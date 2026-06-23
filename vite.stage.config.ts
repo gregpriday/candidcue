@@ -12,5 +12,9 @@ export default defineConfig({
   plugins: [react()],
   resolve: { alias: { '@shared': r('./src/shared') } },
   server: { fs: { allow: [repoRoot] } },
+  // Isolated dep-optimizer cache — see vite.control.config.ts. Without this the
+  // two renderer dev servers race on node_modules/.vite/deps and trigger
+  // recurring "504 (Outdated Optimize Dep)" errors for react/react-dom.
+  cacheDir: r('./node_modules/.vite/stage'),
   build: { outDir: r('./.vite/renderer/stage'), emptyOutDir: true },
 });

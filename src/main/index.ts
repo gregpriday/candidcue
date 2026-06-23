@@ -58,12 +58,17 @@ async function bootstrap(): Promise<void> {
   await repository.migrate();
   const credentials = createCredentialStore();
 
-  const appOrigin = controlDevUrl ?? 'file://';
+  // Each renderer is served from its own origin: in dev that's a per-renderer
+  // Vite dev server (distinct localhost ports); packaged, both load from file://.
+  const controlOrigin = controlDevUrl ?? 'file://';
+  const stageOrigin = stageDevUrl ?? 'file://';
   registerCandidCueProtocol({ videosRoot, rendererRoot: join(currentDir, '..', 'renderer', controlName) });
   applyCspHeaders(session.defaultSession, app.isPackaged);
-  applyPermissionHandlers(session.defaultSession, appOrigin);
+  // The microphone is requested from both the control window (preflight preview)
+  // and the stage window (live capture), so both origins must be allowed.
+  applyPermissionHandlers(session.defaultSession, [controlOrigin, stageOrigin]);
 
-  controlWindow = createControlWindow(rendererTarget('control'), appOrigin);
+  controlWindow = createControlWindow(rendererTarget('control'), controlOrigin);
 
   const getControl = (): WebContents | null => (controlWindow && !controlWindow.isDestroyed() ? controlWindow.webContents : null);
   const getStage = (): WebContents | null => (stageWindow && !stageWindow.isDestroyed() ? stageWindow.webContents : null);
@@ -71,7 +76,7 @@ async function bootstrap(): Promise<void> {
   let blockerId: number | null = null;
   const ensureStageWindow = (displayId: string | null): WebContents => {
     if (!stageWindow || stageWindow.isDestroyed()) {
-      stageWindow = createStageWindow(rendererTarget('stage'), appOrigin, boundsForDisplay(displayId));
+      stageWindow = createStageWindow(rendererTarget('stage'), stageOrigin, boundsForDisplay(displayId));
       stageWindow.on('closed', () => {
         stageWindow = null;
         if (blockerId != null && powerSaveBlocker.isStarted(blockerId)) powerSaveBlocker.stop(blockerId);

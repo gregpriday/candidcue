@@ -13,6 +13,11 @@ export default defineConfig({
   plugins: [react()],
   resolve: { alias: { '@shared': r('./src/shared') } },
   server: { fs: { allow: [repoRoot] } },
+  // Per-renderer dep-optimizer cache. The control + stage renderers each run
+  // their own Vite dev server; sharing the default node_modules/.vite/deps
+  // makes them clobber each other's optimized React bundle, producing
+  // recurring "504 (Outdated Optimize Dep)" reloads. Isolate the caches.
+  cacheDir: r('./node_modules/.vite/control'),
   // Absolute outDir so the bundle lands at the project's .vite/renderer/control
   // (where Forge packages from) rather than under the renderer root folder.
   build: { outDir: r('./.vite/renderer/control'), emptyOutDir: true },
