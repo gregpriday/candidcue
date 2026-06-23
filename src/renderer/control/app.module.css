@@ -5,20 +5,39 @@
   background: var(--bg-app);
 }
 
+/* ---- Title bar -------------------------------------------------------- */
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-3) var(--space-6);
+  gap: var(--space-4);
+  height: var(--titlebar-h);
+  padding: 0 var(--space-4) 0 var(--space-6);
   border-bottom: 1px solid var(--border);
-  background: var(--bg-panel);
+  background: var(--bg-chrome);
   flex: 0 0 auto;
+  /* The window uses titleBarStyle:'hidden' (no native frame), so the title bar
+     is the app's drag handle. Interactive children opt back out with no-drag. */
+  -webkit-app-region: drag;
+}
+
+/* Reserve the gutter for the native window controls so they never overlap the
+   wordmark: traffic lights inset top-left on macOS, control overlay on the right
+   elsewhere. The platform is stamped on .shell at runtime. */
+.shell[data-platform='mac'] .header {
+  padding-left: 84px;
+}
+.shell[data-platform='other'] .header {
+  padding-right: 148px;
 }
 
 .wordmark {
-  font-size: 1.05rem;
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-lg);
   font-weight: 700;
   letter-spacing: 0.01em;
+  line-height: 1;
 }
 .mark {
   color: var(--text-primary);
@@ -30,34 +49,42 @@
 .headerActions {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3);
+  /* One no-drag island so every control in the right cluster (and the
+     diagnostics chip's tooltip/hover) works inside the draggable title bar. */
+  -webkit-app-region: no-drag;
 }
 
 .settingsLink {
+  display: inline-flex;
+  align-items: center;
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-secondary);
-  padding: var(--space-1) var(--space-3);
+  padding: 0 var(--space-3);
+  height: var(--control-h-sm);
   border-radius: var(--radius-sm);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   font-weight: 600;
+  -webkit-app-region: no-drag;
 }
 .settingsLink:hover {
   color: var(--text-primary);
-  border-color: var(--border);
+  background: var(--bg-hover);
 }
 
 .diagnostics {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   color: var(--text-secondary);
 }
 .diagnosticsText {
   font-variant: tabular-nums;
 }
 
+/* ---- Body: activity rail + workspace ---------------------------------- */
 .body {
   display: flex;
   flex: 1 1 auto;
@@ -65,10 +92,12 @@
 }
 
 .sidenav {
-  flex: 0 0 200px;
+  flex: 0 0 var(--rail-w);
   border-right: 1px solid var(--border);
-  background: var(--bg-panel);
-  padding: var(--space-4) var(--space-3);
+  background: var(--bg-chrome);
+  padding: var(--space-3) 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .navList {
@@ -78,27 +107,47 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  width: 100%;
 }
 
 .navButton {
+  position: relative;
   width: 100%;
-  text-align: left;
+  height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
   background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-secondary);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  font-size: 0.9rem;
+  border: none;
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
   font-weight: 600;
+  letter-spacing: 0.02em;
 }
 .navButton:hover {
-  color: var(--text-primary);
-  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  background: var(--bg-hover);
 }
-.navButtonActive {
+.navButtonActive,
+.navButtonActive:hover {
   color: var(--text-primary);
-  background: var(--bg-elevated);
-  border-color: var(--border);
+  background: var(--bg-selected);
+}
+/* Left accent rail marker on the active destination (VS Code / Premiere idiom). */
+.navButtonActive::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+}
+.navLabel {
+  line-height: 1;
 }
 
 .main {
@@ -108,22 +157,41 @@
   padding: var(--space-6);
 }
 
+/* ---- Status bar ------------------------------------------------------- */
 .statusBar {
   flex: 0 0 auto;
-  border-top: 1px solid var(--border);
-  background: var(--bg-panel);
-  padding: var(--space-2) var(--space-6);
-  font-size: 0.8rem;
-  min-height: 32px;
   display: flex;
   align-items: center;
+  gap: var(--space-3);
+  height: var(--statusbar-h);
+  padding: 0 var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-chrome);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.statusContext {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.statusSpacer {
+  flex: 1 1 auto;
 }
 .statusError {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   color: var(--danger);
+  min-width: 0;
+}
+.statusError span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .statusOk {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   color: var(--text-muted);
 }

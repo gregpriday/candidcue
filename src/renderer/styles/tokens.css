@@ -1,29 +1,75 @@
 :root {
-  --bg-app: #101114;
-  --bg-panel: #181a1f;
-  --bg-elevated: #22252b;
-  --text-primary: #f4f5f7;
-  --text-secondary: #aeb4bf;
-  --text-muted: #747b87;
-  --border: #30343c;
-  --accent: #8fa7ff;
-  --accent-contrast: #0d1020;
-  --success: #62c995;
-  --warning: #e7b45b;
+  /* ---- Surfaces: window base → chrome → panel → elevated control ----
+     A real depth stack (not one flat gray) is what makes panels read as docked
+     regions of an application rather than floating cards on a page. */
+  --bg-app: #0d0e11; /* window base, sits behind panels */
+  --bg-chrome: #15171c; /* title bar, activity rail, status bar */
+  --bg-panel: #16181d; /* panel surface */
+  --bg-panel-header: #1b1e24; /* panel header strips */
+  --bg-elevated: #21242b; /* raised controls, hover, inputs */
+  --bg-sunken: #0a0b0e; /* input wells, code/raw blocks, meter tracks */
+  --bg-hover: rgba(255, 255, 255, 0.045); /* subtle hover overlay */
+  --bg-selected: rgba(138, 164, 255, 0.14); /* active nav / selection */
+
+  /* ---- Text ---- */
+  --text-primary: #f1f2f5;
+  --text-secondary: #a8aeba;
+  --text-muted: #6f7682;
+  --text-faint: #545a64;
+
+  /* ---- Lines ---- */
+  --border: #2a2e36; /* default separators / panel outline */
+  --border-strong: #383d48; /* controls/outlines that need to read */
+  --border-faint: #1d2026; /* hairline dividers inside panels */
+
+  /* ---- Accent + status ---- */
+  --accent: #8aa4ff;
+  --accent-strong: #a6bbff; /* hover / pressed */
+  --accent-contrast: #0c1020; /* text on accent fills */
+  --accent-soft: rgba(138, 164, 255, 0.14);
+  --focus: #acc0ff;
+  --success: #5ec98f;
+  --success-soft: rgba(94, 201, 143, 0.13);
+  --warning: #e6b45a;
+  --warning-soft: rgba(230, 180, 90, 0.14);
   --danger: #e87878;
-  --danger-soft: rgba(232, 120, 120, 0.12);
-  --focus: #b9c7ff;
+  --danger-soft: rgba(232, 120, 120, 0.13);
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 16px;
+  /* ---- Radius: tight, application-grade (not pill/card web rounding) ---- */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
 
+  /* ---- Spacing ---- */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-5: 20px;
   --space-6: 24px;
+  --space-7: 28px;
   --space-8: 32px;
+
+  /* ---- Type scale (px, app-dense; base 13) ---- */
+  --text-2xs: 10px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 19px;
+  --text-2xl: 24px;
+
+  /* ---- Chrome geometry ---- */
+  --titlebar-h: 48px;
+  --rail-w: 60px;
+  --statusbar-h: 26px;
+  --control-h: 28px; /* compact button / input height */
+  --control-h-sm: 24px;
+
+  /* ---- Elevation ---- */
+  --shadow-panel: 0 1px 0 rgba(0, 0, 0, 0.3);
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.35);
 
   /* Lead with the platform system stack — no web font is bundled, so claiming
      Inter first made rendering inconsistent across machines (DESIGN-03). */
@@ -44,16 +90,24 @@ body,
   height: 100%;
 }
 
+/* Application-grade base density. The control UI's rem-based sizing tightens with
+   this; the stage teleprompter sizes everything in px and is unaffected. */
+html {
+  font-size: 13px;
+}
+
 body {
   font-family: var(--font-ui);
+  font-size: var(--text-base);
   background: var(--bg-app);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 :focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 2px;
+  outline-offset: 1px;
 }
 
 button {

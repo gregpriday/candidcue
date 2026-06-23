@@ -98,7 +98,6 @@
 .documentTitleInput:focus {
   border-color: var(--border);
   background: var(--bg-app);
-  outline: none;
 }
 .filename {
   font-size: 0.75rem;

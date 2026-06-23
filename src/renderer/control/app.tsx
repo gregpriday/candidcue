@@ -8,6 +8,7 @@ import { PreflightScreen } from './routes/PreflightScreen';
 import { OperatorConsole } from './routes/OperatorConsole';
 import { ReviewScreen } from './routes/ReviewScreen';
 import { StatusIcon, type StatusTone } from './components/StatusIcon';
+import { Icon, type IconName } from './components/Icon';
 import styles from './app.module.css';
 
 export type Route =
@@ -24,9 +25,35 @@ export interface Navigator {
 
 interface NavItem {
   label: string;
+  icon: IconName;
   route: Route;
   matches: (route: Route) => boolean;
 }
+
+/** Short, honest screen context for the status bar (reactive to navigation). */
+function routeLabel(route: Route): string {
+  switch (route.name) {
+    case 'home':
+      return 'Projects';
+    case 'project':
+      return route.projectId ? 'Project' : 'New project';
+    case 'settings':
+      return 'Settings';
+    case 'preflight':
+      return 'Session setup';
+    case 'operator':
+      return 'Live session';
+    case 'review':
+      return 'Review';
+    default:
+      return 'Projects';
+  }
+}
+
+/** Stamp the OS onto the shell so the title bar can reserve the native
+ * window-control gutter on the correct side (traffic lights left on macOS,
+ * control overlay right elsewhere). */
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
 
 export function App(): JSX.Element {
   const [route, setRoute] = useState<Route>({ name: 'home' });
@@ -46,17 +73,15 @@ export function App(): JSX.Element {
   }, []);
 
   const navItems: NavItem[] = [
-    { label: 'Projects', route: { name: 'home' }, matches: (r) => r.name === 'home' || r.name === 'project' },
-    { label: 'Settings', route: { name: 'settings' }, matches: (r) => r.name === 'settings' },
+    { label: 'Projects', icon: 'library', route: { name: 'home' }, matches: (r) => r.name === 'home' || r.name === 'project' },
+    { label: 'Settings', icon: 'settings', route: { name: 'settings' }, matches: (r) => r.name === 'settings' },
   ];
 
   const statusTone: StatusTone = lastError ? 'danger' : 'success';
-  const statusLabel = lastError
-    ? `Attention: ${lastError.publicMessage}`
-    : 'All systems nominal';
+  const statusLabel = lastError ? `Attention: ${lastError.publicMessage}` : 'Ready';
 
   return (
-    <div className={styles.shell}>
+    <div className={styles.shell} data-platform={IS_MAC ? 'mac' : 'other'}>
       <header className={styles.header}>
         <div className={styles.wordmark}>
           <span className={styles.mark}>Candid</span>
@@ -88,8 +113,10 @@ export function App(): JSX.Element {
                   className={`${styles.navButton} ${item.matches(route) ? styles.navButtonActive : ''}`}
                   onClick={() => go(item.route)}
                   aria-current={item.matches(route) ? 'page' : undefined}
+                  title={item.label}
                 >
-                  {item.label}
+                  <Icon name={item.icon} size={20} />
+                  <span className={styles.navLabel}>{item.label}</span>
                 </button>
               </li>
             ))}
@@ -102,12 +129,18 @@ export function App(): JSX.Element {
       </div>
 
       <div className={styles.statusBar} role="status" aria-live="polite">
+        <span className={styles.statusContext}>{routeLabel(route)}</span>
+        <span className={styles.statusSpacer} />
         {lastError ? (
           <span className={styles.statusError}>
-            <StatusIcon tone="danger" label="Error" /> {lastError.publicMessage}
+            <StatusIcon tone="danger" label="Error" />
+            <span>{lastError.publicMessage}</span>
           </span>
         ) : (
-          <span className={styles.statusOk}>Ready</span>
+          <span className={styles.statusOk}>
+            <StatusIcon tone="success" label="Ready" />
+            Ready
+          </span>
         )}
       </div>
     </div>

@@ -1,5 +1,5 @@
 import { BrowserWindow, app } from 'electron';
-import type { WebPreferences, Rectangle } from 'electron';
+import type { WebPreferences, Rectangle, BrowserWindowConstructorOptions } from 'electron';
 import { hardenNavigation } from '../security/navigation';
 
 export interface RendererTarget {
@@ -89,13 +89,24 @@ async function loadRenderer(win: BrowserWindow, target: RendererTarget): Promise
 
 /** Operator ControlWindow (spec §7.3, §20.1). */
 export function createControlWindow(target: RendererTarget, appOrigin: string): BrowserWindow {
+  // Custom in-app title bar so the operator console reads as a desktop
+  // application rather than a framed web page. On macOS the native traffic
+  // lights are kept and inset into our title bar; on Windows/Linux the native
+  // window controls are overlaid on the right of the same bar. The renderer
+  // reserves the matching gutter (see app.module.css .header).
+  const chrome: BrowserWindowConstructorOptions =
+    process.platform === 'darwin'
+      ? { trafficLightPosition: { x: 18, y: 18 } }
+      : { titleBarOverlay: { color: '#15171c', symbolColor: '#aeb4bf', height: 48 } };
   const win = new BrowserWindow({
-    width: 1360,
-    height: 860,
-    minWidth: 1100,
+    width: 1440,
+    height: 900,
+    minWidth: 1120,
     minHeight: 720,
     show: false,
-    backgroundColor: '#101114',
+    backgroundColor: '#0d0e11',
+    titleBarStyle: 'hidden',
+    ...chrome,
     webPreferences: secureWebPreferences(target.preloadPath),
   });
   hardenNavigation(win.webContents, appOrigin);

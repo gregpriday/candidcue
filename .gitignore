@@ -40,3 +40,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Claude Code session/worktree artifacts
+.claude/

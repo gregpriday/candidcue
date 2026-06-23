@@ -1,15 +1,20 @@
+/* Shared screen scaffolding. The workspace fills the window left-aligned — no
+   centered reading column — and type is pinned to the px scale so nothing renders
+   at a fractional rem size. Panels are flat framed surfaces, not floating cards. */
+
 .page {
-  max-width: 920px;
-  margin: 0 auto;
+  max-width: 1180px;
+  margin: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
+  gap: var(--space-4);
 }
 
 .pageWide {
-  max-width: 1100px;
+  max-width: none;
 }
 
+/* A slim workspace header (screen context + actions), not a hero banner. */
 .pageHeader {
   display: flex;
   align-items: flex-start;
@@ -19,19 +24,22 @@
 
 .title {
   margin: 0;
-  font-size: 1.4rem;
-  font-weight: 700;
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: 0.01em;
 }
 
 .subtitle {
-  margin: var(--space-1) 0 0;
+  margin: 4px 0 0;
   color: var(--text-secondary);
-  font-size: 0.9rem;
-  max-width: 60ch;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  max-width: 72ch;
 }
 
 .headerActions {
   display: flex;
+  align-items: center;
   gap: var(--space-2);
   flex: 0 0 auto;
 }
@@ -40,26 +48,27 @@
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  padding: var(--space-6);
+  padding: var(--space-4);
 }
 
 .section {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 
 .sectionTitle {
   margin: 0;
-  font-size: 1rem;
-  font-weight: 700;
+  font-size: var(--text-md);
+  font-weight: 650;
   color: var(--text-primary);
 }
 
 .sectionHint {
-  margin: var(--space-1) 0 0;
-  font-size: 0.82rem;
+  margin: 3px 0 0;
+  font-size: var(--text-xs);
   color: var(--text-muted);
+  line-height: 1.5;
 }
 
 .field {
@@ -69,8 +78,9 @@
 }
 
 .label {
-  font-size: 0.82rem;
+  font-size: var(--text-xs);
   font-weight: 600;
+  letter-spacing: 0.02em;
   color: var(--text-secondary);
 }
 
@@ -78,31 +88,39 @@
 .textarea,
 .select {
   width: 100%;
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg-app);
-  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font: inherit;
-  font-size: 0.9rem;
+  font-size: var(--text-base);
+}
+
+.input,
+.select {
+  height: var(--control-h);
+  padding: 0 var(--space-3);
 }
 
 .textarea {
   resize: vertical;
   min-height: 80px;
+  padding: var(--space-2) var(--space-3);
   font-family: var(--font-mono);
+  line-height: 1.5;
 }
 
+/* Accent the border on focus; the global 2px :focus-visible ring still shows for
+   keyboard users (do NOT set outline:none, which would suppress it). */
 .input:focus,
 .textarea:focus,
 .select:focus {
   border-color: var(--accent);
-  outline: none;
 }
 
 .row {
   display: flex;
-  gap: var(--space-4);
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 .rowItem {
@@ -111,9 +129,9 @@
 }
 
 .count {
-  font-size: 0.75rem;
+  font-size: var(--text-2xs);
   color: var(--text-muted);
-  font-variant: tabular-nums;
+  font-variant-numeric: tabular-nums;
   align-self: flex-end;
 }
 
@@ -121,29 +139,32 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 0.9rem;
+  font-size: var(--text-base);
   color: var(--text-secondary);
 }
 
 .error {
   color: var(--danger);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 
+/* Inline info row — a flat hairline notice with a left accent, not a card. */
 .notice {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
-  background: var(--bg-elevated);
-  font-size: 0.85rem;
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  font-size: var(--text-sm);
   color: var(--text-secondary);
+  line-height: 1.5;
 }
 
 .empty {
-  text-align: center;
-  padding: var(--space-8);
+  padding: var(--space-6) var(--space-4);
   color: var(--text-secondary);
+  font-size: var(--text-sm);
 }
