@@ -43,7 +43,10 @@ export type IconName =
   | 'grip'
   | 'search'
   | 'trash'
-  | 'copy';
+  | 'copy'
+  | 'inbox'
+  | 'folder'
+  | 'externalLink';
 
 /** Icons whose shapes are filled rather than stroked. */
 const FILLED = new Set<IconName>(['play', 'pause', 'stop', 'starFilled', 'grip']);
@@ -237,6 +240,20 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <rect x="9" y="9" width="11" height="11" rx="1.6" />
       <path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5V4.5A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" />
+    </>
+  ),
+  inbox: (
+    <>
+      <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+      <path d="M5.6 5.4 2.2 12v6a2 2 0 0 0 2 2h15.6a2 2 0 0 0 2-2v-6L18.4 5.4A2 2 0 0 0 16.6 4.3H7.4a2 2 0 0 0-1.8 1.1z" />
+    </>
+  ),
+  folder: <path d="M3 7a2 2 0 0 1 2-2h3.8l2 2.5H19a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />,
+  externalLink: (
+    <>
+      <path d="M14 4h6v6" />
+      <line x1="20" y1="4" x2="11" y2="13" />
+      <path d="M19 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5" />
     </>
   ),
 };

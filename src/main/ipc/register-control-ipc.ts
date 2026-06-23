@@ -101,6 +101,10 @@ export function registerControlIpc(app: AppController, guard: Guard): void {
     control(e);
     return app.getSnapshot();
   });
+  ipcMain.handle(CHANNELS.sessionsList, (e, raw) => {
+    control(e);
+    return app.listProjectSessions(idSchema.parse(raw));
+  });
   ipcMain.handle(CHANNELS.sessionsReview, (e, raw) => {
     control(e);
     return app.review(idSchema.parse(raw));

@@ -69,16 +69,17 @@ export function SourceEditorPane({
             </Button>
           )}
           <Button variant="ghost" onClick={onDuplicate} aria-label="Duplicate source">
-            <Icon name="copy" size={14} /> Duplicate
+            <Icon name="copy" size={14} />
           </Button>
           <Button
-            variant="danger"
+            variant="ghost"
+            className={styles.iconDanger}
             onClick={onDelete}
             disabled={!canDelete}
             aria-label="Delete source"
             title={canDelete ? 'Delete this source' : 'A project keeps at least one source'}
           >
-            <Icon name="trash" size={14} /> Delete
+            <Icon name="trash" size={14} />
           </Button>
         </div>
       </div>

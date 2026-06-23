@@ -17,10 +17,10 @@ interface HomeScreenProps {
 /** Surface the richer plan lifecycle state on each tile (PROJ-01/02). */
 const PLAN_BADGE: Record<ProjectPlanState, { tone: StatusTone; text: string }> = {
   ready: { tone: 'success', text: 'Ready' },
-  stale: { tone: 'warning', text: 'Stale' },
+  stale: { tone: 'warning', text: 'Sources changed' },
   preparing: { tone: 'active', text: 'Preparing' },
-  failed: { tone: 'danger', text: 'Failed' },
-  unprepared: { tone: 'pending', text: 'Unprepared' },
+  failed: { tone: 'danger', text: 'Preparation failed' },
+  unprepared: { tone: 'pending', text: 'Draft' },
 };
 
 export function HomeScreen({ nav }: HomeScreenProps): JSX.Element {
@@ -54,6 +54,7 @@ export function HomeScreen({ nav }: HomeScreenProps): JSX.Element {
     <>
       <WorkspaceToolbar
         title="Projects"
+        meta="Prepare and run guided interviews."
         actions={
           <Button variant="primary" onClick={newProject}>
             <Icon name="plus" size={14} /> New project
@@ -71,6 +72,9 @@ export function HomeScreen({ nav }: HomeScreenProps): JSX.Element {
           <p className={route.empty}>Loading projects…</p>
         ) : projects.length === 0 ? (
           <div className={styles.emptyState}>
+            <span className={styles.emptyMark} aria-hidden>
+              <Icon name="waveform" size={24} />
+            </span>
             <p className={styles.emptyText}>
               No projects yet. Create one to prepare your first interview.
             </p>
@@ -85,6 +89,17 @@ export function HomeScreen({ nav }: HomeScreenProps): JSX.Element {
                 <ProjectCard project={project} nav={nav} />
               </li>
             ))}
+            <li>
+              <button type="button" className={styles.createCard} onClick={newProject}>
+                <span className={styles.createIcon}>
+                  <Icon name="plus" size={18} />
+                </span>
+                <span>
+                  <span className={styles.createTitle}>Create new project</span>
+                  <span className={styles.createText}>Start a guided interview workspace.</span>
+                </span>
+              </button>
+            </li>
           </ul>
         )}
       </div>
@@ -106,6 +121,13 @@ function ProjectCard({ project, nav }: { project: ProjectSummary; nav: Navigator
           <StatusIcon tone={badge.tone} label={badge.text} size={12} />
           {badge.text}
         </span>
+      </span>
+      <span className={styles.nextAction}>
+        {project.planState === 'ready'
+          ? 'Start interview'
+          : project.planState === 'stale'
+            ? 'Update interview'
+            : 'Continue setup'}
       </span>
       <dl className={styles.meta}>
         <div className={styles.metaItem}>

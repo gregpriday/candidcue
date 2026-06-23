@@ -1,27 +1,37 @@
 /* Shared screen scaffolding. The workspace fills the window left-aligned — no
    centered reading column — and type is pinned to the px scale so nothing renders
-   at a fractional rem size. Panels are flat framed surfaces, not floating cards. */
+   at a fractional rem size. Panels are flat framed surfaces lit from the top, not
+   floating cards. */
 
 /* The padded body below a screen's WorkspaceToolbar. Left-aligned, capped for
    readability — never a centered web column. */
 .page {
-  max-width: 1180px;
-  margin: 0;
-  padding: var(--space-5);
+  width: min(100%, 1360px);
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: var(--space-7) var(--space-8) var(--space-8);
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-6);
 }
 
 .pageWide {
-  max-width: none;
+  width: min(100%, 1360px);
+  max-width: 1360px;
+}
+
+/* A comfortable working width for form-style screens (Settings) so they read as a
+   composed column on the atmospheric ground, not panels adrift in black. */
+.pageNarrow {
+  width: min(100%, 960px);
+  max-width: 960px;
 }
 
 .sectionHint {
-  margin: 3px 0 0;
-  font-size: var(--text-xs);
+  margin: 0;
+  font-size: var(--text-sm);
   color: var(--text-muted);
-  line-height: 1.5;
+  line-height: 20px;
 }
 
 .field {
@@ -31,22 +41,35 @@
 }
 
 .label {
-  font-size: var(--text-xs);
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: var(--text-sm);
+  line-height: 18px;
+  font-weight: 550;
+  letter-spacing: 0;
   color: var(--text-secondary);
 }
 
+/* Inputs are crafted recesses cut into the panel: a sunken well, a top inner shadow,
+   and a strong hairline edge. They are clearly "into" the surface, the inverse of the
+   raised, top-lit controls. */
 .input,
 .textarea,
 .select {
   width: 100%;
   background: var(--bg-sunken);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-well);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--text-base);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--text-muted);
 }
 
 .input,
@@ -55,12 +78,14 @@
   padding: 0 var(--space-3);
 }
 
+/* Prose textarea — a writing surface, NOT a terminal. (Was --font-mono.) */
 .textarea {
   resize: vertical;
-  min-height: 80px;
-  padding: var(--space-2) var(--space-3);
-  font-family: var(--font-mono);
-  line-height: 1.5;
+  min-height: 112px;
+  padding: var(--space-4);
+  font-family: var(--font-prose);
+  font-size: var(--text-base);
+  line-height: var(--prose-leading);
 }
 
 /* Accent the border on focus; the global 2px :focus-visible ring still shows for
@@ -73,7 +98,7 @@
 
 .row {
   display: flex;
-  gap: var(--space-3);
+  gap: var(--space-4);
   flex-wrap: wrap;
 }
 .rowItem {
@@ -82,7 +107,7 @@
 }
 
 .count {
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   align-self: flex-end;
@@ -100,18 +125,21 @@
   margin: 0;
   color: var(--danger);
   font-size: var(--text-sm);
+  line-height: 20px;
 }
 
-/* Inline info row — a flat hairline notice with a left accent, not a card. */
+/* Inline info row — a flat hairline notice with a left accent, lifted by the top
+   highlight so it reads as a surface, not just a tinted box. */
 .notice {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
   border-left: 2px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--bg-panel);
+  box-shadow: var(--shadow-panel);
   font-size: var(--text-sm);
   color: var(--text-secondary);
   line-height: 1.5;
@@ -119,7 +147,36 @@
 
 .empty {
   margin: 0;
-  padding: var(--space-6) var(--space-4);
+  padding: var(--space-8) 0;
   color: var(--text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
+}
+
+/* ---- Loading skeleton primitives ----------------------------------------------
+   A quiet shimmer over a sunken block. Shared so every screen's loading state reads
+   as "composing" rather than a bare "Loading…" line. The motion guard neutralizes
+   the shimmer for reduced-motion users. */
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+}
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.05),
+    transparent
+  );
+  animation: shimmer 1.4s var(--ease-inout) infinite;
+}
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
 }

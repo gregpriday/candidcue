@@ -7,8 +7,8 @@ import { SettingsScreen } from './routes/SettingsScreen';
 import { PreflightScreen } from './routes/PreflightScreen';
 import { OperatorConsole } from './routes/OperatorConsole';
 import { ReviewScreen } from './routes/ReviewScreen';
-import { StatusIcon, type StatusTone } from './components/StatusIcon';
-import { Icon, type IconName } from './components/Icon';
+import { StatusIcon } from './components/StatusIcon';
+import { Icon } from './components/Icon';
 import styles from './app.module.css';
 
 export type Route =
@@ -25,29 +25,8 @@ export interface Navigator {
 
 interface NavItem {
   label: string;
-  icon: IconName;
   route: Route;
   matches: (route: Route) => boolean;
-}
-
-/** Short, honest screen context for the status bar (reactive to navigation). */
-function routeLabel(route: Route): string {
-  switch (route.name) {
-    case 'home':
-      return 'Projects';
-    case 'project':
-      return route.projectId ? 'Project' : 'New project';
-    case 'settings':
-      return 'Settings';
-    case 'preflight':
-      return 'Session setup';
-    case 'operator':
-      return 'Live session';
-    case 'review':
-      return 'Review';
-    default:
-      return 'Projects';
-  }
 }
 
 /** Stamp the OS onto the shell so the title bar can reserve the native
@@ -72,76 +51,56 @@ export function App(): JSX.Element {
     return unsubscribe;
   }, []);
 
-  const navItems: NavItem[] = [
-    { label: 'Projects', icon: 'library', route: { name: 'home' }, matches: (r) => r.name === 'home' || r.name === 'project' },
-    { label: 'Settings', icon: 'settings', route: { name: 'settings' }, matches: (r) => r.name === 'settings' },
+  const primaryNav: NavItem[] = [
+    {
+      label: 'Projects',
+      route: { name: 'home' },
+      matches: (r) => r.name === 'home' || r.name === 'project' || r.name === 'preflight' || r.name === 'review',
+    },
+    { label: 'Settings', route: { name: 'settings' }, matches: (r) => r.name === 'settings' },
   ];
 
-  const statusTone: StatusTone = lastError ? 'danger' : 'success';
-  const statusLabel = lastError ? `Attention: ${lastError.publicMessage}` : 'Ready';
+  const renderNav = (item: NavItem): JSX.Element => (
+    <button
+      key={item.label}
+      type="button"
+      className={`${styles.navButton} ${item.matches(route) ? styles.navButtonActive : ''}`}
+      onClick={() => go(item.route)}
+      aria-current={item.matches(route) ? 'page' : undefined}
+    >
+      {item.label}
+    </button>
+  );
 
   return (
     <div className={styles.shell} data-platform={IS_MAC ? 'mac' : 'other'}>
       <header className={styles.header}>
-        <div className={styles.wordmark}>
-          <span className={styles.mark}>Candid</span>
-          <span className={styles.markAccent}>Cue</span>
+        <div className={styles.headerLeft}>
+          <span className={styles.wordmark}>
+            <span className={styles.brandTile} aria-hidden>
+              <Icon name="waveform" size={13} />
+            </span>
+            <span className={styles.mark}>Candid</span>
+            <span className={styles.markAccent}>Cue</span>
+          </span>
+          <nav className={styles.titleNav} aria-label="Primary">
+            {primaryNav.map(renderNav)}
+          </nav>
         </div>
-        <div className={styles.headerActions}>
-          <button
-            type="button"
-            className={styles.settingsLink}
-            onClick={() => go({ name: 'settings' })}
-            aria-current={route.name === 'settings' ? 'page' : undefined}
-          >
-            Settings
-          </button>
-          <div className={styles.diagnostics} title={statusLabel}>
-            <StatusIcon tone={statusTone} label={statusLabel} />
-            <span className={styles.diagnosticsText}>{lastError ? 'Issue' : 'Ready'}</span>
+        {lastError && (
+          <div className={styles.headerActions}>
+            <div className={styles.diagnostics} title={`Attention: ${lastError.publicMessage}`}>
+              <StatusIcon tone="danger" label={`Attention: ${lastError.publicMessage}`} />
+              <span className={styles.diagnosticsText}>Issue</span>
+            </div>
           </div>
-        </div>
+        )}
       </header>
 
       <div className={styles.body}>
-        <nav className={styles.sidenav} aria-label="Primary">
-          <ul className={styles.navList}>
-            {navItems.map((item) => (
-              <li key={item.label}>
-                <button
-                  type="button"
-                  className={`${styles.navButton} ${item.matches(route) ? styles.navButtonActive : ''}`}
-                  onClick={() => go(item.route)}
-                  aria-current={item.matches(route) ? 'page' : undefined}
-                  title={item.label}
-                >
-                  <Icon name={item.icon} size={20} />
-                  <span className={styles.navLabel}>{item.label}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </nav>
-
         <main className={styles.main}>
           <RouteView route={route} nav={nav} />
         </main>
-      </div>
-
-      <div className={styles.statusBar} role="status" aria-live="polite">
-        <span className={styles.statusContext}>{routeLabel(route)}</span>
-        <span className={styles.statusSpacer} />
-        {lastError ? (
-          <span className={styles.statusError}>
-            <StatusIcon tone="danger" label="Error" />
-            <span>{lastError.publicMessage}</span>
-          </span>
-        ) : (
-          <span className={styles.statusOk}>
-            <StatusIcon tone="success" label="Ready" />
-            Ready
-          </span>
-        )}
       </div>
     </div>
   );

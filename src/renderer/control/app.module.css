@@ -10,14 +10,15 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-4);
+  gap: var(--space-5);
   height: var(--titlebar-h);
-  padding: 0 var(--space-4) 0 var(--space-6);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-chrome);
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--border-faint);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 38%),
+    var(--bg-chrome);
+  box-shadow: inset 0 1px 0 var(--highlight-edge);
   flex: 0 0 auto;
-  /* The window uses titleBarStyle:'hidden' (no native frame), so the title bar
-     is the app's drag handle. Interactive children opt back out with no-drag. */
   -webkit-app-region: drag;
 }
 
@@ -25,20 +26,46 @@
    wordmark: traffic lights inset top-left on macOS, control overlay on the right
    elsewhere. The platform is stamped on .shell at runtime. */
 .shell[data-platform='mac'] .header {
-  padding-left: 84px;
+  padding-left: 88px;
 }
 .shell[data-platform='other'] .header {
   padding-right: 148px;
 }
 
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: var(--space-7);
+  min-width: 0;
+}
+
 .wordmark {
   display: inline-flex;
   align-items: center;
+  gap: var(--space-2);
   font-size: var(--text-lg);
   font-weight: 700;
-  letter-spacing: 0.01em;
+  letter-spacing: var(--ls-tight);
   line-height: 1;
 }
+
+/* Small brand tile — an accent-gradient rounded square, lit from the top edge, with
+   a white voice/waveform glyph: the app's identity mark beside the wordmark. */
+.brandTile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(var(--accent-gradient-top), var(--accent-gradient-bottom));
+  color: var(--accent-contrast);
+  box-shadow:
+    inset 0 1px 0 var(--highlight-edge-strong),
+    0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
 .mark {
   color: var(--text-primary);
 }
@@ -46,42 +73,69 @@
   color: var(--accent);
 }
 
+.titleNav {
+  display: inline-flex;
+  align-items: stretch;
+  align-self: stretch;
+  gap: var(--space-1);
+  -webkit-app-region: no-drag;
+}
+
+.navButton {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-width: 76px;
+  height: 100%;
+  padding: 0 var(--space-3);
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  transition:
+    color var(--dur-med) var(--ease-out),
+    background var(--dur-med) var(--ease-out);
+}
+.navButton:hover {
+  color: var(--text-secondary);
+}
+.navButtonActive,
+.navButtonActive:hover {
+  color: var(--text-primary);
+}
+.navButtonActive::after {
+  content: '';
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--accent);
+}
+
 .headerActions {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  /* One no-drag island so every control in the right cluster (and the
-     diagnostics chip's tooltip/hover) works inside the draggable title bar. */
   -webkit-app-region: no-drag;
-}
-
-.settingsLink {
-  display: inline-flex;
-  align-items: center;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-secondary);
-  padding: 0 var(--space-3);
-  height: var(--control-h-sm);
-  border-radius: var(--radius-sm);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  -webkit-app-region: no-drag;
-}
-.settingsLink:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
 }
 
 .diagnostics {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
   font-size: var(--text-sm);
-  color: var(--text-secondary);
+  font-weight: 600;
+  color: var(--danger);
 }
 .diagnosticsText {
-  font-variant: tabular-nums;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- Body: activity rail + workspace ---------------------------------- */
@@ -89,65 +143,6 @@
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
-}
-
-.sidenav {
-  flex: 0 0 var(--rail-w);
-  border-right: 1px solid var(--border);
-  background: var(--bg-chrome);
-  padding: var(--space-3) 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.navList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  width: 100%;
-}
-
-.navButton {
-  position: relative;
-  width: 100%;
-  height: 48px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: var(--text-2xs);
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-.navButton:hover {
-  color: var(--text-secondary);
-  background: var(--bg-hover);
-}
-.navButtonActive,
-.navButtonActive:hover {
-  color: var(--text-primary);
-  background: var(--bg-selected);
-}
-/* Left accent rail marker on the active destination (VS Code / Premiere idiom). */
-.navButtonActive::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
-  background: var(--accent);
-}
-.navLabel {
-  line-height: 1;
 }
 
 .main {
@@ -158,43 +153,9 @@
   /* No padding: each screen renders a full-bleed sticky WorkspaceToolbar plus a
      padded body, so the toolbar reaches the rail and right edge like app chrome. */
   padding: 0;
-}
-
-/* ---- Status bar ------------------------------------------------------- */
-.statusBar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  height: var(--statusbar-h);
-  padding: 0 var(--space-4);
-  border-top: 1px solid var(--border);
-  background: var(--bg-chrome);
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-}
-.statusContext {
-  color: var(--text-secondary);
-  font-weight: 600;
-}
-.statusSpacer {
-  flex: 1 1 auto;
-}
-.statusError {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--danger);
-  min-width: 0;
-}
-.statusError span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.statusOk {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--text-muted);
+  /* Atmosphere: a whisper of top-lit warmth anchored to the workspace viewport
+     (default scroll attachment keeps it fixed as content scrolls) so wide empty
+     regions read as material, never dead black. */
+  background-image: var(--sheen-app);
+  background-repeat: no-repeat;
 }

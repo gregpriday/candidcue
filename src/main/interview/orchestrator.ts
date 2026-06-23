@@ -1022,6 +1022,7 @@ export class SessionOrchestrator {
       canCommit: cmds.COMMIT_USER_TURN,
       canRepeat: cmds.REPEAT_QUESTION,
       canSkip: cmds.SKIP_QUESTION,
+      canEnd: cmds.END_AFTER_TURN,
       canEndAfterTurn: cmds.END_AFTER_TURN,
       canEndNow: cmds.END_NOW,
     };

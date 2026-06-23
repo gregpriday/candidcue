@@ -3,6 +3,7 @@ import type {
   SessionCommand,
   PreflightConfig,
   SpeakingMediaPlan,
+  InterviewSession,
   ProjectAggregate,
   ProjectSummary,
   SaveProjectInput,
@@ -41,6 +42,7 @@ export const CHANNELS = {
   sessionsPrepare: 'sessions:prepare',
   sessionsCommand: 'sessions:command',
   sessionsSnapshot: 'sessions:get-snapshot',
+  sessionsList: 'sessions:list',
   sessionsExport: 'sessions:export',
   sessionsResumable: 'sessions:resumable',
   sessionsReview: 'sessions:review',
@@ -180,6 +182,8 @@ export interface OperatorSessionSnapshot {
     canRepeat: boolean;
     canSkip: boolean;
     canEnd: boolean;
+    canEndAfterTurn: boolean;
+    canEndNow: boolean;
   };
 }
 
@@ -355,6 +359,7 @@ export interface CandidCueControlApi {
     prepare(input: PrepareSessionInput): Promise<PreflightState>;
     command(command: SessionCommand): Promise<CommandResult>;
     getSnapshot(): Promise<OperatorSessionSnapshot | null>;
+    list(projectId: string): Promise<InterviewSession[]>;
     review(sessionId: string): Promise<SessionReview | null>;
     editTranscript(turnId: string, text: string): Promise<void>;
     export(sessionId: string, format: 'markdown' | 'json'): Promise<ExportResult>;

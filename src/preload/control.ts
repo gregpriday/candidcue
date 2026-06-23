@@ -39,6 +39,7 @@ const api: CandidCueControlApi = {
     prepare: (input) => ipcRenderer.invoke(CHANNELS.sessionsPrepare, input),
     command: (command) => ipcRenderer.invoke(CHANNELS.sessionsCommand, command),
     getSnapshot: () => ipcRenderer.invoke(CHANNELS.sessionsSnapshot),
+    list: (projectId) => ipcRenderer.invoke(CHANNELS.sessionsList, projectId),
     review: (sessionId) => ipcRenderer.invoke(CHANNELS.sessionsReview, sessionId),
     editTranscript: (turnId, text) => ipcRenderer.invoke(CHANNELS.sessionsEditTranscript, turnId, text),
     export: (sessionId, format) => ipcRenderer.invoke(CHANNELS.sessionsExport, sessionId, format),

@@ -14,12 +14,12 @@ const baseTheme = EditorView.theme(
     '&': {
       color: 'var(--text-primary)',
       backgroundColor: 'transparent',
-      fontSize: 'var(--text-base)',
+      fontSize: '15px',
     },
     '.cm-content': {
       caretColor: 'var(--accent)',
-      fontFamily: 'var(--font-mono)',
-      lineHeight: '1.65',
+      fontFamily: 'var(--font-prose)',
+      lineHeight: '24px',
     },
     '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)' },
     '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
@@ -32,7 +32,7 @@ const baseTheme = EditorView.theme(
     '.cm-activeLine': { backgroundColor: 'transparent' },
     '.cm-activeLineGutter': { backgroundColor: 'transparent' },
     '.cm-placeholder': { color: 'var(--text-muted)' },
-    '.cm-scroller': { fontFamily: 'var(--font-mono)' },
+    '.cm-scroller': { fontFamily: 'var(--font-prose)' },
   },
   { dark: true },
 );

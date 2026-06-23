@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { PublicSettings } from '@shared/contracts';
 import type { ProviderTestResult } from '@shared/contracts';
 import { Button } from '../components/Button';
-import { Panel } from '../components/Panel';
+import { Icon, type IconName } from '../components/Icon';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
 import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
 import { describeError } from '../lib/errors';
@@ -21,6 +21,7 @@ export function SettingsScreen(): JSX.Element {
   const [openai, setOpenai] = useState<KeyFieldState>({ value: '', reveal: false });
   const [inworld, setInworld] = useState<KeyFieldState>({ value: '', reveal: false });
   const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState<ProviderName | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Partial<Record<ProviderName, ProviderTestResult>>>({});
@@ -39,30 +40,36 @@ export function SettingsScreen(): JSX.Element {
     void refresh();
   }, [refresh]);
 
-  const handleSave = useCallback(async () => {
+  const handleSaveProvider = useCallback(async (provider: ProviderName) => {
+    const field = provider === 'openai' ? openai : inworld;
+    const value = field.value.trim();
+    if (!value) {
+      setError('Enter an API key before saving this connection.');
+      return;
+    }
     setSaving(true);
     setError(null);
     setSavedNote(null);
-    // Never overwrite a stored key with an empty string.
-    const input: { openaiApiKey?: string; inworldApiKey?: string } = {};
-    if (openai.value.trim()) {
-      input.openaiApiKey = openai.value.trim();
-    }
-    if (inworld.value.trim()) {
-      input.inworldApiKey = inworld.value.trim();
-    }
+    const input =
+      provider === 'openai'
+        ? { openaiApiKey: value }
+        : { inworldApiKey: value };
     try {
       await window.candidcue.settings.saveProviders(input);
-      setOpenai({ value: '', reveal: false });
-      setInworld({ value: '', reveal: false });
-      setSavedNote('Saved. Entered keys are stored; blank fields were left unchanged.');
+      if (provider === 'openai') {
+        setOpenai({ value: '', reveal: false });
+      } else {
+        setInworld({ value: '', reveal: false });
+      }
+      setSavedNote(`${provider === 'openai' ? 'OpenAI' : 'Inworld'} connection updated.`);
+      setEditing(null);
       await refresh();
     } catch (err: unknown) {
       setError(describeError(err));
     } finally {
       setSaving(false);
     }
-  }, [openai.value, inworld.value, refresh]);
+  }, [inworld, openai, refresh]);
 
   const handleTest = useCallback(async (provider: ProviderName) => {
     setTesting(provider);
@@ -95,13 +102,9 @@ export function SettingsScreen(): JSX.Element {
     <>
       <WorkspaceToolbar
         title="Settings"
-        actions={
-          <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
-            {saving ? 'Saving…' : 'Save keys'}
-          </Button>
-        }
+        meta="AI provider connections."
       />
-      <div className={route.page}>
+      <div className={`${route.page} ${route.pageNarrow}`}>
         {error !== null && (
           <p className={route.error} role="alert">
             {error}
@@ -114,37 +117,53 @@ export function SettingsScreen(): JSX.Element {
           </div>
         )}
 
-        <ProviderCard
-          title="OpenAI"
-          description="Receives your compiled source material and transcripts to plan the interview, generate questions, clean transcripts, and moderate content."
-          hasKey={settings?.hasOpenAiKey ?? false}
-          field={openai}
-          onChange={setOpenai}
-          inputId="openai-key"
-          onTest={() => void handleTest('openai')}
-          onClear={() => void handleClear('openai')}
-          testing={testing === 'openai'}
-          result={testResults.openai}
-        />
+        <div className={styles.providerList}>
+          <ProviderCard
+            provider="openai"
+            icon="sparkles"
+            title="OpenAI"
+            description="Plans interviews and processes transcripts."
+            hasKey={settings?.hasOpenAiKey ?? false}
+            field={openai}
+            onChange={setOpenai}
+            inputId="openai-key"
+            open={editing === 'openai'}
+            onToggle={() => setEditing(editing === 'openai' ? null : 'openai')}
+            onSave={() => void handleSaveProvider('openai')}
+            onTest={() => void handleTest('openai')}
+            onClear={() => void handleClear('openai')}
+            saving={saving}
+            testing={testing === 'openai'}
+            result={testResults.openai}
+          />
 
-        <ProviderCard
-          title="Inworld"
-          description="Receives microphone audio to transcribe your answers and the interviewer's question text to synthesise speech."
-          hasKey={settings?.hasInworldKey ?? false}
-          field={inworld}
-          onChange={setInworld}
-          inputId="inworld-key"
-          onTest={() => void handleTest('inworld')}
-          onClear={() => void handleClear('inworld')}
-          testing={testing === 'inworld'}
-          result={testResults.inworld}
-        />
+          <ProviderCard
+            provider="inworld"
+            icon="speaker"
+            title="Inworld"
+            description="Speech recognition and interviewer voice."
+            hasKey={settings?.hasInworldKey ?? false}
+            field={inworld}
+            onChange={setInworld}
+            inputId="inworld-key"
+            open={editing === 'inworld'}
+            onToggle={() => setEditing(editing === 'inworld' ? null : 'inworld')}
+            onSave={() => void handleSaveProvider('inworld')}
+            onTest={() => void handleTest('inworld')}
+            onClear={() => void handleClear('inworld')}
+            saving={saving}
+            testing={testing === 'inworld'}
+            result={testResults.inworld}
+          />
+        </div>
       </div>
     </>
   );
 }
 
 interface ProviderCardProps {
+  provider: ProviderName;
+  icon: IconName;
   title: string;
   description: string;
   hasKey: boolean;
@@ -155,9 +174,14 @@ interface ProviderCardProps {
   onClear: () => void;
   testing: boolean;
   result: ProviderTestResult | undefined;
+  open: boolean;
+  onToggle: () => void;
+  onSave: () => void;
+  saving: boolean;
 }
 
 function ProviderCard({
+  icon,
   title,
   description,
   hasKey,
@@ -168,56 +192,89 @@ function ProviderCard({
   onClear,
   testing,
   result,
+  open,
+  onToggle,
+  onSave,
+  saving,
 }: ProviderCardProps): JSX.Element {
   const resultTone: StatusTone = result ? (result.ok ? 'success' : 'danger') : 'neutral';
   return (
-    <Panel
-      title={title}
-      actions={
-        <span className={styles.keyStatus}>
-          <StatusIcon tone={hasKey ? 'success' : 'pending'} label={hasKey ? 'Key set' : 'No key set'} size={12} />
-          {hasKey ? 'Key set' : 'Not set'}
+    <section className={styles.providerCard}>
+      <div className={styles.providerSummary}>
+        <span className={styles.providerIcon} aria-hidden>
+          <Icon name={icon} size={22} />
         </span>
-      }
-    >
-      <p className={route.sectionHint}>{description}</p>
-
-      <div className={route.field}>
-        <label className={route.label} htmlFor={inputId}>
-          API key
-        </label>
-        <div className={styles.keyRow}>
-          <input
-            id={inputId}
-            className={route.input}
-            type={field.reveal ? 'text' : 'password'}
-            value={field.value}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={hasKey ? 'A key is stored — enter a new one to replace it' : 'Paste your API key'}
-            onChange={(e) => onChange({ ...field, value: e.target.value })}
-          />
-          <Button variant="secondary" onClick={() => onChange({ ...field, reveal: !field.reveal })}>
-            {field.reveal ? 'Hide' : 'Show'}
-          </Button>
+        <div className={styles.providerCopy}>
+          <h2>{title}</h2>
+          <p>{description}</p>
         </div>
+        <span className={styles.keyStatus}>
+          <StatusIcon tone={hasKey ? 'success' : 'pending'} label={hasKey ? 'Connected' : 'Not connected'} />
+          {hasKey ? 'Connected' : 'Not connected'}
+        </span>
+        <Button variant="secondary" onClick={onToggle}>
+          {hasKey ? 'Manage' : 'Connect'}
+        </Button>
       </div>
 
-      <div className={styles.actions}>
-        <Button variant="secondary" onClick={onTest} disabled={testing || !hasKey}>
-          {testing ? 'Testing…' : 'Test connection'}
-        </Button>
-        <Button variant="danger" onClick={onClear} disabled={!hasKey}>
-          Clear key
-        </Button>
-        {result && (
-          <span className={styles.testResult}>
-            <StatusIcon tone={resultTone} label={result.ok ? 'Passed' : 'Failed'} />
-            {result.message}
-            {result.latencyMs !== null && <span className={styles.latency}> ({result.latencyMs} ms)</span>}
-          </span>
-        )}
-      </div>
-    </Panel>
+      {open && (
+        <div className={styles.managePanel}>
+          <p className={route.sectionHint}>
+            Keys are stored by the desktop app and are never displayed again after saving.
+          </p>
+          <div className={route.field}>
+            <label className={route.label} htmlFor={inputId}>
+              API key
+            </label>
+            <div className={styles.keyInputWrap}>
+              <input
+                id={inputId}
+                className={route.input}
+                type={field.reveal ? 'text' : 'password'}
+                value={field.value}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={hasKey ? 'Enter a new key to replace the stored key' : 'Paste your API key'}
+                onChange={(e) => onChange({ ...field, value: e.target.value })}
+              />
+              <button
+                type="button"
+                className={styles.revealButton}
+                onClick={() => onChange({ ...field, reveal: !field.reveal })}
+                aria-label={field.reveal ? 'Hide API key' : 'Show API key'}
+              >
+                <Icon name={field.reveal ? 'eyeOff' : 'eye'} size={16} />
+              </button>
+            </div>
+          </div>
+
+          <div className={styles.actions}>
+            <Button variant="primary" onClick={onSave} disabled={saving || field.value.trim().length === 0}>
+              {saving ? 'Saving…' : hasKey ? 'Update key' : 'Save key'}
+            </Button>
+            {hasKey && (
+              <Button variant="secondary" onClick={onTest} disabled={testing}>
+                {testing ? 'Testing…' : 'Test connection'}
+              </Button>
+            )}
+            {result && (
+              <span className={styles.testResult}>
+                <StatusIcon tone={resultTone} label={result.ok ? 'Passed' : 'Failed'} />
+                {result.message}
+                {result.latencyMs !== null && <span className={styles.latency}> ({result.latencyMs} ms)</span>}
+              </span>
+            )}
+          </div>
+
+          {hasKey && (
+            <div className={styles.dangerZone}>
+              <Button variant="danger" onClick={onClear}>
+                Remove key
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
   );
 }

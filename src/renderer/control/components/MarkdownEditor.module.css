@@ -1,13 +1,14 @@
 .editor {
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--bg-sunken);
+  background: var(--surface-input, var(--bg-sunken));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
 
 .editor :global(.cm-editor) {
-  font-family: var(--font-mono);
-  font-size: var(--text-base);
+  font-family: var(--font-prose);
+  font-size: 15px;
 }
 
 .editor :global(.cm-editor.cm-focused) {
@@ -16,5 +17,10 @@
 }
 
 .editor :global(.cm-scroller) {
-  line-height: 1.55;
+  line-height: 24px;
+}
+
+.editor :global(.cm-content) {
+  padding: var(--space-5);
+  max-width: 92ch;
 }

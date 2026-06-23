@@ -31,6 +31,7 @@ import type {
   SaveProjectInput,
   ProjectAggregate,
   ProjectSummary,
+  InterviewSession,
   SessionCommand,
   InterviewPlan,
   SessionCoverageItem,
@@ -97,6 +98,9 @@ export class AppController {
   }
   getProject(id: string): Promise<ProjectAggregate | null> {
     return this.deps.repository.getProject(id);
+  }
+  listProjectSessions(projectId: string): Promise<InterviewSession[]> {
+    return this.deps.repository.listSessions(projectId);
   }
   saveProject(input: SaveProjectInput): Promise<ProjectAggregate> {
     return this.deps.repository.saveProject(input);

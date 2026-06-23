@@ -3,26 +3,17 @@ import { Icon } from './Icon';
 import styles from './WorkspaceToolbar.module.css';
 
 interface WorkspaceToolbarProps {
-  /** Screen title — a compact control-strip heading, not a hero header. */
   title: ReactNode;
-  /** Optional back affordance (renders a chevron button on the left). */
   onBack?: () => void;
   backLabel?: string;
-  /** Small muted breadcrumb/meta shown after the title. */
   meta?: ReactNode;
-  /** Right-aligned primary/secondary actions. */
   actions?: ReactNode;
 }
 
-/**
- * The slim, sticky per-screen header strip. A screen reads as a control strip
- * (title + actions) with guidance demoted to inline hints, the way a desktop
- * application's toolbars do — not a tall marketing-style page header.
- */
 export function WorkspaceToolbar({
   title,
   onBack,
-  backLabel = 'Back',
+  backLabel = 'Projects',
   meta,
   actions,
 }: WorkspaceToolbarProps): JSX.Element {
@@ -32,10 +23,13 @@ export function WorkspaceToolbar({
         {onBack && (
           <button type="button" className={styles.back} onClick={onBack} aria-label={backLabel} title={backLabel}>
             <Icon name="arrowLeft" size={16} />
+            <span>{backLabel}</span>
           </button>
         )}
-        <h1 className={styles.title}>{title}</h1>
-        {meta && <span className={styles.meta}>{meta}</span>}
+        <div className={styles.titleBlock}>
+          <h1 className={styles.title}>{title}</h1>
+          {meta && <div className={styles.meta}>{meta}</div>}
+        </div>
       </div>
       {actions && <div className={styles.actions}>{actions}</div>}
     </div>

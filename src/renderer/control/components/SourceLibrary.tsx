@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Button } from './Button';
 import { Icon } from './Icon';
-import { Panel } from './Panel';
 import { SourceList, type SourceListItem } from './SourceList';
 import { SourceEditorPane } from './SourceEditorPane';
 import { describeError } from '../lib/errors';
@@ -160,11 +159,16 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
   const hasImportResult = importFailures.length > 0 || importNotice !== null;
 
   return (
-    <Panel title="Source material" flushBody>
+    <section className={styles.library}>
       <div className={styles.toolbar}>
-        <p className={styles.toolbarHint}>
-          The primary source is the interview's backbone; references add supporting context.
-        </p>
+        <div className={styles.toolbarCopy}>
+          <h2>
+            Sources <span>· {stats.documentCount} of {PROJECT_SOURCE_LIMITS.maxDocuments}</span>
+          </h2>
+          <p className={styles.toolbarHint}>
+            Primary source and supporting references.
+          </p>
+        </div>
         <div className={styles.toolbarActions}>
           <Button
             variant="secondary"
@@ -172,10 +176,10 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
             disabled={stats.atDocumentLimit}
             title={stats.atDocumentLimit ? 'Source limit reached' : 'Add a blank source'}
           >
-            <Icon name="plus" size={15} /> New source
+            <Icon name="plus" size={15} /> Add source
           </Button>
           <Button
-            variant="primary"
+            variant="secondary"
             onClick={() => void importFiles()}
             disabled={stats.atDocumentLimit || importing}
             title={stats.atDocumentLimit ? 'Source limit reached' : 'Import .md / .markdown files'}
@@ -241,6 +245,6 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
           onDelete={() => selectedDraft && remove(selectedDraft.key)}
         />
       </div>
-    </Panel>
+    </section>
   );
 }

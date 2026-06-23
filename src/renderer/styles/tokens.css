@@ -1,45 +1,72 @@
 :root {
   /* ---- Surfaces: window base → chrome → panel → elevated control ----
      A real depth stack (not one flat gray) is what makes panels read as docked
-     regions of an application rather than floating cards on a page. */
-  --bg-app: #0d0e11; /* window base, sits behind panels */
-  --bg-chrome: #15171c; /* title bar, activity rail, status bar */
-  --bg-panel: #16181d; /* panel surface */
-  --bg-panel-header: #1b1e24; /* panel header strips */
-  --bg-elevated: #21242b; /* raised controls, hover, inputs */
-  --bg-sunken: #0a0b0e; /* input wells, code/raw blocks, meter tracks */
-  --bg-hover: rgba(255, 255, 255, 0.045); /* subtle hover overlay */
-  --bg-selected: rgba(138, 164, 255, 0.14); /* active nav / selection */
+     regions of an application rather than floating cards on a page. The ramp is a
+     warm graphite (a hair off cold blue-black) with WIDENED luminance steps so the
+     stack reads as stacked even before any shadow or highlight is applied. */
+  --bg-app: #0b0d12;
+  --bg-chrome: #0f1218;
+  --bg-canvas: #11151c;
+  --bg-panel: #151a23;
+  --bg-panel-header: #1b2230;
+  --bg-elevated: #1b2230;
+  --bg-sunken: #10151c;
+  --bg-hover: #202836;
+  --bg-selected: rgba(142, 160, 255, 0.14);
 
   /* ---- Text ---- */
-  --text-primary: #f1f2f5;
-  --text-secondary: #a8aeba;
-  --text-muted: #6f7682;
-  --text-faint: #545a64;
+  --text-primary: #f5f7fb;
+  --text-secondary: #b8c0ce;
+  --text-muted: #858f9f;
+  --text-faint: #687383;
 
   /* ---- Lines ---- */
-  --border: #2a2e36; /* default separators / panel outline */
-  --border-strong: #383d48; /* controls/outlines that need to read */
-  --border-faint: #1d2026; /* hairline dividers inside panels */
-  --border-seam: #0a0b0e; /* near-black seam between butted/tiled panels */
+  --border: rgba(255, 255, 255, 0.11);
+  --border-strong: rgba(255, 255, 255, 0.17);
+  --border-faint: rgba(255, 255, 255, 0.075);
+  --border-seam: rgba(255, 255, 255, 0.075);
 
   /* ---- Accent + status ---- */
-  --accent: #8aa4ff;
-  --accent-strong: #a6bbff; /* hover / pressed */
-  --accent-contrast: #0c1020; /* text on accent fills */
-  --accent-soft: rgba(138, 164, 255, 0.14);
-  --focus: #acc0ff;
-  --success: #5ec98f;
-  --success-soft: rgba(94, 201, 143, 0.13);
-  --warning: #e6b45a;
-  --warning-soft: rgba(230, 180, 90, 0.14);
-  --danger: #e87878;
-  --danger-soft: rgba(232, 120, 120, 0.13);
+  --accent: #8ea0ff;
+  --accent-strong: #a4b1ff; /* hover / pressed */
+  --accent-contrast: #0b0f1e; /* text on accent fills — deepened for AA on the gradient top */
+  --accent-soft: rgba(142, 160, 255, 0.14);
+  --focus: #aebcff;
+  --success: #5fd6a0;
+  --success-soft: rgba(95, 214, 160, 0.15);
+  --warning: #f0b85a;
+  --warning-soft: rgba(240, 184, 90, 0.15);
+  --danger: #f17178;
+  --danger-soft: rgba(241, 113, 120, 0.15);
+
+  /* ---- The single light source ----
+     Depth comes from one light from the top. Every RAISED surface gets a 1px inner
+     top highlight; every WELL gets an inner top shadow. This is the keystone that
+     turns flat rectangles into machined surfaces that catch light. */
+  --highlight-edge: rgba(255, 255, 255, 0.05); /* top edge of raised surfaces */
+  --highlight-edge-strong: rgba(255, 255, 255, 0.09); /* primary button / hero surfaces */
+
+  /* ---- Accent material (primary button is lit, not a flat fill) ---- */
+  --accent-gradient-top: #a4b1ff;
+  --accent-gradient-bottom: #8ea0ff;
+  --accent-glow: rgba(138, 164, 255, 0.22); /* faint primary-button hover halo */
+
+  /* ---- Live "tally light" ----
+     The cool accent escalates to a warm on-air red ONLY when a session is genuinely
+     live (operator state badge, active mic, stage). Scarcity is the point. */
+  --live: #f86a5a;
+  --live-soft: rgba(248, 106, 90, 0.16);
+  --live-glow: rgba(248, 106, 90, 0.32);
+
+  /* ---- Audio meter zones (so we never recolor the shared status hues) ---- */
+  --meter-low: #5ec98f;
+  --meter-mid: #e6b45a;
+  --meter-high: #e87878;
 
   /* ---- Radius: tight, application-grade (not pill/card web rounding) ---- */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
 
   /* ---- Spacing ---- */
   --space-1: 4px;
@@ -51,35 +78,69 @@
   --space-7: 28px;
   --space-8: 32px;
 
-  /* ---- Type scale (px, app-dense; base 13) ---- */
-  --text-2xs: 10px;
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-base: 13px;
+  /* ---- Type scale (px, editorial authoring base 14) ---- */
+  --text-2xs: 12px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
   --text-md: 14px;
   --text-lg: 16px;
-  --text-xl: 19px;
+  --text-xl: 20px;
   --text-2xl: 24px;
   --ls-caps: 0.06em; /* letter-spacing for UPPERCASE panel/section labels */
+  --ls-tight: 0;
+  --prose-leading: 1.6; /* comfortable reading line-height for editors / transcripts */
 
   /* ---- Chrome geometry ---- */
-  --titlebar-h: 48px;
-  --toolbar-h: 40px; /* per-screen workspace toolbar */
-  --panel-header-h: 30px; /* panel header strip */
-  --row-h: 28px; /* dense list / tree / check rows */
-  --rail-w: 60px;
-  --statusbar-h: 26px;
-  --control-h: 28px; /* compact button / input height */
-  --control-h-sm: 24px;
+  --titlebar-h: 52px;
+  --toolbar-h: 64px; /* per-screen page header */
+  --panel-header-h: 36px;
+  --row-h: 36px;
+  --rail-w: 0px;
+  --statusbar-h: 0px;
+  --control-h: 36px;
+  --control-h-sm: 32px;
 
-  /* ---- Elevation ---- */
-  --shadow-panel: 0 1px 0 rgba(0, 0, 0, 0.3);
-  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.35);
+  /* ---- Elevation ----
+     Docked surfaces stay docked: --shadow-panel is a top highlight + a 1px seam, NOT
+     a floating drop shadow. Real cast shadows are reserved for genuinely floating
+     things (hover-lifted cards, the sticky transport, dialogs/menus). No shadow soup. */
+  --shadow-panel: inset 0 1px 0 var(--highlight-edge), 0 1px 1px rgba(0, 0, 0, 0.35);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.28);
+  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.45), 0 12px 28px rgba(0, 0, 0, 0.4);
+  --shadow-well: inset 0 1px 2px rgba(0, 0, 0, 0.45); /* cut-in recess for input wells / meter tracks */
+  --shadow-transport: 0 -8px 24px rgba(0, 0, 0, 0.4); /* lifts the sticky cockpit transport off content */
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.38);
+
+  /* ---- Motion: a tiny shared vocabulary (3 durations, 3 curves) ----
+     Enough to feel alive and machined; never enough to feel like a marketing site.
+     Honor the global prefers-reduced-motion guard below. */
+  --dur-fast: 120ms; /* hover / press / color */
+  --dur-med: 180ms; /* selection, focus, crossfade */
+  --dur-slow: 260ms; /* mount, state, celebration */
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1); /* default confident settle */
+  --ease-inout: cubic-bezier(0.4, 0, 0.2, 1); /* symmetric crossfades */
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.5, 1); /* restrained overshoot — nav slide / ready only */
+
+  /* ---- Atmosphere: kills the dead-black void without violating restraint ----
+     A whisper of top-lit warmth on large empty grounds, plus a faint film grain.
+     Both are pointer-events:none decoration layered behind content. */
+  --sheen-app: radial-gradient(120% 80% at 50% -10%, rgba(142, 160, 255, 0.055), transparent 60%);
+  --grain-opacity: 0.03;
+  --grain-url: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 
   /* Lead with the platform system stack — no web font is bundled, so claiming
-     Inter first made rendering inconsistent across machines (DESIGN-03). */
+     Inter first made rendering inconsistent across machines (DESIGN-03). On macOS
+     this resolves to SF Pro, which is excellent when used with care. */
   --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  /* Prose is finally given a prose typeface — a semantic alias so editors/transcripts
+     request reading type while genuine code/metrics keep --font-mono (DESIGN: kills
+     mono-for-prose at the source). */
+  --font-prose: var(--font-ui);
+
+  /* Tokenizes editor selection so it matches the app accent instead of a hardcoded rgba. */
+  --selection: var(--accent-soft);
 
   color-scheme: dark;
 }
@@ -98,7 +159,7 @@ body,
 /* Application-grade base density. The control UI's rem-based sizing tightens with
    this; the stage teleprompter sizes everything in px and is unaffected. */
 html {
-  font-size: 13px;
+  font-size: 14px;
 }
 
 body {
@@ -108,14 +169,60 @@ body {
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  font-feature-settings: 'kern' 1;
 }
 
+/* Accent-tinted text selection across the app. */
+::selection {
+  background: var(--selection);
+}
+
+/* A calm, branded keyboard-focus ring. Kept as `outline` (never box-shadow) so it
+   is never clipped by the panels' overflow:hidden and stays a reliable a11y cue. */
 :focus-visible {
   outline: 2px solid var(--focus);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 button {
   font: inherit;
   cursor: pointer;
+}
+
+/* Refined, thin chrome scrollbars so scroll regions read like an application, not a
+   web page. Track is transparent; the thumb is a quiet hairline that brightens on
+   hover. */
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Mandatory motion guard — every animation/transition collapses for users who ask
+   for reduced motion (covers ::before/::after pseudo-elements too). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
