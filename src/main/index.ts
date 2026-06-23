@@ -27,7 +27,10 @@ const controlName = typeof CONTROL_VITE_NAME !== 'undefined' ? CONTROL_VITE_NAME
 const stageName = typeof STAGE_VITE_NAME !== 'undefined' ? STAGE_VITE_NAME : 'stage';
 
 function resourceRoot(name: 'videos' | 'prompts'): string {
-  return app.isPackaged ? join(process.resourcesPath, name) : join(currentDir, '..', '..', '..', name);
+  // In dev the main bundle runs from <repo>/.vite/build, so the repo root (where
+  // videos/ and prompts/ live) is two levels up. Packaged builds copy these
+  // folders into resourcesPath via forge's extraResource.
+  return app.isPackaged ? join(process.resourcesPath, name) : join(currentDir, '..', '..', name);
 }
 
 function rendererTarget(name: 'control' | 'stage'): RendererTarget {
