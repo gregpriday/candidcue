@@ -7,34 +7,28 @@
   gap: var(--space-4);
 }
 
-.turnHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
+/* Start→end timestamps + turn count in the toolbar meta slot. */
+.toolbarMeta {
+  font-variant-numeric: tabular-nums;
 }
-.turnOrdinal {
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
-}
+
+/* Per-turn incomplete/recovered flags, rendered in the Panel header actions. */
 .turnFlags {
   display: flex;
+  align-items: center;
   gap: var(--space-3);
 }
 .flag {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  font-size: 0.75rem;
+  font-size: var(--text-xs);
   color: var(--text-secondary);
 }
 
 .question {
-  margin: 0 0 var(--space-4);
-  font-size: 1.05rem;
+  margin: 0;
+  font-size: var(--text-md);
   font-weight: 600;
   line-height: 1.45;
   color: var(--text-primary);
@@ -46,19 +40,22 @@
   gap: var(--space-2);
 }
 .answerLabel {
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--ls-caps);
   color: var(--text-muted);
 }
+
+/* Raw transcript reads as a read-only inset well: sunken surface, strong
+   hairline, square corners, mono. */
 .rawText {
   margin: 0;
   padding: var(--space-3);
-  background: var(--bg-app);
-  border: 1px solid var(--border);
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 0.88rem;
+  font-size: var(--text-sm);
   line-height: 1.55;
   white-space: pre-wrap;
   color: var(--text-secondary);
@@ -68,12 +65,15 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  margin-top: var(--space-3);
 }
 .savedNote {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  font-size: 0.8rem;
+  font-size: var(--text-sm);
   color: var(--success);
+}
+
+.muted {
+  color: var(--text-muted);
 }

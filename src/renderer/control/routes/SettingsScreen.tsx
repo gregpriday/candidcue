@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import type { PublicSettings } from '@shared/contracts';
 import type { ProviderTestResult } from '@shared/contracts';
 import { Button } from '../components/Button';
+import { Panel } from '../components/Panel';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
+import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
 import { describeError } from '../lib/errors';
 import route from './route.module.css';
 import styles from './SettingsScreen.module.css';
@@ -90,62 +92,55 @@ export function SettingsScreen(): JSX.Element {
   );
 
   return (
-    <div className={route.page}>
-      <div className={route.pageHeader}>
-        <div>
-          <h1 className={route.title}>Settings</h1>
-          <p className={route.subtitle}>
-            CandidCue uses two providers. OpenAI prepares the interview plan, generates the
-            interviewer&apos;s questions, cleans transcripts, and runs moderation. Inworld converts
-            your speech to text and synthesises the interviewer&apos;s voice.
+    <>
+      <WorkspaceToolbar
+        title="Settings"
+        actions={
+          <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
+            {saving ? 'Saving…' : 'Save keys'}
+          </Button>
+        }
+      />
+      <div className={route.page}>
+        {error !== null && (
+          <p className={route.error} role="alert">
+            {error}
           </p>
-        </div>
+        )}
+        {savedNote !== null && (
+          <div className={route.notice} role="status">
+            <StatusIcon tone="success" label="Saved" />
+            <span>{savedNote}</span>
+          </div>
+        )}
+
+        <ProviderCard
+          title="OpenAI"
+          description="Receives your compiled source material and transcripts to plan the interview, generate questions, clean transcripts, and moderate content."
+          hasKey={settings?.hasOpenAiKey ?? false}
+          field={openai}
+          onChange={setOpenai}
+          inputId="openai-key"
+          onTest={() => void handleTest('openai')}
+          onClear={() => void handleClear('openai')}
+          testing={testing === 'openai'}
+          result={testResults.openai}
+        />
+
+        <ProviderCard
+          title="Inworld"
+          description="Receives microphone audio to transcribe your answers and the interviewer's question text to synthesise speech."
+          hasKey={settings?.hasInworldKey ?? false}
+          field={inworld}
+          onChange={setInworld}
+          inputId="inworld-key"
+          onTest={() => void handleTest('inworld')}
+          onClear={() => void handleClear('inworld')}
+          testing={testing === 'inworld'}
+          result={testResults.inworld}
+        />
       </div>
-
-      {error !== null && (
-        <p className={route.error} role="alert">
-          {error}
-        </p>
-      )}
-      {savedNote !== null && (
-        <div className={route.notice} role="status">
-          <StatusIcon tone="success" label="Saved" />
-          <span>{savedNote}</span>
-        </div>
-      )}
-
-      <ProviderCard
-        title="OpenAI"
-        description="Receives your compiled source material and transcripts to plan the interview, generate questions, clean transcripts, and moderate content."
-        hasKey={settings?.hasOpenAiKey ?? false}
-        field={openai}
-        onChange={setOpenai}
-        inputId="openai-key"
-        onTest={() => void handleTest('openai')}
-        onClear={() => void handleClear('openai')}
-        testing={testing === 'openai'}
-        result={testResults.openai}
-      />
-
-      <ProviderCard
-        title="Inworld"
-        description="Receives microphone audio to transcribe your answers and the interviewer's question text to synthesise speech."
-        hasKey={settings?.hasInworldKey ?? false}
-        field={inworld}
-        onChange={setInworld}
-        inputId="inworld-key"
-        onTest={() => void handleTest('inworld')}
-        onClear={() => void handleClear('inworld')}
-        testing={testing === 'inworld'}
-        result={testResults.inworld}
-      />
-
-      <div className={styles.saveBar}>
-        <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
-          {saving ? 'Saving…' : 'Save keys'}
-        </Button>
-      </div>
-    </div>
+    </>
   );
 }
 
@@ -176,14 +171,15 @@ function ProviderCard({
 }: ProviderCardProps): JSX.Element {
   const resultTone: StatusTone = result ? (result.ok ? 'success' : 'danger') : 'neutral';
   return (
-    <section className={`${route.panel} ${route.section}`}>
-      <div className={styles.cardHeader}>
-        <h2 className={route.sectionTitle}>{title}</h2>
+    <Panel
+      title={title}
+      actions={
         <span className={styles.keyStatus}>
-          <StatusIcon tone={hasKey ? 'success' : 'pending'} label={hasKey ? 'Key set' : 'No key set'} />
+          <StatusIcon tone={hasKey ? 'success' : 'pending'} label={hasKey ? 'Key set' : 'No key set'} size={12} />
           {hasKey ? 'Key set' : 'Not set'}
         </span>
-      </div>
+      }
+    >
       <p className={route.sectionHint}>{description}</p>
 
       <div className={route.field}>
@@ -222,6 +218,6 @@ function ProviderCard({
           </span>
         )}
       </div>
-    </section>
+    </Panel>
   );
 }

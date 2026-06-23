@@ -4,6 +4,8 @@ import type { DisplayInfo, PreflightState, PreflightCheck, PrepareSessionInput }
 import type { Navigator } from '../app';
 import { Button } from '../components/Button';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
+import { Panel } from '../components/Panel';
+import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
 import { describeError } from '../lib/errors';
 import { MicMeter } from '../components/MicMeter';
 import route from './route.module.css';
@@ -192,193 +194,181 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
   const meterDeviceId = permissionState === 'granted' ? selectedInput : null;
 
   return (
-    <div className={`${route.page} ${route.pageWide}`}>
-      <div className={route.pageHeader}>
-        <div>
-          <h1 className={route.title}>Session setup</h1>
-          <p className={route.subtitle}>
-            Choose how the interview ends each answer, pick your devices, and confirm the readiness
-            checklist before you begin.
+    <>
+      <WorkspaceToolbar
+        title="Session setup"
+        onBack={() => nav.go({ name: 'project', projectId })}
+      />
+      <div className={`${route.page} ${route.pageWide}`}>
+        {error !== null && (
+          <p className={route.error} role="alert">
+            {error}
           </p>
-        </div>
-        <div className={route.headerActions}>
-          <Button variant="ghost" onClick={() => nav.go({ name: 'project', projectId })}>
-            Back
-          </Button>
-        </div>
-      </div>
+        )}
 
-      {error !== null && (
-        <p className={route.error} role="alert">
-          {error}
-        </p>
-      )}
-
-      <div className={styles.columns}>
-        <div className={styles.column}>
-          <section className={`${route.panel} ${route.section}`}>
-            <h2 className={route.sectionTitle}>Endpoint mode</h2>
-            <p className={route.sectionHint}>How CandidCue decides an answer is finished.</p>
-            <div className={route.field}>
-              <label className={route.label} htmlFor="endpoint-mode">
-                Mode
-              </label>
-              <select
-                id="endpoint-mode"
-                className={route.select}
-                value={endpointMode}
-                onChange={(e) => setEndpointMode(e.target.value as EndpointMode)}
-              >
-                <option value="manual">Manual — you commit each answer</option>
-                <option value="conservative">Conservative — wait longer before committing</option>
-                <option value="balanced">Balanced — commit a little sooner</option>
-              </select>
-            </div>
-          </section>
-
-          <section className={`${route.panel} ${route.section}`}>
-            <h2 className={route.sectionTitle}>Audio devices</h2>
-            {permissionState !== 'granted' ? (
-              <div className={route.notice}>
-                <StatusIcon tone={permissionState === 'denied' ? 'danger' : 'pending'} label="Microphone access" />
-                <div>
-                  <p style={{ margin: 0 }}>
-                    {permissionState === 'denied'
-                      ? 'Microphone access was denied. Grant access in system settings, then retry.'
-                      : 'Grant microphone access to list devices and preview your level.'}
-                  </p>
-                  <Button variant="secondary" onClick={() => void requestPermission()}>
-                    {permissionState === 'denied' ? 'Retry microphone access' : 'Allow microphone'}
-                  </Button>
-                </div>
+        <div className={styles.columns}>
+          <div className={styles.column}>
+            <Panel title="Endpoint mode">
+              <p className={route.sectionHint}>How CandidCue decides an answer is finished.</p>
+              <div className={route.field}>
+                <label className={route.label} htmlFor="endpoint-mode">
+                  Mode
+                </label>
+                <select
+                  id="endpoint-mode"
+                  className={route.select}
+                  value={endpointMode}
+                  onChange={(e) => setEndpointMode(e.target.value as EndpointMode)}
+                >
+                  <option value="manual">Manual — you commit each answer</option>
+                  <option value="conservative">Conservative — wait longer before committing</option>
+                  <option value="balanced">Balanced — commit a little sooner</option>
+                </select>
               </div>
-            ) : (
-              <>
-                <div className={route.field}>
-                  <label className={route.label} htmlFor="input-device">
-                    Microphone
-                  </label>
-                  <select
-                    id="input-device"
-                    className={route.select}
-                    value={selectedInput ?? ''}
-                    onChange={(e) => setSelectedInput(e.target.value || null)}
-                  >
-                    {inputDevices.map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>
-                        {device.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <MicMeter deviceId={meterDeviceId} />
-                <div className={route.field}>
-                  <label className={route.label} htmlFor="output-device">
-                    Audio output
-                  </label>
-                  <select
-                    id="output-device"
-                    className={route.select}
-                    value={selectedOutput ?? ''}
-                    onChange={(e) => setSelectedOutput(e.target.value || null)}
-                  >
-                    {outputDevices.length === 0 && <option value="">System default</option>}
-                    {outputDevices.map((device) => (
-                      <option key={device.deviceId} value={device.deviceId}>
-                        {device.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </>
-            )}
-          </section>
+            </Panel>
 
-          <section className={`${route.panel} ${route.section}`}>
-            <div className={styles.displayHeader}>
-              <h2 className={route.sectionTitle}>Teleprompter display</h2>
-              <Button variant="ghost" onClick={identifyDisplays}>
-                Identify displays
-              </Button>
-            </div>
-            <div className={route.field}>
-              <label className={route.label} htmlFor="display-select">
-                Display
+            <Panel title="Audio devices">
+              {permissionState !== 'granted' ? (
+                <div className={route.notice}>
+                  <StatusIcon tone={permissionState === 'denied' ? 'danger' : 'pending'} label="Microphone access" />
+                  <div>
+                    <p style={{ margin: 0 }}>
+                      {permissionState === 'denied'
+                        ? 'Microphone access was denied. Grant access in system settings, then retry.'
+                        : 'Grant microphone access to list devices and preview your level.'}
+                    </p>
+                    <Button variant="secondary" onClick={() => void requestPermission()}>
+                      {permissionState === 'denied' ? 'Retry microphone access' : 'Allow microphone'}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className={route.field}>
+                    <label className={route.label} htmlFor="input-device">
+                      Microphone
+                    </label>
+                    <select
+                      id="input-device"
+                      className={route.select}
+                      value={selectedInput ?? ''}
+                      onChange={(e) => setSelectedInput(e.target.value || null)}
+                    >
+                      {inputDevices.map((device) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <MicMeter deviceId={meterDeviceId} />
+                  <div className={route.field}>
+                    <label className={route.label} htmlFor="output-device">
+                      Audio output
+                    </label>
+                    <select
+                      id="output-device"
+                      className={route.select}
+                      value={selectedOutput ?? ''}
+                      onChange={(e) => setSelectedOutput(e.target.value || null)}
+                    >
+                      {outputDevices.length === 0 && <option value="">System default</option>}
+                      {outputDevices.map((device) => (
+                        <option key={device.deviceId} value={device.deviceId}>
+                          {device.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
+            </Panel>
+
+            <Panel
+              title="Teleprompter display"
+              actions={
+                <Button variant="ghost" onClick={identifyDisplays}>
+                  Identify displays
+                </Button>
+              }
+            >
+              <div className={route.field}>
+                <label className={route.label} htmlFor="display-select">
+                  Display
+                </label>
+                <select
+                  id="display-select"
+                  className={route.select}
+                  value={selectedDisplay ?? ''}
+                  onChange={(e) => handleSelectDisplay(e.target.value)}
+                >
+                  {displays.length === 0 && <option value="">No displays detected</option>}
+                  {displays.map((display) => (
+                    <option key={display.id} value={display.id}>
+                      {display.label}
+                      {display.isPrimary ? ' (primary)' : ''}
+                      {display.isInternal ? ' (internal)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </Panel>
+          </div>
+
+          <div className={styles.column}>
+            <Panel title="Stage">
+              <label className={route.checkboxRow}>
+                <input
+                  type="checkbox"
+                  checked={captionsEnabled}
+                  onChange={(e) => setCaptionsEnabled(e.target.checked)}
+                />
+                Show captions on the stage
               </label>
-              <select
-                id="display-select"
-                className={route.select}
-                value={selectedDisplay ?? ''}
-                onChange={(e) => handleSelectDisplay(e.target.value)}
-              >
-                {displays.length === 0 && <option value="">No displays detected</option>}
-                {displays.map((display) => (
-                  <option key={display.id} value={display.id}>
-                    {display.label}
-                    {display.isPrimary ? ' (primary)' : ''}
-                    {display.isInternal ? ' (internal)' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </section>
-        </div>
-
-        <div className={styles.column}>
-          <section className={`${route.panel} ${route.section}`}>
-            <h2 className={route.sectionTitle}>Stage</h2>
-            <label className={route.checkboxRow}>
-              <input
-                type="checkbox"
-                checked={captionsEnabled}
-                onChange={(e) => setCaptionsEnabled(e.target.checked)}
+              <label className={route.checkboxRow}>
+                <input type="checkbox" checked={mirrorStage} onChange={(e) => setMirrorStage(e.target.checked)} />
+                Mirror the stage horizontally
+              </label>
+              <RangeField
+                id="zoom"
+                label="Zoom"
+                min={1}
+                max={1.5}
+                step={0.01}
+                value={zoom}
+                onChange={setZoom}
+                format={(v) => `${Math.round(v * 100)}%`}
               />
-              Show captions on the stage
-            </label>
-            <label className={route.checkboxRow}>
-              <input type="checkbox" checked={mirrorStage} onChange={(e) => setMirrorStage(e.target.checked)} />
-              Mirror the stage horizontally
-            </label>
-            <RangeField
-              id="zoom"
-              label="Zoom"
-              min={1}
-              max={1.5}
-              step={0.01}
-              value={zoom}
-              onChange={setZoom}
-              format={(v) => `${Math.round(v * 100)}%`}
-            />
-            <RangeField
-              id="offset"
-              label="Vertical offset"
-              min={-25}
-              max={25}
-              step={1}
-              value={verticalOffsetPercent}
-              onChange={setVerticalOffsetPercent}
-              format={(v) => `${v}%`}
-            />
-          </section>
+              <RangeField
+                id="offset"
+                label="Vertical offset"
+                min={-25}
+                max={25}
+                step={1}
+                value={verticalOffsetPercent}
+                onChange={setVerticalOffsetPercent}
+                format={(v) => `${v}%`}
+              />
+            </Panel>
 
-          <section className={`${route.panel} ${route.section}`}>
-            <div className={styles.displayHeader}>
-              <h2 className={route.sectionTitle}>Readiness</h2>
-              <Button variant="secondary" onClick={() => void handlePrepare()} disabled={preparing}>
-                {preparing ? 'Checking…' : preflight ? 'Re-check' : 'Run checks'}
-              </Button>
-            </div>
-            {checks.length === 0 ? (
-              <p className={route.sectionHint}>Run the checks to confirm everything is ready.</p>
-            ) : (
-              <ul className={styles.checklist}>
-                {checks.map((check) => (
-                  <li key={check.id} className={styles.checkItem}>
-                    <StatusIcon
-                      tone={CHECK_TONE[check.status]}
-                      label={`${check.label}: ${CHECK_WORD[check.status]}`}
-                    />
-                    <div className={styles.checkBody}>
+            <Panel
+              title="Readiness"
+              actions={
+                <Button variant="secondary" onClick={() => void handlePrepare()} disabled={preparing}>
+                  {preparing ? 'Checking…' : preflight ? 'Re-check' : 'Run checks'}
+                </Button>
+              }
+            >
+              {checks.length === 0 ? (
+                <p className={route.sectionHint}>Run the checks to confirm everything is ready.</p>
+              ) : (
+                <ul className={styles.checklist}>
+                  {checks.map((check) => (
+                    <li key={check.id} className={styles.checkItem}>
+                      <StatusIcon
+                        tone={CHECK_TONE[check.status]}
+                        label={`${check.label}: ${CHECK_WORD[check.status]}`}
+                      />
                       <span className={styles.checkLabel}>
                         {check.label}
                         {check.required && <span className={styles.required}> (required)</span>}
@@ -387,23 +377,23 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
                         {CHECK_WORD[check.status]}
                         {check.detail ? ` — ${check.detail}` : ''}
                       </span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className={styles.beginRow} aria-live="polite">
-              <Button variant="primary" onClick={() => void handleBegin()} disabled={!canBegin || beginning}>
-                {beginning ? 'Starting…' : 'Begin'}
-              </Button>
-              {!canBegin && checks.length > 0 && (
-                <span className={route.sectionHint}>Resolve required checks before beginning.</span>
+                    </li>
+                  ))}
+                </ul>
               )}
-            </div>
-          </section>
+              <div className={styles.beginRow} aria-live="polite">
+                <Button variant="primary" onClick={() => void handleBegin()} disabled={!canBegin || beginning}>
+                  {beginning ? 'Starting…' : 'Begin'}
+                </Button>
+                {!canBegin && checks.length > 0 && (
+                  <span className={route.sectionHint}>Resolve required checks before beginning.</span>
+                )}
+              </div>
+            </Panel>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 

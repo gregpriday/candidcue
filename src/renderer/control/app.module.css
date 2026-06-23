@@ -151,10 +151,13 @@
 }
 
 .main {
+  position: relative;
   flex: 1 1 auto;
   min-width: 0;
   overflow-y: auto;
-  padding: var(--space-6);
+  /* No padding: each screen renders a full-bleed sticky WorkspaceToolbar plus a
+     padded body, so the toolbar reaches the rail and right edge like app chrome. */
+  padding: 0;
 }
 
 /* ---- Status bar ------------------------------------------------------- */

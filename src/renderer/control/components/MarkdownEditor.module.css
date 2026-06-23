@@ -1,13 +1,13 @@
 .editor {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   overflow: hidden;
-  background: var(--bg-app);
+  background: var(--bg-sunken);
 }
 
 .editor :global(.cm-editor) {
   font-family: var(--font-mono);
-  font-size: 0.9rem;
+  font-size: var(--text-base);
 }
 
 .editor :global(.cm-editor.cm-focused) {

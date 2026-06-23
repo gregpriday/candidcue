@@ -10,20 +10,20 @@
   align-items: baseline;
 }
 .label {
-  font-size: 0.82rem;
+  font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text-secondary);
 }
 .value {
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   color: var(--text-muted);
-  font-variant: tabular-nums;
+  font-variant-numeric: tabular-nums;
 }
 
 .track {
-  height: 10px;
-  border-radius: 999px;
-  background: var(--bg-app);
+  height: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
   border: 1px solid var(--border);
   overflow: hidden;
 }
@@ -37,10 +37,10 @@
 }
 
 .clipNote {
-  font-size: 0.75rem;
+  font-size: var(--text-2xs);
   color: var(--danger);
 }
 .error {
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
   color: var(--danger);
 }

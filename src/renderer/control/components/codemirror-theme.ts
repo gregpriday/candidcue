@@ -14,7 +14,7 @@ const baseTheme = EditorView.theme(
     '&': {
       color: 'var(--text-primary)',
       backgroundColor: 'transparent',
-      fontSize: '0.9rem',
+      fontSize: 'var(--text-base)',
     },
     '.cm-content': {
       caretColor: 'var(--accent)',

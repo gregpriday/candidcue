@@ -21,6 +21,7 @@
   --border: #2a2e36; /* default separators / panel outline */
   --border-strong: #383d48; /* controls/outlines that need to read */
   --border-faint: #1d2026; /* hairline dividers inside panels */
+  --border-seam: #0a0b0e; /* near-black seam between butted/tiled panels */
 
   /* ---- Accent + status ---- */
   --accent: #8aa4ff;
@@ -59,9 +60,13 @@
   --text-lg: 16px;
   --text-xl: 19px;
   --text-2xl: 24px;
+  --ls-caps: 0.06em; /* letter-spacing for UPPERCASE panel/section labels */
 
   /* ---- Chrome geometry ---- */
   --titlebar-h: 48px;
+  --toolbar-h: 40px; /* per-screen workspace toolbar */
+  --panel-header-h: 30px; /* panel header strip */
+  --row-h: 28px; /* dense list / tree / check rows */
   --rail-w: 60px;
   --statusbar-h: 26px;
   --control-h: 28px; /* compact button / input height */

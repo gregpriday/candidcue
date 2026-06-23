@@ -3,6 +3,8 @@ import type { SessionReview, SessionReviewTurn, ExportResult } from '@shared/con
 import type { Navigator } from '../app';
 import { Button } from '../components/Button';
 import { StatusIcon } from '../components/StatusIcon';
+import { Panel } from '../components/Panel';
+import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
 import { MarkdownEditor } from '../components/MarkdownEditor';
 import { describeError } from '../lib/errors';
 import { formatTimestamp } from '../lib/format';
@@ -120,126 +122,135 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
 
   if (loadError !== null) {
     return (
-      <div className={route.page}>
-        <p className={route.error} role="alert">
-          {loadError}
-        </p>
-        <Button variant="ghost" onClick={() => nav.go({ name: 'home' })}>
-          Back to projects
-        </Button>
-      </div>
+      <>
+        <WorkspaceToolbar title="Review" onBack={() => nav.go({ name: 'home' })} backLabel="Back to projects" />
+        <div className={route.page}>
+          <p className={route.error} role="alert">
+            {loadError}
+          </p>
+        </div>
+      </>
     );
   }
 
   if (review === null) {
     return (
-      <div className={route.page}>
-        <p className={route.empty}>Loading session review…</p>
-      </div>
+      <>
+        <WorkspaceToolbar title="Review" onBack={() => nav.go({ name: 'home' })} backLabel="Back to projects" />
+        <div className={route.page}>
+          <p className={route.empty}>Loading session review…</p>
+        </div>
+      </>
     );
   }
 
   return (
-    <div className={`${route.page} ${route.pageWide}`}>
-      <div className={route.pageHeader}>
-        <div>
-          <h1 className={route.title}>{review.projectTitle}</h1>
-          <p className={route.subtitle}>
+    <>
+      <WorkspaceToolbar
+        title={review.projectTitle || 'Review'}
+        onBack={() => nav.go({ name: 'home' })}
+        backLabel="Back to projects"
+        meta={
+          <span className={styles.toolbarMeta}>
             {formatTimestamp(review.startedAt)} → {formatTimestamp(review.endedAt)} ·{' '}
             {review.turns.length} turn(s)
+          </span>
+        }
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => setShowRaw((v) => !v)} aria-pressed={showRaw}>
+              {showRaw ? 'Show cleaned' : 'Show raw'}
+            </Button>
+            <Button variant="secondary" onClick={() => void handleExport('markdown')}>
+              Export Markdown
+            </Button>
+            <Button variant="secondary" onClick={() => void handleExport('json')}>
+              Export JSON
+            </Button>
+          </>
+        }
+      />
+      <div className={`${route.page} ${route.pageWide}`}>
+        {exportNote !== null && (
+          <div className={route.notice} role="status">
+            <StatusIcon tone="success" label="Exported" />
+            <span>{exportNote}</span>
+          </div>
+        )}
+        {exportError !== null && (
+          <p className={route.error} role="alert">
+            {exportError}
           </p>
-        </div>
-        <div className={route.headerActions}>
-          <Button variant="ghost" onClick={() => setShowRaw((v) => !v)} aria-pressed={showRaw}>
-            {showRaw ? 'Show cleaned' : 'Show raw'}
-          </Button>
-          <Button variant="secondary" onClick={() => void handleExport('markdown')}>
-            Export Markdown
-          </Button>
-          <Button variant="secondary" onClick={() => void handleExport('json')}>
-            Export JSON
-          </Button>
-          <Button variant="ghost" onClick={() => nav.go({ name: 'home' })}>
-            Done
-          </Button>
-        </div>
+        )}
+
+        {review.turns.length === 0 ? (
+          <Panel>
+            <p className={route.empty}>This session has no recorded turns.</p>
+          </Panel>
+        ) : (
+          <ol className={styles.turnList}>
+            {review.turns.map((turn) => {
+              const key = turnKey(turn);
+              const edit = edits[key];
+              return (
+                <li key={key}>
+                  <Panel
+                    title={`Turn ${turn.ordinal}`}
+                    actions={
+                      (turn.incomplete || turn.endpointReason === 'recovery') && (
+                        <div className={styles.turnFlags}>
+                          {turn.incomplete && (
+                            <span className={styles.flag}>
+                              <StatusIcon tone="warning" label="Incomplete answer" /> Incomplete
+                            </span>
+                          )}
+                          {turn.endpointReason === 'recovery' && (
+                            <span className={styles.flag}>
+                              <StatusIcon tone="pending" label="Recovered transcript" /> Recovered
+                            </span>
+                          )}
+                        </div>
+                      )
+                    }
+                  >
+                    <p className={styles.question}>{turn.question}</p>
+
+                    <div className={styles.answerBlock}>
+                      <span className={styles.answerLabel}>{showRaw ? 'Raw transcript' : 'Cleaned answer'}</span>
+                      {showRaw ? (
+                        <p className={styles.rawText}>
+                          {turn.rawTranscript ?? <span className={styles.muted}>No raw transcript.</span>}
+                        </p>
+                      ) : (
+                        <MarkdownEditor
+                          value={edit?.text ?? initialEditText(turn)}
+                          onChange={(value) => updateEdit(key, value)}
+                          ariaLabel={`Edited transcript for turn ${turn.ordinal}`}
+                          minHeight="120px"
+                        />
+                      )}
+                    </div>
+
+                    {!showRaw && (
+                      <div className={styles.turnActions}>
+                        <Button onClick={() => void saveEdit(turn)} disabled={!edit?.dirty || edit?.saving}>
+                          {edit?.saving ? 'Saving…' : 'Save edit'}
+                        </Button>
+                        {edit?.saved && !edit.dirty && (
+                          <span className={styles.savedNote}>
+                            <StatusIcon tone="success" label="Saved" /> Saved
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </Panel>
+                </li>
+              );
+            })}
+          </ol>
+        )}
       </div>
-
-      {exportNote !== null && (
-        <div className={route.notice} role="status">
-          <StatusIcon tone="success" label="Exported" />
-          <span>{exportNote}</span>
-        </div>
-      )}
-      {exportError !== null && (
-        <p className={route.error} role="alert">
-          {exportError}
-        </p>
-      )}
-
-      {review.turns.length === 0 ? (
-        <div className={route.panel}>
-          <p className={route.empty}>This session has no recorded turns.</p>
-        </div>
-      ) : (
-        <ol className={styles.turnList}>
-          {review.turns.map((turn) => {
-            const key = turnKey(turn);
-            const edit = edits[key];
-            return (
-              <li key={key} className={route.panel}>
-                <div className={styles.turnHeader}>
-                  <span className={styles.turnOrdinal}>Turn {turn.ordinal}</span>
-                  <div className={styles.turnFlags}>
-                    {turn.incomplete && (
-                      <span className={styles.flag}>
-                        <StatusIcon tone="warning" label="Incomplete answer" /> Incomplete
-                      </span>
-                    )}
-                    {turn.endpointReason === 'recovery' && (
-                      <span className={styles.flag}>
-                        <StatusIcon tone="pending" label="Recovered transcript" /> Recovered
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <p className={styles.question}>{turn.question}</p>
-
-                <div className={styles.answerBlock}>
-                  <span className={styles.answerLabel}>{showRaw ? 'Raw transcript' : 'Cleaned answer'}</span>
-                  {showRaw ? (
-                    <p className={styles.rawText}>
-                      {turn.rawTranscript ?? <span className={route.empty}>No raw transcript.</span>}
-                    </p>
-                  ) : (
-                    <MarkdownEditor
-                      value={edit?.text ?? initialEditText(turn)}
-                      onChange={(value) => updateEdit(key, value)}
-                      ariaLabel={`Edited transcript for turn ${turn.ordinal}`}
-                      minHeight="120px"
-                    />
-                  )}
-                </div>
-
-                {!showRaw && (
-                  <div className={styles.turnActions}>
-                    <Button onClick={() => void saveEdit(turn)} disabled={!edit?.dirty || edit?.saving}>
-                      {edit?.saving ? 'Saving…' : 'Save edit'}
-                    </Button>
-                    {edit?.saved && !edit.dirty && (
-                      <span className={styles.savedNote}>
-                        <StatusIcon tone="success" label="Saved" /> Saved
-                      </span>
-                    )}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ol>
-      )}
-    </div>
+    </>
   );
 }
 

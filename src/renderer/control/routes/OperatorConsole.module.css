@@ -1,3 +1,4 @@
+/* Accessibility live-region clip (do not change — relied on by the announcer). */
 .visuallyHidden {
   position: absolute;
   width: 1px;
@@ -10,41 +11,25 @@
   border: 0;
 }
 
-.stateRow {
+/* The live cockpit: full-bleed, tiled panels, a docked transport at the base. */
+.cockpit {
   display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  margin-top: var(--space-2);
-}
-.stateBadge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: 0.9rem;
-  font-weight: 600;
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-}
-.timer {
-  font-family: var(--font-mono);
-  font-size: 1.1rem;
-  font-variant: tabular-nums;
-  color: var(--text-primary);
-}
-.ordinal {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  min-height: calc(100% - var(--toolbar-h));
 }
 
-.layout {
+.grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
-  gap: var(--space-4);
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--space-2);
   align-items: start;
+  flex: 1 1 auto;
+  min-height: 0;
 }
-@media (max-width: 960px) {
-  .layout {
+@media (max-width: 1040px) {
+  .grid {
     grid-template-columns: 1fr;
   }
 }
@@ -53,44 +38,32 @@
 .sideColumn {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-2);
   min-width: 0;
 }
 
-.panelLabel {
-  margin: 0 0 var(--space-3);
-  font-size: 0.72rem;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
+/* Current question — the single largest UI text, on an inset canvas. */
+.questionBody {
+  background: var(--bg-sunken);
+  padding: var(--space-4);
 }
-
 .question {
   margin: 0;
-  font-size: 1.25rem;
-  line-height: 1.45;
+  font-size: var(--text-lg);
+  line-height: 1.5;
   color: var(--text-primary);
 }
 
-.transcriptHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-.endpointPending {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: 0.78rem;
-  color: var(--text-secondary);
+.transcriptBody {
+  background: var(--bg-sunken);
+  padding: var(--space-4);
+  min-height: 160px;
 }
 .transcript {
   margin: 0;
-  font-size: 1rem;
+  font-size: var(--text-md);
   line-height: 1.6;
   color: var(--text-primary);
-  min-height: 3.2em;
   white-space: pre-wrap;
 }
 .partial {
@@ -101,17 +74,68 @@
   color: var(--text-muted);
 }
 
-.controls {
+.endpointPending {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.sideBody {
+  padding: var(--space-3);
+}
+
+/* Transport strip — timecode readout + transport buttons, pinned to the base. */
+.transport {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-panel-header);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.transportReadout {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.stateBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: 3px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+}
+.timer {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+.ordinal {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.transportControls {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
 }
-.shortcutHint {
-  margin: var(--space-3) 0 0;
-  font-size: 0.78rem;
-  color: var(--text-muted);
-}
 
+/* Microphone */
 .micStatus {
   display: flex;
   flex-direction: column;
@@ -121,7 +145,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 0.88rem;
+  font-size: var(--text-sm);
   font-weight: 600;
 }
 .micDevice {
@@ -130,8 +154,8 @@
 }
 .micTrack {
   height: 8px;
-  border-radius: 999px;
-  background: var(--bg-app);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
   border: 1px solid var(--border);
   overflow: hidden;
 }
@@ -144,10 +168,11 @@
   background: var(--danger);
 }
 .micClipNote {
-  font-size: 0.75rem;
+  font-size: var(--text-2xs);
   color: var(--danger);
 }
 
+/* Coverage + providers — dense rows */
 .coverageList,
 .providerList {
   list-style: none;
@@ -169,11 +194,11 @@
   min-width: 0;
 }
 .coverageLabel {
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
   color: var(--text-primary);
 }
 .coverageMeta {
-  font-size: 0.72rem;
+  font-size: var(--text-2xs);
   color: var(--text-muted);
   text-transform: capitalize;
 }
@@ -182,7 +207,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: 0.85rem;
+  font-size: var(--text-sm);
 }
 .providerLabel {
   flex: 1 1 auto;
@@ -191,10 +216,10 @@
 .providerValue {
   color: var(--text-muted);
   text-transform: capitalize;
-  font-size: 0.78rem;
+  font-size: var(--text-xs);
 }
 .providerLatency {
-  font-size: 0.75rem;
+  font-size: var(--text-2xs);
   color: var(--text-muted);
-  font-variant: tabular-nums;
+  font-variant-numeric: tabular-nums;
 }

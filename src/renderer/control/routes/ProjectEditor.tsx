@@ -10,6 +10,8 @@ import type {
 import type { Navigator } from '../app';
 import { Button } from '../components/Button';
 import { StatusIcon } from '../components/StatusIcon';
+import { Panel } from '../components/Panel';
+import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
 import { MarkdownEditor } from '../components/MarkdownEditor';
 import { describeError } from '../lib/errors';
 import route from './route.module.css';
@@ -307,9 +309,15 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
 
   if (!form) {
     return (
-      <div className={route.page}>
-        <p className={route.empty}>{loadError ?? 'Loading project…'}</p>
-      </div>
+      <>
+        <WorkspaceToolbar
+          title={savedId ? 'Edit project' : 'New project'}
+          onBack={() => nav.go({ name: 'home' })}
+        />
+        <div className={route.page}>
+          <p className={route.empty}>{loadError ?? 'Loading project…'}</p>
+        </div>
+      </>
     );
   }
 
@@ -318,268 +326,271 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   const totalChars = form.documents.reduce((sum, doc) => sum + doc.content.length, 0);
 
   return (
-    <div className={`${route.page} ${route.pageWide}`}>
-      <div className={route.pageHeader}>
-        <div>
-          <h1 className={route.title}>{savedId ? 'Edit project' : 'New interview project'}</h1>
-          <p className={route.subtitle}>
-            Describe the interview and provide the source material. Imported documents are treated
-            as reference material only.
-          </p>
-        </div>
-        <div className={route.headerActions}>
-          {prepared && (
-            <span className={styles.preparedBadge}>
-              <StatusIcon tone="success" label="Prepared" /> Prepared
-            </span>
-          )}
-          <Button variant="ghost" onClick={() => nav.go({ name: 'home' })}>
-            Back
-          </Button>
-          <Button onClick={() => void handleSave()} disabled={saving}>
-            {saving ? 'Saving…' : 'Save'}
-          </Button>
-          <Button variant="primary" onClick={() => void handlePrepare()} disabled={preparing || saving}>
-            {preparing ? 'Preparing…' : 'Prepare interview'}
-          </Button>
-          {savedId && (
-            <Button
-              variant="secondary"
-              onClick={() => nav.go({ name: 'preflight', projectId: savedId })}
-              disabled={!prepared}
-              title={prepared ? 'Start a session' : 'Prepare the interview first'}
-            >
-              Start session
+    <>
+      <WorkspaceToolbar
+        title={savedId ? 'Edit project' : 'New project'}
+        onBack={() => nav.go({ name: 'home' })}
+        actions={
+          <>
+            {prepared && (
+              <span className={styles.preparedBadge}>
+                <StatusIcon tone="success" label="Prepared" /> Prepared
+              </span>
+            )}
+            <Button onClick={() => void handleSave()} disabled={saving}>
+              {saving ? 'Saving…' : 'Save'}
             </Button>
-          )}
-        </div>
-      </div>
-
-      {loadError !== null && (
-        <p className={route.error} role="alert">
-          {loadError}
-        </p>
-      )}
-      {actionError !== null && (
-        <p className={route.error} role="alert">
-          {actionError}
-        </p>
-      )}
-
-      {warnings !== null && (
-        <div className={route.notice} role="status">
-          <StatusIcon tone={warnings.length > 0 ? 'warning' : 'success'} label="Preparation result" />
-          <div>
-            {warnings.length === 0 ? (
-              <span>Interview prepared with no warnings.</span>
-            ) : (
-              <>
-                <strong>Prepared with {warnings.length} warning(s):</strong>
-                <ul className={styles.warningList}>
-                  {warnings.map((warning, index) => (
-                    <li key={index}>{warning}</li>
-                  ))}
-                </ul>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      <section className={`${route.panel} ${route.section}`}>
-        <div className={route.field}>
-          <label className={route.label} htmlFor="project-title">
-            Title
-          </label>
-          <input
-            id="project-title"
-            className={route.input}
-            value={form.title}
-            onChange={(e) => patch({ title: e.target.value })}
-            placeholder="e.g. The founding story of Acme Robotics"
-          />
-        </div>
-
-        <div className={route.row}>
-          <div className={`${route.field} ${route.rowItem}`}>
-            <label className={route.label} htmlFor="project-audience">
-              Intended audience
-            </label>
-            <input
-              id="project-audience"
-              className={route.input}
-              value={form.audience}
-              onChange={(e) => patch({ audience: e.target.value })}
-              placeholder="e.g. Prospective customers and press"
-            />
-          </div>
-          <div className={`${route.field} ${route.rowItem}`}>
-            <label className={route.label} htmlFor="project-outcome">
-              Desired outcome
-            </label>
-            <input
-              id="project-outcome"
-              className={route.input}
-              value={form.intendedOutcome}
-              onChange={(e) => patch({ intendedOutcome: e.target.value })}
-              placeholder="e.g. A candid narrative of the pivot"
-            />
-          </div>
-        </div>
-
-        <div className={route.row}>
-          <div className={`${route.field} ${route.rowItem}`}>
-            <label className={route.label} htmlFor="project-target-mode">
-              Target mode
-            </label>
-            <select
-              id="project-target-mode"
-              className={route.select}
-              value={form.targetMode}
-              onChange={(e) => patch({ targetMode: e.target.value as TargetMode })}
+            <Button
+              variant="primary"
+              onClick={() => void handlePrepare()}
+              disabled={preparing || saving}
             >
-              <option value="question_count">Question count</option>
-              <option value="approximate_duration">Approximate duration (minutes)</option>
-            </select>
-          </div>
-          <div className={`${route.field} ${route.rowItem}`}>
-            <label className={route.label} htmlFor="project-target-value">
-              {form.targetMode === 'question_count' ? 'Number of questions' : 'Duration (minutes)'}
-            </label>
-            <input
-              id="project-target-value"
-              className={route.input}
-              type="number"
-              min={1}
-              value={form.targetValue}
-              onChange={(e) => {
-                const parsed = Number.parseInt(e.target.value, 10);
-                patch({ targetValue: Number.isFinite(parsed) && parsed > 0 ? parsed : 1 });
-              }}
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className={`${route.panel} ${route.section}`}>
-        <div>
-          <h2 className={route.sectionTitle}>Interviewer</h2>
-          <p className={route.sectionHint}>Mira conducts the interview using your source material.</p>
-        </div>
-        <div className={route.field}>
-          <label className={route.label} htmlFor="project-character">
-            Interviewer
-          </label>
-          <select
-            id="project-character"
-            className={route.select}
-            value={form.interviewerCharacterId}
-            onChange={(e) => patch({ interviewerCharacterId: e.target.value })}
-          >
-            {characters.length === 0 && (
-              <option value={form.interviewerCharacterId}>{form.interviewerCharacterId}</option>
+              {preparing ? 'Preparing…' : 'Prepare interview'}
+            </Button>
+            {savedId && (
+              <Button
+                variant="secondary"
+                onClick={() => nav.go({ name: 'preflight', projectId: savedId })}
+                disabled={!prepared}
+                title={prepared ? 'Start a session' : 'Prepare the interview first'}
+              >
+                Start session
+              </Button>
             )}
-            {characters.map((character) => (
-              <option key={character.id} value={character.id}>
-                {character.displayName} — {character.shortDescription}
-              </option>
-            ))}
-          </select>
-        </div>
-        {selectedCharacter && (
-          <div className={styles.characterCard}>
-            <img
-              className={styles.characterImage}
-              src={selectedCharacter.profileImageUrl}
-              alt={`Portrait of ${selectedCharacter.displayName}`}
+          </>
+        }
+      />
+      <div className={`${route.page} ${route.pageWide}`}>
+        {loadError !== null && (
+          <p className={route.error} role="alert">
+            {loadError}
+          </p>
+        )}
+        {actionError !== null && (
+          <p className={route.error} role="alert">
+            {actionError}
+          </p>
+        )}
+
+        {warnings !== null && (
+          <div className={route.notice} role="status">
+            <StatusIcon
+              tone={warnings.length > 0 ? 'warning' : 'success'}
+              label="Preparation result"
             />
             <div>
-              <div className={styles.characterName}>{selectedCharacter.displayName}</div>
-              <div className={styles.characterDesc}>{selectedCharacter.shortDescription}</div>
+              {warnings.length === 0 ? (
+                <span>Interview prepared with no warnings.</span>
+              ) : (
+                <>
+                  <strong>Prepared with {warnings.length} warning(s):</strong>
+                  <ul className={styles.warningList}>
+                    {warnings.map((warning, index) => (
+                      <li key={index}>{warning}</li>
+                    ))}
+                  </ul>
+                </>
+              )}
             </div>
           </div>
         )}
-      </section>
 
-      <section className={`${route.panel} ${route.section}`}>
-        <div>
-          <h2 className={route.sectionTitle}>Notes to Mira</h2>
+        <Panel title="Project">
+          <div className={route.field}>
+            <label className={route.label} htmlFor="project-title">
+              Title
+            </label>
+            <input
+              id="project-title"
+              className={route.input}
+              value={form.title}
+              onChange={(e) => patch({ title: e.target.value })}
+              placeholder="e.g. The founding story of Acme Robotics"
+            />
+          </div>
+
+          <div className={route.row}>
+            <div className={`${route.field} ${route.rowItem}`}>
+              <label className={route.label} htmlFor="project-audience">
+                Intended audience
+              </label>
+              <input
+                id="project-audience"
+                className={route.input}
+                value={form.audience}
+                onChange={(e) => patch({ audience: e.target.value })}
+                placeholder="e.g. Prospective customers and press"
+              />
+            </div>
+            <div className={`${route.field} ${route.rowItem}`}>
+              <label className={route.label} htmlFor="project-outcome">
+                Desired outcome
+              </label>
+              <input
+                id="project-outcome"
+                className={route.input}
+                value={form.intendedOutcome}
+                onChange={(e) => patch({ intendedOutcome: e.target.value })}
+                placeholder="e.g. A candid narrative of the pivot"
+              />
+            </div>
+          </div>
+
+          <div className={route.row}>
+            <div className={`${route.field} ${route.rowItem}`}>
+              <label className={route.label} htmlFor="project-target-mode">
+                Target mode
+              </label>
+              <select
+                id="project-target-mode"
+                className={route.select}
+                value={form.targetMode}
+                onChange={(e) => patch({ targetMode: e.target.value as TargetMode })}
+              >
+                <option value="question_count">Question count</option>
+                <option value="approximate_duration">Approximate duration (minutes)</option>
+              </select>
+            </div>
+            <div className={`${route.field} ${route.rowItem}`}>
+              <label className={route.label} htmlFor="project-target-value">
+                {form.targetMode === 'question_count' ? 'Number of questions' : 'Duration (minutes)'}
+              </label>
+              <input
+                id="project-target-value"
+                className={route.input}
+                type="number"
+                min={1}
+                value={form.targetValue}
+                onChange={(e) => {
+                  const parsed = Number.parseInt(e.target.value, 10);
+                  patch({ targetValue: Number.isFinite(parsed) && parsed > 0 ? parsed : 1 });
+                }}
+              />
+            </div>
+          </div>
+        </Panel>
+
+        <Panel title="Interviewer">
+          <p className={route.sectionHint}>
+            Mira conducts the interview using your source material.
+          </p>
+          <div className={route.field}>
+            <label className={route.label} htmlFor="project-character">
+              Interviewer
+            </label>
+            <select
+              id="project-character"
+              className={route.select}
+              value={form.interviewerCharacterId}
+              onChange={(e) => patch({ interviewerCharacterId: e.target.value })}
+            >
+              {characters.length === 0 && (
+                <option value={form.interviewerCharacterId}>{form.interviewerCharacterId}</option>
+              )}
+              {characters.map((character) => (
+                <option key={character.id} value={character.id}>
+                  {character.displayName} — {character.shortDescription}
+                </option>
+              ))}
+            </select>
+          </div>
+          {selectedCharacter && (
+            <div className={styles.characterCard}>
+              <img
+                className={styles.characterImage}
+                src={selectedCharacter.profileImageUrl}
+                alt={`Portrait of ${selectedCharacter.displayName}`}
+              />
+              <div>
+                <div className={styles.characterName}>{selectedCharacter.displayName}</div>
+                <div className={styles.characterDesc}>{selectedCharacter.shortDescription}</div>
+              </div>
+            </div>
+          )}
+        </Panel>
+
+        <Panel title="Notes to Mira">
           <p className={route.sectionHint}>
             Steering for the interviewer — tone, areas to probe, things to avoid.
           </p>
-        </div>
-        <MarkdownEditor
-          value={form.notesToInterviewer}
-          onChange={(value) => patch({ notesToInterviewer: value })}
-          ariaLabel="Notes to Mira"
-          minHeight="120px"
-          placeholder="Keep the tone warm but probing. Avoid leading questions about funding."
-        />
-      </section>
+          <MarkdownEditor
+            value={form.notesToInterviewer}
+            onChange={(value) => patch({ notesToInterviewer: value })}
+            ariaLabel="Notes to Mira"
+            minHeight="120px"
+            placeholder="Keep the tone warm but probing. Avoid leading questions about funding."
+          />
+        </Panel>
 
-      <section className={`${route.panel} ${route.section}`}>
-        <div className={styles.sourceHeader}>
-          <div>
-            <h2 className={route.sectionTitle}>Source material</h2>
-            <p className={route.sectionHint}>
-              The primary document is the backbone of the interview. Reference documents add
-              supporting context.
-            </p>
-          </div>
-          <div className={styles.charCount}>
-            <span>{totalChars.toLocaleString()} characters</span>
-            <Button variant="secondary" onClick={() => void importReference()}>
-              Import .md / .txt
-            </Button>
-          </div>
-        </div>
-
-        {primaryDoc && (
-          <div className={styles.document}>
-            <div className={styles.documentHeader}>
-              <span className={styles.documentLabel}>
-                <StatusIcon tone="active" label="Primary document" /> Primary document
-              </span>
-              <span className={route.count}>{primaryDoc.content.length.toLocaleString()} chars</span>
+        <Panel
+          title="Source material"
+          actions={
+            <div className={styles.charCount}>
+              <span>{totalChars.toLocaleString()} characters</span>
+              <Button variant="secondary" onClick={() => void importReference()}>
+                Import .md / .txt
+              </Button>
             </div>
-            <MarkdownEditor
-              value={primaryDoc.content}
-              onChange={(value) => updateDocument(primaryDoc.key, { content: value })}
-              ariaLabel="Primary source document"
-              minHeight="240px"
-              placeholder="Paste or write the main material the interview draws on…"
-            />
-          </div>
-        )}
+          }
+        >
+          <p className={route.sectionHint}>
+            The primary document is the backbone of the interview. Reference documents add supporting
+            context.
+          </p>
 
-        {referenceDocs.map((doc) => (
-          <div key={doc.key} className={styles.document}>
-            <div className={styles.documentHeader}>
-              <input
-                className={styles.documentTitleInput}
-                value={doc.title}
-                aria-label="Reference document title"
-                onChange={(e) => updateDocument(doc.key, { title: e.target.value })}
+          {primaryDoc && (
+            <div className={styles.document}>
+              <div className={styles.documentHeader}>
+                <span className={styles.documentLabel}>
+                  <StatusIcon tone="active" label="Primary document" /> Primary document
+                </span>
+                <span className={route.count}>
+                  {primaryDoc.content.length.toLocaleString()} chars
+                </span>
+              </div>
+              <MarkdownEditor
+                value={primaryDoc.content}
+                onChange={(value) => updateDocument(primaryDoc.key, { content: value })}
+                ariaLabel="Primary source document"
+                minHeight="240px"
+                placeholder="Paste or write the main material the interview draws on…"
               />
-              <span className={styles.documentMeta}>
-                <span className={route.count}>{doc.content.length.toLocaleString()} chars</span>
-                <Button variant="ghost" onClick={() => removeDocument(doc.key)} aria-label={`Remove ${doc.title}`}>
-                  Remove
-                </Button>
-              </span>
             </div>
-            {doc.originalFilename && (
-              <span className={styles.filename}>Imported from {doc.originalFilename}</span>
-            )}
-            <MarkdownEditor
-              value={doc.content}
-              onChange={(value) => updateDocument(doc.key, { content: value })}
-              ariaLabel={`Reference document: ${doc.title}`}
-              minHeight="160px"
-            />
-          </div>
-        ))}
-      </section>
-    </div>
+          )}
+
+          {referenceDocs.map((doc) => (
+            <div key={doc.key} className={styles.document}>
+              <div className={styles.documentHeader}>
+                <input
+                  className={styles.documentTitleInput}
+                  value={doc.title}
+                  aria-label="Reference document title"
+                  onChange={(e) => updateDocument(doc.key, { title: e.target.value })}
+                />
+                <span className={styles.documentMeta}>
+                  <span className={route.count}>{doc.content.length.toLocaleString()} chars</span>
+                  <Button
+                    variant="ghost"
+                    onClick={() => removeDocument(doc.key)}
+                    aria-label={`Remove ${doc.title}`}
+                  >
+                    Remove
+                  </Button>
+                </span>
+              </div>
+              {doc.originalFilename && (
+                <span className={styles.filename}>Imported from {doc.originalFilename}</span>
+              )}
+              <MarkdownEditor
+                value={doc.content}
+                onChange={(value) => updateDocument(doc.key, { content: value })}
+                ariaLabel={`Reference document: ${doc.title}`}
+                minHeight="160px"
+              />
+            </div>
+          ))}
+        </Panel>
+      </div>
+    </>
   );
 }

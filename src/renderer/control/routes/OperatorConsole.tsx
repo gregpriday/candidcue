@@ -8,6 +8,9 @@ import type {
 import type { Navigator } from '../app';
 import { Button } from '../components/Button';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
+import { Icon } from '../components/Icon';
+import { Panel } from '../components/Panel';
+import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
 import { useSnapshot } from '../state/useSnapshot';
 import { formatElapsed } from '../lib/format';
 import { describeError } from '../lib/errors';
@@ -76,6 +79,15 @@ function isEditableTarget(target: EventTarget | null): boolean {
   );
 }
 
+/**
+ * Focus is on an interactive control (e.g. a transport button). Let it handle its
+ * own keys so Space/Enter activates the focused button instead of the global
+ * shortcut wrong-firing a commit at it.
+ */
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.closest('button, a[href], [role="button"]') !== null;
+}
+
 export function OperatorConsole({ nav, sessionId }: OperatorConsoleProps): JSX.Element {
   const snapshot = useSnapshot();
   const [commandError, setCommandError] = useState<string | null>(null);
@@ -110,7 +122,14 @@ export function OperatorConsole({ nav, sessionId }: OperatorConsoleProps): JSX.E
       return undefined;
     }
     const handler = (event: KeyboardEvent): void => {
-      if (event.repeat || isEditableTarget(event.target) || event.metaKey || event.ctrlKey || event.altKey) {
+      if (
+        event.repeat ||
+        isEditableTarget(event.target) ||
+        isInteractiveTarget(event.target) ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey
+      ) {
         return;
       }
       const key = event.key.toLowerCase();
@@ -151,17 +170,19 @@ export function OperatorConsole({ nav, sessionId }: OperatorConsoleProps): JSX.E
 
   if (!snapshot) {
     return (
-      <div className={route.page}>
-        <div className={route.pageHeader}>
-          <div>
-            <h1 className={route.title}>Operator console</h1>
-            <p className={route.subtitle}>Waiting for the session to report in…</p>
-          </div>
-          <Button variant="ghost" onClick={() => nav.go({ name: 'home' })}>
-            Back to projects
-          </Button>
+      <>
+        <WorkspaceToolbar
+          title="Operator console"
+          actions={
+            <Button variant="ghost" onClick={() => nav.go({ name: 'home' })}>
+              Exit
+            </Button>
+          }
+        />
+        <div className={route.page}>
+          <p className={route.empty}>Waiting for the session to report in…</p>
         </div>
-      </div>
+      </>
     );
   }
 
@@ -197,11 +218,82 @@ function OperatorView({ snapshot, commandError, onCommand, onExit }: OperatorVie
   }, [descriptor.label, snapshot.endpointPending, snapshot.recoverableWarning]);
 
   return (
-    <div className={`${route.page} ${route.pageWide}`}>
-      <div className={route.pageHeader}>
-        <div>
-          <h1 className={route.title}>{snapshot.projectTitle}</h1>
-          <div className={styles.stateRow}>
+    <>
+      <WorkspaceToolbar
+        title={snapshot.projectTitle}
+        actions={
+          <Button variant="ghost" onClick={onExit}>
+            Exit
+          </Button>
+        }
+      />
+
+      <div className={styles.cockpit}>
+        {/* ARIA live region announcing state changes to assistive tech. */}
+        <div className={styles.visuallyHidden} role="status" aria-live="assertive">
+          {announcement}
+        </div>
+
+        {snapshot.recoverableWarning && (
+          <div className={route.notice} role="alert">
+            <StatusIcon tone="warning" label="Warning" />
+            <span>{snapshot.recoverableWarning}</span>
+          </div>
+        )}
+        {commandError !== null && (
+          <p className={route.error} role="alert">
+            {commandError}
+          </p>
+        )}
+
+        <div className={styles.grid}>
+          <div className={styles.mainColumn}>
+            <Panel title="Current question" flush flushBody bodyClassName={styles.questionBody}>
+              <p className={styles.question}>
+                {snapshot.currentQuestion ?? <span className={styles.muted}>No question yet.</span>}
+              </p>
+            </Panel>
+
+            <Panel
+              title="Live transcript"
+              flush
+              flushBody
+              bodyClassName={styles.transcriptBody}
+              actions={
+                snapshot.endpointPending ? (
+                  <span className={styles.endpointPending}>
+                    <StatusIcon tone="pending" label="Detecting end of answer" /> Detecting end
+                  </span>
+                ) : undefined
+              }
+            >
+              <p className={styles.transcript}>
+                <span>{snapshot.finalTranscriptSoFar}</span>
+                {snapshot.partialTranscript && (
+                  <span className={styles.partial}> {snapshot.partialTranscript}</span>
+                )}
+                {!snapshot.finalTranscriptSoFar && !snapshot.partialTranscript && (
+                  <span className={styles.muted}>Waiting for the answer…</span>
+                )}
+              </p>
+            </Panel>
+          </div>
+
+          <aside className={styles.sideColumn}>
+            <Panel title="Microphone" flush flushBody bodyClassName={styles.sideBody}>
+              <MicStatus mic={snapshot.mic} />
+            </Panel>
+            <Panel title="Coverage" flush flushBody bodyClassName={styles.sideBody}>
+              <CoverageList items={snapshot.coverage} />
+            </Panel>
+            <Panel title="Providers" flush flushBody bodyClassName={styles.sideBody}>
+              <ProviderStatusList status={snapshot.providerStatus} />
+            </Panel>
+          </aside>
+        </div>
+
+        <div className={styles.transport}>
+          <div className={styles.transportReadout}>
             <span className={styles.stateBadge}>
               <StatusIcon tone={descriptor.tone} label={`State: ${descriptor.label}`} />
               {descriptor.label}
@@ -211,113 +303,41 @@ function OperatorView({ snapshot, commandError, onCommand, onExit }: OperatorVie
             </span>
             <span className={styles.ordinal}>Question {snapshot.questionOrdinal}</span>
           </div>
+
+          <div className={styles.transportControls}>
+            {controls.canResume ? (
+              <Button onClick={() => onCommand({ type: 'RESUME_SESSION' })}>
+                <Icon name="play" size={14} /> Resume (P)
+              </Button>
+            ) : (
+              <Button onClick={() => onCommand({ type: 'PAUSE_SESSION' })} disabled={!controls.canPause}>
+                <Icon name="pause" size={14} /> Pause (P)
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              onClick={() => onCommand({ type: 'COMMIT_USER_TURN', reason: 'manual' })}
+              disabled={!controls.canCommit}
+            >
+              <Icon name="check" size={14} /> Commit (Space)
+            </Button>
+            <Button onClick={() => onCommand({ type: 'REPEAT_QUESTION' })} disabled={!controls.canRepeat}>
+              <Icon name="repeat" size={14} /> Repeat (R)
+            </Button>
+            <Button onClick={() => onCommand({ type: 'SKIP_QUESTION' })} disabled={!controls.canSkip}>
+              <Icon name="skip" size={14} /> Skip (S)
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => onCommand({ type: 'END_AFTER_TURN' })}
+              disabled={!controls.canEnd}
+            >
+              <Icon name="stop" size={14} /> End after turn
+            </Button>
+          </div>
         </div>
-        <Button variant="ghost" onClick={onExit}>
-          Exit
-        </Button>
       </div>
-
-      {/* ARIA live region announcing state changes to assistive tech. */}
-      <div className={styles.visuallyHidden} role="status" aria-live="assertive">
-        {announcement}
-      </div>
-
-      {snapshot.recoverableWarning && (
-        <div className={route.notice} role="alert">
-          <StatusIcon tone="warning" label="Warning" />
-          <span>{snapshot.recoverableWarning}</span>
-        </div>
-      )}
-      {commandError !== null && (
-        <p className={route.error} role="alert">
-          {commandError}
-        </p>
-      )}
-
-      <div className={styles.layout}>
-        <div className={styles.mainColumn}>
-          <section className={route.panel}>
-            <h2 className={styles.panelLabel}>Current question</h2>
-            <p className={styles.question}>
-              {snapshot.currentQuestion ?? <span className={styles.muted}>No question yet.</span>}
-            </p>
-          </section>
-
-          <section className={route.panel}>
-            <div className={styles.transcriptHeader}>
-              <h2 className={styles.panelLabel}>Live transcript</h2>
-              {snapshot.endpointPending && (
-                <span className={styles.endpointPending}>
-                  <StatusIcon tone="pending" label="Detecting end of answer" /> Detecting end
-                </span>
-              )}
-            </div>
-            <p className={styles.transcript}>
-              <span>{snapshot.finalTranscriptSoFar}</span>
-              {snapshot.partialTranscript && (
-                <span className={styles.partial}> {snapshot.partialTranscript}</span>
-              )}
-              {!snapshot.finalTranscriptSoFar && !snapshot.partialTranscript && (
-                <span className={styles.muted}>Waiting for the answer…</span>
-              )}
-            </p>
-          </section>
-
-          <section className={route.panel}>
-            <h2 className={styles.panelLabel}>Controls</h2>
-            <div className={styles.controls}>
-              {controls.canResume ? (
-                <Button onClick={() => onCommand({ type: 'RESUME_SESSION' })}>Resume (P)</Button>
-              ) : (
-                <Button onClick={() => onCommand({ type: 'PAUSE_SESSION' })} disabled={!controls.canPause}>
-                  Pause (P)
-                </Button>
-              )}
-              <Button
-                variant="primary"
-                onClick={() => onCommand({ type: 'COMMIT_USER_TURN', reason: 'manual' })}
-                disabled={!controls.canCommit}
-              >
-                Commit answer (Space)
-              </Button>
-              <Button onClick={() => onCommand({ type: 'REPEAT_QUESTION' })} disabled={!controls.canRepeat}>
-                Repeat (R)
-              </Button>
-              <Button onClick={() => onCommand({ type: 'SKIP_QUESTION' })} disabled={!controls.canSkip}>
-                Skip (S)
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => onCommand({ type: 'END_AFTER_TURN' })}
-                disabled={!controls.canEnd}
-              >
-                End after turn
-              </Button>
-            </div>
-            <p className={styles.shortcutHint}>
-              Shortcuts work when no field is focused: Space commits, P pauses/resumes, R repeats, S skips.
-            </p>
-          </section>
-        </div>
-
-        <aside className={styles.sideColumn}>
-          <section className={route.panel}>
-            <h2 className={styles.panelLabel}>Microphone</h2>
-            <MicStatus mic={snapshot.mic} />
-          </section>
-
-          <section className={route.panel}>
-            <h2 className={styles.panelLabel}>Coverage</h2>
-            <CoverageList items={snapshot.coverage} />
-          </section>
-
-          <section className={route.panel}>
-            <h2 className={styles.panelLabel}>Providers</h2>
-            <ProviderStatusList status={snapshot.providerStatus} />
-          </section>
-        </aside>
-      </div>
-    </div>
+    </>
   );
 }
 
