@@ -109,3 +109,41 @@ export interface ProjectSummary {
   lastSessionAt: string | null;
   updatedAt: string;
 }
+
+// ---------------------------------------------------------------------------
+// Markdown import (multi-file). Results cross main → renderer; absolute paths
+// never do — only the basename is ever returned.
+// ---------------------------------------------------------------------------
+
+/** A single successfully imported Markdown file, normalized and ready to add. */
+export interface ImportedMarkdownDocument {
+  /** Default title — the basename without its extension. */
+  title: string;
+  /** Basename of the imported file (never an absolute path). */
+  originalFilename: string;
+  mimeType: 'text/markdown';
+  /** UTF-8 content, BOM-stripped and normalized to LF line endings. */
+  content: string;
+  sizeBytes: number;
+  characterCount: number;
+}
+
+export type MarkdownImportFailureCode =
+  | 'unsupported_extension'
+  | 'too_large'
+  | 'invalid_utf8'
+  | 'contains_nul'
+  | 'read_failed';
+
+/** A per-file import failure. `filename` is a basename; the message is UI-safe. */
+export interface MarkdownImportFailure {
+  filename: string;
+  code: MarkdownImportFailureCode;
+  message: string;
+}
+
+/** Partial-success result of a multi-file Markdown import. */
+export interface ImportMarkdownDocumentsResult {
+  documents: ImportedMarkdownDocument[];
+  failures: MarkdownImportFailure[];
+}

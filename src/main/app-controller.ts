@@ -1,5 +1,5 @@
 import { dialog, type WebContents } from 'electron';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 
 import type {
@@ -40,6 +40,8 @@ import type {
 import { newId } from '@shared/domain';
 import { MODEL_DEFAULTS, INWORLD_DEFAULTS, RUNTIME_DEFAULTS, PROJECT_LIMITS } from '@shared/constants/runtime-defaults';
 import { PROJECT_SOURCE_LIMITS, isAllowedMarkdownExtension } from '@shared/constants/project-source-limits';
+import { importMarkdownBuffers, MAX_IMPORT_BYTES } from './project-assets/markdown-importer';
+import type { ImportMarkdownDocumentsResult, MarkdownImportFailure } from '@shared/domain';
 import { AppError, isAppError } from '@shared/errors/app-error';
 import { hashProjectPreparationFromDocuments } from '@shared/utils';
 
@@ -126,6 +128,72 @@ export class AppController {
       filename: basename(path),
       mimeType: 'text/markdown',
     };
+  }
+
+  /**
+   * Multi-file Markdown import (spec §7.4, §14, §16.2). All path handling stays
+   * in main; only basenames, normalized content, and structured per-file
+   * failures cross to the renderer — never an absolute path. Reads are bounded
+   * to four at a time and a byte pre-check avoids reading oversize files. A
+   * cancelled dialog returns null and is not an error.
+   */
+  async importMarkdownDocuments(): Promise<ImportMarkdownDocumentsResult | null> {
+    // Never let an unexpected dialog/IO error serialize an internal message to
+    // the renderer; per-file errors are already captured as structured failures.
+    try {
+      return await this.runMarkdownImport();
+    } catch {
+      return null;
+    }
+  }
+
+  private async runMarkdownImport(): Promise<ImportMarkdownDocumentsResult | null> {
+    const res = await dialog.showOpenDialog({
+      title: 'Import Markdown source files',
+      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
+      properties: ['openFile', 'multiSelections'],
+    });
+    if (res.canceled || res.filePaths.length === 0) return null;
+
+    const paths = res.filePaths.slice(0, PROJECT_SOURCE_LIMITS.maxImportBatch);
+    const files: { filename: string; buffer: Uint8Array }[] = [];
+    const readFailures: MarkdownImportFailure[] = [];
+
+    type ReadOutcome =
+      | { ok: true; file: { filename: string; buffer: Uint8Array } }
+      | { ok: false; failure: MarkdownImportFailure };
+
+    // Bounded concurrency (four reads at a time) preserving picker order.
+    for (let i = 0; i < paths.length; i += 4) {
+      const chunk = paths.slice(i, i + 4);
+      const outcomes = await Promise.all(
+        chunk.map(async (path): Promise<ReadOutcome> => {
+          const filename = basename(path);
+          try {
+            const info = await stat(path);
+            if (info.size > MAX_IMPORT_BYTES) {
+              return {
+                ok: false,
+                failure: { filename, code: 'too_large', message: 'The file exceeds the maximum source size.' },
+              };
+            }
+            return { ok: true, file: { filename, buffer: await readFile(path) } };
+          } catch {
+            return {
+              ok: false,
+              failure: { filename, code: 'read_failed', message: 'The file could not be read.' },
+            };
+          }
+        }),
+      );
+      for (const outcome of outcomes) {
+        if (outcome.ok) files.push(outcome.file);
+        else readFailures.push(outcome.failure);
+      }
+    }
+
+    const decoded = importMarkdownBuffers(files);
+    return { documents: decoded.documents, failures: [...readFailures, ...decoded.failures] };
   }
 
   // ---- Project preparation ---------------------------------------------

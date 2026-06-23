@@ -48,6 +48,10 @@ export function registerControlIpc(app: AppController, guard: Guard): void {
     control(e);
     return app.importDocument();
   });
+  ipcMain.handle(CHANNELS.projectsImportMarkdownDocuments, (e) => {
+    control(e);
+    return app.importMarkdownDocuments();
+  });
 
   ipcMain.handle(CHANNELS.settingsGetPublic, (e) => {
     control(e);

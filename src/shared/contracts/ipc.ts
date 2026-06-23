@@ -6,6 +6,7 @@ import type {
   ProjectAggregate,
   ProjectSummary,
   SaveProjectInput,
+  ImportMarkdownDocumentsResult,
   PublicCharacterSummary,
   EndpointMode,
 } from '../domain';
@@ -24,6 +25,7 @@ export const CHANNELS = {
   projectsPrepare: 'projects:prepare',
   projectsExport: 'projects:export',
   projectsImportDocument: 'projects:import-document',
+  projectsImportMarkdownDocuments: 'projects:import-markdown-documents',
   // control: settings
   settingsGetPublic: 'settings:get-public',
   settingsSaveProviders: 'settings:save-providers',
@@ -333,6 +335,7 @@ export interface CandidCueControlApi {
     prepare(projectId: string): Promise<PreparationJobResult>;
     export(projectId: string): Promise<ExportResult>;
     importDocument(): Promise<{ title: string; content: string; filename: string; mimeType: string } | null>;
+    importMarkdownDocuments(): Promise<ImportMarkdownDocumentsResult | null>;
   };
   settings: {
     getPublic(): Promise<PublicSettings>;
