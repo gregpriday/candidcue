@@ -8,6 +8,8 @@ import type {
   StageStateProjection,
   OperatorSessionSnapshot,
   PublicCoverageItem,
+  PublicProviderStatus,
+  AudioMeterReading,
 } from '@shared/contracts';
 import type {
   InterviewSession,
@@ -37,7 +39,7 @@ import { applyCoverageUpdates, incrementFollowUp } from './coverage-controller';
 import { pickFallback } from './fallback-planner';
 import { DurationCalibrator } from './duration-calibrator';
 import { buildCoverageContext, buildRecentTurns, buildModerationGuidance } from './context-builder';
-import { decideEndpoint, shouldRunClassifier } from './endpoint-controller';
+import { decideEndpoint, shouldRunClassifier, autoCommitAllowed } from './endpoint-controller';
 import { NOOP_LOGGER, type Logger, type StagePort, type SnapshotSink, type Clock } from './ports';
 
 export interface OrchestratorModels {
@@ -110,6 +112,9 @@ const MIC_STATE: Record<SessionRuntimeState, 'closed' | 'armed' | 'active'> = {
   PAUSED: 'closed', RECOVERING: 'closed', FINISHING: 'closed', COMPLETED: 'closed', ERROR: 'closed',
 };
 
+/** How often the auto-endpoint loop re-evaluates while the user is silent. */
+const ENDPOINT_TICK_MS = 250;
+
 const STATUS_TEXT: Partial<Record<SessionRuntimeState, string>> = {
   INTERVIEWER_THINKING: 'Thinking',
   INTERVIEWER_BUFFERING: 'Thinking',
@@ -142,6 +147,17 @@ export class SessionOrchestrator {
   private recentQuestionTexts: string[] = [];
   private pausedFromState: SessionRuntimeState | null = null;
   private lastCommittedAnswer = '';
+  private interimTranscript = '';
+  private micLevel = 0;
+  private micClipping = false;
+  private endpointTimer: ReturnType<typeof setInterval> | null = null;
+  private endpointEvalInFlight = false;
+  private providerHealth: PublicProviderStatus = {
+    openai: 'ok',
+    inworldStt: 'ok',
+    inworldTts: 'ok',
+    lastQuestionLatencyMs: null,
+  };
   private recoverableWarning: string | null = null;
   private readonly startedAtMs: number;
   private readonly calibrator = new DurationCalibrator();
@@ -242,6 +258,7 @@ export class SessionOrchestrator {
     // `transition` records pausedFromState from the pre-transition state.
     if (!this.transition('pause')) return;
     this.generationId++; // invalidate any in-flight provider work
+    this.clearEndpointTimer();
     this.deps.stage.closeMicGate();
   }
 
@@ -287,6 +304,7 @@ export class SessionOrchestrator {
 
   async endNow(): Promise<void> {
     this.generationId++;
+    this.clearEndpointTimer();
     this.transition('completionSelected');
     this.transition('finalAnswerStored', 'ended now');
     await this.persistSessionStatus('completed');
@@ -294,6 +312,7 @@ export class SessionOrchestrator {
 
   // -- STT-driven events (auto endpoint) -----------------------------------
   onSpeechStarted(at: number): void {
+    this.clearEndpointTimer();
     if (this.currentTurn && this.currentTurn.speechStartedAt == null) {
       this.currentTurn.speechStartedAt = at;
     }
@@ -303,16 +322,66 @@ export class SessionOrchestrator {
   onSpeechStopped(at: number): void {
     if (this.currentTurn) this.currentTurn.speechEndedAt = at;
     this.transition('speechStopped');
+    // Begin auto-endpoint evaluation as silence grows (MIC-05). No-op in manual mode.
+    this.startEndpointEvaluation();
   }
 
   onSpeechResumed(): void {
+    this.clearEndpointTimer();
     this.transition('speechResumed');
+  }
+
+  /** A live interim (non-final) STT transcript for the current turn (MIC-04). */
+  onSttPartial(text: string): void {
+    this.interimTranscript = text;
+    this.publishSnapshot();
+  }
+
+  /** A finalized STT segment: append to the turn's accumulated transcript (MIC-04). */
+  onSttFinalSegment(text: string): void {
+    const segment = text.trim();
+    if (segment.length > 0 && this.currentTurn) {
+      this.currentTurn.rawTranscript = this.currentTurn.rawTranscript
+        ? `${this.currentTurn.rawTranscript} ${segment}`.trim()
+        : segment;
+    }
+    this.interimTranscript = '';
+    this.markProvider('inworldStt', 'ok');
+    this.publishSnapshot();
+  }
+
+  /** A streaming STT error: degrade provider health and surface it to the operator. */
+  onSttError(message: string): void {
+    this.log.warn('stt.stream_error', { message });
+    this.markProvider('inworldStt', 'degraded');
+    this.publishSnapshot();
+  }
+
+  /** Set the live STT connection health (called once after the connect attempt). */
+  setSttConnected(connected: boolean): void {
+    this.markProvider('inworldStt', connected ? 'ok' : 'down');
+    this.publishSnapshot();
+  }
+
+  /** Live microphone meter reading from the stage capture graph (MIC-06/07). */
+  reportMeter(reading: AudioMeterReading): void {
+    this.micLevel = reading.average;
+    this.micClipping = reading.clipping;
+    // The stage emits ~10 readings/sec; publish each so the operator meter is live.
+    this.publishSnapshot();
+  }
+
+  /** Release timers when the session ends (called from teardown). */
+  dispose(): void {
+    this.clearEndpointTimer();
   }
 
   /** Evaluate whether the conservative/balanced classifier should auto-commit. */
   async evaluateEndpoint(input: { transcript: string; silenceMs: number; speechMs: number }): Promise<void> {
     const mode = this.ctx.session.endpointMode;
     if (this.commitInFlight || this.state !== 'ENDPOINT_CANDIDATE') return;
+    // Identify the turn we're judging so a slow classifier can't commit a later one.
+    const evalTurnId = this.currentTurn?.id ?? null;
     let classifier = null;
     if (
       shouldRunClassifier({
@@ -344,6 +413,16 @@ export class SessionOrchestrator {
       classifier,
     });
     if (decision.commit) {
+      // Re-check after the (possibly slow) classifier await: a concurrent tick or
+      // a manual commit may already have moved us on, or armed a different turn.
+      // Never commit a stale or different turn.
+      if (
+        this.commitInFlight ||
+        this.state !== 'ENDPOINT_CANDIDATE' ||
+        this.currentTurn?.id !== evalTurnId
+      ) {
+        return;
+      }
       await this.commitUserTurn('automatic');
     } else {
       this.transition('classifierWait');
@@ -391,6 +470,7 @@ export class SessionOrchestrator {
   private async armUserTurn(turn: CurrentTurn): Promise<void> {
     turn.speechStartedAt = null;
     turn.speechEndedAt = null;
+    this.interimTranscript = '';
     try {
       await this.deps.stt.beginTurn(turn.id);
     } catch (err) {
@@ -403,6 +483,7 @@ export class SessionOrchestrator {
     const turn = this.currentTurn;
     if (!turn) return;
     this.commitInFlight = true;
+    this.clearEndpointTimer();
     const myGen = this.generationId;
     const endpointReason: EndpointReason = reason;
 
@@ -541,6 +622,14 @@ export class SessionOrchestrator {
       this.r.nextQuestionDeadlineMs,
       () => this.fallbackAction(),
     );
+    // A timed-out next-question call means we fell back to the bank → degraded.
+    this.providerHealth = {
+      ...this.providerHealth,
+      openai: gen.timedOut ? 'degraded' : 'ok',
+      lastQuestionLatencyMs: gen.timedOut
+        ? this.providerHealth.lastQuestionLatencyMs
+        : Math.round(gen.latencyMs),
+    };
     return gen.value;
   }
 
@@ -648,6 +737,7 @@ export class SessionOrchestrator {
       },
     );
     const ttsResult = tts.value;
+    this.markProvider('inworldTts', 'ok');
     this.calibrator.update(wordCount(record.text), ttsResult.durationMs);
     const media = planSpeaking(ttsResult.durationMs, this.ctx.clips, this.recentClipIds, {
       seed: record.text,
@@ -749,6 +839,7 @@ export class SessionOrchestrator {
 
   private async handlePipelineFailure(err: unknown): Promise<void> {
     const appErr = err instanceof AppError ? err : new AppError('UNKNOWN', { cause: err });
+    if (appErr.code === 'TTS_FAILED') this.markProvider('inworldTts', 'down');
     this.log.error('session.pipeline_failure', { code: appErr.code, message: appErr.message });
     this.recoverableWarning = appErr.publicMessage;
     this.transition('pause', 'pipeline failure');
@@ -780,13 +871,61 @@ export class SessionOrchestrator {
     return this.lastCommittedAnswer;
   }
 
+  // -- automatic endpoint evaluation loop (spec §14, MIC-05) ---------------
+  private startEndpointEvaluation(): void {
+    if (!autoCommitAllowed(this.ctx.session.endpointMode)) return;
+    this.clearEndpointTimer();
+    this.endpointTimer = setInterval(() => {
+      void this.tickEndpoint();
+    }, ENDPOINT_TICK_MS);
+  }
+
+  private async tickEndpoint(): Promise<void> {
+    // Never let a slow classifier from one tick overlap the next tick's call.
+    if (this.endpointEvalInFlight) return;
+    const turn = this.currentTurn;
+    if (this.state !== 'ENDPOINT_CANDIDATE' || turn?.speechEndedAt == null) {
+      this.clearEndpointTimer();
+      return;
+    }
+    const now = this.now();
+    const silenceMs = Math.max(0, now - turn.speechEndedAt);
+    const speechMs =
+      turn.speechStartedAt != null ? Math.max(0, turn.speechEndedAt - turn.speechStartedAt) : 0;
+    this.endpointEvalInFlight = true;
+    try {
+      await this.evaluateEndpoint({ transcript: turn.rawTranscript, silenceMs, speechMs });
+    } finally {
+      this.endpointEvalInFlight = false;
+    }
+  }
+
+  private clearEndpointTimer(): void {
+    if (this.endpointTimer != null) {
+      clearInterval(this.endpointTimer);
+      this.endpointTimer = null;
+    }
+  }
+
+  private markProvider(
+    provider: 'openai' | 'inworldStt' | 'inworldTts',
+    status: 'ok' | 'degraded' | 'down',
+  ): void {
+    this.providerHealth = { ...this.providerHealth, [provider]: status };
+  }
+
   private publishStage(): void {
+    // Captions show Mira's current spoken question while she speaks (spec §7.12,
+    // CORR-10); the user's own transcript is never shown on stage by default.
+    const speaking = STAGE_VISUAL[this.state] === 'speaking';
+    const captions =
+      this.ctx.captionsEnabled && speaking ? (this.currentTurn?.question.text ?? null) : null;
     const projection: StageStateProjection = {
       version: ++this.snapshotVersion,
       visualState: STAGE_VISUAL[this.state],
       micState: MIC_STATE[this.state],
       statusText: STATUS_TEXT[this.state] ?? null,
-      captions: null,
+      captions,
       mirror: this.ctx.session.settingsSnapshot.mirrorStage,
       zoom: this.ctx.session.settingsSnapshot.zoom,
       verticalOffsetPercent: this.ctx.session.settingsSnapshot.verticalOffsetPercent,
@@ -809,16 +948,16 @@ export class SessionOrchestrator {
       elapsedMs: Math.max(0, this.now() - this.startedAtMs),
       questionOrdinal: this.currentTurn?.ordinal ?? this.nextOrdinal - 1,
       currentQuestion: this.currentTurn?.question.text ?? null,
-      partialTranscript: '',
+      partialTranscript: this.interimTranscript,
       finalTranscriptSoFar: this.currentTurn?.rawTranscript ?? '',
       coverage,
       mic: {
         gate: MIC_STATE[this.state],
-        level: 0,
-        clipping: false,
+        level: this.micLevel,
+        clipping: this.micClipping,
         deviceLabel: null,
       },
-      providerStatus: { openai: 'ok', inworldStt: 'ok', inworldTts: 'ok', lastQuestionLatencyMs: null },
+      providerStatus: { ...this.providerHealth },
       endpointPending: this.state === 'ENDPOINT_CANDIDATE',
       recoverableWarning: this.recoverableWarning,
       controls: this.controlAvailability(),

@@ -88,6 +88,8 @@ export function VideoDeck({
   const [frontLayer, setFrontLayer] = useState<Layer>('a');
   // Which layer is dedicated to listening loops vs. speaking playback.
   const speakingLayerRef = useRef<Layer>('b');
+  // Index of the speaking segment currently loaded on the speaking layer.
+  const segIndexRef = useRef(0);
   const [posterVisible, setPosterVisible] = useState(false);
 
   const clips = bootstrap.listeningClips;
@@ -118,6 +120,58 @@ export function VideoDeck({
     void el.play().catch(() => setPosterVisible(true));
   }, [bag, clips, refFor]);
 
+  // --- Speaking segment loading -------------------------------------------
+  /**
+   * Load segment `index` of the current plan onto the speaking layer. Only the
+   * FINAL segment loops (so the speaking visual holds until audio — which is
+   * authoritative — ends); earlier segments fire 'ended' to advance.
+   */
+  const loadSpeakingSegment = useCallback(
+    (index: number): boolean => {
+      if (plan === null) {
+        return false;
+      }
+      const segments = plan.media.segments;
+      const seg = segments[index];
+      const el = refFor(speakingLayerRef.current);
+      if (el === null || seg === undefined) {
+        return false;
+      }
+      segIndexRef.current = index;
+      el.src = mediaUrl(seg.relativePath);
+      el.playbackRate = seg.playbackRate > 0 ? seg.playbackRate : 1;
+      el.loop = index === segments.length - 1;
+      el.muted = true;
+      return true;
+    },
+    [plan, refFor],
+  );
+
+  const advanceSpeakingSegment = useCallback(() => {
+    if (plan === null) {
+      return;
+    }
+    const next = segIndexRef.current + 1;
+    if (next >= plan.media.segments.length) {
+      return; // the final segment loops/holds until speech audio ends
+    }
+    if (loadSpeakingSegment(next)) {
+      const el = refFor(speakingLayerRef.current);
+      void el?.play().catch(() => setPosterVisible(true));
+    }
+  }, [plan, loadSpeakingSegment, refFor]);
+
+  const handleLayerEnded = useCallback(
+    (layer: Layer) => {
+      if (state.visualState === 'speaking' && layer === speakingLayerRef.current) {
+        advanceSpeakingSegment();
+      } else if (isListeningVisual && layer !== speakingLayerRef.current) {
+        playNextListeningClip();
+      }
+    },
+    [state.visualState, isListeningVisual, advanceSpeakingSegment, playNextListeningClip],
+  );
+
   // Kick off / sustain the listening loop while in a listening-ish state.
   useEffect(() => {
     if (!isListeningVisual) {
@@ -131,26 +185,21 @@ export function VideoDeck({
     }
   }, [isListeningVisual, playNextListeningClip, refFor]);
 
-  // --- Speaking preload + crossfade --------------------------------------
+  // --- Speaking preload (segment 0) + readiness ---------------------------
   useEffect(() => {
     if (plan === null) {
       return;
     }
     const segments = plan.media.segments;
-    const first = segments[0];
-    const speakingLayer = speakingLayerRef.current;
-    const el = refFor(speakingLayer);
-    if (el === null || first === undefined) {
-      // No media to play (poster fallback plan); still report ready so the
-      // turn isn't blocked waiting on the deck.
+    const el = refFor(speakingLayerRef.current);
+    if (el === null || segments.length === 0) {
+      // No media to play (poster fallback plan); still report ready so the turn
+      // isn't blocked waiting on the deck.
       onSpeakingReady(plan.turnId);
       return;
     }
 
-    el.src = mediaUrl(first.relativePath);
-    el.playbackRate = first.playbackRate > 0 ? first.playbackRate : 1;
-    el.loop = segments.length === 1;
-    el.muted = true;
+    loadSpeakingSegment(0);
 
     const handleReady = (): void => onSpeakingReady(plan.turnId);
     if (el.readyState >= 3 /* HAVE_FUTURE_DATA */) {
@@ -163,7 +212,7 @@ export function VideoDeck({
     return () => {
       el.removeEventListener('canplay', handleReady);
     };
-  }, [plan, refFor, onSpeakingReady]);
+  }, [plan, refFor, onSpeakingReady, loadSpeakingSegment]);
 
   // Start speaking playback + crossfade when the visual state says so.
   useEffect(() => {
@@ -192,6 +241,7 @@ export function VideoDeck({
     }
     // Swap roles so the next speaking plan preloads on the now-idle layer.
     speakingLayerRef.current = previousSpeaking === 'a' ? 'b' : 'a';
+    segIndexRef.current = 0;
     const listeningLayer = previousSpeaking;
     setFrontLayer(listeningLayer);
     playNextListeningClip();
@@ -229,7 +279,7 @@ export function VideoDeck({
         playsInline
         onError={handleError}
         onStalled={handleError}
-        onEnded={isListeningVisual ? playNextListeningClip : undefined}
+        onEnded={() => handleLayerEnded('a')}
       />
       <video
         ref={videoBRef}
@@ -239,7 +289,7 @@ export function VideoDeck({
         playsInline
         onError={handleError}
         onStalled={handleError}
-        onEnded={isListeningVisual ? playNextListeningClip : undefined}
+        onEnded={() => handleLayerEnded('b')}
       />
     </div>
   );

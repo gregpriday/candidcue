@@ -45,6 +45,10 @@ export class SpeechPlayer {
   private loaded: LoadedTurn | null = null;
   private source: AudioBufferSourceNode | null = null;
   private startedTurnId: string | null = null;
+  /** Monotonic load token so a stale decode can't clobber a newer plan. */
+  private loadGen = 0;
+  /** Set when start() was requested before the buffer finished decoding. */
+  private startRequested = false;
 
   constructor(callbacks: SpeechPlayerCallbacks) {
     this.callbacks = callbacks;
@@ -65,18 +69,29 @@ export class SpeechPlayer {
    */
   async load(plan: SpeechPlaybackPlan): Promise<void> {
     const { turnId } = plan;
+    const gen = ++this.loadGen;
+    // A new plan supersedes any start that was requested for the previous turn.
+    this.startRequested = false;
     try {
       // decodeAudioData detaches the buffer, so decode a copy and keep the
       // original plan bytes intact for any later use.
       const copy = plan.audio.bytes.slice(0);
       const buffer = await this.context.decodeAudioData(copy);
+      if (gen !== this.loadGen) {
+        return; // superseded by a newer load while decoding
+      }
       this.loaded = {
         turnId,
         buffer,
         outputDeviceId: plan.audio.outputDeviceId,
       };
       this.callbacks.reportReady({ turnId });
+      // If the stage already reached 'speaking' before decode finished, start now.
+      this.tryStart();
     } catch (error) {
+      if (gen !== this.loadGen) {
+        return;
+      }
       this.callbacks.reportError({
         turnId,
         reason: error instanceof Error ? error.message : 'decode_failed',
@@ -89,46 +104,70 @@ export class SpeechPlayer {
    * not already playing.
    */
   start(): void {
+    // Remember the request; tryStart runs it now or as soon as decode completes.
+    this.startRequested = true;
+    this.tryStart();
+  }
+
+  private tryStart(): void {
     const loaded = this.loaded;
-    if (loaded === null) {
+    if (loaded === null || !this.startRequested) {
       return;
     }
     if (this.startedTurnId === loaded.turnId) {
       return;
     }
-
-    void this.routeOutput(loaded.outputDeviceId);
-
-    const source = this.context.createBufferSource();
-    source.buffer = loaded.buffer;
-    source.connect(this.context.destination);
-
     const turnId = loaded.turnId;
-    source.onended = (): void => {
-      // Ignore ended events from a source we have already superseded/stopped.
-      if (this.source !== source) {
-        return;
-      }
-      this.source = null;
-      this.callbacks.reportEnded({ turnId, atMs: Date.now() });
-      this.callbacks.onEnded(turnId);
-    };
+    // Snapshot the load token so an older routing/resume continuation can't start
+    // a stale buffer after a newer plan has loaded.
+    const gen = this.loadGen;
+    // Claim the turn immediately so a re-entrant start() for the same turn is a
+    // no-op while we await output routing.
+    this.startRequested = false;
+    this.startedTurnId = turnId;
 
-    void this.context.resume().finally(() => {
-      // Guard against a newer turn having been started while resuming.
-      if (this.source !== source) {
+    void (async () => {
+      // Resolve output routing first so the buffer source connects to the chosen
+      // sink node rather than always playing on the default device (MEDIA-03).
+      await this.routeOutput(loaded.outputDeviceId);
+      if (this.startedTurnId !== turnId || this.loadGen !== gen) {
+        return; // superseded by a newer turn/plan while routing
+      }
+
+      const source = this.context.createBufferSource();
+      source.buffer = loaded.buffer;
+      source.connect(this.sinkNode ?? this.context.destination);
+
+      source.onended = (): void => {
+        // Ignore ended events from a source we have already superseded/stopped.
+        if (this.source !== source) {
+          return;
+        }
+        this.source = null;
+        // Allow the same turn to be replayed (Repeat) after it has finished.
+        this.startedTurnId = null;
+        this.callbacks.reportEnded({ turnId, atMs: Date.now() });
+        this.callbacks.onEnded(turnId);
+      };
+      this.source = source;
+
+      try {
+        await this.context.resume();
+      } catch {
+        return; // context closed/disposed mid-start
+      }
+      // Guard against a newer turn/plan having started while resuming.
+      if (this.source !== source || this.loadGen !== gen) {
         return;
       }
       source.start();
       this.callbacks.reportStarted({ turnId, atMs: Date.now() });
-    });
-
-    this.source = source;
-    this.startedTurnId = turnId;
+    })();
   }
 
   /** Stop any in-flight playback without reporting an end for the turn. */
   stop(): void {
+    this.startRequested = false;
     if (this.source !== null) {
       const source = this.source;
       this.source = null;
@@ -162,6 +201,9 @@ export class SpeechPlayer {
    */
   private async routeOutput(outputDeviceId: string | null): Promise<void> {
     if (outputDeviceId === null || outputDeviceId === '') {
+      // Default device: drop any prior sink so playback returns to the default
+      // destination instead of staying pinned to a previously-selected device.
+      this.clearSink();
       return;
     }
     // `setSinkId` is gated behind platform support; treat its absence as default.
@@ -169,18 +211,29 @@ export class SpeechPlayer {
       setSinkId?(deviceId: string): Promise<void>;
     };
     if (typeof el.setSinkId !== 'function') {
+      this.clearSink();
       return;
     }
     try {
       if (this.sinkNode === null) {
+        // The buffer source connects to this node; its stream is played by the
+        // hidden <audio> element, which owns the device selection via setSinkId.
         this.sinkNode = this.context.createMediaStreamDestination();
-        // Mirror the graph into the element so its sink selection takes effect.
-        this.context.destination.channelInterpretation = 'speakers';
         this.sinkElement.srcObject = this.sinkNode.stream;
       }
       await el.setSinkId(outputDeviceId);
     } catch {
-      // Fall back to the default output silently.
+      // Could not pin the device; fall back to the default destination.
+      this.clearSink();
     }
+  }
+
+  /** Disconnect/forget the selected-output sink so playback uses the default. */
+  private clearSink(): void {
+    if (this.sinkNode !== null) {
+      this.sinkNode.disconnect();
+      this.sinkNode = null;
+    }
+    this.sinkElement.srcObject = null;
   }
 }

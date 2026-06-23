@@ -59,10 +59,100 @@ export function StageApp(): JSX.Element {
   // Engines live for the lifetime of the window; refs avoid re-creating them.
   const speechPlayerRef = useRef<SpeechPlayer | null>(null);
   const captureRef = useRef<CaptureController | null>(null);
-  const captureConfigRef = useRef<CaptureConfig | null>(null);
   // Latest state, read by event handlers without re-subscribing.
   const stateRef = useRef<StageStateProjection>(INITIAL_STATE);
   const currentTurnIdRef = useRef<string | null>(null);
+  // Identity of the capture graph currently being built/run, so duplicate
+  // capture-config sends (one from startOrchestrator, one from stageBootstrap)
+  // don't trigger a second getUserMedia.
+  const appliedCaptureKeyRef = useRef<string | null>(null);
+  // Monotonic token so an older async capture continuation can't clobber a newer
+  // config's controller/refs.
+  const captureGenRef = useRef(0);
+
+  // Readiness coordination (MEDIA-02): the single IPC 'ready' is withheld until
+  // BOTH the decoded audio and the speaking video are ready for the same turn,
+  // so the orchestrator never starts audio before the video can play.
+  const audioReadyTurnRef = useRef<string | null>(null);
+  const deckReadyTurnRef = useRef<string | null>(null);
+  const reportedReadyTurnRef = useRef<string | null>(null);
+
+  const maybeReportReady = useCallback((turnId: string) => {
+    if (
+      audioReadyTurnRef.current === turnId &&
+      deckReadyTurnRef.current === turnId &&
+      reportedReadyTurnRef.current !== turnId
+    ) {
+      reportedReadyTurnRef.current = turnId;
+      window.candidcueStage.playback.reportReady({ turnId });
+    }
+  }, []);
+
+  const handleAudioReady = useCallback(
+    (turnId: string) => {
+      // Ignore readiness from a superseded turn (e.g. a late decode/canplay).
+      if (turnId !== currentTurnIdRef.current) {
+        return;
+      }
+      audioReadyTurnRef.current = turnId;
+      maybeReportReady(turnId);
+    },
+    [maybeReportReady],
+  );
+
+  const handleSpeakingReady = useCallback(
+    (turnId: string) => {
+      if (turnId !== currentTurnIdRef.current) {
+        return;
+      }
+      deckReadyTurnRef.current = turnId;
+      maybeReportReady(turnId);
+    },
+    [maybeReportReady],
+  );
+
+  const startCapture = useCallback(async (config: CaptureConfig): Promise<void> => {
+    const key = `${config.sessionId}::${config.inputDeviceId ?? ''}`;
+    // Dedup duplicate/concurrent sends for the same session + device.
+    if (appliedCaptureKeyRef.current === key) {
+      return;
+    }
+    const gen = ++captureGenRef.current;
+    appliedCaptureKeyRef.current = key;
+
+    const previous = captureRef.current;
+    captureRef.current = null;
+    if (previous !== null) {
+      await previous.dispose();
+    }
+    if (gen !== captureGenRef.current) {
+      return; // a newer config superseded us during teardown
+    }
+
+    const controller = new CaptureController({
+      sessionId: config.sessionId,
+      deviceId: config.inputDeviceId,
+      config,
+      reportMeter: (reading) => window.candidcueStage.audio.reportMeter(reading),
+      openPort: (input) => window.candidcueStage.audio.openCapturePort(input),
+    });
+    try {
+      await controller.start();
+      if (gen !== captureGenRef.current) {
+        await controller.dispose();
+        return; // superseded while acquiring the device
+      }
+      captureRef.current = controller;
+      controller.setGate(stateRef.current.micState, currentTurnIdRef.current);
+    } catch {
+      // Capture failed to start; tear it down. Allow a later config to retry,
+      // but only if we are still the most recent attempt.
+      await controller.dispose();
+      if (gen === captureGenRef.current) {
+        appliedCaptureKeyRef.current = null;
+      }
+    }
+  }, []);
 
   // --- Bootstrap ----------------------------------------------------------
   useEffect(() => {
@@ -80,7 +170,9 @@ export function StageApp(): JSX.Element {
   // --- Speech engine ------------------------------------------------------
   useEffect(() => {
     const player = new SpeechPlayer({
-      reportReady: (input) => window.candidcueStage.playback.reportReady(input),
+      // Audio decode readiness is local; the combined IPC 'ready' is sent by
+      // maybeReportReady once the deck is ready too.
+      reportReady: (input) => handleAudioReady(input.turnId),
       reportStarted: (input) => window.candidcueStage.playback.reportStarted(input),
       reportEnded: (input) => window.candidcueStage.playback.reportEnded(input),
       reportError: (input) => window.candidcueStage.playback.reportError(input),
@@ -91,7 +183,7 @@ export function StageApp(): JSX.Element {
       speechPlayerRef.current = null;
       void player.dispose();
     };
-  }, []);
+  }, [handleAudioReady]);
 
   // --- State / plan / capture-config subscriptions ------------------------
   useEffect(() => {
@@ -108,13 +200,16 @@ export function StageApp(): JSX.Element {
 
     const offPlan = window.candidcueStage.events.onPlaybackPlan((next) => {
       currentTurnIdRef.current = next.turnId;
+      // Reset readiness tracking for the new turn.
+      audioReadyTurnRef.current = null;
+      deckReadyTurnRef.current = null;
+      reportedReadyTurnRef.current = null;
       setSpeechEndedTurnId(null);
       setPlan(next);
       void speechPlayerRef.current?.load(next);
     });
 
     const offCapture = window.candidcueStage.events.onCaptureConfig((config) => {
-      captureConfigRef.current = config;
       // (Re)create the capture controller against the latest config.
       void startCapture(config);
     });
@@ -124,36 +219,7 @@ export function StageApp(): JSX.Element {
       offPlan();
       offCapture();
     };
-    // startCapture is stable via useCallback below.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const startCapture = useCallback(async (config: CaptureConfig): Promise<void> => {
-    // Tear down any previous controller first.
-    const previous = captureRef.current;
-    captureRef.current = null;
-    if (previous !== null) {
-      await previous.dispose();
-    }
-
-    const controller = new CaptureController({
-      sessionId: '',
-      deviceId: null,
-      config,
-      reportMeter: (reading) => window.candidcueStage.audio.reportMeter(reading),
-      openPort: (input) => window.candidcueStage.audio.openCapturePort(input),
-    });
-    captureRef.current = controller;
-    try {
-      await controller.start();
-      controller.setGate(stateRef.current.micState, currentTurnIdRef.current);
-    } catch {
-      // Capture failed to start; leave the engine torn down. The operator UI
-      // surfaces device problems — stage stays silent.
-      captureRef.current = null;
-      await controller.dispose();
-    }
-  }, []);
+  }, [startCapture]);
 
   useEffect(() => {
     return () => {
@@ -177,12 +243,6 @@ export function StageApp(): JSX.Element {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
-
-  const handleSpeakingReady = useCallback((turnId: string) => {
-    // The deck is preloaded; the SpeechPlayer reports its own readiness too, but
-    // we surface the deck's readiness only locally (no extra IPC needed).
-    void turnId;
   }, []);
 
   if (bootstrap === null) {

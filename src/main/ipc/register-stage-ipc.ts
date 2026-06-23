@@ -10,6 +10,7 @@ type Guard = ReturnType<typeof makeSenderGuard>;
 
 const playbackEventSchema = z.object({ turnId: z.string(), atMs: z.number().optional() });
 const playbackErrorSchema = z.object({ turnId: z.string(), reason: z.string() });
+const meterSchema = z.object({ peak: z.number(), average: z.number(), clipping: z.boolean() });
 const stageCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('COMMIT'), reason: z.enum(['manual', 'automatic']) }),
   z.object({ type: z.literal('PAUSE') }),
@@ -25,7 +26,11 @@ export function registerStageIpc(app: AppController, guard: Guard): void {
 
   ipcMain.handle(CHANNELS.stageBootstrap, (e) => {
     guard(e.sender, ['stage']);
-    return app.buildStageBootstrap();
+    const boot = app.buildStageBootstrap();
+    // The stage just mounted and registered its event listeners, so (re)send the
+    // capture config now to cover a freshly-loaded window (MIC-01).
+    app.sendCaptureConfig();
+    return boot;
   });
 
   ipcMain.on(CHANNELS.stageOpenAudioPort, (e) => {
@@ -37,7 +42,11 @@ export function registerStageIpc(app: AppController, guard: Guard): void {
     guard(e.sender, ['stage']);
     return undefined;
   });
-  ipcMain.on(CHANNELS.stageReportMeter, (e) => stage(e));
+  ipcMain.on(CHANNELS.stageReportMeter, (e, raw) => {
+    stage(e);
+    const parsed = meterSchema.safeParse(raw);
+    if (parsed.success) app.reportStageMeter(parsed.data);
+  });
 
   ipcMain.on(CHANNELS.stagePlaybackReady, (e, raw) => {
     stage(e);

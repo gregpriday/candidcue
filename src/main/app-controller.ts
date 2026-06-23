@@ -22,6 +22,9 @@ import type {
   ModerationAdapter,
   SpeechToTextAdapter,
   TextToSpeechAdapter,
+  CaptureConfig,
+  AudioMeterReading,
+  Unsubscribe,
 } from '@shared/contracts';
 import { CHANNELS } from '@shared/contracts';
 import type {
@@ -39,6 +42,7 @@ import { AppError, isAppError } from '@shared/errors/app-error';
 import { hashFromProjectDocuments } from '@shared/utils';
 
 import { SessionOrchestrator, type OrchestratorDeps, type SessionContext } from './interview/orchestrator';
+import { bridgeSttToOrchestrator } from './interview/stt-bridge';
 import type { StagePort, SnapshotSink, Logger } from './interview/ports';
 import { compileProjectSource } from './interview/source-compiler';
 import { GLOBAL_INTERVIEW_RULES } from './interview/global-rules';
@@ -64,7 +68,9 @@ interface ActiveSession {
   orchestrator: SessionOrchestrator;
   sessionId: string;
   characterId: string;
+  inputDeviceId: string | null;
   stt: SpeechToTextAdapter;
+  sttOffs: Unsubscribe[];
   lastSnapshot: OperatorSessionSnapshot | null;
   stagePort: IpcStagePort;
 }
@@ -72,6 +78,7 @@ interface ActiveSession {
 /** Central main-process coordinator. Renderers never reach providers or secrets. */
 export class AppController {
   private active: ActiveSession | null = null;
+  private prepareChain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: AppControllerDeps) {}
 
@@ -212,6 +219,20 @@ export class AppController {
 
   // ---- Session lifecycle ------------------------------------------------
   async prepareSession(input: PrepareSessionInput): Promise<PreflightState> {
+    // Serialize preflight runs so concurrent re-checks can't interleave and
+    // clobber each other's active session (each run tears down the prior one).
+    const run = this.prepareChain.then(
+      () => this.runPrepareSession(input),
+      () => this.runPrepareSession(input),
+    );
+    this.prepareChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async runPrepareSession(input: PrepareSessionInput): Promise<PreflightState> {
     const checks: PreflightCheck[] = [];
     const add = (id: PreflightCheck['id'], label: string, required: boolean, ok: boolean, detail: string | null): void => {
       checks.push({ id, label, required, status: ok ? 'passed' : 'failed', detail });
@@ -235,6 +256,9 @@ export class AppController {
         canBegin = true;
         add('opening', 'Opening question cached', true, true, null);
       } catch (err) {
+        // The session may have been partly started (STT connected) before the
+        // failure — tear it down so we don't leak an open stream.
+        await this.teardownActive();
         add('opening', 'Opening question cached', true, false, this.toPublicError(err).publicMessage);
       }
     } else {
@@ -256,6 +280,9 @@ export class AppController {
     plan: InterviewPlan,
     input: PrepareSessionInput,
   ): Promise<void> {
+    // Close any prior active session's live resources before starting a new one
+    // (re-running preflight must not leak an open STT stream).
+    await this.teardownActive();
     const character = getInterviewerCharacter(aggregate.project.interviewerCharacterId) ?? getInterviewerCharacters()[0]!;
     const voiceId = (await this.deps.repository.getSetting<string>('characters.mira.inworldVoiceId')) ?? character.voice.voiceId;
     const clips = loadManifest(this.deps.videosRoot ? `${this.deps.videosRoot}/${character.mediaRootPath}` : character.mediaRootPath).clips;
@@ -332,9 +359,68 @@ export class AppController {
     };
 
     const orchestrator = new SessionOrchestrator(orchDeps, ctx);
-    this.active = { orchestrator, sessionId: session.id, characterId: character.id, stt, lastSnapshot: null, stagePort };
+    this.active = {
+      orchestrator,
+      sessionId: session.id,
+      characterId: character.id,
+      inputDeviceId: input.config.selectedInputDeviceId,
+      stt,
+      sttOffs: [],
+      lastSnapshot: null,
+      stagePort,
+    };
+
+    // Open the live STT stream and subscribe its events to the orchestrator
+    // (MIC-03/04). The streaming endpoint is a documented assumption, so a failed
+    // connect only degrades provider health — manual commit still works via the
+    // endTurn deadline fallback, so the session is not aborted.
+    let sttConnected = false;
+    try {
+      await stt.connect({
+        sampleRate: 16000,
+        channels: 1,
+        model: INWORLD_DEFAULTS.sttModel,
+        interimResults: true,
+      });
+      sttConnected = true;
+    } catch (err) {
+      this.deps.logger.warn('stt.connect_failed', { error: String(err) });
+    }
+    this.active.sttOffs = bridgeSttToOrchestrator(stt, orchestrator, () => Date.now());
+    orchestrator.setSttConnected(sttConnected);
+
+    // Tell the stage to build its capture graph for this session (MIC-01/02).
+    // Also re-sent from the stageBootstrap handler to cover a freshly-loaded
+    // window whose listeners weren't ready when this first send went out.
+    this.sendCaptureConfig();
+
     void stageContents; // window is created/shown; orchestrator drives it via stagePort
     await orchestrator.prepareOpening();
+  }
+
+  /**
+   * Send the live {@link CaptureConfig} (real session id + selected input device)
+   * to the stage so it constructs the microphone graph (MIC-01/02). No-op when
+   * there is no active session or stage window.
+   */
+  sendCaptureConfig(): void {
+    const a = this.active;
+    const stage = this.deps.getStage();
+    if (!a || !stage) return;
+    const config: CaptureConfig = {
+      sessionId: a.sessionId,
+      inputDeviceId: a.inputDeviceId,
+      sampleRate: 16000,
+      channels: 1,
+      preRollMs: RUNTIME_DEFAULTS.preRollMs,
+      postSpeechMicGuardMs: RUNTIME_DEFAULTS.postSpeechMicGuardMs,
+    };
+    stage.send(CHANNELS.evtCaptureConfig, config);
+  }
+
+  /** Forward a live microphone meter reading from the stage into the snapshot (MIC-06). */
+  reportStageMeter(reading: AudioMeterReading): void {
+    this.active?.orchestrator.reportMeter(reading);
   }
 
   async command(cmd: SessionCommand): Promise<CommandResult> {
@@ -372,7 +458,13 @@ export class AppController {
   }
 
   pcmSink = (packet: Parameters<SpeechToTextAdapter['writeAudio']>[0]): void => {
-    this.active?.stt.writeAudio(packet);
+    try {
+      this.active?.stt.writeAudio(packet);
+    } catch {
+      // The STT stream may be disconnected (the streaming endpoint is a
+      // documented assumption). Drop live PCM rather than throwing from the
+      // audio-port handler; endTurn's deadline fallback still yields a result.
+    }
   };
 
   // ---- Stage bootstrap --------------------------------------------------
@@ -520,13 +612,31 @@ export class AppController {
    * regardless. Repository closing is handled by the bootstrap teardown.
    */
   async shutdown(): Promise<void> {
+    await this.teardownActive();
+  }
+
+  /**
+   * Tear down the current active session's live resources (STT subscriptions,
+   * endpoint timer, STT stream) and clear it. Used on quit and before replacing
+   * the active session, so a failed or repeated preflight can't leak an open STT
+   * stream.
+   */
+  private async teardownActive(): Promise<void> {
     const a = this.active;
     this.active = null;
     if (!a) return;
+    for (const off of a.sttOffs) {
+      try {
+        off();
+      } catch {
+        /* best-effort detach */
+      }
+    }
+    a.orchestrator.dispose();
     try {
       await a.stt.close();
     } catch (err) {
-      this.deps.logger.warn('app.shutdown_stt_failed', { message: String(err) });
+      this.deps.logger.warn('app.teardown_stt_failed', { message: String(err) });
     }
   }
 

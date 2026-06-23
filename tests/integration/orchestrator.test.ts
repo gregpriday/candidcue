@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { join } from 'node:path';
 import { SessionOrchestrator, type OrchestratorDeps, type SessionContext } from '@main/interview/orchestrator';
 import { NOOP_LOGGER, type StagePort, type SnapshotSink } from '@main/interview/ports';
@@ -6,7 +6,9 @@ import { MemoryRepository } from '@main/persistence/memory-repository';
 import { FakeInterviewModel, FakeModeration, FakeStt, FakeTts } from '@main/providers/fakes';
 import { loadManifest } from '@main/media/manifest-loader';
 import { AppController } from '@main/app-controller';
+import { bridgeSttToOrchestrator } from '@main/interview/stt-bridge';
 import type { CredentialStore } from '@main/security/secrets';
+import type { EndpointMode } from '@shared/domain';
 import type {
   InterviewBrief,
   InterviewerCharacter,
@@ -89,11 +91,15 @@ interface Harness {
   stage: StagePort & { openMicGate: ReturnType<typeof vi.fn>; closeMicGate: ReturnType<typeof vi.fn> };
   snapshots: OperatorSessionSnapshot[];
   sessionId: string;
+  stt: FakeStt;
 }
 
 async function makeHarness(overrides?: {
   model?: InterviewModelAdapter;
   stt?: FakeStt;
+  endpointMode?: EndpointMode;
+  captionsEnabled?: boolean;
+  clock?: () => number;
 }): Promise<Harness> {
   const repo = new MemoryRepository();
   await repo.migrate();
@@ -123,12 +129,12 @@ async function makeHarness(overrides?: {
     projectId: project.project.id,
     planVersionId: plan.id,
     characterId: 'mira',
-    endpointMode: 'manual',
+    endpointMode: overrides?.endpointMode ?? 'manual',
     selectedInputDeviceId: 'mic-1',
     selectedOutputDeviceId: null,
     selectedDisplayId: 'disp-1',
     settingsSnapshot: {
-      endpointMode: 'manual',
+      endpointMode: overrides?.endpointMode ?? 'manual',
       captionsEnabled: false,
       mirrorStage: false,
       zoom: 1,
@@ -152,14 +158,18 @@ async function makeHarness(overrides?: {
   };
   const snapshotSink: SnapshotSink = { publish: (s) => snapshots.push(s) };
 
+  const stt =
+    overrides?.stt ??
+    new FakeStt({ transcript: 'CandidCue gives solo presenters a partner on the teleprompter.' });
   const deps: OrchestratorDeps = {
     repository: repo,
     model: overrides?.model ?? new FakeInterviewModel({ questionTexts: ['So what changed after that?'] }),
     moderation: new FakeModeration(),
-    stt: overrides?.stt ?? new FakeStt({ transcript: 'CandidCue gives solo presenters a partner on the teleprompter.' }),
+    stt,
     tts: new FakeTts({ durationMs: 7000 }),
     stage,
     snapshotSink,
+    clock: overrides?.clock,
   };
 
   const ctx: SessionContext = {
@@ -172,12 +182,12 @@ async function makeHarness(overrides?: {
     models: { interviewer: 'gpt-5.5', cleanup: 'gpt-5.4-mini', endpoint: 'gpt-5.4-nano', repair: 'gpt-5.4-mini', stt: 'inworld-stt-1' },
     voiceId: 'Ashley',
     ttsSampleRate: 24000,
-    captionsEnabled: false,
+    captionsEnabled: overrides?.captionsEnabled ?? false,
     selectedOutputDeviceId: null,
     targetQuestionCount: 12,
   };
 
-  return { orch: new SessionOrchestrator(deps, ctx), repo, stage, snapshots, sessionId: session.id };
+  return { orch: new SessionOrchestrator(deps, ctx), repo, stage, snapshots, sessionId: session.id, stt };
 }
 
 describe('SessionOrchestrator turn pipeline', () => {
@@ -185,6 +195,16 @@ describe('SessionOrchestrator turn pipeline', () => {
   beforeEach(async () => {
     h = await makeHarness();
   });
+  afterEach(() => {
+    // Release any running auto-endpoint interval so it can't leak across tests.
+    h.orch.dispose();
+  });
+
+  const lastSnapshot = (): OperatorSessionSnapshot => {
+    const snap = h.snapshots.at(-1);
+    if (!snap) throw new Error('no snapshot published yet');
+    return snap;
+  };
 
   it('prepares the opening question and reaches READY', async () => {
     await h.orch.prepareOpening();
@@ -392,5 +412,119 @@ describe('SessionOrchestrator turn pipeline', () => {
     await controller.editTranscript(reviewed.id, 'Edited answer text.');
     const after = await h.repo.getTurn(persisted.id);
     expect(after!.answer!.userEditedTranscript).toBe('Edited answer text.');
+  });
+
+  // --- round-2 live wiring (MIC-* / MEDIA-* / CORR-10/11) ------------------
+
+  it('wires live STT events to the orchestrator via the bridge (MIC-04)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin(); // USER_ARMED
+    const offs = bridgeSttToOrchestrator(h.stt, h.orch, () => 1000);
+    try {
+      h.stt.emit('speechStarted');
+      expect(h.orch.getState()).toBe('USER_SPEAKING');
+
+      h.stt.emit('partial', 'CandidCue gives');
+      expect(lastSnapshot().partialTranscript).toBe('CandidCue gives');
+
+      h.stt.emit('finalSegment', 'CandidCue gives solo presenters a partner.');
+      const snap = lastSnapshot();
+      expect(snap.finalTranscriptSoFar).toContain('solo presenters a partner');
+      expect(snap.partialTranscript).toBe(''); // interim cleared on a final segment
+
+      h.stt.emit('speechStopped');
+      expect(h.orch.getState()).toBe('ENDPOINT_CANDIDATE');
+    } finally {
+      offs.forEach((off) => off());
+    }
+  });
+
+  it('surfaces live mic meter readings in the snapshot (MIC-06/07)', async () => {
+    await h.orch.prepareOpening();
+    h.orch.reportMeter({ peak: 0.8, average: 0.42, clipping: false });
+    let snap = lastSnapshot();
+    expect(snap.mic.level).toBeCloseTo(0.42);
+    expect(snap.mic.clipping).toBe(false);
+
+    h.orch.reportMeter({ peak: 1, average: 0.9, clipping: true });
+    snap = lastSnapshot();
+    expect(snap.mic.clipping).toBe(true);
+  });
+
+  it('reflects STT connection state in provider health (CORR-11)', async () => {
+    await h.orch.prepareOpening();
+    h.orch.setSttConnected(false);
+    expect(lastSnapshot().providerStatus.inworldStt).toBe('down');
+    h.orch.setSttConnected(true);
+    expect(lastSnapshot().providerStatus.inworldStt).toBe('ok');
+  });
+
+  it('shows the spoken question as a caption while speaking when captions are on (CORR-10)', async () => {
+    h = await makeHarness({ captionsEnabled: true });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    const projections = vi.mocked(h.stage.setVisualState).mock.calls.map((c) => c[0]);
+    const speaking = projections.find((p) => p.visualState === 'speaking');
+    expect(speaking?.captions).toBe(
+      'What problem does CandidCue solve for someone recording a video alone?',
+    );
+  });
+
+  it('omits stage captions when captions are disabled', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    const projections = vi.mocked(h.stage.setVisualState).mock.calls.map((c) => c[0]);
+    const speaking = projections.find((p) => p.visualState === 'speaking');
+    expect(speaking).toBeDefined();
+    expect(speaking?.captions).toBeNull();
+  });
+
+  it('drives endpoint evaluation from the silence timer in an auto mode (MIC-05)', async () => {
+    h = await makeHarness({ endpointMode: 'balanced' });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    vi.useFakeTimers();
+    try {
+      h.orch.onSpeechStarted(Date.now());
+      h.orch.onSpeechStopped(Date.now()); // → ENDPOINT_CANDIDATE, starts the loop
+      expect(h.orch.getState()).toBe('ENDPOINT_CANDIDATE');
+      const spy = vi.spyOn(h.orch, 'evaluateEndpoint');
+      await vi.advanceTimersByTimeAsync(300); // fire ≥1 tick of the 250ms interval
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not run the endpoint loop in manual mode', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    vi.useFakeTimers();
+    try {
+      h.orch.onSpeechStarted(Date.now());
+      h.orch.onSpeechStopped(Date.now());
+      const spy = vi.spyOn(h.orch, 'evaluateEndpoint');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops the endpoint loop when the session is ended immediately', async () => {
+    h = await makeHarness({ endpointMode: 'balanced' });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    vi.useFakeTimers();
+    try {
+      h.orch.onSpeechStarted(Date.now());
+      h.orch.onSpeechStopped(Date.now()); // starts the loop in ENDPOINT_CANDIDATE
+      await h.orch.endNow(); // must clear the loop even from ENDPOINT_CANDIDATE
+      const spy = vi.spyOn(h.orch, 'evaluateEndpoint');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

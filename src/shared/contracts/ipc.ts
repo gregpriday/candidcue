@@ -218,6 +218,10 @@ export interface SpeechPlaybackPlan {
 }
 
 export interface CaptureConfig {
+  /** The live session the captured audio belongs to (stamped on every chunk). */
+  sessionId: string;
+  /** Selected microphone, or null for the system default device. */
+  inputDeviceId: string | null;
   sampleRate: 16000;
   channels: 1;
   preRollMs: number;
