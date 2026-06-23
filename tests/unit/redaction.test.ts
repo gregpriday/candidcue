@@ -79,6 +79,18 @@ describe('redact', () => {
     }
   });
 
+  it('redacts source-library title and filename fields', () => {
+    const input = {
+      title: 'My secret interview brief',
+      originalFilename: 'private-notes.md',
+      filename: 'leak.md',
+    };
+    const out = redact(input) as Record<string, unknown>;
+    expect(out.title).toBe('[REDACTED_TEXT]');
+    expect(out.originalFilename).toBe('[REDACTED_TEXT]');
+    expect(out.filename).toBe('[REDACTED_TEXT]');
+  });
+
   it('keeps content fields when redactText is false', () => {
     const input = {
       rawTranscript: 'sensitive answer',

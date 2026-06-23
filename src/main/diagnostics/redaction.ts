@@ -35,6 +35,13 @@ const CONTENT_KEYS = new Set<string>([
   'content',
   'partialTranscript',
   'finalTranscriptSoFar',
+  // Project source-library fields: a source title and the imported basename
+  // are user content/PII and must never reach diagnostics in cleartext
+  // (spec §16.4). Absolute paths never leave the main process, so they are
+  // kept out of logs at the source rather than relied on here.
+  'title',
+  'originalFilename',
+  'filename',
 ]);
 
 /**
