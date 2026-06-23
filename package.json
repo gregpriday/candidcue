@@ -1,0 +1,17 @@
+{
+  "name": "candidcue",
+  "productName": "CandidCue",
+  "version": "0.1.0",
+  "description": "CandidCue desktop application",
+  "main": "src/main.js",
+  "author": "Greg Priday <greg@siteorigin.com>",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --inspect"
+  },
+  "devDependencies": {
+    "electron": "^42.4.1"
+  }
+}
