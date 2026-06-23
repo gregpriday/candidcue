@@ -1,4 +1,4 @@
-import type { RuntimeContext, SessionRuntimeState } from '@shared/domain';
+import type { RuntimeContext, SessionRuntimeState, SessionCommandType } from '@shared/domain';
 
 /**
  * Session runtime state machine (spec §11.2 / §11.3).
@@ -27,6 +27,10 @@ export type TransitionTrigger =
   | 'speechResumed'
   | 'classifierCommit'
   | 'classifierWait'
+  // Operator: replay the current question (Repeat) or abandon it for a new
+  // one (Skip), both only legal before the creator has started answering.
+  | 'replayQuestion'
+  | 'skipToNextQuestion'
   // Finalization
   | 'transcriptStored'
   | 'completionSelected'
@@ -62,6 +66,7 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
 
   READY: {
     begin: 'INTERVIEWER_THINKING',
+    completionSelected: 'FINISHING',
     pause: 'PAUSED',
     deviceOrProviderNeedsRecovery: 'RECOVERING',
   },
@@ -75,12 +80,14 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
 
   INTERVIEWER_BUFFERING: {
     stageReady: 'INTERVIEWER_SPEAKING',
+    completionSelected: 'FINISHING',
     pause: 'PAUSED',
     deviceOrProviderNeedsRecovery: 'RECOVERING',
   },
 
   INTERVIEWER_SPEAKING: {
     audioEnded: 'USER_ARMED',
+    completionSelected: 'FINISHING',
     pause: 'PAUSED',
     deviceOrProviderNeedsRecovery: 'RECOVERING',
   },
@@ -88,6 +95,11 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
   USER_ARMED: {
     speechStarted: 'USER_SPEAKING',
     manualCommit: 'TURN_FINALIZING',
+    // Operator may replay the just-delivered question or swap it for a new one,
+    // but only before any speech exists for this turn (guarded by the caller).
+    replayQuestion: 'INTERVIEWER_BUFFERING',
+    skipToNextQuestion: 'INTERVIEWER_THINKING',
+    completionSelected: 'FINISHING',
     pause: 'PAUSED',
     deviceOrProviderNeedsRecovery: 'RECOVERING',
   },
@@ -95,6 +107,7 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
   USER_SPEAKING: {
     speechStopped: 'ENDPOINT_CANDIDATE',
     manualCommit: 'TURN_FINALIZING',
+    completionSelected: 'FINISHING',
     pause: 'PAUSED',
     deviceOrProviderNeedsRecovery: 'RECOVERING',
   },
@@ -104,6 +117,7 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
     classifierWait: 'ENDPOINT_CANDIDATE',
     classifierCommit: 'TURN_FINALIZING',
     manualCommit: 'TURN_FINALIZING',
+    completionSelected: 'FINISHING',
     pause: 'PAUSED',
     deviceOrProviderNeedsRecovery: 'RECOVERING',
   },
@@ -124,11 +138,14 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
     resumeBeforeStart: 'READY',
     resumeUserTurn: 'USER_ARMED',
     resumePreparedQuestion: 'INTERVIEWER_BUFFERING',
+    replayQuestion: 'INTERVIEWER_BUFFERING',
+    completionSelected: 'FINISHING',
     deviceOrProviderNeedsRecovery: 'RECOVERING',
   },
 
   RECOVERING: {
     recovered: 'PAUSED',
+    completionSelected: 'FINISHING',
     recoveryFailed: 'ERROR',
   },
 
@@ -189,6 +206,111 @@ export function canPlayQuestion(ctx: RuntimeContext, turnId: string): boolean {
   if (turn === null) return false;
   if (turn.id !== turnId) return false;
   return turn.generationId === ctx.currentGenerationId;
+}
+
+// -- command legality -------------------------------------------------------
+
+/**
+ * The minimal context the command-legality projection inspects. It is a
+ * superset of what a single transition guard needs because some commands are
+ * context-sensitive (Skip/Repeat depend on whether the creator has begun
+ * answering; Commit depends on an in-flight commit).
+ */
+export interface CommandContext {
+  state: SessionRuntimeState;
+  commitInFlight: boolean;
+  /** Whether a turn is currently armed/in-flight. */
+  hasCurrentTurn: boolean;
+  /** Whether the creator has produced speech for the current turn. */
+  userHasSpoken: boolean;
+}
+
+/** Every operator/stage command, in a stable order for the projection. */
+export const ALL_COMMANDS: readonly SessionCommandType[] = [
+  'PREPARE_SESSION',
+  'BEGIN_SESSION',
+  'COMMIT_USER_TURN',
+  'PAUSE_SESSION',
+  'RESUME_SESSION',
+  'REPEAT_QUESTION',
+  'SKIP_QUESTION',
+  'END_AFTER_TURN',
+  'END_NOW',
+  'RETRY_RECOVERY',
+];
+
+/**
+ * States from which the session is live enough that "End now" must produce a
+ * coherent COMPLETED. Excludes the lifecycle ends (IDLE/PREPARING/COMPLETED/
+ * ERROR) and FINISHING (already completing). `completionSelected` is a legal
+ * trigger out of every state in this set.
+ */
+const END_NOW_STATES: ReadonlySet<SessionRuntimeState> = new Set<SessionRuntimeState>([
+  'READY',
+  'INTERVIEWER_THINKING',
+  'INTERVIEWER_BUFFERING',
+  'INTERVIEWER_SPEAKING',
+  'USER_ARMED',
+  'USER_SPEAKING',
+  'ENDPOINT_CANDIDATE',
+  'TURN_FINALIZING',
+  'PAUSED',
+  'RECOVERING',
+]);
+
+/**
+ * Single source of truth for whether an operator/stage command is legal right
+ * now. Both the main-process command dispatch and the UI control projection
+ * consume this so the buttons can never advertise an action the orchestrator
+ * would reject (spec §11; review P0-08). Legality is derived from the
+ * transition table wherever a command maps cleanly onto a trigger.
+ */
+export function isCommandLegal(command: SessionCommandType, ctx: CommandContext): boolean {
+  const { state } = ctx;
+  switch (command) {
+    case 'PREPARE_SESSION':
+      return state === 'IDLE' || state === 'PREPARING';
+    case 'BEGIN_SESSION':
+      return state === 'READY';
+    case 'COMMIT_USER_TURN':
+      return isMicGateOpen(state) && ctx.hasCurrentTurn && !ctx.commitInFlight;
+    case 'PAUSE_SESSION':
+      return canTransition(state, 'pause');
+    case 'RESUME_SESSION':
+      return state === 'PAUSED';
+    case 'REPEAT_QUESTION':
+      // Replay the current question only before the creator has begun, or from
+      // a pause taken before they began (review: "before answering, or Paused").
+      return (
+        ctx.hasCurrentTurn &&
+        !ctx.commitInFlight &&
+        !ctx.userHasSpoken &&
+        (state === 'USER_ARMED' || state === 'PAUSED')
+      );
+    case 'SKIP_QUESTION':
+      // Swap the delivered question for a new one, only before any speech.
+      return ctx.hasCurrentTurn && !ctx.userHasSpoken && state === 'USER_ARMED';
+    case 'END_AFTER_TURN':
+      // Finish after the answer the creator currently owns is committed.
+      return isMicGateOpen(state) || state === 'TURN_FINALIZING';
+    case 'END_NOW':
+      return END_NOW_STATES.has(state);
+    case 'RETRY_RECOVERY':
+      return state === 'ERROR';
+    default: {
+      const _exhaustive: never = command;
+      return _exhaustive;
+    }
+  }
+}
+
+/** The full legality verdict for every command in the given context. */
+export function availableCommands(ctx: CommandContext): Record<SessionCommandType, boolean> {
+  const out = {} as Record<SessionCommandType, boolean>;
+  for (const command of ALL_COMMANDS) {
+    out[command] = isCommandLegal(command, ctx);
+  }
+  return out;
 }
 
 /** Observable invariants each state must hold (spec §11.3). */

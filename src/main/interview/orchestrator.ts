@@ -32,7 +32,13 @@ import { RUNTIME_DEFAULTS } from '@shared/constants/runtime-defaults';
 import { AppError } from '@shared/errors/app-error';
 import { withDeadlineFallback, nowMs as defaultNow, splitParagraphs, wordCount } from '@shared/utils';
 
-import { nextState, type TransitionTrigger } from './state-machine';
+import {
+  nextState,
+  availableCommands,
+  isCommandLegal,
+  type CommandContext,
+  type TransitionTrigger,
+} from './state-machine';
 import { planSpeaking } from '../media/media-planner';
 import { validateQuestion, deterministicRepair } from './question-validator';
 import { applyCoverageUpdates, incrementFollowUp } from './coverage-controller';
@@ -277,20 +283,39 @@ export class SessionOrchestrator {
     this.recoverableWarning = null;
   }
 
+  /** The context the command-legality projection inspects (review P0-08). */
+  getCommandContext(): CommandContext {
+    return {
+      state: this.state,
+      commitInFlight: this.commitInFlight,
+      hasCurrentTurn: this.currentTurn != null,
+      userHasSpoken: this.currentTurn?.speechStartedAt != null,
+    };
+  }
+
   async repeatQuestion(): Promise<void> {
-    if (!this.currentTurn) return;
-    // Reuse cached question + audio; choose a different clip when possible.
+    this.assertCommandLegal('REPEAT_QUESTION');
+    // Reuse the cached question + audio; choose a different clip when possible.
     await this.runExclusive(async () => {
+      // Drive back into the buffering state so playback transitions are legal
+      // from USER_ARMED / PAUSED (review P0-08: Repeat from a non-buffering
+      // state previously fired an illegal `stageReady`).
+      if (this.state === 'USER_ARMED' || this.state === 'PAUSED') {
+        this.transition('replayQuestion', 'repeat');
+      }
       await this.playCurrentTurn('repeat');
     });
   }
 
   async skipQuestion(): Promise<void> {
-    // Only valid before the user has produced speech for the current turn.
-    if (this.currentTurn?.speechStartedAt != null) {
-      throw stateConflict('cannot skip after user speech exists');
-    }
+    // Only valid from USER_ARMED before any speech exists for the current turn.
+    this.assertCommandLegal('SKIP_QUESTION');
     this.generationId++;
+    this.deps.stage.closeMicGate();
+    // USER_ARMED → INTERVIEWER_THINKING so realizeNextQuestion's playback
+    // transitions are legal (review P0-08: Skip previously fired an illegal
+    // `stageReady` from USER_ARMED).
+    this.transition('skipToNextQuestion', 'skip');
     await this.runExclusive(async () => {
       const action = await this.generateNextActionOrFallback(this.lastAnswerText());
       await this.realizeNextQuestion(action, 'model');
@@ -298,16 +323,37 @@ export class SessionOrchestrator {
   }
 
   endAfterTurn(): void {
+    this.assertCommandLegal('END_AFTER_TURN');
     this.endAfterTurnRequested = true;
     this.publishSnapshot();
   }
 
   async endNow(): Promise<void> {
+    this.assertCommandLegal('END_NOW');
     this.generationId++;
     this.clearEndpointTimer();
-    this.transition('completionSelected');
+    this.deps.stage.closeMicGate();
+    // Never mark the session completed in persistence unless the state machine
+    // actually finished (review P0-08: endNow previously persisted 'completed'
+    // even when the transitions were illegal, diverging DB from the live UI).
+    if (!this.transition('completionSelected', 'ended now')) {
+      throw stateConflict(`cannot end now from ${this.state}`);
+    }
     this.transition('finalAnswerStored', 'ended now');
     await this.persistSessionStatus('completed');
+  }
+
+  /** Operator retry from the terminal ERROR state (ERROR → RECOVERING). */
+  retryRecovery(): void {
+    this.assertCommandLegal('RETRY_RECOVERY');
+    this.transition('operatorRetry', 'operator retry');
+  }
+
+  /** Reject a command that is illegal in the current state without side effects. */
+  private assertCommandLegal(command: Parameters<typeof isCommandLegal>[0]): void {
+    if (!isCommandLegal(command, this.getCommandContext())) {
+      throw stateConflict(`${command} is not available in ${this.state}`);
+    }
   }
 
   // -- STT-driven events (auto endpoint) -----------------------------------
@@ -966,14 +1012,18 @@ export class SessionOrchestrator {
   }
 
   private controlAvailability(): OperatorSessionSnapshot['controls'] {
-    const active = !['IDLE', 'PREPARING', 'COMPLETED', 'ERROR'].includes(this.state);
+    // Derive UI control availability from the single command-legality source of
+    // truth so a button can never advertise an action the orchestrator (and the
+    // main-process dispatch) would reject (review P0-08).
+    const cmds = availableCommands(this.getCommandContext());
     return {
-      canPause: active && this.state !== 'PAUSED',
-      canResume: this.state === 'PAUSED',
-      canCommit: ['USER_ARMED', 'USER_SPEAKING', 'ENDPOINT_CANDIDATE'].includes(this.state) && !this.commitInFlight,
-      canRepeat: this.currentTurn != null && !this.commitInFlight,
-      canSkip: this.currentTurn?.speechStartedAt == null && active,
-      canEnd: active,
+      canPause: cmds.PAUSE_SESSION,
+      canResume: cmds.RESUME_SESSION,
+      canCommit: cmds.COMMIT_USER_TURN,
+      canRepeat: cmds.REPEAT_QUESTION,
+      canSkip: cmds.SKIP_QUESTION,
+      canEndAfterTurn: cmds.END_AFTER_TURN,
+      canEndNow: cmds.END_NOW,
     };
   }
 
