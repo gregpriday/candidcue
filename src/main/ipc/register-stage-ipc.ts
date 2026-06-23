@@ -1,0 +1,77 @@
+import { ipcMain, type IpcMainEvent } from 'electron';
+import { z } from 'zod';
+import { CHANNELS } from '@shared/contracts';
+import type { SessionCommand } from '@shared/domain';
+import { setupAudioPort } from './audio-port';
+import type { AppController } from '../app-controller';
+import type { makeSenderGuard } from './sender-guards';
+
+type Guard = ReturnType<typeof makeSenderGuard>;
+
+const playbackEventSchema = z.object({ turnId: z.string(), atMs: z.number().optional() });
+const playbackErrorSchema = z.object({ turnId: z.string(), reason: z.string() });
+const stageCommandSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('COMMIT'), reason: z.enum(['manual', 'automatic']) }),
+  z.object({ type: z.literal('PAUSE') }),
+  z.object({ type: z.literal('RESUME') }),
+  z.object({ type: z.literal('REPEAT') }),
+  z.object({ type: z.literal('SKIP') }),
+  z.object({ type: z.literal('EXIT_STAGE') }),
+]);
+
+/** Register StageWindow channels (low-frequency control; PCM uses the port). */
+export function registerStageIpc(app: AppController, guard: Guard): void {
+  const stage = (event: IpcMainEvent): void => guard(event.sender, ['stage']);
+
+  ipcMain.handle(CHANNELS.stageBootstrap, (e) => {
+    guard(e.sender, ['stage']);
+    return app.buildStageBootstrap();
+  });
+
+  ipcMain.on(CHANNELS.stageOpenAudioPort, (e) => {
+    stage(e);
+    setupAudioPort(e.sender, app.pcmSink);
+  });
+
+  ipcMain.handle(CHANNELS.stageReportDevices, (e) => {
+    guard(e.sender, ['stage']);
+    return undefined;
+  });
+  ipcMain.on(CHANNELS.stageReportMeter, (e) => stage(e));
+
+  ipcMain.on(CHANNELS.stagePlaybackReady, (e, raw) => {
+    stage(e);
+    app.reportStagePlayback('ready', playbackEventSchema.parse(raw).turnId);
+  });
+  ipcMain.on(CHANNELS.stagePlaybackStarted, (e, raw) => {
+    stage(e);
+    app.reportStagePlayback('started', playbackEventSchema.parse(raw).turnId);
+  });
+  ipcMain.on(CHANNELS.stagePlaybackEnded, (e, raw) => {
+    stage(e);
+    app.reportStagePlayback('ended', playbackEventSchema.parse(raw).turnId);
+  });
+  ipcMain.on(CHANNELS.stagePlaybackError, (e, raw) => {
+    stage(e);
+    app.reportStagePlayback('error', playbackErrorSchema.parse(raw).turnId);
+  });
+
+  ipcMain.on(CHANNELS.stageCommand, (e, raw) => {
+    stage(e);
+    const cmd = stageCommandSchema.parse(raw);
+    const mapped = mapStageCommand(cmd);
+    if (mapped) void app.command(mapped);
+  });
+}
+
+function mapStageCommand(cmd: z.infer<typeof stageCommandSchema>): SessionCommand | null {
+  switch (cmd.type) {
+    case 'COMMIT': return { type: 'COMMIT_USER_TURN', reason: cmd.reason };
+    case 'PAUSE': return { type: 'PAUSE_SESSION' };
+    case 'RESUME': return { type: 'RESUME_SESSION' };
+    case 'REPEAT': return { type: 'REPEAT_QUESTION' };
+    case 'SKIP': return { type: 'SKIP_QUESTION' };
+    case 'EXIT_STAGE': return { type: 'PAUSE_SESSION' };
+    default: return null;
+  }
+}

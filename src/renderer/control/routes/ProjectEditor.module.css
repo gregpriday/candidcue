@@ -1,0 +1,106 @@
+.preparedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--success);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.warningList {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.characterCard {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+.characterImage {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--bg-app);
+  flex: 0 0 auto;
+}
+.characterName {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.characterDesc {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.sourceHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+.charCount {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.document {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.documentHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.documentLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.documentMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.documentTitleInput {
+  flex: 1 1 auto;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+.documentTitleInput:hover,
+.documentTitleInput:focus {
+  border-color: var(--border);
+  background: var(--bg-app);
+  outline: none;
+}
+.filename {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}

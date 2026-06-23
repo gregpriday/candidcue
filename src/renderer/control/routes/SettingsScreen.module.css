@@ -1,0 +1,48 @@
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.keyStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.keyRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+.keyRow .input {
+  flex: 1 1 auto;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.testResult {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+.latency {
+  color: var(--text-muted);
+  font-variant: tabular-nums;
+}
+
+.saveBar {
+  display: flex;
+  justify-content: flex-end;
+}

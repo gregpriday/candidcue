@@ -1,0 +1,361 @@
+import type { EndpointDecision } from '@shared/domain';
+import { RUNTIME_DEFAULTS } from '@shared/constants/runtime-defaults';
+import {
+  autoCommitAllowed,
+  endsWithContinuation,
+  shouldRunClassifier,
+  decideEndpoint,
+} from '@main/interview/endpoint-controller';
+
+/** Build an EndpointDecision with sensible defaults. */
+function decision(overrides: Partial<EndpointDecision> = {}): EndpointDecision {
+  return {
+    shouldCommit: true,
+    completeProbability: 0.95,
+    incompleteReason: 'none',
+    ...overrides,
+  };
+}
+
+describe('autoCommitAllowed', () => {
+  it('is false for manual mode', () => {
+    expect(autoCommitAllowed('manual')).toBe(false);
+  });
+
+  it('is true for conservative and balanced modes', () => {
+    expect(autoCommitAllowed('conservative')).toBe(true);
+    expect(autoCommitAllowed('balanced')).toBe(true);
+  });
+});
+
+describe('endsWithContinuation', () => {
+  it('detects a trailing continuation word ("and")', () => {
+    expect(endsWithContinuation('I went to the store and')).toBe(true);
+  });
+
+  it('detects a trailing continuation word ("because")', () => {
+    expect(endsWithContinuation('It mattered because')).toBe(true);
+  });
+
+  it('detects a trailing continuation phrase ("for example")', () => {
+    expect(endsWithContinuation('There are many cases, for example')).toBe(true);
+  });
+
+  it('detects a trailing phrase that itself ends in a continuation word', () => {
+    expect(endsWithContinuation('The reason is')).toBe(true);
+  });
+
+  it('ignores trailing punctuation after the continuation word', () => {
+    expect(endsWithContinuation('I was thinking, and...')).toBe(true);
+  });
+
+  it('is case-insensitive', () => {
+    expect(endsWithContinuation('We talked AND')).toBe(true);
+    expect(endsWithContinuation('FOR EXAMPLE')).toBe(true);
+  });
+
+  it('returns false for a completed sentence', () => {
+    expect(endsWithContinuation('That is my final answer.')).toBe(false);
+  });
+
+  it('returns false for an empty or whitespace transcript', () => {
+    expect(endsWithContinuation('')).toBe(false);
+    expect(endsWithContinuation('   ')).toBe(false);
+  });
+
+  it('does not flag a continuation word that is not the last word', () => {
+    expect(endsWithContinuation('and then it was done')).toBe(false);
+  });
+});
+
+describe('shouldRunClassifier', () => {
+  const base = {
+    mode: 'balanced' as const,
+    silenceMs: 1000,
+    speechMs: 2000,
+    transcript: 'A real answer here',
+    commitInFlight: false,
+  };
+
+  it('is false for manual mode', () => {
+    expect(shouldRunClassifier({ ...base, mode: 'manual' })).toBe(false);
+  });
+
+  it('is false when a commit is already in flight', () => {
+    expect(shouldRunClassifier({ ...base, commitInFlight: true })).toBe(false);
+  });
+
+  it('is false when the transcript is empty or whitespace', () => {
+    expect(shouldRunClassifier({ ...base, transcript: '' })).toBe(false);
+    expect(shouldRunClassifier({ ...base, transcript: '   ' })).toBe(false);
+  });
+
+  it('is false when speech is shorter than 1500ms', () => {
+    expect(shouldRunClassifier({ ...base, speechMs: 1499 })).toBe(false);
+    expect(shouldRunClassifier({ ...base, speechMs: 1500 })).toBe(true);
+  });
+
+  it('requires silence to reach the balanced classification floor (900ms)', () => {
+    expect(shouldRunClassifier({ ...base, silenceMs: 899 })).toBe(false);
+    expect(shouldRunClassifier({ ...base, silenceMs: 900 })).toBe(true);
+  });
+
+  it('requires silence to reach the conservative classification floor (1200ms)', () => {
+    const conservative = { ...base, mode: 'conservative' as const };
+    expect(shouldRunClassifier({ ...conservative, silenceMs: 1199 })).toBe(false);
+    expect(shouldRunClassifier({ ...conservative, silenceMs: 1200 })).toBe(true);
+  });
+
+  it('is true when every condition is satisfied', () => {
+    expect(shouldRunClassifier(base)).toBe(true);
+  });
+});
+
+describe('decideEndpoint', () => {
+  const transcript = 'This is a complete and meaningful answer.';
+
+  describe('manual mode', () => {
+    it('never commits and reports "manual"', () => {
+      const result = decideEndpoint({
+        mode: 'manual',
+        silenceMs: 99999,
+        speechMs: 99999,
+        transcript,
+        classifier: decision(),
+      });
+      expect(result).toEqual({ commit: false, reason: 'manual' });
+    });
+  });
+
+  describe('empty transcript', () => {
+    it('never commits and reports "empty"', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 99999,
+        speechMs: 5000,
+        transcript: '   ',
+        classifier: decision(),
+      });
+      expect(result).toEqual({ commit: false, reason: 'empty' });
+    });
+
+    it('reports "empty" even under hard silence', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: RUNTIME_DEFAULTS.endpointHardSilenceMs + 1000,
+        speechMs: 5000,
+        transcript: '',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: false, reason: 'empty' });
+    });
+  });
+
+  describe('conservative mode classifier commit', () => {
+    it('commits with prob >= 0.9 and silence >= 1900', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 1900,
+        speechMs: 4000,
+        transcript,
+        classifier: decision({ shouldCommit: true, completeProbability: 0.9 }),
+      });
+      expect(result).toEqual({ commit: true, reason: 'classifier' });
+    });
+
+    it('does not commit when probability is below 0.9', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 1900,
+        speechMs: 4000,
+        transcript,
+        classifier: decision({ shouldCommit: true, completeProbability: 0.89 }),
+      });
+      expect(result.commit).toBe(false);
+      expect(result.reason).toBe('wait');
+    });
+
+    it('does not commit when silence is below 1900', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 1899,
+        speechMs: 4000,
+        transcript,
+        classifier: decision({ shouldCommit: true, completeProbability: 0.95 }),
+      });
+      expect(result.commit).toBe(false);
+      expect(result.reason).toBe('wait');
+    });
+
+    it('does not commit when the classifier declined to commit', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 2500,
+        speechMs: 4000,
+        transcript,
+        classifier: decision({ shouldCommit: false, completeProbability: 0.95 }),
+      });
+      expect(result.commit).toBe(false);
+    });
+  });
+
+  describe('balanced mode classifier commit', () => {
+    it('commits with prob >= 0.82 and silence >= 1500', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 4000,
+        transcript,
+        classifier: decision({ shouldCommit: true, completeProbability: 0.82 }),
+      });
+      expect(result).toEqual({ commit: true, reason: 'classifier' });
+    });
+
+    it('does not commit when probability is below 0.82', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 4000,
+        transcript,
+        classifier: decision({ shouldCommit: true, completeProbability: 0.81 }),
+      });
+      expect(result.commit).toBe(false);
+      expect(result.reason).toBe('wait');
+    });
+
+    it('does not commit when silence is below 1500', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1499,
+        speechMs: 4000,
+        transcript,
+        classifier: decision({ shouldCommit: true, completeProbability: 0.95 }),
+      });
+      expect(result.commit).toBe(false);
+      expect(result.reason).toBe('wait');
+    });
+  });
+
+  describe('hard silence', () => {
+    const hard = RUNTIME_DEFAULTS.endpointHardSilenceMs;
+
+    it('balanced commits any non-empty transcript on hard silence', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: hard,
+        speechMs: 3000,
+        transcript,
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: true, reason: 'hard_silence' });
+    });
+
+    it('balanced does NOT force commit when classifier is explicitly incomplete', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: hard,
+        speechMs: 3000,
+        transcript,
+        classifier: decision({ shouldCommit: false, completeProbability: 0.3 }),
+      });
+      expect(result.commit).toBe(false);
+      expect(result.reason).toBe('wait');
+    });
+
+    it('conservative waits on hard silence without a high-confidence classifier', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: hard,
+        speechMs: 3000,
+        transcript,
+        classifier: null,
+      });
+      expect(result.commit).toBe(false);
+      expect(result.reason).toBe('wait');
+    });
+
+    it('conservative waits on hard silence when the classifier is low-confidence', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: hard,
+        speechMs: 3000,
+        transcript,
+        classifier: decision({ shouldCommit: true, completeProbability: 0.7 }),
+      });
+      expect(result.commit).toBe(false);
+      expect(result.reason).toBe('wait');
+    });
+
+    it('conservative force-commits on hard silence with a prior high-confidence completion', () => {
+      // Hard silence is well past the 1900ms total floor, so this would also
+      // resolve via the classifier path; the resulting commit is what matters.
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: hard,
+        speechMs: 3000,
+        transcript,
+        classifier: decision({ shouldCommit: true, completeProbability: 0.95 }),
+      });
+      expect(result.commit).toBe(true);
+    });
+  });
+
+  describe('too short', () => {
+    it('reports "too_short" for sub-1200ms speech with no confident completion', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 800,
+        transcript: 'um',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: false, reason: 'too_short' });
+    });
+
+    it('reports "too_short" when a low-confidence classifier accompanies short speech', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 1000,
+        transcript: 'yes',
+        classifier: decision({ shouldCommit: false, completeProbability: 0.4 }),
+      });
+      expect(result.reason).toBe('too_short');
+    });
+
+    it('still commits short speech when the classifier is highly confident', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 800,
+        transcript: 'Absolutely, yes.',
+        classifier: decision({ shouldCommit: true, completeProbability: 0.95 }),
+      });
+      expect(result).toEqual({ commit: true, reason: 'classifier' });
+    });
+  });
+
+  describe('default wait', () => {
+    it('waits when speech is meaningful but no commit condition is met', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1000,
+        speechMs: 2500,
+        transcript,
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: false, reason: 'wait' });
+    });
+
+    it('waits when the classifier wants to commit but silence is insufficient', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1200,
+        speechMs: 2500,
+        transcript,
+        classifier: decision({ shouldCommit: true, completeProbability: 0.9 }),
+      });
+      expect(result).toEqual({ commit: false, reason: 'wait' });
+    });
+  });
+});

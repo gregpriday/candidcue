@@ -1,0 +1,100 @@
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+}
+
+.topRight {
+  position: absolute;
+  top: var(--space-6);
+  right: var(--space-6);
+  display: flex;
+  align-items: center;
+}
+
+.mic {
+  display: inline-flex;
+  opacity: 0.55;
+}
+
+.micBody {
+  fill: currentColor;
+}
+
+.micArc,
+.micStem,
+.micSlash {
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+/* Off: dimmed and slashed. */
+.mic[data-gate='closed'] {
+  opacity: 0.4;
+}
+
+.micSlash {
+  stroke-width: 2;
+}
+
+/* Armed: outline only, steady. */
+.mic[data-gate='armed'] {
+  opacity: 0.7;
+}
+
+/* Active: full opacity with a live dot. */
+.mic[data-gate='active'] {
+  opacity: 1;
+  color: var(--success);
+}
+
+.micLive {
+  fill: currentColor;
+}
+
+.status {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: var(--space-8);
+  display: flex;
+  justify-content: center;
+}
+
+.statusText {
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.4;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
+}
+
+.captions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Sit above the status line; never intrude on the vertical centre. */
+  bottom: calc(var(--space-8) + 44px);
+  display: flex;
+  justify-content: center;
+  padding: 0 12%;
+}
+
+.captionLine {
+  margin: 0;
+  max-width: 76ch;
+  text-align: center;
+  font-size: 22px;
+  line-height: 1.35;
+  /* Clamp to two lines so captions never grow over the frame's centre. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  opacity: 0.85;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
+}

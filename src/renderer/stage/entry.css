@@ -1,0 +1,19 @@
+html,
+body,
+#root {
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+}
+
+/* Stage is a passive display surface; nothing should be selectable. */
+body {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Cursor auto-hide: applied to <body> after pointer idle. */
+body.cursorHidden,
+body.cursorHidden * {
+  cursor: none;
+}

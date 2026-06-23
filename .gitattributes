@@ -1,0 +1,5 @@
+# Git LFS — large binary media assets (videos/ folder, etc.)
+*.mp4 filter=lfs diff=lfs merge=lfs -text
+*.mov filter=lfs diff=lfs merge=lfs -text
+*.webm filter=lfs diff=lfs merge=lfs -text
+videos/**/*.png filter=lfs diff=lfs merge=lfs -text

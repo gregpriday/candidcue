@@ -1,0 +1,22 @@
+# .copytreeignore — paths excluded from copytree context dumps (gitignore syntax)
+
+# Binary media assets (tracked via Git LFS) — not useful as code context
+videos/
+
+# Lockfiles — large and noisy, add nothing for understanding the code
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
+
+# Dependencies & build output
+node_modules/
+dist/
+build/
+out/
+.vite/
+coverage/
+
+# OS / editor cruft and logs
+.DS_Store
+*.log

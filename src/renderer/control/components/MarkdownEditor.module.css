@@ -1,0 +1,20 @@
+.editor {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-app);
+}
+
+.editor :global(.cm-editor) {
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+}
+
+.editor :global(.cm-editor.cm-focused) {
+  outline: 2px solid var(--focus);
+  outline-offset: -1px;
+}
+
+.editor :global(.cm-scroller) {
+  line-height: 1.55;
+}

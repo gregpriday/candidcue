@@ -21,6 +21,14 @@ out/
 release/
 .next/
 .nuxt/
+.vite/
+coverage/
+
+# Local data / generated
+*.sqlite
+*.sqlite-journal
+*.db
+.candidcue-temp/
 
 # OS
 .DS_Store

@@ -1,0 +1,46 @@
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.labelRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.value {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-variant: tabular-nums;
+}
+
+.track {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.fill {
+  height: 100%;
+  background: var(--success);
+  transition: width 60ms linear;
+}
+.clip {
+  background: var(--danger);
+}
+
+.clipNote {
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+.error {
+  font-size: 0.78rem;
+  color: var(--danger);
+}

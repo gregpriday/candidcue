@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "mira",
+  "displayName": "Mira",
+  "shortDescription": "Warm, curious, focused interviewer for conversational video content.",
+  "profile": "profile.png",
+  "poster": "poster.webp",
+  "personaPrompt": "prompts/mira.system.md",
+  "voice": {
+    "provider": "inworld",
+    "voiceIdSettingKey": "characters.mira.inworldVoiceId",
+    "defaultVoiceId": "default-vjmruianb0v3isz0fhtnig__design-voice-99088bb6",
+    "style": "neutral",
+    "speakingRate": 1.0,
+    "sampleRate": 24000
+  },
+  "video": {
+    "fit": "cover",
+    "mirrorByDefault": false,
+    "defaultZoom": 1.0,
+    "defaultVerticalOffsetPercent": 0,
+    "allowedPlaybackRate": {
+      "min": 0.92,
+      "max": 1.08
+    }
+  }
+}
