@@ -63,6 +63,7 @@ export interface AppControllerDeps {
 interface ActiveSession {
   orchestrator: SessionOrchestrator;
   sessionId: string;
+  characterId: string;
   stt: SpeechToTextAdapter;
   lastSnapshot: OperatorSessionSnapshot | null;
   stagePort: IpcStagePort;
@@ -331,7 +332,7 @@ export class AppController {
     };
 
     const orchestrator = new SessionOrchestrator(orchDeps, ctx);
-    this.active = { orchestrator, sessionId: session.id, stt, lastSnapshot: null, stagePort };
+    this.active = { orchestrator, sessionId: session.id, characterId: character.id, stt, lastSnapshot: null, stagePort };
     void stageContents; // window is created/shown; orchestrator drives it via stagePort
     await orchestrator.prepareOpening();
   }
@@ -376,7 +377,11 @@ export class AppController {
 
   // ---- Stage bootstrap --------------------------------------------------
   buildStageBootstrap(): StageBootstrap {
-    const character = getInterviewerCharacters()[0]!;
+    // Resolve the character for the ACTIVE session, not the first registered one,
+    // so the stage shows the interviewer the operator actually chose (CORR-06).
+    const character =
+      (this.active ? getInterviewerCharacter(this.active.characterId) : null) ??
+      getInterviewerCharacters()[0]!;
     const manifest = loadManifest(`${this.deps.videosRoot}/${character.mediaRootPath}`);
     const listeningClips = manifest.clips
       .filter((c) => c.mode === 'listening' && c.enabled)
@@ -408,6 +413,7 @@ export class AppController {
       turns: agg.turns
         .filter((t) => t.answer != null || t.state === 'answered')
         .map((t) => ({
+          id: t.id,
           ordinal: t.ordinal,
           question: t.question.text,
           rawTranscript: t.answer?.rawTranscript ?? null,
@@ -422,6 +428,34 @@ export class AppController {
 
   editTranscript(turnId: string, text: string): Promise<void> {
     return this.deps.repository.updateUserEditedTranscript(turnId, text);
+  }
+
+  /**
+   * Export at the project level. The IPC layer only has a project id here, so we
+   * resolve the project's most recent session (preferring a completed one) and
+   * delegate to {@link exportSession}. Previously the project id was passed
+   * straight into the session lookup, so this path always failed (CORR-05).
+   */
+  async exportProject(projectId: string, format: 'markdown' | 'json'): Promise<ExportResult> {
+    try {
+      // listSessions returns newest-first, so this prefers the latest completed
+      // session, otherwise the most recent session of any status.
+      const sessions = await this.deps.repository.listSessions(projectId);
+      const target = sessions.find((s) => s.status === 'completed') ?? sessions[0];
+      if (!target) {
+        return {
+          ok: false,
+          path: null,
+          bytesWritten: null,
+          error: new AppError('EXPORT_FAILED', {
+            publicMessage: 'This project has no interview sessions to export yet.',
+          }).toPublic(),
+        };
+      }
+      return await this.exportSession(target.id, format);
+    } catch (err) {
+      return { ok: false, path: null, bytesWritten: null, error: this.toPublicError(err) };
+    }
   }
 
   async exportSession(sessionId: string, format: 'markdown' | 'json'): Promise<ExportResult> {
@@ -477,6 +511,22 @@ export class AppController {
       return { ok: true, path: res.filePath, bytesWritten: Buffer.byteLength(content), error: null };
     } catch (err) {
       return { ok: false, path: null, bytesWritten: null, error: this.toPublicError(err) };
+    }
+  }
+
+  /**
+   * Release live resources when the app is quitting (BOOT-04): close any active
+   * STT stream so its provider socket is torn down. Best-effort — quit proceeds
+   * regardless. Repository closing is handled by the bootstrap teardown.
+   */
+  async shutdown(): Promise<void> {
+    const a = this.active;
+    this.active = null;
+    if (!a) return;
+    try {
+      await a.stt.close();
+    } catch (err) {
+      this.deps.logger.warn('app.shutdown_stt_failed', { message: String(err) });
     }
   }
 

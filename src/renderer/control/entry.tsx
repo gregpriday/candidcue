@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../styles/tokens.css';
 import { App } from './app';
+import { ErrorBoundary } from '../shared/ErrorBoundary';
 
 const container = document.getElementById('root');
 if (!container) {
@@ -10,6 +11,8 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary surface="CandidCue">
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import '../styles/tokens.css';
 import './entry.css';
 import { StageApp } from './stage-app';
+import { ErrorBoundary } from '../shared/ErrorBoundary';
 
 const CURSOR_IDLE_MS = 2000;
 
@@ -35,7 +36,9 @@ function main(): void {
   installCursorAutohide();
   createRoot(container).render(
     <StrictMode>
-      <StageApp />
+      <ErrorBoundary surface="The teleprompter">
+        <StageApp />
+      </ErrorBoundary>
     </StrictMode>,
   );
 }

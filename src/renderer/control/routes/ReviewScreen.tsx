@@ -249,9 +249,10 @@ function turnKey(turn: SessionReviewTurn): string {
 }
 
 /**
- * The edit API keys on a turn id. The review projection exposes ordinal as the
- * stable identifier, so we use it as the turn id for the edit call.
+ * The edit API keys on the real persisted turn id. The review projection now
+ * carries it, so edits target the correct turn row (previously the ordinal was
+ * sent as the id and edits silently never persisted).
  */
 function turnId(turn: SessionReviewTurn): string {
-  return String(turn.ordinal);
+  return turn.id;
 }

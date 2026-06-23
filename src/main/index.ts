@@ -46,29 +46,56 @@ function rendererTarget(name: 'control' | 'stage'): RendererTarget {
   };
 }
 
+// Each renderer is served from its own origin: in dev that's a per-renderer
+// Vite dev server (distinct localhost ports); packaged, both load from file://.
+const controlOrigin = controlDevUrl ?? 'file://';
+const stageOrigin = stageDevUrl ?? 'file://';
+
 let controlWindow: BrowserWindow | null = null;
 let stageWindow: BrowserWindow | null = null;
 
+// One-time application services. `bootstrap()` builds these exactly once; window
+// (re)creation is a separate concern so macOS reactivation never re-runs
+// bootstrap — which would re-register IPC handlers and throw on the first
+// duplicate channel (BOOT-02).
+let started = false;
+let repository: ReturnType<typeof createRepository> | null = null;
+let controller: AppController | null = null;
+
+/** Create (or focus) the operator ControlWindow, reusing existing services. */
+function openControlWindow(): void {
+  if (controlWindow && !controlWindow.isDestroyed()) {
+    controlWindow.focus();
+    return;
+  }
+  controlWindow = createControlWindow(rendererTarget('control'), controlOrigin);
+}
+
 async function bootstrap(): Promise<void> {
+  if (started) {
+    openControlWindow();
+    return;
+  }
+  started = true;
+
   const logger = createLogger();
   const videosRoot = resourceRoot('videos');
   setPromptsRoot(resourceRoot('prompts'));
 
-  const repository = createRepository(join(app.getPath('userData'), 'candidcue.sqlite'));
-  await repository.migrate();
+  const repo = createRepository(join(app.getPath('userData'), 'candidcue.sqlite'));
+  // Assign before migrate() so a failed migration still lets before-quit close
+  // the DB handle opened in the repository constructor.
+  repository = repo;
+  await repo.migrate();
   const credentials = createCredentialStore();
 
-  // Each renderer is served from its own origin: in dev that's a per-renderer
-  // Vite dev server (distinct localhost ports); packaged, both load from file://.
-  const controlOrigin = controlDevUrl ?? 'file://';
-  const stageOrigin = stageDevUrl ?? 'file://';
   registerCandidCueProtocol({ videosRoot, rendererRoot: join(currentDir, '..', 'renderer', controlName) });
   applyCspHeaders(session.defaultSession, app.isPackaged);
   // The microphone is requested from both the control window (preflight preview)
   // and the stage window (live capture), so both origins must be allowed.
   applyPermissionHandlers(session.defaultSession, [controlOrigin, stageOrigin]);
 
-  controlWindow = createControlWindow(rendererTarget('control'), controlOrigin);
+  openControlWindow();
 
   const getControl = (): WebContents | null => (controlWindow && !controlWindow.isDestroyed() ? controlWindow.webContents : null);
   const getStage = (): WebContents | null => (stageWindow && !stageWindow.isDestroyed() ? stageWindow.webContents : null);
@@ -87,8 +114,8 @@ async function bootstrap(): Promise<void> {
     return stageWindow.webContents;
   };
 
-  const controller = new AppController({
-    repository,
+  const ctrl = new AppController({
+    repository: repo,
     credentials,
     logger,
     videosRoot,
@@ -96,10 +123,11 @@ async function bootstrap(): Promise<void> {
     getStage,
     ensureStageWindow,
   });
+  controller = ctrl;
 
   const guard = makeSenderGuard(() => ({ control: getControl(), stage: getStage() }));
-  registerControlIpc(controller, guard);
-  registerStageIpc(controller, guard);
+  registerControlIpc(ctrl, guard);
+  registerStageIpc(ctrl, guard);
 
   logger.info('app.ready', { packaged: app.isPackaged });
 }
@@ -115,7 +143,28 @@ app.on('window-all-closed', () => {
 });
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0 && app.isReady()) {
-    void bootstrap();
-  }
+  // Reactivation recreates (or focuses) only the ControlWindow; services persist
+  // (BOOT-02). Keyed off the ControlWindow itself rather than the total window
+  // count, so a closed operator window is restored even while the StageWindow is
+  // still up (openControlWindow no-ops/focuses when it already exists).
+  if (started) openControlWindow();
+});
+
+// Release live resources before exit (BOOT-04): tear down the active session's
+// provider connections, then close the database. Guarded so the deferred quit
+// does not re-enter this handler.
+let quitting = false;
+app.on('before-quit', (event) => {
+  if (quitting || (!repository && !controller)) return;
+  quitting = true;
+  event.preventDefault();
+  // Close provider connections and the database concurrently and best-effort, so
+  // a hung provider shutdown can't prevent the DB from closing. allSettled never
+  // rejects; the 1.5s deadline guarantees the quit proceeds regardless.
+  const teardown = Promise.allSettled([
+    Promise.resolve(controller?.shutdown()),
+    Promise.resolve(repository?.close()),
+  ]);
+  const deadline = new Promise<void>((resolve) => setTimeout(resolve, 1500));
+  void Promise.race([teardown, deadline]).finally(() => app.quit());
 });

@@ -42,7 +42,7 @@ export function registerControlIpc(app: AppController, guard: Guard): void {
   });
   ipcMain.handle(CHANNELS.projectsExport, (e, raw) => {
     control(e);
-    return app.exportSession(idSchema.parse(raw), 'json');
+    return app.exportProject(idSchema.parse(raw), 'json');
   });
   ipcMain.handle(CHANNELS.projectsImportDocument, (e) => {
     control(e);

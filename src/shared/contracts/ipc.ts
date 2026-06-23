@@ -297,6 +297,8 @@ export interface PreparationJobResult {
 }
 
 export interface SessionReviewTurn {
+  /** The real persisted turn id — required for transcript edits to target the right row. */
+  id: string;
   ordinal: number;
   question: string;
   rawTranscript: string | null;

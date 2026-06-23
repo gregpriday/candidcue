@@ -1,17 +1,23 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { join } from 'node:path';
 import { SessionOrchestrator, type OrchestratorDeps, type SessionContext } from '@main/interview/orchestrator';
-import type { StagePort, SnapshotSink } from '@main/interview/ports';
+import { NOOP_LOGGER, type StagePort, type SnapshotSink } from '@main/interview/ports';
 import { MemoryRepository } from '@main/persistence/memory-repository';
 import { FakeInterviewModel, FakeModeration, FakeStt, FakeTts } from '@main/providers/fakes';
 import { loadManifest } from '@main/media/manifest-loader';
+import { AppController } from '@main/app-controller';
+import type { CredentialStore } from '@main/security/secrets';
 import type {
   InterviewBrief,
   InterviewerCharacter,
   MediaClip,
   SessionCoverageItem,
 } from '@shared/domain';
-import type { InterviewModelAdapter, OperatorSessionSnapshot } from '@shared/contracts';
+import type {
+  InterviewModelAdapter,
+  OperatorSessionSnapshot,
+  GenerateNextActionInput,
+} from '@shared/contracts';
 
 const CLIPS: MediaClip[] = loadManifest(join(process.cwd(), 'videos', 'mira')).clips;
 
@@ -264,5 +270,127 @@ describe('SessionOrchestrator turn pipeline', () => {
     h.orch.onSpeechStopped(2000);
     await h.orch.commitUserTurn('manual');
     expect(h.orch.getState()).toBe('PAUSED');
+  });
+
+  // --- round-1 correctness regressions -------------------------------------
+
+  it('marks the session active and stamps startedAt on begin (CORR-07)', async () => {
+    await h.orch.prepareOpening();
+    let agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.session.status).toBe('preflight');
+    expect(agg!.session.startedAt).toBeNull();
+
+    await h.orch.begin();
+
+    agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.session.status).toBe('active');
+    expect(agg!.session.startedAt).not.toBeNull();
+
+    // startedAt is preserved (not reset/cleared) when the session later completes.
+    await h.orch.endNow();
+    agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.session.status).toBe('completed');
+    expect(agg!.session.startedAt).not.toBeNull();
+  });
+
+  it('resumes the open user turn without replaying the question (CORR-01)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000); // USER_SPEAKING — mic was open
+    expect(h.orch.getState()).toBe('USER_SPEAKING');
+
+    h.orch.pause();
+    expect(h.orch.getState()).toBe('PAUSED');
+
+    vi.mocked(h.stage.preloadSpeechPlan).mockClear();
+    h.stage.openMicGate.mockClear();
+    await h.orch.resume();
+
+    // Back to the user turn with the mic reopened; the question is NOT replayed.
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    expect(h.stage.openMicGate).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(h.stage.preloadSpeechPlan)).not.toHaveBeenCalled();
+  });
+
+  it('persists the computed coverage delta on the answered turn (CORR-09)', async () => {
+    const model = new FakeInterviewModel({
+      questionTexts: ['So what changed after that?'],
+      scriptedActions: [
+        { coverageUpdates: [{ coverageItemId: 'cov-problem', status: 'covered', evidenceTurnIds: [] }] },
+      ],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.coverageDelta).toHaveLength(1);
+    expect(turn1.coverageDelta[0]).toMatchObject({
+      coverageItemId: 'cov-problem',
+      fromStatus: 'not_started',
+      toStatus: 'covered',
+    });
+    // The freshly-asked next turn carries no delta.
+    const turn2 = agg!.turns.find((t) => t.ordinal === 2);
+    expect(turn2?.coverageDelta).toEqual([]);
+  });
+
+  it('feeds the last committed answer into a subsequent skip (CORR-08)', async () => {
+    const model = new FakeInterviewModel({ questionTexts: ['Q two?', 'Q three?'] });
+    const captured: string[] = [];
+    const original = model.generateNextAction.bind(model);
+    model.generateNextAction = vi.fn((input: GenerateNextActionInput, signal?: AbortSignal) => {
+      captured.push(input.currentAnswer);
+      return original(input, signal);
+    });
+    h = await makeHarness({ model });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual'); // commit turn 1 → generates turn 2
+
+    await h.orch.skipQuestion(); // skip turn 2 → generates turn 3 from the prior answer
+
+    // The skip's next-action call received the committed answer, not '' (was a stub).
+    expect(captured.at(-1)).toContain('CandidCue gives solo presenters');
+  });
+
+  it('exposes the real persisted turn id in the review projection and round-trips edits (CORR-02)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const persisted = agg!.turns.find((t) => t.ordinal === 1)!;
+
+    const controller = new AppController({
+      repository: h.repo,
+      credentials: {} as unknown as CredentialStore,
+      logger: NOOP_LOGGER,
+      videosRoot: '',
+      getControl: () => null,
+      getStage: () => null,
+      ensureStageWindow: () => {
+        throw new Error('stage window is not used by review/editTranscript');
+      },
+    });
+
+    const review = await controller.review(h.sessionId);
+    const reviewed = review!.turns.find((t) => t.ordinal === 1)!;
+    expect(reviewed.id).toBe(persisted.id); // real id, not the ordinal
+
+    // Editing by that id actually persists (previously the ordinal was sent and
+    // the update silently matched no row).
+    await controller.editTranscript(reviewed.id, 'Edited answer text.');
+    const after = await h.repo.getTurn(persisted.id);
+    expect(after!.answer!.userEditedTranscript).toBe('Edited answer text.');
   });
 });

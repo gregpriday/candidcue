@@ -23,6 +23,7 @@ import type {
   ModerationRecord,
   TranscriptCleanupResult,
   EndpointReason,
+  CoverageDelta,
 } from '@shared/domain';
 import { newId } from '@shared/domain';
 import { RUNTIME_DEFAULTS } from '@shared/constants/runtime-defaults';
@@ -140,6 +141,7 @@ export class SessionOrchestrator {
   private usedFallbackTexts: string[] = [];
   private recentQuestionTexts: string[] = [];
   private pausedFromState: SessionRuntimeState | null = null;
+  private lastCommittedAnswer = '';
   private recoverableWarning: string | null = null;
   private readonly startedAtMs: number;
   private readonly calibrator = new DurationCalibrator();
@@ -184,6 +186,10 @@ export class SessionOrchestrator {
     }
     const from = this.state;
     this.state = target;
+    // Capture the pre-pause state at the moment we enter PAUSED, from EVERY
+    // pause entry point (manual pause, empty-answer, pipeline failure), so
+    // resume() can tell whether the user's mic was open (spec §5.5).
+    if (target === 'PAUSED') this.pausedFromState = from;
     this.log.info('session.state_changed', { from, to: target, trigger, reason });
     this.publishStage();
     this.publishSnapshot();
@@ -202,7 +208,26 @@ export class SessionOrchestrator {
 
   async begin(): Promise<void> {
     if (this.state !== 'READY') throw stateConflict('begin requires READY');
+    await this.markSessionStarted();
     await this.playCurrentTurn('begin');
+  }
+
+  /**
+   * Persist the session as active and stamp `startedAt` once, when the
+   * interview actually begins. Without this the session row stays in the
+   * `preflight` state with a null start time, breaking resume detection and
+   * review/export timestamps (CORR-07).
+   */
+  private async markSessionStarted(): Promise<void> {
+    if (this.ctx.session.status === 'active' && this.ctx.session.startedAt != null) return;
+    const nowIso = new Date(this.now()).toISOString();
+    this.ctx.session = {
+      ...this.ctx.session,
+      status: 'active',
+      startedAt: this.ctx.session.startedAt ?? nowIso,
+      updatedAt: nowIso,
+    };
+    await this.deps.repository.updateSession(this.ctx.session);
   }
 
   async commitUserTurn(reason: 'manual' | 'automatic'): Promise<void> {
@@ -214,10 +239,10 @@ export class SessionOrchestrator {
   }
 
   pause(): void {
+    // `transition` records pausedFromState from the pre-transition state.
     if (!this.transition('pause')) return;
     this.generationId++; // invalidate any in-flight provider work
     this.deps.stage.closeMicGate();
-    this.pausedFromState = this.state;
   }
 
   async resume(): Promise<void> {
@@ -449,11 +474,11 @@ export class SessionOrchestrator {
       }
 
       // 4. Apply coverage + summary, persist the answered turn atomically.
-      const { coverage } = this.applyAction(action, turn.id);
+      const { coverage, deltas } = this.applyAction(action, turn.id);
       this.coverage = coverage;
       this.rollingSummary = action.updatedSessionSummary || this.rollingSummary;
 
-      const answeredTurn = this.composeTurn(turn, answer, 'answered');
+      const answeredTurn = this.composeTurn(turn, answer, 'answered', deltas);
       await this.deps.repository.appendTurnAtomic({
         sessionId: this.ctx.session.id,
         turn: answeredTurn,
@@ -462,6 +487,9 @@ export class SessionOrchestrator {
         currentTurnOrdinal: turn.ordinal,
       });
       this.recentQuestionTexts.push(turn.question.text);
+      // Remember the committed answer so a subsequent skip feeds the model real
+      // prior context instead of an empty string (CORR-08).
+      this.lastCommittedAnswer = cleanedText;
 
       // 5. Decide: close, or build + play the next question.
       const shouldClose = action.action === 'complete' || action.shouldCloseAfterAnswer || this.endAfterTurnRequested;
@@ -558,9 +586,12 @@ export class SessionOrchestrator {
     return deterministicRepair(action.spokenText, this.r.maxQuestionWords);
   }
 
-  private applyAction(action: NextInterviewerAction, turnId: string): { coverage: SessionCoverageItem[] } {
+  private applyAction(
+    action: NextInterviewerAction,
+    turnId: string,
+  ): { coverage: SessionCoverageItem[]; deltas: CoverageDelta[] } {
     const validTurnIds = [...this.coverage.flatMap((c) => c.evidenceTurnIds), turnId];
-    const { coverage } = applyCoverageUpdates(
+    const { coverage, deltas } = applyCoverageUpdates(
       this.coverage,
       action.coverageUpdates.map((u) => ({
         coverageItemId: u.coverageItemId,
@@ -573,7 +604,7 @@ export class SessionOrchestrator {
     for (const fc of action.followUpCounts) {
       if (fc.count > 0) result = incrementFollowUp(result, fc.coverageItemId);
     }
-    return { coverage: result };
+    return { coverage: result, deltas };
   }
 
   // -- helpers: build records ----------------------------------------------
@@ -697,14 +728,19 @@ export class SessionOrchestrator {
     };
   }
 
-  private composeTurn(turn: CurrentTurn, answer: AnswerRecord | null, state: InterviewTurn['state']): InterviewTurn {
+  private composeTurn(
+    turn: CurrentTurn,
+    answer: AnswerRecord | null,
+    state: InterviewTurn['state'],
+    coverageDelta: CoverageDelta[] = [],
+  ): InterviewTurn {
     return {
       id: turn.id,
       sessionId: this.ctx.session.id,
       ordinal: turn.ordinal,
       question: turn.question,
       answer,
-      coverageDelta: [],
+      coverageDelta,
       state,
       createdAt: new Date(this.now()).toISOString(),
       completedAt: answer ? new Date(this.now()).toISOString() : null,
@@ -741,7 +777,7 @@ export class SessionOrchestrator {
   }
 
   private lastAnswerText(): string {
-    return '';
+    return this.lastCommittedAnswer;
   }
 
   private publishStage(): void {
