@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
-import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorView } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
+import { candidCueEditorTheme } from './codemirror-theme';
 import styles from './MarkdownEditor.module.css';
 
 interface MarkdownEditorProps {
@@ -18,8 +18,8 @@ interface MarkdownEditorProps {
 /**
  * A real CodeMirror markdown editor used for every prose surface (project
  * source, reference docs, notes to the interviewer, transcript editing). Wraps
- * @uiw/react-codemirror with the markdown language and the oneDark theme so the
- * editing surface matches the dark production aesthetic.
+ * @uiw/react-codemirror with the markdown language and a theme built from the
+ * application design tokens so the editing surface matches the rest of the UI.
  */
 export function MarkdownEditor({
   value,
@@ -38,7 +38,7 @@ export function MarkdownEditor({
     <div className={styles.editor}>
       <CodeMirror
         value={value}
-        theme={oneDark}
+        theme={candidCueEditorTheme}
         extensions={extensions}
         minHeight={minHeight}
         readOnly={readOnly}
