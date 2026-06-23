@@ -2,17 +2,27 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   ProjectAggregate,
   ProjectId,
+  ProjectPlanState,
   SaveProjectInput,
-  SaveProjectDocumentInput,
   TargetMode,
   PublicCharacterSummary,
 } from '@shared/domain';
+import {
+  createSourceDrafts,
+  sourceDraftsFromAggregate,
+  sourceDraftsToSaveInput,
+  type SourceDraft,
+} from '@shared/project-source-draft';
+import { canSaveSources, computeSourceLibraryStats } from '@shared/project-source-stats';
 import type { Navigator } from '../app';
 import { Button } from '../components/Button';
 import { StatusIcon } from '../components/StatusIcon';
+import type { StatusTone } from '../components/StatusIcon';
 import { Panel } from '../components/Panel';
 import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
 import { MarkdownEditor } from '../components/MarkdownEditor';
+import { SourceLibrary } from '../components/SourceLibrary';
+import { nextDraftKey } from '../lib/draft-key';
 import { describeError } from '../lib/errors';
 import route from './route.module.css';
 import styles from './ProjectEditor.module.css';
@@ -20,17 +30,6 @@ import styles from './ProjectEditor.module.css';
 interface ProjectEditorProps {
   nav: Navigator;
   projectId: ProjectId | null;
-}
-
-interface DocumentDraft {
-  id?: string;
-  kind: 'primary' | 'reference';
-  title: string;
-  originalFilename: string | null;
-  mimeType: 'text/markdown' | 'text/plain';
-  content: string;
-  sortOrder: number;
-  key: string;
 }
 
 interface FormState {
@@ -41,16 +40,10 @@ interface FormState {
   targetValue: number;
   notesToInterviewer: string;
   interviewerCharacterId: string;
-  documents: DocumentDraft[];
+  sources: SourceDraft[];
 }
 
 const DEFAULT_CHARACTER_ID = 'mira';
-
-let draftCounter = 0;
-function nextKey(): string {
-  draftCounter += 1;
-  return `draft-${draftCounter}`;
-}
 
 function emptyForm(characterId: string): FormState {
   return {
@@ -61,46 +54,12 @@ function emptyForm(characterId: string): FormState {
     targetValue: 12,
     notesToInterviewer: '',
     interviewerCharacterId: characterId,
-    documents: [
-      {
-        kind: 'primary',
-        title: 'Source material',
-        originalFilename: null,
-        mimeType: 'text/markdown',
-        content: '',
-        sortOrder: 0,
-        key: nextKey(),
-      },
-    ],
+    sources: createSourceDrafts(nextDraftKey),
   };
 }
 
 function aggregateToForm(aggregate: ProjectAggregate): FormState {
   const project = aggregate.project;
-  const documents: DocumentDraft[] = aggregate.documents
-    .slice()
-    .sort((a, b) => a.sortOrder - b.sortOrder)
-    .map((doc) => ({
-      id: doc.id,
-      kind: doc.kind,
-      title: doc.title,
-      originalFilename: doc.originalFilename,
-      mimeType: doc.mimeType,
-      content: doc.content,
-      sortOrder: doc.sortOrder,
-      key: nextKey(),
-    }));
-  if (!documents.some((doc) => doc.kind === 'primary')) {
-    documents.unshift({
-      kind: 'primary',
-      title: 'Source material',
-      originalFilename: null,
-      mimeType: 'text/markdown',
-      content: '',
-      sortOrder: 0,
-      key: nextKey(),
-    });
-  }
   return {
     title: project.title,
     audience: project.audience ?? '',
@@ -109,9 +68,18 @@ function aggregateToForm(aggregate: ProjectAggregate): FormState {
     targetValue: project.targetValue,
     notesToInterviewer: project.notesToInterviewer ?? '',
     interviewerCharacterId: project.interviewerCharacterId,
-    documents,
+    sources: sourceDraftsFromAggregate(aggregate, nextDraftKey),
   };
 }
+
+/** Renderer-side label/tone for each plan readiness state. */
+const PLAN_BADGE: Record<ProjectPlanState, { tone: StatusTone; label: string }> = {
+  unprepared: { tone: 'pending', label: 'Not prepared' },
+  preparing: { tone: 'active', label: 'Preparing…' },
+  ready: { tone: 'success', label: 'Prepared' },
+  stale: { tone: 'warning', label: 'Re-prepare needed' },
+  failed: { tone: 'danger', label: 'Preparation failed' },
+};
 
 export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Element {
   const [form, setForm] = useState<FormState | null>(null);
@@ -121,7 +89,9 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   const [saving, setSaving] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [warnings, setWarnings] = useState<string[] | null>(null);
-  const [prepared, setPrepared] = useState(false);
+  const [planState, setPlanState] = useState<ProjectPlanState>('unprepared');
+  const [dirty, setDirty] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -144,9 +114,10 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
+    setDirty(false);
     if (projectId === null) {
       setForm(emptyForm(DEFAULT_CHARACTER_ID));
-      setPrepared(false);
+      setPlanState('unprepared');
       return;
     }
     window.candidcue.projects
@@ -161,7 +132,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
           return;
         }
         setForm(aggregateToForm(aggregate));
-        setPrepared(aggregate.project.status === 'prepared');
+        setPlanState(aggregate.planState);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -176,86 +147,27 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
 
   const patch = useCallback((partial: Partial<FormState>) => {
     setForm((prev) => (prev ? { ...prev, ...partial } : prev));
-    setPrepared(false);
+    setDirty(true);
   }, []);
 
-  const updateDocument = useCallback((key: string, partial: Partial<DocumentDraft>) => {
-    setForm((prev) =>
-      prev
-        ? {
-            ...prev,
-            documents: prev.documents.map((doc) => (doc.key === key ? { ...doc, ...partial } : doc)),
-          }
-        : prev,
-    );
-    setPrepared(false);
+  const setSources = useCallback((sources: SourceDraft[]) => {
+    setForm((prev) => (prev ? { ...prev, sources } : prev));
+    setDirty(true);
   }, []);
 
-  const removeDocument = useCallback((key: string) => {
-    setForm((prev) =>
-      prev ? { ...prev, documents: prev.documents.filter((doc) => doc.key !== key) } : prev,
-    );
-    setPrepared(false);
+  const buildInput = useCallback((state: FormState, id: ProjectId | null): SaveProjectInput => {
+    const input: SaveProjectInput = {
+      title: state.title.trim() || 'Untitled project',
+      audience: state.audience.trim() ? state.audience.trim() : null,
+      intendedOutcome: state.intendedOutcome.trim() ? state.intendedOutcome.trim() : null,
+      targetMode: state.targetMode,
+      targetValue: state.targetValue,
+      interviewerCharacterId: state.interviewerCharacterId,
+      notesToInterviewer: state.notesToInterviewer.trim() ? state.notesToInterviewer.trim() : null,
+      documents: sourceDraftsToSaveInput(state.sources),
+    };
+    return id ? { ...input, id } : input;
   }, []);
-
-  const importReference = useCallback(async () => {
-    setActionError(null);
-    try {
-      const imported = await window.candidcue.projects.importDocument();
-      if (imported === null) {
-        return;
-      }
-      setForm((prev) => {
-        if (!prev) {
-          return prev;
-        }
-        const maxSort = prev.documents.reduce((max, doc) => Math.max(max, doc.sortOrder), 0);
-        const mimeType: 'text/markdown' | 'text/plain' =
-          imported.mimeType === 'text/plain' ? 'text/plain' : 'text/markdown';
-        const doc: DocumentDraft = {
-          kind: 'reference',
-          title: imported.title || imported.filename,
-          originalFilename: imported.filename,
-          mimeType,
-          content: imported.content,
-          sortOrder: maxSort + 1,
-          key: nextKey(),
-        };
-        return { ...prev, documents: [...prev.documents, doc] };
-      });
-      setPrepared(false);
-    } catch (err: unknown) {
-      setActionError(describeError(err));
-    }
-  }, []);
-
-  const buildInput = useCallback(
-    (state: FormState, id: ProjectId | null): SaveProjectInput => {
-      const documents: SaveProjectDocumentInput[] = state.documents.map((doc, index) => {
-        const base: SaveProjectDocumentInput = {
-          kind: doc.kind,
-          title: doc.title,
-          originalFilename: doc.originalFilename,
-          mimeType: doc.mimeType,
-          content: doc.content,
-          sortOrder: index,
-        };
-        return doc.id ? { ...base, id: doc.id } : base;
-      });
-      const input: SaveProjectInput = {
-        title: state.title.trim() || 'Untitled project',
-        audience: state.audience.trim() ? state.audience.trim() : null,
-        intendedOutcome: state.intendedOutcome.trim() ? state.intendedOutcome.trim() : null,
-        targetMode: state.targetMode,
-        targetValue: state.targetValue,
-        interviewerCharacterId: state.interviewerCharacterId,
-        notesToInterviewer: state.notesToInterviewer.trim() ? state.notesToInterviewer.trim() : null,
-        documents,
-      };
-      return id ? { ...input, id } : input;
-    },
-    [],
-  );
 
   const handleSave = useCallback(async (): Promise<ProjectId | null> => {
     if (!form) {
@@ -267,7 +179,8 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
       const aggregate = await window.candidcue.projects.save(buildInput(form, savedId));
       setSavedId(aggregate.project.id);
       setForm(aggregateToForm(aggregate));
-      setPrepared(aggregate.project.status === 'prepared');
+      setPlanState(aggregate.planState);
+      setDirty(false);
       return aggregate.project.id;
     } catch (err: unknown) {
       setActionError(describeError(err));
@@ -289,9 +202,12 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
       const result = await window.candidcue.projects.prepare(id);
       setWarnings(result.warnings);
       if (result.ok) {
-        setPrepared(true);
-      } else if (result.error) {
-        setActionError(result.error.publicMessage);
+        setPlanState('ready');
+      } else {
+        setPlanState('failed');
+        if (result.error) {
+          setActionError(result.error.publicMessage);
+        }
       }
     } catch (err: unknown) {
       setActionError(describeError(err));
@@ -300,6 +216,14 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     }
   }, [handleSave]);
 
+  const requestBack = useCallback(() => {
+    if (dirty) {
+      setConfirmDiscard(true);
+    } else {
+      nav.go({ name: 'home' });
+    }
+  }, [dirty, nav]);
+
   const selectedCharacter = useMemo<PublicCharacterSummary | null>(() => {
     if (!form) {
       return null;
@@ -307,7 +231,12 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     return characters.find((c) => c.id === form.interviewerCharacterId) ?? null;
   }, [characters, form]);
 
-  if (!form) {
+  const sourceStats = useMemo(
+    () => (form ? computeSourceLibraryStats(form.sources) : null),
+    [form],
+  );
+
+  if (!form || !sourceStats) {
     return (
       <>
         <WorkspaceToolbar
@@ -321,29 +250,36 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     );
   }
 
-  const primaryDoc = form.documents.find((doc) => doc.kind === 'primary');
-  const referenceDocs = form.documents.filter((doc) => doc.kind === 'reference');
-  const totalChars = form.documents.reduce((sum, doc) => sum + doc.content.length, 0);
+  const canSave = canSaveSources(sourceStats);
+  const readyToStart = planState === 'ready' && !dirty;
+  const badge = dirty
+    ? ({ tone: 'pending', label: 'Unsaved changes' } as const)
+    : PLAN_BADGE[planState];
+  // What blocks Prepare, in priority order, surfaced as an inline hint.
+  const prepareBlocker = !canSave
+    ? sourceStats.blockers[0]?.message ?? 'Resolve source issues before preparing.'
+    : sourceStats.primaryEmpty
+      ? 'Add content to the primary source before preparing.'
+      : null;
 
   return (
     <>
       <WorkspaceToolbar
         title={savedId ? 'Edit project' : 'New project'}
-        onBack={() => nav.go({ name: 'home' })}
+        onBack={requestBack}
         actions={
           <>
-            {prepared && (
-              <span className={styles.preparedBadge}>
-                <StatusIcon tone="success" label="Prepared" /> Prepared
-              </span>
-            )}
-            <Button onClick={() => void handleSave()} disabled={saving}>
+            <span className={styles.preparedBadge}>
+              <StatusIcon tone={badge.tone} label={badge.label} /> {badge.label}
+            </span>
+            <Button onClick={() => void handleSave()} disabled={saving || !canSave}>
               {saving ? 'Saving…' : 'Save'}
             </Button>
             <Button
               variant="primary"
               onClick={() => void handlePrepare()}
-              disabled={preparing || saving}
+              disabled={preparing || saving || prepareBlocker !== null}
+              title={prepareBlocker ?? 'Prepare the interview from these sources'}
             >
               {preparing ? 'Preparing…' : 'Prepare interview'}
             </Button>
@@ -351,8 +287,8 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
               <Button
                 variant="secondary"
                 onClick={() => nav.go({ name: 'preflight', projectId: savedId })}
-                disabled={!prepared}
-                title={prepared ? 'Start a session' : 'Prepare the interview first'}
+                disabled={!readyToStart}
+                title={readyToStart ? 'Start a session' : 'Prepare the interview first'}
               >
                 Start session
               </Button>
@@ -361,6 +297,23 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
         }
       />
       <div className={`${route.page} ${route.pageWide}`}>
+        {confirmDiscard && (
+          <div className={route.notice} role="alertdialog" aria-label="Discard unsaved changes">
+            <StatusIcon tone="warning" label="Unsaved changes" />
+            <div className={styles.confirmRow}>
+              <span>You have unsaved changes. Leave without saving?</span>
+              <span className={styles.confirmActions}>
+                <Button variant="ghost" onClick={() => setConfirmDiscard(false)}>
+                  Keep editing
+                </Button>
+                <Button variant="danger" onClick={() => nav.go({ name: 'home' })}>
+                  Discard changes
+                </Button>
+              </span>
+            </div>
+          </div>
+        )}
+
         {loadError !== null && (
           <p className={route.error} role="alert">
             {loadError}
@@ -522,74 +475,11 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
           />
         </Panel>
 
-        <Panel
-          title="Source material"
-          actions={
-            <div className={styles.charCount}>
-              <span>{totalChars.toLocaleString()} characters</span>
-              <Button variant="secondary" onClick={() => void importReference()}>
-                Import .md / .txt
-              </Button>
-            </div>
-          }
-        >
-          <p className={route.sectionHint}>
-            The primary document is the backbone of the interview. Reference documents add supporting
-            context.
-          </p>
-
-          {primaryDoc && (
-            <div className={styles.document}>
-              <div className={styles.documentHeader}>
-                <span className={styles.documentLabel}>
-                  <StatusIcon tone="active" label="Primary document" /> Primary document
-                </span>
-                <span className={route.count}>
-                  {primaryDoc.content.length.toLocaleString()} chars
-                </span>
-              </div>
-              <MarkdownEditor
-                value={primaryDoc.content}
-                onChange={(value) => updateDocument(primaryDoc.key, { content: value })}
-                ariaLabel="Primary source document"
-                minHeight="240px"
-                placeholder="Paste or write the main material the interview draws on…"
-              />
-            </div>
-          )}
-
-          {referenceDocs.map((doc) => (
-            <div key={doc.key} className={styles.document}>
-              <div className={styles.documentHeader}>
-                <input
-                  className={styles.documentTitleInput}
-                  value={doc.title}
-                  aria-label="Reference document title"
-                  onChange={(e) => updateDocument(doc.key, { title: e.target.value })}
-                />
-                <span className={styles.documentMeta}>
-                  <span className={route.count}>{doc.content.length.toLocaleString()} chars</span>
-                  <Button
-                    variant="ghost"
-                    onClick={() => removeDocument(doc.key)}
-                    aria-label={`Remove ${doc.title}`}
-                  >
-                    Remove
-                  </Button>
-                </span>
-              </div>
-              {doc.originalFilename && (
-                <span className={styles.filename}>Imported from {doc.originalFilename}</span>
-              )}
-              <MarkdownEditor
-                value={doc.content}
-                onChange={(value) => updateDocument(doc.key, { content: value })}
-                ariaLabel={`Reference document: ${doc.title}`}
-                minHeight="160px"
-              />
-            </div>
-          ))}
-        </Panel>
+        <SourceLibrary
+          drafts={form.sources}
+          onChange={setSources}
+          onImportError={setActionError}
+        />
       </div>
     </>
   );

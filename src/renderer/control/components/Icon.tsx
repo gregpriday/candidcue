@@ -37,10 +37,16 @@ export type IconName =
   | 'waveform'
   | 'speaker'
   | 'info'
-  | 'pencil';
+  | 'pencil'
+  | 'star'
+  | 'starFilled'
+  | 'grip'
+  | 'search'
+  | 'trash'
+  | 'copy';
 
 /** Icons whose shapes are filled rather than stroked. */
-const FILLED = new Set<IconName>(['play', 'pause', 'stop']);
+const FILLED = new Set<IconName>(['play', 'pause', 'stop', 'starFilled', 'grip']);
 
 const PATHS: Record<IconName, JSX.Element> = {
   library: (
@@ -195,6 +201,42 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M12 20h9" />
       <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+    </>
+  ),
+  star: (
+    <path d="M12 2.6l2.82 5.72 6.31.92-4.57 4.45 1.08 6.29L12 17.5l-5.64 2.97 1.08-6.29-4.57-4.45 6.31-.92L12 2.6z" />
+  ),
+  starFilled: (
+    <path d="M12 2.6l2.82 5.72 6.31.92-4.57 4.45 1.08 6.29L12 17.5l-5.64 2.97 1.08-6.29-4.57-4.45 6.31-.92L12 2.6z" />
+  ),
+  grip: (
+    <>
+      <circle cx="9" cy="6" r="1.4" />
+      <circle cx="15" cy="6" r="1.4" />
+      <circle cx="9" cy="12" r="1.4" />
+      <circle cx="15" cy="12" r="1.4" />
+      <circle cx="9" cy="18" r="1.4" />
+      <circle cx="15" cy="18" r="1.4" />
+    </>
+  ),
+  search: (
+    <>
+      <circle cx="10.5" cy="10.5" r="6.5" />
+      <line x1="15.5" y1="15.5" x2="21" y2="21" />
+    </>
+  ),
+  trash: (
+    <>
+      <polyline points="3.5 6 5 6 20.5 6" />
+      <path d="M8 6V4.5a1.5 1.5 0 0 1 1.5-1.5h5A1.5 1.5 0 0 1 16 4.5V6m2.5 0v14a1.5 1.5 0 0 1-1.5 1.5H7a1.5 1.5 0 0 1-1.5-1.5V6" />
+      <line x1="10" y1="10.5" x2="10" y2="17" />
+      <line x1="14" y1="10.5" x2="14" y2="17" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="1.6" />
+      <path d="M5 15H4.5A1.5 1.5 0 0 1 3 13.5V4.5A1.5 1.5 0 0 1 4.5 3h9A1.5 1.5 0 0 1 15 4.5V5" />
     </>
   ),
 };

@@ -48,57 +48,18 @@
   color: var(--text-secondary);
 }
 
-.charCount {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  flex: 0 0 auto;
-}
-
-.document {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.documentHeader {
+/* The unsaved-changes guard row sits inside a route .notice banner. */
+.confirmRow {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  flex-wrap: wrap;
+  flex: 1 1 auto;
 }
-.documentLabel {
+.confirmActions {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-.documentMeta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-.documentTitleInput {
-  flex: 1 1 auto;
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--text-md);
-  font-weight: 600;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-}
-.documentTitleInput:hover,
-.documentTitleInput:focus {
-  border-color: var(--border);
-  background: var(--bg-sunken);
-}
-.filename {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
+  flex: 0 0 auto;
 }
