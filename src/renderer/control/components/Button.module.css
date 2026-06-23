@@ -28,7 +28,7 @@
 .primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #0d1020;
+  color: var(--accent-contrast);
 }
 .primary:hover:not(:disabled) {
   background: var(--focus);
@@ -55,5 +55,5 @@
   color: var(--danger);
 }
 .danger:hover:not(:disabled) {
-  background: rgba(232, 120, 120, 0.12);
+  background: var(--danger-soft);
 }

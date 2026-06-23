@@ -213,8 +213,23 @@ export class AppController {
         const adapters = buildOpenAiAdapters(key);
         // A cheap structured call validates the key + model access.
         await adapters.moderation.moderate('hello');
+      } else {
+        // Inworld: synthesize a one-word phrase with the configured Mira voice and
+        // discard the audio — a real round-trip, not just key presence (CORR-04).
+        const { tts } = buildInworldAdapters(key, INWORLD_DEFAULTS.sttModel);
+        const voiceId =
+          (await this.deps.repository.getSetting<string>('characters.mira.inworldVoiceId')) ??
+          getInterviewerCharacter('mira')?.voice.voiceId ??
+          '';
+        await tts.synthesize({
+          text: 'Hello.',
+          voiceId,
+          style: 'neutral',
+          speakingRate: 1,
+          outputFormat: 'wav',
+          sampleRate: INWORLD_DEFAULTS.ttsSampleRate,
+        });
       }
-      // Inworld has no free health endpoint in the MVP; presence is treated as ok.
       return { provider, ok: true, message: 'Credentials look valid.', latencyMs: Date.now() - start };
     } catch (err) {
       return { provider, ok: false, message: this.toPublicError(err).publicMessage, latencyMs: Date.now() - start };

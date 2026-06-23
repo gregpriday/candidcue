@@ -82,7 +82,7 @@ export function registerControlIpc(app: AppController, guard: Guard): void {
   });
   ipcMain.handle(CHANNELS.devicesIdentifyDisplays, (e) => {
     control(e);
-    return undefined;
+    return import('../windows/display-manager').then((m) => m.identifyDisplays());
   });
 
   ipcMain.handle(CHANNELS.sessionsPrepare, (e, raw) => {
