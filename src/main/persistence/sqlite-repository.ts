@@ -27,6 +27,7 @@ import type {
 } from '@shared/domain';
 import { newId, deriveProjectPlanState } from '@shared/domain';
 import { hashProjectPreparationFromDocuments } from '@shared/utils';
+import { materializeSavedDocuments, normalizeLoadedDocuments } from './project-document-diff';
 
 import type { CandidCueRepository } from '@shared/contracts/repository';
 import { MIGRATIONS } from './migrations/index';
@@ -260,7 +261,7 @@ export class SqliteRepository implements CandidCueRepository {
     if (!row) return null;
 
     const project = mapProjectRow(row);
-    const documents = this.loadDocuments(id);
+    const documents = normalizeLoadedDocuments(this.loadDocuments(id));
     const activePlan = row.active_plan_version_id
       ? await this.getPlan(row.active_plan_version_id)
       : null;
@@ -273,21 +274,13 @@ export class SqliteRepository implements CandidCueRepository {
     const isUpdate = Boolean(input.id);
     const projectId = input.id ?? newId();
 
-    // Materialize documents first so we can compute the source hash and persist
-    // them and the project together. New docs get fresh ids; existing docs keep
-    // theirs so plan/source-hash continuity is preserved.
-    const documents: ProjectDocument[] = input.documents.map((doc) => ({
-      id: doc.id ?? newId(),
-      projectId,
-      kind: doc.kind,
-      title: doc.title,
-      originalFilename: doc.originalFilename ?? null,
-      mimeType: doc.mimeType,
-      content: doc.content,
-      sortOrder: doc.sortOrder,
-      createdAt: now,
-      updatedAt: now,
-    }));
+    // Diff against the existing documents so we can compute the source hash and
+    // persist alongside the project: existing docs keep their id + createdAt and
+    // only bump updatedAt on real changes, new docs get fresh ids (minted before
+    // hashing), and a foreign document id is rejected.
+    const existingDocs = isUpdate ? this.loadDocuments(projectId) : [];
+    const existingById = new Map(existingDocs.map((doc) => [doc.id, doc] as const));
+    const documents = materializeSavedDocuments(input, projectId, now, existingById, newId);
 
     const sourceHash = hashProjectPreparationFromDocuments(
       {
@@ -347,17 +340,30 @@ export class SqliteRepository implements CandidCueRepository {
           now,
         );
 
-      // Replace documents wholesale: simplest correct semantics for an editor
-      // that always sends the full document set.
-      this.db.prepare('DELETE FROM project_documents WHERE project_id = ?').run(projectId);
-      const insertDoc = this.db.prepare(
+      // Diff the document set: delete only the documents that are gone, then
+      // upsert the rest. Existing rows keep their created_at (the conflict path
+      // never touches it); only materialized changes advance updated_at.
+      const incomingIds = new Set(documents.map((doc) => doc.id));
+      const deleteDoc = this.db.prepare('DELETE FROM project_documents WHERE id = ?');
+      for (const existing of existingDocs) {
+        if (!incomingIds.has(existing.id)) deleteDoc.run(existing.id);
+      }
+      const upsertDoc = this.db.prepare(
         `INSERT INTO project_documents
            (id, project_id, kind, title, original_filename, mime_type, content,
             sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           kind = excluded.kind,
+           title = excluded.title,
+           original_filename = excluded.original_filename,
+           mime_type = excluded.mime_type,
+           content = excluded.content,
+           sort_order = excluded.sort_order,
+           updated_at = excluded.updated_at`,
       );
       for (const doc of documents) {
-        insertDoc.run(
+        upsertDoc.run(
           doc.id,
           projectId,
           doc.kind,
@@ -430,6 +436,10 @@ export class SqliteRepository implements CandidCueRepository {
     this.db
       .prepare('UPDATE projects SET active_plan_version_id = ?, updated_at = ? WHERE id = ?')
       .run(planId, new Date().toISOString(), projectId);
+  }
+
+  async updateProjectSourceHash(projectId: ProjectId, sourceHash: string): Promise<void> {
+    this.db.prepare('UPDATE projects SET source_hash = ? WHERE id = ?').run(sourceHash, projectId);
   }
 
   // --- sessions ------------------------------------------------------------

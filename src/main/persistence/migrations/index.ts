@@ -144,7 +144,26 @@ const v1: Migration = {
 };
 
 /**
+ * v2 — normalize legacy `text/plain` source documents to `text/markdown`. Plain
+ * text is a strict subset of Markdown, so this is semantically safe and lets the
+ * runtime treat new writes as Markdown-only. `original_filename` is preserved
+ * even when it ends in `.txt`. The stored `source_hash` is intentionally left
+ * untouched so previously prepared plans stay matched (and therefore ready)
+ * until the next save recomputes it.
+ */
+const v2: Migration = {
+  version: 2,
+  up(db: MigrationDb): void {
+    db.exec(`
+      UPDATE project_documents
+      SET mime_type = 'text/markdown'
+      WHERE mime_type = 'text/plain';
+    `);
+  },
+};
+
+/**
  * The full ordered migration list. Append new migrations with the next
  * `version`; never reorder or mutate an already-shipped migration.
  */
-export const MIGRATIONS: readonly Migration[] = [v1];
+export const MIGRATIONS: readonly Migration[] = [v1, v2];

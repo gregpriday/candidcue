@@ -1,45 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ProjectDocument } from '../domain/project';
 
-export interface HashableDocument {
-  id: string;
-  title: string;
-  mimeType: string;
-  content: string;
-}
-
-/**
- * Compile project documents in a stable order and hash them with SHA-256
- * (spec §10.7). Order is by sortOrder then id so the hash is deterministic
- * regardless of input ordering.
- */
-export function hashProjectSource(documents: readonly HashableDocument[]): string {
-  const ordered = [...documents].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const hash = createHash('sha256');
-  for (const doc of ordered) {
-    hash.update(doc.id);
-    hash.update(' ');
-    hash.update(doc.title);
-    hash.update(' ');
-    hash.update(doc.mimeType);
-    hash.update(' ');
-    hash.update(doc.content);
-    hash.update('');
-  }
-  return hash.digest('hex');
-}
-
-export function hashFromProjectDocuments(documents: readonly ProjectDocument[]): string {
-  return hashProjectSource(
-    documents.map((d) => ({
-      id: d.id,
-      title: d.title,
-      mimeType: d.mimeType,
-      content: d.content,
-    })),
-  );
-}
-
 /** Preparation-relevant project settings that influence the generated plan. */
 export interface PreparationSettings {
   audience: string | null;

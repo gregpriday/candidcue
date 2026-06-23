@@ -70,7 +70,6 @@ export const MEDIA_DEFAULTS = {
 } as const;
 
 export const PROJECT_LIMITS = {
-  maxSourceCharacters: 100_000,
   recentTurnCount: 6,
   maxConsecutiveFollowUps: 2,
   rollingSummaryMaxWords: 1500,

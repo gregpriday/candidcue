@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 
 export const endpointModeSchema = z.enum(['manual', 'conservative', 'balanced']);
 export const targetModeSchema = z.enum(['question_count', 'approximate_duration']);
@@ -30,26 +31,89 @@ export const sessionCommandSchema = z.discriminatedUnion('type', [
 ]);
 
 export const saveProjectDocumentInputSchema = z.object({
-  id: z.string().optional(),
+  id: z.string().min(1).optional(),
   kind: documentKindSchema,
-  title: z.string().min(1).max(200),
-  originalFilename: z.string().nullable().optional(),
-  mimeType: documentMimeSchema,
-  content: z.string().max(200_000),
+  title: z.string().trim().min(1).max(PROJECT_SOURCE_LIMITS.maxTitleCharacters),
+  originalFilename: z.string().max(PROJECT_SOURCE_LIMITS.maxOriginalFilenameCharacters).nullable().optional(),
+  // New writes are Markdown-only; `text/plain` survives only for legacy reads
+  // and is normalized to `text/markdown` by migration + read coercion.
+  mimeType: z.literal('text/markdown'),
+  content: z.string().max(PROJECT_SOURCE_LIMITS.maxCharactersPerDocument),
   sortOrder: z.number().int().nonnegative(),
 });
 
-export const saveProjectInputSchema = z.object({
-  id: z.string().optional(),
-  title: z.string().min(1).max(200),
-  audience: z.string().nullable().optional(),
-  intendedOutcome: z.string().nullable().optional(),
-  targetMode: targetModeSchema,
-  targetValue: z.number().int().positive(),
-  interviewerCharacterId: z.string().min(1),
-  notesToInterviewer: z.string().nullable().optional(),
-  documents: z.array(saveProjectDocumentInputSchema).min(1),
-});
+/**
+ * Cross-document invariants the per-field schema cannot express: exactly one
+ * primary source, unique document IDs, a dense `0..n-1` sort order, and an
+ * aggregate content budget. Main-process Zod validation is authoritative.
+ */
+function validateProjectSourceInvariants(
+  input: { documents: Array<z.infer<typeof saveProjectDocumentInputSchema>> },
+  ctx: z.RefinementCtx,
+): void {
+  const docs = input.documents;
+
+  const primaries = docs.filter((d) => d.kind === 'primary');
+  if (primaries.length !== 1) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `A project must have exactly one primary source (found ${primaries.length}).`,
+      path: ['documents'],
+    });
+  } else if (primaries[0] && primaries[0].sortOrder !== 0) {
+    // Pin the primary first so compile order, hash order, and read order agree.
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'The primary source must be first (sort order 0).',
+      path: ['documents'],
+    });
+  }
+
+  const ids = docs.map((d) => d.id).filter((id): id is string => typeof id === 'string');
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Document IDs must be unique.',
+      path: ['documents'],
+    });
+  }
+
+  const orders = docs.map((d) => d.sortOrder).sort((a, b) => a - b);
+  const dense = orders.every((value, index) => value === index);
+  if (!dense) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Document sort order must be dense (0..n-1) and unique.',
+      path: ['documents'],
+    });
+  }
+
+  const totalCharacters = docs.reduce((sum, d) => sum + d.content.length, 0);
+  if (totalCharacters > PROJECT_SOURCE_LIMITS.maxTotalCharacters) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Total source content (${totalCharacters}) exceeds the ${PROJECT_SOURCE_LIMITS.maxTotalCharacters} character limit.`,
+      path: ['documents'],
+    });
+  }
+}
+
+export const saveProjectInputSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    title: z.string().min(1).max(200),
+    audience: z.string().nullable().optional(),
+    intendedOutcome: z.string().nullable().optional(),
+    targetMode: targetModeSchema,
+    targetValue: z.number().int().positive(),
+    interviewerCharacterId: z.string().min(1),
+    notesToInterviewer: z.string().nullable().optional(),
+    documents: z
+      .array(saveProjectDocumentInputSchema)
+      .min(1)
+      .max(PROJECT_SOURCE_LIMITS.maxDocuments),
+  })
+  .superRefine(validateProjectSourceInvariants);
 
 export const providerCredentialInputSchema = z.object({
   openaiApiKey: z.string().optional(),

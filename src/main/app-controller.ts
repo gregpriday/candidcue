@@ -39,6 +39,7 @@ import type {
 } from '@shared/domain';
 import { newId } from '@shared/domain';
 import { MODEL_DEFAULTS, INWORLD_DEFAULTS, RUNTIME_DEFAULTS, PROJECT_LIMITS } from '@shared/constants/runtime-defaults';
+import { PROJECT_SOURCE_LIMITS, isAllowedMarkdownExtension } from '@shared/constants/project-source-limits';
 import { AppError, isAppError } from '@shared/errors/app-error';
 import { hashProjectPreparationFromDocuments } from '@shared/utils';
 
@@ -104,14 +105,18 @@ export class AppController {
 
   async importDocument(): Promise<{ title: string; content: string; filename: string; mimeType: string } | null> {
     const res = await dialog.showOpenDialog({
-      title: 'Import reference document',
-      filters: [{ name: 'Text/Markdown', extensions: ['md', 'txt'] }],
+      title: 'Import Markdown source file',
+      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
       properties: ['openFile'],
     });
     const path = res.filePaths[0];
     if (res.canceled || !path) return null;
+    // Dialog filters are not a security boundary; re-verify the extension.
+    if (!isAllowedMarkdownExtension(path)) {
+      throw new AppError('VALIDATION_FAILED', { publicMessage: 'Only Markdown files can be imported.' });
+    }
     const raw = await readFile(path, 'utf8');
-    if (raw.length > PROJECT_LIMITS.maxSourceCharacters) {
+    if (raw.length > PROJECT_SOURCE_LIMITS.maxCharactersPerDocument) {
       throw new AppError('VALIDATION_FAILED', { publicMessage: 'Document exceeds the size limit.' });
     }
     const ext = extname(path).toLowerCase();
@@ -119,7 +124,7 @@ export class AppController {
       title: basename(path, ext),
       content: raw,
       filename: basename(path),
-      mimeType: ext === '.md' ? 'text/markdown' : 'text/plain',
+      mimeType: 'text/markdown',
     };
   }
 
@@ -129,9 +134,18 @@ export class AppController {
       const aggregate = await this.deps.repository.getProject(projectId);
       if (!aggregate) throw new AppError('VALIDATION_FAILED', { publicMessage: 'Project not found.' });
 
+      // Deterministic, primary-first order for both the compiled envelope and the
+      // preparation hash — do not rely solely on repository query order (§15.1).
+      const orderedDocs = [...aggregate.documents].sort((a, b) => {
+        if (a.kind !== b.kind) return a.kind === 'primary' ? -1 : 1;
+        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
+      this.assertPreparableSources(orderedDocs);
+
       const model = this.requireModelAdapter();
       const compiled = compileProjectSource(
-        aggregate.documents.map((d) => ({ id: d.id, kind: d.kind, title: d.title, content: d.content })),
+        orderedDocs.map((d) => ({ id: d.id, kind: d.kind, title: d.title, content: d.content })),
       );
       const prepared = await model.prepareProject({
         compiledSource: compiled,
@@ -152,7 +166,7 @@ export class AppController {
           interviewerCharacterId: aggregate.project.interviewerCharacterId,
           notesToInterviewer: aggregate.project.notesToInterviewer,
         },
-        aggregate.documents,
+        orderedDocs,
       );
       const latest = await this.deps.repository.getLatestPlan(projectId);
       const plan: InterviewPlan = {
@@ -167,9 +181,52 @@ export class AppController {
       };
       await this.deps.repository.savePlan(plan);
       await this.deps.repository.setActivePlan(projectId, plan.id);
+      // Align the project's stored hash with the prepared baseline so readiness
+      // is accurate right after prepare even if it had drifted (e.g. a legacy
+      // text/plain → markdown migration that left the old hash in place).
+      await this.deps.repository.updateProjectSourceHash(projectId, sourceHash);
       return { ok: true, planId: plan.id, warnings: validated.warnings.map((w) => w.message), error: null };
     } catch (err) {
       return { ok: false, planId: null, warnings: [], error: this.toPublicError(err) };
+    }
+  }
+
+  /**
+   * Preparation gate (spec §7.15/§15): exactly one primary, a non-empty primary,
+   * every source titled, and per-document + aggregate size within limits. Empty
+   * references are allowed (they compile to empty envelopes). Messages are
+   * UI-safe and never echo source content.
+   */
+  private assertPreparableSources(
+    documents: readonly { kind: string; title: string; content: string }[],
+  ): void {
+    const primaries = documents.filter((doc) => doc.kind === 'primary');
+    const primary = primaries[0];
+    if (primaries.length !== 1 || !primary) {
+      throw new AppError('VALIDATION_FAILED', {
+        publicMessage: 'A project needs exactly one primary source before it can be prepared.',
+      });
+    }
+    if (primary.content.trim().length === 0) {
+      throw new AppError('VALIDATION_FAILED', {
+        publicMessage: 'The primary source is empty. Add content before preparing.',
+      });
+    }
+    if (documents.some((doc) => doc.title.trim().length === 0)) {
+      throw new AppError('VALIDATION_FAILED', {
+        publicMessage: 'Every source needs a title before preparing.',
+      });
+    }
+    if (documents.some((doc) => doc.content.length > PROJECT_SOURCE_LIMITS.maxCharactersPerDocument)) {
+      throw new AppError('VALIDATION_FAILED', {
+        publicMessage: 'A source exceeds the maximum size.',
+      });
+    }
+    const totalCharacters = documents.reduce((sum, doc) => sum + doc.content.length, 0);
+    if (totalCharacters > PROJECT_SOURCE_LIMITS.maxTotalCharacters) {
+      throw new AppError('VALIDATION_FAILED', {
+        publicMessage: 'The combined sources exceed the maximum size.',
+      });
     }
   }
 

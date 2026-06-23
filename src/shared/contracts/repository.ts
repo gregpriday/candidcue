@@ -37,6 +37,12 @@ export interface CandidCueRepository {
   getPlan(planId: PlanId): Promise<InterviewPlan | null>;
   getLatestPlan(projectId: ProjectId): Promise<InterviewPlan | null>;
   setActivePlan(projectId: ProjectId, planId: PlanId): Promise<void>;
+  /**
+   * Set the project's stored source hash to the baseline a freshly prepared
+   * plan was generated from, so readiness is accurate immediately after prepare
+   * even if the stored hash had drifted (e.g. a legacy mime migration).
+   */
+  updateProjectSourceHash(projectId: ProjectId, sourceHash: string): Promise<void>;
 
   // Sessions ----------------------------------------------------------------
   createSession(input: CreateSessionInput): Promise<InterviewSession>;

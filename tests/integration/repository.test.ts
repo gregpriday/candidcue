@@ -18,9 +18,28 @@ import type {
   AnswerRecord,
   ProjectId,
   PlanId,
+  ProjectDocument,
 } from '@shared/domain';
 
 // --- fixtures --------------------------------------------------------------
+
+/** Convert persisted documents back into save input, for round-trip edits. */
+function toSaveDocuments(documents: readonly ProjectDocument[]): SaveProjectInput['documents'] {
+  return documents.map((d) => ({
+    id: d.id,
+    kind: d.kind,
+    title: d.title,
+    originalFilename: d.originalFilename,
+    mimeType: d.mimeType,
+    content: d.content,
+    sortOrder: d.sortOrder,
+  }));
+}
+
+/** Small real delay so a subsequent save lands on a later ISO timestamp. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function projectInput(overrides: Partial<SaveProjectInput> = {}): SaveProjectInput {
   return {
@@ -405,6 +424,129 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
     expect(await summaryState()).toBe('stale');
   });
 
+  it('preserves document ids/createdAt and bumps updatedAt only for changed documents', async () => {
+    const saved = await repo.saveProject(projectInput());
+    const before = saved.documents;
+    await delay(10);
+
+    const edited = await repo.saveProject({
+      ...projectInput(),
+      id: saved.project.id,
+      documents: toSaveDocuments(before).map((d) =>
+        d.kind === 'reference' ? { ...d, content: 'Mention the pivot, expanded.' } : d,
+      ),
+    });
+
+    // ids + createdAt are stable for every document across the edit.
+    expect(edited.documents.map((d) => d.id)).toEqual(before.map((d) => d.id));
+    expect(edited.documents.map((d) => d.createdAt)).toEqual(before.map((d) => d.createdAt));
+
+    const beforePrimary = before.find((d) => d.kind === 'primary');
+    const beforeReference = before.find((d) => d.kind === 'reference');
+    const editedPrimary = edited.documents.find((d) => d.kind === 'primary');
+    const editedReference = edited.documents.find((d) => d.kind === 'reference');
+
+    // Unchanged primary keeps its updatedAt; the changed reference advances it.
+    expect(editedPrimary?.updatedAt).toBe(beforePrimary?.updatedAt);
+    expect(editedReference?.updatedAt).not.toBe(beforeReference?.updatedAt);
+    expect((editedReference?.updatedAt ?? '') > (beforeReference?.updatedAt ?? '')).toBe(true);
+  });
+
+  it('rejects a document id that belongs to another project', async () => {
+    const a = await repo.saveProject(projectInput());
+    const b = await repo.saveProject(projectInput());
+    const foreignId = a.documents[0]?.id;
+    expect(foreignId).toBeTruthy();
+
+    await expect(
+      repo.saveProject({
+        ...projectInput(),
+        id: b.project.id,
+        documents: [
+          { id: foreignId, kind: 'primary', title: 'Stolen', mimeType: 'text/markdown', content: 'x', sortOrder: 0 },
+        ],
+      }),
+    ).rejects.toThrow(/does not belong to project/);
+  });
+
+  it('updateProjectSourceHash realigns readiness after the stored hash drifts', async () => {
+    const saved = await repo.saveProject(projectInput());
+    const projectId = saved.project.id;
+
+    // An active ready plan whose hash differs from the project's stored hash is stale.
+    const plan = planFor(projectId, 1, newId());
+    plan.sourceHash = 'drifted-baseline-hash';
+    await repo.savePlan(plan);
+    await repo.setActivePlan(projectId, plan.id);
+    expect((await repo.getProject(projectId))?.planState).toBe('stale');
+
+    // Aligning the project's stored hash to the plan's baseline restores readiness.
+    await repo.updateProjectSourceHash(projectId, 'drifted-baseline-hash');
+    expect((await repo.getProject(projectId))?.planState).toBe('ready');
+  });
+
+  it('removes documents dropped from the saved set', async () => {
+    const saved = await repo.saveProject(projectInput()); // primary + reference
+    const updated = await repo.saveProject({
+      ...projectInput(),
+      id: saved.project.id,
+      documents: toSaveDocuments(saved.documents).filter((d) => d.kind === 'primary'),
+    });
+
+    expect(updated.documents).toHaveLength(1);
+    expect(updated.documents[0]?.kind).toBe('primary');
+    expect((await repo.getProject(saved.project.id))?.documents).toHaveLength(1);
+  });
+
+  it('changing only original_filename persists but does not change the source hash', async () => {
+    const saved = await repo.saveProject(projectInput());
+    const renamed = await repo.saveProject({
+      ...projectInput(),
+      id: saved.project.id,
+      documents: toSaveDocuments(saved.documents).map((d) =>
+        d.kind === 'reference' ? { ...d, originalFilename: 'notes.md' } : d,
+      ),
+    });
+
+    expect(renamed.project.sourceHash).toBe(saved.project.sourceHash);
+    expect(renamed.documents.find((d) => d.kind === 'reference')?.originalFilename).toBe('notes.md');
+  });
+
+  it('normalizes a legacy text/plain document to text/markdown', async () => {
+    const saved = await repo.saveProject(
+      projectInput({
+        documents: [
+          { kind: 'primary', title: 'Brief', mimeType: 'text/markdown', content: '# hi', sortOrder: 0 },
+          { kind: 'reference', title: 'Notes', mimeType: 'text/plain', content: 'plain notes', sortOrder: 1 },
+        ],
+      }),
+    );
+    expect(saved.documents.every((d) => d.mimeType === 'text/markdown')).toBe(true);
+  });
+
+  it('returns the primary first and repairs an invalid multi-primary set on read', async () => {
+    const reordered = await repo.saveProject(
+      projectInput({
+        documents: [
+          { kind: 'reference', title: 'Ref', mimeType: 'text/markdown', content: 'r', sortOrder: 0 },
+          { kind: 'primary', title: 'Main', mimeType: 'text/markdown', content: 'm', sortOrder: 1 },
+        ],
+      }),
+    );
+    expect(reordered.documents[0]?.kind).toBe('primary');
+
+    const multiPrimary = await repo.saveProject(
+      projectInput({
+        documents: [
+          { kind: 'primary', title: 'A', mimeType: 'text/markdown', content: 'a', sortOrder: 0 },
+          { kind: 'primary', title: 'B', mimeType: 'text/markdown', content: 'b', sortOrder: 1 },
+        ],
+      }),
+    );
+    expect(multiPrimary.documents.filter((d) => d.kind === 'primary')).toHaveLength(1);
+    expect(multiPrimary.documents[0]?.kind).toBe('primary');
+  });
+
   it('createSession persists coverage and starts at preflight with ordinal 0', async () => {
     const { projectId, planId } = await seedProjectWithPlan();
     const session = await repo.createSession(
@@ -626,7 +768,7 @@ describe('SqliteRepository.migrate()', () => {
     const rows = db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as {
       version: number;
     }[];
-    expect(rows.map((r) => r.version)).toEqual([1]);
+    expect(rows.map((r) => r.version)).toEqual([1, 2]);
     await repo.close();
   });
 });

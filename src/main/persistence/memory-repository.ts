@@ -20,6 +20,7 @@ import type {
 } from '@shared/domain';
 import { newId, deriveProjectPlanState } from '@shared/domain';
 import { hashProjectPreparationFromDocuments } from '@shared/utils';
+import { materializeSavedDocuments, normalizeLoadedDocuments } from './project-document-diff';
 
 import type { CandidCueRepository } from '@shared/contracts/repository';
 import { minimalAnswer } from './sqlite-repository';
@@ -113,7 +114,7 @@ export class MemoryRepository implements CandidCueRepository {
     const activePlan = activePlanId ? (this.plans.get(activePlanId) ?? null) : null;
     return {
       project: clone(stored.project),
-      documents: clone(this.sortedDocuments(stored.documents)),
+      documents: normalizeLoadedDocuments(clone(stored.documents)),
       activePlan: activePlan ? clone(activePlan) : null,
       planState: deriveProjectPlanState(stored.project, activePlan),
     };
@@ -124,18 +125,12 @@ export class MemoryRepository implements CandidCueRepository {
     const projectId = input.id ?? newId();
     const existing = this.projects.get(projectId);
 
-    const documents: ProjectDocument[] = input.documents.map((doc) => ({
-      id: doc.id ?? newId(),
-      projectId,
-      kind: doc.kind,
-      title: doc.title,
-      originalFilename: doc.originalFilename ?? null,
-      mimeType: doc.mimeType,
-      content: doc.content,
-      sortOrder: doc.sortOrder,
-      createdAt: now,
-      updatedAt: now,
-    }));
+    // Mirror the SQLite repository's diff/upsert: preserve ids + createdAt, bump
+    // updatedAt only on real changes, reject foreign document ids.
+    const existingById = new Map(
+      (existing?.documents ?? []).map((doc) => [doc.id, doc] as const),
+    );
+    const documents = materializeSavedDocuments(input, projectId, now, existingById, newId);
 
     const sourceHash = hashProjectPreparationFromDocuments(
       {
@@ -208,6 +203,11 @@ export class MemoryRepository implements CandidCueRepository {
     if (!stored) return;
     stored.project.activePlanVersionId = planId;
     stored.project.updatedAt = new Date().toISOString();
+  }
+
+  async updateProjectSourceHash(projectId: ProjectId, sourceHash: string): Promise<void> {
+    const stored = this.projects.get(projectId);
+    if (stored) stored.project.sourceHash = sourceHash;
   }
 
   // --- sessions ------------------------------------------------------------
@@ -348,13 +348,6 @@ export class MemoryRepository implements CandidCueRepository {
   }
 
   // --- internals -----------------------------------------------------------
-
-  private sortedDocuments(documents: ProjectDocument[]): ProjectDocument[] {
-    return [...documents].sort((a, b) => {
-      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
-      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-    });
-  }
 
   private upsertTurn(sessionId: SessionId, turn: InterviewTurn): void {
     const list = this.turnsBySession.get(sessionId) ?? [];
