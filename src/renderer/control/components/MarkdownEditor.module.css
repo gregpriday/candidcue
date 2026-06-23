@@ -22,5 +22,5 @@
 
 .editor :global(.cm-content) {
   padding: var(--space-5);
-  max-width: 92ch;
+  max-width: var(--prose-measure, 68ch);
 }

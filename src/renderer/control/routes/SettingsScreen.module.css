@@ -33,6 +33,13 @@
   background: var(--accent-soft);
 }
 
+/* Provider logos are displayed larger without background */
+.providerIcon svg {
+  width: auto;
+  height: 20px;
+  object-fit: contain;
+}
+
 .providerCopy {
   min-width: 0;
 }

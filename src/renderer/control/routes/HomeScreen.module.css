@@ -108,40 +108,78 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Signature microinteraction: create card has a subtle pulse that invites creation */
+@keyframes create-pulse {
+  0%, 100% {
+    border-color: var(--empty-border, rgba(142, 160, 255, 0.35));
+  }
+  50% {
+    border-color: rgba(142, 160, 255, 0.42);
+  }
+}
+
 .createCard {
+  position: relative;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: var(--space-4);
   width: 100%;
   min-height: 164px;
-  padding: var(--space-5);
-  color: var(--text-secondary);
+  padding: var(--space-6);
+  color: var(--empty-text, var(--text-secondary));
   text-align: left;
-  background: rgba(142, 160, 255, 0.055);
-  border: 1px dashed rgba(142, 160, 255, 0.42);
+  background: var(--empty-bg, rgba(142, 160, 255, 0.07));
+  border: 1px dashed var(--empty-border, rgba(142, 160, 255, 0.35));
   border-radius: var(--radius-md);
+  animation: create-pulse 3s var(--ease-breathe) infinite;
   transition:
     background var(--dur-med) var(--ease-out),
     border-color var(--dur-med) var(--ease-out),
-    color var(--dur-med) var(--ease-out);
+    color var(--dur-med) var(--ease-out),
+    transform var(--dur-med) var(--ease-out),
+    box-shadow var(--dur-med) var(--ease-out);
 }
 .createCard:hover {
+  animation: none;
   color: var(--text-primary);
-  background: var(--accent-soft);
-  border-color: var(--accent);
+  background: var(--empty-hover-bg, rgba(142, 160, 255, 0.11));
+  border-color: var(--empty-hover-border, rgba(142, 160, 255, 0.5));
+  border-style: solid;
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card);
+}
+.createCard::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-md);
+  background: radial-gradient(120% 80% at 50% -20%, rgba(142, 160, 255, 0.12), transparent 50%);
+  opacity: 0;
+  transition: opacity var(--dur-med) var(--ease-out);
+  pointer-events: none;
+}
+.createCard:hover::before {
+  opacity: 1;
 }
 .createIcon {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   border-radius: var(--radius-sm);
   color: var(--accent);
   background: var(--accent-soft);
+  box-shadow: 0 0 0 1px rgba(142, 160, 255, 0.15) inset,
+              var(--accent-glow);
 }
 .createTitle,
 .createText {
+  position: relative;
+  z-index: 1;
   display: block;
 }
 .createTitle {
@@ -154,30 +192,43 @@
   margin-top: var(--space-1);
   font-size: var(--text-sm);
   line-height: 20px;
-  color: var(--text-muted);
+  color: var(--empty-text-muted, var(--text-muted));
 }
 
 .emptyState {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-4);
-  max-width: 420px;
+  gap: var(--space-5);
+  max-width: 480px;
   padding: var(--space-8) 0;
 }
 .emptyMark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 52px;
-  height: 52px;
+  width: 56px;
+  height: 56px;
   color: var(--accent);
   background: var(--accent-soft);
   border-radius: var(--radius-md);
+  box-shadow: var(--accent-glow) 0 0 0 1px inset;
+}
+.emptyTitle {
+  margin: 0;
+  font-size: var(--text-xl);
+  line-height: 28px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 .emptyText {
   margin: 0;
-  color: var(--text-secondary);
   font-size: var(--text-base);
   line-height: 22px;
+  color: var(--prose-secondary-warm, var(--text-secondary));
+}
+.emptyHint {
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--prose-muted-warm, var(--text-muted));
 }

@@ -58,6 +58,16 @@
   --live-soft: rgba(248, 106, 90, 0.16);
   --live-glow: rgba(248, 106, 90, 0.32);
 
+  /* ---- Live mode transformations ----
+     When a session goes live, these tokens override their at-rest counterparts to
+     signal state change across the entire UI. Applied via a [data-live] attribute
+     on the shell so the entire window participates in the transformation. */
+  --live-accent: #ff6b5a;
+  --live-accent-soft: rgba(255, 107, 90, 0.18);
+  --live-accent-glow: rgba(255, 107, 90, 0.35);
+  --live-border: rgba(255, 107, 90, 0.28);
+  --live-sheen: radial-gradient(120% 80% at 50% -10%, rgba(255, 107, 90, 0.08), transparent 60%);
+
   /* ---- Audio meter zones (so we never recolor the shared status hues) ---- */
   --meter-low: #5ec98f;
   --meter-mid: #e6b45a;
@@ -79,7 +89,7 @@
   --space-8: 32px;
 
   /* ---- Type scale (px, editorial authoring base 14) ---- */
-  --text-2xs: 12px;
+  --text-2xs: 11px; /* Distinguished from xs for true tiny labels */
   --text-xs: 12px;
   --text-sm: 13px;
   --text-base: 14px;
@@ -87,9 +97,33 @@
   --text-lg: 16px;
   --text-xl: 20px;
   --text-2xl: 24px;
+  --text-3xl: 32px; /* Hero headings, intros */
   --ls-caps: 0.06em; /* letter-spacing for UPPERCASE panel/section labels */
   --ls-tight: 0;
+  --ls-prose: 0.01em; /* Subtle opening for long-form readability */
   --prose-leading: 1.6; /* comfortable reading line-height for editors / transcripts */
+
+  /* ---- Live question typography ----
+     The current question is the most important text in the console—dominate
+     the visual hierarchy with responsive sizing that scales from 24px at
+     small viewports to 32px at large ones. */
+  --text-live-question: clamp(24px, 2vw, 32px);
+  --text-live-question-leading: 1.35; /* Tighter leading for large display type */
+
+  /* ---- Stage caption typography ----
+     Captions need to be readable from teleprompter distance. Responsive sizing
+     ensures legibility across displays while maintaining elegance. */
+  --text-caption: clamp(28px, 2.3vw, 42px);
+  --text-caption-leading: 1.3;
+
+  /* ---- Prose typography (long-form content) ----
+     Warmer, more inviting treatment for project descriptions, source material,
+     transcripts, and any text meant to be read rather than scanned. */
+  --prose-measure: 68ch; /* Optimal reading line length (45-75ch ideal) */
+  --prose-measure-narrow: 52ch; /* For secondary prose */
+  --prose-text-warm: #e8ecf5; /* Slightly warmer than primary for reading comfort */
+  --prose-secondary-warm: #c5ccd8; /* Warmer secondary text */
+  --prose-muted-warm: #9aa5b5; /* Warmer muted text */
 
   /* ---- Chrome geometry ---- */
   --titlebar-h: 52px;
@@ -118,9 +152,12 @@
   --dur-fast: 120ms; /* hover / press / color */
   --dur-med: 180ms; /* selection, focus, crossfade */
   --dur-slow: 260ms; /* mount, state, celebration */
+  --dur-slower: 380ms; /* Signature moments, live transitions */
   --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1); /* default confident settle */
   --ease-inout: cubic-bezier(0.4, 0, 0.2, 1); /* symmetric crossfades */
   --ease-spring: cubic-bezier(0.34, 1.4, 0.5, 1); /* restrained overshoot — nav slide / ready only */
+  --ease-breathe: cubic-bezier(0.3, 0, 0.7, 1); /* Gentle symmetric ease for breathing animations */
+  --ease-signature: cubic-bezier(0.2, 0.8, 0.2, 1); /* Signature microinteraction curve */
 
   /* ---- Atmosphere: kills the dead-black void without violating restraint ----
      A whisper of top-lit warmth on large empty grounds, plus a faint film grain.
@@ -128,6 +165,15 @@
   --sheen-app: radial-gradient(120% 80% at 50% -10%, rgba(142, 160, 255, 0.055), transparent 60%);
   --grain-opacity: 0.03;
   --grain-url: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+
+  /* ---- Empty state invitations ----
+     Tokens for spaces that invite creation rather than announce absence. */
+  --empty-bg: rgba(142, 160, 255, 0.07);
+  --empty-border: rgba(142, 160, 255, 0.35);
+  --empty-text: var(--text-secondary);
+  --empty-text-muted: var(--text-muted);
+  --empty-hover-bg: rgba(142, 160, 255, 0.11);
+  --empty-hover-border: rgba(142, 160, 255, 0.5);
 
   /* Lead with the platform system stack — no web font is bundled, so claiming
      Inter first made rendering inconsistent across machines (DESIGN-03). On macOS
@@ -225,4 +271,46 @@ button {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---- Live mode transformation ----
+   When a session is live, the entire UI transforms to signal the elevated state.
+   Applied via [data-live="true"] on the shell — every component participates. */
+.shell[data-live="true"] {
+  --accent: var(--live-accent);
+  --accent-strong: var(--live-accent);
+  --accent-soft: var(--live-accent-soft);
+  --accent-gradient-top: #ff7f6b;
+  --accent-gradient-bottom: var(--live-accent);
+  --sheen-app: var(--live-sheen);
+}
+
+/* Live mode breathing animation for accents */
+@keyframes breathe-live {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.92;
+    transform: scale(1.01);
+  }
+}
+
+.shell[data-live="true"] .liveBreathing {
+  animation: breathe-live 3s var(--ease-breathe) infinite;
+}
+
+/* Live transport glow */
+.shell[data-live="true"] .transport {
+  border-color: var(--live-border);
+  box-shadow: 0 0 0 1px rgba(255, 107, 90, 0.1) inset,
+              var(--live-accent-glow);
+}
+
+/* Live state badge glow */
+.shell[data-live="true"] .stateBadge {
+  background: var(--live-accent-soft);
+  border-color: var(--live-border);
+  color: var(--live-accent);
 }

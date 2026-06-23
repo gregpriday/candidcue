@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 60">
+  <!-- Hexagonal logo mark -->
+  <path fill="#00d4ff" d="M30,5 L50,5 L60,17.32 L60,42.68 L50,55 L30,55 L20,42.68 L20,17.32 Z" opacity="0.9"/>
+  <path fill="#ffffff" d="M33,12 L47,12 L54,21.65 L54,38.35 L47,48 L33,48 L26,38.35 L26,21.65 Z"/>
+  <!-- Inner stylized 'i' -->
+  <circle fill="#00d4ff" cx="40" cy="22" r="3"/>
+  <rect fill="#00d4ff" x="38.5" y="27" width="3" height="15" rx="1"/>
+
+  <!-- "inworld" text -->
+  <text x="75" y="38" font-family="system-ui, -apple-system, sans-serif" font-size="28" font-weight="600" fill="#ffffff">
+    inworld
+  </text>
+  <text x="75" y="38" font-family="system-ui, -apple-system, sans-serif" font-size="28" font-weight="600" fill="#00d4ff" opacity="0.3">
+    in
+  </text>
+</svg>

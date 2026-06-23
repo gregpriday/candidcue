@@ -12,7 +12,7 @@ import type { Extension } from '@codemirror/state';
 const baseTheme = EditorView.theme(
   {
     '&': {
-      color: 'var(--text-primary)',
+      color: 'var(--prose-text-warm, var(--text-primary))',
       backgroundColor: 'transparent',
       fontSize: '15px',
     },
@@ -20,18 +20,20 @@ const baseTheme = EditorView.theme(
       caretColor: 'var(--accent)',
       fontFamily: 'var(--font-prose)',
       lineHeight: '24px',
+      letterSpacing: 'var(--ls-prose, 0.01em)',
+      maxWidth: 'var(--prose-measure, 68ch)',
     },
     '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)' },
     '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
       { backgroundColor: 'rgba(143, 167, 255, 0.22)' },
     '.cm-gutters': {
       backgroundColor: 'transparent',
-      color: 'var(--text-muted)',
+      color: 'var(--prose-muted-warm, var(--text-muted))',
       border: 'none',
     },
     '.cm-activeLine': { backgroundColor: 'transparent' },
     '.cm-activeLineGutter': { backgroundColor: 'transparent' },
-    '.cm-placeholder': { color: 'var(--text-muted)' },
+    '.cm-placeholder': { color: 'var(--prose-muted-warm, var(--text-muted))' },
     '.cm-scroller': { fontFamily: 'var(--font-prose)' },
   },
   { dark: true },

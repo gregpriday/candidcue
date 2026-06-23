@@ -106,7 +106,9 @@ export function StatusOverlay({
 
       {captions !== null ? (
         <div className={styles.captions}>
-          <p className={styles.captionLine}>{captions}</p>
+          <div className={styles.captionPlate}>
+            <p className={styles.captionLine}>{captions}</p>
+          </div>
         </div>
       ) : null}
     </div>

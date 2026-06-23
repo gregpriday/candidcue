@@ -75,8 +75,12 @@ export function HomeScreen({ nav }: HomeScreenProps): JSX.Element {
             <span className={styles.emptyMark} aria-hidden>
               <Icon name="waveform" size={24} />
             </span>
+            <h2 className={styles.emptyTitle}>Your interview workspace</h2>
             <p className={styles.emptyText}>
-              No projects yet. Create one to prepare your first interview.
+              Prepare projects with source material and context, then conduct natural interviews.
+            </p>
+            <p className={styles.emptyHint}>
+              Create your first project to begin.
             </p>
             <Button variant="primary" onClick={newProject}>
               <Icon name="plus" size={14} /> New project

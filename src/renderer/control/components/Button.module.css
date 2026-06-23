@@ -43,9 +43,12 @@
 .primary:hover:not(:disabled) {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset,
+              var(--accent-glow);
 }
 .primary:active:not(:disabled) {
   background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
 }
 
 .secondary {

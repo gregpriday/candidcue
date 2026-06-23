@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Icon } from './Icon';
 import styles from './WorkspaceToolbar.module.css';
@@ -17,8 +18,27 @@ export function WorkspaceToolbar({
   meta,
   actions,
 }: WorkspaceToolbarProps): JSX.Element {
+  const [scrolled, setScrolled] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const element = scrollRef.current?.parentElement;
+    if (!element) return;
+
+    const handleScroll = () => {
+      const isScrolled = element.scrollTop > 8;
+      setScrolled(isScrolled);
+    };
+
+    // Check initial scroll state
+    handleScroll();
+
+    element.addEventListener('scroll', handleScroll, { passive: true });
+    return () => element.removeEventListener('scroll', handleScroll);
+  }, []);
+
   return (
-    <div className={styles.toolbar}>
+    <div ref={scrollRef} className={styles.toolbar} data-scrolled={scrolled ? 'true' : 'false'}>
       <div className={styles.left}>
         {onBack && (
           <button type="button" className={styles.back} onClick={onBack} aria-label={backLabel} title={backLabel}>

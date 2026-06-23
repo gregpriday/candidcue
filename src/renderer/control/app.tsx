@@ -72,8 +72,11 @@ export function App(): JSX.Element {
     </button>
   );
 
+  // Live mode: when in operator view, the entire UI transforms
+  const isLive = route.name === 'operator';
+
   return (
-    <div className={styles.shell} data-platform={IS_MAC ? 'mac' : 'other'}>
+    <div className={styles.shell} data-platform={IS_MAC ? 'mac' : 'other'} data-live={isLive ? 'true' : 'false'}>
       <header className={styles.header}>
         <div className={styles.headerLeft}>
           <span className={styles.wordmark}>
