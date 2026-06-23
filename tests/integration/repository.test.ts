@@ -1,6 +1,6 @@
 import { SqliteRepository } from '@main/persistence/sqlite-repository';
 import { MemoryRepository } from '@main/persistence/memory-repository';
-import { hashFromProjectDocuments } from '@shared/utils';
+import { hashProjectPreparationFromDocuments } from '@shared/utils';
 import { newId } from '@shared/domain';
 import type {
   CandidCueRepository,
@@ -251,8 +251,20 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
     expect(saved.documents).toHaveLength(2);
     expect(saved.documents.map((d) => d.title)).toEqual(['Brief', 'Notes']);
 
-    // Source hash must match a recompute over the persisted documents.
-    expect(saved.project.sourceHash).toBe(hashFromProjectDocuments(saved.documents));
+    // Source hash must match a recompute over the persisted setup + documents.
+    expect(saved.project.sourceHash).toBe(
+      hashProjectPreparationFromDocuments(
+        {
+          audience: saved.project.audience,
+          intendedOutcome: saved.project.intendedOutcome,
+          targetMode: saved.project.targetMode,
+          targetValue: saved.project.targetValue,
+          interviewerCharacterId: saved.project.interviewerCharacterId,
+          notesToInterviewer: saved.project.notesToInterviewer,
+        },
+        saved.documents,
+      ),
+    );
     expect(saved.project.sourceHash).toMatch(/^[0-9a-f]{64}$/);
 
     const fetched = await repo.getProject(saved.project.id);
@@ -324,6 +336,73 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
     await repo.setActivePlan(projectId, planV2.id);
     const withActive = await repo.getProject(projectId);
     expect(withActive?.activePlan?.id).toBe(planV2.id);
+  });
+
+  it('source hash covers setup fields, not just documents (PROJ-03)', async () => {
+    const a = await repo.saveProject(projectInput());
+    const sameDocs = a.documents.map((d) => ({
+      id: d.id,
+      kind: d.kind,
+      title: d.title,
+      originalFilename: d.originalFilename,
+      mimeType: d.mimeType,
+      content: d.content,
+      sortOrder: d.sortOrder,
+    }));
+    // Same documents, only the audience differs → hash must change.
+    const b = await repo.saveProject({
+      ...projectInput(),
+      id: a.project.id,
+      documents: sameDocs,
+      audience: 'A completely different audience',
+    });
+    expect(b.project.sourceHash).not.toBe(a.project.sourceHash);
+    // Same documents + audience, only the target value differs → hash changes too.
+    const c = await repo.saveProject({
+      ...projectInput(),
+      id: a.project.id,
+      documents: sameDocs,
+      targetValue: 99,
+    });
+    expect(c.project.sourceHash).not.toBe(a.project.sourceHash);
+  });
+
+  it('derives planState unprepared → ready → stale across source edits (PROJ-01/02)', async () => {
+    const saved = await repo.saveProject(projectInput());
+    const projectId = saved.project.id;
+    const summaryState = async (): Promise<string | undefined> =>
+      (await repo.listProjects()).find((p) => p.id === projectId)?.planState;
+
+    // No active plan yet.
+    expect(saved.planState).toBe('unprepared');
+    expect(await summaryState()).toBe('unprepared');
+
+    // A ready plan whose hash matches the project's source hash → ready.
+    const plan = planFor(projectId, 1, newId());
+    plan.sourceHash = saved.project.sourceHash;
+    await repo.savePlan(plan);
+    await repo.setActivePlan(projectId, plan.id);
+    expect((await repo.getProject(projectId))?.planState).toBe('ready');
+    expect(await summaryState()).toBe('ready');
+
+    // Editing a setup field changes the source hash → the active plan goes stale.
+    const sameDocs = saved.documents.map((d) => ({
+      id: d.id,
+      kind: d.kind,
+      title: d.title,
+      originalFilename: d.originalFilename,
+      mimeType: d.mimeType,
+      content: d.content,
+      sortOrder: d.sortOrder,
+    }));
+    const edited = await repo.saveProject({
+      ...projectInput(),
+      id: projectId,
+      documents: sameDocs,
+      audience: 'Newly edited audience',
+    });
+    expect(edited.planState).toBe('stale');
+    expect(await summaryState()).toBe('stale');
   });
 
   it('createSession persists coverage and starts at preflight with ordinal 0', async () => {

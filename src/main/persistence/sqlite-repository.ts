@@ -23,9 +23,10 @@ import type {
   AnswerRecord,
   CoverageDelta,
   EndpointReason,
+  PlanStatus,
 } from '@shared/domain';
-import { newId } from '@shared/domain';
-import { hashFromProjectDocuments } from '@shared/utils';
+import { newId, deriveProjectPlanState } from '@shared/domain';
+import { hashProjectPreparationFromDocuments } from '@shared/utils';
 
 import type { CandidCueRepository } from '@shared/contracts/repository';
 import { MIGRATIONS } from './migrations/index';
@@ -211,10 +212,13 @@ export class SqliteRepository implements CandidCueRepository {
     const rows = this.db
       .prepare(
         `SELECT p.id, p.title, p.status, p.interviewer_character_id, p.updated_at,
+                p.source_hash, p.active_plan_version_id,
+                pl.status AS plan_status, pl.source_hash AS plan_source_hash,
                 COUNT(s.id) AS session_count,
                 MAX(s.created_at) AS last_session_at
            FROM projects p
            LEFT JOIN sessions s ON s.project_id = p.id
+           LEFT JOIN interview_plans pl ON pl.id = p.active_plan_version_id
           GROUP BY p.id
           ORDER BY p.updated_at DESC`,
       )
@@ -224,6 +228,10 @@ export class SqliteRepository implements CandidCueRepository {
       status: string;
       interviewer_character_id: string;
       updated_at: string;
+      source_hash: string;
+      active_plan_version_id: string | null;
+      plan_status: string | null;
+      plan_source_hash: string | null;
       session_count: number;
       last_session_at: string | null;
     }[];
@@ -232,6 +240,12 @@ export class SqliteRepository implements CandidCueRepository {
       id: r.id,
       title: r.title,
       status: r.status as ProjectSummary['status'],
+      planState: deriveProjectPlanState(
+        { sourceHash: r.source_hash, activePlanVersionId: r.active_plan_version_id },
+        r.plan_status != null && r.plan_source_hash != null
+          ? { status: r.plan_status as PlanStatus, sourceHash: r.plan_source_hash }
+          : null,
+      ),
       interviewerCharacterId: r.interviewer_character_id,
       sessionCount: Number(r.session_count),
       lastSessionAt: r.last_session_at,
@@ -251,7 +265,7 @@ export class SqliteRepository implements CandidCueRepository {
       ? await this.getPlan(row.active_plan_version_id)
       : null;
 
-    return { project, documents, activePlan };
+    return { project, documents, activePlan, planState: deriveProjectPlanState(project, activePlan) };
   }
 
   async saveProject(input: SaveProjectInput): Promise<ProjectAggregate> {
@@ -275,7 +289,17 @@ export class SqliteRepository implements CandidCueRepository {
       updatedAt: now,
     }));
 
-    const sourceHash = hashFromProjectDocuments(documents);
+    const sourceHash = hashProjectPreparationFromDocuments(
+      {
+        audience: input.audience ?? null,
+        intendedOutcome: input.intendedOutcome ?? null,
+        targetMode: input.targetMode,
+        targetValue: input.targetValue,
+        interviewerCharacterId: input.interviewerCharacterId,
+        notesToInterviewer: input.notesToInterviewer ?? null,
+      },
+      documents,
+    );
 
     this.transaction(() => {
       const existing = isUpdate

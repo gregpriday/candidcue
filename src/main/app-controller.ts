@@ -35,11 +35,12 @@ import type {
   InterviewPlan,
   SessionCoverageItem,
   PublicCharacterSummary,
+  PreflightConfig,
 } from '@shared/domain';
 import { newId } from '@shared/domain';
 import { MODEL_DEFAULTS, INWORLD_DEFAULTS, RUNTIME_DEFAULTS, PROJECT_LIMITS } from '@shared/constants/runtime-defaults';
 import { AppError, isAppError } from '@shared/errors/app-error';
-import { hashFromProjectDocuments } from '@shared/utils';
+import { hashProjectPreparationFromDocuments } from '@shared/utils';
 
 import { SessionOrchestrator, type OrchestratorDeps, type SessionContext } from './interview/orchestrator';
 import { bridgeSttToOrchestrator } from './interview/stt-bridge';
@@ -69,6 +70,8 @@ interface ActiveSession {
   sessionId: string;
   characterId: string;
   inputDeviceId: string | null;
+  /** Identity of the prepared config so an unchanged re-check can reuse it (PROJ-04). */
+  cacheKey: string;
   stt: SpeechToTextAdapter;
   sttOffs: Unsubscribe[];
   lastSnapshot: OperatorSessionSnapshot | null;
@@ -79,6 +82,9 @@ interface ActiveSession {
 export class AppController {
   private active: ActiveSession | null = null;
   private prepareChain: Promise<unknown> = Promise.resolve();
+  /** Bumped whenever provider credentials change, so a cached preflight session
+   *  built with the old keys is not reused (part of the preflight cache key). */
+  private credentialEpoch = 0;
 
   constructor(private readonly deps: AppControllerDeps) {}
 
@@ -137,7 +143,17 @@ export class AppController {
       const validated = preparedInterviewOutputSchema.parse(prepared);
       interviewBriefSchema.parse(validated.brief);
 
-      const sourceHash = hashFromProjectDocuments(aggregate.documents);
+      const sourceHash = hashProjectPreparationFromDocuments(
+        {
+          audience: aggregate.project.audience,
+          intendedOutcome: aggregate.project.intendedOutcome,
+          targetMode: aggregate.project.targetMode,
+          targetValue: aggregate.project.targetValue,
+          interviewerCharacterId: aggregate.project.interviewerCharacterId,
+          notesToInterviewer: aggregate.project.notesToInterviewer,
+        },
+        aggregate.documents,
+      );
       const latest = await this.deps.repository.getLatestPlan(projectId);
       const plan: InterviewPlan = {
         id: newId(),
@@ -178,11 +194,13 @@ export class AppController {
   saveProviders(input: ProviderCredentialInput): { ok: boolean } {
     if (input.openaiApiKey != null) this.deps.credentials.setKey('openai', input.openaiApiKey);
     if (input.inworldApiKey != null) this.deps.credentials.setKey('inworld', input.inworldApiKey);
+    this.credentialEpoch += 1;
     return { ok: true };
   }
 
   clearProvider(provider: 'openai' | 'inworld'): { ok: boolean } {
     this.deps.credentials.clearKey(provider);
+    this.credentialEpoch += 1;
     return { ok: true };
   }
 
@@ -251,15 +269,28 @@ export class AppController {
 
     let canBegin = false;
     if (aggregate && plan && hasOpenAi && hasInworld && planReady) {
-      try {
-        await this.startOrchestrator(aggregate, plan, input);
+      const cacheKey = preflightCacheKey(input.projectId, plan.id, input.config, this.credentialEpoch);
+      if (
+        this.active &&
+        this.active.cacheKey === cacheKey &&
+        this.active.orchestrator.getState() === 'READY'
+      ) {
+        // Idempotent re-check with unchanged inputs and a still-ready (not begun)
+        // session: reuse it rather than creating a new persisted session +
+        // re-synthesizing the opening, which would leak orphan sessions (PROJ-04).
         canBegin = true;
         add('opening', 'Opening question cached', true, true, null);
-      } catch (err) {
-        // The session may have been partly started (STT connected) before the
-        // failure — tear it down so we don't leak an open stream.
-        await this.teardownActive();
-        add('opening', 'Opening question cached', true, false, this.toPublicError(err).publicMessage);
+      } else {
+        try {
+          await this.startOrchestrator(aggregate, plan, input, cacheKey);
+          canBegin = true;
+          add('opening', 'Opening question cached', true, true, null);
+        } catch (err) {
+          // The session may have been partly started (STT connected) before the
+          // failure — tear it down so we don't leak an open stream.
+          await this.teardownActive();
+          add('opening', 'Opening question cached', true, false, this.toPublicError(err).publicMessage);
+        }
       }
     } else {
       add('opening', 'Opening question cached', true, false, 'Resolve the checks above first.');
@@ -279,6 +310,7 @@ export class AppController {
     aggregate: ProjectAggregate,
     plan: InterviewPlan,
     input: PrepareSessionInput,
+    cacheKey: string,
   ): Promise<void> {
     // Close any prior active session's live resources before starting a new one
     // (re-running preflight must not leak an open STT stream).
@@ -364,6 +396,7 @@ export class AppController {
       sessionId: session.id,
       characterId: character.id,
       inputDeviceId: input.config.selectedInputDeviceId,
+      cacheKey,
       stt,
       sttOffs: [],
       lastSnapshot: null,
@@ -662,6 +695,32 @@ export class AppController {
     this.deps.logger.error('app.error', { message: String(err) });
     return new AppError('UNKNOWN', { cause: err }).toPublic();
   }
+}
+
+/**
+ * Identity of a prepared preflight session. Two prepare calls with the same key
+ * describe the same prepared resources, so the second can reuse the first's
+ * session instead of creating a new one (PROJ-04).
+ */
+function preflightCacheKey(
+  projectId: string,
+  planId: string,
+  config: PreflightConfig,
+  credentialEpoch: number,
+): string {
+  return JSON.stringify([
+    projectId,
+    planId,
+    credentialEpoch,
+    config.selectedInputDeviceId,
+    config.selectedOutputDeviceId,
+    config.selectedDisplayId,
+    config.endpointMode,
+    config.captionsEnabled,
+    config.mirrorStage,
+    config.zoom,
+    config.verticalOffsetPercent,
+  ]);
 }
 
 /**

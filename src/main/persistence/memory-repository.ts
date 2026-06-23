@@ -18,8 +18,8 @@ import type {
   AnswerRecord,
   EndpointReason,
 } from '@shared/domain';
-import { newId } from '@shared/domain';
-import { hashFromProjectDocuments } from '@shared/utils';
+import { newId, deriveProjectPlanState } from '@shared/domain';
+import { hashProjectPreparationFromDocuments } from '@shared/utils';
 
 import type { CandidCueRepository } from '@shared/contracts/repository';
 import { minimalAnswer } from './sqlite-repository';
@@ -87,10 +87,14 @@ export class MemoryRepository implements CandidCueRepository {
         const created = s.session.createdAt;
         return latest === null || created > latest ? created : latest;
       }, null);
+      const activePlan = project.activePlanVersionId
+        ? (this.plans.get(project.activePlanVersionId) ?? null)
+        : null;
       summaries.push({
         id: project.id,
         title: project.title,
         status: project.status,
+        planState: deriveProjectPlanState(project, activePlan),
         interviewerCharacterId: project.interviewerCharacterId,
         sessionCount: sessions.length,
         lastSessionAt,
@@ -111,6 +115,7 @@ export class MemoryRepository implements CandidCueRepository {
       project: clone(stored.project),
       documents: clone(this.sortedDocuments(stored.documents)),
       activePlan: activePlan ? clone(activePlan) : null,
+      planState: deriveProjectPlanState(stored.project, activePlan),
     };
   }
 
@@ -132,7 +137,17 @@ export class MemoryRepository implements CandidCueRepository {
       updatedAt: now,
     }));
 
-    const sourceHash = hashFromProjectDocuments(documents);
+    const sourceHash = hashProjectPreparationFromDocuments(
+      {
+        audience: input.audience ?? null,
+        intendedOutcome: input.intendedOutcome ?? null,
+        targetMode: input.targetMode,
+        targetValue: input.targetValue,
+        interviewerCharacterId: input.interviewerCharacterId,
+        notesToInterviewer: input.notesToInterviewer ?? null,
+      },
+      documents,
+    );
 
     const project: Project = {
       id: projectId,

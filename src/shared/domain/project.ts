@@ -1,7 +1,38 @@
 import type { ProjectId, DocumentId } from './ids';
-import type { InterviewPlan } from './plan';
+import type { InterviewPlan, PlanStatus } from './plan';
 
 export type ProjectStatus = 'draft' | 'prepared' | 'stale' | 'archived';
+
+/**
+ * Renderer-safe readiness of a project's interview plan, derived from the active
+ * plan and the current source hash (PROJ-01/02). Distinct from {@link ProjectStatus},
+ * which carries the archive lifecycle.
+ */
+export type ProjectPlanState = 'unprepared' | 'preparing' | 'ready' | 'stale' | 'failed';
+
+/**
+ * Derive the plan readiness from a project's source hash + its active plan.
+ * `ready` requires a ready plan whose source hash still matches the project's;
+ * a hash mismatch means the inputs changed since preparation → `stale`.
+ */
+export function deriveProjectPlanState(
+  project: { sourceHash: string; activePlanVersionId: string | null },
+  activePlan: { status: PlanStatus; sourceHash: string } | null,
+): ProjectPlanState {
+  if (!project.activePlanVersionId || activePlan == null) return 'unprepared';
+  switch (activePlan.status) {
+    case 'generating':
+      return 'preparing';
+    case 'failed':
+      return 'failed';
+    case 'superseded':
+      return 'unprepared';
+    case 'ready':
+      return activePlan.sourceHash === project.sourceHash ? 'ready' : 'stale';
+    default:
+      return 'unprepared';
+  }
+}
 export type TargetMode = 'question_count' | 'approximate_duration';
 export type DocumentKind = 'primary' | 'reference';
 export type DocumentMime = 'text/markdown' | 'text/plain';
@@ -41,6 +72,8 @@ export interface ProjectAggregate {
   project: Project;
   documents: ProjectDocument[];
   activePlan: InterviewPlan | null;
+  /** Derived plan readiness (PROJ-01/02). */
+  planState: ProjectPlanState;
 }
 
 export interface SaveProjectDocumentInput {
@@ -69,6 +102,8 @@ export interface ProjectSummary {
   id: ProjectId;
   title: string;
   status: ProjectStatus;
+  /** Derived plan readiness (PROJ-01/02). */
+  planState: ProjectPlanState;
   interviewerCharacterId: string;
   sessionCount: number;
   lastSessionAt: string | null;
