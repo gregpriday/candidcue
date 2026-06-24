@@ -3,15 +3,16 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  height: var(--control-h);
+  /* Compact + crisp — the modern desktop proportion. Flat: no elevation at all. */
+  height: 34px;
   padding: 0 var(--space-4);
-  border-radius: var(--radius-sm);
+  border-radius: 6px;
   border: 1px solid var(--border-control);
   background: var(--bg-elevated);
   color: var(--text-primary);
   font-size: var(--text-sm);
   font-weight: 600;
-  letter-spacing: 0;
+  letter-spacing: -0.01em;
   white-space: nowrap;
   transition:
     background var(--dur-fast) var(--ease-out),
@@ -25,33 +26,33 @@
   background: var(--bg-hover);
   border-color: var(--border-strong);
 }
-/* A restrained press — a slight darken and a single-pixel settle, never a spring. */
+/* A restrained scale "squeeze" on press — the only motion; no shadow tricks. */
 .button:active:not(:disabled) {
   background: var(--bg-hover);
-  transform: translateY(1px);
+  transform: scale(0.98);
 }
 .button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-/* Primary — a flat lit accent fill at the taller primary-action height. */
+/* Primary — a clean SOLID accent fill. Flat: no shadow, no gradient, no border
+   ring, no inset edge. The fill + crisp geometry + confident label is the look. */
 .primary {
-  height: var(--control-h-lg);
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: transparent;
   color: var(--accent-contrast);
 }
 .primary:hover:not(:disabled) {
   background: var(--accent-strong);
-  border-color: var(--accent-strong);
+  border-color: transparent;
 }
 .primary:active:not(:disabled) {
   background: var(--accent-strong);
-  border-color: var(--accent-strong);
+  border-color: transparent;
 }
-/* A disabled primary should read as deliberately inactive — a neutral control —
-   not a faded accent that still draws the eye. */
+/* A disabled primary reads as deliberately inactive — a neutral control, not a
+   faded accent that still draws the eye. */
 .primary:disabled {
   opacity: 1;
   background: var(--bg-secondary);
@@ -63,6 +64,7 @@
   background: var(--bg-elevated);
 }
 
+/* Ghost & danger are quiet, transparent actions — they recede into toolbars. */
 .ghost {
   background: transparent;
   border-color: transparent;
