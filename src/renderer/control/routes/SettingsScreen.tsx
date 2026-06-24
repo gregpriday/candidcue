@@ -5,7 +5,6 @@ import { Icon } from '../components/Icon';
 import { StatusIcon } from '../components/StatusIcon';
 import { StatusPill, type StatusTone } from '../components/StatusPill';
 import { PageHeader } from '../components/PageHeader';
-import { Section } from '../components/Section';
 import { Sheet } from '../components/Sheet';
 import { ToastRegion, useToasts } from '../components/Toast';
 import { describeError } from '../lib/errors';
@@ -40,6 +39,13 @@ function InworldLogo(): JSX.Element {
 type ProviderName = 'openai' | 'inworld';
 
 const PROVIDER_TITLE: Record<ProviderName, string> = { openai: 'OpenAI', inworld: 'Inworld' };
+
+// Where a new key is issued. Both hosts are on the renderer's external-link
+// allowlist, so the click is routed to the system browser.
+const PROVIDER_KEY_URL: Record<ProviderName, string> = {
+  openai: 'https://platform.openai.com/api-keys',
+  inworld: 'https://docs.inworld.ai',
+};
 
 interface KeyFieldState {
   value: string;
@@ -153,11 +159,9 @@ export function SettingsScreen(): JSX.Element {
     }
   }, [removeTarget, push, refresh]);
 
-  const configuredCount = Number(settings?.hasOpenAiKey ?? false) + Number(settings?.hasInworldKey ?? false);
-
   return (
     <>
-      <PageHeader title="Settings" meta="Manage the services CandidCue uses during interviews" />
+      <PageHeader title="Settings" meta="Connect the AI services CandidCue uses during interviews" />
       <div className={`${route.page} ${styles.settingsPage}`}>
         {loadError !== null && (
           <p className={route.error} role="alert">
@@ -165,75 +169,61 @@ export function SettingsScreen(): JSX.Element {
           </p>
         )}
 
-        <Section title="AI providers">
-          <div className={styles.providerList}>
-            <div className={styles.panelHead}>
-              <span className={styles.panelHeadLabel}>Both are required before you can start an interview.</span>
-              {settings !== null && (
-                <StatusPill tone={configuredCount === 2 ? 'success' : 'neutral'} dot={configuredCount === 2}>
-                  {configuredCount} of 2 configured
-                </StatusPill>
-              )}
-            </div>
+        <div className={styles.providerList}>
+          {settings === null ? (
+            <>
+              <ProviderSkeleton />
+              <ProviderSkeleton />
+            </>
+          ) : (
+            <>
+              <ProviderCard
+                provider="openai"
+                logo={<OpenAILogo />}
+                title="OpenAI"
+                description="Interview planning and transcript processing."
+                hasKey={settings.hasOpenAiKey}
+                field={openai}
+                onChange={setOpenai}
+                inputId="openai-key"
+                open={editing === 'openai'}
+                onToggle={() => setEditing(editing === 'openai' ? null : 'openai')}
+                onSave={() => void handleSaveProvider('openai')}
+                onTest={() => void handleTest('openai')}
+                onRemove={() => setRemoveTarget('openai')}
+                saving={savingProvider === 'openai'}
+                testing={testing === 'openai'}
+                result={testResults.openai}
+                error={panelError.openai}
+              />
 
-            {settings === null ? (
-              <>
-                <ProviderSkeleton />
-                <ProviderSkeleton />
-              </>
-            ) : (
-              <>
-                <ProviderCard
-                  provider="openai"
-                  logo={<OpenAILogo />}
-                  title="OpenAI"
-                  description="Interview planning and transcript processing."
-                  hasKey={settings.hasOpenAiKey}
-                  field={openai}
-                  onChange={setOpenai}
-                  inputId="openai-key"
-                  open={editing === 'openai'}
-                  onToggle={() => setEditing(editing === 'openai' ? null : 'openai')}
-                  onSave={() => void handleSaveProvider('openai')}
-                  onTest={() => void handleTest('openai')}
-                  onRemove={() => setRemoveTarget('openai')}
-                  saving={savingProvider === 'openai'}
-                  testing={testing === 'openai'}
-                  result={testResults.openai}
-                  error={panelError.openai}
-                />
+              <ProviderCard
+                provider="inworld"
+                logo={<InworldLogo />}
+                title="Inworld"
+                description="Speech recognition and interviewer voice."
+                hasKey={settings.hasInworldKey}
+                field={inworld}
+                onChange={setInworld}
+                inputId="inworld-key"
+                open={editing === 'inworld'}
+                onToggle={() => setEditing(editing === 'inworld' ? null : 'inworld')}
+                onSave={() => void handleSaveProvider('inworld')}
+                onTest={() => void handleTest('inworld')}
+                onRemove={() => setRemoveTarget('inworld')}
+                saving={savingProvider === 'inworld'}
+                testing={testing === 'inworld'}
+                result={testResults.inworld}
+                error={panelError.inworld}
+              />
+            </>
+          )}
+        </div>
 
-                <ProviderCard
-                  provider="inworld"
-                  logo={<InworldLogo />}
-                  title="Inworld"
-                  description="Speech recognition and interviewer voice."
-                  hasKey={settings.hasInworldKey}
-                  field={inworld}
-                  onChange={setInworld}
-                  inputId="inworld-key"
-                  open={editing === 'inworld'}
-                  onToggle={() => setEditing(editing === 'inworld' ? null : 'inworld')}
-                  onSave={() => void handleSaveProvider('inworld')}
-                  onTest={() => void handleTest('inworld')}
-                  onRemove={() => setRemoveTarget('inworld')}
-                  saving={savingProvider === 'inworld'}
-                  testing={testing === 'inworld'}
-                  result={testResults.inworld}
-                  error={panelError.inworld}
-                />
-              </>
-            )}
-
-            <div className={styles.panelFoot}>
-              <Icon name="info" size={15} />
-              <p>
-                <strong>Stored securely on this computer.</strong> API keys are encrypted using your operating
-                system&rsquo;s secure credential storage and are never displayed again.
-              </p>
-            </div>
-          </div>
-        </Section>
+        <p className={styles.securityLine}>
+          <Icon name="info" size={14} />
+          Keys are kept in your operating system&rsquo;s secure credential store and never shown again after saving.
+        </p>
       </div>
 
       <Sheet
@@ -335,12 +325,12 @@ function ProviderCard({
           {logo}
         </span>
         <div className={styles.providerCopy}>
-          <h2>{title}</h2>
+          <div className={styles.providerNameRow}>
+            <h2>{title}</h2>
+            <StatusPill tone={status.tone}>{status.label}</StatusPill>
+          </div>
           <p>{description}</p>
         </div>
-        <span className={styles.summaryStatus}>
-          <StatusPill tone={status.tone}>{status.label}</StatusPill>
-        </span>
         <Button variant="secondary" onClick={onToggle} aria-expanded={open} aria-controls={panelId}>
           {hasKey ? 'Manage' : 'Configure'}
           <Icon name={open ? 'chevronDown' : 'chevronRight'} size={15} />
@@ -349,15 +339,6 @@ function ProviderCard({
 
       {open && (
         <div id={panelId} className={styles.managePanel}>
-          <div className={styles.manageHeading}>
-            <h3>Connection details</h3>
-            <p>
-              {hasKey
-                ? 'Enter a replacement key or verify the key currently stored.'
-                : 'Add the API key provided by this service.'}
-            </p>
-          </div>
-
           <div className={route.field}>
             <label className={route.label} htmlFor={inputId}>
               {hasKey ? 'Replacement API key' : 'API key'}
@@ -383,11 +364,17 @@ function ProviderCard({
                 <Icon name={field.reveal ? 'eyeOff' : 'eye'} size={16} />
               </button>
             </div>
-            <p id={helpId} className={styles.fieldHelp}>
-              {hasKey
-                ? 'The current key remains stored until you save a replacement.'
-                : 'After saving, the key cannot be displayed or copied from CandidCue.'}
-            </p>
+            <div className={styles.fieldFootnote}>
+              <p id={helpId} className={styles.fieldHelp}>
+                {hasKey
+                  ? 'The current key stays in place until you save a replacement.'
+                  : 'After saving, the key cannot be shown or copied from CandidCue again.'}
+              </p>
+              <a className={styles.getKeyLink} href={PROVIDER_KEY_URL[provider]} target="_blank" rel="noreferrer">
+                Get your {title} key
+                <Icon name="externalLink" size={12} />
+              </a>
+            </div>
           </div>
 
           <div className={styles.formFooter}>
@@ -433,12 +420,8 @@ function ProviderCard({
 
           {hasKey && (
             <div className={styles.removeRow}>
-              <div>
-                <strong>Remove connection</strong>
-                <span>Delete the credential stored on this computer.</span>
-              </div>
               <Button variant="danger" onClick={onRemove} disabled={saving || testing}>
-                Remove
+                <Icon name="trash" size={15} /> Remove connection
               </Button>
             </div>
           )}

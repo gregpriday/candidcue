@@ -1,17 +1,16 @@
-/* Settings reads as one composed desktop panel, not panels adrift on the canvas.
-   A comfortable column width, a single grouped provider list with hairline
-   dividers, and an inset expanded layer for each connection. */
+/* Settings is a single, focused task — connect the two AI services the app needs
+   — not a multi-section settings dashboard. So it stays a compact, left-aligned
+   column (matching the workspace's left-aligned convention, à la Linear) instead
+   of stretching wide with section headings, progress counters, or framing bands.
+   The generous space to the right is deliberate breathing room, not emptiness. */
 
 .settingsPage {
-  width: min(100%, 900px);
-  max-width: 900px;
-  gap: var(--space-8);
+  width: min(100%, 560px);
+  max-width: 560px;
+  gap: var(--space-5);
 }
 
-/* ---- Grouped provider panel ------------------------------------------------
-   One framed module: a header band (requirement + status), the provider rows,
-   and a grounded footer caption. Settings only ever renders in the workspace
-   (light) theme, so the resting shadow is tuned for that surface. */
+/* ---- The two providers, one quiet grouped list ----------------------------- */
 
 .providerList {
   display: flex;
@@ -20,53 +19,8 @@
   overflow: hidden;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  box-shadow:
-    0 1px 2px rgba(24, 25, 29, 0.05),
-    0 10px 26px -16px rgba(24, 25, 29, 0.22);
-}
-
-/* Header band — frames the top of the list and carries the readiness count. */
-.panelHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  min-height: 46px;
-  padding: var(--space-2) var(--space-5);
-  border-bottom: 1px solid var(--border-faint);
-  background: var(--bg-panel-header);
-}
-.panelHeadLabel {
-  min-width: 0;
-  font-size: var(--text-sm);
-  line-height: 18px;
-  color: var(--text-secondary);
-}
-
-/* Footer caption — grounds the module and reassures about secret handling. */
-.panelFoot {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-5);
-  border-top: 1px solid var(--border-faint);
-  background: var(--bg-panel-header);
-}
-.panelFoot > svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-  color: var(--text-muted);
-}
-.panelFoot p {
-  margin: 0;
-  font-size: var(--text-xs);
-  line-height: 18px;
-  color: var(--text-secondary);
-}
-.panelFoot strong {
-  font-weight: 600;
-  color: var(--text-primary);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
 }
 
 .providerCard {
@@ -82,60 +36,79 @@
 
 .providerSummary {
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr) auto auto;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-4);
-  min-height: 80px;
-  padding: 18px var(--space-5);
+  min-height: 68px;
+  padding: var(--space-3) var(--space-4);
 }
 
 .providerIcon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 46px;
-  height: 46px;
-  /* A crisp raised chip — the brand mark sits on its own surface rather than a
-     flat grey swatch, which reads as more crafted. */
+  width: 40px;
+  height: 40px;
+  /* A crisp raised chip so the brand mark sits on its own surface. */
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 10px;
   background: var(--bg-panel);
   box-shadow: var(--shadow-card);
   color: var(--text-primary);
 }
-/* Optically balanced logo sizes — the Inworld mark is visually heavier than the
-   OpenAI knot, so it sits a couple of pixels smaller. */
+/* Optically balanced logo sizes — the Inworld mark is visually heavier. */
 .providerIcon svg {
   width: auto;
   object-fit: contain;
 }
 .providerIcon[data-provider='openai'] svg {
-  height: 21px;
+  height: 19px;
 }
 .providerIcon[data-provider='inworld'] svg {
-  height: 19px;
+  height: 17px;
 }
 
 .providerCopy {
   min-width: 0;
 }
-.providerCopy h2 {
+.providerNameRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.providerNameRow h2 {
   margin: 0;
-  font-size: 16px;
-  line-height: 22px;
+  font-size: var(--text-base);
+  line-height: 20px;
   font-weight: 650;
   color: var(--text-primary);
 }
 .providerCopy p {
-  max-width: 52ch;
   margin: 2px 0 0;
   font-size: var(--text-sm);
-  line-height: 19px;
+  line-height: 18px;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.summaryStatus {
-  display: inline-flex;
+/* ---- Encryption caption (a plain line, not a band) ------------------------- */
+
+.securityLine {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0 var(--space-1);
+  font-size: var(--text-xs);
+  line-height: 17px;
+  color: var(--text-secondary);
+}
+.securityLine > svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
 }
 
 /* ---- Expanded connection panel --------------------------------------------- */
@@ -144,9 +117,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  /* Left pad aligns the form with the provider title (20 + 46 + 16), not the
-     outside edge of the logo tile. */
-  padding: var(--space-5) var(--space-5) 22px 82px;
+  /* Left pad aligns the form with the provider title (16 + 40 + 16), not the
+     outside edge of the logo chip. */
+  padding: var(--space-4) var(--space-4) var(--space-4) 72px;
   background: color-mix(in srgb, var(--bg-panel) 68%, var(--bg-app));
   border-top: 1px solid var(--border-faint);
   animation: revealSettings var(--dur-med) var(--ease-out);
@@ -161,26 +134,6 @@
     opacity: 1;
     transform: translateY(0);
   }
-}
-
-.manageHeading {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.manageHeading h3 {
-  margin: 0;
-  font-size: var(--text-base);
-  line-height: 22px;
-  font-weight: 650;
-  color: var(--text-primary);
-}
-.manageHeading p,
-.fieldHelp {
-  margin: 0;
-  font-size: var(--text-xs);
-  line-height: 18px;
-  color: var(--text-muted);
 }
 
 .keyInputWrap {
@@ -210,6 +163,35 @@
 .revealButton:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
+}
+
+.fieldFootnote {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.fieldHelp {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--text-xs);
+  line-height: 17px;
+  color: var(--text-muted);
+}
+.getKeyLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.getKeyLink:hover {
+  text-decoration: underline;
 }
 
 /* ---- Footer: result feedback + actions ------------------------------------- */
@@ -249,35 +231,20 @@
   height: var(--control-h);
 }
 
-/* ---- Remove connection ----------------------------------------------------- */
+/* ---- Remove connection (quiet, below the actions) -------------------------- */
 
 .removeRow {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding-top: var(--space-4);
+  padding-top: var(--space-3);
   border-top: 1px solid var(--border-faint);
-}
-.removeRow strong {
-  display: block;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-.removeRow span {
-  display: block;
-  margin-top: 1px;
-  font-size: var(--text-xs);
-  color: var(--text-muted);
 }
 
 /* ---- Loading skeleton ------------------------------------------------------ */
 
 .skeletonIcon {
-  width: 46px;
-  height: 46px;
-  border-radius: 11px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
 }
 .skeletonCopy {
   display: flex;
@@ -287,28 +254,30 @@
 }
 .skeletonLine {
   height: 12px;
-  width: 38%;
+  width: 34%;
   border-radius: 6px;
 }
 .skeletonLineSm {
   height: 10px;
-  width: 60%;
+  width: 58%;
   border-radius: 6px;
 }
 
 /* ---- Responsive ------------------------------------------------------------ */
 
-@media (max-width: 760px) {
+@media (max-width: 600px) {
   .providerSummary {
-    grid-template-columns: 46px minmax(0, 1fr);
+    grid-template-columns: 40px minmax(0, 1fr);
   }
-  .providerSummary > .summaryStatus,
   .providerSummary > button {
     grid-column: 2;
     justify-self: start;
   }
+  .providerCopy p {
+    white-space: normal;
+  }
   .managePanel {
-    padding: var(--space-5);
+    padding: var(--space-4);
   }
   .formFooter {
     flex-direction: column;
