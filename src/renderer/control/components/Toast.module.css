@@ -1,0 +1,64 @@
+.region {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-6);
+  transform: translateX(-50%);
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: center;
+  pointer-events: none;
+}
+
+.toast {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: 420px;
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+  pointer-events: auto;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.success .dot {
+  background: var(--success);
+}
+.info .dot {
+  background: var(--accent);
+}
+.danger .dot {
+  background: var(--danger);
+}
+
+.message {
+  min-width: 0;
+}
+
+.dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+}
+.dismiss:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}

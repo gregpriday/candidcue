@@ -7,6 +7,7 @@ import { SettingsScreen } from './routes/SettingsScreen';
 import { PreflightScreen } from './routes/PreflightScreen';
 import { OperatorConsole } from './routes/OperatorConsole';
 import { ReviewScreen } from './routes/ReviewScreen';
+import { DesignLab } from './routes/DesignLab';
 import { StatusIcon } from './components/StatusIcon';
 import { Icon } from './components/Icon';
 import styles from './app.module.css';
@@ -17,7 +18,13 @@ export type Route =
   | { name: 'settings' }
   | { name: 'preflight'; projectId: ProjectId }
   | { name: 'operator'; sessionId: string }
-  | { name: 'review'; sessionId: string };
+  | { name: 'review'; sessionId: string }
+  | { name: 'designlab' };
+
+/** Dev-only surfaces (the design gallery) are gated out of production builds. */
+const IS_DEV = import.meta.env.DEV;
+const START_IN_LAB =
+  IS_DEV && typeof window !== 'undefined' && window.location.search.includes('lab');
 
 export interface Navigator {
   go: (route: Route) => void;
@@ -35,7 +42,7 @@ interface NavItem {
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
 
 export function App(): JSX.Element {
-  const [route, setRoute] = useState<Route>({ name: 'home' });
+  const [route, setRoute] = useState<Route>(START_IN_LAB ? { name: 'designlab' } : { name: 'home' });
   const [lastError, setLastError] = useState<PublicAppError | null>(null);
 
   const go = useCallback((next: Route) => {
@@ -58,6 +65,15 @@ export function App(): JSX.Element {
       matches: (r) => r.name === 'home' || r.name === 'project' || r.name === 'preflight' || r.name === 'review',
     },
     { label: 'Settings', route: { name: 'settings' }, matches: (r) => r.name === 'settings' },
+    ...(IS_DEV
+      ? [
+          {
+            label: 'Design Lab',
+            route: { name: 'designlab' } as Route,
+            matches: (r: Route) => r.name === 'designlab',
+          },
+        ]
+      : []),
   ];
 
   const renderNav = (item: NavItem): JSX.Element => (
@@ -72,11 +88,14 @@ export function App(): JSX.Element {
     </button>
   );
 
-  // Live mode: when in operator view, the entire UI transforms
+  // Two themes: the calm light workspace at rest, the focused dark studio when
+  // a session is live. The whole shell (and its descendants) re-skins via the
+  // shared token names — no per-component theming required.
   const isLive = route.name === 'operator';
+  const theme = isLive ? 'studio' : 'workspace';
 
   return (
-    <div className={styles.shell} data-platform={IS_MAC ? 'mac' : 'other'} data-live={isLive ? 'true' : 'false'}>
+    <div className={styles.shell} data-platform={IS_MAC ? 'mac' : 'other'} data-theme={theme}>
       <header className={styles.header}>
         <div className={styles.headerLeft}>
           <span className={styles.wordmark}>
@@ -123,6 +142,9 @@ function RouteView({ route, nav }: { route: Route; nav: Navigator }): JSX.Elemen
       return <OperatorConsole nav={nav} sessionId={route.sessionId} />;
     case 'review':
       return <ReviewScreen nav={nav} sessionId={route.sessionId} />;
+    case 'designlab':
+      // Dev-only surface — never render it in a production build.
+      return IS_DEV ? <DesignLab nav={nav} /> : <HomeScreen nav={nav} />;
     default:
       return <HomeScreen nav={nav} />;
   }

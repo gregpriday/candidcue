@@ -1,0 +1,58 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: rgba(8, 9, 12, 0.5);
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 440px;
+  padding: var(--space-6);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+}
+
+.heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.title {
+  margin: 0;
+  font-size: var(--text-xl);
+  line-height: 26px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+.danger .title {
+  color: var(--danger);
+}
+.description {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 22px;
+  color: var(--text-secondary);
+}
+
+.body {
+  font-size: var(--text-sm);
+  line-height: 20px;
+  color: var(--text-secondary);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}

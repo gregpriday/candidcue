@@ -1,0 +1,51 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* Sentence case, not an uppercase strip. Quiet authority. */
+.title {
+  margin: 0;
+  font-size: var(--text-section);
+  line-height: var(--lh-section);
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text-primary);
+}
+
+.description {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}

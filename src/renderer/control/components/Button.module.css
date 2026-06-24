@@ -6,7 +6,7 @@
   height: var(--control-h);
   padding: 0 var(--space-4);
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: var(--bg-elevated);
   color: var(--text-primary);
   font-size: var(--text-sm);
@@ -14,41 +14,38 @@
   letter-spacing: 0;
   white-space: nowrap;
   transition:
-    background var(--dur-med) var(--ease-out),
-    border-color var(--dur-med) var(--ease-out),
-    color var(--dur-med) var(--ease-out),
-    opacity var(--dur-fast) var(--ease-out),
-    transform var(--dur-fast) var(--ease-out);
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
 }
 
 .button:hover:not(:disabled) {
-  border-color: var(--accent);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
 }
 .button:active:not(:disabled) {
-  background: var(--bg-sunken);
-  transform: translateY(1px);
+  background: var(--bg-hover);
 }
 .button:disabled {
-  opacity: 0.58;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
+/* Primary — a flat lit accent fill at the taller primary-action height. */
 .primary {
-  min-height: 40px;
+  height: var(--control-h-lg);
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-contrast);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
 }
 .primary:hover:not(:disabled) {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08) inset,
-              var(--accent-glow);
 }
 .primary:active:not(:disabled) {
   background: var(--accent);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
+  border-color: var(--accent);
 }
 
 .secondary {

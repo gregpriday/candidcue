@@ -2,8 +2,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--surface-input, var(--bg-sunken));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  background: var(--bg-panel);
 }
 
 .editor :global(.cm-editor) {

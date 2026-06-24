@@ -1,0 +1,40 @@
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.fieldGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-4);
+}
+
+.radioStack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-width: 520px;
+}
+
+/* A self-contained dark island so the studio theme can be previewed inside the
+   light workspace without going live. */
+.studioIsland {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+}
+
+.studioQuestion {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: var(--text-live-question);
+  line-height: var(--text-live-question-leading);
+  color: var(--text-primary);
+}

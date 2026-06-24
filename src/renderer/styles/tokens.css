@@ -1,84 +1,22 @@
+/* ============================================================================
+   CandidCue design tokens — "warm editorial workspace + focused dark studio"
+
+   Two themes share one set of token NAMES so components never hard-code a
+   palette. Theme is chosen by a `data-theme` attribute:
+
+     [data-theme='workspace'] → calm light surfaces for preparing & reviewing
+     [data-theme='studio']    → restrained dark surfaces for the live session
+
+   The dark studio palette is ALSO the un-themed default on :root, so the stage
+   window (which sets no attribute) stays dark exactly as before. The control
+   shell sets data-theme per route (workspace at rest, studio when live).
+
+   Depth here comes from spacing, type, and controlled contrast — NOT from
+   glows, gradients, grain, or perpetual motion.
+   ============================================================================ */
+
 :root {
-  /* ---- Surfaces: window base → chrome → panel → elevated control ----
-     A real depth stack (not one flat gray) is what makes panels read as docked
-     regions of an application rather than floating cards on a page. The ramp is a
-     warm graphite (a hair off cold blue-black) with WIDENED luminance steps so the
-     stack reads as stacked even before any shadow or highlight is applied. */
-  --bg-app: #0b0d12;
-  --bg-chrome: #0f1218;
-  --bg-canvas: #11151c;
-  --bg-panel: #151a23;
-  --bg-panel-header: #1b2230;
-  --bg-elevated: #1b2230;
-  --bg-sunken: #10151c;
-  --bg-hover: #202836;
-  --bg-selected: rgba(142, 160, 255, 0.14);
-
-  /* ---- Text ---- */
-  --text-primary: #f5f7fb;
-  --text-secondary: #b8c0ce;
-  --text-muted: #858f9f;
-  --text-faint: #687383;
-
-  /* ---- Lines ---- */
-  --border: rgba(255, 255, 255, 0.11);
-  --border-strong: rgba(255, 255, 255, 0.17);
-  --border-faint: rgba(255, 255, 255, 0.075);
-  --border-seam: rgba(255, 255, 255, 0.075);
-
-  /* ---- Accent + status ---- */
-  --accent: #8ea0ff;
-  --accent-strong: #a4b1ff; /* hover / pressed */
-  --accent-contrast: #0b0f1e; /* text on accent fills — deepened for AA on the gradient top */
-  --accent-soft: rgba(142, 160, 255, 0.14);
-  --focus: #aebcff;
-  --success: #5fd6a0;
-  --success-soft: rgba(95, 214, 160, 0.15);
-  --warning: #f0b85a;
-  --warning-soft: rgba(240, 184, 90, 0.15);
-  --danger: #f17178;
-  --danger-soft: rgba(241, 113, 120, 0.15);
-
-  /* ---- The single light source ----
-     Depth comes from one light from the top. Every RAISED surface gets a 1px inner
-     top highlight; every WELL gets an inner top shadow. This is the keystone that
-     turns flat rectangles into machined surfaces that catch light. */
-  --highlight-edge: rgba(255, 255, 255, 0.05); /* top edge of raised surfaces */
-  --highlight-edge-strong: rgba(255, 255, 255, 0.09); /* primary button / hero surfaces */
-
-  /* ---- Accent material (primary button is lit, not a flat fill) ---- */
-  --accent-gradient-top: #a4b1ff;
-  --accent-gradient-bottom: #8ea0ff;
-  --accent-glow: rgba(138, 164, 255, 0.22); /* faint primary-button hover halo */
-
-  /* ---- Live "tally light" ----
-     The cool accent escalates to a warm on-air red ONLY when a session is genuinely
-     live (operator state badge, active mic, stage). Scarcity is the point. */
-  --live: #f86a5a;
-  --live-soft: rgba(248, 106, 90, 0.16);
-  --live-glow: rgba(248, 106, 90, 0.32);
-
-  /* ---- Live mode transformations ----
-     When a session goes live, these tokens override their at-rest counterparts to
-     signal state change across the entire UI. Applied via a [data-live] attribute
-     on the shell so the entire window participates in the transformation. */
-  --live-accent: #ff6b5a;
-  --live-accent-soft: rgba(255, 107, 90, 0.18);
-  --live-accent-glow: rgba(255, 107, 90, 0.35);
-  --live-border: rgba(255, 107, 90, 0.28);
-  --live-sheen: radial-gradient(120% 80% at 50% -10%, rgba(255, 107, 90, 0.08), transparent 60%);
-
-  /* ---- Audio meter zones (so we never recolor the shared status hues) ---- */
-  --meter-low: #5ec98f;
-  --meter-mid: #e6b45a;
-  --meter-high: #e87878;
-
-  /* ---- Radius: tight, application-grade (not pill/card web rounding) ---- */
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-
-  /* ---- Spacing ---- */
+  /* ---- Spacing (4px base) ---- */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -87,110 +25,258 @@
   --space-6: 24px;
   --space-7: 28px;
   --space-8: 32px;
+  --space-9: 40px;
+  --space-10: 48px;
 
-  /* ---- Type scale (px, editorial authoring base 14) ---- */
-  --text-2xs: 11px; /* Distinguished from xs for true tiny labels */
-  --text-xs: 12px;
-  --text-sm: 13px;
-  --text-base: 14px;
-  --text-md: 14px;
-  --text-lg: 16px;
-  --text-xl: 20px;
-  --text-2xl: 24px;
-  --text-3xl: 32px; /* Hero headings, intros */
-  --ls-caps: 0.06em; /* letter-spacing for UPPERCASE panel/section labels */
+  /* ---- Type scale (px) ---- */
+  --text-2xs: 11px;
+  --text-xs: 12px; /* metadata */
+  --text-sm: 13px; /* form labels, controls */
+  --text-base: 15px; /* body */
+  --text-md: 15px;
+  --text-lg: 17px; /* transcript / lead body */
+  --text-xl: 18px; /* section titles */
+  --text-2xl: 22px;
+  --text-3xl: 28px; /* page titles */
+
+  /* Semantic display sizes (adopted as screens are rebuilt) */
+  --text-page-title: 28px;
+  --lh-page-title: 34px;
+  --text-section: 18px;
+  --lh-section: 26px;
+  --lh-body: 23px;
+  --text-transcript: 17px;
+  --lh-transcript: 28px;
+  --text-label: 13px;
+  --lh-label: 18px;
+  --text-meta: 12px;
+  --lh-meta: 17px;
+
+  --ls-caps: 0.06em;
   --ls-tight: 0;
-  --ls-prose: 0.01em; /* Subtle opening for long-form readability */
-  --prose-leading: 1.6; /* comfortable reading line-height for editors / transcripts */
+  --ls-prose: 0.01em;
+  --prose-leading: 1.6;
 
-  /* ---- Live question typography ----
-     The current question is the most important text in the console—dominate
-     the visual hierarchy with responsive sizing that scales from 24px at
-     small viewports to 32px at large ones. */
-  --text-live-question: clamp(24px, 2vw, 32px);
-  --text-live-question-leading: 1.35; /* Tighter leading for large display type */
+  /* Live "current question" — the dominant text on the studio console. */
+  --text-live-question: clamp(28px, 3vw, 42px);
+  --text-live-question-leading: 1.22;
+  /* Stage captions — legible at teleprompter distance. */
+  --text-caption: clamp(28px, 2.4vw, 44px);
+  --text-caption-leading: 1.25;
+  /* Reading measure for editors / transcripts. */
+  --prose-measure: 70ch;
+  --prose-measure-narrow: 52ch;
 
-  /* ---- Stage caption typography ----
-     Captions need to be readable from teleprompter distance. Responsive sizing
-     ensures legibility across displays while maintaining elegance. */
-  --text-caption: clamp(28px, 2.3vw, 42px);
-  --text-caption-leading: 1.3;
+  /* ---- Geometry ---- */
+  --radius-sm: 8px; /* controls */
+  --radius-md: 12px; /* cards, dialogs */
+  --radius-lg: 16px; /* stage previews, large visual areas */
 
-  /* ---- Prose typography (long-form content) ----
-     Warmer, more inviting treatment for project descriptions, source material,
-     transcripts, and any text meant to be read rather than scanned. */
-  --prose-measure: 68ch; /* Optimal reading line length (45-75ch ideal) */
-  --prose-measure-narrow: 52ch; /* For secondary prose */
-  --prose-text-warm: #e8ecf5; /* Slightly warmer than primary for reading comfort */
-  --prose-secondary-warm: #c5ccd8; /* Warmer secondary text */
-  --prose-muted-warm: #9aa5b5; /* Warmer muted text */
-
-  /* ---- Chrome geometry ---- */
-  --titlebar-h: 52px;
-  --toolbar-h: 64px; /* per-screen page header */
+  --titlebar-h: 48px;
+  --toolbar-h: 56px; /* per-screen page header */
   --panel-header-h: 36px;
-  --row-h: 36px;
+  --row-h: 40px;
+  --sidebar-w: 216px;
   --rail-w: 0px;
   --statusbar-h: 0px;
-  --control-h: 36px;
+  --control-h: 40px; /* standard control height */
   --control-h-sm: 32px;
+  --control-h-lg: 44px; /* primary & destructive actions */
 
-  /* ---- Elevation ----
-     Docked surfaces stay docked: --shadow-panel is a top highlight + a 1px seam, NOT
-     a floating drop shadow. Real cast shadows are reserved for genuinely floating
-     things (hover-lifted cards, the sticky transport, dialogs/menus). No shadow soup. */
-  --shadow-panel: inset 0 1px 0 var(--highlight-edge), 0 1px 1px rgba(0, 0, 0, 0.35);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.28);
-  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.45), 0 12px 28px rgba(0, 0, 0, 0.4);
-  --shadow-well: inset 0 1px 2px rgba(0, 0, 0, 0.45); /* cut-in recess for input wells / meter tracks */
-  --shadow-transport: 0 -8px 24px rgba(0, 0, 0, 0.4); /* lifts the sticky cockpit transport off content */
-  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.38);
+  /* ---- Motion: three durations, two curves ----
+     Enough to feel responsive; never decorative. Honor the reduced-motion
+     guard below. Legacy easing names are aliased so nothing breaks. */
+  --dur-fast: 120ms; /* hover / press */
+  --dur-med: 180ms; /* selection / disclosure */
+  --dur-slow: 240ms; /* screen / readiness transition */
+  --dur-slower: 240ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: var(--ease-out);
+  --ease-breathe: var(--ease-inout);
+  --ease-signature: var(--ease-out);
 
-  /* ---- Motion: a tiny shared vocabulary (3 durations, 3 curves) ----
-     Enough to feel alive and machined; never enough to feel like a marketing site.
-     Honor the global prefers-reduced-motion guard below. */
-  --dur-fast: 120ms; /* hover / press / color */
-  --dur-med: 180ms; /* selection, focus, crossfade */
-  --dur-slow: 260ms; /* mount, state, celebration */
-  --dur-slower: 380ms; /* Signature moments, live transitions */
-  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1); /* default confident settle */
-  --ease-inout: cubic-bezier(0.4, 0, 0.2, 1); /* symmetric crossfades */
-  --ease-spring: cubic-bezier(0.34, 1.4, 0.5, 1); /* restrained overshoot — nav slide / ready only */
-  --ease-breathe: cubic-bezier(0.3, 0, 0.7, 1); /* Gentle symmetric ease for breathing animations */
-  --ease-signature: cubic-bezier(0.2, 0.8, 0.2, 1); /* Signature microinteraction curve */
-
-  /* ---- Atmosphere: kills the dead-black void without violating restraint ----
-     A whisper of top-lit warmth on large empty grounds, plus a faint film grain.
-     Both are pointer-events:none decoration layered behind content. */
-  --sheen-app: radial-gradient(120% 80% at 50% -10%, rgba(142, 160, 255, 0.055), transparent 60%);
-  --grain-opacity: 0.03;
-  --grain-url: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-
-  /* ---- Empty state invitations ----
-     Tokens for spaces that invite creation rather than announce absence. */
-  --empty-bg: rgba(142, 160, 255, 0.07);
-  --empty-border: rgba(142, 160, 255, 0.35);
-  --empty-text: var(--text-secondary);
-  --empty-text-muted: var(--text-muted);
-  --empty-hover-bg: rgba(142, 160, 255, 0.11);
-  --empty-hover-border: rgba(142, 160, 255, 0.5);
-
-  /* Lead with the platform system stack — no web font is bundled, so claiming
-     Inter first made rendering inconsistent across machines (DESIGN-03). On macOS
-     this resolves to SF Pro, which is excellent when used with care. */
+  /* ---- Type families ----
+     System stack for application chrome (resolves to SF Pro on macOS). An
+     optional editorial serif is reserved for the live question and quotations
+     only — every control / label / metric stays in the UI font. */
   --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
-  /* Prose is finally given a prose typeface — a semantic alias so editors/transcripts
-     request reading type while genuine code/metrics keep --font-mono (DESIGN: kills
-     mono-for-prose at the source). */
+  --font-serif: 'Source Serif 4', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
   --font-prose: var(--font-ui);
 
-  /* Tokenizes editor selection so it matches the app accent instead of a hardcoded rgba. */
-  --selection: var(--accent-soft);
-
-  color-scheme: dark;
+  /* Decorative atmosphere is gone; tokens kept as no-ops so stray references
+     resolve. */
+  --sheen-app: none;
+  --grain-opacity: 0;
+  --grain-url: none;
 }
 
+/* ============================================================================
+   DARK studio palette — also the un-themed default (stage window).
+   ============================================================================ */
+:root,
+[data-theme='studio'] {
+  color-scheme: dark;
+
+  /* Surfaces: canvas → chrome → panel → control */
+  --bg-app: #0f1115;
+  --bg-canvas: #0f1115;
+  --bg-chrome: #14171d;
+  --bg-panel: #171a20;
+  --bg-panel-header: #1c2027;
+  --bg-secondary: #20242c;
+  --bg-elevated: #20242c;
+  --bg-sunken: #0d0f13;
+  --bg-hover: #242932;
+  --bg-selected: rgba(125, 134, 246, 0.16);
+
+  /* Text */
+  --text-primary: #f5f6f8;
+  --text-secondary: #a8afbc;
+  --text-muted: #858d9b;
+  --text-faint: #6b7280;
+
+  /* Lines */
+  --border: #303641;
+  --border-strong: #474e5b;
+  --border-faint: #262b33;
+  --border-seam: #262b33;
+
+  /* Accent + status */
+  --accent: #7d86f6;
+  --accent-strong: #98a0ff;
+  --accent-contrast: #0f1115;
+  --accent-soft: #292d49;
+  --focus: #98a0ff;
+  --success: #55b894;
+  --success-soft: rgba(85, 184, 148, 0.16);
+  --warning: #dea94d;
+  --warning-soft: rgba(222, 169, 77, 0.16);
+  --danger: #ef7168;
+  --danger-soft: rgba(239, 113, 104, 0.16);
+
+  /* Flat fills — no machined highlight, no gradient, no glow. */
+  --highlight-edge: transparent;
+  --highlight-edge-strong: transparent;
+  --accent-gradient-top: var(--accent);
+  --accent-gradient-bottom: var(--accent);
+  --accent-glow: transparent;
+
+  /* Live "on-air" — reserved for the LIVE indicator, active mic, and
+     end-session control only. Never recolors the shell. */
+  --live: #e05a4f;
+  --live-soft: rgba(224, 90, 79, 0.18);
+  --live-glow: rgba(224, 90, 79, 0.3);
+
+  /* Audio meter zones (kept distinct from shared status hues) */
+  --meter-low: #55b894;
+  --meter-mid: #dea94d;
+  --meter-high: #ef7168;
+
+  /* Elevation — shadows ONLY on genuinely floating things. */
+  --shadow-panel: none;
+  --shadow-well: none;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-transport: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.38);
+
+  /* Empty-state invitations */
+  --empty-bg: rgba(125, 134, 246, 0.08);
+  --empty-border: #303641;
+  --empty-text: var(--text-secondary);
+  --empty-text-muted: var(--text-muted);
+  --empty-hover-bg: rgba(125, 134, 246, 0.12);
+  --empty-hover-border: #474e5b;
+
+  /* Warm reading text (transcripts / source prose) */
+  --prose-text-warm: #e8ecf5;
+  --prose-secondary-warm: #c5ccd8;
+  --prose-muted-warm: #9aa5b5;
+
+  --selection: rgba(125, 134, 246, 0.22);
+}
+
+/* ============================================================================
+   LIGHT workspace palette — calm warm editorial surfaces.
+   Declared after the dark block so it wins at equal specificity on the shell.
+   ============================================================================ */
+[data-theme='workspace'] {
+  color-scheme: light;
+
+  --bg-app: #f6f4f0;
+  --bg-canvas: #f6f4f0;
+  --bg-chrome: #efebe5; /* sidebar — slightly quieter than the content */
+  --bg-panel: #ffffff;
+  --bg-panel-header: #f3f0ea;
+  --bg-secondary: #efebe5;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #f1eee8;
+  --bg-hover: #ece8e1;
+  --bg-selected: rgba(91, 95, 199, 0.1);
+
+  --text-primary: #18191d;
+  --text-secondary: #5d626c;
+  --text-muted: #6b707a;
+  --text-faint: #868b94;
+
+  --border: #dedad3; /* decorative divider */
+  --border-strong: #99948c; /* control boundary */
+  --border-faint: #e7e3dc;
+  --border-seam: #e7e3dc;
+
+  --accent: #5b5fc7;
+  --accent-strong: #4b4fb0;
+  --accent-contrast: #ffffff;
+  --accent-soft: #eeedff;
+  --focus: #5b5fc7;
+  /* Status foregrounds are darkened from the source palette so 12-13px text on
+     the translucent -soft fills clears WCAG AA (the lighter source hues sat
+     ~3.8:1 on the warm canvas). */
+  --success: #1f6b52;
+  --success-soft: rgba(47, 125, 101, 0.12);
+  --warning: #7a5310;
+  --warning-soft: rgba(154, 103, 22, 0.12);
+  --danger: #a6342b;
+  --danger-soft: rgba(185, 65, 56, 0.1);
+
+  --highlight-edge: transparent;
+  --highlight-edge-strong: transparent;
+  --accent-gradient-top: var(--accent);
+  --accent-gradient-bottom: var(--accent);
+  --accent-glow: transparent;
+
+  --live: #e05a4f;
+  --live-soft: rgba(224, 90, 79, 0.12);
+  --live-glow: transparent;
+
+  --meter-low: #2f9e76;
+  --meter-mid: #c58a2e;
+  --meter-high: #d2564b;
+
+  --shadow-panel: none;
+  --shadow-well: none;
+  --shadow-card: 0 1px 2px rgba(24, 25, 29, 0.06);
+  --shadow-card-hover: 0 6px 16px rgba(24, 25, 29, 0.1);
+  --shadow-transport: 0 -2px 12px rgba(24, 25, 29, 0.05);
+  --shadow-pop: 0 12px 32px rgba(24, 25, 29, 0.16), 0 2px 8px rgba(24, 25, 29, 0.08);
+
+  --empty-bg: #f3f2fb;
+  --empty-border: #dedad3;
+  --empty-text: var(--text-secondary);
+  --empty-text-muted: var(--text-muted);
+  --empty-hover-bg: #eceafb;
+  --empty-hover-border: #c9c9ee;
+
+  --prose-text-warm: #2a2b30;
+  --prose-secondary-warm: #4f535c;
+  --prose-muted-warm: #6b707a;
+
+  --selection: rgba(91, 95, 199, 0.16);
+}
+
+/* ---- Base reset ---- */
 * {
   box-sizing: border-box;
 }
@@ -202,8 +288,6 @@ body,
   height: 100%;
 }
 
-/* Application-grade base density. The control UI's rem-based sizing tightens with
-   this; the stage teleprompter sizes everything in px and is unaffected. */
 html {
   font-size: 14px;
 }
@@ -211,6 +295,7 @@ html {
 body {
   font-family: var(--font-ui);
   font-size: var(--text-base);
+  line-height: var(--lh-body);
   background: var(--bg-app);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
@@ -218,13 +303,12 @@ body {
   font-feature-settings: 'kern' 1;
 }
 
-/* Accent-tinted text selection across the app. */
 ::selection {
   background: var(--selection);
 }
 
-/* A calm, branded keyboard-focus ring. Kept as `outline` (never box-shadow) so it
-   is never clipped by the panels' overflow:hidden and stays a reliable a11y cue. */
+/* A calm keyboard-focus ring. Kept as `outline` (never box-shadow) so panel
+   overflow never clips it. */
 :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
@@ -235,9 +319,7 @@ button {
   cursor: pointer;
 }
 
-/* Refined, thin chrome scrollbars so scroll regions read like an application, not a
-   web page. Track is transparent; the thumb is a quiet hairline that brightens on
-   hover. */
+/* Thin chrome scrollbars. */
 ::-webkit-scrollbar {
   width: 11px;
   height: 11px;
@@ -260,8 +342,7 @@ button {
   background: transparent;
 }
 
-/* Mandatory motion guard — every animation/transition collapses for users who ask
-   for reduced motion (covers ::before/::after pseudo-elements too). */
+/* Mandatory motion guard. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -271,46 +352,4 @@ button {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-}
-
-/* ---- Live mode transformation ----
-   When a session is live, the entire UI transforms to signal the elevated state.
-   Applied via [data-live="true"] on the shell — every component participates. */
-.shell[data-live="true"] {
-  --accent: var(--live-accent);
-  --accent-strong: var(--live-accent);
-  --accent-soft: var(--live-accent-soft);
-  --accent-gradient-top: #ff7f6b;
-  --accent-gradient-bottom: var(--live-accent);
-  --sheen-app: var(--live-sheen);
-}
-
-/* Live mode breathing animation for accents */
-@keyframes breathe-live {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.92;
-    transform: scale(1.01);
-  }
-}
-
-.shell[data-live="true"] .liveBreathing {
-  animation: breathe-live 3s var(--ease-breathe) infinite;
-}
-
-/* Live transport glow */
-.shell[data-live="true"] .transport {
-  border-color: var(--live-border);
-  box-shadow: 0 0 0 1px rgba(255, 107, 90, 0.1) inset,
-              var(--live-accent-glow);
-}
-
-/* Live state badge glow */
-.shell[data-live="true"] .stateBadge {
-  background: var(--live-accent-soft);
-  border-color: var(--live-border);
-  color: var(--live-accent);
 }

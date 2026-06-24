@@ -1,0 +1,35 @@
+.track {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.segment {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  height: 30px;
+  padding: 0 var(--space-3);
+  border-radius: 6px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.segment:hover {
+  color: var(--text-primary);
+}
+
+.selected,
+.selected:hover {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-card);
+}

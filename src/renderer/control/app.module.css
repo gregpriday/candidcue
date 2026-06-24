@@ -13,18 +13,14 @@
   gap: var(--space-5);
   height: var(--titlebar-h);
   padding: 0 var(--space-5);
-  border-bottom: 1px solid var(--border-faint);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 38%),
-    var(--bg-chrome);
-  box-shadow: inset 0 1px 0 var(--highlight-edge);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-chrome);
   flex: 0 0 auto;
   -webkit-app-region: drag;
 }
 
-/* Reserve the gutter for the native window controls so they never overlap the
-   wordmark: traffic lights inset top-left on macOS, control overlay on the right
-   elsewhere. The platform is stamped on .shell at runtime. */
+/* Reserve the native window-control gutter: traffic lights left on macOS,
+   control overlay on the right elsewhere. */
 .shell[data-platform='mac'] .header {
   padding-left: 88px;
 }
@@ -39,8 +35,8 @@
   min-width: 0;
 }
 
+/* Static wordmark — no hover motion, no glow. */
 .wordmark {
-  position: relative;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -49,17 +45,10 @@
   letter-spacing: var(--ls-tight);
   line-height: 1;
   cursor: default;
-  transition: transform var(--dur-med) var(--ease-signature);
 }
 
-.wordmark:hover {
-  transform: translateX(2px);
-}
-
-/* Small brand tile — an accent-gradient rounded square, lit from the top edge, with
-   a white voice/waveform glyph: the app's identity mark beside the wordmark. */
+/* A quiet accent square holding the app mark — flat, no animation. */
 .brandTile {
-  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -67,85 +56,16 @@
   height: 24px;
   flex: 0 0 auto;
   border-radius: var(--radius-sm);
-  background: linear-gradient(var(--accent-gradient-top), var(--accent-gradient-bottom));
+  background: var(--accent);
   color: var(--accent-contrast);
-  box-shadow:
-    inset 0 1px 0 var(--highlight-edge-strong),
-    0 1px 2px rgba(0, 0, 0, 0.4);
-  transition:
-    transform var(--dur-slow) var(--ease-signature),
-    box-shadow var(--dur-med) var(--ease-out);
-}
-
-/* Signature microinteraction: a subtle pulse emanates from the brand tile,
-   creating a waveform ripple that references the app's purpose. */
-.brandTile::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: var(--radius-sm);
-  background: linear-gradient(var(--accent-gradient-top), var(--accent-gradient-bottom));
-  opacity: 0;
-  transform: scale(1);
-  transition:
-    opacity var(--dur-slower) var(--ease-breathe),
-    transform var(--dur-slower) var(--ease-breathe);
-  pointer-events: none;
-}
-
-.brandTile:hover {
-  transform: scale(1.05);
-  box-shadow:
-    inset 0 1px 0 var(--highlight-edge-strong),
-    0 2px 4px rgba(0, 0, 0, 0.5),
-    var(--accent-glow);
-}
-
-.brandTile:hover::after {
-  opacity: 0.6;
-  transform: scale(1.4);
-}
-
-/* Subtle breathing animation at rest - the brand is alive */
-@keyframes brand-breathe {
-  0%, 100% {
-    box-shadow:
-      inset 0 1px 0 var(--highlight-edge-strong),
-      0 1px 2px rgba(0, 0, 0, 0.4);
-  }
-  50% {
-    box-shadow:
-      inset 0 1px 0 var(--highlight-edge-strong),
-      0 1px 3px rgba(0, 0, 0, 0.45),
-      rgba(142, 160, 255, 0.15);
-  }
-}
-
-.brandTile {
-  animation: brand-breathe 4s var(--ease-breathe) infinite;
 }
 
 .mark {
-  position: relative;
-  color: var(--text-primary);
-  transition: color var(--dur-med) var(--ease-out);
-}
-
-.wordmark:hover .mark {
   color: var(--text-primary);
 }
 
 .markAccent {
-  position: relative;
   color: var(--accent);
-  transition:
-    color var(--dur-med) var(--ease-out),
-    text-shadow var(--dur-med) var(--ease-out);
-}
-
-.wordmark:hover .markAccent {
-  color: var(--accent-strong);
-  text-shadow: 0 0 20px var(--accent-glow);
 }
 
 .titleNav {
@@ -168,9 +88,7 @@
   color: var(--text-muted);
   font-size: var(--text-sm);
   font-weight: 600;
-  transition:
-    color var(--dur-med) var(--ease-out),
-    background var(--dur-med) var(--ease-out);
+  transition: color var(--dur-fast) var(--ease-out);
 }
 .navButton:hover {
   color: var(--text-secondary);
@@ -213,7 +131,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- Body: activity rail + workspace ---------------------------------- */
+/* ---- Body / workspace ------------------------------------------------- */
 .body {
   display: flex;
   flex: 1 1 auto;
@@ -225,12 +143,5 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow-y: auto;
-  /* No padding: each screen renders a full-bleed sticky WorkspaceToolbar plus a
-     padded body, so the toolbar reaches the rail and right edge like app chrome. */
   padding: 0;
-  /* Atmosphere: a whisper of top-lit warmth anchored to the workspace viewport
-     (default scroll attachment keeps it fixed as content scrolls) so wide empty
-     regions read as material, never dead black. */
-  background-image: var(--sheen-app);
-  background-repeat: no-repeat;
 }

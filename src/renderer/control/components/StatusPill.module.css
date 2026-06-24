@@ -1,0 +1,56 @@
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 24px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: var(--text-xs);
+  line-height: 1;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+.label {
+  color: inherit;
+}
+
+/* The pill's `color` drives both the label and the dot (currentColor). */
+.neutral {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border-color: var(--border);
+}
+.neutral .dot {
+  background: var(--text-muted);
+}
+
+.accent {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.success {
+  color: var(--success);
+  background: var(--success-soft);
+}
+.warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+.danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.live {
+  color: var(--live);
+  background: var(--live-soft);
+}

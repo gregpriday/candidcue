@@ -48,23 +48,20 @@
   color: var(--text-secondary);
 }
 
-/* Inputs are crafted recesses cut into the panel: a sunken well, a top inner shadow,
-   and a strong hairline edge. They are clearly "into" the surface, the inverse of the
-   raised, top-lit controls. */
+/* Clean, explicit fields — a plain surface with a clear boundary, not a recess
+   machined into the panel. Focus accents the border; the global :focus-visible
+   ring still shows for keyboard users. */
 .input,
 .textarea,
 .select {
   width: 100%;
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-well);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--text-base);
-  transition:
-    border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
 .input::placeholder,
@@ -152,31 +149,10 @@
   font-size: var(--text-base);
 }
 
-/* ---- Loading skeleton primitives ----------------------------------------------
-   A quiet shimmer over a sunken block. Shared so every screen's loading state reads
-   as "composing" rather than a bare "Loading…" line. The motion guard neutralizes
-   the shimmer for reduced-motion users. */
+/* ---- Loading skeleton primitive ------------------------------------------------
+   A calm static block (no perpetual shimmer). Loading reads as "composing" via
+   layout, not animation. */
 .skeleton {
-  position: relative;
-  overflow: hidden;
-  background: var(--bg-elevated);
+  background: var(--bg-secondary);
   border-radius: var(--radius-sm);
-}
-.skeleton::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  transform: translateX(-100%);
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(255, 255, 255, 0.05),
-    transparent
-  );
-  animation: shimmer 1.4s var(--ease-inout) infinite;
-}
-@keyframes shimmer {
-  100% {
-    transform: translateX(100%);
-  }
 }

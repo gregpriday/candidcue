@@ -6,6 +6,16 @@ declare global {
     candidcueStage: CandidCueStageApi;
   }
 
+  // Vite injects these at build time (vite/client is not in tsconfig types).
+  interface ImportMetaEnv {
+    readonly DEV: boolean;
+    readonly PROD: boolean;
+    readonly MODE: string;
+  }
+  interface ImportMeta {
+    readonly env: ImportMetaEnv;
+  }
+
   // AudioWorklet globals (not in the standard DOM lib) for pcm-worklet.ts.
   class AudioWorkletProcessor {
     readonly port: MessagePort;
