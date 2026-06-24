@@ -6,6 +6,8 @@ import { StatusPill } from '../components/StatusPill';
 import { PageHeader } from '../components/PageHeader';
 import { MarkdownEditor } from '../components/MarkdownEditor';
 import { OverflowMenu, type OverflowMenuItem } from '../components/OverflowMenu';
+import { Button } from '../components/Button';
+import { Icon } from '../components/Icon';
 import { describeError } from '../lib/errors';
 import { formatTimestamp } from '../lib/format';
 import route from './route.module.css';
@@ -48,6 +50,7 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
   const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<string, TurnEditState>>({});
   const [exportNote, setExportNote] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -167,6 +170,44 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
 
   useEffect(() => () => flushEditing(), [flushEditing]);
 
+  // Track which question is currently in view so the sticky index can mark it.
+  // The topmost intersecting turn wins, giving the index a stable reading position
+  // as the document scrolls rather than flickering between neighbours.
+  useEffect(() => {
+    if (review === null || review.turns.length === 0) {
+      return undefined;
+    }
+    const visible = new Map<string, number>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            visible.set(entry.target.id, entry.boundingClientRect.top);
+          } else {
+            visible.delete(entry.target.id);
+          }
+        }
+        let topKey: string | null = null;
+        let topY = Infinity;
+        visible.forEach((y, id) => {
+          if (y < topY) {
+            topY = y;
+            topKey = id;
+          }
+        });
+        setActiveKey(topKey);
+      },
+      { rootMargin: '-128px 0px -55% 0px', threshold: 0 },
+    );
+    review.turns.forEach((turn) => {
+      const node = document.getElementById(turnKey(turn));
+      if (node) {
+        observer.observe(node);
+      }
+    });
+    return () => observer.disconnect();
+  }, [review]);
+
   const handleExport = useCallback(
     async (format: 'markdown' | 'json') => {
       setExportNote(null);
@@ -225,7 +266,6 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
       onSelect: () => setShowRaw((v) => !v),
       active: showRaw,
     },
-    { label: 'Export as Markdown', onSelect: () => void handleExport('markdown'), icon: 'download' },
     { label: 'Export as JSON', onSelect: () => void handleExport('json'), icon: 'download' },
   ];
 
@@ -239,23 +279,36 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
         status={
           <StatusPill tone={completed ? 'success' : 'neutral'}>{completed ? 'Completed' : 'In progress'}</StatusPill>
         }
-        actions={<OverflowMenu items={menuItems} ariaLabel="Review options" />}
+        actions={
+          <div className={styles.toolbar}>
+            <Button variant="secondary" onClick={() => void handleExport('markdown')}>
+              <Icon name="download" size={16} /> Export
+            </Button>
+            <OverflowMenu items={menuItems} ariaLabel="Review options" />
+          </div>
+        }
       />
       <div className={styles.review}>
         <nav className={styles.index} aria-label="Questions">
           <ol className={styles.indexList}>
-            {review.turns.map((turn) => (
-              <li key={turnKey(turn)}>
-                <button
-                  type="button"
-                  className={styles.indexItem}
-                  onClick={() => document.getElementById(turnKey(turn))?.scrollIntoView({ behavior: 'smooth' })}
-                >
-                  <span className={styles.indexNum}>{turn.ordinal}</span>
-                  <span className={styles.indexQuestion}>{turn.question}</span>
-                </button>
-              </li>
-            ))}
+            {review.turns.map((turn) => {
+              const key = turnKey(turn);
+              const active = activeKey === key;
+              return (
+                <li key={key}>
+                  <button
+                    type="button"
+                    className={styles.indexItem}
+                    data-active={active || undefined}
+                    aria-current={active ? 'true' : undefined}
+                    onClick={() => document.getElementById(key)?.scrollIntoView({ behavior: 'smooth' })}
+                  >
+                    <span className={styles.indexNum}>{turn.ordinal}</span>
+                    <span className={styles.indexQuestion}>{turn.question}</span>
+                  </button>
+                </li>
+              );
+            })}
           </ol>
         </nav>
 
@@ -287,7 +340,7 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
                   </div>
 
                   <div className={styles.block}>
-                    <div className={styles.youHead}>
+                    <div className={styles.youHead} data-editing={editing || undefined}>
                       <span className={styles.speakerYou}>You</span>
                       {turn.incomplete && (
                         <span className={styles.flag}>

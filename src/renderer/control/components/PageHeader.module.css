@@ -5,9 +5,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-4) var(--space-7);
+  padding: var(--space-4) var(--page-x);
   /* Reserve the window-control overlay gutter on non-macOS at the right edge. */
-  padding-right: calc(var(--space-7) + var(--win-controls-w, 0px));
+  padding-right: calc(var(--page-x) + var(--win-controls-w, 0px));
   background: var(--bg-canvas);
   border-bottom: 1px solid var(--border);
   -webkit-app-region: drag;
@@ -42,6 +42,20 @@
   min-width: 0;
 }
 
+/* Leading visual (e.g. an interviewer avatar) grouped with the title block so the
+   two stay together on the left while actions hold the right. */
+.lead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.leading {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
 .titleBlock {
   display: flex;
   flex-direction: column;
@@ -53,7 +67,7 @@
   font-size: var(--text-page-title);
   line-height: var(--lh-page-title);
   font-weight: 650;
-  letter-spacing: -0.01em;
+  letter-spacing: var(--ls-title);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;

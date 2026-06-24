@@ -49,11 +49,10 @@
   justify-content: center;
   width: 40px;
   height: 40px;
-  /* A crisp raised chip so the brand mark sits on its own surface. */
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-panel);
-  box-shadow: var(--shadow-card);
+  /* A flat, faintly tinted well — no border or shadow — so the brand mark
+     reads as part of the row, not a card stacked inside the grouped list. */
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
   color: var(--text-primary);
 }
 /* Optically balanced logo sizes — the Inworld mark is visually heavier. */
@@ -92,6 +91,24 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The resting connected state is a quiet dot + label, not a filled capsule, so
+   the provider-name line stays calm. Louder states keep the StatusPill. */
+.connectedTag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.connectedDot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--success);
 }
 
 /* ---- Encryption caption (a plain line, not a band) ------------------------- */
@@ -244,7 +261,7 @@
 .skeletonIcon {
   width: 40px;
   height: 40px;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
 }
 .skeletonCopy {
   display: flex;
@@ -255,12 +272,10 @@
 .skeletonLine {
   height: 12px;
   width: 34%;
-  border-radius: 6px;
 }
 .skeletonLineSm {
   height: 10px;
   width: 58%;
-  border-radius: 6px;
 }
 
 /* ---- Responsive ------------------------------------------------------------ */

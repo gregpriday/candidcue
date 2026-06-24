@@ -4,18 +4,19 @@
   gap: 2px;
   padding: 3px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius-sm);
 }
 
 .segment {
+  position: relative;
   appearance: none;
   border: none;
   background: transparent;
   color: var(--text-secondary);
-  height: 30px;
+  height: var(--control-h-sm);
   padding: 0 var(--space-3);
-  border-radius: 6px;
+  border-radius: 7px;
   font-size: var(--text-sm);
   font-weight: 600;
   white-space: nowrap;
@@ -27,9 +28,21 @@
   color: var(--text-primary);
 }
 
+/* Selected = a subtle panel fill with DARK text; a thin accent underline is the
+   marker rather than a heavy lift. */
 .selected,
 .selected:hover {
   background: var(--bg-panel);
   color: var(--text-primary);
   box-shadow: var(--shadow-card);
+}
+.selected::after {
+  content: '';
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: 5px;
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
 }

@@ -69,7 +69,7 @@ export function AppSidebar({
     <aside className={styles.sidebar}>
       <div className={styles.brandRow}>
         <span className={styles.brandTile} aria-hidden>
-          <Icon name="waveform" size={14} />
+          <Icon name="waveform" size={15} />
         </span>
         <span className={styles.brand}>CandidCue</span>
       </div>

@@ -38,14 +38,17 @@ export const saveProjectDocumentInputSchema = z.object({
   // New writes are Markdown-only; `text/plain` survives only for legacy reads
   // and is normalized to `text/markdown` by migration + read coercion.
   mimeType: z.literal('text/markdown'),
-  content: z.string().max(PROJECT_SOURCE_LIMITS.maxCharactersPerDocument),
+  // Content size is intentionally uncapped — the operator supplies their own
+  // material and the app only reports counts, never enforces an upper bound.
+  content: z.string(),
   sortOrder: z.number().int().nonnegative(),
 });
 
 /**
  * Cross-document invariants the per-field schema cannot express: exactly one
- * primary source, unique document IDs, a dense `0..n-1` sort order, and an
- * aggregate content budget. Main-process Zod validation is authoritative.
+ * primary source, unique document IDs, and a dense `0..n-1` sort order. Content
+ * size and document count are intentionally uncapped. Main-process Zod
+ * validation is authoritative.
  */
 function validateProjectSourceInvariants(
   input: { documents: Array<z.infer<typeof saveProjectDocumentInputSchema>> },
@@ -87,15 +90,6 @@ function validateProjectSourceInvariants(
       path: ['documents'],
     });
   }
-
-  const totalCharacters = docs.reduce((sum, d) => sum + d.content.length, 0);
-  if (totalCharacters > PROJECT_SOURCE_LIMITS.maxTotalCharacters) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: `Total source content (${totalCharacters}) exceeds the ${PROJECT_SOURCE_LIMITS.maxTotalCharacters} character limit.`,
-      path: ['documents'],
-    });
-  }
 }
 
 export const saveProjectInputSchema = z
@@ -108,10 +102,8 @@ export const saveProjectInputSchema = z
     targetValue: z.number().int().positive(),
     interviewerCharacterId: z.string().min(1),
     notesToInterviewer: z.string().nullable().optional(),
-    documents: z
-      .array(saveProjectDocumentInputSchema)
-      .min(1)
-      .max(PROJECT_SOURCE_LIMITS.maxDocuments),
+    // The reference count is uncapped — the count is reported, never enforced.
+    documents: z.array(saveProjectDocumentInputSchema).min(1),
   })
   .superRefine(validateProjectSourceInvariants);
 

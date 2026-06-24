@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Button } from './Button';
 import { Icon } from './Icon';
 import { MarkdownEditor } from './MarkdownEditor';
@@ -22,8 +23,9 @@ interface SourceEditorPaneProps {
 
 /**
  * The right pane of the Sources workspace: edits the selected source's title and
- * Markdown content, and exposes the per-source actions (make primary, duplicate,
- * delete). Holds the only CodeMirror surface in the library.
+ * Markdown content. The title sits in the editor's integrated header strip with
+ * a primary-marking star, and the per-source actions (duplicate, delete) live
+ * alongside it. Delete is a two-step confirm. Holds the only CodeMirror surface.
  */
 export function SourceEditorPane({
   draft,
@@ -36,6 +38,22 @@ export function SourceEditorPane({
   onDuplicate,
   onDelete,
 }: SourceEditorPaneProps): JSX.Element {
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  // Disarm the delete confirm whenever the selection changes, and auto-disarm a
+  // few seconds after arming so a stray first click never lingers as a trap.
+  const draftKey = draft?.key ?? null;
+  useEffect(() => {
+    setConfirmingDelete(false);
+  }, [draftKey]);
+  useEffect(() => {
+    if (!confirmingDelete) {
+      return undefined;
+    }
+    const timer = setTimeout(() => setConfirmingDelete(false), 3500);
+    return () => clearTimeout(timer);
+  }, [confirmingDelete]);
+
   if (!draft) {
     return (
       <div className={styles.pane}>
@@ -45,81 +63,101 @@ export function SourceEditorPane({
   }
 
   const characters = stat?.characters ?? draft.content.length;
-  const overLimit = stat?.overCharacterLimit ?? false;
-  // The counter is noise until you're approaching the limit.
-  const nearLimit = characters >= 0.8 * PROJECT_SOURCE_LIMITS.maxCharactersPerDocument;
 
-  return (
-    <div className={styles.pane}>
-      <div className={styles.paneHeader}>
-        <input
-          className={styles.titleInput}
-          value={draft.title}
-          maxLength={PROJECT_SOURCE_LIMITS.maxTitleCharacters}
-          aria-label="Reference title"
-          placeholder={isPrimary ? 'Primary reference' : 'Untitled reference'}
-          onChange={(event) => onTitleChange(event.target.value)}
-        />
-        <div className={styles.paneActions}>
-          {!isPrimary && (
-            <Button
-              variant="ghost"
-              onClick={onMakePrimary}
-              title="Use this as the interview's main reference"
-            >
-              <Icon name="star" size={14} /> Make primary
-            </Button>
-          )}
-          <Button variant="ghost" onClick={onDuplicate} aria-label="Duplicate reference">
-            <Icon name="copy" size={14} />
+  const handleDelete = (): void => {
+    if (!canDelete) {
+      return;
+    }
+    if (confirmingDelete) {
+      onDelete();
+      setConfirmingDelete(false);
+    } else {
+      setConfirmingDelete(true);
+    }
+  };
+
+  const editorHeader = (
+    <>
+      {isPrimary ? (
+        <span className={styles.editorStar} title="Primary reference" aria-label="Primary reference">
+          <Icon name="starFilled" size={16} aria-hidden />
+        </span>
+      ) : (
+        <button
+          type="button"
+          className={styles.editorStarButton}
+          onClick={onMakePrimary}
+          title="Make this the primary reference"
+          aria-label="Make this the primary reference"
+        >
+          <Icon name="star" size={16} />
+        </button>
+      )}
+      <input
+        className={styles.editorTitleInput}
+        value={draft.title}
+        maxLength={PROJECT_SOURCE_LIMITS.maxTitleCharacters}
+        aria-label="Reference title"
+        placeholder={isPrimary ? 'Primary reference' : 'Untitled reference'}
+        onChange={(event) => onTitleChange(event.target.value)}
+      />
+      <div className={styles.editorActions}>
+        <Button
+          variant="ghost"
+          className={styles.editorAction}
+          onClick={onDuplicate}
+          title="Duplicate this reference"
+        >
+          <Icon name="copy" size={15} /> Duplicate
+        </Button>
+        {confirmingDelete ? (
+          <Button
+            variant="danger"
+            className={styles.confirmDelete}
+            onClick={handleDelete}
+            title="Click again to delete this reference"
+          >
+            <Icon name="trash" size={15} /> Confirm delete
           </Button>
+        ) : (
           <Button
             variant="ghost"
             className={styles.iconDanger}
-            onClick={onDelete}
+            onClick={handleDelete}
             disabled={!canDelete}
             aria-label="Delete reference"
             title={canDelete ? 'Delete this reference' : 'An interview keeps at least one reference'}
           >
-            <Icon name="trash" size={14} />
+            <Icon name="trash" size={15} />
           </Button>
-        </div>
-      </div>
-
-      <div className={styles.paneMeta}>
-        <span className={styles.metaRole}>
-          {isPrimary && <Icon name="starFilled" size={13} className={styles.metaStar} />}
-          {isPrimary ? 'Primary reference' : 'Supporting reference'}
-        </span>
-        {draft.originalFilename && (
-          <span className={styles.metaFile}>Imported from {draft.originalFilename}</span>
-        )}
-        {(nearLimit || overLimit) && (
-          <span className={overLimit ? styles.metaCharsOver : styles.metaChars}>
-            {characters.toLocaleString()} / {PROJECT_SOURCE_LIMITS.maxCharactersPerDocument.toLocaleString()} chars
-          </span>
         )}
       </div>
+    </>
+  );
 
-      {overLimit && (
-        <p className={styles.paneWarning} role="alert">
-          This reference is over the {PROJECT_SOURCE_LIMITS.maxCharactersPerDocument.toLocaleString()}-character
-          limit. Trim it before preparing the interview.
-        </p>
-      )}
-
+  return (
+    <div className={styles.pane}>
       <MarkdownEditor
         key={draft.key}
+        flush
         value={draft.content}
         onChange={onContentChange}
         ariaLabel={`Editing reference: ${draft.title || 'Untitled reference'}`}
-        minHeight="320px"
+        minHeight="360px"
+        header={editorHeader}
         placeholder={
           isPrimary
             ? 'Paste or write the main material the interview draws on…'
             : 'Supporting context Mira can draw on…'
         }
       />
+
+      <p className={styles.editorStatusBar}>
+        <span className={styles.editorChars}>{characters.toLocaleString()} characters</span>
+        {draft.originalFilename && (
+          <span className={styles.editorFile}>Imported from {draft.originalFilename}</span>
+        )}
+      </p>
     </div>
   );
 }

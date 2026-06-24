@@ -1,7 +1,7 @@
 .meter {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-2);
 }
 
 .labelRow {
@@ -21,19 +21,33 @@
 }
 
 .track {
+  /* A container so the fill's zone gradient is measured against the full track,
+     not the shrinking fill — colour reflects absolute level, not relative. */
+  container-type: inline-size;
   height: 8px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   background: var(--bg-sunken);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   overflow: hidden;
 }
 .fill {
   height: 100%;
-  background: var(--success);
+  border-radius: inherit;
+  /* Calm low → mid → high sweep across the meter's zones. The gradient spans the
+     full track width so the visible colour tracks the true input level. */
+  background: linear-gradient(
+    to right,
+    var(--meter-low) 0%,
+    var(--meter-low) 55%,
+    var(--meter-mid) 78%,
+    var(--meter-high) 100%
+  );
+  background-size: 100cqw 100%;
+  background-repeat: no-repeat;
   transition: width 60ms linear;
 }
 .clip {
-  background: var(--danger);
+  background: var(--meter-high);
 }
 
 .clipNote {

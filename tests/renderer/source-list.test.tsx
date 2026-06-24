@@ -8,9 +8,9 @@ import { SourceList, type SourceListItem } from '../../src/renderer/control/comp
 
 function items(): SourceListItem[] {
   return [
-    { key: 'p', title: 'Founding story', isPrimary: true, characters: 1200, overLimit: false, empty: false },
-    { key: 'a', title: 'Market notes', isPrimary: false, characters: 300, overLimit: false, empty: false },
-    { key: 'b', title: 'Press kit', isPrimary: false, characters: 0, overLimit: false, empty: true },
+    { key: 'p', title: 'Founding story', isPrimary: true, characters: 1200, empty: false },
+    { key: 'a', title: 'Market notes', isPrimary: false, characters: 300, empty: false },
+    { key: 'b', title: 'Press kit', isPrimary: false, characters: 0, empty: true },
   ];
 }
 
@@ -18,9 +18,9 @@ function items(): SourceListItem[] {
 function manyItems(): SourceListItem[] {
   return [
     ...items(),
-    { key: 'c', title: 'Roadmap', isPrimary: false, characters: 500, overLimit: false, empty: false },
-    { key: 'd', title: 'Customer quotes', isPrimary: false, characters: 700, overLimit: false, empty: false },
-    { key: 'e', title: 'Pricing memo', isPrimary: false, characters: 400, overLimit: false, empty: false },
+    { key: 'c', title: 'Roadmap', isPrimary: false, characters: 500, empty: false },
+    { key: 'd', title: 'Customer quotes', isPrimary: false, characters: 700, empty: false },
+    { key: 'e', title: 'Pricing memo', isPrimary: false, characters: 400, empty: false },
   ];
 }
 
@@ -36,7 +36,6 @@ function Harness(props: Partial<Parameters<typeof SourceList>[0]>) {
       onSelect={vi.fn()}
       onMakePrimary={vi.fn()}
       onReorder={vi.fn()}
-      budget="ok"
       totalCharacters={1500}
       documentCount={3}
       {...props}
@@ -68,7 +67,6 @@ describe('SourceList', () => {
         onSelect={vi.fn()}
         onMakePrimary={vi.fn()}
         onReorder={vi.fn()}
-        budget="ok"
         totalCharacters={1500}
         documentCount={3}
       />,

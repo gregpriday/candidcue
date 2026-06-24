@@ -1,10 +1,10 @@
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
-  height: 24px;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-sm);
+  gap: 6px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
   border: 1px solid transparent;
   font-size: var(--text-xs);
   line-height: 1;
@@ -13,8 +13,8 @@
 }
 
 .dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: currentColor;
   flex: 0 0 auto;

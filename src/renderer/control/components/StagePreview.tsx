@@ -26,9 +26,14 @@ export function StagePreview({
   return (
     <div className={styles.preview} data-theme="studio">
       <div className={styles.stage}>
-        {posterUrl !== null && (
+        {posterUrl !== null ? (
           <img className={styles.poster} src={posterUrl} alt="" aria-hidden style={{ transform }} />
+        ) : (
+          <div className={styles.placeholder} aria-hidden />
         )}
+        {/* A finished framing scrim — vignettes the edges and grounds the lower
+            third so the caption reads as stage UI, not a label on a void. */}
+        <div className={styles.scrim} aria-hidden />
         {captionsEnabled && caption !== undefined && caption !== '' && (
           <div className={styles.caption}>{caption}</div>
         )}

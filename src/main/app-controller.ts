@@ -122,9 +122,6 @@ export class AppController {
       throw new AppError('VALIDATION_FAILED', { publicMessage: 'Only Markdown files can be imported.' });
     }
     const raw = await readFile(path, 'utf8');
-    if (raw.length > PROJECT_SOURCE_LIMITS.maxCharactersPerDocument) {
-      throw new AppError('VALIDATION_FAILED', { publicMessage: 'Document exceeds the size limit.' });
-    }
     const ext = extname(path).toLowerCase();
     return {
       title: basename(path, ext),
@@ -287,17 +284,6 @@ export class AppController {
     if (documents.some((doc) => doc.title.trim().length === 0)) {
       throw new AppError('VALIDATION_FAILED', {
         publicMessage: 'Every source needs a title before preparing.',
-      });
-    }
-    if (documents.some((doc) => doc.content.length > PROJECT_SOURCE_LIMITS.maxCharactersPerDocument)) {
-      throw new AppError('VALIDATION_FAILED', {
-        publicMessage: 'A source exceeds the maximum size.',
-      });
-    }
-    const totalCharacters = documents.reduce((sum, doc) => sum + doc.content.length, 0);
-    if (totalCharacters > PROJECT_SOURCE_LIMITS.maxTotalCharacters) {
-      throw new AppError('VALIDATION_FAILED', {
-        publicMessage: 'The combined sources exceed the maximum size.',
       });
     }
   }

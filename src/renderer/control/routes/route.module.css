@@ -9,7 +9,7 @@
   width: min(100%, 1180px);
   max-width: 1180px;
   margin: 0;
-  padding: var(--space-7) var(--space-8) var(--space-8);
+  padding: var(--page-y) var(--page-x) var(--space-8);
   display: flex;
   flex-direction: column;
   gap: var(--space-6);
@@ -49,12 +49,21 @@
 .select {
   width: 100%;
   background: var(--bg-panel);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--text-base);
-  transition: border-color var(--dur-fast) var(--ease-out);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+/* Quiet by default; the boundary firms up only on hover. */
+.input:hover:not(:focus),
+.textarea:hover:not(:focus),
+.select:hover:not(:focus) {
+  border-color: var(--border-strong);
 }
 
 .input::placeholder,
@@ -68,9 +77,28 @@
   padding: 0 var(--space-3);
 }
 
-/* Prose textarea — a writing surface, NOT a terminal. (Was --font-mono.) */
+/* A deliberate, theme-aware chevron in place of the native OS select arrow — the
+   single biggest "this is a web form" tell. The glyph matches Icon "chevronDown".
+   Selects only appear on workspace (light) surfaces; the studio override keeps a
+   future dark select legible. */
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: var(--space-8);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b707a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9.5 12 15.5 18 9.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--space-3) center;
+  background-size: 16px 16px;
+  cursor: pointer;
+}
+:global([data-theme='studio']) .select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23858d9b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9.5 12 15.5 18 9.5'/%3E%3C/svg%3E");
+}
+
+/* Prose textarea — a writing surface, NOT a terminal. The browser resize grip is
+   removed (it reads as a raw HTML control); height grows via min-height. */
 .textarea {
-  resize: vertical;
+  resize: none;
   min-height: 112px;
   padding: var(--space-4);
   font-family: var(--font-prose);
@@ -78,12 +106,14 @@
   line-height: var(--prose-leading);
 }
 
-/* Accent the border on focus; the global 2px :focus-visible ring still shows for
-   keyboard users (do NOT set outline:none, which would suppress it). */
+/* Accent the border on focus and add a restrained tinted ring so the focused
+   field reads as deliberately lit. The global 2px :focus-visible outline still
+   shows for keyboard users (do NOT set outline:none, which would suppress it). */
 .input:focus,
 .textarea:focus,
 .select:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .row {
@@ -118,21 +148,32 @@
   line-height: 20px;
 }
 
-/* Inline info row — a flat hairline notice with a left accent, lifted by the top
-   highlight so it reads as a surface, not just a tinted box. */
+/* Inline info row — a hairline surface with a leading accent rule. The rule is an
+   inset bar (held back from the corners), never a one-sided border, so the
+   rounded corners stay clean instead of pinching into a crescent. */
 .notice {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
-  border-left: 2px solid var(--accent);
   border-radius: var(--radius-sm);
   background: var(--bg-panel);
   box-shadow: var(--shadow-panel);
   font-size: var(--text-sm);
   color: var(--text-secondary);
   line-height: 1.5;
+}
+.notice::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: var(--space-3);
+  bottom: var(--space-3);
+  width: 3px;
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+  background: var(--accent);
 }
 
 .empty {
@@ -148,4 +189,48 @@
 .skeleton {
   background: var(--bg-secondary);
   border-radius: var(--radius-sm);
+}
+
+/* ---- Pinned bottom action bar -------------------------------------------------
+   A screen that owns a primary commit action wraps its content in `.screen` — a
+   min-height column — so the body (`.screenBody`, flex:1) pushes `.actionBar`
+   flush to the bottom of the window when content is short, and lets it ride
+   naturally below the content when it's long. The bar shares the page's
+   horizontal inset (--page-x) and uses a restrained translucent material so
+   content scrolls softly beneath sticky chrome. Give `.screenBody` enough
+   bottom padding that its last row never hides under the bar. */
+.screen {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.screenBody {
+  flex: 1 1 auto;
+}
+.actionBar {
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--page-x);
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-canvas) 86%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  backdrop-filter: blur(16px) saturate(1.4);
+}
+/* Cap the bar's contents to the page measure so actions align with page content
+   instead of drifting to the window edge. */
+.actionBarInner {
+  width: min(100%, 1180px);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.actionBarEnd {
+  justify-content: flex-end;
+}
+.actionBarSplit {
+  justify-content: space-between;
 }

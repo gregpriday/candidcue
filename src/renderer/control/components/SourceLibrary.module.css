@@ -58,6 +58,7 @@
 /* ---- import result banner -------------------------------------------------- */
 
 .importResult {
+  position: relative;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -65,12 +66,22 @@
   margin: var(--space-3);
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
-  border-left: 2px solid var(--warning);
   border-radius: var(--radius-sm);
   background: var(--warning-soft);
   font-size: var(--text-sm);
   color: var(--text-secondary);
   line-height: 1.5;
+}
+/* Leading rule as an inset bar — never a one-sided border on a rounded box. */
+.importResult::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  width: 3px;
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+  background: var(--warning);
 }
 .importResultBody {
   display: flex;
@@ -112,7 +123,7 @@
   flex-direction: column;
   min-width: 0;
   border-right: 1px solid var(--border-faint);
-  background: var(--bg-secondary);
+  background: var(--bg-canvas);
 }
 
 .search {
@@ -176,23 +187,31 @@
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
 }
 .option:hover {
   background: var(--bg-hover);
 }
+/* Selected = a clean panel card lifted off the warm rail with a soft shadow,
+   not a flat clay wash. A separate inset accent bar (held back from the corners,
+   never a one-sided border) carries the terracotta marker without a crescent. */
 .optionSelected,
 .optionSelected:hover {
-  background: var(--bg-selected);
-  border-color: transparent;
+  background: var(--bg-panel);
+  border-color: var(--border-faint);
+  box-shadow: var(--shadow-card);
 }
 .optionSelected::before {
   content: '';
   position: absolute;
-  left: 0;
-  top: 9px;
-  bottom: 9px;
-  width: 2px;
-  border-radius: 0 2px 2px 0;
+  left: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 20px;
+  border-radius: var(--radius-pill);
   background: var(--accent);
 }
 
@@ -244,22 +263,10 @@
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
-.primaryTag {
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 600;
-  color: var(--accent);
-}
 .optionChars {
   font-variant-numeric: tabular-nums;
 }
-.optionCharsOver {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  color: var(--danger);
-}
 .optionEmpty {
-  font-style: italic;
   color: var(--text-muted);
 }
 
@@ -309,6 +316,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-2);
   min-height: 44px;
   padding: 0 var(--space-4);
   border-top: 1px solid var(--border-faint);
@@ -316,28 +324,24 @@
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
-.budget {
+/* Counts are reported, never enforced — no caps, no warning colors. */
+.docCount {
   font-weight: 600;
-}
-.budget_ok {
   color: var(--text-secondary);
 }
-.budget_approaching {
-  color: var(--warning);
-}
-.budget_over {
-  color: var(--danger);
+.totalChars {
+  color: var(--text-muted);
 }
 
 /* ---- editor pane ----------------------------------------------------------- */
 
+/* The editing surface fills the right cell edge-to-edge — a white panel hosting
+   a full-bleed editor (its own header strip + content) with no nested border. */
 .pane {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-5);
   min-width: 0;
-  background: var(--bg-canvas, #11151c);
+  background: var(--bg-panel);
 }
 .paneEmpty {
   margin: 0;
@@ -355,81 +359,103 @@
   font-size: var(--text-xs);
   color: var(--prose-muted-warm, var(--text-muted));
 }
-.paneHeader {
-  display: flex;
+/* ---- editor header strip (integrated title) ------------------------------- */
+/* The strip chrome (grey background, border, padding) lives in MarkdownEditor;
+   these style its contents: a primary star, the inline title, and actions. */
+.editorStar,
+.editorStarButton {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  padding: 0;
 }
-.titleInput {
+.editorStar {
+  color: var(--accent);
+}
+.editorStarButton {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.editorStarButton:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.editorTitleInput {
   flex: 1 1 auto;
   min-width: 0;
-  height: 44px;
-  padding: 0;
+  height: 32px;
+  padding: 0 var(--space-2);
   background: transparent;
   border: none;
-  border-bottom: 1px solid var(--border-faint);
-  border-radius: 0;
+  border-radius: var(--radius-sm);
   color: var(--text-primary);
   font: inherit;
-  font-size: 18px;
-  line-height: 26px;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: var(--ls-title);
+}
+.editorTitleInput::placeholder {
+  color: var(--text-muted);
   font-weight: 600;
 }
-.titleInput:focus {
-  border-bottom-color: var(--accent);
+/* No per-field outline — the whole editor surface rings on :focus-within. */
+.editorTitleInput:focus {
+  outline: none;
 }
-.paneActions {
+
+.editorActions {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
   flex: 0 0 auto;
 }
+.editorAction,
+.confirmDelete {
+  height: 32px;
+}
 .iconDanger {
+  height: 32px;
   color: var(--text-muted);
 }
 .iconDanger:hover:not(:disabled) {
   color: var(--danger);
 }
 
-.paneMeta {
+/* ---- editor status bar (flush; informational counts, never a cap) --------- */
+.editorStatusBar {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
   flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  /* Pin to the bottom of the white pane, like a code editor's status strip. */
+  margin-top: auto;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-faint);
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
-.metaRole {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-.metaStar {
-  color: var(--accent);
-}
-.metaFile {
-  font-style: italic;
-}
-.metaChars {
+.editorChars {
   font-variant-numeric: tabular-nums;
 }
-.metaCharsOver {
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  color: var(--danger);
+.editorFile {
+  position: relative;
+  padding-left: var(--space-3);
 }
-.paneWarning {
-  margin: 0;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--danger);
-  border-left-width: 2px;
-  border-radius: var(--radius-sm);
-  background: var(--danger-soft);
-  color: var(--danger);
-  font-size: var(--text-sm);
+.editorFile::before {
+  content: '·';
+  position: absolute;
+  left: 0;
 }
 
 @media (max-width: 900px) {

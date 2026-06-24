@@ -1,23 +1,23 @@
 /**
- * Single source of truth for Project Asset Library ("Sources") size and count
- * limits. The same constants drive native import validation, the renderer
- * budget display, Zod save validation, preparation validation, and tests, so
- * the previously-divergent import (100k) and save (200k) caps stay reconciled.
+ * Project Asset Library ("Sources") constants. Content size and document count
+ * are intentionally NOT capped — the operator supplies their own material — so
+ * `maxCharactersPerDocument` / `maxTotalCharacters` / `maxDocuments` are retained
+ * only as reference magnitudes (e.g. for tests), not enforced anywhere. The
+ * enforced constants are the title length, the import batch size, and the
+ * accepted extensions.
  */
 export const PROJECT_SOURCE_LIMITS = {
-  /** Maximum number of source documents a project may hold. */
+  /** Reference only — the document count is no longer enforced. */
   maxDocuments: 50,
-  /** Maximum files accepted in a single native import selection. */
+  /** Maximum files accepted in a single native import selection (enforced). */
   maxImportBatch: 50,
-  /** Hard per-document character cap (content length). */
+  /** Reference only — per-document content length is no longer capped. */
   maxCharactersPerDocument: 100_000,
-  /** Hard aggregate character cap across all documents in a project. */
+  /** Reference only — aggregate content length is no longer capped. */
   maxTotalCharacters: 300_000,
-  /** Soft threshold at which the UI warns the project is approaching the cap. */
-  softWarningTotalCharacters: 240_000,
-  /** Maximum source title length. */
+  /** Maximum source title length (enforced by the Zod save schema). */
   maxTitleCharacters: 200,
-  /** Maximum stored original filename (basename) length. */
+  /** Maximum stored original filename (basename) length (enforced). */
   maxOriginalFilenameCharacters: 255,
   /** Lower-cased file extensions accepted by Markdown import. */
   allowedExtensions: ['.md', '.markdown'],

@@ -3,7 +3,7 @@
   align-items: flex-start;
   gap: var(--space-3);
   padding: var(--space-4);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius-sm);
   background: var(--bg-panel);
   cursor: pointer;
@@ -12,7 +12,7 @@
     background var(--dur-fast) var(--ease-out);
 }
 .card:not(.disabled):hover {
-  border-color: var(--accent);
+  border-color: var(--border-strong);
 }
 .checked {
   border-color: var(--accent);
@@ -43,9 +43,12 @@
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  border: 2px solid var(--border-strong);
+  border: 2px solid var(--border-control);
   background: var(--bg-panel);
   transition: border-color var(--dur-fast) var(--ease-out);
+}
+.card:not(.disabled):hover .indicator {
+  border-color: var(--border-strong);
 }
 .checked .indicator {
   border-color: var(--accent);

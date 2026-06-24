@@ -4,7 +4,7 @@
   gap: var(--space-8);
   align-items: start;
   width: min(100%, 1180px);
-  padding: var(--space-6) var(--space-7) var(--space-9);
+  padding: var(--space-6) var(--page-x) var(--space-9);
 }
 @media (max-width: 900px) {
   .review {
@@ -13,6 +13,13 @@
   .index {
     display: none;
   }
+}
+
+/* ---- Header toolbar -------------------------------------------------- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 /* ---- Sticky question index ------------------------------------------- */
@@ -29,6 +36,7 @@
   gap: 2px;
 }
 .indexItem {
+  position: relative;
   display: flex;
   gap: var(--space-2);
   width: 100%;
@@ -40,10 +48,34 @@
   font-size: var(--text-sm);
   text-align: left;
   cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 .indexItem:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+/* Current reading position — a soft selection wash with an accent edge marker and
+   firm dark text, so the index gives positional feedback rather than reading as
+   inert navigation. */
+.indexItem[data-active] {
+  background: var(--bg-selected);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.indexItem[data-active]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+.indexItem[data-active] .indexNum {
+  color: var(--accent-strong);
 }
 .indexNum {
   flex: 0 0 auto;
@@ -103,6 +135,7 @@
   font-size: 20px;
   line-height: 1.4;
   color: var(--text-primary);
+  text-wrap: balance;
 }
 
 .youHead {
@@ -135,6 +168,16 @@
   font-size: var(--text-sm);
   font-weight: 600;
   cursor: pointer;
+  /* Quiet by default — the transcript is the dominant surface. The repeated
+     per-turn affordance only surfaces when the row is hovered or focused, and
+     stays put while a turn is actually being edited. */
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.turn:hover .editToggle,
+.turn:focus-within .editToggle,
+.youHead[data-editing] .editToggle {
+  opacity: 1;
 }
 
 .answerProse {

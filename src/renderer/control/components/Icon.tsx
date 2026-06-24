@@ -99,7 +99,7 @@ const PATHS: Record<IconName, JSX.Element> = {
       <line x1="8" y1="22" x2="16" y2="22" />
     </>
   ),
-  play: <path d="M7 4.5v15a1 1 0 0 0 1.52.85l12-7.5a1 1 0 0 0 0-1.7l-12-7.5A1 1 0 0 0 7 4.5z" />,
+  play: <path d="M7.5 4.5v15a1 1 0 0 0 1.52.85l12-7.5a1 1 0 0 0 0-1.7l-12-7.5A1 1 0 0 0 7.5 4.5z" />,
   pause: (
     <>
       <rect x="6" y="4.5" width="4" height="15" rx="1" />

@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import type { ReactNode } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorView } from '@codemirror/view';
@@ -13,6 +14,18 @@ interface MarkdownEditorProps {
   minHeight?: string;
   placeholder?: string;
   readOnly?: boolean;
+  /**
+   * Optional chrome rendered as a header strip inside the editor surface, above
+   * the content — e.g. an integrated title bar — so the title and the editor
+   * read as one composed code-editor panel that shares a single focus ring.
+   */
+  header?: ReactNode;
+  /**
+   * Full-bleed mode: drops the surface's own border, radius, and focus ring so
+   * the editor fills its container edge-to-edge (the host panel supplies the
+   * frame). Avoids a "border inside a border" when embedded in a bordered pane.
+   */
+  flush?: boolean;
 }
 
 /**
@@ -28,6 +41,8 @@ export function MarkdownEditor({
   minHeight = '160px',
   placeholder,
   readOnly = false,
+  header,
+  flush = false,
 }: MarkdownEditorProps): JSX.Element {
   const extensions = useMemo<Extension[]>(
     () => [markdown(), EditorView.lineWrapping, EditorView.contentAttributes.of({ 'aria-label': ariaLabel })],
@@ -35,7 +50,8 @@ export function MarkdownEditor({
   );
 
   return (
-    <div className={styles.editor}>
+    <div className={[styles.editor, flush ? styles.editorFlush : null].filter(Boolean).join(' ')}>
+      {header != null && <div className={styles.header}>{header}</div>}
       <CodeMirror
         value={value}
         theme={candidCueEditorTheme}

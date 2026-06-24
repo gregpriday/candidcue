@@ -32,7 +32,7 @@
 .description {
   margin: 0;
   font-size: var(--text-sm);
-  line-height: 20px;
+  line-height: var(--lh-label);
   color: var(--text-muted);
 }
 

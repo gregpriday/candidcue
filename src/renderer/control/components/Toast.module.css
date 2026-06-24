@@ -11,6 +11,8 @@
   pointer-events: none;
 }
 
+/* A floating notice: warm panel surface, hairline edge, elevation does the
+   lifting. Each toast slides up and fades in. */
 .toast {
   display: inline-flex;
   align-items: center;
@@ -19,11 +21,23 @@
   padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-pop);
   font-size: var(--text-sm);
   color: var(--text-primary);
   pointer-events: auto;
+  animation: toastIn var(--dur-med) var(--ease-out);
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .dot {
@@ -57,6 +71,10 @@
   background: transparent;
   color: var(--text-muted);
   border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 .dismiss:hover {
   color: var(--text-primary);

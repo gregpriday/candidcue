@@ -1,5 +1,5 @@
 import { basename, extname } from 'node:path';
-import { PROJECT_SOURCE_LIMITS, isAllowedMarkdownExtension } from '@shared/constants/project-source-limits';
+import { isAllowedMarkdownExtension } from '@shared/constants/project-source-limits';
 import type {
   ImportedMarkdownDocument,
   ImportMarkdownDocumentsResult,
@@ -15,11 +15,12 @@ import type {
  */
 
 /**
- * Generous byte ceiling used as a pre-read guard against pathologically large
- * files. The authoritative limit is the decoded character count; a UTF-8
- * character is 1–4 bytes, so this never false-rejects a within-limit document.
+ * Standalone memory safety valve: a per-file byte ceiling that guards against
+ * reading a pathologically large file fully into memory. It is deliberately far
+ * beyond any realistic Markdown brief and is NOT a product limit on source size
+ * — content length itself is uncapped, the operator supplies their own material.
  */
-export const MAX_IMPORT_BYTES = PROJECT_SOURCE_LIMITS.maxCharactersPerDocument * 4;
+export const MAX_IMPORT_BYTES = 64 * 1024 * 1024;
 
 /** The NUL control character; its presence marks binary (non-text) content. */
 const NUL_CHARACTER = String.fromCharCode(0);
@@ -44,7 +45,7 @@ export function isImportFailure(
  * Decode one file's bytes into a normalized Markdown document, or a structured
  * failure. Re-checks the extension (native dialog filters are not a security
  * boundary), decodes UTF-8 strictly, strips a leading BOM, rejects NUL bytes,
- * normalizes CRLF/CR to LF, and enforces the per-document character cap.
+ * and normalizes CRLF/CR to LF. Content length is uncapped.
  */
 export function decodeMarkdownFile(
   filename: string,
@@ -71,10 +72,6 @@ export function decodeMarkdownFile(
 
   // Normalize CRLF and lone CR to LF.
   text = text.replace(/\r\n?/g, '\n');
-
-  if (text.length > PROJECT_SOURCE_LIMITS.maxCharactersPerDocument) {
-    return failure(name, 'too_large', 'The file exceeds the maximum source size.');
-  }
 
   const ext = extname(name).toLowerCase();
   return {

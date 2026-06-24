@@ -364,10 +364,17 @@ function LiveIndicator({ paused }: { paused: boolean }): JSX.Element {
 function MicChip({ mic }: { mic: OperatorSessionSnapshot['mic'] }): JSX.Element {
   const tone: StatusTone = mic.gate === 'active' ? 'success' : mic.gate === 'armed' ? 'pending' : 'neutral';
   const label = mic.gate === 'active' ? 'Mic on' : mic.gate === 'armed' ? 'Mic ready' : 'Mic off';
+  // Restrained live level — only while the mic is open. level is normalised 0..1;
+  // a light curve keeps quiet speech visible without the bar pinning to the top.
+  const open = mic.gate === 'active';
+  const fill = open ? Math.min(1, Math.max(0, mic.level)) ** 0.7 : 0;
   return (
     <span className={styles.chip} title={mic.deviceLabel ? `${label} · ${mic.deviceLabel}` : label}>
       <StatusIcon tone={tone} label={label} size={13} />
       <span className={styles.chipLabel}>Mic</span>
+      <span className={styles.micLevel} data-open={open || undefined} aria-hidden>
+        <span className={styles.micLevelFill} style={{ transform: `scaleY(${0.12 + fill * 0.88})` }} />
+      </span>
     </span>
   );
 }
@@ -470,13 +477,18 @@ function Topics({ items }: { items: PublicCoverageItem[] }): JSX.Element | null 
         <div className={styles.topicsBarFill} style={{ width: `${(covered / items.length) * 100}%` }} />
       </div>
       <ul className={styles.topicsList}>
-        {shown.map((item) => (
-          <li key={item.id} className={styles.topicItem}>
-            <StatusIcon tone={COVERAGE_TONE[item.status]} label={COVERAGE_WORD[item.status]} size={13} />
-            <span className={styles.topicLabel}>{item.label}</span>
-            <span className={styles.topicStatus}>{COVERAGE_WORD[item.status]}</span>
-          </li>
-        ))}
+        {shown.map((item) => {
+          const inProgress = item.status === 'partial';
+          return (
+            <li key={item.id} className={styles.topicItem} data-current={inProgress || undefined}>
+              <span className={styles.topicMark} data-current={inProgress || undefined}>
+                <StatusIcon tone={COVERAGE_TONE[item.status]} label={COVERAGE_WORD[item.status]} size={13} />
+              </span>
+              <span className={styles.topicLabel}>{item.label}</span>
+              <span className={styles.topicStatus}>{COVERAGE_WORD[item.status]}</span>
+            </li>
+          );
+        })}
       </ul>
       {items.length > shown.length || expanded ? (
         <button type="button" className={styles.topicsToggle} onClick={() => setExpanded((prev) => !prev)}>

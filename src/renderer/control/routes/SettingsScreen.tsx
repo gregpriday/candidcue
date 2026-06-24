@@ -317,6 +317,9 @@ function ProviderCard({
         : result && !result.ok
           ? { tone: 'danger', label: 'Needs attention' }
           : { tone: 'accent', label: 'Configured' };
+  // The resting connected state reads as a quiet dot + label so the name line
+  // stays calm; louder/transient states keep the filled StatusPill.
+  const isConnected = status.tone === 'success';
 
   return (
     <section className={styles.providerCard}>
@@ -327,7 +330,14 @@ function ProviderCard({
         <div className={styles.providerCopy}>
           <div className={styles.providerNameRow}>
             <h2>{title}</h2>
-            <StatusPill tone={status.tone}>{status.label}</StatusPill>
+            {isConnected ? (
+              <span className={styles.connectedTag}>
+                <span className={styles.connectedDot} aria-hidden />
+                Connected
+              </span>
+            ) : (
+              <StatusPill tone={status.tone}>{status.label}</StatusPill>
+            )}
           </div>
           <p>{description}</p>
         </div>

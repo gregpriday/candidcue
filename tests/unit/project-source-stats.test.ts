@@ -20,75 +20,56 @@ function draft(partial: Partial<SourceDraft> & { key: string }): SourceDraft {
 }
 
 describe('computeSourceLibraryStats', () => {
-  it('sums characters and reports an ok budget under the soft threshold', () => {
+  it('sums characters and document count and is saveable by default', () => {
     const stats = computeSourceLibraryStats([
       draft({ key: 'p', kind: 'primary', content: 'abc' }),
       draft({ key: 'a', content: 'de' }),
     ]);
     expect(stats.totalCharacters).toBe(5);
     expect(stats.documentCount).toBe(2);
-    expect(stats.budget).toBe('ok');
-    expect(stats.remainingCharacters).toBe(L.maxTotalCharacters - 5);
+    expect(stats.primaryEmpty).toBe(false);
+    expect(stats.blockers).toHaveLength(0);
     expect(canSaveSources(stats)).toBe(true);
   });
 
-  it('flags the budget as approaching at the soft warning threshold', () => {
-    // Three docs of 80k = 240k total, each under the 100k per-doc cap.
-    const chunk = L.softWarningTotalCharacters / 3;
-    expect(Number.isInteger(chunk) && chunk <= L.maxCharactersPerDocument).toBe(true);
+  it('reports primary emptiness (blocks prepare, not save)', () => {
     const stats = computeSourceLibraryStats([
-      draft({ key: 'p', kind: 'primary', content: 'x'.repeat(chunk) }),
-      draft({ key: 'a', content: 'y'.repeat(chunk) }),
-      draft({ key: 'b', content: 'z'.repeat(chunk) }),
+      draft({ key: 'p', kind: 'primary', content: '   ' }),
+      draft({ key: 'a', content: 'x' }),
     ]);
-    expect(stats.totalCharacters).toBe(L.softWarningTotalCharacters);
-    expect(stats.budget).toBe('approaching');
-    // soft warning is still saveable — only the hard cap blocks.
-    expect(canSaveSources(stats)).toBe(true);
-  });
-
-  it('blocks a save when the aggregate exceeds the hard cap', () => {
-    // Four 80k docs = 320k aggregate; each stays under the per-doc cap, so the
-    // only blocker is the aggregate one (not a per-document overflow).
-    const stats = computeSourceLibraryStats([
-      draft({ key: 'p', kind: 'primary', content: 'x'.repeat(80_000) }),
-      draft({ key: 'a', content: 'y'.repeat(80_000) }),
-      draft({ key: 'b', content: 'z'.repeat(80_000) }),
-      draft({ key: 'c', content: 'w'.repeat(80_000) }),
-    ]);
-    expect(stats.totalCharacters).toBe(320_000);
-    expect(stats.budget).toBe('over');
-    expect(stats.remainingCharacters).toBe(0);
-    expect(stats.blockers.map((b) => b.code)).toEqual(['total_over_limit']);
-    expect(canSaveSources(stats)).toBe(false);
-  });
-
-  it('blocks a save when a single document exceeds the per-document cap', () => {
-    const stats = computeSourceLibraryStats([
-      draft({ key: 'p', kind: 'primary', content: 'x'.repeat(L.maxCharactersPerDocument + 1) }),
-    ]);
-    expect(stats.perDocument[0]?.overCharacterLimit).toBe(true);
-    expect(stats.blockers.map((b) => b.code)).toContain('document_over_limit');
-    expect(canSaveSources(stats)).toBe(false);
-  });
-
-  it('reports the document limit and primary emptiness', () => {
-    const atLimit = Array.from({ length: L.maxDocuments }, (_, i) =>
-      draft({ key: `k${i}`, kind: i === 0 ? 'primary' : 'reference', content: i === 0 ? '' : 'x' }),
-    );
-    const stats = computeSourceLibraryStats(atLimit);
-    expect(stats.atDocumentLimit).toBe(true);
     expect(stats.primaryEmpty).toBe(true);
-    // primaryEmpty blocks prepare, not save.
+    // An empty primary still saves; it only blocks preparing the interview.
     expect(canSaveSources(stats)).toBe(true);
   });
 
-  it('blocks a save when more than the max documents are present', () => {
-    const tooMany = Array.from({ length: L.maxDocuments + 1 }, (_, i) =>
+  it('does not cap content size — a very large aggregate stays saveable', () => {
+    const big = 'x'.repeat(L.maxCharactersPerDocument * 2);
+    const stats = computeSourceLibraryStats([
+      draft({ key: 'p', kind: 'primary', content: big }),
+      draft({ key: 'a', content: big }),
+      draft({ key: 'b', content: big }),
+    ]);
+    expect(stats.totalCharacters).toBe(big.length * 3);
+    expect(stats.blockers).toHaveLength(0);
+    expect(canSaveSources(stats)).toBe(true);
+  });
+
+  it('does not cap the reference count', () => {
+    const many = Array.from({ length: L.maxDocuments + 25 }, (_, i) =>
       draft({ key: `k${i}`, kind: i === 0 ? 'primary' : 'reference', content: 'x' }),
     );
-    const stats = computeSourceLibraryStats(tooMany);
-    expect(stats.blockers.map((b) => b.code)).toContain('too_many_documents');
+    const stats = computeSourceLibraryStats(many);
+    expect(stats.documentCount).toBe(L.maxDocuments + 25);
+    expect(stats.blockers).toHaveLength(0);
+    expect(canSaveSources(stats)).toBe(true);
+  });
+
+  it('blocks a save when a title exceeds the title-length limit', () => {
+    const stats = computeSourceLibraryStats([
+      draft({ key: 'p', kind: 'primary', content: 'x', title: 'x'.repeat(L.maxTitleCharacters + 1) }),
+    ]);
+    expect(stats.perDocument[0]?.titleTooLong).toBe(true);
+    expect(stats.blockers.map((b) => b.code)).toEqual(['title_too_long']);
     expect(canSaveSources(stats)).toBe(false);
   });
 });

@@ -3,7 +3,6 @@ import type { ProjectSummary, ProjectPlanState } from '@shared/domain';
 import type { Navigator, Route } from '../app';
 import { Button } from '../components/Button';
 import { StatusPill, type StatusTone } from '../components/StatusPill';
-import { ListRow } from '../components/ListRow';
 import { Icon } from '../components/Icon';
 import { PageHeader } from '../components/PageHeader';
 import { describeError } from '../lib/errors';
@@ -18,10 +17,10 @@ interface HomeScreenProps {
 const DEFAULT_CHARACTER_ID = 'mira';
 
 const PLAN_PILL: Record<ProjectPlanState, { tone: StatusTone; text: string }> = {
-  ready: { tone: 'success', text: 'Ready to interview' },
-  stale: { tone: 'warning', text: 'Needs an update' },
+  ready: { tone: 'success', text: 'Ready' },
+  stale: { tone: 'warning', text: 'Update needed' },
   preparing: { tone: 'accent', text: 'Preparing' },
-  failed: { tone: 'danger', text: 'Preparation failed' },
+  failed: { tone: 'danger', text: "Couldn't prepare" },
   unprepared: { tone: 'neutral', text: 'Draft' },
 };
 
@@ -126,25 +125,30 @@ export function HomeScreen({ nav }: HomeScreenProps): JSX.Element {
             {rest.length > 0 && (
               <section className={styles.recent}>
                 <h2 className={styles.recentTitle}>Recent interviews</h2>
+                {/* One grouped surface: rows share an outline and are split by
+                    hairlines; the whole row lights up on hover (no per-row card). */}
                 <ul className={styles.list}>
                   {rest.map((project) => {
                     const pill = PLAN_PILL[project.planState];
                     const action = actionFor(project, nav);
                     const title = project.title.trim() === '' ? 'Untitled interview' : project.title;
                     return (
-                      <li key={project.id}>
-                        <ListRow
-                          title={title}
-                          meta={metaFor(project)}
-                          onOpen={() => nav.go({ name: 'project', projectId: project.id })}
-                          ariaLabel={`Open ${title}`}
-                          status={<StatusPill tone={pill.tone}>{pill.text}</StatusPill>}
-                          action={
-                            <Button variant="secondary" onClick={action.run}>
-                              {action.label}
-                            </Button>
-                          }
-                        />
+                      <li key={project.id} className={styles.row}>
+                        <button
+                          type="button"
+                          className={styles.rowMain}
+                          onClick={() => nav.go({ name: 'project', projectId: project.id })}
+                          aria-label={`Open ${title}`}
+                        >
+                          <span className={styles.rowTitle}>{title}</span>
+                          <span className={styles.rowMeta}>{metaFor(project)}</span>
+                        </button>
+                        <div className={styles.rowTrailing}>
+                          <StatusPill tone={pill.tone}>{pill.text}</StatusPill>
+                          <Button variant="secondary" onClick={action.run}>
+                            {action.label}
+                          </Button>
+                        </div>
                       </li>
                     );
                   })}

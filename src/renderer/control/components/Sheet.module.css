@@ -6,9 +6,13 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-6);
+  /* Backdrop dim — a neutral scrim behind the centered modal, not a themable surface. */
   background: rgba(8, 9, 12, 0.5);
+  animation: sheetOverlayIn var(--dur-med) var(--ease-out);
 }
 
+/* A grouped surface that floats on a shadow: a subtle hairline edge, not a
+   firm outline — the elevation does the separating. */
 .sheet {
   display: flex;
   flex-direction: column;
@@ -20,6 +24,28 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-pop);
+  /* Restrained entrance: fade with a small rise, no springy scale. */
+  animation: sheetIn var(--dur-med) var(--ease-out);
+}
+
+@keyframes sheetOverlayIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheetIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .heading {

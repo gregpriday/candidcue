@@ -266,25 +266,9 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
             : { label: 'Check setup', onClick: () => void handlePrepare(), disabled: false };
 
   return (
-    <>
+    <div className={route.screen}>
       <PageHeader title="Get ready" onBack={() => nav.go({ name: 'project', projectId })} backLabel="Interview" />
-      <div className={styles.preflight}>
-        <div className={styles.previewCol}>
-          <StagePreview
-            posterUrl={posterUrl}
-            captionsEnabled={captionsEnabled}
-            caption="Your interview is ready."
-            mirror={mirrorStage}
-            zoom={zoom}
-            verticalOffsetPercent={verticalOffsetPercent}
-            status="Stage preview"
-          />
-          <p className={styles.privacy}>
-            CandidCue does not record your camera. Raw microphone audio is not saved. Interview text is processed
-            using your configured providers.
-          </p>
-        </div>
-
+      <div className={`${route.screenBody} ${styles.preflight}`}>
         <div className={styles.setupCol}>
           {error !== null && (
             <p className={route.error} role="alert">
@@ -436,18 +420,38 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
               ))}
             </ul>
           )}
+        </div>
 
-          <div className={styles.actionRow} aria-live="polite">
-            <Button variant="primary" onClick={primary.onClick} disabled={primary.disabled}>
-              {primary.label}
-            </Button>
-            {permissionState === 'granted' && !canBegin && checks.length > 0 && !preparing && (
-              <span className={route.sectionHint}>Resolve the items above to begin.</span>
-            )}
-          </div>
+        <div className={styles.previewCol}>
+          <StagePreview
+            posterUrl={posterUrl}
+            captionsEnabled={captionsEnabled}
+            caption="Your interview is ready."
+            mirror={mirrorStage}
+            zoom={zoom}
+            verticalOffsetPercent={verticalOffsetPercent}
+            status="Stage preview"
+          />
+          <p className={styles.privacy}>
+            CandidCue does not record your camera. Raw microphone audio is not saved. Interview text is processed
+            using your configured providers.
+          </p>
         </div>
       </div>
-    </>
+
+      <div className={route.actionBar}>
+        <div className={`${route.actionBarInner} ${route.actionBarSplit}`} aria-live="polite">
+          <span className={route.sectionHint}>
+            {permissionState === 'granted' && !canBegin && checks.length > 0 && !preparing
+              ? 'Resolve the items above to begin.'
+              : ''}
+          </span>
+          <Button variant="primary" onClick={primary.onClick} disabled={primary.disabled}>
+            {primary.label}
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
 

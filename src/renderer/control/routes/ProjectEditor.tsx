@@ -20,6 +20,7 @@ import { Button } from '../components/Button';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
 import { StatusPill, type StatusTone as PillTone } from '../components/StatusPill';
 import { PageHeader } from '../components/PageHeader';
+import { Icon } from '../components/Icon';
 import { Section } from '../components/Section';
 import { SegmentedControl } from '../components/SegmentedControl';
 import { ProgressSteps, type ProgressStep } from '../components/ProgressSteps';
@@ -140,7 +141,9 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   const [warnings, setWarnings] = useState<string[] | null>(null);
   const [planState, setPlanState] = useState<ProjectPlanState>('unprepared');
   const [dirty, setDirty] = useState(false);
-  const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
+  // A momentary "Saved just now" pulse in the header right after an actual save;
+  // the persistent quiet state ("All changes saved") lives only in the footer.
+  const [justSaved, setJustSaved] = useState(false);
   const [step, setStep] = useState<EditorStep>('brief');
   const [sessionHistory, setSessionHistory] = useState<InterviewSession[] | null>(null);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
@@ -168,7 +171,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     let cancelled = false;
     setLoadError(null);
     setDirty(false);
-    setLastSavedAt(null);
+    setJustSaved(false);
     setStep('brief');
     setSessionHistory(null);
     setSessionsError(null);
@@ -196,7 +199,6 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
         }
         setForm(aggregateToForm(aggregate));
         setPlanState(aggregate.planState);
-        setLastSavedAt(null);
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -245,7 +247,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
       setForm(aggregateToForm(aggregate));
       setPlanState(aggregate.planState);
       setDirty(false);
-      setLastSavedAt(new Date().toISOString());
+      setJustSaved(true);
       return aggregate.project.id;
     } catch (err: unknown) {
       setActionError(describeError(err));
@@ -294,6 +296,16 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     }, 900);
     return () => window.clearTimeout(timer);
   }, [dirty, form, handleSave, preparing, saving]);
+
+  // Let the header's "Saved just now" pulse fade back to quiet a moment after the
+  // save lands, so the persistent confirmation reads only once in the footer.
+  useEffect(() => {
+    if (!justSaved) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setJustSaved(false), 2400);
+    return () => window.clearTimeout(timer);
+  }, [justSaved]);
 
   useEffect(() => {
     if (step !== 'ready' || !savedId) {
@@ -352,43 +364,51 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   }
 
   const canSave = canSaveSources(sourceStats);
-  const readyToStart = planState === 'ready' && !dirty;
   const pill = PLAN_PILL[planState];
-  const saveStatus = actionError
+  // The footer carries the persistent quiet save state; the header only flashes a
+  // momentary "Saved just now" right after a save, then falls back to nothing.
+  const footerStatus = actionError
     ? 'Save error'
     : saving
       ? 'Saving…'
       : dirty
         ? 'Unsaved changes'
-        : lastSavedAt
+        : savedId
+          ? 'All changes saved'
+          : 'Not saved yet';
+  const headerStatus = actionError
+    ? 'Save error'
+    : saving
+      ? 'Saving…'
+      : dirty
+        ? 'Unsaved changes'
+        : justSaved
           ? 'Saved just now'
-          : savedId
-            ? 'Saved'
-            : 'Not saved yet';
+          : undefined;
   const prepareBlocker = !canSave
     ? sourceStats.blockers[0]?.message ?? 'Resolve reference-material issues before preparing.'
     : sourceStats.primaryEmpty
       ? 'Add content to the primary reference before preparing.'
       : null;
-  const shouldStart = readyToStart && savedId !== null;
-  const primaryLabel = shouldStart
-    ? 'Start interview'
-    : preparing || planState === 'preparing'
+  // Preparation (the footer action) builds or refreshes the interview plan from
+  // the reference material. Starting is a separate, always-available action.
+  const prepLabel =
+    preparing || planState === 'preparing'
       ? 'Preparing…'
       : planState === 'failed'
         ? 'Retry preparation'
         : planState === 'ready' || planState === 'stale' || dirty
           ? 'Update interview'
           : 'Prepare interview';
-  const primaryDisabled = shouldStart
-    ? false
-    : preparing || saving || prepareBlocker !== null || planState === 'preparing';
-  const runPrimaryAction = (): void => {
-    if (shouldStart) {
+  const prepDisabled = preparing || saving || prepareBlocker !== null || planState === 'preparing';
+  // An interview is technically startable the moment it's saved — even an
+  // unprepared draft can launch (it just makes for a weaker interview). So the
+  // header's Start action stays available instead of gating behind preparation.
+  const canStartNow = savedId !== null;
+  const startInterview = (): void => {
+    if (savedId !== null) {
       nav.go({ name: 'preflight', projectId: savedId });
-      return;
     }
-    void handlePrepare();
   };
 
   const stepIndex = STEPS.findIndex((s) => s.key === step);
@@ -415,18 +435,61 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   const briefComplete = form.title.trim() !== '';
   const interviewerName = selectedCharacter?.displayName ?? 'Mira';
 
+  // A step reads as complete only once its own requirement is satisfied and it
+  // sits behind the current step — so the stepper marks real progress, not just
+  // position. Style and Ready carry no gate, so position alone settles them.
+  const isStepComplete = (key: EditorStep): boolean => {
+    const index = STEPS.findIndex((s) => s.key === key);
+    if (index >= stepIndex) {
+      return false;
+    }
+    if (key === 'brief') {
+      return briefComplete;
+    }
+    if (key === 'reference') {
+      return !sourceStats.primaryEmpty;
+    }
+    return true;
+  };
+
   return (
-    <>
+    <div className={route.screen}>
       <PageHeader
         title={form.title.trim() || (savedId ? 'Untitled interview' : 'New interview')}
-        meta={saveStatus}
+        leading={
+          selectedCharacter?.profileImageUrl ? (
+            <img
+              className={styles.headerAvatar}
+              src={selectedCharacter.profileImageUrl}
+              alt={`Interviewer: ${interviewerName}`}
+            />
+          ) : undefined
+        }
+        meta={
+          <span className={styles.headerSub}>
+            <StatusPill tone={pill.tone}>{pill.label}</StatusPill>
+            {headerStatus != null && <span className={styles.headerFlash}>{headerStatus}</span>}
+          </span>
+        }
         onBack={requestBack}
         backLabel="Interviews"
-        status={<StatusPill tone={pill.tone}>{pill.label}</StatusPill>}
+        actions={
+          <Button
+            variant="primary"
+            className={styles.startButton}
+            onClick={startInterview}
+            disabled={!canStartNow}
+            title={canStartNow ? 'Start the interview now' : 'Save the interview before starting'}
+          >
+            <Icon name="play" size={16} />
+            Start interview
+          </Button>
+        }
       />
 
-      <div className={styles.flowBody}>
-        <ProgressSteps steps={STEPS} current={step} onSelect={setStep} />
+      <div className={route.screenBody}>
+        <div className={styles.flowBody}>
+          <ProgressSteps steps={STEPS} current={step} isComplete={isStepComplete} onSelect={setStep} />
 
         {loadError !== null && (
           <p className={route.error} role="alert">
@@ -635,28 +698,31 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
             )}
           </div>
         )}
+        </div>
       </div>
 
-      <div className={styles.stepBar}>
-        <span className={styles.stepStatus}>{saveStatus}</span>
-        <div className={styles.stepActions}>
-          <Button variant="ghost" onClick={goBack}>
-            {stepIndex <= 0 ? 'Interviews' : 'Back'}
-          </Button>
-          {onLastStep ? (
-            <Button
-              variant="primary"
-              onClick={runPrimaryAction}
-              disabled={primaryDisabled}
-              title={prepareBlocker ?? (shouldStart ? 'Start a session' : 'Prepare the interview from these sources')}
-            >
-              {primaryLabel}
+      <div className={`${route.actionBar} ${route.actionBarSplit}`}>
+        <div className={`${route.actionBarInner} ${route.actionBarSplit}`}>
+          <span className={styles.stepStatus}>{footerStatus}</span>
+          <div className={styles.stepActions}>
+            <Button variant="ghost" onClick={goBack}>
+              {stepIndex <= 0 ? 'Interviews' : 'Back'}
             </Button>
-          ) : (
-            <Button variant="primary" onClick={goNext}>
-              Continue
-            </Button>
-          )}
+            {onLastStep ? (
+              <Button
+                variant="primary"
+                onClick={() => void handlePrepare()}
+                disabled={prepDisabled}
+                title={prepareBlocker ?? 'Prepare the interview from these sources'}
+              >
+                {prepLabel}
+              </Button>
+            ) : (
+              <Button variant="primary" onClick={goNext}>
+                Continue
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -677,7 +743,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
           </>
         }
       />
-    </>
+    </div>
   );
 }
 

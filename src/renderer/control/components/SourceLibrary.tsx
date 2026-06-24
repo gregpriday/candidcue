@@ -5,7 +5,6 @@ import { SourceList, type SourceListItem } from './SourceList';
 import { SourceEditorPane } from './SourceEditorPane';
 import { describeError } from '../lib/errors';
 import { nextDraftKey } from '../lib/draft-key';
-import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 import {
   addBlankSource,
   addImportedSources,
@@ -40,7 +39,6 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
   const [query, setQuery] = useState('');
   const [importing, setImporting] = useState(false);
   const [importFailures, setImportFailures] = useState<MarkdownImportFailure[]>([]);
-  const [importNotice, setImportNotice] = useState<string | null>(null);
 
   const stats = useMemo(() => computeSourceLibraryStats(drafts), [drafts]);
   const statByKey = useMemo(
@@ -64,7 +62,6 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
           title: draft.title,
           isPrimary: index === 0,
           characters: stat?.characters ?? draft.content.length,
-          overLimit: stat?.overCharacterLimit ?? false,
           empty: stat?.empty ?? draft.content.trim().length === 0,
         };
       }),
@@ -117,21 +114,13 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
   const importFiles = useCallback(async () => {
     setImporting(true);
     setImportFailures([]);
-    setImportNotice(null);
     try {
       const result = await window.candidcue.projects.importMarkdownDocuments();
       if (result === null) {
         return; // dialog cancelled
       }
-      const remainingSlots = Math.max(0, PROJECT_SOURCE_LIMITS.maxDocuments - drafts.length);
-      let toAdd = result.documents;
-      let skipped = 0;
-      if (toAdd.length > remainingSlots) {
-        skipped = toAdd.length - remainingSlots;
-        toAdd = toAdd.slice(0, remainingSlots);
-      }
-      if (toAdd.length > 0) {
-        const { drafts: next, addedKeys } = addImportedSources(drafts, toAdd, nextDraftKey);
+      if (result.documents.length > 0) {
+        const { drafts: next, addedKeys } = addImportedSources(drafts, result.documents, nextDraftKey);
         onChange(next);
         const firstAdded = addedKeys[0];
         if (firstAdded) {
@@ -139,11 +128,6 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
         }
       }
       setImportFailures(result.failures);
-      if (skipped > 0) {
-        setImportNotice(
-          `${skipped} file(s) skipped — an interview can hold at most ${PROJECT_SOURCE_LIMITS.maxDocuments} references.`,
-        );
-      }
     } catch (err: unknown) {
       onImportError?.(describeError(err));
     } finally {
@@ -153,36 +137,28 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
 
   const dismissImportResult = useCallback(() => {
     setImportFailures([]);
-    setImportNotice(null);
   }, []);
 
-  const hasImportResult = importFailures.length > 0 || importNotice !== null;
+  const hasImportResult = importFailures.length > 0;
 
   return (
     <section className={styles.library}>
       <div className={styles.toolbar}>
         <div className={styles.toolbarCopy}>
-          <h2>
-            Reference material <span>· {stats.documentCount} of {PROJECT_SOURCE_LIMITS.maxDocuments}</span>
-          </h2>
+          <h2>Reference material</h2>
           <p className={styles.toolbarHint}>
             The main material and any supporting context Mira can draw on.
           </p>
         </div>
         <div className={styles.toolbarActions}>
-          <Button
-            variant="secondary"
-            onClick={addBlank}
-            disabled={stats.atDocumentLimit}
-            title={stats.atDocumentLimit ? 'Reference limit reached' : 'Add a blank reference'}
-          >
+          <Button variant="secondary" onClick={addBlank} title="Add a blank reference">
             <Icon name="plus" size={15} /> Add reference
           </Button>
           <Button
             variant="ghost"
             onClick={() => void importFiles()}
-            disabled={stats.atDocumentLimit || importing}
-            title={stats.atDocumentLimit ? 'Reference limit reached' : 'Import Markdown files'}
+            disabled={importing}
+            title="Import Markdown files"
           >
             <Icon name="upload" size={15} /> {importing ? 'Importing…' : 'Import Markdown'}
           </Button>
@@ -192,7 +168,6 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
       {hasImportResult && (
         <div className={styles.importResult} role="status">
           <div className={styles.importResultBody}>
-            {importNotice && <p className={styles.importNotice}>{importNotice}</p>}
             {importFailures.length > 0 && (
               <>
                 <strong>
@@ -229,7 +204,6 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
           onSelect={setSelectedKey}
           onMakePrimary={makePrimary}
           onReorder={reorder}
-          budget={stats.budget}
           totalCharacters={stats.totalCharacters}
           documentCount={stats.documentCount}
         />

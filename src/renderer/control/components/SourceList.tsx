@@ -1,8 +1,6 @@
 import { useMemo } from 'react';
 import type { DragEvent, KeyboardEvent } from 'react';
 import { Icon } from './Icon';
-import type { SourceBudgetLevel } from '@shared/project-source-stats';
-import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 import styles from './SourceLibrary.module.css';
 
 export interface SourceListItem {
@@ -10,7 +8,6 @@ export interface SourceListItem {
   title: string;
   isPrimary: boolean;
   characters: number;
-  overLimit: boolean;
   empty: boolean;
 }
 
@@ -23,7 +20,6 @@ interface SourceListProps {
   onMakePrimary: (key: string) => void;
   /** Move a reference to an absolute index (references occupy 1..n-1). */
   onReorder: (key: string, targetIndex: number) => void;
-  budget: SourceBudgetLevel;
   totalCharacters: number;
   documentCount: number;
 }
@@ -41,7 +37,6 @@ export function SourceList({
   onSelect,
   onMakePrimary,
   onReorder,
-  budget,
   totalCharacters,
   documentCount,
 }: SourceListProps): JSX.Element {
@@ -87,8 +82,7 @@ export function SourceList({
     }
   };
 
-  const budgetLabel = `${totalCharacters.toLocaleString()} / ${PROJECT_SOURCE_LIMITS.maxTotalCharacters.toLocaleString()}`;
-  const budgetClass = [styles.budget, styles[`budget_${budget}`]].filter(Boolean).join(' ');
+  const referenceLabel = `${documentCount.toLocaleString()} ${documentCount === 1 ? 'reference' : 'references'}`;
 
   return (
     <div className={styles.list}>
@@ -158,11 +152,13 @@ export function SourceList({
                   <span className={styles.optionBody}>
                     <span className={styles.optionTitle}>{displayTitle}</span>
                     <span className={styles.optionMeta}>
-                      {item.isPrimary && <span className={styles.primaryTag}>primary</span>}
-                      <span className={item.overLimit ? styles.optionCharsOver : styles.optionChars}>
-                        {item.characters.toLocaleString()} chars
-                      </span>
-                      {item.empty && <span className={styles.optionEmpty}>empty</span>}
+                      {item.empty ? (
+                        <span className={styles.optionEmpty}>Empty</span>
+                      ) : (
+                        <span className={styles.optionChars}>
+                          {item.characters.toLocaleString()} chars
+                        </span>
+                      )}
                     </span>
                   </span>
 
@@ -205,11 +201,12 @@ export function SourceList({
       </div>
 
       <div className={styles.footer}>
-        <span className={styles.docCount}>
-          {documentCount} / {PROJECT_SOURCE_LIMITS.maxDocuments} references
-        </span>
-        <span className={budgetClass} title="Total characters across all reference material">
-          {budgetLabel}
+        <span className={styles.docCount}>{referenceLabel}</span>
+        <span
+          className={styles.totalChars}
+          title="Total characters across all reference material"
+        >
+          {totalCharacters.toLocaleString()} characters
         </span>
       </div>
     </div>

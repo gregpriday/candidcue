@@ -54,6 +54,7 @@
 
   --ls-caps: 0.06em;
   --ls-tight: 0;
+  --ls-title: -0.018em; /* page titles — tightened editorial tracking */
   --ls-prose: 0.01em;
   --prose-leading: 1.6;
 
@@ -68,27 +69,34 @@
   --prose-measure-narrow: 52ch;
 
   /* ---- Geometry ---- */
-  --radius-sm: 8px; /* controls */
-  --radius-md: 12px; /* cards, dialogs */
+  --radius-sm: 10px; /* controls */
+  --radius-md: 14px; /* cards, dialogs */
   --radius-lg: 16px; /* stage previews, large visual areas */
+  --radius-pill: 999px; /* status capsules, toggles */
 
   --titlebar-h: 48px;
   --toolbar-h: 56px; /* per-screen page header */
   --panel-header-h: 36px;
   --row-h: 40px;
-  --sidebar-w: 216px;
+  --sidebar-w: 224px;
   --rail-w: 0px;
   --statusbar-h: 0px;
   --control-h: 40px; /* standard control height */
   --control-h-sm: 32px;
-  --control-h-lg: 44px; /* primary & destructive actions */
+  --control-h-lg: 42px; /* primary & destructive actions */
+
+  /* Shared horizontal page inset — one rhythm across headers, page bodies,
+     steppers, editor/review content, and bottom action bars. */
+  --page-x: var(--space-8); /* 32px */
+  --page-y: var(--space-7); /* 28px */
 
   /* ---- Motion: three durations, two curves ----
      Enough to feel responsive; never decorative. Honor the reduced-motion
      guard below. Legacy easing names are aliased so nothing breaks. */
+  --dur-press: 80ms; /* button depress */
   --dur-fast: 120ms; /* hover / press */
-  --dur-med: 180ms; /* selection / disclosure */
-  --dur-slow: 240ms; /* screen / readiness transition */
+  --dur-med: 160ms; /* selection / disclosure */
+  --dur-slow: 200ms; /* screen / readiness transition */
   --dur-slower: 240ms;
   --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
   --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
@@ -102,7 +110,8 @@
      only — every control / label / metric stays in the UI font. */
   --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
-  --font-serif: 'Source Serif 4', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+  --font-serif: ui-serif, 'Source Serif 4', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia,
+    serif;
   --font-prose: var(--font-ui);
 
   /* Decorative atmosphere is gone; tokens kept as no-ops so stray references
@@ -129,7 +138,7 @@
   --bg-elevated: #20242c;
   --bg-sunken: #0d0f13;
   --bg-hover: #242932;
-  --bg-selected: rgba(125, 134, 246, 0.16);
+  --bg-selected: rgba(224, 138, 99, 0.16);
 
   /* Text */
   --text-primary: #f5f6f8;
@@ -139,16 +148,18 @@
 
   /* Lines */
   --border: #303641;
-  --border-strong: #474e5b;
+  --border-control: #3b424e; /* resting control outline (strengthens on hover/focus) */
+  --border-strong: #474e5b; /* emphasis only: hover, focus, active drag */
   --border-faint: #262b33;
   --border-seam: #262b33;
 
-  /* Accent + status */
-  --accent: #7d86f6;
-  --accent-strong: #98a0ff;
-  --accent-contrast: #0f1115;
-  --accent-soft: #292d49;
-  --focus: #98a0ff;
+  /* Accent + status — terracotta "clay", nudged toward amber so it stays clearly
+     apart from the on-air red (--live) and the danger red on dark surfaces. */
+  --accent: #e08a63;
+  --accent-strong: #ec9d7a;
+  --accent-contrast: #241510;
+  --accent-soft: #3a2018;
+  --focus: #ec9d7a;
   --success: #55b894;
   --success-soft: rgba(85, 184, 148, 0.16);
   --warning: #dea94d;
@@ -183,11 +194,11 @@
   --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.38);
 
   /* Empty-state invitations */
-  --empty-bg: rgba(125, 134, 246, 0.08);
+  --empty-bg: rgba(224, 138, 99, 0.08);
   --empty-border: #303641;
   --empty-text: var(--text-secondary);
   --empty-text-muted: var(--text-muted);
-  --empty-hover-bg: rgba(125, 134, 246, 0.12);
+  --empty-hover-bg: rgba(224, 138, 99, 0.12);
   --empty-hover-border: #474e5b;
 
   /* Warm reading text (transcripts / source prose) */
@@ -195,7 +206,7 @@
   --prose-secondary-warm: #c5ccd8;
   --prose-muted-warm: #9aa5b5;
 
-  --selection: rgba(125, 134, 246, 0.22);
+  --selection: rgba(224, 138, 99, 0.22);
 }
 
 /* ============================================================================
@@ -214,7 +225,7 @@
   --bg-elevated: #ffffff;
   --bg-sunken: #f1eee8;
   --bg-hover: #ece8e1;
-  --bg-selected: rgba(91, 95, 199, 0.1);
+  --bg-selected: rgba(183, 94, 59, 0.1);
 
   --text-primary: #18191d;
   --text-secondary: #5d626c;
@@ -222,15 +233,18 @@
   --text-faint: #868b94;
 
   --border: #dedad3; /* decorative divider */
-  --border-strong: #99948c; /* control boundary */
+  --border-control: #c7c1b6; /* resting control outline — medium-light warm gray */
+  --border-strong: #99948c; /* emphasis only: hover, focus, active drag */
   --border-faint: #e7e3dc;
   --border-seam: #e7e3dc;
 
-  --accent: #5b5fc7;
-  --accent-strong: #4b4fb0;
+  /* Terracotta "clay". --accent is AA-legible as text on the warm canvas
+     (~4.5:1); --accent-strong is the darker hover/press + safest text weight. */
+  --accent: #b75e3b;
+  --accent-strong: #9c4a2c;
   --accent-contrast: #ffffff;
-  --accent-soft: #eeedff;
-  --focus: #5b5fc7;
+  --accent-soft: #f6e7df;
+  --focus: #b75e3b;
   /* Status foregrounds are darkened from the source palette so 12-13px text on
      the translucent -soft fills clears WCAG AA (the lighter source hues sat
      ~3.8:1 on the warm canvas). */
@@ -262,18 +276,18 @@
   --shadow-transport: 0 -2px 12px rgba(24, 25, 29, 0.05);
   --shadow-pop: 0 12px 32px rgba(24, 25, 29, 0.16), 0 2px 8px rgba(24, 25, 29, 0.08);
 
-  --empty-bg: #f3f2fb;
+  --empty-bg: #faf1ec;
   --empty-border: #dedad3;
   --empty-text: var(--text-secondary);
   --empty-text-muted: var(--text-muted);
-  --empty-hover-bg: #eceafb;
-  --empty-hover-border: #c9c9ee;
+  --empty-hover-bg: #f6e7df;
+  --empty-hover-border: #e6c8b6;
 
   --prose-text-warm: #2a2b30;
   --prose-secondary-warm: #4f535c;
   --prose-muted-warm: #6b707a;
 
-  --selection: rgba(91, 95, 199, 0.16);
+  --selection: rgba(183, 94, 59, 0.16);
 }
 
 /* ---- Base reset ---- */
@@ -317,6 +331,48 @@ body {
 button {
   font: inherit;
   cursor: pointer;
+}
+
+/* Native form controls wear the brand, not the OS accent. Checkboxes/radios on
+   macOS read as native when simply re-tinted; the range slider is fully restyled
+   so no platform thumb or track shows through. (Electron = Chromium, so only the
+   -webkit- pseudo-elements are needed.) */
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--accent);
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--border-control);
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -6px; /* center the 16px thumb over the 4px track */
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-panel);
+  box-shadow: var(--shadow-card);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+input[type='range']:hover::-webkit-slider-thumb {
+  background: var(--accent-strong);
+}
+input[type='range']:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 /* Thin chrome scrollbars. */

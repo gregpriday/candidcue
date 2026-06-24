@@ -5,7 +5,8 @@ import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 /**
  * Cross-document invariants on the authoritative save schema (spec §10.2,
  * §12.2): Markdown-only writes, exactly one primary, unique ids, dense sort
- * order, per-document + aggregate size limits, and title trimming.
+ * order, and title trimming. Content size and reference count are uncapped —
+ * the operator supplies their own material.
  */
 
 function sourceDoc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -65,48 +66,40 @@ describe('saveProjectInputSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it(`accepts ${PROJECT_SOURCE_LIMITS.maxDocuments} documents but rejects one more`, () => {
+  it('does not cap the document count', () => {
     expect(
       saveProjectInputSchema.safeParse(
-        projectInput({ documents: denseDocuments(PROJECT_SOURCE_LIMITS.maxDocuments) }),
+        projectInput({ documents: denseDocuments(PROJECT_SOURCE_LIMITS.maxDocuments + 25) }),
       ).success,
     ).toBe(true);
-    expect(
-      saveProjectInputSchema.safeParse(
-        projectInput({ documents: denseDocuments(PROJECT_SOURCE_LIMITS.maxDocuments + 1) }),
-      ).success,
-    ).toBe(false);
   });
 
-  it('rejects a document over the per-document character limit', () => {
+  it('does not cap per-document content size', () => {
     const result = saveProjectInputSchema.safeParse(
       projectInput({
-        documents: [sourceDoc({ content: 'x'.repeat(PROJECT_SOURCE_LIMITS.maxCharactersPerDocument + 1) })],
+        documents: [sourceDoc({ content: 'x'.repeat(PROJECT_SOURCE_LIMITS.maxCharactersPerDocument * 3) })],
       }),
     );
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
-  it('accepts a document exactly at the per-document limit but rejects one character more', () => {
-    const max = PROJECT_SOURCE_LIMITS.maxCharactersPerDocument;
-    expect(saveProjectInputSchema.safeParse(projectInput({ documents: documentsOfSizes([max]) })).success).toBe(true);
-    expect(
-      saveProjectInputSchema.safeParse(projectInput({ documents: documentsOfSizes([max + 1]) })).success,
-    ).toBe(false);
-  });
-
-  it('accepts an aggregate exactly at the total limit but rejects one character more', () => {
+  it('does not cap aggregate content size', () => {
     const perDoc = PROJECT_SOURCE_LIMITS.maxCharactersPerDocument;
-    const total = PROJECT_SOURCE_LIMITS.maxTotalCharacters;
-    const full = Math.floor(total / perDoc);
-    const remainder = total - full * perDoc;
-    const exact = [...Array(full).fill(perDoc), ...(remainder > 0 ? [remainder] : [])];
-
-    expect(saveProjectInputSchema.safeParse(projectInput({ documents: documentsOfSizes(exact) })).success).toBe(true);
-    // One extra single-character document pushes the aggregate past the cap
-    // while every document stays within the per-document cap.
+    // Three oversize documents put the aggregate well past the former total cap.
     expect(
-      saveProjectInputSchema.safeParse(projectInput({ documents: documentsOfSizes([...exact, 1]) })).success,
+      saveProjectInputSchema.safeParse(
+        projectInput({ documents: documentsOfSizes([perDoc * 2, perDoc * 2, perDoc * 2]) }),
+      ).success,
+    ).toBe(true);
+  });
+
+  it('accepts a title at the length limit but rejects one character longer', () => {
+    const max = PROJECT_SOURCE_LIMITS.maxTitleCharacters;
+    expect(
+      saveProjectInputSchema.safeParse(projectInput({ documents: [sourceDoc({ title: 'x'.repeat(max) })] })).success,
+    ).toBe(true);
+    expect(
+      saveProjectInputSchema.safeParse(projectInput({ documents: [sourceDoc({ title: 'x'.repeat(max + 1) })] })).success,
     ).toBe(false);
   });
 

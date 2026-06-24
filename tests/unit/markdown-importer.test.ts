@@ -61,16 +61,13 @@ describe('decodeMarkdownFile', () => {
     if (isImportFailure(result)) expect(result.code).toBe('contains_nul');
   });
 
-  it('rejects content over the per-document character limit', () => {
-    const big = enc('x'.repeat(PROJECT_SOURCE_LIMITS.maxCharactersPerDocument + 1));
+  it('does not cap decoded content size', () => {
+    const big = enc('x'.repeat(PROJECT_SOURCE_LIMITS.maxCharactersPerDocument * 3));
     const result = decodeMarkdownFile('x.md', big);
-    expect(isImportFailure(result)).toBe(true);
-    if (isImportFailure(result)) expect(result.code).toBe('too_large');
-  });
-
-  it('accepts content exactly at the per-document character limit', () => {
-    const exact = enc('x'.repeat(PROJECT_SOURCE_LIMITS.maxCharactersPerDocument));
-    expect(isImportFailure(decodeMarkdownFile('x.md', exact))).toBe(false);
+    expect(isImportFailure(result)).toBe(false);
+    if (!isImportFailure(result)) {
+      expect(result.characterCount).toBe(PROJECT_SOURCE_LIMITS.maxCharactersPerDocument * 3);
+    }
   });
 
   it('accepts an empty file as an empty document', () => {
@@ -103,12 +100,13 @@ describe('importMarkdownBuffers', () => {
     const result = importMarkdownBuffers([
       { filename: 'one.md', buffer: enc('first') },
       { filename: 'skip.txt', buffer: enc('nope') },
-      { filename: 'big.md', buffer: enc('x'.repeat(PROJECT_SOURCE_LIMITS.maxCharactersPerDocument + 1)) },
+      { filename: 'large.md', buffer: enc('x'.repeat(PROJECT_SOURCE_LIMITS.maxCharactersPerDocument + 1)) },
       { filename: 'two.markdown', buffer: enc('second') },
     ]);
 
-    expect(result.documents.map((d) => d.originalFilename)).toEqual(['one.md', 'two.markdown']);
-    expect(result.failures.map((f) => f.code)).toEqual(['unsupported_extension', 'too_large']);
+    // Only the unsupported extension fails; large content is accepted, not capped.
+    expect(result.documents.map((d) => d.originalFilename)).toEqual(['one.md', 'large.md', 'two.markdown']);
+    expect(result.failures.map((f) => f.code)).toEqual(['unsupported_extension']);
   });
 
   it('preserves selection order for successful documents', () => {

@@ -1,14 +1,23 @@
+/* Two columns on one page inset: LEFT is the setup controls, RIGHT is the
+   sticky stage preview. The extra bottom padding lets the last setup row clear
+   the pinned action bar. */
 .preflight {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
-  gap: var(--space-8);
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.92fr);
+  gap: var(--space-9);
   align-items: start;
-  width: min(100%, 1200px);
-  padding: var(--space-6) var(--space-7) var(--space-9);
+  width: min(100%, 1180px);
+  padding: var(--page-y) var(--page-x) var(--space-10);
 }
-@media (max-width: 920px) {
+@media (max-width: 940px) {
   .preflight {
     grid-template-columns: 1fr;
+    gap: var(--space-7);
+  }
+  /* On a single column the preview leads, then the controls follow. */
+  .previewCol {
+    order: -1;
+    position: static;
   }
 }
 
@@ -30,14 +39,17 @@
 .setupCol {
   display: flex;
   flex-direction: column;
-  gap: var(--space-7);
+  gap: var(--space-8);
   min-width: 0;
 }
 
+/* Pacing choices stay compact and vertical inside the setup column — a
+   constrained stack of cards, never a full-width band. */
 .pacing {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  max-width: 480px;
 }
 
 .checklist {
@@ -74,13 +86,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.actionRow {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
 }
 
 .rangeValue {

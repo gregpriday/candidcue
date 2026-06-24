@@ -25,7 +25,7 @@ const baseTheme = EditorView.theme(
     },
     '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)' },
     '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection':
-      { backgroundColor: 'rgba(143, 167, 255, 0.22)' },
+      { backgroundColor: 'var(--selection)' },
     '.cm-gutters': {
       backgroundColor: 'transparent',
       color: 'var(--prose-muted-warm, var(--text-muted))',
