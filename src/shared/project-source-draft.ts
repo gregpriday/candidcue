@@ -2,18 +2,18 @@
  * Pure, framework-agnostic draft model for the Project Asset Library ("Sources").
  *
  * The renderer edits an ordered array of {@link SourceDraft}s; this module owns
- * every transition (rename, reorder, make-primary, duplicate, remove, import).
- * The list's array order **is** the persisted sort order and index 0 is always
- * the single primary, so the cross-document save invariants enforced by
- * `validateProjectSourceInvariants` (exactly one primary, primary at sortOrder 0,
- * dense 0..n-1 order) hold by construction — the UI cannot build an invalid list.
+ * every transition (rename, reorder, duplicate, remove, import). Sources are
+ * equal, user-ordered peers — there is no primary — so the list's array order
+ * **is** the persisted sort order. The cross-document save invariants enforced by
+ * `validateProjectSourceInvariants` (unique ids, dense 0..n-1 order) hold by
+ * construction: {@link sourceDraftsToSaveInput} stamps the sortOrder from the
+ * array index, so the UI cannot build an invalid list.
  *
  * No React, DOM, randomness, or clock access: key generation is injected so the
  * transitions stay deterministic and unit-testable.
  */
 import { PROJECT_SOURCE_LIMITS } from './constants/project-source-limits';
 import type {
-  DocumentKind,
   DocumentMime,
   ImportedMarkdownDocument,
   ProjectAggregate,
@@ -26,7 +26,6 @@ export interface SourceDraft {
   id?: string;
   /** Stable client-only key for React lists and selection (always present). */
   key: string;
-  kind: DocumentKind;
   title: string;
   originalFilename: string | null;
   mimeType: DocumentMime;
@@ -36,8 +35,9 @@ export interface SourceDraft {
 /** Injected key generator — deterministic in tests, unique-per-call in the app. */
 export type KeyFactory = () => string;
 
-const DEFAULT_PRIMARY_TITLE = 'Source material';
-const DEFAULT_REFERENCE_TITLE = 'Untitled source';
+/** Title of the seed source a fresh library starts with. Not special otherwise. */
+const DEFAULT_SEED_TITLE = 'Source material';
+const DEFAULT_UNTITLED_TITLE = 'Untitled source';
 
 function clampTitle(title: string): string {
   return title.length > PROJECT_SOURCE_LIMITS.maxTitleCharacters
@@ -45,47 +45,31 @@ function clampTitle(title: string): string {
     : title;
 }
 
-function makeEmptyPrimary(newKey: KeyFactory): SourceDraft {
+function makeEmptySource(newKey: KeyFactory): SourceDraft {
   return {
     key: newKey(),
-    kind: 'primary',
-    title: DEFAULT_PRIMARY_TITLE,
+    title: DEFAULT_SEED_TITLE,
     originalFilename: null,
     mimeType: 'text/markdown',
     content: '',
   };
 }
 
-/** A fresh library: a single empty primary source. */
+/** A fresh library: a single empty source titled "Source material". */
 export function createSourceDrafts(newKey: KeyFactory): SourceDraft[] {
-  return [makeEmptyPrimary(newKey)];
+  return [makeEmptySource(newKey)];
 }
 
 /**
- * Force the invariant shape: a non-empty list whose only primary sits at index 0.
- * Defensive — the database already guarantees this, but local edits route through
- * here so a malformed list can never reach {@link sourceDraftsToSaveInput}.
+ * Force the invariant shape: a non-empty list. Defensive — a library always has
+ * at least one source, so a wholesale edit that emptied the list resets to a
+ * single seed source rather than letting an empty list reach the save contract.
  */
 export function normalizeSourceDrafts(drafts: SourceDraft[], newKey: KeyFactory): SourceDraft[] {
-  if (drafts.length === 0) {
-    return [makeEmptyPrimary(newKey)];
-  }
-  let primaryIndex = drafts.findIndex((draft) => draft.kind === 'primary');
-  if (primaryIndex === -1) {
-    primaryIndex = 0;
-  }
-  const found = drafts[primaryIndex];
-  if (!found) {
-    return [makeEmptyPrimary(newKey)];
-  }
-  const primary: SourceDraft = { ...found, kind: 'primary' };
-  const rest = drafts
-    .filter((_, index) => index !== primaryIndex)
-    .map<SourceDraft>((draft) => (draft.kind === 'primary' ? { ...draft, kind: 'reference' } : draft));
-  return [primary, ...rest];
+  return drafts.length === 0 ? [makeEmptySource(newKey)] : drafts;
 }
 
-/** Hydrate drafts from a loaded aggregate, sorted and normalized. */
+/** Hydrate drafts from a loaded aggregate, sorted by sort order. */
 export function sourceDraftsFromAggregate(
   aggregate: ProjectAggregate,
   newKey: KeyFactory,
@@ -96,7 +80,6 @@ export function sourceDraftsFromAggregate(
     .map<SourceDraft>((doc) => ({
       id: doc.id,
       key: newKey(),
-      kind: doc.kind,
       title: doc.title,
       originalFilename: doc.originalFilename,
       mimeType: doc.mimeType,
@@ -106,17 +89,13 @@ export function sourceDraftsFromAggregate(
 }
 
 /**
- * Project drafts to the save contract. The array index becomes both the dense
- * sortOrder and the primary/reference role, so the result always satisfies the
- * cross-document invariants regardless of any stale `kind` on a draft.
+ * Project drafts to the save contract. The array index becomes the dense
+ * sortOrder, so the result always satisfies the cross-document invariants.
  */
 export function sourceDraftsToSaveInput(drafts: SourceDraft[]): SaveProjectDocumentInput[] {
   return drafts.map((draft, index) => {
-    const kind: DocumentKind = index === 0 ? 'primary' : 'reference';
-    const fallbackTitle = index === 0 ? DEFAULT_PRIMARY_TITLE : DEFAULT_REFERENCE_TITLE;
     const base: SaveProjectDocumentInput = {
-      kind,
-      title: clampTitle(draft.title.trim() || fallbackTitle),
+      title: clampTitle(draft.title.trim() || DEFAULT_UNTITLED_TITLE),
       originalFilename: draft.originalFilename,
       mimeType: draft.mimeType,
       content: draft.content,
@@ -140,7 +119,7 @@ export function renameSource(drafts: SourceDraft[], key: string, title: string):
   return drafts.map((draft) => (draft.key === key ? { ...draft, title: clampTitle(title) } : draft));
 }
 
-/** Append a blank reference source and return the key to select it by. */
+/** Append a blank source and return the key to select it by. */
 export function addBlankSource(
   drafts: SourceDraft[],
   newKey: KeyFactory,
@@ -148,8 +127,7 @@ export function addBlankSource(
   const addedKey = newKey();
   const draft: SourceDraft = {
     key: addedKey,
-    kind: 'reference',
-    title: DEFAULT_REFERENCE_TITLE,
+    title: DEFAULT_UNTITLED_TITLE,
     originalFilename: null,
     mimeType: 'text/markdown',
     content: '',
@@ -157,7 +135,7 @@ export function addBlankSource(
   return { drafts: [...drafts, draft], addedKey };
 }
 
-/** Append imported Markdown files as reference sources. */
+/** Append imported Markdown files as sources. */
 export function addImportedSources(
   drafts: SourceDraft[],
   imported: ImportedMarkdownDocument[],
@@ -165,7 +143,6 @@ export function addImportedSources(
 ): { drafts: SourceDraft[]; addedKeys: string[] } {
   const added = imported.map<SourceDraft>((file) => ({
     key: newKey(),
-    kind: 'reference',
     title: clampTitle(file.title || file.originalFilename),
     originalFilename: file.originalFilename,
     mimeType: 'text/markdown',
@@ -174,27 +151,7 @@ export function addImportedSources(
   return { drafts: [...drafts, ...added], addedKeys: added.map((draft) => draft.key) };
 }
 
-/**
- * Promote a source to primary: it moves to index 0 and the previous primary is
- * demoted to a reference, keeping the relative order of the remaining sources.
- */
-export function makeSourcePrimary(drafts: SourceDraft[], key: string): SourceDraft[] {
-  const index = drafts.findIndex((draft) => draft.key === key);
-  if (index <= 0) {
-    return drafts; // not found, or already the primary at index 0
-  }
-  const source = drafts[index];
-  if (!source) {
-    return drafts;
-  }
-  const target: SourceDraft = { ...source, kind: 'primary' };
-  const rest = drafts
-    .filter((draft) => draft.key !== key)
-    .map<SourceDraft>((draft) => ({ ...draft, kind: 'reference' }));
-  return [target, ...rest];
-}
-
-/** Duplicate a source as a reference inserted directly after the original. */
+/** Duplicate a source as a copy inserted directly after the original. */
 export function duplicateSource(
   drafts: SourceDraft[],
   key: string,
@@ -208,7 +165,6 @@ export function duplicateSource(
   const addedKey = newKey();
   const copy: SourceDraft = {
     key: addedKey,
-    kind: 'reference',
     title: clampTitle(`${source.title} (copy)`),
     originalFilename: null,
     mimeType: source.mimeType,
@@ -219,9 +175,9 @@ export function duplicateSource(
 }
 
 /**
- * Remove a source. If the primary is removed the next source is promoted; if the
- * last source is removed the library resets to a single empty primary. Returns
- * the key the UI should select next.
+ * Remove a source. If the last source is removed the library resets to a single
+ * empty seed source. Returns the key the UI should select next (the prior
+ * neighbor, falling back to the new first source).
  */
 export function removeSource(
   drafts: SourceDraft[],
@@ -241,9 +197,8 @@ export function removeSource(
 }
 
 /**
- * Move a reference source to a target slot. References occupy indices 1..n-1; the
- * target is clamped into that range so a reorder (button or drag) can never
- * displace the primary at index 0. The target index is interpreted against the
+ * Move a source to a target slot. Any source can move to any position 0..n-1;
+ * the target is clamped into range. The target index is interpreted against the
  * array after the source is lifted out.
  */
 export function moveSourceToIndex(
@@ -252,10 +207,10 @@ export function moveSourceToIndex(
   targetIndex: number,
 ): SourceDraft[] {
   const index = drafts.findIndex((draft) => draft.key === key);
-  if (index <= 0) {
-    return drafts; // primary (or not found) — not reorderable
+  if (index < 0) {
+    return drafts; // not found
   }
-  const clamped = Math.min(Math.max(1, targetIndex), drafts.length - 1);
+  const clamped = Math.min(Math.max(0, targetIndex), drafts.length - 1);
   if (clamped === index) {
     return drafts;
   }
@@ -268,13 +223,10 @@ export function moveSourceToIndex(
   return next;
 }
 
-/**
- * Reorder a reference source one slot up or down. The primary is pinned at index
- * 0 and never participates, so reordering can never displace it.
- */
+/** Reorder a source one slot up or down. */
 export function moveSource(drafts: SourceDraft[], key: string, delta: -1 | 1): SourceDraft[] {
   const index = drafts.findIndex((draft) => draft.key === key);
-  if (index <= 0) {
+  if (index < 0) {
     return drafts;
   }
   return moveSourceToIndex(drafts, key, index + delta);

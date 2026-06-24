@@ -177,13 +177,14 @@
   gap: 2px;
 }
 
+/* Rows hug their two lines (title + meta) with even, comfortable padding — not a
+   tall floaty centered box, but not cramped either. */
 .option {
   position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 58px;
-  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  padding: 10px var(--space-3);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -194,50 +195,14 @@
 .option:hover {
   background: var(--bg-hover);
 }
-/* Selected = a clean panel card lifted off the warm rail with a soft shadow,
-   not a flat clay wash. A separate inset accent bar (held back from the corners,
-   never a one-sided border) carries the terracotta marker without a crescent. */
+/* Selected = a crisp white card lifted off the warm rail with a soft shadow and
+   a hairline border. That contrast alone marks the selection — no accent bar,
+   which just read as noise on an already-obvious pill. */
 .optionSelected,
 .optionSelected:hover {
   background: var(--bg-panel);
   border-color: var(--border-faint);
   box-shadow: var(--shadow-card);
-}
-.optionSelected::before {
-  content: '';
-  position: absolute;
-  left: 5px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 3px;
-  height: 20px;
-  border-radius: var(--radius-pill);
-  background: var(--accent);
-}
-
-.primaryStar {
-  display: inline-flex;
-  justify-content: center;
-  width: 20px;
-  flex: 0 0 auto;
-  color: var(--accent);
-}
-.makePrimary {
-  display: inline-flex;
-  justify-content: center;
-  align-items: center;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  cursor: pointer;
-  color: var(--text-muted);
-}
-.makePrimary:hover {
-  color: var(--accent);
 }
 
 .optionBody {
@@ -247,20 +212,29 @@
   min-width: 0;
   flex: 1 1 auto;
 }
+/* Same treatment as the app sidebar's nav rail (this is just another sidebar):
+   non-selected titles are muted, darkening to primary on hover and when selected,
+   so the eye reads selection as a step from lighter to darker. */
 .optionTitle {
   font-size: var(--text-sm);
-  line-height: 18px;
+  line-height: 17px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.option:hover .optionTitle,
+.optionSelected .optionTitle {
+  color: var(--text-primary);
 }
 .optionMeta {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   font-size: var(--text-xs);
+  line-height: 15px;
   color: var(--text-muted);
 }
 .optionChars {
@@ -286,7 +260,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  /* Narrow enough that the up/down chevrons sit as a tight pair, not spread out. */
+  width: 22px;
   height: 28px;
   background: transparent;
   border: none;
@@ -361,35 +336,7 @@
 }
 /* ---- editor header strip (integrated title) ------------------------------- */
 /* The strip chrome (grey background, border, padding) lives in MarkdownEditor;
-   these style its contents: a primary star, the inline title, and actions. */
-.editorStar,
-.editorStarButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-  border-radius: var(--radius-sm);
-  padding: 0;
-}
-.editorStar {
-  color: var(--accent);
-}
-.editorStarButton {
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  transition:
-    color var(--dur-fast) var(--ease-out),
-    background var(--dur-fast) var(--ease-out);
-}
-.editorStarButton:hover {
-  color: var(--accent);
-  background: var(--bg-hover);
-}
-
+   these style its contents: the inline title and the per-source actions. */
 .editorTitleInput {
   flex: 1 1 auto;
   min-width: 0;

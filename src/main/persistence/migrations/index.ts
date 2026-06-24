@@ -163,7 +163,25 @@ const v2: Migration = {
 };
 
 /**
+ * v3 — drop the now-unused `kind` column from `project_documents`. The
+ * primary/reference distinction has been removed: every source is an equal,
+ * user-ordered peer, so the column carries no meaning. SQLite ≥ 3.35 (bundled
+ * with `node:sqlite`) supports `DROP COLUMN`, and `kind` is not referenced by any
+ * index, trigger, or constraint, so the drop is safe. Prepared plans keep their
+ * stored `source_hash`; since the hash no longer mixes in `kind`, the next
+ * prepare recomputes it, so a project may read as stale once until re-prepared.
+ */
+const v3: Migration = {
+  version: 3,
+  up(db: MigrationDb): void {
+    db.exec(`
+      ALTER TABLE project_documents DROP COLUMN kind;
+    `);
+  },
+};
+
+/**
  * The full ordered migration list. Append new migrations with the next
  * `version`; never reorder or mutate an already-shipped migration.
  */
-export const MIGRATIONS: readonly Migration[] = [v1, v2];
+export const MIGRATIONS: readonly Migration[] = [v1, v2, v3];

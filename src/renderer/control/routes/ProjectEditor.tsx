@@ -387,8 +387,8 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
           : undefined;
   const prepareBlocker = !canSave
     ? sourceStats.blockers[0]?.message ?? 'Resolve reference-material issues before preparing.'
-    : sourceStats.primaryEmpty
-      ? 'Add content to the primary reference before preparing.'
+    : !sourceStats.hasContent
+      ? 'Add content to at least one source before preparing.'
       : null;
   // Preparation (the footer action) builds or refreshes the interview plan from
   // the reference material. Starting is a separate, always-available action.
@@ -447,7 +447,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
       return briefComplete;
     }
     if (key === 'reference') {
-      return !sourceStats.primaryEmpty;
+      return sourceStats.hasContent;
     }
     return true;
   };
@@ -654,7 +654,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
                 <SummaryRow
                   label="Reference material"
                   value={`${sourceStats.documentCount} source${sourceStats.documentCount === 1 ? '' : 's'}`}
-                  ok={!sourceStats.primaryEmpty}
+                  ok={sourceStats.hasContent}
                 />
                 <SummaryRow label="Interviewer" value={interviewerName} ok />
                 <SummaryRow label="Estimated length" value={estimatedLength} ok />

@@ -53,6 +53,7 @@ export function MarkdownEditor({
     <div className={[styles.editor, flush ? styles.editorFlush : null].filter(Boolean).join(' ')}>
       {header != null && <div className={styles.header}>{header}</div>}
       <CodeMirror
+        className={styles.cmRoot}
         value={value}
         theme={candidCueEditorTheme}
         extensions={extensions}

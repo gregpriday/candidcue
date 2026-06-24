@@ -1,5 +1,6 @@
 import { SqliteRepository } from '@main/persistence/sqlite-repository';
 import { MemoryRepository } from '@main/persistence/memory-repository';
+import { MIGRATIONS } from '@main/persistence/migrations';
 import { hashProjectPreparationFromDocuments } from '@shared/utils';
 import { newId } from '@shared/domain';
 import type {
@@ -27,7 +28,6 @@ import type {
 function toSaveDocuments(documents: readonly ProjectDocument[]): SaveProjectInput['documents'] {
   return documents.map((d) => ({
     id: d.id,
-    kind: d.kind,
     title: d.title,
     originalFilename: d.originalFilename,
     mimeType: d.mimeType,
@@ -52,14 +52,12 @@ function projectInput(overrides: Partial<SaveProjectInput> = {}): SaveProjectInp
     notesToInterviewer: 'Keep it warm.',
     documents: [
       {
-        kind: 'primary',
         title: 'Brief',
         mimeType: 'text/markdown',
         content: '# The story\nWe started in a garage.',
         sortOrder: 0,
       },
       {
-        kind: 'reference',
         title: 'Notes',
         mimeType: 'text/plain',
         content: 'Mention the pivot.',
@@ -361,7 +359,6 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
     const a = await repo.saveProject(projectInput());
     const sameDocs = a.documents.map((d) => ({
       id: d.id,
-      kind: d.kind,
       title: d.title,
       originalFilename: d.originalFilename,
       mimeType: d.mimeType,
@@ -407,7 +404,6 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
     // Editing a setup field changes the source hash → the active plan goes stale.
     const sameDocs = saved.documents.map((d) => ({
       id: d.id,
-      kind: d.kind,
       title: d.title,
       originalFilename: d.originalFilename,
       mimeType: d.mimeType,
@@ -433,7 +429,7 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
       ...projectInput(),
       id: saved.project.id,
       documents: toSaveDocuments(before).map((d) =>
-        d.kind === 'reference' ? { ...d, content: 'Mention the pivot, expanded.' } : d,
+        d.title === 'Notes' ? { ...d, content: 'Mention the pivot, expanded.' } : d,
       ),
     });
 
@@ -441,15 +437,15 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
     expect(edited.documents.map((d) => d.id)).toEqual(before.map((d) => d.id));
     expect(edited.documents.map((d) => d.createdAt)).toEqual(before.map((d) => d.createdAt));
 
-    const beforePrimary = before.find((d) => d.kind === 'primary');
-    const beforeReference = before.find((d) => d.kind === 'reference');
-    const editedPrimary = edited.documents.find((d) => d.kind === 'primary');
-    const editedReference = edited.documents.find((d) => d.kind === 'reference');
+    const beforeBrief = before.find((d) => d.title === 'Brief');
+    const beforeNotes = before.find((d) => d.title === 'Notes');
+    const editedBrief = edited.documents.find((d) => d.title === 'Brief');
+    const editedNotes = edited.documents.find((d) => d.title === 'Notes');
 
-    // Unchanged primary keeps its updatedAt; the changed reference advances it.
-    expect(editedPrimary?.updatedAt).toBe(beforePrimary?.updatedAt);
-    expect(editedReference?.updatedAt).not.toBe(beforeReference?.updatedAt);
-    expect((editedReference?.updatedAt ?? '') > (beforeReference?.updatedAt ?? '')).toBe(true);
+    // The unchanged "Brief" keeps its updatedAt; the changed "Notes" advances it.
+    expect(editedBrief?.updatedAt).toBe(beforeBrief?.updatedAt);
+    expect(editedNotes?.updatedAt).not.toBe(beforeNotes?.updatedAt);
+    expect((editedNotes?.updatedAt ?? '') > (beforeNotes?.updatedAt ?? '')).toBe(true);
   });
 
   it('rejects a document id that belongs to another project', async () => {
@@ -463,7 +459,7 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
         ...projectInput(),
         id: b.project.id,
         documents: [
-          { id: foreignId, kind: 'primary', title: 'Stolen', mimeType: 'text/markdown', content: 'x', sortOrder: 0 },
+          { id: foreignId, title: 'Stolen', mimeType: 'text/markdown', content: 'x', sortOrder: 0 },
         ],
       }),
     ).rejects.toThrow(/does not belong to project/);
@@ -486,15 +482,17 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
   });
 
   it('removes documents dropped from the saved set', async () => {
-    const saved = await repo.saveProject(projectInput()); // primary + reference
+    const saved = await repo.saveProject(projectInput()); // two sources
     const updated = await repo.saveProject({
       ...projectInput(),
       id: saved.project.id,
-      documents: toSaveDocuments(saved.documents).filter((d) => d.kind === 'primary'),
+      documents: toSaveDocuments(saved.documents)
+        .filter((d) => d.title === 'Brief')
+        .map((d) => ({ ...d, sortOrder: 0 })),
     });
 
     expect(updated.documents).toHaveLength(1);
-    expect(updated.documents[0]?.kind).toBe('primary');
+    expect(updated.documents[0]?.title).toBe('Brief');
     expect((await repo.getProject(saved.project.id))?.documents).toHaveLength(1);
   });
 
@@ -504,47 +502,39 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
       ...projectInput(),
       id: saved.project.id,
       documents: toSaveDocuments(saved.documents).map((d) =>
-        d.kind === 'reference' ? { ...d, originalFilename: 'notes.md' } : d,
+        d.title === 'Notes' ? { ...d, originalFilename: 'notes.md' } : d,
       ),
     });
 
     expect(renamed.project.sourceHash).toBe(saved.project.sourceHash);
-    expect(renamed.documents.find((d) => d.kind === 'reference')?.originalFilename).toBe('notes.md');
+    expect(renamed.documents.find((d) => d.title === 'Notes')?.originalFilename).toBe('notes.md');
   });
 
   it('normalizes a legacy text/plain document to text/markdown', async () => {
     const saved = await repo.saveProject(
       projectInput({
         documents: [
-          { kind: 'primary', title: 'Brief', mimeType: 'text/markdown', content: '# hi', sortOrder: 0 },
-          { kind: 'reference', title: 'Notes', mimeType: 'text/plain', content: 'plain notes', sortOrder: 1 },
+          { title: 'Brief', mimeType: 'text/markdown', content: '# hi', sortOrder: 0 },
+          { title: 'Notes', mimeType: 'text/plain', content: 'plain notes', sortOrder: 1 },
         ],
       }),
     );
     expect(saved.documents.every((d) => d.mimeType === 'text/markdown')).toBe(true);
   });
 
-  it('returns the primary first and repairs an invalid multi-primary set on read', async () => {
-    const reordered = await repo.saveProject(
+  it('returns documents ordered by sortOrder on read', async () => {
+    const saved = await repo.saveProject(
       projectInput({
         documents: [
-          { kind: 'reference', title: 'Ref', mimeType: 'text/markdown', content: 'r', sortOrder: 0 },
-          { kind: 'primary', title: 'Main', mimeType: 'text/markdown', content: 'm', sortOrder: 1 },
+          { title: 'Second', mimeType: 'text/markdown', content: 'b', sortOrder: 1 },
+          { title: 'First', mimeType: 'text/markdown', content: 'a', sortOrder: 0 },
         ],
       }),
     );
-    expect(reordered.documents[0]?.kind).toBe('primary');
+    expect(saved.documents.map((d) => d.title)).toEqual(['First', 'Second']);
 
-    const multiPrimary = await repo.saveProject(
-      projectInput({
-        documents: [
-          { kind: 'primary', title: 'A', mimeType: 'text/markdown', content: 'a', sortOrder: 0 },
-          { kind: 'primary', title: 'B', mimeType: 'text/markdown', content: 'b', sortOrder: 1 },
-        ],
-      }),
-    );
-    expect(multiPrimary.documents.filter((d) => d.kind === 'primary')).toHaveLength(1);
-    expect(multiPrimary.documents[0]?.kind).toBe('primary');
+    const reread = await repo.getProject(saved.project.id);
+    expect(reread?.documents.map((d) => d.title)).toEqual(['First', 'Second']);
   });
 
   it('createSession persists coverage and starts at preflight with ordinal 0', async () => {
@@ -768,7 +758,60 @@ describe('SqliteRepository.migrate()', () => {
     const rows = db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as {
       version: number;
     }[];
-    expect(rows.map((r) => r.version)).toEqual([1, 2]);
+    expect(rows.map((r) => r.version)).toEqual([1, 2, 3]);
+    await repo.close();
+  });
+
+  it('drops the legacy kind column from a populated v2 database, preserving rows and the index', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(':memory:');
+    const repo = new SqliteRepository(db as never);
+
+    // Simulate an existing on-disk database stopped at v2: apply v1+v2 by hand,
+    // seed the ledger to {1,2}, and populate project_documents with the legacy
+    // `kind` column — the one upgrade path v3's DROP COLUMN actually runs in prod.
+    for (const m of MIGRATIONS.filter((mig) => mig.version <= 2)) m.up(db as never);
+    db.exec(
+      "INSERT INTO schema_migrations (version, applied_at) VALUES (1, '2020-01-01T00:00:00.000Z'), (2, '2020-01-01T00:00:00.000Z')",
+    );
+    db.exec(
+      "INSERT INTO projects (id, title, status, target_mode, target_value, interviewer_character_id, source_hash, created_at, updated_at)" +
+        " VALUES ('proj1', 'P', 'draft', 'question_count', 12, 'mira', '', '2020-01-01', '2020-01-01')",
+    );
+    db.exec(
+      "INSERT INTO project_documents (id, project_id, kind, title, original_filename, mime_type, content, sort_order, created_at, updated_at) VALUES" +
+        " ('doc1', 'proj1', 'primary', 'Brief', NULL, 'text/markdown', 'hello', 0, '2020-01-01', '2020-01-01')," +
+        " ('doc2', 'proj1', 'reference', 'Notes', NULL, 'text/markdown', 'world', 1, '2020-01-01', '2020-01-01')",
+    );
+
+    // v3 runs against live data with the column populated.
+    await repo.migrate();
+
+    const columns = (db.prepare("PRAGMA table_info('project_documents')").all() as { name: string }[]).map(
+      (c) => c.name,
+    );
+    expect(columns).not.toContain('kind');
+
+    // Both rows survive intact, in sort order.
+    const docs = db
+      .prepare('SELECT id, content, sort_order FROM project_documents ORDER BY sort_order')
+      .all() as { id: string; content: string; sort_order: number }[];
+    expect(docs).toEqual([
+      { id: 'doc1', content: 'hello', sort_order: 0 },
+      { id: 'doc2', content: 'world', sort_order: 1 },
+    ]);
+
+    // The (project_id, sort_order) index is preserved across the column drop.
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_project_documents_project'")
+      .all() as { name: string }[];
+    expect(indexes).toHaveLength(1);
+
+    const versions = db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as {
+      version: number;
+    }[];
+    expect(versions.map((v) => v.version)).toEqual([1, 2, 3]);
+
     await repo.close();
   });
 });

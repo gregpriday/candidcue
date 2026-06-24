@@ -34,7 +34,6 @@ export function deriveProjectPlanState(
   }
 }
 export type TargetMode = 'question_count' | 'approximate_duration';
-export type DocumentKind = 'primary' | 'reference';
 export type DocumentMime = 'text/markdown' | 'text/plain';
 
 export interface Project {
@@ -57,7 +56,6 @@ export interface Project {
 export interface ProjectDocument {
   id: DocumentId;
   projectId: ProjectId;
-  kind: DocumentKind;
   title: string;
   originalFilename: string | null;
   mimeType: DocumentMime;
@@ -78,7 +76,6 @@ export interface ProjectAggregate {
 
 export interface SaveProjectDocumentInput {
   id?: DocumentId;
-  kind: DocumentKind;
   title: string;
   originalFilename?: string | null;
   mimeType: DocumentMime;

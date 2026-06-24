@@ -14,7 +14,6 @@ export interface PreparationSettings {
 /** A document as it contributes to the compiled preparation source. */
 export interface PreparationDocument {
   id: string;
-  kind: string;
   title: string;
   mimeType: string;
   content: string;
@@ -25,8 +24,8 @@ export interface PreparationDocument {
  * Hash the FULL preparation input — setup fields plus source documents — so that
  * editing audience/outcome/target/interviewer/notes (not just document content)
  * marks an existing plan stale (PROJ-03). Documents are hashed in the SAME order
- * the compiler emits them (sortOrder, then id) and include `kind`, so reordering
- * or re-kinding a document is detected too.
+ * the compiler emits them (sortOrder, then id), so reordering a document is
+ * detected too.
  */
 export function hashProjectPreparation(
   settings: PreparationSettings,
@@ -53,8 +52,6 @@ export function hashProjectPreparation(
     hash.update('\n');
     hash.update(doc.id);
     hash.update(' ');
-    hash.update(doc.kind);
-    hash.update(' ');
     hash.update(doc.title);
     hash.update(' ');
     hash.update(doc.mimeType);
@@ -73,7 +70,6 @@ export function hashProjectPreparationFromDocuments(
     settings,
     documents.map((d) => ({
       id: d.id,
-      kind: d.kind,
       title: d.title,
       mimeType: d.mimeType,
       content: d.content,

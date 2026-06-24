@@ -10,31 +10,26 @@ import styles from './SourceLibrary.module.css';
 interface SourceEditorPaneProps {
   draft: SourceDraft | null;
   stat: SourceDocumentStat | null;
-  /** True when this draft is the primary (index 0). */
-  isPrimary: boolean;
   /** Delete is disabled when only one source remains. */
   canDelete: boolean;
   onTitleChange: (title: string) => void;
   onContentChange: (content: string) => void;
-  onMakePrimary: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
 }
 
 /**
  * The right pane of the Sources workspace: edits the selected source's title and
- * Markdown content. The title sits in the editor's integrated header strip with
- * a primary-marking star, and the per-source actions (duplicate, delete) live
- * alongside it. Delete is a two-step confirm. Holds the only CodeMirror surface.
+ * Markdown content. The title sits in the editor's integrated header strip, and
+ * the per-source actions (duplicate, delete) live alongside it. Delete is a
+ * two-step confirm. Holds the only CodeMirror surface.
  */
 export function SourceEditorPane({
   draft,
   stat,
-  isPrimary,
   canDelete,
   onTitleChange,
   onContentChange,
-  onMakePrimary,
   onDuplicate,
   onDelete,
 }: SourceEditorPaneProps): JSX.Element {
@@ -57,7 +52,7 @@ export function SourceEditorPane({
   if (!draft) {
     return (
       <div className={styles.pane}>
-        <p className={styles.paneEmpty}>Select a reference to edit, or add one to begin.</p>
+        <p className={styles.paneEmpty}>Select a source to edit, or add one to begin.</p>
       </div>
     );
   }
@@ -78,27 +73,12 @@ export function SourceEditorPane({
 
   const editorHeader = (
     <>
-      {isPrimary ? (
-        <span className={styles.editorStar} title="Primary reference" aria-label="Primary reference">
-          <Icon name="starFilled" size={16} aria-hidden />
-        </span>
-      ) : (
-        <button
-          type="button"
-          className={styles.editorStarButton}
-          onClick={onMakePrimary}
-          title="Make this the primary reference"
-          aria-label="Make this the primary reference"
-        >
-          <Icon name="star" size={16} />
-        </button>
-      )}
       <input
         className={styles.editorTitleInput}
         value={draft.title}
         maxLength={PROJECT_SOURCE_LIMITS.maxTitleCharacters}
-        aria-label="Reference title"
-        placeholder={isPrimary ? 'Primary reference' : 'Untitled reference'}
+        aria-label="Source title"
+        placeholder="Untitled source"
         onChange={(event) => onTitleChange(event.target.value)}
       />
       <div className={styles.editorActions}>
@@ -106,7 +86,7 @@ export function SourceEditorPane({
           variant="ghost"
           className={styles.editorAction}
           onClick={onDuplicate}
-          title="Duplicate this reference"
+          title="Duplicate this source"
         >
           <Icon name="copy" size={15} /> Duplicate
         </Button>
@@ -115,7 +95,7 @@ export function SourceEditorPane({
             variant="danger"
             className={styles.confirmDelete}
             onClick={handleDelete}
-            title="Click again to delete this reference"
+            title="Click again to delete this source"
           >
             <Icon name="trash" size={15} /> Confirm delete
           </Button>
@@ -125,8 +105,8 @@ export function SourceEditorPane({
             className={styles.iconDanger}
             onClick={handleDelete}
             disabled={!canDelete}
-            aria-label="Delete reference"
-            title={canDelete ? 'Delete this reference' : 'An interview keeps at least one reference'}
+            aria-label="Delete source"
+            title={canDelete ? 'Delete this source' : 'An interview keeps at least one source'}
           >
             <Icon name="trash" size={15} />
           </Button>
@@ -142,14 +122,10 @@ export function SourceEditorPane({
         flush
         value={draft.content}
         onChange={onContentChange}
-        ariaLabel={`Editing reference: ${draft.title || 'Untitled reference'}`}
+        ariaLabel={`Editing source: ${draft.title || 'Untitled source'}`}
         minHeight="360px"
         header={editorHeader}
-        placeholder={
-          isPrimary
-            ? 'Paste or write the main material the interview draws on…'
-            : 'Supporting context Mira can draw on…'
-        }
+        placeholder="Paste or write the material Mira can draw on…"
       />
 
       <p className={styles.editorStatusBar}>

@@ -3,7 +3,6 @@ import { AppError } from '@shared/errors/app-error';
 /** A single document fed into the project source envelope. */
 export interface SourceCompilerDocument {
   id: string;
-  kind: 'primary' | 'reference';
   title: string;
   content: string;
 }
@@ -65,12 +64,9 @@ export function compileProjectSource(docs: SourceCompilerDocument[]): string {
 
   const blocks = docs.map((doc) => {
     const id = neutralizeAttribute(doc.id);
-    const kind = neutralizeAttribute(doc.kind);
     const title = neutralizeAttribute(doc.title);
     const body = numberLines(doc.content);
-    return [`  <DOCUMENT id="${id}" kind="${kind}" title="${title}">`, body, `  </DOCUMENT>`].join(
-      '\n',
-    );
+    return [`  <DOCUMENT id="${id}" title="${title}">`, body, `  </DOCUMENT>`].join('\n');
   });
 
   return [

@@ -6,7 +6,6 @@ import styles from './SourceLibrary.module.css';
 export interface SourceListItem {
   key: string;
   title: string;
-  isPrimary: boolean;
   characters: number;
   empty: boolean;
 }
@@ -17,8 +16,7 @@ interface SourceListProps {
   query: string;
   onQueryChange: (query: string) => void;
   onSelect: (key: string) => void;
-  onMakePrimary: (key: string) => void;
-  /** Move a reference to an absolute index (references occupy 1..n-1). */
+  /** Move a source to an absolute index (0..n-1). */
   onReorder: (key: string, targetIndex: number) => void;
   totalCharacters: number;
   documentCount: number;
@@ -35,7 +33,6 @@ export function SourceList({
   query,
   onQueryChange,
   onSelect,
-  onMakePrimary,
   onReorder,
   totalCharacters,
   documentCount,
@@ -82,7 +79,7 @@ export function SourceList({
     }
   };
 
-  const referenceLabel = `${documentCount.toLocaleString()} ${documentCount === 1 ? 'reference' : 'references'}`;
+  const sourceLabel = `${documentCount.toLocaleString()} ${documentCount === 1 ? 'source' : 'sources'}`;
 
   return (
     <div className={styles.list}>
@@ -94,8 +91,8 @@ export function SourceList({
             type="search"
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
-            placeholder="Search references…"
-            aria-label="Search references"
+            placeholder="Search sources…"
+            aria-label="Search sources"
           />
         </div>
       )}
@@ -108,13 +105,19 @@ export function SourceList({
         onKeyDown={onListKeyDown}
       >
         {visible.length === 0 ? (
-          <p className={styles.listEmpty}>No references match “{query}”.</p>
+          <p className={styles.listEmpty}>No sources match “{query}”.</p>
         ) : (
           <ul className={styles.optionList}>
             {visible.map((item, position) => {
               const selected = item.key === selectedKey;
               const itemIndex = items.findIndex((entry) => entry.key === item.key);
-              const displayTitle = item.title || 'Untitled reference';
+              const displayTitle = item.title || 'Untitled source';
+              // Reorder against the adjacent *visible* row's absolute index, so a
+              // move never lands relative to a row hidden by the search filter.
+              const prevKey = visible[position - 1]?.key;
+              const nextKey = visible[position + 1]?.key;
+              const moveUpTarget = prevKey ? items.findIndex((entry) => entry.key === prevKey) : itemIndex;
+              const moveDownTarget = nextKey ? items.findIndex((entry) => entry.key === nextKey) : itemIndex;
               const rowClass = [styles.option, selected ? styles.optionSelected : '']
                 .filter(Boolean)
                 .join(' ');
@@ -124,31 +127,12 @@ export function SourceList({
                   className={rowClass}
                   role="option"
                   aria-selected={selected}
-                  draggable={!item.isPrimary}
+                  draggable
                   onDragStart={(event) => event.dataTransfer.setData('text/plain', item.key)}
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => handleDrop(event, itemIndex)}
                   onClick={() => onSelect(item.key)}
                 >
-                  {item.isPrimary ? (
-                    <span className={styles.primaryStar} title="Primary reference" aria-label="Primary reference">
-                      <Icon name="starFilled" size={14} aria-hidden />
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      className={styles.makePrimary}
-                      title="Make primary"
-                      aria-label={`Make “${displayTitle}” the primary reference`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onMakePrimary(item.key);
-                      }}
-                    >
-                      <Icon name="star" size={14} />
-                    </button>
-                  )}
-
                   <span className={styles.optionBody}>
                     <span className={styles.optionTitle}>{displayTitle}</span>
                     <span className={styles.optionMeta}>
@@ -162,37 +146,35 @@ export function SourceList({
                     </span>
                   </span>
 
-                  {!item.isPrimary && (
-                    <span className={styles.reorder}>
-                      <button
-                        type="button"
-                        className={styles.reorderButton}
-                        aria-label={`Move “${displayTitle}” up`}
-                        disabled={position <= 1}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onReorder(item.key, itemIndex - 1);
-                        }}
-                      >
-                        <Icon name="chevronDown" size={14} className={styles.reorderUp} />
-                      </button>
-                      <button
-                        type="button"
-                        className={styles.reorderButton}
-                        aria-label={`Move “${displayTitle}” down`}
-                        disabled={position === visible.length - 1}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onReorder(item.key, itemIndex + 1);
-                        }}
-                      >
-                        <Icon name="chevronDown" size={14} />
-                      </button>
-                      <span className={styles.grip} aria-hidden title="Drag to reorder">
-                        <Icon name="grip" size={14} />
-                      </span>
+                  <span className={styles.reorder}>
+                    <button
+                      type="button"
+                      className={styles.reorderButton}
+                      aria-label={`Move “${displayTitle}” up`}
+                      disabled={position === 0}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onReorder(item.key, moveUpTarget);
+                      }}
+                    >
+                      <Icon name="chevronDown" size={14} className={styles.reorderUp} />
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.reorderButton}
+                      aria-label={`Move “${displayTitle}” down`}
+                      disabled={position === visible.length - 1}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onReorder(item.key, moveDownTarget);
+                      }}
+                    >
+                      <Icon name="chevronDown" size={14} />
+                    </button>
+                    <span className={styles.grip} aria-hidden title="Drag to reorder">
+                      <Icon name="grip" size={14} />
                     </span>
-                  )}
+                  </span>
                 </li>
               );
             })}
@@ -201,10 +183,10 @@ export function SourceList({
       </div>
 
       <div className={styles.footer}>
-        <span className={styles.docCount}>{referenceLabel}</span>
+        <span className={styles.docCount}>{sourceLabel}</span>
         <span
           className={styles.totalChars}
-          title="Total characters across all reference material"
+          title="Total characters across all sources"
         >
           {totalCharacters.toLocaleString()} characters
         </span>

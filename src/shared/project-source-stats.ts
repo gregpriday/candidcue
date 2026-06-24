@@ -33,8 +33,8 @@ export interface SourceLibraryStats {
   documentCount: number;
   totalCharacters: number;
   perDocument: SourceDocumentStat[];
-  /** The primary source has no content yet (blocks prepare, not save). */
-  primaryEmpty: boolean;
+  /** At least one source has content (required to prepare, not to save). */
+  hasContent: boolean;
   /** Empty ⇒ the library can be saved as-is. */
   blockers: SourceLibraryBlocker[];
 }
@@ -64,7 +64,7 @@ export function computeSourceLibraryStats(drafts: SourceDraft[]): SourceLibraryS
     documentCount,
     totalCharacters,
     perDocument,
-    primaryEmpty: perDocument[0]?.empty ?? true,
+    hasContent: perDocument.some((stat) => !stat.empty),
     blockers,
   };
 }

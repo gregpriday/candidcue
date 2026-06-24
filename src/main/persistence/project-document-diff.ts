@@ -7,9 +7,8 @@ import { AppError } from '@shared/errors/app-error';
  * (spec §13.4). Kept free of any storage dependency to remain unit-testable.
  */
 
-/** Deterministic order: the single primary first, then references by (sortOrder, id). */
+/** Deterministic order: by (sortOrder, id). */
 function compareDocuments(a: ProjectDocument, b: ProjectDocument): number {
-  if (a.kind !== b.kind) return a.kind === 'primary' ? -1 : 1;
   if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
@@ -64,7 +63,6 @@ export function materializeSavedDocuments(
         });
       }
       const changed =
-        existing.kind !== doc.kind ||
         existing.title !== doc.title ||
         (existing.originalFilename ?? null) !== originalFilename ||
         existing.mimeType !== mimeType ||
@@ -73,7 +71,6 @@ export function materializeSavedDocuments(
       return {
         id: doc.id,
         projectId,
-        kind: doc.kind,
         title: doc.title,
         originalFilename,
         mimeType,
@@ -86,7 +83,6 @@ export function materializeSavedDocuments(
     return {
       id: generateId(),
       projectId,
-      kind: doc.kind,
       title: doc.title,
       originalFilename,
       mimeType,
@@ -100,16 +96,13 @@ export function materializeSavedDocuments(
 
 /**
  * Defensive read-time normalization (spec §7.2, §12.4). Idempotent, and for
- * well-formed data (exactly one primary, Markdown mime, primary at sortOrder 0)
- * it preserves every field the preparation hash covers — it may reorder the
- * array primary-first, but never changes a hashed field — so it never perturbs
- * the preparation hash of projects saved through the strict schema. It only
- * repairs genuinely legacy/corrupt rows:
+ * well-formed data (Markdown mime, dense sort order) it preserves every field
+ * the preparation hash covers — it only reorders by (sortOrder, id), never
+ * changing a hashed field — so it never perturbs the preparation hash of
+ * projects saved through the strict schema. It only repairs legacy rows:
  *
  * - legacy `text/plain` is coerced to `text/markdown` (plain text is a subset);
- * - if there is no primary, the first document (in deterministic order) is
- *   promoted; if there are several, only the first stays primary;
- * - documents are returned primary-first, then by (sortOrder, id).
+ * - documents are returned ordered by (sortOrder, id).
  */
 export function normalizeLoadedDocuments(documents: readonly ProjectDocument[]): ProjectDocument[] {
   const coerced = documents.map((doc) =>
@@ -118,19 +111,5 @@ export function normalizeLoadedDocuments(documents: readonly ProjectDocument[]):
       : { ...doc, mimeType: 'text/markdown' as const },
   );
 
-  const ordered = [...coerced].sort(compareDocuments);
-
-  const primaryCount = ordered.filter((doc) => doc.kind === 'primary').length;
-  if (primaryCount === 1) return ordered;
-
-  let primaryAssigned = false;
-  const repaired = ordered.map((doc) => {
-    if (!primaryAssigned) {
-      primaryAssigned = true;
-      return doc.kind === 'primary' ? doc : { ...doc, kind: 'primary' as const };
-    }
-    return doc.kind === 'reference' ? doc : { ...doc, kind: 'reference' as const };
-  });
-  // Re-sort: a demotion/promotion can change the primary-first ordering.
-  return repaired.sort(compareDocuments);
+  return [...coerced].sort(compareDocuments);
 }

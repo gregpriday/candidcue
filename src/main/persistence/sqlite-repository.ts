@@ -72,7 +72,6 @@ interface ProjectRow {
 interface ProjectDocumentRow {
   id: string;
   project_id: string;
-  kind: string;
   title: string;
   original_filename: string | null;
   mime_type: string;
@@ -350,11 +349,10 @@ export class SqliteRepository implements CandidCueRepository {
       }
       const upsertDoc = this.db.prepare(
         `INSERT INTO project_documents
-           (id, project_id, kind, title, original_filename, mime_type, content,
+           (id, project_id, title, original_filename, mime_type, content,
             sort_order, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
-           kind = excluded.kind,
            title = excluded.title,
            original_filename = excluded.original_filename,
            mime_type = excluded.mime_type,
@@ -366,7 +364,6 @@ export class SqliteRepository implements CandidCueRepository {
         upsertDoc.run(
           doc.id,
           projectId,
-          doc.kind,
           doc.title,
           doc.originalFilename,
           doc.mimeType,
@@ -760,7 +757,6 @@ function mapDocumentRow(row: ProjectDocumentRow): ProjectDocument {
   return {
     id: row.id,
     projectId: row.project_id,
-    kind: row.kind as ProjectDocument['kind'],
     title: row.title,
     originalFilename: row.original_filename,
     mimeType: row.mime_type as ProjectDocument['mimeType'],

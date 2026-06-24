@@ -4,14 +4,13 @@ import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 
 /**
  * Cross-document invariants on the authoritative save schema (spec §10.2,
- * §12.2): Markdown-only writes, exactly one primary, unique ids, dense sort
- * order, and title trimming. Content size and reference count are uncapped —
- * the operator supplies their own material.
+ * §12.2): Markdown-only writes, unique ids, dense sort order, and title trimming.
+ * Sources are equal, user-ordered peers — there is no primary — and content size
+ * and document count are uncapped: the operator supplies their own material.
  */
 
 function sourceDoc(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    kind: 'primary',
     title: 'Doc',
     mimeType: 'text/markdown',
     content: 'body',
@@ -31,39 +30,23 @@ function projectInput(overrides: Record<string, unknown> = {}): Record<string, u
   };
 }
 
-/** `count` documents: index 0 is the primary, the rest references, densely ordered. */
+/** `count` densely ordered documents. */
 function denseDocuments(count: number): Record<string, unknown>[] {
-  return Array.from({ length: count }, (_, i) =>
-    sourceDoc({ kind: i === 0 ? 'primary' : 'reference', sortOrder: i, title: `Doc ${i}` }),
-  );
+  return Array.from({ length: count }, (_, i) => sourceDoc({ sortOrder: i, title: `Doc ${i}` }));
 }
 
-/** Documents sized to the given content lengths; index 0 is the primary. */
+/** Documents sized to the given content lengths, densely ordered. */
 function documentsOfSizes(sizes: number[]): Record<string, unknown>[] {
-  return sizes.map((n, i) =>
-    sourceDoc({ kind: i === 0 ? 'primary' : 'reference', sortOrder: i, title: `Doc ${i}`, content: 'x'.repeat(n) }),
-  );
+  return sizes.map((n, i) => sourceDoc({ sortOrder: i, title: `Doc ${i}`, content: 'x'.repeat(n) }));
 }
 
 describe('saveProjectInputSchema', () => {
-  it('accepts a well-formed single-primary project', () => {
+  it('accepts a well-formed project', () => {
     expect(saveProjectInputSchema.safeParse(projectInput()).success).toBe(true);
   });
 
-  it('rejects zero primaries', () => {
-    const result = saveProjectInputSchema.safeParse(
-      projectInput({ documents: [sourceDoc({ kind: 'reference' })] }),
-    );
-    expect(result.success).toBe(false);
-  });
-
-  it('rejects multiple primaries', () => {
-    const result = saveProjectInputSchema.safeParse(
-      projectInput({
-        documents: [sourceDoc(), sourceDoc({ sortOrder: 1, title: 'Two' })],
-      }),
-    );
-    expect(result.success).toBe(false);
+  it('rejects an empty document list', () => {
+    expect(saveProjectInputSchema.safeParse(projectInput({ documents: [] })).success).toBe(false);
   });
 
   it('does not cap the document count', () => {
@@ -120,7 +103,7 @@ describe('saveProjectInputSchema', () => {
       projectInput({
         documents: [
           sourceDoc({ id: 'dup' }),
-          sourceDoc({ id: 'dup', kind: 'reference', sortOrder: 1 }),
+          sourceDoc({ id: 'dup', sortOrder: 1 }),
         ],
       }),
     );
@@ -130,7 +113,7 @@ describe('saveProjectInputSchema', () => {
   it('rejects a non-dense sort order', () => {
     const result = saveProjectInputSchema.safeParse(
       projectInput({
-        documents: [sourceDoc({ sortOrder: 0 }), sourceDoc({ kind: 'reference', sortOrder: 2 })],
+        documents: [sourceDoc({ sortOrder: 0 }), sourceDoc({ sortOrder: 2 })],
       }),
     );
     expect(result.success).toBe(false);
@@ -139,35 +122,23 @@ describe('saveProjectInputSchema', () => {
   it('rejects a duplicate sort order', () => {
     const result = saveProjectInputSchema.safeParse(
       projectInput({
-        documents: [sourceDoc({ sortOrder: 0 }), sourceDoc({ kind: 'reference', sortOrder: 0 })],
+        documents: [sourceDoc({ sortOrder: 0 }), sourceDoc({ sortOrder: 0 })],
       }),
     );
     expect(result.success).toBe(false);
   });
 
-  it('accepts references in any order as long as the set is dense and the primary is first', () => {
+  it('accepts documents in any order as long as the set is dense', () => {
     const result = saveProjectInputSchema.safeParse(
       projectInput({
         documents: [
-          sourceDoc({ kind: 'primary', sortOrder: 0 }),
-          sourceDoc({ kind: 'reference', sortOrder: 2, title: 'Third' }),
-          sourceDoc({ kind: 'reference', sortOrder: 1, title: 'Second' }),
+          sourceDoc({ sortOrder: 2, title: 'Third' }),
+          sourceDoc({ sortOrder: 0, title: 'First' }),
+          sourceDoc({ sortOrder: 1, title: 'Second' }),
         ],
       }),
     );
     expect(result.success).toBe(true);
-  });
-
-  it('rejects a primary that is not first (sort order 0)', () => {
-    const result = saveProjectInputSchema.safeParse(
-      projectInput({
-        documents: [
-          sourceDoc({ kind: 'reference', sortOrder: 0, title: 'Ref' }),
-          sourceDoc({ kind: 'primary', sortOrder: 1, title: 'Main' }),
-        ],
-      }),
-    );
-    expect(result.success).toBe(false);
   });
 
   it('rejects a negative sort order', () => {

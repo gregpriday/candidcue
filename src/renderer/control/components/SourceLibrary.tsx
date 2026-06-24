@@ -9,7 +9,6 @@ import {
   addBlankSource,
   addImportedSources,
   duplicateSource,
-  makeSourcePrimary,
   moveSourceToIndex,
   removeSource,
   renameSource,
@@ -49,18 +48,14 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
   // Selection always resolves to a live source; the parent may replace the list
   // wholesale (load/save), orphaning a stale key.
   const selectedDraft = drafts.find((draft) => draft.key === selectedKey) ?? drafts[0] ?? null;
-  const selectedIndex = selectedDraft
-    ? drafts.findIndex((draft) => draft.key === selectedDraft.key)
-    : -1;
 
   const items = useMemo<SourceListItem[]>(
     () =>
-      drafts.map((draft, index) => {
+      drafts.map((draft) => {
         const stat = statByKey.get(draft.key);
         return {
           key: draft.key,
           title: draft.title,
-          isPrimary: index === 0,
           characters: stat?.characters ?? draft.content.length,
           empty: stat?.empty ?? draft.content.trim().length === 0,
         };
@@ -78,13 +73,6 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
   );
   const reorder = useCallback(
     (key: string, targetIndex: number) => onChange(moveSourceToIndex(drafts, key, targetIndex)),
-    [drafts, onChange],
-  );
-  const makePrimary = useCallback(
-    (key: string) => {
-      onChange(makeSourcePrimary(drafts, key));
-      setSelectedKey(key);
-    },
     [drafts, onChange],
   );
   const addBlank = useCallback(() => {
@@ -147,12 +135,12 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
         <div className={styles.toolbarCopy}>
           <h2>Reference material</h2>
           <p className={styles.toolbarHint}>
-            The main material and any supporting context Mira can draw on.
+            The sources Mira can draw on — add as many as you like, in any order.
           </p>
         </div>
         <div className={styles.toolbarActions}>
-          <Button variant="secondary" onClick={addBlank} title="Add a blank reference">
-            <Icon name="plus" size={15} /> Add reference
+          <Button variant="secondary" onClick={addBlank} title="Add a blank source">
+            <Icon name="plus" size={15} /> Add source
           </Button>
           <Button
             variant="ghost"
@@ -202,7 +190,6 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
           query={query}
           onQueryChange={setQuery}
           onSelect={setSelectedKey}
-          onMakePrimary={makePrimary}
           onReorder={reorder}
           totalCharacters={stats.totalCharacters}
           documentCount={stats.documentCount}
@@ -210,11 +197,9 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
         <SourceEditorPane
           draft={selectedDraft}
           stat={selectedDraft ? statByKey.get(selectedDraft.key) ?? null : null}
-          isPrimary={selectedIndex === 0}
           canDelete={drafts.length > 1}
           onTitleChange={(title) => selectedDraft && rename(selectedDraft.key, title)}
           onContentChange={(content) => selectedDraft && updateContent(selectedDraft.key, content)}
-          onMakePrimary={() => selectedDraft && makePrimary(selectedDraft.key)}
           onDuplicate={() => selectedDraft && duplicate(selectedDraft.key)}
           onDelete={() => selectedDraft && remove(selectedDraft.key)}
         />

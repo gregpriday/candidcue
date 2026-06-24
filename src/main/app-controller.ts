@@ -203,10 +203,9 @@ export class AppController {
       const aggregate = await this.deps.repository.getProject(projectId);
       if (!aggregate) throw new AppError('VALIDATION_FAILED', { publicMessage: 'Project not found.' });
 
-      // Deterministic, primary-first order for both the compiled envelope and the
-      // preparation hash — do not rely solely on repository query order (§15.1).
+      // Deterministic order (by sortOrder, then id) for both the compiled envelope
+      // and the preparation hash — do not rely solely on repository query order (§15.1).
       const orderedDocs = [...aggregate.documents].sort((a, b) => {
-        if (a.kind !== b.kind) return a.kind === 'primary' ? -1 : 1;
         if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
         return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
       });
@@ -214,7 +213,7 @@ export class AppController {
 
       const model = this.requireModelAdapter();
       const compiled = compileProjectSource(
-        orderedDocs.map((d) => ({ id: d.id, kind: d.kind, title: d.title, content: d.content })),
+        orderedDocs.map((d) => ({ id: d.id, title: d.title, content: d.content })),
       );
       const prepared = await model.prepareProject({
         compiledSource: compiled,
@@ -261,24 +260,17 @@ export class AppController {
   }
 
   /**
-   * Preparation gate (spec §7.15/§15): exactly one primary, a non-empty primary,
-   * every source titled, and per-document + aggregate size within limits. Empty
-   * references are allowed (they compile to empty envelopes). Messages are
-   * UI-safe and never echo source content.
+   * Preparation gate (spec §7.15/§15): at least one source with content and every
+   * source titled. Sources are equal peers, so any non-empty source satisfies the
+   * content requirement; empty sources are allowed (they compile to empty
+   * envelopes). Messages are UI-safe and never echo source content.
    */
   private assertPreparableSources(
-    documents: readonly { kind: string; title: string; content: string }[],
+    documents: readonly { title: string; content: string }[],
   ): void {
-    const primaries = documents.filter((doc) => doc.kind === 'primary');
-    const primary = primaries[0];
-    if (primaries.length !== 1 || !primary) {
+    if (documents.every((doc) => doc.content.trim().length === 0)) {
       throw new AppError('VALIDATION_FAILED', {
-        publicMessage: 'A project needs exactly one primary source before it can be prepared.',
-      });
-    }
-    if (primary.content.trim().length === 0) {
-      throw new AppError('VALIDATION_FAILED', {
-        publicMessage: 'The primary source is empty. Add content before preparing.',
+        publicMessage: 'Add content to at least one source before preparing.',
       });
     }
     if (documents.some((doc) => doc.title.trim().length === 0)) {

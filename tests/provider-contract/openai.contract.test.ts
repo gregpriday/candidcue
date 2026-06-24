@@ -21,7 +21,7 @@ describe.skipIf(!KEY)('OpenAI provider contract', () => {
     const { model } = buildOpenAiAdapters(KEY!);
     const out = await model.prepareProject({
       compiledSource:
-        '<CANDIDCUE_PROJECT_SOURCE version="1"><DOCUMENT id="d1" kind="primary" title="Topic">1| We make a desktop interview app.</DOCUMENT></CANDIDCUE_PROJECT_SOURCE>',
+        '<CANDIDCUE_PROJECT_SOURCE version="1"><DOCUMENT id="d1" title="Topic">1| We make a desktop interview app.</DOCUMENT></CANDIDCUE_PROJECT_SOURCE>',
       targetQuestionCount: 5,
       tone: null,
       exclusions: [],

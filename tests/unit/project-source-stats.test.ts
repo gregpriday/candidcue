@@ -10,7 +10,6 @@ const L = PROJECT_SOURCE_LIMITS;
 
 function draft(partial: Partial<SourceDraft> & { key: string }): SourceDraft {
   return {
-    kind: 'reference',
     title: partial.key,
     originalFilename: null,
     mimeType: 'text/markdown',
@@ -22,30 +21,36 @@ function draft(partial: Partial<SourceDraft> & { key: string }): SourceDraft {
 describe('computeSourceLibraryStats', () => {
   it('sums characters and document count and is saveable by default', () => {
     const stats = computeSourceLibraryStats([
-      draft({ key: 'p', kind: 'primary', content: 'abc' }),
+      draft({ key: 'p', content: 'abc' }),
       draft({ key: 'a', content: 'de' }),
     ]);
     expect(stats.totalCharacters).toBe(5);
     expect(stats.documentCount).toBe(2);
-    expect(stats.primaryEmpty).toBe(false);
+    expect(stats.hasContent).toBe(true);
     expect(stats.blockers).toHaveLength(0);
     expect(canSaveSources(stats)).toBe(true);
   });
 
-  it('reports primary emptiness (blocks prepare, not save)', () => {
-    const stats = computeSourceLibraryStats([
-      draft({ key: 'p', kind: 'primary', content: '   ' }),
+  it('reports whether any source has content (required to prepare, not to save)', () => {
+    const allEmpty = computeSourceLibraryStats([
+      draft({ key: 'p', content: '   ' }),
+      draft({ key: 'a', content: '' }),
+    ]);
+    expect(allEmpty.hasContent).toBe(false);
+    // An empty library still saves; content only gates preparing the interview.
+    expect(canSaveSources(allEmpty)).toBe(true);
+
+    const someContent = computeSourceLibraryStats([
+      draft({ key: 'p', content: '   ' }),
       draft({ key: 'a', content: 'x' }),
     ]);
-    expect(stats.primaryEmpty).toBe(true);
-    // An empty primary still saves; it only blocks preparing the interview.
-    expect(canSaveSources(stats)).toBe(true);
+    expect(someContent.hasContent).toBe(true);
   });
 
   it('does not cap content size — a very large aggregate stays saveable', () => {
     const big = 'x'.repeat(L.maxCharactersPerDocument * 2);
     const stats = computeSourceLibraryStats([
-      draft({ key: 'p', kind: 'primary', content: big }),
+      draft({ key: 'p', content: big }),
       draft({ key: 'a', content: big }),
       draft({ key: 'b', content: big }),
     ]);
@@ -54,9 +59,9 @@ describe('computeSourceLibraryStats', () => {
     expect(canSaveSources(stats)).toBe(true);
   });
 
-  it('does not cap the reference count', () => {
+  it('does not cap the document count', () => {
     const many = Array.from({ length: L.maxDocuments + 25 }, (_, i) =>
-      draft({ key: `k${i}`, kind: i === 0 ? 'primary' : 'reference', content: 'x' }),
+      draft({ key: `k${i}`, content: 'x' }),
     );
     const stats = computeSourceLibraryStats(many);
     expect(stats.documentCount).toBe(L.maxDocuments + 25);
@@ -66,7 +71,7 @@ describe('computeSourceLibraryStats', () => {
 
   it('blocks a save when a title exceeds the title-length limit', () => {
     const stats = computeSourceLibraryStats([
-      draft({ key: 'p', kind: 'primary', content: 'x', title: 'x'.repeat(L.maxTitleCharacters + 1) }),
+      draft({ key: 'p', content: 'x', title: 'x'.repeat(L.maxTitleCharacters + 1) }),
     ]);
     expect(stats.perDocument[0]?.titleTooLong).toBe(true);
     expect(stats.blockers.map((b) => b.code)).toEqual(['title_too_long']);

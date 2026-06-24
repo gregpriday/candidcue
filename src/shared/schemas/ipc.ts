@@ -3,7 +3,6 @@ import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 
 export const endpointModeSchema = z.enum(['manual', 'conservative', 'balanced']);
 export const targetModeSchema = z.enum(['question_count', 'approximate_duration']);
-export const documentKindSchema = z.enum(['primary', 'reference']);
 export const documentMimeSchema = z.enum(['text/markdown', 'text/plain']);
 
 export const preflightConfigSchema = z.object({
@@ -32,7 +31,6 @@ export const sessionCommandSchema = z.discriminatedUnion('type', [
 
 export const saveProjectDocumentInputSchema = z.object({
   id: z.string().min(1).optional(),
-  kind: documentKindSchema,
   title: z.string().trim().min(1).max(PROJECT_SOURCE_LIMITS.maxTitleCharacters),
   originalFilename: z.string().max(PROJECT_SOURCE_LIMITS.maxOriginalFilenameCharacters).nullable().optional(),
   // New writes are Markdown-only; `text/plain` survives only for legacy reads
@@ -45,32 +43,16 @@ export const saveProjectDocumentInputSchema = z.object({
 });
 
 /**
- * Cross-document invariants the per-field schema cannot express: exactly one
- * primary source, unique document IDs, and a dense `0..n-1` sort order. Content
- * size and document count are intentionally uncapped. Main-process Zod
- * validation is authoritative.
+ * Cross-document invariants the per-field schema cannot express: unique document
+ * IDs and a dense `0..n-1` sort order. Sources are equal, user-ordered peers —
+ * there is no primary, and content size and document count are intentionally
+ * uncapped. Main-process Zod validation is authoritative.
  */
 function validateProjectSourceInvariants(
   input: { documents: Array<z.infer<typeof saveProjectDocumentInputSchema>> },
   ctx: z.RefinementCtx,
 ): void {
   const docs = input.documents;
-
-  const primaries = docs.filter((d) => d.kind === 'primary');
-  if (primaries.length !== 1) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: `A project must have exactly one primary source (found ${primaries.length}).`,
-      path: ['documents'],
-    });
-  } else if (primaries[0] && primaries[0].sortOrder !== 0) {
-    // Pin the primary first so compile order, hash order, and read order agree.
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'The primary source must be first (sort order 0).',
-      path: ['documents'],
-    });
-  }
 
   const ids = docs.map((d) => d.id).filter((id): id is string => typeof id === 'string');
   if (new Set(ids).size !== ids.length) {
@@ -102,7 +84,7 @@ export const saveProjectInputSchema = z
     targetValue: z.number().int().positive(),
     interviewerCharacterId: z.string().min(1),
     notesToInterviewer: z.string().nullable().optional(),
-    // The reference count is uncapped — the count is reported, never enforced.
+    // At least one source; the count is otherwise uncapped — reported, never enforced.
     documents: z.array(saveProjectDocumentInputSchema).min(1),
   })
   .superRefine(validateProjectSourceInvariants);

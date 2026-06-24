@@ -4,7 +4,6 @@ import { AppError } from '@shared/errors/app-error';
 
 const doc = (overrides: Partial<SourceCompilerDocument> = {}): SourceCompilerDocument => ({
   id: 'doc-1',
-  kind: 'primary',
   title: 'Title',
   content: 'line one\nline two',
   ...overrides,
@@ -25,7 +24,7 @@ describe('compileProjectSource', () => {
     const out = compileProjectSource([doc()]);
     expect(out.startsWith('<CANDIDCUE_PROJECT_SOURCE version="1">')).toBe(true);
     expect(out.trimEnd().endsWith('</CANDIDCUE_PROJECT_SOURCE>')).toBe(true);
-    expect(out).toContain('<DOCUMENT id="doc-1" kind="primary" title="Title">');
+    expect(out).toContain('<DOCUMENT id="doc-1" title="Title">');
     expect(out).toContain('</DOCUMENT>');
   });
 
@@ -106,15 +105,15 @@ describe('compileProjectSource', () => {
 
   it('wraps each of multiple documents in its own DOCUMENT element', () => {
     const out = compileProjectSource([
-      doc({ id: 'd1', kind: 'primary', title: 'First', content: 'one' }),
-      doc({ id: 'd2', kind: 'reference', title: 'Second', content: 'two' }),
+      doc({ id: 'd1', title: 'First', content: 'one' }),
+      doc({ id: 'd2', title: 'Second', content: 'two' }),
     ]);
     const opens = out.split('\n').filter((l) => l.trim().startsWith('<DOCUMENT ')).length;
     const closes = out.split('\n').filter((l) => l.trim() === '</DOCUMENT>').length;
     expect(opens).toBe(2);
     expect(closes).toBe(2);
-    expect(out).toContain('<DOCUMENT id="d1" kind="primary" title="First">');
-    expect(out).toContain('<DOCUMENT id="d2" kind="reference" title="Second">');
+    expect(out).toContain('<DOCUMENT id="d1" title="First">');
+    expect(out).toContain('<DOCUMENT id="d2" title="Second">');
     expect(out).toContain('1| one');
     expect(out).toContain('1| two');
   });

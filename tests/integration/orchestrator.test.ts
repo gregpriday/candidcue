@@ -110,7 +110,7 @@ async function makeHarness(overrides?: {
     targetMode: 'question_count',
     targetValue: 12,
     interviewerCharacterId: 'mira',
-    documents: [{ kind: 'primary', title: 'Brief', mimeType: 'text/markdown', content: '# Topic', sortOrder: 0 }],
+    documents: [{ title: 'Brief', mimeType: 'text/markdown', content: '# Topic', sortOrder: 0 }],
   });
   const plan = {
     id: 'plan-1',

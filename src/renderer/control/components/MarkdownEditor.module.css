@@ -53,10 +53,27 @@
   border-bottom-color: var(--accent);
   box-shadow: inset 0 -2px 0 0 var(--accent);
 }
+/* In flush mode the editor fills the pane down to the status strip: the
+   react-codemirror root and the editor itself stretch, so there is no dead
+   white space below the text and no floating, half-height outline. */
+.editorFlush .cmRoot {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.editorFlush .cmRoot :global(.cm-editor) {
+  flex: 1 1 auto;
+}
 
 .editor :global(.cm-editor) {
   font-family: var(--font-prose);
   font-size: 15px;
+}
+/* CodeMirror's default dotted focus outline reads as a janky half-height box;
+   the surface ring (non-flush) / header underline (flush) carries focus instead. */
+.editor :global(.cm-editor.cm-focused) {
+  outline: none;
 }
 
 .editor :global(.cm-scroller) {
