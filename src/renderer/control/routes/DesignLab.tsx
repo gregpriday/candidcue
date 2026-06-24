@@ -8,6 +8,10 @@ import { SegmentedControl } from '../components/SegmentedControl';
 import { RadioCard } from '../components/RadioCard';
 import { Sheet } from '../components/Sheet';
 import { ToastRegion, useToasts } from '../components/Toast';
+import { ListRow } from '../components/ListRow';
+import { ProgressSteps } from '../components/ProgressSteps';
+import { Disclosure } from '../components/Disclosure';
+import { OverflowMenu } from '../components/OverflowMenu';
 import { PageHeader } from '../components/PageHeader';
 import route from './route.module.css';
 import styles from './DesignLab.module.css';
@@ -148,6 +152,36 @@ export function DesignLab({ nav }: { nav: Navigator }): JSX.Element {
             <Button variant="secondary" onClick={() => push('danger', 'Connection lost. Reconnecting…')}>
               Danger toast
             </Button>
+          </div>
+        </Section>
+
+        <Section title="Lists, steps &amp; menus">
+          <ProgressSteps
+            steps={[
+              { key: 'brief', label: 'Brief' },
+              { key: 'reference', label: 'Reference material' },
+              { key: 'style', label: 'Interview style' },
+              { key: 'ready', label: 'Ready' },
+            ]}
+            current="reference"
+          />
+          <ListRow
+            title="Acme founding story"
+            meta="Updated 2h ago · 3 sessions"
+            status={<StatusPill tone="success">Ready</StatusPill>}
+            action={<Button variant="secondary">Start</Button>}
+            onOpen={() => undefined}
+          />
+          <div className={styles.row}>
+            <Disclosure summary="Advanced settings">
+              <p>Tucked-away technical options live here.</p>
+            </Disclosure>
+            <OverflowMenu
+              items={[
+                { label: 'Show original transcript', onSelect: () => undefined },
+                { label: 'Export as Markdown', onSelect: () => undefined, icon: 'download' },
+              ]}
+            />
           </div>
         </Section>
 

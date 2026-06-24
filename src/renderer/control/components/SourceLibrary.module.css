@@ -260,7 +260,7 @@
 }
 .optionEmpty {
   font-style: italic;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 
 .reorder {
@@ -300,7 +300,7 @@
 .grip {
   display: inline-flex;
   align-items: center;
-  color: var(--text-faint);
+  color: var(--text-muted);
   cursor: grab;
   padding-left: 2px;
 }
