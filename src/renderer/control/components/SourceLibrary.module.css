@@ -1,7 +1,8 @@
 .library {
   display: flex;
   flex-direction: column;
-  min-height: calc(100vh - var(--titlebar-h) - var(--toolbar-h) - 168px);
+  /* Fill most of the viewport below the page header + step rail + step bar. */
+  min-height: calc(100vh - 320px);
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -132,8 +133,10 @@
   font: inherit;
   font-size: var(--text-sm);
 }
-.searchInput:focus {
-  outline: none;
+.searchInput:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 .options {
@@ -204,13 +207,15 @@
   display: inline-flex;
   justify-content: center;
   align-items: center;
-  width: 20px;
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
   background: transparent;
   border: none;
+  border-radius: var(--radius-sm);
   padding: 0;
   cursor: pointer;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .makePrimary:hover {
   color: var(--accent);
@@ -266,18 +271,21 @@
   opacity: 0;
 }
 .option:hover .reorder,
-.optionSelected .reorder {
+.optionSelected .reorder,
+.option:focus-within .reorder {
   opacity: 1;
 }
 .reorderButton {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 28px;
+  height: 28px;
   background: transparent;
   border: none;
-  padding: 2px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  color: var(--text-faint);
+  color: var(--text-muted);
 }
 .reorderButton:hover:not(:disabled) {
   color: var(--text-primary);
@@ -370,7 +378,6 @@
 }
 .titleInput:focus {
   border-bottom-color: var(--accent);
-  outline: none;
 }
 .paneActions {
   display: flex;

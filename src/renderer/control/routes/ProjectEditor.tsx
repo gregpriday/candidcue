@@ -15,12 +15,15 @@ import {
   type SourceDraft,
 } from '@shared/project-source-draft';
 import { canSaveSources, computeSourceLibraryStats } from '@shared/project-source-stats';
-import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 import type { Navigator } from '../app';
 import { Button } from '../components/Button';
-import { StatusIcon } from '../components/StatusIcon';
-import type { StatusTone } from '../components/StatusIcon';
+import { StatusIcon, type StatusTone } from '../components/StatusIcon';
+import { StatusPill, type StatusTone as PillTone } from '../components/StatusPill';
 import { PageHeader } from '../components/PageHeader';
+import { Section } from '../components/Section';
+import { SegmentedControl } from '../components/SegmentedControl';
+import { ProgressSteps, type ProgressStep } from '../components/ProgressSteps';
+import { Sheet } from '../components/Sheet';
 import { MarkdownEditor } from '../components/MarkdownEditor';
 import { SourceLibrary } from '../components/SourceLibrary';
 import { nextDraftKey } from '../lib/draft-key';
@@ -46,7 +49,14 @@ interface FormState {
 }
 
 const DEFAULT_CHARACTER_ID = 'mira';
-type ProjectTab = 'overview' | 'sources' | 'sessions';
+
+type EditorStep = 'brief' | 'reference' | 'style' | 'ready';
+const STEPS: ReadonlyArray<ProgressStep<EditorStep>> = [
+  { key: 'brief', label: 'Brief' },
+  { key: 'reference', label: 'Reference material' },
+  { key: 'style', label: 'Interview style' },
+  { key: 'ready', label: 'Ready' },
+];
 
 function emptyForm(characterId: string): FormState {
   return {
@@ -76,11 +86,11 @@ function aggregateToForm(aggregate: ProjectAggregate): FormState {
 }
 
 /** Renderer-side label/tone for each plan readiness state. */
-const PLAN_BADGE: Record<ProjectPlanState, { tone: StatusTone; label: string }> = {
-  unprepared: { tone: 'pending', label: 'Draft' },
-  preparing: { tone: 'active', label: 'Preparing…' },
+const PLAN_PILL: Record<ProjectPlanState, { tone: PillTone; label: string }> = {
+  unprepared: { tone: 'neutral', label: 'Draft' },
+  preparing: { tone: 'accent', label: 'Preparing…' },
   ready: { tone: 'success', label: 'Ready' },
-  stale: { tone: 'warning', label: 'Sources changed' },
+  stale: { tone: 'warning', label: 'Needs an update' },
   failed: { tone: 'danger', label: 'Preparation failed' },
 };
 
@@ -131,7 +141,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   const [planState, setPlanState] = useState<ProjectPlanState>('unprepared');
   const [dirty, setDirty] = useState(false);
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<ProjectTab>('overview');
+  const [step, setStep] = useState<EditorStep>('brief');
   const [sessionHistory, setSessionHistory] = useState<InterviewSession[] | null>(null);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
@@ -159,9 +169,15 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     setLoadError(null);
     setDirty(false);
     setLastSavedAt(null);
-    setActiveTab('overview');
+    setStep('brief');
     setSessionHistory(null);
     setSessionsError(null);
+    // Reset the persisted id and per-interview transient state — the sidebar can
+    // navigate straight from one interview to another without unmounting, so a
+    // stale savedId would let autosave write this form into the previous id.
+    setSavedId(projectId);
+    setWarnings(null);
+    setActionError(null);
     if (projectId === null) {
       setForm(emptyForm(DEFAULT_CHARACTER_ID));
       setPlanState('unprepared');
@@ -174,7 +190,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
           return;
         }
         if (aggregate === null) {
-          setLoadError('This project could not be found.');
+          setLoadError('This interview could not be found.');
           setForm(emptyForm(DEFAULT_CHARACTER_ID));
           return;
         }
@@ -205,7 +221,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
 
   const buildInput = useCallback((state: FormState, id: ProjectId | null): SaveProjectInput => {
     const input: SaveProjectInput = {
-      title: state.title.trim() || 'Untitled project',
+      title: state.title.trim() || 'Untitled interview',
       audience: state.audience.trim() ? state.audience.trim() : null,
       intendedOutcome: state.intendedOutcome.trim() ? state.intendedOutcome.trim() : null,
       targetMode: state.targetMode,
@@ -280,7 +296,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   }, [dirty, form, handleSave, preparing, saving]);
 
   useEffect(() => {
-    if (activeTab !== 'sessions' || !savedId) {
+    if (step !== 'ready' || !savedId) {
       return undefined;
     }
     let cancelled = false;
@@ -302,7 +318,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     return () => {
       cancelled = true;
     };
-  }, [activeTab, savedId]);
+  }, [step, savedId]);
 
   const requestBack = useCallback(() => {
     if (dirty) {
@@ -327,12 +343,9 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   if (!form || !sourceStats) {
     return (
       <>
-        <PageHeader
-          title={savedId ? 'Edit project' : 'New project'}
-          onBack={() => nav.go({ name: 'home' })}
-        />
+        <PageHeader title={savedId ? 'Edit interview' : 'New interview'} onBack={() => nav.go({ name: 'home' })} />
         <div className={route.page}>
-          <p className={route.empty}>{loadError ?? 'Loading project…'}</p>
+          <p className={route.empty}>{loadError ?? 'Loading interview…'}</p>
         </div>
       </>
     );
@@ -340,7 +353,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
 
   const canSave = canSaveSources(sourceStats);
   const readyToStart = planState === 'ready' && !dirty;
-  const badge = PLAN_BADGE[planState];
+  const pill = PLAN_PILL[planState];
   const saveStatus = actionError
     ? 'Save error'
     : saving
@@ -352,11 +365,10 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
           : savedId
             ? 'Saved'
             : 'Not saved yet';
-  // What blocks Prepare, in priority order, surfaced as an inline hint.
   const prepareBlocker = !canSave
-    ? sourceStats.blockers[0]?.message ?? 'Resolve source issues before preparing.'
+    ? sourceStats.blockers[0]?.message ?? 'Resolve reference-material issues before preparing.'
     : sourceStats.primaryEmpty
-      ? 'Add content to the primary source before preparing.'
+      ? 'Add content to the primary reference before preparing.'
       : null;
   const shouldStart = readyToStart && savedId !== null;
   const primaryLabel = shouldStart
@@ -379,47 +391,42 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     void handlePrepare();
   };
 
+  const stepIndex = STEPS.findIndex((s) => s.key === step);
+  const onLastStep = step === 'ready';
+  const goNext = (): void => {
+    const next = STEPS[stepIndex + 1];
+    if (next) {
+      setStep(next.key);
+    }
+  };
+  const goBack = (): void => {
+    if (stepIndex <= 0) {
+      requestBack();
+      return;
+    }
+    const prev = STEPS[stepIndex - 1];
+    if (prev) {
+      setStep(prev.key);
+    }
+  };
+
+  const estimatedLength =
+    form.targetMode === 'question_count' ? `${form.targetValue} questions` : `~${form.targetValue} min`;
+  const briefComplete = form.title.trim() !== '';
+  const interviewerName = selectedCharacter?.displayName ?? 'Mira';
+
   return (
     <>
       <PageHeader
-        title={form.title.trim() || (savedId ? 'Untitled project' : 'New project')}
-        meta={
-          <span className={styles.headerMeta}>
-            <span className={styles.preparedBadge}>
-              <StatusIcon tone={badge.tone} label={badge.label} /> {badge.label}
-            </span>
-            <span>{saveStatus}</span>
-          </span>
-        }
+        title={form.title.trim() || (savedId ? 'Untitled interview' : 'New interview')}
+        meta={saveStatus}
         onBack={requestBack}
-        actions={
-          <Button
-            variant="primary"
-            onClick={runPrimaryAction}
-            disabled={primaryDisabled}
-            title={prepareBlocker ?? (shouldStart ? 'Start a session' : 'Prepare the interview from these sources')}
-          >
-            {primaryLabel}
-          </Button>
-        }
+        backLabel="Interviews"
+        status={<StatusPill tone={pill.tone}>{pill.label}</StatusPill>}
       />
-      <div className={`${route.page} ${route.pageWide}`}>
-        {confirmDiscard && (
-          <div className={route.notice} role="alertdialog" aria-label="Discard unsaved changes">
-            <StatusIcon tone="warning" label="Unsaved changes" />
-            <div className={styles.confirmRow}>
-              <span>You have unsaved changes. Leave without saving?</span>
-              <span className={styles.confirmActions}>
-                <Button variant="ghost" onClick={() => setConfirmDiscard(false)}>
-                  Keep editing
-                </Button>
-                <Button variant="danger" onClick={() => nav.go({ name: 'home' })}>
-                  Discard changes
-                </Button>
-              </span>
-            </div>
-          </div>
-        )}
+
+      <div className={styles.flowBody}>
+        <ProgressSteps steps={STEPS} current={step} onSelect={setStep} />
 
         {loadError !== null && (
           <p className={route.error} role="alert">
@@ -431,13 +438,9 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
             {actionError}
           </p>
         )}
-
         {warnings !== null && (
           <div className={route.notice} role="status">
-            <StatusIcon
-              tone={warnings.length > 0 ? 'warning' : 'success'}
-              label="Preparation result"
-            />
+            <StatusIcon tone={warnings.length > 0 ? 'warning' : 'success'} label="Preparation result" />
             <div>
               {warnings.length === 0 ? (
                 <span>Interview prepared with no warnings.</span>
@@ -455,253 +458,237 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
           </div>
         )}
 
-        <div className={styles.tabs} role="tablist" aria-label="Project sections">
-          {(['overview', 'sources', 'sessions'] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={activeTab === tab}
-              className={`${styles.tab} ${activeTab === tab ? styles.tabActive : ''}`}
-              onClick={() => setActiveTab(tab)}
-            >
-              {tab === 'overview' ? 'Overview' : tab === 'sources' ? 'Sources' : 'Sessions'}
-            </button>
-          ))}
-        </div>
+        {step === 'brief' && (
+          <Section title="Interview brief" description="What should Mira understand before the interview begins?">
+            <div className={route.field}>
+              <label className={route.label} htmlFor="project-title">
+                Interview title
+              </label>
+              <input
+                id="project-title"
+                className={route.input}
+                value={form.title}
+                onChange={(e) => patch({ title: e.target.value })}
+                placeholder="The founding story of Acme Robotics"
+              />
+            </div>
+            <div className={route.row}>
+              <div className={`${route.field} ${route.rowItem}`}>
+                <label className={route.label} htmlFor="project-audience">
+                  Intended audience
+                </label>
+                <input
+                  id="project-audience"
+                  className={route.input}
+                  value={form.audience}
+                  onChange={(e) => patch({ audience: e.target.value })}
+                  placeholder="Prospective customers and press"
+                />
+              </div>
+              <div className={`${route.field} ${route.rowItem}`}>
+                <label className={route.label} htmlFor="project-outcome">
+                  Desired outcome
+                </label>
+                <input
+                  id="project-outcome"
+                  className={route.input}
+                  value={form.intendedOutcome}
+                  onChange={(e) => patch({ intendedOutcome: e.target.value })}
+                  placeholder="A candid narrative of the pivot"
+                />
+              </div>
+            </div>
+          </Section>
+        )}
 
-        {activeTab === 'overview' && (
-          <div className={styles.overviewGrid}>
-            <div className={styles.overviewMain}>
-              <section className={styles.section}>
-                <div className={styles.sectionHeader}>
-                  <h2>Project brief</h2>
-                  <p>Define what Mira should understand before the interview starts.</p>
-                </div>
-                <div className={route.field}>
-                  <label className={route.label} htmlFor="project-title">
-                    Project title
-                  </label>
+        {step === 'reference' && (
+          <SourceLibrary drafts={form.sources} onChange={setSources} onImportError={setActionError} />
+        )}
+
+        {step === 'style' && (
+          <div className={styles.stepStack}>
+            <Section title="Length" description="Land the interview on a number of questions or an approximate duration.">
+              <div className={styles.lengthRow}>
+                <SegmentedControl<TargetMode>
+                  ariaLabel="Interview length mode"
+                  value={form.targetMode}
+                  onChange={(targetMode) => patch({ targetMode })}
+                  segments={[
+                    { value: 'question_count', label: 'Questions' },
+                    { value: 'approximate_duration', label: 'Duration' },
+                  ]}
+                />
+                <div className={styles.lengthValue}>
                   <input
-                    id="project-title"
+                    id="project-target-value"
                     className={route.input}
-                    value={form.title}
-                    onChange={(e) => patch({ title: e.target.value })}
-                    placeholder="e.g. The founding story of Acme Robotics"
+                    type="number"
+                    min={1}
+                    aria-label={form.targetMode === 'question_count' ? 'Number of questions' : 'Approximate duration in minutes'}
+                    value={form.targetValue}
+                    onChange={(e) => {
+                      const parsed = Number.parseInt(e.target.value, 10);
+                      patch({ targetValue: Number.isFinite(parsed) && parsed > 0 ? parsed : 1 });
+                    }}
                   />
+                  <span className={styles.lengthUnit}>
+                    {form.targetMode === 'question_count' ? 'questions' : 'minutes'}
+                  </span>
                 </div>
+              </div>
+            </Section>
 
-                <div className={route.row}>
-                  <div className={`${route.field} ${route.rowItem}`}>
-                    <label className={route.label} htmlFor="project-audience">
-                      Intended audience
-                    </label>
-                    <input
-                      id="project-audience"
-                      className={route.input}
-                      value={form.audience}
-                      onChange={(e) => patch({ audience: e.target.value })}
-                      placeholder="e.g. Prospective customers and press"
-                    />
-                  </div>
-                  <div className={`${route.field} ${route.rowItem}`}>
-                    <label className={route.label} htmlFor="project-outcome">
-                      Desired outcome
-                    </label>
-                    <input
-                      id="project-outcome"
-                      className={route.input}
-                      value={form.intendedOutcome}
-                      onChange={(e) => patch({ intendedOutcome: e.target.value })}
-                      placeholder="e.g. A candid narrative of the pivot"
-                    />
+            <Section title="Interviewer" description="Mira conducts the interview from your reference material.">
+              <div className={styles.interviewerCard}>
+                {selectedCharacter && (
+                  <img
+                    className={styles.interviewerImage}
+                    src={selectedCharacter.profileImageUrl}
+                    alt={`Portrait of ${selectedCharacter.displayName}`}
+                  />
+                )}
+                <div className={styles.interviewerBody}>
+                  <div className={styles.interviewerName}>{interviewerName}</div>
+                  <div className={styles.interviewerDesc}>
+                    {selectedCharacter?.shortDescription ?? 'Your interviewer'}
                   </div>
                 </div>
-              </section>
-
-              <section className={styles.section}>
-                <div className={styles.sectionHeader}>
-                  <h2>Interview length</h2>
-                  <p>Choose whether the interview should land on a number of questions or an approximate duration.</p>
-                </div>
-                <div className={styles.lengthControl}>
-                  <button
-                    type="button"
-                    className={`${styles.lengthOption} ${form.targetMode === 'question_count' ? styles.lengthOptionActive : ''}`}
-                    onClick={() => patch({ targetMode: 'question_count' })}
-                  >
-                    <span>Questions</span>
-                    <strong>{form.targetMode === 'question_count' ? form.targetValue : 12}</strong>
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.lengthOption} ${form.targetMode === 'approximate_duration' ? styles.lengthOptionActive : ''}`}
-                    onClick={() => patch({ targetMode: 'approximate_duration' })}
-                  >
-                    <span>Duration</span>
-                    <strong>{form.targetMode === 'approximate_duration' ? `${form.targetValue} min` : '20 min'}</strong>
-                  </button>
-                  <div className={styles.lengthValue}>
-                    <label className={route.label} htmlFor="project-target-value">
-                      {form.targetMode === 'question_count' ? 'Number of questions' : 'Approximate duration'}
-                    </label>
-                    <input
-                      id="project-target-value"
-                      className={route.input}
-                      type="number"
-                      min={1}
-                      value={form.targetValue}
-                      onChange={(e) => {
-                        const parsed = Number.parseInt(e.target.value, 10);
-                        patch({ targetValue: Number.isFinite(parsed) && parsed > 0 ? parsed : 1 });
-                      }}
-                    />
-                  </div>
-                </div>
-              </section>
-
-              <section className={styles.section}>
-                <div className={styles.sectionHeader}>
-                  <h2>Interviewer</h2>
-                  <p>Mira conducts the interview using your source material.</p>
-                </div>
-                <div className={styles.characterCard}>
-                  {selectedCharacter && (
-                    <img
-                      className={styles.characterImage}
-                      src={selectedCharacter.profileImageUrl}
-                      alt={`Portrait of ${selectedCharacter.displayName}`}
-                    />
-                  )}
-                  <div className={styles.characterBody}>
-                    <div className={styles.characterName}>
-                      {selectedCharacter?.displayName ?? form.interviewerCharacterId}
-                    </div>
-                    <div className={styles.characterDesc}>
-                      {selectedCharacter?.shortDescription ?? 'Interview character'}
-                    </div>
-                  </div>
-                  <label className={styles.characterSelectLabel} htmlFor="project-character">
-                    Change interviewer
-                  </label>
+                {characters.length > 1 && (
                   <select
                     id="project-character"
-                    className={styles.characterSelect}
+                    className={styles.interviewerSelect}
+                    aria-label="Change interviewer"
                     value={form.interviewerCharacterId}
                     onChange={(e) => patch({ interviewerCharacterId: e.target.value })}
                   >
-                    {characters.length === 0 && (
-                      <option value={form.interviewerCharacterId}>{form.interviewerCharacterId}</option>
-                    )}
                     {characters.map((character) => (
                       <option key={character.id} value={character.id}>
                         {character.displayName}
                       </option>
                     ))}
                   </select>
-                </div>
-              </section>
-
-              <section className={styles.section}>
-                <div className={styles.sectionHeader}>
-                  <h2>Interviewer guidance</h2>
-                  <p>Tone, subjects to explore, and areas to avoid.</p>
-                </div>
-                <MarkdownEditor
-                  value={form.notesToInterviewer}
-                  onChange={(value) => patch({ notesToInterviewer: value })}
-                  ariaLabel="Interviewer guidance"
-                  minHeight="180px"
-                  placeholder="Keep the tone warm but probing. Avoid leading questions about funding."
-                />
-              </section>
-            </div>
-
-            <aside className={styles.readinessRail}>
-              <section className={styles.readinessCard}>
-                <div className={styles.sectionHeader}>
-                  <h2>Preparation readiness</h2>
-                  <p>{prepareBlocker ?? 'Sources are ready to prepare.'}</p>
-                </div>
-                <div className={styles.readinessStatus}>
-                  <StatusIcon tone={badge.tone} label={badge.label} />
-                  <span>{badge.label}</span>
-                </div>
-                <dl className={styles.readinessFacts}>
-                  <div>
-                    <dt>Sources</dt>
-                    <dd>
-                      {sourceStats.documentCount} of {PROJECT_SOURCE_LIMITS.maxDocuments}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Characters</dt>
-                    <dd>{sourceStats.totalCharacters.toLocaleString()}</dd>
-                  </div>
-                  <div>
-                    <dt>Primary source</dt>
-                    <dd>{sourceStats.primaryEmpty ? 'Needs content' : 'Ready'}</dd>
-                  </div>
-                </dl>
-                {sourceStats.blockers.length > 0 && (
-                  <ul className={styles.blockerList}>
-                    {sourceStats.blockers.map((blocker) => (
-                      <li key={blocker.code}>{blocker.message}</li>
-                    ))}
-                  </ul>
                 )}
-              </section>
-            </aside>
+              </div>
+            </Section>
+
+            <Section title="Style and boundaries" description="Tone, subjects to explore, and areas to avoid.">
+              <MarkdownEditor
+                value={form.notesToInterviewer}
+                onChange={(value) => patch({ notesToInterviewer: value })}
+                ariaLabel="Style and boundaries"
+                minHeight="180px"
+                placeholder="Keep the tone warm but probing. Avoid leading questions about funding."
+              />
+            </Section>
           </div>
         )}
 
-        {activeTab === 'sources' && (
-          <SourceLibrary
-            drafts={form.sources}
-            onChange={setSources}
-            onImportError={setActionError}
-          />
-        )}
+        {step === 'ready' && (
+          <div className={styles.stepStack}>
+            <Section title="Ready to prepare" description={prepareBlocker ?? 'Everything looks good. Prepare the interview to generate the plan.'}>
+              <dl className={styles.summary}>
+                <SummaryRow label="Interview brief" value={briefComplete ? 'Complete' : 'Add a title'} ok={briefComplete} />
+                <SummaryRow
+                  label="Reference material"
+                  value={`${sourceStats.documentCount} source${sourceStats.documentCount === 1 ? '' : 's'}`}
+                  ok={!sourceStats.primaryEmpty}
+                />
+                <SummaryRow label="Interviewer" value={interviewerName} ok />
+                <SummaryRow label="Estimated length" value={estimatedLength} ok />
+              </dl>
+              {prepareBlocker !== null && <p className={styles.prepareHint}>{prepareBlocker}</p>}
+            </Section>
 
-        {activeTab === 'sessions' && (
-          <section className={styles.sessionsSection}>
-            {sessionsError !== null && (
-              <p className={route.error} role="alert">
-                {sessionsError}
-              </p>
+            {savedId !== null && (
+              <Section title="Past sessions">
+                {sessionsError !== null ? (
+                  <p className={route.error} role="alert">
+                    {sessionsError}
+                  </p>
+                ) : sessionHistory === null ? (
+                  <p className={route.empty}>Loading sessions…</p>
+                ) : sessionHistory.length === 0 ? (
+                  <p className={route.empty}>No sessions yet. Prepare the interview, then start a conversation.</p>
+                ) : (
+                  <ul className={styles.sessionList}>
+                    {sessionHistory.map((session) => {
+                      const status = sessionStatus(session.status);
+                      return (
+                        <li key={session.id} className={styles.sessionRow}>
+                          <div className={styles.sessionDate}>
+                            <strong>{formatTimestamp(session.startedAt ?? session.createdAt)}</strong>
+                            <span>{formatDuration(session.startedAt, session.endedAt)}</span>
+                          </div>
+                          <StatusPill tone={status.tone === 'active' ? 'accent' : status.tone === 'pending' ? 'neutral' : status.tone}>
+                            {status.label}
+                          </StatusPill>
+                          <span className={styles.sessionTurns}>{session.currentTurnOrdinal} turns</span>
+                          <Button variant="ghost" onClick={() => nav.go({ name: 'review', sessionId: session.id })}>
+                            Review
+                          </Button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </Section>
             )}
-            {!savedId ? (
-              <p className={route.empty}>Save this project before running interview sessions.</p>
-            ) : sessionHistory === null ? (
-              <p className={route.empty}>Loading sessions…</p>
-            ) : sessionHistory.length === 0 ? (
-              <p className={route.empty}>No interview sessions yet. Prepare the project, then start an interview.</p>
-            ) : (
-              <ul className={styles.sessionList}>
-                {sessionHistory.map((session) => {
-                  const status = sessionStatus(session.status);
-                  return (
-                    <li key={session.id} className={styles.sessionRow}>
-                      <div className={styles.sessionDate}>
-                        <strong>{formatTimestamp(session.startedAt ?? session.createdAt)}</strong>
-                        <span>{formatDuration(session.startedAt, session.endedAt)}</span>
-                      </div>
-                      <span className={styles.sessionBadge}>
-                        <StatusIcon tone={status.tone} label={status.label} />
-                        {status.label}
-                      </span>
-                      <span className={styles.sessionTurns}>{session.currentTurnOrdinal} turns</span>
-                      <Button variant="ghost" onClick={() => nav.go({ name: 'review', sessionId: session.id })}>
-                        Review
-                      </Button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </section>
+          </div>
         )}
       </div>
+
+      <div className={styles.stepBar}>
+        <span className={styles.stepStatus}>{saveStatus}</span>
+        <div className={styles.stepActions}>
+          <Button variant="ghost" onClick={goBack}>
+            {stepIndex <= 0 ? 'Interviews' : 'Back'}
+          </Button>
+          {onLastStep ? (
+            <Button
+              variant="primary"
+              onClick={runPrimaryAction}
+              disabled={primaryDisabled}
+              title={prepareBlocker ?? (shouldStart ? 'Start a session' : 'Prepare the interview from these sources')}
+            >
+              {primaryLabel}
+            </Button>
+          ) : (
+            <Button variant="primary" onClick={goNext}>
+              Continue
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <Sheet
+        open={confirmDiscard}
+        onClose={() => setConfirmDiscard(false)}
+        tone="danger"
+        title="Leave without saving?"
+        description="You have unsaved changes to this interview."
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmDiscard(false)}>
+              Keep editing
+            </Button>
+            <Button variant="danger" onClick={() => nav.go({ name: 'home' })}>
+              Discard changes
+            </Button>
+          </>
+        }
+      />
     </>
+  );
+}
+
+function SummaryRow({ label, value, ok }: { label: string; value: string; ok: boolean }): JSX.Element {
+  return (
+    <div className={styles.summaryRow}>
+      <dt>{label}</dt>
+      <dd>
+        <StatusIcon tone={ok ? 'success' : 'pending'} label={ok ? 'Ready' : 'Needs attention'} size={14} />
+        {value}
+      </dd>
+    </div>
   );
 }

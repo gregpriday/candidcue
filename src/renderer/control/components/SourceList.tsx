@@ -45,13 +45,17 @@ export function SourceList({
   totalCharacters,
   documentCount,
 }: SourceListProps): JSX.Element {
-  const normalizedQuery = query.trim().toLowerCase();
+  // Search only earns its place once the list is long enough to need it. When
+  // it's hidden, ignore any stale query so the user is never stranded with a
+  // filtered list and no box to clear.
+  const showSearch = items.length >= 6;
+  const effectiveQuery = showSearch ? query.trim().toLowerCase() : '';
   const visible = useMemo(
     () =>
-      normalizedQuery
-        ? items.filter((item) => item.title.toLowerCase().includes(normalizedQuery))
+      effectiveQuery
+        ? items.filter((item) => item.title.toLowerCase().includes(effectiveQuery))
         : items,
-    [items, normalizedQuery],
+    [items, effectiveQuery],
   );
 
   const selectRelative = (event: KeyboardEvent<HTMLDivElement>, delta: 1 | -1): void => {
@@ -88,32 +92,35 @@ export function SourceList({
 
   return (
     <div className={styles.list}>
-      <div className={styles.search}>
-        <Icon name="search" size={14} />
-        <input
-          className={styles.searchInput}
-          type="search"
-          value={query}
-          onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Search sources…"
-          aria-label="Search sources"
-        />
-      </div>
+      {showSearch && (
+        <div className={styles.search}>
+          <Icon name="search" size={14} />
+          <input
+            className={styles.searchInput}
+            type="search"
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder="Search references…"
+            aria-label="Search references"
+          />
+        </div>
+      )}
 
       <div
         className={styles.options}
         role="listbox"
-        aria-label="Sources"
+        aria-label="Reference material"
         tabIndex={0}
         onKeyDown={onListKeyDown}
       >
         {visible.length === 0 ? (
-          <p className={styles.listEmpty}>No sources match “{query}”.</p>
+          <p className={styles.listEmpty}>No references match “{query}”.</p>
         ) : (
           <ul className={styles.optionList}>
             {visible.map((item, position) => {
               const selected = item.key === selectedKey;
               const itemIndex = items.findIndex((entry) => entry.key === item.key);
+              const displayTitle = item.title || 'Untitled reference';
               const rowClass = [styles.option, selected ? styles.optionSelected : '']
                 .filter(Boolean)
                 .join(' ');
@@ -130,7 +137,7 @@ export function SourceList({
                   onClick={() => onSelect(item.key)}
                 >
                   {item.isPrimary ? (
-                    <span className={styles.primaryStar} title="Primary source" aria-label="Primary source">
+                    <span className={styles.primaryStar} title="Primary reference" aria-label="Primary reference">
                       <Icon name="starFilled" size={14} aria-hidden />
                     </span>
                   ) : (
@@ -138,7 +145,7 @@ export function SourceList({
                       type="button"
                       className={styles.makePrimary}
                       title="Make primary"
-                      aria-label={`Make “${item.title}” the primary source`}
+                      aria-label={`Make “${displayTitle}” the primary reference`}
                       onClick={(event) => {
                         event.stopPropagation();
                         onMakePrimary(item.key);
@@ -149,7 +156,7 @@ export function SourceList({
                   )}
 
                   <span className={styles.optionBody}>
-                    <span className={styles.optionTitle}>{item.title || 'Untitled source'}</span>
+                    <span className={styles.optionTitle}>{displayTitle}</span>
                     <span className={styles.optionMeta}>
                       {item.isPrimary && <span className={styles.primaryTag}>primary</span>}
                       <span className={item.overLimit ? styles.optionCharsOver : styles.optionChars}>
@@ -164,7 +171,7 @@ export function SourceList({
                       <button
                         type="button"
                         className={styles.reorderButton}
-                        aria-label={`Move “${item.title}” up`}
+                        aria-label={`Move “${displayTitle}” up`}
                         disabled={position <= 1}
                         onClick={(event) => {
                           event.stopPropagation();
@@ -176,7 +183,7 @@ export function SourceList({
                       <button
                         type="button"
                         className={styles.reorderButton}
-                        aria-label={`Move “${item.title}” down`}
+                        aria-label={`Move “${displayTitle}” down`}
                         disabled={position === visible.length - 1}
                         onClick={(event) => {
                           event.stopPropagation();
@@ -199,9 +206,9 @@ export function SourceList({
 
       <div className={styles.footer}>
         <span className={styles.docCount}>
-          {documentCount} / {PROJECT_SOURCE_LIMITS.maxDocuments} sources
+          {documentCount} / {PROJECT_SOURCE_LIMITS.maxDocuments} references
         </span>
-        <span className={budgetClass} title="Total source characters across the project">
+        <span className={budgetClass} title="Total characters across all reference material">
           {budgetLabel}
         </span>
       </div>

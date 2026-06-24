@@ -141,7 +141,7 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
       setImportFailures(result.failures);
       if (skipped > 0) {
         setImportNotice(
-          `${skipped} file(s) skipped — a project can hold at most ${PROJECT_SOURCE_LIMITS.maxDocuments} sources.`,
+          `${skipped} file(s) skipped — an interview can hold at most ${PROJECT_SOURCE_LIMITS.maxDocuments} references.`,
         );
       }
     } catch (err: unknown) {
@@ -163,10 +163,10 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
       <div className={styles.toolbar}>
         <div className={styles.toolbarCopy}>
           <h2>
-            Sources <span>· {stats.documentCount} of {PROJECT_SOURCE_LIMITS.maxDocuments}</span>
+            Reference material <span>· {stats.documentCount} of {PROJECT_SOURCE_LIMITS.maxDocuments}</span>
           </h2>
           <p className={styles.toolbarHint}>
-            Primary source and supporting references.
+            The main material and any supporting context Mira can draw on.
           </p>
         </div>
         <div className={styles.toolbarActions}>
@@ -174,15 +174,15 @@ export function SourceLibrary({ drafts, onChange, onImportError }: SourceLibrary
             variant="secondary"
             onClick={addBlank}
             disabled={stats.atDocumentLimit}
-            title={stats.atDocumentLimit ? 'Source limit reached' : 'Add a blank source'}
+            title={stats.atDocumentLimit ? 'Reference limit reached' : 'Add a blank reference'}
           >
-            <Icon name="plus" size={15} /> Add source
+            <Icon name="plus" size={15} /> Add reference
           </Button>
           <Button
-            variant="secondary"
+            variant="ghost"
             onClick={() => void importFiles()}
             disabled={stats.atDocumentLimit || importing}
-            title={stats.atDocumentLimit ? 'Source limit reached' : 'Import .md / .markdown files'}
+            title={stats.atDocumentLimit ? 'Reference limit reached' : 'Import Markdown files'}
           >
             <Icon name="upload" size={15} /> {importing ? 'Importing…' : 'Import Markdown'}
           </Button>

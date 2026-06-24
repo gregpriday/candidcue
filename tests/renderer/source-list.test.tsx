@@ -14,6 +14,16 @@ function items(): SourceListItem[] {
   ];
 }
 
+/** Six references so the search box (gated to ≥6) is present. */
+function manyItems(): SourceListItem[] {
+  return [
+    ...items(),
+    { key: 'c', title: 'Roadmap', isPrimary: false, characters: 500, overLimit: false, empty: false },
+    { key: 'd', title: 'Customer quotes', isPrimary: false, characters: 700, overLimit: false, empty: false },
+    { key: 'e', title: 'Pricing memo', isPrimary: false, characters: 400, overLimit: false, empty: false },
+  ];
+}
+
 /** Minimal harness that owns the search query so the search box is controllable. */
 function Harness(props: Partial<Parameters<typeof SourceList>[0]>) {
   const [query, setQuery] = useState('');
@@ -35,18 +45,42 @@ function Harness(props: Partial<Parameters<typeof SourceList>[0]>) {
 }
 
 describe('SourceList', () => {
-  it('renders every source as a listbox option with the primary marked', () => {
+  it('renders every reference as a listbox option with the primary marked', () => {
     render(<Harness />);
     const options = screen.getAllByRole('option');
     expect(options).toHaveLength(3);
     expect(screen.getByRole('option', { selected: true })).toHaveTextContent('Founding story');
-    expect(within(options[0]!).getByLabelText('Primary source')).toBeInTheDocument();
+    expect(within(options[0]!).getByLabelText('Primary reference')).toBeInTheDocument();
+  });
+
+  it('hides the search box until there are enough references', () => {
+    render(<Harness />);
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument();
+  });
+
+  it('ignores a stale query when the search box is hidden (<6 references)', () => {
+    render(
+      <SourceList
+        items={items()}
+        selectedKey="p"
+        query="press"
+        onQueryChange={vi.fn()}
+        onSelect={vi.fn()}
+        onMakePrimary={vi.fn()}
+        onReorder={vi.fn()}
+        budget="ok"
+        totalCharacters={1500}
+        documentCount={3}
+      />,
+    );
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('option')).toHaveLength(3);
   });
 
   it('filters the list by the search query', async () => {
     const user = userEvent.setup();
-    render(<Harness />);
-    await user.type(screen.getByRole('searchbox', { name: 'Search sources' }), 'press');
+    render(<Harness items={manyItems()} documentCount={6} />);
+    await user.type(screen.getByRole('searchbox', { name: 'Search references' }), 'press');
     expect(screen.getAllByRole('option')).toHaveLength(1);
     expect(screen.getByRole('option')).toHaveTextContent('Press kit');
   });
@@ -55,7 +89,7 @@ describe('SourceList', () => {
     const user = userEvent.setup();
     const onMakePrimary = vi.fn();
     render(<Harness onMakePrimary={onMakePrimary} />);
-    await user.click(screen.getByRole('button', { name: /Make .*Market notes.* the primary source/ }));
+    await user.click(screen.getByRole('button', { name: /Make .*Market notes.* the primary reference/ }));
     expect(onMakePrimary).toHaveBeenCalledWith('a');
   });
 
@@ -76,9 +110,9 @@ describe('SourceList', () => {
 
   it('shows an empty-state message when the query matches nothing', async () => {
     const user = userEvent.setup();
-    render(<Harness />);
-    await user.type(screen.getByRole('searchbox', { name: 'Search sources' }), 'zzz');
+    render(<Harness items={manyItems()} documentCount={6} />);
+    await user.type(screen.getByRole('searchbox', { name: 'Search references' }), 'zzz');
     expect(screen.queryByRole('option')).not.toBeInTheDocument();
-    expect(screen.getByText(/No sources match/)).toBeInTheDocument();
+    expect(screen.getByText(/No references match/)).toBeInTheDocument();
   });
 });

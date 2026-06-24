@@ -1,165 +1,43 @@
-.headerMeta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.preparedBadge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--text-xs);
-  line-height: 17px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  padding: 2px var(--space-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
-}
-
-.warningList {
-  margin: var(--space-2) 0 0;
-  padding-left: var(--space-4);
+/* The guided-preparation body: a left-aligned column above the sticky step bar. */
+.flowBody {
+  width: min(100%, 1100px);
+  max-width: 1100px;
+  margin: 0;
+  /* Bottom room so the sticky step bar (~69px) never covers the last control. */
+  padding: var(--space-6) var(--space-7) 96px;
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-6);
 }
 
-.tabs {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  border-bottom: 1px solid var(--border-faint);
-}
-
-.tab {
-  position: relative;
-  min-width: 96px;
-  height: 40px;
-  padding: 0 var(--space-4);
-  color: var(--text-muted);
-  background: transparent;
-  border: none;
-  font-size: var(--text-sm);
-  font-weight: 600;
-}
-.tab:hover {
-  color: var(--text-secondary);
-}
-.tabActive,
-.tabActive:hover {
-  color: var(--text-primary);
-}
-.tabActive::after {
-  content: '';
-  position: absolute;
-  left: var(--space-4);
-  right: var(--space-4);
-  bottom: -1px;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--accent);
-}
-
-.overviewGrid {
-  display: grid;
-  grid-template-columns: minmax(0, 820px) minmax(280px, 340px);
-  gap: var(--space-8);
-  align-items: start;
-}
-
-.overviewMain {
+.stepStack {
   display: flex;
   flex-direction: column;
   gap: var(--space-7);
 }
 
-.section,
-.readinessCard,
-.sessionsSection {
-  min-width: 0;
-}
-
-.section {
+/* ---- Length ---------------------------------------------------------- */
+.lengthRow {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: var(--space-4);
+  flex-wrap: wrap;
 }
-
-.sectionHeader {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+.lengthValue {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
 }
-.sectionHeader h2 {
-  margin: 0;
-  font-size: var(--text-lg);
-  line-height: 24px;
-  font-weight: 600;
-  color: var(--text-primary);
+.lengthValue input {
+  width: 96px;
 }
-.sectionHeader p {
-  margin: 0;
-  font-size: var(--text-base);
-  line-height: 21px;
+.lengthUnit {
+  font-size: var(--text-sm);
   color: var(--text-muted);
 }
 
-.lengthControl {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(160px, 1fr)) minmax(180px, 220px);
-  gap: var(--space-3);
-  align-items: end;
-}
-
-.lengthOption {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-height: 92px;
-  padding: var(--space-4);
-  color: var(--text-secondary);
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  text-align: left;
-  transition:
-    border-color var(--dur-med) var(--ease-out),
-    background var(--dur-med) var(--ease-out),
-    color var(--dur-med) var(--ease-out);
-}
-.lengthOption:hover {
-  color: var(--text-primary);
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
-}
-.lengthOptionActive,
-.lengthOptionActive:hover {
-  color: var(--text-primary);
-  border-color: var(--accent);
-  background: var(--accent-soft);
-}
-.lengthOption span {
-  font-size: var(--text-sm);
-  font-weight: 600;
-}
-.lengthOption strong {
-  font-size: var(--text-xl);
-  line-height: 28px;
-  font-weight: 650;
-}
-
-.lengthValue {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.characterCard {
+/* ---- Interviewer identity card --------------------------------------- */
+.interviewerCard {
   display: flex;
   align-items: center;
   gap: var(--space-4);
@@ -167,72 +45,64 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-panel);
-  box-shadow: inset 0 1px 0 var(--highlight-edge);
 }
-.characterImage {
-  width: 64px;
-  height: 64px;
-  border-radius: var(--radius-sm);
-  object-fit: cover;
-  background: var(--bg-sunken);
+.interviewerImage {
+  width: 56px;
+  height: 56px;
   flex: 0 0 auto;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--bg-secondary);
 }
-.characterBody {
-  min-width: 0;
+.interviewerBody {
   flex: 1 1 auto;
+  min-width: 0;
 }
-.characterName {
-  font-weight: 600;
+.interviewerName {
   font-size: var(--text-lg);
-  line-height: 24px;
+  font-weight: 650;
   color: var(--text-primary);
 }
-.characterDesc {
+.interviewerDesc {
   margin-top: 2px;
   font-size: var(--text-sm);
-  line-height: 20px;
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
-.characterSelectLabel {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-}
-.characterSelect {
-  width: 132px;
+.interviewerSelect {
   height: var(--control-h);
-  flex: 0 0 auto;
   padding: 0 var(--space-3);
-  color: var(--text-secondary);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
+  flex: 0 0 auto;
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  color: var(--text-primary);
   font: inherit;
   font-size: var(--text-sm);
-  font-weight: 600;
 }
 
-.readinessRail {
-  position: sticky;
-  /* Clear the taller PageHeader (breadcrumb + title + meta). This rail is
-     replaced by the Ready summary step in Phase 3. */
-  top: calc(var(--toolbar-h) + var(--space-10));
-}
-
-.readinessCard {
+/* ---- Ready summary --------------------------------------------------- */
+.summary {
+  margin: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  padding: var(--space-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg-panel);
-  box-shadow: inset 0 1px 0 var(--highlight-edge);
 }
-
-.readinessStatus {
+.summaryRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border-faint);
+}
+.summaryRow:last-child {
+  border-bottom: none;
+}
+.summaryRow dt {
+  font-size: var(--text-base);
+  color: var(--text-secondary);
+}
+.summaryRow dd {
+  margin: 0;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -240,125 +110,81 @@
   font-weight: 600;
   color: var(--text-primary);
 }
-
-.readinessFacts {
-  display: grid;
-  gap: var(--space-3);
-  margin: 0;
-}
-.readinessFacts div {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding-bottom: var(--space-3);
-  border-bottom: 1px solid var(--border-faint);
-}
-.readinessFacts div:last-child {
-  padding-bottom: 0;
-  border-bottom: none;
-}
-.readinessFacts dt {
-  color: var(--text-muted);
+.prepareHint {
+  margin: var(--space-2) 0 0;
   font-size: var(--text-sm);
-}
-.readinessFacts dd {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  color: var(--warning);
 }
 
-.blockerList {
+/* ---- Past sessions --------------------------------------------------- */
+.sessionList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  margin: 0;
-  padding-left: var(--space-4);
-  color: var(--warning);
-  font-size: var(--text-sm);
-  line-height: 20px;
 }
-
-.sessionsSection {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.sessionList {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  margin: 0;
-  padding: 0;
-}
-
 .sessionRow {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(120px, auto) minmax(90px, auto) auto;
+  display: flex;
   align-items: center;
   gap: var(--space-4);
-  min-height: 64px;
-  padding: var(--space-3) 0;
-  border-bottom: 1px solid var(--border-faint);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
 }
 .sessionDate {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  flex: 1 1 auto;
   min-width: 0;
 }
 .sessionDate strong {
   font-size: var(--text-base);
-  line-height: 21px;
   font-weight: 600;
   color: var(--text-primary);
 }
-.sessionDate span,
-.sessionTurns {
+.sessionDate span {
+  font-size: var(--text-sm);
   color: var(--text-muted);
-  font-size: var(--text-sm);
 }
-.sessionBadge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--text-secondary);
+.sessionTurns {
   font-size: var(--text-sm);
-  font-weight: 600;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 
-/* The unsaved-changes guard row sits inside a route .notice banner. */
-.confirmRow {
+.warningList {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ---- Sticky step bar ------------------------------------------------- */
+.stepBar {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
-  flex-wrap: wrap;
-  flex: 1 1 auto;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-7);
+  padding-right: calc(var(--space-7) + var(--win-controls-w, 0px));
+  background: var(--bg-canvas);
+  border-top: 1px solid var(--border);
 }
-.confirmActions {
-  display: inline-flex;
+.stepStatus {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.stepActions {
+  display: flex;
   align-items: center;
-  gap: var(--space-2);
-  flex: 0 0 auto;
-}
-
-@media (max-width: 980px) {
-  .overviewGrid,
-  .lengthControl,
-  .sessionRow {
-    grid-template-columns: 1fr;
-  }
-
-  .readinessRail {
-    position: static;
-  }
-
-  .characterCard {
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
+  gap: var(--space-3);
 }
