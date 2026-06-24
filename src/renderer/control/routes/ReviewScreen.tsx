@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SessionReview, SessionReviewTurn, ExportResult } from '@shared/contracts';
 import type { Navigator } from '../app';
-import { Button } from '../components/Button';
 import { StatusIcon } from '../components/StatusIcon';
-import { Panel } from '../components/Panel';
+import { StatusPill } from '../components/StatusPill';
 import { PageHeader } from '../components/PageHeader';
 import { MarkdownEditor } from '../components/MarkdownEditor';
+import { OverflowMenu, type OverflowMenuItem } from '../components/OverflowMenu';
 import { describeError } from '../lib/errors';
 import { formatTimestamp } from '../lib/format';
 import route from './route.module.css';
@@ -27,10 +27,27 @@ function initialEditText(turn: SessionReviewTurn): string {
   return turn.userEditedTranscript ?? turn.cleanedTranscript ?? turn.rawTranscript ?? '';
 }
 
+function turnKey(turn: SessionReviewTurn): string {
+  return `turn-${turn.ordinal}`;
+}
+
+function formatDuration(startedAt: string | null, endedAt: string | null): string | null {
+  if (!startedAt || !endedAt) {
+    return null;
+  }
+  const started = Date.parse(startedAt);
+  const ended = Date.parse(endedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(ended) || ended <= started) {
+    return null;
+  }
+  return `${Math.max(1, Math.round((ended - started) / 60_000))} min`;
+}
+
 export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element {
   const [review, setReview] = useState<SessionReview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
   const [edits, setEdits] = useState<Record<string, TurnEditState>>({});
   const [exportNote, setExportNote] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -51,12 +68,7 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
         setReview(result);
         const seeded: Record<string, TurnEditState> = {};
         result.turns.forEach((turn) => {
-          seeded[turnKey(turn)] = {
-            text: initialEditText(turn),
-            dirty: false,
-            saving: false,
-            saved: false,
-          };
+          seeded[turnKey(turn)] = { text: initialEditText(turn), dirty: false, saving: false, saved: false };
         });
         setEdits(seeded);
       })
@@ -80,7 +92,10 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
     });
   }, []);
 
-  const saveEdit = useCallback(async (turn: SessionReviewTurn) => {
+  // Persist a specific text snapshot. The text is captured explicitly so a save
+  // in flight can be reconciled against newer typing: only mark the turn clean
+  // if nothing changed during the await, otherwise leave it dirty to re-save.
+  const saveEdit = useCallback(async (turn: SessionReviewTurn, textToSave: string) => {
     const key = turnKey(turn);
     setEdits((prev) => {
       const current = prev[key];
@@ -88,11 +103,14 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
     });
     setExportError(null);
     try {
-      const text = edits[key]?.text ?? initialEditText(turn);
-      await window.candidcue.sessions.editTranscript(turnId(turn), text);
+      await window.candidcue.sessions.editTranscript(turn.id, textToSave);
       setEdits((prev) => {
         const current = prev[key];
-        return current ? { ...prev, [key]: { ...current, dirty: false, saving: false, saved: true } } : prev;
+        if (!current) {
+          return prev;
+        }
+        const stillDirty = current.text !== textToSave;
+        return { ...prev, [key]: { ...current, saving: false, dirty: stillDirty, saved: !stillDirty } };
       });
     } catch (err: unknown) {
       setExportError(describeError(err));
@@ -101,29 +119,78 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
         return current ? { ...prev, [key]: { ...current, saving: false } } : prev;
       });
     }
-  }, [edits]);
+  }, []);
 
-  const handleExport = useCallback(async (format: 'markdown' | 'json') => {
-    setExportNote(null);
-    setExportError(null);
-    try {
-      const result: ExportResult = await window.candidcue.sessions.export(sessionId, format);
-      if (result.ok && result.path) {
-        setExportNote(`Exported ${format} to ${result.path}.`);
-      } else if (result.error) {
-        setExportError(result.error.publicMessage);
-      } else {
-        setExportNote(`Exported ${format}.`);
-      }
-    } catch (err: unknown) {
-      setExportError(describeError(err));
+  // Autosave the turn being edited shortly after the last keystroke.
+  useEffect(() => {
+    if (editingKey === null) {
+      return undefined;
     }
-  }, [sessionId]);
+    const edit = edits[editingKey];
+    const turn = review?.turns.find((t) => turnKey(t) === editingKey);
+    if (!edit || !edit.dirty || edit.saving || !turn) {
+      return undefined;
+    }
+    const text = edit.text;
+    const timer = window.setTimeout(() => void saveEdit(turn, text), 1000);
+    return () => window.clearTimeout(timer);
+  }, [editingKey, edits, review, saveEdit]);
+
+  // Flush a pending edit before leaving a turn (Done / switch / unmount) so the
+  // debounce window can never swallow the last change.
+  const editsRef = useRef(edits);
+  editsRef.current = edits;
+  const reviewRef = useRef(review);
+  reviewRef.current = review;
+  const editingKeyRef = useRef(editingKey);
+  editingKeyRef.current = editingKey;
+
+  const flushEditing = useCallback(() => {
+    const key = editingKeyRef.current;
+    if (key === null) {
+      return;
+    }
+    const edit = editsRef.current[key];
+    const turn = reviewRef.current?.turns.find((t) => turnKey(t) === key);
+    if (edit && edit.dirty && !edit.saving && turn) {
+      void saveEdit(turn, edit.text);
+    }
+  }, [saveEdit]);
+
+  const setEditing = useCallback(
+    (nextKey: string | null) => {
+      flushEditing();
+      setEditingKey(nextKey);
+    },
+    [flushEditing],
+  );
+
+  useEffect(() => () => flushEditing(), [flushEditing]);
+
+  const handleExport = useCallback(
+    async (format: 'markdown' | 'json') => {
+      setExportNote(null);
+      setExportError(null);
+      try {
+        const result: ExportResult = await window.candidcue.sessions.export(sessionId, format);
+        if (result.ok && result.path) {
+          setExportNote(`Exported ${format} to ${result.path}.`);
+        } else if (result.error) {
+          setExportError(result.error.publicMessage);
+        } else {
+          setExportNote(`Exported ${format}.`);
+        }
+      } catch (err: unknown) {
+        setExportError(describeError(err));
+      }
+    },
+    [sessionId],
+  );
 
   if (loadError !== null) {
     return (
       <>
-        <PageHeader title="Review" onBack={() => nav.go({ name: 'home' })} backLabel="Back to projects" />
+        <PageHeader title="Review" onBack={() => nav.go({ name: 'home' })} backLabel="Interviews" />
         <div className={route.page}>
           <p className={route.error} role="alert">
             {loadError}
@@ -136,134 +203,160 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
   if (review === null) {
     return (
       <>
-        <PageHeader title="Review" onBack={() => nav.go({ name: 'home' })} backLabel="Back to projects" />
+        <PageHeader title="Review" onBack={() => nav.go({ name: 'home' })} backLabel="Interviews" />
         <div className={route.page}>
-          <p className={route.empty}>Loading session review…</p>
+          <p className={route.empty}>Loading the interview…</p>
         </div>
       </>
     );
   }
 
+  const duration = formatDuration(review.startedAt, review.endedAt);
+  const completed = review.endedAt !== null;
+  const metaParts = [formatTimestamp(review.startedAt)];
+  if (duration) {
+    metaParts.push(duration);
+  }
+  metaParts.push(`${review.turns.length} question${review.turns.length === 1 ? '' : 's'}`);
+
+  const menuItems: OverflowMenuItem[] = [
+    {
+      label: showRaw ? 'Show cleaned answers' : 'Show original transcript',
+      onSelect: () => setShowRaw((v) => !v),
+      active: showRaw,
+    },
+    { label: 'Export as Markdown', onSelect: () => void handleExport('markdown'), icon: 'download' },
+    { label: 'Export as JSON', onSelect: () => void handleExport('json'), icon: 'download' },
+  ];
+
   return (
     <>
       <PageHeader
-        title={review.projectTitle || 'Review'}
+        title={review.projectTitle || 'Interview'}
         onBack={() => nav.go({ name: 'home' })}
-        backLabel="Back to projects"
-        meta={
-          <span className={styles.toolbarMeta}>
-            {formatTimestamp(review.startedAt)} → {formatTimestamp(review.endedAt)} ·{' '}
-            {review.turns.length} turn(s)
-          </span>
+        backLabel="Interviews"
+        meta={metaParts.join(' · ')}
+        status={
+          <StatusPill tone={completed ? 'success' : 'neutral'}>{completed ? 'Completed' : 'In progress'}</StatusPill>
         }
-        actions={
-          <>
-            <Button variant="ghost" onClick={() => setShowRaw((v) => !v)} aria-pressed={showRaw}>
-              {showRaw ? 'Show cleaned' : 'Show raw'}
-            </Button>
-            <Button variant="secondary" onClick={() => void handleExport('markdown')}>
-              Export Markdown
-            </Button>
-            <Button variant="secondary" onClick={() => void handleExport('json')}>
-              Export JSON
-            </Button>
-          </>
-        }
+        actions={<OverflowMenu items={menuItems} ariaLabel="Review options" />}
       />
-      <div className={`${route.page} ${route.pageWide}`}>
-        {exportNote !== null && (
-          <div className={route.notice} role="status">
-            <StatusIcon tone="success" label="Exported" />
-            <span>{exportNote}</span>
-          </div>
-        )}
-        {exportError !== null && (
-          <p className={route.error} role="alert">
-            {exportError}
-          </p>
-        )}
+      <div className={styles.review}>
+        <nav className={styles.index} aria-label="Questions">
+          <ol className={styles.indexList}>
+            {review.turns.map((turn) => (
+              <li key={turnKey(turn)}>
+                <button
+                  type="button"
+                  className={styles.indexItem}
+                  onClick={() => document.getElementById(turnKey(turn))?.scrollIntoView({ behavior: 'smooth' })}
+                >
+                  <span className={styles.indexNum}>{turn.ordinal}</span>
+                  <span className={styles.indexQuestion}>{turn.question}</span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        </nav>
 
-        {review.turns.length === 0 ? (
-          <Panel>
-            <p className={route.empty}>This session has no recorded turns.</p>
-          </Panel>
-        ) : (
-          <ol className={styles.turnList}>
-            {review.turns.map((turn) => {
+        <div className={styles.document}>
+          {exportNote !== null && (
+            <div className={route.notice} role="status">
+              <StatusIcon tone="success" label="Exported" />
+              <span>{exportNote}</span>
+            </div>
+          )}
+          {exportError !== null && (
+            <p className={route.error} role="alert">
+              {exportError}
+            </p>
+          )}
+
+          {review.turns.length === 0 ? (
+            <p className={route.empty}>This interview has no recorded answers.</p>
+          ) : (
+            review.turns.map((turn) => {
               const key = turnKey(turn);
               const edit = edits[key];
+              const editing = editingKey === key;
               return (
-                <li key={key}>
-                  <Panel
-                    title={`Turn ${turn.ordinal}`}
-                    actions={
-                      (turn.incomplete || turn.endpointReason === 'recovery') && (
-                        <div className={styles.turnFlags}>
-                          {turn.incomplete && (
-                            <span className={styles.flag}>
-                              <StatusIcon tone="warning" label="Incomplete answer" /> Incomplete
-                            </span>
-                          )}
-                          {turn.endpointReason === 'recovery' && (
-                            <span className={styles.flag}>
-                              <StatusIcon tone="pending" label="Recovered transcript" /> Recovered
-                            </span>
-                          )}
-                        </div>
-                      )
-                    }
-                  >
+                <article key={key} id={key} className={styles.turn}>
+                  <div className={styles.block}>
+                    <span className={styles.speakerMira}>Mira</span>
                     <p className={styles.question}>{turn.question}</p>
+                  </div>
 
-                    <div className={styles.answerBlock}>
-                      <span className={styles.answerLabel}>{showRaw ? 'Raw transcript' : 'Cleaned answer'}</span>
-                      {showRaw ? (
-                        <p className={styles.rawText}>
-                          {turn.rawTranscript ?? <span className={styles.muted}>No raw transcript.</span>}
-                        </p>
-                      ) : (
-                        <MarkdownEditor
-                          value={edit?.text ?? initialEditText(turn)}
-                          onChange={(value) => updateEdit(key, value)}
-                          ariaLabel={`Edited transcript for turn ${turn.ordinal}`}
-                          minHeight="120px"
-                        />
+                  <div className={styles.block}>
+                    <div className={styles.youHead}>
+                      <span className={styles.speakerYou}>You</span>
+                      {turn.incomplete && (
+                        <span className={styles.flag}>
+                          <StatusIcon tone="warning" label="Incomplete answer" size={13} /> Incomplete
+                        </span>
+                      )}
+                      {turn.endpointReason === 'recovery' && (
+                        <span className={styles.flag}>
+                          <StatusIcon tone="pending" label="Recovered transcript" size={13} /> Recovered
+                        </span>
+                      )}
+                      <span className={styles.youSpacer} />
+                      {!showRaw &&
+                        (edit?.saving ? (
+                          <span className={styles.saveState}>Saving…</span>
+                        ) : edit?.saved && !edit.dirty ? (
+                          <span className={styles.saveState}>
+                            <StatusIcon tone="success" label="Saved" size={13} /> Saved
+                          </span>
+                        ) : null)}
+                      {!showRaw && (
+                        <button
+                          type="button"
+                          className={styles.editToggle}
+                          onClick={() => setEditing(editing ? null : key)}
+                        >
+                          {editing ? 'Done' : 'Edit'}
+                        </button>
                       )}
                     </div>
 
-                    {!showRaw && (
-                      <div className={styles.turnActions}>
-                        <Button onClick={() => void saveEdit(turn)} disabled={!edit?.dirty || edit?.saving}>
-                          {edit?.saving ? 'Saving…' : 'Save edit'}
-                        </Button>
-                        {edit?.saved && !edit.dirty && (
-                          <span className={styles.savedNote}>
-                            <StatusIcon tone="success" label="Saved" /> Saved
-                          </span>
-                        )}
-                      </div>
+                    {showRaw ? (
+                      <p className={styles.answerText}>
+                        {turn.rawTranscript ?? <span className={styles.muted}>No original transcript.</span>}
+                      </p>
+                    ) : editing ? (
+                      <MarkdownEditor
+                        value={edit?.text ?? initialEditText(turn)}
+                        onChange={(value) => updateEdit(key, value)}
+                        ariaLabel={`Answer to: ${turn.question}`}
+                        minHeight="120px"
+                      />
+                    ) : (
+                      <AnswerText text={edit?.text ?? initialEditText(turn)} />
                     )}
-                  </Panel>
-                </li>
+                  </div>
+                </article>
               );
-            })}
-          </ol>
-        )}
+            })
+          )}
+        </div>
       </div>
     </>
   );
 }
 
-/** Stable key for a turn — ordinal is unique within a review. */
-function turnKey(turn: SessionReviewTurn): string {
-  return `turn-${turn.ordinal}`;
-}
-
-/**
- * The edit API keys on the real persisted turn id. The review projection now
- * carries it, so edits target the correct turn row (previously the ordinal was
- * sent as the id and edits silently never persisted).
- */
-function turnId(turn: SessionReviewTurn): string {
-  return turn.id;
+function AnswerText({ text }: { text: string }): JSX.Element {
+  const trimmed = text.trim();
+  if (trimmed === '') {
+    return <p className={styles.answerText}><span className={styles.muted}>No answer recorded.</span></p>;
+  }
+  const paragraphs = trimmed.split(/\n{2,}/);
+  return (
+    <div className={styles.answerProse}>
+      {paragraphs.map((para, index) => (
+        <p key={index} className={styles.answerText}>
+          {para}
+        </p>
+      ))}
+    </div>
+  );
 }

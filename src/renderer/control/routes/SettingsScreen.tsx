@@ -5,13 +5,14 @@ import { Button } from '../components/Button';
 import { Icon, type IconName } from '../components/Icon';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
 import { PageHeader } from '../components/PageHeader';
+import { Section } from '../components/Section';
 import { describeError } from '../lib/errors';
 import route from './route.module.css';
 import styles from './SettingsScreen.module.css';
 
-// Provider brand marks — official logo icons only (no wordmark). OpenAI's logomark
-// is monochrome (rendered white on this dark UI); Inworld's brushstroke mark uses
-// its warm off-white from the brand favicon.
+// Provider brand marks — official logomarks only (no wordmark). Both are
+// monochrome and inherit `currentColor` from the provider tile, so they render
+// as dark marks on the light theme (and would adapt to a dark surface too).
 function OpenAILogo(): JSX.Element {
   return (
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden>
@@ -125,10 +126,7 @@ export function SettingsScreen(): JSX.Element {
 
   return (
     <>
-      <PageHeader
-        title="Settings"
-        meta="AI provider connections."
-      />
+      <PageHeader title="Settings" />
       <div className={`${route.page} ${route.pageNarrow}`}>
         {error !== null && (
           <p className={route.error} role="alert">
@@ -142,7 +140,11 @@ export function SettingsScreen(): JSX.Element {
           </div>
         )}
 
-        <div className={styles.providerList}>
+        <Section
+          title="Connection health"
+          description="Where CandidCue gets its language and voice. Keys are stored by the desktop app and are never shown again after saving."
+        >
+          <div className={styles.providerList}>
           <ProviderCard
             provider="openai"
             logo={<OpenAILogo />}
@@ -180,7 +182,8 @@ export function SettingsScreen(): JSX.Element {
             testing={testing === 'inworld'}
             result={testResults.inworld}
           />
-        </div>
+          </div>
+        </Section>
       </div>
     </>
   );

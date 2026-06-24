@@ -46,12 +46,20 @@ export type IconName =
   | 'copy'
   | 'inbox'
   | 'folder'
-  | 'externalLink';
+  | 'externalLink'
+  | 'more';
 
 /** Icons whose shapes are filled rather than stroked. */
-const FILLED = new Set<IconName>(['play', 'pause', 'stop', 'starFilled', 'grip']);
+const FILLED = new Set<IconName>(['play', 'pause', 'stop', 'starFilled', 'grip', 'more']);
 
 const PATHS: Record<IconName, JSX.Element> = {
+  more: (
+    <>
+      <circle cx="5" cy="12" r="1.7" />
+      <circle cx="12" cy="12" r="1.7" />
+      <circle cx="19" cy="12" r="1.7" />
+    </>
+  ),
   library: (
     <>
       <rect x="3" y="3" width="7" height="7" rx="1.4" />
