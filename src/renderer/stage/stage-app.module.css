@@ -1,6 +1,7 @@
 .stage {
   position: absolute;
   inset: 0;
-  background: #000;
+  /* A subtle charcoal vignette rather than a dead-black void behind the video. */
+  background: radial-gradient(130% 100% at 50% 42%, #15181f 0%, #07080a 78%);
   overflow: hidden;
 }

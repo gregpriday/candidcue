@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionRuntimeState, SessionCommand } from '@shared/domain';
 import type {
   OperatorSessionSnapshot,
@@ -9,12 +9,10 @@ import type { Navigator } from '../app';
 import { Button } from '../components/Button';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
 import { Icon } from '../components/Icon';
-import { Panel } from '../components/Panel';
-import { PageHeader } from '../components/PageHeader';
+import { Sheet } from '../components/Sheet';
 import { useSnapshot } from '../state/useSnapshot';
 import { formatElapsed } from '../lib/format';
 import { describeError } from '../lib/errors';
-import route from './route.module.css';
 import styles from './OperatorConsole.module.css';
 
 interface OperatorConsoleProps {
@@ -27,28 +25,23 @@ interface StateDescriptor {
   label: string;
 }
 
+/** Reassuring, human state copy — what's happening, in the interviewee's terms. */
 const STATE_DESCRIPTORS: Record<SessionRuntimeState, StateDescriptor> = {
   IDLE: { tone: 'neutral', label: 'Idle' },
-  PREPARING: { tone: 'pending', label: 'Preparing' },
+  PREPARING: { tone: 'pending', label: 'Preparing the interview' },
   READY: { tone: 'success', label: 'Ready' },
-  INTERVIEWER_THINKING: { tone: 'active', label: 'Mira is thinking' },
-  INTERVIEWER_BUFFERING: { tone: 'active', label: 'Buffering question' },
+  INTERVIEWER_THINKING: { tone: 'active', label: 'Mira is preparing the next question' },
+  INTERVIEWER_BUFFERING: { tone: 'active', label: 'Preparing the next question' },
   INTERVIEWER_SPEAKING: { tone: 'active', label: 'Mira is speaking' },
-  USER_ARMED: { tone: 'pending', label: 'Ready for your answer' },
-  USER_SPEAKING: { tone: 'active', label: 'Listening' },
-  ENDPOINT_CANDIDATE: { tone: 'pending', label: 'Detecting end of answer' },
-  TURN_FINALIZING: { tone: 'active', label: 'Finalizing answer' },
+  USER_ARMED: { tone: 'pending', label: 'Your turn — take your time' },
+  USER_SPEAKING: { tone: 'active', label: 'Mira is listening' },
+  ENDPOINT_CANDIDATE: { tone: 'pending', label: 'Waiting for a natural pause' },
+  TURN_FINALIZING: { tone: 'active', label: 'Saving your answer' },
   PAUSED: { tone: 'warning', label: 'Paused' },
-  RECOVERING: { tone: 'warning', label: 'Recovering' },
-  FINISHING: { tone: 'pending', label: 'Finishing up' },
-  COMPLETED: { tone: 'success', label: 'Completed' },
-  ERROR: { tone: 'danger', label: 'Error' },
-};
-
-const PROVIDER_TONE: Record<'ok' | 'degraded' | 'down', StatusTone> = {
-  ok: 'success',
-  degraded: 'warning',
-  down: 'danger',
+  RECOVERING: { tone: 'warning', label: 'Reconnecting' },
+  FINISHING: { tone: 'pending', label: 'Wrapping up' },
+  COMPLETED: { tone: 'success', label: 'Interview complete' },
+  ERROR: { tone: 'danger', label: 'Something went wrong' },
 };
 
 const COVERAGE_TONE: Record<PublicCoverageItem['status'], StatusTone> = {
@@ -59,8 +52,8 @@ const COVERAGE_TONE: Record<PublicCoverageItem['status'], StatusTone> = {
 };
 
 const COVERAGE_WORD: Record<PublicCoverageItem['status'], string> = {
-  not_started: 'Not started',
-  partial: 'Partial',
+  not_started: 'Not discussed',
+  partial: 'In progress',
   covered: 'Covered',
   skipped: 'Skipped',
 };
@@ -82,7 +75,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 /**
  * Focus is on an interactive control (e.g. a transport button). Let it handle its
  * own keys so Space/Enter activates the focused button instead of the global
- * shortcut wrong-firing a commit at it.
+ * shortcut wrong-firing at it.
  */
 function isInteractiveTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && target.closest('button, a[href], [role="button"]') !== null;
@@ -104,7 +97,6 @@ export function OperatorConsole({ nav, sessionId }: OperatorConsoleProps): JSX.E
     }
   }, []);
 
-  // Navigate to review once the session completes.
   const completed = snapshot?.state === 'COMPLETED';
   useEffect(() => {
     if (completed) {
@@ -116,7 +108,6 @@ export function OperatorConsole({ nav, sessionId }: OperatorConsoleProps): JSX.E
   }, [completed, snapshot, sessionId, nav]);
 
   const controls = snapshot?.controls;
-  // Global keyboard shortcuts while a session is active and no field is focused.
   useEffect(() => {
     if (!snapshot) {
       return undefined;
@@ -124,6 +115,8 @@ export function OperatorConsole({ nav, sessionId }: OperatorConsoleProps): JSX.E
     const handler = (event: KeyboardEvent): void => {
       if (
         event.repeat ||
+        // A confirmation sheet is open — don't drive the session behind it.
+        document.querySelector('[aria-modal="true"]') !== null ||
         isEditableTarget(event.target) ||
         isInteractiveTarget(event.target) ||
         event.metaKey ||
@@ -170,19 +163,12 @@ export function OperatorConsole({ nav, sessionId }: OperatorConsoleProps): JSX.E
 
   if (!snapshot) {
     return (
-      <>
-        <PageHeader
-          title="Operator console"
-          actions={
-            <Button variant="ghost" onClick={() => nav.go({ name: 'home' })}>
-              Exit
-            </Button>
-          }
-        />
-        <div className={route.page}>
-          <p className={route.empty}>Waiting for the session to report in…</p>
-        </div>
-      </>
+      <div className={styles.waiting}>
+        <p>Connecting to the session…</p>
+        <Button variant="ghost" onClick={() => nav.go({ name: 'home' })}>
+          Exit
+        </Button>
+      </div>
     );
   }
 
@@ -206,206 +192,297 @@ interface OperatorViewProps {
 function OperatorView({ snapshot, commandError, onCommand, onExit }: OperatorViewProps): JSX.Element {
   const descriptor = STATE_DESCRIPTORS[snapshot.state];
   const controls = snapshot.controls;
+  const [endConfirm, setEndConfirm] = useState(false);
+
   const announcement = useMemo(() => {
     const parts = [descriptor.label];
-    if (snapshot.endpointPending) {
-      parts.push('detecting end of answer');
-    }
     if (snapshot.recoverableWarning) {
       parts.push(snapshot.recoverableWarning);
     }
     return parts.join('. ');
-  }, [descriptor.label, snapshot.endpointPending, snapshot.recoverableWarning]);
+  }, [descriptor.label, snapshot.recoverableWarning]);
+
+  const hasAnswer = snapshot.finalTranscriptSoFar !== '' || snapshot.partialTranscript !== '';
+  const awaitingAnswer = snapshot.state === 'USER_ARMED' || snapshot.state === 'USER_SPEAKING';
 
   return (
-    <>
-      <PageHeader
-        title={snapshot.projectTitle}
+    <div className={styles.console}>
+      <div className={styles.visuallyHidden} role="status" aria-live="assertive">
+        {announcement}
+      </div>
+
+      <header className={styles.bar}>
+        <div className={styles.barLeft}>
+          <LiveIndicator paused={snapshot.state === 'PAUSED'} />
+          <span className={styles.timer} aria-label="Elapsed time">
+            {formatElapsed(snapshot.elapsedMs)}
+          </span>
+        </div>
+        <div className={styles.barTitle}>{snapshot.projectTitle}</div>
+        <div className={styles.barRight}>
+          <MicChip mic={snapshot.mic} />
+          <ConnectionChip status={snapshot.providerStatus} />
+          <button type="button" className={styles.exit} onClick={onExit} title="Exit the live console">
+            <Icon name="close" size={16} />
+          </button>
+        </div>
+      </header>
+
+      {snapshot.recoverableWarning && (
+        <div className={styles.warning} role="alert">
+          <StatusIcon tone="warning" label="Warning" />
+          <span>{snapshot.recoverableWarning}</span>
+        </div>
+      )}
+      {commandError !== null && (
+        <p className={styles.commandError} role="alert">
+          {commandError}
+        </p>
+      )}
+
+      <main className={styles.conversation}>
+        <p className={styles.stateLine} data-tone={descriptor.tone}>
+          {descriptor.label}
+        </p>
+        <p className={styles.question}>
+          {snapshot.currentQuestion ?? <span className={styles.muted}>Preparing the first question…</span>}
+        </p>
+
+        <div className={styles.answer}>
+          <span className={styles.speaker}>You</span>
+          {hasAnswer ? (
+            <p className={styles.answerText}>
+              {snapshot.finalTranscriptSoFar}
+              {snapshot.partialTranscript && <span className={styles.partial}> {snapshot.partialTranscript}</span>}
+            </p>
+          ) : (
+            <p className={styles.answerPlaceholder}>
+              {awaitingAnswer ? 'Your turn — take your time.' : 'Mira is listening.'}
+            </p>
+          )}
+        </div>
+
+        <Topics items={snapshot.coverage} />
+      </main>
+
+      <footer className={styles.transport}>
+        <div className={styles.transportSecondary}>
+          {controls.canResume ? (
+            <Button onClick={() => onCommand({ type: 'RESUME_SESSION' })} title="Resume (P)">
+              <Icon name="play" size={16} /> Resume
+            </Button>
+          ) : (
+            <Button onClick={() => onCommand({ type: 'PAUSE_SESSION' })} disabled={!controls.canPause} title="Pause (P)">
+              <Icon name="pause" size={16} /> Pause
+            </Button>
+          )}
+        </div>
+
+        <Button
+          variant="primary"
+          className={styles.finish}
+          onClick={() => onCommand({ type: 'COMMIT_USER_TURN', reason: 'manual' })}
+          disabled={!controls.canCommit}
+          title="Finish answer (Space)"
+        >
+          <Icon name="check" size={16} /> Finish answer
+        </Button>
+
+        <div className={styles.transportSecondary}>
+          <button
+            type="button"
+            className={styles.iconButton}
+            onClick={() => onCommand({ type: 'REPEAT_QUESTION' })}
+            disabled={!controls.canRepeat}
+            title="Repeat question (R)"
+            aria-label="Repeat question"
+          >
+            <Icon name="repeat" size={18} />
+          </button>
+          <button
+            type="button"
+            className={styles.iconButton}
+            onClick={() => onCommand({ type: 'SKIP_QUESTION' })}
+            disabled={!controls.canSkip}
+            title="Skip question (S)"
+            aria-label="Skip question"
+          >
+            <Icon name="skip" size={18} />
+          </button>
+          <button
+            type="button"
+            className={styles.iconButtonDanger}
+            onClick={() => setEndConfirm(true)}
+            disabled={!controls.canEnd}
+            title="End after this answer"
+            aria-label="End after this answer"
+          >
+            <Icon name="stop" size={18} />
+          </button>
+        </div>
+      </footer>
+
+      <Sheet
+        open={endConfirm}
+        onClose={() => setEndConfirm(false)}
+        tone="danger"
+        title="End the interview after this answer?"
+        description="Mira will wrap up once the current answer is saved."
         actions={
-          <Button variant="ghost" onClick={onExit}>
-            Exit
-          </Button>
-        }
-      />
-
-      <div className={styles.cockpit}>
-        {/* ARIA live region announcing state changes to assistive tech. */}
-        <div className={styles.visuallyHidden} role="status" aria-live="assertive">
-          {announcement}
-        </div>
-
-        {snapshot.recoverableWarning && (
-          <div className={route.notice} role="alert">
-            <StatusIcon tone="warning" label="Warning" />
-            <span>{snapshot.recoverableWarning}</span>
-          </div>
-        )}
-        {commandError !== null && (
-          <p className={route.error} role="alert">
-            {commandError}
-          </p>
-        )}
-
-        <div className={styles.grid}>
-          <div className={styles.mainColumn}>
-            <Panel title="Current question" flush flushBody bodyClassName={styles.questionBody}>
-              <p className={styles.question}>
-                {snapshot.currentQuestion ?? <span className={styles.muted}>No question yet.</span>}
-              </p>
-            </Panel>
-
-            <Panel
-              title="Live transcript"
-              flush
-              flushBody
-              bodyClassName={styles.transcriptBody}
-              actions={
-                snapshot.endpointPending ? (
-                  <span className={styles.endpointPending}>
-                    <StatusIcon tone="pending" label="Detecting end of answer" /> Detecting end
-                  </span>
-                ) : undefined
-              }
-            >
-              <p className={styles.transcript}>
-                <span>{snapshot.finalTranscriptSoFar}</span>
-                {snapshot.partialTranscript && (
-                  <span className={styles.partial}> {snapshot.partialTranscript}</span>
-                )}
-                {!snapshot.finalTranscriptSoFar && !snapshot.partialTranscript && (
-                  <span className={styles.muted}>Waiting for the answer…</span>
-                )}
-              </p>
-            </Panel>
-          </div>
-
-          <aside className={styles.sideColumn}>
-            <Panel title="Microphone" flush flushBody bodyClassName={styles.sideBody}>
-              <MicStatus mic={snapshot.mic} />
-            </Panel>
-            <Panel title="Coverage" flush flushBody bodyClassName={styles.sideBody}>
-              <CoverageList items={snapshot.coverage} />
-            </Panel>
-            <Panel title="Providers" flush flushBody bodyClassName={styles.sideBody}>
-              <ProviderStatusList status={snapshot.providerStatus} />
-            </Panel>
-          </aside>
-        </div>
-
-        <div className={styles.transport}>
-          <div className={styles.transportReadout}>
-            <span className={styles.stateBadge}>
-              <StatusIcon tone={descriptor.tone} label={`State: ${descriptor.label}`} />
-              {descriptor.label}
-            </span>
-            <span className={styles.timer} aria-label="Elapsed time">
-              {formatElapsed(snapshot.elapsedMs)}
-            </span>
-            <span className={styles.ordinal}>Question {snapshot.questionOrdinal}</span>
-          </div>
-
-          <div className={styles.transportControls}>
-            {controls.canResume ? (
-              <Button onClick={() => onCommand({ type: 'RESUME_SESSION' })}>
-                <Icon name="play" size={14} /> Resume (P)
-              </Button>
-            ) : (
-              <Button onClick={() => onCommand({ type: 'PAUSE_SESSION' })} disabled={!controls.canPause}>
-                <Icon name="pause" size={14} /> Pause (P)
-              </Button>
-            )}
-            <Button
-              variant="primary"
-              onClick={() => onCommand({ type: 'COMMIT_USER_TURN', reason: 'manual' })}
-              disabled={!controls.canCommit}
-            >
-              <Icon name="check" size={14} /> Commit (Space)
-            </Button>
-            <Button onClick={() => onCommand({ type: 'REPEAT_QUESTION' })} disabled={!controls.canRepeat}>
-              <Icon name="repeat" size={14} /> Repeat (R)
-            </Button>
-            <Button onClick={() => onCommand({ type: 'SKIP_QUESTION' })} disabled={!controls.canSkip}>
-              <Icon name="skip" size={14} /> Skip (S)
+          <>
+            <Button variant="ghost" onClick={() => setEndConfirm(false)}>
+              Keep going
             </Button>
             <Button
               variant="danger"
-              onClick={() => onCommand({ type: 'END_AFTER_TURN' })}
               disabled={!controls.canEnd}
+              onClick={() => {
+                setEndConfirm(false);
+                if (controls.canEnd) {
+                  onCommand({ type: 'END_AFTER_TURN' });
+                }
+              }}
             >
-              <Icon name="stop" size={14} /> End after turn
+              End after turn
             </Button>
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function MicStatus({ mic }: { mic: OperatorSessionSnapshot['mic'] }): JSX.Element {
-  const gateTone: StatusTone = mic.gate === 'active' ? 'active' : mic.gate === 'armed' ? 'pending' : 'neutral';
-  const gateWord = mic.gate === 'active' ? 'Active' : mic.gate === 'armed' ? 'Armed' : 'Closed';
-  const percent = Math.round(Math.min(1, Math.max(0, mic.level)) * 100);
-  return (
-    <div className={styles.micStatus}>
-      <span className={styles.micGate}>
-        <StatusIcon tone={gateTone} label={`Microphone ${gateWord}`} />
-        {gateWord}
-        {mic.deviceLabel && <span className={styles.micDevice}> · {mic.deviceLabel}</span>}
-      </span>
-      <div
-        className={styles.micTrack}
-        role="meter"
-        aria-label="Microphone level"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={percent}
-      >
-        <div className={`${styles.micFill} ${mic.clipping ? styles.micClip : ''}`} style={{ width: `${percent}%` }} />
-      </div>
-      {mic.clipping && <span className={styles.micClipNote}>Clipping</span>}
+          </>
+        }
+      />
     </div>
   );
 }
 
-function CoverageList({ items }: { items: PublicCoverageItem[] }): JSX.Element {
-  if (items.length === 0) {
-    return <p className={styles.muted}>No coverage items.</p>;
-  }
+function LiveIndicator({ paused }: { paused: boolean }): JSX.Element {
   return (
-    <ul className={styles.coverageList}>
-      {items.map((item) => (
-        <li key={item.id} className={styles.coverageItem}>
-          <StatusIcon tone={COVERAGE_TONE[item.status]} label={`${item.label}: ${COVERAGE_WORD[item.status]}`} />
-          <div className={styles.coverageBody}>
-            <span className={styles.coverageLabel}>{item.label}</span>
-            <span className={styles.coverageMeta}>
-              {item.priority} · {COVERAGE_WORD[item.status]}
-            </span>
-          </div>
-        </li>
-      ))}
-    </ul>
+    <span className={paused ? styles.liveIndicatorPaused : styles.liveIndicator}>
+      <span className={styles.liveDot} aria-hidden />
+      {paused ? 'PAUSED' : 'LIVE'}
+    </span>
   );
 }
 
-function ProviderStatusList({ status }: { status: PublicProviderStatus }): JSX.Element {
+function MicChip({ mic }: { mic: OperatorSessionSnapshot['mic'] }): JSX.Element {
+  const tone: StatusTone = mic.gate === 'active' ? 'success' : mic.gate === 'armed' ? 'pending' : 'neutral';
+  const label = mic.gate === 'active' ? 'Mic on' : mic.gate === 'armed' ? 'Mic ready' : 'Mic off';
+  return (
+    <span className={styles.chip} title={mic.deviceLabel ? `${label} · ${mic.deviceLabel}` : label}>
+      <StatusIcon tone={tone} label={label} size={13} />
+      <span className={styles.chipLabel}>Mic</span>
+    </span>
+  );
+}
+
+function ConnectionChip({ status }: { status: PublicProviderStatus }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const values = [status.openai, status.inworldStt, status.inworldTts];
+  const overall: 'ok' | 'degraded' | 'down' = values.includes('down')
+    ? 'down'
+    : values.includes('degraded')
+      ? 'degraded'
+      : 'ok';
+  const tone: StatusTone = overall === 'ok' ? 'success' : overall === 'degraded' ? 'warning' : 'danger';
+  const label = overall === 'ok' ? 'Connected' : overall === 'degraded' ? 'Degraded' : 'Connection lost';
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+    const onDown = (event: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   const rows: Array<{ label: string; value: 'ok' | 'degraded' | 'down' }> = [
     { label: 'OpenAI', value: status.openai },
-    { label: 'Inworld STT', value: status.inworldStt },
-    { label: 'Inworld TTS', value: status.inworldTts },
+    { label: 'Speech-to-text', value: status.inworldStt },
+    { label: 'Voice', value: status.inworldTts },
   ];
+
   return (
-    <ul className={styles.providerList}>
-      {rows.map((row) => (
-        <li key={row.label} className={styles.providerItem}>
-          <StatusIcon tone={PROVIDER_TONE[row.value]} label={`${row.label}: ${row.value}`} />
-          <span className={styles.providerLabel}>{row.label}</span>
-          <span className={styles.providerValue}>{row.value}</span>
-        </li>
-      ))}
-      {status.lastQuestionLatencyMs !== null && (
-        <li className={styles.providerLatency}>Last question: {status.lastQuestionLatencyMs} ms</li>
+    <div className={styles.connection} ref={ref}>
+      <button
+        type="button"
+        className={overall === 'ok' ? styles.chipButton : styles.chipButtonAlert}
+        onClick={() => setOpen((prev) => !prev)}
+        title={`Connection: ${label}`}
+        aria-expanded={open}
+      >
+        <StatusIcon tone={tone} label={label} size={13} />
+        <span className={styles.chipLabel}>{overall === 'ok' ? 'Connection' : label}</span>
+      </button>
+      {open && (
+        <div className={styles.connectionPopover} role="group" aria-label="Connection details">
+          <ul className={styles.connectionList}>
+            {rows.map((row) => {
+              const rowTone: StatusTone = row.value === 'ok' ? 'success' : row.value === 'degraded' ? 'warning' : 'danger';
+              const rowWord = row.value === 'ok' ? 'Connected' : row.value === 'degraded' ? 'Degraded' : 'Offline';
+              return (
+                <li key={row.label}>
+                  <StatusIcon tone={rowTone} label={rowWord} size={13} />
+                  <span className={styles.connectionName}>{row.label}</span>
+                  <span className={styles.connectionValue}>{rowWord}</span>
+                </li>
+              );
+            })}
+          </ul>
+          {status.lastQuestionLatencyMs !== null && (
+            <p className={styles.connectionLatency}>Last question took {status.lastQuestionLatencyMs} ms</p>
+          )}
+        </div>
       )}
-    </ul>
+    </div>
+  );
+}
+
+function Topics({ items }: { items: PublicCoverageItem[] }): JSX.Element | null {
+  const [expanded, setExpanded] = useState(false);
+  if (items.length === 0) {
+    return null;
+  }
+  const covered = items.filter((item) => item.status === 'covered').length;
+  const remaining = items.filter((item) => item.status !== 'covered');
+  const shown = expanded ? items : remaining.slice(0, 3);
+
+  return (
+    <section className={styles.topics}>
+      <div className={styles.topicsHead}>
+        <span className={styles.topicsTitle}>Topics</span>
+        <span className={styles.topicsCount}>
+          {covered} of {items.length}
+        </span>
+      </div>
+      <div className={styles.topicsBar} aria-hidden>
+        <div className={styles.topicsBarFill} style={{ width: `${(covered / items.length) * 100}%` }} />
+      </div>
+      <ul className={styles.topicsList}>
+        {shown.map((item) => (
+          <li key={item.id} className={styles.topicItem}>
+            <StatusIcon tone={COVERAGE_TONE[item.status]} label={COVERAGE_WORD[item.status]} size={13} />
+            <span className={styles.topicLabel}>{item.label}</span>
+            <span className={styles.topicStatus}>{COVERAGE_WORD[item.status]}</span>
+          </li>
+        ))}
+      </ul>
+      {items.length > shown.length || expanded ? (
+        <button type="button" className={styles.topicsToggle} onClick={() => setExpanded((prev) => !prev)}>
+          {expanded ? 'Show less' : `Show all ${items.length}`}
+        </button>
+      ) : null}
+    </section>
   );
 }

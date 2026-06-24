@@ -1,18 +1,20 @@
+import { useEffect, useState } from 'react';
 import type { StageStateProjection } from '@shared/contracts';
 import styles from './StatusOverlay.module.css';
 
 interface StatusOverlayProps {
   state: StageStateProjection;
   captionsEnabled: boolean;
+  characterName?: string | null;
 }
 
-/** Visual states whose status text we surface (sparingly) on stage. */
+/** Visual states whose status text we surface (sparingly) on stage. The
+ *  'standby' and 'complete' states render their own dedicated screens. */
 const VISIBLE_STATUS: ReadonlySet<StageStateProjection['visualState']> = new Set([
   'listening',
   'thinking',
   'paused',
   'recovering',
-  'complete',
 ]);
 
 function fallbackStatusText(
@@ -27,8 +29,6 @@ function fallbackStatusText(
       return 'Paused';
     case 'recovering':
       return 'Reconnecting';
-    case 'complete':
-      return 'Interview complete';
     default:
       return null;
   }
@@ -80,11 +80,30 @@ function MicGlyph({ gate }: { gate: StageStateProjection['micState'] }): JSX.Ele
 export function StatusOverlay({
   state,
   captionsEnabled,
+  characterName,
 }: StatusOverlayProps): JSX.Element {
+  const isStandby = state.visualState === 'standby';
+  const isComplete = state.visualState === 'complete';
+
   const statusText =
-    VISIBLE_STATUS.has(state.visualState)
+    !isStandby && !isComplete && VISIBLE_STATUS.has(state.visualState)
       ? state.statusText ?? fallbackStatusText(state.visualState)
       : null;
+
+  // Transient status fades after a couple of seconds so it never lingers as
+  // permanent chrome; 'paused' stays put because it's a held state.
+  const [statusVisible, setStatusVisible] = useState(true);
+  useEffect(() => {
+    if (statusText === null) {
+      return undefined;
+    }
+    setStatusVisible(true);
+    if (state.visualState === 'paused') {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setStatusVisible(false), 2400);
+    return () => window.clearTimeout(timer);
+  }, [statusText, state.visualState]);
 
   const captions =
     captionsEnabled && state.captions !== null && state.captions !== ''
@@ -97,10 +116,29 @@ export function StatusOverlay({
         <MicGlyph gate={state.micState} />
       </div>
 
-      {/* Single ARIA live region announces status changes for assistive tech. */}
+      {isStandby && (
+        <div className={styles.screen} role="status" aria-live="polite">
+          {characterName != null && characterName !== '' && (
+            <p className={styles.screenName}>{characterName}</p>
+          )}
+          <p className={styles.screenTitle}>Your interview is ready.</p>
+          <p className={styles.screenHint}>Press Start in CandidCue when you’re ready.</p>
+        </div>
+      )}
+
+      {isComplete && (
+        <div className={styles.screen} role="status" aria-live="polite">
+          <p className={styles.screenTitle}>Interview complete</p>
+          <p className={styles.screenHint}>Thank you for your time.</p>
+        </div>
+      )}
+
+      {/* ARIA live region announces transient status changes for assistive tech. */}
       <div className={styles.status} aria-live="polite" aria-atomic="true">
         {statusText !== null ? (
-          <span className={styles.statusText}>{statusText}</span>
+          <span className={styles.statusText} data-visible={statusVisible ? 'true' : 'false'}>
+            {statusText}
+          </span>
         ) : null}
       </div>
 

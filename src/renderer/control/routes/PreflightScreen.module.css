@@ -1,80 +1,89 @@
-.columns {
+.preflight {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  gap: var(--space-8);
   align-items: start;
+  width: min(100%, 1200px);
+  padding: var(--space-6) var(--space-7) var(--space-9);
 }
-
-@media (max-width: 880px) {
-  .columns {
+@media (max-width: 920px) {
+  .preflight {
     grid-template-columns: 1fr;
   }
 }
 
-.column {
+.previewCol {
+  position: sticky;
+  top: var(--space-6);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  min-width: 0;
+}
+.privacy {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: 17px;
+  color: var(--text-muted);
 }
 
-/* Dense readiness rows: leading status dot + label + right-aligned status text,
-   separated by near-black hairline seams. No card chrome per row. */
+.setupCol {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-7);
+  min-width: 0;
+}
+
+.pacing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 .checklist {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: var(--space-3) var(--space-4);
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg-sunken);
-  overflow: hidden;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
 }
 .checkItem {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  min-height: var(--row-h);
-  padding: var(--space-1) var(--space-3);
-}
-.checkItem + .checkItem {
-  border-top: 1px solid var(--border-seam);
+  gap: var(--space-3);
+  font-size: var(--text-sm);
 }
 .checkLabel {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: var(--text-base);
-  font-weight: 600;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.required {
-  color: var(--text-muted);
-  font-weight: 400;
-  font-size: var(--text-xs);
 }
 .checkStatus {
   flex: 0 1 auto;
   min-width: 0;
   text-align: right;
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.beginRow {
+.actionRow {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
+  gap: var(--space-4);
+  flex-wrap: wrap;
 }
 
 .rangeValue {
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
-  font-family: var(--font-mono);
 }

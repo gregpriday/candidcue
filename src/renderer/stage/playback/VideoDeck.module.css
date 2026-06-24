@@ -1,7 +1,9 @@
 .deck {
   position: absolute;
   inset: 0;
-  background: #000;
+  /* Transparent so the stage's charcoal vignette shows through any letterbox
+     gaps (object-fit: contain) instead of a dead-black surround. */
+  background: transparent;
   overflow: hidden;
 }
 
@@ -13,7 +15,7 @@
   height: 100%;
   transform-origin: center center;
   will-change: opacity, transform;
-  background: #000;
+  background: transparent;
 }
 
 .poster {

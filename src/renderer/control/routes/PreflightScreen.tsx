@@ -4,7 +4,10 @@ import type { DisplayInfo, PreflightState, PreflightCheck, PrepareSessionInput }
 import type { Navigator } from '../app';
 import { Button } from '../components/Button';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
-import { Panel } from '../components/Panel';
+import { Section } from '../components/Section';
+import { RadioCard } from '../components/RadioCard';
+import { Disclosure } from '../components/Disclosure';
+import { StagePreview } from '../components/StagePreview';
 import { PageHeader } from '../components/PageHeader';
 import { describeError } from '../lib/errors';
 import { MicMeter } from '../components/MicMeter';
@@ -35,6 +38,12 @@ const CHECK_WORD: Record<PreflightCheck['status'], string> = {
   failed: 'Not ready',
 };
 
+const PACING: ReadonlyArray<{ value: EndpointMode; title: string; description: string }> = [
+  { value: 'manual', title: 'I’ll finish each answer myself', description: 'You decide when each answer is complete.' },
+  { value: 'balanced', title: 'Move on after a natural pause', description: 'Mira continues once you pause naturally.' },
+  { value: 'conservative', title: 'Wait for a longer pause', description: 'Mira waits a little longer before moving on.' },
+];
+
 export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.Element {
   const [endpointMode, setEndpointMode] = useState<EndpointMode>('conservative');
   const [inputDevices, setInputDevices] = useState<DeviceOption[]>([]);
@@ -47,12 +56,14 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
   const [mirrorStage, setMirrorStage] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [verticalOffsetPercent, setVerticalOffsetPercent] = useState(0);
+  const [posterUrl, setPosterUrl] = useState<string | null>(null);
 
   const [permissionState, setPermissionState] = useState<'idle' | 'granted' | 'denied'>('idle');
   const [preflight, setPreflight] = useState<PreflightState | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [beginning, setBeginning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const autoPrepared = useRef(false);
 
   const enumerate = useCallback(async () => {
     try {
@@ -110,6 +121,26 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
     };
   }, []);
 
+  // The interviewer's portrait for the stage preview.
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([window.candidcue.projects.get(projectId), window.candidcue.characters.list()])
+      .then(([aggregate, chars]) => {
+        if (cancelled || aggregate === null) {
+          return;
+        }
+        const characterId = aggregate.project.interviewerCharacterId;
+        const character = chars.find((c) => c.id === characterId) ?? chars.find((c) => c.id === 'mira') ?? chars[0];
+        setPosterUrl(character?.profileImageUrl ?? null);
+      })
+      .catch(() => {
+        /* the preview portrait is a nicety */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
   useEffect(() => {
     const unsubscribe = window.candidcue.events.onPreflight((state) => {
       if (state.projectId === projectId) {
@@ -158,6 +189,31 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
     }
   }, [buildInput]);
 
+  // A completed check is only valid for the config it was prepared with. When a
+  // session-affecting input changes, drop the prepared state so the user can't
+  // start a stale session and the check re-runs. (Display-only fine-tuning —
+  // zoom/offset — is excluded so dragging a slider doesn't thrash prepare.)
+  useEffect(() => {
+    setPreflight(null);
+    autoPrepared.current = false;
+  }, [endpointMode, selectedInput, selectedOutput, selectedDisplay, captionsEnabled, mirrorStage]);
+
+  // Run the readiness checks automatically once the microphone is enumerated and
+  // a display is available — no separate "prepare" step the user has to discover.
+  useEffect(() => {
+    if (
+      permissionState === 'granted' &&
+      selectedInput !== null &&
+      selectedDisplay !== null &&
+      preflight === null &&
+      !preparing &&
+      !autoPrepared.current
+    ) {
+      autoPrepared.current = true;
+      void handlePrepare();
+    }
+  }, [permissionState, selectedInput, selectedDisplay, preflight, preparing, handlePrepare]);
+
   const handleBegin = useCallback(async () => {
     setBeginning(true);
     setError(null);
@@ -193,203 +249,201 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
   const checks = preflight?.checks ?? [];
   const meterDeviceId = permissionState === 'granted' ? selectedInput : null;
 
+  // One evolving primary action instead of separate "prepare" then "begin".
+  const primary: { label: string; onClick: () => void; disabled: boolean } =
+    permissionState !== 'granted'
+      ? {
+          label: permissionState === 'denied' ? 'Fix microphone access' : 'Allow microphone',
+          onClick: () => void requestPermission(),
+          disabled: false,
+        }
+      : preparing
+        ? { label: 'Checking setup…', onClick: () => undefined, disabled: true }
+        : canBegin
+          ? { label: beginning ? 'Starting…' : 'Start interview', onClick: () => void handleBegin(), disabled: beginning }
+          : preflight !== null
+            ? { label: 'Re-check setup', onClick: () => void handlePrepare(), disabled: false }
+            : { label: 'Check setup', onClick: () => void handlePrepare(), disabled: false };
+
   return (
     <>
-      <PageHeader
-        title="Session setup"
-        onBack={() => nav.go({ name: 'project', projectId })}
-      />
-      <div className={`${route.page} ${route.pageWide}`}>
-        {error !== null && (
-          <p className={route.error} role="alert">
-            {error}
+      <PageHeader title="Get ready" onBack={() => nav.go({ name: 'project', projectId })} backLabel="Interview" />
+      <div className={styles.preflight}>
+        <div className={styles.previewCol}>
+          <StagePreview
+            posterUrl={posterUrl}
+            captionsEnabled={captionsEnabled}
+            caption="Your interview is ready."
+            mirror={mirrorStage}
+            zoom={zoom}
+            verticalOffsetPercent={verticalOffsetPercent}
+            status="Stage preview"
+          />
+          <p className={styles.privacy}>
+            CandidCue does not record your camera. Raw microphone audio is not saved. Interview text is processed
+            using your configured providers.
           </p>
-        )}
+        </div>
 
-        <div className={styles.columns}>
-          <div className={styles.column}>
-            <Panel title="Endpoint mode">
-              <p className={route.sectionHint}>How CandidCue decides an answer is finished.</p>
-              <div className={route.field}>
-                <label className={route.label} htmlFor="endpoint-mode">
-                  Mode
-                </label>
-                <select
-                  id="endpoint-mode"
-                  className={route.select}
-                  value={endpointMode}
-                  onChange={(e) => setEndpointMode(e.target.value as EndpointMode)}
-                >
-                  <option value="manual">Manual — you commit each answer</option>
-                  <option value="conservative">Conservative — wait longer before committing</option>
-                  <option value="balanced">Balanced — commit a little sooner</option>
-                </select>
+        <div className={styles.setupCol}>
+          {error !== null && (
+            <p className={route.error} role="alert">
+              {error}
+            </p>
+          )}
+
+          <Section title="Microphone" description="Say a few words and watch the level move.">
+            {permissionState !== 'granted' ? (
+              <div className={route.notice}>
+                <StatusIcon tone={permissionState === 'denied' ? 'danger' : 'pending'} label="Microphone access" />
+                <span>
+                  {permissionState === 'denied'
+                    ? 'Microphone access was denied. Grant access in system settings, then try again.'
+                    : 'Grant microphone access to pick a device and preview your level.'}
+                </span>
               </div>
-            </Panel>
-
-            <Panel title="Audio devices">
-              {permissionState !== 'granted' ? (
-                <div className={route.notice}>
-                  <StatusIcon tone={permissionState === 'denied' ? 'danger' : 'pending'} label="Microphone access" />
-                  <div>
-                    <p style={{ margin: 0 }}>
-                      {permissionState === 'denied'
-                        ? 'Microphone access was denied. Grant access in system settings, then retry.'
-                        : 'Grant microphone access to list devices and preview your level.'}
-                    </p>
-                    <Button variant="secondary" onClick={() => void requestPermission()}>
-                      {permissionState === 'denied' ? 'Retry microphone access' : 'Allow microphone'}
-                    </Button>
-                  </div>
+            ) : (
+              <>
+                <div className={route.field}>
+                  <label className={route.label} htmlFor="input-device">
+                    Device
+                  </label>
+                  <select
+                    id="input-device"
+                    className={route.select}
+                    value={selectedInput ?? ''}
+                    onChange={(e) => setSelectedInput(e.target.value || null)}
+                  >
+                    {inputDevices.map((device) => (
+                      <option key={device.deviceId} value={device.deviceId}>
+                        {device.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              ) : (
-                <>
-                  <div className={route.field}>
-                    <label className={route.label} htmlFor="input-device">
-                      Microphone
-                    </label>
-                    <select
-                      id="input-device"
-                      className={route.select}
-                      value={selectedInput ?? ''}
-                      onChange={(e) => setSelectedInput(e.target.value || null)}
-                    >
-                      {inputDevices.map((device) => (
-                        <option key={device.deviceId} value={device.deviceId}>
-                          {device.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <MicMeter deviceId={meterDeviceId} />
-                  <div className={route.field}>
-                    <label className={route.label} htmlFor="output-device">
-                      Audio output
-                    </label>
-                    <select
-                      id="output-device"
-                      className={route.select}
-                      value={selectedOutput ?? ''}
-                      onChange={(e) => setSelectedOutput(e.target.value || null)}
-                    >
-                      {outputDevices.length === 0 && <option value="">System default</option>}
-                      {outputDevices.map((device) => (
-                        <option key={device.deviceId} value={device.deviceId}>
-                          {device.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </>
-              )}
-            </Panel>
+                <MicMeter deviceId={meterDeviceId} />
+                <div className={route.field}>
+                  <label className={route.label} htmlFor="output-device">
+                    Interviewer voice plays through
+                  </label>
+                  <select
+                    id="output-device"
+                    className={route.select}
+                    value={selectedOutput ?? ''}
+                    onChange={(e) => setSelectedOutput(e.target.value || null)}
+                  >
+                    {outputDevices.length === 0 && <option value="">System default</option>}
+                    {outputDevices.map((device) => (
+                      <option key={device.deviceId} value={device.deviceId}>
+                        {device.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
+          </Section>
 
-            <Panel
-              title="Teleprompter display"
-              actions={
-                <Button variant="ghost" onClick={identifyDisplays}>
-                  Identify displays
-                </Button>
-              }
-            >
-              <div className={route.field}>
-                <label className={route.label} htmlFor="display-select">
-                  Display
-                </label>
-                <select
-                  id="display-select"
-                  className={route.select}
-                  value={selectedDisplay ?? ''}
-                  onChange={(e) => handleSelectDisplay(e.target.value)}
-                >
-                  {displays.length === 0 && <option value="">No displays detected</option>}
-                  {displays.map((display) => (
-                    <option key={display.id} value={display.id}>
-                      {display.label}
-                      {display.isPrimary ? ' (primary)' : ''}
-                      {display.isInternal ? ' (internal)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </Panel>
-          </div>
+          <Section
+            title="Stage display"
+            description="The screen the interviewee sees."
+            actions={
+              <Button variant="ghost" onClick={identifyDisplays}>
+                Identify displays
+              </Button>
+            }
+          >
+            <div className={route.field}>
+              <label className={route.label} htmlFor="display-select">
+                Display
+              </label>
+              <select
+                id="display-select"
+                className={route.select}
+                value={selectedDisplay ?? ''}
+                onChange={(e) => handleSelectDisplay(e.target.value)}
+              >
+                {displays.length === 0 && <option value="">No displays detected</option>}
+                {displays.map((display) => (
+                  <option key={display.id} value={display.id}>
+                    {display.label}
+                    {display.isPrimary ? ' (primary)' : ''}
+                    {display.isInternal ? ' (internal)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <label className={route.checkboxRow}>
+              <input type="checkbox" checked={captionsEnabled} onChange={(e) => setCaptionsEnabled(e.target.checked)} />
+              Show captions on the stage
+            </label>
+          </Section>
 
-          <div className={styles.column}>
-            <Panel title="Stage">
-              <label className={route.checkboxRow}>
-                <input
-                  type="checkbox"
-                  checked={captionsEnabled}
-                  onChange={(e) => setCaptionsEnabled(e.target.checked)}
+          <Section title="When to move on" description="How Mira decides an answer is finished.">
+            <div className={styles.pacing}>
+              {PACING.map((option) => (
+                <RadioCard<EndpointMode>
+                  key={option.value}
+                  name="endpoint-mode"
+                  value={option.value}
+                  checked={endpointMode === option.value}
+                  onChange={setEndpointMode}
+                  title={option.title}
+                  description={option.description}
                 />
-                Show captions on the stage
-              </label>
-              <label className={route.checkboxRow}>
-                <input type="checkbox" checked={mirrorStage} onChange={(e) => setMirrorStage(e.target.checked)} />
-                Mirror the stage horizontally
-              </label>
-              <RangeField
-                id="zoom"
-                label="Zoom"
-                min={1}
-                max={1.5}
-                step={0.01}
-                value={zoom}
-                onChange={setZoom}
-                format={(v) => `${Math.round(v * 100)}%`}
-              />
-              <RangeField
-                id="offset"
-                label="Vertical offset"
-                min={-25}
-                max={25}
-                step={1}
-                value={verticalOffsetPercent}
-                onChange={setVerticalOffsetPercent}
-                format={(v) => `${v}%`}
-              />
-            </Panel>
+              ))}
+            </div>
+          </Section>
 
-            <Panel
-              title="Readiness"
-              actions={
-                <Button variant="secondary" onClick={() => void handlePrepare()} disabled={preparing}>
-                  {preparing ? 'Checking…' : preflight ? 'Re-check' : 'Run checks'}
-                </Button>
-              }
-            >
-              {checks.length === 0 ? (
-                <p className={route.sectionHint}>Run the checks to confirm everything is ready.</p>
-              ) : (
-                <ul className={styles.checklist}>
-                  {checks.map((check) => (
-                    <li key={check.id} className={styles.checkItem}>
-                      <StatusIcon
-                        tone={CHECK_TONE[check.status]}
-                        label={`${check.label}: ${CHECK_WORD[check.status]}`}
-                      />
-                      <span className={styles.checkLabel}>
-                        {check.label}
-                        {check.required && <span className={styles.required}> (required)</span>}
-                      </span>
-                      <span className={styles.checkStatus}>
-                        {CHECK_WORD[check.status]}
-                        {check.detail ? ` — ${check.detail}` : ''}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className={styles.beginRow} aria-live="polite">
-                <Button variant="primary" onClick={() => void handleBegin()} disabled={!canBegin || beginning}>
-                  {beginning ? 'Starting…' : 'Begin'}
-                </Button>
-                {!canBegin && checks.length > 0 && (
-                  <span className={route.sectionHint}>Resolve required checks before beginning.</span>
-                )}
-              </div>
-            </Panel>
+          <Disclosure summary="Stage preferences">
+            <label className={route.checkboxRow}>
+              <input type="checkbox" checked={mirrorStage} onChange={(e) => setMirrorStage(e.target.checked)} />
+              Mirror the stage horizontally
+            </label>
+            <RangeField
+              id="zoom"
+              label="Zoom"
+              min={1}
+              max={1.5}
+              step={0.01}
+              value={zoom}
+              onChange={setZoom}
+              format={(v) => `${Math.round(v * 100)}%`}
+            />
+            <RangeField
+              id="offset"
+              label="Vertical offset"
+              min={-25}
+              max={25}
+              step={1}
+              value={verticalOffsetPercent}
+              onChange={setVerticalOffsetPercent}
+              format={(v) => `${v}%`}
+            />
+          </Disclosure>
+
+          {checks.length > 0 && (
+            <ul className={styles.checklist}>
+              {checks.map((check) => (
+                <li key={check.id} className={styles.checkItem}>
+                  <StatusIcon tone={CHECK_TONE[check.status]} label={`${check.label}: ${CHECK_WORD[check.status]}`} />
+                  <span className={styles.checkLabel}>{check.label}</span>
+                  <span className={styles.checkStatus}>
+                    {CHECK_WORD[check.status]}
+                    {check.detail ? ` — ${check.detail}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          <div className={styles.actionRow} aria-live="polite">
+            <Button variant="primary" onClick={primary.onClick} disabled={primary.disabled}>
+              {primary.label}
+            </Button>
+            {permissionState === 'granted' && !canBegin && checks.length > 0 && !preparing && (
+              <span className={route.sectionHint}>Resolve the items above to begin.</span>
+            )}
           </div>
         </div>
       </div>

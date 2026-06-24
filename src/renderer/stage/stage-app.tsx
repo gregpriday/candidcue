@@ -250,6 +250,10 @@ export function StageApp(): JSX.Element {
   }
 
   const captionsEnabled = plan?.captionsEnabled ?? false;
+  const characterName =
+    bootstrap.characterId !== ''
+      ? bootstrap.characterId.charAt(0).toUpperCase() + bootstrap.characterId.slice(1)
+      : null;
 
   return (
     <div className={styles.stage}>
@@ -260,7 +264,7 @@ export function StageApp(): JSX.Element {
         speechEndedTurnId={speechEndedTurnId}
         onSpeakingReady={handleSpeakingReady}
       />
-      <StatusOverlay state={state} captionsEnabled={captionsEnabled} />
+      <StatusOverlay state={state} captionsEnabled={captionsEnabled} characterName={characterName} />
     </div>
   );
 }

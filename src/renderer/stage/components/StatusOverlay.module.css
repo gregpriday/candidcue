@@ -66,11 +66,50 @@
 }
 
 .statusText {
-  font-size: 15px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  opacity: 0.6;
+  font-size: 16px;
+  letter-spacing: 0.01em;
+  color: rgba(245, 246, 248, 0.82);
   text-shadow: 0 1px 8px rgba(0, 0, 0, 0.9);
+  opacity: 0.85;
+  transition: opacity 600ms var(--ease-inout);
+}
+.statusText[data-visible='false'] {
+  opacity: 0;
+}
+
+/* ---- Ready / completion screens -------------------------------------- */
+.screen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  text-align: center;
+  padding: 0 12%;
+}
+.screenName {
+  margin: 0 0 var(--space-2);
+  font-size: clamp(20px, 1.6vw, 28px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(245, 246, 248, 0.7);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
+}
+.screenTitle {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: clamp(30px, 3vw, 46px);
+  line-height: 1.2;
+  color: #f5f6f8;
+  text-shadow: 0 2px 14px rgba(0, 0, 0, 0.8);
+}
+.screenHint {
+  margin: var(--space-2) 0 0;
+  font-size: clamp(15px, 1.3vw, 19px);
+  color: rgba(245, 246, 248, 0.62);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
 }
 
 .captions {
@@ -84,16 +123,15 @@
   padding: 0 12%;
 }
 
-/* Caption plate — semi-transparent background for improved readability */
+/* Softer lower-third caption treatment — a gentle scrim, not a hard plate. */
 .captionPlate {
   position: relative;
   display: inline-block;
   max-width: min(76ch, 80vw);
-  padding: 10px 18px;
-  background: rgba(11, 13, 18, 0.85);
-  backdrop-filter: blur(8px);
-  border-radius: 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+  padding: 10px 20px;
+  background: rgba(8, 9, 12, 0.55);
+  backdrop-filter: blur(6px);
+  border-radius: 14px;
 }
 
 .captionLine {
