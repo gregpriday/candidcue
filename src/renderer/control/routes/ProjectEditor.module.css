@@ -63,6 +63,7 @@
 }
 .lengthValue input {
   width: 96px;
+  font-variant-numeric: tabular-nums;
 }
 .lengthUnit {
   font-size: var(--text-sm);
@@ -86,6 +87,9 @@
   border-radius: 50%;
   object-fit: cover;
   background: var(--bg-secondary);
+  /* The same faint ring its sibling portraits carry, so a tone-matched photo
+     edge never bleeds into the panel. */
+  box-shadow: 0 0 0 1px var(--border);
 }
 .interviewerBody {
   flex: 1 1 auto;
@@ -112,13 +116,18 @@
   color: var(--text-primary);
   font: inherit;
   font-size: var(--text-sm);
-  transition: border-color var(--dur-fast) var(--ease-out);
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 .interviewerSelect:hover:not(:focus) {
   border-color: var(--border-strong);
 }
+/* Match the app-standard field focus: accent border AND a restrained tinted ring,
+   so this lone select doesn't read flatter than the inputs beside it. */
 .interviewerSelect:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 /* ---- Ready summary --------------------------------------------------- */
@@ -150,6 +159,7 @@
   font-size: var(--text-base);
   font-weight: 600;
   color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
 }
 .prepareHint {
   margin: var(--space-2) 0 0;

@@ -22,7 +22,8 @@
   white-space: nowrap;
   transition:
     background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+    color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 .segment:hover {
   color: var(--text-primary);

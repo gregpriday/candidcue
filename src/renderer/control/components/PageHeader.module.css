@@ -19,7 +19,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 24px;
+  height: 28px;
   padding: 0 var(--space-2) 0 var(--space-1);
   margin-left: calc(-1 * var(--space-1));
   border: none;
@@ -28,6 +28,9 @@
   color: var(--text-muted);
   font-size: var(--text-sm);
   font-weight: 600;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 .back:hover {
   color: var(--text-primary);

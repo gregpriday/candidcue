@@ -18,7 +18,8 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 var(--space-2);
+  /* Align the brand tile to the same 12px rail column as the nav rows below. */
+  padding: 0 var(--space-3);
 }
 .brandTile {
   display: inline-flex;
@@ -34,6 +35,7 @@
 .brand {
   font-size: var(--text-lg);
   font-weight: 700;
+  letter-spacing: var(--ls-title);
   color: var(--text-primary);
 }
 
@@ -88,7 +90,9 @@
   text-align: left;
   transition:
     background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 .navItem:hover {
   background: var(--bg-hover);
@@ -147,7 +151,9 @@
   text-overflow: ellipsis;
   transition:
     background var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 .recentItem:hover {
   background: var(--bg-hover);

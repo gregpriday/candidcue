@@ -18,6 +18,11 @@
 .mic {
   display: inline-flex;
   opacity: 0.55;
+  /* The gate moves between closed/armed/active during a live session — ease the
+     dim/brighten and the color shift instead of snapping. */
+  transition:
+    opacity var(--dur-slow) var(--ease-inout),
+    color var(--dur-slow) var(--ease-inout);
 }
 
 .micBody {

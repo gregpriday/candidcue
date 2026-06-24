@@ -37,4 +37,6 @@
   font-size: var(--text-live-question);
   line-height: var(--text-live-question-leading);
   color: var(--text-primary);
+  /* Mirror the real live question's balanced wrap so the preview is faithful. */
+  text-wrap: balance;
 }

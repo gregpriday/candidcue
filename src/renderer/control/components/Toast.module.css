@@ -64,8 +64,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  /* A comfortable 28px hit target; the negative margin keeps the visual
+     footprint unchanged so the toast doesn't grow. */
+  width: 28px;
+  height: 28px;
+  margin: -2px;
   flex: 0 0 auto;
   border: none;
   background: transparent;

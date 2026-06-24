@@ -131,6 +131,12 @@
 .rowMain:hover .rowTitle {
   color: var(--accent);
 }
+/* A momentary press deepen to the canonical terracotta press color, matching how
+   every real Button settles on :active. */
+.rowMain:active .rowTitle,
+.featuredMain:active .featuredTitle {
+  color: var(--accent-strong);
+}
 .rowMeta {
   font-size: var(--text-sm);
   color: var(--text-muted);
@@ -208,7 +214,7 @@
   flex: 0 0 auto;
   border-radius: 50%;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-strong);
   font-size: var(--text-sm);
   font-weight: 700;
 }

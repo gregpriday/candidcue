@@ -118,7 +118,7 @@
   align-items: center;
   gap: var(--space-2);
   margin: 0;
-  padding: 0 var(--space-1);
+  padding: 0;
   font-size: var(--text-xs);
   line-height: 17px;
   color: var(--text-secondary);
@@ -176,10 +176,21 @@
   background: transparent;
   border: none;
   border-radius: var(--radius-sm);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 .revealButton:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
+}
+/* Sitting 4px inside the field edge, the default outset focus ring fuses with the
+   input's own accent ring — a contained inset ring keeps keyboard focus distinct. */
+.revealButton:focus-visible {
+  outline: none;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  box-shadow: 0 0 0 2px var(--focus);
 }
 
 .fieldFootnote {
@@ -203,7 +214,7 @@
   flex: 0 0 auto;
   font-size: var(--text-xs);
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-strong);
   text-decoration: none;
   white-space: nowrap;
 }

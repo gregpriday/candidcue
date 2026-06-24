@@ -374,6 +374,11 @@ input[type='range']:focus-visible::-webkit-slider-thumb {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
+/* Dragging the thumb deepens it to the press accent — completing rest/hover/
+   focus/active so the slider has the same state matrix as every other control. */
+input[type='range']:active::-webkit-slider-thumb {
+  background: var(--accent-strong);
+}
 
 /* Thin chrome scrollbars. */
 ::-webkit-scrollbar {
@@ -391,6 +396,12 @@ input[type='range']:focus-visible::-webkit-slider-thumb {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-faint);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+/* A distinct grab step while actively dragging the bar. */
+::-webkit-scrollbar-thumb:active {
+  background: var(--text-secondary);
   border: 3px solid transparent;
   background-clip: padding-box;
 }

@@ -52,6 +52,7 @@
   border: 1px solid var(--border-control);
   border-radius: var(--radius-sm);
   color: var(--text-primary);
+  caret-color: var(--accent);
   font: inherit;
   font-size: var(--text-base);
   transition:
@@ -60,10 +61,30 @@
 }
 
 /* Quiet by default; the boundary firms up only on hover. */
-.input:hover:not(:focus),
-.textarea:hover:not(:focus),
-.select:hover:not(:focus) {
+.input:hover:not(:focus):not(:disabled),
+.textarea:hover:not(:focus):not(:disabled),
+.select:hover:not(:focus):not(:disabled) {
   border-color: var(--border-strong);
+}
+
+/* Disabled fields read as deliberately inactive — same recipe as Button:disabled,
+   the one interactive primitive family that lacked a disabled treatment. */
+.input:disabled,
+.textarea:disabled,
+.select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Drop the OS number-stepper — one of the last raw-HTML tells, like the
+   custom-drawn select chevron and the removed textarea resize grip. */
+.input[type='number'] {
+  -moz-appearance: textfield;
+}
+.input[type='number']::-webkit-inner-spin-button,
+.input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .input::placeholder,
@@ -85,14 +106,14 @@
   appearance: none;
   -webkit-appearance: none;
   padding-right: var(--space-8);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b707a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9.5 12 15.5 18 9.5'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b707a' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9.5 12 15.5 18 9.5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right var(--space-3) center;
   background-size: 16px 16px;
   cursor: pointer;
 }
 :global([data-theme='studio']) .select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23858d9b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9.5 12 15.5 18 9.5'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23858d9b' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9.5 12 15.5 18 9.5'/%3E%3C/svg%3E");
 }
 
 /* Prose textarea — a writing surface, NOT a terminal. The browser resize grip is

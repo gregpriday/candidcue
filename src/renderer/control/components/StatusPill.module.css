@@ -35,7 +35,9 @@
 }
 
 .accent {
-  color: var(--accent);
+  /* --accent-strong is the AA-safe text weight: small label type on the soft
+     fill needs the darker clay to clear 4.5:1 in the workspace theme. */
+  color: var(--accent-strong);
   background: var(--accent-soft);
 }
 .success {

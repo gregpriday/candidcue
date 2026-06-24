@@ -23,7 +23,7 @@
 
 .previewCol {
   position: sticky;
-  top: var(--space-6);
+  top: var(--page-y);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
@@ -39,7 +39,7 @@
 .setupCol {
   display: flex;
   flex-direction: column;
-  gap: var(--space-8);
+  gap: var(--space-7);
   min-width: 0;
 }
 
