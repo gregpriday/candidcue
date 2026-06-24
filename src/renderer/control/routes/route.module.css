@@ -20,13 +20,6 @@
   max-width: 1360px;
 }
 
-/* A comfortable working width for form-style screens (Settings) so they read as a
-   composed column on the atmospheric ground, not panels adrift in black. */
-.pageNarrow {
-  width: min(100%, 960px);
-  max-width: 960px;
-}
-
 .sectionHint {
   margin: 0;
   font-size: var(--text-sm);

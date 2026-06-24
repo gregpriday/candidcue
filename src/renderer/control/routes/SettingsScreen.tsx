@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { PublicSettings } from '@shared/contracts';
-import type { ProviderTestResult } from '@shared/contracts';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ProviderTestResult, PublicSettings } from '@shared/contracts';
 import { Button } from '../components/Button';
-import { Icon, type IconName } from '../components/Icon';
-import { StatusIcon, type StatusTone } from '../components/StatusIcon';
+import { Icon } from '../components/Icon';
+import { StatusIcon } from '../components/StatusIcon';
+import { StatusPill, type StatusTone } from '../components/StatusPill';
 import { PageHeader } from '../components/PageHeader';
 import { Section } from '../components/Section';
+import { Sheet } from '../components/Sheet';
+import { ToastRegion, useToasts } from '../components/Toast';
 import { describeError } from '../lib/errors';
 import route from './route.module.css';
 import styles from './SettingsScreen.module.css';
@@ -37,6 +39,8 @@ function InworldLogo(): JSX.Element {
 
 type ProviderName = 'openai' | 'inworld';
 
+const PROVIDER_TITLE: Record<ProviderName, string> = { openai: 'OpenAI', inworld: 'Inworld' };
+
 interface KeyFieldState {
   value: string;
   reveal: boolean;
@@ -46,19 +50,26 @@ export function SettingsScreen(): JSX.Element {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
   const [openai, setOpenai] = useState<KeyFieldState>({ value: '', reveal: false });
   const [inworld, setInworld] = useState<KeyFieldState>({ value: '', reveal: false });
-  const [saving, setSaving] = useState(false);
+  const [savingProvider, setSavingProvider] = useState<ProviderName | null>(null);
   const [editing, setEditing] = useState<ProviderName | null>(null);
-  const [savedNote, setSavedNote] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Validation / save / test errors live inside the relevant provider panel.
+  const [panelError, setPanelError] = useState<Partial<Record<ProviderName, string>>>({});
   const [testResults, setTestResults] = useState<Partial<Record<ProviderName, ProviderTestResult>>>({});
   const [testing, setTesting] = useState<ProviderName | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<ProviderName | null>(null);
+  const { toasts, push, dismiss } = useToasts();
+  // Bumped whenever a save/remove lands so a slow in-flight test that returns
+  // afterwards can be discarded instead of re-marking a replaced/removed key.
+  const opSeq = useRef<Record<ProviderName, number>>({ openai: 0, inworld: 0 });
 
   const refresh = useCallback(async () => {
     try {
       const next = await window.candidcue.settings.getPublic();
       setSettings(next);
+      setLoadError(null);
     } catch (err: unknown) {
-      setError(describeError(err));
+      setLoadError(describeError(err));
     }
   }, []);
 
@@ -66,151 +77,225 @@ export function SettingsScreen(): JSX.Element {
     void refresh();
   }, [refresh]);
 
-  const handleSaveProvider = useCallback(async (provider: ProviderName) => {
-    const field = provider === 'openai' ? openai : inworld;
-    const value = field.value.trim();
-    if (!value) {
-      setError('Enter an API key before saving this connection.');
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    setSavedNote(null);
-    const input =
-      provider === 'openai'
-        ? { openaiApiKey: value }
-        : { inworldApiKey: value };
-    try {
-      await window.candidcue.settings.saveProviders(input);
-      if (provider === 'openai') {
-        setOpenai({ value: '', reveal: false });
-      } else {
-        setInworld({ value: '', reveal: false });
+  const handleSaveProvider = useCallback(
+    async (provider: ProviderName) => {
+      const field = provider === 'openai' ? openai : inworld;
+      const value = field.value.trim();
+      if (!value) {
+        setPanelError((prev) => ({ ...prev, [provider]: 'Enter an API key before saving.' }));
+        return;
       }
-      setSavedNote(`${provider === 'openai' ? 'OpenAI' : 'Inworld'} connection updated.`);
-      setEditing(null);
-      await refresh();
-    } catch (err: unknown) {
-      setError(describeError(err));
-    } finally {
-      setSaving(false);
-    }
-  }, [inworld, openai, refresh]);
+      setSavingProvider(provider);
+      setPanelError((prev) => ({ ...prev, [provider]: undefined }));
+      const input = provider === 'openai' ? { openaiApiKey: value } : { inworldApiKey: value };
+      try {
+        await window.candidcue.settings.saveProviders(input);
+        // A freshly saved key invalidates any earlier verification result and
+        // any test still in flight for this provider.
+        opSeq.current[provider] += 1;
+        if (provider === 'openai') {
+          setOpenai({ value: '', reveal: false });
+        } else {
+          setInworld({ value: '', reveal: false });
+        }
+        setTestResults((prev) => ({ ...prev, [provider]: undefined }));
+        setEditing(null);
+        push('success', `${PROVIDER_TITLE[provider]} key saved.`);
+        await refresh();
+      } catch (err: unknown) {
+        setPanelError((prev) => ({ ...prev, [provider]: describeError(err) }));
+      } finally {
+        setSavingProvider(null);
+      }
+    },
+    [inworld, openai, push, refresh],
+  );
 
   const handleTest = useCallback(async (provider: ProviderName) => {
+    const seq = opSeq.current[provider];
     setTesting(provider);
-    setError(null);
+    setPanelError((prev) => ({ ...prev, [provider]: undefined }));
     try {
       const result = await window.candidcue.settings.testProvider(provider);
+      // Drop a result the user has since superseded with a save/remove.
+      if (opSeq.current[provider] !== seq) {
+        return;
+      }
       setTestResults((prev) => ({ ...prev, [provider]: result }));
     } catch (err: unknown) {
-      setError(describeError(err));
+      if (opSeq.current[provider] !== seq) {
+        return;
+      }
+      setPanelError((prev) => ({ ...prev, [provider]: describeError(err) }));
     } finally {
-      setTesting(null);
+      setTesting((curr) => (curr === provider ? null : curr));
     }
   }, []);
 
-  const handleClear = useCallback(
-    async (provider: ProviderName) => {
-      setError(null);
-      try {
-        await window.candidcue.settings.clearProvider(provider);
-        setTestResults((prev) => ({ ...prev, [provider]: undefined }));
-        await refresh();
-      } catch (err: unknown) {
-        setError(describeError(err));
-      }
-    },
-    [refresh],
-  );
+  const handleConfirmRemove = useCallback(async () => {
+    const provider = removeTarget;
+    if (provider === null) {
+      return;
+    }
+    setRemoveTarget(null);
+    setPanelError((prev) => ({ ...prev, [provider]: undefined }));
+    // Collapse the editor so no save/test can be triggered while the credential
+    // is being cleared, and invalidate any in-flight test for this provider.
+    setEditing((curr) => (curr === provider ? null : curr));
+    opSeq.current[provider] += 1;
+    try {
+      await window.candidcue.settings.clearProvider(provider);
+      setTestResults((prev) => ({ ...prev, [provider]: undefined }));
+      push('info', `${PROVIDER_TITLE[provider]} connection removed.`);
+      await refresh();
+    } catch (err: unknown) {
+      setPanelError((prev) => ({ ...prev, [provider]: describeError(err) }));
+    }
+  }, [removeTarget, push, refresh]);
+
+  const configuredCount = Number(settings?.hasOpenAiKey ?? false) + Number(settings?.hasInworldKey ?? false);
 
   return (
     <>
-      <PageHeader title="Settings" />
-      <div className={`${route.page} ${route.pageNarrow}`}>
-        {error !== null && (
+      <PageHeader title="Settings" meta="Manage the services CandidCue uses during interviews" />
+      <div className={`${route.page} ${styles.settingsPage}`}>
+        {loadError !== null && (
           <p className={route.error} role="alert">
-            {error}
+            {loadError}
           </p>
         )}
-        {savedNote !== null && (
-          <div className={route.notice} role="status">
-            <StatusIcon tone="success" label="Saved" />
-            <span>{savedNote}</span>
-          </div>
-        )}
 
-        <Section
-          title="Connection health"
-          description="Where CandidCue gets its language and voice. Keys are stored by the desktop app and are never shown again after saving."
-        >
+        <Section title="AI providers">
           <div className={styles.providerList}>
-          <ProviderCard
-            provider="openai"
-            logo={<OpenAILogo />}
-            title="OpenAI"
-            description="Plans interviews and processes transcripts."
-            hasKey={settings?.hasOpenAiKey ?? false}
-            field={openai}
-            onChange={setOpenai}
-            inputId="openai-key"
-            open={editing === 'openai'}
-            onToggle={() => setEditing(editing === 'openai' ? null : 'openai')}
-            onSave={() => void handleSaveProvider('openai')}
-            onTest={() => void handleTest('openai')}
-            onClear={() => void handleClear('openai')}
-            saving={saving}
-            testing={testing === 'openai'}
-            result={testResults.openai}
-          />
+            <div className={styles.panelHead}>
+              <span className={styles.panelHeadLabel}>Both are required before you can start an interview.</span>
+              {settings !== null && (
+                <StatusPill tone={configuredCount === 2 ? 'success' : 'neutral'} dot={configuredCount === 2}>
+                  {configuredCount} of 2 configured
+                </StatusPill>
+              )}
+            </div>
 
-          <ProviderCard
-            provider="inworld"
-            logo={<InworldLogo />}
-            title="Inworld"
-            description="Speech recognition and interviewer voice."
-            hasKey={settings?.hasInworldKey ?? false}
-            field={inworld}
-            onChange={setInworld}
-            inputId="inworld-key"
-            open={editing === 'inworld'}
-            onToggle={() => setEditing(editing === 'inworld' ? null : 'inworld')}
-            onSave={() => void handleSaveProvider('inworld')}
-            onTest={() => void handleTest('inworld')}
-            onClear={() => void handleClear('inworld')}
-            saving={saving}
-            testing={testing === 'inworld'}
-            result={testResults.inworld}
-          />
+            {settings === null ? (
+              <>
+                <ProviderSkeleton />
+                <ProviderSkeleton />
+              </>
+            ) : (
+              <>
+                <ProviderCard
+                  provider="openai"
+                  logo={<OpenAILogo />}
+                  title="OpenAI"
+                  description="Interview planning and transcript processing."
+                  hasKey={settings.hasOpenAiKey}
+                  field={openai}
+                  onChange={setOpenai}
+                  inputId="openai-key"
+                  open={editing === 'openai'}
+                  onToggle={() => setEditing(editing === 'openai' ? null : 'openai')}
+                  onSave={() => void handleSaveProvider('openai')}
+                  onTest={() => void handleTest('openai')}
+                  onRemove={() => setRemoveTarget('openai')}
+                  saving={savingProvider === 'openai'}
+                  testing={testing === 'openai'}
+                  result={testResults.openai}
+                  error={panelError.openai}
+                />
+
+                <ProviderCard
+                  provider="inworld"
+                  logo={<InworldLogo />}
+                  title="Inworld"
+                  description="Speech recognition and interviewer voice."
+                  hasKey={settings.hasInworldKey}
+                  field={inworld}
+                  onChange={setInworld}
+                  inputId="inworld-key"
+                  open={editing === 'inworld'}
+                  onToggle={() => setEditing(editing === 'inworld' ? null : 'inworld')}
+                  onSave={() => void handleSaveProvider('inworld')}
+                  onTest={() => void handleTest('inworld')}
+                  onRemove={() => setRemoveTarget('inworld')}
+                  saving={savingProvider === 'inworld'}
+                  testing={testing === 'inworld'}
+                  result={testResults.inworld}
+                  error={panelError.inworld}
+                />
+              </>
+            )}
+
+            <div className={styles.panelFoot}>
+              <Icon name="info" size={15} />
+              <p>
+                <strong>Stored securely on this computer.</strong> API keys are encrypted using your operating
+                system&rsquo;s secure credential storage and are never displayed again.
+              </p>
+            </div>
           </div>
         </Section>
       </div>
+
+      <Sheet
+        open={removeTarget !== null}
+        onClose={() => setRemoveTarget(null)}
+        tone="danger"
+        title={`Remove the ${removeTarget !== null ? PROVIDER_TITLE[removeTarget] : ''} connection?`}
+        description={`CandidCue will not be able to start an interview until a new ${
+          removeTarget !== null ? PROVIDER_TITLE[removeTarget] : ''
+        } key is configured.`}
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => setRemoveTarget(null)}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={() => void handleConfirmRemove()}>
+              Remove connection
+            </Button>
+          </>
+        }
+      />
+      <ToastRegion toasts={toasts} onDismiss={dismiss} />
     </>
+  );
+}
+
+function ProviderSkeleton(): JSX.Element {
+  return (
+    <div className={styles.providerCard} aria-hidden>
+      <div className={styles.providerSummary}>
+        <span className={`${route.skeleton} ${styles.skeletonIcon}`} />
+        <div className={styles.skeletonCopy}>
+          <span className={`${route.skeleton} ${styles.skeletonLine}`} />
+          <span className={`${route.skeleton} ${styles.skeletonLineSm}`} />
+        </div>
+      </div>
+    </div>
   );
 }
 
 interface ProviderCardProps {
   provider: ProviderName;
-  icon?: IconName;
-  logo?: JSX.Element;
+  logo: JSX.Element;
   title: string;
   description: string;
   hasKey: boolean;
   field: KeyFieldState;
   onChange: (next: KeyFieldState) => void;
   inputId: string;
-  onTest: () => void;
-  onClear: () => void;
-  testing: boolean;
-  result: ProviderTestResult | undefined;
   open: boolean;
   onToggle: () => void;
   onSave: () => void;
+  onTest: () => void;
+  onRemove: () => void;
   saving: boolean;
+  testing: boolean;
+  result: ProviderTestResult | undefined;
+  error: string | undefined;
 }
 
 function ProviderCard({
-  icon,
+  provider,
   logo,
   title,
   description,
@@ -218,43 +303,64 @@ function ProviderCard({
   field,
   onChange,
   inputId,
-  onTest,
-  onClear,
-  testing,
-  result,
   open,
   onToggle,
   onSave,
+  onTest,
+  onRemove,
   saving,
+  testing,
+  result,
+  error,
 }: ProviderCardProps): JSX.Element {
-  const resultTone: StatusTone = result ? (result.ok ? 'success' : 'danger') : 'neutral';
+  const panelId = `${provider}-connection-panel`;
+  const helpId = `${inputId}-help`;
+  // Credential presence is not a connection. Reserve "Verified" for a successful
+  // explicit test; a stored-but-untested key is only ever "Configured". Gating on
+  // hasKey first guarantees a keyless provider can never show a result-based tone.
+  const status: { tone: StatusTone; label: string } = !hasKey
+    ? { tone: 'neutral', label: 'Not configured' }
+    : testing
+      ? { tone: 'accent', label: 'Verifying' }
+      : result?.ok
+        ? { tone: 'success', label: 'Verified' }
+        : result && !result.ok
+          ? { tone: 'danger', label: 'Needs attention' }
+          : { tone: 'accent', label: 'Configured' };
+
   return (
     <section className={styles.providerCard}>
       <div className={styles.providerSummary}>
-        <span className={styles.providerIcon} aria-hidden>
-          {logo ? logo : <Icon name={icon!} size={22} />}
+        <span className={styles.providerIcon} data-provider={provider} aria-hidden>
+          {logo}
         </span>
         <div className={styles.providerCopy}>
           <h2>{title}</h2>
           <p>{description}</p>
         </div>
-        <span className={styles.keyStatus}>
-          <StatusIcon tone={hasKey ? 'success' : 'pending'} label={hasKey ? 'Connected' : 'Not connected'} />
-          {hasKey ? 'Connected' : 'Not connected'}
+        <span className={styles.summaryStatus}>
+          <StatusPill tone={status.tone}>{status.label}</StatusPill>
         </span>
-        <Button variant="secondary" onClick={onToggle}>
-          {hasKey ? 'Manage' : 'Connect'}
+        <Button variant="secondary" onClick={onToggle} aria-expanded={open} aria-controls={panelId}>
+          {hasKey ? 'Manage' : 'Configure'}
+          <Icon name={open ? 'chevronDown' : 'chevronRight'} size={15} />
         </Button>
       </div>
 
       {open && (
-        <div className={styles.managePanel}>
-          <p className={route.sectionHint}>
-            Keys are stored by the desktop app and are never displayed again after saving.
-          </p>
+        <div id={panelId} className={styles.managePanel}>
+          <div className={styles.manageHeading}>
+            <h3>Connection details</h3>
+            <p>
+              {hasKey
+                ? 'Enter a replacement key or verify the key currently stored.'
+                : 'Add the API key provided by this service.'}
+            </p>
+          </div>
+
           <div className={route.field}>
             <label className={route.label} htmlFor={inputId}>
-              API key
+              {hasKey ? 'Replacement API key' : 'API key'}
             </label>
             <div className={styles.keyInputWrap}>
               <input
@@ -264,7 +370,8 @@ function ProviderCard({
                 value={field.value}
                 autoComplete="off"
                 spellCheck={false}
-                placeholder={hasKey ? 'Enter a new key to replace the stored key' : 'Paste your API key'}
+                aria-describedby={helpId}
+                placeholder={hasKey ? 'Paste a replacement key' : 'Paste your API key'}
                 onChange={(e) => onChange({ ...field, value: e.target.value })}
               />
               <button
@@ -276,30 +383,62 @@ function ProviderCard({
                 <Icon name={field.reveal ? 'eyeOff' : 'eye'} size={16} />
               </button>
             </div>
+            <p id={helpId} className={styles.fieldHelp}>
+              {hasKey
+                ? 'The current key remains stored until you save a replacement.'
+                : 'After saving, the key cannot be displayed or copied from CandidCue.'}
+            </p>
           </div>
 
-          <div className={styles.actions}>
-            <Button variant="primary" onClick={onSave} disabled={saving || field.value.trim().length === 0}>
-              {saving ? 'Saving…' : hasKey ? 'Update key' : 'Save key'}
-            </Button>
-            {hasKey && (
-              <Button variant="secondary" onClick={onTest} disabled={testing}>
-                {testing ? 'Testing…' : 'Test connection'}
+          <div className={styles.formFooter}>
+            <div className={styles.resultArea} role="status" aria-live="polite">
+              {error ? (
+                <>
+                  <StatusIcon tone="danger" label="Error" />
+                  <span>{error}</span>
+                </>
+              ) : result ? (
+                <>
+                  <StatusIcon
+                    tone={result.ok ? 'success' : 'danger'}
+                    label={result.ok ? 'Verified' : 'Verification failed'}
+                  />
+                  <span>
+                    {result.ok
+                      ? `Verified${result.latencyMs !== null ? ` in ${result.latencyMs} ms` : ''}`
+                      : result.message}
+                  </span>
+                </>
+              ) : null}
+            </div>
+            <div className={styles.formActions}>
+              <Button variant="ghost" onClick={onToggle}>
+                Cancel
               </Button>
-            )}
-            {result && (
-              <span className={styles.testResult}>
-                <StatusIcon tone={resultTone} label={result.ok ? 'Passed' : 'Failed'} />
-                {result.message}
-                {result.latencyMs !== null && <span className={styles.latency}> ({result.latencyMs} ms)</span>}
-              </span>
-            )}
+              {hasKey && (
+                <Button variant="secondary" onClick={onTest} disabled={testing || saving}>
+                  {testing ? 'Verifying…' : 'Test connection'}
+                </Button>
+              )}
+              <Button
+                className={styles.compactAction}
+                variant="primary"
+                onClick={onSave}
+                disabled={saving || testing || field.value.trim().length === 0}
+              >
+                {saving ? 'Saving…' : hasKey ? 'Save replacement' : 'Save key'}
+              </Button>
+            </div>
           </div>
 
           {hasKey && (
-            <div className={styles.dangerZone}>
-              <Button variant="danger" onClick={onClear}>
-                Remove key
+            <div className={styles.removeRow}>
+              <div>
+                <strong>Remove connection</strong>
+                <span>Delete the credential stored on this computer.</span>
+              </div>
+              <Button variant="danger" onClick={onRemove} disabled={saving || testing}>
+                Remove
               </Button>
             </div>
           )}

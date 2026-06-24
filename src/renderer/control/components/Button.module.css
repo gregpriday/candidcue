@@ -47,6 +47,14 @@
   background: var(--accent);
   border-color: var(--accent);
 }
+/* A disabled primary should read as deliberately inactive — a neutral control —
+   not a faded accent that still draws the eye. */
+.primary:disabled {
+  opacity: 1;
+  background: var(--bg-secondary);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
 
 .secondary {
   background: var(--bg-elevated);
