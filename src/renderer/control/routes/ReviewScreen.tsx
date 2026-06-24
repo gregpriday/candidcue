@@ -4,7 +4,7 @@ import type { Navigator } from '../app';
 import { Button } from '../components/Button';
 import { StatusIcon } from '../components/StatusIcon';
 import { Panel } from '../components/Panel';
-import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
+import { PageHeader } from '../components/PageHeader';
 import { MarkdownEditor } from '../components/MarkdownEditor';
 import { describeError } from '../lib/errors';
 import { formatTimestamp } from '../lib/format';
@@ -123,7 +123,7 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
   if (loadError !== null) {
     return (
       <>
-        <WorkspaceToolbar title="Review" onBack={() => nav.go({ name: 'home' })} backLabel="Back to projects" />
+        <PageHeader title="Review" onBack={() => nav.go({ name: 'home' })} backLabel="Back to projects" />
         <div className={route.page}>
           <p className={route.error} role="alert">
             {loadError}
@@ -136,7 +136,7 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
   if (review === null) {
     return (
       <>
-        <WorkspaceToolbar title="Review" onBack={() => nav.go({ name: 'home' })} backLabel="Back to projects" />
+        <PageHeader title="Review" onBack={() => nav.go({ name: 'home' })} backLabel="Back to projects" />
         <div className={route.page}>
           <p className={route.empty}>Loading session review…</p>
         </div>
@@ -146,7 +146,7 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
 
   return (
     <>
-      <WorkspaceToolbar
+      <PageHeader
         title={review.projectTitle || 'Review'}
         onBack={() => nav.go({ name: 'home' })}
         backLabel="Back to projects"

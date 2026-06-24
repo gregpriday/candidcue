@@ -1,0 +1,85 @@
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-7);
+  /* Reserve the window-control overlay gutter on non-macOS at the right edge. */
+  padding-right: calc(var(--space-7) + var(--win-controls-w, 0px));
+  background: var(--bg-canvas);
+  border-bottom: 1px solid var(--border);
+  -webkit-app-region: drag;
+}
+
+.back {
+  -webkit-app-region: no-drag;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 var(--space-2) 0 var(--space-1);
+  margin-left: calc(-1 * var(--space-1));
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.back:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.title {
+  margin: 0;
+  font-size: var(--text-page-title);
+  line-height: var(--lh-page-title);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meta {
+  font-size: var(--text-sm);
+  line-height: 18px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.right {
+  -webkit-app-region: no-drag;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+}
+.status {
+  display: flex;
+  align-items: center;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}

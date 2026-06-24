@@ -4,7 +4,7 @@ import type { Navigator } from '../app';
 import { Button } from '../components/Button';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
 import { Icon } from '../components/Icon';
-import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
+import { PageHeader } from '../components/PageHeader';
 import { describeError } from '../lib/errors';
 import { formatTimestamp } from '../lib/format';
 import route from './route.module.css';
@@ -52,7 +52,7 @@ export function HomeScreen({ nav }: HomeScreenProps): JSX.Element {
 
   return (
     <>
-      <WorkspaceToolbar
+      <PageHeader
         title="Projects"
         meta="Prepare and run guided interviews."
         actions={

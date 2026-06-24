@@ -3,135 +3,20 @@
   flex-direction: column;
   height: 100%;
   background: var(--bg-app);
+  /* Window-control gutters, exposed as custom properties so the sidebar (top,
+     macOS traffic lights) and page headers (right, other platforms) can each
+     reserve the right amount of room. */
+  --titlebar-gutter: 0px;
+  --win-controls-w: 0px;
+}
+.shell[data-platform='mac'] {
+  --titlebar-gutter: 28px;
+}
+.shell[data-platform='other'] {
+  --win-controls-w: 140px;
 }
 
-/* ---- Title bar -------------------------------------------------------- */
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-5);
-  height: var(--titlebar-h);
-  padding: 0 var(--space-5);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-chrome);
-  flex: 0 0 auto;
-  -webkit-app-region: drag;
-}
-
-/* Reserve the native window-control gutter: traffic lights left on macOS,
-   control overlay on the right elsewhere. */
-.shell[data-platform='mac'] .header {
-  padding-left: 88px;
-}
-.shell[data-platform='other'] .header {
-  padding-right: 148px;
-}
-
-.headerLeft {
-  display: flex;
-  align-items: center;
-  gap: var(--space-7);
-  min-width: 0;
-}
-
-/* Static wordmark — no hover motion, no glow. */
-.wordmark {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-lg);
-  font-weight: 700;
-  letter-spacing: var(--ls-tight);
-  line-height: 1;
-  cursor: default;
-}
-
-/* A quiet accent square holding the app mark — flat, no animation. */
-.brandTile {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 auto;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--accent-contrast);
-}
-
-.mark {
-  color: var(--text-primary);
-}
-
-.markAccent {
-  color: var(--accent);
-}
-
-.titleNav {
-  display: inline-flex;
-  align-items: stretch;
-  align-self: stretch;
-  gap: var(--space-1);
-  -webkit-app-region: no-drag;
-}
-
-.navButton {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  min-width: 76px;
-  height: 100%;
-  padding: 0 var(--space-3);
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  transition: color var(--dur-fast) var(--ease-out);
-}
-.navButton:hover {
-  color: var(--text-secondary);
-}
-.navButtonActive,
-.navButtonActive:hover {
-  color: var(--text-primary);
-}
-.navButtonActive::after {
-  content: '';
-  position: absolute;
-  left: var(--space-3);
-  right: var(--space-3);
-  bottom: 0;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--accent);
-}
-
-.headerActions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  -webkit-app-region: no-drag;
-}
-
-.diagnostics {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  height: var(--control-h-sm);
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-sm);
-  background: var(--danger-soft);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--danger);
-}
-.diagnosticsText {
-  font-variant-numeric: tabular-nums;
-}
-
-/* ---- Body / workspace ------------------------------------------------- */
+/* ---- Workspace shell: sidebar + content ------------------------------- */
 .body {
   display: flex;
   flex: 1 1 auto;
@@ -143,5 +28,32 @@
   flex: 1 1 auto;
   min-width: 0;
   overflow-y: auto;
-  padding: 0;
+}
+
+/* ---- Studio shell: full-bleed live console ----------------------------
+   A non-scrolling drag strip above a separate scroll region — mirrors the old
+   header+main split so a sticky PageHeader pins below the window-control gutter
+   instead of riding up into it. (The full studio header lands in Phase 4.) */
+.studioMain {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.studioDrag {
+  flex: 0 0 auto;
+  height: var(--titlebar-gutter, 0px);
+  -webkit-app-region: drag;
+}
+
+.studioScroll {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
 }

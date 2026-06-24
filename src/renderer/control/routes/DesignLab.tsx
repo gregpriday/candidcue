@@ -8,7 +8,7 @@ import { SegmentedControl } from '../components/SegmentedControl';
 import { RadioCard } from '../components/RadioCard';
 import { Sheet } from '../components/Sheet';
 import { ToastRegion, useToasts } from '../components/Toast';
-import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
+import { PageHeader } from '../components/PageHeader';
 import route from './route.module.css';
 import styles from './DesignLab.module.css';
 
@@ -30,7 +30,7 @@ export function DesignLab({ nav }: { nav: Navigator }): JSX.Element {
 
   return (
     <>
-      <WorkspaceToolbar
+      <PageHeader
         title="Design Lab"
         meta="Workspace + studio primitives"
         onBack={() => nav.go({ name: 'home' })}

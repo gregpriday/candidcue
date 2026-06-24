@@ -216,7 +216,9 @@
 
 .readinessRail {
   position: sticky;
-  top: calc(var(--toolbar-h) + var(--space-6));
+  /* Clear the taller PageHeader (breadcrumb + title + meta). This rail is
+     replaced by the Ready summary step in Phase 3. */
+  top: calc(var(--toolbar-h) + var(--space-10));
 }
 
 .readinessCard {

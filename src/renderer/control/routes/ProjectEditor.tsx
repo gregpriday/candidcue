@@ -20,7 +20,7 @@ import type { Navigator } from '../app';
 import { Button } from '../components/Button';
 import { StatusIcon } from '../components/StatusIcon';
 import type { StatusTone } from '../components/StatusIcon';
-import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
+import { PageHeader } from '../components/PageHeader';
 import { MarkdownEditor } from '../components/MarkdownEditor';
 import { SourceLibrary } from '../components/SourceLibrary';
 import { nextDraftKey } from '../lib/draft-key';
@@ -327,7 +327,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   if (!form || !sourceStats) {
     return (
       <>
-        <WorkspaceToolbar
+        <PageHeader
           title={savedId ? 'Edit project' : 'New project'}
           onBack={() => nav.go({ name: 'home' })}
         />
@@ -381,7 +381,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
 
   return (
     <>
-      <WorkspaceToolbar
+      <PageHeader
         title={form.title.trim() || (savedId ? 'Untitled project' : 'New project')}
         meta={
           <span className={styles.headerMeta}>

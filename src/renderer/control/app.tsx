@@ -8,8 +8,7 @@ import { PreflightScreen } from './routes/PreflightScreen';
 import { OperatorConsole } from './routes/OperatorConsole';
 import { ReviewScreen } from './routes/ReviewScreen';
 import { DesignLab } from './routes/DesignLab';
-import { StatusIcon } from './components/StatusIcon';
-import { Icon } from './components/Icon';
+import { AppSidebar } from './components/AppSidebar';
 import styles from './app.module.css';
 
 export type Route =
@@ -24,21 +23,17 @@ export type Route =
 /** Dev-only surfaces (the design gallery) are gated out of production builds. */
 const IS_DEV = import.meta.env.DEV;
 const START_IN_LAB =
-  IS_DEV && typeof window !== 'undefined' && window.location.search.includes('lab');
+  IS_DEV &&
+  typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).has('lab');
 
 export interface Navigator {
   go: (route: Route) => void;
 }
 
-interface NavItem {
-  label: string;
-  route: Route;
-  matches: (route: Route) => boolean;
-}
-
-/** Stamp the OS onto the shell so the title bar can reserve the native
- * window-control gutter on the correct side (traffic lights left on macOS,
- * control overlay right elsewhere). */
+/** Stamp the OS onto the shell so the window-control gutter is reserved on the
+ * correct side (traffic lights top-left on macOS, control overlay right
+ * elsewhere). */
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.userAgent);
 
 export function App(): JSX.Element {
@@ -58,72 +53,29 @@ export function App(): JSX.Element {
     return unsubscribe;
   }, []);
 
-  const primaryNav: NavItem[] = [
-    {
-      label: 'Projects',
-      route: { name: 'home' },
-      matches: (r) => r.name === 'home' || r.name === 'project' || r.name === 'preflight' || r.name === 'review',
-    },
-    { label: 'Settings', route: { name: 'settings' }, matches: (r) => r.name === 'settings' },
-    ...(IS_DEV
-      ? [
-          {
-            label: 'Design Lab',
-            route: { name: 'designlab' } as Route,
-            matches: (r: Route) => r.name === 'designlab',
-          },
-        ]
-      : []),
-  ];
-
-  const renderNav = (item: NavItem): JSX.Element => (
-    <button
-      key={item.label}
-      type="button"
-      className={`${styles.navButton} ${item.matches(route) ? styles.navButtonActive : ''}`}
-      onClick={() => go(item.route)}
-      aria-current={item.matches(route) ? 'page' : undefined}
-    >
-      {item.label}
-    </button>
-  );
-
-  // Two themes: the calm light workspace at rest, the focused dark studio when
-  // a session is live. The whole shell (and its descendants) re-skins via the
-  // shared token names — no per-component theming required.
+  // Two themes / two shells: the calm light workspace (sidebar + content) at
+  // rest, and the focused dark studio — full-bleed, no sidebar — when a session
+  // is live. The whole shell re-skins via the shared token names.
   const isLive = route.name === 'operator';
   const theme = isLive ? 'studio' : 'workspace';
 
   return (
     <div className={styles.shell} data-platform={IS_MAC ? 'mac' : 'other'} data-theme={theme}>
-      <header className={styles.header}>
-        <div className={styles.headerLeft}>
-          <span className={styles.wordmark}>
-            <span className={styles.brandTile} aria-hidden>
-              <Icon name="waveform" size={13} />
-            </span>
-            <span className={styles.mark}>Candid</span>
-            <span className={styles.markAccent}>Cue</span>
-          </span>
-          <nav className={styles.titleNav} aria-label="Primary">
-            {primaryNav.map(renderNav)}
-          </nav>
-        </div>
-        {lastError && (
-          <div className={styles.headerActions}>
-            <div className={styles.diagnostics} title={`Attention: ${lastError.publicMessage}`}>
-              <StatusIcon tone="danger" label={`Attention: ${lastError.publicMessage}`} />
-              <span className={styles.diagnosticsText}>Issue</span>
-            </div>
+      {isLive ? (
+        <main className={styles.studioMain}>
+          <div className={styles.studioDrag} aria-hidden />
+          <div className={styles.studioScroll}>
+            <RouteView route={route} nav={nav} />
           </div>
-        )}
-      </header>
-
-      <div className={styles.body}>
-        <main className={styles.main}>
-          <RouteView route={route} nav={nav} />
         </main>
-      </div>
+      ) : (
+        <div className={styles.body}>
+          <AppSidebar nav={nav} route={route} lastError={lastError} />
+          <main className={styles.main}>
+            <RouteView route={route} nav={nav} />
+          </main>
+        </div>
+      )}
     </div>
   );
 }

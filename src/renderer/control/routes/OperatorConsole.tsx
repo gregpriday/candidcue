@@ -10,7 +10,7 @@ import { Button } from '../components/Button';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
 import { Icon } from '../components/Icon';
 import { Panel } from '../components/Panel';
-import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
+import { PageHeader } from '../components/PageHeader';
 import { useSnapshot } from '../state/useSnapshot';
 import { formatElapsed } from '../lib/format';
 import { describeError } from '../lib/errors';
@@ -171,7 +171,7 @@ export function OperatorConsole({ nav, sessionId }: OperatorConsoleProps): JSX.E
   if (!snapshot) {
     return (
       <>
-        <WorkspaceToolbar
+        <PageHeader
           title="Operator console"
           actions={
             <Button variant="ghost" onClick={() => nav.go({ name: 'home' })}>
@@ -219,7 +219,7 @@ function OperatorView({ snapshot, commandError, onCommand, onExit }: OperatorVie
 
   return (
     <>
-      <WorkspaceToolbar
+      <PageHeader
         title={snapshot.projectTitle}
         actions={
           <Button variant="ghost" onClick={onExit}>

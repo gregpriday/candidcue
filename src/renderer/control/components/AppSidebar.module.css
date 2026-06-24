@@ -1,0 +1,163 @@
+.sidebar {
+  width: var(--sidebar-w);
+  flex: 0 0 var(--sidebar-w);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  height: 100%;
+  /* Reserve the macOS traffic-light gutter at the top of the rail. */
+  padding: calc(var(--space-4) + var(--titlebar-gutter, 0px)) var(--space-3) var(--space-4);
+  background: var(--bg-chrome);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  /* The whole rail is a window-drag handle; interactive controls opt out. */
+  -webkit-app-region: drag;
+}
+
+.brandRow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+}
+.brandTile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+.brand {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.newButton {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.newButton:hover {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+.navItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-align: left;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.navItem:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.navItemActive,
+.navItemActive:hover {
+  background: var(--bg-selected);
+  color: var(--accent);
+}
+
+.recent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  -webkit-app-region: no-drag;
+  min-height: 0;
+}
+.recentLabel {
+  padding: 0 var(--space-3);
+  font-size: var(--text-2xs);
+  text-transform: uppercase;
+  letter-spacing: var(--ls-caps);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.recentList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.recentItem {
+  display: block;
+  width: 100%;
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.recentItem:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.recentItemActive,
+.recentItemActive:hover {
+  background: var(--bg-selected);
+  color: var(--accent);
+}
+
+.footer {
+  margin-top: auto;
+  -webkit-app-region: no-drag;
+}
+.issue {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--text-xs);
+  line-height: 16px;
+}
+.issueText {
+  min-width: 0;
+}

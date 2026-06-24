@@ -4,7 +4,7 @@ import type { ProviderTestResult } from '@shared/contracts';
 import { Button } from '../components/Button';
 import { Icon, type IconName } from '../components/Icon';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
-import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
+import { PageHeader } from '../components/PageHeader';
 import { describeError } from '../lib/errors';
 import route from './route.module.css';
 import styles from './SettingsScreen.module.css';
@@ -125,7 +125,7 @@ export function SettingsScreen(): JSX.Element {
 
   return (
     <>
-      <WorkspaceToolbar
+      <PageHeader
         title="Settings"
         meta="AI provider connections."
       />

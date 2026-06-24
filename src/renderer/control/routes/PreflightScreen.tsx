@@ -5,7 +5,7 @@ import type { Navigator } from '../app';
 import { Button } from '../components/Button';
 import { StatusIcon, type StatusTone } from '../components/StatusIcon';
 import { Panel } from '../components/Panel';
-import { WorkspaceToolbar } from '../components/WorkspaceToolbar';
+import { PageHeader } from '../components/PageHeader';
 import { describeError } from '../lib/errors';
 import { MicMeter } from '../components/MicMeter';
 import route from './route.module.css';
@@ -195,7 +195,7 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
 
   return (
     <>
-      <WorkspaceToolbar
+      <PageHeader
         title="Session setup"
         onBack={() => nav.go({ name: 'project', projectId })}
       />
