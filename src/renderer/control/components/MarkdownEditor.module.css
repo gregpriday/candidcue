@@ -47,12 +47,10 @@
   flex: 1 1 auto;
   min-height: 0;
 }
-/* Full-bleed editors can't carry a rounded ring, so the focus signal is a clear
-   2px accent underline on the toolbar strip (a square edge — no crescent). */
-.editorFlush:focus-within .header {
-  border-bottom-color: var(--accent);
-  box-shadow: inset 0 -2px 0 0 var(--accent);
-}
+/* Full-bleed editors keep their header strip static: it stays the quiet
+   bg-canvas toolbar (base `.header`) with no focus treatment. The focus signal is
+   a subtle wash on the editing body alone (see SourceLibrary `.pane`); the old
+   accent underline on the strip read as a janky line and is intentionally gone. */
 /* In flush mode the editor fills the pane down to the status strip: the
    react-codemirror root and the editor itself stretch, so there is no dead
    white space below the text and no floating, half-height outline. */

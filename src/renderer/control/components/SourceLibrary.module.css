@@ -342,6 +342,16 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* Only the editing body reads this background — the transparent CodeMirror
+     paints through to it, while the header and status bar lay their own static
+     fills over it. At rest the body sits halfway between the bright panel and the
+     recessed canvas: a hair below white, just enough to read as a fillable field;
+     focusing the title or body lifts it the rest of the way to the panel. A
+     subtle wash in place of the old accent line on the header strip. */
+  background: color-mix(in srgb, var(--bg-canvas) 50%, var(--bg-panel));
+  transition: background var(--dur-med) var(--ease-out);
+}
+.pane:focus-within {
   background: var(--bg-panel);
 }
 .paneEmpty {
@@ -412,16 +422,20 @@
   color: var(--danger);
 }
 
-/* ---- editor status bar (flush; informational counts, never a cap) --------- */
+/* ---- editor status bar (flush; informational counts, never a cap) ---------
+   Static canvas fill matching the header strip — both bars are quiet chrome that
+   frame the editing body and stay put, so the body (off-white at rest, brighter
+   on focus) always reads as the foreground and is never outshone by the bars. */
 .editorStatusBar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-3);
   margin: 0;
-  /* Pin to the bottom of the white pane, like a code editor's status strip. */
+  /* Pin to the bottom of the pane, like a code editor's status strip. */
   margin-top: auto;
   padding: var(--space-3) var(--space-4);
+  background: var(--bg-canvas);
   border-top: 1px solid var(--border-faint);
   font-size: var(--text-xs);
   color: var(--text-muted);
