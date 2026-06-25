@@ -172,8 +172,9 @@
   background: var(--bg-panel);
   border-color: var(--border);
   box-shadow: var(--shadow-card);
+  /* Color only — no weight change. A weight shift on selection nudges the text
+     sideways; the pill + darker color already mark the current item. */
   color: var(--text-primary);
-  font-weight: 600;
 }
 
 .footer {
