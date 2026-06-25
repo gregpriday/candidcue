@@ -51,7 +51,8 @@
 
 .workspace {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  /* Wide enough that a two-line title plus the reorder controls breathe. */
+  grid-template-columns: 320px minmax(0, 1fr);
   flex: 1 1 auto;
   min-height: 520px;
 }
@@ -123,7 +124,7 @@
 }
 .dismiss:hover {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--bg-hover-surface);
 }
 
 /* ---- list rail ------------------------------------------------------------- */
@@ -165,7 +166,7 @@
   appearance: none;
 }
 .searchInput:focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -213,16 +214,18 @@
     background var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out);
 }
+/* Chrome hover — this rail is warm-paper sidebar, not a white panel. */
 .option:hover {
-  background: var(--bg-hover);
+  background: var(--bg-hover-chrome);
 }
-/* Selected = a crisp white card lifted off the warm rail with a soft shadow and
-   a hairline border. That contrast alone marks the selection — no accent bar,
-   which just read as noise on an already-obvious pill. */
+/* Selected = a crisp white pill lifted off the warm rail — the same white-pill
+   selection language as the app sidebar. The lifted white pill alone marks the
+   selection; no accent edge bar (it read as a one-sided line on the rounded
+   pill), no broad peach fill. */
 .optionSelected,
 .optionSelected:hover {
   background: var(--bg-panel);
-  border-color: var(--border-faint);
+  border-color: var(--border);
   box-shadow: var(--shadow-card);
 }
 
@@ -241,9 +244,14 @@
   line-height: 17px;
   font-weight: 600;
   color: var(--text-secondary);
-  white-space: nowrap;
+  /* Allow up to two lines before ellipsing, so longer source titles stay legible
+     in the widened rail rather than truncating mid-word on a single line. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
   transition: color var(--dur-fast) var(--ease-out);
 }
 .option:hover .optionTitle,
@@ -270,44 +278,63 @@
   align-items: center;
   gap: 0;
   flex: 0 0 auto;
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
 }
-.option:hover .reorder,
-.optionSelected .reorder,
-.option:focus-within .reorder {
-  opacity: 1;
-}
+/* The up/down buttons stay hidden until the row is hovered OR keyboard-focused —
+   keyboard focus reveals them exactly as hover does. The grip (below) persists as
+   a faint always-on indicator so the row reads as reorderable even at rest. */
 .reorderButton {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* Narrow enough that the up/down chevrons sit as a tight pair, not spread out. */
-  width: 22px;
+  /* >=28x28px hit target around the 14px chevron, per the touch/click minimum. */
+  width: 28px;
   height: 28px;
   background: transparent;
   border: none;
   border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--text-muted);
-  transition: color var(--dur-fast) var(--ease-out);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+.option:hover .reorderButton,
+.option:focus-within .reorderButton {
+  opacity: 1;
 }
 .reorderButton:hover:not(:disabled) {
   color: var(--text-primary);
 }
 .reorderButton:disabled {
-  opacity: 0.3;
+  opacity: 0;
   cursor: not-allowed;
+}
+/* Keep a disabled button discoverable (faint) once its row is revealed, so the
+   pair never collapses to a lone button. */
+.option:hover .reorderButton:disabled,
+.option:focus-within .reorderButton:disabled {
+  opacity: 0.3;
 }
 .reorderUp {
   transform: rotate(180deg);
 }
+/* Faint, always-visible grip: the persistent position/drag affordance that keeps
+   reorderability discoverable before the row is hovered. */
 .grip {
   display: inline-flex;
   align-items: center;
-  color: var(--text-muted);
+  justify-content: center;
+  width: 20px;
+  height: 28px;
+  color: var(--text-faint, var(--text-muted));
+  opacity: 0.45;
   cursor: grab;
-  padding-left: 2px;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.option:hover .grip,
+.option:focus-within .grip {
+  opacity: 0.7;
 }
 .grip:active {
   cursor: grabbing;
@@ -396,9 +423,10 @@
 }
 /* A faint well on hover signals the title is editable in place. */
 .editorTitleInput:hover:not(:focus) {
-  background: var(--bg-hover);
+  background: var(--bg-hover-chrome);
 }
-/* No per-field outline — the whole editor surface rings on :focus-within. */
+/* No per-field outline — the whole editor surface rings on :focus-within, and a
+   keyboard tab into the title raises the editor's :has(:focus-visible) ring. */
 .editorTitleInput:focus {
   outline: none;
 }

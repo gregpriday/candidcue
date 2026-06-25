@@ -51,7 +51,7 @@
   transition: color var(--dur-fast) var(--ease-out);
 }
 .featuredMain:hover .featuredTitle {
-  color: var(--accent);
+  color: var(--accent-strong);
 }
 .featuredMeta {
   display: flex;
@@ -92,20 +92,30 @@
   overflow: hidden;
 }
 .row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  /* Hairline between rows only — the outer edge belongs to the container. */
-  border-top: 1px solid var(--border-faint);
+  min-height: 60px;
+  padding: 10px var(--space-3);
   transition: background var(--dur-fast) var(--ease-out);
 }
-.row:first-child {
-  border-top: none;
+/* Hairline between rows only — the outer edge belongs to the container. The
+   separator is inset to begin at the row's content edge rather than spanning
+   the full row including its padding. */
+.row:not(:first-child)::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--space-3);
+  right: 0;
+  height: 1px;
+  background: var(--border-faint);
 }
 .row:hover {
-  /* The whole row lights up rather than darkening an outline. */
-  background: var(--bg-hover);
+  /* The whole row lights up (surface hover on a white panel) — a background
+     change only, never a shadow lift. */
+  background: var(--bg-hover-surface);
 }
 .rowMain {
   display: flex;
@@ -129,7 +139,7 @@
   transition: color var(--dur-fast) var(--ease-out);
 }
 .rowMain:hover .rowTitle {
-  color: var(--accent);
+  color: var(--accent-strong);
 }
 /* A momentary press deepen to the canonical terracotta press color, matching how
    every real Button settles on :active. */

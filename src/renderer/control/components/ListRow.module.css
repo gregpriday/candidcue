@@ -8,10 +8,13 @@
   background: var(--bg-panel);
   transition:
     border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
+    background var(--dur-fast) var(--ease-out);
 }
+/* Clickable rows sit on a white panel — hover is a quiet surface fill, no shadow,
+   no upward lift. The border firms up only slightly to anchor the fill. */
 .interactive:hover {
   border-color: var(--border-strong);
+  background: var(--bg-hover-surface);
 }
 
 .main {
@@ -31,7 +34,7 @@ button.main {
   cursor: pointer;
 }
 button.main:hover .title {
-  color: var(--accent);
+  color: var(--accent-strong);
 }
 
 .leading {

@@ -69,8 +69,8 @@
   --prose-measure-narrow: 52ch;
 
   /* ---- Geometry ---- */
-  --radius-sm: 10px; /* controls */
-  --radius-md: 14px; /* cards, dialogs */
+  --radius-sm: 8px; /* buttons, inputs, selects, small menu items */
+  --radius-md: 12px; /* cards, sheets, larger compound controls */
   --radius-lg: 16px; /* stage previews, large visual areas */
   --radius-pill: 999px; /* status capsules, toggles */
 
@@ -81,9 +81,21 @@
   --sidebar-w: 224px;
   --rail-w: 0px;
   --statusbar-h: 0px;
-  --control-h: 40px; /* standard control height */
+  --control-h: 40px; /* standard form control height */
   --control-h-sm: 32px;
-  --control-h-lg: 42px; /* primary & destructive actions */
+  --control-h-lg: 42px; /* legacy — superseded by --button-h / --transport-control-h */
+
+  /* Explicit control geometry (refinement §4) — four sizes only: form controls
+     40px (--control-h), buttons 36px, compact icon controls 32px, live
+     transport 44px. Adjoining controls share a height so they read as related. */
+  --button-h: 36px;
+  --icon-control-h: 32px;
+  --transport-control-h: 44px;
+
+  /* Sticky-header offsets (refinement §6) — the page header is taller than
+     --page-y, so sticky columns must clear the real header height. */
+  --header-back-h: 103px; /* back control + title */
+  --header-back-meta-h: 123px; /* back control + title + metadata */
 
   /* Shared horizontal page inset — one rhythm across headers, page bodies,
      steppers, editor/review content, and bottom action bars. */
@@ -98,6 +110,11 @@
   --dur-med: 160ms; /* selection / disclosure */
   --dur-slow: 200ms; /* screen / readiness transition */
   --dur-slower: 240ms;
+  /* Spec-named aliases (refinement §19): background/text 120ms, border/shadow
+     160ms, sheet entrance / route 200ms. Same values as --dur-*. */
+  --motion-fast: 120ms;
+  --motion-base: 160ms;
+  --motion-slow: 200ms;
   --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
   --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-spring: var(--ease-out);
@@ -110,8 +127,9 @@
      only — every control / label / metric stays in the UI font. */
   --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
-  --font-serif: ui-serif, 'Source Serif 4', 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia,
-    serif;
+  /* Bundled via @fontsource (control entry) so it renders deterministically;
+     Georgia is the only fallback if the bundle somehow fails to load. */
+  --font-serif: 'Source Serif 4', Georgia, serif;
   --font-prose: var(--font-ui);
 
   /* Decorative atmosphere is gone; tokens kept as no-ops so stray references
@@ -119,6 +137,9 @@
   --sheen-app: none;
   --grain-opacity: 0;
   --grain-url: none;
+
+  /* One keyboard-focus ring color, themed via --focus (refinement §3). */
+  --focus-ring: var(--focus);
 }
 
 /* ============================================================================
@@ -138,6 +159,9 @@
   --bg-elevated: #20242c;
   --bg-sunken: #0d0f13;
   --bg-hover: #242932;
+  --bg-hover-chrome: #242932; /* chrome surfaces (nav/toolbar) */
+  --bg-hover-surface: #242932; /* rows/cards on panels */
+  --accent-wash: rgba(224, 138, 99, 0.08); /* selected radio/index wash */
   --bg-selected: rgba(224, 138, 99, 0.16);
 
   /* Text */
@@ -192,6 +216,8 @@
   --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.4);
   --shadow-transport: 0 -8px 24px rgba(0, 0, 0, 0.4);
   --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.38);
+  --shadow-hover: var(--shadow-card-hover); /* card lift on hover */
+  --shadow-preview: var(--shadow-pop); /* studio preview surface */
 
   /* Empty-state invitations */
   --empty-bg: rgba(224, 138, 99, 0.08);
@@ -224,12 +250,14 @@
   --bg-secondary: #efebe5;
   --bg-elevated: #ffffff;
   --bg-sunken: #f1eee8;
-  --bg-hover: #ece8e1;
+  --bg-hover: #ece8e1; /* legacy shared hover — migrate to chrome/surface below */
+  --bg-hover-chrome: #e8e3db; /* sidebar, nav, toolbar, breadcrumb/back controls */
+  --bg-hover-surface: #f7f4ef; /* rows & cards on white panels */
   --bg-selected: rgba(183, 94, 59, 0.1);
 
   --text-primary: #18191d;
   --text-secondary: #5d626c;
-  --text-muted: #6b707a;
+  --text-muted: #676b74; /* nudged darker so 12-13px text clears AA on chrome */
   --text-faint: #868b94;
 
   --border: #dedad3; /* decorative divider */
@@ -240,11 +268,12 @@
 
   /* Terracotta "clay". --accent is AA-legible as text on the warm canvas
      (~4.5:1); --accent-strong is the darker hover/press + safest text weight. */
-  --accent: #b75e3b;
+  --accent: #b35a38;
   --accent-strong: #9c4a2c;
   --accent-contrast: #ffffff;
   --accent-soft: #f6e7df;
-  --focus: #b75e3b;
+  --accent-wash: rgba(179, 90, 56, 0.05); /* 5% terracotta — selected radio/index */
+  --focus: #b35a38;
   /* Status foregrounds are darkened from the source palette so 12-13px text on
      the translucent -soft fills clears WCAG AA (the lighter source hues sat
      ~3.8:1 on the warm canvas). */
@@ -275,6 +304,8 @@
   --shadow-card-hover: 0 6px 16px rgba(24, 25, 29, 0.1);
   --shadow-transport: 0 -2px 12px rgba(24, 25, 29, 0.05);
   --shadow-pop: 0 12px 32px rgba(24, 25, 29, 0.16), 0 2px 8px rgba(24, 25, 29, 0.08);
+  --shadow-hover: 0 4px 12px rgba(24, 25, 29, 0.09); /* card lift on hover */
+  --shadow-preview: 0 10px 28px rgba(24, 25, 29, 0.14), 0 2px 6px rgba(24, 25, 29, 0.06);
 
   --empty-bg: #faf1ec;
   --empty-border: #dedad3;
@@ -321,10 +352,15 @@ body {
   background: var(--selection);
 }
 
-/* A calm keyboard-focus ring. Kept as `outline` (never box-shadow) so panel
-   overflow never clips it. */
-:focus-visible {
-  outline: 2px solid var(--focus);
+/* A single calm keyboard-focus ring for SMALL interactive controls only —
+   exactly one treatment, so it never doubles with a component's own accent
+   border. Deliberately NOT extended to `[tabindex]`: large composite surfaces
+   (the source listbox, a sheet panel) carry tabindex, and an accent ring around
+   a whole surface looks wrong — those indicate focus with a quiet bg/border
+   shift instead (see CLAUDE.md "Focus indication"). Kept as `outline` (never
+   box-shadow) so panel overflow never clips it and dimensions never change. */
+:where(button, a, input, textarea, select):focus-visible {
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 

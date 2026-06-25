@@ -12,7 +12,7 @@
 }
 
 /* A floating notice: warm panel surface, hairline edge, elevation does the
-   lifting. Each toast slides up and fades in. */
+   lifting. Each toast fades in — opacity only, no positional slide. */
 .toast {
   display: inline-flex;
   align-items: center;
@@ -32,11 +32,9 @@
 @keyframes toastIn {
   from {
     opacity: 0;
-    transform: translateY(8px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 
@@ -81,5 +79,5 @@
 }
 .dismiss:hover {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--bg-hover-surface);
 }

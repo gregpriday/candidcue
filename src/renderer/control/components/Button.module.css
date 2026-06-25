@@ -3,13 +3,15 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  /* Compact + crisp — the modern desktop proportion. Flat: no elevation at all. */
-  height: 34px;
-  padding: 0 var(--space-4);
-  border-radius: 6px;
+  /* Premium-flat: a darker 1px border "lip" + a --shadow-card micro-lift give
+     the control a confident, seated presence — no gradient, no glow. */
+  min-height: var(--button-h);
+  padding-inline: 14px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-control);
   background: var(--bg-elevated);
   color: var(--text-primary);
+  box-shadow: var(--shadow-card);
   font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -23,17 +25,23 @@
 }
 
 .button:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--bg-hover-surface);
   border-color: var(--border-strong);
 }
-/* A restrained scale "squeeze" on press — the only motion; no shadow tricks. */
+/* A 1px depress on press — the only motion. No scale (it blurs the label). */
 .button:active:not(:disabled) {
-  background: var(--bg-hover);
-  transform: scale(0.98);
+  background: var(--bg-hover-surface);
+  transform: translateY(1px);
 }
 .button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Small — a compact 32px control for dense toolbars and inline actions. */
+.small {
+  min-height: 32px;
+  padding-inline: var(--space-3);
 }
 
 /* Primary — a clean SOLID accent fill. Flat: no shadow, no gradient, no border
@@ -42,6 +50,8 @@
   background: var(--accent);
   border-color: transparent;
   color: var(--accent-contrast);
+  box-shadow: none;
+  font-size: var(--text-base);
 }
 .primary:hover:not(:disabled) {
   background: var(--accent-strong);
@@ -69,10 +79,11 @@
   background: transparent;
   border-color: transparent;
   color: var(--text-secondary);
-  padding: 0 var(--space-2);
+  padding-inline: var(--space-2);
+  box-shadow: none;
 }
 .ghost:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--bg-hover-chrome);
   border-color: transparent;
   color: var(--text-primary);
 }
@@ -81,6 +92,7 @@
   background: transparent;
   border-color: transparent;
   color: var(--danger);
+  box-shadow: none;
 }
 .danger:hover:not(:disabled) {
   background: var(--danger-soft);

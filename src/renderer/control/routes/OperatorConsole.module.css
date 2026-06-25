@@ -34,7 +34,10 @@
   position: sticky;
   top: 0;
   z-index: 3;
-  display: flex;
+  /* True-centered title: a 3-column grid so the title is optically centered on
+     the bar and never shifts when the side groups change width. */
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(320px, 520px) minmax(240px, 1fr);
   align-items: center;
   gap: var(--space-4);
   height: 52px;
@@ -48,11 +51,13 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  flex: 0 0 auto;
+  justify-self: start;
+  min-width: 0;
 }
 .barTitle {
-  flex: 1 1 auto;
+  justify-self: center;
   min-width: 0;
+  max-width: 100%;
   text-align: center;
   font-size: var(--text-sm);
   font-weight: 600;
@@ -65,7 +70,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex: 0 0 auto;
+  justify-self: end;
   -webkit-app-region: no-drag;
 }
 .timer {
@@ -116,7 +121,8 @@
 
 .chip,
 .chipButton,
-.chipButtonAlert {
+.chipButtonAlert,
+.chipButtonDanger {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -133,15 +139,22 @@
     color var(--dur-fast) var(--ease-out);
 }
 .chipButton,
-.chipButtonAlert {
+.chipButtonAlert,
+.chipButtonDanger {
   cursor: pointer;
 }
 .chipButton:hover {
-  background: var(--bg-hover);
+  background: var(--bg-hover-chrome);
 }
+/* Degraded connectivity — a WARNING tone (recoverable). */
 .chipButtonAlert {
   color: var(--warning);
   background: var(--warning-soft);
+}
+/* A FULL disconnection is the studio danger state, not merely a warning. */
+.chipButtonDanger {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 .chipLabel {
   white-space: nowrap;
@@ -155,7 +168,8 @@
   width: 3px;
   height: 14px;
   border-radius: var(--radius-pill);
-  background: var(--bg-hover);
+  /* Neutral empty-track behind the green level fill — sits in the chrome header. */
+  background: var(--bg-hover-chrome);
   overflow: hidden;
   opacity: 0;
   transition: opacity var(--dur-med) var(--ease-out);
@@ -189,7 +203,7 @@
 }
 .exit:hover {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--bg-hover-chrome);
 }
 
 .connection {
@@ -260,7 +274,9 @@
   gap: var(--space-5);
   width: min(100%, 760px);
   margin: 0 auto;
-  padding: var(--space-9) var(--space-6) 124px;
+  /* The question sits optically above center, leaving room for the response
+     below — the top breathing room scales gently with viewport height. */
+  padding: clamp(40px, 8vh, 72px) var(--space-6) 124px;
 }
 .stateLine {
   margin: 0;
@@ -278,7 +294,9 @@
   margin: 0;
   font-family: var(--font-serif);
   font-size: var(--text-live-question);
-  line-height: var(--text-live-question-leading);
+  font-weight: 500;
+  font-optical-sizing: auto;
+  line-height: 1.2;
   color: var(--text-primary);
   /* Even out the wrap so the first line isn't conspicuously long. */
   text-wrap: balance;
@@ -293,11 +311,13 @@
   gap: var(--space-2);
 }
 .speaker {
-  /* True small-caps rather than shouting all-caps — distinct, less technical. */
-  font-size: var(--text-sm);
+  /* Real uppercase at a small size — renders consistently in Chromium where
+     all-small-caps was unreliable. */
+  font-size: 11px;
+  line-height: 16px;
   font-weight: 600;
-  font-variant-caps: all-small-caps;
-  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   color: var(--text-muted);
 }
 .answerText {
@@ -414,7 +434,8 @@
   background: none;
   border: none;
   padding: 0;
-  color: var(--accent);
+  /* A small inline text action — the stronger accent clears contrast at this size. */
+  color: var(--accent-strong);
   font-size: var(--text-sm);
   font-weight: 600;
   cursor: pointer;
@@ -442,8 +463,19 @@
 .transportSecondary:last-child {
   justify-content: flex-end;
 }
-.finish {
-  min-width: 200px;
+/* Transport text controls (Resume/Pause via <Button>) — held to the 44px live
+   transport height with a 10px radius, overriding the standard button height.
+   Scoped under .transport so it wins regardless of stylesheet insertion order. */
+.transport .transportButton {
+  height: var(--transport-control-h);
+  padding: 0 18px;
+  border-radius: 10px;
+}
+.transport .finish {
+  min-width: 180px;
+  height: var(--transport-control-h);
+  padding: 0 18px;
+  border-radius: 10px;
   justify-self: center;
 }
 .iconButton,
@@ -451,11 +483,11 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 44px;
-  height: 44px;
+  width: var(--transport-control-h);
+  height: var(--transport-control-h);
   border: 1px solid var(--border-control);
   background: var(--bg-elevated);
-  border-radius: var(--radius-sm);
+  border-radius: 10px;
   color: var(--text-secondary);
   cursor: pointer;
   transition:
@@ -463,7 +495,7 @@
     color var(--dur-fast) var(--ease-out);
 }
 .iconButton:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--bg-hover-chrome);
   color: var(--text-primary);
 }
 .iconButtonDanger {

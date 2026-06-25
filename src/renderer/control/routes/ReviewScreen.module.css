@@ -25,7 +25,9 @@
 /* ---- Sticky question index ------------------------------------------- */
 .index {
   position: sticky;
-  top: var(--page-y);
+  /* Clear the real sticky PageHeader (back + title + meta) plus a 16px gap so
+     the index never tucks under the header as the document scrolls. */
+  top: calc(var(--header-back-meta-h) + 16px);
 }
 .indexList {
   list-style: none;
@@ -53,15 +55,17 @@
     color var(--dur-fast) var(--ease-out);
 }
 .indexItem:hover {
-  background: var(--bg-hover);
+  background: var(--bg-hover-chrome);
   color: var(--text-primary);
 }
 /* Current reading position — a soft selection wash with firm dark text and an
    accent-tinted number, so the index gives positional feedback rather than
-   reading as inert navigation. (No left marker bar — the wash + bold + accent
-   number carry it; a bar reads as noise on an already-clear row.) */
+   reading as inert navigation. The wash is kept lighter than the general
+   --bg-selected (7% terracotta) so the index never competes with the document
+   itself. (No left marker bar — the wash + bold + accent number carry it; a bar
+   reads as noise on an already-clear row.) */
 .indexItem[data-active] {
-  background: var(--bg-selected);
+  background: rgba(179, 90, 56, 0.07);
   color: var(--text-primary);
   font-weight: 600;
 }
@@ -87,8 +91,10 @@
 .document {
   display: flex;
   flex-direction: column;
+  /* 32px between questions — each turn reads as its own editorial section. */
   gap: var(--space-8);
-  max-width: var(--prose-measure);
+  /* Cap the document to a comfortable reading measure (~72ch). */
+  max-width: 72ch;
 }
 .turn {
   display: flex;
@@ -96,8 +102,9 @@
   gap: var(--space-4);
   padding-bottom: var(--space-7);
   border-bottom: 1px solid var(--border-faint);
-  /* Clear the sticky PageHeader (breadcrumb + title + meta) when jumped to. */
-  scroll-margin-top: 128px;
+  /* Clear the sticky PageHeader (back + title + meta) plus a 16px gap when a
+     turn is jumped to from the index — matches the index's own sticky offset. */
+  scroll-margin-top: calc(var(--header-back-meta-h) + 16px);
 }
 .turn:last-child {
   border-bottom: none;
@@ -105,7 +112,9 @@
 .block {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  /* Speaker label sits 10px above its question / answer — a tight pairing that
+     keeps each block reading as one unit. */
+  gap: 10px;
 }
 .speakerMira,
 .speakerYou {
@@ -123,8 +132,10 @@
 .question {
   margin: 0;
   font-family: var(--font-serif);
-  font-size: 20px;
-  line-height: 1.4;
+  font-size: 21px;
+  line-height: 30px;
+  font-weight: 500;
+  letter-spacing: 0;
   color: var(--text-primary);
   text-wrap: balance;
 }
@@ -152,6 +163,11 @@
   color: var(--text-muted);
 }
 .editToggle {
+  display: inline-flex;
+  align-items: center;
+  /* Keep the interactive region >=28px tall even though the label is quiet, so
+     the hover/focus target is comfortable regardless of opacity. */
+  min-height: 28px;
   background: none;
   border: none;
   padding: 0;
@@ -165,8 +181,11 @@
   opacity: 0;
   transition: opacity var(--dur-fast) var(--ease-out);
 }
+/* Keyboard focus must reveal the action exactly as hover does — including the
+   button's own focus, so tabbing onto it never lands on an invisible control. */
 .turn:hover .editToggle,
 .turn:focus-within .editToggle,
+.editToggle:focus-visible,
 .youHead[data-editing] .editToggle {
   opacity: 1;
 }
@@ -185,4 +204,33 @@
 }
 .muted {
   color: var(--text-muted);
+}
+
+/* ---- Export confirmation -------------------------------------------------
+   A completed export is a success outcome, not an accent notice — so it wears
+   the success tone (soft fill + success leading rule) rather than the general
+   accent-bar treatment. Mirrors the inset-bar geometry of the shared notice so
+   it stays consistent, never a one-sided border. */
+.exportNotice {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--success-soft);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.exportNotice::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: var(--space-3);
+  bottom: var(--space-3);
+  width: 3px;
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+  background: var(--success);
 }

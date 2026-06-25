@@ -6,9 +6,17 @@
   align-items: center;
   justify-content: center;
   padding: var(--space-6);
-  /* Backdrop dim — a neutral scrim behind the centered modal, not a themable surface. */
-  background: rgba(8, 9, 12, 0.5);
-  animation: sheetOverlayIn var(--dur-med) var(--ease-out);
+  /* Workspace scrim — a soft warm-neutral dim with a faint 2px blur. The blur
+     is deliberately shallow: anything stronger reads glossy and off-system. */
+  background: rgba(24, 25, 29, 0.34);
+  backdrop-filter: blur(2px);
+  animation: sheetOverlayIn var(--motion-slow) var(--ease-out);
+}
+
+/* Studio scrim — deeper and unblurred, sitting over the dark live console. */
+:global([data-theme='studio']) .overlay {
+  background: rgba(8, 9, 12, 0.52);
+  backdrop-filter: none;
 }
 
 /* A grouped surface that floats on a shadow: a subtle hairline edge, not a
@@ -25,7 +33,7 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-pop);
   /* Restrained entrance: fade with a small rise, no springy scale. */
-  animation: sheetIn var(--dur-med) var(--ease-out);
+  animation: sheetIn var(--motion-slow) var(--ease-out);
 }
 
 @keyframes sheetOverlayIn {
@@ -80,5 +88,9 @@
   display: flex;
   justify-content: flex-end;
   gap: var(--space-3);
-  margin-top: var(--space-2);
+  /* Footer separated by a faint top rule, not extra whitespace. The 16px flex
+     gap sits above the rule; the padding gives the buttons matching breathing
+     room below it. */
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-faint);
 }

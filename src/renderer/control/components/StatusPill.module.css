@@ -40,6 +40,11 @@
   color: var(--accent-strong);
   background: var(--accent-soft);
 }
+/* The leading mark is a FILL, not text (§3/§7): paint it the true --accent so
+   the dot reads as the brand clay while the label keeps the AA-safe weight. */
+.accent .dot {
+  background: var(--accent);
+}
 .success {
   color: var(--success);
   background: var(--success-soft);

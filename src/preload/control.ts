@@ -11,6 +11,9 @@ function subscribe(channel: string, listener: (payload: any) => void): Unsubscri
 // Each method maps to ONE hardcoded channel. The raw ipcRenderer and any
 // generic invoke(channel, ...args) wrapper are never exposed (spec §20.6).
 const api: CandidCueControlApi = {
+  window: {
+    setThemeChrome: (theme) => ipcRenderer.send(CHANNELS.windowSetThemeChrome, theme),
+  },
   projects: {
     list: () => ipcRenderer.invoke(CHANNELS.projectsList),
     get: (projectId) => ipcRenderer.invoke(CHANNELS.projectsGet, projectId),

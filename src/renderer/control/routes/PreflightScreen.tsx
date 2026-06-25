@@ -407,18 +407,21 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
           </Disclosure>
 
           {checks.length > 0 && (
-            <ul className={styles.checklist}>
-              {checks.map((check) => (
-                <li key={check.id} className={styles.checkItem}>
-                  <StatusIcon tone={CHECK_TONE[check.status]} label={`${check.label}: ${CHECK_WORD[check.status]}`} />
-                  <span className={styles.checkLabel}>{check.label}</span>
-                  <span className={styles.checkStatus}>
-                    {CHECK_WORD[check.status]}
-                    {check.detail ? ` — ${check.detail}` : ''}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <div className={styles.readinessBlock}>
+              <p className={styles.readinessLabel}>Readiness</p>
+              <ul className={styles.checklist}>
+                {checks.map((check) => (
+                  <li key={check.id} className={styles.checkItem}>
+                    <StatusIcon tone={CHECK_TONE[check.status]} label={`${check.label}: ${CHECK_WORD[check.status]}`} />
+                    <span className={styles.checkLabel}>{check.label}</span>
+                    <span className={styles.checkStatus}>
+                      {CHECK_WORD[check.status]}
+                      {check.detail ? ` — ${check.detail}` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
 

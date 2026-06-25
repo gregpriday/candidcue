@@ -1,4 +1,4 @@
-import { ipcMain, type IpcMainInvokeEvent } from 'electron';
+import { BrowserWindow, ipcMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
 import { z } from 'zod';
 import { CHANNELS } from '@shared/contracts';
 import {
@@ -9,16 +9,31 @@ import {
   providerNameSchema,
   exportFormatSchema,
 } from '@shared/schemas';
+import { applyTitleBarOverlay } from '../windows/windows';
 import type { AppController } from '../app-controller';
 import type { makeSenderGuard } from './sender-guards';
 
 type Guard = ReturnType<typeof makeSenderGuard>;
 
 const idSchema = z.string().min(1).max(200);
+const chromeThemeSchema = z.enum(['workspace', 'studio']);
 
 /** Register every ControlWindow channel with Zod validation + sender guards. */
 export function registerControlIpc(app: AppController, guard: Guard): void {
   const control = (event: IpcMainInvokeEvent): void => guard(event.sender, ['control']);
+
+  // Re-skin the native Windows/Linux title-bar overlay when the renderer flips
+  // shell theme (no-op on macOS). Fire-and-forget; the BrowserWindow is resolved
+  // from the (guarded) sender so we never touch an unrelated window.
+  ipcMain.on(CHANNELS.windowSetThemeChrome, (e: IpcMainEvent, raw) => {
+    // Fire-and-forget: there's no invoke reply to reject onto, so a malformed
+    // payload must not throw an uncaught exception out of the listener — ignore it.
+    const parsed = chromeThemeSchema.safeParse(raw);
+    if (!parsed.success) return;
+    guard(e.sender, ['control']);
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (win) applyTitleBarOverlay(win, parsed.data);
+  });
 
   ipcMain.handle(CHANNELS.projectsList, (e) => {
     control(e);

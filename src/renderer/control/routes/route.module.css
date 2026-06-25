@@ -55,9 +55,7 @@
   caret-color: var(--accent);
   font: inherit;
   font-size: var(--text-base);
-  transition:
-    border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out);
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 
 /* Quiet by default; the boundary firms up only on hover. */
@@ -127,14 +125,14 @@
   line-height: var(--prose-leading);
 }
 
-/* Accent the border on focus and add a restrained tinted ring so the focused
-   field reads as deliberately lit. The global 2px :focus-visible outline still
-   shows for keyboard users (do NOT set outline:none, which would suppress it). */
+/* Accent the border on focus — no tinted glow. The global 2px :focus-visible
+   outline still shows for keyboard users (do NOT set outline:none, which would
+   suppress it), so pointer focus stays quiet while keyboard focus stays legible. */
 .input:focus,
 .textarea:focus,
 .select:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: none;
 }
 
 .row {

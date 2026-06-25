@@ -268,11 +268,20 @@ function OperatorView({ snapshot, commandError, onCommand, onExit }: OperatorVie
       <footer className={styles.transport}>
         <div className={styles.transportSecondary}>
           {controls.canResume ? (
-            <Button onClick={() => onCommand({ type: 'RESUME_SESSION' })} title="Resume (P)">
+            <Button
+              className={styles.transportButton}
+              onClick={() => onCommand({ type: 'RESUME_SESSION' })}
+              title="Resume (P)"
+            >
               <Icon name="play" size={16} /> Resume
             </Button>
           ) : (
-            <Button onClick={() => onCommand({ type: 'PAUSE_SESSION' })} disabled={!controls.canPause} title="Pause (P)">
+            <Button
+              className={styles.transportButton}
+              onClick={() => onCommand({ type: 'PAUSE_SESSION' })}
+              disabled={!controls.canPause}
+              title="Pause (P)"
+            >
               <Icon name="pause" size={16} /> Pause
             </Button>
           )}
@@ -424,7 +433,13 @@ function ConnectionChip({ status }: { status: PublicProviderStatus }): JSX.Eleme
     <div className={styles.connection} ref={ref}>
       <button
         type="button"
-        className={overall === 'ok' ? styles.chipButton : styles.chipButtonAlert}
+        className={
+          overall === 'ok'
+            ? styles.chipButton
+            : overall === 'down'
+              ? styles.chipButtonDanger
+              : styles.chipButtonAlert
+        }
         onClick={() => setOpen((prev) => !prev)}
         title={`Connection: ${label}`}
         aria-expanded={open}

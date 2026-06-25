@@ -8,13 +8,14 @@
     box-shadow var(--dur-fast) var(--ease-out);
 }
 
-/* The focus ring lives on the rounded surface itself (border + outset glow that
-   follow the radius) rather than as an outline on the inner CodeMirror — an
-   outline is a sharp rectangle the rounded `overflow: hidden` clips into ugly
-   corner crescents. The whole panel lights up for title OR content focus. */
+/* Focus is a quiet border firm only — NEVER an accent ring or a `:focus-visible`
+   outline wrapping the whole surface (that reads as a heavy terracotta box around
+   the entire editor and looks wrong; see CLAUDE.md "Focus indication"). The
+   caret marks text focus; on the flush variant the host pane's background lift
+   carries it. */
 .editor:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: var(--border-strong);
+  box-shadow: none;
 }
 
 /* Integrated header strip: a quiet warm-paper toolbar that carries an editor's

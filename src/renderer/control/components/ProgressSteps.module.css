@@ -52,7 +52,6 @@
   transition:
     background var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out),
-    box-shadow var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
 }
 
@@ -76,7 +75,7 @@
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-contrast);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: none;
 }
 
 .step[data-state='complete'] .button {

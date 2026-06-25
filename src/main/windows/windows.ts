@@ -29,6 +29,31 @@ function secureWebPreferences(preload: string): WebPreferences {
 const diagnosed = new WeakSet<BrowserWindow>();
 
 /**
+ * Native Windows/Linux title-bar overlay palette per shell theme. The overlay
+ * is a real OS-drawn rectangle, so it must track the renderer theme or a dark
+ * block sits over the light workspace. Colours mirror the token substrate:
+ * workspace = warm paper, studio = dark. Used both for the initial overlay and
+ * by `applyTitleBarOverlay` when the renderer switches themes.
+ */
+export type ChromeTheme = 'workspace' | 'studio';
+
+const TITLE_BAR_OVERLAY: Record<ChromeTheme, { color: string; symbolColor: string }> = {
+  workspace: { color: '#F6F4F0', symbolColor: '#5D626C' },
+  studio: { color: '#14171D', symbolColor: '#A8AFBC' },
+};
+
+const TITLE_BAR_OVERLAY_HEIGHT = 48;
+
+/**
+ * Re-skin the native window-control overlay for the given theme. No-op on macOS
+ * (native traffic lights are used instead) and when the overlay API is absent.
+ */
+export function applyTitleBarOverlay(win: BrowserWindow, theme: ChromeTheme): void {
+  if (process.platform === 'darwin' || win.isDestroyed()) return;
+  win.setTitleBarOverlay({ ...TITLE_BAR_OVERLAY[theme], height: TITLE_BAR_OVERLAY_HEIGHT });
+}
+
+/**
  * Build a self-contained diagnostic page as a `data:` URL. data: documents do
  * not go through the network stack, so the session CSP (injected via
  * onHeadersReceived) does not apply and inline styles render fine. No scripts.
@@ -94,10 +119,13 @@ export function createControlWindow(target: RendererTarget, appOrigin: string): 
   // lights are kept and inset into our title bar; on Windows/Linux the native
   // window controls are overlaid on the right of the same bar. The renderer
   // reserves the matching gutter (see app.module.css .header).
+  // The control window opens at the workspace (home) route, so the initial
+  // overlay must be the light workspace palette — never the dark studio block.
+  // The renderer flips it via `window:set-theme-chrome` when a session goes live.
   const chrome: BrowserWindowConstructorOptions =
     process.platform === 'darwin'
       ? { trafficLightPosition: { x: 18, y: 18 } }
-      : { titleBarOverlay: { color: '#15171c', symbolColor: '#aeb4bf', height: 48 } };
+      : { titleBarOverlay: { ...TITLE_BAR_OVERLAY.workspace, height: TITLE_BAR_OVERLAY_HEIGHT } };
   const win = new BrowserWindow({
     width: 1440,
     height: 900,

@@ -33,6 +33,19 @@ function turnKey(turn: SessionReviewTurn): string {
   return `turn-${turn.ordinal}`;
 }
 
+// Scroll a turn into view from the index. Honor prefers-reduced-motion: when the
+// user has asked for less motion, jump instantly instead of forcing a smooth
+// scroll across the whole document.
+function scrollToTurn(key: string): void {
+  const node = document.getElementById(key);
+  if (!node) {
+    return;
+  }
+  const reduceMotion =
+    typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  node.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth' });
+}
+
 function formatDuration(startedAt: string | null, endedAt: string | null): string | null {
   if (!startedAt || !endedAt) {
     return null;
@@ -197,7 +210,9 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
         });
         setActiveKey(topKey);
       },
-      { rootMargin: '-128px 0px -55% 0px', threshold: 0 },
+      // Top inset matches the sticky header offset (--header-back-meta-h 123px +
+      // 16px gap) so a turn flips to "active" exactly as it clears the header.
+      { rootMargin: '-139px 0px -55% 0px', threshold: 0 },
     );
     review.turns.forEach((turn) => {
       const node = document.getElementById(turnKey(turn));
@@ -301,7 +316,7 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
                     className={styles.indexItem}
                     data-active={active || undefined}
                     aria-current={active ? 'true' : undefined}
-                    onClick={() => document.getElementById(key)?.scrollIntoView({ behavior: 'smooth' })}
+                    onClick={() => scrollToTurn(key)}
                   >
                     <span className={styles.indexNum}>{turn.ordinal}</span>
                     <span className={styles.indexQuestion}>{turn.question}</span>
@@ -314,7 +329,7 @@ export function ReviewScreen({ nav, sessionId }: ReviewScreenProps): JSX.Element
 
         <div className={styles.document}>
           {exportNote !== null && (
-            <div className={route.notice} role="status">
+            <div className={styles.exportNotice} role="status">
               <StatusIcon tone="success" label="Exported" />
               <span>{exportNote}</span>
             </div>

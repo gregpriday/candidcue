@@ -16,7 +16,8 @@
 }
 .checked {
   border-color: var(--accent);
-  background: var(--accent-soft);
+  background: var(--accent-wash);
+  box-shadow: none;
 }
 .disabled {
   opacity: 0.55;

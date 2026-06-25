@@ -305,9 +305,11 @@ function ProviderCard({
 }: ProviderCardProps): JSX.Element {
   const panelId = `${provider}-connection-panel`;
   const helpId = `${inputId}-help`;
-  // Credential presence is not a connection. Reserve "Verified" for a successful
-  // explicit test; a stored-but-untested key is only ever "Configured". Gating on
-  // hasKey first guarantees a keyless provider can never show a result-based tone.
+  // The label tracks the underlying state truthfully. Credential presence is not a
+  // connection: a stored-but-untested key is only ever "Configured" (neutral), and
+  // "Verified" (success) is reserved for a successful explicit test. A failed test
+  // says exactly that — "Connection failed". Gating on hasKey first guarantees a
+  // keyless provider can never show a result-based tone.
   const status: { tone: StatusTone; label: string } = !hasKey
     ? { tone: 'neutral', label: 'Not configured' }
     : testing
@@ -315,11 +317,8 @@ function ProviderCard({
       : result?.ok
         ? { tone: 'success', label: 'Verified' }
         : result && !result.ok
-          ? { tone: 'danger', label: 'Needs attention' }
-          : { tone: 'accent', label: 'Configured' };
-  // The resting connected state reads as a quiet dot + label so the name line
-  // stays calm; louder/transient states keep the filled StatusPill.
-  const isConnected = status.tone === 'success';
+          ? { tone: 'danger', label: 'Connection failed' }
+          : { tone: 'neutral', label: 'Configured' };
 
   return (
     <section className={styles.providerCard}>
@@ -330,20 +329,13 @@ function ProviderCard({
         <div className={styles.providerCopy}>
           <div className={styles.providerNameRow}>
             <h2>{title}</h2>
-            {isConnected ? (
-              <span className={styles.connectedTag}>
-                <span className={styles.connectedDot} aria-hidden />
-                Connected
-              </span>
-            ) : (
-              <StatusPill tone={status.tone}>{status.label}</StatusPill>
-            )}
+            <StatusPill tone={status.tone}>{status.label}</StatusPill>
           </div>
           <p>{description}</p>
         </div>
         <Button variant="secondary" onClick={onToggle} aria-expanded={open} aria-controls={panelId}>
           {hasKey ? 'Manage' : 'Configure'}
-          <Icon name={open ? 'chevronDown' : 'chevronRight'} size={15} />
+          <Icon name={open ? 'chevronDown' : 'chevronRight'} size={16} />
         </Button>
       </div>
 
@@ -382,7 +374,7 @@ function ProviderCard({
               </p>
               <a className={styles.getKeyLink} href={PROVIDER_KEY_URL[provider]} target="_blank" rel="noreferrer">
                 Get your {title} key
-                <Icon name="externalLink" size={12} />
+                <Icon name="externalLink" size={14} />
               </a>
             </div>
           </div>
@@ -431,7 +423,7 @@ function ProviderCard({
           {hasKey && (
             <div className={styles.removeRow}>
               <Button variant="danger" onClick={onRemove} disabled={saving || testing}>
-                <Icon name="trash" size={15} /> Remove connection
+                <Icon name="trash" size={16} /> Remove connection
               </Button>
             </div>
           )}

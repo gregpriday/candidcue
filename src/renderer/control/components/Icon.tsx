@@ -82,24 +82,29 @@ const PATHS: Record<IconName, JSX.Element> = {
     </>
   ),
   mic: (
-    <>
+    <g transform="translate(0 -0.5)">
       <path d="M12 1.75a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0v-7a3 3 0 0 0-3-3z" />
       <path d="M18.5 10.5v1a6.5 6.5 0 0 1-13 0v-1" />
       <line x1="12" y1="18" x2="12" y2="22" />
       <line x1="8" y1="22" x2="16" y2="22" />
-    </>
+    </g>
   ),
   micOff: (
-    <>
+    <g transform="translate(0 -0.5)">
       <line x1="3" y1="3" x2="21" y2="21" />
       <path d="M9 9.3v2.45a3 3 0 0 0 4.9 2.32" />
       <path d="M15 10.8V4.75a3 3 0 0 0-5.86-.9" />
       <path d="M18.5 10.5v1a6.5 6.5 0 0 1-10.2 5.32M5.5 11.5v-1" />
       <line x1="12" y1="18" x2="12" y2="22" />
       <line x1="8" y1="22" x2="16" y2="22" />
-    </>
+    </g>
   ),
-  play: <path d="M7.5 4.5v15a1 1 0 0 0 1.52.85l12-7.5a1 1 0 0 0 0-1.7l-12-7.5A1 1 0 0 0 7.5 4.5z" />,
+  play: (
+    <path
+      transform="translate(1 0)"
+      d="M7.5 4.5v15a1 1 0 0 0 1.52.85l12-7.5a1 1 0 0 0 0-1.7l-12-7.5A1 1 0 0 0 7.5 4.5z"
+    />
+  ),
   pause: (
     <>
       <rect x="6" y="4.5" width="4" height="15" rx="1" />
@@ -139,7 +144,7 @@ const PATHS: Record<IconName, JSX.Element> = {
     </>
   ),
   chevronLeft: <polyline points="15 6 9 12 15 18" />,
-  chevronRight: <polyline points="9 6 15 12 9 18" />,
+  chevronRight: <polyline transform="translate(0.5 0)" points="9 6 15 12 9 18" />,
   chevronDown: <polyline points="6 9.5 12 15.5 18 9.5" />,
   arrowLeft: (
     <>

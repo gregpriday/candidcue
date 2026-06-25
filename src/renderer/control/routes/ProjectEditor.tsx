@@ -144,6 +144,9 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   // A momentary "Saved just now" pulse in the header right after an actual save;
   // the persistent quiet state ("All changes saved") lives only in the footer.
   const [justSaved, setJustSaved] = useState(false);
+  // The footer's save confirmation is transient: it lingers for ~2s after a save,
+  // then fades out over 160ms rather than sitting as a permanent idle label.
+  const [savedConfirm, setSavedConfirm] = useState<'hidden' | 'visible' | 'fading'>('hidden');
   const [step, setStep] = useState<EditorStep>('brief');
   const [sessionHistory, setSessionHistory] = useState<InterviewSession[] | null>(null);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
@@ -172,6 +175,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     setLoadError(null);
     setDirty(false);
     setJustSaved(false);
+    setSavedConfirm('hidden');
     setStep('brief');
     setSessionHistory(null);
     setSessionsError(null);
@@ -248,6 +252,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
       setPlanState(aggregate.planState);
       setDirty(false);
       setJustSaved(true);
+      setSavedConfirm('visible');
       return aggregate.project.id;
     } catch (err: unknown) {
       setActionError(describeError(err));
@@ -307,6 +312,27 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     return () => window.clearTimeout(timer);
   }, [justSaved]);
 
+  // Footer save confirmation: hold "All changes saved" ~2s, then fade over 160ms.
+  useEffect(() => {
+    if (savedConfirm === 'visible') {
+      const timer = window.setTimeout(() => setSavedConfirm('fading'), 2000);
+      return () => window.clearTimeout(timer);
+    }
+    if (savedConfirm === 'fading') {
+      const timer = window.setTimeout(() => setSavedConfirm('hidden'), 160);
+      return () => window.clearTimeout(timer);
+    }
+    return undefined;
+  }, [savedConfirm]);
+
+  // A fresh edit supersedes the lingering confirmation immediately — the footer
+  // should read "Unsaved changes", not fade out a stale "All changes saved".
+  useEffect(() => {
+    if (dirty && savedConfirm !== 'hidden') {
+      setSavedConfirm('hidden');
+    }
+  }, [dirty, savedConfirm]);
+
   useEffect(() => {
     if (step !== 'ready' || !savedId) {
       return undefined;
@@ -365,17 +391,25 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
 
   const canSave = canSaveSources(sourceStats);
   const pill = PLAN_PILL[planState];
-  // The footer carries the persistent quiet save state; the header only flashes a
-  // momentary "Saved just now" right after a save, then falls back to nothing.
-  const footerStatus = actionError
-    ? 'Save error'
-    : saving
-      ? 'Saving…'
-      : dirty
-        ? 'Unsaved changes'
-        : savedId
-          ? 'All changes saved'
-          : 'Not saved yet';
+  // The footer carries the save state, but only while it's worth saying: it shows
+  // persistently while Saving / Unsaved / Failed, then — after a successful save —
+  // confirms "All changes saved" for ~2s and fades out, leaving the bar quiet.
+  let footerStatus: string | null;
+  let footerStatusFading = false;
+  if (actionError) {
+    footerStatus = 'Save error';
+  } else if (saving) {
+    footerStatus = 'Saving…';
+  } else if (dirty) {
+    footerStatus = 'Unsaved changes';
+  } else if (savedId === null) {
+    footerStatus = 'Not saved yet';
+  } else if (savedConfirm !== 'hidden') {
+    footerStatus = 'All changes saved';
+    footerStatusFading = savedConfirm === 'fading';
+  } else {
+    footerStatus = null;
+  }
   const headerStatus = actionError
     ? 'Save error'
     : saving
@@ -405,6 +439,12 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   // unprepared draft can launch (it just makes for a weaker interview). So the
   // header's Start action stays available instead of gating behind preparation.
   const canStartNow = savedId !== null;
+  // Exactly one accent-filled primary action is on screen at a time. While the
+  // plan is still incomplete OR has unsaved edits, the BOTTOM Continue/Prepare
+  // action carries the accent and the header's Start is secondary. Once the plan
+  // is ready AND saved, Start is promoted to primary and the footer action steps
+  // down — so the two primaries never compete in the same viewport.
+  const planReadyAndSaved = planState === 'ready' && !dirty && savedId !== null;
   const startInterview = (): void => {
     if (savedId !== null) {
       nav.go({ name: 'preflight', projectId: savedId });
@@ -475,7 +515,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
         backLabel="Interviews"
         actions={
           <Button
-            variant="primary"
+            variant={planReadyAndSaved ? 'primary' : 'secondary'}
             className={styles.startButton}
             onClick={startInterview}
             disabled={!canStartNow}
@@ -522,6 +562,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
         )}
 
         {step === 'brief' && (
+          <div className={styles.briefStep}>
           <Section title="Interview brief" description="What should Mira understand before the interview begins?">
             <div className={route.field}>
               <label className={route.label} htmlFor="project-title">
@@ -562,6 +603,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
               </div>
             </div>
           </Section>
+          </div>
         )}
 
         {step === 'reference' && (
@@ -569,7 +611,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
         )}
 
         {step === 'style' && (
-          <div className={styles.stepStack}>
+          <div className={`${styles.stepStack} ${styles.styleStep}`}>
             <Section title="Length" description="Land the interview on a number of questions or an approximate duration.">
               <div className={styles.lengthRow}>
                 <SegmentedControl<TargetMode>
@@ -647,7 +689,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
         )}
 
         {step === 'ready' && (
-          <div className={styles.stepStack}>
+          <div className={`${styles.stepStack} ${styles.readyStep}`}>
             <Section title="Ready to prepare" description={prepareBlocker ?? 'Everything looks good. Prepare the interview to generate the plan.'}>
               <dl className={styles.summary}>
                 <SummaryRow label="Interview brief" value={briefComplete ? 'Complete' : 'Add a title'} ok={briefComplete} />
@@ -701,16 +743,20 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
         </div>
       </div>
 
-      <div className={`${route.actionBar} ${route.actionBarSplit}`}>
+      <div className={`${route.actionBar} ${route.actionBarSplit} ${styles.actionBarSlim}`}>
         <div className={`${route.actionBarInner} ${route.actionBarSplit}`}>
-          <span className={styles.stepStatus}>{footerStatus}</span>
+          <span
+            className={`${styles.stepStatus}${footerStatusFading ? ` ${styles.footerStatusFade}` : ''}`}
+          >
+            {footerStatus}
+          </span>
           <div className={styles.stepActions}>
             <Button variant="ghost" onClick={goBack}>
               {stepIndex <= 0 ? 'Interviews' : 'Back'}
             </Button>
             {onLastStep ? (
               <Button
-                variant="primary"
+                variant={planReadyAndSaved ? 'secondary' : 'primary'}
                 onClick={() => void handlePrepare()}
                 disabled={prepDisabled}
                 title={prepareBlocker ?? 'Prepare the interview from these sources'}
@@ -718,7 +764,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
                 {prepLabel}
               </Button>
             ) : (
-              <Button variant="primary" onClick={goNext}>
+              <Button variant={planReadyAndSaved ? 'secondary' : 'primary'} onClick={goNext}>
                 Continue
               </Button>
             )}

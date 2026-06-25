@@ -187,7 +187,10 @@ function FeaturedInterview({
             <span className={styles.featuredTime}>Updated {formatRelative(project.updatedAt)}</span>
           </span>
         </button>
-        <Button variant="primary" onClick={action.run}>
+        {/* Quieter than the page-header "New interview" primary so the screen
+            never shows two accent-filled CTAs at once; the elevated featured
+            card still makes this the focal action. */}
+        <Button variant="secondary" onClick={action.run}>
           {action.label}
         </Button>
       </div>
@@ -217,7 +220,9 @@ function EmptyState({ miraImage, onCreate }: { miraImage: string | null; onCreat
           Start a guided conversation.
         </li>
       </ol>
-      <Button variant="primary" onClick={onCreate}>
+      {/* The page-header "New interview" is the single accent-filled primary in
+          this viewport; the empty-state CTA stays quieter to avoid a duplicate. */}
+      <Button variant="secondary" onClick={onCreate}>
         <Icon name="plus" size={16} /> New interview
       </Button>
     </div>

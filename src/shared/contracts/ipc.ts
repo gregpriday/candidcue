@@ -32,6 +32,8 @@ export const CHANNELS = {
   settingsSaveProviders: 'settings:save-providers',
   settingsTestProvider: 'settings:test-provider',
   settingsClearProvider: 'settings:clear-provider',
+  // control: window chrome
+  windowSetThemeChrome: 'window:set-theme-chrome',
   // control: characters
   charactersList: 'characters:list',
   // control: devices
@@ -327,10 +329,21 @@ export interface SessionReview {
   coverage: PublicCoverageItem[];
 }
 
+/**
+ * Shell theme the renderer is currently showing — drives the native Windows
+ * title-bar overlay palette so a dark block never sits over the light workspace.
+ */
+export type ChromeTheme = 'workspace' | 'studio';
+
 // ---------------------------------------------------------------------------
 // Preload API surfaces (spec §20.6)
 // ---------------------------------------------------------------------------
 export interface CandidCueControlApi {
+  window: {
+    /** Re-skin the native window-control overlay for the active shell theme
+     * (no-op on macOS, where traffic lights are used). Fire-and-forget. */
+    setThemeChrome(theme: ChromeTheme): void;
+  };
   projects: {
     list(): Promise<ProjectSummary[]>;
     get(projectId: string): Promise<ProjectAggregate | null>;

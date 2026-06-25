@@ -6,8 +6,8 @@
   gap: var(--space-5);
   height: 100%;
   /* Reserve the macOS traffic-light gutter at the top of the rail. */
-  padding: calc(var(--space-4) + var(--titlebar-gutter, 0px)) var(--space-3) var(--space-4);
-  background: var(--bg-canvas);
+  padding: calc(var(--space-4) + var(--titlebar-gutter, 0px)) var(--space-4) var(--space-4);
+  background: var(--bg-chrome);
   border-right: 1px solid var(--border);
   overflow-y: auto;
   /* The whole rail is a window-drag handle; interactive controls opt out. */
@@ -62,7 +62,9 @@
     border-color var(--dur-fast) var(--ease-out);
 }
 .newButton:hover {
-  box-shadow: var(--shadow-card-hover);
+  /* Quieter than the page-header creation action: a gentle lift, not the full
+     card-hover elevation. */
+  box-shadow: 0 3px 10px rgba(24, 25, 29, 0.08);
   border-color: var(--border);
 }
 
@@ -95,16 +97,17 @@
     box-shadow var(--dur-fast) var(--ease-out);
 }
 .navItem:hover {
-  background: var(--bg-hover);
+  background: var(--bg-hover-chrome);
   color: var(--text-primary);
 }
-/* Selected: a crisp white pill lifted off the warm rail (not a flat clay wash),
-   dark text, accent icon. The raised white pill alone marks the selection — no
-   accent bar, which just read as noise on an already-obvious pill. */
+/* Selected PRIMARY destination: a crisp white pill raised off the warm rail
+   (not a flat clay wash) — the 'current item' within the workspace. Dark text,
+   accent icon. The raised white pill alone marks the selection — no accent bar,
+   which just read as noise on an already-obvious pill. */
 .navItemActive,
 .navItemActive:hover {
   background: var(--bg-panel);
-  border-color: var(--border-faint);
+  border-color: var(--border);
   box-shadow: var(--shadow-card);
   color: var(--text-primary);
 }
@@ -115,7 +118,8 @@
 .recent {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  /* 6px from the section label to the first recent row. */
+  gap: 6px;
   -webkit-app-region: no-drag;
   min-height: 0;
 }
@@ -156,13 +160,17 @@
     box-shadow var(--dur-fast) var(--ease-out);
 }
 .recentItem:hover {
-  background: var(--bg-hover);
+  background: var(--bg-hover-chrome);
   color: var(--text-primary);
 }
+/* Selected RECENT project: a crisp white pill lifted off the warm rail — the
+   same white-pill selection language as the primary nav. The 5% terracotta wash
+   that was here read as barely-there ("never muddy peachy washes"); a clean
+   white pill is unmistakably the current item. */
 .recentItemActive,
 .recentItemActive:hover {
   background: var(--bg-panel);
-  border-color: var(--border-faint);
+  border-color: var(--border);
   box-shadow: var(--shadow-card);
   color: var(--text-primary);
   font-weight: 600;

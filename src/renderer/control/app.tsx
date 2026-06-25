@@ -59,6 +59,22 @@ export function App(): JSX.Element {
   const isLive = route.name === 'operator';
   const theme = isLive ? 'studio' : 'workspace';
 
+  // Keep the native Windows title-bar overlay in step with the shell theme so a
+  // dark control block never sits over the light workspace. macOS uses traffic
+  // lights (handled natively), so skip it there; tolerate an older preload.
+  useEffect(() => {
+    if (IS_MAC) return;
+    window.candidcue.window?.setThemeChrome(theme);
+  }, [theme]);
+
+  // Sheets/overlays portal to <body>, outside the themed `.shell` below, so they
+  // resolve their tokens from the document root. Mirror the active theme onto
+  // <html> (statically 'workspace' in index.html) so a live-session sheet gets
+  // the studio palette instead of the resting workspace one.
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
   return (
     <div className={styles.shell} data-platform={IS_MAC ? 'mac' : 'other'} data-theme={theme}>
       {isLive ? (

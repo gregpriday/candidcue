@@ -4,7 +4,7 @@ import CodeMirror from '@uiw/react-codemirror';
 import { markdown } from '@codemirror/lang-markdown';
 import { EditorView } from '@codemirror/view';
 import type { Extension } from '@codemirror/state';
-import { candidCueEditorTheme } from './codemirror-theme';
+import { candidCueEditorThemeWorkspace, candidCueEditorThemeStudio } from './codemirror-theme';
 import styles from './MarkdownEditor.module.css';
 
 interface MarkdownEditorProps {
@@ -26,6 +26,13 @@ interface MarkdownEditorProps {
    * frame). Avoids a "border inside a border" when embedded in a bordered pane.
    */
   flush?: boolean;
+  /**
+   * Which shell the editor lives in. Selects the matching CodeMirror base theme
+   * so the native cursor/selection behaviour inherits the correct light/dark
+   * assumptions. The workspace (light) shell is the default; pass 'studio' only
+   * when the editor renders inside the dark studio shell.
+   */
+  shellTheme?: 'workspace' | 'studio';
 }
 
 /**
@@ -43,11 +50,13 @@ export function MarkdownEditor({
   readOnly = false,
   header,
   flush = false,
+  shellTheme = 'workspace',
 }: MarkdownEditorProps): JSX.Element {
   const extensions = useMemo<Extension[]>(
     () => [markdown(), EditorView.lineWrapping, EditorView.contentAttributes.of({ 'aria-label': ariaLabel })],
     [ariaLabel],
   );
+  const theme = shellTheme === 'studio' ? candidCueEditorThemeStudio : candidCueEditorThemeWorkspace;
 
   return (
     <div className={[styles.editor, flush ? styles.editorFlush : null].filter(Boolean).join(' ')}>
@@ -55,7 +64,7 @@ export function MarkdownEditor({
       <CodeMirror
         className={styles.cmRoot}
         value={value}
-        theme={candidCueEditorTheme}
+        theme={theme}
         extensions={extensions}
         minHeight={minHeight}
         readOnly={readOnly}

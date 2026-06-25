@@ -23,7 +23,9 @@
 
 .previewCol {
   position: sticky;
-  top: var(--page-y);
+  /* Clear the real back+title header (103px) plus a 16px breathing gap so the
+     pinned preview never travels under the chrome. */
+  top: calc(var(--header-back-h) + 16px);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
@@ -52,13 +54,29 @@
   max-width: 480px;
 }
 
+/* The readiness block: a quiet section label sitting above the checklist card. */
+.readinessBlock {
+  display: flex;
+  flex-direction: column;
+  /* 16px between the label and the first checklist row. */
+  gap: var(--space-4);
+}
+.readinessLabel {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: 18px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
 .checklist {
   list-style: none;
   margin: 0;
   padding: var(--space-3) var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  /* 10px between checklist rows. */
+  gap: 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-panel);

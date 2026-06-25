@@ -8,10 +8,11 @@
   border-radius: var(--radius-lg);
   overflow: hidden;
   background: #0b0d11;
-  /* Float the frame off the page with a soft drop shadow, then trace the edge
-     with a faint inset hairline so it reads as a screen, not a printed panel. */
+  /* A refined preview-level drop shadow (not the popover-level pop), then trace
+     the edge with a faint 1px studio hairline so it reads as a screen, not a
+     printed panel. The hairline + this shadow is enough — no border glow. */
   box-shadow:
-    var(--shadow-pop),
+    var(--shadow-preview),
     inset 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 

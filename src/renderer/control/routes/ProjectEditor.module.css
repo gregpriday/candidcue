@@ -35,6 +35,13 @@
   font-size: var(--text-xs);
   color: var(--text-muted);
 }
+/* The momentary "All changes saved" confirmation in the footer lingers ~2s, then
+   fades out over 160ms rather than blinking off. The TSX toggles .footerStatusFade
+   to drive the fade once the linger window closes. */
+.footerStatusFade {
+  opacity: 0;
+  transition: opacity var(--motion-base) var(--ease-out);
+}
 /* The header's headline action — the prominent CTA so starting an interview is
    always one obvious click away. Shares the standard primary height/size; just a
    little extra side padding for presence. */
@@ -45,7 +52,28 @@
 .stepStack {
   display: flex;
   flex-direction: column;
-  gap: var(--space-7);
+  /* Section-to-section rhythm: 24px. */
+  gap: var(--space-6);
+}
+
+/* ---- Per-step measure -------------------------------------------------
+   The writing-oriented steps read as a single left-aligned column on the
+   shared --page-x axis (NOT centered), each capped to a comfortable measure so
+   prose fields don't sprawl. The reference-material step stays full width. */
+.briefStep,
+.styleStep,
+.readyStep {
+  align-self: flex-start;
+  width: 100%;
+}
+.briefStep {
+  max-width: 840px;
+}
+.styleStep {
+  max-width: 880px;
+}
+.readyStep {
+  max-width: 760px;
 }
 
 /* ---- Length ---------------------------------------------------------- */
@@ -122,11 +150,11 @@
 .interviewerSelect:hover:not(:focus) {
   border-color: var(--border-strong);
 }
-/* Match the app-standard field focus: accent border AND a restrained tinted ring,
-   so this lone select doesn't read flatter than the inputs beside it. */
+/* Pointer focus accents the border only — no translucent ring (§3). Keyboard
+   focus additionally shows the global 2px :focus-visible outline. */
 .interviewerSelect:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: none;
 }
 
 /* ---- Ready summary --------------------------------------------------- */
@@ -161,7 +189,8 @@
   font-variant-numeric: tabular-nums;
 }
 .prepareHint {
-  margin: var(--space-2) 0 0;
+  /* Help text sits 6px below the control it qualifies. */
+  margin: 6px 0 0;
   font-size: var(--text-sm);
   color: var(--warning);
 }
@@ -217,6 +246,12 @@
 /* ---- Pinned action-bar contents -------------------------------------- */
 /* The bar itself comes from route.actionBar (sticky, translucent, --page-x
    inset); these style only its inner status + action cluster. */
+
+/* Keep the bar a slim committed strip (~60px with a 36px button), not a second
+   footer panel: 12px vertical padding instead of the shared 16px. */
+.actionBarSlim {
+  padding-block: var(--space-3);
+}
 .stepStatus {
   font-size: var(--text-sm);
   color: var(--text-muted);
