@@ -57,7 +57,7 @@ export const MODEL_DEFAULTS = {
 } as const;
 
 export const INWORLD_DEFAULTS = {
-  sttModel: 'inworld-stt-1',
+  sttModel: 'inworld/inworld-stt-1',
   ttsModel: 'inworld-tts-2',
   ttsSampleRate: 24000,
   sttSampleRate: 16000,

@@ -20,7 +20,7 @@ import { normalizeSttEvent, type NormalizedSttEvent } from './event-normalizer';
  * {@link normalizeSttEvent} maps).
  */
 export interface SttTransport {
-  /** Send a binary audio frame (PCM s16le) to the provider. */
+  /** Send a PCM s16le audio frame to the provider (the transport handles encoding). */
   send(payload: ArrayBuffer): void;
   /** Close the transport. Idempotent. */
   close(): void;
