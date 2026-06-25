@@ -128,6 +128,14 @@ export type SttEvent = 'partial' | 'finalSegment' | 'speechStarted' | 'speechSto
 export interface SpeechToTextAdapter {
   connect(config: SttSessionConfig, signal?: AbortSignal): Promise<void>;
   beginTurn(turnId: string): Promise<void>;
+  /**
+   * Re-activate the in-flight turn after a mid-answer pause so partial/final
+   * events fold again, WITHOUT resetting the accumulator or discarding any
+   * transcript captured before the pause. Unlike {@link beginTurn} (which starts
+   * a fresh turn from empty), this preserves the pre-pause words so resuming a
+   * live answer never drops what the user already said.
+   */
+  resumeTurn(turnId: string): Promise<void>;
   writeAudio(chunk: AudioChunkPacket): void;
   endTurn(options: { signal?: AbortSignal; deadlineMs: number }): Promise<SttTurnResult>;
   recoverFromAudio(pcm: Uint8Array, config: SttRecoveryConfig, signal?: AbortSignal): Promise<SttTurnResult>;

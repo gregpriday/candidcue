@@ -204,6 +204,13 @@ describe('InworldSttClient.recoverFromAudio', () => {
     expect((error as AppError).code).toBe('STT_FINALIZE_FAILED');
   });
 
+  it('resumeTurn throws STT_DISCONNECTED before connect, like beginTurn', async () => {
+    const client = new InworldSttClient({ apiKey: 'k', connect: unusedConnect });
+    const error = await client.resumeTurn('turn-1').catch((e) => e);
+    expect(error).toBeInstanceOf(AppError);
+    expect((error as AppError).code).toBe('STT_DISCONNECTED');
+  });
+
   it('rethrows an AbortError unchanged', async () => {
     const fetchImpl: SttFetch = async () =>
       ({

@@ -272,6 +272,27 @@ export class SessionOrchestrator {
     if (this.state !== 'PAUSED') return;
     // Resume to the safest prior state (spec §5.5).
     if (this.currentTurn && this.micWasOpenBeforePause()) {
+      // Re-activate STT FIRST, and only arm the mic if it succeeds. pause stopped
+      // the client's turn, so without resumeTurn its turnActive stays false and
+      // every partial/final is dropped. If we armed the mic before confirming STT
+      // is live and resumeTurn threw (STT_DISCONNECTED — transport dropped), the
+      // session would sit in USER_ARMED with the mic projection 'armed' but STT
+      // inactive — an "armed but deaf" state where the user speaks into the void.
+      // resumeTurn (unlike beginTurn / armUserTurn) re-arms WITHOUT resetting the
+      // accumulator or the turn's speech timestamps, so the user's pre-pause words
+      // and userHasSpoken are preserved (spec §5.5).
+      try {
+        await this.deps.stt.resumeTurn(this.currentTurn.id);
+      } catch (err) {
+        // STT could not be re-activated: stay PAUSED, leave the mic closed, and
+        // surface a clear retry prompt. resume() never rejects unhandled.
+        this.log.warn('stt.resume_failed', { error: String(err) });
+        this.recoverableWarning = 'Speech service disconnected. Retry to resume.';
+        this.publishSnapshot();
+        return;
+      }
+      // STT is live again: now it is safe to transition to USER_ARMED and open the
+      // mic, then clear the recoverable warning on this success path.
       this.transition('resumeUserTurn');
       this.deps.stage.openMicGate();
     } else if (this.currentTurn) {
@@ -280,7 +301,11 @@ export class SessionOrchestrator {
     } else {
       this.transition('resumeBeforeStart');
     }
+    // Success path: clear any recoverable warning (e.g. a prior failed-resume
+    // prompt) and republish so the UI drops it. The failure path above returns
+    // early with its warning intact, so this never clobbers it.
     this.recoverableWarning = null;
+    this.publishSnapshot();
   }
 
   /** The context the command-legality projection inspects (review P0-08). */
@@ -548,7 +573,11 @@ export class SessionOrchestrator {
       // Empty answer: do not invent content (spec §14.6, §22.3).
       if (rawTranscript.length === 0) {
         this.commitInFlight = false;
-        this.recoverableWarning = 'No speech was captured. Resume, repeat, or skip.';
+        // The user may have triggered speechStarted before the silence (so
+        // userHasSpoken is true), which re-legalizes neither Skip nor Repeat from
+        // this PAUSED state. Resume is the only action that is always legal here,
+        // so advertise it alone (no "skip"/"repeat" the operator can't take).
+        this.recoverableWarning = 'No speech was captured. Resume to try again.';
         this.transition('pause', 'empty answer');
         this.publishSnapshot();
         return;

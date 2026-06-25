@@ -290,6 +290,16 @@ describe('SessionOrchestrator turn pipeline', () => {
     h.orch.onSpeechStopped(2000);
     await h.orch.commitUserTurn('manual');
     expect(h.orch.getState()).toBe('PAUSED');
+
+    // The user spoke (onSpeechStarted) before the silence, so userHasSpoken is
+    // true: neither Skip nor Repeat is legal here. The warning must advertise
+    // only the always-legal action (Resume) so it can't promise an action the
+    // operator can't take.
+    const snap = h.snapshots.at(-1)!;
+    expect(snap.recoverableWarning).toBe('No speech was captured. Resume to try again.');
+    expect(snap.recoverableWarning).not.toMatch(/skip/i);
+    expect(snap.recoverableWarning).not.toMatch(/repeat/i);
+    expect(snap.controls.canSkip).toBe(false);
   });
 
   // --- round-1 correctness regressions -------------------------------------
@@ -330,6 +340,85 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(h.orch.getState()).toBe('USER_ARMED');
     expect(h.stage.openMicGate).toHaveBeenCalledTimes(1);
     expect(vi.mocked(h.stage.preloadSpeechPlan)).not.toHaveBeenCalled();
+  });
+
+  it('resumes a live user turn without re-beginning STT, preserving pre-pause speech (BUG-1)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    const turnId = h.stt.currentTurnId; // armed by playCurrentTurn
+    expect(turnId).not.toBeNull();
+    const beginCallsBeforePause = h.stt.beginTurnCalls;
+
+    // The user speaks and the live stream captures some words before the pause.
+    h.orch.onSpeechStarted(1000); // USER_SPEAKING — mic was open
+    h.stt.pushTranscript('words captured before the pause');
+    expect(h.orch.getState()).toBe('USER_SPEAKING');
+
+    h.orch.pause();
+    // A real STT client would deactivate its turn on pause; mirror that so the
+    // test proves resume() restores it. Without the fix, currentTurnId stays
+    // null and every subsequent partial/final is dropped by the client.
+    h.stt.currentTurnId = null;
+
+    await h.orch.resume();
+
+    // (a) STT is active for the SAME turn again via resumeTurn — NOT a second
+    // beginTurn (which would reset the accumulator and drop the pre-pause words).
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    expect(h.stt.resumeTurnCalls).toBe(1);
+    expect(h.stt.lastResumedTurnId).toBe(turnId);
+    expect(h.stt.currentTurnId).toBe(turnId);
+    expect(h.stt.beginTurnCalls).toBe(beginCallsBeforePause); // no second beginTurn
+
+    // (c) The user already spoke: speechStartedAt was NOT reset, so userHasSpoken
+    // stays true and Skip/Repeat remain illegal (they require a fresh turn).
+    expect(h.orch.getCommandContext().userHasSpoken).toBe(true);
+    const resumedSnap = h.snapshots.at(-1)!;
+    expect(resumedSnap.controls.canSkip).toBe(false);
+    expect(resumedSnap.controls.canRepeat).toBe(false);
+
+    // (b) A subsequent commit includes the pre-pause words, proving the captured
+    // transcript survived the resume (was dropped before the fix).
+    await h.orch.commitUserTurn('manual');
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.answer?.rawTranscript).toContain('words captured before the pause');
+  });
+
+  it('stays PAUSED and warns the operator when STT cannot re-activate on resume (no "armed but deaf")', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    // The user speaks, then we pause a live user turn.
+    h.orch.onSpeechStarted(1000); // USER_SPEAKING — mic was open
+    expect(h.orch.getState()).toBe('USER_SPEAKING');
+    h.orch.pause();
+    expect(h.orch.getState()).toBe('PAUSED');
+
+    // Simulate the STT transport having dropped: resumeTurn now throws.
+    h.stt.failResume = true;
+    h.stage.openMicGate.mockClear();
+
+    // resume() must not reject even though the underlying re-activation failed.
+    await expect(h.orch.resume()).resolves.toBeUndefined();
+
+    // It attempted re-activation but, on failure, stayed PAUSED with the mic shut.
+    expect(h.stt.resumeTurnCalls).toBe(1);
+    expect(h.orch.getState()).toBe('PAUSED'); // NOT USER_ARMED
+    expect(h.stage.openMicGate).not.toHaveBeenCalled();
+
+    const snap = h.snapshots.at(-1)!;
+    expect(snap.state).toBe('PAUSED');
+    expect(snap.mic.gate).toBe('closed');
+    expect(snap.recoverableWarning).toBe('Speech service disconnected. Retry to resume.');
+
+    // A subsequent retry, once STT is healthy again, resumes cleanly and clears the warning.
+    h.stt.failResume = false;
+    await h.orch.resume();
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    expect(h.stt.resumeTurnCalls).toBe(2);
+    expect(h.stage.openMicGate).toHaveBeenCalledTimes(1);
+    expect(h.snapshots.at(-1)!.recoverableWarning).toBeNull();
   });
 
   it('persists the computed coverage delta on the answered turn (CORR-09)', async () => {

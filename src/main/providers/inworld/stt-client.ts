@@ -135,6 +135,18 @@ export class InworldSttClient implements SpeechToTextAdapter {
     this.turnActive = true;
   }
 
+  /**
+   * Resume an in-flight turn after a mid-answer pause. Re-activates folding so
+   * partial/final events accumulate again, but deliberately does NOT reset the
+   * accumulator — the words captured before the pause are preserved (spec §5.5).
+   */
+  async resumeTurn(_turnId: string): Promise<void> {
+    if (this.transport === null) {
+      throw new AppError('STT_DISCONNECTED', { message: 'resumeTurn called before connect' });
+    }
+    this.turnActive = true;
+  }
+
   /** Forward a captured PCM audio chunk to the live transport. */
   writeAudio(chunk: AudioChunkPacket): void {
     if (this.transport === null) {

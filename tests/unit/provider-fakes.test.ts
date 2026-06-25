@@ -366,6 +366,37 @@ describe('FakeStt', () => {
     expect(stt.currentTurnId).toBeNull();
   });
 
+  it('resumeTurn re-activates the same turn without dropping accumulated transcript', async () => {
+    const stt = new FakeStt({ transcript: 'config fallback' });
+    await stt.connect(sttConfig);
+
+    await stt.beginTurn('turn-1');
+    expect(stt.beginTurnCalls).toBe(1);
+    stt.pushTranscript('hello there');
+
+    // A pause/resume cycle: resumeTurn restores the turn but must NOT begin a new
+    // one (which would clear the accumulator) and must keep the captured words.
+    await stt.resumeTurn('turn-1');
+    expect(stt.resumeTurnCalls).toBe(1);
+    expect(stt.lastResumedTurnId).toBe('turn-1');
+    expect(stt.currentTurnId).toBe('turn-1');
+    expect(stt.beginTurnCalls).toBe(1); // no second beginTurn
+
+    const result = await stt.endTurn({ deadlineMs: 1500 });
+    expect(result.text).toBe('hello there'); // accumulated transcript preserved
+  });
+
+  it('beginTurn starts a fresh turn and discards previously accumulated transcript', async () => {
+    const stt = new FakeStt({ transcript: 'config fallback' });
+    await stt.connect(sttConfig);
+    await stt.beginTurn('turn-1');
+    stt.pushTranscript('stale words');
+    await stt.beginTurn('turn-2'); // fresh turn → accumulator cleared
+
+    const result = await stt.endTurn({ deadlineMs: 1500 });
+    expect(result.text).toBe('config fallback');
+  });
+
   it('recoverFromAudio returns the transcript for non-empty audio and empty for empty audio', async () => {
     const stt = new FakeStt({ transcript: 'recovered text' });
     const recovered = await stt.recoverFromAudio(new Uint8Array([1, 2, 3, 4]), {

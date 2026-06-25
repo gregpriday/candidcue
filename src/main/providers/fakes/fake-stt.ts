@@ -45,6 +45,23 @@ export class FakeStt implements SpeechToTextAdapter {
   public currentTurnId: string | null = null;
   public readonly writtenChunks: AudioChunkPacket[] = [];
   public lastConfig: SttSessionConfig | null = null;
+  /** How many times beginTurn has been called (a fresh turn each time). */
+  public beginTurnCalls = 0;
+  /** How many times resumeTurn has been called (re-activation, no reset). */
+  public resumeTurnCalls = 0;
+  /** The turnId of the most recent resumeTurn call, or null if never resumed. */
+  public lastResumedTurnId: string | null = null;
+  /**
+   * Test hook: when true, `resumeTurn` rejects (simulating a dropped transport /
+   * STT_DISCONNECTED) so tests can drive the "re-activate failed" resume path.
+   */
+  public failResume = false;
+  /**
+   * Words captured for the in-flight turn. `beginTurn` clears it (fresh turn);
+   * `resumeTurn` preserves it; `endTurn` returns it when non-empty (mirroring the
+   * real accumulator) so tests can prove pre-pause transcript is not dropped.
+   */
+  private accumulated = '';
 
   constructor(config: FakeSttConfig = {}) {
     this.transcript = config.transcript ?? 'this is a fake transcript';
@@ -62,11 +79,42 @@ export class FakeStt implements SpeechToTextAdapter {
   }
 
   async beginTurn(turnId: string): Promise<void> {
+    this.beginTurnCalls += 1;
     this.currentTurnId = turnId;
+    // A fresh turn discards any previously accumulated transcript.
+    this.accumulated = '';
+  }
+
+  /**
+   * Re-activate the in-flight turn after a pause WITHOUT clearing accumulated
+   * state (mirrors {@link beginTurn} minus the reset). Records the call so tests
+   * can assert resume happened on the original turn and that beginTurn was not
+   * fired a second time.
+   */
+  async resumeTurn(turnId: string): Promise<void> {
+    this.resumeTurnCalls += 1;
+    this.lastResumedTurnId = turnId;
+    if (this.failResume) {
+      // Simulate a dropped transport: the in-flight turn is NOT re-activated.
+      throw new Error('STT_DISCONNECTED');
+    }
+    this.currentTurnId = turnId;
+    // Deliberately do NOT touch `accumulated` — pre-pause words are preserved.
   }
 
   writeAudio(chunk: AudioChunkPacket): void {
     this.writtenChunks.push(chunk);
+  }
+
+  /**
+   * Test hook: append a finalized segment to the in-flight turn's accumulated
+   * transcript, modelling words captured by the live stream. Not part of the
+   * adapter contract.
+   */
+  pushTranscript(text: string): void {
+    const segment = text.trim();
+    if (segment.length === 0) return;
+    this.accumulated = this.accumulated ? `${this.accumulated} ${segment}`.trim() : segment;
   }
 
   async endTurn(options: { signal?: AbortSignal; deadlineMs: number }): Promise<SttTurnResult> {
@@ -121,8 +169,19 @@ export class FakeStt implements SpeechToTextAdapter {
     for (const listener of [...set]) listener(...args);
   }
 
-  /** Build a fresh copy of the configured turn result. */
+  /**
+   * Build a fresh copy of the turn result. When the in-flight turn accumulated
+   * transcript (via {@link pushTranscript}), that takes precedence — mirroring
+   * the real adapter, where endTurn returns what the live stream captured.
+   */
   private result(): SttTurnResult {
+    if (this.accumulated.length > 0) {
+      return {
+        text: this.accumulated,
+        finalSegments: [this.accumulated],
+        confidence: this.confidence,
+      };
+    }
     return {
       text: this.transcript,
       finalSegments: [...this.finalSegments],
