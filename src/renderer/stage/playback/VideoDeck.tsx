@@ -228,12 +228,11 @@ export function VideoDeck({
     void el.play().catch(() => setPosterVisible(true));
   }, [state.visualState, plan, refFor]);
 
-  // When speech audio ends, hand the speaking layer back to listening duty and
-  // return the front to the listening loop.
-  useEffect(() => {
-    if (speechEndedTurnId === null) {
-      return;
-    }
+  // Pause the speaking <video> layer and hand its role back to listening duty,
+  // returning the front to the listening loop. Shared by the natural-end path
+  // and the leave-speaking (pause/complete/error) path so audio + video stop
+  // together rather than the footage looping on after a mid-speech stop.
+  const stopSpeakingAndReturnToListening = useCallback(() => {
     const previousSpeaking = speakingLayerRef.current;
     const el = refFor(previousSpeaking);
     if (el !== null) {
@@ -245,7 +244,33 @@ export function VideoDeck({
     const listeningLayer = previousSpeaking;
     setFrontLayer(listeningLayer);
     playNextListeningClip();
-  }, [speechEndedTurnId, refFor, playNextListeningClip]);
+  }, [refFor, playNextListeningClip]);
+
+  // When speech audio ends naturally, return to listening.
+  useEffect(() => {
+    if (speechEndedTurnId === null) {
+      return;
+    }
+    stopSpeakingAndReturnToListening();
+  }, [speechEndedTurnId, stopSpeakingAndReturnToListening]);
+
+  // Pause the speaking layer when the visual state transitions AWAY from
+  // 'speaking' to a control state (paused/complete/error) WITHOUT a natural
+  // audio end — e.g. Pause or End Now mid-speech. Without this the speaking
+  // footage keeps looping (the final segment has el.loop = true) even though the
+  // audio was stopped. The natural-end path above already handled the end-of-
+  // speech case via speechEndedTurnId, so skip when that has fired for clarity.
+  const speakingActive = state.visualState === 'speaking';
+  const prevSpeakingActiveRef = useRef(false);
+  useEffect(() => {
+    const wasSpeaking = prevSpeakingActiveRef.current;
+    prevSpeakingActiveRef.current = speakingActive;
+    // Only react to a speaking -> non-speaking transition that was NOT a natural
+    // audio end (speechEndedTurnId drives that path and resets per new plan).
+    if (wasSpeaking && !speakingActive && speechEndedTurnId === null) {
+      stopSpeakingAndReturnToListening();
+    }
+  }, [speakingActive, speechEndedTurnId, stopSpeakingAndReturnToListening]);
 
   // --- Transform / fit ----------------------------------------------------
   const fit = bootstrap.video.fit;

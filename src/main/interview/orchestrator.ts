@@ -512,6 +512,17 @@ export class SessionOrchestrator {
     if (this.state === 'INTERVIEWER_THINKING') this.transition('questionAndTtsReady', reason);
     // else: already buffering (repeat/resume).
 
+    // Snapshot the generation BEFORE the FIRST cancelable await. We are now in
+    // INTERVIEWER_BUFFERING, where pause/endNow/skip are legal and each bumps
+    // generationId to cancel this turn. If we sampled myGen only after the
+    // persist/buildPlan/preload awaits, a bump landing during one of those awaits
+    // would be folded into the new generation and the guard would wrongly pass,
+    // arming a turn the operator already cancelled. Sampling here means any such
+    // bump makes myGen !== this.generationId at every later check. Mirrors
+    // commitPipeline's stale-generation guard (a silent bail; no
+    // failStagePlayback, no recoverable warning).
+    const myGen = this.generationId;
+
     // Persist the turn as "asked" before playback so a crash after the answer
     // but before the next question can resume cleanly (spec §10.6).
     await this.persistAskedTurn(turn);
@@ -522,12 +533,22 @@ export class SessionOrchestrator {
     // stage error or a deadline timeout returns false: Mira never actually
     // spoke, so we must NOT advance to audioEnded / open the mic / arm the turn.
     const preloaded = await this.deps.stage.preloadSpeechPlan(plan);
+    if (myGen !== this.generationId) {
+      this.log.info('session.stale_playback_discarded', { turnId: turn.id, phase: 'preload' });
+      return;
+    }
     if (!preloaded) {
       this.failStagePlayback(reason);
       return;
     }
     this.transition('stageReady', reason);
     const played = await this.deps.stage.playSpeechPlan(plan); // resolves when audio ends
+    // A late ready/ended for a cancelled/superseded turn must be ignored: the
+    // pause/endNow/skip that bumped the generation already owns the stage state.
+    if (myGen !== this.generationId) {
+      this.log.info('session.stale_playback_discarded', { turnId: turn.id, phase: 'play' });
+      return;
+    }
     if (!played) {
       this.failStagePlayback(reason);
       return;

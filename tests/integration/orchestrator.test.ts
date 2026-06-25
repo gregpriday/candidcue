@@ -260,6 +260,99 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(snap.controls.canSkip).toBe(false);
   });
 
+  it('does NOT arm a turn whose generation was bumped (pause) while play was in flight', async () => {
+    // Make playSpeechPlan resolve only when we choose, so we can bump the
+    // generation (pause) while the stage "play" await is still pending — the
+    // exact race where a late audioEnded must NOT advance a cancelled turn.
+    let resolvePlay!: (confirmed: boolean) => void;
+    const playDeferred = new Promise<boolean>((resolve) => {
+      resolvePlay = resolve;
+    });
+    vi.mocked(h.stage.playSpeechPlan).mockImplementationOnce(async () => playDeferred);
+
+    await h.orch.prepareOpening();
+    // begin() awaits playSpeechPlan, so run it concurrently; it stays parked on
+    // the deferred play promise until we resolve it below.
+    const begun = h.orch.begin();
+    // Let begin() drive through preload + stageReady and park on the deferred
+    // playSpeechPlan await (so myGen is already captured before we pause).
+    await vi.waitFor(() => {
+      expect(h.orch.getState()).toBe('INTERVIEWER_SPEAKING');
+    });
+    expect(h.stage.playSpeechPlan).toHaveBeenCalled();
+
+    // Operator pauses mid-speech: bumps generationId, closes the mic gate.
+    h.orch.pause();
+    expect(h.orch.getState()).toBe('PAUSED');
+
+    const openCallsBeforeLatePlay = h.stage.openMicGate.mock.calls.length;
+    const beginCallsBeforeLatePlay = h.stt.beginTurnCalls;
+
+    // The stage now (late) confirms audio ended for the superseded turn.
+    resolvePlay(true);
+    await begun;
+
+    // The generation guard must have silently bailed: no audioEnded-driven
+    // arming, mic never (re)opened, STT not armed for the cancelled turn.
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.stage.openMicGate.mock.calls.length).toBe(openCallsBeforeLatePlay);
+    expect(h.stt.beginTurnCalls).toBe(beginCallsBeforeLatePlay);
+  });
+
+  it('does NOT arm a turn whose generation was bumped (pause) while PRELOAD setup was in flight', async () => {
+    // Park on the persistAskedTurn await — the FIRST cancelable await in
+    // playCurrentTurn, which runs BEFORE the stage preload. myGen must be
+    // captured right after entering INTERVIEWER_BUFFERING (before this await),
+    // so a pause that bumps generationId here is seen by the later guard. If
+    // myGen were sampled only after persist/buildPlan (the old code), the bump
+    // would fold into the new generation and the guard would wrongly pass,
+    // arming a turn the operator already cancelled — exactly the regression.
+    let resolvePersist!: () => void;
+    const persistDeferred = new Promise<void>((resolve) => {
+      resolvePersist = resolve;
+    });
+    // appendTurnAtomic is the cancelable await inside persistAskedTurn. Defer the
+    // first (the "asked" persist) so we can pause while it is pending.
+    const realAppend = h.repo.appendTurnAtomic.bind(h.repo);
+    vi.spyOn(h.repo, 'appendTurnAtomic').mockImplementationOnce(async (args) => {
+      await persistDeferred;
+      return realAppend(args);
+    });
+
+    await h.orch.prepareOpening();
+    // begin() awaits persistAskedTurn, so run it concurrently; it stays parked on
+    // the deferred persist promise until we resolve it below.
+    const begun = h.orch.begin();
+    // Let begin() drive into INTERVIEWER_BUFFERING and park on the deferred
+    // persist await (myGen is already captured at that point).
+    await vi.waitFor(() => {
+      expect(h.repo.appendTurnAtomic).toHaveBeenCalled();
+    });
+    expect(h.orch.getState()).toBe('INTERVIEWER_BUFFERING');
+    // The stage has not been touched yet: persist precedes preload.
+    expect(h.stage.preloadSpeechPlan).not.toHaveBeenCalled();
+
+    // Operator pauses while the persist is in flight: bumps generationId, closes
+    // the mic gate. This bump happens BEFORE the old (late) myGen capture point.
+    h.orch.pause();
+    expect(h.orch.getState()).toBe('PAUSED');
+
+    const openCallsBeforeLatePersist = h.stage.openMicGate.mock.calls.length;
+    const beginCallsBeforeLatePersist = h.stt.beginTurnCalls;
+
+    // The persist now (late) completes for the superseded turn; playCurrentTurn
+    // proceeds to preload and the post-preload guard runs.
+    resolvePersist();
+    await begun;
+
+    // The generation guard must have silently bailed: never transitioned to
+    // stageReady / SPEAKING, never played, mic never (re)opened, STT not armed.
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.stage.playSpeechPlan).not.toHaveBeenCalled();
+    expect(h.stage.openMicGate.mock.calls.length).toBe(openCallsBeforeLatePersist);
+    expect(h.stt.beginTurnCalls).toBe(beginCallsBeforeLatePersist);
+  });
+
   it('commits a manual answer, stores raw transcript, and plays the next question', async () => {
     await h.orch.prepareOpening();
     await h.orch.begin();

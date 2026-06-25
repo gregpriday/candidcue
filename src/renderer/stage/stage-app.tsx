@@ -193,8 +193,14 @@ export function StageApp(): JSX.Element {
       // Drive the mic gate from the authoritative projection.
       captureRef.current?.setGate(next.micState, currentTurnIdRef.current);
       // Once the visual state reaches 'speaking', start the decoded audio.
+      // On any non-speaking visual state, stop playback promptly so Pause / End
+      // Now actually silence Mira (the state otherwise only stops at teardown).
+      // stop() is a no-op when nothing is playing, so a normal speaking->listening
+      // handoff after a natural audio end is harmless.
       if (next.visualState === 'speaking') {
         speechPlayerRef.current?.start();
+      } else {
+        speechPlayerRef.current?.stop();
       }
     });
 
