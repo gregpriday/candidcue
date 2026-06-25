@@ -52,11 +52,15 @@ export interface InworldSttClientOptions {
   fetchImpl?: SttFetch;
 }
 
-/** Shape the batch recovery endpoint is assumed to return (documented assumption). */
+/**
+ * Shape Inworld's synchronous transcribe endpoint returns (doc-derived —
+ * https://docs.inworld.ai/api-reference/sttAPI ; may need live confirmation):
+ *   { transcription: { transcript: string, isFinal?: boolean, ... }, usage?: ... }
+ * The inworld-stt-1 model also returns a top-level `voiceProfile` block which we
+ * ignore here.
+ */
 interface RecoveryResponseBody {
-  text?: unknown;
-  finalSegments?: unknown;
-  confidence?: unknown;
+  transcription?: unknown;
 }
 
 /**
@@ -106,7 +110,7 @@ export class InworldSttClient implements SpeechToTextAdapter {
     this.apiKey = options.apiKey;
     this.model = options.model ?? INWORLD_DEFAULTS.sttModel;
     this.connectFactory = options.connect;
-    this.recoveryBaseUrl = options.recoveryBaseUrl ?? 'https://api.inworld.ai/v1/stt:recognize';
+    this.recoveryBaseUrl = options.recoveryBaseUrl ?? 'https://api.inworld.ai/stt/v1/transcribe';
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -187,42 +191,83 @@ export class InworldSttClient implements SpeechToTextAdapter {
 
   /**
    * Batch-recover a turn by POSTing the full buffered PCM to Inworld's
-   * recognize endpoint. Used when the live stream dropped mid-turn (spec §17).
-   * @throws AppError STT_FINALIZE_FAILED on a non-OK response.
+   * synchronous transcribe endpoint. Used when the live stream dropped mid-turn
+   * (spec §17).
+   *
+   * Wire shape is doc-derived from Inworld's synchronous STT REST contract
+   * (https://docs.inworld.ai/api-reference/sttAPI ; may need live confirmation)
+   * and deliberately mirrors the streaming `transcribeConfig` envelope used in
+   * providers/factory.ts: HTTP Basic auth where the API key is the verbatim
+   * credential (already base64-encoded by the user — do NOT re-encode), a JSON
+   * body of `{ transcribeConfig: {...}, audioData: { content: <base64 PCM> } }`,
+   * and a `{ transcription: { transcript, isFinal? } }` response.
+   *
+   * @throws AppError STT_FINALIZE_FAILED on a non-OK response (401/403 are
+   *   classified as INWORLD_AUTH) or an unreadable/malformed body.
    */
   async recoverFromAudio(
     pcm: Uint8Array,
     config: SttRecoveryConfig,
     signal?: AbortSignal,
   ): Promise<SttTurnResult> {
+    // Prefer the caller's model when it is already provider-prefixed (e.g.
+    // 'inworld/inworld-stt-1'); otherwise fall back to the configured default.
+    const modelId = config.model.includes('/') ? config.model : INWORLD_DEFAULTS.sttModel;
+
     const response = await this.fetchImpl(this.recoveryBaseUrl, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/octet-stream',
-        Authorization: `Bearer ${this.apiKey}`,
-        'X-Inworld-Model': config.model,
-        'X-Inworld-Sample-Rate': String(config.sampleRate),
-        'X-Inworld-Channels': String(config.channels),
+        'Content-Type': 'application/json',
+        // The API key IS the verbatim Basic credential; pass it through unmodified.
+        Authorization: `Basic ${this.apiKey}`,
       },
-      // Copy into a standalone ArrayBuffer so we never send a shared/oversized view.
-      body: pcm.slice().buffer,
+      body: JSON.stringify({
+        transcribeConfig: {
+          modelId,
+          audioEncoding: 'LINEAR16',
+          sampleRateHertz: config.sampleRate,
+          numberOfChannels: config.channels,
+          language: 'en-US',
+        },
+        audioData: { content: Buffer.from(pcm).toString('base64') },
+      }),
       ...(signal ? { signal } : {}),
     });
 
     if (!response.ok) {
-      throw new AppError('STT_FINALIZE_FAILED', {
+      const code = response.status === 401 || response.status === 403 ? 'INWORLD_AUTH' : 'STT_FINALIZE_FAILED';
+      throw new AppError(code, {
         message: `Inworld batch STT failed with status ${response.status}`,
       });
     }
 
-    const body = (await response.json()) as RecoveryResponseBody;
-    const finalSegments = Array.isArray(body.finalSegments)
-      ? body.finalSegments.filter((s): s is string => typeof s === 'string')
-      : [];
-    const text = typeof body.text === 'string' ? body.text : finalSegments.join(' ').trim();
-    const confidence = typeof body.confidence === 'number' ? body.confidence : null;
+    // Guard JSON parsing so a truncated/non-JSON OK body throws a clean AppError
+    // rather than a raw SyntaxError. An AbortError is rethrown unchanged.
+    let body: RecoveryResponseBody;
+    try {
+      body = (await response.json()) as RecoveryResponseBody;
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') throw err;
+      throw new AppError('STT_FINALIZE_FAILED', {
+        message: 'Inworld batch STT returned an unreadable response body',
+      });
+    }
 
-    return { text, finalSegments, confidence };
+    // A non-object body is malformed; an empty/missing transcript is valid and
+    // yields text '' (the caller decides what to do with it).
+    if (typeof body !== 'object' || body === null) {
+      throw new AppError('STT_FINALIZE_FAILED', {
+        message: 'Inworld batch STT returned a malformed response body',
+      });
+    }
+    const transcription =
+      typeof body.transcription === 'object' && body.transcription !== null
+        ? (body.transcription as { transcript?: unknown })
+        : null;
+    const text = typeof transcription?.transcript === 'string' ? transcription.transcript : '';
+    const finalSegments = text.length > 0 ? [text] : [];
+
+    return { text, finalSegments, confidence: null };
   }
 
   /** Tear down the transport and clear all turn state. Idempotent. */
