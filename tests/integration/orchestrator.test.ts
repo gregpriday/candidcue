@@ -436,6 +436,34 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(snap.controls.canSkip).toBe(false);
   });
 
+  it('persists recoveredFromBufferedAudio=false when the finalize deadline fallback engages', async () => {
+    // The finalize fallback reuses the already-streamed live transcript; no
+    // buffered-audio batch recovery (stt.recoverFromAudio) actually runs, so the
+    // answer must NOT be flagged as recovered-from-buffered-audio.
+    const stt = new FakeStt({ transcript: 'streamed transcript' });
+    // Force endTurn to reject so withDeadlineFallback reports timedOut=true and
+    // falls back to the live turn.rawTranscript (set via the finalSegment below).
+    stt.endTurn = vi.fn(async () => {
+      throw new Error('finalize failed');
+    });
+    h = await makeHarness({ stt });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    // Populate the live turn's rawTranscript so the deadline fallback (which
+    // reuses turn.rawTranscript) yields a non-empty answer instead of the
+    // empty-answer pause path.
+    h.orch.onSttFinalSegment('CandidCue gives solo presenters a partner.');
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.state).toBe('answered');
+    expect(turn1.answer?.rawTranscript).toContain('CandidCue gives solo presenters');
+    expect(turn1.answer?.recoveredFromBufferedAudio).toBe(false);
+  });
+
   // --- round-1 correctness regressions -------------------------------------
 
   it('marks the session active and stamps startedAt on begin (CORR-07)', async () => {
@@ -635,6 +663,40 @@ describe('SessionOrchestrator turn pipeline', () => {
     await controller.editTranscript(reviewed.id, 'Edited answer text.');
     const after = await h.repo.getTurn(persisted.id);
     expect(after!.answer!.userEditedTranscript).toBe('Edited answer text.');
+  });
+
+  it('dispatches RETRY_RECOVERY to retryRecovery (ERROR -> RECOVERING), not a resume no-op', async () => {
+    // Put a real orchestrator into the terminal ERROR state, then drive the
+    // AppController command dispatcher. RETRY_RECOVERY must call retryRecovery()
+    // (ERROR -> RECOVERING); resume() early-returns unless PAUSED, so the prior
+    // `resume()` wiring left ERROR recovery a no-op.
+    const orch = h.orch as unknown as { state: string };
+    orch.state = 'ERROR';
+    expect(h.orch.getState()).toBe('ERROR');
+
+    const retrySpy = vi.spyOn(h.orch, 'retryRecovery');
+    const resumeSpy = vi.spyOn(h.orch, 'resume');
+
+    const controller = new AppController({
+      repository: h.repo,
+      credentials: {} as unknown as CredentialStore,
+      logger: NOOP_LOGGER,
+      videosRoot: '',
+      getControl: () => null,
+      getStage: () => null,
+      ensureStageWindow: () => {
+        throw new Error('stage window is not used by command dispatch');
+      },
+    });
+    // Inject the active session so command() routes to this orchestrator.
+    (controller as unknown as { active: unknown }).active = { orchestrator: h.orch };
+
+    const result = await controller.command({ type: 'RETRY_RECOVERY' });
+
+    expect(retrySpy).toHaveBeenCalledTimes(1);
+    expect(resumeSpy).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(h.orch.getState()).toBe('RECOVERING');
   });
 
   // --- round-2 live wiring (MIC-* / MEDIA-* / CORR-10/11) ------------------

@@ -70,6 +70,14 @@ export const MEDIA_DEFAULTS = {
   maxSpeakingClipsPerQuestion: 2,
 } as const;
 
+/**
+ * STOPGAP: average minutes per question, used only to translate an
+ * `approximate_duration` interview target into an approximate question count.
+ * A real elapsed-time budget (driving the interview off wall-clock duration
+ * rather than a derived count) is deferred.
+ */
+export const APPROX_MINUTES_PER_QUESTION = 2;
+
 export const PROJECT_LIMITS = {
   recentTurnCount: 6,
   maxConsecutiveFollowUps: 2,

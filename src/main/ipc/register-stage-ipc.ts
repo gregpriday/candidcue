@@ -35,7 +35,10 @@ export function registerStageIpc(app: AppController, guard: Guard): void {
 
   ipcMain.on(CHANNELS.stageOpenAudioPort, (e) => {
     stage(e);
-    setupAudioPort(e.sender, app.pcmSink);
+    // Hand the disposer to the controller, which disposes any prior audio port
+    // first — a re-bootstrap must not leak the old port1 listener or let two
+    // ports forward PCM into one STT turn (spec §20.9).
+    app.setAudioPortDisposer(setupAudioPort(e.sender, app.pcmSink));
   });
 
   ipcMain.handle(CHANNELS.stageReportDevices, (e) => {

@@ -661,7 +661,12 @@ export class SessionOrchestrator {
         endpointReason,
         sttLatencyMs: finalize.latencyMs,
         cleanupLatencyMs: cleanup.timedOut ? null : cleanup.latencyMs,
-        recovered: finalize.timedOut,
+        // recoveredFromBufferedAudio must only be true when stt.recoverFromAudio
+        // actually produced the transcript. The finalize deadline fallback just
+        // reuses the already-streamed turn.rawTranscript — no batch audio
+        // recovery occurs — so this is false. Wiring buffered-audio recovery
+        // into the live flow is deferred.
+        recovered: false,
       });
 
       // 3. Next action (GPT-5.5) with fallback to the ranked bank (spec §22.2).

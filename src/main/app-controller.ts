@@ -37,9 +37,16 @@ import type {
   SessionCoverageItem,
   PublicCharacterSummary,
   PreflightConfig,
+  TargetMode,
 } from '@shared/domain';
 import { newId } from '@shared/domain';
-import { MODEL_DEFAULTS, INWORLD_DEFAULTS, RUNTIME_DEFAULTS, PROJECT_LIMITS } from '@shared/constants/runtime-defaults';
+import {
+  MODEL_DEFAULTS,
+  INWORLD_DEFAULTS,
+  RUNTIME_DEFAULTS,
+  PROJECT_LIMITS,
+  APPROX_MINUTES_PER_QUESTION,
+} from '@shared/constants/runtime-defaults';
 import { PROJECT_SOURCE_LIMITS, isAllowedMarkdownExtension } from '@shared/constants/project-source-limits';
 import { importMarkdownBuffers, MAX_IMPORT_BYTES } from './project-assets/markdown-importer';
 import type { ImportMarkdownDocumentsResult, MarkdownImportFailure } from '@shared/domain';
@@ -85,6 +92,13 @@ interface ActiveSession {
 /** Central main-process coordinator. Renderers never reach providers or secrets. */
 export class AppController {
   private active: ActiveSession | null = null;
+  /**
+   * Disposer for the currently-live audio MessagePort (PCM → STT sink). Only one
+   * port may be live at a time: opening a new one disposes the prior, and a
+   * session teardown disposes the live one, so a re-bootstrap can't leak a
+   * port1 listener or have two ports forward PCM into one STT turn (spec §20.9).
+   */
+  private audioPortDisposer: (() => void) | null = null;
   private prepareChain: Promise<unknown> = Promise.resolve();
   /** Bumped whenever provider credentials change, so a cached preflight session
    *  built with the old keys is not reused (part of the preflight cache key). */
@@ -217,7 +231,10 @@ export class AppController {
       );
       const prepared = await model.prepareProject({
         compiledSource: compiled,
-        targetQuestionCount: aggregate.project.targetValue,
+        targetQuestionCount: resolveTargetQuestionCount(
+          aggregate.project.targetMode,
+          aggregate.project.targetValue,
+        ),
         tone: aggregate.project.notesToInterviewer,
         exclusions: [],
         modelId: MODEL_DEFAULTS.projectPreparationModel,
@@ -509,7 +526,10 @@ export class AppController {
       ttsSampleRate: INWORLD_DEFAULTS.ttsSampleRate,
       captionsEnabled: input.config.captionsEnabled,
       selectedOutputDeviceId: input.config.selectedOutputDeviceId,
-      targetQuestionCount: aggregate.project.targetValue,
+      targetQuestionCount: resolveTargetQuestionCount(
+        aggregate.project.targetMode,
+        aggregate.project.targetValue,
+      ),
     };
 
     const orchestrator = new SessionOrchestrator(orchDeps, ctx);
@@ -594,7 +614,7 @@ export class AppController {
         case 'SKIP_QUESTION': await o.skipQuestion(); break;
         case 'END_AFTER_TURN': o.endAfterTurn(); break;
         case 'END_NOW': await o.endNow(); break;
-        case 'RETRY_RECOVERY': await o.resume(); break;
+        case 'RETRY_RECOVERY': o.retryRecovery(); break;
         case 'PREPARE_SESSION': break;
       }
       return { ok: true, state: a!.orchestrator.getState(), error: null };
@@ -621,6 +641,30 @@ export class AppController {
       // audio-port handler; endTurn's deadline fallback still yields a result.
     }
   };
+
+  /**
+   * Register the disposer for a freshly-opened audio MessagePort, first disposing
+   * any previously-live port so only one is wired into the STT sink at a time
+   * (a stage re-bootstrap opens a new port and must not leak the old port1
+   * listener). The prior disposer is cleared before being called so it can never
+   * run twice.
+   */
+  setAudioPortDisposer(dispose: () => void): void {
+    this.clearAudioPort();
+    this.audioPortDisposer = dispose;
+  }
+
+  /** Dispose the live audio port (if any) exactly once. */
+  private clearAudioPort(): void {
+    const dispose = this.audioPortDisposer;
+    this.audioPortDisposer = null;
+    if (!dispose) return;
+    try {
+      dispose();
+    } catch {
+      /* port1.close() is idempotent/best-effort */
+    }
+  }
 
   // ---- Stage bootstrap --------------------------------------------------
   buildStageBootstrap(): StageBootstrap {
@@ -777,6 +821,9 @@ export class AppController {
    * stream.
    */
   private async teardownActive(): Promise<void> {
+    // Dispose the live audio port so its port1 listener doesn't outlive the
+    // session (spec §20.9). Safe even when there is no active session.
+    this.clearAudioPort();
     const a = this.active;
     this.active = null;
     if (!a) return;
@@ -817,6 +864,22 @@ export class AppController {
     this.deps.logger.error('app.error', { message: String(err) });
     return new AppError('UNKNOWN', { cause: err }).toPublic();
   }
+}
+
+/**
+ * Translate a project's interview target into a target question count.
+ *
+ * STOPGAP: `approximate_duration` is not yet driven off a real elapsed-time
+ * budget — we approximate it as a question count using a fixed average
+ * minutes-per-question. A true duration budget (stopping on wall-clock time
+ * rather than a derived count) is deferred. This is a deliberate approximation,
+ * not a cap: any duration the user picks is translated, never rejected.
+ */
+export function resolveTargetQuestionCount(targetMode: TargetMode, targetValue: number): number {
+  if (targetMode === 'approximate_duration') {
+    return Math.max(1, Math.round(targetValue / APPROX_MINUTES_PER_QUESTION));
+  }
+  return targetValue;
 }
 
 /**
