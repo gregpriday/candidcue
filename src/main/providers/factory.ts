@@ -92,8 +92,9 @@ const inworldWsConnect: SttConnectFactory = async ({ apiKey, model, config }, si
 export function buildInworldAdapters(
   apiKey: string,
   sttModel: string = INWORLD_DEFAULTS.sttModel,
+  ttsModel: string = INWORLD_DEFAULTS.ttsModel,
 ): { stt: SpeechToTextAdapter; tts: TextToSpeechAdapter } {
   const stt = new InworldSttClient({ apiKey, model: sttModel, connect: inworldWsConnect });
-  const tts = new InworldTtsClient({ apiKey });
+  const tts = new InworldTtsClient({ apiKey, modelId: ttsModel });
   return { stt, tts };
 }

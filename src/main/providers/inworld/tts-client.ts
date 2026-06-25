@@ -5,22 +5,25 @@ import type {
   TtsResult,
 } from '@shared/contracts/adapters';
 import { AppError } from '@shared/errors/app-error';
+import { INWORLD_DEFAULTS } from '@shared/constants/runtime-defaults';
 import { nowMs } from '@shared/utils/deadline';
-import { durationMsFromPcm, pcm16ToWav, WAV_HEADER_BYTES } from './wav';
+import { durationMsFromPcm, pcm16ToWav } from './wav';
 
 /** Injectable fetch implementation. Defaults to the global `fetch`. */
 export type TtsFetch = typeof fetch;
 
 export interface InworldTtsClientOptions {
   apiKey: string;
-  /** Base URL of the Inworld TTS synthesize endpoint. */
+  /** Inworld TTS model id. Defaults to {@link INWORLD_DEFAULTS.ttsModel}. */
+  modelId?: string;
+  /** Base URL of the Inworld TTS endpoint. */
   baseUrl?: string;
   /** Injectable fetch (real `fetch` in production, fake in tests). */
   fetchImpl?: TtsFetch;
 }
 
-/** Default synthesize endpoint (documented assumption; overridable). */
-const DEFAULT_BASE_URL = 'https://api.inworld.ai/v1/tts:synthesize';
+/** Default synthesize endpoint (real Inworld tts/v1/voice contract; overridable). */
+const DEFAULT_BASE_URL = 'https://api.inworld.ai/tts/v1/voice';
 
 /** Single mono channel for all TTS output (spec §17). */
 const TTS_CHANNELS = 1;
@@ -33,19 +36,20 @@ const TTS_CHANNELS = 1;
  * length, and hand back a complete {@link TtsResult}. There is no streaming
  * playback in the MVP, so callers always receive the whole clip up front.
  *
- * Output handling:
- *  - `pcm_s16le`: the body is raw 16-bit PCM; we wrap it in a WAV header so the
- *    renderer can decode it, and report `audio/wav`.
- *  - `wav`: the body already carries a RIFF/WAVE header; we pass it through and
- *    derive duration from the payload after the 44-byte header.
+ * Wire shape: the Inworld `tts/v1/voice` endpoint returns JSON with a base64
+ * `audioContent` field carrying raw LINEAR16 (pcm_s16le) samples. We base64-decode
+ * it, wrap it in a canonical WAV header so the renderer can decode it, and report
+ * `audio/wav`.
  */
 export class InworldTtsClient implements TextToSpeechAdapter {
   private readonly apiKey: string;
+  private readonly modelId: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: TtsFetch;
 
   constructor(options: InworldTtsClientOptions) {
     this.apiKey = options.apiKey;
+    this.modelId = options.modelId ?? INWORLD_DEFAULTS.ttsModel;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
@@ -54,7 +58,8 @@ export class InworldTtsClient implements TextToSpeechAdapter {
    * Synthesize speech for `input.text` in voice `input.voiceId`. Buffers the
    * whole response, computes duration from the decoded PCM, and returns a
    * complete {@link TtsResult}.
-   * @throws AppError TTS_FAILED on a non-OK response.
+   * @throws AppError INWORLD_AUTH on 401/403, TTS_FAILED on any other non-OK
+   *   response or a malformed/empty `audioContent`.
    */
   async synthesize(input: TtsInput, signal?: AbortSignal): Promise<TtsResult> {
     const start = nowMs();
@@ -63,16 +68,21 @@ export class InworldTtsClient implements TextToSpeechAdapter {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Accept: input.outputFormat === 'wav' ? 'audio/wav' : 'audio/L16',
-        Authorization: `Bearer ${this.apiKey}`,
+        // Inworld passes the API key verbatim as the Basic credential — it is
+        // already the Basic token, so we do NOT base64-encode it again.
+        Authorization: `Basic ${this.apiKey}`,
       },
+      // Follows the documented Inworld `tts/v1/voice` request contract. Field
+      // names are doc-derived and may need live confirmation against the API.
       body: JSON.stringify({
         text: input.text,
         voiceId: input.voiceId,
-        style: input.style,
-        speakingRate: input.speakingRate,
-        outputFormat: input.outputFormat,
-        sampleRate: input.sampleRate,
+        modelId: this.modelId,
+        audioConfig: {
+          audioEncoding: 'LINEAR16',
+          sampleRateHertz: input.sampleRate,
+          speakingRate: input.speakingRate,
+        },
       }),
       ...(signal ? { signal } : {}),
     });
@@ -86,14 +96,46 @@ export class InworldTtsClient implements TextToSpeechAdapter {
       });
     }
 
-    const raw = new Uint8Array(await response.arrayBuffer());
     const providerRequestId =
       response.headers.get('x-request-id') ?? response.headers.get('x-inworld-request-id');
 
-    // Normalize to a renderer-playable WAV and compute duration from the PCM
-    // payload (the data chunk, i.e. everything after the 44-byte header).
-    const { bytes, pcmByteLength } = this.toWav(raw, input.outputFormat, input.sampleRate);
-    const durationMs = durationMsFromPcm(pcmByteLength, input.sampleRate, TTS_CHANNELS);
+    let payload: { audioContent?: unknown };
+    try {
+      payload = (await response.json()) as { audioContent?: unknown };
+    } catch (error) {
+      // Preserve abort semantics: a caller-triggered abort surfaces here as an
+      // AbortError and must propagate unchanged, never masked as TTS_FAILED.
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw error;
+      }
+      // An OK status with a non-JSON or truncated body is a synthesis failure,
+      // not a raw SyntaxError leaking out of the adapter.
+      throw new AppError('TTS_FAILED', {
+        message: 'Inworld TTS response body was not valid JSON',
+        cause: error,
+      });
+    }
+
+    const audioContent = payload.audioContent;
+    if (typeof audioContent !== 'string' || audioContent.trim().length === 0) {
+      // A missing/empty/whitespace-only/non-string body is a failure, not silence.
+      throw new AppError('TTS_FAILED', {
+        message: 'Inworld TTS response did not include base64 audioContent',
+      });
+    }
+
+    // `audioContent` is base64-encoded raw LINEAR16 (pcm_s16le) PCM. Decode it,
+    // wrap it in a WAV header for the renderer, and derive duration from the PCM.
+    const pcm = base64ToBytes(audioContent);
+    // LINEAR16 is 2 bytes/sample, so a valid clip has a non-zero, even byte
+    // count. Anything else means the decoded payload is truncated or corrupt.
+    if (pcm.byteLength === 0 || pcm.byteLength % 2 !== 0) {
+      throw new AppError('TTS_FAILED', {
+        message: 'Inworld TTS response decoded to malformed LINEAR16 PCM',
+      });
+    }
+    const bytes = pcm16ToWav(pcm, input.sampleRate, TTS_CHANNELS);
+    const durationMs = durationMsFromPcm(pcm.byteLength, input.sampleRate, TTS_CHANNELS);
 
     return {
       bytes,
@@ -110,23 +152,9 @@ export class InworldTtsClient implements TextToSpeechAdapter {
   async testVoice(input: TestVoiceInput, signal?: AbortSignal): Promise<TtsResult> {
     return this.synthesize(input, signal);
   }
+}
 
-  /**
-   * Coerce the raw response body into a renderer-playable WAV buffer and report
-   * the size of its PCM payload (used for duration math). Raw PCM is wrapped in
-   * a fresh 44-byte header at `sampleRate`; an already-WAV body is passed
-   * through and its header subtracted from the reported PCM length.
-   */
-  private toWav(
-    raw: Uint8Array,
-    outputFormat: TtsInput['outputFormat'],
-    sampleRate: number,
-  ): { bytes: Uint8Array; pcmByteLength: number } {
-    if (outputFormat === 'wav') {
-      // Body already carries a RIFF/WAVE header; duration is from the data chunk.
-      return { bytes: raw, pcmByteLength: Math.max(0, raw.byteLength - WAV_HEADER_BYTES) };
-    }
-    // Raw PCM: wrap so the renderer can decode it; the whole body is the payload.
-    return { bytes: pcm16ToWav(raw, sampleRate, TTS_CHANNELS), pcmByteLength: raw.byteLength };
-  }
+/** Decode a base64 string to raw bytes (works in both Node and Electron main). */
+function base64ToBytes(base64: string): Uint8Array {
+  return new Uint8Array(Buffer.from(base64, 'base64'));
 }
