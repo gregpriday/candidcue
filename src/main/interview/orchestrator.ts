@@ -518,13 +518,37 @@ export class SessionOrchestrator {
 
     const plan = await this.buildPlaybackPlan(turn);
 
-    await this.deps.stage.preloadSpeechPlan(plan);
+    // Playback is only "confirmed" when the stage reports ready then ended. A
+    // stage error or a deadline timeout returns false: Mira never actually
+    // spoke, so we must NOT advance to audioEnded / open the mic / arm the turn.
+    const preloaded = await this.deps.stage.preloadSpeechPlan(plan);
+    if (!preloaded) {
+      this.failStagePlayback(reason);
+      return;
+    }
     this.transition('stageReady', reason);
-    await this.deps.stage.playSpeechPlan(plan); // resolves when audio ends
+    const played = await this.deps.stage.playSpeechPlan(plan); // resolves when audio ends
+    if (!played) {
+      this.failStagePlayback(reason);
+      return;
+    }
     // Audio end is authoritative end of Mira's speaking turn (spec §18.7).
     this.transition('audioEnded', reason);
     this.deps.stage.openMicGate();
     await this.armUserTurn(turn);
+  }
+
+  /**
+   * Stage playback was not confirmed (error report or deadline timeout). Hold in
+   * the recoverable-pause state — same mechanism as a pipeline failure — so the
+   * mic is never armed and the operator can retry or skip. The question is
+   * already persisted as "asked", so a resume replays the prepared turn.
+   */
+  private failStagePlayback(reason: string): void {
+    this.log.warn('stage.playback_not_confirmed', { state: this.state, reason });
+    this.recoverableWarning = 'Stage playback failed. Resume to retry.';
+    this.transition('pause', 'stage playback failed');
+    this.publishSnapshot();
   }
 
   private async persistAskedTurn(turn: CurrentTurn): Promise<void> {

@@ -867,36 +867,47 @@ class IpcStagePort implements StagePort {
     this.getStage()?.send(CHANNELS.evtStageState, projection);
   }
 
-  async preloadSpeechPlan(plan: SpeechPlaybackPlan): Promise<void> {
+  async preloadSpeechPlan(plan: SpeechPlaybackPlan): Promise<boolean> {
     this.getStage()?.send(CHANNELS.evtPlaybackPlan, plan);
-    await this.await('ready', plan.turnId, RUNTIME_DEFAULTS.stagePreloadDeadlineMs);
+    return this.await('ready', plan.turnId, RUNTIME_DEFAULTS.stagePreloadDeadlineMs);
   }
 
-  async playSpeechPlan(plan: SpeechPlaybackPlan): Promise<void> {
+  async playSpeechPlan(plan: SpeechPlaybackPlan): Promise<boolean> {
     // Audio end is authoritative; fall back after the known duration + slack.
-    await this.await('ended', plan.turnId, plan.audio.durationMs + 2000);
+    return this.await('ended', plan.turnId, plan.audio.durationMs + 2000);
   }
 
   handleReport(kind: 'ready' | 'started' | 'ended' | 'error', turnId: string): void {
     if (kind === 'ready') this.pendingReady.get(turnId)?.(true);
     if (kind === 'ended') this.pendingEnded.get(turnId)?.(true);
     if (kind === 'error') {
+      // A stage error fails BOTH the preload and the playback waiter for this
+      // turn: playback was not confirmed, so resolve each with ok=false.
       this.logger.warn('stage.playback_error', { turnId });
       this.pendingReady.get(turnId)?.(false);
       this.pendingEnded.get(turnId)?.(false);
     }
   }
 
-  private await(kind: 'ready' | 'ended', turnId: string, deadlineMs: number): Promise<void> {
+  /**
+   * Resolves true when the stage confirms the milestone (ready/ended), false on
+   * a stage error report OR the deadline lapsing (playback NOT confirmed). The
+   * map entry is deleted once settled so a late event cannot double-resolve.
+   */
+  private await(kind: 'ready' | 'ended', turnId: string, deadlineMs: number): Promise<boolean> {
     const map = kind === 'ready' ? this.pendingReady : this.pendingEnded;
-    return new Promise<void>((resolve) => {
-      const done = (): void => {
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const done = (ok: boolean): void => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         map.delete(turnId);
-        resolve();
+        resolve(ok);
       };
-      const timer = setTimeout(done, deadlineMs);
-      map.set(turnId, () => done());
+      // Timeout = not confirmed.
+      const timer = setTimeout(() => done(false), deadlineMs);
+      map.set(turnId, (ok) => done(ok));
     });
   }
 }

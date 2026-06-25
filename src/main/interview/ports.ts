@@ -24,8 +24,18 @@ export const NOOP_LOGGER: Logger = {
 export interface StagePort {
   openMicGate(): void;
   closeMicGate(): void;
-  preloadSpeechPlan(plan: SpeechPlaybackPlan): Promise<void>;
-  playSpeechPlan(plan: SpeechPlaybackPlan): Promise<void>;
+  /**
+   * Preload + buffer the speech plan. Resolves true when the stage confirms it
+   * is ready; false means readiness was NOT confirmed (stage error or timeout)
+   * and playback must not be treated as having started.
+   */
+  preloadSpeechPlan(plan: SpeechPlaybackPlan): Promise<boolean>;
+  /**
+   * Play the speech plan. Resolves true when the stage confirms audio ended;
+   * false means playback was NOT confirmed (stage error or timeout) and the
+   * turn must not be treated as having been spoken.
+   */
+  playSpeechPlan(plan: SpeechPlaybackPlan): Promise<boolean>;
   setVisualState(projection: StageStateProjection): void;
 }
 

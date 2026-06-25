@@ -88,7 +88,11 @@ function coverageFromBrief(b: InterviewBrief): SessionCoverageItem[] {
 interface Harness {
   orch: SessionOrchestrator;
   repo: MemoryRepository;
-  stage: StagePort & { openMicGate: ReturnType<typeof vi.fn>; closeMicGate: ReturnType<typeof vi.fn> };
+  stage: StagePort & {
+    openMicGate: ReturnType<typeof vi.fn>;
+    closeMicGate: ReturnType<typeof vi.fn>;
+    results: { preload: boolean; play: boolean };
+  };
   snapshots: OperatorSessionSnapshot[];
   sessionId: string;
   stt: FakeStt;
@@ -149,12 +153,16 @@ async function makeHarness(overrides?: {
   });
 
   const snapshots: OperatorSessionSnapshot[] = [];
+  // Stage confirms playback by default; tests flip these to simulate a stage
+  // error / deadline timeout (preload or play not confirmed).
+  const stageResults = { preload: true, play: true };
   const stage = {
     openMicGate: vi.fn(),
     closeMicGate: vi.fn(),
-    preloadSpeechPlan: vi.fn(async () => {}),
-    playSpeechPlan: vi.fn(async () => {}), // resolves immediately = audio ended
+    preloadSpeechPlan: vi.fn(async () => stageResults.preload),
+    playSpeechPlan: vi.fn(async () => stageResults.play), // resolves immediately = audio ended
     setVisualState: vi.fn(),
+    results: stageResults,
   };
   const snapshotSink: SnapshotSink = { publish: (s) => snapshots.push(s) };
 
@@ -217,6 +225,39 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(h.orch.getState()).toBe('USER_ARMED');
     expect(h.stage.closeMicGate).toHaveBeenCalled(); // never open during Mira speech
     expect(h.stage.openMicGate).toHaveBeenCalledTimes(1);
+    expect(h.stt.beginTurnCalls).toBe(1); // STT armed for the user turn
+  });
+
+  it('does NOT arm the mic when stage playback fails (play not confirmed)', async () => {
+    // Simulate a stage error / deadline timeout: playSpeechPlan resolves false.
+    h.stage.results.play = false;
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    // Mira never spoke: must not reach USER_ARMED, mic stays closed, STT not armed.
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.stage.openMicGate).not.toHaveBeenCalled();
+    expect(h.stt.beginTurnCalls).toBe(0);
+    // The warning must only advertise always-legal recovery: skip is illegal
+    // from PAUSED, so canSkip is false and the text must not mention "skip".
+    const snap = lastSnapshot();
+    expect(snap.recoverableWarning).toBe('Stage playback failed. Resume to retry.');
+    expect(snap.recoverableWarning).not.toMatch(/skip/i);
+    expect(snap.controls.canSkip).toBe(false);
+  });
+
+  it('does NOT arm the mic when stage preload fails (ready not confirmed)', async () => {
+    h.stage.results.preload = false;
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.stage.playSpeechPlan).not.toHaveBeenCalled();
+    expect(h.stage.openMicGate).not.toHaveBeenCalled();
+    expect(h.stt.beginTurnCalls).toBe(0);
+    // Same guard: warning advertises only resume, skip stays disabled.
+    const snap = lastSnapshot();
+    expect(snap.recoverableWarning).toBe('Stage playback failed. Resume to retry.');
+    expect(snap.recoverableWarning).not.toMatch(/skip/i);
+    expect(snap.controls.canSkip).toBe(false);
   });
 
   it('commits a manual answer, stores raw transcript, and plays the next question', async () => {
