@@ -168,35 +168,58 @@ export class InworldSttClient implements SpeechToTextAdapter {
       throw new DOMException('Aborted', 'AbortError');
     }
 
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      const finish = (): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        signal?.removeEventListener('abort', onAbort);
-        this.finalResolve = null;
-        resolve();
-      };
-      const onAbort = (): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        this.finalResolve = null;
-        reject(new DOMException('Aborted', 'AbortError'));
-      };
-      // Resolve early if a FINAL segment arrives while we wait.
-      this.finalResolve = finish;
-      // Deadline: resolve with whatever accumulated so far (spec §13.4).
-      const timer = setTimeout(finish, deadlineMs);
-      if (signal) signal.addEventListener('abort', onAbort, { once: true });
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const finish = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          this.finalResolve = null;
+          resolve();
+        };
+        const onAbort = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          this.finalResolve = null;
+          reject(new DOMException('Aborted', 'AbortError'));
+        };
+        // Resolve early if a FINAL segment arrives while we wait.
+        this.finalResolve = finish;
+        // Deadline: resolve with whatever accumulated so far (spec §13.4).
+        const timer = setTimeout(finish, deadlineMs);
+        if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      });
+    } finally {
+      // Deactivate the turn on EVERY exit path — success, deadline, AND abort.
+      // If the wait Promise rejects on abort, the throw propagates out of this
+      // method before the commit/promotion logic below runs, so an aborted turn
+      // is left committed-free; this finally guarantees later events stop
+      // folding into the dead turn (no resurrection of an aborted turn).
+      this.turnActive = false;
+      this.finalResolve = null;
+    }
 
-    this.turnActive = false;
-    const text = this.accumulator.commit();
+    // Capture the in-flight interim BEFORE commit() clears it. FINAL always wins:
+    // when any final segment exists, commit() returns the finals-joined text and
+    // the interim is discarded. But if the turn produced only partials (no FINAL
+    // arrived before the deadline), promote the interim so the answer isn't lost
+    // ("No speech was captured"). Otherwise text is '' (genuine no-speech).
+    const interim = this.accumulator.interimText;
+    const committed = this.accumulator.commit();
+    if (committed.length > 0) {
+      return {
+        text: committed,
+        finalSegments: [...this.accumulator.finalSegments],
+        confidence: null,
+      };
+    }
+    const promoted = interim.trim();
     return {
-      text,
-      finalSegments: [...this.accumulator.finalSegments],
+      text: promoted,
+      finalSegments: promoted.length > 0 ? [promoted] : [],
       confidence: null,
     };
   }

@@ -141,6 +141,75 @@ describe('TranscriptAccumulator', () => {
     });
   });
 
+  describe('interimText', () => {
+    it('exposes the current trimmed interim phrase', () => {
+      const acc = new TranscriptAccumulator();
+      acc.setInterim('  in flight  ');
+      expect(acc.interimText).toBe('in flight');
+    });
+
+    it('is empty when no interim is pending', () => {
+      const acc = new TranscriptAccumulator();
+      acc.addFinalSegment('Final.');
+      expect(acc.interimText).toBe('');
+    });
+
+    it('is cleared by commit (read it BEFORE committing to promote it)', () => {
+      const acc = new TranscriptAccumulator();
+      acc.setInterim('only interim');
+      // Promotion pattern: capture interim first, then commit.
+      const interim = acc.interimText;
+      const committed = acc.commit();
+      expect(committed).toBe('');
+      expect(interim).toBe('only interim');
+      expect(acc.interimText).toBe('');
+    });
+
+    it('is cleared by reset', () => {
+      const acc = new TranscriptAccumulator();
+      acc.setInterim('gone');
+      acc.reset();
+      expect(acc.interimText).toBe('');
+    });
+  });
+
+  describe('interim promotion on finalize (interim-only turn)', () => {
+    it('promotes the interim when there are no final segments', () => {
+      const acc = new TranscriptAccumulator();
+      acc.setInterim('I think the answer is yes');
+
+      // Mirrors endTurn: read interim, commit (finals only), pick the survivor.
+      const interim = acc.interimText;
+      const committed = acc.commit();
+      const text = committed.length > 0 ? committed : interim.trim();
+
+      expect(committed).toBe('');
+      expect(text).toBe('I think the answer is yes');
+    });
+
+    it('ignores the interim when a final segment is present (FINAL wins)', () => {
+      const acc = new TranscriptAccumulator();
+      acc.addFinalSegment('The final answer.');
+      acc.setInterim('a later partial that should not win');
+
+      const interim = acc.interimText;
+      const committed = acc.commit();
+      const text = committed.length > 0 ? committed : interim.trim();
+
+      expect(text).toBe('The final answer.');
+    });
+
+    it('yields empty text when neither finals nor interim exist (genuine no-speech)', () => {
+      const acc = new TranscriptAccumulator();
+
+      const interim = acc.interimText;
+      const committed = acc.commit();
+      const text = committed.length > 0 ? committed : interim.trim();
+
+      expect(text).toBe('');
+    });
+  });
+
   describe('reset', () => {
     it('clears finalized segments and interim', () => {
       const acc = new TranscriptAccumulator();

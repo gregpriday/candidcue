@@ -46,6 +46,15 @@ export class TranscriptAccumulator {
   }
 
   /**
+   * The current in-flight interim phrase (already trimmed), or '' when none.
+   * Read this BEFORE {@link commit} (which clears it) when you need to promote
+   * an interim-only turn — a turn that produced partials but no final segment.
+   */
+  get interimText(): string {
+    return this.interim;
+  }
+
+  /**
    * Return the finalized transcript (segments joined and trimmed) and discard
    * the pending interim phrase. Finalized segments are left intact.
    */
