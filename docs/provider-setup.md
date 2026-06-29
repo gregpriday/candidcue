@@ -35,10 +35,13 @@ Used for streaming speech-to-text and text-to-speech.
 > `src/main/providers/factory.ts` are a documented assumption; confirm them
 > against current Inworld docs before a production release.
 
-## Development credentials
+## Credential storage
 
-In non-packaged builds you may set credentials via environment variables for
-convenience. Production builds require secure OS storage.
+Credentials are set the same way in both development and packaged builds — enter
+each key in **Settings → OpenAI API Key** or **Settings → Inworld API Key**. Keys
+are encrypted immediately with Electron `safeStorage`, stored in the app's
+user-data directory, and only ever decrypted inside the main process; they are
+never written to logs and never exposed to the renderer.
 
 ## What is sent where
 
