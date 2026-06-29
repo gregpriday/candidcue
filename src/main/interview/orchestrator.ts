@@ -154,6 +154,10 @@ export class SessionOrchestrator {
   // the next question rather than replaying (and wiping) the answered turn (#9).
   private currentTurnAnswered = false;
   private nextOrdinal: number;
+  // Memoized hard ceiling on answered questions (issue #17):
+  // ceil(targetQuestionCount * RUNTIME_DEFAULTS.questionCountHardCapFactor).
+  // Lazily computed; the target is immutable for the session.
+  private questionCountHardCap: number | null = null;
   private recentClipIds: string[] = [];
   private usedFallbackTexts: string[] = [];
   private recentQuestionTexts: string[] = [];
@@ -873,10 +877,43 @@ export class SessionOrchestrator {
       this.lastCommittedAnswer = cleanedText;
 
       // 5. Decide: close, or build + play the next question.
-      const shouldClose = action.action === 'complete' || action.shouldCloseAfterAnswer || this.endAfterTurnRequested;
+      // Hard safety cap (issue #17): if enough questions have been answered,
+      // force completion regardless of the model's decision — a model that keeps
+      // returning `ask` must not run forever. Evaluated against turn.ordinal, the
+      // count of answered questions (nextOrdinal has not advanced yet here, so
+      // using it would close one turn early).
+      const hardCapReached = this.hardQuestionCapReached(turn.ordinal);
+      // Surface the cap only when it is the DECISIVE close reason; if the model
+      // also asked to close this turn, attribute the close to the model (the OR
+      // still guarantees the cap closes regardless, and collapses idempotently).
+      const closedByHardCap =
+        hardCapReached &&
+        action.action !== 'complete' &&
+        !action.shouldCloseAfterAnswer &&
+        !this.endAfterTurnRequested;
+      const shouldClose =
+        action.action === 'complete' ||
+        action.shouldCloseAfterAnswer ||
+        this.endAfterTurnRequested ||
+        hardCapReached;
       if (shouldClose) {
+        if (closedByHardCap) {
+          // Set before the transitions: transition() publishes a snapshot that
+          // reads recoverableWarning, so the COMPLETED snapshot must carry it.
+          this.recoverableWarning =
+            'Reached the safety question limit. The interview ended automatically.';
+          this.log.info('session.hard_question_cap_reached', {
+            sessionId: this.ctx.session.id,
+            answeredQuestionCount: turn.ordinal,
+            targetQuestionCount: this.ctx.targetQuestionCount,
+            hardQuestionCap: this.hardQuestionCap(),
+          });
+        }
         this.commitInFlight = false;
-        this.transition('completionSelected', 'coverage complete');
+        this.transition(
+          'completionSelected',
+          closedByHardCap ? 'hard question cap reached' : 'coverage complete',
+        );
         this.transition('finalAnswerStored');
         await this.persistSessionStatus('completed');
         return;
@@ -1167,6 +1204,26 @@ export class SessionOrchestrator {
       updatedAt: new Date(this.now()).toISOString(),
     };
     await this.deps.repository.updateSession(updated);
+  }
+
+  /**
+   * Hard safety cap on answered questions (issue #17). A model that keeps
+   * returning `ask` is forced to close once this many questions have been
+   * answered, independent of the model's own termination decision. Derived from
+   * the (immutable) soft target and memoized per session.
+   */
+  private hardQuestionCap(): number {
+    if (this.questionCountHardCap == null) {
+      this.questionCountHardCap = Math.ceil(
+        this.ctx.targetQuestionCount * this.r.questionCountHardCapFactor,
+      );
+    }
+    return this.questionCountHardCap;
+  }
+
+  /** True once enough questions have been answered to trip the safety cap. */
+  private hardQuestionCapReached(answeredQuestionCount: number): boolean {
+    return answeredQuestionCount >= this.hardQuestionCap();
   }
 
   // -- snapshots -----------------------------------------------------------
