@@ -379,10 +379,32 @@ describe('SessionOrchestrator turn pipeline', () => {
     await h.orch.begin();
     h.orch.onSpeechStarted(1000);
     h.orch.onSpeechStopped(4000);
+    // Two commits in the same tick (double-click / duplicate IPC). Without the
+    // synchronous commitInFlight claim, both pass the guard and enqueue: the
+    // first commits turn 1, the second commits the freshly-armed turn 2 (#16).
     await Promise.allSettled([h.orch.commitUserTurn('manual'), h.orch.commitUserTurn('manual')]);
+
     const agg = await h.repo.getSession(h.sessionId);
     const ordinal1 = agg!.turns.filter((t) => t.ordinal === 1);
     expect(ordinal1).toHaveLength(1);
+    expect(ordinal1[0]!.state).toBe('answered');
+    // The duplicate must be a no-op: exactly one turn is answered and only the
+    // armed next turn (turn 2) was added — the duplicate did NOT commit it.
+    expect(agg!.turns.filter((t) => t.state === 'answered')).toHaveLength(1);
+    expect(agg!.turns).toHaveLength(2);
+    expect(h.orch.getState()).toBe('USER_ARMED');
+
+    // The flag was released, not permanently latched: a subsequent commit on the
+    // armed turn still works and advances the interview (guards the early-return
+    // reset in commitPipeline that the claim-at-enqueue fix made load-bearing).
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    const agg2 = await h.repo.getSession(h.sessionId);
+    expect(agg2!.turns.find((t) => t.ordinal === 2)!.state).toBe('answered');
+    expect(agg2!.turns.some((t) => t.ordinal === 3)).toBe(true);
+    expect(h.orch.getState()).toBe('USER_ARMED');
   });
 
   it('falls back to a bank question when the model fails', async () => {

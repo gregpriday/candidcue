@@ -284,6 +284,12 @@ export class SessionOrchestrator {
       throw stateConflict(`commit not allowed in ${this.state}`);
     }
     if (this.commitInFlight) return; // idempotent (spec directive 10)
+    // Claim the flag synchronously, before runExclusive enqueues onto opChain.
+    // runExclusive only schedules the pipeline (it never runs it in this tick),
+    // so if we waited for commitPipeline to set the flag, two same-tick callers
+    // (double-click / duplicate IPC) would both pass the guard above and both
+    // enqueue — the second committing the now-empty armed next turn (#16).
+    this.commitInFlight = true;
     await this.runExclusive(() => this.commitPipeline(reason));
   }
 
@@ -728,8 +734,13 @@ export class SessionOrchestrator {
   // -- core: the commit pipeline (spec §12.2) ------------------------------
   private async commitPipeline(reason: 'manual' | 'automatic'): Promise<void> {
     const turn = this.currentTurn;
-    if (!turn) return;
-    this.commitInFlight = true;
+    if (!turn) {
+      // commitInFlight was claimed in commitUserTurn; release it on this early
+      // exit or all future commits would silently no-op (permanent lock).
+      this.commitInFlight = false;
+      return;
+    }
+    // commitInFlight is already true (claimed in commitUserTurn before enqueue).
     this.clearEndpointTimer();
     const myGen = this.generationId;
     const endpointReason: EndpointReason = reason;
