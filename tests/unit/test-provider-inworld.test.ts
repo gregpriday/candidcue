@@ -9,7 +9,26 @@ const { buildInworldAdapters, buildOpenAiAdapters } = vi.hoisted(() => ({
   buildOpenAiAdapters: vi.fn(),
 }));
 
-vi.mock('@main/providers/factory', () => ({ buildInworldAdapters, buildOpenAiAdapters }));
+// `testProvider` now reads its credential through the factory's `getProviderCredential`
+// and consults the fake-provider seam (`useFakeProviders`) added for the app-launch
+// harness (issue #24). The mock mirrors the real *non-fake* helpers — fake mode stays
+// off, and the credential resolves straight from the store — so the health-check path
+// runs exactly as in production. `hasProviderCredential`/`buildAdapters` are exported
+// for completeness (imported by AppController) but unused on this code path.
+vi.mock('@main/providers/factory', () => ({
+  buildInworldAdapters,
+  buildOpenAiAdapters,
+  useFakeProviders: (): boolean => false,
+  getProviderCredential: (
+    provider: 'openai' | 'inworld',
+    store: { getKey: (p: 'openai' | 'inworld') => string | null },
+  ): string | null => store.getKey(provider),
+  hasProviderCredential: (
+    provider: 'openai' | 'inworld',
+    store: { hasKey?: (p: 'openai' | 'inworld') => boolean },
+  ): boolean => store.hasKey?.(provider) ?? true,
+  buildAdapters: vi.fn(),
+}));
 
 import { AppController } from '@main/app-controller';
 import { NOOP_LOGGER } from '@main/interview/ports';

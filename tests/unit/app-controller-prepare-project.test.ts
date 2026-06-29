@@ -6,11 +6,16 @@ import { compileProjectSource } from '@main/interview/source-compiler';
 import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 import { AppError } from '@shared/errors/app-error';
 
-// The preparation model adapter is built from the OpenAI credential inside the
-// controller (via the provider factory). Stub the factory so `model.prepareProject`
-// is a shared spy delegating to the deterministic FakeInterviewModel — schema-valid
-// output, no network — which lets the at-limit success path complete and lets each
-// test assert exactly whether the model was reached.
+// The preparation model adapter is resolved inside the controller via the
+// provider factory: `requireModelAdapter` reads the OpenAI credential with
+// `getProviderCredential` and then builds the adapter set with `buildAdapters`,
+// using its `.model`. Stub the factory so that model's `prepareProject` is a
+// shared spy delegating to the deterministic FakeInterviewModel — schema-valid
+// output, no network — which lets the at-limit success path complete and lets
+// each test assert exactly whether the model was reached. The credential/fake-mode
+// helpers are stubbed to their real non-fake behaviour (no fake provider mode;
+// the credential comes straight from the injected store) so the controller's real
+// resolution flow runs end to end.
 const { prepareProjectSpy } = vi.hoisted(() => ({ prepareProjectSpy: vi.fn() }));
 
 vi.mock('@main/providers/factory', async () => {
@@ -19,8 +24,19 @@ vi.mock('@main/providers/factory', async () => {
   prepareProjectSpy.mockImplementation((input: never, signal?: never) =>
     fake.prepareProject(input, signal),
   );
+  const model = { prepareProject: prepareProjectSpy };
   return {
-    buildOpenAiAdapters: () => ({ model: { prepareProject: prepareProjectSpy }, moderation: {} }),
+    useFakeProviders: () => false,
+    getProviderCredential: (
+      provider: 'openai' | 'inworld',
+      store: { getKey: (p: 'openai' | 'inworld') => string | null },
+    ) => store.getKey(provider),
+    hasProviderCredential: (
+      provider: 'openai' | 'inworld',
+      store: { hasKey: (p: 'openai' | 'inworld') => boolean },
+    ) => store.hasKey(provider),
+    buildAdapters: () => ({ model, moderation: {}, stt: {}, tts: {} }),
+    buildOpenAiAdapters: () => ({ model, moderation: {} }),
     buildInworldAdapters: () => ({}),
   };
 });

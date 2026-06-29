@@ -5,6 +5,7 @@ import {
   FakeTts,
   AbortError,
 } from '@main/providers/fakes';
+import { wavDurationMs } from '@main/providers/inworld/wav';
 import type {
   PrepareProjectInput,
   GenerateNextActionInput,
@@ -559,6 +560,39 @@ describe('FakeTts', () => {
     expect(result.mimeType).toBe('audio/wav');
     expect(result.providerRequestId).toBe('req-9');
     expect(tts.seen).toHaveLength(1);
+  });
+
+  it('returns a real RIFF/WAVE container (not raw PCM) for wav output', async () => {
+    // The real TTS contract always requests `outputFormat: 'wav'`, and the stage
+    // SpeechPlayer decodes via AudioContext.decodeAudioData — which rejects a
+    // bare-PCM buffer. The fake must therefore emit a well-formed WAV container.
+    const tts = new FakeTts({ durationMs: 1500 });
+    const result = await tts.synthesize(ttsInput({ outputFormat: 'wav', sampleRate: 24000 }));
+    const bytes = result.bytes;
+    const tag = (b: Uint8Array, off: number): string =>
+      String.fromCharCode(b[off] ?? 0, b[off + 1] ?? 0, b[off + 2] ?? 0, b[off + 3] ?? 0);
+
+    expect(result.mimeType).toBe('audio/wav');
+    expect(bytes.length).toBeGreaterThanOrEqual(44); // 44-byte header + PCM payload
+    expect(tag(bytes, 0)).toBe('RIFF');
+    expect(tag(bytes, 8)).toBe('WAVE');
+    // The production WAV parser walks the container without throwing.
+    expect(wavDurationMs(bytes)).toBeGreaterThan(0);
+  });
+
+  it('returns raw PCM (no RIFF/WAVE container) for non-wav output', async () => {
+    // The wav path wraps PCM in a container for the stage decoder; the pcm_s16le
+    // path must stay bare PCM so callers counting on raw samples aren't handed a
+    // WAV header. Guards the format switch from regressing into always-WAV.
+    const tts = new FakeTts();
+    const result = await tts.synthesize(ttsInput({ outputFormat: 'pcm_s16le' }));
+    const bytes = result.bytes;
+    const tag = (b: Uint8Array, off: number): string =>
+      String.fromCharCode(b[off] ?? 0, b[off + 1] ?? 0, b[off + 2] ?? 0, b[off + 3] ?? 0);
+
+    expect(result.mimeType).toBe('audio/pcm');
+    expect(tag(bytes, 0)).not.toBe('RIFF');
+    expect(tag(bytes, 8)).not.toBe('WAVE');
   });
 
   it('rejects when the signal is already aborted', async () => {

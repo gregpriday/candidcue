@@ -24,6 +24,10 @@ release/
 .vite/
 coverage/
 
+# Playwright (app-level e2e)
+playwright-report/
+test-results/
+
 # Local data / generated
 *.sqlite
 *.sqlite-journal

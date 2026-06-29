@@ -61,7 +61,14 @@ import { compileProjectSource } from './interview/source-compiler';
 import { GLOBAL_INTERVIEW_RULES } from './interview/global-rules';
 import { getInterviewerCharacters, getInterviewerCharacter, composeCharacterSystemPrompt } from './characters';
 import { CredentialStore, publicKeyState } from './security/secrets';
-import { buildOpenAiAdapters, buildInworldAdapters } from './providers/factory';
+import {
+  buildAdapters,
+  buildOpenAiAdapters,
+  buildInworldAdapters,
+  getProviderCredential,
+  hasProviderCredential,
+  useFakeProviders,
+} from './providers/factory';
 import { loadManifest } from './media/manifest-loader';
 import { mediaUrl } from './media/protocol-handler';
 import { buildMarkdownExport, buildJsonExport, computeSessionDurationLabel } from './export';
@@ -338,8 +345,30 @@ export class AppController {
 
   async testProvider(provider: 'openai' | 'inworld'): Promise<ProviderTestResult> {
     const start = Date.now();
-    const key = this.deps.credentials.getKey(provider);
+    const key = getProviderCredential(provider, this.deps.credentials);
     if (!key) return { provider, ok: false, message: 'No credentials saved.', latencyMs: null };
+    // Fake-provider mode: exercise the seam with a deterministic round-trip so the
+    // Settings "Test" button reports success without real credentials or network.
+    if (useFakeProviders()) {
+      try {
+        const adapters = buildAdapters({ openaiKey: key, inworldKey: key });
+        if (provider === 'openai') {
+          await adapters.moderation.moderate('hello');
+        } else {
+          await adapters.tts.synthesize({
+            text: 'Hello.',
+            voiceId: '',
+            style: 'neutral',
+            speakingRate: 1,
+            outputFormat: 'wav',
+            sampleRate: INWORLD_DEFAULTS.ttsSampleRate,
+          });
+        }
+        return { provider, ok: true, message: 'Credentials look valid.', latencyMs: Date.now() - start };
+      } catch (err) {
+        return { provider, ok: false, message: this.toPublicError(err).publicMessage, latencyMs: Date.now() - start };
+      }
+    }
     let message = 'Credentials look valid.';
     try {
       if (provider === 'openai') {
@@ -441,8 +470,8 @@ export class AppController {
     const aggregate = await this.deps.repository.getProject(input.projectId);
     const plan = aggregate?.activePlan ?? (await this.deps.repository.getLatestPlan(input.projectId));
 
-    const hasOpenAi = this.deps.credentials.hasKey('openai');
-    const hasInworld = this.deps.credentials.hasKey('inworld');
+    const hasOpenAi = hasProviderCredential('openai', this.deps.credentials);
+    const hasInworld = hasProviderCredential('inworld', this.deps.credentials);
     add('openai', 'OpenAI credentials', true, hasOpenAi, hasOpenAi ? null : 'Add your key in Settings.');
     add('inworld', 'Inworld credentials', true, hasInworld, hasInworld ? null : 'Add your key in Settings.');
 
@@ -514,9 +543,9 @@ export class AppController {
     // Read credentials before persisting a session so an unavailable keychain
     // (getKey now fails soft to null) surfaces a clean auth error instead of an
     // orphaned session row and a downstream crash in adapter init.
-    const openaiKey = this.deps.credentials.getKey('openai');
+    const openaiKey = getProviderCredential('openai', this.deps.credentials);
     if (!openaiKey) throw new AppError('OPENAI_AUTH', { publicMessage: 'Add your OpenAI key in Settings.' });
-    const inworldKey = this.deps.credentials.getKey('inworld');
+    const inworldKey = getProviderCredential('inworld', this.deps.credentials);
     if (!inworldKey) throw new AppError('INWORLD_AUTH', { publicMessage: 'Add your Inworld key in Settings.' });
 
     const character = getInterviewerCharacter(aggregate.project.interviewerCharacterId) ?? getInterviewerCharacters()[0]!;
@@ -548,8 +577,11 @@ export class AppController {
       coverage,
     });
 
-    const { model, moderation } = buildOpenAiAdapters(openaiKey);
-    const { stt, tts } = buildInworldAdapters(inworldKey, INWORLD_DEFAULTS.sttModel);
+    const { model, moderation, stt, tts } = buildAdapters({
+      openaiKey,
+      inworldKey,
+      sttModel: INWORLD_DEFAULTS.sttModel,
+    });
 
     const stageContents = this.deps.ensureStageWindow(input.config.selectedDisplayId);
     const stagePort = new IpcStagePort(() => this.deps.getStage(), this.deps.logger);
@@ -915,10 +947,10 @@ export class AppController {
 
   // ---- helpers ----------------------------------------------------------
   private requireModelAdapter(): InterviewModelAdapter {
-    const key = this.deps.credentials.getKey('openai');
+    const key = getProviderCredential('openai', this.deps.credentials);
     if (!key) throw new AppError('OPENAI_AUTH', { publicMessage: 'Add your OpenAI key in Settings.' });
     if (this.deps.buildModelAdapter) return this.deps.buildModelAdapter(key);
-    return buildOpenAiAdapters(key).model as InterviewModelAdapter;
+    return buildAdapters({ openaiKey: key, inworldKey: key }).model as InterviewModelAdapter;
   }
 
   private toPublicError(err: unknown): ReturnType<AppError['toPublic']> {

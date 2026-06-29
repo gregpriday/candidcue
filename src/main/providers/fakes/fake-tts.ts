@@ -6,6 +6,7 @@ import type {
 } from '@shared/contracts/adapters';
 import { AppError } from '@shared/errors/app-error';
 import { wordCount } from '@shared/utils';
+import { pcm16ToWav } from '../inworld/wav';
 
 import { throwIfAborted, delay } from './abort';
 
@@ -86,9 +87,16 @@ export class FakeTts implements TextToSpeechAdapter {
 
     this.seen.push(input);
     const durationMs = this.deriveDuration(input.text);
+    // When the caller asks for WAV, return a real RIFF/WAVE container around the
+    // PCM payload — not raw PCM labelled audio/wav. The real TTS contract always
+    // requests `outputFormat: 'wav'`, and the stage SpeechPlayer decodes via
+    // AudioContext.decodeAudioData, which rejects a bare-PCM buffer. Without this
+    // the fake silently breaks the playback path it is meant to stand in for.
+    const raw = synthBytes(durationMs, input.sampleRate);
+    const wav = input.outputFormat === 'wav';
     return {
-      bytes: synthBytes(durationMs, input.sampleRate),
-      mimeType: input.outputFormat === 'wav' ? 'audio/wav' : 'audio/pcm',
+      bytes: wav ? pcm16ToWav(raw, input.sampleRate, 1) : raw,
+      mimeType: wav ? 'audio/wav' : 'audio/pcm',
       sampleRate: input.sampleRate,
       channels: 1,
       durationMs,

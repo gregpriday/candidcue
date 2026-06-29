@@ -19,6 +19,14 @@ import { AppController } from './app-controller';
 // Privileged scheme must be registered before the app is ready (spec §20.2).
 registerCandidCueSchemePrivileges();
 
+// E2E test seam (issue #24): redirect per-user data (the SQLite DB + credential
+// envelopes) to an isolated dir so the app-launch smoke test never touches the
+// operator's real CandidCue data. Set before app.whenReady() so the repository
+// and credential store open against the redirected path. Inert in normal runs.
+if (process.env.CANDIDCUE_E2E_USER_DATA_DIR) {
+  app.setPath('userData', process.env.CANDIDCUE_E2E_USER_DATA_DIR);
+}
+
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
 const controlDevUrl = typeof CONTROL_VITE_DEV_SERVER_URL !== 'undefined' ? CONTROL_VITE_DEV_SERVER_URL : null;
