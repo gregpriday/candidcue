@@ -31,6 +31,12 @@
   color: var(--text-primary);
 }
 
+.studioCue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .studioQuestion {
   margin: 0;
   font-family: var(--font-serif);
@@ -39,4 +45,12 @@
   color: var(--text-primary);
   /* Mirror the real live question's balanced wrap so the preview is faithful. */
   text-wrap: balance;
+}
+
+/* The coaching steer beneath the question — quiet and secondary, never
+   competing with it. Mirrors the stage cue's prompt line. */
+.studioPrompt {
+  margin: 0;
+  font-size: var(--text-base, 1rem);
+  color: var(--text-secondary);
 }

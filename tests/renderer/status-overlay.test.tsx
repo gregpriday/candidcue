@@ -12,6 +12,7 @@ function projection(overrides: Partial<StageStateProjection> = {}): StageStatePr
     micState: 'closed',
     statusText: null,
     captions: null,
+    cue: null,
     mirror: false,
     zoom: 1,
     verticalOffsetPercent: 0,
@@ -121,6 +122,91 @@ describe('StatusOverlay', () => {
       />,
     );
     expect(screen.getByText('hello there')).toBeInTheDocument();
+  });
+
+  it('renders the model cue headline and coaching prompt while Mira is speaking', () => {
+    render(
+      <StatusOverlay
+        state={projection({
+          visualState: 'speaking',
+          cue: { headline: 'What changed your mind?', prompt: 'Name one moment' },
+        })}
+        captionsEnabled={false}
+      />,
+    );
+    // The headline shows even though the verbatim-captions toggle is OFF — the
+    // cue is the core teleprompter prompt, not an accessibility caption.
+    expect(screen.getByText('What changed your mind?')).toBeInTheDocument();
+    expect(screen.getByText('Name one moment')).toBeInTheDocument();
+  });
+
+  it('keeps the cue headline but drops the coaching prompt once the founder is answering', () => {
+    render(
+      <StatusOverlay
+        state={projection({
+          visualState: 'listening',
+          cue: { headline: 'What changed your mind?', prompt: 'Name one moment' },
+        })}
+        captionsEnabled={false}
+      />,
+    );
+    expect(screen.getByText('What changed your mind?')).toBeInTheDocument();
+    // The "how to answer" steer belongs to Mira's turn, not the founder's.
+    expect(screen.queryByText('Name one moment')).not.toBeInTheDocument();
+  });
+
+  it('lets the cue replace the verbatim caption plate so the question is not shown twice', () => {
+    render(
+      <StatusOverlay
+        state={projection({
+          visualState: 'speaking',
+          captions: 'the spoken verbatim line',
+          cue: { headline: 'a tightened headline', prompt: null },
+        })}
+        captionsEnabled
+      />,
+    );
+    expect(screen.getByText('a tightened headline')).toBeInTheDocument();
+    expect(screen.queryByText('the spoken verbatim line')).not.toBeInTheDocument();
+  });
+
+  it('never renders the cue in the error state', () => {
+    render(
+      <StatusOverlay
+        state={projection({
+          visualState: 'error',
+          cue: { headline: 'a stale headline', prompt: null },
+        })}
+        captionsEnabled={false}
+      />,
+    );
+    expect(screen.queryByText('a stale headline')).not.toBeInTheDocument();
+  });
+
+  it('keeps the cue headline visible while paused, without the coaching prompt', () => {
+    render(
+      <StatusOverlay
+        state={projection({
+          visualState: 'paused',
+          cue: { headline: 'What changed your mind?', prompt: 'Name one moment' },
+        })}
+        captionsEnabled={false}
+      />,
+    );
+    expect(screen.getByText('What changed your mind?')).toBeInTheDocument();
+    expect(screen.queryByText('Name one moment')).not.toBeInTheDocument();
+  });
+
+  it('renders nothing for an empty cue headline', () => {
+    const { container } = render(
+      <StatusOverlay
+        state={projection({ visualState: 'speaking', cue: { headline: '', prompt: 'orphan steer' } })}
+        captionsEnabled={false}
+      />,
+    );
+    // No headline, and the prompt never shows on its own.
+    expect(screen.queryByText('orphan steer')).not.toBeInTheDocument();
+    expect(container.querySelector('p')).toBeNull();
   });
 });
 

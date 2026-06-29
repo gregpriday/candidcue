@@ -153,8 +153,24 @@ export function StatusOverlay({
   // so it stays out of the frame, and toggles with '?'.
   const showLegend = legendVisible;
 
+  // The model-authored teleprompter cue: the on-screen question (headline) the
+  // founder reads, plus an optional coaching line. This is the primary prompt —
+  // shown independently of the verbatim captions toggle — and the orchestrator
+  // already gates it to the live turn (speaking → answer). The coaching prompt
+  // shows only while Mira is the one talking ("how to answer" belongs to her
+  // turn); once the founder answers, the headline stays for reference but the
+  // steer recedes.
+  const cue =
+    !isError && state.cue !== null && state.cue.headline !== '' ? state.cue : null;
+  const cuePrompt =
+    cue !== null && state.visualState === 'speaking' && cue.prompt !== null && cue.prompt !== ''
+      ? cue.prompt
+      : null;
+
+  // When a cue owns the lower third, the verbatim caption plate steps aside so
+  // the two never stack into a double readout of the same question.
   const captions =
-    !isError && captionsEnabled && state.captions !== null && state.captions !== ''
+    !isError && cue === null && captionsEnabled && state.captions !== null && state.captions !== ''
       ? state.captions
       : null;
 
@@ -236,6 +252,23 @@ export function StatusOverlay({
           </div>
         ))}
       </div>
+
+      {/* Teleprompter cue: a soft lower-third scrim grounds the text so it reads
+          over a bright (non-dark) video, then the serif headline + optional
+          coaching line. No plate, no bordered box — the scrim and text-shadow
+          carry legibility. The headline is keyed on its text so a new question
+          replays the entrance reveal. */}
+      {cue !== null ? (
+        <>
+          <div className={styles.lowerScrim} aria-hidden="true" />
+          <div className={styles.cue}>
+            <p key={cue.headline} className={styles.cueHeadline}>
+              {cue.headline}
+            </p>
+            {cuePrompt !== null ? <p className={styles.cuePrompt}>{cuePrompt}</p> : null}
+          </div>
+        </>
+      ) : null}
 
       {captions !== null ? (
         <div className={styles.captions}>

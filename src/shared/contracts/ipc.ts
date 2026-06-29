@@ -179,6 +179,14 @@ export interface OperatorSessionSnapshot {
   };
 }
 
+/** The model-authored teleprompter cue the founder reads during a live turn.
+ *  `headline` is the question rendered for the eye (the dominant on-screen text);
+ *  `prompt` is an optional short coaching line on how to answer, or null. */
+export interface StageCueProjection {
+  headline: string;
+  prompt: string | null;
+}
+
 export interface StageStateProjection {
   version: number;
   visualState:
@@ -193,6 +201,11 @@ export interface StageStateProjection {
   micState: 'closed' | 'armed' | 'active';
   statusText: string | null;
   captions: string | null;
+  /** The current turn's teleprompter cue, shown across the live turn (speaking →
+   *  the founder's answer). Null outside a live turn (standby / complete / error)
+   *  and for the closing sign-off. Independent of the verbatim `captions` toggle:
+   *  this is the core prompt the founder reads, not an accessibility caption. */
+  cue: StageCueProjection | null;
   mirror: boolean;
   zoom: number;
   verticalOffsetPercent: number;

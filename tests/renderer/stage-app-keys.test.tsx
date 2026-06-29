@@ -49,6 +49,7 @@ function projection(overrides: Partial<StageStateProjection> = {}): StageStatePr
     micState: 'closed',
     statusText: null,
     captions: null,
+    cue: null,
     mirror: false,
     zoom: 1,
     verticalOffsetPercent: 0,

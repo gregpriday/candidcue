@@ -52,6 +52,7 @@ function makeState(visualState: StageStateProjection['visualState']): StageState
     micState: 'closed',
     statusText: null,
     captions: null,
+    cue: null,
     mirror: false,
     zoom: 1,
     verticalOffsetPercent: 0,

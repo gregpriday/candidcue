@@ -28,7 +28,16 @@ export interface SpeakingMediaPlan {
 }
 
 export interface QuestionRecord {
+  /** The conversational question Mira speaks aloud (drives TTS). */
   text: string;
+  /**
+   * The on-screen teleprompter cue resolved for this turn. `displayHeadline` is
+   * the question rendered for the eye (model-authored, or `text` when the model
+   * supplied none); `displayPrompt` is an optional short coaching line on how to
+   * answer, or null. These drive the stage cue overlay during the live turn.
+   */
+  displayHeadline: string;
+  displayPrompt: string | null;
   type: QuestionType;
   targetCoverageItemIds: CoverageItemId[];
   modelId: string;

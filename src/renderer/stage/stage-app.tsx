@@ -24,6 +24,7 @@ const INITIAL_STATE: StageStateProjection = {
   micState: 'closed',
   statusText: null,
   captions: null,
+  cue: null,
   mirror: false,
   zoom: 1,
   verticalOffsetPercent: 0,

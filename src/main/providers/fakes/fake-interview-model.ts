@@ -177,6 +177,10 @@ export class FakeInterviewModel implements InterviewModelAdapter {
       currentSectionId: input.currentSectionId,
       shouldCloseAfterAnswer: input.endAfterTurn,
       qualityFlags: ['none'],
+      // A schema-valid teleprompter cue: a tightened, reading-friendly headline
+      // (drop the trailing '?' the spoken form carries) and no coaching steer.
+      // Tests that need a distinct headline/prompt script it via scriptedActions.
+      stageCue: { headline: text.replace(/\?+$/u, '').trim() || text, prompt: null },
     };
   }
 

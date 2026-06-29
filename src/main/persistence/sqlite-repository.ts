@@ -820,12 +820,27 @@ function mapCoverageRow(row: CoverageRow): SessionCoverageItem {
   };
 }
 
+/**
+ * Back-fill the teleprompter-cue fields on a parsed question record. They were
+ * added after some sessions were already persisted, and `question_json` is a
+ * raw JSON blob (no column migration), so older rows lack them. Default the
+ * headline to the spoken text and the prompt to null so every consumer sees a
+ * type-complete record.
+ */
+function normalizeQuestionRecord(raw: QuestionRecord): QuestionRecord {
+  return {
+    ...raw,
+    displayHeadline: raw.displayHeadline ?? raw.text,
+    displayPrompt: raw.displayPrompt ?? null,
+  };
+}
+
 function mapTurnRow(row: TurnRow): InterviewTurn {
   return {
     id: row.id,
     sessionId: row.session_id,
     ordinal: Number(row.ordinal),
-    question: JSON.parse(row.question_json) as QuestionRecord,
+    question: normalizeQuestionRecord(JSON.parse(row.question_json) as QuestionRecord),
     answer: row.answer_json ? (JSON.parse(row.answer_json) as AnswerRecord) : null,
     coverageDelta: JSON.parse(row.coverage_delta_json) as CoverageDelta[],
     state: row.state as InterviewTurn['state'],

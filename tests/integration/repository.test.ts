@@ -155,6 +155,8 @@ function sessionInput(
 function questionRecord(): QuestionRecord {
   return {
     text: 'Where did this all start?',
+    displayHeadline: 'Where did this all start?',
+    displayPrompt: null,
     type: 'opening',
     targetCoverageItemIds: ['c1'],
     modelId: 'gpt-5.5',

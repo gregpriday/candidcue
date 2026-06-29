@@ -196,7 +196,13 @@ export function DesignLab({ nav }: { nav: Navigator }): JSX.Element {
               <StatusPill tone="live">Live</StatusPill>
               <StatusPill tone="success">Mic ready</StatusPill>
             </div>
-            <p className={styles.studioQuestion}>What changed your mind about the original business model?</p>
+            {/* The live teleprompter cue: the on-screen question the founder
+                reads, plus the model's optional coaching steer beneath it —
+                exactly the pairing the stage shows while the interviewer speaks. */}
+            <div className={styles.studioCue}>
+              <p className={styles.studioQuestion}>What changed your mind about the original business model?</p>
+              <p className={styles.studioPrompt}>Share one specific turning point.</p>
+            </div>
           </div>
         </Section>
       </div>

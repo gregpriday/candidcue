@@ -125,6 +125,19 @@ const MIC_STATE: Record<SessionRuntimeState, 'closed' | 'armed' | 'active'> = {
   PAUSED: 'closed', RECOVERING: 'closed', FINISHING: 'closed', COMPLETED: 'closed', ERROR: 'closed',
 };
 
+/**
+ * Visual states where the current turn's teleprompter cue belongs on screen:
+ * from when Mira starts speaking the new question through the founder's answer,
+ * and held across a pause. Excludes the 'thinking' gap between turns — there
+ * `currentTurn` is still the just-answered question, so showing it would read as
+ * stale — and the standby / complete / error screens, which own the frame.
+ */
+const CUE_VISIBLE: ReadonlySet<StageStateProjection['visualState']> = new Set([
+  'speaking',
+  'listening',
+  'paused',
+]);
+
 /** How often the auto-endpoint loop re-evaluates while the user is silent. */
 const ENDPOINT_TICK_MS = 250;
 
@@ -1636,8 +1649,17 @@ export class SessionOrchestrator {
 
   private questionRecordFrom(text: string, action: NextInterviewerAction, source: QuestionRecord['source']): QuestionRecord {
     const hintRate = action.deliveryHint?.speakingRate;
+    const trimmedText = text.trim();
+    // Resolve the teleprompter cue once, at turn creation: prefer the model's
+    // authored headline, fall back to the spoken question (fallback-bank turns
+    // and pre-cue records carry no stageCue). An empty/whitespace prompt is
+    // normalized to null so the renderer never shows a blank coaching line.
+    const headline = action.stageCue?.headline?.trim();
+    const prompt = action.stageCue?.prompt?.trim();
     return {
-      text: text.trim(),
+      text: trimmedText,
+      displayHeadline: headline !== undefined && headline !== '' ? headline : trimmedText,
+      displayPrompt: prompt !== undefined && prompt !== '' ? prompt : null,
       type: action.questionType,
       targetCoverageItemIds: action.targetCoverageItemIds,
       modelId: this.ctx.models.interviewer,
@@ -1944,6 +1966,8 @@ export class SessionOrchestrator {
       micState: 'closed',
       statusText: STATUS_TEXT.COMPLETED ?? 'Interview complete',
       captions: this.ctx.captionsEnabled ? text : null,
+      // The closing sign-off is not a question turn — no teleprompter cue.
+      cue: null,
       mirror: this.ctx.session.settingsSnapshot.mirrorStage,
       zoom: this.ctx.session.settingsSnapshot.zoom,
       verticalOffsetPercent: this.ctx.session.settingsSnapshot.verticalOffsetPercent,
@@ -2107,15 +2131,32 @@ export class SessionOrchestrator {
   private publishStage(): void {
     // Captions show Mira's current spoken question while she speaks (spec §7.12,
     // CORR-10); the user's own transcript is never shown on stage by default.
-    const speaking = STAGE_VISUAL[this.state] === 'speaking';
+    const visualState = STAGE_VISUAL[this.state];
+    const speaking = visualState === 'speaking';
     const captions =
       this.ctx.captionsEnabled && speaking ? (this.currentTurn?.question.text ?? null) : null;
+    // The model-authored teleprompter cue rides the live turn (speaking → the
+    // founder's answer, held through a pause). Unlike captions it is not gated by
+    // the captions toggle — it is the core prompt the founder reads, and the
+    // renderer prefers it over the verbatim caption plate when both are present.
+    // `!currentTurnAnswered` keeps a just-answered question off screen if a
+    // post-commit pause lands while `currentTurn` still points at it (e.g. the
+    // next-question TTS failed and paused us — the same stale-turn case resume()
+    // handles at the `currentTurnAnswered` branch).
+    const cue =
+      this.currentTurn !== null && !this.currentTurnAnswered && CUE_VISIBLE.has(visualState)
+        ? {
+            headline: this.currentTurn.question.displayHeadline,
+            prompt: this.currentTurn.question.displayPrompt,
+          }
+        : null;
     const projection: StageStateProjection = {
       version: ++this.snapshotVersion,
-      visualState: STAGE_VISUAL[this.state],
+      visualState,
       micState: MIC_STATE[this.state],
       statusText: STATUS_TEXT[this.state] ?? null,
       captions,
+      cue,
       mirror: this.ctx.session.settingsSnapshot.mirrorStage,
       zoom: this.ctx.session.settingsSnapshot.zoom,
       verticalOffsetPercent: this.ctx.session.settingsSnapshot.verticalOffsetPercent,

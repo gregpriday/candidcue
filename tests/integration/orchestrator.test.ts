@@ -317,6 +317,80 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(reemitted?.canBegin).toBe(true);
   });
 
+  it('rides the teleprompter cue through the live turn and clears it on standby', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    const projections = vi.mocked(h.stage.setVisualState).mock.calls.map((c) => c[0]);
+
+    // No question is on screen before the interview starts.
+    const standby = projections.find((p) => p.visualState === 'standby');
+    expect(standby?.cue).toBeNull();
+
+    // While Mira speaks, the founder reads the cue. The opening is a cached
+    // (non-model) question, so the headline falls back to the spoken text and
+    // carries no coaching prompt — but the cue is present and populated.
+    const speaking = projections.find((p) => p.visualState === 'speaking');
+    expect(speaking?.cue?.headline).toBeTruthy();
+    expect(speaking?.cue?.prompt).toBeNull();
+
+    // The cue persists into the founder's answer (listening), not just Mira's
+    // turn, so the question stays readable while they respond.
+    const listening = projections.find((p) => p.visualState === 'listening');
+    expect(listening?.cue?.headline).toBe(speaking?.cue?.headline);
+  });
+
+  it('carries the model-authored headline and coaching prompt into the speaking cue', async () => {
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ stageCue: { headline: 'What changed your mind?', prompt: 'Name one moment' } }],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    // Drop the opening turn's projections; we only care about the model turn.
+    vi.mocked(h.stage.setVisualState).mockClear();
+
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    const projections = vi.mocked(h.stage.setVisualState).mock.calls.map((c) => c[0]);
+    const speaking = projections.find((p) => p.visualState === 'speaking');
+    expect(speaking?.cue).toEqual({ headline: 'What changed your mind?', prompt: 'Name one moment' });
+  });
+
+  it('clears the cue once the answer is committed and we pause with no next question (no stale headline)', async () => {
+    // Commit an answer, then pause while the next question is still being
+    // synthesized: the next turn is discarded mid-synthesis and we settle in
+    // PAUSED with `currentTurn` still pointing at the just-answered turn. PAUSED
+    // is otherwise a cue-visible state, so without the `currentTurnAnswered`
+    // gate the answered question's headline would linger on screen. (We assert
+    // via republishStage so the check runs after the commit has durably set
+    // `currentTurnAnswered`, not against a projection emitted mid-fan-out.)
+    const tts = new FakeTts({ durationMs: 7000, delayMs: 100 });
+    const synthSpy = vi.spyOn(tts, 'synthesize');
+    h = await makeHarness({ tts });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    const synthBefore = synthSpy.mock.calls.length;
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    const committed = h.orch.commitUserTurn('manual');
+    // Wait until the next-question synthesis has started, then pause mid-flight.
+    await vi.waitFor(() => {
+      expect(synthSpy.mock.calls.length).toBe(synthBefore + 1);
+    });
+    h.orch.pause();
+    await committed;
+    expect(h.orch.getState()).toBe('PAUSED');
+
+    vi.mocked(h.stage.setVisualState).mockClear();
+    h.orch.republishStage();
+    const reemitted = vi.mocked(h.stage.setVisualState).mock.calls.at(-1)?.[0];
+    expect(reemitted?.visualState).toBe('paused');
+    expect(reemitted?.cue).toBeNull();
+  });
+
   it('plays the opening and arms the user turn (mic opens only after speech)', async () => {
     await h.orch.prepareOpening();
     await h.orch.begin();

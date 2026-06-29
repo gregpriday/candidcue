@@ -113,6 +113,7 @@ export const nextInterviewerActionSchema = z.object({
     ]),
   ),
   deliveryHint: z.object({ speakingRate: z.number().min(0.85).max(1.15) }).optional(),
+  stageCue: z.object({ headline: z.string(), prompt: z.string().nullable() }).optional(),
 });
 
 export const transcriptCleanupResultSchema = z.object({

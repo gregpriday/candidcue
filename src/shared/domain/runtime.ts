@@ -138,6 +138,16 @@ export interface NextInterviewerAction {
    * before synthesis and falls back to the character default when absent.
    */
   deliveryHint?: { speakingRate: number };
+  /**
+   * What the founder sees on the stage teleprompter while Mira delivers this
+   * turn. `headline` is the question rendered for *reading* — a crisp on-screen
+   * form, distinct from the conversational `spokenText` Mira says aloud.
+   * `prompt` is an optional short coaching line on *how* to answer (e.g. "Think
+   * of one specific moment"), or null when no extra steer helps. Optional so
+   * fallback-bank questions degrade gracefully (headline = spokenText, no
+   * prompt); the orchestrator always resolves a concrete cue before display.
+   */
+  stageCue?: { headline: string; prompt: string | null };
 }
 
 export type QuestionViolation =
