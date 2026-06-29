@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Electron's V8 engine requires JIT, which the macOS hardened runtime
+       blocks unless this entitlement is granted. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <!-- The interview recorder captures microphone audio. Audio only — the app
+       never opens the camera (see src/main/security/permissions.ts), so no
+       video-capture entitlement is granted. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>
