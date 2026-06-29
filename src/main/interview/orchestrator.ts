@@ -877,11 +877,12 @@ export class SessionOrchestrator {
       this.lastCommittedAnswer = cleanedText;
 
       // 5. Decide: close, or build + play the next question.
-      // Hard safety cap (issue #17): if enough questions have been answered,
-      // force completion regardless of the model's decision — a model that keeps
+      // Hard safety cap (issue #17): if enough questions have been posed, force
+      // completion regardless of the model's decision — a model that keeps
       // returning `ask` must not run forever. Evaluated against turn.ordinal, the
-      // count of answered questions (nextOrdinal has not advanced yet here, so
-      // using it would close one turn early).
+      // count of questions posed so far (the current turn's ordinal; skipped turns
+      // count too, bounding total interview length). nextOrdinal has not advanced
+      // yet here, so using it would close one turn early.
       const hardCapReached = this.hardQuestionCapReached(turn.ordinal);
       // Surface the cap only when it is the DECISIVE close reason; if the model
       // also asked to close this turn, attribute the close to the model (the OR
@@ -904,7 +905,7 @@ export class SessionOrchestrator {
             'Reached the safety question limit. The interview ended automatically.';
           this.log.info('session.hard_question_cap_reached', {
             sessionId: this.ctx.session.id,
-            answeredQuestionCount: turn.ordinal,
+            questionCount: turn.ordinal,
             targetQuestionCount: this.ctx.targetQuestionCount,
             hardQuestionCap: this.hardQuestionCap(),
           });
@@ -1207,23 +1208,26 @@ export class SessionOrchestrator {
   }
 
   /**
-   * Hard safety cap on answered questions (issue #17). A model that keeps
-   * returning `ask` is forced to close once this many questions have been
-   * answered, independent of the model's own termination decision. Derived from
-   * the (immutable) soft target and memoized per session.
+   * Hard safety cap on the number of questions posed (issue #17). A model that
+   * keeps returning `ask` is forced to close once this many questions have been
+   * posed, independent of the model's own termination decision. Counting posed
+   * questions (not just answered ones) bounds total interview length even when
+   * turns are skipped, and it is resume-safe: the ordinal is restored from
+   * ctx.session.currentTurnOrdinal on reconstruction. Derived from the (immutable)
+   * soft target, floored at 1 so a degenerate target never collapses the cap to
+   * zero, and memoized per session.
    */
   private hardQuestionCap(): number {
     if (this.questionCountHardCap == null) {
-      this.questionCountHardCap = Math.ceil(
-        this.ctx.targetQuestionCount * this.r.questionCountHardCapFactor,
-      );
+      const target = Math.max(1, this.ctx.targetQuestionCount);
+      this.questionCountHardCap = Math.ceil(target * this.r.questionCountHardCapFactor);
     }
     return this.questionCountHardCap;
   }
 
-  /** True once enough questions have been answered to trip the safety cap. */
-  private hardQuestionCapReached(answeredQuestionCount: number): boolean {
-    return answeredQuestionCount >= this.hardQuestionCap();
+  /** True once enough questions have been posed to trip the safety cap. */
+  private hardQuestionCapReached(posedQuestionCount: number): boolean {
+    return posedQuestionCount >= this.hardQuestionCap();
   }
 
   // -- snapshots -----------------------------------------------------------
