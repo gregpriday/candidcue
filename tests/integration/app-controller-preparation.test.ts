@@ -26,11 +26,12 @@ class RecordingInterviewModel extends FakeInterviewModel {
   override async prepareProject(
     input: PrepareProjectInput,
     signal?: AbortSignal,
+    onProgress?: (charsGenerated: number) => void,
   ): Promise<PreparedInterviewOutput> {
     this.lastPrepareInput = input;
     this.lastSignal = signal;
     this.startedResolve?.();
-    return super.prepareProject(input, signal);
+    return super.prepareProject(input, signal, onProgress);
   }
 }
 

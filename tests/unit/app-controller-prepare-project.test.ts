@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AppController } from '@main/app-controller';
 import { NOOP_LOGGER } from '@main/interview/ports';
 import { compileProjectSource } from '@main/interview/source-compiler';
-import { CHANNELS } from '@shared/contracts';
+import { CHANNELS, type PrepareProgress } from '@shared/contracts';
 import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 import { AppError } from '@shared/errors/app-error';
 
@@ -22,8 +22,8 @@ const { prepareProjectSpy } = vi.hoisted(() => ({ prepareProjectSpy: vi.fn() }))
 vi.mock('@main/providers/factory', async () => {
   const { FakeInterviewModel } = await import('@main/providers/fakes');
   const fake = new FakeInterviewModel();
-  prepareProjectSpy.mockImplementation((input: never, signal?: never) =>
-    fake.prepareProject(input, signal),
+  prepareProjectSpy.mockImplementation((input: never, signal?: never, onProgress?: never) =>
+    fake.prepareProject(input, signal, onProgress),
   );
   const model = { prepareProject: prepareProjectSpy };
   return {
@@ -130,11 +130,17 @@ function build(opts: BuildOptions) {
   return { controller, savePlan, setActivePlan, updateProjectSourceHash, send };
 }
 
-/** Ordered list of prepare-progress phases emitted to the (fake) control window. */
+/**
+ * Ordered list of prepare-progress phases emitted to the (fake) control window,
+ * with consecutive duplicates collapsed. The streaming producer emits several
+ * `generating` events (the initial 0, then throttled character counts), so the
+ * phase *transitions* — not the raw event count — are what these tests assert.
+ */
 function emittedPhases(send: ReturnType<typeof vi.fn>): string[] {
-  return send.mock.calls
+  const phases = send.mock.calls
     .filter((call) => call[0] === CHANNELS.evtPrepareProgress)
     .map((call) => (call[1] as { phase: string }).phase);
+  return phases.filter((phase, index) => phase !== phases[index - 1]);
 }
 
 describe('AppController.prepareProject compiled-source budget', () => {
@@ -272,6 +278,28 @@ describe('AppController.prepareProject staged progress (issue #48)', () => {
       .map((c) => c[1] as { projectId: string });
     expect(payloads).not.toHaveLength(0);
     expect(payloads.every((p) => p.projectId === 'project-1')).toBe(true);
+  });
+
+  it('streams a positive generating character count as output is produced (issue #47)', async () => {
+    const { controller, send } = build({
+      documents: [{ id: DOC_ID, title: DOC_TITLE, content: 'A short interview source.' }],
+    });
+
+    const result = await controller.prepareProject('project-1');
+    expect(result.ok).toBe(true);
+
+    const progress = send.mock.calls
+      .filter((c) => c[0] === CHANNELS.evtPrepareProgress)
+      .map((c) => c[1] as PrepareProgress);
+    // The streaming responder reports incremental deltas, so at least one
+    // `generating` event carries a positive char count (not just the initial 0).
+    // This is the streaming producer filling the renderer's character readout —
+    // the piece main's progress UI already displays but its producer never fed.
+    expect(
+      progress.some((p) => p.phase === 'generating' && (p.charsGenerated ?? 0) > 0),
+    ).toBe(true);
+    // Every event is scoped to the project being prepared.
+    expect(progress.every((p) => p.projectId === 'project-1')).toBe(true);
   });
 
   it('emits reading → failed when the source gate rejects, before reaching the model', async () => {

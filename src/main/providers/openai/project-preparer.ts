@@ -22,6 +22,7 @@ export function createProjectPreparer(responder: StructuredResponder) {
   return async function prepareProject(
     input: PrepareProjectInput,
     signal?: AbortSignal,
+    onProgress?: (charsGenerated: number) => void,
   ): Promise<PreparedInterviewOutput> {
     const template = loadPromptBody(PROMPT_NAME);
     const system = fillTemplate(template, {
@@ -42,6 +43,7 @@ export function createProjectPreparer(responder: StructuredResponder) {
       schemaName: SCHEMA_NAME,
       schema: preparedInterviewOutputJsonSchema,
       ...(signal ? { signal } : {}),
+      ...(onProgress ? { onProgress } : {}),
     });
 
     return parseStructured(raw, preparedInterviewOutputSchema, 'prepareProject');
