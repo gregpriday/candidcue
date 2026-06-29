@@ -11,8 +11,10 @@ import { AppError, type PublicAppError } from '@shared/errors/app-error';
 import type { CredentialStore } from '@main/security/secrets';
 import type { EndpointMode, EndpointDecision } from '@shared/domain';
 import type {
+  CoverageStatus,
   InterviewBrief,
   InterviewerCharacter,
+  InterviewSection,
   MediaClip,
   SessionCoverageItem,
 } from '@shared/domain';
@@ -2275,8 +2277,36 @@ describe('SessionOrchestrator delivery-rate threading (#56)', () => {
   });
 });
 
-/** A two-section arc (problem → mechanism) for exercising narrative-arc wiring. */
-function arcBrief(): InterviewBrief {
+/**
+ * A two-section arc (problem → mechanism) for exercising narrative-arc wiring.
+ * Coverage statuses and array order are configurable so a single fixture can
+ * drive initialization, advancement, and reconstruction cases.
+ */
+function arcBrief(opts?: {
+  problemStatus?: CoverageStatus;
+  mechanismStatus?: CoverageStatus;
+  arcOrder?: 'forward' | 'reverse';
+}): InterviewBrief {
+  const sectionA: InterviewSection = {
+    id: 'section-A',
+    label: 'Problem',
+    objective: 'Establish the problem and audience.',
+    order: 0,
+    entryCondition: 'session start',
+    exitCriteria: ['problem articulated'],
+    coverageItemIds: ['cov-problem'],
+    suggestedQuestionTypes: ['opening', 'context'],
+  };
+  const sectionB: InterviewSection = {
+    id: 'section-B',
+    label: 'Mechanism',
+    objective: 'Explain how the product works.',
+    order: 1,
+    entryCondition: 'problem established',
+    exitCriteria: ['mechanism explained'],
+    coverageItemIds: ['cov-mechanism'],
+    suggestedQuestionTypes: ['mechanism', 'example'],
+  };
   return {
     title: 'Introducing CandidCue',
     oneSentencePremise: 'CandidCue helps solo presenters record natural answers.',
@@ -2291,7 +2321,7 @@ function arcBrief(): InterviewBrief {
         label: 'Problem and audience',
         objective: 'Explain who needs a conversational partner.',
         priority: 'must',
-        status: 'not_started',
+        status: opts?.problemStatus ?? 'not_started',
         evidenceTurnIds: [],
         maxFollowUps: 2,
         sourceRefs: [],
@@ -2301,34 +2331,13 @@ function arcBrief(): InterviewBrief {
         label: 'How it works',
         objective: 'Explain the core answer-capture loop.',
         priority: 'must',
-        status: 'not_started',
+        status: opts?.mechanismStatus ?? 'not_started',
         evidenceTurnIds: [],
         maxFollowUps: 2,
         sourceRefs: [],
       },
     ],
-    arc: [
-      {
-        id: 'section-A',
-        label: 'Problem',
-        objective: 'Establish the problem and audience.',
-        order: 0,
-        entryCondition: 'session start',
-        exitCriteria: ['problem articulated'],
-        coverageItemIds: ['cov-problem'],
-        suggestedQuestionTypes: ['opening', 'context'],
-      },
-      {
-        id: 'section-B',
-        label: 'Mechanism',
-        objective: 'Explain how the product works.',
-        order: 1,
-        entryCondition: 'problem established',
-        exitCriteria: ['mechanism explained'],
-        coverageItemIds: ['cov-mechanism'],
-        suggestedQuestionTypes: ['mechanism', 'example'],
-      },
-    ],
+    arc: opts?.arcOrder === 'reverse' ? [sectionB, sectionA] : [sectionA, sectionB],
     exclusions: [],
     openingQuestion: {
       text: 'What problem does CandidCue solve for someone recording a video alone?',
@@ -2426,5 +2435,93 @@ describe('SessionOrchestrator narrative arc (#67)', () => {
     expect(generateSpy.mock.calls[0]?.[0]?.currentSectionId).toBe('section-A');
     expect(generateSpy.mock.calls[1]?.[0]?.currentSectionId).toBe('section-A');
     expect(warnings).toContain('session.unknown_section_id_ignored');
+  });
+
+  it('advances the active section when the model proposes one on a skip', async () => {
+    // Skip generates a next action just like a committed turn; a section advance
+    // proposed there must persist into the following model call (#67).
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ currentSectionId: 'section-B' }],
+      questionTexts: ['How does the core loop actually work?', 'What surprised you most?'],
+    });
+    const generateSpy = vi.spyOn(model, 'generateNextAction');
+    h = await makeHarness({ model, brief: arcBrief() });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin(); // USER_ARMED, no speech yet → skip is legal
+    await h.orch.skipQuestion(); // model call #1 (section-A), proposes section-B
+    expect(h.orch.getState()).toBe('USER_ARMED');
+
+    // The next committed turn → model call #2 must carry the advanced section.
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(generateSpy.mock.calls[0]?.[0]?.currentSectionId).toBe('section-A');
+    expect(generateSpy.mock.calls[1]?.[0]?.currentSectionId).toBe('section-B');
+  });
+
+  it('advances the active section when the model proposes one on a resume-advance', async () => {
+    // Answer committed but next-question TTS fails → PAUSED with the answered
+    // flag set. resume() re-generates the next action (issue #9); a section
+    // advance proposed on THAT call must persist into the following model call.
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ currentSectionId: 'section-A' }, { currentSectionId: 'section-B' }],
+      questionTexts: ['How does the core loop actually work?', 'What surprised you most?'],
+    });
+    const generateSpy = vi.spyOn(model, 'generateNextAction');
+    const tts = new FakeTts({ durationMs: 7000, failAfterCalls: 2 });
+    h = await makeHarness({ model, tts, brief: arcBrief() });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual'); // call #1 holds section-A; turn-2 TTS fails
+    expect(h.orch.getState()).toBe('PAUSED');
+
+    tts.resetFailure();
+    await h.orch.resume(); // call #2 (resume-advance) proposes section-B
+    expect(h.orch.getState()).toBe('USER_ARMED');
+
+    // A subsequent committed turn → call #3 must carry the resume-advanced section.
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(generateSpy.mock.calls[1]?.[0]?.currentSectionId).toBe('section-A');
+    expect(generateSpy.mock.calls[2]?.[0]?.currentSectionId).toBe('section-B');
+  });
+
+  it('initializes the active section by arc order, not array order', async () => {
+    // Arc array is reversed (section-B first); both sections have open items.
+    // The constructor must sort by `order` and start at section-A (order 0).
+    const model = new FakeInterviewModel({ questionTexts: ['So what changed after that?'] });
+    const generateSpy = vi.spyOn(model, 'generateNextAction');
+    h = await makeHarness({ model, brief: arcBrief({ arcOrder: 'reverse' }) });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(generateSpy.mock.calls[0]?.[0]?.currentSectionId).toBe('section-A');
+  });
+
+  it('reconstructs the active section from coverage state (skips a fully-covered section)', async () => {
+    // Section A's only coverage item is already covered; section B's is open.
+    // The constructor must initialize the active section to B (resume path).
+    const model = new FakeInterviewModel({ questionTexts: ['So what changed after that?'] });
+    const generateSpy = vi.spyOn(model, 'generateNextAction');
+    h = await makeHarness({ model, brief: arcBrief({ problemStatus: 'covered' }) });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(generateSpy.mock.calls[0]?.[0]?.currentSectionId).toBe('section-B');
   });
 });

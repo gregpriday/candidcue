@@ -430,6 +430,7 @@ export class SessionOrchestrator {
       this.transition('resumeNextQuestion');
       try {
         const action = await this.generateNextActionOrFallback(this.lastAnswerText());
+        this.advanceSection(action.currentSectionId);
         await this.realizeNextQuestion(action, 'model');
       } catch (err) {
         // Stay PAUSED with the recoverable warning intact. The early return
@@ -497,6 +498,10 @@ export class SessionOrchestrator {
     this.transition('skipToNextQuestion', 'skip');
     await this.runExclusive(async () => {
       const action = await this.generateNextActionOrFallback(this.lastAnswerText());
+      // Honour a section advance proposed on the skip turn (#67) before the close
+      // decision, mirroring commitPipeline. bumpGeneration() already ran (above),
+      // so this action belongs to the skip's own generation — no stale guard.
+      this.advanceSection(action.currentSectionId);
       // A skip can land on a completion just like an answered turn: the model may
       // return `complete`, request close after the turn, or End After Turn may be
       // armed. Honour that here instead of realizing an empty question (#13) — the
