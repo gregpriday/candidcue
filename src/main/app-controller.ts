@@ -223,6 +223,13 @@ export class AppController {
       const compiled = compileProjectSource(
         orderedDocs.map((d) => ({ id: d.id, title: d.title, content: d.content })),
       );
+      // Budget the compiled envelope against the planner model's context window
+      // before the call (issue #70). Without this, an oversized source overflows
+      // the model context and surfaces as an opaque UNKNOWN error; reject early
+      // with an actionable message instead.
+      if (compiled.length > PROJECT_SOURCE_LIMITS.maxCompiledSourceCharacters) {
+        throw new AppError('SOURCE_TOO_LARGE');
+      }
       const prepared = await model.prepareProject({
         compiledSource: compiled,
         targetQuestionCount: resolveTargetQuestionCount(

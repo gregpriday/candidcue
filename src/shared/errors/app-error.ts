@@ -17,6 +17,7 @@ export type ErrorCode =
   | 'SESSION_STATE_CONFLICT'
   | 'EXPORT_FAILED'
   | 'VALIDATION_FAILED'
+  | 'SOURCE_TOO_LARGE'
   | 'UNKNOWN';
 
 export interface PublicAppError {
@@ -95,6 +96,8 @@ const DEFAULT_PUBLIC_MESSAGES: Record<ErrorCode, string> = {
   SESSION_STATE_CONFLICT: 'That action is not available in the current session state.',
   EXPORT_FAILED: 'The export could not be completed.',
   VALIDATION_FAILED: 'The request was invalid.',
+  SOURCE_TOO_LARGE:
+    "Your project's source material is too large to prepare. Shorten or split the sources, then try again.",
   UNKNOWN: 'Something went wrong.',
 };
 
