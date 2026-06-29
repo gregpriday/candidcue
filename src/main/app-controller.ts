@@ -81,7 +81,7 @@ import { interviewBriefSchema, preparedInterviewOutputSchema } from '@shared/sch
  * prepared under an older prompt (e.g. before the launch-video coverage beats)
  * is treated as stale and re-prepared rather than silently reused.
  */
-const CURRENT_PROMPT_VERSION = '1.1.0';
+export const CURRENT_PROMPT_VERSION = '1.1.0';
 
 export interface AppControllerDeps {
   repository: CandidCueRepository;

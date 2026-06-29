@@ -14,13 +14,14 @@ interface DepOverrides {
   hasKey?: () => boolean;
   getKey?: () => string | null;
   getProject?: () => Promise<unknown>;
+  getLatestPlan?: () => Promise<unknown>;
 }
 
 function makeController(overrides: DepOverrides): AppController {
   return new AppController({
     repository: {
       getProject: overrides.getProject ?? (async () => null),
-      getLatestPlan: async () => null,
+      getLatestPlan: overrides.getLatestPlan ?? (async () => null),
     } as never,
     credentials: {
       hasKey: overrides.hasKey ?? (() => false),
@@ -126,6 +127,21 @@ describe('runPrepareSession display check', () => {
     expect(check(state, 'manifest')?.status).toBe('failed');
     expect(check(state, 'manifest')?.detail).toMatch(/prepare/i);
     expect(state.canBegin).toBe(false);
+  });
+
+  it('passes the manifest check via the getLatestPlan fallback when no plan is active', async () => {
+    // The gate resolves the plan as `aggregate.activePlan ?? getLatestPlan()`.
+    // With no active plan, a current (1.1.0) latest plan whose source hash still
+    // matches must satisfy the manifest check through that fallback branch.
+    const aggregate = { project: { sourceHash: 'hash-1' }, activePlan: null };
+    const latest = { id: 'plan-2', status: 'ready', sourceHash: 'hash-1', promptVersion: '1.1.0' };
+    const state = await makeController({
+      isDisplayConnected: () => true,
+      getProject: async () => aggregate,
+      getLatestPlan: async () => latest,
+    }).prepareSession(input('display-9'));
+
+    expect(check(state, 'manifest')?.status).toBe('passed');
   });
 
   it('emits exactly the checks declared by the narrowed contract, in order', async () => {
