@@ -482,10 +482,19 @@ export function StageApp(): JSX.Element {
         stateRef.current.visualState,
         stateRef.current.micState,
       );
-      setCommandFeedback((prev) => ({
-        kind: useful ? 'ok' : 'rejected',
-        token: (prev?.token ?? 0) + 1,
-      }));
+      // A COMMIT only applies while the mic is open; whenever it's closed (the
+      // between-turns working gap, Mira speaking, paused, standby…) a SPACE press
+      // is a benign no-op, never an error. Don't flash the red "Not now" for it —
+      // that read as "I press space and it just stops", and during the gap the
+      // persistent status already narrates the work. Other keys keep their
+      // wrong-moment reject cue so a genuinely mistimed press isn't silent.
+      const isRedundantCommit = command.type === 'COMMIT' && !useful;
+      if (!isRedundantCommit) {
+        setCommandFeedback((prev) => ({
+          kind: useful ? 'ok' : 'rejected',
+          token: (prev?.token ?? 0) + 1,
+        }));
+      }
       // Send regardless: the orchestrator is the source of truth and tolerates a
       // command that a briefly-lagging projection made look illegal.
       sendCommand(command);

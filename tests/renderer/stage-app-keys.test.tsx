@@ -127,9 +127,27 @@ describe('StageApp — keypress confirm/reject', () => {
     await mountStage();
     pushState(projection({ visualState: 'speaking', micState: 'closed' }));
 
-    fireEvent.keyDown(window, { code: 'Space', key: ' ' });
+    // REPEAT is illegal while Mira speaks, so it flashes a reject cue — but is
+    // still sent, because the orchestrator is the source of truth.
+    fireEvent.keyDown(window, { code: 'KeyR', key: 'r' });
 
     expect(screen.getByText('Not now')).toHaveAttribute('data-kind', 'rejected');
+    expect(send).toHaveBeenCalledWith({ type: 'REPEAT' });
+  });
+
+  it('does not flash a reject when SPACE is pressed during the working gap', async () => {
+    // After the founder answers, the mic closes while the next question is
+    // prepared. A second SPACE is a benign no-op (the answer is already in), so
+    // it must NOT show the red "Not now" — that read as "I press space and it
+    // just stops". It is still SENT so a briefly-lagging projection can't
+    // swallow a real commit.
+    await mountStage();
+    pushState(projection({ visualState: 'thinking', micState: 'closed' }));
+
+    fireEvent.keyDown(window, { code: 'Space', key: ' ' });
+
+    expect(screen.queryByText('Not now')).toBeNull();
+    expect(screen.queryByText('Got it')).toBeNull();
     expect(send).toHaveBeenCalledWith({ type: 'COMMIT', reason: 'manual' });
   });
 
