@@ -20,6 +20,7 @@ export type EndpointDecisionReason =
   | 'classifier'
   | 'short_answer'
   | 'hard_silence'
+  | 'continuation_hold'
   | 'wait'
   | 'too_short'
   | 'empty';
@@ -134,6 +135,13 @@ function isExplicitlyIncomplete(classifier: EndpointDecision | null): boolean {
  *  6. Very short speech with no confident completion is treated as a stray blip
  *     ('too_short').
  *  7. Otherwise keep listening ('wait').
+ *
+ * Continuation hold (spec §14.3): a transcript ending on a dangling
+ * conjunction/phrase ({@link endsWithContinuation}) holds back the *borderline*
+ * commits — the short-answer fast path (step 4) and both hard-silence branches
+ * (step 5) — reporting 'continuation_hold' instead of committing. It never
+ * suppresses the high-confidence classifier (step 3): a confident completion is
+ * not borderline, so the hint cannot override it.
  */
 export function decideEndpoint(input: {
   mode: EndpointMode;
@@ -155,6 +163,10 @@ export function decideEndpoint(input: {
   const thresholds = thresholdsFor(mode);
   const highConfidence = isHighConfidenceCompletion(input.classifier, thresholds);
 
+  // Weak continuation signal (spec §14.3): held back the borderline commits in
+  // steps 4 and 5 below. Computed once on the known-non-empty transcript.
+  const hasContinuation = endsWithContinuation(input.transcript);
+
   // 3. Classifier-driven commit: confident completion past the total-silence floor.
   if (highConfidence && input.silenceMs >= thresholds.minTotalSilenceMs) {
     return { commit: true, reason: 'classifier' };
@@ -174,20 +186,27 @@ export function decideEndpoint(input: {
     !isExplicitlyIncomplete(input.classifier) &&
     input.silenceMs >= thresholds.minTotalSilenceMs
   ) {
-    return { commit: true, reason: 'short_answer' };
+    return hasContinuation
+      ? { commit: false, reason: 'continuation_hold' }
+      : { commit: true, reason: 'short_answer' };
   }
 
   // 5. Hard-silence ceiling.
   if (input.silenceMs >= RUNTIME_DEFAULTS.endpointHardSilenceMs) {
     if (mode === 'balanced') {
       // Balanced commits anything non-empty unless the classifier explicitly
-      // judged the answer incomplete.
+      // judged the answer incomplete — or the turn trails off mid-thought.
       if (!isExplicitlyIncomplete(input.classifier)) {
-        return { commit: true, reason: 'hard_silence' };
+        return hasContinuation
+          ? { commit: false, reason: 'continuation_hold' }
+          : { commit: true, reason: 'hard_silence' };
       }
     } else if (highConfidence) {
-      // Conservative only force-commits on hard silence with prior confidence.
-      return { commit: true, reason: 'hard_silence' };
+      // Conservative only force-commits on hard silence with prior confidence,
+      // and still yields to a trailing continuation.
+      return hasContinuation
+        ? { commit: false, reason: 'continuation_hold' }
+        : { commit: true, reason: 'hard_silence' };
     }
     // Conservative without confidence (or balanced with an incomplete
     // classifier) keeps waiting for more speech.
