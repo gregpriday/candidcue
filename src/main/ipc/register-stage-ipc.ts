@@ -17,6 +17,7 @@ const stageCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('RESUME') }),
   z.object({ type: z.literal('REPEAT') }),
   z.object({ type: z.literal('SKIP') }),
+  z.object({ type: z.literal('RETAKE') }),
   z.object({ type: z.literal('EXIT_STAGE') }),
   z.object({ type: z.literal('END_AFTER_TURN') }),
 ]);
@@ -80,6 +81,7 @@ export function mapStageCommand(cmd: z.infer<typeof stageCommandSchema>): Sessio
     case 'RESUME': return { type: 'RESUME_SESSION' };
     case 'REPEAT': return { type: 'REPEAT_QUESTION' };
     case 'SKIP': return { type: 'SKIP_QUESTION' };
+    case 'RETAKE': return { type: 'RETAKE_TURN' };
     case 'EXIT_STAGE': return { type: 'PAUSE_SESSION' };
     case 'END_AFTER_TURN': return { type: 'END_AFTER_TURN' };
     default: return null;

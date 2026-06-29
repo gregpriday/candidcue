@@ -159,6 +159,14 @@ export function OperatorConsole({ nav, sessionId }: OperatorConsoleProps): JSX.E
           event.preventDefault();
           void sendCommand({ type: 'SKIP_QUESTION' });
         }
+        return;
+      }
+      if (key === 't') {
+        // Retake: discard the in-progress answer and re-ask the same question.
+        if (controls?.canRetake) {
+          event.preventDefault();
+          void sendCommand({ type: 'RETAKE_TURN' });
+        }
       }
     };
     window.addEventListener('keydown', handler);
@@ -329,6 +337,16 @@ function OperatorView({ snapshot, commandError, onCommand, onExit }: OperatorVie
             aria-label="Skip question"
           >
             <Icon name="skip" size={18} />
+          </button>
+          <button
+            type="button"
+            className={styles.iconButton}
+            onClick={() => onCommand({ type: 'RETAKE_TURN' })}
+            disabled={!controls.canRetake}
+            title="Retake answer (T)"
+            aria-label="Retake answer"
+          >
+            <Icon name="retake" size={18} />
           </button>
           <button
             type="button"

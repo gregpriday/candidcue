@@ -24,6 +24,7 @@ export const sessionCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('RESUME_SESSION') }),
   z.object({ type: z.literal('REPEAT_QUESTION') }),
   z.object({ type: z.literal('SKIP_QUESTION') }),
+  z.object({ type: z.literal('RETAKE_TURN') }),
   z.object({ type: z.literal('END_AFTER_TURN') }),
   z.object({ type: z.literal('END_NOW') }),
   z.object({ type: z.literal('RETRY_RECOVERY') }),
@@ -117,6 +118,7 @@ export const stageCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('RESUME') }),
   z.object({ type: z.literal('REPEAT') }),
   z.object({ type: z.literal('SKIP') }),
+  z.object({ type: z.literal('RETAKE') }),
   z.object({ type: z.literal('EXIT_STAGE') }),
   z.object({ type: z.literal('END_AFTER_TURN') }),
 ]);

@@ -5,10 +5,11 @@ import {
   canCommitUserTurn,
   canPlayQuestion,
   canTransition,
+  isCommandLegal,
   isMicGateOpen,
   nextState,
 } from '@main/interview/state-machine';
-import type { TransitionTrigger } from '@main/interview/state-machine';
+import type { CommandContext, TransitionTrigger } from '@main/interview/state-machine';
 
 const ALL_STATES: SessionRuntimeState[] = [
   'IDLE',
@@ -117,6 +118,7 @@ describe('nextState / canTransition', () => {
       'resumeBeforeStart',
       'resumeUserTurn',
       'resumePreparedQuestion',
+      'retakeTurn',
       'recovered',
       'recoveryFailed',
       'operatorRetry',
@@ -146,6 +148,96 @@ describe('endpoint / user-turn transitions', () => {
 
   it('speechResumed returns to USER_SPEAKING', () => {
     expect(nextState('ENDPOINT_CANDIDATE', 'speechResumed')).toBe('USER_SPEAKING');
+  });
+});
+
+describe('retake transitions (#62)', () => {
+  const RETAKE_SOURCES: SessionRuntimeState[] = [
+    'USER_ARMED',
+    'USER_SPEAKING',
+    'ENDPOINT_CANDIDATE',
+    'PAUSED',
+  ];
+
+  it('retakeTurn re-buffers the same question from every source state', () => {
+    for (const state of RETAKE_SOURCES) {
+      expect(nextState(state, 'retakeTurn')).toBe('INTERVIEWER_BUFFERING');
+    }
+  });
+
+  it('targets INTERVIEWER_BUFFERING — the same destination as replayQuestion', () => {
+    expect(nextState('USER_ARMED', 'retakeTurn')).toBe(nextState('USER_ARMED', 'replayQuestion'));
+    expect(nextState('PAUSED', 'retakeTurn')).toBe(nextState('PAUSED', 'replayQuestion'));
+  });
+
+  it('is illegal from states with no live or paused turn to discard', () => {
+    const illegal: SessionRuntimeState[] = [
+      'IDLE',
+      'READY',
+      'INTERVIEWER_THINKING',
+      'INTERVIEWER_BUFFERING',
+      'INTERVIEWER_SPEAKING',
+      'TURN_FINALIZING',
+      'FINISHING',
+      'COMPLETED',
+      'ERROR',
+    ];
+    for (const state of illegal) {
+      expect(nextState(state, 'retakeTurn')).toBeNull();
+    }
+  });
+});
+
+describe('RETAKE_TURN command legality (#62)', () => {
+  function cmdCtx(overrides: Partial<CommandContext> = {}): CommandContext {
+    return {
+      state: 'USER_SPEAKING',
+      commitInFlight: false,
+      hasCurrentTurn: true,
+      userHasSpoken: true,
+      currentTurnAnswered: false,
+      ...overrides,
+    };
+  }
+
+  it('is legal in every mic-open state once the creator has spoken', () => {
+    for (const state of MIC_OPEN_STATES) {
+      expect(isCommandLegal('RETAKE_TURN', cmdCtx({ state }))).toBe(true);
+    }
+  });
+
+  it('is legal from a pause taken mid-answer', () => {
+    expect(isCommandLegal('RETAKE_TURN', cmdCtx({ state: 'PAUSED' }))).toBe(true);
+  });
+
+  it('is illegal before any speech exists (the complement of Repeat)', () => {
+    expect(isCommandLegal('RETAKE_TURN', cmdCtx({ userHasSpoken: false }))).toBe(false);
+    // USER_ARMED with no speech yet is exactly where Repeat is legal, not Retake.
+    expect(
+      isCommandLegal('RETAKE_TURN', cmdCtx({ state: 'USER_ARMED', userHasSpoken: false })),
+    ).toBe(false);
+    expect(
+      isCommandLegal('REPEAT_QUESTION', cmdCtx({ state: 'USER_ARMED', userHasSpoken: false })),
+    ).toBe(true);
+  });
+
+  it('is illegal once the answer is committed — re-asking would wipe it (#9)', () => {
+    expect(isCommandLegal('RETAKE_TURN', cmdCtx({ state: 'PAUSED', currentTurnAnswered: true }))).toBe(
+      false,
+    );
+  });
+
+  it('is illegal while a commit is already in flight', () => {
+    expect(isCommandLegal('RETAKE_TURN', cmdCtx({ commitInFlight: true }))).toBe(false);
+  });
+
+  it('is illegal when there is no current turn', () => {
+    expect(isCommandLegal('RETAKE_TURN', cmdCtx({ hasCurrentTurn: false }))).toBe(false);
+  });
+
+  it('is illegal from a non-mic-open, non-paused state even with speech', () => {
+    expect(isCommandLegal('RETAKE_TURN', cmdCtx({ state: 'TURN_FINALIZING' }))).toBe(false);
+    expect(isCommandLegal('RETAKE_TURN', cmdCtx({ state: 'INTERVIEWER_SPEAKING' }))).toBe(false);
   });
 });
 

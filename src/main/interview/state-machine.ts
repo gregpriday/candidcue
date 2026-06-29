@@ -30,6 +30,10 @@ export type TransitionTrigger =
   // one (Skip), both only legal before the creator has started answering.
   | 'replayQuestion'
   | 'skipToNextQuestion'
+  // Operator: discard the in-progress answer and re-deliver the SAME question
+  // (Retake), the complement of Repeat — only legal AFTER the creator has begun
+  // answering. Re-buffers the cached question just like replayQuestion (#62).
+  | 'retakeTurn'
   // Finalization
   | 'transcriptStored'
   | 'completionSelected'
@@ -99,6 +103,9 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
     // but only before any speech exists for this turn (guarded by the caller).
     replayQuestion: 'INTERVIEWER_BUFFERING',
     skipToNextQuestion: 'INTERVIEWER_THINKING',
+    // Retake re-delivers the same question after a paused/resumed mic-open turn
+    // where speech already exists (guarded by the caller on userHasSpoken) (#62).
+    retakeTurn: 'INTERVIEWER_BUFFERING',
     completionSelected: 'FINISHING',
     pause: 'PAUSED',
     deviceOrProviderNeedsRecovery: 'RECOVERING',
@@ -107,6 +114,8 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
   USER_SPEAKING: {
     speechStopped: 'ENDPOINT_CANDIDATE',
     manualCommit: 'TURN_FINALIZING',
+    // Discard this in-progress answer and re-ask the same question (#62).
+    retakeTurn: 'INTERVIEWER_BUFFERING',
     completionSelected: 'FINISHING',
     pause: 'PAUSED',
     deviceOrProviderNeedsRecovery: 'RECOVERING',
@@ -116,6 +125,8 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
     speechResumed: 'USER_SPEAKING',
     classifierWait: 'ENDPOINT_CANDIDATE',
     manualCommit: 'TURN_FINALIZING',
+    // Discard this in-progress answer and re-ask the same question (#62).
+    retakeTurn: 'INTERVIEWER_BUFFERING',
     completionSelected: 'FINISHING',
     pause: 'PAUSED',
     deviceOrProviderNeedsRecovery: 'RECOVERING',
@@ -142,6 +153,10 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
     // than replaying the answered turn (issue #9). Mirrors skipToNextQuestion.
     resumeNextQuestion: 'INTERVIEWER_THINKING',
     replayQuestion: 'INTERVIEWER_BUFFERING',
+    // Retake from a pause taken mid-answer: re-deliver the same question rather
+    // than re-arming the half-spoken turn (guarded by the caller on
+    // userHasSpoken && !currentTurnAnswered) (#62).
+    retakeTurn: 'INTERVIEWER_BUFFERING',
     completionSelected: 'FINISHING',
     deviceOrProviderNeedsRecovery: 'RECOVERING',
   },
@@ -226,6 +241,12 @@ export interface CommandContext {
   hasCurrentTurn: boolean;
   /** Whether the creator has produced speech for the current turn. */
   userHasSpoken: boolean;
+  /**
+   * Whether the current turn's answer is already committed (but the next turn is
+   * not yet built). Retake must be illegal here — re-asking an answered turn
+   * would discard the committed answer (cf. the same guard in resume(), #9).
+   */
+  currentTurnAnswered: boolean;
 }
 
 /** Every operator/stage command, in a stable order for the projection. */
@@ -237,6 +258,7 @@ export const ALL_COMMANDS: readonly SessionCommandType[] = [
   'RESUME_SESSION',
   'REPEAT_QUESTION',
   'SKIP_QUESTION',
+  'RETAKE_TURN',
   'END_AFTER_TURN',
   'END_NOW',
   'RETRY_RECOVERY',
@@ -293,6 +315,18 @@ export function isCommandLegal(command: SessionCommandType, ctx: CommandContext)
     case 'SKIP_QUESTION':
       // Swap the delivered question for a new one, only before any speech.
       return ctx.hasCurrentTurn && !ctx.userHasSpoken && state === 'USER_ARMED';
+    case 'RETAKE_TURN':
+      // Discard the in-progress answer and re-deliver the same question — the
+      // complement of Repeat. Legal once the creator has begun answering, while
+      // the mic is open, or from a pause taken mid-answer. Never once the answer
+      // is committed (that would wipe it) nor while a commit is in flight.
+      return (
+        ctx.hasCurrentTurn &&
+        !ctx.commitInFlight &&
+        !ctx.currentTurnAnswered &&
+        ctx.userHasSpoken &&
+        (isMicGateOpen(state) || state === 'PAUSED')
+      );
     case 'END_AFTER_TURN':
       // Finish after the answer the creator currently owns is committed.
       return isMicGateOpen(state) || state === 'TURN_FINALIZING';

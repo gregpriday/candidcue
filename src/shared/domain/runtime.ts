@@ -42,6 +42,7 @@ export type SessionCommand =
   | { type: 'RESUME_SESSION' }
   | { type: 'REPEAT_QUESTION' }
   | { type: 'SKIP_QUESTION' }
+  | { type: 'RETAKE_TURN' }
   | { type: 'END_AFTER_TURN' }
   | { type: 'END_NOW' }
   | { type: 'RETRY_RECOVERY' };

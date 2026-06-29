@@ -49,6 +49,10 @@ describe('commandForKey', () => {
     expect(commandForKey(key('KeyS'), 'listening')).toEqual({ type: 'SKIP' });
   });
 
+  it('maps KeyT to RETAKE', () => {
+    expect(commandForKey(key('KeyT'), 'listening')).toEqual({ type: 'RETAKE' });
+  });
+
   it('maps Shift+Escape to EXIT_STAGE', () => {
     expect(commandForKey(key('Escape', { key: 'Escape', shiftKey: true }), 'speaking')).toEqual({
       type: 'EXIT_STAGE',
