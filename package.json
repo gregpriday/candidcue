@@ -17,7 +17,7 @@
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--experimental-sqlite vitest run",
     "test:watch": "NODE_OPTIONS=--experimental-sqlite vitest",
-    "test:providers": "NODE_OPTIONS=--experimental-sqlite vitest run tests/provider-contract",
+    "test:providers": "NODE_OPTIONS=--experimental-sqlite vitest run --config vitest.providers.config.ts",
     "eval": "tsx tests/evals/run-interview-evals.ts",
     "media:index": "tsx scripts/index-media.ts",
     "media:validate": "tsx scripts/validate-media.ts",
