@@ -64,7 +64,7 @@ describe('HomeScreen — resumable sessions', () => {
 
     // Both the row and its trailing CTA carry the same per-session label; either
     // resumes the same session.
-    await user.click(screen.getAllByRole('button', { name: 'Resume Founding story' })[0]);
+    await user.click(screen.getAllByRole('button', { name: 'Resume Founding story' })[0]!);
 
     expect(nav.go).toHaveBeenCalledWith({ name: 'preflight', projectId: 'proj-42' });
     expect(nav.go).not.toHaveBeenCalledWith(expect.objectContaining({ name: 'operator' }));
@@ -83,8 +83,8 @@ describe('HomeScreen — resumable sessions', () => {
     render(<HomeScreen nav={nav} />);
 
     // Click the trailing CTA for each row (the row button shares the same label).
-    await user.click((await screen.findAllByRole('button', { name: 'Resume Alpha' }))[1]);
-    await user.click(screen.getAllByRole('button', { name: 'Resume Beta' })[1]);
+    await user.click((await screen.findAllByRole('button', { name: 'Resume Alpha' }))[1]!);
+    await user.click(screen.getAllByRole('button', { name: 'Resume Beta' })[1]!);
 
     expect(nav.go).toHaveBeenNthCalledWith(1, { name: 'preflight', projectId: 'proj-1' });
     expect(nav.go).toHaveBeenNthCalledWith(2, { name: 'preflight', projectId: 'proj-2' });
