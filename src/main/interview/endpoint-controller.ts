@@ -59,17 +59,24 @@ export function autoCommitAllowed(mode: EndpointMode): boolean {
  * otherwise-borderline commit.
  */
 export function endsWithContinuation(transcript: string): boolean {
-  const lower = transcript.toLowerCase().trim();
-  if (lower.length === 0) return false;
+  // Normalize once — lowercase, replace punctuation with spaces, collapse runs —
+  // and match both the phrase and the final word against it. Doing the phrase
+  // check on the cleaned string means trailing punctuation ("for example.",
+  // "and...") can no longer hide an otherwise-matching continuation.
+  const normalized = transcript
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normalized.length === 0) return false;
 
   // Phrase match: transcript ends with a known trailing phrase.
   for (const phrase of CONTINUATION_PHRASES) {
-    if (lower.endsWith(phrase)) return true;
+    if (normalized.endsWith(phrase)) return true;
   }
 
-  // Word match: the final word (stripped of trailing punctuation) is a known
-  // continuation conjunction/article.
-  const words = lower.replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter((w) => w.length > 0);
+  // Word match: the final word is a known continuation conjunction/article.
+  const words = normalized.split(' ');
   const lastWord = words[words.length - 1];
   if (lastWord !== undefined && CONTINUATION_WORDS.includes(lastWord)) return true;
 

@@ -49,6 +49,11 @@ describe('endsWithContinuation', () => {
     expect(endsWithContinuation('I was thinking, and...')).toBe(true);
   });
 
+  it('detects a trailing phrase even with trailing punctuation', () => {
+    expect(endsWithContinuation('There are many cases, for example.')).toBe(true);
+    expect(endsWithContinuation('The reason is...')).toBe(true);
+  });
+
   it('is case-insensitive', () => {
     expect(endsWithContinuation('We talked AND')).toBe(true);
     expect(endsWithContinuation('FOR EXAMPLE')).toBe(true);
@@ -539,6 +544,48 @@ describe('decideEndpoint', () => {
         classifier: null,
       });
       expect(result).toEqual({ commit: true, reason: 'hard_silence' });
+    });
+
+    it('is a hint, not a decider — below the silence floor it never holds on its own', () => {
+      // The continuation guard only fires inside a commit branch. Below the
+      // floor there is no commit to suppress, so a trailing "because" falls
+      // through to the ordinary blip handling, not 'continuation_hold'.
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1499,
+        speechMs: 800,
+        transcript: 'because',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: false, reason: 'too_short' });
+    });
+
+    it('holds a low-confidence positive classifier at hard silence', () => {
+      // A positive-but-not-confident classifier does not satisfy step 3, so the
+      // balanced hard-silence branch owns the decision — and the continuation
+      // guard holds it.
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: hard,
+        speechMs: 3000,
+        transcript: 'because',
+        classifier: decision({ shouldCommit: true, completeProbability: 0.5 }),
+      });
+      expect(result).toEqual({ commit: false, reason: 'continuation_hold' });
+    });
+
+    it('holds a common trailing-word answer per the current word list (known tradeoff)', () => {
+      // 'so' is in CONTINUATION_WORDS, so "I think so" is held rather than
+      // committed. Pinned deliberately: whether such common closers belong in
+      // the list is a separate product tuning question (see #55 follow-up).
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 600,
+        transcript: 'I think so',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: false, reason: 'continuation_hold' });
     });
   });
 
