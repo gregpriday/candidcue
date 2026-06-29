@@ -118,6 +118,7 @@ export const stageCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('REPEAT') }),
   z.object({ type: z.literal('SKIP') }),
   z.object({ type: z.literal('EXIT_STAGE') }),
+  z.object({ type: z.literal('END_AFTER_TURN') }),
 ]);
 
 export const openAudioPortInputSchema = z.object({

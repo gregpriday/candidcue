@@ -1,0 +1,120 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  /* Above StatusOverlay (z-index 3); pointer-events:auto overrides the parent
+     overlay's pointer-events:none so the dialog is clickable. */
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  pointer-events: auto;
+  background: rgba(8, 9, 12, 0.68);
+  backdrop-filter: blur(3px);
+  font-family: var(--font-ui);
+  animation: endOverlayIn var(--motion-slow) var(--ease-out);
+}
+
+/* A grouped surface floating on a shadow — a hairline edge, not a firm outline. */
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 420px;
+  padding: var(--space-6);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-pop);
+  animation: endPanelIn var(--motion-slow) var(--ease-out);
+}
+
+@keyframes endOverlayIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes endPanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.heading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.title {
+  margin: 0;
+  font-size: var(--text-xl);
+  line-height: 26px;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+.description {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: 22px;
+  color: var(--text-secondary);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-faint);
+}
+
+/* Shared button shape — premium-flat: a darker 1px border "lip", a small
+   shadow lift, and a subtle press, no gradient or glow. */
+.ghost,
+.danger {
+  padding: 9px 16px;
+  font-family: inherit;
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: 1;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  transition:
+    background var(--motion-slow) var(--ease-out),
+    border-color var(--motion-slow) var(--ease-out),
+    transform var(--motion-slow) var(--ease-out);
+}
+.ghost:active,
+.danger:active {
+  transform: scale(0.98);
+}
+
+.ghost {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  color: var(--text-primary);
+}
+.ghost:hover {
+  background: var(--bg-panel);
+  border-color: var(--border-strong);
+}
+
+.danger {
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+.danger:hover {
+  background: var(--danger);
+  color: #ffffff;
+}

@@ -64,6 +64,10 @@ describe('commandForKey', () => {
     expect(commandForKey(key('Enter'), 'listening')).toBeNull();
   });
 
+  it('returns null for Shift+E (the end-confirm trigger is stage-app state, not a direct command)', () => {
+    expect(commandForKey(key('KeyE', { key: 'E', shiftKey: true }), 'listening')).toBeNull();
+  });
+
   it('ignores modifier chords so OS shortcuts never toggle the session', () => {
     expect(commandForKey(key('KeyP', { metaKey: true }), 'paused')).toBeNull();
     expect(commandForKey(key('KeyP', { ctrlKey: true }), 'listening')).toBeNull();
