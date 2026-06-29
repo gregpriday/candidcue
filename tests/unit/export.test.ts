@@ -228,6 +228,12 @@ describe('computeSessionDurationLabel', () => {
     ).toBe('—');
   });
 
+  it('formats a degenerate zero-length session as 0s (start === end is valid)', () => {
+    expect(
+      computeSessionDurationLabel('2026-06-23T10:00:00.000Z', '2026-06-23T10:00:00.000Z'),
+    ).toBe('0s');
+  });
+
   it('formats sub-minute durations as Ns', () => {
     expect(
       computeSessionDurationLabel('2026-06-23T10:00:00.000Z', '2026-06-23T10:00:45.000Z'),
@@ -293,6 +299,34 @@ describe('buildMarkdownExport', () => {
       }),
     );
     expect(md).not.toContain('[0:12]');
+    // The spoken duration is independent of the seek anchor, so the heading
+    // still carries `(8s)` with no timecode bracket at all.
+    expect(md).toContain('## 1. context (8s)\n');
+  });
+
+  it('computes each turn timecode independently across multiple turns', () => {
+    const md = buildMarkdownExport(
+      makeInput({
+        // Session starts 10:00:00; speech starts at +12s, +2m15s, +1h01m01s.
+        turns: [
+          makeTurn({
+            ordinal: 1,
+            answer: makeAnswer({ speechStartedAt: '2026-06-23T10:00:12.000Z', durationMs: 8000 }),
+          }),
+          makeTurn({
+            ordinal: 2,
+            answer: makeAnswer({ speechStartedAt: '2026-06-23T10:02:15.000Z', durationMs: 30_000 }),
+          }),
+          makeTurn({
+            ordinal: 3,
+            answer: makeAnswer({ speechStartedAt: '2026-06-23T11:01:01.000Z', durationMs: 5000 }),
+          }),
+        ],
+      }),
+    );
+    expect(md).toContain('## 1. context [0:12] (8s)');
+    expect(md).toContain('## 2. context [2:15] (30s)');
+    expect(md).toContain('## 3. context [1:01:01] (5s)');
   });
 
   it('renders no timecode or duration for an unanswered turn', () => {
@@ -616,6 +650,41 @@ describe('buildJsonExport', () => {
     expect(out.turns[0]?.offsetFromStartMs).toBe(0);
     // The raw ISO value is unchanged — losslessness is preserved.
     expect(out.turns[0]?.answer?.speechStartedAt).toBe('2026-06-23T09:59:59.000Z');
+  });
+
+  it('computes offsetFromStartMs independently per turn', () => {
+    const out = buildJsonExport(
+      makeInput({
+        turns: [
+          makeTurn({ ordinal: 1, answer: makeAnswer({ speechStartedAt: '2026-06-23T10:00:12.000Z' }) }),
+          makeTurn({ ordinal: 2, answer: makeAnswer({ speechStartedAt: '2026-06-23T10:02:15.000Z' }) }),
+          makeTurn({ ordinal: 3, answer: makeAnswer({ speechStartedAt: '2026-06-23T11:01:01.000Z' }) }),
+        ],
+      }),
+    );
+    expect(out.turns.map((t) => t.offsetFromStartMs)).toEqual([12_000, 135_000, 3_661_000]);
+  });
+
+  it('drops unknown/sensitive answer fields via the explicit projection (no spread)', () => {
+    // Poison the answer with fields the portable projection must never carry.
+    // The exporter builds its output field-by-field, so injected internals are
+    // structurally dropped — this guards against a future spread regression.
+    const poisoned = {
+      ...makeAnswer(),
+      sttProvider: 'inworld',
+      moderation: { flagged: false },
+      apiKey: 'sk-should-never-leak',
+      rawAudio: 'BASE64AUDIO',
+    } as unknown as NonNullable<Turn['answer']>;
+    const out = buildJsonExport(makeInput({ turns: [makeTurn({ answer: poisoned })] }));
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain('sttProvider');
+    expect(serialized).not.toContain('apiKey');
+    expect(serialized).not.toContain('sk-should-never-leak');
+    expect(serialized).not.toContain('rawAudio');
+    expect(serialized).not.toContain('BASE64AUDIO');
+    // The legitimate timing fields still survive.
+    expect(out.turns[0]?.answer?.durationMs).toBe(8000);
   });
 
   it('preserves the coverage delta for each turn', () => {
