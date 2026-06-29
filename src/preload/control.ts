@@ -20,8 +20,6 @@ const api: CandidCueControlApi = {
     save: (input) => ipcRenderer.invoke(CHANNELS.projectsSave, input),
     remove: (projectId) => ipcRenderer.invoke(CHANNELS.projectsRemove, projectId),
     prepare: (projectId) => ipcRenderer.invoke(CHANNELS.projectsPrepare, projectId),
-    export: (projectId) => ipcRenderer.invoke(CHANNELS.projectsExport, projectId),
-    importDocument: () => ipcRenderer.invoke(CHANNELS.projectsImportDocument),
     importMarkdownDocuments: () => ipcRenderer.invoke(CHANNELS.projectsImportMarkdownDocuments),
   },
   settings: {

@@ -55,14 +55,6 @@ export function registerControlIpc(app: AppController, guard: Guard): void {
     control(e);
     return app.prepareProject(idSchema.parse(raw));
   });
-  ipcMain.handle(CHANNELS.projectsExport, (e, raw) => {
-    control(e);
-    return app.exportProject(idSchema.parse(raw), 'json');
-  });
-  ipcMain.handle(CHANNELS.projectsImportDocument, (e) => {
-    control(e);
-    return app.importDocument();
-  });
   ipcMain.handle(CHANNELS.projectsImportMarkdownDocuments, (e) => {
     control(e);
     return app.importMarkdownDocuments();
