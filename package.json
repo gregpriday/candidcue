@@ -23,7 +23,10 @@
     "media:validate": "tsx scripts/validate-media.ts",
     "prompts:validate": "tsx scripts/validate-prompts.ts",
     "clean:temp": "tsx scripts/clean-temp.ts",
-    "verify": "npm run lint && npm run typecheck && npm run test && npm run media:validate && npm run prompts:validate"
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run media:validate && npm run prompts:validate",
+    "build:app": "vite build --config vite.main.config.ts && PRELOAD_ENTRY=control vite build --config vite.preload.config.ts --outDir .vite/build && PRELOAD_ENTRY=stage vite build --config vite.preload.config.ts --outDir .vite/build && vite build --config vite.control.config.ts && vite build --config vite.stage.config.ts",
+    "test:e2e": "playwright test --config playwright.config.ts",
+    "verify:e2e": "npm run verify && npm run test:e2e"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.0",
@@ -42,6 +45,7 @@
     "@electron-forge/maker-squirrel": "^7.6.0",
     "@electron-forge/maker-zip": "^7.6.0",
     "@electron-forge/plugin-vite": "^7.6.0",
+    "@playwright/test": "^1.49.0",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",

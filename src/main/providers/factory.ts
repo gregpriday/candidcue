@@ -7,7 +7,13 @@ import {
   type SttConnectFactory,
   type SttTransport,
 } from './inworld';
-import type { SpeechToTextAdapter, TextToSpeechAdapter } from '@shared/contracts';
+import { FakeInterviewModel, FakeModeration, FakeStt, FakeTts } from './fakes';
+import type {
+  InterviewModelAdapter,
+  ModerationAdapter,
+  SpeechToTextAdapter,
+  TextToSpeechAdapter,
+} from '@shared/contracts';
 import { INWORLD_DEFAULTS } from '@shared/constants/runtime-defaults';
 
 export function buildOpenAiAdapters(apiKey: string): OpenAiAdapters {
@@ -174,4 +180,86 @@ export function buildInworldAdapters(
   const stt = new InworldSttClient({ apiKey, model: sttModel, connect: inworldWsConnect });
   const tts = new InworldTtsClient({ apiKey, modelId: ttsModel });
   return { stt, tts };
+}
+
+// ---------------------------------------------------------------------------
+// Provider selection / fake-mode seam
+// ---------------------------------------------------------------------------
+//
+// The four deterministic fakes in ./fakes back unit and integration tests, but
+// were never reachable from a RUNNING app: production wiring hardcodes the real
+// OpenAI/Inworld adapters. The env-gated seam below lets an app-level launch
+// test (issue #24) point the real Electron app at the fakes — exercising real
+// IPC, real windows, and the real orchestrator without network access or keys.
+// It ships inert: production builds never set CANDIDCUE_PROVIDERS, so the real
+// adapters are used unless fakes are explicitly requested.
+
+/** Stand-in credential returned to the auth/preflight gates in fake mode. */
+export const FAKE_PROVIDER_KEY = 'fake-provider-key';
+
+/** Whether the running app should be backed by the deterministic provider fakes. */
+export function useFakeProviders(): boolean {
+  return process.env.CANDIDCUE_PROVIDERS === 'fake';
+}
+
+/** The full adapter set the orchestrator drives (model + moderation + stt + tts). */
+export interface ProviderAdapters {
+  model: InterviewModelAdapter;
+  moderation: ModerationAdapter;
+  stt: SpeechToTextAdapter;
+  tts: TextToSpeechAdapter;
+}
+
+/**
+ * Build the four provider adapters. In fake mode the existing deterministic
+ * fakes are wired in (no network, no keys); otherwise the real OpenAI + Inworld
+ * adapters are constructed from the supplied credentials.
+ */
+export function buildAdapters(input: {
+  openaiKey: string;
+  inworldKey: string;
+  sttModel?: string;
+  ttsModel?: string;
+}): ProviderAdapters {
+  if (useFakeProviders()) return buildFakeAdapters();
+  const openai = buildOpenAiAdapters(input.openaiKey);
+  const inworld = buildInworldAdapters(input.inworldKey, input.sttModel, input.ttsModel);
+  return { model: openai.model, moderation: openai.moderation, stt: inworld.stt, tts: inworld.tts };
+}
+
+/**
+ * The deterministic fake adapter set. Exported so unit tests and the app-launch
+ * harness can assert against the exact instances a fake-mode app uses.
+ */
+export function buildFakeAdapters(): ProviderAdapters {
+  return {
+    model: new FakeInterviewModel(),
+    moderation: new FakeModeration(),
+    stt: new FakeStt({ transcript: 'A clear, candid answer to the opening question.' }),
+    tts: new FakeTts({ durationMs: 1500 }),
+  };
+}
+
+/** Credential-store shape the provider-credential helpers consult. */
+interface CredentialStoreLike {
+  hasKey(provider: 'openai' | 'inworld'): boolean;
+  getKey(provider: 'openai' | 'inworld'): string | null;
+}
+
+/**
+ * Whether `provider`'s credential requirement is satisfied. Fake mode short-
+ * circuits to true so preflight passes without stored keys; otherwise the real
+ * credential store is consulted.
+ */
+export function hasProviderCredential(provider: 'openai' | 'inworld', store: CredentialStoreLike): boolean {
+  return useFakeProviders() || store.hasKey(provider);
+}
+
+/**
+ * The credential for `provider`, or null when none is available. Fake mode
+ * returns a stand-in key so the adapter-build auth checks never fire.
+ */
+export function getProviderCredential(provider: 'openai' | 'inworld', store: CredentialStoreLike): string | null {
+  if (useFakeProviders()) return FAKE_PROVIDER_KEY;
+  return store.getKey(provider);
 }
