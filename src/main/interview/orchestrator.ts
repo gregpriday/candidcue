@@ -615,6 +615,18 @@ export class SessionOrchestrator {
     this.reconnectAbort?.abort();
     this.clearEndpointTimer();
     this.deps.stage.closeMicGate();
+    // Flush whatever the in-flight turn has captured before tearing the session
+    // down (#74). Without this, END_NOW from a live turn (USER_SPEAKING /
+    // ENDPOINT_CANDIDATE) silently dropped the partial transcript: the turn was
+    // left with answer == null and vanished from review. We persist a raw answer
+    // marked 'ended-now' so the partial speech survives. A failure here must not
+    // strand the session — END_NOW is an abort and always has to complete — so we
+    // warn and proceed to completion (mirrors the closing-line try/catch).
+    try {
+      await this.flushLiveTurnForEndNow();
+    } catch (err) {
+      this.log.warn('session.end_now_flush_failed', { error: String(err) });
+    }
     // Never mark the session completed in persistence unless the state machine
     // actually finished (review P0-08: endNow previously persisted 'completed'
     // even when the transitions were illegal, diverging DB from the live UI).
@@ -633,6 +645,27 @@ export class SessionOrchestrator {
       }
     }
     await this.completeSession(undefined, 'ended now');
+  }
+
+  /**
+   * Persist the in-flight turn's partial transcript before END_NOW tears the
+   * session down (#74). Uses `recordRawAnswer` only — never `appendTurnAtomic`,
+   * whose full-row upsert would stomp the turn `state` with a downgraded value
+   * and could race a concurrent commit pipeline. `recordRawAnswer` is idempotent
+   * (it skips when a fuller cleaned answer already landed), so it is safe even if
+   * a parked commit pipeline writes the same raw transcript moments later; the
+   * `bumpGeneration()` at the top of `endNow()` already invalidates that
+   * pipeline's `appendTurnAtomic`. Cleanup/moderation/next-action are skipped —
+   * the session is ending. Flushes nothing when there is no captured speech.
+   */
+  private async flushLiveTurnForEndNow(): Promise<void> {
+    const turn = this.currentTurn;
+    if (!turn) return;
+    // Prefer accumulated final segments; fall back to the latest interim partial
+    // when speech is mid-utterance and no segment has finalized yet.
+    const rawText = (turn.rawTranscript || '').trim() || this.interimTranscript.trim();
+    if (rawText.length === 0) return;
+    await this.deps.repository.recordRawAnswer(this.ctx.session.id, turn.id, rawText, 'ended-now');
   }
 
   /** Operator retry from the terminal ERROR state (ERROR → RECOVERING). */

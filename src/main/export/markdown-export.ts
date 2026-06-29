@@ -185,15 +185,18 @@ export function resolveAnswerText(turn: ExportTurn): string {
 
 /**
  * A turn is considered incomplete (and is annotated as such) when it has no
- * answer, or when its answer was salvaged from buffered audio after an
- * interruption (endpoint reason `recovery`). Reviewers need to know these
- * turns may be partial.
+ * answer, when its answer was salvaged from buffered audio after an interruption
+ * (endpoint reason `recovery`), or when it was flushed by an operator END_NOW
+ * abort (endpoint reason `ended-now`). Reviewers need to know these turns may be
+ * partial.
  */
 export function isIncompleteTurn(turn: ExportTurn): boolean {
   if (turn.answer === null) {
     return true;
   }
-  return turn.answer.endpointReason === 'recovery';
+  return (
+    turn.answer.endpointReason === 'recovery' || turn.answer.endpointReason === 'ended-now'
+  );
 }
 
 /**

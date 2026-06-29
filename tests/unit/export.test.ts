@@ -170,6 +170,12 @@ describe('isIncompleteTurn', () => {
     ).toBe(true);
   });
 
+  it('flags turns flushed by an END_NOW abort', () => {
+    expect(
+      isIncompleteTurn(makeTurn({ answer: makeAnswer({ endpointReason: 'ended-now' }) })),
+    ).toBe(true);
+  });
+
   it('does not flag a normally completed turn', () => {
     expect(
       isIncompleteTurn(makeTurn({ answer: makeAnswer({ endpointReason: 'automatic' }) })),

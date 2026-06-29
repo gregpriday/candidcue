@@ -909,7 +909,10 @@ export class AppController {
           cleanedTranscript: t.answer?.cleanedTranscript ?? null,
           userEditedTranscript: t.answer?.userEditedTranscript ?? null,
           endpointReason: t.answer?.endpointReason ?? null,
-          incomplete: t.state !== 'answered' || t.answer?.endpointReason === 'recovery',
+          incomplete:
+            t.state !== 'answered' ||
+            t.answer?.endpointReason === 'recovery' ||
+            t.answer?.endpointReason === 'ended-now',
         })),
       coverage: agg.coverage.map((c) => ({ id: c.id, label: c.label, priority: c.priority, status: c.status })),
     };

@@ -2597,6 +2597,103 @@ describe('SessionOrchestrator turn pipeline', () => {
     await expect(h.orch.repeatQuestion()).resolves.toBeUndefined();
     expect(h.orch.getState()).toBe('USER_ARMED');
   });
+
+  // --- END_NOW flushes the in-flight turn (issue #74) -----------------------
+
+  it('END_NOW from USER_SPEAKING persists the in-flight raw transcript with an ended-now reason', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSttFinalSegment('we shipped the operator console redesign last week');
+    expect(h.orch.getState()).toBe('USER_SPEAKING');
+
+    await h.orch.endNow();
+    expect(h.orch.getState()).toBe('COMPLETED');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    // Previously END_NOW dropped the partial transcript entirely (answer == null,
+    // turn vanished from review). It is now flushed as a raw 'ended-now' answer.
+    expect(turn1.answer).not.toBeNull();
+    expect(turn1.answer!.rawTranscript).toContain('operator console redesign');
+    expect(turn1.answer!.endpointReason).toBe('ended-now');
+    // Raw-only flush: no cleanup is run (the session is ending).
+    expect(turn1.answer!.cleanedTranscript).toBe('');
+  });
+
+  it('END_NOW flushes the interim partial when no segment has finalized yet', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    // Speech in progress, nothing finalized into a segment — only the interim partial.
+    h.orch.onSttPartial('still in the middle of a sentence');
+
+    await h.orch.endNow();
+    expect(h.orch.getState()).toBe('COMPLETED');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.answer).not.toBeNull();
+    expect(turn1.answer!.rawTranscript).toBe('still in the middle of a sentence');
+    expect(turn1.answer!.endpointReason).toBe('ended-now');
+  });
+
+  it('END_NOW with no captured speech writes no answer (nothing to flush)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000); // user turn armed, but nothing was transcribed
+
+    await h.orch.endNow();
+    expect(h.orch.getState()).toBe('COMPLETED');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    // No fabricated empty answer — the turn keeps its null answer.
+    expect(turn1.answer).toBeNull();
+  });
+
+  it('END_NOW during TURN_FINALIZING still persists a non-null answer for the in-flight turn', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSttFinalSegment('partial answer in flight');
+
+    // Gate STT finalize so the commit pipeline parks in TURN_FINALIZING while we
+    // fire END_NOW (the race the issue calls out).
+    let releaseEndTurn!: () => void;
+    const endTurnGate = new Promise<void>((resolve) => {
+      releaseEndTurn = resolve;
+    });
+    vi.spyOn(h.stt, 'endTurn').mockImplementationOnce(async () => {
+      await endTurnGate;
+      return { text: 'partial answer in flight', finalSegments: ['partial answer in flight'], confidence: null };
+    });
+
+    const commitPromise = h.orch.commitUserTurn('manual');
+    // Let the scheduled commit pipeline advance to (and park at) the gated endTurn.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.orch.getState()).toBe('TURN_FINALIZING');
+
+    // Operator ends the session mid-finalize.
+    await h.orch.endNow();
+    expect(h.orch.getState()).toBe('COMPLETED');
+
+    // The in-flight turn was flushed, not silently dropped. (Endpoint reason is
+    // not asserted: once the parked commit unblocks it may overwrite the raw
+    // answer with its own 'manual' reason — the guarantee here is non-null +
+    // non-empty, the core bug fix.)
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.answer).not.toBeNull();
+    expect(turn1.answer!.rawTranscript).toContain('partial answer in flight');
+
+    // Release the parked commit; its stale result must not crash or revive the
+    // already-completed session (generation guard discards it).
+    releaseEndTurn();
+    await commitPromise.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.orch.getState()).toBe('COMPLETED');
+  });
 });
 
 // Mira used to read every question with identical flat affect because the
