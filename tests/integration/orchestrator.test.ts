@@ -868,8 +868,12 @@ describe('SessionOrchestrator turn pipeline', () => {
     await h.orch.commitUserTurn('manual');
     expect(h.orch.getState()).toBe('PAUSED');
     expect(h.errors).toHaveLength(1);
+    // Full PublicAppError shape — the banner reads publicMessage, so a
+    // serialization bug here would silently render an empty banner.
     expect(h.errors[0]!.code).toBe('DATABASE_FAILED');
+    expect(h.errors[0]!.publicMessage).toBe('We could not save session data.');
     expect(h.errors[0]!.recoverable).toBe(false);
+    expect(h.errors[0]!.retryAction).toBe(null);
   });
 
   it('does NOT emit a recoverable failure (transient TTS) to the banner (issue #20)', async () => {
@@ -881,6 +885,37 @@ describe('SessionOrchestrator turn pipeline', () => {
     // spam the global banner.
     vi.spyOn(h.repo, 'recordRawAnswer').mockRejectedValueOnce(
       new AppError('TTS_FAILED', { message: 'tts blip' }),
+    );
+    await h.orch.commitUserTurn('manual');
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.errors).toHaveLength(0);
+  });
+
+  it('wraps a non-AppError throw as unrecoverable UNKNOWN and emits it (issue #20)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.stt.pushTranscript('a captured answer');
+    // A plain (non-AppError) rejection must still surface: handlePipelineFailure
+    // wraps it as UNKNOWN, which is unrecoverable by default, so the banner fires.
+    vi.spyOn(h.repo, 'recordRawAnswer').mockRejectedValueOnce(new Error('boom'));
+    await h.orch.commitUserTurn('manual');
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.errors).toHaveLength(1);
+    expect(h.errors[0]!.code).toBe('UNKNOWN');
+    expect(h.errors[0]!.recoverable).toBe(false);
+  });
+
+  it('respects an instance override of recoverable even for a normally-fatal code (issue #20)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.stt.pushTranscript('a captured answer');
+    // DATABASE_FAILED defaults to recoverable:false, but the throw site can opt a
+    // specific instance into recoverability. The gate must read the instance flag
+    // (not just the code default) and suppress the banner for this one.
+    vi.spyOn(h.repo, 'recordRawAnswer').mockRejectedValueOnce(
+      new AppError('DATABASE_FAILED', { message: 'transient', recoverable: true }),
     );
     await h.orch.commitUserTurn('manual');
     expect(h.orch.getState()).toBe('PAUSED');
