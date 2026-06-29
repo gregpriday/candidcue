@@ -18,6 +18,7 @@ import {
 export type EndpointDecisionReason =
   | 'manual'
   | 'classifier'
+  | 'short_answer'
   | 'hard_silence'
   | 'wait'
   | 'too_short'
@@ -121,13 +122,18 @@ function isExplicitlyIncomplete(classifier: EndpointDecision | null): boolean {
  *  2. An empty transcript never commits.
  *  3. A high-confidence classifier completion past the per-mode silence floor
  *     commits ('classifier').
- *  4. The hard-silence ceiling forces a balanced commit on any non-empty
+ *  4. Short-answer fast path: speech too brief for the classifier to have run
+ *     (speechMs < MIN_SPEECH_FOR_CLASSIFICATION_MS) commits at the per-mode
+ *     natural silence floor, unless the classifier explicitly said incomplete
+ *     ('short_answer'). Without this, a short complete answer ("Yes", "Three
+ *     years") never earns classifier confidence and so never commits.
+ *  5. The hard-silence ceiling forces a balanced commit on any non-empty
  *     transcript (unless the classifier explicitly said incomplete); a
  *     conservative session only force-commits on hard silence if a prior
  *     high-confidence completion exists ('hard_silence').
- *  5. Very short speech with no confident completion is treated as a stray blip
+ *  6. Very short speech with no confident completion is treated as a stray blip
  *     ('too_short').
- *  6. Otherwise keep listening ('wait').
+ *  7. Otherwise keep listening ('wait').
  */
 export function decideEndpoint(input: {
   mode: EndpointMode;
@@ -154,7 +160,24 @@ export function decideEndpoint(input: {
     return { commit: true, reason: 'classifier' };
   }
 
-  // 4. Hard-silence ceiling.
+  // 4. Short-answer fast path. A reply too brief to classify
+  //    (speechMs < MIN_SPEECH_FOR_CLASSIFICATION_MS) can never earn the
+  //    confidence that step 3 needs, so without this it would wait forever in
+  //    conservative mode. Commit it once silence reaches the per-mode natural
+  //    floor — the same floor a confident classifier would commit at — so brief
+  //    answers ("Yes", "Three years") end on silence instead of stalling. The
+  //    non-empty transcript guard (step 2) is the blip discriminator; an
+  //    explicit incomplete verdict (defensive: the classifier does not run this
+  //    short today) still holds the turn back.
+  if (
+    input.speechMs < MIN_SPEECH_FOR_CLASSIFICATION_MS &&
+    !isExplicitlyIncomplete(input.classifier) &&
+    input.silenceMs >= thresholds.minTotalSilenceMs
+  ) {
+    return { commit: true, reason: 'short_answer' };
+  }
+
+  // 5. Hard-silence ceiling.
   if (input.silenceMs >= RUNTIME_DEFAULTS.endpointHardSilenceMs) {
     if (mode === 'balanced') {
       // Balanced commits anything non-empty unless the classifier explicitly
@@ -171,11 +194,11 @@ export function decideEndpoint(input: {
     return { commit: false, reason: 'wait' };
   }
 
-  // 5. Too short and not confidently complete → stray blip.
+  // 6. Too short and not confidently complete → stray blip.
   if (input.speechMs < MIN_MEANINGFUL_SPEECH_MS && !highConfidence) {
     return { commit: false, reason: 'too_short' };
   }
 
-  // 6. Default: keep listening.
+  // 7. Default: keep listening.
   return { commit: false, reason: 'wait' };
 }

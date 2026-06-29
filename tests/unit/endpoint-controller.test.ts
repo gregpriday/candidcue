@@ -301,10 +301,12 @@ describe('decideEndpoint', () => {
   });
 
   describe('too short', () => {
-    it('reports "too_short" for sub-1200ms speech with no confident completion', () => {
+    it('reports "too_short" for sub-1200ms speech before the silence floor with no confident completion', () => {
+      // Below balanced's 1500ms natural floor the short-answer fast path does not
+      // fire, so a stray blip is still held back as "too_short".
       const result = decideEndpoint({
         mode: 'balanced',
-        silenceMs: 1500,
+        silenceMs: 1000,
         speechMs: 800,
         transcript: 'um',
         classifier: null,
@@ -332,6 +334,130 @@ describe('decideEndpoint', () => {
         classifier: decision({ shouldCommit: true, completeProbability: 0.95 }),
       });
       expect(result).toEqual({ commit: true, reason: 'classifier' });
+    });
+  });
+
+  describe('short answer fast path', () => {
+    const hard = RUNTIME_DEFAULTS.endpointHardSilenceMs;
+
+    it('commits a short "Yes" at the conservative natural silence floor', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 1900,
+        speechMs: 500,
+        transcript: 'Yes',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: true, reason: 'short_answer' });
+    });
+
+    it('commits a short "Three years" at the conservative floor', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 1900,
+        speechMs: 700,
+        transcript: 'Three years',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: true, reason: 'short_answer' });
+    });
+
+    it('commits a short answer at the lower balanced floor (1500ms)', () => {
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 600,
+        transcript: 'Right',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: true, reason: 'short_answer' });
+    });
+
+    it('commits a 1200-1499ms answer that is real but too brief to classify', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 1900,
+        speechMs: 1400,
+        transcript: 'I would say so',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: true, reason: 'short_answer' });
+    });
+
+    it('previously hung forever — now commits a short answer even at hard silence', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: hard,
+        speechMs: 500,
+        transcript: 'Yes',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: true, reason: 'short_answer' });
+    });
+
+    it('waits below the silence floor instead of fast-committing', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 1899,
+        speechMs: 500,
+        transcript: 'Yes',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: false, reason: 'too_short' });
+    });
+
+    it('does not fast-commit when the classifier explicitly judged the answer incomplete', () => {
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 1900,
+        speechMs: 800,
+        transcript: 'Yes',
+        classifier: decision({ shouldCommit: false, completeProbability: 0.3 }),
+      });
+      expect(result).toEqual({ commit: false, reason: 'too_short' });
+    });
+
+    it('does not fast-commit speech long enough to classify (classifier path owns it)', () => {
+      // At exactly the classification gate the fast path no longer applies; a
+      // null classifier here means the classifier should have run, so we wait
+      // rather than commit blindly.
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 1900,
+        speechMs: 1500,
+        transcript: 'This is a complete and meaningful answer.',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: false, reason: 'wait' });
+    });
+
+    it('commits even a filler blip at the floor — duration cannot tell "um" from "Yes"', () => {
+      // Accepted tradeoff (#54): a sub-MIN_MEANINGFUL_SPEECH_MS reply that the
+      // blip guard would normally drop still commits once silence reaches the
+      // floor, because a real short answer and a filler are indistinguishable by
+      // speech duration alone. Step 2 already discards a truly empty transcript.
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 800,
+        transcript: 'um',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: true, reason: 'short_answer' });
+    });
+
+    it('does not fast-commit a 1200-1499ms answer the classifier judged incomplete', () => {
+      // 1400ms is above the blip guard, so this falls through to the default
+      // wait (not too_short) once the explicit-incomplete verdict blocks the
+      // fast path.
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 1900,
+        speechMs: 1400,
+        transcript: 'I would say',
+        classifier: decision({ shouldCommit: false, completeProbability: 0.3 }),
+      });
+      expect(result).toEqual({ commit: false, reason: 'wait' });
     });
   });
 
