@@ -86,6 +86,26 @@ function coverageFromBrief(b: InterviewBrief): SessionCoverageItem[] {
   return b.coverageItems.map((c) => ({ ...c, followUpCount: 0 }));
 }
 
+/** Build a minimal enabled speaking clip of the given duration for media tests. */
+function speakingClip(id: string, durationMs: number): MediaClip {
+  return {
+    id,
+    relativePath: `mira/speaking/${id}.mp4`,
+    mode: 'speaking',
+    durationMs,
+    width: 1280,
+    height: 720,
+    fps: 24,
+    codec: 'h264',
+    container: 'mp4',
+    hasAudio: false,
+    fileSizeBytes: 1000,
+    sha256: id,
+    enabled: true,
+    tags: [],
+  };
+}
+
 interface Harness {
   orch: SessionOrchestrator;
   repo: MemoryRepository;
@@ -107,6 +127,8 @@ async function makeHarness(overrides?: {
   tts?: FakeTts;
   endpointMode?: EndpointMode;
   captionsEnabled?: boolean;
+  recentTurnCount?: number;
+  clips?: MediaClip[];
   clock?: () => number;
   logger?: Logger;
   targetQuestionCount?: number;
@@ -151,7 +173,7 @@ async function makeHarness(overrides?: {
       verticalOffsetPercent: 0,
       maxQuestionWords: 42,
       maxQuestionAudioMs: 15000,
-      recentTurnCount: 6,
+      recentTurnCount: overrides?.recentTurnCount ?? 6,
       characterId: 'mira',
       ttsVoiceId: 'Ashley',
     },
@@ -197,7 +219,7 @@ async function makeHarness(overrides?: {
     character: character(),
     composedSystemPrompt: 'rules + persona',
     coverage,
-    clips: CLIPS,
+    clips: overrides?.clips ?? CLIPS,
     models: { interviewer: 'gpt-5.5', cleanup: 'gpt-5.4-mini', endpoint: 'gpt-5.4-nano', repair: 'gpt-5.4-mini', stt: 'inworld-stt-1' },
     voiceId: 'Ashley',
     ttsSampleRate: 24000,
@@ -1400,5 +1422,150 @@ describe('SessionOrchestrator turn pipeline', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // --- issue #26: orchestrator cleanup (dead branches + correctness nits) -----
+
+  it('uses the session recentTurnCount setting, not a hardcoded 6 (item #26)', async () => {
+    h = await makeHarness({ recentTurnCount: 3 });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    const spy = vi.spyOn(h.repo, 'getRecentTurns');
+
+    await h.orch.commitUserTurn('manual');
+
+    // The dead `maxQuestionWords > 0 ? 6 : 6` ternary is gone; the configured
+    // per-session value now drives the repository fetch (and the context build).
+    expect(spy).toHaveBeenCalledWith(h.sessionId, 3);
+  });
+
+  it('publishes a PREPARING snapshot when preparing the opening (item #26)', async () => {
+    await h.orch.prepareOpening();
+    expect(h.orch.getState()).toBe('READY');
+    // IDLE→PREPARING now routes through transition(), which publishes stage +
+    // snapshot, so the UI sees PREPARING immediately (spec PREPARING.stt='warming')
+    // — not only the final READY projection the old direct assignment produced.
+    expect(h.snapshots.some((s) => s.state === 'PREPARING')).toBe(true);
+  });
+
+  it('speaks the model closing line and closes STT on completion (item #26)', async () => {
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ action: 'complete', spokenText: 'Thanks for sharing all of that.' }],
+    });
+    h = await makeHarness({ model, captionsEnabled: true });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    const ttsBefore = h.tts.seen.length;
+    const micOpensBefore = h.stage.openMicGate.mock.calls.length;
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+
+    await h.orch.commitUserTurn('manual');
+
+    expect(h.orch.getState()).toBe('COMPLETED');
+    // The model's closing line is synthesized + played (one extra TTS call) — it
+    // is no longer discarded on completion.
+    expect(h.tts.seen.length).toBe(ttsBefore + 1);
+    expect(h.tts.seen.at(-1)?.text).toBe('Thanks for sharing all of that.');
+    // The closing line actually plays: a 'speaking' stage projection carrying the
+    // closing text was published (the renderer only calls speechPlayer.start() on
+    // visualState 'speaking' — preload alone just decodes), and the stage was
+    // asked to play the closing plan under its own turn id. Without this the line
+    // would preload then hang silently until the play deadline (#26 review).
+    const projections = vi.mocked(h.stage.setVisualState).mock.calls.map((c) => c[0]);
+    expect(
+      projections.some(
+        (p) => p.visualState === 'speaking' && p.captions === 'Thanks for sharing all of that.',
+      ),
+    ).toBe(true);
+    expect(h.stage.playSpeechPlan).toHaveBeenCalledWith(
+      expect.objectContaining({ turnId: 'closing', text: 'Thanks for sharing all of that.' }),
+    );
+    // The closing sign-off never re-arms the creator: the mic opens only for the
+    // original question, not again for the closing line.
+    expect(h.stage.openMicGate.mock.calls.length).toBe(micOpensBefore);
+    // Reaching COMPLETED proactively closes the STT transport (COMPLETED.stt='closed').
+    expect(h.stt.closed).toBe(true);
+    // Teardown closes STT again; the adapter tolerates the double close.
+    await expect(h.stt.close()).resolves.toBeUndefined();
+    expect(h.stt.closed).toBe(true);
+  });
+
+  it('does not synthesize a closing line on endNow and still closes STT (item #26)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    const ttsBefore = h.tts.seen.length;
+
+    await h.orch.endNow();
+
+    expect(h.orch.getState()).toBe('COMPLETED');
+    // endNow is an operator abort with no model action, so there is no closing
+    // sign-off — and the three silent skip/close paths stay silent too (the line
+    // is voiced only for an explicit `complete` action with non-empty text).
+    expect(h.tts.seen.length).toBe(ttsBefore);
+    expect(h.stt.closed).toBe(true);
+  });
+
+  it('stays silent on a coverage-complete commit with no spokenText (item #26)', async () => {
+    // Same empty-complete shape the skip path covers (#13), but reached via the
+    // coverage-complete commit arm: the closing line is voiced only for an
+    // explicit `complete` with non-empty text, so an empty one completes silently.
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ action: 'complete', spokenText: '', shouldCloseAfterAnswer: false }],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    const ttsBefore = h.tts.seen.length;
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+
+    await h.orch.commitUserTurn('manual');
+
+    expect(h.orch.getState()).toBe('COMPLETED');
+    expect(h.tts.seen.length).toBe(ttsBefore); // empty closing line is not voiced
+    expect(h.stt.closed).toBe(true);
+    // No closing-line playback was attempted.
+    expect(h.stage.playSpeechPlan).not.toHaveBeenCalledWith(
+      expect.objectContaining({ turnId: 'closing' }),
+    );
+  });
+
+  it('replans a different speaking clip on repeat without re-synthesizing TTS (item #26)', async () => {
+    // Two equal-duration speaking clips: both are single-match eligible, so
+    // planSpeaking breaks the tie by recency. The just-played clip is penalized,
+    // so the repeat picks the other — reusing the cached TTS audio (no synth).
+    const clips: MediaClip[] = [speakingClip('clip-a', 7000), speakingClip('clip-b', 7000)];
+    h = await makeHarness({ clips, tts: new FakeTts({ durationMs: 7000 }) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    const ttsBefore = h.tts.seen.length;
+    const firstClip = vi
+      .mocked(h.stage.preloadSpeechPlan)
+      .mock.calls.at(-1)![0].media.segments[0]!.clipId;
+
+    await h.orch.repeatQuestion();
+
+    const repeatClip = vi
+      .mocked(h.stage.preloadSpeechPlan)
+      .mock.calls.at(-1)![0].media.segments[0]!.clipId;
+    expect(repeatClip).toBeTruthy();
+    expect(repeatClip).not.toBe(firstClip); // a different clip was chosen
+    expect(h.tts.seen.length).toBe(ttsBefore); // TTS not re-synthesized on repeat
+    expect(h.orch.getState()).toBe('USER_ARMED');
+  });
+
+  it('tolerates a repeat when only one speaking clip is eligible (item #26)', async () => {
+    // Real manifest: for a 7s speech only one ~7s speaking clip fits the rate
+    // band, so the repeat must fall back to the same clip without throwing (the
+    // "choose a different clip when possible" escape hatch).
+    h = await makeHarness({ tts: new FakeTts({ durationMs: 7000 }) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    await expect(h.orch.repeatQuestion()).resolves.toBeUndefined();
+    expect(h.orch.getState()).toBe('USER_ARMED');
   });
 });

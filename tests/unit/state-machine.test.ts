@@ -77,7 +77,7 @@ describe('TRANSITIONS table', () => {
     expect(nextState('INTERVIEWER_SPEAKING', 'audioEnded')).toBe('USER_ARMED');
     expect(nextState('USER_ARMED', 'speechStarted')).toBe('USER_SPEAKING');
     expect(nextState('USER_SPEAKING', 'speechStopped')).toBe('ENDPOINT_CANDIDATE');
-    expect(nextState('ENDPOINT_CANDIDATE', 'classifierCommit')).toBe('TURN_FINALIZING');
+    expect(nextState('ENDPOINT_CANDIDATE', 'manualCommit')).toBe('TURN_FINALIZING');
     expect(nextState('TURN_FINALIZING', 'transcriptStored')).toBe('INTERVIEWER_THINKING');
   });
 
@@ -107,7 +107,6 @@ describe('nextState / canTransition', () => {
       'manualCommit',
       'speechStopped',
       'speechResumed',
-      'classifierCommit',
       'classifierWait',
       'transcriptStored',
       'questionAndTtsReady',
@@ -147,12 +146,6 @@ describe('endpoint / user-turn transitions', () => {
 
   it('speechResumed returns to USER_SPEAKING', () => {
     expect(nextState('ENDPOINT_CANDIDATE', 'speechResumed')).toBe('USER_SPEAKING');
-  });
-
-  it('classifierCommit is only valid from ENDPOINT_CANDIDATE', () => {
-    expect(nextState('ENDPOINT_CANDIDATE', 'classifierCommit')).toBe('TURN_FINALIZING');
-    expect(nextState('USER_SPEAKING', 'classifierCommit')).toBeNull();
-    expect(nextState('USER_ARMED', 'classifierCommit')).toBeNull();
   });
 });
 
