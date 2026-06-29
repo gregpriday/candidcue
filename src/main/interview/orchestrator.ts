@@ -38,6 +38,7 @@ import {
   canTransition,
   availableCommands,
   isCommandLegal,
+  isMicGateOpen,
   type CommandContext,
   type TransitionTrigger,
 } from './state-machine';
@@ -349,8 +350,12 @@ export class SessionOrchestrator {
         return;
       }
       // STT is live again: now it is safe to transition to USER_ARMED and open the
-      // mic, then clear the recoverable warning on this success path.
-      this.transition('resumeUserTurn');
+      // mic, then clear the recoverable warning on this success path. Guard the
+      // transition: a Retake (or Repeat) dispatched while we awaited resumeTurn is
+      // still legal from PAUSED and may have already driven us into
+      // INTERVIEWER_BUFFERING. If so, resumeUserTurn is illegal (returns false) and
+      // we must NOT openMicGate over the in-progress re-delivery (#62).
+      if (!this.transition('resumeUserTurn')) return;
       this.deps.stage.openMicGate();
     } else if (this.currentTurn && !this.currentTurnAnswered) {
       this.transition('resumePreparedQuestion');
@@ -395,6 +400,7 @@ export class SessionOrchestrator {
       commitInFlight: this.commitInFlight,
       hasCurrentTurn: this.currentTurn != null,
       userHasSpoken: this.currentTurn?.speechStartedAt != null,
+      currentTurnAnswered: this.currentTurnAnswered,
     };
   }
 
@@ -442,6 +448,51 @@ export class SessionOrchestrator {
         return;
       }
       await this.realizeNextQuestion(action, 'model');
+    });
+  }
+
+  /**
+   * Discard the in-progress answer and re-deliver the SAME question (Retake, the
+   * complement of Repeat). Legal once the creator has begun answering — from any
+   * mic-open state or a pause taken mid-answer (#62). The turn object and its
+   * cached TTS are reused (same turnId, no re-synthesis); only the answer fields
+   * are cleared. Modeled on {@link skipQuestion}: a synchronous prefix that
+   * cancels in-flight work and resets state before any await, then the buffered
+   * re-play inside runExclusive.
+   */
+  async retakeTurn(): Promise<void> {
+    this.assertCommandLegal('RETAKE_TURN');
+    // bumpGeneration() cancels endpoint evaluation in flight and aborts any
+    // speculative next-question TTS; clearEndpointTimer() stops the silence loop.
+    this.bumpGeneration();
+    this.clearEndpointTimer();
+    this.deps.stage.closeMicGate();
+    // Reset the discarded answer SYNCHRONOUSLY — before the transition and any
+    // await — so userHasSpoken flips false at once and the mic-gate guard in
+    // onSttFinalSegment drops any late final from the abandoned take. armUserTurn
+    // (inside playCurrentTurn) clears these again and beginTurn() resets the STT
+    // accumulator, so the next take starts clean. We deliberately do NOT call
+    // stt.endTurn(): there is no transcript to finalize and it would add a
+    // network round-trip for words we are throwing away (cf. skipQuestion).
+    if (this.currentTurn) {
+      this.currentTurn.rawTranscript = '';
+      this.currentTurn.speechStartedAt = null;
+      this.currentTurn.speechEndedAt = null;
+    }
+    this.interimTranscript = '';
+    // The turn is an unanswered prepared question again (it never committed, but
+    // keep this explicit and symmetric with repeatQuestion's reset).
+    this.currentTurnAnswered = false;
+    // Drive back into INTERVIEWER_BUFFERING so playCurrentTurn's playback
+    // transitions are legal from USER_SPEAKING / ENDPOINT_CANDIDATE / USER_ARMED
+    // / PAUSED (the retakeTurn trigger targets INTERVIEWER_BUFFERING).
+    this.transition('retakeTurn', 'retake');
+    await this.runExclusive(async () => {
+      // Re-plan the speaking media so the retake picks a different clip when one
+      // is available (same as Repeat, item #26), reusing the cached TTS audio.
+      const turn = this.currentTurn;
+      if (turn) this.replanForRepeat(turn);
+      await this.playCurrentTurn('retake');
     });
   }
 
@@ -580,12 +631,23 @@ export class SessionOrchestrator {
 
   /** A live interim (non-final) STT transcript for the current turn (MIC-04). */
   onSttPartial(text: string): void {
+    // Same mic-gate gate as onSttFinalSegment: a stale interim from an abandoned
+    // take (e.g. arriving during the INTERVIEWER_BUFFERING window of a Retake)
+    // must not flash old text into the operator's live caption (#62).
+    if (!isMicGateOpen(this.state)) return;
     this.interimTranscript = text;
     this.publishSnapshot();
   }
 
   /** A finalized STT segment: append to the turn's accumulated transcript (MIC-04). */
   onSttFinalSegment(text: string): void {
+    // The streaming transcript shadows the floor only while the mic gate is open
+    // (spec §11.3: stt='streaming' solely in the mic-open states). Once the floor
+    // is released — commit (TURN_FINALIZING reads endTurn's result, not this
+    // shadow), pause, skip, or retake — drop late segments so a final arriving in
+    // the millisecond window after Retake closes the gate cannot contaminate the
+    // freshly-cleared rawTranscript of the next take (#62).
+    if (!isMicGateOpen(this.state)) return;
     const segment = text.trim();
     if (segment.length > 0 && this.currentTurn) {
       this.currentTurn.rawTranscript = this.currentTurn.rawTranscript
@@ -1680,6 +1742,7 @@ export class SessionOrchestrator {
       canCommit: cmds.COMMIT_USER_TURN,
       canRepeat: cmds.REPEAT_QUESTION,
       canSkip: cmds.SKIP_QUESTION,
+      canRetake: cmds.RETAKE_TURN,
       canEnd: cmds.END_AFTER_TURN,
       canEndAfterTurn: cmds.END_AFTER_TURN,
       canEndNow: cmds.END_NOW,

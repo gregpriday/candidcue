@@ -170,6 +170,7 @@ export interface OperatorSessionSnapshot {
     canCommit: boolean;
     canRepeat: boolean;
     canSkip: boolean;
+    canRetake: boolean;
     canEnd: boolean;
     canEndAfterTurn: boolean;
     canEndNow: boolean;
@@ -271,6 +272,7 @@ export type StageCommand =
   | { type: 'RESUME' }
   | { type: 'REPEAT' }
   | { type: 'SKIP' }
+  | { type: 'RETAKE' }
   | { type: 'EXIT_STAGE' }
   | { type: 'END_AFTER_TURN' };
 

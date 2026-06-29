@@ -39,6 +39,8 @@ export function commandForKey(
       return { type: 'REPEAT' };
     case 'KeyS':
       return { type: 'SKIP' };
+    case 'KeyT':
+      return { type: 'RETAKE' };
     default:
       return null;
   }

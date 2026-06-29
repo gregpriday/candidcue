@@ -721,6 +721,7 @@ export class AppController {
         case 'RESUME_SESSION': await o.resume(); break;
         case 'REPEAT_QUESTION': await o.repeatQuestion(); break;
         case 'SKIP_QUESTION': await o.skipQuestion(); break;
+        case 'RETAKE_TURN': await o.retakeTurn(); break;
         case 'END_AFTER_TURN': o.endAfterTurn(); break;
         case 'END_NOW': await o.endNow(); break;
         case 'RETRY_RECOVERY': o.retryRecovery(); break;

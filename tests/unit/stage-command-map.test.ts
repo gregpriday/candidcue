@@ -21,6 +21,7 @@ describe('mapStageCommand', () => {
     expect(mapStageCommand({ type: 'RESUME' })).toEqual({ type: 'RESUME_SESSION' });
     expect(mapStageCommand({ type: 'REPEAT' })).toEqual({ type: 'REPEAT_QUESTION' });
     expect(mapStageCommand({ type: 'SKIP' })).toEqual({ type: 'SKIP_QUESTION' });
+    expect(mapStageCommand({ type: 'RETAKE' })).toEqual({ type: 'RETAKE_TURN' });
     // EXIT_STAGE intentionally pauses rather than ending — Shift+Esc is a soft exit.
     expect(mapStageCommand({ type: 'EXIT_STAGE' })).toEqual({ type: 'PAUSE_SESSION' });
   });

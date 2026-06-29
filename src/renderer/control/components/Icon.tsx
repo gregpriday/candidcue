@@ -19,6 +19,7 @@ export type IconName =
   | 'stop'
   | 'skip'
   | 'repeat'
+  | 'retake'
   | 'check'
   | 'alert'
   | 'close'
@@ -121,6 +122,12 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <polyline points="2.5 4 2.5 10 8.5 10" />
       <path d="M4.5 15a8 8 0 1 0 1.9-8.3L2.5 10" />
+    </>
+  ),
+  retake: (
+    <>
+      <polyline points="21.5 4 21.5 10 15.5 10" />
+      <path d="M19.5 15a8 8 0 1 1-1.9-8.3L21.5 10" />
     </>
   ),
   check: <polyline points="20 6.5 9.5 17.5 4 12" />,
