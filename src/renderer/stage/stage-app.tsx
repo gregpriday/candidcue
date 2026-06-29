@@ -12,6 +12,7 @@ import type { CommandFeedback } from './components/StatusOverlay';
 import { EndConfirmOverlay } from './components/EndConfirmOverlay';
 import { SpeechPlayer } from './playback/SpeechPlayer';
 import { BackchannelPlayer } from './playback/BackchannelPlayer';
+import { SyncBeeper } from './audio/SyncBeeper';
 import { CaptureController } from './audio/CaptureController';
 import { commandForKey, isCommandUsefulInState } from './stage-commands';
 import styles from './stage-app.module.css';
@@ -92,9 +93,14 @@ export function StageApp(): JSX.Element {
   // is cleared when the session actually leaves the begin-able standby.
   const beginSentRef = useRef(false);
 
+  // Brief white full-screen flash at session start, paired with the audible sync
+  // beep, so an external camera also gets a visual frame to anchor on.
+  const [showSyncSlate, setShowSyncSlate] = useState(false);
+
   // Engines live for the lifetime of the window; refs avoid re-creating them.
   const speechPlayerRef = useRef<SpeechPlayer | null>(null);
   const backchannelPlayerRef = useRef<BackchannelPlayer | null>(null);
+  const syncBeeperRef = useRef<SyncBeeper | null>(null);
   const captureRef = useRef<CaptureController | null>(null);
   // Soft "your turn" chime at mic-arm: a lazily-created context plus the previous
   // mic gate, so the chime fires once on each closed/active -> armed transition.
@@ -103,6 +109,12 @@ export function StageApp(): JSX.Element {
   // Auto-hide the legend exactly once, when the interview leaves standby, so it
   // never sits in the recording (the founder can re-show it with '?').
   const hasLeftStandbyRef = useRef(false);
+  // Previous visual state, tracked independently of React state so the
+  // standby->live transition (session start) is detected in the synchronous
+  // onState handler — a useEffect on `state` would fire async and could miss it.
+  const prevVisualStateRef = useRef<StageStateProjection['visualState']>('standby');
+  // Timer that clears the sync slate; held so it can be cancelled on unmount.
+  const syncSlateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Latest state, read by event handlers without re-subscribing.
   const stateRef = useRef<StageStateProjection>(INITIAL_STATE);
   const currentTurnIdRef = useRef<string | null>(null);
@@ -244,9 +256,46 @@ export function StageApp(): JSX.Element {
     };
   }, [bootstrap]);
 
+  // --- Sync beeper --------------------------------------------------------
+  useEffect(() => {
+    const beeper = new SyncBeeper();
+    syncBeeperRef.current = beeper;
+    return () => {
+      syncBeeperRef.current = null;
+      if (syncSlateTimerRef.current !== null) {
+        clearTimeout(syncSlateTimerRef.current);
+        syncSlateTimerRef.current = null;
+      }
+      void beeper.dispose();
+    };
+  }, []);
+
   // --- State / plan / capture-config subscriptions ------------------------
   useEffect(() => {
     const offState = window.candidcueStage.events.onState((next) => {
+      // Session start = the first move off 'standby' into a live state. Fire the
+      // audible+visual sync marker exactly once per such transition; re-arms if
+      // the stage ever returns to standby. Done synchronously here (not via a
+      // useEffect on `state`) so the transition frame is never missed.
+      const prevVisualState = prevVisualStateRef.current;
+      prevVisualStateRef.current = next.visualState;
+      if (
+        prevVisualState === 'standby' &&
+        (next.visualState === 'thinking' ||
+          next.visualState === 'listening' ||
+          next.visualState === 'speaking')
+      ) {
+        syncBeeperRef.current?.play();
+        setShowSyncSlate(true);
+        if (syncSlateTimerRef.current !== null) {
+          clearTimeout(syncSlateTimerRef.current);
+        }
+        syncSlateTimerRef.current = setTimeout(() => {
+          syncSlateTimerRef.current = null;
+          setShowSyncSlate(false);
+        }, 250);
+      }
+
       stateRef.current = next;
       setState(next);
       // Sound a soft chime the instant the mic arms (and only on the transition,
@@ -498,6 +547,7 @@ export function StageApp(): JSX.Element {
           sendCommand({ type: 'END_AFTER_TURN' });
         }}
       />
+      {showSyncSlate && <div className={styles.syncSlate} aria-hidden="true" />}
     </div>
   );
 }
