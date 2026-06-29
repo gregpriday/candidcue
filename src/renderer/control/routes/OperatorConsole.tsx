@@ -390,7 +390,7 @@ function MicChip({ mic }: { mic: OperatorSessionSnapshot['mic'] }): JSX.Element 
   const open = mic.gate === 'active';
   const fill = open ? Math.min(1, Math.max(0, mic.level)) ** 0.7 : 0;
   return (
-    <span className={styles.chip} title={mic.deviceLabel ? `${label} · ${mic.deviceLabel}` : label}>
+    <span className={styles.chip} title={label}>
       <StatusIcon tone={tone} label={label} size={13} />
       <span className={styles.chipLabel}>Mic</span>
       <span className={styles.micLevel} data-open={open || undefined} aria-hidden>

@@ -1,6 +1,6 @@
 import { dialog, type WebContents } from 'electron';
 import { readFile, writeFile, stat } from 'node:fs/promises';
-import { basename, extname } from 'node:path';
+import { basename } from 'node:path';
 
 import type {
   CandidCueRepository,
@@ -47,7 +47,7 @@ import {
   PROJECT_LIMITS,
   APPROX_MINUTES_PER_QUESTION,
 } from '@shared/constants/runtime-defaults';
-import { PROJECT_SOURCE_LIMITS, isAllowedMarkdownExtension } from '@shared/constants/project-source-limits';
+import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 import { importMarkdownBuffers, MAX_IMPORT_BYTES } from './project-assets/markdown-importer';
 import type { ImportMarkdownDocumentsResult, MarkdownImportFailure } from '@shared/domain';
 import { AppError, isAppError } from '@shared/errors/app-error';
@@ -129,28 +129,6 @@ export class AppController {
   }
   deleteProject(id: string): Promise<void> {
     return this.deps.repository.deleteProject(id);
-  }
-
-  async importDocument(): Promise<{ title: string; content: string; filename: string; mimeType: string } | null> {
-    const res = await dialog.showOpenDialog({
-      title: 'Import Markdown source file',
-      filters: [{ name: 'Markdown', extensions: ['md', 'markdown'] }],
-      properties: ['openFile'],
-    });
-    const path = res.filePaths[0];
-    if (res.canceled || !path) return null;
-    // Dialog filters are not a security boundary; re-verify the extension.
-    if (!isAllowedMarkdownExtension(path)) {
-      throw new AppError('VALIDATION_FAILED', { publicMessage: 'Only Markdown files can be imported.' });
-    }
-    const raw = await readFile(path, 'utf8');
-    const ext = extname(path).toLowerCase();
-    return {
-      title: basename(path, ext),
-      content: raw,
-      filename: basename(path),
-      mimeType: 'text/markdown',
-    };
   }
 
   /**
@@ -754,34 +732,6 @@ export class AppController {
 
   editTranscript(turnId: string, text: string): Promise<void> {
     return this.deps.repository.updateUserEditedTranscript(turnId, text);
-  }
-
-  /**
-   * Export at the project level. The IPC layer only has a project id here, so we
-   * resolve the project's most recent session (preferring a completed one) and
-   * delegate to {@link exportSession}. Previously the project id was passed
-   * straight into the session lookup, so this path always failed (CORR-05).
-   */
-  async exportProject(projectId: string, format: 'markdown' | 'json'): Promise<ExportResult> {
-    try {
-      // listSessions returns newest-first, so this prefers the latest completed
-      // session, otherwise the most recent session of any status.
-      const sessions = await this.deps.repository.listSessions(projectId);
-      const target = sessions.find((s) => s.status === 'completed') ?? sessions[0];
-      if (!target) {
-        return {
-          ok: false,
-          path: null,
-          bytesWritten: null,
-          error: new AppError('EXPORT_FAILED', {
-            publicMessage: 'This project has no interview sessions to export yet.',
-          }).toPublic(),
-        };
-      }
-      return await this.exportSession(target.id, format);
-    } catch (err) {
-      return { ok: false, path: null, bytesWritten: null, error: this.toPublicError(err) };
-    }
   }
 
   async exportSession(sessionId: string, format: 'markdown' | 'json'): Promise<ExportResult> {

@@ -95,8 +95,11 @@ async function bootstrap(): Promise<void> {
   // and the stage window (live capture), so both origins must be allowed.
   applyPermissionHandlers(session.defaultSession, [controlOrigin, stageOrigin]);
 
-  openControlWindow();
-
+  // Register IPC handlers before opening any window. The sender guards resolve
+  // window webContents lazily at invoke time (not at registration), so wiring
+  // them first is safe — and it removes a startup race where a future `await`
+  // between openControlWindow and registration could let a first-frame invoke
+  // hit a channel with no handler.
   const getControl = (): WebContents | null => (controlWindow && !controlWindow.isDestroyed() ? controlWindow.webContents : null);
   const getStage = (): WebContents | null => (stageWindow && !stageWindow.isDestroyed() ? stageWindow.webContents : null);
 
@@ -129,6 +132,8 @@ async function bootstrap(): Promise<void> {
   const guard = makeSenderGuard(() => ({ control: getControl(), stage: getStage() }));
   registerControlIpc(ctrl, guard);
   registerStageIpc(ctrl, guard);
+
+  openControlWindow();
 
   logger.info('app.ready', { packaged: app.isPackaged });
 }

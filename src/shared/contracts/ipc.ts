@@ -24,8 +24,6 @@ export const CHANNELS = {
   projectsSave: 'projects:save',
   projectsRemove: 'projects:remove',
   projectsPrepare: 'projects:prepare',
-  projectsExport: 'projects:export',
-  projectsImportDocument: 'projects:import-document',
   projectsImportMarkdownDocuments: 'projects:import-markdown-documents',
   // control: settings
   settingsGetPublic: 'settings:get-public',
@@ -56,7 +54,6 @@ export const CHANNELS = {
   // stage
   stageBootstrap: 'stage:bootstrap',
   stageOpenAudioPort: 'stage:open-audio-port',
-  stageReportDevices: 'stage:report-devices',
   stageReportMeter: 'stage:report-meter',
   stagePlaybackReady: 'stage:playback-ready',
   stagePlaybackStarted: 'stage:playback-started',
@@ -95,12 +92,6 @@ export interface DisplayInfo {
   scaleFactor: number;
   isPrimary: boolean;
   isInternal: boolean;
-}
-
-export interface PublicMediaDevice {
-  deviceId: string;
-  label: string;
-  kind: 'audioinput' | 'audiooutput';
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +138,6 @@ export interface PublicMicState {
   gate: 'closed' | 'armed' | 'active';
   level: number;
   clipping: boolean;
-  deviceLabel: string | null;
 }
 
 export interface PublicProviderStatus {
@@ -346,8 +336,6 @@ export interface CandidCueControlApi {
     save(input: SaveProjectInput): Promise<ProjectAggregate>;
     remove(projectId: string): Promise<void>;
     prepare(projectId: string): Promise<PreparationJobResult>;
-    export(projectId: string): Promise<ExportResult>;
-    importDocument(): Promise<{ title: string; content: string; filename: string; mimeType: string } | null>;
     importMarkdownDocuments(): Promise<ImportMarkdownDocumentsResult | null>;
   };
   settings: {
@@ -387,7 +375,6 @@ export interface CandidCueStageApi {
   bootstrap(): Promise<StageBootstrap>;
   audio: {
     openCapturePort(input: { sessionId: string }): Promise<MessagePort>;
-    reportDeviceList(devices: PublicMediaDevice[]): Promise<void>;
     reportMeter(level: AudioMeterReading): void;
   };
   playback: {

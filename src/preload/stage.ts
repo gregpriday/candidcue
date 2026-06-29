@@ -25,7 +25,6 @@ const api: CandidCueStageApi = {
         ipcRenderer.on(CHANNELS.stageOpenAudioPort, onPort);
         ipcRenderer.send(CHANNELS.stageOpenAudioPort, input);
       }),
-    reportDeviceList: (devices) => ipcRenderer.invoke(CHANNELS.stageReportDevices, devices),
     reportMeter: (level) => ipcRenderer.send(CHANNELS.stageReportMeter, level),
   },
   playback: {

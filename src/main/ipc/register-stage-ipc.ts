@@ -41,10 +41,6 @@ export function registerStageIpc(app: AppController, guard: Guard): void {
     app.setAudioPortDisposer(setupAudioPort(e.sender, app.pcmSink));
   });
 
-  ipcMain.handle(CHANNELS.stageReportDevices, (e) => {
-    guard(e.sender, ['stage']);
-    return undefined;
-  });
   ipcMain.on(CHANNELS.stageReportMeter, (e, raw) => {
     stage(e);
     const parsed = meterSchema.safeParse(raw);

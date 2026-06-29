@@ -1248,7 +1248,6 @@ export class SessionOrchestrator {
         gate: MIC_STATE[this.state],
         level: this.micLevel,
         clipping: this.micClipping,
-        deviceLabel: null,
       },
       providerStatus: { ...this.providerHealth },
       endpointPending: this.state === 'ENDPOINT_CANDIDATE',
