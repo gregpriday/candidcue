@@ -454,6 +454,15 @@ export class AppController {
     // Close any prior active session's live resources before starting a new one
     // (re-running preflight must not leak an open STT stream).
     await this.teardownActive();
+
+    // Read credentials before persisting a session so an unavailable keychain
+    // (getKey now fails soft to null) surfaces a clean auth error instead of an
+    // orphaned session row and a downstream crash in adapter init.
+    const openaiKey = this.deps.credentials.getKey('openai');
+    if (!openaiKey) throw new AppError('OPENAI_AUTH', { publicMessage: 'Add your OpenAI key in Settings.' });
+    const inworldKey = this.deps.credentials.getKey('inworld');
+    if (!inworldKey) throw new AppError('INWORLD_AUTH', { publicMessage: 'Add your Inworld key in Settings.' });
+
     const character = getInterviewerCharacter(aggregate.project.interviewerCharacterId) ?? getInterviewerCharacters()[0]!;
     const voiceId = (await this.deps.repository.getSetting<string>('characters.mira.inworldVoiceId')) ?? character.voice.voiceId;
     const clips = loadManifest(this.deps.videosRoot ? `${this.deps.videosRoot}/${character.mediaRootPath}` : character.mediaRootPath).clips;
@@ -483,8 +492,6 @@ export class AppController {
       coverage,
     });
 
-    const openaiKey = this.deps.credentials.getKey('openai')!;
-    const inworldKey = this.deps.credentials.getKey('inworld')!;
     const { model, moderation } = buildOpenAiAdapters(openaiKey);
     const { stt, tts } = buildInworldAdapters(inworldKey, INWORLD_DEFAULTS.sttModel);
 

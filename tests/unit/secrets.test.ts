@@ -67,4 +67,35 @@ describe('CredentialStore', () => {
     const unavailable = new CredentialStore(fakeEncryptor(false), memoryStore());
     expect(() => unavailable.setKey('openai', 'sk-x')).toThrow();
   });
+
+  it('returns null (does not throw) when secure storage is unavailable on read', () => {
+    const shared = memoryStore();
+    new CredentialStore(fakeEncryptor(true), shared, () => '2026-06-23T00:00:00.000Z').setKey(
+      'openai',
+      'sk-stored',
+    );
+    // Keychain dropped out after the key was written: getKey must fail soft.
+    const reader = new CredentialStore(fakeEncryptor(false), shared);
+    expect(() => reader.getKey('openai')).not.toThrow();
+    expect(reader.getKey('openai')).toBeNull();
+  });
+
+  it('returns null (does not throw) when decryption fails', () => {
+    const shared = memoryStore();
+    new CredentialStore(fakeEncryptor(true), shared, () => '2026-06-23T00:00:00.000Z').setKey(
+      'inworld',
+      'iw-stored',
+    );
+    // Available but decrypt throws (corrupted envelope / transient native error).
+    const throwingEncryptor: Encryptor = {
+      isAvailable: () => true,
+      encryptString: (plain) => Buffer.from(`enc:${plain}`, 'utf8'),
+      decryptString: () => {
+        throw new Error('keychain locked');
+      },
+    };
+    const reader = new CredentialStore(throwingEncryptor, shared);
+    expect(() => reader.getKey('inworld')).not.toThrow();
+    expect(reader.getKey('inworld')).toBeNull();
+  });
 });
