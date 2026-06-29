@@ -1,3 +1,9 @@
+import {
+  APIConnectionError as SDKAPIConnectionError,
+  APIConnectionTimeoutError as SDKAPIConnectionTimeoutError,
+  APIUserAbortError as SDKAPIUserAbortError,
+} from 'openai';
+
 import { isTransientStatus, shouldRetry, withRetry } from '@main/providers/retry';
 import { RETRY_POLICY } from '@shared/constants/runtime-defaults';
 
@@ -12,6 +18,30 @@ function statusError(status: number): Error & { status: number } {
 /** Build a plain error object carrying a network-style `.code`. */
 function codeError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code });
+}
+
+// Minimal stand-ins for the OpenAI SDK error classes. Like the real ones, they
+// leave `.name` as the inherited 'Error' and expose their identity only via the
+// constructor name; `APIConnectionError` carries the Node errno on `.cause`.
+class APIConnectionError extends Error {
+  cause?: { code: string };
+  constructor(cause?: { code: string }) {
+    super('Connection error.');
+    if (cause) this.cause = cause;
+  }
+}
+
+class APIConnectionTimeoutError extends APIConnectionError {
+  constructor() {
+    super();
+    this.message = 'Request timed out.';
+  }
+}
+
+class APIUserAbortError extends Error {
+  constructor() {
+    super('Request was aborted.');
+  }
 }
 
 describe('isTransientStatus', () => {
@@ -71,6 +101,59 @@ describe('shouldRetry', () => {
     expect(shouldRetry(undefined)).toBe(false);
     expect(shouldRetry(codeError('ENOTFOUND'))).toBe(false);
   });
+
+  it('retries an SDK APIConnectionError whose cause carries a transient code', () => {
+    expect(shouldRetry(new APIConnectionError({ code: 'ECONNRESET' }))).toBe(true);
+    expect(shouldRetry(new APIConnectionError({ code: 'ETIMEDOUT' }))).toBe(true);
+  });
+
+  it('does not retry an APIConnectionError whose cause code is non-transient', () => {
+    expect(shouldRetry(new APIConnectionError({ code: 'ENOTFOUND' }))).toBe(false);
+  });
+
+  it('does not retry a bare APIConnectionError with no cause', () => {
+    expect(shouldRetry(new APIConnectionError())).toBe(false);
+  });
+
+  it('retries an APIConnectionTimeoutError by constructor name', () => {
+    expect(shouldRetry(new APIConnectionTimeoutError())).toBe(true);
+  });
+
+  it('does not retry an APIUserAbortError (matched by constructor name)', () => {
+    expect(shouldRetry(new APIUserAbortError())).toBe(false);
+  });
+
+  it('treats an APIUserAbortError as non-retryable even with a transient cause', () => {
+    const err = Object.assign(new APIUserAbortError(), { cause: { code: 'ECONNRESET' } });
+    expect(shouldRetry(err)).toBe(false);
+  });
+
+  it('lets a non-retryable status win over a transient cause code', () => {
+    const err = Object.assign(new Error('HTTP 401'), {
+      status: 401,
+      cause: { code: 'ECONNRESET' },
+    });
+    expect(shouldRetry(err)).toBe(false);
+  });
+});
+
+// Guards the duck-typed helpers against drift in the real OpenAI SDK error
+// shapes — the entire fix hinges on `.cause.code` and `constructor.name`.
+describe('shouldRetry with real OpenAI SDK errors', () => {
+  it('retries a real APIConnectionError carrying a transient cause', () => {
+    const cause = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    expect(shouldRetry(new SDKAPIConnectionError({ message: 'Connection error.', cause }))).toBe(
+      true,
+    );
+  });
+
+  it('retries a real APIConnectionTimeoutError', () => {
+    expect(shouldRetry(new SDKAPIConnectionTimeoutError())).toBe(true);
+  });
+
+  it('does not retry a real APIUserAbortError', () => {
+    expect(shouldRetry(new SDKAPIUserAbortError())).toBe(false);
+  });
 });
 
 describe('withRetry', () => {
@@ -86,6 +169,30 @@ describe('withRetry', () => {
     const fn = vi.fn(async () => {
       calls += 1;
       if (calls === 1) throw statusError(503);
+      return 'recovered';
+    });
+    const result = await withRetry(fn, { maxAttempts: 3, delayFn: noDelay });
+    expect(result).toBe('recovered');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries an SDK APIConnectionError (dropped connection) then succeeds', async () => {
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new APIConnectionError({ code: 'ECONNRESET' });
+      return 'recovered';
+    });
+    const result = await withRetry(fn, { maxAttempts: 3, delayFn: noDelay });
+    expect(result).toBe('recovered');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries an APIConnectionTimeoutError then succeeds', async () => {
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new APIConnectionTimeoutError();
       return 'recovered';
     });
     const result = await withRetry(fn, { maxAttempts: 3, delayFn: noDelay });
