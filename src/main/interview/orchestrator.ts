@@ -170,6 +170,12 @@ export class SessionOrchestrator {
   private snapshotVersion = 0;
   private rollingSummary: string;
   private coverage: SessionCoverageItem[];
+  // The narrative-arc section the interview is currently in (#67). Initialized
+  // from brief.arc + coverage state in the constructor, threaded into every
+  // model/fallback call, and advanced only when the model returns a valid arc
+  // section id (validated in the commit pipeline, after the stale-generation
+  // guard). Null when the brief has no arc — preserving pre-#67 behavior.
+  private activeSectionId: string | null = null;
   private currentTurn: CurrentTurn | null = null;
   // True once the current turn's answer is committed but before the next turn is
   // built. If realizing the next question fails here, resume() must advance to
@@ -237,6 +243,34 @@ export class SessionOrchestrator {
     this.rollingSummary = ctx.session.rollingSummary ?? '';
     this.nextOrdinal = ctx.session.currentTurnOrdinal + 1;
     this.startedAtMs = this.now();
+    this.activeSectionId = this.initialActiveSectionId();
+  }
+
+  /**
+   * Derive the narrative-arc section to start in (#67). The arc section is not
+   * persisted; it is reconstructed from coverage state, which makes the same
+   * path correct for both fresh sessions and resumes. Walks the arc in `order`
+   * and returns the first section that still has an open (not covered, not
+   * skipped) coverage item. If every section is fully resolved, holds at the
+   * last section so the model keeps coherent closing context rather than losing
+   * its place. Returns null when the brief has no arc (pre-#67 behavior).
+   */
+  private initialActiveSectionId(): string | null {
+    const arc = this.ctx.brief.arc;
+    if (arc.length === 0) return null;
+    const statusById = new Map(this.coverage.map((c) => [c.id, c.status]));
+    const sorted = [...arc].sort((a, b) => a.order - b.order);
+    for (const section of sorted) {
+      const hasOpenItem = section.coverageItemIds.some((id) => {
+        const status = statusById.get(id);
+        return status != null && status !== 'covered' && status !== 'skipped';
+      });
+      if (hasOpenItem) return section.id;
+    }
+    // arc is non-empty (guarded above), so the last section always exists; the
+    // null fallback only satisfies the index-access type and is never reached.
+    const last = sorted[sorted.length - 1];
+    return last ? last.id : null;
   }
 
   getState(): SessionRuntimeState {
@@ -1087,6 +1121,7 @@ export class SessionOrchestrator {
       const { coverage, deltas } = this.applyAction(action, turn.id);
       this.coverage = coverage;
       this.rollingSummary = action.updatedSessionSummary || this.rollingSummary;
+      this.advanceSection(action.currentSectionId);
 
       const answeredTurn = this.composeTurn(turn, answer, 'answered', deltas);
       const persistAnswered = {
@@ -1260,7 +1295,7 @@ export class SessionOrchestrator {
         nextOrdinal: this.nextOrdinal,
         targetQuestionCount: this.ctx.targetQuestionCount,
         endAfterTurn: this.endAfterTurnRequested,
-        currentSectionId: null,
+        currentSectionId: this.activeSectionId,
         modelId: this.ctx.models.interviewer,
       }),
       this.r.nextQuestionDeadlineMs,
@@ -1280,13 +1315,13 @@ export class SessionOrchestrator {
   private fallbackAction(): NextInterviewerAction {
     const picked = pickFallback(this.ctx.brief.fallbackQuestions, {
       coverage: this.coverage,
-      currentSectionId: null,
+      currentSectionId: this.activeSectionId,
       recentQuestions: this.recentQuestionTexts.slice(-5),
       usedFallbackTexts: this.usedFallbackTexts,
     });
     if (picked) {
       this.usedFallbackTexts.push(picked.text);
-      return askAction(picked.text, picked.type, picked.targetCoverageItemIds);
+      return askAction(picked.text, picked.type, picked.targetCoverageItemIds, this.activeSectionId);
     }
     // Nothing left to ask → close gracefully.
     return {
@@ -1297,7 +1332,7 @@ export class SessionOrchestrator {
       coverageUpdates: [],
       followUpCounts: [],
       updatedSessionSummary: this.rollingSummary,
-      currentSectionId: null,
+      currentSectionId: this.activeSectionId,
       shouldCloseAfterAnswer: true,
       qualityFlags: ['none'],
     };
@@ -1340,10 +1375,32 @@ export class SessionOrchestrator {
     return { coverage: result, deltas };
   }
 
+  /**
+   * Advance the active arc section to the model's proposed section (#67).
+   * Model-primary with a validation guard: a returned id is accepted only when
+   * it names a real section in the brief's arc; an unknown id is ignored (the
+   * section holds) and logged as prompt-tuning signal. A null proposal — the
+   * model chose not to move, or the brief has no arc — also holds position. Must
+   * be called only after the stale-generation guard so a discarded turn can
+   * never shift the section for the wrong generation.
+   */
+  private advanceSection(proposed: string | null): void {
+    if (proposed == null) return;
+    if (this.ctx.brief.arc.some((s) => s.id === proposed)) {
+      this.activeSectionId = proposed;
+      return;
+    }
+    this.log.warn('session.unknown_section_id_ignored', { received: proposed });
+  }
+
   // -- helpers: build records ----------------------------------------------
   private openingQuestionRecord(): QuestionRecord {
     const q = this.ctx.brief.openingQuestion;
-    return this.questionRecordFrom(q.text, askAction(q.text, q.type, q.targetCoverageItemIds), 'opening_cache');
+    return this.questionRecordFrom(
+      q.text,
+      askAction(q.text, q.type, q.targetCoverageItemIds, this.activeSectionId),
+      'opening_cache',
+    );
   }
 
   private questionRecordFrom(text: string, action: NextInterviewerAction, source: QuestionRecord['source']): QuestionRecord {
@@ -1885,7 +1942,12 @@ function stateConflict(message: string): AppError {
   return new AppError('SESSION_STATE_CONFLICT', { message, publicMessage: message });
 }
 
-function askAction(text: string, type: QuestionRecord['type'], targets: string[]): NextInterviewerAction {
+function askAction(
+  text: string,
+  type: QuestionRecord['type'],
+  targets: string[],
+  sectionId: string | null = null,
+): NextInterviewerAction {
   return {
     action: 'ask',
     spokenText: text,
@@ -1894,7 +1956,7 @@ function askAction(text: string, type: QuestionRecord['type'], targets: string[]
     coverageUpdates: [],
     followUpCounts: [],
     updatedSessionSummary: '',
-    currentSectionId: null,
+    currentSectionId: sectionId,
     shouldCloseAfterAnswer: false,
     qualityFlags: ['none'],
   };
