@@ -3,6 +3,8 @@ import {
   buildJsonExport,
   resolveAnswerText,
   isIncompleteTurn,
+  formatTimecodeOffset,
+  computeSessionDurationLabel,
   PORTABLE_EXPORT_SCHEMA_VERSION,
   INTERVIEWER_DISPLAY_NAME,
 } from '@main/export';
@@ -47,6 +49,10 @@ function makeAnswer(
     cleanedTranscript: 'cleaned text',
     userEditedTranscript: null,
     endpointReason: 'automatic',
+    // Default speech window: started 12s into the session, ran for 8s.
+    speechStartedAt: '2026-06-23T10:00:12.000Z',
+    speechEndedAt: '2026-06-23T10:00:20.000Z',
+    durationMs: 8000,
     ...overrides,
   };
 }
@@ -54,6 +60,8 @@ function makeAnswer(
 function makeTurn(overrides: Partial<Turn> = {}): Turn {
   return {
     ordinal: 1,
+    createdAt: '2026-06-23T10:00:10.000Z',
+    completedAt: '2026-06-23T10:00:21.000Z',
     question: {
       text: 'What is your name?',
       type: 'context',
@@ -179,6 +187,67 @@ describe('isIncompleteTurn', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Timecode / duration helpers (issue #49)
+// ---------------------------------------------------------------------------
+
+describe('formatTimecodeOffset', () => {
+  it('formats sub-minute offsets as M:SS with a zero minute', () => {
+    expect(formatTimecodeOffset(0)).toBe('0:00');
+    expect(formatTimecodeOffset(12000)).toBe('0:12');
+    expect(formatTimecodeOffset(59_999)).toBe('0:59');
+  });
+
+  it('rolls over to minutes at exactly 60s', () => {
+    expect(formatTimecodeOffset(60_000)).toBe('1:00');
+    expect(formatTimecodeOffset(135_000)).toBe('2:15');
+  });
+
+  it('switches to H:MM:SS at and beyond one hour', () => {
+    expect(formatTimecodeOffset(3_599_999)).toBe('59:59');
+    expect(formatTimecodeOffset(3_600_000)).toBe('1:00:00');
+    expect(formatTimecodeOffset(3_600_000 + 12_000)).toBe('1:00:12');
+    expect(formatTimecodeOffset(3_661_000)).toBe('1:01:01');
+  });
+
+  it('clamps negative offsets to 0:00', () => {
+    expect(formatTimecodeOffset(-5000)).toBe('0:00');
+  });
+});
+
+describe('computeSessionDurationLabel', () => {
+  it('returns — when either timestamp is missing', () => {
+    expect(computeSessionDurationLabel(null, '2026-06-23T10:12:30.000Z')).toBe('—');
+    expect(computeSessionDurationLabel('2026-06-23T10:00:00.000Z', null)).toBe('—');
+    expect(computeSessionDurationLabel(null, null)).toBe('—');
+  });
+
+  it('returns — when a timestamp is unparseable or the order is inverted', () => {
+    expect(computeSessionDurationLabel('not-a-date', '2026-06-23T10:12:30.000Z')).toBe('—');
+    expect(
+      computeSessionDurationLabel('2026-06-23T10:12:30.000Z', '2026-06-23T10:00:00.000Z'),
+    ).toBe('—');
+  });
+
+  it('formats sub-minute durations as Ns', () => {
+    expect(
+      computeSessionDurationLabel('2026-06-23T10:00:00.000Z', '2026-06-23T10:00:45.000Z'),
+    ).toBe('45s');
+  });
+
+  it('formats minute-scale durations as Mm Ss (matching the existing 12m 30s example)', () => {
+    expect(
+      computeSessionDurationLabel('2026-06-23T10:00:00.000Z', '2026-06-23T10:12:30.000Z'),
+    ).toBe('12m 30s');
+  });
+
+  it('formats hour-scale durations as Hh MMm SSs', () => {
+    expect(
+      computeSessionDurationLabel('2026-06-23T10:00:00.000Z', '2026-06-23T11:05:03.000Z'),
+    ).toBe('1h 05m 03s');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Markdown export
 // ---------------------------------------------------------------------------
 
@@ -197,6 +266,49 @@ describe('buildMarkdownExport', () => {
     expect(md).toContain('- **Interviewer:** Mira');
     expect(md).toContain('- **Duration:** 12m 30s');
     expect(md).toContain('- **Questions completed:** 1 of 1');
+  });
+
+  it('stamps the turn heading with a seek timecode and spoken duration', () => {
+    // speechStartedAt is 12s after the session start; durationMs is 8000.
+    const md = buildMarkdownExport(makeInput());
+    expect(md).toContain('## 1. context [0:12] (8s)');
+  });
+
+  it('omits the timecode bracket when the session has no start timestamp', () => {
+    const md = buildMarkdownExport(
+      makeInput({
+        session: { ...makeInput().session, startedAt: null },
+      }),
+    );
+    expect(md).toContain('## 1. context');
+    expect(md).not.toContain('[0:12]');
+    // Spoken duration is independent of the session anchor, so it still shows.
+    expect(md).toContain('(8s)');
+  });
+
+  it('omits the timecode bracket when the answer has no speech start', () => {
+    const md = buildMarkdownExport(
+      makeInput({
+        turns: [makeTurn({ answer: makeAnswer({ speechStartedAt: null }) })],
+      }),
+    );
+    expect(md).not.toContain('[0:12]');
+  });
+
+  it('renders no timecode or duration for an unanswered turn', () => {
+    const md = buildMarkdownExport(makeInput({ turns: [makeTurn({ ordinal: 1, answer: null })] }));
+    // The heading line carries no timecode/duration suffix (the coverage
+    // checklist below legitimately uses `[x]`/`[ ]`, so check the heading line).
+    expect(md).toContain('## 1. context\n');
+    expect(md).not.toContain('[0:12]');
+    expect(md).not.toContain('(8s)');
+  });
+
+  it('renders the computed session duration in the metadata', () => {
+    // makeInput's session runs 10:00:00 → 10:12:30, but durationLabel is the
+    // caller's responsibility; the exporter just prints what it's given.
+    const md = buildMarkdownExport(makeInput({ durationLabel: '12m 30s' }));
+    expect(md).toContain('- **Duration:** 12m 30s');
   });
 
   it('renders one numbered section per turn with the question type', () => {
@@ -395,7 +507,7 @@ describe('buildJsonExport', () => {
     expect(turn?.question).not.toHaveProperty('mediaPlan');
   });
 
-  it('projects the answer down to transcripts plus endpointReason', () => {
+  it('projects the answer down to transcripts, endpointReason, and speech timing', () => {
     const out = buildJsonExport(
       makeInput({
         turns: [
@@ -405,27 +517,105 @@ describe('buildJsonExport', () => {
               cleanedTranscript: 'c',
               userEditedTranscript: 'u',
               endpointReason: 'manual',
+              speechStartedAt: '2026-06-23T10:00:12.000Z',
+              speechEndedAt: '2026-06-23T10:00:20.000Z',
+              durationMs: 8000,
             }),
           }),
         ],
       }),
     );
     const answer = out.turns[0]?.answer;
+    // Timing (issue #49) is now a deliberate, carried field.
     expect(answer).toEqual({
       rawTranscript: 'r',
       cleanedTranscript: 'c',
       userEditedTranscript: 'u',
       endpointReason: 'manual',
+      speechStartedAt: '2026-06-23T10:00:12.000Z',
+      speechEndedAt: '2026-06-23T10:00:20.000Z',
+      durationMs: 8000,
     });
-    // Provider/audio internals must not survive.
+    // Provider/audio/moderation internals must still not survive.
     expect(answer).not.toHaveProperty('sttProvider');
     expect(answer).not.toHaveProperty('moderation');
-    expect(answer).not.toHaveProperty('durationMs');
+    expect(answer).not.toHaveProperty('sttLatencyMs');
+    expect(answer).not.toHaveProperty('transcriptParagraphs');
   });
 
   it('keeps a null answer null', () => {
     const out = buildJsonExport(makeInput({ turns: [makeTurn({ answer: null })] }));
     expect(out.turns[0]?.answer).toBeNull();
+  });
+
+  it('carries the answer speech timing through losslessly', () => {
+    const out = buildJsonExport(
+      makeInput({
+        turns: [
+          makeTurn({
+            answer: makeAnswer({
+              speechStartedAt: '2026-06-23T10:00:12.500Z',
+              speechEndedAt: '2026-06-23T10:00:20.500Z',
+              durationMs: 8000,
+            }),
+          }),
+        ],
+      }),
+    );
+    const answer = out.turns[0]?.answer;
+    expect(answer?.speechStartedAt).toBe('2026-06-23T10:00:12.500Z');
+    expect(answer?.speechEndedAt).toBe('2026-06-23T10:00:20.500Z');
+    expect(answer?.durationMs).toBe(8000);
+  });
+
+  it('carries the turn createdAt/completedAt timestamps', () => {
+    const out = buildJsonExport(
+      makeInput({
+        turns: [
+          makeTurn({
+            createdAt: '2026-06-23T10:00:10.000Z',
+            completedAt: '2026-06-23T10:00:21.000Z',
+          }),
+        ],
+      }),
+    );
+    expect(out.turns[0]?.createdAt).toBe('2026-06-23T10:00:10.000Z');
+    expect(out.turns[0]?.completedAt).toBe('2026-06-23T10:00:21.000Z');
+  });
+
+  it('computes offsetFromStartMs from session start to speech start', () => {
+    // session starts 10:00:00, speech starts 10:00:12 → 12000ms.
+    const out = buildJsonExport(makeInput());
+    expect(out.turns[0]?.offsetFromStartMs).toBe(12000);
+  });
+
+  it('nulls offsetFromStartMs when the turn has no answer', () => {
+    const out = buildJsonExport(makeInput({ turns: [makeTurn({ answer: null })] }));
+    expect(out.turns[0]?.offsetFromStartMs).toBeNull();
+  });
+
+  it('nulls offsetFromStartMs when the session has no start timestamp', () => {
+    const out = buildJsonExport(
+      makeInput({ session: { ...makeInput().session, startedAt: null } }),
+    );
+    expect(out.turns[0]?.offsetFromStartMs).toBeNull();
+  });
+
+  it('clamps a negative offset (clock skew) to 0 while preserving raw ISO', () => {
+    // Speech start precedes session start by 1s — a clock-skew artifact.
+    const out = buildJsonExport(
+      makeInput({
+        session: { ...makeInput().session, startedAt: '2026-06-23T10:00:00.000Z' },
+        turns: [
+          makeTurn({
+            answer: makeAnswer({ speechStartedAt: '2026-06-23T09:59:59.000Z' }),
+          }),
+        ],
+      }),
+    );
+    expect(out.turns[0]?.offsetFromStartMs).toBe(0);
+    // The raw ISO value is unchanged — losslessness is preserved.
+    expect(out.turns[0]?.answer?.speechStartedAt).toBe('2026-06-23T09:59:59.000Z');
   });
 
   it('preserves the coverage delta for each turn', () => {
