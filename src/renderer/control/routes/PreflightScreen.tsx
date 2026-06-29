@@ -324,6 +324,14 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
                     ))}
                   </select>
                 </div>
+                <div className={route.notice}>
+                  <StatusIcon tone="warning" label="Headphones recommended" />
+                  <span>
+                    Wear headphones so Mira&rsquo;s voice stays out of your camera mic. CandidCue records
+                    that mic as your only audio track — it doesn&rsquo;t keep a separate raw stem to clean
+                    up later.
+                  </span>
+                </div>
               </>
             )}
           </Section>
