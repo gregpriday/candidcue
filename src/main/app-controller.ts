@@ -11,6 +11,7 @@ import type {
   PreflightState,
   PreflightCheck,
   PreparationJobResult,
+  PrepareProgress,
   CommandResult,
   ExportResult,
   SessionReview,
@@ -135,6 +136,12 @@ export class AppController {
   /** Bumped whenever provider credentials change, so a cached preflight session
    *  built with the old keys is not reused (part of the preflight cache key). */
   private credentialEpoch = 0;
+  /**
+   * In-flight project preparations, keyed by project id, so `cancelPrepare` can
+   * abort the running model call. One entry per project: starting a fresh prepare
+   * for the same id aborts and replaces any prior run (issue #48).
+   */
+  private readonly projectPrepareAborters = new Map<string, AbortController>();
 
   constructor(private readonly deps: AppControllerDeps) {}
 
@@ -223,7 +230,17 @@ export class AppController {
 
   // ---- Project preparation ---------------------------------------------
   async prepareProject(projectId: string): Promise<PreparationJobResult> {
+    // Register this run so `cancelPrepare` can reach it; a second prepare for the
+    // same project aborts and replaces the first (the UI disables the button, but
+    // IPC can still race).
+    this.projectPrepareAborters.get(projectId)?.abort();
+    const aborter = new AbortController();
+    this.projectPrepareAborters.set(projectId, aborter);
+    const emit = (phase: PrepareProgress['phase'], extra?: { charsGenerated?: number }): void => {
+      this.deps.getControl()?.send(CHANNELS.evtPrepareProgress, { projectId, phase, ...extra });
+    };
     try {
+      emit('reading');
       const aggregate = await this.deps.repository.getProject(projectId);
       if (!aggregate) throw new AppError('VALIDATION_FAILED', { publicMessage: 'Project not found.' });
 
@@ -246,22 +263,27 @@ export class AppController {
       if (compiled.length > PROJECT_SOURCE_LIMITS.maxCompiledSourceCharacters) {
         throw new AppError('SOURCE_TOO_LARGE');
       }
-      const prepared = await model.prepareProject({
-        compiledSource: compiled,
-        targetQuestionCount: resolveTargetQuestionCount(
-          aggregate.project.targetMode,
-          aggregate.project.targetValue,
-        ),
-        // Treat the editor's placeholder title as "no title" so the planner
-        // infers one from the source instead of baking the placeholder in.
-        title:
-          aggregate.project.title === DEFAULT_INTERVIEW_TITLE ? null : aggregate.project.title,
-        audience: aggregate.project.audience,
-        intendedOutcome: aggregate.project.intendedOutcome,
-        tone: aggregate.project.notesToInterviewer,
-        exclusions: [],
-        modelId: MODEL_DEFAULTS.projectPreparationModel,
-      });
+      emit('generating');
+      const prepared = await model.prepareProject(
+        {
+          compiledSource: compiled,
+          targetQuestionCount: resolveTargetQuestionCount(
+            aggregate.project.targetMode,
+            aggregate.project.targetValue,
+          ),
+          // Treat the editor's placeholder title as "no title" so the planner
+          // infers one from the source instead of baking the placeholder in.
+          title:
+            aggregate.project.title === DEFAULT_INTERVIEW_TITLE ? null : aggregate.project.title,
+          audience: aggregate.project.audience,
+          intendedOutcome: aggregate.project.intendedOutcome,
+          tone: aggregate.project.notesToInterviewer,
+          exclusions: [],
+          modelId: MODEL_DEFAULTS.projectPreparationModel,
+        },
+        aborter.signal,
+      );
+      emit('validating');
       const validated = preparedInterviewOutputSchema.parse(prepared);
       interviewBriefSchema.parse(validated.brief);
 
@@ -288,16 +310,39 @@ export class AppController {
         promptVersion: CURRENT_PROMPT_VERSION,
         createdAt: new Date().toISOString(),
       };
+      // A cancel can land after the model returns but before we commit; bail
+      // before any write so a cancelled run never persists a plan.
+      if (aborter.signal.aborted) throw new AppError('PREPARE_CANCELLED');
+      emit('saving');
       await this.deps.repository.savePlan(plan);
       await this.deps.repository.setActivePlan(projectId, plan.id);
       // Align the project's stored hash with the prepared baseline so readiness
       // is accurate right after prepare even if it had drifted (e.g. a legacy
       // text/plain → markdown migration that left the old hash in place).
       await this.deps.repository.updateProjectSourceHash(projectId, sourceHash);
+      emit('done');
       return { ok: true, planId: plan.id, warnings: validated.warnings.map((w) => w.message), error: null };
     } catch (err) {
+      emit('failed');
+      // A user cancel aborts the in-flight model call, which rejects with an
+      // abort-shaped error. Surface it under a dedicated code so the renderer
+      // tears the panel down silently instead of flashing a failure message.
+      if (aborter.signal.aborted) {
+        return { ok: false, planId: null, warnings: [], error: new AppError('PREPARE_CANCELLED').toPublic() };
+      }
       return { ok: false, planId: null, warnings: [], error: this.toPublicError(err) };
+    } finally {
+      // Only release the slot if this run still owns it (a newer prepare for the
+      // same project may have replaced the controller).
+      if (this.projectPrepareAborters.get(projectId) === aborter) {
+        this.projectPrepareAborters.delete(projectId);
+      }
     }
+  }
+
+  /** Abort an in-flight project preparation (issue #48); a no-op if none is running. */
+  cancelPrepare(projectId: string): void {
+    this.projectPrepareAborters.get(projectId)?.abort();
   }
 
   /**

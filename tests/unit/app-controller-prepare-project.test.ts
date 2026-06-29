@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AppController } from '@main/app-controller';
 import { NOOP_LOGGER } from '@main/interview/ports';
 import { compileProjectSource } from '@main/interview/source-compiler';
+import { CHANNELS } from '@shared/contracts';
 import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 import { AppError } from '@shared/errors/app-error';
 
@@ -66,12 +67,16 @@ function contentForCompiledLength(compiledLength: number): string {
 
 interface BuildOptions {
   documents: Array<{ id?: string; title?: string; content: string; sortOrder?: number }>;
+  /** Override the repository's getLatestPlan (e.g. to defer it for a cancel race). */
+  getLatestPlan?: () => Promise<null>;
 }
 
 function build(opts: BuildOptions) {
   const savePlan = vi.fn(async () => {});
   const setActivePlan = vi.fn(async () => {});
   const updateProjectSourceHash = vi.fn(async () => {});
+  // Stand-in for the control WebContents so prepare-progress emissions are captured.
+  const send = vi.fn();
 
   const documents = opts.documents.map((d, i) => ({
     id: d.id ?? `doc-${i + 1}`,
@@ -103,7 +108,7 @@ function build(opts: BuildOptions) {
   const controller = new AppController({
     repository: {
       getProject: async () => aggregate,
-      getLatestPlan: async () => null,
+      getLatestPlan: opts.getLatestPlan ?? (async () => null),
       savePlan,
       setActivePlan,
       updateProjectSourceHash,
@@ -114,7 +119,7 @@ function build(opts: BuildOptions) {
     } as never,
     logger: NOOP_LOGGER,
     videosRoot: '',
-    getControl: () => null,
+    getControl: () => ({ send }) as never,
     getStage: () => null,
     ensureStageWindow: () => {
       throw new Error('stage window must not be opened during preparation');
@@ -122,7 +127,14 @@ function build(opts: BuildOptions) {
     isDisplayConnected: () => true,
   });
 
-  return { controller, savePlan, setActivePlan, updateProjectSourceHash };
+  return { controller, savePlan, setActivePlan, updateProjectSourceHash, send };
+}
+
+/** Ordered list of prepare-progress phases emitted to the (fake) control window. */
+function emittedPhases(send: ReturnType<typeof vi.fn>): string[] {
+  return send.mock.calls
+    .filter((call) => call[0] === CHANNELS.evtPrepareProgress)
+    .map((call) => (call[1] as { phase: string }).phase);
 }
 
 describe('AppController.prepareProject compiled-source budget', () => {
@@ -237,5 +249,111 @@ describe('AppController.prepareProject compiled-source budget', () => {
     expect(savePlan).not.toHaveBeenCalled();
     expect(setActivePlan).not.toHaveBeenCalled();
     expect(updateProjectSourceHash).not.toHaveBeenCalled();
+  });
+});
+
+describe('AppController.prepareProject staged progress (issue #48)', () => {
+  beforeEach(() => {
+    prepareProjectSpy.mockClear();
+  });
+
+  it('emits reading → generating → validating → saving → done on the happy path', async () => {
+    const { controller, send } = build({
+      documents: [{ id: DOC_ID, title: DOC_TITLE, content: 'A short interview source.' }],
+    });
+
+    const result = await controller.prepareProject('project-1');
+
+    expect(result.ok).toBe(true);
+    expect(emittedPhases(send)).toEqual(['reading', 'generating', 'validating', 'saving', 'done']);
+    // Every emission is tagged with the project id so the renderer can filter.
+    const payloads = send.mock.calls
+      .filter((c) => c[0] === CHANNELS.evtPrepareProgress)
+      .map((c) => c[1] as { projectId: string });
+    expect(payloads).not.toHaveLength(0);
+    expect(payloads.every((p) => p.projectId === 'project-1')).toBe(true);
+  });
+
+  it('emits reading → failed when the source gate rejects, before reaching the model', async () => {
+    const { controller, send } = build({
+      documents: [{ id: DOC_ID, title: DOC_TITLE, content: '   ' }],
+    });
+
+    const result = await controller.prepareProject('project-1');
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('VALIDATION_FAILED');
+    expect(emittedPhases(send)).toEqual(['reading', 'failed']);
+    expect(prepareProjectSpy).not.toHaveBeenCalled();
+  });
+
+  it('emits reading → generating → failed when the model rejects', async () => {
+    prepareProjectSpy.mockRejectedValueOnce(new AppError('OPENAI_TIMEOUT'));
+    const { controller, send } = build({
+      documents: [{ id: DOC_ID, title: DOC_TITLE, content: 'A short interview source.' }],
+    });
+
+    const result = await controller.prepareProject('project-1');
+
+    expect(result.ok).toBe(false);
+    expect(emittedPhases(send)).toEqual(['reading', 'generating', 'failed']);
+  });
+
+  it('maps a cancelled prepare to PREPARE_CANCELLED and persists no plan', async () => {
+    const { controller, savePlan, setActivePlan } = build({
+      documents: [{ id: DOC_ID, title: DOC_TITLE, content: 'A short interview source.' }],
+    });
+
+    // The aborter is registered synchronously, so cancelling immediately after
+    // starting aborts the run before the model resolves.
+    const promise = controller.prepareProject('project-1');
+    controller.cancelPrepare('project-1');
+    const result = await promise;
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('PREPARE_CANCELLED');
+    expect(result.planId).toBeNull();
+    expect(savePlan).not.toHaveBeenCalled();
+    expect(setActivePlan).not.toHaveBeenCalled();
+  });
+
+  it('persists no plan when cancelled after the model resolves, during the save phase', async () => {
+    // Block getLatestPlan so the run pauses after the model returns (signal still
+    // unaborted) but before any write — a deterministic window to cancel mid-save.
+    let releaseLatest: () => void = () => {};
+    let enteredLatest: () => void = () => {};
+    const entered = new Promise<void>((resolve) => {
+      enteredLatest = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseLatest = resolve;
+    });
+    const { controller, savePlan, setActivePlan } = build({
+      documents: [{ id: DOC_ID, title: DOC_TITLE, content: 'A short interview source.' }],
+      getLatestPlan: async () => {
+        enteredLatest();
+        await gate;
+        return null;
+      },
+    });
+
+    const promise = controller.prepareProject('project-1');
+    await entered; // model resolved; now parked in getLatestPlan with no abort yet
+    controller.cancelPrepare('project-1');
+    releaseLatest();
+    const result = await promise;
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('PREPARE_CANCELLED');
+    expect(savePlan).not.toHaveBeenCalled();
+    expect(setActivePlan).not.toHaveBeenCalled();
+  });
+
+  it('cancelPrepare for an unknown project is a no-op', () => {
+    const { controller } = build({
+      documents: [{ id: DOC_ID, title: DOC_TITLE, content: 'A short interview source.' }],
+    });
+
+    expect(() => controller.cancelPrepare('does-not-exist')).not.toThrow();
   });
 });
