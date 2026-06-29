@@ -430,6 +430,35 @@ describe('decideEndpoint', () => {
       });
       expect(result).toEqual({ commit: false, reason: 'wait' });
     });
+
+    it('commits even a filler blip at the floor — duration cannot tell "um" from "Yes"', () => {
+      // Accepted tradeoff (#54): a sub-MIN_MEANINGFUL_SPEECH_MS reply that the
+      // blip guard would normally drop still commits once silence reaches the
+      // floor, because a real short answer and a filler are indistinguishable by
+      // speech duration alone. Step 2 already discards a truly empty transcript.
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 800,
+        transcript: 'um',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: true, reason: 'short_answer' });
+    });
+
+    it('does not fast-commit a 1200-1499ms answer the classifier judged incomplete', () => {
+      // 1400ms is above the blip guard, so this falls through to the default
+      // wait (not too_short) once the explicit-incomplete verdict blocks the
+      // fast path.
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: 1900,
+        speechMs: 1400,
+        transcript: 'I would say',
+        classifier: decision({ shouldCommit: false, completeProbability: 0.3 }),
+      });
+      expect(result).toEqual({ commit: false, reason: 'wait' });
+    });
   });
 
   describe('default wait', () => {
