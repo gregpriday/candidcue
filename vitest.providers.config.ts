@@ -25,5 +25,9 @@ export default defineConfig({
       'tests/provider-contract/**/*.test.tsx',
     ],
     exclude: ['node_modules', '.vite'],
+    // Contract tests make real provider round-trips (e.g. prepareProject builds
+    // a full interview plan), which routinely exceed Vitest's 5s default. Give
+    // live-key runs generous headroom; keyless runs skip instantly regardless.
+    testTimeout: 30_000,
   },
 });
