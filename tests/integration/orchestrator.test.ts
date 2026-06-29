@@ -362,8 +362,11 @@ describe('SessionOrchestrator turn pipeline', () => {
       expect(h.repo.appendTurnAtomic).toHaveBeenCalled();
     });
     expect(h.orch.getState()).toBe('INTERVIEWER_BUFFERING');
-    // The stage has not been touched yet: persist precedes preload.
-    expect(h.stage.preloadSpeechPlan).not.toHaveBeenCalled();
+    // Overlap B (#52): the asked-turn persist and the stage preload now run in
+    // parallel, so preload may already be dispatched while the persist is parked.
+    // Playback is still NOT confirmed (we are awaiting the deferred persist before
+    // the stale guard), so the stage was never told to play and no turn is armed.
+    expect(h.stage.playSpeechPlan).not.toHaveBeenCalled();
 
     // Operator pauses while the persist is in flight: bumps generationId, closes
     // the mic gate. This bump happens BEFORE the old (late) myGen capture point.
@@ -433,6 +436,128 @@ describe('SessionOrchestrator turn pipeline', () => {
     const agg2 = await h.repo.getSession(h.sessionId);
     expect(agg2!.turns.find((t) => t.ordinal === 2)!.state).toBe('answered');
     expect(agg2!.turns.some((t) => t.ordinal === 3)).toBe(true);
+    expect(h.orch.getState()).toBe('USER_ARMED');
+  });
+
+  it('synthesizes the next question in parallel with the answered-turn persist (Overlap A, #52)', async () => {
+    // Prove commitPipeline fans out the answered-turn DB write and the next
+    // question's TTS instead of running them serially: with the persist deferred,
+    // the TTS must still start. If they were serial, synthesize would not be
+    // called until the persist resolved and the waitFor below would time out.
+    const tts = new FakeTts({ durationMs: 7000 });
+    const synthSpy = vi.spyOn(tts, 'synthesize');
+    h = await makeHarness({ tts });
+
+    await h.orch.prepareOpening(); // synth call 1 (opening)
+    await h.orch.begin(); // appendTurnAtomic call: turn 1 "asked"
+
+    // Defer the FIRST appendTurnAtomic from here on — the answered-turn persist
+    // inside the commit pipeline — so we can observe the TTS overlapping it.
+    let resolveAnswered!: () => void;
+    const answeredDeferred = new Promise<void>((resolve) => {
+      resolveAnswered = resolve;
+    });
+    const realAppend = h.repo.appendTurnAtomic.bind(h.repo);
+    let appendCalls = 0;
+    vi.spyOn(h.repo, 'appendTurnAtomic').mockImplementation(async (args) => {
+      appendCalls += 1;
+      if (appendCalls === 1) await answeredDeferred; // the answered persist
+      return realAppend(args);
+    });
+
+    const synthBefore = synthSpy.mock.calls.length; // 1 (opening)
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    const committed = h.orch.commitUserTurn('manual');
+
+    // The next-question synthesis (call 2) starts while the answered persist is
+    // still pending — the two run concurrently.
+    await vi.waitFor(() => {
+      expect(synthSpy.mock.calls.length).toBe(synthBefore + 1);
+    });
+
+    resolveAnswered();
+    await committed;
+
+    // The commit completed: answer stored, next turn armed.
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.turns.find((t) => t.ordinal === 1)?.state).toBe('answered');
+    expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(true);
+  });
+
+  it('aborts the speculative next-question TTS and discards the turn when paused mid-synthesis (Overlap A, #52)', async () => {
+    // A pause while the next-question TTS is in flight must abort the synthesis
+    // and the stale-generation guard must discard the next turn before it is
+    // mounted — without surfacing a TTS-failure warning (the cancel is silent).
+    const tts = new FakeTts({ durationMs: 7000, delayMs: 100 });
+    const synthSpy = vi.spyOn(tts, 'synthesize');
+    h = await makeHarness({ tts });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    const synthBefore = synthSpy.mock.calls.length;
+    const preloadBefore = vi.mocked(h.stage.preloadSpeechPlan).mock.calls.length;
+    const playBefore = vi.mocked(h.stage.playSpeechPlan).mock.calls.length;
+
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    const committed = h.orch.commitUserTurn('manual');
+
+    // Wait until the next-question synthesis has started (state INTERVIEWER_THINKING)...
+    await vi.waitFor(() => {
+      expect(synthSpy.mock.calls.length).toBe(synthBefore + 1);
+    });
+    // ...then pause mid-synthesis: bumpGeneration() aborts the in-flight TTS.
+    h.orch.pause();
+    await committed;
+
+    // The next turn was discarded pre-mount: never preloaded or played, PAUSED.
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(vi.mocked(h.stage.preloadSpeechPlan).mock.calls.length).toBe(preloadBefore);
+    expect(vi.mocked(h.stage.playSpeechPlan).mock.calls.length).toBe(playBefore);
+    // The abort is a silent cancellation — not the TTS-failure recoverable pause.
+    expect(h.snapshots.at(-1)!.recoverableWarning ?? '').not.toMatch(/voice/i);
+
+    // The answer WAS durably committed before the pause, so a later resume must
+    // ADVANCE (issue #9): turn 1 is answered and no turn 2 was persisted.
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.turns.find((t) => t.ordinal === 1)?.state).toBe('answered');
+    expect(agg!.turns.find((t) => t.ordinal === 1)?.answer?.rawTranscript).toBeTruthy();
+    expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+  });
+
+  it('preloads the stage in parallel with the asked-turn persist (Overlap B, #52)', async () => {
+    // Prove playCurrentTurn fans out the asked-turn persist and the stage preload
+    // instead of running them serially: with the persist deferred, the preload
+    // must still be dispatched. If they were serial, preload would not be called
+    // until the persist resolved and the waitFor below would time out.
+    let resolvePersist!: () => void;
+    const persistDeferred = new Promise<void>((resolve) => {
+      resolvePersist = resolve;
+    });
+    const realAppend = h.repo.appendTurnAtomic.bind(h.repo);
+    vi.spyOn(h.repo, 'appendTurnAtomic').mockImplementationOnce(async (args) => {
+      await persistDeferred; // the turn 1 "asked" persist
+      return realAppend(args);
+    });
+
+    await h.orch.prepareOpening();
+    const begun = h.orch.begin();
+
+    // The stage preload is dispatched while the asked-turn persist is still
+    // pending (Overlap B).
+    await vi.waitFor(() => {
+      expect(h.stage.preloadSpeechPlan).toHaveBeenCalled();
+    });
+    // Playback is not yet confirmed: still buffering, never told to play.
+    expect(h.orch.getState()).toBe('INTERVIEWER_BUFFERING');
+    expect(h.stage.playSpeechPlan).not.toHaveBeenCalled();
+
+    resolvePersist();
+    await begun;
+
     expect(h.orch.getState()).toBe('USER_ARMED');
   });
 

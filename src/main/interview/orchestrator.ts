@@ -172,6 +172,13 @@ export class SessionOrchestrator {
   // when the session is ended/disposed mid-RECOVERING, so a late-resolving
   // connect can't leave a freshly-opened transport dangling after teardown (#14).
   private reconnectAbort: AbortController | null = null;
+  // Aborts the speculative next-question TTS synthesis the commit pipeline runs
+  // in parallel with the answered-turn DB write (Overlap A, #52). Bumped in
+  // lockstep with generationId via bumpGeneration() so any pause/skip/endNow/
+  // recovery that invalidates the commit also cancels its in-flight TTS request
+  // instead of leaving a multi-second synthesis running for a discarded turn.
+  // Null whenever no commit fan-out is in flight.
+  private _commitAbort: AbortController | null = null;
   private lastCommittedAnswer = '';
   private interimTranscript = '';
   private micLevel = 0;
@@ -312,7 +319,7 @@ export class SessionOrchestrator {
   pause(): void {
     // `transition` records pausedFromState from the pre-transition state.
     if (!this.transition('pause')) return;
-    this.generationId++; // invalidate any in-flight provider work
+    this.bumpGeneration(); // invalidate any in-flight provider work
     this.clearEndpointTimer();
     this.deps.stage.closeMicGate();
   }
@@ -416,7 +423,7 @@ export class SessionOrchestrator {
   async skipQuestion(): Promise<void> {
     // Only valid from USER_ARMED before any speech exists for the current turn.
     this.assertCommandLegal('SKIP_QUESTION');
-    this.generationId++;
+    this.bumpGeneration();
     this.deps.stage.closeMicGate();
     // USER_ARMED → INTERVIEWER_THINKING so realizeNextQuestion's playback
     // transitions are legal (review P0-08: Skip previously fired an illegal
@@ -446,7 +453,7 @@ export class SessionOrchestrator {
 
   async endNow(): Promise<void> {
     this.assertCommandLegal('END_NOW');
-    this.generationId++;
+    this.bumpGeneration();
     // Cancel any in-flight reconnect (END_NOW is legal from RECOVERING) so its
     // connectFactory does not open a transport into a session we are ending.
     this.reconnectAbort?.abort();
@@ -466,7 +473,7 @@ export class SessionOrchestrator {
   retryRecovery(): void {
     this.assertCommandLegal('RETRY_RECOVERY');
     if (!this.transition('operatorRetry', 'operator retry')) return;
-    this.generationId++; // a fresh reconnect generation; invalidate any stale one
+    this.bumpGeneration(); // a fresh reconnect generation; invalidate any stale one
     this.recoverableWarning = 'Reconnecting to the speech service…';
     this.publishSnapshot();
     void this.launchReconnect();
@@ -483,7 +490,7 @@ export class SessionOrchestrator {
     if (!canTransition(this.state, 'deviceOrProviderNeedsRecovery')) {
       this.recoverableWarning = 'Speech service disconnected. Resume to try again.';
       if (this.transition('pause', reason)) {
-        this.generationId++;
+        this.bumpGeneration();
         this.clearEndpointTimer();
         this.deps.stage.closeMicGate();
       }
@@ -493,7 +500,7 @@ export class SessionOrchestrator {
     this.markProvider('inworldStt', 'degraded');
     this.recoverableWarning = 'Reconnecting to the speech service…';
     this.transition('deviceOrProviderNeedsRecovery', reason);
-    this.generationId++; // invalidate any in-flight provider work
+    this.bumpGeneration(); // invalidate any in-flight provider work
     this.clearEndpointTimer();
     this.deps.stage.closeMicGate();
     void this.launchReconnect();
@@ -615,6 +622,23 @@ export class SessionOrchestrator {
   dispose(): void {
     this.clearEndpointTimer();
     this.reconnectAbort?.abort();
+    this._commitAbort?.abort();
+    this._commitAbort = null;
+  }
+
+  /**
+   * Advance the generation counter and cancel any in-flight commit-pipeline TTS.
+   * Every generationId bump invalidates a running commit (its stale-gen guard
+   * discards the result), so the speculative TTS synthesis the commit fan-out
+   * started (Overlap A, #52) must be aborted in lockstep — otherwise a pause/
+   * skip/endNow/recovery would leave a multi-second synthesis running for a turn
+   * the operator already abandoned. Coupling the two here means no bump site can
+   * forget the abort. A no-op when no commit fan-out is in flight.
+   */
+  private bumpGeneration(): void {
+    this.generationId++;
+    this._commitAbort?.abort();
+    this._commitAbort = null;
   }
 
   /** Evaluate whether the conservative/balanced classifier should auto-commit. */
@@ -700,16 +724,22 @@ export class SessionOrchestrator {
     // failStagePlayback, no recoverable warning).
     const myGen = this.generationId;
 
-    // Persist the turn as "asked" before playback so a crash after the answer
-    // but before the next question can resume cleanly (spec §10.6).
-    await this.persistAskedTurn(turn);
-
+    // Build the playback plan up front: buildPlaybackPlan only reads the cached
+    // TTS buffer (set in mountPreparedTurn) and copies it for IPC — no I/O — so
+    // it can feed the preload immediately.
     const plan = await this.buildPlaybackPlan(turn);
 
-    // Playback is only "confirmed" when the stage reports ready then ended. A
-    // stage error or a deadline timeout returns false: Mira never actually
-    // spoke, so we must NOT advance to audioEnded / open the mic / arm the turn.
-    const preloaded = await this.deps.stage.preloadSpeechPlan(plan);
+    // Overlap B (#52): persist the turn as "asked" (crash-recovery, spec §10.6)
+    // IN PARALLEL with shipping the plan to the renderer for decode. These were
+    // serial; the persist's DB write and the renderer's decodeAudioData are
+    // independent waits. Sending the plan early is safe — the renderer only PLAYS
+    // on playSpeechPlan, never on preload. Playback is only "confirmed" when the
+    // stage reports ready: a stage error or deadline timeout returns false, so
+    // Mira never actually spoke and we must NOT advance / open the mic / arm.
+    const [, preloaded] = await Promise.all([
+      this.persistAskedTurn(turn),
+      this.deps.stage.preloadSpeechPlan(plan),
+    ]);
     if (myGen !== this.generationId) {
       this.log.info('session.stale_playback_discarded', { turnId: turn.id, phase: 'preload' });
       return;
@@ -869,26 +899,19 @@ export class SessionOrchestrator {
         return;
       }
 
-      // 4. Apply coverage + summary, persist the answered turn atomically.
+      // 4. Apply coverage + summary, compose the answered turn for persistence.
       const { coverage, deltas } = this.applyAction(action, turn.id);
       this.coverage = coverage;
       this.rollingSummary = action.updatedSessionSummary || this.rollingSummary;
 
       const answeredTurn = this.composeTurn(turn, answer, 'answered', deltas);
-      await this.deps.repository.appendTurnAtomic({
+      const persistAnswered = {
         sessionId: this.ctx.session.id,
         turn: answeredTurn,
         coverage: this.coverage,
         rollingSummary: this.rollingSummary,
         currentTurnOrdinal: turn.ordinal,
-      });
-      // The answer is durably committed. If realizing the next question now
-      // fails, resume() advances instead of replaying this answered turn (#9).
-      this.currentTurnAnswered = true;
-      this.recentQuestionTexts.push(turn.question.text);
-      // Remember the committed answer so a subsequent skip feeds the model real
-      // prior context instead of an empty string (CORR-08).
-      this.lastCommittedAnswer = cleanedText;
+      };
 
       // 5. Decide: close, or build + play the next question.
       // Hard safety cap (issue #17): if enough questions have been posed, force
@@ -912,6 +935,9 @@ export class SessionOrchestrator {
         this.endAfterTurnRequested ||
         hardCapReached;
       if (shouldClose) {
+        // No next question to synthesize — persist the answer serially, then end.
+        await this.deps.repository.appendTurnAtomic(persistAnswered);
+        this.markAnswerCommitted(turn, cleanedText);
         if (closedByHardCap) {
           // Set before the transitions: completeSession()'s transition()
           // publishes a snapshot that reads recoverableWarning, so the COMPLETED
@@ -939,7 +965,60 @@ export class SessionOrchestrator {
         return;
       }
 
-      await this.realizeNextQuestion(action, 'model');
+      // 6. Overlap A (#52): synthesize the next question's audio IN PARALLEL with
+      // the answered-turn persist. They are independent — the persist writes the
+      // turn we just finished; the synthesis produces the turn we play next — and
+      // were previously serial, so fanning them out trims the persist time off
+      // the gap. The synthesis is speculative: a pause/skip/recovery aborts it
+      // via _commitAbort (set below, bumped by bumpGeneration), and the
+      // stale-generation guard discards its result before it is ever mounted.
+      const nextRecord = this.questionRecordFrom(this.validateAndRepair(action), action, 'model');
+      const ac = new AbortController();
+      this._commitAbort = ac;
+      const [appendOutcome, ttsOutcome] = await Promise.allSettled([
+        this.deps.repository.appendTurnAtomic(persistAnswered),
+        this.synthesizeSpeech(nextRecord, ac.signal),
+      ]);
+      if (this._commitAbort === ac) this._commitAbort = null;
+
+      // The answer is durable the moment its persist resolves. Record the resume
+      // sentinels (#9, CORR-08) immediately — independent of what happened to the
+      // speculative TTS — so any pause/skip/failure from here advances rather
+      // than replays the already-committed answer.
+      if (appendOutcome.status === 'fulfilled') {
+        this.markAnswerCommitted(turn, cleanedText);
+      } else {
+        // The answer was NOT persisted: a hard pipeline failure. resume() replays
+        // this turn (currentTurnAnswered stays false). The aborted/failed TTS is
+        // irrelevant here.
+        this.commitInFlight = false;
+        await this.handlePipelineFailure(appendOutcome.reason);
+        return;
+      }
+
+      // Stale check — a pause/skip/endNow/recovery during the fan-out bumped the
+      // generation (and aborted the in-flight TTS). The answer is safely
+      // persisted above; silently discard the speculative next turn before it is
+      // mounted (mirrors the post-LLM guard: a silent bail, no warning).
+      if (myGen !== this.generationId) {
+        this.log.info('session.stale_result_discarded', { turnId: turn.id });
+        this.commitInFlight = false;
+        return;
+      }
+
+      // A non-abort TTS failure (deadline timeout / provider down): the answer is
+      // durable but there is no audio. Route to a recoverable pause; resume
+      // advances to re-realize the next question (#9).
+      if (ttsOutcome.status === 'rejected') {
+        this.commitInFlight = false;
+        await this.handlePipelineFailure(ttsOutcome.reason);
+        return;
+      }
+
+      // 7. Mount the freshly synthesized turn (all state writes, gated on the
+      // stale guard above) and play it.
+      this.mountPreparedTurn(nextRecord, ttsOutcome.value);
+      await this.playCurrentTurn('next-question');
       this.commitInFlight = false;
     } catch (err) {
       this.commitInFlight = false;
@@ -953,6 +1032,19 @@ export class SessionOrchestrator {
     const record = this.questionRecordFrom(validatedText, action, source);
     await this.buildAndCacheTurn(record, source);
     await this.playCurrentTurn('next-question');
+  }
+
+  /**
+   * Record that the current turn's answer is durably persisted: set the
+   * answered-turn resume sentinel (#9, so resume() advances instead of replaying
+   * a wiped turn), remember the asked question text, and cache the cleaned answer
+   * so a later skip feeds the model real prior context (CORR-08). Called only
+   * once the answered-turn appendTurnAtomic has resolved.
+   */
+  private markAnswerCommitted(turn: CurrentTurn, cleanedText: string): void {
+    this.currentTurnAnswered = true;
+    this.recentQuestionTexts.push(turn.question.text);
+    this.lastCommittedAnswer = cleanedText;
   }
 
   private async generateNextActionOrFallback(
@@ -1081,23 +1173,45 @@ export class SessionOrchestrator {
     };
   }
 
-  /** Synthesize TTS, plan media, and set the current turn. */
-  private async buildAndCacheTurn(record: QuestionRecord, _source: QuestionRecord['source']): Promise<void> {
+  /**
+   * Synthesize the question's audio. PURE with respect to orchestrator state —
+   * it touches no shared fields (`currentTurn`, `_lastTts`, `recentClipIds`,
+   * calibrator, provider health), so the commit pipeline can run it concurrently
+   * with the answered-turn DB write (Overlap A, #52) without a chance of
+   * corrupting state for the wrong turn. All of those writes live in
+   * {@link mountPreparedTurn}, applied only after the stale-generation guard
+   * passes. The optional `signal` lets a pause/skip/recovery abort the in-flight
+   * request (see {@link bumpGeneration}). On timeout or abort the deadline
+   * fallback throws `TTS_FAILED`.
+   */
+  private async synthesizeSpeech(record: QuestionRecord, signal?: AbortSignal): Promise<TtsResult> {
     const tts = await withDeadlineFallback(
-      this.deps.tts.synthesize({
-        text: record.text,
-        voiceId: this.ctx.voiceId,
-        style: 'neutral',
-        speakingRate: 1.0,
-        outputFormat: 'wav',
-        sampleRate: this.ctx.ttsSampleRate,
-      }),
+      this.deps.tts.synthesize(
+        {
+          text: record.text,
+          voiceId: this.ctx.voiceId,
+          style: 'neutral',
+          speakingRate: 1.0,
+          outputFormat: 'wav',
+          sampleRate: this.ctx.ttsSampleRate,
+        },
+        signal,
+      ),
       this.r.ttsDeadlineMs,
       () => {
         throw new AppError('TTS_FAILED', { recoverable: true, retryAction: 'retry-tts' });
       },
     );
-    const ttsResult = tts.value;
+    return tts.value;
+  }
+
+  /**
+   * Commit a freshly synthesized turn into orchestrator state: plan its media,
+   * build `currentTurn`, cache the TTS buffer, and advance the ordinal. Must run
+   * synchronously AFTER the stale-generation guard passes — every write here is
+   * the irreversible "this is now the live turn" step that the guard protects.
+   */
+  private mountPreparedTurn(record: QuestionRecord, ttsResult: TtsResult): void {
     this.markProvider('inworldTts', 'ok');
     this.calibrator.update(wordCount(record.text), ttsResult.durationMs);
     const media = planSpeaking(ttsResult.durationMs, this.ctx.clips, this.recentClipIds, {
@@ -1121,6 +1235,18 @@ export class SessionOrchestrator {
     this.currentTurnAnswered = false;
     this.nextOrdinal = this.currentTurn.ordinal + 1;
     this._lastTts = ttsResult;
+  }
+
+  /**
+   * Synthesize TTS and mount the turn, serially. Used by every realization path
+   * except the commit pipeline (opening, skip, resume-advance, repeat), which
+   * have no concurrent DB write to overlap. The commit pipeline instead calls
+   * {@link synthesizeSpeech} and {@link mountPreparedTurn} directly so it can fan
+   * the synthesis out against the answered-turn persist (Overlap A, #52).
+   */
+  private async buildAndCacheTurn(record: QuestionRecord, _source: QuestionRecord['source']): Promise<void> {
+    const ttsResult = await this.synthesizeSpeech(record);
+    this.mountPreparedTurn(record, ttsResult);
   }
 
   private _lastTts: Awaited<ReturnType<TextToSpeechAdapter['synthesize']>> | null = null;
