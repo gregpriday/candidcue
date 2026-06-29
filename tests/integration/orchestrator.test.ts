@@ -3073,7 +3073,10 @@ describe('SessionOrchestrator follow-up cap gate (#66)', () => {
     await answerOnce(1);
 
     // A contradiction is a different signal (fact correction): the gate stays
-    // out of it and injects no follow-up, so the budget is untouched.
+    // out of it and injects no follow-up, so the budget is untouched. Assert the
+    // model's question is asked verbatim too — a bank fallback would also leave
+    // the count at 0, so the count alone can't prove the gate stayed out.
+    expect(await questionAt(2)).toBe('Earlier you framed it differently, which is it?');
     expect(await followUpCountOf('cov-problem')).toBe(0);
   });
 
@@ -3119,5 +3122,53 @@ describe('SessionOrchestrator follow-up cap gate (#66)', () => {
     // rather than probe an untrackable point, and no budget is spent.
     expect(await questionAt(2)).toBe(FALLBACK_TEXT);
     expect(await followUpCountOf('cov-problem')).toBe(0);
+  });
+
+  it('holds an over-budget target at its cap even when the model self-reports it (mixed targets)', async () => {
+    // cov-a has a 1-follow-up budget, cov-b has 2. The regression guard: when a
+    // later probe targets BOTH (cov-a exhausted, cov-b with budget) and the model
+    // also self-reports a count for the exhausted cov-a, that stray count must be
+    // dropped — not incremented past cov-a's cap.
+    const twoItem: InterviewBrief = {
+      ...brief(),
+      coverageItems: [
+        { id: 'cov-a', label: 'A', objective: 'Explain A.', priority: 'must', status: 'not_started', evidenceTurnIds: [], maxFollowUps: 1, sourceRefs: [] },
+        { id: 'cov-b', label: 'B', objective: 'Explain B.', priority: 'must', status: 'not_started', evidenceTurnIds: [], maxFollowUps: 2, sourceRefs: [] },
+      ],
+      openingQuestion: { text: 'What is the core problem you set out to solve here?', type: 'opening', targetCoverageItemIds: ['cov-a'], useWhen: 'Session start' },
+      fallbackQuestions: [{ text: FALLBACK_TEXT, type: 'mechanism', targetCoverageItemIds: ['cov-b'], useWhen: 'fallback' }],
+    };
+    const model = new FakeInterviewModel({
+      scriptedActions: [
+        // Turn 1 answer → probe cov-a (0 → 1, now at its cap of 1).
+        { action: 'ask', spokenText: 'Can you give a concrete example for A?', qualityFlags: ['needs_specific_example'], targetCoverageItemIds: ['cov-a'] },
+        // Turn 2 answer → probe targets BOTH; cov-a is capped, cov-b has budget.
+        // The model also (wrongly) self-reports a count for the capped cov-a.
+        { action: 'ask', spokenText: 'What did that look like across both areas?', qualityFlags: ['needs_clarification'], targetCoverageItemIds: ['cov-a', 'cov-b'], followUpCounts: [{ coverageItemId: 'cov-a', count: 1 }] },
+      ],
+    });
+    h = await makeHarness({ model, brief: twoItem });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    await answerOnce(1); // cov-a 0 → 1 (at cap)
+    await answerOnce(2); // cov-a stays 1 (stray self-report dropped); cov-b 0 → 1
+
+    expect(await followUpCountOf('cov-a')).toBe(1);
+    expect(await followUpCountOf('cov-b')).toBe(1);
+  });
+
+  it('increments only once when the model repeats a target id', async () => {
+    const model = new FakeInterviewModel({
+      scriptedActions: [
+        { action: 'ask', spokenText: 'Can you give a specific example of that?', qualityFlags: ['needs_specific_example'], targetCoverageItemIds: ['cov-problem', 'cov-problem'] },
+      ],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    await answerOnce(1);
+
+    // A duplicated target must advance the budget by exactly one, not two.
+    expect(await followUpCountOf('cov-problem')).toBe(1);
   });
 });

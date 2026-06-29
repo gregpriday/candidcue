@@ -1456,13 +1456,17 @@ export class SessionOrchestrator {
     // than probe the same exhausted point again.
     if (underBudget.length === 0) return this.fallbackAction();
 
-    // Pass the probe through, but make the increment authoritative: drop any
-    // model-supplied counts for the under-budget targets (so a model entry plus
-    // our injected one cannot double-count in applyAction), then inject one each.
-    const underBudgetSet = new Set(underBudget);
+    // Pass the probe through, but make the increment authoritative. Strip ANY
+    // model-supplied counts for the targeted items — both the under-budget ones
+    // (replaced by the injection below) and any over-budget target the model
+    // also reported, which must NOT advance past its cap — then inject exactly
+    // one per DISTINCT under-budget target (a model that repeats a target id must
+    // not double-count). Counts for non-targeted items are left untouched.
+    const targetedSet = new Set(action.targetCoverageItemIds);
+    const distinctUnderBudget = [...new Set(underBudget)];
     const followUpCounts = [
-      ...action.followUpCounts.filter((fc) => !underBudgetSet.has(fc.coverageItemId)),
-      ...underBudget.map((coverageItemId) => ({ coverageItemId, count: 1 })),
+      ...action.followUpCounts.filter((fc) => !targetedSet.has(fc.coverageItemId)),
+      ...distinctUnderBudget.map((coverageItemId) => ({ coverageItemId, count: 1 })),
     ];
     return { ...action, followUpCounts };
   }
