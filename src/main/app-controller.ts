@@ -18,6 +18,7 @@ import type {
   PrepareSessionInput,
   PublicSettings,
   StageBootstrap,
+  ListeningClipRef,
   ProviderCredentialInput,
   InterviewModelAdapter,
   ModerationAdapter,
@@ -872,13 +873,24 @@ export class AppController {
       (this.active ? getInterviewerCharacter(this.active.characterId) : null) ??
       getInterviewerCharacters()[0]!;
     const manifest = loadManifest(`${this.deps.videosRoot}/${character.mediaRootPath}`);
+    const toClipRef = (c: (typeof manifest.clips)[number]): ListeningClipRef => ({
+      clipId: c.id,
+      url: mediaUrl(c.relativePath),
+      durationMs: c.durationMs,
+    });
+    // Backchannel clips are audio-only and tagged 'backchannel'; they must NOT
+    // appear in listeningClips or VideoDeck would feed them to a <video> element.
     const listeningClips = manifest.clips
-      .filter((c) => c.mode === 'listening' && c.enabled)
-      .map((c) => ({ clipId: c.id, url: mediaUrl(c.relativePath), durationMs: c.durationMs }));
+      .filter((c) => c.mode === 'listening' && c.enabled && !c.tags.includes('backchannel'))
+      .map(toClipRef);
+    const backchannelClips = manifest.clips
+      .filter((c) => c.mode === 'listening' && c.enabled && c.tags.includes('backchannel'))
+      .map(toClipRef);
     return {
       characterId: character.id,
       posterUrl: mediaUrl(character.posterPath),
       listeningClips,
+      backchannelClips,
       video: {
         fit: character.video.fit,
         mirror: character.video.mirrorByDefault,
@@ -1110,6 +1122,12 @@ class IpcStagePort implements StagePort {
   }
   closeMicGate(): void {
     /* No-op: mic state follows the published runtime state. */
+  }
+
+  playBackchannel(): void {
+    // Fire-and-forget: the stage owns a pre-decoded clip pool and picks one.
+    // No payload, no reply — must never block the commit pipeline (#53).
+    this.getStage()?.send(CHANNELS.evtPlayBackchannel);
   }
 
   setVisualState(projection: StageStateProjection): void {

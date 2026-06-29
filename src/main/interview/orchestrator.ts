@@ -1088,6 +1088,11 @@ export class SessionOrchestrator {
 
     this.transition('manualCommit', reason);
     this.deps.stage.closeMicGate();
+    // Acknowledge the instant the turn commits, BEFORE any await, so the founder
+    // hears a reaction while STT finalizes and the next question synthesizes
+    // (#53). Fire-and-forget: it must not delay the pipeline, and needs no
+    // stale-gen guard — a ~1s clip finishing after a later pause is harmless.
+    this.deps.stage.playBackchannel();
 
     try {
       // 1. Finalize STT (buffered fallback handled by the adapter).

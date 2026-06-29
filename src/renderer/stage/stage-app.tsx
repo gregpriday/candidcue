@@ -11,6 +11,7 @@ import { StatusOverlay } from './components/StatusOverlay';
 import type { CommandFeedback } from './components/StatusOverlay';
 import { EndConfirmOverlay } from './components/EndConfirmOverlay';
 import { SpeechPlayer } from './playback/SpeechPlayer';
+import { BackchannelPlayer } from './playback/BackchannelPlayer';
 import { CaptureController } from './audio/CaptureController';
 import { commandForKey, isCommandUsefulInState } from './stage-commands';
 import styles from './stage-app.module.css';
@@ -74,6 +75,7 @@ export function StageApp(): JSX.Element {
 
   // Engines live for the lifetime of the window; refs avoid re-creating them.
   const speechPlayerRef = useRef<SpeechPlayer | null>(null);
+  const backchannelPlayerRef = useRef<BackchannelPlayer | null>(null);
   const captureRef = useRef<CaptureController | null>(null);
   // Soft "your turn" chime at mic-arm: a lazily-created context plus the previous
   // mic gate, so the chime fires once on each closed/active -> armed transition.
@@ -208,6 +210,21 @@ export function StageApp(): JSX.Element {
     };
   }, [handleAudioReady]);
 
+  // --- Backchannel engine -------------------------------------------------
+  // Built once bootstrap arrives so it can pre-decode the character's clips.
+  useEffect(() => {
+    if (bootstrap === null) {
+      return;
+    }
+    const player = new BackchannelPlayer();
+    backchannelPlayerRef.current = player;
+    void player.init(bootstrap.backchannelClips);
+    return () => {
+      backchannelPlayerRef.current = null;
+      void player.dispose();
+    };
+  }, [bootstrap]);
+
   // --- State / plan / capture-config subscriptions ------------------------
   useEffect(() => {
     const offState = window.candidcueStage.events.onState((next) => {
@@ -259,6 +276,13 @@ export function StageApp(): JSX.Element {
       void speechPlayerRef.current?.load(next);
     });
 
+    const offBackchannel = window.candidcueStage.events.onPlayBackchannel(() => {
+      // Immediate acknowledgment at commit (#53). The player guards a suspended
+      // context and refuses to play over Mira's speech, so the current visual
+      // state is all it needs.
+      backchannelPlayerRef.current?.play(stateRef.current.visualState);
+    });
+
     const offCapture = window.candidcueStage.events.onCaptureConfig((config) => {
       // (Re)create the capture controller against the latest config.
       void startCapture(config);
@@ -267,6 +291,7 @@ export function StageApp(): JSX.Element {
     return () => {
       offState();
       offPlan();
+      offBackchannel();
       offCapture();
     };
   }, [startCapture]);

@@ -129,6 +129,7 @@ interface Harness {
   stage: StagePort & {
     openMicGate: ReturnType<typeof vi.fn>;
     closeMicGate: ReturnType<typeof vi.fn>;
+    playBackchannel: ReturnType<typeof vi.fn>;
     results: { preload: boolean; play: boolean };
   };
   snapshots: OperatorSessionSnapshot[];
@@ -216,6 +217,7 @@ async function makeHarness(overrides?: {
   const stage = {
     openMicGate: vi.fn(),
     closeMicGate: vi.fn(),
+    playBackchannel: vi.fn(),
     preloadSpeechPlan: vi.fn(async () => stageResults.preload),
     playSpeechPlan: vi.fn(async () => stageResults.play), // resolves immediately = audio ended
     setVisualState: vi.fn(),
@@ -432,6 +434,29 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(turn1.state).toBe('answered');
     // A second (next) question was generated and is now armed.
     expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(true);
+    expect(h.orch.getState()).toBe('USER_ARMED');
+  });
+
+  it('fires an immediate backchannel at commit, after closeMicGate, without blocking the pipeline (#53)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    // The backchannel fires exactly once for the commit...
+    expect(h.stage.playBackchannel).toHaveBeenCalledTimes(1);
+    // ...in the call immediately after the mic closes for this commit. The two
+    // are adjacent synchronous statements (invocationCallOrder is a global
+    // monotonic counter), so the cue precedes every awaited finalize/synthesis
+    // step — exactly the silent gap it fills. (closeMicGate also fires for the
+    // opening and the next question, so we match the adjacent one, not the last.)
+    const backchannelOrder = h.stage.playBackchannel.mock.invocationCallOrder[0]!;
+    expect(h.stage.closeMicGate.mock.invocationCallOrder).toContain(backchannelOrder - 1);
+    // Fire-and-forget: the cue did not block the pipeline — the turn still
+    // committed and armed the next question.
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.turns.find((t) => t.ordinal === 1)!.state).toBe('answered');
     expect(h.orch.getState()).toBe('USER_ARMED');
   });
 
