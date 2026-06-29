@@ -42,6 +42,7 @@ export function createProjectPreparer(responder: StructuredResponder) {
       user: 'Prepare the interview plan for the project source above.',
       schemaName: SCHEMA_NAME,
       schema: preparedInterviewOutputJsonSchema,
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       ...(signal ? { signal } : {}),
       ...(onProgress ? { onProgress } : {}),
     });

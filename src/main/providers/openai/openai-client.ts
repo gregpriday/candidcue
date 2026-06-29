@@ -1,6 +1,7 @@
 import type OpenAI from 'openai';
 
 import { AppError } from '@shared/errors/app-error';
+import type { ReasoningEffort } from '@shared/contracts/adapters';
 
 import { withRetry } from '../retry';
 
@@ -20,6 +21,14 @@ export interface StructuredRequest {
   schemaName: string;
   /** JSON Schema the model output must conform to. */
   schema: Record<string, unknown>;
+  /**
+   * Reasoning effort for reasoning-capable models. Omit to use the model default.
+   * 'low' makes the model answer fast with little internal reasoning — used for
+   * the latency-critical live question call. (The SDK does not expose 'minimal'.)
+   */
+  reasoningEffort?: ReasoningEffort;
+  /** Hard cap on output tokens. Omit for the model default. */
+  maxOutputTokens?: number;
   /** Abort signal forwarded to the underlying request. */
   signal?: AbortSignal;
   /**
@@ -199,6 +208,8 @@ export function createDefaultResponder(client: OpenAI): StructuredResponder {
                 strict: true,
               },
             },
+            ...(req.reasoningEffort ? { reasoning: { effort: req.reasoningEffort } } : {}),
+            ...(req.maxOutputTokens != null ? { max_output_tokens: req.maxOutputTokens } : {}),
           },
           req.signal ? { signal: req.signal } : undefined,
         );
@@ -239,6 +250,8 @@ export function createStreamingResponder(client: OpenAI): StructuredResponder {
                 strict: true,
               },
             },
+            ...(req.reasoningEffort ? { reasoning: { effort: req.reasoningEffort } } : {}),
+            ...(req.maxOutputTokens != null ? { max_output_tokens: req.maxOutputTokens } : {}),
           },
           req.signal ? { signal: req.signal } : undefined,
         );

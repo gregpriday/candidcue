@@ -50,6 +50,7 @@ export function createInterviewer(responder: StructuredResponder) {
       user: buildUserPayload(input),
       schemaName: SCHEMA_NAME,
       schema: nextInterviewerActionJsonSchema,
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
       ...(signal ? { signal } : {}),
     });
 

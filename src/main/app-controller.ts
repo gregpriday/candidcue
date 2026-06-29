@@ -305,6 +305,7 @@ export class AppController {
           tone: aggregate.project.notesToInterviewer,
           exclusions: [],
           modelId: MODEL_DEFAULTS.projectPreparationModel,
+          reasoningEffort: MODEL_DEFAULTS.projectPreparationReasoningEffort,
         },
         aborter.signal,
         onProgress,
@@ -726,6 +727,7 @@ export class AppController {
       clips,
       models: {
         interviewer: MODEL_DEFAULTS.interviewerModel,
+        interviewerReasoningEffort: MODEL_DEFAULTS.interviewerReasoningEffort,
         cleanup: MODEL_DEFAULTS.cleanupModel,
         endpoint: MODEL_DEFAULTS.endpointModel,
         repair: MODEL_DEFAULTS.repairModel,

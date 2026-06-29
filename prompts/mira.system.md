@@ -1,7 +1,7 @@
 ---
 id: mira-runtime
 version: 1.1.0
-model_family: gpt-5.5
+model_family: gpt-5.4-mini
 updated_at: 2026-06-29
 ---
 

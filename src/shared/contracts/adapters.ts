@@ -14,6 +14,14 @@ import type {
 // Interview model adapter (OpenAI behind a domain interface)
 // ---------------------------------------------------------------------------
 
+/**
+ * Reasoning effort for reasoning-capable models. The live question call runs
+ * 'low' so it answers fast with little internal reasoning (the heavy thinking is
+ * pre-done in preparation, which runs 'high'). NOTE: the installed OpenAI SDK's
+ * ReasoningEffort does not expose 'minimal', so 'low' is the practical floor.
+ */
+export type ReasoningEffort = 'low' | 'medium' | 'high';
+
 export interface PrepareProjectInput {
   compiledSource: string;
   targetQuestionCount: number;
@@ -26,6 +34,8 @@ export interface PrepareProjectInput {
   tone: string | null;
   exclusions: string[];
   modelId: string;
+  /** Reasoning effort for the (heavy, up-front) preparation call. */
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface RecentTurnContext {
@@ -57,6 +67,8 @@ export interface GenerateNextActionInput {
   endAfterTurn: boolean;
   currentSectionId: string | null;
   modelId: string;
+  /** Reasoning effort for the latency-critical live question call ('low'). */
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface CleanTranscriptInput {

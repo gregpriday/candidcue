@@ -17,7 +17,8 @@ Models (configurable in `src/shared/constants/runtime-defaults.ts`):
 
 | Role | Default |
 |---|---|
-| Interviewer / project prep | `gpt-5.5` |
+| Project preparation (heavy, up-front) | `gpt-5.5` (high reasoning) |
+| Live interviewer (per-turn questions) | `gpt-5.4-mini` (low reasoning) |
 | Transcript cleanup | `gpt-5.4-mini` |
 | Endpoint classifier | `gpt-5.4-nano` |
 | Moderation | `omni-moderation-latest` |

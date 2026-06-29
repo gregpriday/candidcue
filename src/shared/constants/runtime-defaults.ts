@@ -69,8 +69,14 @@ export const RETRY_POLICY = {
 } as const;
 
 export const MODEL_DEFAULTS = {
-  interviewerModel: 'gpt-5.5',
+  // The live question call is on the latency-critical path, so it runs a small,
+  // fast model with LOW reasoning — the heavy thinking is pre-done in
+  // preparation (below), which runs the capable model at HIGH reasoning. ('low'
+  // is the SDK's floor; it does not expose 'minimal'.)
+  interviewerModel: 'gpt-5.4-mini',
+  interviewerReasoningEffort: 'low',
   projectPreparationModel: 'gpt-5.5',
+  projectPreparationReasoningEffort: 'high',
   cleanupModel: 'gpt-5.4-mini',
   endpointModel: 'gpt-5.4-nano',
   repairModel: 'gpt-5.4-mini',

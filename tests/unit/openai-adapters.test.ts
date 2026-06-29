@@ -312,6 +312,18 @@ describe('createOpenAiAdapters — interview model', () => {
     expect(sessionControl.currentSectionId).toBe('sec-1');
   });
 
+  it('generateNextAction forwards reasoningEffort to the responder when set', async () => {
+    const spy = spyResponder(JSON.stringify(NEXT_ACTION));
+    const { model } = adapters(spy.responder);
+
+    await model.generateNextAction({ ...NEXT_ACTION_INPUT, reasoningEffort: 'low' });
+    expect(spy.calls[0]!.reasoningEffort).toBe('low');
+
+    // Omitted on the input → omitted on the request (model default applies).
+    await model.generateNextAction(NEXT_ACTION_INPUT);
+    expect(spy.calls[1]!.reasoningEffort).toBeUndefined();
+  });
+
   it('cleanTranscript returns a validated TranscriptCleanupResult', async () => {
     const { model } = adapters(fixedResponder(JSON.stringify(CLEANUP_RESULT)));
     const result = await model.cleanTranscript(CLEAN_INPUT);

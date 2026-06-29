@@ -12,6 +12,7 @@ import type {
   PublicProviderStatus,
   AudioMeterReading,
   AudioChunkPacket,
+  ReasoningEffort,
 } from '@shared/contracts';
 import type {
   InterviewSession,
@@ -56,6 +57,9 @@ import { NOOP_LOGGER, type Logger, type StagePort, type SnapshotSink, type Error
 
 export interface OrchestratorModels {
   interviewer: string;
+  /** Reasoning effort for the live question call ('low' in prod). Optional so
+   *  test fixtures can omit it (the model then uses its default). */
+  interviewerReasoningEffort?: ReasoningEffort;
   cleanup: string;
   endpoint: string;
   repair: string;
@@ -1469,6 +1473,9 @@ export class SessionOrchestrator {
         endAfterTurn: this.endAfterTurnRequested,
         currentSectionId: this.activeSectionId,
         modelId: this.ctx.models.interviewer,
+        ...(this.ctx.models.interviewerReasoningEffort
+          ? { reasoningEffort: this.ctx.models.interviewerReasoningEffort }
+          : {}),
       }),
       this.r.nextQuestionDeadlineMs,
       () => this.fallbackAction(),
