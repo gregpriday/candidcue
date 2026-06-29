@@ -969,15 +969,20 @@ export class SessionOrchestrator {
       let sttLatencyMs = finalize.latencyMs;
       let recovered = false;
 
-      // Mid-answer stream drop recovery (#69). A timed-out / errored finalize
-      // means the live stream did not cleanly close — the streamed partial may be
-      // truncated (or empty). If we buffered the turn's PCM, batch re-transcribe
-      // the WHOLE turn from audio rather than silently shipping the partial. Runs
-      // BEFORE the empty-answer check so a fully-dropped stream (empty partial)
-      // can still be rescued. Only flag recoveredFromBufferedAudio when this path
-      // actually produced the transcript; the plain deadline fallback (which just
-      // reuses turn.rawTranscript) leaves it false (test at §"recoveredFromBufferedAudio=false").
-      if (finalize.timedOut && this.turnPcmChunks.length > 0) {
+      // Mid-answer stream drop recovery (#69). The live stream did not cleanly
+      // close when either (a) endTurn threw / exceeded the outer wrapper
+      // (finalize.timedOut) — a null transport or abort — or (b) endTurn resolved
+      // by hitting its own finalize deadline because the provider went quiet
+      // (finalize.value.hitDeadline). The latter is the common real stream-drop
+      // case: endTurn does NOT reject, it resolves with whatever partial
+      // accumulated, so gating on timedOut alone would never fire in production.
+      // In either case the streamed partial may be truncated (or empty), so if we
+      // buffered the turn's PCM, batch re-transcribe the WHOLE turn from audio.
+      // Runs BEFORE the empty-answer check so a fully-dropped stream (empty
+      // partial) is still rescued. Only flag recoveredFromBufferedAudio when this
+      // path actually produced the transcript; a clean finalize leaves it false.
+      const finalizeUnclean = finalize.timedOut || finalize.value.hitDeadline === true;
+      if (finalizeUnclean && this.turnPcmChunks.length > 0) {
         // Register the abort with _commitAbort so a pause/skip/endNow/dispose
         // (all bump the generation) cancels the in-flight recovery POST in
         // lockstep, mirroring the speculative-TTS fan-out below — the deadline

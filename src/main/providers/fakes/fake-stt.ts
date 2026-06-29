@@ -63,6 +63,14 @@ export class FakeStt implements SpeechToTextAdapter {
    * can drive the armed-but-deaf recovery path.
    */
   public failBeginTurn = false;
+  /**
+   * Test hook: when true, `endTurn` resolves with `hitDeadline: true` (modelling
+   * the real client when the live stream drops mid-turn — the provider goes
+   * quiet, the internal deadline fires, and whatever accumulated is returned)
+   * instead of a clean FINAL. Lets tests drive the buffered-audio recovery gate
+   * (#69) through the production path rather than a thrown endTurn.
+   */
+  public deadlineOnEndTurn = false;
   /** How many times reconnect() has been called. */
   public reconnectCalls = 0;
   /**
@@ -167,7 +175,8 @@ export class FakeStt implements SpeechToTextAdapter {
     if (this.delayMs > 0) await delay(this.delayMs, options.signal);
     throwIfAborted(options.signal);
     this.currentTurnId = null;
-    return this.result();
+    const result = this.result();
+    return this.deadlineOnEndTurn ? { ...result, hitDeadline: true } : result;
   }
 
   async recoverFromAudio(
