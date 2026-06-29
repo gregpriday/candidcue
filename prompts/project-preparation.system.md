@@ -1,6 +1,6 @@
 ---
 id: project-preparation
-version: 1.1.0
+version: 1.2.0
 model_family: gpt-5.5
 updated_at: 2026-06-29
 ---
@@ -57,6 +57,12 @@ Rules:
   the desired outcome is "not specified" and cannot be confidently inferred.
   Never emit these warnings for a field the founder supplied.
 - Keep coverage items distinct and testable.
+- For every coverage item, author 2–4 `suggestedQuestions`: natural, single-
+  principal-question phrasings that would draw out that objective and encourage a
+  self-contained answer. These are Mira's backbone to ADAPT in the moment, not a
+  script — she will reshape and reorder them around what the subject actually
+  says, so make them strong starting points, varied in angle, grounded in the
+  source where evidence exists.
 - Prefer a coherent narrative over mirroring document order.
 - A fallback question must ask exactly one principal question.
 - Questions should encourage answers that name their subject and include

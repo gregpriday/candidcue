@@ -286,6 +286,7 @@ function buildCoverage(): CoverageItem[] {
 
 /** Build one mandatory launch-video coverage beat with a stable id. */
 function beat(id: string, label: string, objective: string): CoverageItem {
+  const topic = label.toLowerCase();
   return {
     id,
     label,
@@ -295,6 +296,12 @@ function beat(id: string, label: string, objective: string): CoverageItem {
     evidenceTurnIds: [],
     maxFollowUps: 2,
     sourceRefs: [],
+    // A small fake backbone so local/fake prep exercises the suggested-question
+    // path end to end (the real preparation model authors richer sets).
+    suggestedQuestions: [
+      `Tell me about ${topic}.`,
+      `What's the most important thing to understand about ${topic}?`,
+    ],
   };
 }
 

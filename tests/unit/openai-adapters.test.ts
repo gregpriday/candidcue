@@ -187,6 +187,7 @@ const NEXT_ACTION_INPUT: GenerateNextActionInput = {
       status: 'not_started',
       followUpCount: 0,
       maxFollowUps: 2,
+      suggestedQuestions: ['Why did you start building this?'],
     },
   ],
   rollingSummary: 'Nothing yet.',

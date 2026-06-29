@@ -84,7 +84,7 @@ import { interviewBriefSchema, preparedInterviewOutputSchema } from '@shared/sch
  * prepared under an older prompt (e.g. before the launch-video coverage beats)
  * is treated as stale and re-prepared rather than silently reused.
  */
-export const CURRENT_PROMPT_VERSION = '1.1.0';
+export const CURRENT_PROMPT_VERSION = '1.2.0';
 
 /**
  * Coalesce streamed preparation progress to ~4 updates/sec (issue #47). Deltas

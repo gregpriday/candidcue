@@ -48,6 +48,13 @@ export interface CoverageItem {
   evidenceTurnIds: TurnId[];
   maxFollowUps: number;
   sourceRefs: SourceRef[];
+  /**
+   * Prep-authored candidate questions for this objective — the live interviewer's
+   * backbone to ADAPT (not recite). Optional so plans prepared before this field
+   * existed still load (they were persisted by a `JSON.parse … as InterviewBrief`
+   * cast, not re-validated); a prompt-version bump re-prepares them with values.
+   */
+  suggestedQuestions?: string[];
 }
 
 export interface InterviewSection {

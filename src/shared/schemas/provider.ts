@@ -40,6 +40,10 @@ export const coverageItemSchema = z.object({
   evidenceTurnIds: z.array(z.string()),
   maxFollowUps: z.number().int().nonnegative(),
   sourceRefs: z.array(sourceRefSchema),
+  // Candidate questions Mira adapts for this objective. `.default([])` keeps the
+  // schema lenient (older fixtures / fakes may omit it); the strict JSON schema
+  // still requires the live preparation model to author them.
+  suggestedQuestions: z.array(z.string()).default([]),
 });
 
 export const interviewSectionSchema = z.object({

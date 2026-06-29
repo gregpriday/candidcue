@@ -76,6 +76,9 @@ const coverageItem = object({
   evidenceTurnIds: stringArray,
   maxFollowUps: integer,
   sourceRefs,
+  // Candidate questions the live interviewer adapts for this objective (its
+  // backbone). object() marks every key required, so the model must author them.
+  suggestedQuestions: stringArray,
 });
 
 const interviewSection = object({

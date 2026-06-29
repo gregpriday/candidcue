@@ -16,6 +16,7 @@ export function buildCoverageContext(
   status: string;
   followUpCount: number;
   maxFollowUps: number;
+  suggestedQuestions: string[];
 }> {
   return coverage.map((c) => ({
     coverageItemId: c.id,
@@ -25,6 +26,10 @@ export function buildCoverageContext(
     status: c.status,
     followUpCount: c.followUpCount,
     maxFollowUps: c.maxFollowUps,
+    // The prep-authored backbone for this objective, alongside its live status so
+    // the model adapts the right questions for what is still uncovered. `?? []`
+    // tolerates plans prepared before suggestedQuestions existed.
+    suggestedQuestions: c.suggestedQuestions ?? [],
   }));
 }
 

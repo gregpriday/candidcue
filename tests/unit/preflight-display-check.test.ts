@@ -78,7 +78,7 @@ describe('runPrepareSession display check', () => {
   });
 
   it('fails the display check and blocks begin when the selected display is gone, even with every other check green', async () => {
-    const plan = { id: 'plan-1', status: 'ready', sourceHash: 'hash-1', promptVersion: '1.1.0' };
+    const plan = { id: 'plan-1', status: 'ready', sourceHash: 'hash-1', promptVersion: '1.2.0' };
     const aggregate = { project: { sourceHash: 'hash-1' }, activePlan: plan };
     // getKey is consulted only inside startOrchestrator (which the canBegin gate
     // guards). A valid key means that if `&& displayOk` were ever dropped from
@@ -131,10 +131,10 @@ describe('runPrepareSession display check', () => {
 
   it('passes the manifest check via the getLatestPlan fallback when no plan is active', async () => {
     // The gate resolves the plan as `aggregate.activePlan ?? getLatestPlan()`.
-    // With no active plan, a current (1.1.0) latest plan whose source hash still
+    // With no active plan, a current (1.2.0) latest plan whose source hash still
     // matches must satisfy the manifest check through that fallback branch.
     const aggregate = { project: { sourceHash: 'hash-1' }, activePlan: null };
-    const latest = { id: 'plan-2', status: 'ready', sourceHash: 'hash-1', promptVersion: '1.1.0' };
+    const latest = { id: 'plan-2', status: 'ready', sourceHash: 'hash-1', promptVersion: '1.2.0' };
     const state = await makeController({
       isDisplayConnected: () => true,
       getProject: async () => aggregate,

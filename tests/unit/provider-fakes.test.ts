@@ -62,6 +62,7 @@ function nextActionInput(overrides: Partial<GenerateNextActionInput> = {}): Gene
         status: 'not_started',
         followUpCount: 0,
         maxFollowUps: 2,
+        suggestedQuestions: ['How did this get started?'],
       },
     ],
     rollingSummary: 'so far so good',

@@ -56,6 +56,8 @@ export interface GenerateNextActionInput {
     status: string;
     followUpCount: number;
     maxFollowUps: number;
+    /** Prep-authored candidate questions for this objective, for Mira to adapt. */
+    suggestedQuestions: string[];
   }>;
   rollingSummary: string;
   recentTurns: RecentTurnContext[];
