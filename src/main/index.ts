@@ -10,7 +10,7 @@ import { registerCandidCueSchemePrivileges, registerCandidCueProtocol } from './
 import { applyCspHeaders } from './security/csp';
 import { applyPermissionHandlers } from './security/permissions';
 import { createControlWindow, createStageWindow, type RendererTarget } from './windows/windows';
-import { boundsForDisplay } from './windows/display-manager';
+import { boundsForDisplay, isDisplayConnected } from './windows/display-manager';
 import { makeSenderGuard } from './ipc/sender-guards';
 import { registerControlIpc } from './ipc/register-control-ipc';
 import { registerStageIpc } from './ipc/register-stage-ipc';
@@ -122,6 +122,7 @@ async function bootstrap(): Promise<void> {
     getControl,
     getStage,
     ensureStageWindow,
+    isDisplayConnected,
   });
   controller = ctrl;
 

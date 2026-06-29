@@ -74,6 +74,8 @@ export interface AppControllerDeps {
   getControl: () => WebContents | null;
   getStage: () => WebContents | null;
   ensureStageWindow: (displayId: string | null) => WebContents;
+  /** Whether the given display id is among the currently connected displays. */
+  isDisplayConnected: (displayId: string | null) => boolean;
 }
 
 interface ActiveSession {
@@ -406,8 +408,21 @@ export class AppController {
     const planReady = plan != null && plan.status === 'ready' && plan.sourceHash === aggregate?.project.sourceHash;
     add('manifest', 'Interview plan', true, planReady, planReady ? null : 'Prepare (or regenerate) the interview plan.');
 
+    // A null display id means "use the primary display" (boundsForDisplay /
+    // ensureStageWindow both fall back to primary), which is always available —
+    // so only a specifically-chosen display that has since been unplugged fails.
+    const displayOk =
+      input.config.selectedDisplayId === null || this.deps.isDisplayConnected(input.config.selectedDisplayId);
+    add(
+      'display',
+      'Teleprompter display',
+      true,
+      displayOk,
+      displayOk ? null : 'The selected display is no longer connected. Choose another.',
+    );
+
     let canBegin = false;
-    if (aggregate && plan && hasOpenAi && hasInworld && planReady) {
+    if (aggregate && plan && hasOpenAi && hasInworld && planReady && displayOk) {
       const cacheKey = preflightCacheKey(input.projectId, plan.id, input.config, this.credentialEpoch);
       if (
         this.active &&
