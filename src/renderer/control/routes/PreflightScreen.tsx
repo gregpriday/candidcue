@@ -121,6 +121,47 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
     };
   }, []);
 
+  // The microphone grant persists across interviews and app restarts (macOS
+  // remembers it, and the main process auto-grants the Chromium media
+  // permission). So when access is already granted, unlock the device list
+  // silently on mount instead of forcing the user to re-click "Allow
+  // microphone" before every interview — the explicit button is only for a
+  // genuine first-run grant or a denial that needs fixing in system settings.
+  useEffect(() => {
+    let cancelled = false;
+    let status: PermissionStatus | null = null;
+    const sync = (state: PermissionState): void => {
+      if (cancelled) {
+        return;
+      }
+      if (state === 'granted') {
+        void requestPermission();
+      } else if (state === 'denied') {
+        setPermissionState('denied');
+      }
+    };
+    void navigator.permissions
+      ?.query({ name: 'microphone' } as PermissionDescriptor)
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+        status = result;
+        status.onchange = () => sync(status?.state ?? 'prompt');
+        sync(result.state);
+      })
+      .catch(() => {
+        // Some platforms don't support querying 'microphone'; fall back to the
+        // manual "Allow microphone" button.
+      });
+    return () => {
+      cancelled = true;
+      if (status !== null) {
+        status.onchange = null;
+      }
+    };
+  }, [requestPermission]);
+
   // The interviewer's portrait for the stage preview.
   useEffect(() => {
     let cancelled = false;
