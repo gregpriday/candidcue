@@ -1004,7 +1004,11 @@ export class SessionOrchestrator {
         this.r.sttFinalizeDeadlineMs + 100,
         () => ({ text: turn.rawTranscript, finalSegments: [], confidence: null }),
       );
-      let rawTranscript = (finalize.value.text || turn.rawTranscript || '').trim();
+      // Trim the finalize text BEFORE the fallback: a whitespace-only provider
+      // result is truthy and would otherwise short-circuit the `||`, discarding
+      // the real words streamed via onSttFinalSegment and spuriously triggering
+      // the empty-answer re-arm path below.
+      let rawTranscript = (finalize.value.text.trim() || turn.rawTranscript || '').trim();
       let sttLatencyMs = finalize.latencyMs;
       let recovered = false;
 
@@ -1067,15 +1071,24 @@ export class SessionOrchestrator {
       // Skip/Repeat. rawTranscript is already '' on this branch (defensive set).
       if (rawTranscript.length === 0) {
         this.commitInFlight = false;
+        // A dispose/pause/skip/recovery during the `await endTurn()` above bumps
+        // the generation. dispose() in particular only bumps the generation — it
+        // leaves the state on TURN_FINALIZING — so the transition() guard below
+        // would NOT catch it and we'd arm STT against a torn-down session. Mirror
+        // the non-empty stale check and bail before touching anything.
+        if (myGen !== this.generationId) {
+          this.log.info('session.stale_result_discarded', { turnId: turn.id });
+          return;
+        }
         turn.rawTranscript = '';
         turn.speechStartedAt = null;
         turn.speechEndedAt = null;
         this.interimTranscript = '';
         this.recoverableWarning = null;
         this.log.info('session.empty_answer_rearmed', { turnId: turn.id });
-        // If a pause/end-now/dispose raced in during the await above, the state
-        // moved off TURN_FINALIZING and this trigger is illegal: bail cleanly
-        // (commitInFlight is already cleared). Otherwise we land in USER_ARMED.
+        // A pause/end-now that raced in moves the state off TURN_FINALIZING, so
+        // this trigger is illegal and we bail cleanly (commitInFlight already
+        // cleared). Otherwise we land in USER_ARMED on the same turn.
         if (!this.transition('emptyAnswerRearm', 'empty answer')) return;
         this.deps.stage.openMicGate();
         await this.armUserTurn(turn);

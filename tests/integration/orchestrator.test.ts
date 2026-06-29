@@ -1019,6 +1019,7 @@ describe('SessionOrchestrator turn pipeline', () => {
     const openGatesBefore = h.stage.openMicGate.mock.calls.length;
 
     h.orch.onSpeechStarted(1000); // a cough trips speechStarted but yields no text
+    h.orch.onSttPartial('uh'); // a stray interim the re-arm must wipe
     h.orch.onSpeechStopped(2000);
     await h.orch.commitUserTurn('manual');
 
@@ -1031,6 +1032,9 @@ describe('SessionOrchestrator turn pipeline', () => {
     const snap = h.snapshots.at(-1)!;
     expect(snap.recoverableWarning).toBeNull(); // no "Resume to try again" prompt
     expect(snap.mic.gate).toBe('armed'); // mic re-opened and waiting for speech
+    // The re-armed snapshot is clean: no stray interim/final text carried over.
+    expect(snap.partialTranscript).toBe('');
+    expect(snap.finalTranscriptSoFar).toBe('');
     // Capture state was reset before the snapshot published, so userHasSpoken is
     // false again — Skip/Repeat are legal exactly as on the fresh arm, with no
     // stale speechStartedAt mis-gating them.
@@ -1120,6 +1124,65 @@ describe('SessionOrchestrator turn pipeline', () => {
     // Auto-reconnect restores the transport and lands in PAUSED.
     releaseReconnect();
     await vi.waitFor(() => expect(h.orch.getState()).toBe('PAUSED'));
+  });
+
+  it('discards the empty-answer re-arm when the session is disposed mid-finalize (issue #61)', async () => {
+    h = await makeHarness({ stt: new FakeStt({ transcript: '' }) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    expect(h.stt.beginTurnCalls).toBe(1);
+    const openGatesBefore = h.stage.openMicGate.mock.calls.length;
+
+    // Park the commit on stt.endTurn so we can dispose() AFTER the pipeline has
+    // captured its generation but BEFORE the empty-answer branch runs. dispose()
+    // only bumps the generation (it leaves the state on TURN_FINALIZING), so the
+    // transition() guard would not catch it — the explicit generation check must.
+    let releaseEnd!: () => void;
+    const endGate = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    let signalReached!: () => void;
+    const endReached = new Promise<void>((resolve) => {
+      signalReached = resolve;
+    });
+    h.stt.endTurn = vi.fn(async () => {
+      signalReached(); // the pipeline is now parked on finalize
+      await endGate;
+      return { text: '', finalSegments: [], confidence: null };
+    });
+
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(2000);
+    const commit = h.orch.commitUserTurn('manual');
+    await endReached; // generation already captured by the pipeline
+    h.orch.dispose(); // bumps the generation; state stays TURN_FINALIZING
+    releaseEnd();
+    await commit;
+
+    // The stale guard fired: STT was never re-armed against the torn-down
+    // session, and the mic gate was not reopened.
+    expect(h.stt.beginTurnCalls).toBe(1);
+    expect(h.stage.openMicGate.mock.calls.length).toBe(openGatesBefore);
+    expect(h.orch.getState()).toBe('TURN_FINALIZING');
+  });
+
+  it('commits a real answer when STT finalize returns only whitespace (issue #61)', async () => {
+    h = await makeHarness({ stt: new FakeStt({ transcript: '' }) });
+    // The provider's final result is whitespace-only (truthy), but the live
+    // stream already captured real words via onSttFinalSegment — those must win
+    // rather than being discarded into a spurious empty-answer re-arm.
+    h.stt.endTurn = vi.fn(async () => ({ text: '   ', finalSegments: [], confidence: null }));
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSttFinalSegment('A complete spoken answer.');
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.state).toBe('answered');
+    expect(turn1.answer?.rawTranscript).toContain('A complete spoken answer');
   });
 
   it('persists recoveredFromBufferedAudio=false when the finalize deadline fallback engages', async () => {
