@@ -21,6 +21,7 @@ import type {
   InterviewModelAdapter,
   ModerationAdapter,
   SpeechToTextAdapter,
+  SttSessionConfig,
   TextToSpeechAdapter,
   CaptureConfig,
   AudioMeterReading,
@@ -325,15 +326,20 @@ export class AppController {
     const start = Date.now();
     const key = this.deps.credentials.getKey(provider);
     if (!key) return { provider, ok: false, message: 'No credentials saved.', latencyMs: null };
+    let message = 'Credentials look valid.';
     try {
       if (provider === 'openai') {
         const adapters = buildOpenAiAdapters(key);
         // A cheap structured call validates the key + model access.
         await adapters.moderation.moderate('hello');
       } else {
-        // Inworld: synthesize a one-word phrase with the configured Mira voice and
-        // discard the audio — a real round-trip, not just key presence (CORR-04).
-        const { tts } = buildInworldAdapters(key, INWORLD_DEFAULTS.sttModel);
+        // Inworld: exercise BOTH provider surfaces so a green preflight can't hide
+        // a broken half. TTS authenticates over HTTP Basic; the streaming STT
+        // socket authenticates over a query param — different transports and code
+        // paths, so a working TTS round-trip says nothing about STT (issue #68).
+        const { stt, tts } = buildInworldAdapters(key, INWORLD_DEFAULTS.sttModel);
+        // 1. TTS round-trip: synthesize a one-word phrase with the configured Mira
+        //    voice and discard the audio — a real round-trip, not just key presence (CORR-04).
         const voiceId =
           (await this.deps.repository.getSetting<string>('characters.mira.inworldVoiceId')) ??
           getInterviewerCharacter('mira')?.voice.voiceId ??
@@ -346,8 +352,38 @@ export class AppController {
           outputFormat: 'wav',
           sampleRate: INWORLD_DEFAULTS.ttsSampleRate,
         });
+        // 2. STT probe: open the streaming socket (auth + transport) and close it
+        //    immediately. Reaching OPEN is the success signal — no audio is sent.
+        //    close() runs in finally so a successful probe never leaks the socket.
+        const sttProbe: SttSessionConfig = {
+          sampleRate: 16000,
+          channels: 1,
+          model: INWORLD_DEFAULTS.sttModel,
+          interimResults: false,
+        };
+        // Bound the open with an AbortController rather than racing a bare timer:
+        // aborting actually tears the half-open socket down (inworldWsConnect's
+        // onAbort closes the WebSocket), so a slow handshake can't leak a live
+        // connection the way a fire-and-forget timeout would.
+        const sttProbeAbort = new AbortController();
+        const sttProbeTimer = setTimeout(() => sttProbeAbort.abort(), 8000);
+        try {
+          await stt.connect(sttProbe, sttProbeAbort.signal);
+        } catch (err) {
+          // TTS already proved the key, so a failure here is the STT surface
+          // specifically — name it, and cover both auth and transport causes
+          // since the probe can't tell a rejected key from an unreachable socket.
+          throw new AppError('INWORLD_AUTH', {
+            publicMessage: 'Inworld STT connection failed. Please verify your API key and network connection.',
+            cause: err,
+          });
+        } finally {
+          clearTimeout(sttProbeTimer);
+          await stt.close();
+        }
+        message = 'TTS and STT connections verified.';
       }
-      return { provider, ok: true, message: 'Credentials look valid.', latencyMs: Date.now() - start };
+      return { provider, ok: true, message, latencyMs: Date.now() - start };
     } catch (err) {
       return { provider, ok: false, message: this.toPublicError(err).publicMessage, latencyMs: Date.now() - start };
     }
