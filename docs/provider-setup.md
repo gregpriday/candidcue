@@ -41,7 +41,8 @@ Credentials are set the same way in both development and packaged builds — ent
 each key in **Settings → OpenAI API Key** or **Settings → Inworld API Key**. Keys
 are encrypted immediately with Electron `safeStorage`, stored in the app's
 user-data directory, and only ever decrypted inside the main process; they are
-never written to logs and never exposed to the renderer.
+never written to logs, and stored keys are never returned to the renderer (it
+sees only whether each key is set).
 
 ## What is sent where
 
