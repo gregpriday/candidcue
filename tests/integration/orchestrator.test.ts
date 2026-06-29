@@ -420,6 +420,40 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
   });
 
+  it('closes the session instead of synthesizing an empty question when the model completes on skip (#13)', async () => {
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ action: 'complete', spokenText: '', shouldCloseAfterAnswer: true }],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    const ttsBefore = h.tts.seen.length;
+
+    await h.orch.skipQuestion();
+
+    expect(h.orch.getState()).toBe('COMPLETED');
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.session.status).toBe('completed');
+    // The empty 'complete' action must not be voiced or persisted as a turn.
+    expect(h.tts.seen.length).toBe(ttsBefore);
+    expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+  });
+
+  it('closes the session when End After Turn is armed before a skip (#13)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    const ttsBefore = h.tts.seen.length;
+    h.orch.endAfterTurn();
+
+    await h.orch.skipQuestion();
+
+    expect(h.orch.getState()).toBe('COMPLETED');
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.session.status).toBe('completed');
+    expect(h.tts.seen.length).toBe(ttsBefore);
+    expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+  });
+
   it('preserves the turn and pauses on an empty answer instead of inventing one', async () => {
     h = await makeHarness({ stt: new FakeStt({ transcript: '' }) });
     await h.orch.prepareOpening();
