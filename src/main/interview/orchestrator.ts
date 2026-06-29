@@ -622,8 +622,11 @@ export class SessionOrchestrator {
   dispose(): void {
     this.clearEndpointTimer();
     this.reconnectAbort?.abort();
-    this._commitAbort?.abort();
-    this._commitAbort = null;
+    // Bump the generation so an in-flight commit fan-out (Overlap A) trips its
+    // stale guard and silently bails — never running mountPreparedTurn or
+    // handlePipelineFailure (transition/publishSnapshot) against a torn-down
+    // orchestrator. bumpGeneration() also aborts the speculative TTS.
+    this.bumpGeneration();
   }
 
   /**
@@ -976,7 +979,14 @@ export class SessionOrchestrator {
       const ac = new AbortController();
       this._commitAbort = ac;
       const [appendOutcome, ttsOutcome] = await Promise.allSettled([
-        this.deps.repository.appendTurnAtomic(persistAnswered),
+        // If the answered persist hard-fails, the next turn is moot — abort its
+        // speculative TTS so the fan-out fails fast instead of waiting out the
+        // full ttsDeadlineMs (and burning a synthesis call) for a turn we will
+        // never mount.
+        this.deps.repository.appendTurnAtomic(persistAnswered).catch((err) => {
+          ac.abort();
+          throw err;
+        }),
         this.synthesizeSpeech(nextRecord, ac.signal),
       ]);
       if (this._commitAbort === ac) this._commitAbort = null;

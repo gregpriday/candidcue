@@ -521,11 +521,89 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(h.snapshots.at(-1)!.recoverableWarning ?? '').not.toMatch(/voice/i);
 
     // The answer WAS durably committed before the pause, so a later resume must
-    // ADVANCE (issue #9): turn 1 is answered and no turn 2 was persisted.
+    // ADVANCE (issue #9): turn 1 is answered and no turn 2 was persisted yet.
     const agg = await h.repo.getSession(h.sessionId);
     expect(agg!.turns.find((t) => t.ordinal === 1)?.state).toBe('answered');
     expect(agg!.turns.find((t) => t.ordinal === 1)?.answer?.rawTranscript).toBeTruthy();
     expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+
+    // Prove the #9 invariant end-to-end across the aborted-TTS path: because
+    // currentTurnAnswered is true, resume ADVANCES (generates + plays the next
+    // question, arming turn 2) rather than replaying the answered turn 1.
+    await h.orch.resume();
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    const aggAfter = await h.repo.getSession(h.sessionId);
+    expect(aggAfter!.turns.find((t) => t.ordinal === 1)?.state).toBe('answered');
+    expect(aggAfter!.turns.some((t) => t.ordinal === 2)).toBe(true);
+  });
+
+  it('keeps the replay path when the answered-turn persist fails during the fan-out (Overlap A, #52)', async () => {
+    // The answered-turn persist hard-fails while the next-question TTS runs. The
+    // answer is NOT durable, so currentTurnAnswered must stay false: a later
+    // resume must REPLAY turn 1 (no next-question generation) and no turn 2 is
+    // ever mounted. Covers the append-rejected branch of the fan-out matrix.
+    const model = new FakeInterviewModel({ questionTexts: ['So what changed after that?'] });
+    h = await makeHarness({ model });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin(); // turn 1 "asked" persist (real)
+
+    // Fail the answered-turn persist (the first appendTurnAtomic from here).
+    vi.spyOn(h.repo, 'appendTurnAtomic').mockImplementationOnce(async () => {
+      throw new Error('disk full');
+    });
+
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    // The hard failure routed to a recoverable pause; no next turn was mounted.
+    expect(h.orch.getState()).toBe('PAUSED');
+    let agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+
+    // Resume REPLAYS turn 1 (currentTurnAnswered stayed false): no new
+    // next-question generation and still no turn 2.
+    const modelCallsBeforeResume = model.callCount;
+    await h.orch.resume();
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    expect(model.callCount).toBe(modelCallsBeforeResume);
+    agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+  });
+
+  it('discards the in-flight commit fan-out on dispose without mutating a torn-down session (Overlap A, #52)', async () => {
+    // Dispose while the next-question synthesis is in flight. bumpGeneration() in
+    // dispose() must trip the stale guard so the fan-out silently bails — never
+    // mounting/playing the next turn and never publishing a snapshot against the
+    // torn-down orchestrator.
+    const tts = new FakeTts({ durationMs: 7000, delayMs: 100 });
+    const synthSpy = vi.spyOn(tts, 'synthesize');
+    h = await makeHarness({ tts });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    const synthBefore = synthSpy.mock.calls.length;
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    const committed = h.orch.commitUserTurn('manual');
+
+    await vi.waitFor(() => {
+      expect(synthSpy.mock.calls.length).toBe(synthBefore + 1);
+    });
+    const snapshotsBefore = h.snapshots.length;
+    const preloadBefore = vi.mocked(h.stage.preloadSpeechPlan).mock.calls.length;
+    const playBefore = vi.mocked(h.stage.playSpeechPlan).mock.calls.length;
+
+    h.orch.dispose();
+    await committed;
+
+    // The next turn was never mounted/played and nothing was published after the
+    // teardown — the stale guard absorbed the resolving fan-out.
+    expect(vi.mocked(h.stage.preloadSpeechPlan).mock.calls.length).toBe(preloadBefore);
+    expect(vi.mocked(h.stage.playSpeechPlan).mock.calls.length).toBe(playBefore);
+    expect(h.snapshots.length).toBe(snapshotsBefore);
   });
 
   it('preloads the stage in parallel with the asked-turn persist (Overlap B, #52)', async () => {
