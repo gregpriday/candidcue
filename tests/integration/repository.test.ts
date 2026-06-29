@@ -272,6 +272,7 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
     expect(saved.project.sourceHash).toBe(
       hashProjectPreparationFromDocuments(
         {
+          title: saved.project.title,
           audience: saved.project.audience,
           intendedOutcome: saved.project.intendedOutcome,
           targetMode: saved.project.targetMode,

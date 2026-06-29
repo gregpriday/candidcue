@@ -26,6 +26,10 @@ export function createProjectPreparer(responder: StructuredResponder) {
     const template = loadPromptBody(PROMPT_NAME);
     const system = fillTemplate(template, {
       targetQuestionCount: String(input.targetQuestionCount),
+      titleOrInferred: input.title?.trim() || 'not specified — infer from source',
+      audienceOrInferred: input.audience?.trim() || 'not specified — infer from source',
+      intendedOutcomeOrInferred:
+        input.intendedOutcome?.trim() || 'not specified — infer from source',
       toneOrDefault: input.tone ?? 'default (warm, curious, professional)',
       exclusionsOrNone: input.exclusions.length > 0 ? input.exclusions.join('; ') : 'none',
       compiledSource: input.compiledSource,

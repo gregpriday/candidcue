@@ -39,6 +39,7 @@ function writeValidPromptSet(dir: string): void {
   writeFileSync(
     join(dir, 'project-preparation.system.md'),
     `${frontmatter('project-preparation')}` +
+      'Framing: {{titleOrInferred}} {{audienceOrInferred}} {{intendedOutcomeOrInferred}}\n' +
       'Target: {{targetQuestionCount}} {{toneOrDefault}} {{exclusionsOrNone}}\n{{compiledSource}}\n',
   );
   writeFileSync(
@@ -105,6 +106,15 @@ describe('validatePrompts (synthetic fixtures)', () => {
 
     const result = validatePrompts(dir);
     expect(result.ok).toBe(false);
+    expect(result.problems).toContain(
+      'project-preparation.system: missing required placeholder {{titleOrInferred}}',
+    );
+    expect(result.problems).toContain(
+      'project-preparation.system: missing required placeholder {{audienceOrInferred}}',
+    );
+    expect(result.problems).toContain(
+      'project-preparation.system: missing required placeholder {{intendedOutcomeOrInferred}}',
+    );
     expect(result.problems).toContain(
       'project-preparation.system: missing required placeholder {{toneOrDefault}}',
     );

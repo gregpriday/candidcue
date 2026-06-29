@@ -237,6 +237,9 @@ export class AppController {
           aggregate.project.targetMode,
           aggregate.project.targetValue,
         ),
+        title: aggregate.project.title,
+        audience: aggregate.project.audience,
+        intendedOutcome: aggregate.project.intendedOutcome,
         tone: aggregate.project.notesToInterviewer,
         exclusions: [],
         modelId: MODEL_DEFAULTS.projectPreparationModel,
@@ -246,6 +249,7 @@ export class AppController {
 
       const sourceHash = hashProjectPreparationFromDocuments(
         {
+          title: aggregate.project.title,
           audience: aggregate.project.audience,
           intendedOutcome: aggregate.project.intendedOutcome,
           targetMode: aggregate.project.targetMode,

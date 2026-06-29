@@ -3,6 +3,7 @@ import type { ProjectDocument } from '../domain/project';
 
 /** Preparation-relevant project settings that influence the generated plan. */
 export interface PreparationSettings {
+  title: string | null;
   audience: string | null;
   intendedOutcome: string | null;
   targetMode: string;
@@ -32,7 +33,9 @@ export function hashProjectPreparation(
   documents: readonly PreparationDocument[],
 ): string {
   const hash = createHash('sha256');
-  hash.update('audience:');
+  hash.update('title:');
+  hash.update(settings.title ?? '');
+  hash.update('\naudience:');
   hash.update(settings.audience ?? '');
   hash.update('\noutcome:');
   hash.update(settings.intendedOutcome ?? '');
