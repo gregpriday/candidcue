@@ -16,6 +16,10 @@ interface HomeScreenProps {
 
 const DEFAULT_CHARACTER_ID = 'mira';
 
+/** A session that was interrupted (crash/quit mid-interview) and can be picked
+ *  back up. Shape mirrors the `sessions.resumable()` IPC contract. */
+type ResumableSession = Awaited<ReturnType<typeof window.candidcue.sessions.resumable>>[number];
+
 const PLAN_PILL: Record<ProjectPlanState, { tone: StatusTone; text: string }> = {
   ready: { tone: 'success', text: 'Ready' },
   stale: { tone: 'warning', text: 'Update needed' },
@@ -49,6 +53,7 @@ function metaFor(project: ProjectSummary): string {
 export function HomeScreen({ nav }: HomeScreenProps): JSX.Element {
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
   const [miraImage, setMiraImage] = useState<string | null>(null);
+  const [resumable, setResumable] = useState<ResumableSession[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -84,6 +89,29 @@ export function HomeScreen({ nav }: HomeScreenProps): JSX.Element {
     };
   }, []);
 
+  // Interrupted sessions are a launch-time recovery nudge: fetched once on
+  // mount, independently of the project list so they still surface while the
+  // list is loading or has failed. A load failure here is non-fatal — we just
+  // show no recovery section.
+  useEffect(() => {
+    let cancelled = false;
+    window.candidcue.sessions
+      .resumable()
+      .then((list) => {
+        if (!cancelled) {
+          setResumable(list);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setResumable([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const newInterview = (): void => nav.go({ name: 'project', projectId: null });
 
   // Most-recently-touched first: the top one is featured as "continue".
@@ -113,6 +141,8 @@ export function HomeScreen({ nav }: HomeScreenProps): JSX.Element {
             {error}
           </p>
         )}
+
+        {resumable.length > 0 && <ResumableSessions sessions={resumable} nav={nav} />}
 
         {sorted === null ? (
           <p className={route.empty}>Loading interviews…</p>
@@ -194,6 +224,38 @@ function FeaturedInterview({
           {action.label}
         </Button>
       </div>
+    </section>
+  );
+}
+
+/** Recovery surface for sessions interrupted by a crash or quit. Re-entry goes
+ *  through preflight (device/credential checks) rather than straight into the
+ *  operator console — after a relaunch there is no live orchestrator to attach
+ *  to, so the session restarts cleanly from the project's preflight. */
+function ResumableSessions({ sessions, nav }: { sessions: ResumableSession[]; nav: Navigator }): JSX.Element {
+  return (
+    <section className={styles.recent}>
+      <h2 className={styles.recentTitle}>Interrupted interviews</h2>
+      {/* Same grouped surface as Recent: one outline, rows split by hairlines. */}
+      <ul className={styles.list}>
+        {sessions.map((session) => {
+          const title = session.projectTitle.trim() === '' ? 'Untitled interview' : session.projectTitle;
+          const resume = (): void => nav.go({ name: 'preflight', projectId: session.projectId });
+          return (
+            <li key={session.sessionId} className={styles.row}>
+              <button type="button" className={styles.rowMain} onClick={resume} aria-label={`Resume ${title}`}>
+                <span className={styles.rowTitle}>{title}</span>
+                <span className={styles.rowMeta}>Started {formatRelative(session.startedAt)}</span>
+              </button>
+              <div className={styles.rowTrailing}>
+                <Button variant="secondary" onClick={resume} aria-label={`Resume ${title}`}>
+                  Resume
+                </Button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }
