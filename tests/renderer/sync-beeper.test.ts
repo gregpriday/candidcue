@@ -49,8 +49,11 @@ class FakeAudioContext {
   readonly destination = { id: 'destination' };
   readonly oscillators: FakeOscillator[] = [];
   readonly gains: FakeGain[] = [];
+  closed = false;
   resume = vi.fn(async () => {});
-  close = vi.fn(async () => {});
+  close = vi.fn(async () => {
+    this.closed = true;
+  });
 
   constructor() {
     FakeAudioContext.instances.push(this);
@@ -61,6 +64,10 @@ class FakeAudioContext {
   }
 
   createOscillator(): FakeOscillator {
+    // Mirror the real API: building nodes on a closed context throws.
+    if (this.closed) {
+      throw new Error('context is closed');
+    }
     const osc = new FakeOscillator();
     this.oscillators.push(osc);
     return osc;
@@ -138,6 +145,27 @@ describe('SyncBeeper', () => {
     await flush();
     // resume failed before any node was created — no tone scheduled, no crash.
     expect(ctx.oscillators).toHaveLength(0);
+  });
+
+  it('schedules nothing and never throws when disposed before resume() settles', async () => {
+    const beeper = new SyncBeeper();
+    const ctx = FakeAudioContext.instances[0];
+    let releaseResume!: () => void;
+    ctx.resume.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseResume = resolve;
+        }),
+    );
+
+    beeper.play(); // parks on the pending resume()
+    await beeper.dispose(); // closes the context mid-flight
+    releaseResume(); // resume resolves after the context is gone
+    await flush();
+
+    // createOscillator() throws on the closed context; the catch swallows it.
+    expect(ctx.oscillators).toHaveLength(0);
+    expect(ctx.close).toHaveBeenCalledOnce();
   });
 
   it('closes the context on dispose', async () => {

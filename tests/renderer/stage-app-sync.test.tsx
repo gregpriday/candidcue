@@ -107,16 +107,21 @@ afterEach(() => {
 });
 
 describe('StageApp session-start sync marker', () => {
-  it('fires the beep and shows the slate on the first move off standby', async () => {
-    await mountStage();
-    expect(beeperPlay).not.toHaveBeenCalled();
-    expect(slate()).toBeNull();
+  // The orchestrator can reach thinking|listening|speaking first depending on the
+  // session shape, so each must arm the marker on the initial move off standby.
+  it.each(['thinking', 'listening', 'speaking'] as const)(
+    'fires the beep and shows the slate on the first move off standby (%s)',
+    async (visualState) => {
+      await mountStage();
+      expect(beeperPlay).not.toHaveBeenCalled();
+      expect(slate()).toBeNull();
 
-    pushState('thinking');
+      pushState(visualState);
 
-    expect(beeperPlay).toHaveBeenCalledOnce();
-    expect(slate()).not.toBeNull();
-  });
+      expect(beeperPlay).toHaveBeenCalledOnce();
+      expect(slate()).not.toBeNull();
+    },
+  );
 
   it('auto-clears the slate after ~250ms', async () => {
     await mountStage();
@@ -149,10 +154,15 @@ describe('StageApp session-start sync marker', () => {
     expect(beeperPlay).toHaveBeenCalledTimes(2);
   });
 
-  it('ignores a standby->error transition (only live states count as start)', async () => {
-    await mountStage();
-    pushState('error');
-    expect(beeperPlay).not.toHaveBeenCalled();
-    expect(slate()).toBeNull();
-  });
+  // Only thinking|listening|speaking represent a session actually starting; the
+  // remaining non-standby states must never arm the marker.
+  it.each(['paused', 'recovering', 'complete', 'error'] as const)(
+    'ignores a standby->%s transition (not a session start)',
+    async (visualState) => {
+      await mountStage();
+      pushState(visualState);
+      expect(beeperPlay).not.toHaveBeenCalled();
+      expect(slate()).toBeNull();
+    },
+  );
 });
