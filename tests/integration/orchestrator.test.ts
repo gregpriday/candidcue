@@ -420,9 +420,13 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
   });
 
+  // The three cases below isolate each arm of skipQuestion's shouldClose guard so
+  // a regression that drops any single arm is caught (#13).
+
   it('closes the session instead of synthesizing an empty question when the model completes on skip (#13)', async () => {
+    // Isolates the `action === 'complete'` arm: shouldCloseAfterAnswer is false.
     const model = new FakeInterviewModel({
-      scriptedActions: [{ action: 'complete', spokenText: '', shouldCloseAfterAnswer: true }],
+      scriptedActions: [{ action: 'complete', spokenText: '', shouldCloseAfterAnswer: false }],
     });
     h = await makeHarness({ model });
     await h.orch.prepareOpening();
@@ -439,7 +443,33 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
   });
 
+  it('closes the session when a skip action requests close-after-answer (#13)', async () => {
+    // Isolates the `shouldCloseAfterAnswer` arm: still an 'ask' with real text,
+    // which the buggy path would have voiced as a second question.
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ action: 'ask', spokenText: 'One more thing?', shouldCloseAfterAnswer: true }],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    const ttsBefore = h.tts.seen.length;
+
+    await h.orch.skipQuestion();
+
+    expect(h.orch.getState()).toBe('COMPLETED');
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.session.status).toBe('completed');
+    expect(h.tts.seen.length).toBe(ttsBefore);
+    expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+  });
+
   it('closes the session when End After Turn is armed before a skip (#13)', async () => {
+    // Isolates the `endAfterTurnRequested` arm: the model deliberately does NOT
+    // echo the close signal, so only the orchestrator's own flag can close.
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ action: 'ask', spokenText: 'One more thing?', shouldCloseAfterAnswer: false }],
+    });
+    h = await makeHarness({ model });
     await h.orch.prepareOpening();
     await h.orch.begin();
     const ttsBefore = h.tts.seen.length;
