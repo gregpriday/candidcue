@@ -131,6 +131,13 @@ export interface NextInterviewerAction {
   currentSectionId: string | null;
   shouldCloseAfterAnswer: boolean;
   qualityFlags: QualityFlag[];
+  /**
+   * Optional per-turn delivery hint so Mira does not read every question with
+   * identical flat affect. `speakingRate` is a multiplier in the safe subset
+   * [0.85, 1.15] of Inworld's supported range; the orchestrator clamps it again
+   * before synthesis and falls back to the character default when absent.
+   */
+  deliveryHint?: { speakingRate: number };
 }
 
 export type QuestionViolation =

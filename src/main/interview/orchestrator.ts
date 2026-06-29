@@ -126,6 +126,24 @@ const MIC_STATE: Record<SessionRuntimeState, 'closed' | 'armed' | 'active'> = {
 /** How often the auto-endpoint loop re-evaluates while the user is silent. */
 const ENDPOINT_TICK_MS = 250;
 
+/**
+ * Safe subset of Inworld's supported speaking-rate range (0.5–1.5). The model's
+ * per-turn delivery hint is clamped to this narrower band so a non-compliant
+ * response can never produce a jarring pace; only `speakingRate` reaches the
+ * Inworld synthesis endpoint (the `style` field is not sent on the wire).
+ *
+ * On the live path the Zod schema (`nextInterviewerActionSchema`) already
+ * rejects out-of-band rates, so this clamp is defense-in-depth: it absorbs hints
+ * from non-validating sources (fakes, future schema widening) without an extreme
+ * rate ever reaching TTS.
+ */
+const DELIVERY_RATE_MIN = 0.85;
+const DELIVERY_RATE_MAX = 1.15;
+
+function clampDeliveryRate(rate: number): number {
+  return Math.min(DELIVERY_RATE_MAX, Math.max(DELIVERY_RATE_MIN, rate));
+}
+
 const STATUS_TEXT: Partial<Record<SessionRuntimeState, string>> = {
   INTERVIEWER_THINKING: 'Thinking',
   INTERVIEWER_BUFFERING: 'Thinking',
@@ -1228,6 +1246,7 @@ export class SessionOrchestrator {
   }
 
   private questionRecordFrom(text: string, action: NextInterviewerAction, source: QuestionRecord['source']): QuestionRecord {
+    const hintRate = action.deliveryHint?.speakingRate;
     return {
       text: text.trim(),
       type: action.questionType,
@@ -1237,6 +1256,9 @@ export class SessionOrchestrator {
       generatedAt: new Date(this.now()).toISOString(),
       ttsProvider: 'inworld',
       ttsVoiceId: this.ctx.voiceId,
+      ...(typeof hintRate === 'number' && Number.isFinite(hintRate)
+        ? { ttsSpeakingRate: clampDeliveryRate(hintRate) }
+        : {}),
       audioDurationMs: null,
       mediaPlan: null,
       generationLatencyMs: null,
@@ -1262,8 +1284,8 @@ export class SessionOrchestrator {
         {
           text: record.text,
           voiceId: this.ctx.voiceId,
-          style: 'neutral',
-          speakingRate: 1.0,
+          style: this.ctx.character.voice.style,
+          speakingRate: record.ttsSpeakingRate ?? this.ctx.character.voice.speakingRate,
           outputFormat: 'wav',
           sampleRate: this.ctx.ttsSampleRate,
         },
@@ -1467,8 +1489,8 @@ export class SessionOrchestrator {
         this.deps.tts.synthesize({
           text,
           voiceId: this.ctx.voiceId,
-          style: 'neutral',
-          speakingRate: 1.0,
+          style: this.ctx.character.voice.style,
+          speakingRate: this.ctx.character.voice.speakingRate,
           outputFormat: 'wav',
           sampleRate: this.ctx.ttsSampleRate,
         }),

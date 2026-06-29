@@ -132,6 +132,7 @@ async function makeHarness(overrides?: {
   clock?: () => number;
   logger?: Logger;
   targetQuestionCount?: number;
+  character?: InterviewerCharacter;
 }): Promise<Harness> {
   const repo = new MemoryRepository();
   await repo.migrate();
@@ -216,7 +217,7 @@ async function makeHarness(overrides?: {
   const ctx: SessionContext = {
     session,
     brief: b,
-    character: character(),
+    character: overrides?.character ?? character(),
     composedSystemPrompt: 'rules + persona',
     coverage,
     clips: overrides?.clips ?? CLIPS,
@@ -1917,5 +1918,120 @@ describe('SessionOrchestrator turn pipeline', () => {
 
     await expect(h.orch.repeatQuestion()).resolves.toBeUndefined();
     expect(h.orch.getState()).toBe('USER_ARMED');
+  });
+});
+
+// Mira used to read every question with identical flat affect because the
+// orchestrator hardcoded `speakingRate: 1.0` on every synthesis call (#56). The
+// rate now flows from the character config, overridable per turn by the model's
+// delivery hint, clamped to a safe band.
+describe('SessionOrchestrator delivery-rate threading (#56)', () => {
+  const charWithRate = (rate: number): InterviewerCharacter => {
+    const base = character();
+    return { ...base, voice: { ...base.voice, speakingRate: rate } };
+  };
+
+  let h: Harness;
+  afterEach(() => {
+    h?.orch.dispose();
+  });
+
+  it('synthesizes the opening question at the character speaking rate, not a hardcoded 1.0', async () => {
+    h = await makeHarness({ character: charWithRate(0.95) });
+    await h.orch.prepareOpening();
+    expect(h.tts.seen[0]?.speakingRate).toBe(0.95);
+    expect(h.tts.seen[0]?.style).toBe('neutral');
+  });
+
+  it('uses the model delivery hint for the next question rate', async () => {
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ deliveryHint: { speakingRate: 1.1 } }],
+    });
+    h = await makeHarness({ model, character: charWithRate(0.95) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    const before = h.tts.seen.length;
+    await h.orch.commitUserTurn('manual');
+
+    // The next (second) question was synthesized from the scripted action's hint.
+    expect(h.tts.seen.length).toBeGreaterThan(before);
+    expect(h.tts.seen.at(-1)?.speakingRate).toBe(1.1);
+  });
+
+  it('falls back to the character rate when the model emits no delivery hint', async () => {
+    // FakeInterviewModel.defaultAction() carries no deliveryHint, so the next
+    // question must inherit the character default rather than snapping to 1.0.
+    h = await makeHarness({ character: charWithRate(0.95) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(h.tts.seen.at(-1)?.speakingRate).toBe(0.95);
+  });
+
+  it('clamps an out-of-range delivery hint to the safe maximum', async () => {
+    // 1.9 bypasses the Zod guard (the fake returns the action directly); the
+    // orchestrator's own clamp must still absorb it before it reaches TTS.
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ deliveryHint: { speakingRate: 1.9 } }],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(h.tts.seen.at(-1)?.speakingRate).toBe(1.15);
+  });
+
+  it('clamps an under-range delivery hint to the safe minimum', async () => {
+    // Lower-bound twin of the test above: guards against a swapped MIN/MAX in
+    // clampDeliveryRate. 0.1 must floor to 0.85, not pass through.
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ deliveryHint: { speakingRate: 0.1 } }],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(h.tts.seen.at(-1)?.speakingRate).toBe(0.85);
+  });
+
+  it('threads the delivery hint when a skip lands on a follow-up question', async () => {
+    // Skip-to-ask is the common skip destination; confirm the hint flows
+    // action -> record -> TTS on that path too (not just the commit path).
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ action: 'ask', spokenText: 'What changed after that?', deliveryHint: { speakingRate: 1.1 } }],
+    });
+    h = await makeHarness({ model, character: charWithRate(0.95) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    await h.orch.skipQuestion();
+
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    expect(h.tts.seen.at(-1)?.speakingRate).toBe(1.1);
+  });
+
+  it('synthesizes the closing line at the character rate', async () => {
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ action: 'complete', spokenText: 'Thank you so much for your time.' }],
+    });
+    h = await makeHarness({ model, character: charWithRate(0.95) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    await h.orch.skipQuestion();
+
+    expect(h.orch.getState()).toBe('COMPLETED');
+    // The opening used the character rate; the closing line must too.
+    expect(h.tts.seen.at(-1)?.speakingRate).toBe(0.95);
+    expect(h.tts.seen.at(-1)?.text).toContain('Thank you');
   });
 });

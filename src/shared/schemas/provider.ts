@@ -112,6 +112,7 @@ export const nextInterviewerActionSchema = z.object({
       'answer_repeated_prior_content', 'needs_specific_example', 'needs_clarification',
     ]),
   ),
+  deliveryHint: z.object({ speakingRate: z.number().min(0.85).max(1.15) }).optional(),
 });
 
 export const transcriptCleanupResultSchema = z.object({
