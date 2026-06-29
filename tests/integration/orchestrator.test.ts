@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { join } from 'node:path';
 import { SessionOrchestrator, type OrchestratorDeps, type SessionContext } from '@main/interview/orchestrator';
-import { NOOP_LOGGER, type StagePort, type SnapshotSink } from '@main/interview/ports';
+import { NOOP_LOGGER, type Logger, type StagePort, type SnapshotSink } from '@main/interview/ports';
 import { MemoryRepository } from '@main/persistence/memory-repository';
 import { FakeInterviewModel, FakeModeration, FakeStt, FakeTts } from '@main/providers/fakes';
 import { loadManifest } from '@main/media/manifest-loader';
@@ -9,7 +9,7 @@ import { AppController } from '@main/app-controller';
 import { bridgeSttToOrchestrator } from '@main/interview/stt-bridge';
 import { AppError } from '@shared/errors/app-error';
 import type { CredentialStore } from '@main/security/secrets';
-import type { EndpointMode } from '@shared/domain';
+import type { EndpointMode, EndpointDecision } from '@shared/domain';
 import type {
   InterviewBrief,
   InterviewerCharacter,
@@ -107,6 +107,7 @@ async function makeHarness(overrides?: {
   endpointMode?: EndpointMode;
   captionsEnabled?: boolean;
   clock?: () => number;
+  logger?: Logger;
 }): Promise<Harness> {
   const repo = new MemoryRepository();
   await repo.migrate();
@@ -182,6 +183,7 @@ async function makeHarness(overrides?: {
     stage,
     snapshotSink,
     clock: overrides?.clock,
+    logger: overrides?.logger,
   };
 
   const ctx: SessionContext = {
@@ -1044,6 +1046,88 @@ describe('SessionOrchestrator turn pipeline', () => {
       expect(h.orch.getState()).toBe('ENDPOINT_CANDIDATE');
     } finally {
       offs.forEach((off) => off());
+    }
+  });
+
+  it('maps a second speechStarted from endpoint candidate to resumed speech (#15)', async () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } satisfies Logger;
+    h.orch.dispose();
+    h = await makeHarness({ logger });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin(); // USER_ARMED
+    const offs = bridgeSttToOrchestrator(h.stt, h.orch, () => 1000);
+    try {
+      h.stt.emit('speechStarted');
+      expect(h.orch.getState()).toBe('USER_SPEAKING');
+
+      // A pause ends the first speech segment and begins endpoint evaluation.
+      h.stt.emit('speechStopped');
+      expect(h.orch.getState()).toBe('ENDPOINT_CANDIDATE');
+
+      // Resuming speech: the provider re-emits a bare speechStarted. This must
+      // return the turn to USER_SPEAKING via speechResumed, not log an
+      // invalid_transition for an illegal speechStarted from ENDPOINT_CANDIDATE.
+      h.stt.emit('speechStarted');
+      expect(h.orch.getState()).toBe('USER_SPEAKING');
+
+      expect(
+        logger.warn.mock.calls.some(([event]) => event === 'session.invalid_transition'),
+      ).toBe(false);
+    } finally {
+      offs.forEach((off) => off());
+    }
+  });
+
+  it('drops a stale classifierWait when speech resumes mid-evaluation (#15)', async () => {
+    // A slow endpoint classifier can still be in flight when the user resumes
+    // talking. Its eventual "wait" result must be ignored (not fired as an
+    // illegal classifierWait from USER_SPEAKING, which would log an
+    // invalid_transition — the very telemetry this issue eliminates).
+    let resolveClassifier!: (d: EndpointDecision) => void;
+    const model = new FakeInterviewModel();
+    model.classifyEndpoint = vi.fn(
+      () => new Promise<EndpointDecision>((resolve) => { resolveClassifier = resolve; }),
+    );
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } satisfies Logger;
+    let clockNow = 0;
+    h.orch.dispose();
+    h = await makeHarness({ model, logger, endpointMode: 'balanced', clock: () => clockNow });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin(); // USER_ARMED
+    vi.useFakeTimers();
+    try {
+      clockNow = 1000;
+      h.orch.onSpeechStarted(clockNow); // USER_SPEAKING, speechStartedAt = 1000
+      h.orch.onSttFinalSegment('A meaningful answer with enough words to classify.');
+      clockNow = 5000;
+      h.orch.onSpeechStopped(clockNow); // ENDPOINT_CANDIDATE, speechEndedAt = 5000
+      // speechMs = 4000 (>= 1500). Advance the 250ms endpoint tick so
+      // evaluateEndpoint runs with silenceMs = 1000 (>= 900) and calls the
+      // classifier, which stays unresolved.
+      clockNow = 6000;
+      await vi.advanceTimersByTimeAsync(300);
+      expect(vi.mocked(model.classifyEndpoint)).toHaveBeenCalledTimes(1);
+
+      // Resume speech → USER_SPEAKING; the endpoint timer is cleared, but the
+      // in-flight classifier is still pending.
+      clockNow = 7000;
+      h.orch.onSpeechStarted(clockNow);
+      expect(h.orch.getState()).toBe('USER_SPEAKING');
+
+      // The stale "wait" result resolves — must be a no-op, not an illegal
+      // classifierWait transition from USER_SPEAKING.
+      resolveClassifier({ shouldCommit: false, completeProbability: 0.1, incompleteReason: 'none' });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(h.orch.getState()).toBe('USER_SPEAKING');
+      expect(
+        logger.warn.mock.calls.some(([event]) => event === 'session.invalid_transition'),
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
