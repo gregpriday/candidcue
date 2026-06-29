@@ -131,6 +131,11 @@ const ENDPOINT_TICK_MS = 250;
  * per-turn delivery hint is clamped to this narrower band so a non-compliant
  * response can never produce a jarring pace; only `speakingRate` reaches the
  * Inworld synthesis endpoint (the `style` field is not sent on the wire).
+ *
+ * On the live path the Zod schema (`nextInterviewerActionSchema`) already
+ * rejects out-of-band rates, so this clamp is defense-in-depth: it absorbs hints
+ * from non-validating sources (fakes, future schema widening) without an extreme
+ * rate ever reaching TTS.
  */
 const DELIVERY_RATE_MIN = 0.85;
 const DELIVERY_RATE_MAX = 1.15;

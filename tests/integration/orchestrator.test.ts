@@ -1989,6 +1989,37 @@ describe('SessionOrchestrator delivery-rate threading (#56)', () => {
     expect(h.tts.seen.at(-1)?.speakingRate).toBe(1.15);
   });
 
+  it('clamps an under-range delivery hint to the safe minimum', async () => {
+    // Lower-bound twin of the test above: guards against a swapped MIN/MAX in
+    // clampDeliveryRate. 0.1 must floor to 0.85, not pass through.
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ deliveryHint: { speakingRate: 0.1 } }],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(h.tts.seen.at(-1)?.speakingRate).toBe(0.85);
+  });
+
+  it('threads the delivery hint when a skip lands on a follow-up question', async () => {
+    // Skip-to-ask is the common skip destination; confirm the hint flows
+    // action -> record -> TTS on that path too (not just the commit path).
+    const model = new FakeInterviewModel({
+      scriptedActions: [{ action: 'ask', spokenText: 'What changed after that?', deliveryHint: { speakingRate: 1.1 } }],
+    });
+    h = await makeHarness({ model, character: charWithRate(0.95) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    await h.orch.skipQuestion();
+
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    expect(h.tts.seen.at(-1)?.speakingRate).toBe(1.1);
+  });
+
   it('synthesizes the closing line at the character rate', async () => {
     const model = new FakeInterviewModel({
       scriptedActions: [{ action: 'complete', spokenText: 'Thank you so much for your time.' }],
