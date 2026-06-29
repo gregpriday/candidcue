@@ -5,6 +5,7 @@ import type {
   StageStateProjection,
   ListeningClipRef,
 } from '@shared/contracts';
+import type { SpeakingMediaPlanSegment } from '@shared/domain';
 import { mediaUrl } from './mediaUrl';
 import styles from './VideoDeck.module.css';
 
@@ -138,13 +139,58 @@ export function VideoDeck({
         return false;
       }
       segIndexRef.current = index;
-      el.src = mediaUrl(seg.relativePath);
-      el.playbackRate = seg.playbackRate > 0 ? seg.playbackRate : 1;
-      el.loop = index === segments.length - 1;
       el.muted = true;
+      el.loop = index === segments.length - 1;
+      // Assigning `src` starts the load on its own. We deliberately do NOT call
+      // el.load() afterwards: a redundant reload aborts the in-flight fetch and
+      // can strand the <video> on its first frame — the "static image while
+      // speaking" bug. The listening loop never calls load() and plays fine.
+      // playbackRate is applied when playback actually starts (the load that
+      // assigning `src` kicks off resets it back to defaultPlaybackRate).
+      el.src = mediaUrl(seg.relativePath);
       return true;
     },
     [plan, refFor],
+  );
+
+  /**
+   * Start (or queue) playback of the loaded speaking segment on `el`. The
+   * segment's playback rate is applied only once the element can actually play —
+   * setting it before the load completes is reset to defaultPlaybackRate. A
+   * rejected play() is retried once on the next 'canplay' so a momentary
+   * not-ready state never leaves a frozen frame.
+   */
+  const playSpeakingSegment = useCallback(
+    (el: HTMLVideoElement, seg: SpeakingMediaPlanSegment | undefined): void => {
+      // A queued attempt/retry may fire later, on a 'canplay' that arrives after
+      // this element has been handed back to listening duty (the two layers are
+      // reused). Bail unless `el` is still the speaking layer, so a stale callback
+      // never re-rates or replays the listening loop.
+      const stillSpeaking = (): boolean => refFor(speakingLayerRef.current) === el;
+      const attempt = (): void => {
+        if (!stillSpeaking()) {
+          return;
+        }
+        if (seg !== undefined) {
+          el.playbackRate = seg.playbackRate > 0 ? seg.playbackRate : 1;
+        }
+        void el.play().catch(() => {
+          const retry = (): void => {
+            if (!stillSpeaking()) {
+              return;
+            }
+            void el.play().catch(() => setPosterVisible(true));
+          };
+          el.addEventListener('canplay', retry, { once: true });
+        });
+      };
+      if (el.readyState >= 2 /* HAVE_CURRENT_DATA */) {
+        attempt();
+      } else {
+        el.addEventListener('canplay', attempt, { once: true });
+      }
+    },
+    [refFor],
   );
 
   const advanceSpeakingSegment = useCallback(() => {
@@ -157,9 +203,11 @@ export function VideoDeck({
     }
     if (loadSpeakingSegment(next)) {
       const el = refFor(speakingLayerRef.current);
-      void el?.play().catch(() => setPosterVisible(true));
+      if (el !== null) {
+        playSpeakingSegment(el, plan.media.segments[next]);
+      }
     }
-  }, [plan, loadSpeakingSegment, refFor]);
+  }, [plan, loadSpeakingSegment, refFor, playSpeakingSegment]);
 
   const handleLayerEnded = useCallback(
     (layer: Layer) => {
@@ -199,15 +247,14 @@ export function VideoDeck({
       return;
     }
 
-    loadSpeakingSegment(0);
-
-    const handleReady = (): void => onSpeakingReady(plan.turnId);
-    if (el.readyState >= 3 /* HAVE_FUTURE_DATA */) {
-      handleReady();
-    } else {
-      el.addEventListener('canplay', handleReady, { once: true });
-    }
-    el.load();
+    const turnId = plan.turnId;
+    // Report readiness from the freshly-loaded clip's own 'canplay'. The listener
+    // is attached BEFORE `src` is assigned, and we never short-circuit on a stale
+    // readyState (which can still describe the previous clip on a reused layer),
+    // so the deck never claims ready for a clip that has not actually decoded.
+    const handleReady = (): void => onSpeakingReady(turnId);
+    el.addEventListener('canplay', handleReady, { once: true });
+    loadSpeakingSegment(0); // assigning `src` kicks off the load → 'canplay'
 
     return () => {
       el.removeEventListener('canplay', handleReady);
@@ -225,8 +272,8 @@ export function VideoDeck({
       return;
     }
     setFrontLayer(speakingLayer);
-    void el.play().catch(() => setPosterVisible(true));
-  }, [state.visualState, plan, refFor]);
+    playSpeakingSegment(el, plan.media.segments[segIndexRef.current]);
+  }, [state.visualState, plan, refFor, playSpeakingSegment]);
 
   // Pause the speaking <video> layer and hand its role back to listening duty,
   // returning the front to the listening loop. Shared by the natural-end path
