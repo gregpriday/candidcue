@@ -849,12 +849,19 @@ export class AppController {
     }
   }
 
-  async resumable(): Promise<Array<{ sessionId: string; projectTitle: string; startedAt: string | null }>> {
+  async resumable(): Promise<
+    Array<{ sessionId: string; projectId: string; projectTitle: string; startedAt: string | null }>
+  > {
     const sessions = await this.deps.repository.findResumableSessions();
-    const out: Array<{ sessionId: string; projectTitle: string; startedAt: string | null }> = [];
+    const out: Array<{ sessionId: string; projectId: string; projectTitle: string; startedAt: string | null }> = [];
     for (const s of sessions) {
       const p = await this.deps.repository.getProject(s.projectId);
-      out.push({ sessionId: s.id, projectTitle: p?.project.title ?? 'Interview', startedAt: s.startedAt });
+      out.push({
+        sessionId: s.id,
+        projectId: s.projectId,
+        projectTitle: p?.project.title ?? 'Interview',
+        startedAt: s.startedAt,
+      });
     }
     return out;
   }

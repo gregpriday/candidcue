@@ -376,7 +376,9 @@ export interface CandidCueControlApi {
     review(sessionId: string): Promise<SessionReview | null>;
     editTranscript(turnId: string, text: string): Promise<void>;
     export(sessionId: string, format: 'markdown' | 'json'): Promise<ExportResult>;
-    resumable(): Promise<Array<{ sessionId: string; projectTitle: string; startedAt: string | null }>>;
+    resumable(): Promise<
+      Array<{ sessionId: string; projectId: string; projectTitle: string; startedAt: string | null }>
+    >;
   };
   events: {
     onSessionSnapshot(listener: (snapshot: OperatorSessionSnapshot) => void): Unsubscribe;
