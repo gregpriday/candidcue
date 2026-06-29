@@ -3,6 +3,7 @@ export type ErrorCode =
   | 'OPENAI_RATE_LIMIT'
   | 'OPENAI_TIMEOUT'
   | 'OPENAI_SCHEMA'
+  | 'OPENAI_TRUNCATED'
   | 'INWORLD_AUTH'
   | 'STT_DISCONNECTED'
   | 'STT_FINALIZE_FAILED'
@@ -83,6 +84,8 @@ const DEFAULT_PUBLIC_MESSAGES: Record<ErrorCode, string> = {
   OPENAI_RATE_LIMIT: 'OpenAI is rate limiting requests. Retrying shortly.',
   OPENAI_TIMEOUT: 'The interview model took too long to respond.',
   OPENAI_SCHEMA: 'The interview model returned an unexpected response.',
+  OPENAI_TRUNCATED:
+    'The interview model ran out of room before it finished the plan. Try fewer or shorter sources, or a smaller question target, then prepare again.',
   INWORLD_AUTH: 'Inworld credentials are invalid. Please check them in Settings.',
   STT_DISCONNECTED: 'The speech service disconnected. Reconnecting.',
   STT_FINALIZE_FAILED: 'We could not finalize the transcript for this answer.',
