@@ -1,0 +1,16 @@
+{
+  "id": "recipe-7d9560dc-2190-4b07-940a-b6b5d4866853",
+  "name": "Work",
+  "terminals": [
+    {
+      "type": "claude",
+      "title": "Work",
+      "env": {},
+      "initialPrompt": "/work {{number}}"
+    }
+  ],
+  "createdAt": 1782720825989,
+  "showInEmptyState": false,
+  "autoAssign": "always",
+  "scope": "inrepo"
+}
