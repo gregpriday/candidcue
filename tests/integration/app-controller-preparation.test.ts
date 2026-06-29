@@ -16,12 +16,20 @@ import { DEFAULT_INTERVIEW_TITLE, type SaveProjectInput } from '@shared/domain';
  */
 class RecordingInterviewModel extends FakeInterviewModel {
   lastPrepareInput: PrepareProjectInput | null = null;
+  lastSignal: AbortSignal | undefined = undefined;
+  /** Resolves the moment `prepareProject` is entered, so a test can cancel mid-flight. */
+  private startedResolve: (() => void) | null = null;
+  readonly started: Promise<void> = new Promise((resolve) => {
+    this.startedResolve = resolve;
+  });
 
   override async prepareProject(
     input: PrepareProjectInput,
     signal?: AbortSignal,
   ): Promise<PreparedInterviewOutput> {
     this.lastPrepareInput = input;
+    this.lastSignal = signal;
+    this.startedResolve?.();
     return super.prepareProject(input, signal);
   }
 }
@@ -110,5 +118,39 @@ describe('AppController.prepareProject input wiring (issue #63)', () => {
     expect(result.ok).toBe(true);
     expect(model.lastPrepareInput?.audience).toBeNull();
     expect(model.lastPrepareInput?.intendedOutcome).toBeNull();
+  });
+});
+
+describe('AppController.prepareProject cancellation (issue #48)', () => {
+  it('hands the model an AbortSignal so the run can be cancelled', async () => {
+    const model = new RecordingInterviewModel();
+    const { controller, repo } = makeController(model);
+    const saved = await repo.saveProject(projectInput());
+
+    const result = await controller.prepareProject(saved.project.id);
+
+    expect(result.ok).toBe(true);
+    expect(model.lastSignal).toBeInstanceOf(AbortSignal);
+    // A normal completion never aborts the signal.
+    expect(model.lastSignal?.aborted).toBe(false);
+  });
+
+  it('cancelling an in-flight prepare aborts the model and persists no plan', async () => {
+    // A long delay keeps the model call hanging so the cancel lands mid-flight.
+    const model = new RecordingInterviewModel({ delayMs: 1000 });
+    const { controller, repo } = makeController(model);
+    const saved = await repo.saveProject(projectInput());
+
+    const promise = controller.prepareProject(saved.project.id);
+    await model.started;
+    controller.cancelPrepare(saved.project.id);
+    const result = await promise;
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('PREPARE_CANCELLED');
+    expect(result.planId).toBeNull();
+    expect(model.lastSignal?.aborted).toBe(true);
+    // No plan was persisted for the cancelled run.
+    expect(await repo.getLatestPlan(saved.project.id)).toBeNull();
   });
 });

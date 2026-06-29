@@ -9,6 +9,7 @@ import type {
   InterviewSession,
 } from '@shared/domain';
 import { DEFAULT_INTERVIEW_TITLE } from '@shared/domain';
+import type { PrepareProgress } from '@shared/contracts';
 import {
   createSourceDrafts,
   sourceDraftsFromAggregate,
@@ -51,6 +52,26 @@ interface FormState {
 }
 
 const DEFAULT_CHARACTER_ID = 'mira';
+
+// The four labelled steps shown in the preparation progress panel, in order.
+const PREPARE_STEPS = [
+  { phase: 'reading', label: 'Reading sources' },
+  { phase: 'generating', label: 'Generating plan' },
+  { phase: 'validating', label: 'Validating' },
+  { phase: 'saving', label: 'Saving' },
+] as const;
+
+// Position of each streamed phase in the four-step sequence. `done` sits past the
+// last step so every row reads as complete; `failed` (-1) highlights nothing — the
+// panel is torn down the moment the prepare promise settles either way.
+const PREPARE_PHASE_INDEX: Record<PrepareProgress['phase'], number> = {
+  reading: 0,
+  generating: 1,
+  validating: 2,
+  saving: 3,
+  done: 4,
+  failed: -1,
+};
 
 type EditorStep = 'brief' | 'reference' | 'style' | 'ready';
 const STEPS: ReadonlyArray<ProgressStep<EditorStep>> = [
@@ -139,6 +160,9 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [preparing, setPreparing] = useState(false);
+  // Latest staged-progress event for the in-flight preparation, used to drive the
+  // four-step progress panel. Reset to null whenever a new prepare begins.
+  const [prepareProgress, setPrepareProgress] = useState<PrepareProgress | null>(null);
   const [warnings, setWarnings] = useState<string[] | null>(null);
   const [planState, setPlanState] = useState<ProjectPlanState>('unprepared');
   const [dirty, setDirty] = useState(false);
@@ -266,6 +290,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   const handlePrepare = useCallback(async () => {
     setActionError(null);
     setWarnings(null);
+    setPrepareProgress(null);
     const id = await handleSave();
     if (id === null) {
       return;
@@ -273,6 +298,11 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     setPreparing(true);
     try {
       const result = await window.candidcue.projects.prepare(id);
+      // A user cancel resolves with a dedicated code: leave the plan state as it
+      // was and surface no error — the panel simply disappears.
+      if (!result.ok && result.error?.code === 'PREPARE_CANCELLED') {
+        return;
+      }
       setWarnings(result.warnings);
       if (result.ok) {
         setPlanState('ready');
@@ -288,6 +318,25 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
       setPreparing(false);
     }
   }, [handleSave]);
+
+  const handleCancelPrepare = useCallback(() => {
+    // Fire-and-forget: the main process aborts the run and `handlePrepare`'s
+    // `finally` tears the panel down when the prepare promise settles.
+    if (savedId !== null) {
+      void window.candidcue.projects.cancelPrepare(savedId);
+    }
+  }, [savedId]);
+
+  // Stream staged progress for the in-flight preparation into the panel. Filter by
+  // the saved project id so a prepare for another project can never bleed in.
+  useEffect(() => {
+    const unsubscribe = window.candidcue.events.onPrepareProgress((p) => {
+      if (p.projectId === savedId) {
+        setPrepareProgress(p);
+      }
+    });
+    return unsubscribe;
+  }, [savedId]);
 
   useEffect(() => {
     if (!form || !dirty || saving || preparing) {
@@ -705,6 +754,10 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
               {prepareBlocker !== null && <p className={styles.prepareHint}>{prepareBlocker}</p>}
             </Section>
 
+            {preparing && (
+              <PrepareProgressPanel progress={prepareProgress} onCancel={handleCancelPrepare} />
+            )}
+
             {savedId !== null && (
               <Section title="Past sessions">
                 {sessionsError !== null ? (
@@ -790,6 +843,49 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
           </>
         }
       />
+    </div>
+  );
+}
+
+function PrepareProgressPanel({
+  progress,
+  onCancel,
+}: {
+  progress: PrepareProgress | null;
+  onCancel: () => void;
+}): JSX.Element {
+  // Before the first event lands the run is already reading sources, so default
+  // the active row to the first step rather than leaving the panel blank.
+  const activeIndex = PREPARE_PHASE_INDEX[progress?.phase ?? 'reading'];
+  const chars = progress?.charsGenerated;
+  return (
+    <div className={styles.progressPanel} role="status" aria-live="polite">
+      <ol className={styles.progressSteps}>
+        {PREPARE_STEPS.map((step, index) => {
+          const active = index === activeIndex;
+          const done = index < activeIndex;
+          return (
+            <li
+              key={step.phase}
+              className={`${styles.progressStep}${active ? ` ${styles.progressStepActive}` : ''}${
+                done ? ` ${styles.progressStepDone}` : ''
+              }`}
+              aria-current={active ? 'step' : undefined}
+            >
+              <span>{step.label}</span>
+              {step.phase === 'generating' && active && chars != null && chars > 0 && (
+                <span className={styles.progressChars}>{chars.toLocaleString()} characters</span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      <div className={styles.progressFoot}>
+        <span className={styles.progressHint}>Usually about 30s.</span>
+        <Button variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
     </div>
   );
 }

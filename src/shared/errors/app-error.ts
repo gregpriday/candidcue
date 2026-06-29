@@ -18,6 +18,7 @@ export type ErrorCode =
   | 'EXPORT_FAILED'
   | 'VALIDATION_FAILED'
   | 'SOURCE_TOO_LARGE'
+  | 'PREPARE_CANCELLED'
   | 'UNKNOWN';
 
 export interface PublicAppError {
@@ -98,6 +99,7 @@ const DEFAULT_PUBLIC_MESSAGES: Record<ErrorCode, string> = {
   VALIDATION_FAILED: 'The request was invalid.',
   SOURCE_TOO_LARGE:
     "Your project's source material is too large to prepare. Shorten or split the sources, then try again.",
+  PREPARE_CANCELLED: 'Preparation was cancelled.',
   UNKNOWN: 'Something went wrong.',
 };
 

@@ -195,6 +195,73 @@
   color: var(--warning);
 }
 
+/* ---- Preparation progress panel (issue #48) -------------------------- */
+.progressPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  /* Warm recessed surface so the active step lifts off it as a quiet pill. */
+  background: var(--bg-secondary);
+}
+.progressSteps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.progressStep {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+/* Active step: a quiet lift off the warm panel, marked by an inset leading bar —
+   never a one-sided border on the rounded row. */
+.progressStepActive {
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.progressStepActive::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  width: 3px;
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+  background: var(--accent-strong);
+}
+.progressStepDone {
+  color: var(--text-muted);
+}
+.progressChars {
+  font-size: var(--text-xs);
+  color: var(--accent-strong);
+  font-variant-numeric: tabular-nums;
+}
+.progressFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.progressHint {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
 /* ---- Past sessions --------------------------------------------------- */
 .sessionList {
   list-style: none;
