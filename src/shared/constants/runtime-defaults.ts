@@ -1,6 +1,10 @@
 /** Tunable runtime timings and limits (spec §12.5). Single source of truth. */
 export const RUNTIME_DEFAULTS = {
   sttFinalizeDeadlineMs: 1500,
+  // Budget for the batch buffered-audio recovery POST when the live stream drops
+  // mid-answer (#69). The synchronous REST endpoint re-transcribes the whole
+  // turn, so it needs far more headroom than the streaming finalize flush.
+  sttRecoveryDeadlineMs: 10000,
   transcriptCleanupDeadlineMs: 2000,
   moderationDeadlineMs: 1500,
   nextQuestionDeadlineMs: 6000,

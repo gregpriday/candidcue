@@ -750,6 +750,12 @@ export class AppController {
       // documented assumption). Drop live PCM rather than throwing from the
       // audio-port handler; endTurn's deadline fallback still yields a result.
     }
+    // Tap the same PCM into the orchestrator's per-turn buffer so a mid-answer
+    // stream drop can be batch-recovered from it (#69). Deliberately OUTSIDE the
+    // try above: buffering must keep running even when the live STT stream is the
+    // very thing that disconnected (writeAudio threw) — that is the case recovery
+    // exists for. onAudioChunk is a no-op unless a turn is currently active.
+    this.active?.orchestrator.onAudioChunk(packet);
   };
 
   /**
