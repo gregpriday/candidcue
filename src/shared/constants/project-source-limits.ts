@@ -25,7 +25,12 @@ export const PROJECT_SOURCE_LIMITS = {
    * for the compiled source. At the standard ~4-chars-per-token heuristic
    * (slightly optimistic for Markdown/XML, hence the conservative reserve) that
    * is ~3.6M characters. Beyond this the call would fail opaquely as a context
-   * overflow, so we reject early with a clear SOURCE_TOO_LARGE message.
+   * overflow, so we reject early with a clear SOURCE_TOO_LARGE message. The
+   * heuristic assumes mostly Latin-script prose; CJK/dense-Unicode sources
+   * tokenise denser (~1-2 chars/token), so a source near this ceiling in those
+   * scripts could still overflow — acceptable until a real tokenizer is worth
+   * the dependency, since such a source would simply surface the model's own
+   * overflow error rather than silently misbehaving.
    */
   maxCompiledSourceCharacters: 3_600_000,
   /** Maximum source title length (enforced by the Zod save schema). */
