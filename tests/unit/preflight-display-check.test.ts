@@ -77,7 +77,7 @@ describe('runPrepareSession display check', () => {
   });
 
   it('fails the display check and blocks begin when the selected display is gone, even with every other check green', async () => {
-    const plan = { id: 'plan-1', status: 'ready', sourceHash: 'hash-1' };
+    const plan = { id: 'plan-1', status: 'ready', sourceHash: 'hash-1', promptVersion: '1.1.0' };
     const aggregate = { project: { sourceHash: 'hash-1' }, activePlan: plan };
     // getKey is consulted only inside startOrchestrator (which the canBegin gate
     // guards). A valid key means that if `&& displayOk` were ever dropped from
@@ -104,6 +104,28 @@ describe('runPrepareSession display check', () => {
     // own message (not a downstream error) and no credentials were read.
     expect(check(state, 'opening')?.detail).toBe('Resolve the checks above first.');
     expect(getKey).not.toHaveBeenCalled();
+  });
+
+  it('fails the manifest check when the plan predates the current prompt version, even with a matching source hash', async () => {
+    // A plan can be 'ready' with an up-to-date sourceHash yet have been prepared
+    // under an older preparation prompt (e.g. before the launch-video coverage
+    // beats landed, issue #64). The promptVersion gate must flag it stale so the
+    // user re-prepares rather than starting on a plan missing the seeded beats.
+    const plan = { id: 'plan-1', status: 'ready', sourceHash: 'hash-1', promptVersion: '1.0.0' };
+    const aggregate = { project: { sourceHash: 'hash-1' }, activePlan: plan };
+    const state = await makeController({
+      isDisplayConnected: () => true,
+      hasKey: () => true,
+      getKey: () => 'sk-test',
+      getProject: async () => aggregate,
+    }).prepareSession(input('display-9'));
+
+    // Source hash matches and the display is connected, so the stale prompt
+    // version is the sole reason the plan is not ready.
+    expect(check(state, 'display')?.status).toBe('passed');
+    expect(check(state, 'manifest')?.status).toBe('failed');
+    expect(check(state, 'manifest')?.detail).toMatch(/prepare/i);
+    expect(state.canBegin).toBe(false);
   });
 
   it('emits exactly the checks declared by the narrowed contract, in order', async () => {

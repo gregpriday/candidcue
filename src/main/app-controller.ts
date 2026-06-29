@@ -74,6 +74,15 @@ import { mediaUrl } from './media/protocol-handler';
 import { buildMarkdownExport, buildJsonExport, computeSessionDurationLabel } from './export';
 import { interviewBriefSchema, preparedInterviewOutputSchema } from '@shared/schemas';
 
+/**
+ * Version of the project-preparation prompt this build plans against. Keep in
+ * sync with the `version` frontmatter in `prompts/project-preparation.system.md`.
+ * Stamped onto every plan and enforced by the preflight readiness gate so a plan
+ * prepared under an older prompt (e.g. before the launch-video coverage beats)
+ * is treated as stale and re-prepared rather than silently reused.
+ */
+const CURRENT_PROMPT_VERSION = '1.1.0';
+
 export interface AppControllerDeps {
   repository: CandidCueRepository;
   credentials: CredentialStore;
@@ -276,7 +285,7 @@ export class AppController {
         sourceHash,
         status: 'ready',
         brief: validated.brief,
-        promptVersion: '1.0.0',
+        promptVersion: CURRENT_PROMPT_VERSION,
         createdAt: new Date().toISOString(),
       };
       await this.deps.repository.savePlan(plan);
@@ -475,7 +484,11 @@ export class AppController {
     add('openai', 'OpenAI credentials', true, hasOpenAi, hasOpenAi ? null : 'Add your key in Settings.');
     add('inworld', 'Inworld credentials', true, hasInworld, hasInworld ? null : 'Add your key in Settings.');
 
-    const planReady = plan != null && plan.status === 'ready' && plan.sourceHash === aggregate?.project.sourceHash;
+    const planReady =
+      plan != null &&
+      plan.status === 'ready' &&
+      plan.sourceHash === aggregate?.project.sourceHash &&
+      plan.promptVersion === CURRENT_PROMPT_VERSION;
     add('manifest', 'Interview plan', true, planReady, planReady ? null : 'Prepare (or regenerate) the interview plan.');
 
     // A null display id means "use the primary display" (boundsForDisplay /
