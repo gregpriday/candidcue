@@ -472,3 +472,102 @@ describe('createOpenAiAdapters — AbortSignal forwarding', () => {
     expect(received).toBe(controller.signal);
   });
 });
+
+describe('createOpenAiAdapters — streaming preparation progress', () => {
+  /**
+   * A streaming-capable responder: it invokes `onProgress` `chunks` times with a
+   * growing accumulated char count (mirroring `response.output_text.delta`
+   * snapshots), then returns the full body. Other adapters' requests carry no
+   * `onProgress`, so this is exercised only via `prepareProject`.
+   */
+  function streamingResponder(body: string, chunks = 4): StructuredResponder {
+    return async (req) => {
+      for (let i = 1; i <= chunks; i++) {
+        req.onProgress?.(Math.floor((body.length * i) / chunks));
+      }
+      return body;
+    };
+  }
+
+  it('prepareProject reports increasing charsGenerated and still parses the brief', async () => {
+    const { model } = createOpenAiAdapters({
+      responder: fixedResponder('{}'),
+      streamingResponder: streamingResponder(JSON.stringify(PREPARED_OUTPUT)),
+      moderator: PASS_MODERATOR,
+      models: MODELS,
+    });
+
+    const counts: number[] = [];
+    const result = await model.prepareProject(PREPARE_INPUT, undefined, (n) => counts.push(n));
+
+    expect(counts.length).toBeGreaterThan(1);
+    for (let i = 1; i < counts.length; i++) {
+      expect(counts[i]!).toBeGreaterThan(counts[i - 1]!);
+    }
+    expect(result.brief.title).toBe('A Project');
+  });
+
+  it('routes prepareProject to the streaming responder while other methods use the plain one', async () => {
+    const streamingCalls: StructuredRequest[] = [];
+    const plainCalls: StructuredRequest[] = [];
+    const streaming: StructuredResponder = async (req) => {
+      streamingCalls.push(req);
+      return JSON.stringify(PREPARED_OUTPUT);
+    };
+    const plain: StructuredResponder = async (req) => {
+      plainCalls.push(req);
+      return JSON.stringify(NEXT_ACTION);
+    };
+    const { model } = createOpenAiAdapters({
+      responder: plain,
+      streamingResponder: streaming,
+      moderator: PASS_MODERATOR,
+      models: MODELS,
+    });
+
+    await model.prepareProject(PREPARE_INPUT);
+    await model.generateNextAction(NEXT_ACTION_INPUT);
+
+    expect(streamingCalls).toHaveLength(1);
+    expect(streamingCalls[0]?.schemaName).toBe('prepared_interview_output');
+    expect(plainCalls).toHaveLength(1);
+    expect(plainCalls[0]?.schemaName).toBe('next_interviewer_action');
+  });
+
+  it('falls back to the plain responder for prepareProject when no streaming responder is given', async () => {
+    const spy = spyResponder(JSON.stringify(PREPARED_OUTPUT));
+    const { model } = createOpenAiAdapters({
+      responder: spy.responder,
+      moderator: PASS_MODERATOR,
+      models: MODELS,
+    });
+
+    const result = await model.prepareProject(PREPARE_INPUT);
+
+    expect(spy.calls).toHaveLength(1);
+    expect(result.brief.title).toBe('A Project');
+  });
+
+  it('threads both the signal and onProgress into the streaming responder request', async () => {
+    let captured: StructuredRequest | undefined;
+    const streaming: StructuredResponder = async (req) => {
+      captured = req;
+      return JSON.stringify(PREPARED_OUTPUT);
+    };
+    const { model } = createOpenAiAdapters({
+      responder: fixedResponder('{}'),
+      streamingResponder: streaming,
+      moderator: PASS_MODERATOR,
+      models: MODELS,
+    });
+
+    const ac = new AbortController();
+    const cb = (_n: number): void => {};
+    await model.prepareProject(PREPARE_INPUT, ac.signal, cb);
+
+    // Both the abort signal and the progress callback must reach the actual
+    // StructuredRequest the streaming responder receives.
+    expect(captured?.signal).toBe(ac.signal);
+    expect(captured?.onProgress).toBe(cb);
+  });
+});

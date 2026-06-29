@@ -16,6 +16,7 @@ import {
 import { createModerationAdapter } from './moderation';
 import {
   createDefaultResponder,
+  createStreamingResponder,
   createDefaultModerator,
   type StructuredResponder,
   type Moderator,
@@ -36,6 +37,13 @@ export interface OpenAiModelConfig {
 export interface OpenAiAdapterDeps {
   /** Structured-output responder (inject a fake in tests). */
   responder: StructuredResponder;
+  /**
+   * Streaming structured-output responder used only by `prepareProject` so its
+   * long single call can report progress and be cancelled mid-flight (issue
+   * #47). Falls back to `responder` when omitted, keeping tests that inject only
+   * `responder` — and the four non-streaming adapters — unchanged.
+   */
+  streamingResponder?: StructuredResponder;
   /** Moderation runner (inject a fake in tests). */
   moderator: Moderator;
   /** Model configuration. */
@@ -59,7 +67,9 @@ export function createOpenAiAdapters(deps: OpenAiAdapterDeps): OpenAiAdapters {
   const { responder, moderator, models } = deps;
 
   const model: InterviewModelAdapter = {
-    prepareProject: createProjectPreparer(responder),
+    // Only project preparation streams; the other four stay on the plain
+    // responder. Fall back to it when no streaming responder is supplied.
+    prepareProject: createProjectPreparer(deps.streamingResponder ?? responder),
     generateNextAction: createInterviewer(responder),
     cleanTranscript: createTranscriptCleaner(responder),
     classifyEndpoint: createEndpointClassifier(responder),
@@ -82,6 +92,7 @@ export function createOpenAiAdaptersFromClient(
 ): OpenAiAdapters {
   return createOpenAiAdapters({
     responder: createDefaultResponder(client),
+    streamingResponder: createStreamingResponder(client),
     moderator: createDefaultModerator(client, models.moderationModel),
     models,
   });

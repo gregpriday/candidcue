@@ -183,6 +183,25 @@ describe('FakeInterviewModel', () => {
       expect(out.brief.audience).toBe('general interested listeners');
       expect(out.brief.intendedOutcome).toBe('a clear, candid account of the topic');
     });
+
+    it('reports streaming progress through onProgress with a non-decreasing count', async () => {
+      const model = new FakeInterviewModel();
+      const counts: number[] = [];
+      await model.prepareProject(prepareInput(), undefined, (n) => counts.push(n));
+      expect(counts.length).toBeGreaterThan(0);
+      for (let i = 1; i < counts.length; i++) {
+        expect(counts[i]!).toBeGreaterThanOrEqual(counts[i - 1]!);
+      }
+    });
+
+    it('aborts mid-progress and rejects before returning a brief when the signal fires', async () => {
+      const model = new FakeInterviewModel({ delayMs: 50 });
+      const ac = new AbortController();
+      const counts: number[] = [];
+      const pending = model.prepareProject(prepareInput(), ac.signal, (n) => counts.push(n));
+      ac.abort();
+      await expect(pending).rejects.toBeInstanceOf(AbortError);
+    });
   });
 
   describe('generateNextAction', () => {

@@ -84,6 +84,13 @@ import { interviewBriefSchema, preparedInterviewOutputSchema } from '@shared/sch
  */
 export const CURRENT_PROMPT_VERSION = '1.1.0';
 
+/**
+ * Coalesce streamed preparation progress to ~4 updates/sec (issue #47). Deltas
+ * arrive far faster than the UI needs; the first delta of a run always fires and
+ * the final count rides on the explicit `validating`/`done` events regardless.
+ */
+const PREPARE_PROGRESS_THROTTLE_MS = 250;
+
 export interface AppControllerDeps {
   repository: CandidCueRepository;
   credentials: CredentialStore;
@@ -239,6 +246,22 @@ export class AppController {
     const emit = (phase: PrepareProgress['phase'], extra?: { charsGenerated?: number }): void => {
       this.deps.getControl()?.send(CHANNELS.evtPrepareProgress, { projectId, phase, ...extra });
     };
+
+    // Throttled progress relay (issue #47): the streaming responder reports the
+    // running character count far faster than the UI needs, so coalesce to ~4
+    // updates/sec. The first delta always fires (the initial timestamp is 0);
+    // `lastChars` carries the latest count so the explicit validating/done events
+    // report the final value regardless.
+    let lastEmitAt = 0;
+    let lastChars = 0;
+    const onProgress = (charsGenerated: number): void => {
+      lastChars = charsGenerated;
+      const now = Date.now();
+      if (now - lastEmitAt < PREPARE_PROGRESS_THROTTLE_MS) return;
+      lastEmitAt = now;
+      emit('generating', { charsGenerated });
+    };
+
     try {
       emit('reading');
       const aggregate = await this.deps.repository.getProject(projectId);
@@ -263,7 +286,7 @@ export class AppController {
       if (compiled.length > PROJECT_SOURCE_LIMITS.maxCompiledSourceCharacters) {
         throw new AppError('SOURCE_TOO_LARGE');
       }
-      emit('generating');
+      emit('generating', { charsGenerated: 0 });
       const prepared = await model.prepareProject(
         {
           compiledSource: compiled,
@@ -282,8 +305,9 @@ export class AppController {
           modelId: MODEL_DEFAULTS.projectPreparationModel,
         },
         aborter.signal,
+        onProgress,
       );
-      emit('validating');
+      emit('validating', { charsGenerated: lastChars });
       const validated = preparedInterviewOutputSchema.parse(prepared);
       interviewBriefSchema.parse(validated.brief);
 
@@ -320,7 +344,7 @@ export class AppController {
       // is accurate right after prepare even if it had drifted (e.g. a legacy
       // text/plain → markdown migration that left the old hash in place).
       await this.deps.repository.updateProjectSourceHash(projectId, sourceHash);
-      emit('done');
+      emit('done', { charsGenerated: lastChars });
       return { ok: true, planId: plan.id, warnings: validated.warnings.map((w) => w.message), error: null };
     } catch (err) {
       emit('failed');

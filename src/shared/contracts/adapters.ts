@@ -82,7 +82,17 @@ export interface RepairQuestionInput {
 }
 
 export interface InterviewModelAdapter {
-  prepareProject(input: PrepareProjectInput, signal?: AbortSignal): Promise<PreparedInterviewOutput>;
+  /**
+   * Build the interview plan from the compiled project source. Unlike the other
+   * methods this one streams: `onProgress`, when supplied, is invoked as output
+   * generates with the running count of characters produced so far (issue #47),
+   * letting the caller surface live progress while the long call runs.
+   */
+  prepareProject(
+    input: PrepareProjectInput,
+    signal?: AbortSignal,
+    onProgress?: (charsGenerated: number) => void,
+  ): Promise<PreparedInterviewOutput>;
   generateNextAction(input: GenerateNextActionInput, signal?: AbortSignal): Promise<NextInterviewerAction>;
   cleanTranscript(input: CleanTranscriptInput, signal?: AbortSignal): Promise<TranscriptCleanupResult>;
   classifyEndpoint(input: ClassifyEndpointInput, signal?: AbortSignal): Promise<EndpointDecision>;

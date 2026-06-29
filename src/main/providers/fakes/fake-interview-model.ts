@@ -86,9 +86,17 @@ export class FakeInterviewModel implements InterviewModelAdapter {
   async prepareProject(
     input: PrepareProjectInput,
     signal?: AbortSignal,
+    onProgress?: (charsGenerated: number) => void,
   ): Promise<PreparedInterviewOutput> {
     throwIfAborted(signal);
+    // Mimic the streaming responder's incremental deltas so tests can assert
+    // that progress fires with a growing char count and that a cancel landing
+    // mid-generation aborts before any brief is returned. The first delta fires
+    // synchronously; the second lands after the (optional) latency, where an
+    // abort during the delay rejects before it (and the brief) is reached.
+    onProgress?.(256);
     if (this.delayMs > 0) await delay(this.delayMs, signal);
+    onProgress?.(1024);
     throwIfAborted(signal);
 
     const title = input.title?.trim() || deriveTitle(input.compiledSource);
