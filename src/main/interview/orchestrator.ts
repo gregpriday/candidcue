@@ -48,7 +48,7 @@ import { pickFallback } from './fallback-planner';
 import { DurationCalibrator } from './duration-calibrator';
 import { buildCoverageContext, buildRecentTurns, buildModerationGuidance } from './context-builder';
 import { decideEndpoint, shouldRunClassifier, autoCommitAllowed } from './endpoint-controller';
-import { NOOP_LOGGER, type Logger, type StagePort, type SnapshotSink, type Clock } from './ports';
+import { NOOP_LOGGER, type Logger, type StagePort, type SnapshotSink, type ErrorSink, type Clock } from './ports';
 
 export interface OrchestratorModels {
   interviewer: string;
@@ -81,6 +81,7 @@ export interface OrchestratorDeps {
   tts: TextToSpeechAdapter;
   stage: StagePort;
   snapshotSink: SnapshotSink;
+  errorSink: ErrorSink;
   logger?: Logger;
   clock?: Clock;
 }
@@ -1191,6 +1192,14 @@ export class SessionOrchestrator {
       return;
     }
     this.recoverableWarning = appErr.publicMessage;
+    // Unrecoverable failures (auth, db, mic permission, export, …) have no
+    // per-screen handler, so surface them on the global error banner. Recoverable
+    // faults (rate limits, transient TTS) keep their snapshot warning only — they
+    // self-heal and must not light up the banner.
+    const publicError = appErr.toPublic();
+    if (!publicError.recoverable) {
+      this.deps.errorSink.publish(publicError);
+    }
     this.transition('pause', 'pipeline failure');
     this.publishSnapshot();
   }

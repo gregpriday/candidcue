@@ -3,6 +3,7 @@ import type {
   StageStateProjection,
   OperatorSessionSnapshot,
 } from '@shared/contracts';
+import type { PublicAppError } from '@shared/errors/app-error';
 
 /** Minimal structured logger the orchestrator depends on (diagnostics logger is compatible). */
 export interface Logger {
@@ -42,6 +43,16 @@ export interface StagePort {
 /** Sink for operator-console snapshots (IPC forwards to ControlWindow). */
 export interface SnapshotSink {
   publish(snapshot: OperatorSessionSnapshot): void;
+}
+
+/**
+ * Sink for fatal / unrecoverable session errors. IPC forwards these to the
+ * ControlWindow's global error banner (CHANNELS.evtError). Recoverable /
+ * transient faults (STT disconnects, rate limits) do NOT flow here — they
+ * surface via the snapshot's `recoverableWarning` and provider health instead.
+ */
+export interface ErrorSink {
+  publish(error: PublicAppError): void;
 }
 
 export type Clock = () => number;

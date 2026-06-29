@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { join } from 'node:path';
 import { SessionOrchestrator, type OrchestratorDeps, type SessionContext } from '@main/interview/orchestrator';
-import { NOOP_LOGGER, type Logger, type StagePort, type SnapshotSink } from '@main/interview/ports';
+import { NOOP_LOGGER, type Logger, type StagePort, type SnapshotSink, type ErrorSink } from '@main/interview/ports';
 import { MemoryRepository } from '@main/persistence/memory-repository';
 import { FakeInterviewModel, FakeModeration, FakeStt, FakeTts } from '@main/providers/fakes';
 import { loadManifest } from '@main/media/manifest-loader';
 import { AppController } from '@main/app-controller';
 import { bridgeSttToOrchestrator } from '@main/interview/stt-bridge';
-import { AppError } from '@shared/errors/app-error';
+import { AppError, type PublicAppError } from '@shared/errors/app-error';
 import type { CredentialStore } from '@main/security/secrets';
 import type { EndpointMode, EndpointDecision } from '@shared/domain';
 import type {
@@ -95,6 +95,7 @@ interface Harness {
     results: { preload: boolean; play: boolean };
   };
   snapshots: OperatorSessionSnapshot[];
+  errors: PublicAppError[];
   sessionId: string;
   stt: FakeStt;
   tts: FakeTts;
@@ -170,6 +171,8 @@ async function makeHarness(overrides?: {
     results: stageResults,
   };
   const snapshotSink: SnapshotSink = { publish: (s) => snapshots.push(s) };
+  const errors: PublicAppError[] = [];
+  const errorSink: ErrorSink = { publish: (e) => errors.push(e) };
 
   const stt =
     overrides?.stt ??
@@ -183,6 +186,7 @@ async function makeHarness(overrides?: {
     tts,
     stage,
     snapshotSink,
+    errorSink,
     clock: overrides?.clock,
     logger: overrides?.logger,
   };
@@ -202,7 +206,7 @@ async function makeHarness(overrides?: {
     targetQuestionCount: overrides?.targetQuestionCount ?? 12,
   };
 
-  return { orch: new SessionOrchestrator(deps, ctx), repo, stage, snapshots, sessionId: session.id, stt, tts };
+  return { orch: new SessionOrchestrator(deps, ctx), repo, stage, snapshots, errors, sessionId: session.id, stt, tts };
 }
 
 describe('SessionOrchestrator turn pipeline', () => {
@@ -846,6 +850,41 @@ describe('SessionOrchestrator turn pipeline', () => {
     releaseReconnect();
     await vi.waitFor(() => expect(h.orch.getState()).toBe('PAUSED'));
     expect(h.stt.reconnectCalls).toBe(1);
+    // A self-healing STT disconnect must NOT light up the global error banner
+    // (issue #20): recoverable faults surface via the snapshot warning only.
+    expect(h.errors).toHaveLength(0);
+  });
+
+  it('emits a fatal error to the error sink so the global banner can show it (issue #20)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.stt.pushTranscript('a captured answer');
+    // An unrecoverable persistence failure mid-commit has no per-screen handler,
+    // so it must surface on the global banner via the error sink.
+    vi.spyOn(h.repo, 'recordRawAnswer').mockRejectedValueOnce(
+      new AppError('DATABASE_FAILED', { message: 'db down' }),
+    );
+    await h.orch.commitUserTurn('manual');
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.errors).toHaveLength(1);
+    expect(h.errors[0]!.code).toBe('DATABASE_FAILED');
+    expect(h.errors[0]!.recoverable).toBe(false);
+  });
+
+  it('does NOT emit a recoverable failure (transient TTS) to the banner (issue #20)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.stt.pushTranscript('a captured answer');
+    // A recoverable TTS failure self-heals via the snapshot warning; it must not
+    // spam the global banner.
+    vi.spyOn(h.repo, 'recordRawAnswer').mockRejectedValueOnce(
+      new AppError('TTS_FAILED', { message: 'tts blip' }),
+    );
+    await h.orch.commitUserTurn('manual');
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.errors).toHaveLength(0);
   });
 
   it('END_NOW during RECOVERING completes the session; a late reconnect cannot revive it (issue #14)', async () => {
