@@ -74,15 +74,12 @@ const consoleSink: LogSink = (record) => {
   const line = JSON.stringify(record);
   switch (record.level) {
     case 'error':
-      // eslint-disable-next-line no-console
       console.error(line);
       break;
     case 'warn':
-      // eslint-disable-next-line no-console
       console.warn(line);
       break;
     default:
-      // eslint-disable-next-line no-console
       console.info(line);
       break;
   }

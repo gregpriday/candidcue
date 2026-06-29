@@ -44,21 +44,17 @@ function runOffline(): { passed: number; total: number } {
     });
     const ok = result.valid === s.expectValid;
     if (ok) passed++;
-    // eslint-disable-next-line no-console
     console.log(`${ok ? 'PASS' : 'FAIL'}  valid=${result.valid} (${result.wordCount}w) — ${s.note}`);
   }
   return { passed, total: SAMPLES.length };
 }
 
 async function main(): Promise<void> {
-  // eslint-disable-next-line no-console
   console.log('— CandidCue interview evals (offline validator) —');
   const { passed, total } = runOffline();
-  // eslint-disable-next-line no-console
   console.log(`\nOffline validator: ${passed}/${total} expectations met.`);
 
   if (!process.env.OPENAI_API_KEY) {
-    // eslint-disable-next-line no-console
     console.log('Set OPENAI_API_KEY to run the live project-preparation evals.');
   }
   process.exit(passed === total ? 0 : 1);

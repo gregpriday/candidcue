@@ -86,7 +86,6 @@ async function loadRenderer(win: BrowserWindow, target: RendererTarget): Promise
   // permanently invisible with no recovery surface (BOOT-01).
   win.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
     if (!isMainFrame || code === -3 /* ERR_ABORTED — superseded load, ignore */) return;
-    // eslint-disable-next-line no-console
     console.error(`[renderer] did-fail-load ${code} ${desc} ${url}`);
     showFatalDiagnostic(
       win,
@@ -95,7 +94,6 @@ async function loadRenderer(win: BrowserWindow, target: RendererTarget): Promise
     );
   });
   win.webContents.on('render-process-gone', (_e, details) => {
-    // eslint-disable-next-line no-console
     console.error(`[renderer] render-process-gone ${details.reason}`);
     showFatalDiagnostic(
       win,

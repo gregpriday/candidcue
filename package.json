@@ -23,7 +23,7 @@
     "media:validate": "tsx scripts/validate-media.ts",
     "prompts:validate": "tsx scripts/validate-prompts.ts",
     "clean:temp": "tsx scripts/clean-temp.ts",
-    "verify": "npm run typecheck && npm run test && npm run media:validate && npm run prompts:validate"
+    "verify": "npm run lint && npm run typecheck && npm run test && npm run media:validate && npm run prompts:validate"
   },
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.0",
