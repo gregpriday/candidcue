@@ -72,10 +72,6 @@ export function StageApp(): JSX.Element {
   // floor (or is finalizing) — confirming in any other state is a harmless no-op,
   // matching how commandForKey's commands are silently dropped when illegal.
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
-  // On-screen keyboard legend, toggled with '?'. Renderer-local, not a command.
-  // Defaults open to orient the founder on standby; auto-hidden once the
-  // interview starts (see prevMicState/standby handling below).
-  const [legendVisible, setLegendVisible] = useState(true);
   // Brief confirm/reject cue for the last keypress so a wrong-moment key is never
   // silent. `token` increments per press so a repeated identical key re-pulses.
   const [commandFeedback, setCommandFeedback] = useState<CommandFeedback | null>(null);
@@ -107,9 +103,6 @@ export function StageApp(): JSX.Element {
   // mic gate, so the chime fires once on each closed/active -> armed transition.
   const chimeCtxRef = useRef<AudioContext | null>(null);
   const prevMicStateRef = useRef<StageStateProjection['micState']>(INITIAL_STATE.micState);
-  // Auto-hide the legend exactly once, when the interview leaves standby, so it
-  // never sits in the recording (the founder can re-show it with '?').
-  const hasLeftStandbyRef = useRef(false);
   // Previous visual state, tracked independently of React state so the
   // standby->live transition (session start) is detected in the synchronous
   // onState handler — a useEffect on `state` would fire async and could miss it.
@@ -314,12 +307,6 @@ export function StageApp(): JSX.Element {
         }
       }
       prevMicStateRef.current = next.micState;
-      // Once the interview starts, retire the orientation legend so it isn't part
-      // of the framing; it stays a '?' away if the founder wants it back.
-      if (next.visualState !== 'standby' && !hasLeftStandbyRef.current) {
-        hasLeftStandbyRef.current = true;
-        setLegendVisible(false);
-      }
       // Drive the mic gate from the authoritative projection.
       captureRef.current?.setGate(next.micState, currentTurnIdRef.current);
       // Once the visual state reaches 'speaking', start the decoded audio.
@@ -451,13 +438,6 @@ export function StageApp(): JSX.Element {
         setEndConfirmOpen(true);
         return;
       }
-      // '?' (Slash) toggles the on-screen controls legend. Renderer-local state,
-      // not a StageCommand — nothing crosses IPC.
-      if (event.code === 'Slash' && !event.metaKey && !event.ctrlKey && !event.altKey) {
-        event.preventDefault();
-        setLegendVisible((visible) => !visible);
-        return;
-      }
       // Founder-start: when the session is READY (canBegin) and waiting on the
       // standby screen, Space arms a short visible countdown so the founder can
       // settle before recording begins. A bare Escape cancels it. Both read the
@@ -536,7 +516,6 @@ export function StageApp(): JSX.Element {
         state={state}
         captionsEnabled={captionsEnabled}
         characterName={characterName}
-        legendVisible={legendVisible}
         commandFeedback={commandFeedback}
         countdown={countdown}
       />

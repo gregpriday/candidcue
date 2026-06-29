@@ -100,13 +100,6 @@ function pushState(next: StageStateProjection): void {
   });
 }
 
-/** The legend container (a div carrying data-visible) above a known row label. */
-function legendContainer(): Element {
-  const el = screen.getByText('Commit answer').closest('div[data-visible]');
-  if (el === null) throw new Error('legend container not found');
-  return el;
-}
-
 beforeEach(() => {
   send.mockClear();
   installStageBridge();
@@ -116,60 +109,6 @@ afterEach(() => {
   cleanup();
   delete (window as unknown as { candidcueStage?: unknown }).candidcueStage;
   delete (window as unknown as { AudioContext?: unknown }).AudioContext;
-});
-
-describe('StageApp — controls legend', () => {
-  it('shows the legend on standby and retires it once the interview starts', async () => {
-    await mountStage();
-    // Default-open on standby to orient the founder.
-    expect(legendContainer()).toHaveAttribute('data-visible', 'true');
-
-    // It auto-hides the moment the interview leaves standby.
-    pushState(projection({ visualState: 'thinking', micState: 'closed' }));
-    expect(legendContainer()).toHaveAttribute('data-visible', 'false');
-  });
-
-  it('lets the founder dismiss the legend on standby with "?"', async () => {
-    await mountStage();
-    expect(legendContainer()).toHaveAttribute('data-visible', 'true');
-
-    fireEvent.keyDown(window, { code: 'Slash', key: '/' });
-    expect(legendContainer()).toHaveAttribute('data-visible', 'false');
-    expect(send).not.toHaveBeenCalled();
-  });
-
-  it('toggles the legend with Shift+Slash (the actual "?" on US layouts)', async () => {
-    await mountStage();
-    pushState(projection({ visualState: 'listening', micState: 'armed' }));
-    expect(legendContainer()).toHaveAttribute('data-visible', 'false');
-
-    fireEvent.keyDown(window, { code: 'Slash', key: '?', shiftKey: true });
-    expect(legendContainer()).toHaveAttribute('data-visible', 'true');
-  });
-
-  it('toggles the legend with "?" during a live state', async () => {
-    await mountStage();
-    pushState(projection({ visualState: 'listening', micState: 'armed' }));
-    expect(legendContainer()).toHaveAttribute('data-visible', 'false');
-
-    fireEvent.keyDown(window, { code: 'Slash', key: '/' });
-    expect(legendContainer()).toHaveAttribute('data-visible', 'true');
-
-    fireEvent.keyDown(window, { code: 'Slash', key: '/' });
-    expect(legendContainer()).toHaveAttribute('data-visible', 'false');
-    // Toggling the legend never crosses IPC.
-    expect(send).not.toHaveBeenCalled();
-  });
-
-  it('does not toggle the legend while the end-confirm is open', async () => {
-    await mountStage();
-    pushState(projection({ visualState: 'listening', micState: 'armed' }));
-    fireEvent.keyDown(window, { code: 'KeyE', key: 'E', shiftKey: true });
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
-
-    fireEvent.keyDown(window, { code: 'Slash', key: '/' });
-    expect(legendContainer()).toHaveAttribute('data-visible', 'false');
-  });
 });
 
 describe('StageApp — keypress confirm/reject', () => {

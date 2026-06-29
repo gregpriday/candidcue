@@ -13,25 +13,11 @@ interface StatusOverlayProps {
   state: StageStateProjection;
   captionsEnabled: boolean;
   characterName?: string | null;
-  /** Show the keyboard legend (also shown automatically on standby). */
-  legendVisible?: boolean;
   /** Transient confirm/reject cue for the last keypress, or null. */
   commandFeedback?: CommandFeedback | null;
   /** Seconds left in the founder's start countdown, or null when not counting. */
   countdown?: number | null;
 }
-
-/** The keyboard controls surfaced in the on-screen legend, in press order. The
- *  labels mirror exactly what `commandForKey` / stage-app act on. */
-const LEGEND_ROWS: ReadonlyArray<{ keys: string; label: string }> = [
-  { keys: 'Space', label: 'Commit answer' },
-  { keys: 'P', label: 'Pause / Resume' },
-  { keys: 'R', label: 'Repeat question' },
-  { keys: 'S', label: 'Skip question' },
-  { keys: 'Shift + E', label: 'End interview' },
-  { keys: 'Shift + Esc', label: 'Exit stage' },
-  { keys: '?', label: 'Toggle controls' },
-];
 
 /** Visual states whose status text we surface (sparingly) on stage. The
  *  'standby' and 'complete' states render their own dedicated screens. */
@@ -106,7 +92,6 @@ export function StatusOverlay({
   state,
   captionsEnabled,
   characterName,
-  legendVisible = false,
   commandFeedback = null,
   countdown = null,
 }: StatusOverlayProps): JSX.Element {
@@ -148,11 +133,6 @@ export function StatusOverlay({
     return () => window.clearTimeout(timer);
   }, [statusText, state.visualState]);
 
-  // The legend's visibility is fully owned by the caller (StageApp): it defaults
-  // open on standby to orient the founder, auto-hides once the interview starts
-  // so it stays out of the frame, and toggles with '?'.
-  const showLegend = legendVisible;
-
   // The model-authored teleprompter cue: the on-screen question (headline) the
   // founder reads, plus an optional coaching line. This is the primary prompt —
   // shown independently of the verbatim captions toggle — and the orchestrator
@@ -189,7 +169,6 @@ export function StatusOverlay({
           <p className={styles.screenHint}>
             {state.canBegin ? 'Press Space to begin.' : 'Getting everything ready…'}
           </p>
-          <p className={styles.screenHint}>Press ? anytime to show the controls.</p>
         </div>
       )}
 
@@ -240,17 +219,6 @@ export function StatusOverlay({
             {statusText}
           </span>
         ) : null}
-      </div>
-
-      {/* Keyboard legend: quiet, non-interactive help. Kept in the DOM so it can
-          fade, but hidden from assistive tech while not shown. */}
-      <div className={styles.legend} data-visible={showLegend ? 'true' : 'false'} aria-hidden={!showLegend}>
-        {LEGEND_ROWS.map((row) => (
-          <div key={row.keys} className={styles.legendRow}>
-            <span className={styles.legendKey}>{row.keys}</span>
-            <span className={styles.legendLabel}>{row.label}</span>
-          </div>
-        ))}
       </div>
 
       {/* Teleprompter cue: a soft lower-third scrim grounds the text so it reads
