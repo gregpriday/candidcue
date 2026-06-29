@@ -1,7 +1,12 @@
-import { InworldSttClient, type SttFetch, type SttConnectFactory } from '@main/providers/inworld/stt-client';
+import {
+  InworldSttClient,
+  type SttFetch,
+  type SttConnectFactory,
+  type SttTransport,
+} from '@main/providers/inworld/stt-client';
 import { INWORLD_DEFAULTS } from '@shared/constants/runtime-defaults';
 import { AppError } from '@shared/errors/app-error';
-import type { SttRecoveryConfig } from '@shared/contracts/adapters';
+import type { SttRecoveryConfig, SttSessionConfig } from '@shared/contracts/adapters';
 
 /** A connect factory that is never invoked by the recovery path. */
 const unusedConnect: SttConnectFactory = async () => {
@@ -227,5 +232,105 @@ describe('InworldSttClient.recoverFromAudio', () => {
     await expect(client.recoverFromAudio(new Uint8Array([0]), recoveryConfig)).rejects.toMatchObject({
       name: 'AbortError',
     });
+  });
+});
+
+/** A controllable fake transport that records closure and replays inbound events. */
+function makeTransport(): SttTransport & { closed: boolean; push: (raw: unknown) => void } {
+  let listener: ((raw: unknown) => void) | null = null;
+  return {
+    closed: false,
+    send() {
+      /* no-op for these tests */
+    },
+    close() {
+      this.closed = true;
+    },
+    onMessage(l: (raw: unknown) => void) {
+      listener = l;
+      return () => {
+        listener = null;
+      };
+    },
+    push(raw: unknown) {
+      listener?.(raw);
+    },
+  };
+}
+
+const sessionConfig: SttSessionConfig = {
+  sampleRate: 16000,
+  channels: 1,
+  model: 'inworld-stt-1',
+  interimResults: true,
+};
+
+describe('InworldSttClient.reconnect', () => {
+  it('throws STT_DISCONNECTED when called before connect (no session config)', async () => {
+    const client = new InworldSttClient({ apiKey: 'k', connect: unusedConnect });
+    const error = await client.reconnect().catch((e) => e);
+    expect(error).toBeInstanceOf(AppError);
+    expect((error as AppError).code).toBe('STT_DISCONNECTED');
+  });
+
+  it('rebuilds the transport, closes the old one, reuses the config, and preserves listeners', async () => {
+    const transports: Array<ReturnType<typeof makeTransport>> = [];
+    const configs: SttSessionConfig[] = [];
+    const connect: SttConnectFactory = async (args) => {
+      configs.push(args.config);
+      const t = makeTransport();
+      transports.push(t);
+      return t;
+    };
+    const client = new InworldSttClient({ apiKey: 'k', connect });
+    await client.connect(sessionConfig);
+    expect(transports).toHaveLength(1);
+
+    // A listener registered before the reconnect must keep receiving events
+    // (close() would clear it; reconnect must not).
+    const partials: string[] = [];
+    client.on('partial', (text: string) => partials.push(text));
+
+    await client.reconnect();
+
+    // The dead transport was torn down; a fresh one was built with the SAME config.
+    expect(transports[0]!.closed).toBe(true);
+    expect(transports).toHaveLength(2);
+    expect(configs).toEqual([sessionConfig, sessionConfig]);
+
+    // An event from the NEW transport still reaches the pre-reconnect listener.
+    transports[1]!.push({ transcription: { transcript: 'after reconnect', isFinal: false } });
+    expect(partials).toEqual(['after reconnect']);
+
+    // The stale transport's late event must NOT fold in (its subscription was detached).
+    transports[0]!.push({ transcription: { transcript: 'stale', isFinal: false } });
+    expect(partials).toEqual(['after reconnect']);
+  });
+
+  it('preserves accumulated transcript across a reconnect (no words dropped)', async () => {
+    const transports: Array<ReturnType<typeof makeTransport>> = [];
+    const connect: SttConnectFactory = async () => {
+      const t = makeTransport();
+      transports.push(t);
+      return t;
+    };
+    const client = new InworldSttClient({ apiKey: 'k', connect });
+    await client.connect(sessionConfig);
+    await client.beginTurn('turn-1');
+
+    // A finalized segment captured before the transport dropped.
+    transports[0]!.push({ transcription: { transcript: 'before the drop', isFinal: true } });
+
+    // Reconnect must NOT reset the accumulator; resumeTurn re-activates folding.
+    await client.reconnect();
+    await client.resumeTurn('turn-1');
+
+    // A finalized segment from the NEW transport after the reconnect.
+    transports[1]!.push({ transcription: { transcript: 'after the drop', isFinal: true } });
+
+    const result = await client.endTurn({ deadlineMs: 20 });
+    expect(result.finalSegments).toEqual(['before the drop', 'after the drop']);
+    expect(result.text).toContain('before the drop');
+    expect(result.text).toContain('after the drop');
   });
 });

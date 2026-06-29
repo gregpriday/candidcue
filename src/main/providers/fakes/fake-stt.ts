@@ -7,6 +7,7 @@ import type {
   SttEvent,
   Unsubscribe,
 } from '@shared/contracts/adapters';
+import { AppError } from '@shared/errors/app-error';
 
 import { throwIfAborted, delay } from './abort';
 
@@ -57,6 +58,26 @@ export class FakeStt implements SpeechToTextAdapter {
    */
   public failResume = false;
   /**
+   * Test hook: when true, `beginTurn` rejects with STT_DISCONNECTED (the
+   * transport dropped between Mira's audio ending and the turn arming) so tests
+   * can drive the armed-but-deaf recovery path.
+   */
+  public failBeginTurn = false;
+  /** How many times reconnect() has been called. */
+  public reconnectCalls = 0;
+  /**
+   * Test hook: when true, `reconnect` rejects (the transport cannot be
+   * re-established) so tests can drive the RECOVERING → ERROR path. The thrown
+   * `STT_DISCONNECTED` is non-retryable, so each reconnect is a single attempt.
+   */
+  public failReconnect = false;
+  /**
+   * Test hook: when set, `reconnect` awaits this promise before resolving, so a
+   * test can hold the session in RECOVERING (e.g. to drive an END_NOW mid-recover
+   * and prove the stale reconnect is discarded).
+   */
+  public reconnectGate: Promise<void> | null = null;
+  /**
    * Words captured for the in-flight turn. `beginTurn` clears it (fresh turn);
    * `resumeTurn` preserves it; `endTurn` returns it when non-empty (mirroring the
    * real accumulator) so tests can prove pre-pause transcript is not dropped.
@@ -80,6 +101,10 @@ export class FakeStt implements SpeechToTextAdapter {
 
   async beginTurn(turnId: string): Promise<void> {
     this.beginTurnCalls += 1;
+    if (this.failBeginTurn) {
+      // Simulate a transport that dropped before the turn could arm.
+      throw new AppError('STT_DISCONNECTED', { message: 'fake beginTurn failed' });
+    }
     this.currentTurnId = turnId;
     // A fresh turn discards any previously accumulated transcript.
     this.accumulated = '';
@@ -100,6 +125,26 @@ export class FakeStt implements SpeechToTextAdapter {
     }
     this.currentTurnId = turnId;
     // Deliberately do NOT touch `accumulated` — pre-pause words are preserved.
+  }
+
+  /**
+   * Re-establish the (fake) transport. A successful reconnect restores the live
+   * stream, so a subsequent {@link resumeTurn} succeeds again (`failResume` is
+   * cleared). When `failReconnect` is set it rejects instead, modelling a
+   * transport that cannot be brought back.
+   */
+  async reconnect(signal?: AbortSignal): Promise<void> {
+    this.reconnectCalls += 1;
+    throwIfAborted(signal);
+    if (this.reconnectGate) await this.reconnectGate;
+    if (this.delayMs > 0) await delay(this.delayMs, signal);
+    throwIfAborted(signal);
+    if (this.failReconnect) {
+      throw new AppError('STT_DISCONNECTED', { message: 'fake reconnect failed' });
+    }
+    this.connected = true;
+    // The transport is live again: re-activation no longer fails.
+    this.failResume = false;
   }
 
   writeAudio(chunk: AudioChunkPacket): void {

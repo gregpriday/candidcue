@@ -127,6 +127,15 @@ export type SttEvent = 'partial' | 'finalSegment' | 'speechStarted' | 'speechSto
 
 export interface SpeechToTextAdapter {
   connect(config: SttSessionConfig, signal?: AbortSignal): Promise<void>;
+  /**
+   * Re-establish the streaming transport after it dropped mid-session, reusing
+   * the config supplied at {@link connect}. Unlike {@link close} + {@link connect}
+   * this preserves the registered event listeners (and the orchestrator bridge
+   * wired through {@link on}) so a reconnect is transparent to subscribers — only
+   * the dead transport is torn down and rebuilt. Throws if no session was ever
+   * established (reconnect before a successful connect).
+   */
+  reconnect(signal?: AbortSignal): Promise<void>;
   beginTurn(turnId: string): Promise<void>;
   /**
    * Re-activate the in-flight turn after a mid-answer pause so partial/final

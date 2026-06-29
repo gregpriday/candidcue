@@ -34,11 +34,13 @@ import { withDeadlineFallback, nowMs as defaultNow, splitParagraphs, wordCount }
 
 import {
   nextState,
+  canTransition,
   availableCommands,
   isCommandLegal,
   type CommandContext,
   type TransitionTrigger,
 } from './state-machine';
+import { withRetry } from '../providers/retry';
 import { planSpeaking } from '../media/media-planner';
 import { validateQuestion, deterministicRepair } from './question-validator';
 import { applyCoverageUpdates, incrementFollowUp } from './coverage-controller';
@@ -156,6 +158,14 @@ export class SessionOrchestrator {
   private usedFallbackTexts: string[] = [];
   private recentQuestionTexts: string[] = [];
   private pausedFromState: SessionRuntimeState | null = null;
+  // The working state to return to once a reconnect succeeds (RECOVERING →
+  // PAUSED → resume). Captured when entering RECOVERING and folded back into
+  // pausedFromState on `recovered` so resume() picks the right destination (#14).
+  private recoveredFromState: SessionRuntimeState | null = null;
+  // Aborts an in-flight reconnect (the connectFactory await inside stt.reconnect)
+  // when the session is ended/disposed mid-RECOVERING, so a late-resolving
+  // connect can't leave a freshly-opened transport dangling after teardown (#14).
+  private reconnectAbort: AbortController | null = null;
   private lastCommittedAnswer = '';
   private interimTranscript = '';
   private micLevel = 0;
@@ -214,8 +224,21 @@ export class SessionOrchestrator {
     this.state = target;
     // Capture the pre-pause state at the moment we enter PAUSED, from EVERY
     // pause entry point (manual pause, empty-answer, pipeline failure), so
-    // resume() can tell whether the user's mic was open (spec §5.5).
-    if (target === 'PAUSED') this.pausedFromState = from;
+    // resume() can tell whether the user's mic was open (spec §5.5). When PAUSED
+    // is re-entered from RECOVERING via `recovered`, restore the true
+    // pre-recovery state captured in recoveredFromState rather than RECOVERING
+    // itself — otherwise a resume after a reconnect would lose the mic-open
+    // context and replay the question instead of re-arming the turn (#14).
+    if (target === 'PAUSED') {
+      this.pausedFromState = from === 'RECOVERING' ? this.recoveredFromState : from;
+    }
+    // Entering RECOVERING: remember where to resume to once reconnect succeeds.
+    // From PAUSED the true pre-pause state lives in pausedFromState (a failed
+    // resume re-entered recovery); from a live state it is `from`. An operator
+    // retry (ERROR → RECOVERING) keeps the value captured when recovery began.
+    if (target === 'RECOVERING' && from !== 'ERROR') {
+      this.recoveredFromState = from === 'PAUSED' ? this.pausedFromState : from;
+    }
     this.log.info('session.state_changed', { from, to: target, trigger, reason });
     this.publishStage();
     this.publishSnapshot();
@@ -288,11 +311,12 @@ export class SessionOrchestrator {
       try {
         await this.deps.stt.resumeTurn(this.currentTurn.id);
       } catch (err) {
-        // STT could not be re-activated: stay PAUSED, leave the mic closed, and
-        // surface a clear retry prompt. resume() never rejects unhandled.
+        // STT could not be re-activated (the transport dropped). Route into
+        // RECOVERING so the orchestrator auto-reconnects and self-heals, rather
+        // than stranding the operator in PAUSED with a manual retry prompt (#14).
+        // The mic stays closed; resume() never rejects unhandled.
         this.log.warn('stt.resume_failed', { error: String(err) });
-        this.recoverableWarning = 'Speech service disconnected. Retry to resume.';
-        this.publishSnapshot();
+        this.enterRecovery('stt resume failed');
         return;
       }
       // STT is live again: now it is safe to transition to USER_ARMED and open the
@@ -387,6 +411,9 @@ export class SessionOrchestrator {
   async endNow(): Promise<void> {
     this.assertCommandLegal('END_NOW');
     this.generationId++;
+    // Cancel any in-flight reconnect (END_NOW is legal from RECOVERING) so its
+    // connectFactory does not open a transport into a session we are ending.
+    this.reconnectAbort?.abort();
     this.clearEndpointTimer();
     this.deps.stage.closeMicGate();
     // Never mark the session completed in persistence unless the state machine
@@ -402,7 +429,71 @@ export class SessionOrchestrator {
   /** Operator retry from the terminal ERROR state (ERROR → RECOVERING). */
   retryRecovery(): void {
     this.assertCommandLegal('RETRY_RECOVERY');
-    this.transition('operatorRetry', 'operator retry');
+    if (!this.transition('operatorRetry', 'operator retry')) return;
+    this.generationId++; // a fresh reconnect generation; invalidate any stale one
+    this.recoverableWarning = 'Reconnecting to the speech service…';
+    this.publishSnapshot();
+    void this.launchReconnect();
+  }
+
+  /**
+   * Route a recoverable device/provider fault into RECOVERING and kick off an
+   * async reconnect (#14). Wired call sites (a dropped STT transport seen on
+   * resume, or an STT_DISCONNECTED pipeline failure) always have a recovery edge;
+   * if some future caller does not, degrade to a plain recoverable pause so the
+   * session is never stranded mid-flight.
+   */
+  private enterRecovery(reason: string): void {
+    if (!canTransition(this.state, 'deviceOrProviderNeedsRecovery')) {
+      this.recoverableWarning = 'Speech service disconnected. Resume to try again.';
+      if (this.transition('pause', reason)) {
+        this.generationId++;
+        this.clearEndpointTimer();
+        this.deps.stage.closeMicGate();
+      }
+      this.publishSnapshot();
+      return;
+    }
+    this.markProvider('inworldStt', 'degraded');
+    this.recoverableWarning = 'Reconnecting to the speech service…';
+    this.transition('deviceOrProviderNeedsRecovery', reason);
+    this.generationId++; // invalidate any in-flight provider work
+    this.clearEndpointTimer();
+    this.deps.stage.closeMicGate();
+    void this.launchReconnect();
+  }
+
+  /**
+   * Drive the async reconnect that gives RECOVERING a real exit (#14). Re-opens
+   * the STT transport with bounded backoff; on success fires `recovered`
+   * (→ PAUSED), on exhaustion fires `recoveryFailed` (→ ERROR, where the operator
+   * can RETRY_RECOVERY). The generation guard discards a stale resolution if the
+   * session has since been ended, paused, or re-entered recovery — a late
+   * reconnect must never transition a state the operator already escaped.
+   */
+  private async launchReconnect(): Promise<void> {
+    const myGen = this.generationId;
+    const superseded = (): boolean => this.state !== 'RECOVERING' || myGen !== this.generationId;
+    // Abort the in-flight connect if the session is ended/disposed mid-reconnect,
+    // so a late connectFactory resolution can't leave an orphaned open transport.
+    const ac = new AbortController();
+    this.reconnectAbort = ac;
+    try {
+      await withRetry(() => this.deps.stt.reconnect(ac.signal), { shouldAbort: superseded });
+    } catch (err) {
+      if (superseded()) return;
+      this.log.error('stt.reconnect_failed', { error: String(err) });
+      this.markProvider('inworldStt', 'down');
+      this.recoverableWarning = 'Could not reconnect to the speech service. Tap Retry to try again.';
+      this.transition('recoveryFailed', 'reconnect exhausted');
+      return;
+    } finally {
+      if (this.reconnectAbort === ac) this.reconnectAbort = null;
+    }
+    if (superseded()) return;
+    this.markProvider('inworldStt', 'ok');
+    this.recoverableWarning = null;
+    this.transition('recovered', 'reconnected');
   }
 
   /** Reject a command that is illegal in the current state without side effects. */
@@ -473,9 +564,10 @@ export class SessionOrchestrator {
     this.publishSnapshot();
   }
 
-  /** Release timers when the session ends (called from teardown). */
+  /** Release timers (and any in-flight reconnect) when the session ends. */
   dispose(): void {
     this.clearEndpointTimer();
+    this.reconnectAbort?.abort();
   }
 
   /** Evaluate whether the conservative/balanced classifier should auto-commit. */
@@ -622,6 +714,14 @@ export class SessionOrchestrator {
       await this.deps.stt.beginTurn(turn.id);
     } catch (err) {
       this.log.warn('stt.begin_failed', { error: String(err) });
+      // We have just opened the mic gate (audioEnded → USER_ARMED). If STT could
+      // not arm because the transport dropped, staying USER_ARMED would be the
+      // "armed but deaf" antipattern resume() deliberately avoids: mic open, STT
+      // silent. Route the dropped transport into RECOVERING so it auto-reconnects
+      // and the mic is closed (enterRecovery closes the gate) until it does (#14).
+      if (err instanceof AppError && err.code === 'STT_DISCONNECTED') {
+        this.enterRecovery('beginTurn failed');
+      }
     }
   }
 
@@ -1003,6 +1103,14 @@ export class SessionOrchestrator {
     const appErr = err instanceof AppError ? err : new AppError('UNKNOWN', { cause: err });
     if (appErr.code === 'TTS_FAILED') this.markProvider('inworldTts', 'down');
     this.log.error('session.pipeline_failure', { code: appErr.code, message: appErr.message });
+    // A dropped speech transport routes through RECOVERING (auto-reconnect)
+    // rather than a plain pause, so the session self-heals instead of stranding
+    // the operator with a manual retry prompt (#14). Every other failure keeps
+    // the existing recoverable-pause behaviour.
+    if (appErr.code === 'STT_DISCONNECTED') {
+      this.enterRecovery('stt disconnected');
+      return;
+    }
     this.recoverableWarning = appErr.publicMessage;
     this.transition('pause', 'pipeline failure');
     this.publishSnapshot();
@@ -1141,6 +1249,7 @@ export class SessionOrchestrator {
       canEnd: cmds.END_AFTER_TURN,
       canEndAfterTurn: cmds.END_AFTER_TURN,
       canEndNow: cmds.END_NOW,
+      canRetry: cmds.RETRY_RECOVERY,
     };
   }
 
