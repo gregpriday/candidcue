@@ -5,3 +5,14 @@
   background: radial-gradient(130% 100% at 50% 42%, #15181f 0%, #07080a 78%);
   overflow: hidden;
 }
+
+/* Transient full-screen flash at session start: a high-contrast visual anchor
+   the external camera can lock onto, paired with the audible sync beep. Plain
+   white (not the brand accent) for maximum, neutral contrast on every camera. */
+.syncSlate {
+  position: fixed;
+  inset: 0;
+  background: #fff;
+  z-index: 999;
+  pointer-events: none;
+}
