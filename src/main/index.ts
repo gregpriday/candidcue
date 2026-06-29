@@ -134,7 +134,6 @@ async function bootstrap(): Promise<void> {
 }
 
 app.whenReady().then(bootstrap).catch((err) => {
-  // eslint-disable-next-line no-console
   console.error('CandidCue failed to start:', err);
   app.quit();
 });

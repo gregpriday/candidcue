@@ -141,7 +141,7 @@ describe('redact', () => {
 
   it('passes through primitives unchanged', () => {
     expect(redact(42)).toBe(42);
-    expect(redact(true)).toBe(false || true);
+    expect(redact(true)).toBe(true);
     expect(redact(null)).toBeNull();
     expect(redact('plain string')).toBe('plain string');
     expect(redact('sk-abcdEFGH1234')).toBe('[REDACTED]');
