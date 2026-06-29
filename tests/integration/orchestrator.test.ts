@@ -1058,7 +1058,7 @@ describe('SessionOrchestrator turn pipeline', () => {
     for (const [start, stop] of [
       [1000, 2000],
       [3000, 4000],
-    ]) {
+    ] as const) {
       h.orch.onSpeechStarted(start);
       h.orch.onSpeechStopped(stop);
       await h.orch.commitUserTurn('manual');
