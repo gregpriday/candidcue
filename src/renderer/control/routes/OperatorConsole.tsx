@@ -147,6 +147,10 @@ export function OperatorConsole({ nav, sessionId }: OperatorConsoleProps): JSX.E
         if (controls?.canRepeat) {
           event.preventDefault();
           void sendCommand({ type: 'REPEAT_QUESTION' });
+        } else if (controls?.canRetry) {
+          // In ERROR, Repeat is unavailable; R retries the recovery instead.
+          event.preventDefault();
+          void sendCommand({ type: 'RETRY_RECOVERY' });
         }
         return;
       }
@@ -267,7 +271,15 @@ function OperatorView({ snapshot, commandError, onCommand, onExit }: OperatorVie
 
       <footer className={styles.transport}>
         <div className={styles.transportSecondary}>
-          {controls.canResume ? (
+          {controls.canRetry ? (
+            <Button
+              className={styles.transportButton}
+              onClick={() => onCommand({ type: 'RETRY_RECOVERY' })}
+              title="Retry connecting (R)"
+            >
+              <Icon name="repeat" size={16} /> Retry
+            </Button>
+          ) : controls.canResume ? (
             <Button
               className={styles.transportButton}
               onClick={() => onCommand({ type: 'RESUME_SESSION' })}

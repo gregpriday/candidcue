@@ -7,6 +7,7 @@ import { FakeInterviewModel, FakeModeration, FakeStt, FakeTts } from '@main/prov
 import { loadManifest } from '@main/media/manifest-loader';
 import { AppController } from '@main/app-controller';
 import { bridgeSttToOrchestrator } from '@main/interview/stt-bridge';
+import { AppError } from '@shared/errors/app-error';
 import type { CredentialStore } from '@main/security/secrets';
 import type { EndpointMode } from '@shared/domain';
 import type {
@@ -550,7 +551,7 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(turn1.answer?.rawTranscript).toContain('words captured before the pause');
   });
 
-  it('stays PAUSED and warns the operator when STT cannot re-activate on resume (no "armed but deaf")', async () => {
+  it('routes a failed STT re-activation through RECOVERING and auto-reconnects (issue #14)', async () => {
     await h.orch.prepareOpening();
     await h.orch.begin();
 
@@ -560,30 +561,122 @@ describe('SessionOrchestrator turn pipeline', () => {
     h.orch.pause();
     expect(h.orch.getState()).toBe('PAUSED');
 
-    // Simulate the STT transport having dropped: resumeTurn now throws.
+    // Simulate the STT transport having dropped: resumeTurn now throws. Hold the
+    // reconnect open so RECOVERING is observable before it auto-resolves.
     h.stt.failResume = true;
+    let releaseReconnect!: () => void;
+    h.stt.reconnectGate = new Promise<void>((resolve) => {
+      releaseReconnect = resolve;
+    });
     h.stage.openMicGate.mockClear();
 
-    // resume() must not reject even though the underlying re-activation failed.
+    // resume() must not reject; the failed re-activation routes into RECOVERING
+    // (mic still shut, never "armed but deaf") and kicks off the auto-reconnect.
     await expect(h.orch.resume()).resolves.toBeUndefined();
-
-    // It attempted re-activation but, on failure, stayed PAUSED with the mic shut.
     expect(h.stt.resumeTurnCalls).toBe(1);
-    expect(h.orch.getState()).toBe('PAUSED'); // NOT USER_ARMED
+    expect(h.orch.getState()).toBe('RECOVERING'); // NOT USER_ARMED, NOT a bare PAUSED
     expect(h.stage.openMicGate).not.toHaveBeenCalled();
+    expect(h.snapshots.at(-1)!.recoverableWarning).toMatch(/reconnect/i);
 
-    const snap = h.snapshots.at(-1)!;
-    expect(snap.state).toBe('PAUSED');
-    expect(snap.mic.gate).toBe('closed');
-    expect(snap.recoverableWarning).toBe('Speech service disconnected. Retry to resume.');
+    // The held reconnect resolves and the session lands back in PAUSED, warning cleared.
+    releaseReconnect();
+    await vi.waitFor(() => expect(h.orch.getState()).toBe('PAUSED'));
+    expect(h.stt.reconnectCalls).toBe(1);
+    const recoveredSnap = h.snapshots.at(-1)!;
+    expect(recoveredSnap.state).toBe('PAUSED');
+    expect(recoveredSnap.mic.gate).toBe('closed');
+    expect(recoveredSnap.recoverableWarning).toBeNull();
 
-    // A subsequent retry, once STT is healthy again, resumes cleanly and clears the warning.
-    h.stt.failResume = false;
+    // The pre-recovery USER_SPEAKING context survived: a resume now re-arms the
+    // mic via resumeTurn (which succeeds again — the reconnect restored the stream).
     await h.orch.resume();
     expect(h.orch.getState()).toBe('USER_ARMED');
     expect(h.stt.resumeTurnCalls).toBe(2);
     expect(h.stage.openMicGate).toHaveBeenCalledTimes(1);
     expect(h.snapshots.at(-1)!.recoverableWarning).toBeNull();
+  });
+
+  it('exhausts reconnect into ERROR, then RETRY_RECOVERY recovers (issue #14)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000); // USER_SPEAKING — mic was open
+    h.orch.pause();
+    expect(h.orch.getState()).toBe('PAUSED');
+
+    // The transport is down AND every reconnect attempt fails.
+    h.stt.failResume = true;
+    h.stt.failReconnect = true;
+
+    await h.orch.resume(); // → RECOVERING → (reconnect fails) → ERROR
+    await vi.waitFor(() => expect(h.orch.getState()).toBe('ERROR'));
+    const errSnap = h.snapshots.at(-1)!;
+    expect(errSnap.controls.canRetry).toBe(true);
+    expect(errSnap.recoverableWarning).toMatch(/reconnect/i);
+    expect(errSnap.providerStatus.inworldStt).toBe('down');
+
+    // Operator retries; this time the transport comes back.
+    h.stt.failReconnect = false;
+    h.orch.retryRecovery(); // ERROR → RECOVERING
+    expect(h.orch.getState()).toBe('RECOVERING');
+    await vi.waitFor(() => expect(h.orch.getState()).toBe('PAUSED'));
+    expect(h.snapshots.at(-1)!.recoverableWarning).toBeNull();
+
+    // The original USER_SPEAKING context survived the ERROR round-trip: resume re-arms.
+    await h.orch.resume();
+    expect(h.orch.getState()).toBe('USER_ARMED');
+  });
+
+  it('routes an STT_DISCONNECTED pipeline failure into RECOVERING (issue #14)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.stt.pushTranscript('a captured answer');
+
+    // Hold the reconnect so RECOVERING is observable before it auto-resolves.
+    let releaseReconnect!: () => void;
+    h.stt.reconnectGate = new Promise<void>((resolve) => {
+      releaseReconnect = resolve;
+    });
+
+    // The commit pipeline throws STT_DISCONNECTED after finalize (the transport
+    // dropped mid-commit). It must route into RECOVERING, not a bare pause.
+    vi.spyOn(h.repo, 'recordRawAnswer').mockRejectedValueOnce(
+      new AppError('STT_DISCONNECTED', { message: 'dropped mid-commit' }),
+    );
+    await h.orch.commitUserTurn('manual');
+    expect(h.orch.getState()).toBe('RECOVERING');
+
+    // Auto-reconnect resolves into PAUSED.
+    releaseReconnect();
+    await vi.waitFor(() => expect(h.orch.getState()).toBe('PAUSED'));
+    expect(h.stt.reconnectCalls).toBe(1);
+  });
+
+  it('END_NOW during RECOVERING completes the session; a late reconnect cannot revive it (issue #14)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.pause();
+    h.stt.failResume = true;
+
+    // Hold the reconnect open so the session stays in RECOVERING while we END_NOW.
+    let releaseReconnect!: () => void;
+    h.stt.reconnectGate = new Promise<void>((resolve) => {
+      releaseReconnect = resolve;
+    });
+
+    await h.orch.resume();
+    expect(h.orch.getState()).toBe('RECOVERING');
+
+    // Operator ends the session mid-reconnect (END_NOW is legal from RECOVERING).
+    await h.orch.endNow();
+    expect(h.orch.getState()).toBe('COMPLETED');
+
+    // The held reconnect now resolves; its stale resolution must NOT transition
+    // out of COMPLETED (the generation guard discards it).
+    releaseReconnect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.orch.getState()).toBe('COMPLETED');
   });
 
   it('preserves the committed answer and advances when the next question fails to realize, then resumes (issue #9)', async () => {

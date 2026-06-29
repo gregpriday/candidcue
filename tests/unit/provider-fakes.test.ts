@@ -386,6 +386,34 @@ describe('FakeStt', () => {
     expect(result.text).toBe('hello there'); // accumulated transcript preserved
   });
 
+  it('reconnect restores the transport so resumeTurn succeeds again, and counts calls', async () => {
+    const stt = new FakeStt({ transcript: 'config fallback' });
+    await stt.connect(sttConfig);
+
+    // The transport dropped: resumeTurn fails until a reconnect restores it.
+    stt.failResume = true;
+    await expect(stt.resumeTurn('turn-1')).rejects.toThrow();
+    expect(stt.resumeTurnCalls).toBe(1); // the failed attempt still counted
+
+    await stt.reconnect();
+    expect(stt.reconnectCalls).toBe(1);
+    expect(stt.connected).toBe(true);
+    expect(stt.failResume).toBe(false); // transport restored
+
+    // resumeTurn now succeeds and re-activates the turn.
+    await stt.resumeTurn('turn-1');
+    expect(stt.resumeTurnCalls).toBe(2);
+    expect(stt.lastResumedTurnId).toBe('turn-1');
+  });
+
+  it('reconnect rejects with STT_DISCONNECTED when failReconnect is set', async () => {
+    const stt = new FakeStt();
+    await stt.connect(sttConfig);
+    stt.failReconnect = true;
+    await expect(stt.reconnect()).rejects.toMatchObject({ code: 'STT_DISCONNECTED' });
+    expect(stt.reconnectCalls).toBe(1);
+  });
+
   it('beginTurn starts a fresh turn and discards previously accumulated transcript', async () => {
     const stt = new FakeStt({ transcript: 'config fallback' });
     await stt.connect(sttConfig);

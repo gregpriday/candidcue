@@ -126,6 +126,38 @@ export class InworldSttClient implements SpeechToTextAdapter {
     this.transportUnsub = transport.onMessage((raw) => this.handleRaw(raw));
   }
 
+  /**
+   * Re-open the streaming transport after it dropped mid-session, reusing the
+   * config saved at {@link connect}. Tears down only the dead transport — the
+   * registered {@link on} listeners (and the orchestrator bridge through them)
+   * are deliberately preserved, so reconnection is transparent to subscribers.
+   * The in-flight turn is deactivated; the accumulator is left untouched so any
+   * words captured before the drop survive a later resume.
+   *
+   * @throws AppError STT_DISCONNECTED if no session config was ever established
+   *   (reconnect called before a successful connect).
+   */
+  async reconnect(signal?: AbortSignal): Promise<void> {
+    if (this.sessionConfig === null) {
+      throw new AppError('STT_DISCONNECTED', { message: 'reconnect called before connect' });
+    }
+    // Drop the old transport without clearing listeners (close() would). Detach
+    // its message subscription first so a late event from the dead socket can't
+    // fold into the rebuilt one.
+    this.transportUnsub?.();
+    this.transportUnsub = null;
+    this.transport?.close();
+    this.transport = null;
+    this.turnActive = false;
+    this.finalResolve = null;
+    const transport = await this.connectFactory(
+      { apiKey: this.apiKey, model: this.model, config: this.sessionConfig },
+      signal,
+    );
+    this.transport = transport;
+    this.transportUnsub = transport.onMessage((raw) => this.handleRaw(raw));
+  }
+
   /** Begin a new answer turn, resetting any prior accumulated transcript. */
   async beginTurn(_turnId: string): Promise<void> {
     if (this.transport === null) {

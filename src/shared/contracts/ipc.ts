@@ -186,6 +186,7 @@ export interface OperatorSessionSnapshot {
     canEnd: boolean;
     canEndAfterTurn: boolean;
     canEndNow: boolean;
+    canRetry: boolean;
   };
 }
 
