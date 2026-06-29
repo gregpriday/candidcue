@@ -47,6 +47,7 @@ function makeController() {
     ensureStageWindow: () => {
       throw new Error('not used');
     },
+    isDisplayConnected: () => true,
   });
 }
 

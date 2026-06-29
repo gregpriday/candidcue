@@ -767,6 +767,7 @@ describe('SessionOrchestrator turn pipeline', () => {
       ensureStageWindow: () => {
         throw new Error('stage window is not used by review/editTranscript');
       },
+      isDisplayConnected: () => true,
     });
 
     const review = await controller.review(h.sessionId);
@@ -802,6 +803,7 @@ describe('SessionOrchestrator turn pipeline', () => {
       ensureStageWindow: () => {
         throw new Error('stage window is not used by command dispatch');
       },
+      isDisplayConnected: () => true,
     });
     // Inject the active session so command() routes to this orchestrator.
     (controller as unknown as { active: unknown }).active = { orchestrator: h.orch };

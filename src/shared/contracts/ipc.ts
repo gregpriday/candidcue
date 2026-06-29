@@ -106,17 +106,12 @@ export interface PublicMediaDevice {
 // ---------------------------------------------------------------------------
 // Preflight
 // ---------------------------------------------------------------------------
-export type PreflightCheckId =
-  | 'openai'
-  | 'inworld'
-  | 'voice'
-  | 'manifest'
-  | 'microphone'
-  | 'output'
-  | 'display'
-  | 'network'
-  | 'opening'
-  | 'endpoint';
+// Only the checks the main-process preflight actually runs. The renderer owns
+// mic permission/enumeration and audio-device selection (navigator.mediaDevices
+// is unavailable in the main process), so those are not part of the shared
+// readiness result; `voice` is deferred until the Inworld TTS format issue (#8)
+// is resolved.
+export type PreflightCheckId = 'openai' | 'inworld' | 'manifest' | 'display' | 'opening';
 
 export interface PreflightCheck {
   id: PreflightCheckId;
