@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { join } from 'node:path';
 import { SessionOrchestrator, type OrchestratorDeps, type SessionContext } from '@main/interview/orchestrator';
-import { NOOP_LOGGER, type StagePort, type SnapshotSink } from '@main/interview/ports';
+import { NOOP_LOGGER, type Logger, type StagePort, type SnapshotSink } from '@main/interview/ports';
 import { MemoryRepository } from '@main/persistence/memory-repository';
 import { FakeInterviewModel, FakeModeration, FakeStt, FakeTts } from '@main/providers/fakes';
 import { loadManifest } from '@main/media/manifest-loader';
@@ -107,6 +107,7 @@ async function makeHarness(overrides?: {
   endpointMode?: EndpointMode;
   captionsEnabled?: boolean;
   clock?: () => number;
+  logger?: Logger;
 }): Promise<Harness> {
   const repo = new MemoryRepository();
   await repo.migrate();
@@ -182,6 +183,7 @@ async function makeHarness(overrides?: {
     stage,
     snapshotSink,
     clock: overrides?.clock,
+    logger: overrides?.logger,
   };
 
   const ctx: SessionContext = {
@@ -1042,6 +1044,36 @@ describe('SessionOrchestrator turn pipeline', () => {
 
       h.stt.emit('speechStopped');
       expect(h.orch.getState()).toBe('ENDPOINT_CANDIDATE');
+    } finally {
+      offs.forEach((off) => off());
+    }
+  });
+
+  it('maps a second speechStarted from endpoint candidate to resumed speech (#15)', async () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } satisfies Logger;
+    h.orch.dispose();
+    h = await makeHarness({ logger });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin(); // USER_ARMED
+    const offs = bridgeSttToOrchestrator(h.stt, h.orch, () => 1000);
+    try {
+      h.stt.emit('speechStarted');
+      expect(h.orch.getState()).toBe('USER_SPEAKING');
+
+      // A pause ends the first speech segment and begins endpoint evaluation.
+      h.stt.emit('speechStopped');
+      expect(h.orch.getState()).toBe('ENDPOINT_CANDIDATE');
+
+      // Resuming speech: the provider re-emits a bare speechStarted. This must
+      // return the turn to USER_SPEAKING via speechResumed, not log an
+      // invalid_transition for an illegal speechStarted from ENDPOINT_CANDIDATE.
+      h.stt.emit('speechStarted');
+      expect(h.orch.getState()).toBe('USER_SPEAKING');
+
+      expect(
+        logger.warn.mock.calls.some(([event]) => event === 'session.invalid_transition'),
+      ).toBe(false);
     } finally {
       offs.forEach((off) => off());
     }

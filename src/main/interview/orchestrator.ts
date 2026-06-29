@@ -523,6 +523,17 @@ export class SessionOrchestrator {
 
   // -- STT-driven events (auto endpoint) -----------------------------------
   onSpeechStarted(at: number): void {
+    // A speechStarted arriving while we are already evaluating an endpoint
+    // candidate means the user resumed talking after a pause. The STT provider
+    // emits no distinct "resume" event — resume is always a second bare
+    // speechStarted after a prior speechStopped — so our own state is the only
+    // reliable resume signal. Route it to the already-legal speechResumed
+    // trigger instead of firing an illegal speechStarted from ENDPOINT_CANDIDATE
+    // (which would log session.invalid_transition and leave the state stuck) (#15).
+    if (this.state === 'ENDPOINT_CANDIDATE') {
+      this.onSpeechResumed();
+      return;
+    }
     this.clearEndpointTimer();
     if (this.currentTurn && this.currentTurn.speechStartedAt == null) {
       this.currentTurn.speechStartedAt = at;
