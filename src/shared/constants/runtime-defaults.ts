@@ -100,7 +100,15 @@ export const MEDIA_DEFAULTS = {
 export const APPROX_MINUTES_PER_QUESTION = 2;
 
 export const PROJECT_LIMITS = {
-  recentTurnCount: 6,
+  // How many most-recent completed turns the interviewer model receives VERBATIM
+  // each turn — its working memory of the conversation. At 6 (three exchanges)
+  // the model quickly "forgot" what the founder said a few questions earlier and
+  // every turn read as a fresh one-shot, which felt inorganic. A full business
+  // interview runs well under this many questions, so the model now sees the
+  // WHOLE conversation verbatim; the rolling summary below is only a backstop for
+  // pathologically long sessions. (Tunable: if the small/fast live model later
+  // struggles with the larger context, lower this.)
+  recentTurnCount: 50,
   maxConsecutiveFollowUps: 2,
   rollingSummaryMaxWords: 1500,
 } as const;
