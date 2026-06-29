@@ -82,6 +82,15 @@ describe('TRANSITIONS table', () => {
     expect(nextState('TURN_FINALIZING', 'transcriptStored')).toBe('INTERVIEWER_THINKING');
   });
 
+  it('re-arms the user turn on an empty answer instead of pausing (issue #61)', () => {
+    // An empty transcript (cough/silence) re-arms the same turn rather than
+    // dropping into PAUSED. The trigger is only legal while finalizing.
+    expect(nextState('TURN_FINALIZING', 'emptyAnswerRearm')).toBe('USER_ARMED');
+    expect(nextState('USER_ARMED', 'emptyAnswerRearm')).toBeNull();
+    expect(nextState('PAUSED', 'emptyAnswerRearm')).toBeNull();
+    expect(nextState('COMPLETED', 'emptyAnswerRearm')).toBeNull();
+  });
+
   it('routes completion to FINISHING then COMPLETED', () => {
     expect(nextState('TURN_FINALIZING', 'completionSelected')).toBe('FINISHING');
     expect(nextState('INTERVIEWER_THINKING', 'completionSelected')).toBe('FINISHING');
@@ -110,6 +119,7 @@ describe('nextState / canTransition', () => {
       'speechResumed',
       'classifierWait',
       'transcriptStored',
+      'emptyAnswerRearm',
       'questionAndTtsReady',
       'completionSelected',
       'finalAnswerStored',

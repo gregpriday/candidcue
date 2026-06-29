@@ -1011,24 +1011,178 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(h.stage.openMicGate).toHaveBeenCalledTimes(1);
   });
 
-  it('preserves the turn and pauses on an empty answer instead of inventing one', async () => {
+  it('silently re-arms the same turn on an empty answer instead of pausing (issue #61)', async () => {
     h = await makeHarness({ stt: new FakeStt({ transcript: '' }) });
     await h.orch.prepareOpening();
     await h.orch.begin();
+    expect(h.stt.beginTurnCalls).toBe(1); // armed for the first attempt
+    const openGatesBefore = h.stage.openMicGate.mock.calls.length;
+
+    h.orch.onSpeechStarted(1000); // a cough trips speechStarted but yields no text
+    h.orch.onSttPartial('uh'); // a stray interim the re-arm must wipe
+    h.orch.onSpeechStopped(2000);
+    await h.orch.commitUserTurn('manual');
+
+    // No pause: the creator is dropped straight back to listening on the SAME
+    // turn so they can simply keep talking (no Resume to hunt for).
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    expect(h.stt.beginTurnCalls).toBe(2); // re-armed (a fresh STT turn, same turn id)
+    expect(h.stage.openMicGate.mock.calls.length).toBe(openGatesBefore + 1);
+
+    const snap = h.snapshots.at(-1)!;
+    expect(snap.recoverableWarning).toBeNull(); // no "Resume to try again" prompt
+    expect(snap.mic.gate).toBe('armed'); // mic re-opened and waiting for speech
+    // The re-armed snapshot is clean: no stray interim/final text carried over.
+    expect(snap.partialTranscript).toBe('');
+    expect(snap.finalTranscriptSoFar).toBe('');
+    // Capture state was reset before the snapshot published, so userHasSpoken is
+    // false again — Skip/Repeat are legal exactly as on the fresh arm, with no
+    // stale speechStartedAt mis-gating them.
+    expect(snap.controls.canSkip).toBe(true);
+    expect(snap.controls.canRepeat).toBe(true);
+
+    // Nothing was invented or persisted (spec §14.6, §22.3): the turn is still
+    // just "asked", with no answer and no second turn.
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.state).toBe('asked');
+    expect(turn1.answer).toBeFalsy();
+    expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+  });
+
+  it('re-arms repeatedly on consecutive empty answers without persisting anything (issue #61)', async () => {
+    h = await makeHarness({ stt: new FakeStt({ transcript: '' }) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    for (const [start, stop] of [
+      [1000, 2000],
+      [3000, 4000],
+    ] as const) {
+      h.orch.onSpeechStarted(start);
+      h.orch.onSpeechStopped(stop);
+      await h.orch.commitUserTurn('manual');
+      expect(h.orch.getState()).toBe('USER_ARMED');
+    }
+
+    // Two coughs → two re-arms, on top of the initial arm. No retry cap kicks in.
+    expect(h.stt.beginTurnCalls).toBe(3);
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.state).toBe('asked');
+    expect(turn1.answer).toBeFalsy();
+    expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+  });
+
+  it('accepts a real answer after an empty-answer re-arm, persisting it under the same turn (issue #61)', async () => {
+    h = await makeHarness({ stt: new FakeStt({ transcript: '' }) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    // First attempt is an empty cough → silent re-arm.
     h.orch.onSpeechStarted(1000);
     h.orch.onSpeechStopped(2000);
     await h.orch.commitUserTurn('manual');
-    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.orch.getState()).toBe('USER_ARMED');
 
-    // The user spoke (onSpeechStarted) before the silence, so userHasSpoken is
-    // true: neither Skip nor Repeat is legal here. The warning must advertise
-    // only the always-legal action (Resume) so it can't promise an action the
-    // operator can't take.
-    const snap = h.snapshots.at(-1)!;
-    expect(snap.recoverableWarning).toBe('No speech was captured. Resume to try again.');
-    expect(snap.recoverableWarning).not.toMatch(/skip/i);
-    expect(snap.recoverableWarning).not.toMatch(/repeat/i);
-    expect(snap.controls.canSkip).toBe(false);
+    // Second attempt on the same turn captures a real answer.
+    h.stt.pushTranscript('A real answer this time around.');
+    h.orch.onSpeechStarted(3000);
+    h.orch.onSpeechStopped(5000);
+    await h.orch.commitUserTurn('manual');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const ordinal1 = agg!.turns.filter((t) => t.ordinal === 1);
+    expect(ordinal1).toHaveLength(1); // the cough left no duplicate turn record
+    expect(ordinal1[0]!.state).toBe('answered');
+    expect(ordinal1[0]!.answer?.rawTranscript).toContain('A real answer this time around');
+  });
+
+  it('routes a dropped transport during empty-answer re-arm through RECOVERING (issue #61)', async () => {
+    h = await makeHarness({ stt: new FakeStt({ transcript: '' }) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    // The STT transport drops in the window where the empty answer re-arms the
+    // turn, so the re-arm beginTurn throws STT_DISCONNECTED. Hold the reconnect
+    // open so RECOVERING is observable before it auto-resolves.
+    h.stt.failBeginTurn = true;
+    let releaseReconnect!: () => void;
+    h.stt.reconnectGate = new Promise<void>((resolve) => {
+      releaseReconnect = resolve;
+    });
+
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(2000);
+    await h.orch.commitUserTurn('manual');
+
+    // Instead of sitting USER_ARMED with the mic open and STT deaf, the empty
+    // re-arm routed the dropped transport into RECOVERING with the mic closed.
+    expect(h.orch.getState()).toBe('RECOVERING');
+    expect(h.snapshots.at(-1)!.mic.gate).toBe('closed');
+
+    // Auto-reconnect restores the transport and lands in PAUSED.
+    releaseReconnect();
+    await vi.waitFor(() => expect(h.orch.getState()).toBe('PAUSED'));
+  });
+
+  it('discards the empty-answer re-arm when the session is disposed mid-finalize (issue #61)', async () => {
+    h = await makeHarness({ stt: new FakeStt({ transcript: '' }) });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    expect(h.stt.beginTurnCalls).toBe(1);
+    const openGatesBefore = h.stage.openMicGate.mock.calls.length;
+
+    // Park the commit on stt.endTurn so we can dispose() AFTER the pipeline has
+    // captured its generation but BEFORE the empty-answer branch runs. dispose()
+    // only bumps the generation (it leaves the state on TURN_FINALIZING), so the
+    // transition() guard would not catch it — the explicit generation check must.
+    let releaseEnd!: () => void;
+    const endGate = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    let signalReached!: () => void;
+    const endReached = new Promise<void>((resolve) => {
+      signalReached = resolve;
+    });
+    h.stt.endTurn = vi.fn(async () => {
+      signalReached(); // the pipeline is now parked on finalize
+      await endGate;
+      return { text: '', finalSegments: [], confidence: null };
+    });
+
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(2000);
+    const commit = h.orch.commitUserTurn('manual');
+    await endReached; // generation already captured by the pipeline
+    h.orch.dispose(); // bumps the generation; state stays TURN_FINALIZING
+    releaseEnd();
+    await commit;
+
+    // The stale guard fired: STT was never re-armed against the torn-down
+    // session, and the mic gate was not reopened.
+    expect(h.stt.beginTurnCalls).toBe(1);
+    expect(h.stage.openMicGate.mock.calls.length).toBe(openGatesBefore);
+    expect(h.orch.getState()).toBe('TURN_FINALIZING');
+  });
+
+  it('commits a real answer when STT finalize returns only whitespace (issue #61)', async () => {
+    h = await makeHarness({ stt: new FakeStt({ transcript: '' }) });
+    // The provider's final result is whitespace-only (truthy), but the live
+    // stream already captured real words via onSttFinalSegment — those must win
+    // rather than being discarded into a spurious empty-answer re-arm.
+    h.stt.endTurn = vi.fn(async () => ({ text: '   ', finalSegments: [], confidence: null }));
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSttFinalSegment('A complete spoken answer.');
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.state).toBe('answered');
+    expect(turn1.answer?.rawTranscript).toContain('A complete spoken answer');
   });
 
   it('persists recoveredFromBufferedAudio=false when the finalize deadline fallback engages', async () => {
