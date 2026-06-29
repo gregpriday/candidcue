@@ -20,6 +20,7 @@ const api: CandidCueControlApi = {
     save: (input) => ipcRenderer.invoke(CHANNELS.projectsSave, input),
     remove: (projectId) => ipcRenderer.invoke(CHANNELS.projectsRemove, projectId),
     prepare: (projectId) => ipcRenderer.invoke(CHANNELS.projectsPrepare, projectId),
+    cancelPrepare: (projectId) => ipcRenderer.invoke(CHANNELS.projectsPrepareCancel, projectId),
     importMarkdownDocuments: () => ipcRenderer.invoke(CHANNELS.projectsImportMarkdownDocuments),
   },
   settings: {
@@ -49,6 +50,7 @@ const api: CandidCueControlApi = {
   events: {
     onSessionSnapshot: (listener) => subscribe(CHANNELS.evtSessionSnapshot, listener),
     onPreflight: (listener) => subscribe(CHANNELS.evtPreflight, listener),
+    onPrepareProgress: (listener) => subscribe(CHANNELS.evtPrepareProgress, listener),
     onError: (listener) => subscribe(CHANNELS.evtError, listener),
   },
 };

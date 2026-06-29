@@ -24,6 +24,7 @@ export const CHANNELS = {
   projectsSave: 'projects:save',
   projectsRemove: 'projects:remove',
   projectsPrepare: 'projects:prepare',
+  projectsPrepareCancel: 'projects:prepare-cancel',
   projectsImportMarkdownDocuments: 'projects:import-markdown-documents',
   // control: settings
   settingsGetPublic: 'settings:get-public',
@@ -50,6 +51,7 @@ export const CHANNELS = {
   // events (main → control)
   evtSessionSnapshot: 'evt:session-snapshot',
   evtPreflight: 'evt:preflight',
+  evtPrepareProgress: 'evt:prepare-progress',
   evtError: 'evt:error',
   // stage
   stageBootstrap: 'stage:bootstrap',
@@ -295,6 +297,18 @@ export interface PreparationJobResult {
   error: PublicAppError | null;
 }
 
+/**
+ * Streaming progress for an in-flight interview preparation, pushed from the
+ * main process to the renderer over `evt:prepare-progress`. The companion
+ * `projects:prepare-cancel` command lets the renderer abort the job.
+ */
+export interface PrepareProgress {
+  projectId: string;
+  phase: 'reading' | 'generating' | 'validating' | 'saving' | 'done' | 'failed';
+  detail?: string;
+  charsGenerated?: number;
+}
+
 export interface SessionReviewTurn {
   /** The real persisted turn id — required for transcript edits to target the right row. */
   id: string;
@@ -337,6 +351,7 @@ export interface CandidCueControlApi {
     save(input: SaveProjectInput): Promise<ProjectAggregate>;
     remove(projectId: string): Promise<void>;
     prepare(projectId: string): Promise<PreparationJobResult>;
+    cancelPrepare(projectId: string): Promise<void>;
     importMarkdownDocuments(): Promise<ImportMarkdownDocumentsResult | null>;
   };
   settings: {
@@ -368,6 +383,7 @@ export interface CandidCueControlApi {
   events: {
     onSessionSnapshot(listener: (snapshot: OperatorSessionSnapshot) => void): Unsubscribe;
     onPreflight(listener: (state: PreflightState) => void): Unsubscribe;
+    onPrepareProgress(listener: (p: PrepareProgress) => void): Unsubscribe;
     onError(listener: (error: PublicAppError) => void): Unsubscribe;
   };
 }
