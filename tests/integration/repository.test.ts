@@ -582,6 +582,48 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
     expect(fetchedTurn?.ordinal).toBe(1);
   });
 
+  it('appendTurnAtomic never erases a committed answer when the turn is re-persisted as "asked" (issue #9)', async () => {
+    const { projectId, planId } = await seedProjectWithPlan();
+    const session = await repo.createSession(
+      sessionInput(projectId, planId, [coverageItem('c1')]),
+    );
+
+    // Commit the turn with a full answer (the realistic post-commit state).
+    const answered = turn(session.id, 1, {
+      state: 'answered',
+      answer: fullAnswer('It started in a garage.'),
+      completedAt: new Date().toISOString(),
+    });
+    await repo.appendTurnAtomic({
+      sessionId: session.id,
+      turn: answered,
+      coverage: [coverageItem('c1')],
+      rollingSummary: 'committed',
+      currentTurnOrdinal: 1,
+    });
+
+    // Re-persist the SAME id as "asked" with a null answer — the resume path that
+    // previously wiped the committed answer via a blind last-write-wins upsert.
+    const reAsked = turn(session.id, 1, {
+      id: answered.id,
+      state: 'asked',
+      answer: null,
+      completedAt: null,
+    });
+    await repo.appendTurnAtomic({
+      sessionId: session.id,
+      turn: reAsked,
+      coverage: [coverageItem('c1')],
+      rollingSummary: 'committed',
+      currentTurnOrdinal: 1,
+    });
+
+    // The committed answer survives: a null answer must never overwrite it.
+    const fetched = await repo.getTurn(answered.id);
+    expect(fetched?.answer?.cleanedTranscript).toBe('It started in a garage.');
+    expect(fetched?.completedAt).not.toBeNull();
+  });
+
   it('getRecentTurns returns the newest N turns in chronological order', async () => {
     const { projectId, planId } = await seedProjectWithPlan();
     const session = await repo.createSession(

@@ -4,6 +4,7 @@ import type {
   TestVoiceInput,
   TtsResult,
 } from '@shared/contracts/adapters';
+import { AppError } from '@shared/errors/app-error';
 import { wordCount } from '@shared/utils';
 
 import { throwIfAborted, delay } from './abort';
@@ -21,6 +22,13 @@ export interface FakeTtsConfig {
   providerRequestId?: string | null;
   /** Artificial latency (ms), also reported as `latencyMs`. Default 0. */
   delayMs?: number;
+  /**
+   * Throw `TTS_FAILED` on the Nth synthesis call onward (1-based). Lets a test
+   * simulate a realization failure mid-session (e.g. the opening succeeds but
+   * the next question's TTS fails). `resetFailure()` clears it so a later resume
+   * can succeed. When omitted, synthesis never fails.
+   */
+  failAfterCalls?: number;
 }
 
 /**
@@ -33,6 +41,8 @@ export class FakeTts implements TextToSpeechAdapter {
   private readonly wordsPerSecond: number;
   private readonly providerRequestId: string | null;
   private readonly delayMs: number;
+  private failAfterCalls: number | undefined;
+  private callCount = 0;
 
   /** Inputs seen so far, for test assertions. */
   public readonly seen: TtsInput[] = [];
@@ -42,6 +52,17 @@ export class FakeTts implements TextToSpeechAdapter {
     this.wordsPerSecond = config.wordsPerSecond ?? 2.7;
     this.providerRequestId = config.providerRequestId ?? null;
     this.delayMs = config.delayMs ?? 0;
+    this.failAfterCalls = config.failAfterCalls;
+  }
+
+  /**
+   * Stop failing and reset the call counter so subsequent synthesis succeeds —
+   * lets a single test drive a failure then a recovery (e.g. resume after a
+   * realization failure) without swapping the adapter instance.
+   */
+  resetFailure(): void {
+    this.failAfterCalls = undefined;
+    this.callCount = 0;
   }
 
   testVoice(input: TestVoiceInput, signal?: AbortSignal): Promise<TtsResult> {
@@ -57,6 +78,11 @@ export class FakeTts implements TextToSpeechAdapter {
     throwIfAborted(signal);
     if (this.delayMs > 0) await delay(this.delayMs, signal);
     throwIfAborted(signal);
+
+    this.callCount += 1;
+    if (this.failAfterCalls !== undefined && this.callCount >= this.failAfterCalls) {
+      throw new AppError('TTS_FAILED', { recoverable: true, retryAction: 'retry-tts' });
+    }
 
     this.seen.push(input);
     const durationMs = this.deriveDuration(input.text);

@@ -147,6 +147,10 @@ export class SessionOrchestrator {
   private rollingSummary: string;
   private coverage: SessionCoverageItem[];
   private currentTurn: CurrentTurn | null = null;
+  // True once the current turn's answer is committed but before the next turn is
+  // built. If realizing the next question fails here, resume() must advance to
+  // the next question rather than replaying (and wiping) the answered turn (#9).
+  private currentTurnAnswered = false;
   private nextOrdinal: number;
   private recentClipIds: string[] = [];
   private usedFallbackTexts: string[] = [];
@@ -295,9 +299,27 @@ export class SessionOrchestrator {
       // mic, then clear the recoverable warning on this success path.
       this.transition('resumeUserTurn');
       this.deps.stage.openMicGate();
-    } else if (this.currentTurn) {
+    } else if (this.currentTurn && !this.currentTurnAnswered) {
       this.transition('resumePreparedQuestion');
       await this.playCurrentTurn('resume');
+    } else if (this.currentTurn && this.currentTurnAnswered) {
+      // The current turn's answer was committed, but realizing the next question
+      // failed (e.g. TTS) and paused us with currentTurn still on the answered
+      // turn. Replaying it would re-persist the turn as "asked" with a null
+      // answer — wiping the committed answer — and force the user to re-answer.
+      // Instead advance: generate and play the next question from the committed
+      // answer, exactly as skipQuestion does (issue #9).
+      this.transition('resumeNextQuestion');
+      try {
+        const action = await this.generateNextActionOrFallback(this.lastAnswerText());
+        await this.realizeNextQuestion(action, 'model');
+      } catch (err) {
+        // Stay PAUSED with the recoverable warning intact. The early return
+        // skips the warning-clearing tail below, mirroring the STT-failure
+        // branch above so the operator still sees a retry prompt.
+        await this.handlePipelineFailure(err);
+        return;
+      }
     } else {
       this.transition('resumeBeforeStart');
     }
@@ -692,6 +714,9 @@ export class SessionOrchestrator {
         rollingSummary: this.rollingSummary,
         currentTurnOrdinal: turn.ordinal,
       });
+      // The answer is durably committed. If realizing the next question now
+      // fails, resume() advances instead of replaying this answered turn (#9).
+      this.currentTurnAnswered = true;
       this.recentQuestionTexts.push(turn.question.text);
       // Remember the committed answer so a subsequent skip feeds the model real
       // prior context instead of an empty string (CORR-08).
@@ -880,6 +905,9 @@ export class SessionOrchestrator {
       speechEndedAt: null,
       rawTranscript: '',
     };
+    // A fresh, unanswered turn is now current. Reaching this line means TTS
+    // succeeded, so the answered-turn resume path (#9) no longer applies.
+    this.currentTurnAnswered = false;
     this.nextOrdinal = this.currentTurn.ordinal + 1;
     this._lastTts = ttsResult;
   }

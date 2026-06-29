@@ -96,11 +96,13 @@ interface Harness {
   snapshots: OperatorSessionSnapshot[];
   sessionId: string;
   stt: FakeStt;
+  tts: FakeTts;
 }
 
 async function makeHarness(overrides?: {
   model?: InterviewModelAdapter;
   stt?: FakeStt;
+  tts?: FakeTts;
   endpointMode?: EndpointMode;
   captionsEnabled?: boolean;
   clock?: () => number;
@@ -169,12 +171,13 @@ async function makeHarness(overrides?: {
   const stt =
     overrides?.stt ??
     new FakeStt({ transcript: 'CandidCue gives solo presenters a partner on the teleprompter.' });
+  const tts = overrides?.tts ?? new FakeTts({ durationMs: 7000 });
   const deps: OrchestratorDeps = {
     repository: repo,
     model: overrides?.model ?? new FakeInterviewModel({ questionTexts: ['So what changed after that?'] }),
     moderation: new FakeModeration(),
     stt,
-    tts: new FakeTts({ durationMs: 7000 }),
+    tts,
     stage,
     snapshotSink,
     clock: overrides?.clock,
@@ -195,7 +198,7 @@ async function makeHarness(overrides?: {
     targetQuestionCount: 12,
   };
 
-  return { orch: new SessionOrchestrator(deps, ctx), repo, stage, snapshots, sessionId: session.id, stt };
+  return { orch: new SessionOrchestrator(deps, ctx), repo, stage, snapshots, sessionId: session.id, stt, tts };
 }
 
 describe('SessionOrchestrator turn pipeline', () => {
@@ -581,6 +584,48 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(h.stt.resumeTurnCalls).toBe(2);
     expect(h.stage.openMicGate).toHaveBeenCalledTimes(1);
     expect(h.snapshots.at(-1)!.recoverableWarning).toBeNull();
+  });
+
+  it('preserves the committed answer and advances when the next question fails to realize, then resumes (issue #9)', async () => {
+    // The opening TTS (call 1) succeeds; the NEXT question's TTS (call 2) fails,
+    // simulating a realization failure immediately after the answer is committed.
+    const tts = new FakeTts({ durationMs: 7000, failAfterCalls: 2 });
+    h = await makeHarness({ tts });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    // Turn 1's answer was committed; realizing turn 2 then threw TTS_FAILED, so
+    // we are in a recoverable pause. The committed answer must already be safe.
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.snapshots.at(-1)!.recoverableWarning).toBe('We could not generate the interviewer voice.');
+
+    let agg = await h.repo.getSession(h.sessionId);
+    let turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.state).toBe('answered');
+    expect(turn1.answer?.rawTranscript).toBeTruthy();
+    const committedAnswer = turn1.answer!.rawTranscript;
+
+    // Recover TTS, then resume. The fix must ADVANCE to the next question rather
+    // than replaying the answered turn 1 (which would re-persist it as "asked"
+    // with a null answer and wipe the committed answer — the bug).
+    tts.resetFailure();
+    await h.orch.resume();
+
+    // The session advanced out of PAUSED (armed for turn 2) and turn 1's answer
+    // is intact — not wiped by a replay.
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    agg = await h.repo.getSession(h.sessionId);
+    turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.state).toBe('answered');
+    expect(turn1.answer?.rawTranscript).toBe(committedAnswer);
+
+    // A fresh turn 2 was realized and persisted as "asked" — not a replay of 1.
+    const turn2 = agg!.turns.find((t) => t.ordinal === 2);
+    expect(turn2?.state).toBe('asked');
   });
 
   it('persists the computed coverage delta on the answered turn (CORR-09)', async () => {
