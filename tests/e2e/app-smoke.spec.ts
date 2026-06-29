@@ -113,11 +113,13 @@ test('launches the app and runs a fake-provider interview end to end', async () 
       window.candidcue.sessions.command({ type: 'BEGIN_SESSION' }),
     );
     expect(begin.ok).toBe(true);
-    expect(begin.state).not.toBeNull();
-    // The opening question drove the orchestrator out of READY (interview began).
-    expect(begin.state).not.toBe('READY');
-    expect(begin.state).not.toBe('IDLE');
-    expect(begin.state).not.toBe('ERROR');
+    // begin() resolves only after the stage has decoded and played the opening
+    // question's fake-TTS audio end-to-end and armed the user. Landing in
+    // USER_ARMED therefore proves the fake TTS's RIFF/WAVE output was actually
+    // decoded by the stage's AudioContext.decodeAudioData — the exact packaged-
+    // build decode failure this test exists to catch. A stage-playback failure
+    // would instead leave the orchestrator in PAUSED.
+    expect(begin.state).toBe('USER_ARMED');
 
     const end = await control.evaluate(() => window.candidcue.sessions.command({ type: 'END_NOW' }));
     expect(end.ok).toBe(true);

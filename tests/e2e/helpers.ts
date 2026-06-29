@@ -82,22 +82,32 @@ export interface LaunchedApp {
  */
 export async function launchApp(): Promise<LaunchedApp> {
   const userDataDir = await mkdtemp(join(tmpdir(), 'candidcue-e2e-'));
-  const electronApp = await _electron.launch({
-    executablePath: electronExecutablePath(),
-    // '.' = run the app from the repo root (package.json main → .vite/build/main.js).
-    // The fake-media switches auto-grant mic permission and feed a synthetic mic,
-    // so the control window's preflight preview and the stage capture never block
-    // on a real permission prompt or a missing audio device.
-    args: ['.', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
-    cwd: repoRoot,
-    env: {
-      ...process.env,
-      CANDIDCUE_PROVIDERS: 'fake',
-      CANDIDCUE_E2E_USER_DATA_DIR: userDataDir,
-      NODE_OPTIONS: '',
-    },
-    timeout: 60_000,
-  });
+  // If the launch fails (missing/stale build artifact, Electron binary not
+  // installed, timeout), the isolated userData dir must not be orphaned in the
+  // system temp dir — cleanup is only wired after a successful launch, so remove
+  // the dir on failure before re-throwing.
+  let electronApp: ElectronApplication;
+  try {
+    electronApp = await _electron.launch({
+      executablePath: electronExecutablePath(),
+      // '.' = run the app from the repo root (package.json main → .vite/build/main.js).
+      // The fake-media switches auto-grant mic permission and feed a synthetic mic,
+      // so the control window's preflight preview and the stage capture never block
+      // on a real permission prompt or a missing audio device.
+      args: ['.', '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        CANDIDCUE_PROVIDERS: 'fake',
+        CANDIDCUE_E2E_USER_DATA_DIR: userDataDir,
+        NODE_OPTIONS: '',
+      },
+      timeout: 60_000,
+    });
+  } catch (err) {
+    await rm(userDataDir, { recursive: true, force: true }).catch(() => undefined);
+    throw err;
+  }
 
   const cleanup = async (): Promise<void> => {
     try {
