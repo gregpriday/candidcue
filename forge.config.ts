@@ -6,6 +6,10 @@ import { MakerSquirrel } from '@electron-forge/maker-squirrel';
 import { MakerDMG } from '@electron-forge/maker-dmg';
 
 type PackagerConfig = NonNullable<ForgeConfig['packagerConfig']>;
+// `osxSign` is `true | OsxSignOptions`; isolate the options object form so the
+// `optionsForFile` return type can be reused without a deep transitive import.
+type OsxSignObject = Extract<NonNullable<PackagerConfig['osxSign']>, object>;
+type PerFileSignOptions = ReturnType<NonNullable<OsxSignObject['optionsForFile']>>;
 
 const ENTITLEMENTS_PATH = fileURLToPath(
   new URL('./entitlements/entitlements.darwin.plist', import.meta.url),
@@ -23,9 +27,11 @@ const ENTITLEMENTS_PATH = fileURLToPath(
  * wiring can be unit-tested without spawning a real `make`.
  */
 export function createForgeConfig(env: NodeJS.ProcessEnv = process.env): ForgeConfig {
-  const appleId = env.APPLE_ID;
-  const appleIdPassword = env.APPLE_APP_SPECIFIC_PASSWORD;
-  const teamId = env.APPLE_TEAM_ID;
+  // Trim so a stray whitespace-only value (e.g. APPLE_ID=' ') is treated as
+  // unset rather than triggering a confusing late notarization failure.
+  const appleId = env.APPLE_ID?.trim() || undefined;
+  const appleIdPassword = env.APPLE_APP_SPECIFIC_PASSWORD?.trim() || undefined;
+  const teamId = env.APPLE_TEAM_ID?.trim() || undefined;
 
   const provided = [appleId, appleIdPassword, teamId].filter(Boolean).length;
   if (provided > 0 && provided < 3) {
@@ -50,16 +56,29 @@ export function createForgeConfig(env: NodeJS.ProcessEnv = process.env): ForgeCo
   };
 
   if (appleId && appleIdPassword && teamId) {
-    // `continueOnError` is honoured by @electron/packager at runtime (mac.js)
-    // but is absent from the published OsxSignOptions type, so the literal is
-    // cast to the property type. It defaults to true, which would let a signing
-    // failure slip through as an unsigned build — force it false so a bad cert
-    // fails the make.
-    packagerConfig.osxSign = {
-      entitlements: ENTITLEMENTS_PATH,
-      hardenedRuntime: true,
+    const osxSign = {
+      // Custom entitlements MUST go through `optionsForFile` — @electron/osx-sign
+      // ignores any top-level `entitlements` field (it only reads the per-file
+      // options). The top-level app and the generic helper (which hosts the
+      // audio service) get our minimal hardened-runtime plist; the GPU/Renderer/
+      // Plugin helpers keep the library's correct, narrower default plists.
+      optionsForFile: (filePath: string): PerFileSignOptions => {
+        if (
+          filePath.includes('(GPU).app') ||
+          filePath.includes('(Renderer).app') ||
+          filePath.includes('(Plugin).app')
+        ) {
+          return {};
+        }
+        return { entitlements: ENTITLEMENTS_PATH, hardenedRuntime: true };
+      },
+      // `continueOnError` is honoured by @electron/packager at runtime (mac.js)
+      // but is absent from the published type, so the object is cast on assign.
+      // It defaults to true, which would let a signing failure slip through as an
+      // unsigned build — force it false so a bad cert fails the make.
       continueOnError: false,
-    } as PackagerConfig['osxSign'];
+    };
+    packagerConfig.osxSign = osxSign as PackagerConfig['osxSign'];
     packagerConfig.osxNotarize = { appleId, appleIdPassword, teamId };
   }
 
