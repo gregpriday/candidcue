@@ -23,10 +23,29 @@ export function buildOpenAiAdapters(apiKey: string): OpenAiAdapters {
  */
 const STT_STREAM_URL = 'wss://api.inworld.ai/stt/v1/transcribe:streamBidirectional';
 
-const inworldWsConnect: SttConnectFactory = async ({ apiKey, model, config }, signal) => {
-  // Inworld uses HTTP Basic auth; the API key IS the verbatim Basic credential
-  // (already base64-encoded by the user), so we pass it through unmodified.
-  const ws = new WebSocket(STT_STREAM_URL, { headers: { Authorization: `Basic ${apiKey}` } });
+/**
+ * Build the streaming-STT WebSocket URL. The streamBidirectional endpoint's
+ * security scheme is `httpApiKey` with `in: query` (param name lowercase
+ * `authorization`), so the Basic credential travels as a URL query parameter —
+ * NOT as an `Authorization` upgrade header (the server ignores the header and
+ * rejects the connection). `encodeURIComponent` is used rather than
+ * URLSearchParams so the space becomes `%20` (per the docs) instead of `+`, and
+ * so the base64 credential's `+` `/` `=` are percent-escaped verbatim.
+ *
+ * Note: the synchronous REST recovery path (`recoverFromAudio` in stt-client.ts)
+ * uses a different Inworld scheme — `apiKey` in an HTTP `Authorization` header —
+ * and is intentionally left untouched here.
+ */
+export function buildSttWsUrl(baseUrl: string, apiKey: string): string {
+  const separator = baseUrl.includes('?') ? '&' : '?';
+  return `${baseUrl}${separator}authorization=${encodeURIComponent(`Basic ${apiKey}`)}`;
+}
+
+export const inworldWsConnect: SttConnectFactory = async ({ apiKey, model, config }, signal) => {
+  // The API key IS the verbatim Basic credential (already base64-encoded by the
+  // user), passed through unmodified inside the query-param URL (see
+  // buildSttWsUrl) — the streaming endpoint authenticates via query param.
+  const ws = new WebSocket(buildSttWsUrl(STT_STREAM_URL, apiKey));
   await new Promise<void>((resolve, reject) => {
     const onOpen = (): void => {
       cleanup();
