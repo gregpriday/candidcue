@@ -283,6 +283,20 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(h.orch.getState()).toBe('READY');
   });
 
+  it('marks the stage begin-able only while READY (canBegin)', async () => {
+    await h.orch.prepareOpening();
+    expect(h.orch.getState()).toBe('READY');
+    const ready = vi.mocked(h.stage.setVisualState).mock.calls.at(-1)?.[0];
+    expect(ready?.visualState).toBe('standby');
+    expect(ready?.canBegin).toBe(true);
+
+    // Once the interview begins, the stage must no longer offer the founder a
+    // start affordance — BEGIN is illegal outside READY.
+    await h.orch.begin();
+    const afterBegin = vi.mocked(h.stage.setVisualState).mock.calls.at(-1)?.[0];
+    expect(afterBegin?.canBegin).toBe(false);
+  });
+
   it('plays the opening and arms the user turn (mic opens only after speech)', async () => {
     await h.orch.prepareOpening();
     await h.orch.begin();

@@ -1947,6 +1947,8 @@ export class SessionOrchestrator {
       mirror: this.ctx.session.settingsSnapshot.mirrorStage,
       zoom: this.ctx.session.settingsSnapshot.zoom,
       verticalOffsetPercent: this.ctx.session.settingsSnapshot.verticalOffsetPercent,
+      // The closing line plays as the session wraps up; never begin-able.
+      canBegin: false,
     };
     this.deps.stage.setVisualState(projection);
   }
@@ -2107,6 +2109,10 @@ export class SessionOrchestrator {
       mirror: this.ctx.session.settingsSnapshot.mirrorStage,
       zoom: this.ctx.session.settingsSnapshot.zoom,
       verticalOffsetPercent: this.ctx.session.settingsSnapshot.verticalOffsetPercent,
+      // READY is the only state where the founder may begin from the stage. The
+      // 'standby' visualState also covers IDLE/PREPARING, so this flag is what
+      // lets the stage offer the start affordance without firing BEGIN too early.
+      canBegin: this.state === 'READY',
     };
     this.deps.stage.setVisualState(projection);
   }

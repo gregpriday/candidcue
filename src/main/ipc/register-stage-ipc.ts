@@ -13,6 +13,7 @@ const playbackErrorSchema = z.object({ turnId: z.string(), reason: z.string() })
 const meterSchema = z.object({ peak: z.number(), average: z.number(), clipping: z.boolean() });
 const stageCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('COMMIT'), reason: z.enum(['manual', 'automatic']) }),
+  z.object({ type: z.literal('BEGIN') }),
   z.object({ type: z.literal('PAUSE') }),
   z.object({ type: z.literal('RESUME') }),
   z.object({ type: z.literal('REPEAT') }),
@@ -77,6 +78,7 @@ export function registerStageIpc(app: AppController, guard: Guard): void {
 export function mapStageCommand(cmd: z.infer<typeof stageCommandSchema>): SessionCommand | null {
   switch (cmd.type) {
     case 'COMMIT': return { type: 'COMMIT_USER_TURN', reason: cmd.reason };
+    case 'BEGIN': return { type: 'BEGIN_SESSION' };
     case 'PAUSE': return { type: 'PAUSE_SESSION' };
     case 'RESUME': return { type: 'RESUME_SESSION' };
     case 'REPEAT': return { type: 'REPEAT_QUESTION' };
