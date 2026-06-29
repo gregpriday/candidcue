@@ -20,6 +20,7 @@ import type {
   InterviewModelAdapter,
   OperatorSessionSnapshot,
   GenerateNextActionInput,
+  AudioChunkPacket,
 } from '@shared/contracts';
 
 const CLIPS: MediaClip[] = loadManifest(join(process.cwd(), 'videos', 'mira')).clips;
@@ -103,6 +104,20 @@ function speakingClip(id: string, durationMs: number): MediaClip {
     sha256: id,
     enabled: true,
     tags: [],
+  };
+}
+
+/** A minimal live-turn PCM packet (16 kHz mono LINEAR16) for buffered-audio tests. */
+function audioPacket(sessionId: string, byteLength: number): AudioChunkPacket {
+  return {
+    sessionId,
+    turnId: 'turn',
+    sequence: 0,
+    sampleRate: 16000,
+    channels: 1,
+    format: 'pcm_s16le',
+    capturedAtMs: 0,
+    payload: new ArrayBuffer(byteLength),
   };
 }
 
@@ -1038,6 +1053,229 @@ describe('SessionOrchestrator turn pipeline', () => {
     const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
     expect(turn1.state).toBe('answered');
     expect(turn1.answer?.rawTranscript).toContain('CandidCue gives solo presenters');
+    expect(turn1.answer?.recoveredFromBufferedAudio).toBe(false);
+  });
+
+  it('recovers the full answer from buffered audio when the live stream drops mid-answer (#69)', async () => {
+    // The live finalize fails (stream dropped mid-answer). The orchestrator
+    // buffered the turn's PCM, so it batch re-transcribes the WHOLE turn via
+    // recoverFromAudio and ships that complete transcript — not the truncated
+    // streamed partial — flagging the answer as recovered-from-buffered-audio.
+    const stt = new FakeStt({ transcript: 'the complete recovered answer from buffered audio' });
+    stt.endTurn = vi.fn(async () => {
+      throw new Error('stream dropped mid-answer');
+    });
+    h = await makeHarness({ stt });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    // The truncated partial the live stream managed before dropping.
+    h.orch.onSttFinalSegment('the complete');
+    // Non-empty buffered PCM → recoverFromAudio returns the full transcript.
+    h.orch.onAudioChunk(audioPacket(h.sessionId, 4096));
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.state).toBe('answered');
+    expect(turn1.answer?.rawTranscript).toBe('the complete recovered answer from buffered audio');
+    expect(turn1.answer?.recoveredFromBufferedAudio).toBe(true);
+  });
+
+  it('falls back to the streamed partial when buffered-audio recovery yields nothing (#69)', async () => {
+    // Finalize fails AND batch recovery comes back empty (e.g. the REST endpoint
+    // could not transcribe either). The answer must keep the streamed partial and
+    // stay un-flagged — recovered-from-buffered-audio is only true when recovery
+    // actually produced text.
+    const stt = new FakeStt({ transcript: 'unused' });
+    stt.endTurn = vi.fn(async () => {
+      throw new Error('stream dropped mid-answer');
+    });
+    stt.recoverFromAudio = vi.fn(async () => ({ text: '', finalSegments: [], confidence: null }));
+    h = await makeHarness({ stt });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSttFinalSegment('the streamed partial answer');
+    h.orch.onAudioChunk(audioPacket(h.sessionId, 4096));
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.state).toBe('answered');
+    expect(turn1.answer?.rawTranscript).toBe('the streamed partial answer');
+    expect(turn1.answer?.recoveredFromBufferedAudio).toBe(false);
+    expect(stt.recoverFromAudio).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT attempt buffered-audio recovery when no PCM was captured (#69)', async () => {
+    // Finalize fails but no audio was ever buffered (no-mic / no onAudioChunk).
+    // The recovery branch is gated on turnPcmChunks.length > 0, so recoverFromAudio
+    // must never be called and the streamed partial is used unflagged.
+    const stt = new FakeStt({ transcript: 'should never be used' });
+    stt.endTurn = vi.fn(async () => {
+      throw new Error('stream dropped mid-answer');
+    });
+    const recoverSpy = vi.spyOn(stt, 'recoverFromAudio');
+    h = await makeHarness({ stt });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSttFinalSegment('partial with no buffered audio');
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(recoverSpy).not.toHaveBeenCalled();
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.answer?.rawTranscript).toBe('partial with no buffered audio');
+    expect(turn1.answer?.recoveredFromBufferedAudio).toBe(false);
+  });
+
+  it('discards a buffered-audio recovery that resolves after the session is disposed (#69)', async () => {
+    // The stale-generation guard must bail before persisting if a pause/dispose
+    // bumps the generation while the recovery POST is in flight, so a late
+    // result can't be committed against a torn-down session.
+    const stt = new FakeStt({ transcript: 'late recovery text' });
+    stt.endTurn = vi.fn(async () => {
+      throw new Error('stream dropped mid-answer');
+    });
+    let releaseRecovery!: () => void;
+    const recoveryGate = new Promise<void>((resolve) => {
+      releaseRecovery = resolve;
+    });
+    stt.recoverFromAudio = vi.fn(async () => {
+      await recoveryGate;
+      return { text: 'late recovery text', finalSegments: ['late recovery text'], confidence: null };
+    });
+    h = await makeHarness({ stt });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSttFinalSegment('partial');
+    h.orch.onAudioChunk(audioPacket(h.sessionId, 4096));
+    h.orch.onSpeechStopped(4000);
+
+    // Start the commit but don't await — it parks on the recovery gate.
+    const committing = h.orch.commitUserTurn('manual');
+    await vi.waitFor(() => {
+      expect(stt.recoverFromAudio).toHaveBeenCalled();
+    });
+
+    // Dispose mid-recovery: bumps the generation, invalidating this turn.
+    h.orch.dispose();
+    releaseRecovery();
+    await committing;
+
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.turns.some((t) => t.state === 'answered')).toBe(false);
+  });
+
+  it('triggers recovery when endTurn resolves via its deadline on a real stream drop (#69)', async () => {
+    // The real InworldSttClient does NOT throw on a mid-answer drop — endTurn
+    // resolves at its internal deadline with hitDeadline=true and whatever
+    // partial accumulated. Gating on a thrown/timed-out endTurn alone would miss
+    // this (the common production case), so the orchestrator also keys off
+    // hitDeadline. Here endTurn returns a truncated partial flagged hitDeadline,
+    // and recovery replaces it with the full buffered-audio transcript.
+    const stt = new FakeStt({ transcript: 'the truncated streamed partial' });
+    stt.deadlineOnEndTurn = true;
+    stt.recoverFromAudio = vi.fn(async () => ({
+      text: 'the full answer recovered from buffered audio',
+      finalSegments: ['the full answer recovered from buffered audio'],
+      confidence: null,
+    }));
+    h = await makeHarness({ stt });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onAudioChunk(audioPacket(h.sessionId, 4096));
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(stt.recoverFromAudio).toHaveBeenCalledTimes(1);
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.answer?.rawTranscript).toBe('the full answer recovered from buffered audio');
+    expect(turn1.answer?.recoveredFromBufferedAudio).toBe(true);
+  });
+
+  it('does NOT recover on a clean finalize even when audio was buffered (#69)', async () => {
+    // A healthy turn: endTurn returns a genuine FINAL (hitDeadline falsy, no
+    // throw). Recovery must NOT run — re-transcribing every healthy turn would be
+    // wasteful and could overwrite a perfectly good streamed transcript.
+    const stt = new FakeStt({ transcript: 'the clean final transcript' });
+    const recoverSpy = vi.spyOn(stt, 'recoverFromAudio');
+    h = await makeHarness({ stt });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onAudioChunk(audioPacket(h.sessionId, 4096));
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(recoverSpy).not.toHaveBeenCalled();
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.answer?.rawTranscript).toBe('the clean final transcript');
+    expect(turn1.answer?.recoveredFromBufferedAudio).toBe(false);
+  });
+
+  it('concatenates buffered PCM chunks in order for recovery (#69)', async () => {
+    // Validates concatTurnPcm() ordering and that the defensive .slice(0) copy
+    // preserves the bytes: three identifiable chunks must reach recoverFromAudio
+    // as one contiguous buffer in arrival order.
+    const stt = new FakeStt({ transcript: 'recovered' });
+    stt.deadlineOnEndTurn = true;
+    let receivedPcm: Uint8Array | null = null;
+    stt.recoverFromAudio = vi.fn(async (pcm: Uint8Array) => {
+      receivedPcm = pcm;
+      return { text: 'recovered', finalSegments: ['recovered'], confidence: null };
+    });
+    h = await makeHarness({ stt });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    const filledPacket = (byte: number, len: number): AudioChunkPacket => {
+      const packet = audioPacket(h.sessionId, len);
+      new Uint8Array(packet.payload).fill(byte);
+      return packet;
+    };
+    h.orch.onAudioChunk(filledPacket(0x01, 2));
+    h.orch.onAudioChunk(filledPacket(0x02, 3));
+    h.orch.onAudioChunk(filledPacket(0x03, 1));
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(receivedPcm).not.toBeNull();
+    expect(Array.from(receivedPcm!)).toEqual([0x01, 0x01, 0x02, 0x02, 0x02, 0x03]);
+  });
+
+  it('falls back to the streamed partial when buffered-audio recovery throws (#69)', async () => {
+    // recoverFromAudio rejecting (e.g. an INWORLD_AUTH 401 from the batch
+    // endpoint) must be caught by the recovery deadline wrapper, leave the
+    // streamed partial in place, and never surface an unhandled rejection.
+    const stt = new FakeStt({ transcript: 'unused' });
+    stt.endTurn = vi.fn(async () => {
+      throw new Error('stream dropped mid-answer');
+    });
+    stt.recoverFromAudio = vi.fn(async () => {
+      throw new AppError('INWORLD_AUTH', { message: 'batch STT auth failed' });
+    });
+    h = await makeHarness({ stt });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSttFinalSegment('the streamed partial answer');
+    h.orch.onAudioChunk(audioPacket(h.sessionId, 4096));
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.answer?.rawTranscript).toBe('the streamed partial answer');
     expect(turn1.answer?.recoveredFromBufferedAudio).toBe(false);
   });
 

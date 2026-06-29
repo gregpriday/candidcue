@@ -119,6 +119,15 @@ export interface SttTurnResult {
   text: string;
   finalSegments: string[];
   confidence: number | null;
+  /**
+   * True when {@link SpeechToTextAdapter.endTurn} resolved by hitting its own
+   * finalize deadline (the provider went quiet) rather than observing a genuine
+   * FINAL segment. A mid-answer stream drop surfaces here — endTurn does NOT
+   * reject, it resolves with whatever partial accumulated — so the orchestrator
+   * uses this (not just a thrown/timed-out endTurn) to decide whether to batch
+   * re-transcribe the buffered audio (#69). Undefined/false means a clean final.
+   */
+  hitDeadline?: boolean;
 }
 
 export interface SttRecoveryConfig {

@@ -11,6 +11,7 @@ import type {
   PublicCoverageItem,
   PublicProviderStatus,
   AudioMeterReading,
+  AudioChunkPacket,
 } from '@shared/contracts';
 import type {
   InterviewSession,
@@ -29,7 +30,7 @@ import type {
   CoverageDelta,
 } from '@shared/domain';
 import { newId } from '@shared/domain';
-import { RUNTIME_DEFAULTS } from '@shared/constants/runtime-defaults';
+import { RUNTIME_DEFAULTS, INWORLD_DEFAULTS } from '@shared/constants/runtime-defaults';
 import { AppError } from '@shared/errors/app-error';
 import { withDeadlineFallback, withTimeout, nowMs as defaultNow, splitParagraphs, wordCount } from '@shared/utils';
 
@@ -199,6 +200,13 @@ export class SessionOrchestrator {
   // Null whenever no commit fan-out is in flight.
   private _commitAbort: AbortController | null = null;
   private lastCommittedAnswer = '';
+  // Raw PCM captured for the in-flight user turn, buffered so a mid-answer stream
+  // drop can be batch re-transcribed via stt.recoverFromAudio (#69). Fed by
+  // onAudioChunk (tapped off the same audio port that feeds stt.writeAudio),
+  // reset when a fresh turn arms, cleared on dispose. turnPcmBytes tracks the
+  // running total so the byte cap check and the concat allocation never re-sum.
+  private turnPcmChunks: ArrayBuffer[] = [];
+  private turnPcmBytes = 0;
   private interimTranscript = '';
   private micLevel = 0;
   private micClipping = false;
@@ -698,6 +706,38 @@ export class SessionOrchestrator {
     this.publishSnapshot();
   }
 
+  /**
+   * Buffer a chunk of the live turn's raw PCM so a mid-answer stream drop can be
+   * recovered by re-transcribing the whole turn from audio (#69). Fed from the
+   * same audio port that feeds stt.writeAudio (see app-controller.pcmSink). Only
+   * accumulates while a turn is current; armUserTurn resets the buffer per turn
+   * and dispose clears it. The buffer is capped at maxTurnAudioMinutes of PCM16
+   * (16 kHz mono = 2 bytes/sample) — past the cap we silently keep the EARLIEST
+   * audio and stop appending, since a stream drop loses the tail, not the head,
+   * so the head is exactly what recovery needs. Cheap and side-effect-free
+   * (no snapshot publish) because it runs on every audio frame.
+   */
+  onAudioChunk(packet: AudioChunkPacket): void {
+    if (!this.currentTurn) return;
+    const cap = this.r.maxTurnAudioMinutes * 60 * INWORLD_DEFAULTS.sttSampleRate * 2;
+    if (this.turnPcmBytes + packet.payload.byteLength > cap) return;
+    // Defensive copy: an IPC-delivered ArrayBuffer may be transferred (detached)
+    // or back a reused view once this call returns, so retain our own copy.
+    this.turnPcmChunks.push(packet.payload.slice(0));
+    this.turnPcmBytes += packet.payload.byteLength;
+  }
+
+  /** Concatenate the buffered turn PCM into one contiguous LINEAR16 buffer (#69). */
+  private concatTurnPcm(): Uint8Array {
+    const merged = new Uint8Array(this.turnPcmBytes);
+    let offset = 0;
+    for (const chunk of this.turnPcmChunks) {
+      merged.set(new Uint8Array(chunk), offset);
+      offset += chunk.byteLength;
+    }
+    return merged;
+  }
+
   /** Release timers (and any in-flight reconnect) when the session ends. */
   dispose(): void {
     this.clearEndpointTimer();
@@ -707,6 +747,10 @@ export class SessionOrchestrator {
     // handlePipelineFailure (transition/publishSnapshot) against a torn-down
     // orchestrator. bumpGeneration() also aborts the speculative TTS.
     this.bumpGeneration();
+    // Release any buffered turn audio (#69) so a disposed session frees it
+    // promptly rather than holding up to maxTurnAudioMinutes of PCM.
+    this.turnPcmChunks = [];
+    this.turnPcmBytes = 0;
   }
 
   /**
@@ -877,6 +921,11 @@ export class SessionOrchestrator {
     turn.speechStartedAt = null;
     turn.speechEndedAt = null;
     this.interimTranscript = '';
+    // Fresh turn: discard any audio buffered for the prior answer so a recovery
+    // (#69) only ever re-transcribes the current turn's PCM. Done here (not in
+    // resumeTurn) so a mid-turn pause/resume preserves the accumulated audio.
+    this.turnPcmChunks = [];
+    this.turnPcmBytes = 0;
     try {
       await this.deps.stt.beginTurn(turn.id);
     } catch (err) {
@@ -916,7 +965,59 @@ export class SessionOrchestrator {
         this.r.sttFinalizeDeadlineMs + 100,
         () => ({ text: turn.rawTranscript, finalSegments: [], confidence: null }),
       );
-      const rawTranscript = (finalize.value.text || turn.rawTranscript || '').trim();
+      let rawTranscript = (finalize.value.text || turn.rawTranscript || '').trim();
+      let sttLatencyMs = finalize.latencyMs;
+      let recovered = false;
+
+      // Mid-answer stream drop recovery (#69). The live stream did not cleanly
+      // close when either (a) endTurn threw / exceeded the outer wrapper
+      // (finalize.timedOut) — a null transport or abort — or (b) endTurn resolved
+      // by hitting its own finalize deadline because the provider went quiet
+      // (finalize.value.hitDeadline). The latter is the common real stream-drop
+      // case: endTurn does NOT reject, it resolves with whatever partial
+      // accumulated, so gating on timedOut alone would never fire in production.
+      // In either case the streamed partial may be truncated (or empty), so if we
+      // buffered the turn's PCM, batch re-transcribe the WHOLE turn from audio.
+      // Runs BEFORE the empty-answer check so a fully-dropped stream (empty
+      // partial) is still rescued. Only flag recoveredFromBufferedAudio when this
+      // path actually produced the transcript; a clean finalize leaves it false.
+      const finalizeUnclean = finalize.timedOut || finalize.value.hitDeadline === true;
+      if (finalizeUnclean && this.turnPcmChunks.length > 0) {
+        // Register the abort with _commitAbort so a pause/skip/endNow/dispose
+        // (all bump the generation) cancels the in-flight recovery POST in
+        // lockstep, mirroring the speculative-TTS fan-out below — the deadline
+        // fallback also aborts it so a hung HTTP call can't stall the pipeline.
+        const recoveryAc = new AbortController();
+        this._commitAbort = recoveryAc;
+        const recovery = await withDeadlineFallback(
+          this.deps.stt.recoverFromAudio(
+            this.concatTurnPcm(),
+            { model: this.ctx.models.stt, sampleRate: INWORLD_DEFAULTS.sttSampleRate, channels: 1 },
+            recoveryAc.signal,
+          ),
+          this.r.sttRecoveryDeadlineMs,
+          () => {
+            recoveryAc.abort();
+            return { text: '', finalSegments: [], confidence: null };
+          },
+        );
+        if (this._commitAbort === recoveryAc) this._commitAbort = null;
+        // Stale check — a pause/skip/endNow/dispose during the recovery await
+        // invalidates this turn. Bail before persisting anything (mirrors the
+        // post-LLM guard): a silent bail, no warning, nothing written.
+        if (myGen !== this.generationId) {
+          this.log.info('session.stale_result_discarded', { turnId: turn.id, phase: 'recovery' });
+          this.commitInFlight = false;
+          return;
+        }
+        const recoveredText = recovery.value.text.trim();
+        if (recoveredText.length > 0) {
+          rawTranscript = recoveredText;
+          sttLatencyMs = recovery.latencyMs;
+          recovered = true;
+          this.log.info('session.buffered_audio_recovered', { turnId: turn.id, chars: recoveredText.length });
+        }
+      }
 
       // Empty answer: do not invent content (spec §14.6, §22.3).
       if (rawTranscript.length === 0) {
@@ -962,14 +1063,14 @@ export class SessionOrchestrator {
         cleanup: cleanupResult,
         moderation: moderationResult,
         endpointReason,
-        sttLatencyMs: finalize.latencyMs,
+        // Reflects the recovery POST latency when buffered-audio recovery
+        // produced the transcript, otherwise the live finalize latency (#69).
+        sttLatencyMs,
         cleanupLatencyMs: cleanup.timedOut ? null : cleanup.latencyMs,
-        // recoveredFromBufferedAudio must only be true when stt.recoverFromAudio
-        // actually produced the transcript. The finalize deadline fallback just
-        // reuses the already-streamed turn.rawTranscript — no batch audio
-        // recovery occurs — so this is false. Wiring buffered-audio recovery
-        // into the live flow is deferred.
-        recovered: false,
+        // True only when stt.recoverFromAudio actually produced the transcript
+        // above. The plain finalize deadline fallback reuses the streamed
+        // turn.rawTranscript (no batch audio recovery), leaving this false.
+        recovered,
       });
 
       // 3. Next action (GPT-5.5) with fallback to the ranked bank (spec §22.2).

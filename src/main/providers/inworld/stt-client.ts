@@ -200,6 +200,10 @@ export class InworldSttClient implements SpeechToTextAdapter {
       throw new DOMException('Aborted', 'AbortError');
     }
 
+    // Tracks whether we resolved because the deadline fired (provider quiet —
+    // the mid-answer stream-drop signal, #69) rather than a genuine FINAL. A
+    // FINAL clears the timer before it runs, so this stays false on a clean end.
+    let hitDeadline = false;
     try {
       await new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -220,8 +224,12 @@ export class InworldSttClient implements SpeechToTextAdapter {
         };
         // Resolve early if a FINAL segment arrives while we wait.
         this.finalResolve = finish;
-        // Deadline: resolve with whatever accumulated so far (spec §13.4).
-        const timer = setTimeout(finish, deadlineMs);
+        // Deadline: resolve with whatever accumulated so far (spec §13.4). Mark
+        // the deadline path so the orchestrator can batch-recover (#69).
+        const timer = setTimeout(() => {
+          hitDeadline = true;
+          finish();
+        }, deadlineMs);
         if (signal) signal.addEventListener('abort', onAbort, { once: true });
       });
     } finally {
@@ -246,6 +254,7 @@ export class InworldSttClient implements SpeechToTextAdapter {
         text: committed,
         finalSegments: [...this.accumulator.finalSegments],
         confidence: null,
+        hitDeadline,
       };
     }
     const promoted = interim.trim();
@@ -253,6 +262,7 @@ export class InworldSttClient implements SpeechToTextAdapter {
       text: promoted,
       finalSegments: promoted.length > 0 ? [promoted] : [],
       confidence: null,
+      hitDeadline,
     };
   }
 
