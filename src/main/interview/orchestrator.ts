@@ -648,6 +648,13 @@ export class SessionOrchestrator {
       }
       await this.commitUserTurn('automatic');
     } else {
+      // Symmetric staleness check: a classifier that resolves after we have left
+      // ENDPOINT_CANDIDATE (e.g. the user resumed speech, moving us back to
+      // USER_SPEAKING) is stale — its classifierWait transition would be illegal
+      // from the new state and only log an invalid_transition (#15).
+      if (this.state !== 'ENDPOINT_CANDIDATE' || this.currentTurn?.id !== evalTurnId) {
+        return;
+      }
       this.transition('classifierWait');
     }
   }
