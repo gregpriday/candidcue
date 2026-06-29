@@ -1,10 +1,36 @@
 import { InworldTtsClient, type TtsFetch } from '@main/providers/inworld/tts-client';
-import { WAV_HEADER_BYTES } from '@main/providers/inworld/wav';
+import { pcm16ToWav, WAV_HEADER_BYTES } from '@main/providers/inworld/wav';
 import { INWORLD_DEFAULTS } from '@shared/constants/runtime-defaults';
 import { AppError } from '@shared/errors/app-error';
 import type { TtsInput } from '@shared/contracts/adapters';
 
 const SAMPLE_RATE = 24000;
+
+/**
+ * Build a mono WAV fixture with `numPcmBytes` of PCM payload — the shape Inworld
+ * returns for `LINEAR16` (a complete RIFF/WAVE file, not raw samples).
+ */
+function wavFixture(numPcmBytes: number): Uint8Array {
+  return pcm16ToWav(new Uint8Array(numPcmBytes).fill(7), SAMPLE_RATE, 1);
+}
+
+/**
+ * A non-canonical WAV: a 12-byte `LIST` metadata chunk spliced in between `fmt `
+ * and `data`, so the `data` chunk is no longer at the usual offset 36. Exercises
+ * the chunk-walking passthrough against a layout `pcm16ToWav` never produces.
+ */
+function wavWithMetadataChunk(numPcmBytes: number): Uint8Array {
+  const canonical = wavFixture(numPcmBytes);
+  const list = new Uint8Array(12);
+  list.set([0x4c, 0x49, 0x53, 0x54], 0); // 'LIST'
+  new DataView(list.buffer).setUint32(4, 4, true); // chunk size = 4 (body left zero)
+  const out = new Uint8Array(canonical.byteLength + list.byteLength);
+  out.set(canonical.subarray(0, 36), 0); // 'RIFF'..end of fmt chunk
+  out.set(list, 36);
+  out.set(canonical.subarray(36), 36 + list.byteLength); // 'data' chunk onward
+  new DataView(out.buffer).setUint32(4, out.byteLength - 8, true); // fix RIFF size
+  return out;
+}
 
 /** A base {@link TtsInput} suitable for most cases; override per test. */
 function ttsInput(overrides: Partial<TtsInput> = {}): TtsInput {
@@ -41,13 +67,12 @@ function jsonResponse(
 
 describe('InworldTtsClient', () => {
   it('posts to tts/v1/voice with Basic auth and the documented body', async () => {
-    const pcm = new Uint8Array([1, 2, 3, 4]);
     let capturedUrl: string | undefined;
     let capturedInit: RequestInit | undefined;
     const fetchImpl: TtsFetch = async (url, init) => {
       capturedUrl = String(url);
       capturedInit = init;
-      return jsonResponse({ audioContent: bytesToBase64(pcm) });
+      return jsonResponse({ audioContent: bytesToBase64(wavFixture(4)) });
     };
 
     const client = new InworldTtsClient({ apiKey: 'key-123', fetchImpl });
@@ -75,13 +100,13 @@ describe('InworldTtsClient', () => {
     expect(body.outputFormat).toBeUndefined();
   });
 
-  it('base64-decodes audioContent, wraps to WAV, and computes duration', async () => {
-    // 1 second of mono 16-bit PCM at SAMPLE_RATE.
-    const pcm = new Uint8Array(SAMPLE_RATE * 2);
-    pcm.fill(7);
+  it('base64-decodes a WAV audioContent, passes it through, and computes duration', async () => {
+    // 1 second of mono 16-bit PCM at SAMPLE_RATE, already wrapped as a WAV file
+    // (the shape Inworld returns for LINEAR16).
+    const wav = wavFixture(SAMPLE_RATE * 2);
     const fetchImpl: TtsFetch = async () =>
       jsonResponse(
-        { audioContent: bytesToBase64(pcm) },
+        { audioContent: bytesToBase64(wav) },
         { headers: { 'x-request-id': 'req-42' } },
       );
 
@@ -91,17 +116,40 @@ describe('InworldTtsClient', () => {
     expect(result.mimeType).toBe('audio/wav');
     expect(result.sampleRate).toBe(SAMPLE_RATE);
     expect(result.channels).toBe(1);
-    expect(result.bytes.byteLength).toBe(WAV_HEADER_BYTES + pcm.byteLength);
+    // Passed through unchanged: same byte length as the fixture, with a single
+    // RIFF/WAVE header (no second header nested inside).
+    expect(result.bytes.byteLength).toBe(WAV_HEADER_BYTES + SAMPLE_RATE * 2);
+    expect(Array.from(result.bytes.subarray(0, 4))).toEqual([0x52, 0x49, 0x46, 0x46]); // 'RIFF'
+    expect(Array.from(result.bytes.subarray(8, 12))).toEqual([0x57, 0x41, 0x56, 0x45]); // 'WAVE'
     expect(result.durationMs).toBe(1000);
     expect(result.providerRequestId).toBe('req-42');
     expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('passes a WAV audioContent through byte-for-byte (no double-wrap)', async () => {
+    const wav = wavFixture(8);
+    const fetchImpl: TtsFetch = async () => jsonResponse({ audioContent: bytesToBase64(wav) });
+    const client = new InworldTtsClient({ apiKey: 'k', fetchImpl });
+    const result = await client.synthesize(ttsInput());
+    expect(Array.from(result.bytes)).toEqual(Array.from(wav));
+  });
+
+  it('passes a non-canonical WAV (data not at offset 36) through byte-for-byte', async () => {
+    // A LIST chunk before `data` pushes the payload off the canonical offset; the
+    // adapter must still pass the bytes through and read duration from the chunks.
+    const wav = wavWithMetadataChunk(SAMPLE_RATE * 2); // 1 s of audio
+    const fetchImpl: TtsFetch = async () => jsonResponse({ audioContent: bytesToBase64(wav) });
+    const client = new InworldTtsClient({ apiKey: 'k', fetchImpl });
+    const result = await client.synthesize(ttsInput());
+    expect(Array.from(result.bytes)).toEqual(Array.from(wav));
+    expect(result.durationMs).toBe(1000);
   });
 
   it('threads a custom modelId into the request body', async () => {
     let body: { modelId?: string } = {};
     const fetchImpl: TtsFetch = async (_url, init) => {
       body = JSON.parse(String(init?.body));
-      return jsonResponse({ audioContent: bytesToBase64(new Uint8Array([0, 0])) });
+      return jsonResponse({ audioContent: bytesToBase64(wavFixture(2)) });
     };
     const client = new InworldTtsClient({ apiKey: 'k', modelId: 'inworld-tts-custom', fetchImpl });
     await client.synthesize(ttsInput());
@@ -132,10 +180,24 @@ describe('InworldTtsClient', () => {
     });
   });
 
-  it('throws TTS_FAILED when audioContent decodes to an odd byte length', async () => {
-    // 3 bytes is not a whole number of 16-bit LINEAR16 samples.
+  it('throws TTS_FAILED when audioContent is not a valid WAV file', async () => {
+    // Raw bytes with no RIFF/WAVE magic — e.g. headerless PCM the renderer can't
+    // decode. The adapter must reject rather than hand back a corrupt clip.
     const fetchImpl: TtsFetch = async () =>
-      jsonResponse({ audioContent: bytesToBase64(new Uint8Array([1, 2, 3])) });
+      jsonResponse({ audioContent: bytesToBase64(new Uint8Array([1, 2, 3, 4])) });
+    const client = new InworldTtsClient({ apiKey: 'k', fetchImpl });
+    await expect(client.synthesize(ttsInput())).rejects.toMatchObject({
+      code: 'TTS_FAILED',
+    });
+  });
+
+  it('throws TTS_FAILED when the WAV header cannot be parsed', async () => {
+    // Valid RIFF/WAVE magic but no fmt/data chunks -> wavDurationMs throws and the
+    // adapter wraps it as TTS_FAILED.
+    const broken = bytesToBase64(
+      new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45]),
+    );
+    const fetchImpl: TtsFetch = async () => jsonResponse({ audioContent: broken });
     const client = new InworldTtsClient({ apiKey: 'k', fetchImpl });
     await expect(client.synthesize(ttsInput())).rejects.toMatchObject({
       code: 'TTS_FAILED',
@@ -177,10 +239,9 @@ describe('InworldTtsClient', () => {
   });
 
   it('falls back to x-inworld-request-id for providerRequestId', async () => {
-    const pcm = new Uint8Array([1, 2, 3, 4]);
     const fetchImpl: TtsFetch = async () =>
       jsonResponse(
-        { audioContent: bytesToBase64(pcm) },
+        { audioContent: bytesToBase64(wavFixture(4)) },
         { headers: { 'x-inworld-request-id': 'inworld-req-7' } },
       );
     const client = new InworldTtsClient({ apiKey: 'k', fetchImpl });

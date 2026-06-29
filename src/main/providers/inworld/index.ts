@@ -6,7 +6,13 @@ export {
   type NormalizedSttEvent,
   type NormalizedSttEventKind,
 } from './event-normalizer';
-export { durationMsFromPcm, pcm16ToWav, WAV_HEADER_BYTES } from './wav';
+export {
+  durationMsFromPcm,
+  isWavFile,
+  pcm16ToWav,
+  wavDurationMs,
+  WAV_HEADER_BYTES,
+} from './wav';
 export {
   InworldSttClient,
   type InworldSttClientOptions,

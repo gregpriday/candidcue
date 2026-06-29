@@ -1,6 +1,8 @@
 import {
   durationMsFromPcm,
+  isWavFile,
   pcm16ToWav,
+  wavDurationMs,
   WAV_HEADER_BYTES,
 } from '@main/providers/inworld/wav';
 
@@ -130,5 +132,186 @@ describe('pcm16ToWav', () => {
     const payloadLength = wav.byteLength - WAV_HEADER_BYTES;
     expect(payloadLength).toBe(48000);
     expect(durationMsFromPcm(payloadLength, 24000, 1)).toBe(1000);
+  });
+});
+
+/** Encode `s` (4 chars) as a 4-byte ASCII tag. */
+function tag(s: string): Uint8Array {
+  return new Uint8Array([s.charCodeAt(0), s.charCodeAt(1), s.charCodeAt(2), s.charCodeAt(3)]);
+}
+
+/** Encode `n` as a 4-byte little-endian uint32. */
+function u32le(n: number): Uint8Array {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setUint32(0, n, true);
+  return b;
+}
+
+/** Concatenate byte arrays into a single buffer. */
+function concat(parts: Uint8Array[]): Uint8Array {
+  const total = parts.reduce((sum, p) => sum + p.byteLength, 0);
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.byteLength;
+  }
+  return out;
+}
+
+/** Build a 16-byte PCM `fmt ` chunk body with the given parameters. */
+function fmtBody(sampleRate: number, channels: number, bitsPerSample = 16, formatTag = 1): Uint8Array {
+  const body = new Uint8Array(16);
+  const view = new DataView(body.buffer);
+  const blockAlign = channels * (bitsPerSample / 8);
+  view.setUint16(0, formatTag, true);
+  view.setUint16(2, channels, true);
+  view.setUint32(4, sampleRate, true);
+  view.setUint32(8, sampleRate * blockAlign, true); // byte rate
+  view.setUint16(12, blockAlign, true);
+  view.setUint16(14, bitsPerSample, true);
+  return body;
+}
+
+/**
+ * Assemble a RIFF/WAVE file from explicit sub-chunks, padding odd-sized bodies to
+ * the 2-byte boundary — lets each test exercise a specific chunk layout.
+ */
+function buildWav(chunks: Array<{ id: string; body: Uint8Array }>): Uint8Array {
+  const parts: Uint8Array[] = [];
+  for (const { id, body } of chunks) {
+    parts.push(tag(id), u32le(body.byteLength), body);
+    if (body.byteLength % 2 === 1) parts.push(new Uint8Array(1)); // pad byte
+  }
+  const payload = concat(parts);
+  return concat([tag('RIFF'), u32le(4 + payload.byteLength), tag('WAVE'), payload]);
+}
+
+describe('isWavFile', () => {
+  it('returns true for a canonical WAV from pcm16ToWav', () => {
+    expect(isWavFile(pcm16ToWav(new Uint8Array(4), 24000, 1))).toBe(true);
+  });
+
+  it('returns false for an empty buffer', () => {
+    expect(isWavFile(new Uint8Array(0))).toBe(false);
+  });
+
+  it('returns false for a buffer shorter than the 12-byte magic', () => {
+    expect(isWavFile(new Uint8Array(11))).toBe(false);
+  });
+
+  it('returns false when the chunk id is RIFX rather than RIFF', () => {
+    const wav = pcm16ToWav(new Uint8Array(4), 24000, 1);
+    wav[3] = 'X'.charCodeAt(0); // RIFF -> RIFX
+    expect(isWavFile(wav)).toBe(false);
+  });
+
+  it('returns false when the form type is not WAVE', () => {
+    const wav = pcm16ToWav(new Uint8Array(4), 24000, 1);
+    wav.set(tag('AVI '), 8); // WAVE -> 'AVI '
+    expect(isWavFile(wav)).toBe(false);
+  });
+
+  it('returns false for raw PCM bytes with no header', () => {
+    expect(isWavFile(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]))).toBe(false);
+  });
+});
+
+describe('wavDurationMs', () => {
+  it('reads duration from a canonical pcm16ToWav buffer', () => {
+    // 48000 data bytes of 24 kHz mono 16-bit PCM = exactly 1 second.
+    expect(wavDurationMs(pcm16ToWav(new Uint8Array(48000), 24000, 1))).toBe(1000);
+  });
+
+  it('uses the data chunk size, not the total file length (no header inflation)', () => {
+    // 24000 data bytes at 24 kHz mono = 0.5 s; the 44 header bytes must not count.
+    expect(wavDurationMs(pcm16ToWav(new Uint8Array(24000), 24000, 1))).toBe(500);
+  });
+
+  it('halves duration for stereo at the same data length', () => {
+    expect(wavDurationMs(pcm16ToWav(new Uint8Array(48000), 24000, 2))).toBe(500);
+  });
+
+  it('finds the data chunk past a fact chunk between fmt and data', () => {
+    const wav = buildWav([
+      { id: 'fmt ', body: fmtBody(24000, 1) },
+      { id: 'fact', body: u32le(24000) },
+      { id: 'data', body: new Uint8Array(48000) },
+    ]);
+    expect(wavDurationMs(wav)).toBe(1000);
+  });
+
+  it('skips an odd-sized metadata chunk with its pad byte', () => {
+    const wav = buildWav([
+      { id: 'fmt ', body: fmtBody(24000, 1) },
+      { id: 'LIST', body: new Uint8Array(5) }, // odd -> padded to 6
+      { id: 'data', body: new Uint8Array(24000) }, // 0.5 s
+    ]);
+    expect(wavDurationMs(wav)).toBe(500);
+  });
+
+  it('clamps a data chunk size that over-states the bytes present', () => {
+    // Declared data size 48000 but only 24000 real bytes -> 0.5 s, not 1 s.
+    const wav = concat([
+      tag('RIFF'),
+      u32le(0),
+      tag('WAVE'),
+      tag('fmt '),
+      u32le(16),
+      fmtBody(24000, 1),
+      tag('data'),
+      u32le(48000), // lies: claims 48000 data bytes
+      new Uint8Array(24000), // only 24000 present
+    ]);
+    expect(wavDurationMs(wav)).toBe(500);
+  });
+
+  it('returns 0 for a zero-length data chunk', () => {
+    const wav = buildWav([
+      { id: 'fmt ', body: fmtBody(24000, 1) },
+      { id: 'data', body: new Uint8Array(0) },
+    ]);
+    expect(wavDurationMs(wav)).toBe(0);
+  });
+
+  it('throws for bytes without the RIFF/WAVE magic', () => {
+    expect(() => wavDurationMs(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]))).toThrow();
+  });
+
+  it('throws when the fmt chunk is truncated (size < 16)', () => {
+    const wav = buildWav([
+      { id: 'fmt ', body: new Uint8Array(14) },
+      { id: 'data', body: new Uint8Array(100) },
+    ]);
+    expect(() => wavDurationMs(wav)).toThrow();
+  });
+
+  it('throws for a non-PCM format tag', () => {
+    const wav = buildWav([
+      { id: 'fmt ', body: fmtBody(24000, 1, 16, 3) }, // tag 3 = IEEE float
+      { id: 'data', body: new Uint8Array(100) },
+    ]);
+    expect(() => wavDurationMs(wav)).toThrow();
+  });
+
+  it('throws for a non-16-bit sample depth (durationMsFromPcm assumes 16-bit)', () => {
+    const wav = buildWav([
+      { id: 'fmt ', body: fmtBody(24000, 1, 8) }, // 8-bit PCM
+      { id: 'data', body: new Uint8Array(100) },
+    ]);
+    expect(() => wavDurationMs(wav)).toThrow();
+  });
+
+  it('throws when a data chunk precedes the fmt chunk', () => {
+    const wav = buildWav([
+      { id: 'data', body: new Uint8Array(100) },
+      { id: 'fmt ', body: fmtBody(24000, 1) },
+    ]);
+    expect(() => wavDurationMs(wav)).toThrow();
+  });
+
+  it('throws when no data chunk is present', () => {
+    const wav = buildWav([{ id: 'fmt ', body: fmtBody(24000, 1) }]);
+    expect(() => wavDurationMs(wav)).toThrow();
   });
 });
