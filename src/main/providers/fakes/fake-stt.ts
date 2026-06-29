@@ -57,6 +57,12 @@ export class FakeStt implements SpeechToTextAdapter {
    * STT_DISCONNECTED) so tests can drive the "re-activate failed" resume path.
    */
   public failResume = false;
+  /**
+   * Test hook: when true, `beginTurn` rejects with STT_DISCONNECTED (the
+   * transport dropped between Mira's audio ending and the turn arming) so tests
+   * can drive the armed-but-deaf recovery path.
+   */
+  public failBeginTurn = false;
   /** How many times reconnect() has been called. */
   public reconnectCalls = 0;
   /**
@@ -95,6 +101,10 @@ export class FakeStt implements SpeechToTextAdapter {
 
   async beginTurn(turnId: string): Promise<void> {
     this.beginTurnCalls += 1;
+    if (this.failBeginTurn) {
+      // Simulate a transport that dropped before the turn could arm.
+      throw new AppError('STT_DISCONNECTED', { message: 'fake beginTurn failed' });
+    }
     this.currentTurnId = turnId;
     // A fresh turn discards any previously accumulated transcript.
     this.accumulated = '';

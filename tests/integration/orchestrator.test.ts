@@ -673,10 +673,37 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(h.orch.getState()).toBe('COMPLETED');
 
     // The held reconnect now resolves; its stale resolution must NOT transition
-    // out of COMPLETED (the generation guard discards it).
+    // out of COMPLETED, nor run its success side-effects (the generation guard
+    // discards it).
     releaseReconnect();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(h.orch.getState()).toBe('COMPLETED');
+    const finalSnap = h.snapshots.at(-1)!;
+    expect(finalSnap.providerStatus.inworldStt).toBe('degraded'); // not flipped back to 'ok'
+    expect(finalSnap.recoverableWarning).toMatch(/reconnect/i); // not cleared by the stale reconnect
+  });
+
+  it('routes a failed beginTurn (dropped transport) through RECOVERING, never armed-but-deaf (issue #14)', async () => {
+    // STT drops in the window between Mira's audio ending and the turn arming, so
+    // beginTurn throws STT_DISCONNECTED. Hold the reconnect to observe RECOVERING.
+    h.stt.failBeginTurn = true;
+    let releaseReconnect!: () => void;
+    h.stt.reconnectGate = new Promise<void>((resolve) => {
+      releaseReconnect = resolve;
+    });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    // Instead of sitting USER_ARMED with the mic open and STT deaf, the session
+    // entered RECOVERING with the mic closed.
+    expect(h.orch.getState()).toBe('RECOVERING');
+    expect(h.snapshots.at(-1)!.mic.gate).toBe('closed');
+
+    // Auto-reconnect restores the transport and lands in PAUSED.
+    releaseReconnect();
+    await vi.waitFor(() => expect(h.orch.getState()).toBe('PAUSED'));
+    expect(h.stt.reconnectCalls).toBe(1);
   });
 
   it('preserves the committed answer and advances when the next question fails to realize, then resumes (issue #9)', async () => {

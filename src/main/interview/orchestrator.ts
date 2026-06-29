@@ -162,6 +162,10 @@ export class SessionOrchestrator {
   // PAUSED → resume). Captured when entering RECOVERING and folded back into
   // pausedFromState on `recovered` so resume() picks the right destination (#14).
   private recoveredFromState: SessionRuntimeState | null = null;
+  // Aborts an in-flight reconnect (the connectFactory await inside stt.reconnect)
+  // when the session is ended/disposed mid-RECOVERING, so a late-resolving
+  // connect can't leave a freshly-opened transport dangling after teardown (#14).
+  private reconnectAbort: AbortController | null = null;
   private lastCommittedAnswer = '';
   private interimTranscript = '';
   private micLevel = 0;
@@ -407,6 +411,9 @@ export class SessionOrchestrator {
   async endNow(): Promise<void> {
     this.assertCommandLegal('END_NOW');
     this.generationId++;
+    // Cancel any in-flight reconnect (END_NOW is legal from RECOVERING) so its
+    // connectFactory does not open a transport into a session we are ending.
+    this.reconnectAbort?.abort();
     this.clearEndpointTimer();
     this.deps.stage.closeMicGate();
     // Never mark the session completed in persistence unless the state machine
@@ -467,8 +474,12 @@ export class SessionOrchestrator {
   private async launchReconnect(): Promise<void> {
     const myGen = this.generationId;
     const superseded = (): boolean => this.state !== 'RECOVERING' || myGen !== this.generationId;
+    // Abort the in-flight connect if the session is ended/disposed mid-reconnect,
+    // so a late connectFactory resolution can't leave an orphaned open transport.
+    const ac = new AbortController();
+    this.reconnectAbort = ac;
     try {
-      await withRetry(() => this.deps.stt.reconnect(), { shouldAbort: superseded });
+      await withRetry(() => this.deps.stt.reconnect(ac.signal), { shouldAbort: superseded });
     } catch (err) {
       if (superseded()) return;
       this.log.error('stt.reconnect_failed', { error: String(err) });
@@ -476,6 +487,8 @@ export class SessionOrchestrator {
       this.recoverableWarning = 'Could not reconnect to the speech service. Tap Retry to try again.';
       this.transition('recoveryFailed', 'reconnect exhausted');
       return;
+    } finally {
+      if (this.reconnectAbort === ac) this.reconnectAbort = null;
     }
     if (superseded()) return;
     this.markProvider('inworldStt', 'ok');
@@ -551,9 +564,10 @@ export class SessionOrchestrator {
     this.publishSnapshot();
   }
 
-  /** Release timers when the session ends (called from teardown). */
+  /** Release timers (and any in-flight reconnect) when the session ends. */
   dispose(): void {
     this.clearEndpointTimer();
+    this.reconnectAbort?.abort();
   }
 
   /** Evaluate whether the conservative/balanced classifier should auto-commit. */
@@ -700,6 +714,14 @@ export class SessionOrchestrator {
       await this.deps.stt.beginTurn(turn.id);
     } catch (err) {
       this.log.warn('stt.begin_failed', { error: String(err) });
+      // We have just opened the mic gate (audioEnded → USER_ARMED). If STT could
+      // not arm because the transport dropped, staying USER_ARMED would be the
+      // "armed but deaf" antipattern resume() deliberately avoids: mic open, STT
+      // silent. Route the dropped transport into RECOVERING so it auto-reconnects
+      // and the mic is closed (enterRecovery closes the gate) until it does (#14).
+      if (err instanceof AppError && err.code === 'STT_DISCONNECTED') {
+        this.enterRecovery('beginTurn failed');
+      }
     }
   }
 

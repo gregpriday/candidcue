@@ -306,4 +306,31 @@ describe('InworldSttClient.reconnect', () => {
     transports[0]!.push({ transcription: { transcript: 'stale', isFinal: false } });
     expect(partials).toEqual(['after reconnect']);
   });
+
+  it('preserves accumulated transcript across a reconnect (no words dropped)', async () => {
+    const transports: Array<ReturnType<typeof makeTransport>> = [];
+    const connect: SttConnectFactory = async () => {
+      const t = makeTransport();
+      transports.push(t);
+      return t;
+    };
+    const client = new InworldSttClient({ apiKey: 'k', connect });
+    await client.connect(sessionConfig);
+    await client.beginTurn('turn-1');
+
+    // A finalized segment captured before the transport dropped.
+    transports[0]!.push({ transcription: { transcript: 'before the drop', isFinal: true } });
+
+    // Reconnect must NOT reset the accumulator; resumeTurn re-activates folding.
+    await client.reconnect();
+    await client.resumeTurn('turn-1');
+
+    // A finalized segment from the NEW transport after the reconnect.
+    transports[1]!.push({ transcription: { transcript: 'after the drop', isFinal: true } });
+
+    const result = await client.endTurn({ deadlineMs: 20 });
+    expect(result.finalSegments).toEqual(['before the drop', 'after the drop']);
+    expect(result.text).toContain('before the drop');
+    expect(result.text).toContain('after the drop');
+  });
 });
