@@ -66,6 +66,51 @@ describe('extractResponseText', () => {
     expect(err.code).toBe('OPENAI_SCHEMA');
   });
 
+  it('spells out the status and incomplete reason when the body is empty', () => {
+    const err = caught(() =>
+      extractResponseText(
+        { output_text: '', status: 'incomplete', incomplete_details: { reason: 'content_filter' } },
+        'prepared_interview_output',
+      ),
+    ) as AppError;
+
+    expect(err.code).toBe('OPENAI_SCHEMA');
+    expect(err.message).toContain('status=incomplete');
+    expect(err.message).toContain('incomplete=content_filter');
+  });
+
+  it('surfaces a model refusal recovered from the output items', () => {
+    const err = caught(() =>
+      extractResponseText(
+        {
+          output_text: '',
+          status: 'completed',
+          output: [
+            { content: [{ type: 'refusal', refusal: 'I can’t help with that.' }] },
+            { content: [{ type: 'output_text' }] },
+          ],
+        },
+        'prepared_interview_output',
+      ),
+    ) as AppError;
+
+    expect(err.code).toBe('OPENAI_SCHEMA');
+    expect(err.message).toContain('refusal=I can’t help with that.');
+  });
+
+  it('surfaces an API error code/message when the response failed with no text', () => {
+    const err = caught(() =>
+      extractResponseText(
+        { output_text: '', status: 'failed', error: { code: 'server_error', message: 'boom' } },
+        'prepared_interview_output',
+      ),
+    ) as AppError;
+
+    expect(err.code).toBe('OPENAI_SCHEMA');
+    expect(err.message).toContain('status=failed');
+    expect(err.message).toContain('error=server_error: boom');
+  });
+
   it('does not misclassify a non-token incomplete reason as truncation when a body is present', () => {
     // Only `max_output_tokens` means cut-off JSON; other incomplete reasons fall
     // through to the normal path (return the text, let the caller parse it).

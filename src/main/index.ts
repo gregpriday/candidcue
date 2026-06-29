@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 
 import { createRepository } from './persistence';
 import { createCredentialStore } from './security/secrets-electron';
-import { createLogger } from './diagnostics';
+import { createLogger, consoleSink, combineSinks, createFileSink, type LogSink } from './diagnostics';
 import { setPromptsRoot } from './prompts/prompt-loader';
 import { registerCandidCueSchemePrivileges, registerCandidCueProtocol } from './media/protocol-handler';
 import { applyCspHeaders } from './security/csp';
@@ -86,7 +86,21 @@ async function bootstrap(): Promise<void> {
   }
   started = true;
 
-  const logger = createLogger();
+  // Tee logs to the console (dev visibility) and a JSON-lines file under the
+  // user-data dir, so a failure that scrolled past — or happened in a packaged
+  // build with no console — can still be retrieved. Fall back to console-only if
+  // the log file can't be opened.
+  let logSink: LogSink = consoleSink;
+  let logFilePath: string | null = null;
+  try {
+    const file = createFileSink(join(app.getPath('userData'), 'logs'));
+    logFilePath = file.filePath;
+    logSink = combineSinks(consoleSink, file.sink);
+  } catch {
+    // Keep console-only logging rather than failing startup.
+  }
+  const logger = createLogger({ sink: logSink });
+  if (logFilePath) logger.info('app.log_file', { path: logFilePath });
   const videosRoot = resourceRoot('videos');
   setPromptsRoot(resourceRoot('prompts'));
 

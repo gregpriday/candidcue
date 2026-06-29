@@ -181,6 +181,10 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // The full internal diagnostic for the last action error (e.g. the model's
+  // raw/validation detail behind a prepare failure), shown verbatim under the
+  // headline so a failure can actually be diagnosed rather than just labelled.
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -214,6 +218,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     setSavedId(projectId);
     setWarnings(null);
     setActionError(null);
+    setErrorDetail(null);
     if (projectId === null) {
       setForm(emptyForm(DEFAULT_CHARACTER_ID));
       setPlanState('unprepared');
@@ -274,6 +279,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     }
     setSaving(true);
     setActionError(null);
+    setErrorDetail(null);
     try {
       const aggregate = await window.candidcue.projects.save(buildInput(form, savedId));
       setSavedId(aggregate.project.id);
@@ -293,6 +299,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
 
   const handlePrepare = useCallback(async () => {
     setActionError(null);
+    setErrorDetail(null);
     setWarnings(null);
     setPrepareProgress(null);
     const id = await handleSave();
@@ -319,6 +326,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
         setPlanState('failed');
         if (result.error) {
           setActionError(result.error.publicMessage);
+          setErrorDetail(result.error.detail);
         }
       }
     } catch (err: unknown) {
@@ -604,6 +612,9 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
             {actionError}
           </p>
         )}
+        {errorDetail !== null && (
+          <pre className={styles.errorDetail}>{errorDetail}</pre>
+        )}
         {warnings !== null && (
           <div className={route.notice} role="status">
             <StatusIcon tone={warnings.length > 0 ? 'warning' : 'success'} label="Preparation result" />
@@ -670,7 +681,14 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
         )}
 
         {step === 'reference' && (
-          <SourceLibrary drafts={form.sources} onChange={setSources} onImportError={setActionError} />
+          <SourceLibrary
+            drafts={form.sources}
+            onChange={setSources}
+            onImportError={(message) => {
+              setActionError(message);
+              setErrorDetail(null);
+            }}
+          />
         )}
 
         {step === 'style' && (

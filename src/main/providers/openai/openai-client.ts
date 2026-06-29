@@ -57,10 +57,20 @@ export type Moderator = (
  * logic is unit-testable with a plain object; the real SDK response satisfies it.
  */
 export interface ResponseEnvelope {
+  /** Overall lifecycle state: `completed` | `incomplete` | `failed` | … */
+  status?: string | null;
   /** Why the response stopped early, when it stopped early. */
   incomplete_details?: { reason?: string | null } | null;
+  /** Set when the API itself failed to produce a response. */
+  error?: { code?: string | null; message?: string | null } | null;
   /** SDK-accumulated output text — the final JSON string. */
   output_text: string;
+  /**
+   * Raw output items, scanned only to recover a model refusal when text is empty.
+   * Typed as `unknown[]` because the SDK's item union is heterogeneous (messages,
+   * reasoning, tool calls); {@link findRefusal} narrows each item at runtime.
+   */
+  output?: readonly unknown[] | null;
   /** Token accounting, used only to enrich the truncation diagnostic. */
   usage?: {
     output_tokens?: number;
@@ -69,7 +79,7 @@ export interface ResponseEnvelope {
 }
 
 /**
- * Pull the final JSON string out of a Responses-API result, classifying the two
+ * Pull the final JSON string out of a Responses-API result, classifying the
  * structural failures the orchestrator must tell apart:
  *
  *  - The model hit its output-token ceiling, so the JSON is cut off mid-stream
@@ -77,9 +87,12 @@ export interface ResponseEnvelope {
  *    reach `JSON.parse` and surface as a generic "unexpected response"; we raise
  *    `OPENAI_TRUNCATED` instead so the UI can tell the user to shorten the source,
  *    and fold the token usage into the internal message so the truncation shows
- *    up in logs. Other incomplete reasons fall through to the normal path.
- *  - An empty body — a structural failure, not a transient one — stays
- *    `OPENAI_SCHEMA`, leaving the existing repair/fallback path unchanged.
+ *    up in logs.
+ *  - No usable output text (empty body, a refusal, a `failed`/`incomplete`
+ *    response). This stays `OPENAI_SCHEMA` so the existing repair/fallback path is
+ *    unchanged, but the internal message now spells out the actual reason —
+ *    status, incomplete reason, API error, or refusal text — because a bare
+ *    "empty response" is undiagnosable.
  */
 export function extractResponseText(response: ResponseEnvelope, schemaName: string): string {
   if (response.incomplete_details?.reason === 'max_output_tokens') {
@@ -92,14 +105,42 @@ export function extractResponseText(response: ResponseEnvelope, schemaName: stri
     });
   }
   const text = response.output_text;
-  if (typeof text !== 'string' || text.length === 0) {
-    // An empty body is a structural failure, not a transient one; surface it as
-    // a schema error so the orchestrator can repair or fall back.
-    throw new AppError('OPENAI_SCHEMA', {
-      message: `OpenAI returned an empty response for schema "${schemaName}"`,
-    });
+  if (typeof text === 'string' && text.length > 0) {
+    return text;
   }
-  return text;
+  // No usable text. Spell out WHY so an empty body is diagnosable instead of
+  // opaque — this is the difference between "unexpected response" and "the model
+  // refused" / "content_filter" / "the API failed".
+  throw new AppError('OPENAI_SCHEMA', { message: describeMissingText(response, schemaName) });
+}
+
+/** Build a diagnostic for a Responses result that carried no usable output text. */
+function describeMissingText(response: ResponseEnvelope, schemaName: string): string {
+  const bits: string[] = [];
+  if (response.status) bits.push(`status=${response.status}`);
+  if (response.incomplete_details?.reason) bits.push(`incomplete=${response.incomplete_details.reason}`);
+  if (response.error?.code || response.error?.message) {
+    bits.push(`error=${[response.error.code, response.error.message].filter(Boolean).join(': ')}`);
+  }
+  const refusal = findRefusal(response);
+  if (refusal) bits.push(`refusal=${refusal.slice(0, 400)}`);
+  const suffix = bits.length > 0 ? ` (${bits.join('; ')})` : '';
+  return `OpenAI returned no output text for schema "${schemaName}"${suffix}`;
+}
+
+/** Recover a model refusal string from the output items, if the model refused. */
+function findRefusal(response: ResponseEnvelope): string | null {
+  for (const item of response.output ?? []) {
+    const content = (item as { content?: unknown })?.content;
+    if (!Array.isArray(content)) continue;
+    for (const raw of content) {
+      const part = raw as { type?: unknown; refusal?: unknown };
+      if (part?.type === 'refusal' && typeof part.refusal === 'string' && part.refusal.length > 0) {
+        return part.refusal;
+      }
+    }
+  }
+  return null;
 }
 
 /**

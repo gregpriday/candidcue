@@ -25,6 +25,12 @@ export type ErrorCode =
 export interface PublicAppError {
   code: ErrorCode;
   publicMessage: string;
+  /**
+   * The internal diagnostic — the technical message and underlying cause, when
+   * they say more than `publicMessage`. Safe to show in the UI for debugging
+   * (the logger redacts secrets independently); null when there's nothing extra.
+   */
+  detail: string | null;
   recoverable: boolean;
   retryAction: string | null;
   sessionId: string | null;
@@ -50,6 +56,7 @@ export class AppError extends Error {
   readonly sessionId: string | null;
   readonly turnId: string | null;
   readonly causeName: string | null;
+  readonly causeMessage: string | null;
 
   constructor(code: ErrorCode, options: AppErrorOptions = {}) {
     super(options.message ?? options.publicMessage ?? code);
@@ -62,6 +69,8 @@ export class AppError extends Error {
     this.turnId = options.turnId ?? null;
     this.causeName =
       options.cause instanceof Error ? options.cause.name : options.cause ? String(options.cause) : null;
+    this.causeMessage =
+      options.cause instanceof Error ? options.cause.message : null;
     if (options.cause !== undefined) {
       (this as { cause?: unknown }).cause = options.cause;
     }
@@ -71,11 +80,33 @@ export class AppError extends Error {
     return {
       code: this.code,
       publicMessage: this.publicMessage,
+      detail: this.buildDetail(),
       recoverable: this.recoverable,
       retryAction: this.retryAction,
       sessionId: this.sessionId,
       turnId: this.turnId,
     };
+  }
+
+  /**
+   * Compose the diagnostic surfaced to the renderer: the internal `message` (when
+   * it adds more than `publicMessage`) followed by the underlying cause's type
+   * and message (skipped when that message is already folded into `message`).
+   * Returns null when there is nothing beyond the public text.
+   */
+  private buildDetail(): string | null {
+    const parts: string[] = [];
+    if (this.message && this.message !== this.publicMessage) parts.push(this.message);
+    if (this.causeName) {
+      const cm = this.causeMessage;
+      // Fold the cause line in unless its (non-empty) message is already embedded
+      // in `message` — an empty/missing cause message must not suppress the name.
+      const alreadyShown = cm != null && cm.length > 0 && this.message.includes(cm);
+      if (!alreadyShown) {
+        parts.push(cm && cm.length > 0 ? `${this.causeName}: ${cm}` : this.causeName);
+      }
+    }
+    return parts.length > 0 ? parts.join('\n') : null;
   }
 }
 

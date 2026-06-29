@@ -70,7 +70,7 @@ export interface Logger {
  * console method matching its level. Kept tiny and dependency-free so it works
  * in the main process without additional wiring.
  */
-const consoleSink: LogSink = (record) => {
+export const consoleSink: LogSink = (record) => {
   const line = JSON.stringify(record);
   switch (record.level) {
     case 'error':

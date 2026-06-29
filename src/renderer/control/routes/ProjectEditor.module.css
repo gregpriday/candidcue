@@ -195,6 +195,25 @@
   color: var(--warning);
 }
 
+/* Full error diagnostic: a quiet recessed code block under the red headline. The
+   raw technical detail is monospaced and wraps; no accent, so it reads as debug
+   output rather than a decorated surface. */
+.errorDetail {
+  margin: calc(var(--space-1) * -1) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow: auto;
+}
+
 /* ---- Preparation progress panel (issue #48) -------------------------- */
 .progressPanel {
   display: flex;
