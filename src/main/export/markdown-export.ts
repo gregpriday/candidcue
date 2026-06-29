@@ -175,11 +175,14 @@ export function resolveAnswerText(turn: ExportTurn): string {
   if (answer === null) {
     return NO_ANSWER_PLACEHOLDER;
   }
+  // A user edit still wins outright (an intentional empty edit redacts the
+  // answer, so keep `??` there). But a present-but-empty cleaned transcript must
+  // fall through to the raw transcript — raw-only answers (END_NOW / recovery
+  // durability checkpoints) carry `cleanedTranscript: ''`, and `??` would
+  // otherwise render them blank even though the raw speech was captured (#74).
   return (
     answer.userEditedTranscript ??
-    answer.cleanedTranscript ??
-    answer.rawTranscript ??
-    NO_ANSWER_PLACEHOLDER
+    (answer.cleanedTranscript || answer.rawTranscript || NO_ANSWER_PLACEHOLDER)
   );
 }
 

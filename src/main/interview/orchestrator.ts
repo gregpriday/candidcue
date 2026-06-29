@@ -655,15 +655,24 @@ export class SessionOrchestrator {
    * (it skips when a fuller cleaned answer already landed), so it is safe even if
    * a parked commit pipeline writes the same raw transcript moments later; the
    * `bumpGeneration()` at the top of `endNow()` already invalidates that
-   * pipeline's `appendTurnAtomic`. Cleanup/moderation/next-action are skipped —
-   * the session is ending. Flushes nothing when there is no captured speech.
+   * pipeline's `appendTurnAtomic`. One accepted edge: a commit pipeline parked at
+   * STT finalize when END_NOW fires runs its own `recordRawAnswer('manual')`
+   * before its stale check, which can overwrite our `'ended-now'` reason — the
+   * turn still keeps a non-null answer (the bug being fixed), only the
+   * incomplete-flag is lost in that narrow window. Cleanup/moderation/next-action
+   * are skipped — the session is ending. Flushes nothing when no speech exists.
    */
   private async flushLiveTurnForEndNow(): Promise<void> {
     const turn = this.currentTurn;
     if (!turn) return;
-    // Prefer accumulated final segments; fall back to the latest interim partial
-    // when speech is mid-utterance and no segment has finalized yet.
-    const rawText = (turn.rawTranscript || '').trim() || this.interimTranscript.trim();
+    // Combine the accumulated final segments with the latest interim partial so a
+    // mid-utterance END_NOW keeps both the finalized words and the in-progress
+    // tail (the two are disjoint: onSttFinalSegment clears the interim it folds
+    // in). Either may be empty; flush nothing when both are.
+    const rawText = [turn.rawTranscript, this.interimTranscript]
+      .map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0)
+      .join(' ');
     if (rawText.length === 0) return;
     await this.deps.repository.recordRawAnswer(this.ctx.session.id, turn.id, rawText, 'ended-now');
   }

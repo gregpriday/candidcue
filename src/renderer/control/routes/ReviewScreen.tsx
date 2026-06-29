@@ -26,7 +26,10 @@ interface TurnEditState {
 }
 
 function initialEditText(turn: SessionReviewTurn): string {
-  return turn.userEditedTranscript ?? turn.cleanedTranscript ?? turn.rawTranscript ?? '';
+  // A present-but-empty cleaned transcript falls through to the raw transcript:
+  // raw-only answers (END_NOW / recovery) carry an empty cleaned transcript, and
+  // `??` alone would seed the editor blank despite captured speech (#74).
+  return turn.userEditedTranscript ?? (turn.cleanedTranscript || turn.rawTranscript) ?? '';
 }
 
 function turnKey(turn: SessionReviewTurn): string {

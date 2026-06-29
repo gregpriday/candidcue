@@ -2638,6 +2638,24 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(turn1.answer!.endpointReason).toBe('ended-now');
   });
 
+  it('END_NOW combines finalized segments with the trailing interim partial', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSttFinalSegment('we launched the alpha'); // finalized
+    h.orch.onSttPartial('and the beta is next'); // still mid-utterance, not finalized
+
+    await h.orch.endNow();
+    expect(h.orch.getState()).toBe('COMPLETED');
+
+    const agg = await h.repo.getSession(h.sessionId);
+    const turn1 = agg!.turns.find((t) => t.ordinal === 1)!;
+    expect(turn1.answer).not.toBeNull();
+    // Neither the finalized words nor the in-progress tail are dropped.
+    expect(turn1.answer!.rawTranscript).toBe('we launched the alpha and the beta is next');
+    expect(turn1.answer!.endpointReason).toBe('ended-now');
+  });
+
   it('END_NOW with no captured speech writes no answer (nothing to flush)', async () => {
     await h.orch.prepareOpening();
     await h.orch.begin();
