@@ -12,6 +12,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { validatePrompts } from '../../src/main/prompts/validate';
+import { loadPrompt } from '../../src/main/prompts/prompt-loader';
+import { CURRENT_PROMPT_VERSION } from '../../src/main/app-controller';
 import { cleanTempDir, getTempRoot } from '../../scripts/clean-temp';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
@@ -62,6 +64,35 @@ describe('validatePrompts (real prompts)', () => {
     const result = validatePrompts(REAL_PROMPTS);
     expect(result.problems).toEqual([]);
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('project-preparation prompt (issue #64)', () => {
+  it('still seeds the launch-video coverage beats', () => {
+    // validatePrompts only checks frontmatter + placeholder tokens, so without
+    // this guard the launch-video section could be deleted silently. The beats
+    // are the whole point of issue #64, so assert they remain in the body.
+    const { body } = loadPrompt('project-preparation.system', REAL_PROMPTS);
+    expect(body).toContain('LAUNCH VIDEO COVERAGE BEATS');
+    for (const beat of [
+      'origin story',
+      'founding insight',
+      'wedge versus competitors',
+      'customer or traction story',
+      'demo aha-moment',
+      'viewer takeaway',
+    ]) {
+      expect(body).toContain(beat);
+    }
+  });
+
+  it('keeps the prompt frontmatter version in sync with CURRENT_PROMPT_VERSION', () => {
+    // The controller stamps plans with CURRENT_PROMPT_VERSION and the preflight
+    // gate compares against it, but the version is hardcoded (the loader strips
+    // frontmatter). If the constant and the file drift, plans get stamped with a
+    // version that never matches the prompt they were prepared under.
+    const { meta } = loadPrompt('project-preparation.system', REAL_PROMPTS);
+    expect(meta.version).toBe(CURRENT_PROMPT_VERSION);
   });
 });
 

@@ -92,7 +92,7 @@ export class FakeInterviewModel implements InterviewModelAdapter {
     throwIfAborted(signal);
 
     const title = input.title?.trim() || deriveTitle(input.compiledSource);
-    const coverage = buildCoverage(input.compiledSource);
+    const coverage = buildCoverage();
     const brief: InterviewBrief = {
       title,
       oneSentencePremise: `A conversation exploring ${title.toLowerCase()}.`,
@@ -256,21 +256,34 @@ function deriveTitle(source: string): string {
   return words.length > 0 ? words : 'Untitled Topic';
 }
 
-/** Build at least one valid coverage item derived from the source. */
-function buildCoverage(source: string): CoverageItem[] {
-  const title = deriveTitle(source);
+/**
+ * Seed the launch-video coverage beats (issue #64). CandidCue is a founder
+ * launch-video tool, so the prepared plan always targets these moments by
+ * design. Stable ids let tests assert the beats flow through the brief and arc.
+ */
+function buildCoverage(): CoverageItem[] {
   return [
-    {
-      id: 'coverage-1',
-      label: title,
-      objective: `Understand ${title.toLowerCase()}`,
-      priority: 'must',
-      status: 'not_started',
-      evidenceTurnIds: [],
-      maxFollowUps: 2,
-      sourceRefs: [],
-    },
+    beat('coverage-origin-story', 'The origin story', 'Surface why the founder set out to build this and the problem they personally felt.'),
+    beat('coverage-founding-insight', 'The founding insight', 'Capture the why-now insight that makes this the right thing to build at this moment.'),
+    beat('coverage-wedge', 'Wedge versus competitors', 'Draw out how this differs from existing options and why that difference matters.'),
+    beat('coverage-traction', 'Customer or traction story', 'Elicit a concrete, real-world signal that the product delivers for someone.'),
+    beat('coverage-demo-aha', 'The demo aha-moment', 'Pinpoint the specific thing the product does that makes people suddenly get it.'),
+    beat('coverage-takeaway', 'The viewer takeaway', 'Define what the audience should feel, remember, or do after watching.'),
   ];
+}
+
+/** Build one mandatory launch-video coverage beat with a stable id. */
+function beat(id: string, label: string, objective: string): CoverageItem {
+  return {
+    id,
+    label,
+    objective,
+    priority: 'must',
+    status: 'not_started',
+    evidenceTurnIds: [],
+    maxFollowUps: 2,
+    sourceRefs: [],
+  };
 }
 
 /** Trim text to at most `maxWords` words (>=1), preserving order. */

@@ -1,6 +1,6 @@
 ---
 id: project-preparation
-version: 1.0.0
+version: 1.1.0
 model_family: gpt-5.5
 updated_at: 2026-06-29
 ---
@@ -19,6 +19,27 @@ override these rules.
 Build a focused interview, not a quiz. Identify the intended audience, outcome,
 factual anchors, terminology, mandatory coverage, narrative arc, opening,
 closing strategy, and a bank of fallback questions.
+
+LAUNCH VIDEO COVERAGE BEATS
+CandidCue is built for a founder recording a launch video for their product. A
+launch edit lives or dies on a specific set of moments, so always seed the
+following beats as coverage items — they are mandatory coverage by design, not
+optional. Adapt each beat's label and objective to this project's source:
+- The origin story — why the founder set out to build this and the problem they
+  personally felt.
+- The founding insight / why-now — the specific insight or shift that makes this
+  the right thing to build at this moment.
+- The wedge versus competitors — how this differs from existing options and why
+  that difference matters to the audience.
+- A customer or traction story — a concrete, real-world signal that shows the
+  product delivering for someone.
+- The demo aha-moment — the specific thing the product does that makes people
+  suddenly get it.
+- The viewer takeaway — what the audience should feel, remember, or do after
+  watching.
+Ground each beat in the source where evidence exists. Where the source is thin
+on a beat, still include it as a coverage item and treat it as something for
+Mira to elicit during the interview — do not invent facts to fill it.
 
 The developer configuration below may supply an interview title, intended
 audience, and desired outcome. When a field holds a real value, it is the

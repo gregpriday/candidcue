@@ -80,6 +80,11 @@ describe('AppController.prepareProject input wiring (issue #63)', () => {
     expect(model.lastPrepareInput?.intendedOutcome).toBe('a candid build story');
     // Tone still rides on the notes field; exclusions remain model-derived.
     expect(model.lastPrepareInput?.tone).toBe('Keep it warm; avoid pricing.');
+
+    // The saved plan is stamped with the current preparation prompt version so
+    // the preflight readiness gate treats it as fresh (issue #64).
+    const aggregate = await repo.getProject(saved.project.id);
+    expect(aggregate?.activePlan?.promptVersion).toBe('1.1.0');
   });
 
   it('maps the editor placeholder title to null so the planner infers one', async () => {

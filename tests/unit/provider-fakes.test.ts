@@ -120,11 +120,23 @@ function questionMarks(text: string): number {
 
 describe('FakeInterviewModel', () => {
   describe('prepareProject', () => {
-    it('returns a valid brief with >=1 coverage item, an opening question, and 2 fallbacks', async () => {
+    it('seeds the six launch-video coverage beats, an opening question, and 2 fallbacks', async () => {
       const model = new FakeInterviewModel();
       const out = await model.prepareProject(prepareInput());
 
-      expect(out.brief.coverageItems.length).toBeGreaterThanOrEqual(1);
+      // Issue #64: preparation always targets the launch-video beats by design.
+      expect(out.brief.coverageItems.map((c) => c.id)).toEqual([
+        'coverage-origin-story',
+        'coverage-founding-insight',
+        'coverage-wedge',
+        'coverage-traction',
+        'coverage-demo-aha',
+        'coverage-takeaway',
+      ]);
+      for (const item of out.brief.coverageItems) {
+        expect(item.priority).toBe('must');
+        expect(item.status).toBe('not_started');
+      }
       expect(out.brief.openingQuestion.text.endsWith('?')).toBe(true);
       expect(out.brief.fallbackQuestions).toHaveLength(2);
       for (const q of out.brief.fallbackQuestions) {
@@ -132,8 +144,8 @@ describe('FakeInterviewModel', () => {
       }
       // Exclusions are threaded through from input.
       expect(out.brief.exclusions).toContain('salary');
-      // Arc references the generated coverage ids.
-      expect(out.brief.arc[0]?.coverageItemIds).toContain(out.brief.coverageItems[0]?.id);
+      // The arc references every seeded coverage id, in order.
+      expect(out.brief.arc[0]?.coverageItemIds).toEqual(out.brief.coverageItems.map((c) => c.id));
       expect(out.warnings).toEqual([]);
     });
 
