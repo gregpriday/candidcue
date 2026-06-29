@@ -715,9 +715,13 @@ export class SqliteRepository implements CandidCueRepository {
            ordinal = excluded.ordinal,
            state = excluded.state,
            question_json = excluded.question_json,
-           answer_json = excluded.answer_json,
+           -- COALESCE so a re-persist of an already-answered turn as "asked"
+           -- (answer NULL) can never erase a committed answer (issue #9). The
+           -- commit path always supplies a non-null answer, so this is a no-op
+           -- there; only the asked-state re-write is guarded.
+           answer_json = COALESCE(excluded.answer_json, answer_json),
            coverage_delta_json = excluded.coverage_delta_json,
-           completed_at = excluded.completed_at`,
+           completed_at = COALESCE(excluded.completed_at, completed_at)`,
       )
       .run(
         turn.id,

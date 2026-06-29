@@ -40,6 +40,7 @@ export type TransitionTrigger =
   | 'resumeBeforeStart'
   | 'resumeUserTurn'
   | 'resumePreparedQuestion'
+  | 'resumeNextQuestion'
   // Recovery
   | 'deviceOrProviderNeedsRecovery'
   | 'recovered'
@@ -138,6 +139,10 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
     resumeBeforeStart: 'READY',
     resumeUserTurn: 'USER_ARMED',
     resumePreparedQuestion: 'INTERVIEWER_BUFFERING',
+    // The current turn's answer is already committed but realizing the next
+    // question failed; resume by generating/playing the next question rather
+    // than replaying the answered turn (issue #9). Mirrors skipToNextQuestion.
+    resumeNextQuestion: 'INTERVIEWER_THINKING',
     replayQuestion: 'INTERVIEWER_BUFFERING',
     completionSelected: 'FINISHING',
     deviceOrProviderNeedsRecovery: 'RECOVERING',

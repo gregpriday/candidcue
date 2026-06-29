@@ -353,7 +353,15 @@ export class MemoryRepository implements CandidCueRepository {
     const list = this.turnsBySession.get(sessionId) ?? [];
     const idx = list.findIndex((t) => t.id === turn.id);
     if (idx >= 0) {
-      list[idx] = turn;
+      // Mirror the SQLite COALESCE guard: re-persisting an already-answered turn
+      // as "asked" (answer null) must never erase the committed answer (issue
+      // #9). Preserve the prior answer/completedAt when the incoming turn has no
+      // answer of its own.
+      const existing = list[idx];
+      list[idx] =
+        existing != null && turn.answer == null && existing.answer != null
+          ? { ...turn, answer: existing.answer, completedAt: existing.completedAt }
+          : turn;
     } else {
       list.push(turn);
       this.turnSession.set(turn.id, sessionId);
