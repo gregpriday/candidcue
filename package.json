@@ -13,7 +13,7 @@
     "dev": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--experimental-sqlite vitest run",
     "test:watch": "NODE_OPTIONS=--experimental-sqlite vitest",

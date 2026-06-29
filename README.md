@@ -33,7 +33,7 @@ Then open **Settings** and add your OpenAI and Inworld API keys
 ```bash
 npm run typecheck   # tsc --noEmit (strict)
 npm test            # vitest (unit + integration)
-npm run verify      # typecheck + test + media:validate + prompts:validate
+npm run verify      # lint + typecheck + test + media:validate + prompts:validate
 ```
 
 > Note: `tsc`/`vitest` may be wrapped by a local CLI proxy that summarizes
