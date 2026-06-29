@@ -2,11 +2,34 @@ import { useEffect, useState } from 'react';
 import type { StageStateProjection } from '@shared/contracts';
 import styles from './StatusOverlay.module.css';
 
+/** A brief confirm/reject cue for a keypress. `token` increments per press so a
+ *  repeated identical key still restarts the cue (the element is keyed on it). */
+export interface CommandFeedback {
+  kind: 'ok' | 'rejected';
+  token: number;
+}
+
 interface StatusOverlayProps {
   state: StageStateProjection;
   captionsEnabled: boolean;
   characterName?: string | null;
+  /** Show the keyboard legend (also shown automatically on standby). */
+  legendVisible?: boolean;
+  /** Transient confirm/reject cue for the last keypress, or null. */
+  commandFeedback?: CommandFeedback | null;
 }
+
+/** The keyboard controls surfaced in the on-screen legend, in press order. The
+ *  labels mirror exactly what `commandForKey` / stage-app act on. */
+const LEGEND_ROWS: ReadonlyArray<{ keys: string; label: string }> = [
+  { keys: 'Space', label: 'Commit answer' },
+  { keys: 'P', label: 'Pause / Resume' },
+  { keys: 'R', label: 'Repeat question' },
+  { keys: 'S', label: 'Skip question' },
+  { keys: 'Shift + E', label: 'End interview' },
+  { keys: 'Shift + Esc', label: 'Exit stage' },
+  { keys: '?', label: 'Toggle controls' },
+];
 
 /** Visual states whose status text we surface (sparingly) on stage. The
  *  'standby' and 'complete' states render their own dedicated screens. */
@@ -81,30 +104,50 @@ export function StatusOverlay({
   state,
   captionsEnabled,
   characterName,
+  legendVisible = false,
+  commandFeedback = null,
 }: StatusOverlayProps): JSX.Element {
   const isStandby = state.visualState === 'standby';
   const isComplete = state.visualState === 'complete';
   const isError = state.visualState === 'error';
 
+  // 'listening' is the founder's turn: always show the actionable "Answer now"
+  // cue (overriding any orchestrator statusText) so the prompt to speak is
+  // unmistakable rather than a passive "Listening" that reads as the machine's
+  // state and fades into chrome.
   const statusText =
-    !isStandby && !isComplete && VISIBLE_STATUS.has(state.visualState)
-      ? state.statusText ?? fallbackStatusText(state.visualState)
-      : null;
+    isStandby || isComplete || !VISIBLE_STATUS.has(state.visualState)
+      ? null
+      : state.visualState === 'listening'
+        ? 'Answer now'
+        : state.statusText ?? fallbackStatusText(state.visualState);
 
   // Transient status fades after a couple of seconds so it never lingers as
-  // permanent chrome; 'paused' stays put because it's a held state.
+  // permanent chrome. Held states keep their cue on screen: 'paused' and
+  // 'recovering' can last a while (a real reconnect looks frozen if it fades),
+  // and 'listening' is the founder's turn — "Answer now" must persist until they
+  // act, not vanish into a dim corner glyph.
   const [statusVisible, setStatusVisible] = useState(true);
   useEffect(() => {
     if (statusText === null) {
       return undefined;
     }
     setStatusVisible(true);
-    if (state.visualState === 'paused') {
+    if (
+      state.visualState === 'paused' ||
+      state.visualState === 'recovering' ||
+      state.visualState === 'listening'
+    ) {
       return undefined;
     }
     const timer = window.setTimeout(() => setStatusVisible(false), 2400);
     return () => window.clearTimeout(timer);
   }, [statusText, state.visualState]);
+
+  // The legend orients a solo founder; it shows automatically on standby (before
+  // recording) and otherwise only when toggled, so it stays out of the frame
+  // during the interview.
+  const showLegend = legendVisible || isStandby;
 
   const captions =
     !isError && captionsEnabled && state.captions !== null && state.captions !== ''
@@ -124,6 +167,7 @@ export function StatusOverlay({
           )}
           <p className={styles.screenTitle}>Your interview is ready.</p>
           <p className={styles.screenHint}>Press Start in CandidCue when you’re ready.</p>
+          <p className={styles.screenHint}>Press ? anytime to show the controls.</p>
         </div>
       )}
 
@@ -141,6 +185,20 @@ export function StatusOverlay({
         </div>
       )}
 
+      {/* Brief confirm/reject cue so a wrong-moment keypress is never silent.
+          Keyed on the token so a repeated identical press restarts the cue. */}
+      {commandFeedback !== null ? (
+        <span
+          key={commandFeedback.token}
+          className={styles.feedback}
+          data-kind={commandFeedback.kind}
+          role="status"
+          aria-live="polite"
+        >
+          {commandFeedback.kind === 'ok' ? 'Got it' : 'Not now'}
+        </span>
+      ) : null}
+
       {/* ARIA live region announces transient status changes for assistive tech. */}
       <div className={styles.status} aria-live="polite" aria-atomic="true">
         {statusText !== null ? (
@@ -148,6 +206,17 @@ export function StatusOverlay({
             {statusText}
           </span>
         ) : null}
+      </div>
+
+      {/* Keyboard legend: quiet, non-interactive help. Kept in the DOM so it can
+          fade, but hidden from assistive tech while not shown. */}
+      <div className={styles.legend} data-visible={showLegend ? 'true' : 'false'} aria-hidden={!showLegend}>
+        {LEGEND_ROWS.map((row) => (
+          <div key={row.keys} className={styles.legendRow}>
+            <span className={styles.legendKey}>{row.keys}</span>
+            <span className={styles.legendLabel}>{row.label}</span>
+          </div>
+        ))}
       </div>
 
       {captions !== null ? (

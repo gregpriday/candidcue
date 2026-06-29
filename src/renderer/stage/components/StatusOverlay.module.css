@@ -82,6 +82,74 @@
   opacity: 0;
 }
 
+/* ---- Keypress confirm / reject cue ----------------------------------- */
+/* Sits just above the status line; flat text, no plate. Visibility is held by
+   the base opacity (and cleared by the caller) so it still shows under
+   prefers-reduced-motion, where the fade-in collapses to nothing. */
+.feedback {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--space-8) + 30px);
+  text-align: center;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.9);
+  animation: feedbackIn var(--dur-slow) var(--ease-out);
+}
+.feedback[data-kind='ok'] {
+  color: rgba(245, 246, 248, 0.92);
+}
+/* Reject reads as a distinct danger signal — never the terracotta accent. */
+.feedback[data-kind='rejected'] {
+  color: var(--danger);
+}
+@keyframes feedbackIn {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---- Keyboard legend ------------------------------------------------- */
+/* Quiet, non-interactive controls help bottom-left. No border, no outline, no
+   accent — a low-opacity list that never competes with the frame. */
+.legend {
+  position: absolute;
+  bottom: var(--space-8);
+  left: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  opacity: 0;
+  transition: opacity var(--dur-slow) var(--ease-out);
+}
+.legend[data-visible='true'] {
+  opacity: 0.6;
+}
+.legendRow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.legendKey {
+  min-width: 72px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(245, 246, 248, 0.92);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+}
+.legendLabel {
+  font-size: 12px;
+  color: rgba(245, 246, 248, 0.7);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9);
+}
+
 /* ---- Ready / completion screens -------------------------------------- */
 .screen {
   position: absolute;

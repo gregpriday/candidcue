@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
 import type { StageStateProjection } from '@shared/contracts';
 import { StatusOverlay } from '../../src/renderer/stage/components/StatusOverlay';
 
@@ -80,5 +80,98 @@ describe('StatusOverlay', () => {
       />,
     );
     expect(screen.getByText('hello there')).toBeInTheDocument();
+  });
+});
+
+/** The nearest legend container (a div carrying data-visible) above a row label. */
+function legendContainer(): Element {
+  const el = screen.getByText('Commit answer').closest('div[data-visible]');
+  if (el === null) throw new Error('legend container not found');
+  return el;
+}
+
+describe('StatusOverlay — solo-interviewee legibility', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows a persistent "Answer now" cue while listening, overriding statusText', () => {
+    vi.useFakeTimers();
+    render(
+      <StatusOverlay
+        state={projection({ visualState: 'listening', micState: 'armed', statusText: 'Listening' })}
+        captionsEnabled={false}
+      />,
+    );
+    const cue = screen.getByText('Answer now');
+    expect(cue).toHaveAttribute('data-visible', 'true');
+    // It must not fade like a transient status; still visible well past 2.4s.
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.getByText('Answer now')).toHaveAttribute('data-visible', 'true');
+  });
+
+  it('keeps the "Reconnecting" indicator visible during a recovery', () => {
+    vi.useFakeTimers();
+    render(
+      <StatusOverlay state={projection({ visualState: 'recovering' })} captionsEnabled={false} />,
+    );
+    expect(screen.getByText('Reconnecting')).toHaveAttribute('data-visible', 'true');
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.getByText('Reconnecting')).toHaveAttribute('data-visible', 'true');
+  });
+
+  it('still fades a genuinely transient status (thinking) after a couple of seconds', () => {
+    vi.useFakeTimers();
+    render(
+      <StatusOverlay state={projection({ visualState: 'thinking' })} captionsEnabled={false} />,
+    );
+    expect(screen.getByText('Thinking')).toHaveAttribute('data-visible', 'true');
+    act(() => vi.advanceTimersByTime(2400));
+    expect(screen.getByText('Thinking')).toHaveAttribute('data-visible', 'false');
+  });
+
+  it('auto-shows the keyboard legend on standby', () => {
+    render(<StatusOverlay state={projection({ visualState: 'standby' })} captionsEnabled={false} />);
+    expect(legendContainer()).toHaveAttribute('data-visible', 'true');
+    // Legend mirrors the real controls.
+    expect(screen.getByText('Pause / Resume')).toBeInTheDocument();
+    expect(screen.getByText('Exit stage')).toBeInTheDocument();
+  });
+
+  it('hides the legend during a live state unless explicitly toggled on', () => {
+    const { rerender } = render(
+      <StatusOverlay state={projection({ visualState: 'listening' })} captionsEnabled={false} />,
+    );
+    expect(legendContainer()).toHaveAttribute('data-visible', 'false');
+    rerender(
+      <StatusOverlay
+        state={projection({ visualState: 'listening' })}
+        captionsEnabled={false}
+        legendVisible
+      />,
+    );
+    expect(legendContainer()).toHaveAttribute('data-visible', 'true');
+  });
+
+  it('renders a reject cue without the terracotta accent', () => {
+    render(
+      <StatusOverlay
+        state={projection({ visualState: 'speaking' })}
+        captionsEnabled={false}
+        commandFeedback={{ kind: 'rejected', token: 1 }}
+      />,
+    );
+    expect(screen.getByText('Not now')).toHaveAttribute('data-kind', 'rejected');
+  });
+
+  it('renders a confirm cue when a command lands', () => {
+    render(
+      <StatusOverlay
+        state={projection({ visualState: 'listening', micState: 'active' })}
+        captionsEnabled={false}
+        commandFeedback={{ kind: 'ok', token: 1 }}
+      />,
+    );
+    expect(screen.getByText('Got it')).toHaveAttribute('data-kind', 'ok');
   });
 });

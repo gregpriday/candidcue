@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { StageStateProjection } from '@shared/contracts';
-import { commandForKey } from '../../src/renderer/stage/stage-commands';
+import type { StageCommand, StageStateProjection } from '@shared/contracts';
+import { commandForKey, isCommandUsefulInState } from '../../src/renderer/stage/stage-commands';
 
 type VisualState = StageStateProjection['visualState'];
+type MicState = StageStateProjection['micState'];
 
 const ALL_VISUAL_STATES: readonly VisualState[] = [
   'standby',
@@ -91,6 +92,82 @@ describe('commandForKey', () => {
       for (const visualState of ALL_VISUAL_STATES) {
         if (visualState === 'paused') continue;
         expect(commandForKey(key('KeyP'), visualState)).toEqual({ type: 'PAUSE' });
+      }
+    });
+  });
+});
+
+describe('isCommandUsefulInState', () => {
+  const COMMIT: StageCommand = { type: 'COMMIT', reason: 'manual' };
+  const PAUSE: StageCommand = { type: 'PAUSE' };
+  const RESUME: StageCommand = { type: 'RESUME' };
+  const REPEAT: StageCommand = { type: 'REPEAT' };
+  const SKIP: StageCommand = { type: 'SKIP' };
+  const EXIT: StageCommand = { type: 'EXIT_STAGE' };
+
+  describe('COMMIT — only while the mic gate is open', () => {
+    it('is useful when the mic is armed or active', () => {
+      expect(isCommandUsefulInState(COMMIT, 'listening', 'armed')).toBe(true);
+      expect(isCommandUsefulInState(COMMIT, 'listening', 'active')).toBe(true);
+    });
+
+    it('is not useful when the mic is closed', () => {
+      for (const vs of ALL_VISUAL_STATES) {
+        expect(isCommandUsefulInState(COMMIT, vs, 'closed')).toBe(false);
+      }
+    });
+  });
+
+  describe('PAUSE — only during a live exchange', () => {
+    it('is useful while listening, thinking, or speaking', () => {
+      expect(isCommandUsefulInState(PAUSE, 'listening', 'active')).toBe(true);
+      expect(isCommandUsefulInState(PAUSE, 'thinking', 'closed')).toBe(true);
+      expect(isCommandUsefulInState(PAUSE, 'speaking', 'closed')).toBe(true);
+    });
+
+    it('is not useful once paused, recovering, on standby, complete, or errored', () => {
+      for (const vs of ['standby', 'paused', 'recovering', 'complete', 'error'] as VisualState[]) {
+        expect(isCommandUsefulInState(PAUSE, vs, 'closed')).toBe(false);
+      }
+    });
+  });
+
+  describe('RESUME — only from paused', () => {
+    it('is useful only while paused', () => {
+      for (const vs of ALL_VISUAL_STATES) {
+        expect(isCommandUsefulInState(RESUME, vs, 'closed')).toBe(vs === 'paused');
+      }
+    });
+  });
+
+  describe('REPEAT — before answering, or from a pause', () => {
+    it('is useful while paused and while armed but not yet speaking', () => {
+      expect(isCommandUsefulInState(REPEAT, 'paused', 'closed')).toBe(true);
+      expect(isCommandUsefulInState(REPEAT, 'listening', 'armed')).toBe(true);
+    });
+
+    it('is not useful once the founder is speaking, nor while the interviewer speaks', () => {
+      expect(isCommandUsefulInState(REPEAT, 'listening', 'active')).toBe(false);
+      expect(isCommandUsefulInState(REPEAT, 'speaking', 'closed')).toBe(false);
+      expect(isCommandUsefulInState(REPEAT, 'thinking', 'closed')).toBe(false);
+    });
+  });
+
+  describe('SKIP — only before any answer speech', () => {
+    it('is useful only while armed and not yet speaking', () => {
+      expect(isCommandUsefulInState(SKIP, 'listening', 'armed')).toBe(true);
+      expect(isCommandUsefulInState(SKIP, 'listening', 'active')).toBe(false);
+      expect(isCommandUsefulInState(SKIP, 'paused', 'closed')).toBe(false);
+    });
+  });
+
+  describe('EXIT_STAGE — always available', () => {
+    it('is useful in every state', () => {
+      const mics: MicState[] = ['closed', 'armed', 'active'];
+      for (const vs of ALL_VISUAL_STATES) {
+        for (const mic of mics) {
+          expect(isCommandUsefulInState(EXIT, vs, mic)).toBe(true);
+        }
       }
     });
   });

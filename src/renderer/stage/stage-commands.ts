@@ -45,3 +45,57 @@ export function commandForKey(
       return null;
   }
 }
+
+/**
+ * Whether a stage command would actually do something right now. The orchestrator
+ * stays the source of truth and silently drops a command that is illegal for the
+ * session state (see `isCommandLegal` in src/main/interview/state-machine.ts);
+ * this mirrors that gating using only what the renderer can see — the projected
+ * `visualState` and `micState` — so a solo founder gets an immediate confirm/
+ * reject cue instead of silence when they press a key. It can briefly disagree
+ * with the orchestrator while a projection lags a keypress, which is harmless:
+ * the caller sends the command regardless and the orchestrator decides.
+ *
+ * The projection collapses several runtime states (orchestrator STAGE_VISUAL /
+ * MIC_STATE): USER_ARMED → listening + armed; USER_SPEAKING / ENDPOINT_CANDIDATE
+ * → listening + active; INTERVIEWER_SPEAKING → speaking; *_THINKING / BUFFERING /
+ * TURN_FINALIZING → thinking; PAUSED → paused; RECOVERING → recovering. The mic
+ * gate is open (armed or active) exactly while the user holds the floor.
+ */
+export function isCommandUsefulInState(
+  command: StageCommand,
+  visualState: StageStateProjection['visualState'],
+  micState: StageStateProjection['micState'],
+): boolean {
+  switch (command.type) {
+    case 'COMMIT':
+      // A manual commit lands a turn only while the mic gate is open.
+      return micState !== 'closed';
+    case 'PAUSE':
+      // Pausable throughout a live exchange; not once paused, recovering,
+      // finished, errored, or still on standby.
+      return (
+        visualState === 'listening' || visualState === 'thinking' || visualState === 'speaking'
+      );
+    case 'RESUME':
+      return visualState === 'paused';
+    case 'REPEAT':
+      // Replay the current question only before the founder has begun answering
+      // (mic still merely armed) or from a pause taken before they began.
+      return visualState === 'paused' || (visualState === 'listening' && micState === 'armed');
+    case 'SKIP':
+      // Swap the delivered question for a new one, only before any answer speech.
+      return visualState === 'listening' && micState === 'armed';
+    case 'EXIT_STAGE':
+      // Leaving the stage is always available.
+      return true;
+    case 'END_AFTER_TURN':
+      // Finish after the answer the founder currently owns; the mic-open states
+      // are the renderer-visible slice of where this is legal.
+      return micState !== 'closed';
+    default: {
+      const _exhaustive: never = command;
+      return _exhaustive;
+    }
+  }
+}
