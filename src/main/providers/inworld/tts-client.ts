@@ -7,7 +7,7 @@ import type {
 import { AppError } from '@shared/errors/app-error';
 import { INWORLD_DEFAULTS } from '@shared/constants/runtime-defaults';
 import { nowMs } from '@shared/utils/deadline';
-import { durationMsFromPcm, pcm16ToWav } from './wav';
+import { isWavFile, wavDurationMs } from './wav';
 
 /** Injectable fetch implementation. Defaults to the global `fetch`. */
 export type TtsFetch = typeof fetch;
@@ -37,8 +37,10 @@ const TTS_CHANNELS = 1;
  * playback in the MVP, so callers always receive the whole clip up front.
  *
  * Wire shape: the Inworld `tts/v1/voice` endpoint returns JSON with a base64
- * `audioContent` field carrying raw LINEAR16 (pcm_s16le) samples. We base64-decode
- * it, wrap it in a canonical WAV header so the renderer can decode it, and report
+ * `audioContent` field. For `LINEAR16` the field carries a complete WAV file
+ * (RIFF/WAVE header + pcm_s16le samples), so we base64-decode it and pass the
+ * bytes through unchanged — re-wrapping would nest a second RIFF header and
+ * corrupt playback. Duration is read from the WAV header, and we report
  * `audio/wav`.
  */
 export class InworldTtsClient implements TextToSpeechAdapter {
@@ -56,10 +58,10 @@ export class InworldTtsClient implements TextToSpeechAdapter {
 
   /**
    * Synthesize speech for `input.text` in voice `input.voiceId`. Buffers the
-   * whole response, computes duration from the decoded PCM, and returns a
+   * whole response, reads duration from the returned WAV header, and returns a
    * complete {@link TtsResult}.
    * @throws AppError INWORLD_AUTH on 401/403, TTS_FAILED on any other non-OK
-   *   response or a malformed/empty `audioContent`.
+   *   response or a malformed/empty/non-WAV `audioContent`.
    */
   async synthesize(input: TtsInput, signal?: AbortSignal): Promise<TtsResult> {
     const start = nowMs();
@@ -124,18 +126,26 @@ export class InworldTtsClient implements TextToSpeechAdapter {
       });
     }
 
-    // `audioContent` is base64-encoded raw LINEAR16 (pcm_s16le) PCM. Decode it,
-    // wrap it in a WAV header for the renderer, and derive duration from the PCM.
-    const pcm = base64ToBytes(audioContent);
-    // LINEAR16 is 2 bytes/sample, so a valid clip has a non-zero, even byte
-    // count. Anything else means the decoded payload is truncated or corrupt.
-    if (pcm.byteLength === 0 || pcm.byteLength % 2 !== 0) {
+    // `audioContent` for LINEAR16 is a base64-encoded, fully-formed WAV file.
+    // Decode it and pass the bytes through unchanged — re-wrapping would nest a
+    // second RIFF header and corrupt the clip.
+    const bytes = base64ToBytes(audioContent);
+    if (!isWavFile(bytes)) {
       throw new AppError('TTS_FAILED', {
-        message: 'Inworld TTS response decoded to malformed LINEAR16 PCM',
+        message: 'Inworld TTS response was not a valid WAV file',
       });
     }
-    const bytes = pcm16ToWav(pcm, input.sampleRate, TTS_CHANNELS);
-    const durationMs = durationMsFromPcm(pcm.byteLength, input.sampleRate, TTS_CHANNELS);
+    // Duration comes from the WAV header (data chunk / byte rate), not the total
+    // byte length — the header bytes are not audio and would skew calibration.
+    let durationMs: number;
+    try {
+      durationMs = wavDurationMs(bytes);
+    } catch (error) {
+      throw new AppError('TTS_FAILED', {
+        message: 'Inworld TTS WAV header could not be parsed',
+        cause: error,
+      });
+    }
 
     return {
       bytes,
