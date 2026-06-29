@@ -8,6 +8,7 @@ import type {
 } from '@shared/contracts';
 import { VideoDeck } from './playback/VideoDeck';
 import { StatusOverlay } from './components/StatusOverlay';
+import { EndConfirmOverlay } from './components/EndConfirmOverlay';
 import { SpeechPlayer } from './playback/SpeechPlayer';
 import { CaptureController } from './audio/CaptureController';
 import { commandForKey } from './stage-commands';
@@ -34,6 +35,12 @@ export function StageApp(): JSX.Element {
   const [state, setState] = useState<StageStateProjection>(INITIAL_STATE);
   const [plan, setPlan] = useState<SpeechPlaybackPlan | null>(null);
   const [speechEndedTurnId, setSpeechEndedTurnId] = useState<string | null>(null);
+  // Shift+E opens this confirm; only an explicit "End interview" press dispatches
+  // END_AFTER_TURN, so the destructive action never fires from one keystroke.
+  // The orchestrator gates END_AFTER_TURN to states where the user holds the
+  // floor (or is finalizing) — confirming in any other state is a harmless no-op,
+  // matching how commandForKey's commands are silently dropped when illegal.
+  const [endConfirmOpen, setEndConfirmOpen] = useState(false);
 
   // Engines live for the lifetime of the window; refs avoid re-creating them.
   const speechPlayerRef = useRef<SpeechPlayer | null>(null);
@@ -219,6 +226,24 @@ export function StageApp(): JSX.Element {
       if (event.repeat) {
         return;
       }
+      // While the end-confirm (or any modal) is open, let it own the keyboard —
+      // don't fire Space/P/R/S underneath it, and leave Escape to the dialog.
+      if (document.querySelector('[aria-modal="true"]') !== null) {
+        return;
+      }
+      // Shift+E opens the end-interview confirm. This is renderer-local state,
+      // not a StageCommand: only the confirmed action crosses IPC.
+      if (
+        event.shiftKey &&
+        event.code === 'KeyE' &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        setEndConfirmOpen(true);
+        return;
+      }
       // stateRef is always current, so the pause/resume toggle reads the latest
       // visual state without re-subscribing the listener.
       const command = commandForKey(event, stateRef.current.visualState);
@@ -252,6 +277,14 @@ export function StageApp(): JSX.Element {
         onSpeakingReady={handleSpeakingReady}
       />
       <StatusOverlay state={state} captionsEnabled={captionsEnabled} characterName={characterName} />
+      <EndConfirmOverlay
+        open={endConfirmOpen}
+        onClose={() => setEndConfirmOpen(false)}
+        onConfirm={() => {
+          setEndConfirmOpen(false);
+          sendCommand({ type: 'END_AFTER_TURN' });
+        }}
+      />
     </div>
   );
 }

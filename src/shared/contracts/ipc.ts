@@ -269,7 +269,8 @@ export type StageCommand =
   | { type: 'RESUME' }
   | { type: 'REPEAT' }
   | { type: 'SKIP' }
-  | { type: 'EXIT_STAGE' };
+  | { type: 'EXIT_STAGE' }
+  | { type: 'END_AFTER_TURN' };
 
 // ---------------------------------------------------------------------------
 // Job / command results

@@ -18,6 +18,7 @@ const stageCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('REPEAT') }),
   z.object({ type: z.literal('SKIP') }),
   z.object({ type: z.literal('EXIT_STAGE') }),
+  z.object({ type: z.literal('END_AFTER_TURN') }),
 ]);
 
 /** Register StageWindow channels (low-frequency control; PCM uses the port). */
@@ -72,7 +73,7 @@ export function registerStageIpc(app: AppController, guard: Guard): void {
   });
 }
 
-function mapStageCommand(cmd: z.infer<typeof stageCommandSchema>): SessionCommand | null {
+export function mapStageCommand(cmd: z.infer<typeof stageCommandSchema>): SessionCommand | null {
   switch (cmd.type) {
     case 'COMMIT': return { type: 'COMMIT_USER_TURN', reason: cmd.reason };
     case 'PAUSE': return { type: 'PAUSE_SESSION' };
@@ -80,6 +81,7 @@ function mapStageCommand(cmd: z.infer<typeof stageCommandSchema>): SessionComman
     case 'REPEAT': return { type: 'REPEAT_QUESTION' };
     case 'SKIP': return { type: 'SKIP_QUESTION' };
     case 'EXIT_STAGE': return { type: 'PAUSE_SESSION' };
+    case 'END_AFTER_TURN': return { type: 'END_AFTER_TURN' };
     default: return null;
   }
 }
