@@ -37,10 +37,11 @@ const STT_STREAM_URL = 'wss://api.inworld.ai/stt/v1/transcribe:streamBidirection
  * and is intentionally left untouched here.
  */
 export function buildSttWsUrl(baseUrl: string, apiKey: string): string {
-  return `${baseUrl}?authorization=${encodeURIComponent(`Basic ${apiKey}`)}`;
+  const separator = baseUrl.includes('?') ? '&' : '?';
+  return `${baseUrl}${separator}authorization=${encodeURIComponent(`Basic ${apiKey}`)}`;
 }
 
-const inworldWsConnect: SttConnectFactory = async ({ apiKey, model, config }, signal) => {
+export const inworldWsConnect: SttConnectFactory = async ({ apiKey, model, config }, signal) => {
   // The API key IS the verbatim Basic credential (already base64-encoded by the
   // user), passed through unmodified inside the query-param URL (see
   // buildSttWsUrl) — the streaming endpoint authenticates via query param.
