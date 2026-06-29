@@ -64,7 +64,7 @@ import { CredentialStore, publicKeyState } from './security/secrets';
 import { buildOpenAiAdapters, buildInworldAdapters } from './providers/factory';
 import { loadManifest } from './media/manifest-loader';
 import { mediaUrl } from './media/protocol-handler';
-import { buildMarkdownExport, buildJsonExport } from './export';
+import { buildMarkdownExport, buildJsonExport, computeSessionDurationLabel } from './export';
 import { interviewBriefSchema, preparedInterviewOutputSchema } from '@shared/schemas';
 
 export interface AppControllerDeps {
@@ -802,6 +802,8 @@ export class AppController {
         },
         turns: agg.turns.map((t) => ({
           ordinal: t.ordinal,
+          createdAt: t.createdAt,
+          completedAt: t.completedAt,
           question: {
             text: t.question.text,
             type: t.question.type,
@@ -814,12 +816,15 @@ export class AppController {
                 cleanedTranscript: t.answer.cleanedTranscript,
                 userEditedTranscript: t.answer.userEditedTranscript,
                 endpointReason: t.answer.endpointReason,
+                speechStartedAt: t.answer.speechStartedAt,
+                speechEndedAt: t.answer.speechEndedAt,
+                durationMs: t.answer.durationMs,
               }
             : null,
           coverageDelta: t.coverageDelta,
         })),
         coverage: agg.coverage.map((c) => ({ label: c.label, status: c.status })),
-        durationLabel: '—',
+        durationLabel: computeSessionDurationLabel(agg.session.startedAt, agg.session.endedAt),
         date: new Date().toISOString().slice(0, 10),
       };
 

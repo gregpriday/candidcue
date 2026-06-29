@@ -38,6 +38,10 @@ export interface SessionExportInput {
   };
   turns: Array<{
     ordinal: number;
+    /** When the turn (question) was created. ISO 8601. */
+    createdAt: string;
+    /** When the turn was completed, or null if it never finished. ISO 8601. */
+    completedAt: string | null;
     question: {
       text: string;
       type: QuestionType;
@@ -49,6 +53,12 @@ export interface SessionExportInput {
       cleanedTranscript: string;
       userEditedTranscript: string | null;
       endpointReason: EndpointReason;
+      /** When the founder started speaking the answer. ISO 8601, or null. */
+      speechStartedAt: string | null;
+      /** When the founder stopped speaking the answer. ISO 8601, or null. */
+      speechEndedAt: string | null;
+      /** Measured spoken duration of the answer in milliseconds, or null. */
+      durationMs: number | null;
     } | null;
     coverageDelta: CoverageDelta[];
   }>;
@@ -61,6 +71,98 @@ export interface SessionExportInput {
 }
 
 type ExportTurn = SessionExportInput['turns'][number];
+
+// ---------------------------------------------------------------------------
+// Timecode / duration helpers (spec §30, issue #49)
+//
+// Exports carry no video — the footage lives on the founder's external camera.
+// To let an editor conform the transcript against that recording, each turn is
+// stamped with an offset from session start (when the founder began speaking),
+// and the session/turn durations are rendered for real instead of `—`.
+// ---------------------------------------------------------------------------
+
+/**
+ * Milliseconds from session start to when the founder began speaking a given
+ * answer — the canonical anchor an editor uses to seek the external recording.
+ * Returns null when either timestamp is absent or unparseable. The result is
+ * clamped to be non-negative: clock skew can place `speechStartedAt` a hair
+ * before `startedAt`, but a negative seek offset is meaningless. The raw ISO
+ * timestamps are preserved separately (JSON export) so nothing is lost.
+ */
+export function computeOffsetFromStartMs(
+  sessionStartedAt: string | null,
+  speechStartedAt: string | null,
+): number | null {
+  if (sessionStartedAt === null || speechStartedAt === null) {
+    return null;
+  }
+  const start = Date.parse(sessionStartedAt);
+  const speech = Date.parse(speechStartedAt);
+  if (Number.isNaN(start) || Number.isNaN(speech)) {
+    return null;
+  }
+  return Math.max(0, speech - start);
+}
+
+/**
+ * Format a millisecond duration as a coarse human label: `8s`, `12m 30s`, or
+ * `1h 05m 03s`. Second granularity is deliberate — editors scrub by eye, so
+ * sub-second precision is noise. Negative input is clamped to zero.
+ */
+function formatDurationMs(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    const mm = String(minutes).padStart(2, '0');
+    const ss = String(seconds).padStart(2, '0');
+    return `${hours}h ${mm}m ${ss}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
+/**
+ * Format an offset (ms from session start) as a seek timecode: `M:SS` under an
+ * hour, `H:MM:SS` beyond. This is what an editor types into a "go to timecode"
+ * box or scrubs to against the clip's own elapsed counter. Negative input is
+ * clamped to `0:00`.
+ */
+export function formatTimecodeOffset(offsetMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(offsetMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const ss = String(seconds).padStart(2, '0');
+  if (hours > 0) {
+    const mm = String(minutes).padStart(2, '0');
+    return `${hours}:${mm}:${ss}`;
+  }
+  return `${minutes}:${ss}`;
+}
+
+/**
+ * Compute the human session-duration label from the session's start/end
+ * timestamps. Falls back to `—` when either timestamp is missing or
+ * unparseable (e.g. a session that never properly ended).
+ */
+export function computeSessionDurationLabel(
+  startedAt: string | null,
+  endedAt: string | null,
+): string {
+  if (startedAt === null || endedAt === null) {
+    return '—';
+  }
+  const start = Date.parse(startedAt);
+  const end = Date.parse(endedAt);
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) {
+    return '—';
+  }
+  return formatDurationMs(end - start);
+}
 
 /**
  * Resolve the answer text for a turn using the documented precedence
@@ -103,12 +205,27 @@ function countCompletedQuestions(turns: readonly ExportTurn[]): number {
 
 /**
  * Render a single turn block. The heading combines the ordinal with the
- * question type (a stable, human-readable "section" label), e.g.
- * `## 3. clarification`. Recovered or unanswered turns get an inline note.
+ * question type (a stable, human-readable "section" label) and, when timing is
+ * available, a seek timecode plus spoken duration, e.g.
+ * `## 3. clarification [2:15] (8s)`. The `[2:15]` is the offset from session
+ * start to when the founder began speaking — an editor's anchor into the
+ * external recording — and `(8s)` is how long the answer ran. Recovered or
+ * unanswered turns get an inline note.
  */
-function renderTurnBlock(turn: ExportTurn): string {
+function renderTurnBlock(turn: ExportTurn, sessionStartedAt: string | null): string {
   const lines: string[] = [];
-  lines.push(`## ${turn.ordinal}. ${turn.question.type}`);
+  let heading = `## ${turn.ordinal}. ${turn.question.type}`;
+  const offsetMs = turn.answer
+    ? computeOffsetFromStartMs(sessionStartedAt, turn.answer.speechStartedAt)
+    : null;
+  if (offsetMs !== null) {
+    heading += ` [${formatTimecodeOffset(offsetMs)}]`;
+  }
+  const durationMs = turn.answer?.durationMs ?? null;
+  if (durationMs !== null && durationMs >= 0) {
+    heading += ` (${formatDurationMs(durationMs)})`;
+  }
+  lines.push(heading);
   if (isIncompleteTurn(turn)) {
     lines.push('');
     lines.push('> _Note: this turn was incomplete or recovered; the answer may be partial._');
@@ -152,9 +269,10 @@ export function buildMarkdownExport(input: SessionExportInput): string {
   ];
   blocks.push(metadata.join('\n'));
 
-  // One block per turn, in ordinal order as supplied by the caller.
+  // One block per turn, in ordinal order as supplied by the caller. Each turn's
+  // seek timecode is computed relative to the session start.
   for (const turn of input.turns) {
-    blocks.push(renderTurnBlock(turn));
+    blocks.push(renderTurnBlock(turn, input.session.startedAt));
   }
 
   // Coverage checklist.

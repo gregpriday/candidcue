@@ -8,6 +8,8 @@ export {
   buildMarkdownExport,
   resolveAnswerText,
   isIncompleteTurn,
+  formatTimecodeOffset,
+  computeSessionDurationLabel,
   INTERVIEWER_DISPLAY_NAME,
 } from './markdown-export';
 export type { SessionExportInput } from './markdown-export';

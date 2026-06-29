@@ -2,6 +2,7 @@ import type { InterviewBrief, CoverageDelta } from '@shared/domain';
 import type { QuestionType, QuestionSource } from '@shared/domain';
 import type { EndpointMode, EndpointReason } from '@shared/domain';
 import type { SessionExportInput } from './markdown-export';
+import { computeOffsetFromStartMs } from './markdown-export';
 
 /** Current version of the portable export envelope (spec §30.2). */
 export const PORTABLE_EXPORT_SCHEMA_VERSION = 1;
@@ -21,14 +22,22 @@ export interface PortableQuestion {
 
 /**
  * The answer subset preserved in a portable export. Raw audio, provider ids,
- * moderation records, latencies, and timing metadata are intentionally
- * excluded; only transcripts and the reason the turn ended are carried.
+ * moderation records, and latencies are intentionally excluded; transcripts,
+ * the reason the turn ended, and the answer's speech timing are carried. The
+ * timing (issue #49) lets an editor conform the transcript to an external
+ * camera recording — it is non-sensitive and a deliberate addition.
  */
 export interface PortableAnswer {
   rawTranscript: string;
   cleanedTranscript: string;
   userEditedTranscript: string | null;
   endpointReason: EndpointReason;
+  /** When the founder started speaking the answer. ISO 8601, or null. */
+  speechStartedAt: string | null;
+  /** When the founder stopped speaking the answer. ISO 8601, or null. */
+  speechEndedAt: string | null;
+  /** Measured spoken duration of the answer in milliseconds, or null. */
+  durationMs: number | null;
 }
 
 /** A single turn in the portable export. */
@@ -37,6 +46,17 @@ export interface PortableTurn {
   question: PortableQuestion;
   answer: PortableAnswer | null;
   coverageDelta: CoverageDelta[];
+  /** When the turn (question) was created. ISO 8601. */
+  createdAt: string;
+  /** When the turn was completed, or null if it never finished. ISO 8601. */
+  completedAt: string | null;
+  /**
+   * Milliseconds from session start to when the founder began speaking — the
+   * editor's seek anchor into the external recording. Null when the answer or
+   * the session start timestamp is absent. Clamped to be non-negative; the raw
+   * ISO timestamps above remain the lossless source.
+   */
+  offsetFromStartMs: number | null;
 }
 
 /** Session-level metadata in the portable export (no device or credential data). */
@@ -73,7 +93,8 @@ export interface PortableSessionExport {
 
 /**
  * Project the export-input answer onto the portable answer subset. Returns
- * `null` for unanswered turns. Only the four documented fields survive.
+ * `null` for unanswered turns. Only the documented transcript, endpoint, and
+ * speech-timing fields survive — provider/audio/moderation internals do not.
  */
 function toPortableAnswer(
   answer: SessionExportInput['turns'][number]['answer'],
@@ -86,6 +107,9 @@ function toPortableAnswer(
     cleanedTranscript: answer.cleanedTranscript,
     userEditedTranscript: answer.userEditedTranscript,
     endpointReason: answer.endpointReason,
+    speechStartedAt: answer.speechStartedAt,
+    speechEndedAt: answer.speechEndedAt,
+    durationMs: answer.durationMs,
   };
 }
 
@@ -122,6 +146,12 @@ export function buildJsonExport(input: SessionExportInput): PortableSessionExpor
       },
       answer: toPortableAnswer(turn.answer),
       coverageDelta: turn.coverageDelta,
+      createdAt: turn.createdAt,
+      completedAt: turn.completedAt,
+      offsetFromStartMs: computeOffsetFromStartMs(
+        input.session.startedAt,
+        turn.answer?.speechStartedAt ?? null,
+      ),
     })),
   };
 }
