@@ -65,6 +65,7 @@ export const CHANNELS = {
   // events (main → stage)
   evtStageState: 'evt:stage-state',
   evtPlaybackPlan: 'evt:playback-plan',
+  evtPlayBackchannel: 'evt:play-backchannel',
   evtCaptureConfig: 'evt:capture-config',
 } as const;
 
@@ -235,6 +236,13 @@ export interface StageBootstrap {
   characterId: string;
   posterUrl: string;
   listeningClips: ListeningClipRef[];
+  /**
+   * Short audio-only acknowledgments ("mm-hm", "got it") played the instant a
+   * turn commits, to fill the silent gap while STT finalizes and the next
+   * question synthesizes (#53). Empty when the character ships no such clips —
+   * the stage simply plays nothing.
+   */
+  backchannelClips: ListeningClipRef[];
   video: {
     fit: 'cover' | 'contain';
     mirror: boolean;
@@ -408,6 +416,8 @@ export interface CandidCueStageApi {
   events: {
     onState(listener: (state: StageStateProjection) => void): Unsubscribe;
     onPlaybackPlan(listener: (plan: SpeechPlaybackPlan) => void): Unsubscribe;
+    /** Fire-and-forget cue to play an immediate backchannel acknowledgment (#53). */
+    onPlayBackchannel(listener: () => void): Unsubscribe;
     onCaptureConfig(listener: (config: CaptureConfig) => void): Unsubscribe;
   };
 }

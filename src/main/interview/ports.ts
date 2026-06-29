@@ -26,6 +26,13 @@ export interface StagePort {
   openMicGate(): void;
   closeMicGate(): void;
   /**
+   * Fire-and-forget cue to play an immediate backchannel acknowledgment the
+   * instant a turn commits (#53). Must not block the commit pipeline: it returns
+   * synchronously and the stage plays a pre-decoded clip (or nothing, if the
+   * character ships none).
+   */
+  playBackchannel(): void;
+  /**
    * Preload + buffer the speech plan. Resolves true when the stage confirms it
    * is ready; false means readiness was NOT confirmed (stage error or timeout)
    * and playback must not be treated as having started.
