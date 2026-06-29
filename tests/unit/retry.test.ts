@@ -1,3 +1,9 @@
+import {
+  APIConnectionError as SDKAPIConnectionError,
+  APIConnectionTimeoutError as SDKAPIConnectionTimeoutError,
+  APIUserAbortError as SDKAPIUserAbortError,
+} from 'openai';
+
 import { isTransientStatus, shouldRetry, withRetry } from '@main/providers/retry';
 import { RETRY_POLICY } from '@shared/constants/runtime-defaults';
 
@@ -121,6 +127,33 @@ describe('shouldRetry', () => {
     const err = Object.assign(new APIUserAbortError(), { cause: { code: 'ECONNRESET' } });
     expect(shouldRetry(err)).toBe(false);
   });
+
+  it('lets a non-retryable status win over a transient cause code', () => {
+    const err = Object.assign(new Error('HTTP 401'), {
+      status: 401,
+      cause: { code: 'ECONNRESET' },
+    });
+    expect(shouldRetry(err)).toBe(false);
+  });
+});
+
+// Guards the duck-typed helpers against drift in the real OpenAI SDK error
+// shapes — the entire fix hinges on `.cause.code` and `constructor.name`.
+describe('shouldRetry with real OpenAI SDK errors', () => {
+  it('retries a real APIConnectionError carrying a transient cause', () => {
+    const cause = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    expect(shouldRetry(new SDKAPIConnectionError({ message: 'Connection error.', cause }))).toBe(
+      true,
+    );
+  });
+
+  it('retries a real APIConnectionTimeoutError', () => {
+    expect(shouldRetry(new SDKAPIConnectionTimeoutError())).toBe(true);
+  });
+
+  it('does not retry a real APIUserAbortError', () => {
+    expect(shouldRetry(new SDKAPIUserAbortError())).toBe(false);
+  });
 });
 
 describe('withRetry', () => {
@@ -148,6 +181,18 @@ describe('withRetry', () => {
     const fn = vi.fn(async () => {
       calls += 1;
       if (calls === 1) throw new APIConnectionError({ code: 'ECONNRESET' });
+      return 'recovered';
+    });
+    const result = await withRetry(fn, { maxAttempts: 3, delayFn: noDelay });
+    expect(result).toBe('recovered');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries an APIConnectionTimeoutError then succeeds', async () => {
+    let calls = 0;
+    const fn = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new APIConnectionTimeoutError();
       return 'recovered';
     });
     const result = await withRetry(fn, { maxAttempts: 3, delayFn: noDelay });
