@@ -11,3 +11,11 @@ declare module '*.module.css' {
   const classes: Record<string, string>;
   export default classes;
 }
+
+// Vite's `?worker&url` import: bundles the entry into a transpiled JS asset and
+// yields its URL string. Lives here (plain ambient file) for the same reason as
+// the CSS Module wildcard above — global.d.ts is a module and won't match it.
+declare module '*?worker&url' {
+  const url: string;
+  export default url;
+}
