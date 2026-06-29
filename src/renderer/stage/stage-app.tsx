@@ -37,6 +37,9 @@ export function StageApp(): JSX.Element {
   const [speechEndedTurnId, setSpeechEndedTurnId] = useState<string | null>(null);
   // Shift+E opens this confirm; only an explicit "End interview" press dispatches
   // END_AFTER_TURN, so the destructive action never fires from one keystroke.
+  // The orchestrator gates END_AFTER_TURN to states where the user holds the
+  // floor (or is finalizing) — confirming in any other state is a harmless no-op,
+  // matching how commandForKey's commands are silently dropped when illegal.
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
 
   // Engines live for the lifetime of the window; refs avoid re-creating them.
