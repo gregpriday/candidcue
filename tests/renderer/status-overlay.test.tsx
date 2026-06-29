@@ -22,8 +22,13 @@ function projection(overrides: Partial<StageStateProjection> = {}): StageStatePr
 describe('StatusOverlay', () => {
   it('renders a dedicated error screen', () => {
     render(<StatusOverlay state={projection({ visualState: 'error' })} captionsEnabled={false} />);
-    expect(screen.getByText('Something went wrong.')).toBeInTheDocument();
+    const title = screen.getByText('Something went wrong.');
+    expect(title).toBeInTheDocument();
     expect(screen.getByText('Check CandidCue to retry the session.')).toBeInTheDocument();
+    // The screen is an announced live region, matching standby/complete.
+    const screenEl = title.closest('[role="status"]');
+    expect(screenEl).not.toBeNull();
+    expect(screenEl).toHaveAttribute('aria-live', 'polite');
   });
 
   it('still renders the standby screen', () => {
@@ -52,14 +57,19 @@ describe('StatusOverlay', () => {
     expect(screen.queryByText('Something went wrong.')).not.toBeInTheDocument();
   });
 
-  it('suppresses stale captions while in the error state', () => {
+  it('suppresses stale captions and transient status while in the error state', () => {
     render(
       <StatusOverlay
-        state={projection({ visualState: 'error', captions: 'a leftover caption line' })}
+        state={projection({
+          visualState: 'error',
+          captions: 'a leftover caption line',
+          statusText: 'a leftover status line',
+        })}
         captionsEnabled
       />,
     );
     expect(screen.queryByText('a leftover caption line')).not.toBeInTheDocument();
+    expect(screen.queryByText('a leftover status line')).not.toBeInTheDocument();
   });
 
   it('shows captions for a speaking state when enabled', () => {

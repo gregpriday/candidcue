@@ -18,9 +18,22 @@ const ALL_VISUAL_STATES: readonly VisualState[] = [
 /** Build the minimal keydown shape `commandForKey` reads. */
 function key(
   code: string,
-  opts: { key?: string; shiftKey?: boolean } = {},
-): Pick<KeyboardEvent, 'code' | 'key' | 'shiftKey'> {
-  return { code, key: opts.key ?? '', shiftKey: opts.shiftKey ?? false };
+  opts: {
+    key?: string;
+    shiftKey?: boolean;
+    metaKey?: boolean;
+    ctrlKey?: boolean;
+    altKey?: boolean;
+  } = {},
+): Pick<KeyboardEvent, 'code' | 'key' | 'shiftKey' | 'metaKey' | 'ctrlKey' | 'altKey'> {
+  return {
+    code,
+    key: opts.key ?? '',
+    shiftKey: opts.shiftKey ?? false,
+    metaKey: opts.metaKey ?? false,
+    ctrlKey: opts.ctrlKey ?? false,
+    altKey: opts.altKey ?? false,
+  };
 }
 
 describe('commandForKey', () => {
@@ -49,6 +62,16 @@ describe('commandForKey', () => {
   it('ignores unhandled keys', () => {
     expect(commandForKey(key('KeyX'), 'listening')).toBeNull();
     expect(commandForKey(key('Enter'), 'listening')).toBeNull();
+  });
+
+  it('ignores modifier chords so OS shortcuts never toggle the session', () => {
+    expect(commandForKey(key('KeyP', { metaKey: true }), 'paused')).toBeNull();
+    expect(commandForKey(key('KeyP', { ctrlKey: true }), 'listening')).toBeNull();
+    expect(commandForKey(key('KeyS', { altKey: true }), 'listening')).toBeNull();
+    // Shift is still honoured for the exit chord.
+    expect(commandForKey(key('Escape', { key: 'Escape', shiftKey: true }), 'speaking')).toEqual({
+      type: 'EXIT_STAGE',
+    });
   });
 
   describe('KeyP pause/resume toggle', () => {
