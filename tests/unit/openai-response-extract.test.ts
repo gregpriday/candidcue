@@ -58,6 +58,27 @@ describe('extractResponseText', () => {
     expect(err.message).toContain('output_tokens=unknown');
   });
 
+  it('recovers text from output items when output_text getter is empty (streamed finalResponse quirk)', () => {
+    // gpt-5.5's streamed `finalResponse().output_text` comes back empty even
+    // though the message item holds the full JSON; we must assemble it ourselves.
+    expect(
+      extractResponseText(
+        {
+          output_text: '',
+          status: 'completed',
+          output: [
+            { type: 'reasoning', content: [] },
+            {
+              type: 'message',
+              content: [{ type: 'output_text', text: '{"ok":' }, { type: 'output_text', text: 'true}' }],
+            },
+          ],
+        },
+        'prepared_interview_output',
+      ),
+    ).toBe('{"ok":true}');
+  });
+
   it('still treats an empty body as OPENAI_SCHEMA, not truncation', () => {
     const err = caught(() =>
       extractResponseText({ output_text: '' }, 'prepared_interview_output'),

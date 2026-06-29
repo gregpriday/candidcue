@@ -104,14 +104,44 @@ export function extractResponseText(response: ResponseEnvelope, schemaName: stri
         `reasoning_tokens=${usage?.output_tokens_details?.reasoning_tokens ?? 'unknown'}).`,
     });
   }
-  const text = response.output_text;
-  if (typeof text === 'string' && text.length > 0) {
+  // Prefer the SDK's aggregated getter, but fall back to assembling the text from
+  // the output items. `stream.finalResponse().output_text` comes back EMPTY for
+  // gpt-5.5 even when the message item holds the full JSON (the non-streaming
+  // `responses.create()` getter works, the streamed one does not), so trusting
+  // the getter alone drops a perfectly good completed response on the floor.
+  const text =
+    typeof response.output_text === 'string' && response.output_text.length > 0
+      ? response.output_text
+      : collectOutputText(response);
+  if (text.length > 0) {
     return text;
   }
-  // No usable text. Spell out WHY so an empty body is diagnosable instead of
+  // Still nothing. Spell out WHY so an empty body is diagnosable instead of
   // opaque — this is the difference between "unexpected response" and "the model
   // refused" / "content_filter" / "the API failed".
   throw new AppError('OPENAI_SCHEMA', { message: describeMissingText(response, schemaName) });
+}
+
+/**
+ * Assemble the output text from a response's items — the `output_text` content
+ * parts of its message items, concatenated. The fallback for when the SDK's
+ * convenience getter returns empty (notably a streamed `finalResponse()`).
+ */
+function collectOutputText(response: ResponseEnvelope): string {
+  let text = '';
+  for (const item of response.output ?? []) {
+    const obj = item as { type?: unknown; content?: unknown };
+    // Mirror the SDK's own aggregator: only `message` items carry output text,
+    // so reasoning / tool-call items never leak into the assembled string.
+    if (obj?.type !== 'message' || !Array.isArray(obj.content)) continue;
+    for (const raw of obj.content) {
+      const part = raw as { type?: unknown; text?: unknown };
+      if (part?.type === 'output_text' && typeof part.text === 'string') {
+        text += part.text;
+      }
+    }
+  }
+  return text;
 }
 
 /** Build a diagnostic for a Responses result that carried no usable output text. */

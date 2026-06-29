@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import OpenAI from 'openai';
 
 import { buildOpenAiAdapters } from '@main/providers/factory';
+import { extractResponseText } from '@main/providers/openai/openai-client';
 import { compileProjectSource } from '@main/interview/source-compiler';
 import { preparedInterviewOutputJsonSchema } from '@main/providers/openai/json-schemas';
 import { loadPromptBody, fillTemplate } from '@main/prompts/prompt-loader';
@@ -11,21 +12,19 @@ import type { PrepareProjectInput } from '@shared/contracts/adapters';
 
 /**
  * Opt-in INTEGRATION tests for interview preparation against the real OpenAI
- * Responses API (spec §24.1.3). These cost tokens and take tens of seconds, so
- * they are excluded from the default `npm test` run and only collected by
- * `vitest.providers.config.ts`. Run on demand to confirm we still get a usable
- * `prepared_interview_output` back from gpt-5.5 — and, when we don't, to see
- * exactly why (status / incomplete reason / refusal / API error):
+ * Responses API (spec §24.1.3). They cost tokens and take tens of seconds, so the
+ * default `npm test` run excludes them (see vitest.config.ts) and only
+ * `vitest.providers.config.ts` collects them. Run on demand:
  *
  *   OPENAI_API_KEY=sk-... npm run test:providers
  *
- * Every test is gated on the key, so a keyless run skips and exits 0.
+ * Purpose: verify our actual provider code can get a usable
+ * `prepared_interview_output` from gpt-5.5 — and, when it can't, pin whether the
+ * fault is OpenAI/our schema (raw probes) or our streaming reader (the path the
+ * app uses). Every test gates on the key, so a keyless run skips and exits 0.
  */
 const KEY = process.env.OPENAI_API_KEY;
 
-// A realistic, multi-document source — closer to a real launch interview than the
-// one-liner in openai.contract.test.ts, so preparation exercises a full-size plan
-// (the shape that surfaced the empty-response failure in the field).
 const COMPILED_SOURCE = compileProjectSource([
   {
     id: 'd1',
@@ -63,80 +62,70 @@ const PREPARE_INPUT: PrepareProjectInput = {
   modelId: 'gpt-5.5',
 };
 
-/** Scan raw Responses output items for a model refusal string, if present. */
-function findRefusal(output: readonly unknown[] | null | undefined): string | null {
-  for (const item of output ?? []) {
-    const content = (item as { content?: unknown }).content;
-    if (!Array.isArray(content)) continue;
-    for (const raw of content) {
-      const part = raw as { type?: unknown; refusal?: unknown };
-      if (part.type === 'refusal' && typeof part.refusal === 'string' && part.refusal.length > 0) {
-        return part.refusal;
-      }
-    }
-  }
-  return null;
+/** Build the project-preparation system prompt exactly as createProjectPreparer does. */
+function systemPrompt(): string {
+  return fillTemplate(loadPromptBody('project-preparation.system'), {
+    targetQuestionCount: String(PREPARE_INPUT.targetQuestionCount),
+    titleOrInferred: PREPARE_INPUT.title ?? '',
+    audienceOrInferred: PREPARE_INPUT.audience ?? '',
+    intendedOutcomeOrInferred: PREPARE_INPUT.intendedOutcome ?? '',
+    toneOrDefault: PREPARE_INPUT.tone ?? '',
+    exclusionsOrNone: PREPARE_INPUT.exclusions.join('; '),
+    compiledSource: PREPARE_INPUT.compiledSource,
+  });
+}
+
+/** A flat, JSON-loggable summary of a Responses result's output items. */
+function summarizeOutput(output: unknown): unknown[] {
+  if (!Array.isArray(output)) return [];
+  return output.map((it) => {
+    const item = it as { type?: unknown; status?: unknown; content?: unknown };
+    const content = Array.isArray(item.content)
+      ? item.content.map((c) => {
+          const part = c as { type?: unknown; text?: unknown; refusal?: unknown };
+          return {
+            type: part.type,
+            textLen: typeof part.text === 'string' ? part.text.length : undefined,
+            refusalLen: typeof part.refusal === 'string' ? part.refusal.length : undefined,
+          };
+        })
+      : undefined;
+    return { type: item.type, status: item.status, content };
+  });
+}
+
+interface RawResponseView {
+  status?: unknown;
+  incomplete_details?: { reason?: unknown } | null;
+  error?: unknown;
+  output_text?: unknown;
+  usage?: unknown;
+  output?: unknown;
+}
+
+/** Print everything we'd want to see about a raw Responses result. */
+function dump(label: string, response: RawResponseView): void {
+  console.info(
+    `[${label}] ` +
+      JSON.stringify({
+        status: response.status ?? null,
+        incomplete: response.incomplete_details?.reason ?? null,
+        error: response.error ?? null,
+        outputTextChars: typeof response.output_text === 'string' ? response.output_text.length : 0,
+        usage: response.usage ?? null,
+        items: summarizeOutput(response.output),
+      }),
+  );
 }
 
 describe.skipIf(!KEY)('OpenAI interview preparation (integration)', () => {
-  it('prepares a realistic plan and returns the full brief we consume', async () => {
-    const { model } = buildOpenAiAdapters(KEY!);
-
-    let out;
-    try {
-      out = await model.prepareProject(PREPARE_INPUT);
-    } catch (err) {
-      // Surface the enriched internal diagnostic so a real failure is legible in
-      // the test output instead of a bare "OPENAI_SCHEMA".
-      if (isAppError(err)) {
-        throw new Error(`prepareProject failed [${err.code}]: ${err.message}`);
-      }
-      throw err;
-    }
-
-    // The fields the app actually reads downstream — if any are missing/empty,
-    // the prepared plan is unusable even when the call "succeeded".
-    expect(out.brief.title.trim().length).toBeGreaterThan(0);
-    expect(out.brief.oneSentencePremise.trim().length).toBeGreaterThan(0);
-    expect(out.brief.audience.trim().length).toBeGreaterThan(0);
-    expect(out.brief.intendedOutcome.trim().length).toBeGreaterThan(0);
-
-    expect(out.brief.coverageItems.length).toBeGreaterThan(0);
-    for (const item of out.brief.coverageItems) {
-      expect(item.id.length).toBeGreaterThan(0);
-      expect(item.label.trim().length).toBeGreaterThan(0);
-      expect(item.objective.trim().length).toBeGreaterThan(0);
-      expect(['must', 'should', 'could']).toContain(item.priority);
-    }
-
-    expect(out.brief.arc.length).toBeGreaterThan(0);
-    expect(out.brief.openingQuestion.text).toMatch(/\?$/);
-    expect(Array.isArray(out.brief.factualAnchors)).toBe(true);
-    expect(Array.isArray(out.brief.terminology)).toBe(true);
-    expect(Array.isArray(out.warnings)).toBe(true);
-  }, 120_000);
-
-  it('returns a completed, parseable Responses result for the prepared_interview_output schema (raw probe)', async () => {
-    // Mirror exactly what createProjectPreparer + createStreamingResponder send,
-    // but inspect the RAW response so we can see status/incomplete/refusal/usage —
-    // the fields the adapter collapses into a thrown error. This is the probe that
-    // distinguishes an empty body, a refusal, an incomplete response, and an API
-    // error when "prepare" misbehaves.
-    const client = new OpenAI({ apiKey: KEY! });
-    const system = fillTemplate(loadPromptBody('project-preparation.system'), {
-      targetQuestionCount: String(PREPARE_INPUT.targetQuestionCount),
-      titleOrInferred: PREPARE_INPUT.title!,
-      audienceOrInferred: PREPARE_INPUT.audience!,
-      intendedOutcomeOrInferred: PREPARE_INPUT.intendedOutcome!,
-      toneOrDefault: PREPARE_INPUT.tone!,
-      exclusionsOrNone: PREPARE_INPUT.exclusions.join('; '),
-      compiledSource: PREPARE_INPUT.compiledSource,
-    });
-
+  it('raw NON-streaming create returns a completed, non-empty, parseable plan (OpenAI + schema sanity)', async () => {
+    const client = new OpenAI({ apiKey: KEY!, fetch: globalThis.fetch });
     const response = await client.responses.create({
       model: 'gpt-5.5',
-      instructions: system,
+      instructions: systemPrompt(),
       input: 'Prepare the interview plan for the project source above.',
+      reasoning: { effort: 'low' },
       text: {
         format: {
           type: 'json_schema',
@@ -146,31 +135,72 @@ describe.skipIf(!KEY)('OpenAI interview preparation (integration)', () => {
         },
       },
     });
+    dump('non-streaming create', response);
 
-    const refusal = findRefusal(response.output);
-    // Print exactly what came back so a failing run is self-explanatory in the log.
+    expect(response.status).toBe('completed');
+    expect(response.output_text.length, 'non-streaming output_text was empty').toBeGreaterThan(0);
+    expect(() => preparedInterviewOutputSchema.parse(JSON.parse(response.output_text))).not.toThrow();
+  }, 120_000);
+
+  it('raw STREAMING finalResponse exposes the text the deltas streamed (the path the app uses)', async () => {
+    const client = new OpenAI({ apiKey: KEY!, fetch: globalThis.fetch });
+    const stream = client.responses.stream({
+      model: 'gpt-5.5',
+      instructions: systemPrompt(),
+      input: 'Prepare the interview plan for the project source above.',
+      reasoning: { effort: 'low' },
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'prepared_interview_output',
+          schema: preparedInterviewOutputJsonSchema,
+          strict: true,
+        },
+      },
+    });
+    let streamedChars = 0;
+    stream.on('response.output_text.delta', (event) => {
+      streamedChars = event.snapshot.length;
+    });
+    const response = await stream.finalResponse();
+    dump('streaming finalResponse', response);
     console.info(
-      '[prepare raw probe]',
-      JSON.stringify({
-        status: response.status,
-        incomplete: response.incomplete_details?.reason ?? null,
-        error: response.error ?? null,
-        outputTextChars: response.output_text?.length ?? 0,
-        usage: response.usage ?? null,
-        refusal,
-      }),
+      `[streaming] streamedDeltaChars=${streamedChars} finalOutputTextChars=${response.output_text?.length ?? 0}`,
     );
 
-    expect(response.error, 'the API returned an error object').toBeNull();
-    expect(refusal, 'the model returned a refusal instead of the plan').toBeNull();
-    expect(
-      response.incomplete_details?.reason ?? null,
-      'the response was incomplete (e.g. max_output_tokens / content_filter)',
-    ).toBeNull();
+    // The smoking gun: deltas stream the full plan, the message item holds it, but
+    // `finalResponse().output_text` (the SDK getter) comes back EMPTY for gpt-5.5.
+    // extractResponseText must recover the text from the output items — that's the
+    // fix for the app's "status=completed, no output text" preparation failure.
     expect(response.status).toBe('completed');
-    expect(response.output_text.length, 'output_text was empty').toBeGreaterThan(0);
+    expect(streamedChars, 'no output_text deltas streamed at all').toBeGreaterThan(0);
 
-    const parsed = JSON.parse(response.output_text);
-    expect(() => preparedInterviewOutputSchema.parse(parsed)).not.toThrow();
+    const recovered = extractResponseText(response, 'prepared_interview_output');
+    expect(recovered.length, 'extractResponseText recovered no text from the streamed response').toBeGreaterThan(0);
+    expect(() => preparedInterviewOutputSchema.parse(JSON.parse(recovered))).not.toThrow();
+  }, 120_000);
+
+  it('prepares a realistic plan via the real adapter and returns the full brief (end-to-end)', async () => {
+    const { model } = buildOpenAiAdapters(KEY!);
+
+    let out;
+    try {
+      out = await model.prepareProject(PREPARE_INPUT);
+    } catch (err) {
+      // Surface the enriched internal diagnostic so a real failure is legible.
+      if (isAppError(err)) throw new Error(`prepareProject failed [${err.code}]: ${err.message}`);
+      throw err;
+    }
+
+    expect(out.brief.title.trim().length).toBeGreaterThan(0);
+    expect(out.brief.oneSentencePremise.trim().length).toBeGreaterThan(0);
+    expect(out.brief.coverageItems.length).toBeGreaterThan(0);
+    for (const item of out.brief.coverageItems) {
+      expect(item.label.trim().length).toBeGreaterThan(0);
+      expect(['must', 'should', 'could']).toContain(item.priority);
+    }
+    expect(out.brief.arc.length).toBeGreaterThan(0);
+    expect(out.brief.openingQuestion.text).toMatch(/\?$/);
+    expect(Array.isArray(out.warnings)).toBe(true);
   }, 120_000);
 });

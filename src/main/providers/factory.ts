@@ -17,7 +17,15 @@ import type {
 import { INWORLD_DEFAULTS } from '@shared/constants/runtime-defaults';
 
 export function buildOpenAiAdapters(apiKey: string): OpenAiAdapters {
-  return createOpenAiAdaptersFromClient(new OpenAI({ apiKey }));
+  // Force the SDK onto the platform's native fetch. Its bundled `node-fetch`
+  // truncates long gzip response bodies from the Responses API — gpt-5.5's
+  // reasoning replies arrive slowly and large — which surfaces either as a
+  // "Premature close" error or as a `status: "completed"` response with an empty
+  // `output_text`, i.e. a generic "OpenAI returned no output text" preparation
+  // failure. Native fetch (undici on Node 18+, and in Electron) reads the body
+  // correctly. Where no global fetch exists, fall back to the SDK default.
+  const nativeFetch = typeof globalThis.fetch === 'function' ? globalThis.fetch : undefined;
+  return createOpenAiAdaptersFromClient(new OpenAI({ apiKey, fetch: nativeFetch }));
 }
 
 /**
