@@ -17,6 +17,12 @@ CandidCue does **not** record or save your camera video, and **raw microphone
 audio is never persisted by default** — it lives only in memory during a turn
 for retry, then is released.
 
+During an interview, Mira's voice plays through whatever output device you
+select. If you are also filming with an external camera, **wear headphones** so
+the camera microphone records only your answers — CandidCue does not keep a
+separate raw mic stem, so there is no clean track to fix that recording with
+later.
+
 ## Storage
 
 - Provider credentials are encrypted at rest with Electron `safeStorage` and

@@ -324,6 +324,14 @@ export function PreflightScreen({ nav, projectId }: PreflightScreenProps): JSX.E
                     ))}
                   </select>
                 </div>
+                <div className={route.notice}>
+                  <StatusIcon tone="warning" label="Headphones recommended" />
+                  <span>
+                    Wear headphones so Mira&rsquo;s voice stays out of your camera mic. Your camera records
+                    that mic as its only audio track — there&rsquo;s no separate raw stem to clean up the
+                    bleed later.
+                  </span>
+                </div>
               </>
             )}
           </Section>
