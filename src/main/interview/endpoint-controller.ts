@@ -170,7 +170,7 @@ export function decideEndpoint(input: {
   const thresholds = thresholdsFor(mode);
   const highConfidence = isHighConfidenceCompletion(input.classifier, thresholds);
 
-  // Weak continuation signal (spec §14.3): held back the borderline commits in
+  // Weak continuation signal (spec §14.3): holds back the borderline commits in
   // steps 4 and 5 below. Computed once on the known-non-empty transcript.
   const hasContinuation = endsWithContinuation(input.transcript);
 
