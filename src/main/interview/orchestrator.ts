@@ -398,6 +398,18 @@ export class SessionOrchestrator {
     this.transition('skipToNextQuestion', 'skip');
     await this.runExclusive(async () => {
       const action = await this.generateNextActionOrFallback(this.lastAnswerText());
+      // A skip can land on a completion just like an answered turn: the model may
+      // return `complete`, request close after the turn, or End After Turn may be
+      // armed. Honour that here instead of realizing an empty question (#13) — the
+      // same close decision commitPipeline makes after a committed answer.
+      const shouldClose =
+        action.action === 'complete' || action.shouldCloseAfterAnswer || this.endAfterTurnRequested;
+      if (shouldClose) {
+        this.transition('completionSelected', 'skip complete');
+        this.transition('finalAnswerStored');
+        await this.persistSessionStatus('completed');
+        return;
+      }
       await this.realizeNextQuestion(action, 'model');
     });
   }
