@@ -92,6 +92,15 @@ export function isCommandUsefulInState(
     case 'SKIP':
       // Swap the delivered question for a new one, only before any answer speech.
       return visualState === 'listening' && micState === 'armed';
+    case 'RETAKE':
+      // Discard the in-progress answer and re-deliver the same question — the
+      // complement of REPEAT. Legal once the founder has begun answering (the mic
+      // gate is open and active) or from a pause taken mid-answer. The orchestrator
+      // additionally gates on whether speech exists for the turn and that the answer
+      // is not yet committed, neither of which the projection exposes, so a pause
+      // taken *before* speaking can briefly confirm here; the command is sent
+      // regardless and the orchestrator stays the arbiter.
+      return visualState === 'paused' || (visualState === 'listening' && micState === 'active');
     case 'END_AFTER_TURN':
       // Finish after the answer the founder currently owns; the mic-open states
       // are the renderer-visible slice of where this is legal.
