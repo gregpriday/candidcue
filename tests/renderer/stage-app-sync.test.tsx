@@ -22,6 +22,13 @@ vi.mock('../../src/renderer/stage/playback/SpeechPlayer', () => ({
     dispose = vi.fn(async () => {});
   },
 }));
+vi.mock('../../src/renderer/stage/playback/BackchannelPlayer', () => ({
+  BackchannelPlayer: class {
+    init = vi.fn(async () => {});
+    play = vi.fn();
+    dispose = vi.fn(async () => {});
+  },
+}));
 vi.mock('../../src/renderer/stage/audio/CaptureController', () => ({
   CaptureController: class {
     start = vi.fn(async () => {});
@@ -48,6 +55,7 @@ function makeState(visualState: StageStateProjection['visualState']): StageState
     mirror: false,
     zoom: 1,
     verticalOffsetPercent: 0,
+    canBegin: false,
   };
 }
 
@@ -58,6 +66,7 @@ function installStageBridge(): void {
       characterId: 'mira',
       posterUrl: '',
       listeningClips: [],
+      backchannelClips: [],
       video: { fit: 'cover', mirror: false, zoom: 1, verticalOffsetPercent: 0, transitionMs: 0 },
     })),
     commands: { send: vi.fn() },
@@ -74,6 +83,7 @@ function installStageBridge(): void {
         return () => {};
       }),
       onPlaybackPlan: vi.fn(() => () => {}),
+      onPlayBackchannel: vi.fn(() => () => {}),
       onCaptureConfig: vi.fn(() => () => {}),
     },
   };

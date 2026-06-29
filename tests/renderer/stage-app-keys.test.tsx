@@ -20,6 +20,12 @@ vi.mock('../../src/renderer/stage/playback/BackchannelPlayer', () => ({
     dispose = vi.fn(async () => {});
   },
 }));
+vi.mock('../../src/renderer/stage/audio/SyncBeeper', () => ({
+  SyncBeeper: class {
+    play = vi.fn();
+    dispose = vi.fn(async () => {});
+  },
+}));
 vi.mock('../../src/renderer/stage/audio/CaptureController', () => ({
   CaptureController: class {
     start = vi.fn(async () => {});

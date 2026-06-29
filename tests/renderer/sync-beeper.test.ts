@@ -100,16 +100,16 @@ describe('SyncBeeper', () => {
     beeper.play();
     await flush();
 
-    const ctx = FakeAudioContext.instances[0];
+    const ctx = FakeAudioContext.instances[0]!;
     expect(ctx.resume).toHaveBeenCalledOnce();
     expect(ctx.oscillators).toHaveLength(1);
 
-    const osc = ctx.oscillators[0];
+    const osc = ctx.oscillators[0]!;
     expect(osc.type).toBe('sine');
     expect(osc.frequency.value).toBe(880);
     // Default destination = system output, so the camera mic captures the tone.
     expect(osc.connect).toHaveBeenCalledWith(ctx.gains[0]);
-    expect(ctx.gains[0].connect).toHaveBeenCalledWith(ctx.destination);
+    expect(ctx.gains[0]!.connect).toHaveBeenCalledWith(ctx.destination);
   });
 
   it('shapes an attack/sustain/release envelope anchored to currentTime', async () => {
@@ -117,7 +117,7 @@ describe('SyncBeeper', () => {
     beeper.play();
     await flush();
 
-    const gain = FakeAudioContext.instances[0].gains[0];
+    const gain = FakeAudioContext.instances[0]!.gains[0]!;
     expect(gain.gain.calls).toEqual([
       { method: 'setValueAtTime', args: [0, FAKE_NOW] },
       { method: 'linearRampToValueAtTime', args: [0.8, FAKE_NOW + 0.005] },
@@ -131,14 +131,14 @@ describe('SyncBeeper', () => {
     beeper.play();
     await flush();
 
-    const osc = FakeAudioContext.instances[0].oscillators[0];
+    const osc = FakeAudioContext.instances[0]!.oscillators[0]!;
     expect(osc.start).toHaveBeenCalledWith(FAKE_NOW);
     expect(osc.stop).toHaveBeenCalledWith(FAKE_NOW + 0.08);
   });
 
   it('never throws when resume() rejects (suspended/closed context)', async () => {
     const beeper = new SyncBeeper();
-    const ctx = FakeAudioContext.instances[0];
+    const ctx = FakeAudioContext.instances[0]!;
     ctx.resume.mockRejectedValueOnce(new Error('not allowed'));
 
     expect(() => beeper.play()).not.toThrow();
@@ -149,7 +149,7 @@ describe('SyncBeeper', () => {
 
   it('schedules nothing and never throws when disposed before resume() settles', async () => {
     const beeper = new SyncBeeper();
-    const ctx = FakeAudioContext.instances[0];
+    const ctx = FakeAudioContext.instances[0]!;
     let releaseResume!: () => void;
     ctx.resume.mockImplementationOnce(
       () =>
@@ -170,14 +170,14 @@ describe('SyncBeeper', () => {
 
   it('closes the context on dispose', async () => {
     const beeper = new SyncBeeper();
-    const ctx = FakeAudioContext.instances[0];
+    const ctx = FakeAudioContext.instances[0]!;
     await beeper.dispose();
     expect(ctx.close).toHaveBeenCalledOnce();
   });
 
   it('swallows a close() failure on dispose', async () => {
     const beeper = new SyncBeeper();
-    const ctx = FakeAudioContext.instances[0];
+    const ctx = FakeAudioContext.instances[0]!;
     ctx.close.mockRejectedValueOnce(new Error('already closed'));
     await expect(beeper.dispose()).resolves.toBeUndefined();
   });
