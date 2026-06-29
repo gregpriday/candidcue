@@ -4,6 +4,7 @@ import type {
   ModerationAdapter,
   SpeechToTextAdapter,
   TextToSpeechAdapter,
+  TtsResult,
   SpeechPlaybackPlan,
   StageStateProjection,
   OperatorSessionSnapshot,
@@ -30,7 +31,7 @@ import type {
 import { newId } from '@shared/domain';
 import { RUNTIME_DEFAULTS } from '@shared/constants/runtime-defaults';
 import { AppError } from '@shared/errors/app-error';
-import { withDeadlineFallback, nowMs as defaultNow, splitParagraphs, wordCount } from '@shared/utils';
+import { withDeadlineFallback, withTimeout, nowMs as defaultNow, splitParagraphs, wordCount } from '@shared/utils';
 
 import {
   nextState,
@@ -252,10 +253,20 @@ export class SessionOrchestrator {
 
   // -- public command surface ---------------------------------------------
   async prepareOpening(): Promise<void> {
+    // A duplicate prepare once the opening is already built is a no-op.
+    if (this.state === 'READY') return;
     if (this.state !== 'IDLE' && this.state !== 'PREPARING') {
-      this.transition('prepareSession');
+      throw stateConflict('prepareOpening requires IDLE or PREPARING');
     }
-    this.state = 'PREPARING';
+    // Route IDLE→PREPARING through transition() so stage + snapshot publish (the
+    // spec §11.3 invariant PREPARING.stt='warming' must be visible to the UI the
+    // moment preparation begins); a direct `this.state = 'PREPARING'` previously
+    // left the UI blind to PREPARING until preflight landed on READY. We do NOT
+    // short-circuit on PREPARING itself: reaching PREPARING and then failing
+    // buildAndCacheTurn (TTS) would strand the session mid-prepare, so a retry
+    // must be able to rebuild the opening. (Production reconstructs a fresh
+    // orchestrator per prepare IPC; this same-instance retry is defensive.)
+    if (this.state === 'IDLE') this.transition('prepareSession');
     await this.buildAndCacheTurn(this.openingQuestionRecord(), 'opening_cache');
     this.transition('preflightPassed', 'opening cached');
   }
@@ -394,6 +405,10 @@ export class SessionOrchestrator {
       if (this.state === 'USER_ARMED' || this.state === 'PAUSED') {
         this.transition('replayQuestion', 'repeat');
       }
+      // Re-plan the speaking media so a repeat picks a different clip when one is
+      // available (item #26), reusing the cached TTS audio (no re-synthesis).
+      const turn = this.currentTurn;
+      if (turn) this.replanForRepeat(turn);
       await this.playCurrentTurn('repeat');
     });
   }
@@ -416,9 +431,7 @@ export class SessionOrchestrator {
       const shouldClose =
         action.action === 'complete' || action.shouldCloseAfterAnswer || this.endAfterTurnRequested;
       if (shouldClose) {
-        this.transition('completionSelected', 'skip complete');
-        this.transition('finalAnswerStored');
-        await this.persistSessionStatus('completed');
+        await this.completeSession(action, 'skip complete');
         return;
       }
       await this.realizeNextQuestion(action, 'model');
@@ -442,11 +455,11 @@ export class SessionOrchestrator {
     // Never mark the session completed in persistence unless the state machine
     // actually finished (review P0-08: endNow previously persisted 'completed'
     // even when the transitions were illegal, diverging DB from the live UI).
-    if (!this.transition('completionSelected', 'ended now')) {
-      throw stateConflict(`cannot end now from ${this.state}`);
-    }
-    this.transition('finalAnswerStored', 'ended now');
-    await this.persistSessionStatus('completed');
+    // assertCommandLegal('END_NOW') above already guarantees `completionSelected`
+    // is legal (END_NOW_STATES ⊆ states where it is legal), so the shared
+    // completion path drives it. endNow has no model action → no closing line is
+    // spoken (it is an abort, not a sign-off).
+    await this.completeSession(undefined, 'ended now');
   }
 
   /** Operator retry from the terminal ERROR state (ERROR → RECOVERING). */
@@ -900,8 +913,9 @@ export class SessionOrchestrator {
         hardCapReached;
       if (shouldClose) {
         if (closedByHardCap) {
-          // Set before the transitions: transition() publishes a snapshot that
-          // reads recoverableWarning, so the COMPLETED snapshot must carry it.
+          // Set before the transitions: completeSession()'s transition()
+          // publishes a snapshot that reads recoverableWarning, so the COMPLETED
+          // snapshot must carry it (issue #73 hard-cap attribution).
           this.recoverableWarning =
             'Reached the safety question limit. The interview ended automatically.';
           this.log.info('session.hard_question_cap_reached', {
@@ -911,13 +925,17 @@ export class SessionOrchestrator {
             hardQuestionCap: this.hardQuestionCap(),
           });
         }
+        // commitInFlight is released first (preserves the release-before-complete
+        // ordering), then the shared completion path speaks the model's closing
+        // line (when the action is an explicit `complete`) and closes STT. A
+        // hard-cap close authors no sign-off — closedByHardCap implies
+        // action.action !== 'complete', so completeSession plays no closing line —
+        // and the reason carries the cap attribution into the transition log.
         this.commitInFlight = false;
-        this.transition(
-          'completionSelected',
+        await this.completeSession(
+          action,
           closedByHardCap ? 'hard question cap reached' : 'coverage complete',
         );
-        this.transition('finalAnswerStored');
-        await this.persistSessionStatus('completed');
         return;
       }
 
@@ -941,14 +959,18 @@ export class SessionOrchestrator {
     currentAnswer: string,
     moderation?: ModerationRecord,
   ): Promise<NextInterviewerAction> {
-    const recentTurns = await this.deps.repository.getRecentTurns(this.ctx.session.id, RUNTIME_DEFAULTS.maxQuestionWords > 0 ? 6 : 6);
+    // How many prior turns feed the model is a per-session setting, not a
+    // hardcoded constant. (The old `maxQuestionWords > 0 ? 6 : 6` ternary always
+    // evaluated to 6 and gated on an unrelated word-count limit.)
+    const recentTurnCount = this.ctx.session.settingsSnapshot.recentTurnCount;
+    const recentTurns = await this.deps.repository.getRecentTurns(this.ctx.session.id, recentTurnCount);
     const gen = await withDeadlineFallback(
       this.deps.model.generateNextAction({
         characterSystemPrompt: this.ctx.composedSystemPrompt,
         brief: this.ctx.brief,
         coverage: buildCoverageContext(this.coverage),
         rollingSummary: this.rollingSummary,
-        recentTurns: buildRecentTurns(recentTurns, 6),
+        recentTurns: buildRecentTurns(recentTurns, recentTurnCount),
         currentAnswer,
         rawAnswerFallback: currentAnswer,
         moderationGuidance: buildModerationGuidance(moderation ?? null),
@@ -1103,6 +1125,27 @@ export class SessionOrchestrator {
 
   private _lastTts: Awaited<ReturnType<TextToSpeechAdapter['synthesize']>> | null = null;
 
+  /**
+   * Re-plan the speaking media for a repeated question so the same clip does not
+   * replay verbatim (item #26). Reuses the cached TTS buffer (no re-synthesis) —
+   * only the clip selection is redone, now penalized by the recency list updated
+   * since the turn was first built, and seeded per-repeat so a second repeat
+   * differs again. When only one clip is eligible, planSpeaking returns the same
+   * clip — the intended "when possible" escape hatch.
+   */
+  private replanForRepeat(turn: CurrentTurn): void {
+    const durationMs = this._lastTts?.durationMs ?? turn.question.audioDurationMs ?? 0;
+    const media = planSpeaking(durationMs, this.ctx.clips, this.recentClipIds, {
+      seed: `${turn.id}:repeat`,
+    });
+    turn.question = { ...turn.question, mediaPlan: media };
+    // Mirror buildAndCacheTurn's recency tracking so the just-replayed clip is
+    // deprioritized on a subsequent repeat too.
+    for (const seg of media.segments) {
+      this.recentClipIds = [seg.clipId, ...this.recentClipIds].slice(0, 5);
+    }
+  }
+
   private async buildPlaybackPlan(turn: CurrentTurn): Promise<SpeechPlaybackPlan> {
     // Re-synthesize is avoided: reuse the cached TTS buffer from buildAndCacheTurn.
     const tts = this._lastTts;
@@ -1202,6 +1245,151 @@ export class SessionOrchestrator {
     }
     this.transition('pause', 'pipeline failure');
     this.publishSnapshot();
+  }
+
+  /**
+   * Speak a model-authored closing line as one final interviewer utterance,
+   * *before* the session transitions to COMPLETED (item #26). Narrow and
+   * self-contained: it reuses the same generation-guarded preload→play shape as
+   * {@link playCurrentTurn} but deliberately does NOT transition to
+   * stageReady/audioEnded, open the mic gate, or arm a user turn — a closing
+   * sign-off must never hand the floor back to the creator. Best-effort: a
+   * synthesis/stage failure or deadline logs via the caller and is swallowed so
+   * completion still proceeds (the final answer is already committed).
+   */
+  private async playClosingLine(text: string): Promise<void> {
+    // Sample the generation BEFORE the first cancelable await, mirroring
+    // playCurrentTurn: a pause/endNow during the closing line bumps generationId,
+    // and we must not run playback side effects for a session the operator moved
+    // past (though the closing path has none beyond audio, so this is hygiene).
+    const myGen = this.generationId;
+    let ttsResult: TtsResult;
+    try {
+      ttsResult = await withTimeout(
+        this.deps.tts.synthesize({
+          text,
+          voiceId: this.ctx.voiceId,
+          style: 'neutral',
+          speakingRate: 1.0,
+          outputFormat: 'wav',
+          sampleRate: this.ctx.ttsSampleRate,
+        }),
+        this.r.ttsDeadlineMs,
+      );
+    } catch {
+      // Best-effort: a synthesis failure or deadline must never block completion.
+      return;
+    }
+    // Copy into a fresh ArrayBuffer (not SharedArrayBuffer) for structured-clone IPC.
+    const bytes = new ArrayBuffer(ttsResult.bytes.byteLength);
+    new Uint8Array(bytes).set(ttsResult.bytes);
+    const plan: SpeechPlaybackPlan = {
+      sessionId: this.ctx.session.id,
+      // A distinct turnId avoids colliding with the just-answered turn's playback
+      // lifecycle in the stage's pending-ended map.
+      turnId: 'closing',
+      text,
+      audio: {
+        mimeType: ttsResult.mimeType,
+        bytes,
+        durationMs: ttsResult.durationMs,
+        outputDeviceId: this.ctx.selectedOutputDeviceId,
+      },
+      media: planSpeaking(ttsResult.durationMs, this.ctx.clips, this.recentClipIds, { seed: 'closing' }),
+      captionsEnabled: this.ctx.captionsEnabled,
+    };
+    const preloaded = await this.deps.stage.preloadSpeechPlan(plan);
+    if (myGen !== this.generationId) {
+      this.log.info('session.stale_closing_discarded', { phase: 'preload' });
+      return;
+    }
+    if (!preloaded) return;
+    // Publish a 'speaking' projection so the stage renderer actually starts the
+    // decoded audio: the renderer only calls speechPlayer.start() when the
+    // published visualState is 'speaking' (preload alone just loads/decodes, and
+    // playSpeechPlan merely awaits the renderer's 'ended' report — it does not
+    // itself start playback). We cannot transition to INTERVIEWER_SPEAKING for
+    // the closing line because that state arms the mic on audioEnded; instead we
+    // publish the speaking visual directly with the mic closed, and rely on the
+    // completionSelected → FINISHING transition (in completeSession) to publish a
+    // non-speaking visual that stops playback once the audio ends.
+    this.publishClosingStage(text);
+    await this.deps.stage.playSpeechPlan(plan);
+    if (myGen !== this.generationId) {
+      this.log.info('session.stale_closing_discarded', { phase: 'play' });
+    }
+  }
+
+  /**
+   * Publish a 'speaking' stage projection for the closing line so the renderer
+   * starts playback (see playClosingLine). The mic stays closed — the closing
+   * sign-off never hands the floor to the creator — and captions carry the
+   * closing text. statusText reads "Interview complete" because the line plays as
+   * the session wraps up; the next transition's publishStage restores the normal
+   * FINISHING/COMPLETED status.
+   */
+  private publishClosingStage(text: string): void {
+    const projection: StageStateProjection = {
+      version: ++this.snapshotVersion,
+      visualState: 'speaking',
+      micState: 'closed',
+      statusText: STATUS_TEXT.COMPLETED ?? 'Interview complete',
+      captions: this.ctx.captionsEnabled ? text : null,
+      mirror: this.ctx.session.settingsSnapshot.mirrorStage,
+      zoom: this.ctx.session.settingsSnapshot.zoom,
+      verticalOffsetPercent: this.ctx.session.settingsSnapshot.verticalOffsetPercent,
+    };
+    this.deps.stage.setVisualState(projection);
+  }
+
+  /**
+   * Best-effort close of the STT transport on completion (item #26). The spec
+   * §11.3 invariant declares COMPLETED.stt='closed', but teardown
+   * (app-controller) only closes STT when the operator leaves the session — so
+   * an idle review could leave the transport open for minutes. Idempotent at the
+   * adapter (InworldSttClient.close is null-safe on re-entry), so teardown's
+   * later close is harmless.
+   */
+  private async closeStt(): Promise<void> {
+    try {
+      await this.deps.stt.close();
+    } catch (err) {
+      this.log.warn('stt.close_failed_on_complete', { error: String(err) });
+    }
+  }
+
+  /**
+   * Centralize every completion path — coverage-complete commit, skip-complete,
+   * and endNow — so they share one closing-line playback + STT-close posture
+   * (items #26 #4 / #5). The model's closing line is spoken only when the action
+   * is an explicit `complete` with non-empty text: an `ask` that merely requests
+   * close-after-answer has a next-question-shaped line that must not be voiced as
+   * a sign-off, and endNow has no model action at all. Closing playback is
+   * best-effort — the answer is already committed, so a failure logs and
+   * completion proceeds (never strand the session in a recoverable pause).
+   */
+  private async completeSession(
+    action: NextInterviewerAction | undefined,
+    reason = 'completed',
+  ): Promise<void> {
+    if (action?.action === 'complete' && action.spokenText.trim().length > 0) {
+      try {
+        await this.playClosingLine(action.spokenText);
+      } catch (err) {
+        this.log.warn('session.closing_line_failed', { error: String(err) });
+      }
+    }
+    this.transition('completionSelected', reason);
+    this.transition('finalAnswerStored', reason);
+    // The COMPLETED invariant (spec §11.3: COMPLETED.stt='closed') must hold the
+    // moment the live state reaches COMPLETED, so close the STT transport in a
+    // finally — even if the status persist throws (surfaced upstream as a pipeline
+    // failure), STT is not left streaming against a COMPLETED session.
+    try {
+      await this.persistSessionStatus('completed');
+    } finally {
+      await this.closeStt();
+    }
   }
 
   private async persistSessionStatus(status: InterviewSession['status']): Promise<void> {

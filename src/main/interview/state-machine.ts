@@ -25,7 +25,6 @@ export type TransitionTrigger =
   | 'manualCommit'
   | 'speechStopped'
   | 'speechResumed'
-  | 'classifierCommit'
   | 'classifierWait'
   // Operator: replay the current question (Repeat) or abandon it for a new
   // one (Skip), both only legal before the creator has started answering.
@@ -116,7 +115,6 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
   ENDPOINT_CANDIDATE: {
     speechResumed: 'USER_SPEAKING',
     classifierWait: 'ENDPOINT_CANDIDATE',
-    classifierCommit: 'TURN_FINALIZING',
     manualCommit: 'TURN_FINALIZING',
     completionSelected: 'FINISHING',
     pause: 'PAUSED',
