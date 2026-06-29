@@ -126,6 +126,11 @@ async function bootstrap(): Promise<void> {
     getStage,
     ensureStageWindow,
     isDisplayConnected,
+    // Move OS keyboard focus to the stage when a session begins, so the stage's
+    // keydown shortcuts fire without the operator clicking the stage first (#58).
+    focusStageWindow: () => {
+      if (stageWindow && !stageWindow.isDestroyed()) stageWindow.focus();
+    },
   });
   controller = ctrl;
 

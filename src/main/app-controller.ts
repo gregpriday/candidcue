@@ -83,6 +83,13 @@ export interface AppControllerDeps {
    * without a live key.
    */
   buildModelAdapter?: (apiKey: string) => InterviewModelAdapter;
+  /**
+   * Transfer OS keyboard focus to the stage window. Called when a session
+   * begins so the stage's keydown shortcuts (Space/P/R/S/Shift+Esc) work from
+   * the first turn without the operator having to click the stage first (#58).
+   * Optional so existing test constructors compile unchanged.
+   */
+  focusStageWindow?: () => void;
 }
 
 interface ActiveSession {
@@ -655,7 +662,10 @@ export class AppController {
     try {
       const o = a!.orchestrator;
       switch (cmd.type) {
-        case 'BEGIN_SESSION': await o.begin(); break;
+        // Focus the stage BEFORE awaiting begin(): begin() resolves only after
+        // first-turn playback, and the stage's keyboard shortcuts must already
+        // work during that opening turn — the moment they matter most (#58).
+        case 'BEGIN_SESSION': this.deps.focusStageWindow?.(); await o.begin(); break;
         case 'COMMIT_USER_TURN': await o.commitUserTurn(cmd.reason); break;
         case 'PAUSE_SESSION': o.pause(); break;
         case 'RESUME_SESSION': await o.resume(); break;
