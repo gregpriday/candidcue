@@ -521,7 +521,16 @@ export class SessionOrchestrator {
           } else {
             const fallback = this.pickMustGapFallback(unmet);
             if (fallback) {
-              await this.realizeNextQuestion(fallback, 'fallback_bank');
+              // This gate adds a TTS-bearing call to a close arm that previously
+              // went straight to completeSession; a synthesis failure here must
+              // route to a recoverable pause (resume re-realizes), not escape
+              // runExclusive and strand the session in INTERVIEWER_THINKING.
+              // Mirrors the resume path (#9) and commitPipeline's outer catch.
+              try {
+                await this.realizeNextQuestion(fallback, 'fallback_bank');
+              } catch (err) {
+                await this.handlePipelineFailure(err);
+              }
               return;
             }
             this.recoverableWarning = mustGapWarning(unmet);

@@ -17,7 +17,6 @@ import type {
   InterviewSection,
   MediaClip,
   SessionCoverageItem,
-  CoverageStatus,
 } from '@shared/domain';
 import type {
   InterviewModelAdapter,
@@ -151,7 +150,6 @@ async function makeHarness(overrides?: {
   logger?: Logger;
   targetQuestionCount?: number;
   character?: InterviewerCharacter;
-  brief?: InterviewBrief;
   /**
    * Force every brief coverage item to this status (default keeps the brief's
    * own `not_started`). Tests that exercise a close path unrelated to the
@@ -159,6 +157,8 @@ async function makeHarness(overrides?: {
    * unmet musts and the original close behavior is observed in isolation.
    */
   coverageStatus?: CoverageStatus;
+  /** Replace the default single-must brief (issue #65 multi-item gate tests). */
+  brief?: InterviewBrief;
 }): Promise<Harness> {
   const repo = new MemoryRepository();
   await repo.migrate();
@@ -1188,6 +1188,105 @@ describe('SessionOrchestrator turn pipeline', () => {
       expect(lastSnapshot().recoverableWarning).toBeNull();
       const agg = await h.repo.getSession(h.sessionId);
       expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+    });
+
+    it('redirects a skip-driven `complete` to a must-targeting fallback', async () => {
+      // The skip close path mirrors commitPipeline: a model `complete` on a skip
+      // while a must is unmet must redirect to the fallback, not end the session.
+      const model = new FakeInterviewModel({
+        scriptedActions: [{ action: 'complete', spokenText: '' }],
+      });
+      h = await makeHarness({ model });
+      await h.orch.prepareOpening();
+      await h.orch.begin();
+
+      await h.orch.skipQuestion();
+
+      expect(h.orch.getState()).toBe('USER_ARMED');
+      expect(lastSnapshot().recoverableWarning).toBeNull();
+      const agg = await h.repo.getSession(h.sessionId);
+      expect(agg!.session.status).not.toBe('completed');
+      const turn2 = agg!.turns.find((t) => t.ordinal === 2);
+      expect(turn2?.question.text).toBe('What happens after the speaker finishes an answer?');
+      expect(turn2?.question.source).toBe('fallback_bank');
+    });
+
+    it('only redirects to fallbacks that target an unmet must, not should/optional ones', async () => {
+      // Strict filter: the lone fallback targets a non-must item. With the must
+      // still unmet and no must-targeting fallback, the gate must NOT redirect to
+      // the should-fallback — it declares the bank dry and warns-and-closes.
+      const customBrief: InterviewBrief = {
+        ...brief(),
+        coverageItems: [
+          {
+            id: 'cov-problem',
+            label: 'Problem and audience',
+            objective: 'Explain who needs a conversational partner.',
+            priority: 'must',
+            status: 'not_started',
+            evidenceTurnIds: [],
+            maxFollowUps: 2,
+            sourceRefs: [],
+          },
+          {
+            id: 'cov-extra',
+            label: 'Nice-to-have detail',
+            objective: 'A non-essential aside.',
+            priority: 'should',
+            status: 'not_started',
+            evidenceTurnIds: [],
+            maxFollowUps: 2,
+            sourceRefs: [],
+          },
+        ],
+        fallbackQuestions: [
+          {
+            text: 'What is a fun aside about the product?',
+            type: 'mechanism',
+            targetCoverageItemIds: ['cov-extra'],
+            useWhen: 'Non-essential colour',
+          },
+        ],
+      };
+      const model = new FakeInterviewModel({
+        scriptedActions: [{ action: 'complete', spokenText: '' }],
+      });
+      h = await makeHarness({ model, brief: customBrief });
+      await h.orch.prepareOpening();
+      await h.orch.begin();
+      h.orch.onSpeechStarted(1000);
+      h.orch.onSpeechStopped(4000);
+      await h.orch.commitUserTurn('manual');
+
+      // The should-targeting fallback was not asked; the interview closed with the
+      // essential-topics warning naming the unmet must.
+      expect(h.orch.getState()).toBe('COMPLETED');
+      const snap = lastSnapshot();
+      expect(snap.recoverableWarning).toMatch(/essential/i);
+      expect(snap.recoverableWarning).toContain('Problem and audience');
+      expect(snap.recoverableWarning).not.toContain('Nice-to-have detail');
+      const agg = await h.repo.getSession(h.sessionId);
+      expect(
+        agg!.turns.some((t) => t.question.text === 'What is a fun aside about the product?'),
+      ).toBe(false);
+    });
+
+    it('does not overwrite a higher-priority recovery warning on End Now', async () => {
+      // A stage-playback failure leaves a recovery warning and PAUSES the session;
+      // a subsequent End Now with an unmet must must preserve that warning rather
+      // than clobbering it with the lower-priority essential-topics notice.
+      h.stage.results.play = false;
+      await h.orch.prepareOpening();
+      await h.orch.begin();
+      expect(h.orch.getState()).toBe('PAUSED');
+      expect(lastSnapshot().recoverableWarning).toBe('Stage playback failed. Resume to retry.');
+
+      await h.orch.endNow();
+
+      expect(h.orch.getState()).toBe('COMPLETED');
+      const snap = lastSnapshot();
+      expect(snap.recoverableWarning).toBe('Stage playback failed. Resume to retry.');
+      expect(snap.recoverableWarning).not.toMatch(/essential/i);
     });
   });
 
@@ -2603,7 +2702,10 @@ describe('SessionOrchestrator delivery-rate threading (#56)', () => {
     const model = new FakeInterviewModel({
       scriptedActions: [{ action: 'complete', spokenText: 'Thank you so much for your time.' }],
     });
-    h = await makeHarness({ model, character: charWithRate(0.95) });
+    // cov-problem pre-covered: isolates the closing-line rate assertion from the
+    // must-coverage gate (#65), so the skip-complete closes instead of being
+    // redirected to a must-targeting fallback.
+    h = await makeHarness({ model, character: charWithRate(0.95), coverageStatus: 'covered' });
     await h.orch.prepareOpening();
     await h.orch.begin();
     await h.orch.skipQuestion();
