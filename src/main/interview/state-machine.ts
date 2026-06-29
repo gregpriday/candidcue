@@ -36,6 +36,9 @@ export type TransitionTrigger =
   | 'retakeTurn'
   // Finalization
   | 'transcriptStored'
+  // An empty answer (cough/silence) committed nothing; silently re-arm the same
+  // turn instead of pausing so the creator can simply keep talking (issue #61).
+  | 'emptyAnswerRearm'
   | 'completionSelected'
   | 'finalAnswerStored'
   // Pause / resume
@@ -134,6 +137,8 @@ export const TRANSITIONS: Record<SessionRuntimeState, TriggerMap> = {
 
   TURN_FINALIZING: {
     transcriptStored: 'INTERVIEWER_THINKING',
+    // Empty transcript (cough/silence): re-arm the same turn rather than pause.
+    emptyAnswerRearm: 'USER_ARMED',
     completionSelected: 'FINISHING',
     pause: 'PAUSED',
     deviceOrProviderNeedsRecovery: 'RECOVERING',

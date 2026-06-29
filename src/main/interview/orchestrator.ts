@@ -1058,16 +1058,27 @@ export class SessionOrchestrator {
         }
       }
 
-      // Empty answer: do not invent content (spec §14.6, §22.3).
+      // Empty answer (a cough or silence): do not invent content (spec §14.6,
+      // §22.3). Rather than drop into PAUSED and make the creator hunt for
+      // Resume, silently re-arm the same turn so they can just keep talking
+      // (issue #61). Reset the capture state BEFORE transition() — it publishes
+      // a snapshot synchronously, and a stale speechStartedAt would briefly
+      // advertise userHasSpoken=true in the USER_ARMED snapshot, mis-gating
+      // Skip/Repeat. rawTranscript is already '' on this branch (defensive set).
       if (rawTranscript.length === 0) {
         this.commitInFlight = false;
-        // The user may have triggered speechStarted before the silence (so
-        // userHasSpoken is true), which re-legalizes neither Skip nor Repeat from
-        // this PAUSED state. Resume is the only action that is always legal here,
-        // so advertise it alone (no "skip"/"repeat" the operator can't take).
-        this.recoverableWarning = 'No speech was captured. Resume to try again.';
-        this.transition('pause', 'empty answer');
-        this.publishSnapshot();
+        turn.rawTranscript = '';
+        turn.speechStartedAt = null;
+        turn.speechEndedAt = null;
+        this.interimTranscript = '';
+        this.recoverableWarning = null;
+        this.log.info('session.empty_answer_rearmed', { turnId: turn.id });
+        // If a pause/end-now/dispose raced in during the await above, the state
+        // moved off TURN_FINALIZING and this trigger is illegal: bail cleanly
+        // (commitInFlight is already cleared). Otherwise we land in USER_ARMED.
+        if (!this.transition('emptyAnswerRearm', 'empty answer')) return;
+        this.deps.stage.openMicGate();
+        await this.armUserTurn(turn);
         return;
       }
 
