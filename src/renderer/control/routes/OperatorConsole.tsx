@@ -205,6 +205,7 @@ function OperatorView({ snapshot, commandError, onCommand, onExit }: OperatorVie
   const descriptor = STATE_DESCRIPTORS[snapshot.state];
   const controls = snapshot.controls;
   const [endConfirm, setEndConfirm] = useState(false);
+  const [endNowConfirm, setEndNowConfirm] = useState(false);
 
   const announcement = useMemo(() => {
     const parts = [descriptor.label];
@@ -358,6 +359,16 @@ function OperatorView({ snapshot, commandError, onCommand, onExit }: OperatorVie
           >
             <Icon name="stop" size={18} />
           </button>
+          <button
+            type="button"
+            className={styles.iconButtonDanger}
+            onClick={() => setEndNowConfirm(true)}
+            disabled={!controls.canEndNow}
+            title="End now"
+            aria-label="End now"
+          >
+            <Icon name="alert" size={18} />
+          </button>
         </div>
       </footer>
 
@@ -383,6 +394,33 @@ function OperatorView({ snapshot, commandError, onCommand, onExit }: OperatorVie
               }}
             >
               End after turn
+            </Button>
+          </>
+        }
+      />
+
+      <Sheet
+        open={endNowConfirm}
+        onClose={() => setEndNowConfirm(false)}
+        tone="danger"
+        title="End the interview immediately?"
+        description="This ends the session right now. Any answer in progress is saved as a partial transcript."
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => setEndNowConfirm(false)}>
+              Keep going
+            </Button>
+            <Button
+              variant="danger"
+              disabled={!controls.canEndNow}
+              onClick={() => {
+                setEndNowConfirm(false);
+                if (controls.canEndNow) {
+                  onCommand({ type: 'END_NOW' });
+                }
+              }}
+            >
+              End now
             </Button>
           </>
         }

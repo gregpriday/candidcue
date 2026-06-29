@@ -129,9 +129,10 @@ describe('resolveAnswerText', () => {
     expect(resolveAnswerText(turn)).toBe('cleaned');
   });
 
-  it('falls back to the raw transcript only when cleaned is null (??-semantics, not falsy)', () => {
-    // The documented precedence uses `??`, so a present-but-empty cleaned
-    // transcript is a real value and is NOT skipped over to raw.
+  it('falls back to the raw transcript when cleaned is empty or null (#74)', () => {
+    // A present-but-empty cleaned transcript must fall through to raw: raw-only
+    // answers (END_NOW / recovery checkpoints) carry cleanedTranscript: '' and
+    // would otherwise render blank despite captured speech.
     const emptyCleaned = makeTurn({
       answer: makeAnswer({
         userEditedTranscript: null,
@@ -139,10 +140,9 @@ describe('resolveAnswerText', () => {
         rawTranscript: 'raw only',
       }),
     });
-    expect(resolveAnswerText(emptyCleaned)).toBe('');
+    expect(resolveAnswerText(emptyCleaned)).toBe('raw only');
 
-    // cleanedTranscript is typed non-nullable, but transcripts can in practice
-    // be absent; verify raw is used when cleaned is nullish.
+    // Same outcome when cleaned is nullish.
     const nullishCleaned = makeTurn({
       answer: makeAnswer({
         userEditedTranscript: null,
@@ -151,6 +151,19 @@ describe('resolveAnswerText', () => {
       }),
     });
     expect(resolveAnswerText(nullishCleaned)).toBe('raw only');
+  });
+
+  it('keeps an intentional empty user edit (redaction wins over raw)', () => {
+    // An empty user edit is a deliberate redaction and must NOT fall through to
+    // the raw transcript.
+    const redacted = makeTurn({
+      answer: makeAnswer({
+        userEditedTranscript: '',
+        cleanedTranscript: '',
+        rawTranscript: 'raw only',
+      }),
+    });
+    expect(resolveAnswerText(redacted)).toBe('');
   });
 
   it('returns the placeholder when there is no answer', () => {
@@ -167,6 +180,12 @@ describe('isIncompleteTurn', () => {
   it('flags recovered turns', () => {
     expect(
       isIncompleteTurn(makeTurn({ answer: makeAnswer({ endpointReason: 'recovery' }) })),
+    ).toBe(true);
+  });
+
+  it('flags turns flushed by an END_NOW abort', () => {
+    expect(
+      isIncompleteTurn(makeTurn({ answer: makeAnswer({ endpointReason: 'ended-now' }) })),
     ).toBe(true);
   });
 
@@ -400,6 +419,26 @@ describe('buildMarkdownExport', () => {
     expect(md).toContain('the raw answer');
     // The Answer label precedes the body.
     expect(md).toContain('**Answer:**');
+  });
+
+  it('renders the raw transcript for an END_NOW partial turn (empty cleaned, #74)', () => {
+    const md = buildMarkdownExport(
+      makeInput({
+        turns: [
+          makeTurn({
+            ordinal: 1,
+            answer: makeAnswer({
+              userEditedTranscript: null,
+              cleanedTranscript: '', // raw-only checkpoint never gets cleaned
+              rawTranscript: 'partial speech captured before ending',
+              endpointReason: 'ended-now',
+            }),
+          }),
+        ],
+      }),
+    );
+    // The saved partial must render, not a blank answer body.
+    expect(md).toContain('partial speech captured before ending');
   });
 
   it('marks an incomplete (unanswered) turn with a note', () => {

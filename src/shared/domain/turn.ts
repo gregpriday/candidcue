@@ -49,7 +49,7 @@ export interface QuestionRecord {
   source: QuestionSource;
 }
 
-export type EndpointReason = 'manual' | 'automatic' | 'timeout' | 'recovery';
+export type EndpointReason = 'manual' | 'automatic' | 'timeout' | 'recovery' | 'ended-now';
 
 export interface ModerationRecord {
   modelId: string;
