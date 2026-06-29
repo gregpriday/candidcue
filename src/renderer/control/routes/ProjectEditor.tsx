@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ProjectAggregate,
   ProjectId,
@@ -163,6 +163,10 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   // Latest staged-progress event for the in-flight preparation, used to drive the
   // four-step progress panel. Reset to null whenever a new prepare begins.
   const [prepareProgress, setPrepareProgress] = useState<PrepareProgress | null>(null);
+  // Mirror of the live `savedId` for use inside the long-running prepare callback:
+  // its closure captures a stale id, so a prepare that finishes after the user has
+  // navigated to another interview must not write its result onto that interview.
+  const savedIdRef = useRef(savedId);
   const [warnings, setWarnings] = useState<string[] | null>(null);
   const [planState, setPlanState] = useState<ProjectPlanState>('unprepared');
   const [dirty, setDirty] = useState(false);
@@ -298,13 +302,18 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     setPreparing(true);
     try {
       const result = await window.candidcue.projects.prepare(id);
+      // The user navigated to a different interview while this one prepared: drop
+      // the result so it can't overwrite the now-displayed interview's state.
+      if (savedIdRef.current !== id) {
+        return;
+      }
       // A user cancel resolves with a dedicated code: leave the plan state as it
       // was and surface no error — the panel simply disappears.
       if (!result.ok && result.error?.code === 'PREPARE_CANCELLED') {
         return;
       }
-      setWarnings(result.warnings);
       if (result.ok) {
+        setWarnings(result.warnings);
         setPlanState('ready');
       } else {
         setPlanState('failed');
@@ -325,6 +334,10 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
     if (savedId !== null) {
       void window.candidcue.projects.cancelPrepare(savedId);
     }
+  }, [savedId]);
+
+  useEffect(() => {
+    savedIdRef.current = savedId;
   }, [savedId]);
 
   // Stream staged progress for the in-flight preparation into the panel. Filter by

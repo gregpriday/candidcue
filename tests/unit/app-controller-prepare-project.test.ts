@@ -67,6 +67,8 @@ function contentForCompiledLength(compiledLength: number): string {
 
 interface BuildOptions {
   documents: Array<{ id?: string; title?: string; content: string; sortOrder?: number }>;
+  /** Override the repository's getLatestPlan (e.g. to defer it for a cancel race). */
+  getLatestPlan?: () => Promise<null>;
 }
 
 function build(opts: BuildOptions) {
@@ -106,7 +108,7 @@ function build(opts: BuildOptions) {
   const controller = new AppController({
     repository: {
       getProject: async () => aggregate,
-      getLatestPlan: async () => null,
+      getLatestPlan: opts.getLatestPlan ?? (async () => null),
       savePlan,
       setActivePlan,
       updateProjectSourceHash,
@@ -265,8 +267,11 @@ describe('AppController.prepareProject staged progress (issue #48)', () => {
     expect(result.ok).toBe(true);
     expect(emittedPhases(send)).toEqual(['reading', 'generating', 'validating', 'saving', 'done']);
     // Every emission is tagged with the project id so the renderer can filter.
-    const payload = send.mock.calls.find((c) => c[0] === CHANNELS.evtPrepareProgress)?.[1];
-    expect((payload as { projectId: string }).projectId).toBe('project-1');
+    const payloads = send.mock.calls
+      .filter((c) => c[0] === CHANNELS.evtPrepareProgress)
+      .map((c) => c[1] as { projectId: string });
+    expect(payloads).not.toHaveLength(0);
+    expect(payloads.every((p) => p.projectId === 'project-1')).toBe(true);
   });
 
   it('emits reading → failed when the source gate rejects, before reaching the model', async () => {
@@ -308,6 +313,38 @@ describe('AppController.prepareProject staged progress (issue #48)', () => {
     expect(result.ok).toBe(false);
     expect(result.error?.code).toBe('PREPARE_CANCELLED');
     expect(result.planId).toBeNull();
+    expect(savePlan).not.toHaveBeenCalled();
+    expect(setActivePlan).not.toHaveBeenCalled();
+  });
+
+  it('persists no plan when cancelled after the model resolves, during the save phase', async () => {
+    // Block getLatestPlan so the run pauses after the model returns (signal still
+    // unaborted) but before any write — a deterministic window to cancel mid-save.
+    let releaseLatest: () => void = () => {};
+    let enteredLatest: () => void = () => {};
+    const entered = new Promise<void>((resolve) => {
+      enteredLatest = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseLatest = resolve;
+    });
+    const { controller, savePlan, setActivePlan } = build({
+      documents: [{ id: DOC_ID, title: DOC_TITLE, content: 'A short interview source.' }],
+      getLatestPlan: async () => {
+        enteredLatest();
+        await gate;
+        return null;
+      },
+    });
+
+    const promise = controller.prepareProject('project-1');
+    await entered; // model resolved; now parked in getLatestPlan with no abort yet
+    controller.cancelPrepare('project-1');
+    releaseLatest();
+    const result = await promise;
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('PREPARE_CANCELLED');
     expect(savePlan).not.toHaveBeenCalled();
     expect(setActivePlan).not.toHaveBeenCalled();
   });

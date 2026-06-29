@@ -310,6 +310,9 @@ export class AppController {
         promptVersion: CURRENT_PROMPT_VERSION,
         createdAt: new Date().toISOString(),
       };
+      // A cancel can land after the model returns but before we commit; bail
+      // before any write so a cancelled run never persists a plan.
+      if (aborter.signal.aborted) throw new AppError('PREPARE_CANCELLED');
       emit('saving');
       await this.deps.repository.savePlan(plan);
       await this.deps.repository.setActivePlan(projectId, plan.id);
