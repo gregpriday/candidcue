@@ -350,8 +350,12 @@ export class SessionOrchestrator {
         return;
       }
       // STT is live again: now it is safe to transition to USER_ARMED and open the
-      // mic, then clear the recoverable warning on this success path.
-      this.transition('resumeUserTurn');
+      // mic, then clear the recoverable warning on this success path. Guard the
+      // transition: a Retake (or Repeat) dispatched while we awaited resumeTurn is
+      // still legal from PAUSED and may have already driven us into
+      // INTERVIEWER_BUFFERING. If so, resumeUserTurn is illegal (returns false) and
+      // we must NOT openMicGate over the in-progress re-delivery (#62).
+      if (!this.transition('resumeUserTurn')) return;
       this.deps.stage.openMicGate();
     } else if (this.currentTurn && !this.currentTurnAnswered) {
       this.transition('resumePreparedQuestion');
@@ -627,6 +631,10 @@ export class SessionOrchestrator {
 
   /** A live interim (non-final) STT transcript for the current turn (MIC-04). */
   onSttPartial(text: string): void {
+    // Same mic-gate gate as onSttFinalSegment: a stale interim from an abandoned
+    // take (e.g. arriving during the INTERVIEWER_BUFFERING window of a Retake)
+    // must not flash old text into the operator's live caption (#62).
+    if (!isMicGateOpen(this.state)) return;
     this.interimTranscript = text;
     this.publishSnapshot();
   }

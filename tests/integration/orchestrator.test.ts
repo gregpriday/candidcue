@@ -945,6 +945,53 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(lastSnapshot().finalTranscriptSoFar).toBe('captured while the floor was open');
   });
 
+  it('drops a late STT partial once the mic gate has closed (no stale caption flicker, #62)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin(); // USER_ARMED
+    h.orch.onSpeechStarted(1000); // USER_SPEAKING — mic open
+    h.orch.pause(); // → PAUSED, mic closed
+    const snapsBefore = h.snapshots.length;
+    h.orch.onSttPartial('stale interim from the abandoned take');
+    // The stale partial was ignored: no snapshot, interim transcript stays empty.
+    expect(h.snapshots.length).toBe(snapsBefore);
+    expect(lastSnapshot().partialTranscript).toBe('');
+  });
+
+  it('a Retake racing a Resume from PAUSED does not spuriously re-open the mic (#62)', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin(); // USER_ARMED
+    h.orch.onSpeechStarted(1000); // USER_SPEAKING — mic was open, userHasSpoken
+    h.orch.onSttFinalSegment('half a take before pausing');
+    h.orch.pause(); // → PAUSED (mic-open turn)
+    expect(h.orch.getState()).toBe('PAUSED');
+
+    // Hold resumeTurn so a Retake can fire while resume() is parked on the await.
+    let releaseResume!: () => void;
+    const resumeGate = new Promise<void>((r) => {
+      releaseResume = r;
+    });
+    vi.spyOn(h.stt, 'resumeTurn').mockImplementationOnce(async () => {
+      await resumeGate;
+    });
+
+    h.stage.openMicGate.mockClear();
+    const resuming = h.orch.resume(); // parks on resumeTurn await, still PAUSED
+    // Retake is legal from PAUSED with speech and drives into INTERVIEWER_BUFFERING
+    // before the stale resume's await resolves.
+    const retaking = h.orch.retakeTurn();
+    releaseResume();
+    await Promise.all([resuming, retaking]);
+
+    // The retake owns the session: a fresh USER_ARMED take. The stale resume's
+    // resumeUserTurn transition was rejected (illegal from INTERVIEWER_BUFFERING),
+    // so the ONLY openMicGate is the legitimate one at the end of the retake's
+    // playCurrentTurn — never a spurious second open over the re-delivery.
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    expect(h.orch.getCommandContext().userHasSpoken).toBe(false);
+    expect(lastSnapshot().finalTranscriptSoFar).toBe('');
+    expect(h.stage.openMicGate).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves the turn and pauses on an empty answer instead of inventing one', async () => {
     h = await makeHarness({ stt: new FakeStt({ transcript: '' }) });
     await h.orch.prepareOpening();
