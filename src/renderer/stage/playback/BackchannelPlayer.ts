@@ -52,6 +52,14 @@ export class BackchannelPlayer {
       return; // disposed mid-decode; don't retain buffers on a closing context
     }
     this.buffers = decoded.filter((b): b is AudioBuffer => b !== null);
+    // The stage window receives no direct user gestures (it is driven by IPC),
+    // so this context can start suspended and never leave it — leaving play()
+    // to silently no-op at commit. Resume now, at bootstrap, where the latency
+    // is irrelevant; play() must stay synchronous to fire the instant a turn
+    // commits. Fire-and-forget: a rejected resume just leaves play() guarded.
+    if (this.buffers.length > 0 && this.context.state === 'suspended') {
+      void this.context.resume().catch(() => {});
+    }
   }
 
   /**
