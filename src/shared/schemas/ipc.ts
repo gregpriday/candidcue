@@ -114,6 +114,7 @@ export const audioMeterSchema = z.object({
 
 export const stageCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('COMMIT'), reason: z.enum(['manual', 'automatic']) }),
+  z.object({ type: z.literal('BEGIN') }),
   z.object({ type: z.literal('PAUSE') }),
   z.object({ type: z.literal('RESUME') }),
   z.object({ type: z.literal('REPEAT') }),

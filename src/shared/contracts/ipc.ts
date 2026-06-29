@@ -196,6 +196,10 @@ export interface StageStateProjection {
   mirror: boolean;
   zoom: number;
   verticalOffsetPercent: number;
+  /** True only while the session is READY — the one runtime state where the
+   *  founder may begin the interview from the stage. The 'standby' visualState
+   *  alone can't say this: it also covers IDLE/PREPARING, where BEGIN is illegal. */
+  canBegin: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +280,7 @@ export interface PlaybackErrorEvent {
 
 export type StageCommand =
   | { type: 'COMMIT'; reason: 'manual' | 'automatic' }
+  | { type: 'BEGIN' }
   | { type: 'PAUSE' }
   | { type: 'RESUME' }
   | { type: 'REPEAT' }

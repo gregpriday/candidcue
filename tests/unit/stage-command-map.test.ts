@@ -12,6 +12,10 @@ describe('mapStageCommand', () => {
     expect(mapStageCommand({ type: 'END_AFTER_TURN' })).toEqual({ type: 'END_AFTER_TURN' });
   });
 
+  it('maps the founder-start BEGIN to the BEGIN_SESSION session command', () => {
+    expect(mapStageCommand({ type: 'BEGIN' })).toEqual({ type: 'BEGIN_SESSION' });
+  });
+
   it('translates the existing stage commands to their session equivalents', () => {
     expect(mapStageCommand({ type: 'COMMIT', reason: 'manual' })).toEqual({
       type: 'COMMIT_USER_TURN',

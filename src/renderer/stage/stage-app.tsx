@@ -26,7 +26,12 @@ const INITIAL_STATE: StageStateProjection = {
   mirror: false,
   zoom: 1,
   verticalOffsetPercent: 0,
+  canBegin: false,
 };
+
+/** Seconds the founder's start countdown runs for before BEGIN fires — long
+ *  enough to settle into frame, short enough not to feel sluggish. */
+const START_COUNTDOWN_SECONDS = 3;
 
 function sendCommand(command: StageCommand): void {
   window.candidcueStage.commands.send(command);
@@ -72,6 +77,20 @@ export function StageApp(): JSX.Element {
   // Brief confirm/reject cue for the last keypress so a wrong-moment key is never
   // silent. `token` increments per press so a repeated identical key re-pulses.
   const [commandFeedback, setCommandFeedback] = useState<CommandFeedback | null>(null);
+
+  // Founder-start countdown (FOUNDER-START): renderer-local, like the end-confirm
+  // above — only the final BEGIN crosses IPC. null = idle; otherwise the seconds
+  // remaining. The ref mirrors it so the once-bound keydown handler reads the
+  // live value without re-subscribing.
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const countdownRef = useRef<number | null>(null);
+  useEffect(() => {
+    countdownRef.current = countdown;
+  }, [countdown]);
+  // Latches once BEGIN has been sent so Space can't arm a second countdown in
+  // the gap before the orchestrator's new (non-standby) projection arrives. It
+  // is cleared when the session actually leaves the begin-able standby.
+  const beginSentRef = useRef(false);
 
   // Engines live for the lifetime of the window; refs avoid re-creating them.
   const speechPlayerRef = useRef<SpeechPlayer | null>(null);
@@ -316,6 +335,44 @@ export function StageApp(): JSX.Element {
     return () => window.clearTimeout(timer);
   }, [commandFeedback]);
 
+  // --- Founder-start countdown -------------------------------------------
+  // Tick down once per second; the final second hands off to BEGIN rather than
+  // ever rendering "Starting in 0…". setTimeout is rescheduled on each tick, so
+  // a cancel (Escape/blur/state change) clears the pending timer via cleanup.
+  useEffect(() => {
+    if (countdown === null) {
+      return undefined;
+    }
+    if (countdown <= 1) {
+      const timer = window.setTimeout(() => {
+        beginSentRef.current = true;
+        sendCommand({ type: 'BEGIN' });
+        setCountdown(null);
+      }, 1000);
+      return () => window.clearTimeout(timer);
+    }
+    const timer = window.setTimeout(() => {
+      setCountdown((c) => (c === null ? null : c - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [countdown]);
+
+  // Cancel an in-flight countdown the moment the stage is no longer begin-able —
+  // the session left standby (begin landed, or a fault), or READY was lost.
+  useEffect(() => {
+    if (state.visualState !== 'standby' || !state.canBegin) {
+      setCountdown(null);
+      beginSentRef.current = false;
+    }
+  }, [state.visualState, state.canBegin]);
+
+  // A countdown should never fire BEGIN into a window that has lost focus.
+  useEffect(() => {
+    const onBlur = (): void => setCountdown(null);
+    window.addEventListener('blur', onBlur);
+    return () => window.removeEventListener('blur', onBlur);
+  }, []);
+
   // --- Global keyboard ----------------------------------------------------
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -337,6 +394,10 @@ export function StageApp(): JSX.Element {
         !event.altKey
       ) {
         event.preventDefault();
+        // Opening the end-confirm hands the keyboard to the modal, so any live
+        // start countdown must be cancelled here or its timer would fire BEGIN
+        // out from under the dialog.
+        setCountdown(null);
         setEndConfirmOpen(true);
         return;
       }
@@ -346,6 +407,32 @@ export function StageApp(): JSX.Element {
         event.preventDefault();
         setLegendVisible((visible) => !visible);
         return;
+      }
+      // Founder-start: when the session is READY (canBegin) and waiting on the
+      // standby screen, Space arms a short visible countdown so the founder can
+      // settle before recording begins. A bare Escape cancels it. Both read the
+      // live state/countdown via refs (the handler binds once). Gating on
+      // canBegin keeps the prior Space→COMMIT behaviour in non-ready standby.
+      if (
+        stateRef.current.visualState === 'standby' &&
+        stateRef.current.canBegin &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.shiftKey
+      ) {
+        if (event.code === 'Space') {
+          event.preventDefault();
+          if (countdownRef.current === null && !beginSentRef.current) {
+            setCountdown(START_COUNTDOWN_SECONDS);
+          }
+          return;
+        }
+        if (event.code === 'Escape' && countdownRef.current !== null) {
+          event.preventDefault();
+          setCountdown(null);
+          return;
+        }
       }
       // stateRef is always current, so the pause/resume toggle reads the latest
       // visual state without re-subscribing the listener.
@@ -401,6 +488,7 @@ export function StageApp(): JSX.Element {
         characterName={characterName}
         legendVisible={legendVisible}
         commandFeedback={commandFeedback}
+        countdown={countdown}
       />
       <EndConfirmOverlay
         open={endConfirmOpen}

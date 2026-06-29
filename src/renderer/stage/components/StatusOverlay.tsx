@@ -17,6 +17,8 @@ interface StatusOverlayProps {
   legendVisible?: boolean;
   /** Transient confirm/reject cue for the last keypress, or null. */
   commandFeedback?: CommandFeedback | null;
+  /** Seconds left in the founder's start countdown, or null when not counting. */
+  countdown?: number | null;
 }
 
 /** The keyboard controls surfaced in the on-screen legend, in press order. The
@@ -106,8 +108,10 @@ export function StatusOverlay({
   characterName,
   legendVisible = false,
   commandFeedback = null,
+  countdown = null,
 }: StatusOverlayProps): JSX.Element {
   const isStandby = state.visualState === 'standby';
+  const isCounting = isStandby && countdown !== null;
   const isComplete = state.visualState === 'complete';
   const isError = state.visualState === 'error';
 
@@ -160,14 +164,28 @@ export function StatusOverlay({
         <MicGlyph gate={state.micState} />
       </div>
 
-      {isStandby && (
+      {isStandby && !isCounting && (
         <div className={styles.screen} role="status" aria-live="polite">
           {characterName != null && characterName !== '' && (
             <p className={styles.screenName}>{characterName}</p>
           )}
           <p className={styles.screenTitle}>Your interview is ready.</p>
-          <p className={styles.screenHint}>Press Start in CandidCue when you’re ready.</p>
+          <p className={styles.screenHint}>
+            {state.canBegin ? 'Press Space to begin.' : 'Getting everything ready…'}
+          </p>
           <p className={styles.screenHint}>Press ? anytime to show the controls.</p>
+        </div>
+      )}
+
+      {/* The countdown is its own assertive live region — kept a sibling of the
+          standby screen above (never nested) so screen readers announce each
+          tick without ambiguous nested-live-region behaviour. */}
+      {isCounting && (
+        <div className={styles.screen} role="timer" aria-live="assertive" aria-atomic="true">
+          {characterName != null && characterName !== '' && (
+            <p className={styles.screenName}>{characterName}</p>
+          )}
+          <p className={styles.screenTitle}>Starting in {countdown}…</p>
         </div>
       )}
 

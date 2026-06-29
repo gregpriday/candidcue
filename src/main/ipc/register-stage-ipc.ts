@@ -13,6 +13,7 @@ const playbackErrorSchema = z.object({ turnId: z.string(), reason: z.string() })
 const meterSchema = z.object({ peak: z.number(), average: z.number(), clipping: z.boolean() });
 const stageCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('COMMIT'), reason: z.enum(['manual', 'automatic']) }),
+  z.object({ type: z.literal('BEGIN') }),
   z.object({ type: z.literal('PAUSE') }),
   z.object({ type: z.literal('RESUME') }),
   z.object({ type: z.literal('REPEAT') }),
@@ -30,8 +31,12 @@ export function registerStageIpc(app: AppController, guard: Guard): void {
     guard(e.sender, ['stage']);
     const boot = app.buildStageBootstrap();
     // The stage just mounted and registered its event listeners, so (re)send the
-    // capture config now to cover a freshly-loaded window (MIC-01).
+    // capture config now to cover a freshly-loaded window (MIC-01)...
     app.sendCaptureConfig();
+    // ...and re-publish the current state projection so a reloaded window
+    // reflects the live runtime state (e.g. "Press Space to begin." in READY)
+    // rather than sitting on its INITIAL_STATE until the next transition.
+    app.republishStageState();
     return boot;
   });
 
@@ -77,6 +82,7 @@ export function registerStageIpc(app: AppController, guard: Guard): void {
 export function mapStageCommand(cmd: z.infer<typeof stageCommandSchema>): SessionCommand | null {
   switch (cmd.type) {
     case 'COMMIT': return { type: 'COMMIT_USER_TURN', reason: cmd.reason };
+    case 'BEGIN': return { type: 'BEGIN_SESSION' };
     case 'PAUSE': return { type: 'PAUSE_SESSION' };
     case 'RESUME': return { type: 'RESUME_SESSION' };
     case 'REPEAT': return { type: 'REPEAT_QUESTION' };

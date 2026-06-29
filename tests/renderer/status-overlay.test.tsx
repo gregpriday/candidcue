@@ -15,6 +15,7 @@ function projection(overrides: Partial<StageStateProjection> = {}): StageStatePr
     mirror: false,
     zoom: 1,
     verticalOffsetPercent: 0,
+    canBegin: false,
     ...overrides,
   };
 }
@@ -41,6 +42,46 @@ describe('StatusOverlay', () => {
     );
     expect(screen.getByText('Your interview is ready.')).toBeInTheDocument();
     expect(screen.getByText('Mira')).toBeInTheDocument();
+  });
+
+  it('prompts the founder to begin once the session is ready (canBegin)', () => {
+    render(
+      <StatusOverlay
+        state={projection({ visualState: 'standby', canBegin: true })}
+        captionsEnabled={false}
+      />,
+    );
+    expect(screen.getByText('Press Space to begin.')).toBeInTheDocument();
+    // No "Press Start in CandidCue" — the founder starts from the stage now.
+    expect(screen.queryByText(/Press Start in CandidCue/)).not.toBeInTheDocument();
+  });
+
+  it('shows a preparing hint while standby is not yet begin-able', () => {
+    render(
+      <StatusOverlay
+        state={projection({ visualState: 'standby', canBegin: false })}
+        captionsEnabled={false}
+      />,
+    );
+    expect(screen.getByText('Getting everything ready…')).toBeInTheDocument();
+    expect(screen.queryByText('Press Space to begin.')).not.toBeInTheDocument();
+  });
+
+  it('renders the countdown in an assertive timer region, replacing the begin hint', () => {
+    render(
+      <StatusOverlay
+        state={projection({ visualState: 'standby', canBegin: true })}
+        captionsEnabled={false}
+        countdown={3}
+      />,
+    );
+    const timer = screen.getByRole('timer');
+    expect(timer).toHaveTextContent('Starting in 3');
+    expect(timer).toHaveAttribute('aria-live', 'assertive');
+    // The begin hint is gone while counting; the timer is a sibling of (not
+    // nested in) the polite standby status region.
+    expect(screen.queryByText('Press Space to begin.')).not.toBeInTheDocument();
+    expect(timer.closest('[role="status"]')).toBeNull();
   });
 
   it('still renders the complete screen', () => {

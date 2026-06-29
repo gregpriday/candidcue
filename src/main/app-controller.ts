@@ -787,6 +787,15 @@ export class AppController {
     this.active?.orchestrator.reportMeter(reading);
   }
 
+  /**
+   * Re-publish the live stage projection so a freshly-loaded stage window
+   * reflects the current runtime state (e.g. shows "Press Space to begin." when
+   * already READY) instead of its renderer INITIAL_STATE. No-op when idle.
+   */
+  republishStageState(): void {
+    this.active?.orchestrator.republishStage();
+  }
+
   async command(cmd: SessionCommand): Promise<CommandResult> {
     const a = this.active;
     if (!a && cmd.type !== 'PREPARE_SESSION') {
