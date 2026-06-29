@@ -15,6 +15,7 @@ export function buildCoverageContext(
   priority: string;
   status: string;
   followUpCount: number;
+  maxFollowUps: number;
 }> {
   return coverage.map((c) => ({
     coverageItemId: c.id,
@@ -23,6 +24,7 @@ export function buildCoverageContext(
     priority: c.priority,
     status: c.status,
     followUpCount: c.followUpCount,
+    maxFollowUps: c.maxFollowUps,
   }));
 }
 
