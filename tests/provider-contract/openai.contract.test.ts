@@ -23,6 +23,9 @@ describe.skipIf(!KEY)('OpenAI provider contract', () => {
       compiledSource:
         '<CANDIDCUE_PROJECT_SOURCE version="1"><DOCUMENT id="d1" title="Topic">1| We make a desktop interview app.</DOCUMENT></CANDIDCUE_PROJECT_SOURCE>',
       targetQuestionCount: 5,
+      title: null,
+      audience: null,
+      intendedOutcome: null,
       tone: null,
       exclusions: [],
       modelId: 'gpt-5.5',

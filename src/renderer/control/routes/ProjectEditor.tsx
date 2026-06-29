@@ -8,6 +8,7 @@ import type {
   PublicCharacterSummary,
   InterviewSession,
 } from '@shared/domain';
+import { DEFAULT_INTERVIEW_TITLE } from '@shared/domain';
 import {
   createSourceDrafts,
   sourceDraftsFromAggregate,
@@ -227,7 +228,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
 
   const buildInput = useCallback((state: FormState, id: ProjectId | null): SaveProjectInput => {
     const input: SaveProjectInput = {
-      title: state.title.trim() || 'Untitled interview',
+      title: state.title.trim() || DEFAULT_INTERVIEW_TITLE,
       audience: state.audience.trim() ? state.audience.trim() : null,
       intendedOutcome: state.intendedOutcome.trim() ? state.intendedOutcome.trim() : null,
       targetMode: state.targetMode,
@@ -495,7 +496,7 @@ export function ProjectEditor({ nav, projectId }: ProjectEditorProps): JSX.Eleme
   return (
     <div className={route.screen}>
       <PageHeader
-        title={form.title.trim() || (savedId ? 'Untitled interview' : 'New interview')}
+        title={form.title.trim() || (savedId ? DEFAULT_INTERVIEW_TITLE : 'New interview')}
         leading={
           selectedCharacter?.profileImageUrl ? (
             <img

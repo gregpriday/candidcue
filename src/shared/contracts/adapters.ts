@@ -17,6 +17,12 @@ import type {
 export interface PrepareProjectInput {
   compiledSource: string;
   targetQuestionCount: number;
+  /** Founder-supplied interview title, used as authoritative framing. */
+  title: string | null;
+  /** Founder-supplied intended audience, used as authoritative framing. */
+  audience: string | null;
+  /** Founder-supplied desired outcome, used as authoritative framing. */
+  intendedOutcome: string | null;
   tone: string | null;
   exclusions: string[];
   modelId: string;

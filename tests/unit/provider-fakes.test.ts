@@ -24,6 +24,9 @@ function prepareInput(overrides: Partial<PrepareProjectInput> = {}): PrepareProj
   return {
     compiledSource: 'The Future of Solar Power\nA long detailed source about solar panels.',
     targetQuestionCount: 10,
+    title: null,
+    audience: null,
+    intendedOutcome: null,
     tone: null,
     exclusions: ['salary'],
     modelId: 'fake',
@@ -133,7 +136,7 @@ describe('FakeInterviewModel', () => {
       expect(out.warnings).toEqual([]);
     });
 
-    it('derives the title from the compiled source', async () => {
+    it('derives the title from the compiled source when none is supplied', async () => {
       const model = new FakeInterviewModel();
       const out = await model.prepareProject(prepareInput());
       expect(out.brief.title.length).toBeGreaterThan(0);
@@ -144,6 +147,27 @@ describe('FakeInterviewModel', () => {
       const model = new FakeInterviewModel();
       const out = await model.prepareProject(prepareInput({ tone: 'playful' }));
       expect(out.brief.recommendedTone).toBe('playful');
+    });
+
+    it('reflects founder-supplied title, audience, and outcome in the brief', async () => {
+      const model = new FakeInterviewModel();
+      const out = await model.prepareProject(
+        prepareInput({
+          title: 'Founders at Work',
+          audience: 'aspiring founders',
+          intendedOutcome: 'practical, candid lessons',
+        }),
+      );
+      expect(out.brief.title).toBe('Founders at Work');
+      expect(out.brief.audience).toBe('aspiring founders');
+      expect(out.brief.intendedOutcome).toBe('practical, candid lessons');
+    });
+
+    it('falls back to defaults for audience and outcome when not supplied', async () => {
+      const model = new FakeInterviewModel();
+      const out = await model.prepareProject(prepareInput());
+      expect(out.brief.audience).toBe('general interested listeners');
+      expect(out.brief.intendedOutcome).toBe('a clear, candid account of the topic');
     });
   });
 

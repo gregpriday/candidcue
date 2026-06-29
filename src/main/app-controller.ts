@@ -39,7 +39,7 @@ import type {
   PreflightConfig,
   TargetMode,
 } from '@shared/domain';
-import { newId } from '@shared/domain';
+import { newId, DEFAULT_INTERVIEW_TITLE } from '@shared/domain';
 import {
   MODEL_DEFAULTS,
   INWORLD_DEFAULTS,
@@ -76,6 +76,12 @@ export interface AppControllerDeps {
   ensureStageWindow: (displayId: string | null) => WebContents;
   /** Whether the given display id is among the currently connected displays. */
   isDisplayConnected: (displayId: string | null) => boolean;
+  /**
+   * Build the interview model adapter from a validated OpenAI key. Defaults to
+   * the real OpenAI adapter; tests inject a fake to exercise preparation wiring
+   * without a live key.
+   */
+  buildModelAdapter?: (apiKey: string) => InterviewModelAdapter;
 }
 
 interface ActiveSession {
@@ -237,6 +243,12 @@ export class AppController {
           aggregate.project.targetMode,
           aggregate.project.targetValue,
         ),
+        // Treat the editor's placeholder title as "no title" so the planner
+        // infers one from the source instead of baking the placeholder in.
+        title:
+          aggregate.project.title === DEFAULT_INTERVIEW_TITLE ? null : aggregate.project.title,
+        audience: aggregate.project.audience,
+        intendedOutcome: aggregate.project.intendedOutcome,
         tone: aggregate.project.notesToInterviewer,
         exclusions: [],
         modelId: MODEL_DEFAULTS.projectPreparationModel,
@@ -246,6 +258,7 @@ export class AppController {
 
       const sourceHash = hashProjectPreparationFromDocuments(
         {
+          title: aggregate.project.title,
           audience: aggregate.project.audience,
           intendedOutcome: aggregate.project.intendedOutcome,
           targetMode: aggregate.project.targetMode,
@@ -885,6 +898,7 @@ export class AppController {
   private requireModelAdapter(): InterviewModelAdapter {
     const key = this.deps.credentials.getKey('openai');
     if (!key) throw new AppError('OPENAI_AUTH', { publicMessage: 'Add your OpenAI key in Settings.' });
+    if (this.deps.buildModelAdapter) return this.deps.buildModelAdapter(key);
     return buildOpenAiAdapters(key).model as InterviewModelAdapter;
   }
 

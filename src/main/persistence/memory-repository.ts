@@ -134,6 +134,7 @@ export class MemoryRepository implements CandidCueRepository {
 
     const sourceHash = hashProjectPreparationFromDocuments(
       {
+        title: input.title,
         audience: input.audience ?? null,
         intendedOutcome: input.intendedOutcome ?? null,
         targetMode: input.targetMode,

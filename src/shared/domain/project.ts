@@ -36,6 +36,14 @@ export function deriveProjectPlanState(
 export type TargetMode = 'question_count' | 'approximate_duration';
 export type DocumentMime = 'text/markdown' | 'text/plain';
 
+/**
+ * Placeholder title the editor stores when a founder saves without naming the
+ * interview. It is a non-null DB default, not founder-supplied framing, so the
+ * preparation planner treats it as "no title" and infers one from the source
+ * rather than baking the placeholder into the brief.
+ */
+export const DEFAULT_INTERVIEW_TITLE = 'Untitled interview';
+
 export interface Project {
   id: ProjectId;
   title: string;

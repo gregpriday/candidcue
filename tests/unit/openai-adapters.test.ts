@@ -166,6 +166,9 @@ function adapters(responder: StructuredResponder, moderator: Moderator = PASS_MO
 const PREPARE_INPUT: PrepareProjectInput = {
   compiledSource: '<CANDIDCUE_PROJECT_SOURCE version="1"></CANDIDCUE_PROJECT_SOURCE>',
   targetQuestionCount: 12,
+  title: 'Product Launch Interview',
+  audience: 'prospective investors',
+  intendedOutcome: 'showcase early traction',
   tone: 'curious',
   exclusions: ['salary'],
   modelId: 'gpt-5.5',
@@ -254,11 +257,16 @@ describe('createOpenAiAdapters — interview model', () => {
     expect(req.model).toBe('gpt-5.5');
     expect(req.schemaName).toBe('prepared_interview_output');
     expect(req.system).toContain('12'); // targetQuestionCount
+    expect(req.system).toContain('Product Launch Interview'); // title
+    expect(req.system).toContain('prospective investors'); // audience
+    expect(req.system).toContain('showcase early traction'); // intended outcome
     expect(req.system).toContain('curious'); // tone
     expect(req.system).toContain('salary'); // exclusions
     expect(req.system).toContain('CANDIDCUE_PROJECT_SOURCE'); // compiled source
     // No {{...}} placeholders should remain unfilled.
-    expect(req.system).not.toMatch(/\{\{(targetQuestionCount|toneOrDefault|exclusionsOrNone|compiledSource)\}\}/);
+    expect(req.system).not.toMatch(
+      /\{\{(titleOrInferred|audienceOrInferred|intendedOutcomeOrInferred|targetQuestionCount|toneOrDefault|exclusionsOrNone|compiledSource)\}\}/,
+    );
   });
 
   it('generateNextAction returns a validated NextInterviewerAction', async () => {

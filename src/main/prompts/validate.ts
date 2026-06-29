@@ -28,6 +28,9 @@ export interface PromptValidationResult {
 const REQUIRED_PROMPTS: Record<string, readonly string[]> = {
   'mira.system': [],
   'project-preparation.system': [
+    'titleOrInferred',
+    'audienceOrInferred',
+    'intendedOutcomeOrInferred',
     'targetQuestionCount',
     'toneOrDefault',
     'exclusionsOrNone',

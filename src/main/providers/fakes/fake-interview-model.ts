@@ -91,13 +91,13 @@ export class FakeInterviewModel implements InterviewModelAdapter {
     if (this.delayMs > 0) await delay(this.delayMs, signal);
     throwIfAborted(signal);
 
-    const title = deriveTitle(input.compiledSource);
+    const title = input.title?.trim() || deriveTitle(input.compiledSource);
     const coverage = buildCoverage(input.compiledSource);
     const brief: InterviewBrief = {
       title,
       oneSentencePremise: `A conversation exploring ${title.toLowerCase()}.`,
-      audience: 'general interested listeners',
-      intendedOutcome: 'a clear, candid account of the topic',
+      audience: input.audience?.trim() || 'general interested listeners',
+      intendedOutcome: input.intendedOutcome?.trim() || 'a clear, candid account of the topic',
       recommendedTone: input.tone ?? 'curious and warm',
       factualAnchors: [],
       terminology: [],
