@@ -1,10 +1,11 @@
 /**
- * Project Asset Library ("Sources") constants. Content size and document count
- * are intentionally NOT capped — the operator supplies their own material — so
- * `maxCharactersPerDocument` / `maxTotalCharacters` / `maxDocuments` are retained
- * only as reference magnitudes (e.g. for tests), not enforced anywhere. The
- * enforced constants are the title length, the import batch size, and the
- * accepted extensions.
+ * Project Asset Library ("Sources") constants. Stored content size and document
+ * count are intentionally NOT capped — the operator supplies their own material —
+ * so `maxCharactersPerDocument` / `maxTotalCharacters` / `maxDocuments` are
+ * retained only as reference magnitudes (e.g. for tests), not enforced anywhere.
+ * The enforced constants are the title length, the import batch size, the accepted
+ * extensions, and `maxCompiledSourceCharacters` — the one runtime budget, derived
+ * from the planner model's real context window rather than an arbitrary policy cap.
  */
 export const PROJECT_SOURCE_LIMITS = {
   /** Reference only — the document count is no longer enforced. */
@@ -15,6 +16,23 @@ export const PROJECT_SOURCE_LIMITS = {
   maxCharactersPerDocument: 100_000,
   /** Reference only — aggregate content length is no longer capped. */
   maxTotalCharacters: 300_000,
+  /**
+   * Enforced budget for the compiled project-source envelope handed to the
+   * preparation model (see `AppController.prepareProject`). NOT an arbitrary
+   * cap — it is grounded in the planner model's real context window: gpt-5.5
+   * offers ~922k input tokens; reserving ~22k tokens for the system prompt, the
+   * structured-output JSON schema, and the generated plan leaves ~900k tokens
+   * for the compiled source. At the standard ~4-chars-per-token heuristic
+   * (slightly optimistic for Markdown/XML, hence the conservative reserve) that
+   * is ~3.6M characters. Beyond this the call would fail opaquely as a context
+   * overflow, so we reject early with a clear SOURCE_TOO_LARGE message. The
+   * heuristic assumes mostly Latin-script prose; CJK/dense-Unicode sources
+   * tokenise denser (~1-2 chars/token), so a source near this ceiling in those
+   * scripts could still overflow — acceptable until a real tokenizer is worth
+   * the dependency, since such a source would simply surface the model's own
+   * overflow error rather than silently misbehaving.
+   */
+  maxCompiledSourceCharacters: 3_600_000,
   /** Maximum source title length (enforced by the Zod save schema). */
   maxTitleCharacters: 200,
   /** Maximum stored original filename (basename) length (enforced). */
