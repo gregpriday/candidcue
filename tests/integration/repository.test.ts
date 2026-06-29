@@ -622,6 +622,10 @@ describe.each(implementations)('CandidCueRepository — $name', ({ make }) => {
     const fetched = await repo.getTurn(answered.id);
     expect(fetched?.answer?.cleanedTranscript).toBe('It started in a garage.');
     expect(fetched?.completedAt).not.toBeNull();
+    // Only answer_json and completed_at are COALESCE-protected; `state` follows
+    // the incoming row. The orchestrator's resume fix means an answered turn is
+    // never re-persisted as "asked" in practice — this guard is the safety net.
+    expect(fetched?.state).toBe('asked');
   });
 
   it('getRecentTurns returns the newest N turns in chronological order', async () => {

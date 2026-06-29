@@ -323,9 +323,14 @@ export class SessionOrchestrator {
     } else {
       this.transition('resumeBeforeStart');
     }
+    // If playback failed during resume, failStagePlayback() put us back in PAUSED
+    // with a fresh recoverable warning (it pauses without throwing, so the catch
+    // blocks above don't see it). Leave that warning intact instead of clearing
+    // it on the success tail, or the operator is stranded in PAUSED with no retry
+    // prompt. The throwing failure paths above already returned early.
+    if (this.state === 'PAUSED') return;
     // Success path: clear any recoverable warning (e.g. a prior failed-resume
-    // prompt) and republish so the UI drops it. The failure path above returns
-    // early with its warning intact, so this never clobbers it.
+    // prompt) and republish so the UI drops it.
     this.recoverableWarning = null;
     this.publishSnapshot();
   }
@@ -342,6 +347,10 @@ export class SessionOrchestrator {
 
   async repeatQuestion(): Promise<void> {
     this.assertCommandLegal('REPEAT_QUESTION');
+    // Re-asking the current turn makes it an unanswered prepared question again,
+    // so a later resume must replay it — not advance past it (#9). Clear the
+    // answered flag in case we are repeating from a post-commit recoverable pause.
+    this.currentTurnAnswered = false;
     // Reuse the cached question + audio; choose a different clip when possible.
     await this.runExclusive(async () => {
       // Drive back into the buffering state so playback transitions are legal

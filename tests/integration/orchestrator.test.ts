@@ -589,8 +589,10 @@ describe('SessionOrchestrator turn pipeline', () => {
   it('preserves the committed answer and advances when the next question fails to realize, then resumes (issue #9)', async () => {
     // The opening TTS (call 1) succeeds; the NEXT question's TTS (call 2) fails,
     // simulating a realization failure immediately after the answer is committed.
+    const model = new FakeInterviewModel({ questionTexts: ['So what changed after that?'] });
+    const generateSpy = vi.spyOn(model, 'generateNextAction');
     const tts = new FakeTts({ durationMs: 7000, failAfterCalls: 2 });
-    h = await makeHarness({ tts });
+    h = await makeHarness({ model, tts });
 
     await h.orch.prepareOpening();
     await h.orch.begin();
@@ -626,6 +628,74 @@ describe('SessionOrchestrator turn pipeline', () => {
     // A fresh turn 2 was realized and persisted as "asked" — not a replay of 1.
     const turn2 = agg!.turns.find((t) => t.ordinal === 2);
     expect(turn2?.state).toBe('asked');
+
+    // The resumed next-question generation was fed the committed answer as
+    // context (not an empty string), so the model can ask a relevant follow-up.
+    const lastInput = generateSpy.mock.calls.at(-1)?.[0];
+    expect(lastInput?.currentAnswer).toBe(committedAnswer);
+  });
+
+  it('keeps the recoverable warning when stage playback fails during an answered-turn resume (issue #9)', async () => {
+    const tts = new FakeTts({ durationMs: 7000, failAfterCalls: 2 });
+    h = await makeHarness({ tts });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+    expect(h.orch.getState()).toBe('PAUSED'); // turn 2 TTS failed → answered flag set
+
+    // Recover TTS, but make the stage fail to PLAY the resumed next question.
+    // failStagePlayback pauses without throwing, so the resume branch's catch
+    // never fires — the success tail must still NOT clobber the warning.
+    tts.resetFailure();
+    h.stage.results.play = false;
+    h.stage.openMicGate.mockClear();
+    await h.orch.resume();
+
+    // Stay PAUSED with the retry prompt intact; mic closed, STT not armed.
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.snapshots.at(-1)!.recoverableWarning).toBe('Stage playback failed. Resume to retry.');
+    expect(h.stage.openMicGate).not.toHaveBeenCalled();
+
+    // The committed answer survives the failed resume.
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.turns.find((t) => t.ordinal === 1)?.answer?.rawTranscript).toBeTruthy();
+  });
+
+  it('clears the answered flag on Repeat so a later replay does not skip the re-asked question (issue #9)', async () => {
+    const model = new FakeInterviewModel({ questionTexts: ['So what changed after that?'] });
+    const tts = new FakeTts({ durationMs: 7000, failAfterCalls: 2 });
+    h = await makeHarness({ model, tts });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    // Commit WITHOUT onSpeechStarted so userHasSpoken stays false → Repeat is
+    // legal from the recoverable pause that follows the failed turn-2 TTS.
+    await h.orch.commitUserTurn('manual');
+    expect(h.orch.getState()).toBe('PAUSED');
+    expect(h.orch.getCommandContext().userHasSpoken).toBe(false);
+
+    // Repeat re-asks turn 1 (cached audio, no TTS) but its stage playback fails,
+    // pausing from a non-mic state (INTERVIEWER_BUFFERING) — the path where the
+    // next resume routes through the prepared/next-question branches and the
+    // answered flag decides which. Repeat must have cleared the flag.
+    h.stage.results.preload = false;
+    await h.orch.repeatQuestion();
+    expect(h.orch.getState()).toBe('PAUSED');
+
+    h.stage.results.preload = true;
+    const modelCallsBeforeResume = model.callCount;
+    await h.orch.resume();
+
+    // The flag was cleared, so resume REPLAYS the re-asked turn 1 rather than
+    // advancing past it: no next-question generation, and no turn 2 appears.
+    expect(h.orch.getState()).toBe('USER_ARMED');
+    expect(model.callCount).toBe(modelCallsBeforeResume);
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+    expect(agg!.turns.find((t) => t.ordinal === 1)?.answer?.rawTranscript).toBeTruthy();
   });
 
   it('persists the computed coverage delta on the answered turn (CORR-09)', async () => {
