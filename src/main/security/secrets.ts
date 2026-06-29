@@ -75,8 +75,10 @@ export class CredentialStore {
     const envelope = this.store.read()[provider];
     if (!envelope) return null;
     if (!this.encryptor.isAvailable()) return null; // guard mirrors setKey
-    const cipher = Buffer.from(envelope.encryptedBase64, 'base64');
     try {
+      // Decode inside the try: a corrupted on-disk envelope (non-string
+      // encryptedBase64) would otherwise throw from Buffer.from itself.
+      const cipher = Buffer.from(envelope.encryptedBase64, 'base64');
       return this.encryptor.decryptString(cipher);
     } catch {
       // Never log: the cipher and any partial plaintext must not leak.

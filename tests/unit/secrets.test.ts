@@ -98,4 +98,21 @@ describe('CredentialStore', () => {
     expect(() => reader.getKey('inworld')).not.toThrow();
     expect(reader.getKey('inworld')).toBeNull();
   });
+
+  it('returns null (does not throw) when the stored envelope is corrupted', () => {
+    const shared = memoryStore();
+    // A hand-edited / corrupted credentials.json: encryptedBase64 is missing,
+    // so Buffer.from would throw before decryption is even attempted.
+    shared.write({
+      openai: {
+        schemaVersion: 1,
+        provider: 'openai',
+        createdAt: '2026-06-23T00:00:00.000Z',
+        updatedAt: '2026-06-23T00:00:00.000Z',
+      } as unknown as EncryptedCredentialEnvelope,
+    });
+    const reader = new CredentialStore(fakeEncryptor(true), shared);
+    expect(() => reader.getKey('openai')).not.toThrow();
+    expect(reader.getKey('openai')).toBeNull();
+  });
 });
