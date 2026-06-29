@@ -62,10 +62,32 @@ describe('HomeScreen — resumable sessions', () => {
     expect(await screen.findByRole('heading', { name: 'Interrupted interviews' })).toBeInTheDocument();
     expect(screen.getByText('Founding story')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Resume' }));
+    // Both the row and its trailing CTA carry the same per-session label; either
+    // resumes the same session.
+    await user.click(screen.getAllByRole('button', { name: 'Resume Founding story' })[0]);
 
     expect(nav.go).toHaveBeenCalledWith({ name: 'preflight', projectId: 'proj-42' });
     expect(nav.go).not.toHaveBeenCalledWith(expect.objectContaining({ name: 'operator' }));
+  });
+
+  it('resumes each session into its own project', async () => {
+    mockApi({
+      resumable: [
+        { sessionId: 's1', projectId: 'proj-1', projectTitle: 'Alpha', startedAt: null },
+        { sessionId: 's2', projectId: 'proj-2', projectTitle: 'Beta', startedAt: null },
+      ],
+    });
+    const nav = { go: vi.fn() };
+    const user = userEvent.setup();
+
+    render(<HomeScreen nav={nav} />);
+
+    // Click the trailing CTA for each row (the row button shares the same label).
+    await user.click((await screen.findAllByRole('button', { name: 'Resume Alpha' }))[1]);
+    await user.click(screen.getAllByRole('button', { name: 'Resume Beta' })[1]);
+
+    expect(nav.go).toHaveBeenNthCalledWith(1, { name: 'preflight', projectId: 'proj-1' });
+    expect(nav.go).toHaveBeenNthCalledWith(2, { name: 'preflight', projectId: 'proj-2' });
   });
 
   it('omits the section when there are no resumable sessions', async () => {

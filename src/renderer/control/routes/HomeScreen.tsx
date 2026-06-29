@@ -248,7 +248,7 @@ function ResumableSessions({ sessions, nav }: { sessions: ResumableSession[]; na
                 <span className={styles.rowMeta}>Started {formatRelative(session.startedAt)}</span>
               </button>
               <div className={styles.rowTrailing}>
-                <Button variant="secondary" onClick={resume}>
+                <Button variant="secondary" onClick={resume} aria-label={`Resume ${title}`}>
                   Resume
                 </Button>
               </div>
