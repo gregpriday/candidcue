@@ -8,10 +8,11 @@ import type {
 } from '@shared/contracts';
 import { VideoDeck } from './playback/VideoDeck';
 import { StatusOverlay } from './components/StatusOverlay';
+import type { CommandFeedback } from './components/StatusOverlay';
 import { EndConfirmOverlay } from './components/EndConfirmOverlay';
 import { SpeechPlayer } from './playback/SpeechPlayer';
 import { CaptureController } from './audio/CaptureController';
-import { commandForKey } from './stage-commands';
+import { commandForKey, isCommandUsefulInState } from './stage-commands';
 import styles from './stage-app.module.css';
 
 /** Initial projection before the first state event arrives. */
@@ -30,6 +31,28 @@ function sendCommand(command: StageCommand): void {
   window.candidcueStage.commands.send(command);
 }
 
+/**
+ * A soft two-note rising chime that signals "your turn" the moment the mic arms,
+ * so a founder watching the camera doesn't have to read the screen to notice.
+ * Pure Web Audio — no asset — and deliberately quiet so it never competes with
+ * the interviewer's voice.
+ */
+function playArmChime(ctx: AudioContext): void {
+  const now = ctx.currentTime;
+  const gain = ctx.createGain();
+  gain.connect(ctx.destination);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.linearRampToValueAtTime(0.14, now + 0.03);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.34);
+  const osc = ctx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(880, now); // A5
+  osc.frequency.setValueAtTime(1174.66, now + 0.12); // D6
+  osc.connect(gain);
+  osc.start(now);
+  osc.stop(now + 0.34);
+}
+
 export function StageApp(): JSX.Element {
   const [bootstrap, setBootstrap] = useState<StageBootstrap | null>(null);
   const [state, setState] = useState<StageStateProjection>(INITIAL_STATE);
@@ -41,10 +64,24 @@ export function StageApp(): JSX.Element {
   // floor (or is finalizing) — confirming in any other state is a harmless no-op,
   // matching how commandForKey's commands are silently dropped when illegal.
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
+  // On-screen keyboard legend, toggled with '?'. Renderer-local, not a command.
+  // Defaults open to orient the founder on standby; auto-hidden once the
+  // interview starts (see prevMicState/standby handling below).
+  const [legendVisible, setLegendVisible] = useState(true);
+  // Brief confirm/reject cue for the last keypress so a wrong-moment key is never
+  // silent. `token` increments per press so a repeated identical key re-pulses.
+  const [commandFeedback, setCommandFeedback] = useState<CommandFeedback | null>(null);
 
   // Engines live for the lifetime of the window; refs avoid re-creating them.
   const speechPlayerRef = useRef<SpeechPlayer | null>(null);
   const captureRef = useRef<CaptureController | null>(null);
+  // Soft "your turn" chime at mic-arm: a lazily-created context plus the previous
+  // mic gate, so the chime fires once on each closed/active -> armed transition.
+  const chimeCtxRef = useRef<AudioContext | null>(null);
+  const prevMicStateRef = useRef<StageStateProjection['micState']>(INITIAL_STATE.micState);
+  // Auto-hide the legend exactly once, when the interview leaves standby, so it
+  // never sits in the recording (the founder can re-show it with '?').
+  const hasLeftStandbyRef = useRef(false);
   // Latest state, read by event handlers without re-subscribing.
   const stateRef = useRef<StageStateProjection>(INITIAL_STATE);
   const currentTurnIdRef = useRef<string | null>(null);
@@ -176,6 +213,27 @@ export function StageApp(): JSX.Element {
     const offState = window.candidcueStage.events.onState((next) => {
       stateRef.current = next;
       setState(next);
+      // Sound a soft chime the instant the mic arms (and only on the transition,
+      // not on every armed projection) so a founder watching the camera knows
+      // it's their turn without reading the screen.
+      if (next.micState === 'armed' && prevMicStateRef.current !== 'armed') {
+        const AudioCtor = window.AudioContext;
+        if (typeof AudioCtor === 'function') {
+          try {
+            chimeCtxRef.current ??= new AudioCtor();
+            playArmChime(chimeCtxRef.current);
+          } catch {
+            // Audio is a nicety; never let it break the stage.
+          }
+        }
+      }
+      prevMicStateRef.current = next.micState;
+      // Once the interview starts, retire the orientation legend so it isn't part
+      // of the framing; it stays a '?' away if the founder wants it back.
+      if (next.visualState !== 'standby' && !hasLeftStandbyRef.current) {
+        hasLeftStandbyRef.current = true;
+        setLegendVisible(false);
+      }
       // Drive the mic gate from the authoritative projection.
       captureRef.current?.setGate(next.micState, currentTurnIdRef.current);
       // Once the visual state reaches 'speaking', start the decoded audio.
@@ -217,8 +275,21 @@ export function StageApp(): JSX.Element {
     return () => {
       void captureRef.current?.dispose();
       captureRef.current = null;
+      void chimeCtxRef.current?.close().catch(() => {});
+      chimeCtxRef.current = null;
     };
   }, []);
+
+  // Clear the keypress cue after a beat so it stays brief. A timer (not a pure
+  // CSS fill) keeps it visible under prefers-reduced-motion, where the fade-in
+  // animation collapses to nothing.
+  useEffect(() => {
+    if (commandFeedback === null) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setCommandFeedback(null), 1200);
+    return () => window.clearTimeout(timer);
+  }, [commandFeedback]);
 
   // --- Global keyboard ----------------------------------------------------
   useEffect(() => {
@@ -244,13 +315,36 @@ export function StageApp(): JSX.Element {
         setEndConfirmOpen(true);
         return;
       }
+      // '?' (Slash) toggles the on-screen controls legend. Renderer-local state,
+      // not a StageCommand — nothing crosses IPC.
+      if (event.code === 'Slash' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.preventDefault();
+        setLegendVisible((visible) => !visible);
+        return;
+      }
       // stateRef is always current, so the pause/resume toggle reads the latest
       // visual state without re-subscribing the listener.
       const command = commandForKey(event, stateRef.current.visualState);
       if (command === null) {
+        // Leave unrecognized keys untouched — no feedback flash for keys that
+        // were never stage controls.
         return;
       }
       event.preventDefault();
+      // Flash a confirm/reject cue from the same gating the orchestrator applies,
+      // so a wrong-moment press isn't silently swallowed. Bump the token so a
+      // repeated identical key still re-pulses.
+      const useful = isCommandUsefulInState(
+        command,
+        stateRef.current.visualState,
+        stateRef.current.micState,
+      );
+      setCommandFeedback((prev) => ({
+        kind: useful ? 'ok' : 'rejected',
+        token: (prev?.token ?? 0) + 1,
+      }));
+      // Send regardless: the orchestrator is the source of truth and tolerates a
+      // command that a briefly-lagging projection made look illegal.
       sendCommand(command);
     };
     window.addEventListener('keydown', onKeyDown);
@@ -276,7 +370,13 @@ export function StageApp(): JSX.Element {
         speechEndedTurnId={speechEndedTurnId}
         onSpeakingReady={handleSpeakingReady}
       />
-      <StatusOverlay state={state} captionsEnabled={captionsEnabled} characterName={characterName} />
+      <StatusOverlay
+        state={state}
+        captionsEnabled={captionsEnabled}
+        characterName={characterName}
+        legendVisible={legendVisible}
+        commandFeedback={commandFeedback}
+      />
       <EndConfirmOverlay
         open={endConfirmOpen}
         onClose={() => setEndConfirmOpen(false)}

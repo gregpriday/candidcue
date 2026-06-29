@@ -45,3 +45,69 @@ export function commandForKey(
       return null;
   }
 }
+
+/**
+ * Whether a stage command would actually do something right now. The orchestrator
+ * stays the source of truth and silently drops a command that is illegal for the
+ * session state (see `isCommandLegal` in src/main/interview/state-machine.ts);
+ * this mirrors that gating using only what the renderer can see — the projected
+ * `visualState` and `micState` — so a solo founder gets an immediate confirm/
+ * reject cue instead of silence when they press a key. It can briefly disagree
+ * with the orchestrator while a projection lags a keypress, which is harmless:
+ * the caller sends the command regardless and the orchestrator decides.
+ *
+ * The projection collapses several runtime states (orchestrator STAGE_VISUAL /
+ * MIC_STATE): USER_ARMED → listening + armed; USER_SPEAKING / ENDPOINT_CANDIDATE
+ * → listening + active; INTERVIEWER_SPEAKING → speaking; *_THINKING / BUFFERING /
+ * TURN_FINALIZING → thinking; PAUSED → paused; RECOVERING → recovering. The mic
+ * gate is open (armed or active) exactly while the user holds the floor.
+ */
+export function isCommandUsefulInState(
+  command: StageCommand,
+  visualState: StageStateProjection['visualState'],
+  micState: StageStateProjection['micState'],
+): boolean {
+  switch (command.type) {
+    case 'COMMIT':
+      // A manual commit lands a turn only while the mic gate is open.
+      return micState !== 'closed';
+    case 'PAUSE':
+    case 'EXIT_STAGE':
+      // Both pause the session — EXIT_STAGE maps to PAUSE_SESSION in the stage
+      // IPC (register-stage-ipc.ts) — so they share its gating: pausable
+      // throughout a live exchange, but not once paused, recovering, finished,
+      // errored, or still on standby.
+      return (
+        visualState === 'listening' || visualState === 'thinking' || visualState === 'speaking'
+      );
+    case 'RESUME':
+      return visualState === 'paused';
+    case 'REPEAT':
+      // Replay the current question, legal before the founder has begun answering
+      // (mic still merely armed) or from a pause. The orchestrator additionally
+      // gates on whether speech exists for the turn, which the projection does not
+      // expose, so a pause taken *after* speaking can briefly confirm here; the
+      // command is sent regardless and the orchestrator stays the arbiter.
+      return visualState === 'paused' || (visualState === 'listening' && micState === 'armed');
+    case 'SKIP':
+      // Swap the delivered question for a new one, only before any answer speech.
+      return visualState === 'listening' && micState === 'armed';
+    case 'RETAKE':
+      // Discard the in-progress answer and re-deliver the same question — the
+      // complement of REPEAT. Legal once the founder has begun answering (the mic
+      // gate is open and active) or from a pause taken mid-answer. The orchestrator
+      // additionally gates on whether speech exists for the turn and that the answer
+      // is not yet committed, neither of which the projection exposes, so a pause
+      // taken *before* speaking can briefly confirm here; the command is sent
+      // regardless and the orchestrator stays the arbiter.
+      return visualState === 'paused' || (visualState === 'listening' && micState === 'active');
+    case 'END_AFTER_TURN':
+      // Finish after the answer the founder currently owns; the mic-open states
+      // are the renderer-visible slice of where this is legal.
+      return micState !== 'closed';
+    default: {
+      const _exhaustive: never = command;
+      return _exhaustive;
+    }
+  }
+}
