@@ -17,6 +17,7 @@ import type {
   InterviewSection,
   MediaClip,
   SessionCoverageItem,
+  CoverageStatus,
 } from '@shared/domain';
 import type {
   InterviewModelAdapter,
@@ -151,6 +152,13 @@ async function makeHarness(overrides?: {
   targetQuestionCount?: number;
   character?: InterviewerCharacter;
   brief?: InterviewBrief;
+  /**
+   * Force every brief coverage item to this status (default keeps the brief's
+   * own `not_started`). Tests that exercise a close path unrelated to the
+   * must-coverage gate (issue #65) set this to `'covered'` so the gate sees no
+   * unmet musts and the original close behavior is observed in isolation.
+   */
+  coverageStatus?: CoverageStatus;
 }): Promise<Harness> {
   const repo = new MemoryRepository();
   await repo.migrate();
@@ -175,7 +183,9 @@ async function makeHarness(overrides?: {
   };
   await repo.savePlan(plan);
 
-  const coverage = coverageFromBrief(b);
+  const coverage = coverageFromBrief(b).map((c) =>
+    overrides?.coverageStatus ? { ...c, status: overrides.coverageStatus } : c,
+  );
   const session = await repo.createSession({
     projectId: project.project.id,
     planVersionId: plan.id,
@@ -808,7 +818,9 @@ describe('SessionOrchestrator turn pipeline', () => {
     const model = new FakeInterviewModel({
       scriptedActions: [{ action: 'complete', spokenText: '', shouldCloseAfterAnswer: false }],
     });
-    h = await makeHarness({ model });
+    // cov-problem pre-covered: isolates the `complete` arm from the
+    // must-coverage gate (#65), which would otherwise redirect to a fallback.
+    h = await makeHarness({ model, coverageStatus: 'covered' });
     await h.orch.prepareOpening();
     await h.orch.begin();
     const ttsBefore = h.tts.seen.length;
@@ -829,7 +841,9 @@ describe('SessionOrchestrator turn pipeline', () => {
     const model = new FakeInterviewModel({
       scriptedActions: [{ action: 'ask', spokenText: 'One more thing?', shouldCloseAfterAnswer: true }],
     });
-    h = await makeHarness({ model });
+    // cov-problem pre-covered: isolates the `shouldCloseAfterAnswer` arm from the
+    // must-coverage gate (#65).
+    h = await makeHarness({ model, coverageStatus: 'covered' });
     await h.orch.prepareOpening();
     await h.orch.begin();
     const ttsBefore = h.tts.seen.length;
@@ -849,7 +863,9 @@ describe('SessionOrchestrator turn pipeline', () => {
     const model = new FakeInterviewModel({
       scriptedActions: [{ action: 'ask', spokenText: 'One more thing?', shouldCloseAfterAnswer: false }],
     });
-    h = await makeHarness({ model });
+    // cov-problem pre-covered: isolates the `endAfterTurnRequested` arm from the
+    // must-coverage gate (#65), so the close is driven solely by the operator flag.
+    h = await makeHarness({ model, coverageStatus: 'covered' });
     await h.orch.prepareOpening();
     await h.orch.begin();
     const ttsBefore = h.tts.seen.length;
@@ -1009,6 +1025,170 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(h.orch.getCommandContext().userHasSpoken).toBe(false);
     expect(lastSnapshot().finalTranscriptSoFar).toBe('');
     expect(h.stage.openMicGate).toHaveBeenCalledTimes(1);
+  });
+
+  // The completion gate (issue #65): an interview must not end while essential
+  // (`must`) coverage is still unmet. Organic closes (model `complete` /
+  // `shouldCloseAfterAnswer`) are redirected to a must-targeting fallback;
+  // operator-initiated closes (End After Turn / End Now) are honoured but warn;
+  // the hard question cap (#17) is the authoritative escape hatch and is never
+  // gated. The default brief has one `must` item (`cov-problem`, not_started)
+  // and one fallback question that targets it.
+  describe('must-coverage completion gate (#65)', () => {
+    it('redirects a model `complete` to a must-targeting fallback while a must is unmet', async () => {
+      const model = new FakeInterviewModel({
+        scriptedActions: [{ action: 'complete', spokenText: '' }],
+      });
+      h = await makeHarness({ model });
+      await h.orch.prepareOpening();
+      await h.orch.begin();
+      h.orch.onSpeechStarted(1000);
+      h.orch.onSpeechStopped(4000);
+      await h.orch.commitUserTurn('manual');
+
+      // The organic close was blocked: the session stays open and arms the
+      // fallback question that targets the unmet must, sourced from the bank.
+      expect(h.orch.getState()).toBe('USER_ARMED');
+      expect(lastSnapshot().recoverableWarning).toBeNull();
+      const agg = await h.repo.getSession(h.sessionId);
+      expect(agg!.session.status).not.toBe('completed');
+      const turn2 = agg!.turns.find((t) => t.ordinal === 2);
+      expect(turn2?.question.text).toBe('What happens after the speaker finishes an answer?');
+      expect(turn2?.question.source).toBe('fallback_bank');
+    });
+
+    it('redirects a `shouldCloseAfterAnswer` close to a must-targeting fallback', async () => {
+      const model = new FakeInterviewModel({
+        scriptedActions: [{ action: 'ask', spokenText: 'A final thought?', shouldCloseAfterAnswer: true }],
+      });
+      h = await makeHarness({ model });
+      await h.orch.prepareOpening();
+      await h.orch.begin();
+      h.orch.onSpeechStarted(1000);
+      h.orch.onSpeechStopped(4000);
+      await h.orch.commitUserTurn('manual');
+
+      expect(h.orch.getState()).toBe('USER_ARMED');
+      const agg = await h.repo.getSession(h.sessionId);
+      const turn2 = agg!.turns.find((t) => t.ordinal === 2);
+      expect(turn2?.question.text).toBe('What happens after the speaker finishes an answer?');
+      expect(turn2?.question.source).toBe('fallback_bank');
+    });
+
+    it('closes with an essential-topics warning once the must-targeting bank is exhausted', async () => {
+      // Turn 1: the gate redirects the model `complete` to the single
+      // must-targeting fallback (consuming it). Turn 2: the model completes again
+      // with the bank now dry → no fallback remains, so the interview closes and
+      // surfaces the essential-topics warning naming the uncovered item.
+      const model = new FakeInterviewModel({
+        scriptedActions: [
+          { action: 'complete', spokenText: '' },
+          { action: 'complete', spokenText: '' },
+        ],
+      });
+      h = await makeHarness({ model });
+      await h.orch.prepareOpening();
+      await h.orch.begin();
+
+      h.orch.onSpeechStarted(1000);
+      h.orch.onSpeechStopped(4000);
+      await h.orch.commitUserTurn('manual');
+      expect(h.orch.getState()).toBe('USER_ARMED'); // redirected to the fallback
+
+      h.orch.onSpeechStarted(5000);
+      h.orch.onSpeechStopped(8000);
+      await h.orch.commitUserTurn('manual');
+
+      expect(h.orch.getState()).toBe('COMPLETED');
+      const snap = lastSnapshot();
+      expect(snap.recoverableWarning).toMatch(/essential/i);
+      expect(snap.recoverableWarning).toContain('Problem and audience'); // the must item's label
+    });
+
+    it('honours End After Turn but warns when a must is left uncovered', async () => {
+      await h.orch.prepareOpening();
+      await h.orch.begin();
+      h.orch.onSpeechStarted(1000);
+      h.orch.onSpeechStopped(4000);
+      h.orch.endAfterTurn();
+      await h.orch.commitUserTurn('manual');
+
+      // The operator's explicit choice to stop is honoured (not blocked), but the
+      // missed essential topic is surfaced rather than silently dropped.
+      expect(h.orch.getState()).toBe('COMPLETED');
+      const snap = lastSnapshot();
+      expect(snap.recoverableWarning).toMatch(/essential/i);
+      expect(snap.recoverableWarning).toContain('Problem and audience');
+      const agg = await h.repo.getSession(h.sessionId);
+      expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+    });
+
+    it('honours End Now but warns when a must is left uncovered', async () => {
+      await h.orch.prepareOpening();
+      await h.orch.begin();
+
+      await h.orch.endNow();
+
+      expect(h.orch.getState()).toBe('COMPLETED');
+      const snap = lastSnapshot();
+      expect(snap.recoverableWarning).toMatch(/essential/i);
+      expect(snap.recoverableWarning).toContain('Problem and audience');
+    });
+
+    it('lets the hard cap close with its own warning, never the essential-topics one', async () => {
+      // The hard cap (#17) is the authoritative escape hatch: even with a must
+      // still unmet, the cap-driven close keeps its safety-limit attribution and
+      // the must-coverage gate is fully suppressed (no fallback redirect, no
+      // essential-topics warning) — otherwise the interview could never end.
+      const model = new FakeInterviewModel({
+        questionTexts: [
+          'What first drew you to this work',
+          'Can you walk me through a concrete example',
+          'What surprised you most along the way',
+          'How did you measure success there',
+          'Where would you like to take this next',
+        ],
+      });
+      h = await makeHarness({ model, targetQuestionCount: 3 }); // cap = ceil(3 * 1.5) = 5
+
+      await h.orch.prepareOpening();
+      await h.orch.begin();
+      for (let i = 0; i < 5; i++) {
+        h.orch.onSpeechStarted(1000 * (i + 1));
+        h.orch.onSpeechStopped(1000 * (i + 1) + 3000);
+        await h.orch.commitUserTurn('manual');
+      }
+
+      expect(h.orch.getState()).toBe('COMPLETED');
+      const snap = lastSnapshot();
+      expect(snap.recoverableWarning).toMatch(/safety question limit/i);
+      expect(snap.recoverableWarning).not.toMatch(/essential/i);
+    });
+
+    it('closes cleanly with no warning once the must item is covered', async () => {
+      // The model marks the must covered on the same turn it completes: the gate
+      // sees no unmet musts, so the close proceeds normally with no warning.
+      const model = new FakeInterviewModel({
+        scriptedActions: [
+          {
+            action: 'complete',
+            spokenText: 'Thanks, that covers it.',
+            coverageUpdates: [{ coverageItemId: 'cov-problem', status: 'covered', evidenceTurnIds: [] }],
+          },
+        ],
+      });
+      h = await makeHarness({ model });
+      await h.orch.prepareOpening();
+      await h.orch.begin();
+      h.orch.onSpeechStarted(1000);
+      h.orch.onSpeechStopped(4000);
+      await h.orch.commitUserTurn('manual');
+
+      expect(h.orch.getState()).toBe('COMPLETED');
+      expect(lastSnapshot().recoverableWarning).toBeNull();
+      const agg = await h.repo.getSession(h.sessionId);
+      expect(agg!.turns.some((t) => t.ordinal === 2)).toBe(false);
+    });
   });
 
   it('silently re-arms the same turn on an empty answer instead of pausing (issue #61)', async () => {
@@ -2200,7 +2380,9 @@ describe('SessionOrchestrator turn pipeline', () => {
     const model = new FakeInterviewModel({
       scriptedActions: [{ action: 'complete', spokenText: 'Thanks for sharing all of that.' }],
     });
-    h = await makeHarness({ model, captionsEnabled: true });
+    // cov-problem pre-covered so the model's `complete` actually completes
+    // (the must-coverage gate (#65) would otherwise redirect to a fallback).
+    h = await makeHarness({ model, captionsEnabled: true, coverageStatus: 'covered' });
     await h.orch.prepareOpening();
     await h.orch.begin();
     const ttsBefore = h.tts.seen.length;
@@ -2261,7 +2443,9 @@ describe('SessionOrchestrator turn pipeline', () => {
     const model = new FakeInterviewModel({
       scriptedActions: [{ action: 'complete', spokenText: '', shouldCloseAfterAnswer: false }],
     });
-    h = await makeHarness({ model });
+    // cov-problem pre-covered so the empty `complete` completes silently rather
+    // than being redirected to a fallback by the must-coverage gate (#65).
+    h = await makeHarness({ model, coverageStatus: 'covered' });
     await h.orch.prepareOpening();
     await h.orch.begin();
     const ttsBefore = h.tts.seen.length;

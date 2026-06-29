@@ -46,7 +46,7 @@ import {
 import { withRetry } from '../providers/retry';
 import { planSpeaking } from '../media/media-planner';
 import { validateQuestion, deterministicRepair } from './question-validator';
-import { applyCoverageUpdates, incrementFollowUp } from './coverage-controller';
+import { applyCoverageUpdates, incrementFollowUp, unmetMustItems } from './coverage-controller';
 import { pickFallback } from './fallback-planner';
 import { DurationCalibrator } from './duration-calibrator';
 import { buildCoverageContext, buildRecentTurns, buildModerationGuidance } from './context-builder';
@@ -509,6 +509,24 @@ export class SessionOrchestrator {
       const shouldClose =
         action.action === 'complete' || action.shouldCloseAfterAnswer || this.endAfterTurnRequested;
       if (shouldClose) {
+        // Completion gate (issue #65): mirror commitPipeline — don't end while
+        // essential (`must`) topics remain uncovered. Operator End After Turn is
+        // honoured (warn only); an organic close redirects to a must-targeting
+        // fallback when one remains. No hard-cap context applies on a skip, and
+        // there is no committed answer to release, so the redirect is immediate.
+        const unmet = unmetMustItems(this.coverage);
+        if (unmet.length > 0) {
+          if (this.endAfterTurnRequested) {
+            this.recoverableWarning = mustGapWarning(unmet);
+          } else {
+            const fallback = this.pickMustGapFallback(unmet);
+            if (fallback) {
+              await this.realizeNextQuestion(fallback, 'fallback_bank');
+              return;
+            }
+            this.recoverableWarning = mustGapWarning(unmet);
+          }
+        }
         await this.completeSession(action, 'skip complete');
         return;
       }
@@ -582,6 +600,16 @@ export class SessionOrchestrator {
     // is legal (END_NOW_STATES ⊆ states where it is legal), so the shared
     // completion path drives it. endNow has no model action → no closing line is
     // spoken (it is an abort, not a sign-off).
+    // Completion gate (issue #65): an abort never blocks, but warn the operator
+    // when essential (`must`) topics are left uncovered — unless a more urgent
+    // recovery/abort warning is already showing (e.g. a failed reconnect), which
+    // this lower-priority completion notice must not clobber.
+    if (this.recoverableWarning === null) {
+      const unmetOnEnd = unmetMustItems(this.coverage);
+      if (unmetOnEnd.length > 0) {
+        this.recoverableWarning = mustGapWarning(unmetOnEnd);
+      }
+    }
     await this.completeSession(undefined, 'ended now');
   }
 
@@ -1199,6 +1227,33 @@ export class SessionOrchestrator {
             hardQuestionCap: this.hardQuestionCap(),
           });
         }
+        // Completion gate (issue #65): don't end organically while essential
+        // (`must`) topics are still uncovered. The hard cap is the authoritative
+        // escape hatch — when it fired (`hardCapReached`), its warning stands and
+        // the gate is fully suppressed, even if the model also returned `complete`
+        // this turn (then `closedByHardCap` is false but neither warning is set,
+        // preserving the cap's silent-attribution path).
+        if (!hardCapReached) {
+          const unmet = unmetMustItems(this.coverage);
+          if (unmet.length > 0) {
+            if (this.endAfterTurnRequested) {
+              // Operator armed End After Turn: honour the explicit choice to stop,
+              // but warn that essential topics were left uncovered.
+              this.recoverableWarning = mustGapWarning(unmet);
+            } else {
+              // Organic close (model `complete` / `shouldCloseAfterAnswer`):
+              // redirect to a fallback that targets an unmet must, if one remains.
+              const fallback = this.pickMustGapFallback(unmet);
+              if (fallback) {
+                this.commitInFlight = false; // release BEFORE the realize await
+                await this.realizeNextQuestion(fallback, 'fallback_bank');
+                return;
+              }
+              // Bank dry for the must gaps: warn and fall through to close.
+              this.recoverableWarning = mustGapWarning(unmet);
+            }
+          }
+        }
         // commitInFlight is released first (preserves the release-before-complete
         // ordering), then the shared completion path speaks the model's closing
         // line (when the action is an explicit `complete`) and closes STT. A
@@ -1365,6 +1420,31 @@ export class SessionOrchestrator {
       shouldCloseAfterAnswer: true,
       qualityFlags: ['none'],
     };
+  }
+
+  /**
+   * Completion gate (issue #65): when an interview is about to close organically
+   * with `must`-priority coverage still unmet, try to keep it open by asking a
+   * fallback question that explicitly targets one of those gaps. Only fallbacks
+   * whose targets include an unmet must are considered — a generic should/optional
+   * fallback does not satisfy the gate, so the bank is declared dry the moment no
+   * must-targeting question remains and the caller warns-and-closes instead.
+   * Returns the `ask` action to realize, or null when no such fallback is left.
+   */
+  private pickMustGapFallback(unmetMusts: SessionCoverageItem[]): NextInterviewerAction | null {
+    const unmetIds = new Set(unmetMusts.map((m) => m.id));
+    const candidates = this.ctx.brief.fallbackQuestions.filter((q) =>
+      q.targetCoverageItemIds.some((id) => unmetIds.has(id)),
+    );
+    const picked = pickFallback(candidates, {
+      coverage: this.coverage,
+      currentSectionId: null,
+      recentQuestions: this.recentQuestionTexts.slice(-5),
+      usedFallbackTexts: this.usedFallbackTexts,
+    });
+    if (!picked) return null;
+    this.usedFallbackTexts.push(picked.text);
+    return askAction(picked.text, picked.type, picked.targetCoverageItemIds);
   }
 
   private validateAndRepair(action: NextInterviewerAction): string {
@@ -1969,6 +2049,16 @@ export class SessionOrchestrator {
 
 function stateConflict(message: string): AppError {
   return new AppError('SESSION_STATE_CONFLICT', { message, publicMessage: message });
+}
+
+/**
+ * Human-readable completion warning naming the essential (`must`) topics that
+ * ended the interview still uncovered (issue #65). Surfaced through
+ * `recoverableWarning` on the COMPLETED snapshot.
+ */
+function mustGapWarning(items: SessionCoverageItem[]): string {
+  const labels = items.map((i) => i.label).join(', ');
+  return `Essential topic${items.length === 1 ? '' : 's'} not fully covered: ${labels}.`;
 }
 
 function askAction(

@@ -1,6 +1,7 @@
 import {
   applyCoverageUpdates,
   incrementFollowUp,
+  unmetMustItems,
 } from '@main/interview/coverage-controller';
 import type { SessionCoverageItem, CoverageStatus } from '@shared/domain';
 
@@ -382,5 +383,57 @@ describe('incrementFollowUp', () => {
     // The untouched item keeps its identity; the target is a fresh object.
     expect(next[1]).toBe(b);
     expect(next[0]).not.toBe(a);
+  });
+});
+
+describe('unmetMustItems', () => {
+  it('returns must items that are not_started or partial', () => {
+    const current = [
+      makeItem({ id: 'a', priority: 'must', status: 'not_started' }),
+      makeItem({ id: 'b', priority: 'must', status: 'partial' }),
+    ];
+
+    expect(unmetMustItems(current).map((i) => i.id)).toEqual(['a', 'b']);
+  });
+
+  it('excludes must items that are covered or skipped', () => {
+    const current = [
+      makeItem({ id: 'covered', priority: 'must', status: 'covered' }),
+      makeItem({ id: 'skipped', priority: 'must', status: 'skipped' }),
+    ];
+
+    expect(unmetMustItems(current)).toHaveLength(0);
+  });
+
+  it('excludes should and optional items regardless of status', () => {
+    const current = [
+      makeItem({ id: 'should', priority: 'should', status: 'not_started' }),
+      makeItem({ id: 'optional', priority: 'optional', status: 'partial' }),
+    ];
+
+    expect(unmetMustItems(current)).toHaveLength(0);
+  });
+
+  it('returns only the unmet musts from a mixed list, preserving order', () => {
+    const current = [
+      makeItem({ id: 'm-covered', priority: 'must', status: 'covered' }),
+      makeItem({ id: 'm-open', priority: 'must', status: 'not_started' }),
+      makeItem({ id: 's-open', priority: 'should', status: 'not_started' }),
+      makeItem({ id: 'm-partial', priority: 'must', status: 'partial' }),
+    ];
+
+    expect(unmetMustItems(current).map((i) => i.id)).toEqual(['m-open', 'm-partial']);
+  });
+
+  it('returns an empty array for empty coverage', () => {
+    expect(unmetMustItems([])).toEqual([]);
+  });
+
+  it('does not mutate the input array', () => {
+    const current = [makeItem({ priority: 'must', status: 'not_started' })];
+    const snapshot = [...current];
+    unmetMustItems(current);
+
+    expect(current).toEqual(snapshot);
   });
 });
