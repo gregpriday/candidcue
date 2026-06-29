@@ -63,12 +63,27 @@ export class CredentialStore {
     this.store.write(envelopes);
   }
 
-  /** Decrypt a key for immediate provider-client use in main only. */
+  /**
+   * Decrypt a key for immediate provider-client use in main only. Fail-soft:
+   * returns null (never throws) when the envelope is missing, secure storage is
+   * unavailable, or decryption fails. Secure storage can drop out after a key
+   * was written (keychain locked, DPAPI blob from another user, libsecret
+   * unreachable) and an envelope can be corrupted on disk; treating any such
+   * read failure as "no usable key" keeps callers on the existing null path.
+   */
   getKey(provider: ProviderName): string | null {
     const envelope = this.store.read()[provider];
     if (!envelope) return null;
-    const cipher = Buffer.from(envelope.encryptedBase64, 'base64');
-    return this.encryptor.decryptString(cipher);
+    if (!this.encryptor.isAvailable()) return null; // guard mirrors setKey
+    try {
+      // Decode inside the try: a corrupted on-disk envelope (non-string
+      // encryptedBase64) would otherwise throw from Buffer.from itself.
+      const cipher = Buffer.from(envelope.encryptedBase64, 'base64');
+      return this.encryptor.decryptString(cipher);
+    } catch {
+      // Never log: the cipher and any partial plaintext must not leak.
+      return null;
+    }
   }
 
   clearKey(provider: ProviderName): void {
