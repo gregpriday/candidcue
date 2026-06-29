@@ -12,6 +12,7 @@ const ALLOWED_CHECK_IDS = new Set(['openai', 'inworld', 'manifest', 'display', '
 interface DepOverrides {
   isDisplayConnected: (displayId: string | null) => boolean;
   hasKey?: () => boolean;
+  getKey?: () => string | null;
   getProject?: () => Promise<unknown>;
 }
 
@@ -21,7 +22,10 @@ function makeController(overrides: DepOverrides): AppController {
       getProject: overrides.getProject ?? (async () => null),
       getLatestPlan: async () => null,
     } as never,
-    credentials: { hasKey: overrides.hasKey ?? (() => false) } as never,
+    credentials: {
+      hasKey: overrides.hasKey ?? (() => false),
+      getKey: overrides.getKey ?? (() => null),
+    } as never,
     logger: NOOP_LOGGER,
     videosRoot: '',
     getControl: () => null,
@@ -75,9 +79,16 @@ describe('runPrepareSession display check', () => {
   it('fails the display check and blocks begin when the selected display is gone, even with every other check green', async () => {
     const plan = { id: 'plan-1', status: 'ready', sourceHash: 'hash-1' };
     const aggregate = { project: { sourceHash: 'hash-1' }, activePlan: plan };
+    // getKey is consulted only inside startOrchestrator (which the canBegin gate
+    // guards). A valid key means that if `&& displayOk` were ever dropped from
+    // the gate, the orchestrator path would actually be entered — so asserting
+    // getKey is never called proves the display failure short-circuited the gate
+    // rather than some downstream stub throw incidentally leaving canBegin false.
+    const getKey = vi.fn(() => 'sk-test');
     const state = await makeController({
       isDisplayConnected: () => false,
       hasKey: () => true,
+      getKey,
       getProject: async () => aggregate,
     }).prepareSession(input('display-9'));
 
@@ -89,10 +100,15 @@ describe('runPrepareSession display check', () => {
     expect(check(state, 'display')?.status).toBe('failed');
     expect(check(state, 'display')?.detail).toMatch(/no longer connected/i);
     expect(state.canBegin).toBe(false);
+    // The gate blocked before the orchestrator branch: opening carries the gate's
+    // own message (not a downstream error) and no credentials were read.
+    expect(check(state, 'opening')?.detail).toBe('Resolve the checks above first.');
+    expect(getKey).not.toHaveBeenCalled();
   });
 
-  it('only emits checks declared by the narrowed contract', async () => {
+  it('emits exactly the checks declared by the narrowed contract, in order', async () => {
     const state = await makeController({ isDisplayConnected: () => true }).prepareSession(input('display-9'));
+    expect(state.checks.map((c) => c.id)).toEqual(['openai', 'inworld', 'manifest', 'display', 'opening']);
     for (const c of state.checks) {
       expect(ALLOWED_CHECK_IDS.has(c.id)).toBe(true);
     }
