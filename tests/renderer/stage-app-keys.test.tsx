@@ -102,6 +102,34 @@ afterEach(() => {
 });
 
 describe('StageApp — controls legend', () => {
+  it('shows the legend on standby and retires it once the interview starts', async () => {
+    await mountStage();
+    // Default-open on standby to orient the founder.
+    expect(legendContainer()).toHaveAttribute('data-visible', 'true');
+
+    // It auto-hides the moment the interview leaves standby.
+    pushState(projection({ visualState: 'thinking', micState: 'closed' }));
+    expect(legendContainer()).toHaveAttribute('data-visible', 'false');
+  });
+
+  it('lets the founder dismiss the legend on standby with "?"', async () => {
+    await mountStage();
+    expect(legendContainer()).toHaveAttribute('data-visible', 'true');
+
+    fireEvent.keyDown(window, { code: 'Slash', key: '/' });
+    expect(legendContainer()).toHaveAttribute('data-visible', 'false');
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('toggles the legend with Shift+Slash (the actual "?" on US layouts)', async () => {
+    await mountStage();
+    pushState(projection({ visualState: 'listening', micState: 'armed' }));
+    expect(legendContainer()).toHaveAttribute('data-visible', 'false');
+
+    fireEvent.keyDown(window, { code: 'Slash', key: '?', shiftKey: true });
+    expect(legendContainer()).toHaveAttribute('data-visible', 'true');
+  });
+
   it('toggles the legend with "?" during a live state', async () => {
     await mountStage();
     pushState(projection({ visualState: 'listening', micState: 'armed' }));
@@ -157,6 +185,39 @@ describe('StageApp — keypress confirm/reject', () => {
     expect(screen.queryByText('Got it')).toBeNull();
     expect(screen.queryByText('Not now')).toBeNull();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('clears the cue after a beat and re-pulses on the next press', async () => {
+    await mountStage();
+    pushState(projection({ visualState: 'listening', micState: 'active' }));
+    vi.useFakeTimers();
+    try {
+      fireEvent.keyDown(window, { code: 'Space', key: ' ' });
+      expect(screen.getByText('Got it')).toBeInTheDocument();
+
+      // It stays brief: gone after the clear timer fires.
+      act(() => vi.advanceTimersByTime(1200));
+      expect(screen.queryByText('Got it')).toBeNull();
+
+      // A fresh press brings it back (token restart).
+      fireEvent.keyDown(window, { code: 'Space', key: ' ' });
+      expect(screen.getByText('Got it')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('confirms REPEAT from a pause even after speaking (documented approximation)', async () => {
+    // The renderer cannot see `userHasSpoken`, so a pause taken after the founder
+    // began answering still confirms REPEAT; the orchestrator is the final word.
+    await mountStage();
+    pushState(projection({ visualState: 'listening', micState: 'active' }));
+    pushState(projection({ visualState: 'paused', micState: 'closed' }));
+
+    fireEvent.keyDown(window, { code: 'KeyR', key: 'r' });
+
+    expect(screen.getByText('Got it')).toHaveAttribute('data-kind', 'ok');
+    expect(send).toHaveBeenCalledWith({ type: 'REPEAT' });
   });
 });
 

@@ -144,10 +144,10 @@ export function StatusOverlay({
     return () => window.clearTimeout(timer);
   }, [statusText, state.visualState]);
 
-  // The legend orients a solo founder; it shows automatically on standby (before
-  // recording) and otherwise only when toggled, so it stays out of the frame
-  // during the interview.
-  const showLegend = legendVisible || isStandby;
+  // The legend's visibility is fully owned by the caller (StageApp): it defaults
+  // open on standby to orient the founder, auto-hides once the interview starts
+  // so it stays out of the frame, and toggles with '?'.
+  const showLegend = legendVisible;
 
   const captions =
     !isError && captionsEnabled && state.captions !== null && state.captions !== ''

@@ -65,7 +65,9 @@ export function StageApp(): JSX.Element {
   // matching how commandForKey's commands are silently dropped when illegal.
   const [endConfirmOpen, setEndConfirmOpen] = useState(false);
   // On-screen keyboard legend, toggled with '?'. Renderer-local, not a command.
-  const [legendVisible, setLegendVisible] = useState(false);
+  // Defaults open to orient the founder on standby; auto-hidden once the
+  // interview starts (see prevMicState/standby handling below).
+  const [legendVisible, setLegendVisible] = useState(true);
   // Brief confirm/reject cue for the last keypress so a wrong-moment key is never
   // silent. `token` increments per press so a repeated identical key re-pulses.
   const [commandFeedback, setCommandFeedback] = useState<CommandFeedback | null>(null);
@@ -77,6 +79,9 @@ export function StageApp(): JSX.Element {
   // mic gate, so the chime fires once on each closed/active -> armed transition.
   const chimeCtxRef = useRef<AudioContext | null>(null);
   const prevMicStateRef = useRef<StageStateProjection['micState']>(INITIAL_STATE.micState);
+  // Auto-hide the legend exactly once, when the interview leaves standby, so it
+  // never sits in the recording (the founder can re-show it with '?').
+  const hasLeftStandbyRef = useRef(false);
   // Latest state, read by event handlers without re-subscribing.
   const stateRef = useRef<StageStateProjection>(INITIAL_STATE);
   const currentTurnIdRef = useRef<string | null>(null);
@@ -223,6 +228,12 @@ export function StageApp(): JSX.Element {
         }
       }
       prevMicStateRef.current = next.micState;
+      // Once the interview starts, retire the orientation legend so it isn't part
+      // of the framing; it stays a '?' away if the founder wants it back.
+      if (next.visualState !== 'standby' && !hasLeftStandbyRef.current) {
+        hasLeftStandbyRef.current = true;
+        setLegendVisible(false);
+      }
       // Drive the mic gate from the authoritative projection.
       captureRef.current?.setGate(next.micState, currentTurnIdRef.current);
       // Once the visual state reaches 'speaking', start the decoded audio.

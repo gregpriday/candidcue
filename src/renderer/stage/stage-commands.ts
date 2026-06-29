@@ -72,23 +72,26 @@ export function isCommandUsefulInState(
       // A manual commit lands a turn only while the mic gate is open.
       return micState !== 'closed';
     case 'PAUSE':
-      // Pausable throughout a live exchange; not once paused, recovering,
-      // finished, errored, or still on standby.
+    case 'EXIT_STAGE':
+      // Both pause the session — EXIT_STAGE maps to PAUSE_SESSION in the stage
+      // IPC (register-stage-ipc.ts) — so they share its gating: pausable
+      // throughout a live exchange, but not once paused, recovering, finished,
+      // errored, or still on standby.
       return (
         visualState === 'listening' || visualState === 'thinking' || visualState === 'speaking'
       );
     case 'RESUME':
       return visualState === 'paused';
     case 'REPEAT':
-      // Replay the current question only before the founder has begun answering
-      // (mic still merely armed) or from a pause taken before they began.
+      // Replay the current question, legal before the founder has begun answering
+      // (mic still merely armed) or from a pause. The orchestrator additionally
+      // gates on whether speech exists for the turn, which the projection does not
+      // expose, so a pause taken *after* speaking can briefly confirm here; the
+      // command is sent regardless and the orchestrator stays the arbiter.
       return visualState === 'paused' || (visualState === 'listening' && micState === 'armed');
     case 'SKIP':
       // Swap the delivered question for a new one, only before any answer speech.
       return visualState === 'listening' && micState === 'armed';
-    case 'EXIT_STAGE':
-      // Leaving the stage is always available.
-      return true;
     case 'END_AFTER_TURN':
       // Finish after the answer the founder currently owns; the mic-open states
       // are the renderer-visible slice of where this is legal.

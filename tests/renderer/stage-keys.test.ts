@@ -161,12 +161,26 @@ describe('isCommandUsefulInState', () => {
     });
   });
 
-  describe('EXIT_STAGE — always available', () => {
-    it('is useful in every state', () => {
+  describe('EXIT_STAGE — mirrors PAUSE (it maps to PAUSE_SESSION)', () => {
+    it('is useful during a live exchange', () => {
+      expect(isCommandUsefulInState(EXIT, 'listening', 'active')).toBe(true);
+      expect(isCommandUsefulInState(EXIT, 'thinking', 'closed')).toBe(true);
+      expect(isCommandUsefulInState(EXIT, 'speaking', 'closed')).toBe(true);
+    });
+
+    it('is not useful once paused, recovering, on standby, complete, or errored', () => {
+      for (const vs of ['standby', 'paused', 'recovering', 'complete', 'error'] as VisualState[]) {
+        expect(isCommandUsefulInState(EXIT, vs, 'closed')).toBe(false);
+      }
+    });
+
+    it('tracks the PAUSE verdict exactly in every state', () => {
       const mics: MicState[] = ['closed', 'armed', 'active'];
       for (const vs of ALL_VISUAL_STATES) {
         for (const mic of mics) {
-          expect(isCommandUsefulInState(EXIT, vs, mic)).toBe(true);
+          expect(isCommandUsefulInState(EXIT, vs, mic)).toBe(
+            isCommandUsefulInState(PAUSE, vs, mic),
+          );
         }
       }
     });

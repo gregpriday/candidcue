@@ -130,15 +130,30 @@ describe('StatusOverlay — solo-interviewee legibility', () => {
     expect(screen.getByText('Thinking')).toHaveAttribute('data-visible', 'false');
   });
 
-  it('auto-shows the keyboard legend on standby', () => {
-    render(<StatusOverlay state={projection({ visualState: 'standby' })} captionsEnabled={false} />);
+  it('drives the legend purely from the legendVisible prop (dismissible anywhere)', () => {
+    // Even on standby the caller owns visibility, so it can be dismissed.
+    const { rerender } = render(
+      <StatusOverlay
+        state={projection({ visualState: 'standby' })}
+        captionsEnabled={false}
+        legendVisible={false}
+      />,
+    );
+    expect(legendContainer()).toHaveAttribute('data-visible', 'false');
+    rerender(
+      <StatusOverlay
+        state={projection({ visualState: 'standby' })}
+        captionsEnabled={false}
+        legendVisible
+      />,
+    );
     expect(legendContainer()).toHaveAttribute('data-visible', 'true');
     // Legend mirrors the real controls.
     expect(screen.getByText('Pause / Resume')).toBeInTheDocument();
     expect(screen.getByText('Exit stage')).toBeInTheDocument();
   });
 
-  it('hides the legend during a live state unless explicitly toggled on', () => {
+  it('shows the legend during a live state when toggled on', () => {
     const { rerender } = render(
       <StatusOverlay state={projection({ visualState: 'listening' })} captionsEnabled={false} />,
     );
@@ -151,6 +166,24 @@ describe('StatusOverlay — solo-interviewee legibility', () => {
       />,
     );
     expect(legendContainer()).toHaveAttribute('data-visible', 'true');
+  });
+
+  it('does not let an in-flight fade timer hide the new "Answer now" cue', () => {
+    vi.useFakeTimers();
+    const { rerender } = render(
+      <StatusOverlay state={projection({ visualState: 'thinking' })} captionsEnabled={false} />,
+    );
+    // Part-way into the old 2400ms fade, the founder's turn begins.
+    act(() => vi.advanceTimersByTime(2000));
+    rerender(
+      <StatusOverlay
+        state={projection({ visualState: 'listening', micState: 'armed' })}
+        captionsEnabled={false}
+      />,
+    );
+    // The stale timer must not fire against the now-persistent listening cue.
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.getByText('Answer now')).toHaveAttribute('data-visible', 'true');
   });
 
   it('renders a reject cue without the terracotta accent', () => {
