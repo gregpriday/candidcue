@@ -355,6 +355,19 @@ export class AppController {
       if (aborter.signal.aborted) {
         return { ok: false, planId: null, warnings: [], error: new AppError('PREPARE_CANCELLED').toPublic() };
       }
+      // Log the real cause before it collapses to a UI-safe public message.
+      // `toPublicError` only logs unknown errors, so AppErrors (truncation,
+      // schema, database) would otherwise leave no diagnostic trail. Record the
+      // internal classification, message, and how far generation got — this is
+      // what distinguishes a token-limit truncation from a malformed response.
+      const appErr = isAppError(err) ? err : null;
+      this.deps.logger.error('prepare.failed', {
+        projectId,
+        code: appErr?.code ?? 'UNKNOWN',
+        message: appErr ? appErr.message : String(err),
+        cause: appErr?.causeName ?? null,
+        charsGenerated: lastChars,
+      });
       return { ok: false, planId: null, warnings: [], error: this.toPublicError(err) };
     } finally {
       // Only release the slot if this run still owns it (a newer prepare for the

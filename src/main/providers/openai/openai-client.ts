@@ -52,6 +52,57 @@ export type Moderator = (
 }>;
 
 /**
+ * The subset of an OpenAI Responses-API result this module inspects. Declared
+ * structurally rather than importing the SDK's `Response` so the extraction
+ * logic is unit-testable with a plain object; the real SDK response satisfies it.
+ */
+export interface ResponseEnvelope {
+  /** Why the response stopped early, when it stopped early. */
+  incomplete_details?: { reason?: string | null } | null;
+  /** SDK-accumulated output text — the final JSON string. */
+  output_text: string;
+  /** Token accounting, used only to enrich the truncation diagnostic. */
+  usage?: {
+    output_tokens?: number;
+    output_tokens_details?: { reasoning_tokens?: number } | null;
+  } | null;
+}
+
+/**
+ * Pull the final JSON string out of a Responses-API result, classifying the two
+ * structural failures the orchestrator must tell apart:
+ *
+ *  - The model hit its output-token ceiling, so the JSON is cut off mid-stream
+ *    (`incomplete_details.reason === 'max_output_tokens'`). Left alone this would
+ *    reach `JSON.parse` and surface as a generic "unexpected response"; we raise
+ *    `OPENAI_TRUNCATED` instead so the UI can tell the user to shorten the source,
+ *    and fold the token usage into the internal message so the truncation shows
+ *    up in logs. Other incomplete reasons fall through to the normal path.
+ *  - An empty body — a structural failure, not a transient one — stays
+ *    `OPENAI_SCHEMA`, leaving the existing repair/fallback path unchanged.
+ */
+export function extractResponseText(response: ResponseEnvelope, schemaName: string): string {
+  if (response.incomplete_details?.reason === 'max_output_tokens') {
+    const usage = response.usage;
+    throw new AppError('OPENAI_TRUNCATED', {
+      message:
+        `OpenAI truncated the "${schemaName}" response at the output-token limit ` +
+        `(output_tokens=${usage?.output_tokens ?? 'unknown'}, ` +
+        `reasoning_tokens=${usage?.output_tokens_details?.reasoning_tokens ?? 'unknown'}).`,
+    });
+  }
+  const text = response.output_text;
+  if (typeof text !== 'string' || text.length === 0) {
+    // An empty body is a structural failure, not a transient one; surface it as
+    // a schema error so the orchestrator can repair or fall back.
+    throw new AppError('OPENAI_SCHEMA', {
+      message: `OpenAI returned an empty response for schema "${schemaName}"`,
+    });
+  }
+  return text;
+}
+
+/**
  * Build the default {@link StructuredResponder} backed by the OpenAI Responses
  * API. SDK specifics (request shape, structured-output format, output
  * extraction) are isolated here so the adapters stay provider-agnostic.
@@ -80,15 +131,7 @@ export function createDefaultResponder(client: OpenAI): StructuredResponder {
           },
           req.signal ? { signal: req.signal } : undefined,
         );
-        const text = response.output_text;
-        if (typeof text !== 'string' || text.length === 0) {
-          // An empty body is a structural failure, not a transient one; surface
-          // it as a schema error so the orchestrator can repair or fall back.
-          throw new AppError('OPENAI_SCHEMA', {
-            message: `OpenAI returned an empty response for schema "${req.schemaName}"`,
-          });
-        }
-        return text;
+        return extractResponseText(response, req.schemaName);
       },
       { shouldAbort: () => req.signal?.aborted ?? false },
     );
@@ -139,15 +182,7 @@ export function createStreamingResponder(client: OpenAI): StructuredResponder {
           });
         }
         const response = await stream.finalResponse();
-        const text = response.output_text;
-        if (typeof text !== 'string' || text.length === 0) {
-          // An empty body is a structural failure, not a transient one; surface
-          // it as a schema error so the orchestrator can repair or fall back.
-          throw new AppError('OPENAI_SCHEMA', {
-            message: `OpenAI returned an empty response for schema "${req.schemaName}"`,
-          });
-        }
-        return text;
+        return extractResponseText(response, req.schemaName);
       },
       { shouldAbort: () => req.signal?.aborted ?? false },
     );
