@@ -84,6 +84,7 @@ export function StatusOverlay({
 }: StatusOverlayProps): JSX.Element {
   const isStandby = state.visualState === 'standby';
   const isComplete = state.visualState === 'complete';
+  const isError = state.visualState === 'error';
 
   const statusText =
     !isStandby && !isComplete && VISIBLE_STATUS.has(state.visualState)
@@ -106,7 +107,7 @@ export function StatusOverlay({
   }, [statusText, state.visualState]);
 
   const captions =
-    captionsEnabled && state.captions !== null && state.captions !== ''
+    !isError && captionsEnabled && state.captions !== null && state.captions !== ''
       ? state.captions
       : null;
 
@@ -130,6 +131,13 @@ export function StatusOverlay({
         <div className={styles.screen} role="status" aria-live="polite">
           <p className={styles.screenTitle}>Interview complete</p>
           <p className={styles.screenHint}>Thank you for your time.</p>
+        </div>
+      )}
+
+      {isError && (
+        <div className={styles.screen} role="status" aria-live="polite">
+          <p className={styles.screenTitle}>Something went wrong.</p>
+          <p className={styles.screenHint}>Check CandidCue to retry the session.</p>
         </div>
       )}
 

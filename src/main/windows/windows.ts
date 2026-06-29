@@ -162,7 +162,16 @@ export function createStageWindow(target: RendererTarget, appOrigin: string, bou
     fullscreenable: false,
     skipTaskbar: true,
     show: false,
-    webPreferences: secureWebPreferences(target.preloadPath),
+    // The operator clicks Start in the control window, so the stage never
+    // receives a user gesture before Mira's TTS audio plays. Playback works
+    // today only because Electron defaults autoplayPolicy to
+    // 'no-user-gesture-required'; pin it here (stage window only) so a future
+    // default change can't silently mute the interviewer. The control window
+    // plays no audio and is intentionally left on the default.
+    webPreferences: {
+      ...secureWebPreferences(target.preloadPath),
+      autoplayPolicy: 'no-user-gesture-required',
+    },
   });
   hardenNavigation(win.webContents, appOrigin);
   win.setAlwaysOnTop(true, 'screen-saver');

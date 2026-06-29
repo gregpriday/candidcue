@@ -10,6 +10,7 @@ import { VideoDeck } from './playback/VideoDeck';
 import { StatusOverlay } from './components/StatusOverlay';
 import { SpeechPlayer } from './playback/SpeechPlayer';
 import { CaptureController } from './audio/CaptureController';
+import { commandForKey } from './stage-commands';
 import styles from './stage-app.module.css';
 
 /** Initial projection before the first state event arrives. */
@@ -26,28 +27,6 @@ const INITIAL_STATE: StageStateProjection = {
 
 function sendCommand(command: StageCommand): void {
   window.candidcueStage.commands.send(command);
-}
-
-/**
- * Map a held key to a stage command. Returns null for keys we don't handle so
- * the caller can leave the event untouched.
- */
-function commandForKey(event: KeyboardEvent): StageCommand | null {
-  if (event.shiftKey && event.key === 'Escape') {
-    return { type: 'EXIT_STAGE' };
-  }
-  switch (event.code) {
-    case 'Space':
-      return { type: 'COMMIT', reason: 'manual' };
-    case 'KeyP':
-      return { type: 'PAUSE' };
-    case 'KeyR':
-      return { type: 'REPEAT' };
-    case 'KeyS':
-      return { type: 'SKIP' };
-    default:
-      return null;
-  }
 }
 
 export function StageApp(): JSX.Element {
@@ -240,7 +219,9 @@ export function StageApp(): JSX.Element {
       if (event.repeat) {
         return;
       }
-      const command = commandForKey(event);
+      // stateRef is always current, so the pause/resume toggle reads the latest
+      // visual state without re-subscribing the listener.
+      const command = commandForKey(event, stateRef.current.visualState);
       if (command === null) {
         return;
       }
