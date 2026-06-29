@@ -240,22 +240,23 @@ describe('StatusOverlay — solo-interviewee legibility', () => {
     expect(screen.getByText('Reconnecting')).toHaveAttribute('data-visible', 'true');
   });
 
-  it('still fades a genuinely transient status (thinking) after a couple of seconds', () => {
+  it('holds the between-turns "thinking" status on screen (the gap must never go blank)', () => {
     vi.useFakeTimers();
     render(
       <StatusOverlay state={projection({ visualState: 'thinking' })} captionsEnabled={false} />,
     );
     expect(screen.getByText('Thinking')).toHaveAttribute('data-visible', 'true');
-    act(() => vi.advanceTimersByTime(2400));
-    expect(screen.getByText('Thinking')).toHaveAttribute('data-visible', 'false');
+    // The working gap must not fade like a transient cue — it is the moment the
+    // founder reported as "it just stopped". Still visible well past the old 2.4s.
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.getByText('Thinking')).toHaveAttribute('data-visible', 'true');
   });
 
-  it('does not let an in-flight fade timer hide the new "Answer now" cue', () => {
+  it('keeps the new "Answer now" cue visible across a thinking → listening handoff', () => {
     vi.useFakeTimers();
     const { rerender } = render(
       <StatusOverlay state={projection({ visualState: 'thinking' })} captionsEnabled={false} />,
     );
-    // Part-way into the old 2400ms fade, the founder's turn begins.
     act(() => vi.advanceTimersByTime(2000));
     rerender(
       <StatusOverlay

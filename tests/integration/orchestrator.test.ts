@@ -358,6 +358,25 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(speaking?.cue).toEqual({ headline: 'What changed your mind?', prompt: 'Name one moment' });
   });
 
+  it('narrates the between-turns gap in distinct phases (no frozen "Thinking")', async () => {
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    // Only care about the gap after the founder answers, not the opening turn.
+    vi.mocked(h.stage.setVisualState).mockClear();
+
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+
+    // The working gap advances finalize → write-question → prepare-audio so the
+    // founder always sees progress, never a single frozen "Thinking" that the
+    // renderer then lets fade to a blank frame.
+    const statusTexts = vi.mocked(h.stage.setVisualState).mock.calls.map((c) => c[0].statusText);
+    expect(statusTexts).toContain('Got it — one moment…');
+    expect(statusTexts).toContain('Preparing the next question…');
+    expect(statusTexts).toContain('Almost ready…');
+  });
+
   it('clears the cue once the answer is committed and we pause with no next question (no stale headline)', async () => {
     // Commit an answer, then pause while the next question is still being
     // synthesized: the next turn is discarded mid-synthesis and we settle in

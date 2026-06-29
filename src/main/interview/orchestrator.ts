@@ -172,12 +172,18 @@ const PROBING_FLAGS: ReadonlySet<QualityFlag> = new Set<QualityFlag>([
 ]);
 
 const STATUS_TEXT: Partial<Record<SessionRuntimeState, string>> = {
-  INTERVIEWER_THINKING: 'Thinking',
-  INTERVIEWER_BUFFERING: 'Thinking',
+  // The between-turns "working" gap is narrated in phases so the founder always
+  // sees progress instead of a frozen, silent frame after they answer (the
+  // reported "I press space and it just stops, I can't see what's happening").
+  // The text advances finalize → write → prepare-audio; the renderer holds it on
+  // screen (no fade) until Mira starts speaking, so progress shows through the
+  // changing words rather than any perpetual motion.
+  TURN_FINALIZING: 'Got it — one moment…',
+  INTERVIEWER_THINKING: 'Preparing the next question…',
+  INTERVIEWER_BUFFERING: 'Almost ready…',
   USER_ARMED: 'Listening',
   USER_SPEAKING: 'Listening',
   ENDPOINT_CANDIDATE: 'Listening',
-  TURN_FINALIZING: 'Thinking',
   PAUSED: 'Paused',
   RECOVERING: 'Reconnecting',
   COMPLETED: 'Interview complete',

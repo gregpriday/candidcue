@@ -111,26 +111,18 @@ export function StatusOverlay({
         ? 'Answer now'
         : state.statusText ?? fallbackStatusText(state.visualState);
 
-  // Transient status fades after a couple of seconds so it never lingers as
-  // permanent chrome. Held states keep their cue on screen: 'paused' and
-  // 'recovering' can last a while (a real reconnect looks frozen if it fades),
-  // and 'listening' is the founder's turn — "Answer now" must persist until they
-  // act, not vanish into a dim corner glyph.
+  // Every status we surface reflects an ongoing state, so it holds on screen
+  // until the state itself moves on (e.g. 'thinking' → 'speaking' clears it):
+  // the founder's turn ('listening' → "Answer now") must persist until they act;
+  // 'paused' / 'recovering' can last a while (a real reconnect looks frozen if
+  // it fades); and the between-turns 'thinking' gap must never read as a frozen,
+  // blank frame — that gap was the reported "I press space and it just stops, I
+  // can't see what's happening". The orchestrator narrates the gap in phases, so
+  // the words themselves change to show progress — and the status never fades out
+  // mid-gap (only a gentle CSS fade-in on first appearance remains).
   const [statusVisible, setStatusVisible] = useState(true);
   useEffect(() => {
-    if (statusText === null) {
-      return undefined;
-    }
-    setStatusVisible(true);
-    if (
-      state.visualState === 'paused' ||
-      state.visualState === 'recovering' ||
-      state.visualState === 'listening'
-    ) {
-      return undefined;
-    }
-    const timer = window.setTimeout(() => setStatusVisible(false), 2400);
-    return () => window.clearTimeout(timer);
+    setStatusVisible(statusText !== null);
   }, [statusText, state.visualState]);
 
   // The model-authored teleprompter cue: the on-screen question (headline) the
