@@ -5,8 +5,10 @@ import type { Session } from 'electron';
 export const PRODUCTION_CSP = [
   "default-src 'self' candidcue:",
   "script-src 'self'",
-  // AudioWorklet modules (mic capture) are same-origin assets; declare it
-  // explicitly rather than relying on the worker-src -> script-src fallback.
+  // Mic-capture AudioWorklet modules load under script-src 'self' (they are
+  // same-origin bundled assets). worker-src pins any Worker/worklet to the
+  // app origin explicitly as defense-in-depth, instead of inheriting it via
+  // the worker-src -> child-src -> script-src -> default-src fallback.
   "worker-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' candidcue: blob: data:",
