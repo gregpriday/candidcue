@@ -56,7 +56,7 @@ import { hashProjectPreparationFromDocuments } from '@shared/utils';
 
 import { SessionOrchestrator, type OrchestratorDeps, type SessionContext } from './interview/orchestrator';
 import { bridgeSttToOrchestrator } from './interview/stt-bridge';
-import type { StagePort, SnapshotSink, Logger } from './interview/ports';
+import type { StagePort, SnapshotSink, ErrorSink, Logger } from './interview/ports';
 import { compileProjectSource } from './interview/source-compiler';
 import { GLOBAL_INTERVIEW_RULES } from './interview/global-rules';
 import { getInterviewerCharacters, getInterviewerCharacter, composeCharacterSystemPrompt } from './characters';
@@ -561,6 +561,16 @@ export class AppController {
       },
     };
 
+    // Fatal / unrecoverable session failures drive the ControlWindow's global
+    // error banner (the evtError channel is wired but was never emitted). The
+    // orchestrator only publishes here for non-recoverable codes, so this never
+    // fires for transient faults that self-heal via the snapshot warning.
+    const errorSink: ErrorSink = {
+      publish: (error) => {
+        this.deps.getControl()?.send(CHANNELS.evtError, error);
+      },
+    };
+
     const orchDeps: OrchestratorDeps = {
       repository: this.deps.repository,
       model: model as InterviewModelAdapter,
@@ -569,6 +579,7 @@ export class AppController {
       tts: tts as TextToSpeechAdapter,
       stage: stagePort,
       snapshotSink,
+      errorSink,
       logger: this.deps.logger,
     };
     const ctx: SessionContext = {
