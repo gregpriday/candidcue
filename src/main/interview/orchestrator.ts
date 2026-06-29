@@ -24,6 +24,7 @@ import type {
   AnswerRecord,
   InterviewTurn,
   NextInterviewerAction,
+  QualityFlag,
   ModerationRecord,
   TranscriptCleanupResult,
   EndpointReason,
@@ -144,6 +145,18 @@ const DELIVERY_RATE_MAX = 1.15;
 function clampDeliveryRate(rate: number): number {
   return Math.min(DELIVERY_RATE_MAX, Math.max(DELIVERY_RATE_MIN, rate));
 }
+
+/**
+ * Quality flags that signal the just-given answer was vague or thin and should
+ * be probed with a follow-up (issue #66). Deliberately narrow: contradiction
+ * and repetition are different signals (fact correction / topic change) and
+ * must NOT drive the follow-up-probe path, so they are excluded here.
+ */
+const PROBING_FLAGS: ReadonlySet<QualityFlag> = new Set<QualityFlag>([
+  'needs_specific_example',
+  'needs_clarification',
+  'answer_was_incomplete',
+]);
 
 const STATUS_TEXT: Partial<Record<SessionRuntimeState, string>> = {
   INTERVIEWER_THINKING: 'Thinking',
@@ -1402,7 +1415,56 @@ export class SessionOrchestrator {
         ? this.providerHealth.lastQuestionLatencyMs
         : Math.round(gen.latencyMs),
     };
-    return gen.value;
+    return this.enforceFollowUpCap(gen.value);
+  }
+
+  /**
+   * Deterministic follow-up gate (issue #66). The model emits `qualityFlags`
+   * signalling a vague/thin answer, but it cannot be trusted to either probe
+   * reliably or stop probing once a coverage item's `maxFollowUps` budget is
+   * spent. This closes both gaps without a second model round-trip:
+   *
+   *  - No probing flag on the action → return it unchanged (no follow-up
+   *    semantics apply).
+   *  - A probing flag is set, and EVERY targeted coverage item has already
+   *    spent its follow-up budget (`followUpCount >= maxFollowUps`), or no
+   *    target resolves at all → substitute the deterministic bank fallback so
+   *    coverage advances instead of looping on the same point.
+   *  - A probing flag is set and at least one target still has budget → let the
+   *    model's probing question through, but INJECT the follow-up increments
+   *    for the under-budget targets rather than trusting the model's
+   *    self-reported `followUpCounts`. Otherwise a model that forgets to report
+   *    its own increment would never reach the cap — restoring the unbounded
+   *    loop through a different door.
+   *
+   * Reads `this.coverage`, which still reflects prior turns here: the current
+   * turn's {@link applyAction} runs after this returns, so the counts compared
+   * against the cap are exactly the follow-ups already spent.
+   */
+  private enforceFollowUpCap(action: NextInterviewerAction): NextInterviewerAction {
+    const wantsProbe = action.qualityFlags.some((f) => PROBING_FLAGS.has(f));
+    if (!wantsProbe) return action;
+
+    const byId = new Map(this.coverage.map((c) => [c.id, c]));
+    const underBudget: string[] = [];
+    for (const id of action.targetCoverageItemIds) {
+      const item = byId.get(id);
+      if (item && item.followUpCount < item.maxFollowUps) underBudget.push(id);
+    }
+
+    // No resolvable target with remaining budget → advance via the bank rather
+    // than probe the same exhausted point again.
+    if (underBudget.length === 0) return this.fallbackAction();
+
+    // Pass the probe through, but make the increment authoritative: drop any
+    // model-supplied counts for the under-budget targets (so a model entry plus
+    // our injected one cannot double-count in applyAction), then inject one each.
+    const underBudgetSet = new Set(underBudget);
+    const followUpCounts = [
+      ...action.followUpCounts.filter((fc) => !underBudgetSet.has(fc.coverageItemId)),
+      ...underBudget.map((coverageItemId) => ({ coverageItemId, count: 1 })),
+    ];
+    return { ...action, followUpCounts };
   }
 
   private fallbackAction(): NextInterviewerAction {

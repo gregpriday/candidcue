@@ -45,6 +45,7 @@ export interface GenerateNextActionInput {
     priority: string;
     status: string;
     followUpCount: number;
+    maxFollowUps: number;
   }>;
   rollingSummary: string;
   recentTurns: RecentTurnContext[];

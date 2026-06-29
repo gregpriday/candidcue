@@ -61,6 +61,7 @@ function nextActionInput(overrides: Partial<GenerateNextActionInput> = {}): Gene
         priority: 'must',
         status: 'not_started',
         followUpCount: 0,
+        maxFollowUps: 2,
       },
     ],
     rollingSummary: 'so far so good',

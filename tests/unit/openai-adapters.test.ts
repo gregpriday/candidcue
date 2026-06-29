@@ -186,6 +186,7 @@ const NEXT_ACTION_INPUT: GenerateNextActionInput = {
       priority: 'must',
       status: 'not_started',
       followUpCount: 0,
+      maxFollowUps: 2,
     },
   ],
   rollingSummary: 'Nothing yet.',

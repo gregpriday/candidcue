@@ -2965,3 +2965,159 @@ describe('SessionOrchestrator narrative arc (#67)', () => {
     expect(generateSpy.mock.calls[0]?.[0]?.currentSectionId).toBe('section-B');
   });
 });
+
+// The brief() fixture gives `cov-problem` maxFollowUps: 2 and a single bank
+// fallback ("What happens after the speaker finishes an answer?"). These tests
+// drive the deterministic follow-up gate (#66): a probing quality flag must
+// trigger a bounded follow-up, the orchestrator must own the increment (not the
+// model's self-report), and once the budget is spent the gate must advance via
+// the bank instead of probing the same point forever.
+describe('SessionOrchestrator follow-up cap gate (#66)', () => {
+  const FALLBACK_TEXT = 'What happens after the speaker finishes an answer?';
+
+  let h: Harness;
+  afterEach(() => h.orch.dispose());
+
+  /** Drive one answered turn (speech in, manual commit) with a fresh timeline. */
+  async function answerOnce(turn: number): Promise<void> {
+    h.orch.onSpeechStarted(1000 * turn);
+    h.orch.onSpeechStopped(1000 * turn + 3000);
+    await h.orch.commitUserTurn('manual');
+  }
+
+  const followUpCountOf = async (id: string): Promise<number> => {
+    const agg = await h.repo.getSession(h.sessionId);
+    return agg!.coverage.find((c) => c.id === id)!.followUpCount;
+  };
+
+  const questionAt = async (ordinal: number): Promise<string | undefined> => {
+    const agg = await h.repo.getSession(h.sessionId);
+    return agg!.turns.find((t) => t.ordinal === ordinal)?.question.text;
+  };
+
+  it('lets a probing answer through and owns the follow-up increment', async () => {
+    const model = new FakeInterviewModel({
+      scriptedActions: [
+        {
+          action: 'ask',
+          spokenText: 'Can you give one concrete example of that?',
+          qualityFlags: ['needs_specific_example'],
+          targetCoverageItemIds: ['cov-problem'],
+        },
+      ],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    await answerOnce(1);
+
+    // The model's probe is asked verbatim, and the gate (not the model, which
+    // reported no followUpCounts) advanced the budget from 0 → 1.
+    expect(await questionAt(2)).toBe('Can you give one concrete example of that?');
+    expect(await followUpCountOf('cov-problem')).toBe(1);
+  });
+
+  it('stops probing and falls back to the bank once maxFollowUps is spent', async () => {
+    const model = new FakeInterviewModel({
+      scriptedActions: [
+        {
+          action: 'ask',
+          spokenText: 'Can you give one concrete example of that?',
+          qualityFlags: ['needs_specific_example'],
+          targetCoverageItemIds: ['cov-problem'],
+        },
+        {
+          action: 'ask',
+          spokenText: 'What did that look like in practice for you?',
+          qualityFlags: ['needs_clarification'],
+          targetCoverageItemIds: ['cov-problem'],
+        },
+        {
+          action: 'ask',
+          spokenText: 'Could you be even more specific about the third point?',
+          qualityFlags: ['needs_specific_example'],
+          targetCoverageItemIds: ['cov-problem'],
+        },
+      ],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    await answerOnce(1); // 0 → 1, probe #1 asked
+    await answerOnce(2); // 1 → 2, probe #2 asked
+    await answerOnce(3); // budget spent: gate substitutes the bank fallback
+
+    // Two probes fired, then the cap held: the count never exceeds maxFollowUps,
+    // and the third question is the bank fallback, not the scripted probe.
+    expect(await followUpCountOf('cov-problem')).toBe(2);
+    expect(await questionAt(2)).toBe('Can you give one concrete example of that?');
+    expect(await questionAt(3)).toBe('What did that look like in practice for you?');
+    expect(await questionAt(4)).toBe(FALLBACK_TEXT);
+  });
+
+  it('does NOT probe on non-probing quality flags (contradiction)', async () => {
+    const model = new FakeInterviewModel({
+      scriptedActions: [
+        {
+          action: 'ask',
+          spokenText: 'Earlier you framed it differently, which is it?',
+          qualityFlags: ['answer_contradicted_source'],
+          targetCoverageItemIds: ['cov-problem'],
+        },
+      ],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    await answerOnce(1);
+
+    // A contradiction is a different signal (fact correction): the gate stays
+    // out of it and injects no follow-up, so the budget is untouched.
+    expect(await followUpCountOf('cov-problem')).toBe(0);
+  });
+
+  it('de-dupes the model-reported follow-up so the increment is applied once', async () => {
+    const model = new FakeInterviewModel({
+      scriptedActions: [
+        {
+          action: 'ask',
+          spokenText: 'What specifically changed for them?',
+          qualityFlags: ['needs_clarification'],
+          targetCoverageItemIds: ['cov-problem'],
+          // The model also self-reports the same increment. Without de-dup this
+          // would double-count (model entry + injected entry) → 2.
+          followUpCounts: [{ coverageItemId: 'cov-problem', count: 1 }],
+        },
+      ],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    await answerOnce(1);
+
+    expect(await followUpCountOf('cov-problem')).toBe(1);
+  });
+
+  it('advances via the bank when a probe targets no resolvable coverage item', async () => {
+    const model = new FakeInterviewModel({
+      scriptedActions: [
+        {
+          action: 'ask',
+          spokenText: 'Can you say more about that?',
+          qualityFlags: ['answer_was_incomplete'],
+          targetCoverageItemIds: [],
+        },
+      ],
+    });
+    h = await makeHarness({ model });
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    await answerOnce(1);
+
+    // No target to track a budget against → the gate falls back to the bank
+    // rather than probe an untrackable point, and no budget is spent.
+    expect(await questionAt(2)).toBe(FALLBACK_TEXT);
+    expect(await followUpCountOf('cov-problem')).toBe(0);
+  });
+});
