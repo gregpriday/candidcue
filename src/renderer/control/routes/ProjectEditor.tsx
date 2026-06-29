@@ -877,6 +877,11 @@ function PrepareProgressPanel({
         {PREPARE_STEPS.map((step, index) => {
           const active = index === activeIndex;
           const done = index < activeIndex;
+          // Each step carries a leading status mark so the panel reads as a list
+          // of actions: a check for finished steps, a filled accent dot for the
+          // one in flight, a quiet ring for steps still to come.
+          const tone: StatusTone = done ? 'success' : active ? 'active' : 'pending';
+          const stateLabel = done ? 'Done' : active ? 'In progress' : 'Pending';
           return (
             <li
               key={step.phase}
@@ -885,7 +890,8 @@ function PrepareProgressPanel({
               }`}
               aria-current={active ? 'step' : undefined}
             >
-              <span>{step.label}</span>
+              <StatusIcon tone={tone} label={stateLabel} size={14} />
+              <span className={styles.progressLabel}>{step.label}</span>
               {step.phase === 'generating' && active && chars != null && chars > 0 && (
                 <span className={styles.progressChars}>{chars.toLocaleString()} characters</span>
               )}

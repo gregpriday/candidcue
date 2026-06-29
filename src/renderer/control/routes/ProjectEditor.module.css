@@ -215,34 +215,26 @@
   gap: var(--space-1);
 }
 .progressStep {
-  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-1);
   font-size: var(--text-sm);
   color: var(--text-secondary);
 }
-/* Active step: a quiet lift off the warm panel, marked by an inset leading bar —
-   never a one-sided border on the rounded row. */
-.progressStepActive {
-  background: var(--bg-panel);
+/* The label takes the slack so any trailing value (the live character count)
+   sits flush right, like a checklist row. */
+.progressLabel {
+  flex: 1 1 auto;
+}
+/* The current step reads through its leading mark (a filled accent dot) and a
+   firmer label — no pill, no accent ring around the row, so the panel reads as
+   a list of actions rather than one highlighted item. */
+.progressStepActive .progressLabel {
   color: var(--text-primary);
   font-weight: 600;
 }
-.progressStepActive::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: var(--space-2);
-  bottom: var(--space-2);
-  width: 3px;
-  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-  background: var(--accent-strong);
-}
-.progressStepDone {
+.progressStepDone .progressLabel {
   color: var(--text-muted);
 }
 .progressChars {
