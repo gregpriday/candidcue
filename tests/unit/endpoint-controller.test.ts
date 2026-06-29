@@ -49,6 +49,11 @@ describe('endsWithContinuation', () => {
     expect(endsWithContinuation('I was thinking, and...')).toBe(true);
   });
 
+  it('detects a trailing phrase even with trailing punctuation', () => {
+    expect(endsWithContinuation('There are many cases, for example.')).toBe(true);
+    expect(endsWithContinuation('The reason is...')).toBe(true);
+  });
+
   it('is case-insensitive', () => {
     expect(endsWithContinuation('We talked AND')).toBe(true);
     expect(endsWithContinuation('FOR EXAMPLE')).toBe(true);
@@ -378,7 +383,7 @@ describe('decideEndpoint', () => {
         mode: 'conservative',
         silenceMs: 1900,
         speechMs: 1400,
-        transcript: 'I would say so',
+        transcript: 'I would say yes',
         classifier: null,
       });
       expect(result).toEqual({ commit: true, reason: 'short_answer' });
@@ -458,6 +463,129 @@ describe('decideEndpoint', () => {
         classifier: decision({ shouldCommit: false, completeProbability: 0.3 }),
       });
       expect(result).toEqual({ commit: false, reason: 'wait' });
+    });
+  });
+
+  describe('continuation hold', () => {
+    const hard = RUNTIME_DEFAULTS.endpointHardSilenceMs;
+
+    it('holds back the short-answer fast path when the turn trails off mid-thought', () => {
+      // Brief speech at the natural floor would normally short_answer-commit, but
+      // the dangling "and" keeps the turn open (spec §14.3).
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 600,
+        transcript: 'I was thinking, and',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: false, reason: 'continuation_hold' });
+    });
+
+    it('holds back the balanced hard-silence commit on a dangling conjunction (the issue scenario)', () => {
+      // The exact bug from #55: a respondent trailing off on "because" was
+      // force-committed at the hard-silence ceiling; now the turn is held.
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: hard,
+        speechMs: 3000,
+        transcript: 'because',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: false, reason: 'continuation_hold' });
+    });
+
+    it('never overrides a high-confidence classifier, even with a trailing continuation', () => {
+      // Spec §14.3: the hint only suppresses *borderline* commits. A confident
+      // completion (step 3) wins despite the dangling "and".
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 4000,
+        transcript: 'I absolutely agree and',
+        classifier: decision({ shouldCommit: true, completeProbability: 0.82 }),
+      });
+      expect(result).toEqual({ commit: true, reason: 'classifier' });
+    });
+
+    it('a confident conservative completion still commits despite a trailing continuation', () => {
+      // The conservative hard-silence branch is guarded too, but the classifier
+      // path (step 3) intercepts at the 1900ms total floor — so a confident
+      // completion commits as 'classifier' rather than holding.
+      const result = decideEndpoint({
+        mode: 'conservative',
+        silenceMs: hard,
+        speechMs: 3000,
+        transcript: 'We discussed and',
+        classifier: decision({ shouldCommit: true, completeProbability: 0.95 }),
+      });
+      expect(result).toEqual({ commit: true, reason: 'classifier' });
+    });
+
+    it('still short_answer-commits a complete brief reply that does not trail off', () => {
+      // Regression guard: the continuation check must not block ordinary commits.
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 600,
+        transcript: 'Yes',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: true, reason: 'short_answer' });
+    });
+
+    it('still hard-silence-commits a complete reply that does not trail off', () => {
+      // Regression guard for the balanced hard-silence branch.
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: hard,
+        speechMs: 3000,
+        transcript: 'That is my final answer',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: true, reason: 'hard_silence' });
+    });
+
+    it('is a hint, not a decider — below the silence floor it never holds on its own', () => {
+      // The continuation guard only fires inside a commit branch. Below the
+      // floor there is no commit to suppress, so a trailing "because" falls
+      // through to the ordinary blip handling, not 'continuation_hold'.
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1499,
+        speechMs: 800,
+        transcript: 'because',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: false, reason: 'too_short' });
+    });
+
+    it('holds a low-confidence positive classifier at hard silence', () => {
+      // A positive-but-not-confident classifier does not satisfy step 3, so the
+      // balanced hard-silence branch owns the decision — and the continuation
+      // guard holds it.
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: hard,
+        speechMs: 3000,
+        transcript: 'because',
+        classifier: decision({ shouldCommit: true, completeProbability: 0.5 }),
+      });
+      expect(result).toEqual({ commit: false, reason: 'continuation_hold' });
+    });
+
+    it('holds a common trailing-word answer per the current word list (known tradeoff)', () => {
+      // 'so' is in CONTINUATION_WORDS, so "I think so" is held rather than
+      // committed. Pinned deliberately: whether such common closers belong in
+      // the list is a separate product tuning question (see #55 follow-up).
+      const result = decideEndpoint({
+        mode: 'balanced',
+        silenceMs: 1500,
+        speechMs: 600,
+        transcript: 'I think so',
+        classifier: null,
+      });
+      expect(result).toEqual({ commit: false, reason: 'continuation_hold' });
     });
   });
 
