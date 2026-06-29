@@ -46,6 +46,7 @@ function projection(overrides: Partial<StageStateProjection> = {}): StageStatePr
     mirror: false,
     zoom: 1,
     verticalOffsetPercent: 0,
+    canBegin: false,
     ...overrides,
   };
 }

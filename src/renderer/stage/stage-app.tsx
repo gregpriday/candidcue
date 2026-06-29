@@ -87,6 +87,10 @@ export function StageApp(): JSX.Element {
   useEffect(() => {
     countdownRef.current = countdown;
   }, [countdown]);
+  // Latches once BEGIN has been sent so Space can't arm a second countdown in
+  // the gap before the orchestrator's new (non-standby) projection arrives. It
+  // is cleared when the session actually leaves the begin-able standby.
+  const beginSentRef = useRef(false);
 
   // Engines live for the lifetime of the window; refs avoid re-creating them.
   const speechPlayerRef = useRef<SpeechPlayer | null>(null);
@@ -341,6 +345,7 @@ export function StageApp(): JSX.Element {
     }
     if (countdown <= 1) {
       const timer = window.setTimeout(() => {
+        beginSentRef.current = true;
         sendCommand({ type: 'BEGIN' });
         setCountdown(null);
       }, 1000);
@@ -357,6 +362,7 @@ export function StageApp(): JSX.Element {
   useEffect(() => {
     if (state.visualState !== 'standby' || !state.canBegin) {
       setCountdown(null);
+      beginSentRef.current = false;
     }
   }, [state.visualState, state.canBegin]);
 
@@ -388,6 +394,10 @@ export function StageApp(): JSX.Element {
         !event.altKey
       ) {
         event.preventDefault();
+        // Opening the end-confirm hands the keyboard to the modal, so any live
+        // start countdown must be cancelled here or its timer would fire BEGIN
+        // out from under the dialog.
+        setCountdown(null);
         setEndConfirmOpen(true);
         return;
       }
@@ -413,7 +423,7 @@ export function StageApp(): JSX.Element {
       ) {
         if (event.code === 'Space') {
           event.preventDefault();
-          if (countdownRef.current === null) {
+          if (countdownRef.current === null && !beginSentRef.current) {
             setCountdown(START_COUNTDOWN_SECONDS);
           }
           return;

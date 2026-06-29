@@ -15,6 +15,13 @@ vi.mock('../../src/renderer/stage/playback/SpeechPlayer', () => ({
     dispose = vi.fn(async () => {});
   },
 }));
+vi.mock('../../src/renderer/stage/playback/BackchannelPlayer', () => ({
+  BackchannelPlayer: class {
+    init = vi.fn(async () => {});
+    play = vi.fn();
+    dispose = vi.fn(async () => {});
+  },
+}));
 vi.mock('../../src/renderer/stage/audio/CaptureController', () => ({
   CaptureController: class {
     start = vi.fn(async () => {});
@@ -38,6 +45,7 @@ function installStageBridge(): void {
       characterId: 'mira',
       posterUrl: '',
       listeningClips: [],
+      backchannelClips: [],
       video: { fit: 'cover', mirror: false, zoom: 1, verticalOffsetPercent: 0, transitionMs: 0 },
     })),
     commands: { send },
@@ -56,6 +64,7 @@ function installStageBridge(): void {
         };
       }),
       onPlaybackPlan: vi.fn(() => () => {}),
+      onPlayBackchannel: vi.fn(() => () => {}),
       onCaptureConfig: vi.fn(() => () => {}),
     },
   };
@@ -204,6 +213,67 @@ describe('StageApp founder-start countdown', () => {
     expect(screen.queryByRole('timer')).toBeNull();
     act(() => vi.advanceTimersByTime(5000));
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('does not re-arm a second countdown after BEGIN has already fired', async () => {
+    await mount();
+    vi.useFakeTimers();
+    emit(readyState());
+    fireEvent.keyDown(window, { code: 'Space', key: ' ' });
+    act(() => vi.advanceTimersByTime(1000));
+    act(() => vi.advanceTimersByTime(1000));
+    act(() => vi.advanceTimersByTime(1000));
+    expect(send).toHaveBeenCalledTimes(1);
+
+    // The orchestrator hasn't replied yet, so the standby projection is still
+    // begin-able. A stray Space must not arm a fresh countdown / second BEGIN.
+    fireEvent.keyDown(window, { code: 'Space', key: ' ' });
+    expect(screen.queryByRole('timer')).toBeNull();
+    act(() => vi.advanceTimersByTime(4000));
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels the countdown when the end-confirm is opened (Shift+E)', async () => {
+    await mount();
+    vi.useFakeTimers();
+    emit(readyState());
+    fireEvent.keyDown(window, { code: 'Space', key: ' ' });
+    expect(screen.getByRole('timer')).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { code: 'KeyE', key: 'E', shiftKey: true });
+
+    expect(screen.queryByRole('timer')).toBeNull();
+    act(() => vi.advanceTimersByTime(5000));
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('cancels the countdown if the session stops being begin-able while still standby', async () => {
+    await mount();
+    vi.useFakeTimers();
+    emit(readyState());
+    fireEvent.keyDown(window, { code: 'Space', key: ' ' });
+    expect(screen.getByRole('timer')).toBeInTheDocument();
+
+    // READY lost but still on the standby screen — begin is no longer allowed.
+    emit(readyState({ canBegin: false }));
+
+    expect(screen.queryByRole('timer')).toBeNull();
+    expect(screen.getByText('Getting everything ready…')).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(5000));
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('does not arm a countdown on Shift+Space (modifier excluded from the gate)', async () => {
+    await mount();
+    vi.useFakeTimers();
+    emit(readyState());
+
+    fireEvent.keyDown(window, { code: 'Space', key: ' ', shiftKey: true });
+
+    // Shift+Space is excluded from the founder-start gate, so no countdown arms.
+    // (It falls through to the normal command path, which is a harmless no-op in
+    // READY — this test only guards the gate, not that downstream behaviour.)
+    expect(screen.queryByRole('timer')).toBeNull();
   });
 
   it('still commits on Space in standby before the session is begin-able', async () => {

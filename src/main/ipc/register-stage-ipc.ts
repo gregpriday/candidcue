@@ -31,8 +31,12 @@ export function registerStageIpc(app: AppController, guard: Guard): void {
     guard(e.sender, ['stage']);
     const boot = app.buildStageBootstrap();
     // The stage just mounted and registered its event listeners, so (re)send the
-    // capture config now to cover a freshly-loaded window (MIC-01).
+    // capture config now to cover a freshly-loaded window (MIC-01)...
     app.sendCaptureConfig();
+    // ...and re-publish the current state projection so a reloaded window
+    // reflects the live runtime state (e.g. "Press Space to begin." in READY)
+    // rather than sitting on its INITIAL_STATE until the next transition.
+    app.republishStageState();
     return boot;
   });
 

@@ -2094,6 +2094,16 @@ export class SessionOrchestrator {
     this.providerHealth = { ...this.providerHealth, [provider]: status };
   }
 
+  /**
+   * Re-emit the current stage projection. A freshly-loaded stage window (reload,
+   * display change) otherwise renders its renderer INITIAL_STATE until the next
+   * runtime transition — which, sitting idle in READY, may never come, leaving
+   * the founder on "Getting everything ready…" with no way to begin.
+   */
+  republishStage(): void {
+    this.publishStage();
+  }
+
   private publishStage(): void {
     // Captions show Mira's current spoken question while she speaks (spec §7.12,
     // CORR-10); the user's own transcript is never shown on stage by default.

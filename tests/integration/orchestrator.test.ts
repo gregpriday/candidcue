@@ -297,6 +297,26 @@ describe('SessionOrchestrator turn pipeline', () => {
     expect(afterBegin?.canBegin).toBe(false);
   });
 
+  it('never marks the PREPARING standby projection begin-able', async () => {
+    await h.orch.prepareOpening();
+    const projections = vi.mocked(h.stage.setVisualState).mock.calls.map((c) => c[0]);
+    // PREPARING also maps to the 'standby' visualState, so canBegin is the only
+    // thing keeping the founder from starting before the opening is cached.
+    const preparing = projections.find((p) => p.visualState === 'standby' && !p.canBegin);
+    expect(preparing).toBeDefined();
+  });
+
+  it('republishStage re-emits the live projection for a reloaded stage window', async () => {
+    await h.orch.prepareOpening();
+    vi.mocked(h.stage.setVisualState).mockClear();
+
+    h.orch.republishStage();
+
+    const reemitted = vi.mocked(h.stage.setVisualState).mock.calls.at(-1)?.[0];
+    expect(reemitted?.visualState).toBe('standby');
+    expect(reemitted?.canBegin).toBe(true);
+  });
+
   it('plays the opening and arms the user turn (mic opens only after speech)', async () => {
     await h.orch.prepareOpening();
     await h.orch.begin();

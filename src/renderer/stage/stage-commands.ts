@@ -68,6 +68,13 @@ export function isCommandUsefulInState(
   micState: StageStateProjection['micState'],
 ): boolean {
   switch (command.type) {
+    case 'BEGIN':
+      // The founder-start BEGIN is dispatched directly by the standby countdown
+      // (see stage-app.tsx), not routed through commandForKey, so this branch is
+      // effectively unreachable from the keypress-feedback path. It exists for
+      // exhaustiveness and mirrors the orchestrator: BEGIN only does something on
+      // standby (the renderer-visible slice of READY, where canBegin is true).
+      return visualState === 'standby';
     case 'COMMIT':
       // A manual commit lands a turn only while the mic gate is open.
       return micState !== 'closed';
