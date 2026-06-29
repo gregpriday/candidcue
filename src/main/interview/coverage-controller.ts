@@ -152,3 +152,16 @@ export function incrementFollowUp(
     item.id === coverageItemId ? { ...item, followUpCount: item.followUpCount + 1 } : item,
   );
 }
+
+/**
+ * The `must`-priority coverage items that are still unmet — neither fully
+ * `covered` nor explicitly `skipped` (a `skipped` must is treated as
+ * intentionally waived by the operator, §16.13). Used by the orchestrator's
+ * completion gate (issue #65) to keep an interview from ending while essential
+ * topics remain uncovered. Input order is preserved; the array is not mutated.
+ */
+export function unmetMustItems(current: SessionCoverageItem[]): SessionCoverageItem[] {
+  return current.filter(
+    (item) => item.priority === 'must' && item.status !== 'covered' && item.status !== 'skipped',
+  );
+}
