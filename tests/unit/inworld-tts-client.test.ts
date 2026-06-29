@@ -14,6 +14,24 @@ function wavFixture(numPcmBytes: number): Uint8Array {
   return pcm16ToWav(new Uint8Array(numPcmBytes).fill(7), SAMPLE_RATE, 1);
 }
 
+/**
+ * A non-canonical WAV: a 12-byte `LIST` metadata chunk spliced in between `fmt `
+ * and `data`, so the `data` chunk is no longer at the usual offset 36. Exercises
+ * the chunk-walking passthrough against a layout `pcm16ToWav` never produces.
+ */
+function wavWithMetadataChunk(numPcmBytes: number): Uint8Array {
+  const canonical = wavFixture(numPcmBytes);
+  const list = new Uint8Array(12);
+  list.set([0x4c, 0x49, 0x53, 0x54], 0); // 'LIST'
+  new DataView(list.buffer).setUint32(4, 4, true); // chunk size = 4 (body left zero)
+  const out = new Uint8Array(canonical.byteLength + list.byteLength);
+  out.set(canonical.subarray(0, 36), 0); // 'RIFF'..end of fmt chunk
+  out.set(list, 36);
+  out.set(canonical.subarray(36), 36 + list.byteLength); // 'data' chunk onward
+  new DataView(out.buffer).setUint32(4, out.byteLength - 8, true); // fix RIFF size
+  return out;
+}
+
 /** A base {@link TtsInput} suitable for most cases; override per test. */
 function ttsInput(overrides: Partial<TtsInput> = {}): TtsInput {
   return {
@@ -114,6 +132,17 @@ describe('InworldTtsClient', () => {
     const client = new InworldTtsClient({ apiKey: 'k', fetchImpl });
     const result = await client.synthesize(ttsInput());
     expect(Array.from(result.bytes)).toEqual(Array.from(wav));
+  });
+
+  it('passes a non-canonical WAV (data not at offset 36) through byte-for-byte', async () => {
+    // A LIST chunk before `data` pushes the payload off the canonical offset; the
+    // adapter must still pass the bytes through and read duration from the chunks.
+    const wav = wavWithMetadataChunk(SAMPLE_RATE * 2); // 1 s of audio
+    const fetchImpl: TtsFetch = async () => jsonResponse({ audioContent: bytesToBase64(wav) });
+    const client = new InworldTtsClient({ apiKey: 'k', fetchImpl });
+    const result = await client.synthesize(ttsInput());
+    expect(Array.from(result.bytes)).toEqual(Array.from(wav));
+    expect(result.durationMs).toBe(1000);
   });
 
   it('threads a custom modelId into the request body', async () => {

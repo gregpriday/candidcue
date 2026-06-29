@@ -104,10 +104,11 @@ export function isWavFile(bytes: Uint8Array): boolean {
  * from the `data` chunk, so leading/trailing metadata chunks (e.g. `fact`,
  * `LIST`) between `fmt ` and `data` do not throw off the result.
  *
- * Assumes 16-bit samples (the only depth Inworld emits); the `fmt ` format tag is
- * checked to be PCM. Throws a plain {@link Error} on any malformed input (missing
- * magic, missing/truncated `fmt `, non-PCM tag, `data` before `fmt `, or no
- * `data` chunk) — callers wrap it in a domain error.
+ * Requires 16-bit samples (the only depth Inworld emits, and what
+ * {@link durationMsFromPcm} assumes); the `fmt ` format tag is checked to be PCM.
+ * Throws a plain {@link Error} on any malformed or unsupported input (missing
+ * magic, missing/truncated `fmt `, non-PCM tag, non-16-bit depth, `data` before
+ * `fmt `, or no `data` chunk) — callers wrap it in a domain error.
  */
 export function wavDurationMs(bytes: Uint8Array): number {
   if (!isWavFile(bytes)) {
@@ -120,7 +121,9 @@ export function wavDurationMs(bytes: Uint8Array): number {
   let sawFmt = false;
 
   // Sub-chunks begin right after 'RIFF'<size>'WAVE' (offset 12). Each is a 4-byte
-  // id + 4-byte little-endian size + payload, padded to an even byte boundary.
+  // id + 4-byte little-endian size + payload, padded to an even byte boundary. We
+  // walk to the end of `bytes` rather than trusting the RIFF size at offset 4,
+  // which makes the parser robust to streaming headers that under-state the size.
   let offset = 12;
   while (offset + 8 <= bytes.length) {
     const id = readTag(bytes, offset);
@@ -134,6 +137,10 @@ export function wavDurationMs(bytes: Uint8Array): number {
       const formatTag = view.getUint16(bodyStart, true);
       if (formatTag !== PCM_FORMAT_TAG) {
         throw new Error(`WAV: format is not PCM (tag ${formatTag})`);
+      }
+      const bitsPerSample = view.getUint16(bodyStart + 14, true);
+      if (bitsPerSample !== BYTES_PER_SAMPLE * 8) {
+        throw new Error(`WAV: unsupported bit depth ${bitsPerSample} (expected 16)`);
       }
       channels = view.getUint16(bodyStart + 2, true);
       sampleRate = view.getUint32(bodyStart + 4, true);

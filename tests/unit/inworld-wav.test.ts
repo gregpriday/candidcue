@@ -294,6 +294,14 @@ describe('wavDurationMs', () => {
     expect(() => wavDurationMs(wav)).toThrow();
   });
 
+  it('throws for a non-16-bit sample depth (durationMsFromPcm assumes 16-bit)', () => {
+    const wav = buildWav([
+      { id: 'fmt ', body: fmtBody(24000, 1, 8) }, // 8-bit PCM
+      { id: 'data', body: new Uint8Array(100) },
+    ]);
+    expect(() => wavDurationMs(wav)).toThrow();
+  });
+
   it('throws when a data chunk precedes the fmt chunk', () => {
     const wav = buildWav([
       { id: 'data', body: new Uint8Array(100) },

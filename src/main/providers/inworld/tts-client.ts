@@ -148,6 +148,10 @@ export class InworldTtsClient implements TextToSpeechAdapter {
     }
 
     return {
+      // The WAV header is authoritative for playback (the renderer decodes it
+      // directly) and for `durationMs` above. The reported sampleRate/channels
+      // reflect the requested configuration — Inworld honours sampleRateHertz and
+      // we always request mono, so they match the header in practice.
       bytes,
       mimeType: 'audio/wav',
       sampleRate: input.sampleRate,
