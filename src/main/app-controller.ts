@@ -48,6 +48,7 @@ import {
   INWORLD_DEFAULTS,
   RUNTIME_DEFAULTS,
   PROJECT_LIMITS,
+  STATIC_STAGE_BACKGROUND,
   APPROX_MINUTES_PER_QUESTION,
 } from '@shared/constants/runtime-defaults';
 import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
@@ -646,7 +647,13 @@ export class AppController {
 
     const character = getInterviewerCharacter(aggregate.project.interviewerCharacterId) ?? getInterviewerCharacters()[0]!;
     const voiceId = (await this.deps.repository.getSetting<string>('characters.mira.inworldVoiceId')) ?? character.voice.voiceId;
-    const clips = loadManifest(this.deps.videosRoot ? `${this.deps.videosRoot}/${character.mediaRootPath}` : character.mediaRootPath).clips;
+    // Static-background mode disables the video deck, so the speaking-clip
+    // manifest is neither needed nor loaded (a missing/broken manifest must not
+    // block a session). With no clips, planSpeaking degrades to its empty
+    // poster_fallback plan — exactly what the static stage renders against.
+    const clips = STATIC_STAGE_BACKGROUND
+      ? []
+      : loadManifest(this.deps.videosRoot ? `${this.deps.videosRoot}/${character.mediaRootPath}` : character.mediaRootPath).clips;
 
     const coverage: SessionCoverageItem[] = plan.brief.coverageItems.map((c) => ({ ...c, followUpCount: 0 }));
 
@@ -894,22 +901,30 @@ export class AppController {
     const character =
       (this.active ? getInterviewerCharacter(this.active.characterId) : null) ??
       getInterviewerCharacters()[0]!;
-    const manifest = loadManifest(`${this.deps.videosRoot}/${character.mediaRootPath}`);
-    const toClipRef = (c: (typeof manifest.clips)[number]): ListeningClipRef => ({
+    const toClipRef = (c: { id: string; relativePath: string; durationMs: number }): ListeningClipRef => ({
       clipId: c.id,
       url: mediaUrl(c.relativePath),
       durationMs: c.durationMs,
     });
-    // Backchannel clips are audio-only and tagged 'backchannel'; they must NOT
-    // appear in listeningClips or VideoDeck would feed them to a <video> element.
-    const listeningClips = manifest.clips
-      .filter((c) => c.mode === 'listening' && c.enabled && !c.tags.includes('backchannel'))
-      .map(toClipRef);
-    const backchannelClips = manifest.clips
-      .filter((c) => c.mode === 'listening' && c.enabled && c.tags.includes('backchannel'))
-      .map(toClipRef);
+    // In static-background mode the video deck is disabled, so a missing or
+    // broken media manifest must never block a session — skip it entirely and
+    // ship empty clip lists. Backchannel clips are audio-only and tagged
+    // 'backchannel'; they must NOT appear in listeningClips or VideoDeck would
+    // feed them to a <video> element.
+    let listeningClips: ListeningClipRef[] = [];
+    let backchannelClips: ListeningClipRef[] = [];
+    if (!STATIC_STAGE_BACKGROUND) {
+      const manifest = loadManifest(`${this.deps.videosRoot}/${character.mediaRootPath}`);
+      listeningClips = manifest.clips
+        .filter((c) => c.mode === 'listening' && c.enabled && !c.tags.includes('backchannel'))
+        .map(toClipRef);
+      backchannelClips = manifest.clips
+        .filter((c) => c.mode === 'listening' && c.enabled && c.tags.includes('backchannel'))
+        .map(toClipRef);
+    }
     return {
       characterId: character.id,
+      staticBackground: STATIC_STAGE_BACKGROUND,
       posterUrl: mediaUrl(character.posterPath),
       listeningClips,
       backchannelClips,

@@ -49,6 +49,7 @@ function installStageBridge(): void {
   (window as unknown as { candidcueStage: unknown }).candidcueStage = {
     bootstrap: vi.fn(async () => ({
       characterId: 'mira',
+      staticBackground: false,
       posterUrl: '',
       listeningClips: [],
       backchannelClips: [],

@@ -31,6 +31,16 @@ export const RUNTIME_DEFAULTS = {
   defaultWordsPerSecond: 2.7,
 } as const;
 
+/**
+ * Feature flag: render the stage against a STATIC BACKGROUND IMAGE (the
+ * interviewer's poster still) instead of the speaking/listening video deck. The
+ * avatar video pipeline is temporarily disabled while the core interview loop is
+ * stabilized; flip to `false` to restore the VideoDeck. Surfaced to the renderer
+ * via `StageBootstrap.staticBackground`, and used in the main process to skip
+ * manifest loading (so a missing/broken video manifest never blocks a session).
+ */
+export const STATIC_STAGE_BACKGROUND: boolean = true;
+
 export interface EndpointThresholds {
   minSilenceBeforeClassificationMs: number;
   commitProbability: number;

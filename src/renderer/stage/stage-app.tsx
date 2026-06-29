@@ -7,6 +7,7 @@ import type {
   StageCommand,
 } from '@shared/contracts';
 import { VideoDeck } from './playback/VideoDeck';
+import { StaticBackdrop } from './playback/StaticBackdrop';
 import { StatusOverlay } from './components/StatusOverlay';
 import type { CommandFeedback } from './components/StatusOverlay';
 import { EndConfirmOverlay } from './components/EndConfirmOverlay';
@@ -505,13 +506,22 @@ export function StageApp(): JSX.Element {
 
   return (
     <div className={styles.stage}>
-      <VideoDeck
-        bootstrap={bootstrap}
-        state={state}
-        plan={plan}
-        speechEndedTurnId={speechEndedTurnId}
-        onSpeakingReady={handleSpeakingReady}
-      />
+      {bootstrap.staticBackground ? (
+        <StaticBackdrop
+          bootstrap={bootstrap}
+          state={state}
+          plan={plan}
+          onSpeakingReady={handleSpeakingReady}
+        />
+      ) : (
+        <VideoDeck
+          bootstrap={bootstrap}
+          state={state}
+          plan={plan}
+          speechEndedTurnId={speechEndedTurnId}
+          onSpeakingReady={handleSpeakingReady}
+        />
+      )}
       <StatusOverlay
         state={state}
         captionsEnabled={captionsEnabled}

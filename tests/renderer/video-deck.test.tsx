@@ -7,6 +7,7 @@ import type { SpeechPlaybackPlan, StageBootstrap, StageStateProjection } from '@
 
 const bootstrap: StageBootstrap = {
   characterId: 'mira',
+  staticBackground: false,
   posterUrl: 'candidcue://media/mira/poster.webp',
   listeningClips: [
     { clipId: 'listen_001', url: 'candidcue://media/mira/listening/a.mp4', durationMs: 7000 },

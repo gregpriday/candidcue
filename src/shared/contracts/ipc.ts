@@ -251,6 +251,12 @@ export interface ListeningClipRef {
 
 export interface StageBootstrap {
   characterId: string;
+  /** When true, the stage shows a single still image (`posterUrl`) for the whole
+   *  session and skips the avatar video deck — the video pipeline is disabled
+   *  (see STATIC_STAGE_BACKGROUND). The renderer reports speaking-readiness
+   *  immediately, so the turn's readiness gate falls through to the decoded
+   *  audio alone. Flip the flag to re-enable the VideoDeck later. */
+  staticBackground: boolean;
   posterUrl: string;
   listeningClips: ListeningClipRef[];
   /**
