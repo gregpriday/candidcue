@@ -60,13 +60,19 @@ describe('AppController.command stage focus (#58)', () => {
     expect(orch.begin).toHaveBeenCalledTimes(1);
   });
 
-  it('focuses the stage before begin() resolves, so shortcuts work during the opening turn', async () => {
+  it('focuses the stage before begin() is invoked, so shortcuts work during the opening turn', async () => {
     let resolveBegin: () => void = () => {};
     const beginGate = new Promise<void>((resolve) => {
       resolveBegin = resolve;
     });
     const focus = vi.fn();
-    const orch = makeOrchestrator(() => beginGate);
+    // Assert ordering at invocation time: by the moment begin() runs, focus must
+    // already have fired. This rejects a broken `const p = begin(); focus(); await p`
+    // variant, which a resolution-time check could not distinguish.
+    const orch = makeOrchestrator(() => {
+      expect(focus).toHaveBeenCalledTimes(1);
+      return beginGate;
+    });
     const controller = makeController(focus, orch);
 
     const pending = controller.command({ type: 'BEGIN_SESSION' });
@@ -78,6 +84,21 @@ describe('AppController.command stage focus (#58)', () => {
     resolveBegin();
     await pending;
     expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not focus the stage when BEGIN_SESSION arrives with no active session', async () => {
+    const focus = vi.fn();
+    const orch = makeOrchestrator(async () => {});
+    const controller = makeController(focus, orch);
+    // command() early-returns a state conflict for any non-PREPARE command when
+    // no session is active — it must never reach the focus call in that path.
+    (controller as unknown as { active: null }).active = null;
+
+    const result = await controller.command({ type: 'BEGIN_SESSION' });
+
+    expect(result.ok).toBe(false);
+    expect(focus).not.toHaveBeenCalled();
+    expect(orch.begin).not.toHaveBeenCalled();
   });
 
   it('does not focus the stage for any non-begin command', async () => {
