@@ -547,4 +547,27 @@ describe('createOpenAiAdapters — streaming preparation progress', () => {
     expect(spy.calls).toHaveLength(1);
     expect(result.brief.title).toBe('A Project');
   });
+
+  it('threads both the signal and onProgress into the streaming responder request', async () => {
+    let captured: StructuredRequest | undefined;
+    const streaming: StructuredResponder = async (req) => {
+      captured = req;
+      return JSON.stringify(PREPARED_OUTPUT);
+    };
+    const { model } = createOpenAiAdapters({
+      responder: fixedResponder('{}'),
+      streamingResponder: streaming,
+      moderator: PASS_MODERATOR,
+      models: MODELS,
+    });
+
+    const ac = new AbortController();
+    const cb = (_n: number): void => {};
+    await model.prepareProject(PREPARE_INPUT, ac.signal, cb);
+
+    // Both the abort signal and the progress callback must reach the actual
+    // StructuredRequest the streaming responder receives.
+    expect(captured?.signal).toBe(ac.signal);
+    expect(captured?.onProgress).toBe(cb);
+  });
 });
