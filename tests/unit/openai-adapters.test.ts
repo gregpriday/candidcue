@@ -99,6 +99,7 @@ const NEXT_ACTION = {
   currentSectionId: 'sec-1',
   shouldCloseAfterAnswer: false,
   qualityFlags: ['none'],
+  deliveryHint: { speakingRate: 1.05 },
 };
 
 const CLEANUP_RESULT = {
@@ -278,6 +279,15 @@ describe('createOpenAiAdapters — interview model', () => {
     expect(result.questionType).toBe('context');
     expect(result.coverageUpdates[0]?.status).toBe('partial');
     expect(result.qualityFlags).toEqual(['none']);
+    expect(result.deliveryHint?.speakingRate).toBe(1.05);
+  });
+
+  it('generateNextAction tolerates a missing delivery hint (optional field)', async () => {
+    const { deliveryHint: _omit, ...withoutHint } = NEXT_ACTION;
+    const { model } = adapters(fixedResponder(JSON.stringify(withoutHint)));
+    const result = await model.generateNextAction(NEXT_ACTION_INPUT);
+
+    expect(result.deliveryHint).toBeUndefined();
   });
 
   it('generateNextAction uses the character prompt as system and a JSON user payload', async () => {
@@ -374,6 +384,15 @@ describe('createOpenAiAdapters — schema failures map to AppError OPENAI_SCHEMA
   it('well-formed JSON that violates the schema → AppError OPENAI_SCHEMA', async () => {
     // `action` is an invalid enum value; everything else omitted.
     const { model } = adapters(fixedResponder(JSON.stringify({ action: 'noop' })));
+    await expect(model.generateNextAction(NEXT_ACTION_INPUT)).rejects.toSatisfy(
+      (e: unknown) => isAppError(e) && e.code === 'OPENAI_SCHEMA',
+    );
+  });
+
+  it('delivery-hint speaking rate out of range → AppError OPENAI_SCHEMA', async () => {
+    // 2.0 is outside the safe [0.85, 1.15] band the Zod schema enforces.
+    const bad = { ...NEXT_ACTION, deliveryHint: { speakingRate: 2.0 } };
+    const { model } = adapters(fixedResponder(JSON.stringify(bad)));
     await expect(model.generateNextAction(NEXT_ACTION_INPUT)).rejects.toSatisfy(
       (e: unknown) => isAppError(e) && e.code === 'OPENAI_SCHEMA',
     );

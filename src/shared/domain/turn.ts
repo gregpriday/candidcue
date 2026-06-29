@@ -36,6 +36,12 @@ export interface QuestionRecord {
   generatedAt: string;
   ttsProvider: 'inworld';
   ttsVoiceId: string;
+  /**
+   * Per-turn TTS speaking-rate multiplier derived from the model's delivery
+   * hint (clamped to the safe subset of Inworld's range). When absent, the
+   * synthesizer falls back to the character's configured `voice.speakingRate`.
+   */
+  ttsSpeakingRate?: number;
   audioDurationMs: number | null;
   mediaPlan: SpeakingMediaPlan | null;
   generationLatencyMs: number | null;

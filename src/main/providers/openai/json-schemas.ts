@@ -159,6 +159,9 @@ export const nextInterviewerActionJsonSchema: JsonSchema = object({
       ],
     },
   },
+  deliveryHint: object({
+    speakingRate: { type: 'number', minimum: 0.85, maximum: 1.15 },
+  }),
 });
 
 export const transcriptCleanupResultJsonSchema: JsonSchema = object({
