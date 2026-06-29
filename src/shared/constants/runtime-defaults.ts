@@ -17,6 +17,13 @@ export const RUNTIME_DEFAULTS = {
   targetQuestionWordsMax: 35,
   maxQuestionAudioMs: 15000,
   questionAudioHardCeilingMs: 16000,
+  /**
+   * Hard safety multiplier on the soft targetQuestionCount. A model that keeps
+   * asking (never returns `complete`) is forced to close once answered questions
+   * reach ceil(targetQuestionCount * factor) — a backstop behind the model's own
+   * termination, not a change to the soft target (issue #17).
+   */
+  questionCountHardCapFactor: 1.5,
   defaultWordsPerSecond: 2.7,
 } as const;
 

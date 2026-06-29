@@ -108,6 +108,7 @@ async function makeHarness(overrides?: {
   captionsEnabled?: boolean;
   clock?: () => number;
   logger?: Logger;
+  targetQuestionCount?: number;
 }): Promise<Harness> {
   const repo = new MemoryRepository();
   await repo.migrate();
@@ -116,7 +117,7 @@ async function makeHarness(overrides?: {
   const project = await repo.saveProject({
     title: b.title,
     targetMode: 'question_count',
-    targetValue: 12,
+    targetValue: overrides?.targetQuestionCount ?? 12,
     interviewerCharacterId: 'mira',
     documents: [{ title: 'Brief', mimeType: 'text/markdown', content: '# Topic', sortOrder: 0 }],
   });
@@ -198,7 +199,7 @@ async function makeHarness(overrides?: {
     ttsSampleRate: 24000,
     captionsEnabled: overrides?.captionsEnabled ?? false,
     selectedOutputDeviceId: null,
-    targetQuestionCount: 12,
+    targetQuestionCount: overrides?.targetQuestionCount ?? 12,
   };
 
   return { orch: new SessionOrchestrator(deps, ctx), repo, stage, snapshots, sessionId: session.id, stt, tts };
@@ -427,6 +428,113 @@ describe('SessionOrchestrator turn pipeline', () => {
     const turn2 = agg!.turns.find((t) => t.ordinal === 2);
     expect(turn2?.question.text).toBe('What happens after the speaker finishes an answer?');
     expect(turn2?.question.source).toBe('model');
+  });
+
+  it('ends the session at the hard question-count cap when the model never self-terminates', async () => {
+    // Without a backstop, a model that always returns `ask` never self-terminates.
+    // The hard cap (ceil(target * factor)) forces completion after enough answers.
+    const model = new FakeInterviewModel({
+      questionTexts: [
+        'What first drew you to this work',
+        'Can you walk me through a concrete example',
+        'What surprised you most along the way',
+        'How did you measure success there',
+        'Where would you like to take this next',
+        'What else should people know about this',
+      ],
+    });
+    h = await makeHarness({ model, targetQuestionCount: 3 }); // cap = ceil(3 * 1.5) = 5
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    // Drive 5 answered turns; the model asks every time.
+    for (let i = 0; i < 5; i++) {
+      h.orch.onSpeechStarted(1000 * (i + 1));
+      h.orch.onSpeechStopped(1000 * (i + 1) + 3000);
+      await h.orch.commitUserTurn('manual');
+      // Turns 1-4 stay under the cap: the session keeps going, arms a next
+      // question, and surfaces no safety warning. Guards the off-by-one — the cap
+      // fires on ordinal 5, not 4 — and an early-warning regression.
+      if (i < 4) {
+        expect(h.orch.getState()).toBe('USER_ARMED');
+        expect(lastSnapshot().recoverableWarning).toBeNull();
+      }
+    }
+
+    // The 5th answered turn tripped the cap → forced completion, no runaway turn 6.
+    expect(h.orch.getState()).toBe('COMPLETED');
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.session.status).toBe('completed');
+    expect(agg!.session.currentTurnOrdinal).toBe(5);
+    expect(agg!.turns.filter((t) => t.state === 'answered')).toHaveLength(5);
+    expect(agg!.turns.some((t) => t.ordinal === 6)).toBe(false);
+    // The operator snapshot surfaces WHY the interview ended automatically.
+    expect(lastSnapshot().recoverableWarning).toMatch(/safety question limit/i);
+  });
+
+  it('attributes the close to the model when it also completes on the cap turn', async () => {
+    // On the 5th (cap) turn the model independently returns `complete`. The cap's
+    // OR term collapses with the model's close — no duplicate transition, and the
+    // close is attributed to the model (no cap warning surfaced).
+    const model = new FakeInterviewModel({
+      scriptedActions: [
+        { action: 'ask', spokenText: 'What first drew you to this work' },
+        { action: 'ask', spokenText: 'Can you walk me through a concrete example' },
+        { action: 'ask', spokenText: 'What surprised you most along the way' },
+        { action: 'ask', spokenText: 'How did you measure success there' },
+        { action: 'complete', spokenText: '' },
+      ],
+    });
+    h = await makeHarness({ model, targetQuestionCount: 3 });
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+    for (let i = 0; i < 5; i++) {
+      h.orch.onSpeechStarted(1000 * (i + 1));
+      h.orch.onSpeechStopped(1000 * (i + 1) + 3000);
+      await h.orch.commitUserTurn('manual');
+    }
+
+    expect(h.orch.getState()).toBe('COMPLETED');
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.session.status).toBe('completed');
+    expect(agg!.session.currentTurnOrdinal).toBe(5);
+    expect(agg!.turns.filter((t) => t.state === 'answered')).toHaveLength(5);
+    // Attributed to the model's `complete`, not the cap → no safety-limit warning.
+    expect(lastSnapshot().recoverableWarning).toBeNull();
+  });
+
+  it('locks the cap math at a small target boundary (target 1 → cap 2)', async () => {
+    const model = new FakeInterviewModel({
+      questionTexts: [
+        'What first drew you to this work',
+        'Can you walk me through a concrete example',
+        'What surprised you most along the way',
+      ],
+    });
+    h = await makeHarness({ model, targetQuestionCount: 1 }); // cap = ceil(1 * 1.5) = 2
+
+    await h.orch.prepareOpening();
+    await h.orch.begin();
+
+    // First answer is under the cap (ordinal 1 < 2): the session continues.
+    h.orch.onSpeechStarted(1000);
+    h.orch.onSpeechStopped(4000);
+    await h.orch.commitUserTurn('manual');
+    expect(h.orch.getState()).toBe('USER_ARMED');
+
+    // Second answer trips the cap (ordinal 2 >= 2) → forced completion.
+    h.orch.onSpeechStarted(2000);
+    h.orch.onSpeechStopped(5000);
+    await h.orch.commitUserTurn('manual');
+
+    expect(h.orch.getState()).toBe('COMPLETED');
+    const agg = await h.repo.getSession(h.sessionId);
+    expect(agg!.session.status).toBe('completed');
+    expect(agg!.session.currentTurnOrdinal).toBe(2);
+    expect(agg!.turns.filter((t) => t.state === 'answered')).toHaveLength(2);
+    expect(lastSnapshot().recoverableWarning).toMatch(/safety question limit/i);
   });
 
   it('ends the session after the current turn when End After Turn is set', async () => {
