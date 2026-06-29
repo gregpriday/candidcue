@@ -45,12 +45,22 @@ describe.skipIf(!KEY)('Inworld provider contract', () => {
     expect(result.bytes.length).toBeGreaterThan(0);
     expect(isWavFile(result.bytes)).toBe(true);
     expect(result.mimeType).toBe('audio/wav');
+    expect(result.sampleRate).toBe(INWORLD_DEFAULTS.ttsSampleRate);
     expect(result.durationMs).toBeGreaterThan(0);
   });
 
   it('streams an STT turn over the WebSocket and resolves a result', async () => {
     const adapters = buildInworldAdapters(KEY!);
     stt = adapters.stt;
+
+    // A post-handshake failure (e.g. a rejected credential) arrives as an 'error'
+    // event rather than a thrown exception, after which endTurn would still
+    // resolve with empty text by the deadline. Capture it so a bad credential
+    // fails the test instead of passing silently.
+    let sttError: unknown = null;
+    const unsubscribe = stt.on('error', (err: unknown) => {
+      sttError = err;
+    });
 
     try {
       // connect performs the auth handshake and sends the transcribeConfig frame.
@@ -80,9 +90,11 @@ describe.skipIf(!KEY)('Inworld provider contract', () => {
       // fine for silence) — it does not throw on no-speech.
       const result = await stt.endTurn({ deadlineMs: 10_000 });
 
+      expect(sttError).toBeNull();
       expect(typeof result.text).toBe('string');
       expect(Array.isArray(result.finalSegments)).toBe(true);
     } finally {
+      unsubscribe();
       await stt.close();
       stt = null;
     }
