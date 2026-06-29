@@ -1,7 +1,8 @@
 import type { CaptureConfig } from '@shared/contracts';
-
-// The worklet module is resolved relative to this file at build time.
-const PCM_WORKLET_URL = new URL('./pcm-worklet.ts', import.meta.url);
+// `?worker` makes Vite bundle the worklet into a transpiled, same-origin JS
+// asset (not raw .ts in a data: URL); `?url` yields its URL string for
+// audioWorklet.addModule(), which the production CSP serves under script-src 'self'.
+import workletUrl from './pcm-worklet.ts?worker&url';
 
 /** Gate states that mirror StageStateProjection.micState. */
 export type MicGate = 'closed' | 'armed' | 'active';
@@ -91,7 +92,7 @@ export class CaptureController {
 
     const context = new AudioContext();
     this.context = context;
-    await context.audioWorklet.addModule(PCM_WORKLET_URL);
+    await context.audioWorklet.addModule(workletUrl);
     if (this.disposed) {
       await this.dispose();
       return;

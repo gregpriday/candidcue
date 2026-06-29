@@ -1,5 +1,3 @@
-/// <reference path="../../global.d.ts" />
-
 /**
  * Audio worklet that downsamples the live mic to 16 kHz mono PCM16 and posts
  * ~100 ms chunks (1600 samples) to the main thread as transferable ArrayBuffers.
