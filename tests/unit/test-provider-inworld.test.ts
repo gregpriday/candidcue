@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The Inworld health check must exercise BOTH provider surfaces — the TTS HTTP
 // round-trip and the streaming STT WebSocket — so a green preflight can't hide a
@@ -15,8 +15,15 @@ import { AppController } from '@main/app-controller';
 import { NOOP_LOGGER } from '@main/interview/ports';
 import { INWORLD_DEFAULTS } from '@shared/constants/runtime-defaults';
 
+const EXPECTED_STT_PROBE = {
+  sampleRate: 16000,
+  channels: 1,
+  model: INWORLD_DEFAULTS.sttModel,
+  interimResults: false,
+};
+
 function makeFakeAdapters(overrides?: {
-  connect?: () => Promise<void>;
+  connect?: (config?: unknown, signal?: AbortSignal) => Promise<void>;
   synthesize?: () => Promise<unknown>;
 }) {
   const stt = {
@@ -37,7 +44,7 @@ function makeController(): AppController {
       getSetting: async () => null,
     } as never,
     credentials: {
-      getKey: () => 'inworld-key',
+      getKey: () => 'provider-key',
     } as never,
     logger: NOOP_LOGGER,
     videosRoot: '',
@@ -57,21 +64,32 @@ describe('testProvider("inworld") STT probe (issue #68)', () => {
   });
 
   it('exercises both TTS and STT, then closes the STT socket, on success', async () => {
-    const fakes = makeFakeAdapters();
+    const order: string[] = [];
+    const fakes = makeFakeAdapters({
+      connect: async () => {
+        order.push('stt.connect');
+      },
+    });
+    fakes.tts.synthesize.mockImplementation(async () => {
+      order.push('tts.synthesize');
+      return { audio: new ArrayBuffer(0) };
+    });
     buildInworldAdapters.mockReturnValue(fakes);
 
     const result = await makeController().testProvider('inworld');
 
     expect(result.ok).toBe(true);
     expect(result.message).toMatch(/TTS and STT/i);
-    // Both surfaces were genuinely exercised, not just the key presence.
-    expect(fakes.tts.synthesize).toHaveBeenCalledTimes(1);
+    // Both surfaces were genuinely exercised, not just the key presence — and TTS
+    // runs first so a TTS failure short-circuits before any socket is opened.
+    expect(order).toEqual(['tts.synthesize', 'stt.connect']);
+    // The probe opens with the exact streaming config and a cancellation signal,
+    // then closes immediately so a successful probe never leaks a live socket.
     expect(fakes.stt.connect).toHaveBeenCalledTimes(1);
-    // The socket is opened then immediately closed — a successful probe must not
-    // leak a live STT connection.
+    expect(fakes.stt.connect).toHaveBeenCalledWith(EXPECTED_STT_PROBE, expect.any(AbortSignal));
     expect(fakes.stt.close).toHaveBeenCalledTimes(1);
     // The STT model is configured from the shared defaults, not hard-coded.
-    expect(buildInworldAdapters).toHaveBeenCalledWith('inworld-key', INWORLD_DEFAULTS.sttModel);
+    expect(buildInworldAdapters).toHaveBeenCalledWith('provider-key', INWORLD_DEFAULTS.sttModel);
   });
 
   it('fails the health check with an STT-specific message when the socket cannot open, and still closes it', async () => {
@@ -106,5 +124,54 @@ describe('testProvider("inworld") STT probe (issue #68)', () => {
     // TTS fails first, so the STT socket is never opened and never needs closing.
     expect(fakes.stt.connect).not.toHaveBeenCalled();
     expect(fakes.stt.close).not.toHaveBeenCalled();
+  });
+
+  describe('timeout', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('aborts the STT connect after the deadline so a stalled handshake fails the check', async () => {
+      // A connect that never resolves on its own — it only settles when the
+      // probe's AbortController fires, proving the deadline actually cancels the
+      // socket rather than racing a fire-and-forget timer.
+      const fakes = makeFakeAdapters({
+        connect: (_config, signal) =>
+          new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener('abort', () => reject(new Error('aborted')));
+          }),
+      });
+      buildInworldAdapters.mockReturnValue(fakes);
+
+      const resultPromise = makeController().testProvider('inworld');
+      await vi.advanceTimersByTimeAsync(8000);
+      const result = await resultPromise;
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toMatch(/STT connection failed/i);
+      expect(fakes.stt.close).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe('testProvider("openai") is unaffected by the Inworld STT probe (issue #68)', () => {
+  beforeEach(() => {
+    buildInworldAdapters.mockReset();
+    buildOpenAiAdapters.mockReset();
+  });
+
+  it('still reports the generic success message and never builds Inworld adapters', async () => {
+    buildOpenAiAdapters.mockReturnValue({ moderation: { moderate: vi.fn(async () => {}) } });
+
+    const result = await makeController().testProvider('openai');
+
+    // The shared `message` variable defaults to the generic string and the OpenAI
+    // branch never overwrites it — the STT-probe refactor must not change this.
+    expect(result.ok).toBe(true);
+    expect(result.message).toBe('Credentials look valid.');
+    expect(buildInworldAdapters).not.toHaveBeenCalled();
   });
 });

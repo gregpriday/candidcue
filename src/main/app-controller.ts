@@ -52,7 +52,7 @@ import { PROJECT_SOURCE_LIMITS } from '@shared/constants/project-source-limits';
 import { importMarkdownBuffers, MAX_IMPORT_BYTES } from './project-assets/markdown-importer';
 import type { ImportMarkdownDocumentsResult, MarkdownImportFailure } from '@shared/domain';
 import { AppError, isAppError } from '@shared/errors/app-error';
-import { hashProjectPreparationFromDocuments, withTimeout } from '@shared/utils';
+import { hashProjectPreparationFromDocuments } from '@shared/utils';
 
 import { SessionOrchestrator, type OrchestratorDeps, type SessionContext } from './interview/orchestrator';
 import { bridgeSttToOrchestrator } from './interview/stt-bridge';
@@ -361,14 +361,24 @@ export class AppController {
           model: INWORLD_DEFAULTS.sttModel,
           interimResults: false,
         };
+        // Bound the open with an AbortController rather than racing a bare timer:
+        // aborting actually tears the half-open socket down (inworldWsConnect's
+        // onAbort closes the WebSocket), so a slow handshake can't leak a live
+        // connection the way a fire-and-forget timeout would.
+        const sttProbeAbort = new AbortController();
+        const sttProbeTimer = setTimeout(() => sttProbeAbort.abort(), 8000);
         try {
-          await withTimeout(stt.connect(sttProbe), 8000);
+          await stt.connect(sttProbe, sttProbeAbort.signal);
         } catch (err) {
+          // TTS already proved the key, so a failure here is the STT surface
+          // specifically — name it, and cover both auth and transport causes
+          // since the probe can't tell a rejected key from an unreachable socket.
           throw new AppError('INWORLD_AUTH', {
-            publicMessage: 'Inworld STT connection failed. Please verify your API key.',
+            publicMessage: 'Inworld STT connection failed. Please verify your API key and network connection.',
             cause: err,
           });
         } finally {
+          clearTimeout(sttProbeTimer);
           await stt.close();
         }
         message = 'TTS and STT connections verified.';
