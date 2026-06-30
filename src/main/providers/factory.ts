@@ -37,29 +37,21 @@ export function buildOpenAiAdapters(apiKey: string): OpenAiAdapters {
  */
 const STT_STREAM_URL = 'wss://api.inworld.ai/stt/v1/transcribe:streamBidirectional';
 
-/**
- * Build the streaming-STT WebSocket URL. The streamBidirectional endpoint's
- * security scheme is `httpApiKey` with `in: query` (param name lowercase
- * `authorization`), so the Basic credential travels as a URL query parameter —
- * NOT as an `Authorization` upgrade header (the server ignores the header and
- * rejects the connection). `encodeURIComponent` is used rather than
- * URLSearchParams so the space becomes `%20` (per the docs) instead of `+`, and
- * so the base64 credential's `+` `/` `=` are percent-escaped verbatim.
- *
- * Note: the synchronous REST recovery path (`recoverFromAudio` in stt-client.ts)
- * uses a different Inworld scheme — `apiKey` in an HTTP `Authorization` header —
- * and is intentionally left untouched here.
- */
-export function buildSttWsUrl(baseUrl: string, apiKey: string): string {
-  const separator = baseUrl.includes('?') ? '&' : '?';
-  return `${baseUrl}${separator}authorization=${encodeURIComponent(`Basic ${apiKey}`)}`;
-}
-
 export const inworldWsConnect: SttConnectFactory = async ({ apiKey, model, config }, signal) => {
-  // The API key IS the verbatim Basic credential (already base64-encoded by the
-  // user), passed through unmodified inside the query-param URL (see
-  // buildSttWsUrl) — the streaming endpoint authenticates via query param.
-  const ws = new WebSocket(buildSttWsUrl(STT_STREAM_URL, apiKey));
+  // Auth: the streamBidirectional endpoint authenticates via the standard
+  // `Authorization: Basic <key>` upgrade header — VERIFIED against the live API.
+  // The rendered docs advertise a query-param (`?authorization=Basic%20<key>`)
+  // scheme, but the live server rejects that with
+  //   { error: { code: 16, message: "authentication is required",
+  //              details: [{ errorType: "SESSION_TOKEN_INVALID" }] } }
+  // and accepts the header form (returning real `result.transcription` frames).
+  // Node's `ws` can send custom upgrade headers (a browser WebSocket cannot),
+  // so the header is available here and matches the REST TTS/STT scheme. The API
+  // key IS the verbatim Basic credential (already base64-encoded by the user);
+  // pass it through unmodified.
+  const ws = new WebSocket(STT_STREAM_URL, {
+    headers: { Authorization: `Basic ${apiKey}` },
+  });
   await new Promise<void>((resolve, reject) => {
     const onOpen = (): void => {
       cleanup();
@@ -71,6 +63,12 @@ export const inworldWsConnect: SttConnectFactory = async ({ apiKey, model, confi
     };
     const onAbort = (): void => {
       cleanup();
+      // Closing a still-CONNECTING socket makes `ws` emit a late 'error' on a
+      // subsequent tick. cleanup() just removed the only 'error' listener, so
+      // without this no-op absorber that late error would be an unhandled
+      // EventEmitter 'error' and crash the main process (the preflight probe
+      // aborts this connect on its timeout — app-controller.ts).
+      ws.on('error', () => {});
       try {
         ws.close();
       } catch {

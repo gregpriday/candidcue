@@ -47,65 +47,19 @@ vi.mock('ws', async () => {
   return { default: FakeWs };
 });
 
-import { buildSttWsUrl, inworldWsConnect } from '@main/providers/factory';
+import { inworldWsConnect } from '@main/providers/factory';
 
 /**
- * The Inworld streamBidirectional endpoint authenticates via a URL query
- * parameter (`?authorization=Basic%20<key>`), not an `Authorization` upgrade
- * header. These tests pin the encoding contract of buildSttWsUrl: the space
- * must be `%20` (not `+`), and a base64 credential's `+` `/` `=` must be
- * percent-escaped so the server reads the credential verbatim. Regression
- * guard for issue #10.
- */
-describe('buildSttWsUrl', () => {
-  const BASE = 'wss://example.com/stt/v1/transcribe:streamBidirectional';
-
-  it('places the Basic credential in a lowercase `authorization` query param', () => {
-    const url = buildSttWsUrl(BASE, 'abc123');
-    expect(url).toBe(`${BASE}?authorization=Basic%20abc123`);
-  });
-
-  it('encodes the separating space as %20, never a `+`', () => {
-    const url = buildSttWsUrl(BASE, 'abc123');
-    expect(url).toContain('?authorization=Basic%20');
-    // A `+` between "Basic" and the key would be decoded as a space only under
-    // form-encoding semantics — the streaming endpoint reads the value verbatim.
-    expect(url).not.toContain('Basic+');
-  });
-
-  it('percent-escapes base64 credential characters (+ / =)', () => {
-    // A realistic base64 Basic credential containing every reserved char.
-    const key = 'aGVsbG8+d29ybGQ/Zm9v==';
-    const url = buildSttWsUrl(BASE, key);
-    expect(url).toBe(`${BASE}?authorization=Basic%20aGVsbG8%2Bd29ybGQ%2FZm9v%3D%3D`);
-    // No raw base64 reserved characters leak into the credential query value.
-    const credentialValue = url.slice(`${BASE}?authorization=`.length);
-    expect(credentialValue).not.toMatch(/[+/=]/);
-  });
-
-  it('round-trips back to the original credential when URL-decoded', () => {
-    const key = 'aGVsbG8+d29ybGQ/Zm9v==';
-    const url = buildSttWsUrl(BASE, key);
-    const parsed = new URL(url);
-    expect(parsed.searchParams.get('authorization')).toBe(`Basic ${key}`);
-  });
-
-  it('appends with `&` when the base URL already carries a query string', () => {
-    const url = buildSttWsUrl(`${BASE}?foo=bar`, 'abc123');
-    expect(url).toBe(`${BASE}?foo=bar&authorization=Basic%20abc123`);
-    expect(new URL(url).searchParams.get('authorization')).toBe('Basic abc123');
-  });
-
-  it('does not crash on an empty API key', () => {
-    expect(buildSttWsUrl(BASE, '')).toBe(`${BASE}?authorization=Basic%20`);
-  });
-});
-
-/**
- * Integration guard for the actual regression seam: `inworldWsConnect` must
- * open the socket with the query-param URL and pass NO options/headers argument.
- * The pure buildSttWsUrl tests above would still pass if line 47 were reverted
- * to the header form — this test is what catches that.
+ * The Inworld streamBidirectional endpoint authenticates via the standard
+ * `Authorization: Basic <key>` upgrade header — verified against the live API.
+ * The query-param scheme the rendered docs advertise
+ * (`?authorization=Basic%20<key>`) is rejected live with SESSION_TOKEN_INVALID /
+ * "authentication is required"; the header form returns real transcripts. These
+ * tests are the regression guard for issue #10: the connect factory must open
+ * the socket against the BARE endpoint URL and carry the credential in the
+ * upgrade headers, never in the URL query string. The outbound first message is
+ * the wrapped `transcribeConfig`, and audio frames are wrapped `audioChunk`s —
+ * both confirmed live.
  */
 describe('inworldWsConnect', () => {
   const config: SttSessionConfig = {
@@ -120,7 +74,7 @@ describe('inworldWsConnect', () => {
     instances.length = 0;
   });
 
-  it('opens the socket with a query-param URL and no Authorization header', async () => {
+  it('opens the socket with an Authorization: Basic header and a bare URL', async () => {
     const transport = await inworldWsConnect(
       { apiKey: 'abc123', model: 'inworld/inworld-stt-1', config },
       undefined,
@@ -128,11 +82,49 @@ describe('inworldWsConnect', () => {
 
     expect(instances).toHaveLength(1);
     const ws = instances[0]!;
-    expect(ws.url).toBe(
-      'wss://api.inworld.ai/stt/v1/transcribe:streamBidirectional?authorization=Basic%20abc123',
+    expect(ws.url).toBe('wss://api.inworld.ai/stt/v1/transcribe:streamBidirectional');
+    // The credential travels in the upgrade headers, NOT the URL query string.
+    expect(ws.url).not.toContain('authorization=');
+    expect(ws.options).toEqual({ headers: { Authorization: 'Basic abc123' } });
+
+    transport.close();
+  });
+
+  it('sends the wrapped transcribeConfig as the first message', async () => {
+    const transport = await inworldWsConnect(
+      { apiKey: 'abc123', model: 'inworld/inworld-stt-1', config },
+      undefined,
     );
-    // The credential lives only in the URL — no second (options/headers) argument.
-    expect(ws.options).toBeUndefined();
+
+    const ws = instances[0]!;
+    expect(ws.sent).toHaveLength(1);
+    expect(JSON.parse(ws.sent[0]!)).toEqual({
+      transcribeConfig: {
+        modelId: 'inworld/inworld-stt-1',
+        audioEncoding: 'LINEAR16',
+        sampleRateHertz: 16000,
+        numberOfChannels: 1,
+        language: 'en-US',
+      },
+    });
+
+    transport.close();
+  });
+
+  it('wraps outbound audio frames as base64 audioChunk messages', async () => {
+    const transport = await inworldWsConnect(
+      { apiKey: 'abc123', model: 'inworld/inworld-stt-1', config },
+      undefined,
+    );
+
+    const ws = instances[0]!;
+    const pcm = new Uint8Array([1, 2, 3, 4]).buffer;
+    transport.send(pcm);
+    // [0] is the transcribeConfig; [1] is the audio frame.
+    expect(ws.sent).toHaveLength(2);
+    expect(JSON.parse(ws.sent[1]!)).toEqual({
+      audioChunk: { content: Buffer.from(new Uint8Array([1, 2, 3, 4])).toString('base64') },
+    });
 
     transport.close();
   });

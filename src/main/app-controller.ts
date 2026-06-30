@@ -472,9 +472,11 @@ export class AppController {
         await adapters.moderation.moderate('hello');
       } else {
         // Inworld: exercise BOTH provider surfaces so a green preflight can't hide
-        // a broken half. TTS authenticates over HTTP Basic; the streaming STT
-        // socket authenticates over a query param — different transports and code
-        // paths, so a working TTS round-trip says nothing about STT (issue #68).
+        // a broken half. TTS authenticates over an HTTP `Authorization: Basic`
+        // header; the streaming STT socket authenticates over the same Basic
+        // credential carried in the WebSocket upgrade header — but they are
+        // different transports and code paths, so a working TTS round-trip says
+        // nothing about STT (issue #68).
         const { stt, tts } = buildInworldAdapters(key, INWORLD_DEFAULTS.sttModel);
         // 1. TTS round-trip: synthesize a one-word phrase with the configured Mira
         //    voice and discard the audio — a real round-trip, not just key presence (CORR-04).

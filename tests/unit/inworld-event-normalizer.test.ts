@@ -48,6 +48,44 @@ describe('normalizeSttEvent', () => {
     });
   });
 
+  // The live streamBidirectional API wraps successful events in a `result`
+  // envelope; these are the exact shapes captured from a real round-trip.
+  describe('live result-wrapped envelope', () => {
+    it('unwraps a result-wrapped partial transcription', () => {
+      expect(
+        normalizeSttEvent({
+          result: { transcription: { transcript: 'Testing one two', isFinal: false } },
+        }),
+      ).toEqual({ kind: 'partial', text: 'Testing one two' });
+    });
+
+    it('unwraps a result-wrapped final transcription', () => {
+      expect(
+        normalizeSttEvent({ result: { transcription: { transcript: 'Done.', isFinal: true } } }),
+      ).toEqual({ kind: 'finalSegment', text: 'Done.' });
+    });
+
+    it('unwraps a result-wrapped speechStarted', () => {
+      expect(
+        normalizeSttEvent({ result: { speechStarted: { startTimeMs: 0, confidence: 0 } } }),
+      ).toEqual({ kind: 'speechStarted' });
+    });
+
+    it('unwraps a result-wrapped speechStopped', () => {
+      expect(
+        normalizeSttEvent({ result: { speechStopped: { silenceDurationMs: 800 } } }),
+      ).toEqual({ kind: 'speechStopped' });
+    });
+
+    it('maps a top-level error envelope (errors are not result-wrapped)', () => {
+      expect(
+        normalizeSttEvent({
+          error: { code: 16, message: 'authentication is required', details: [] },
+        }),
+      ).toEqual({ kind: 'error', message: 'authentication is required' });
+    });
+  });
+
   describe('field tolerance', () => {
     it('defaults missing partial transcript to an empty string', () => {
       expect(normalizeSttEvent({ transcription: { isFinal: false } })).toEqual({
@@ -102,6 +140,18 @@ describe('normalizeSttEvent', () => {
 
     it('returns null when the transcription wrapper is not an object', () => {
       expect(normalizeSttEvent({ transcription: 'oops' })).toBeNull();
+    });
+
+    it('returns null when a result envelope wraps a non-object', () => {
+      expect(normalizeSttEvent({ result: 'oops' })).toBeNull();
+    });
+
+    it('returns null for an empty result envelope', () => {
+      expect(normalizeSttEvent({ result: {} })).toBeNull();
+    });
+
+    it('returns null when a result-wrapped transcription is not an object', () => {
+      expect(normalizeSttEvent({ result: { transcription: 'oops' } })).toBeNull();
     });
 
     it('returns null for an empty object', () => {

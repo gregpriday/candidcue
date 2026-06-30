@@ -8,19 +8,22 @@
  * cheap to test exhaustively and easy to adjust if the provider's event names
  * drift.
  *
- * Recognized raw event shapes (documented streamBidirectional contract —
- * https://docs.inworld.ai/api-reference/sttAPI/speechtotext/transcribe-stream-websocket):
+ * Recognized raw event shapes (VERIFIED against the live streamBidirectional
+ * API — https://docs.inworld.ai/api-reference/sttAPI/speechtotext/transcribe-stream-websocket):
  *
- *   { transcription:  { transcript: string, isFinal: false } } → interim/partial transcript
- *   { transcription:  { transcript: string, isFinal: true  } } → a finalized transcript segment
- *   { speechStarted:  {...} }                                   → voice activity began (VAD)
- *   { speechStopped:  {...} }                                   → voice activity ended (VAD)
- *   { error: { message: string } } | { error: string }         → transport/recognition error
+ * The live server wraps every successful event in a `result` envelope:
  *
- * NOTE: the docs do not specify an error envelope, so the `error` mapping here is
- * a defensive best-effort and may need live confirmation. Anything else (unknown
- * wrapper key, missing fields, non-object input) maps to `null` so callers can
- * safely ignore noise rather than crash.
+ *   { result: { transcription: { transcript: string, isFinal: false } } } → interim/partial
+ *   { result: { transcription: { transcript: string, isFinal: true  } } } → finalized segment
+ *   { result: { speechStarted:  {...} } }                                  → voice activity began (VAD)
+ *   { result: { speechStopped:  {...} } }                                  → voice activity ended (VAD)
+ *   { error: { code, message: string, details: [...] } } | { error: string } → transport/recognition error
+ *
+ * The `result` wrapper is stripped first below, so the legacy unwrapped shapes
+ * (`{ transcription: {...} }`, etc.) are still accepted for back-compat. Errors
+ * arrive at the top level (NOT under `result`). Anything else (unknown wrapper
+ * key, missing fields, non-object input) maps to `null` so callers can safely
+ * ignore noise rather than crash.
  */
 
 /** The normalized event kinds consumed by the STT client and orchestrator. */
@@ -59,11 +62,18 @@ function readString(record: Record<string, unknown>, key: string): string {
  * ignore it without special-casing.
  */
 export function normalizeSttEvent(raw: unknown): NormalizedSttEvent | null {
-  const record = asRecord(raw);
-  if (record === null) return null;
+  const outer = asRecord(raw);
+  if (outer === null) return null;
+
+  // The live API wraps successful events in a `result` envelope
+  // ({ result: { transcription | speechStarted | speechStopped } }); descend into
+  // it when present. Errors arrive at the top level, and legacy unwrapped shapes
+  // (no `result` key) still pass through unchanged.
+  const inner = asRecord(outer['result']);
+  const record = inner ?? outer;
 
   // Inbound messages are tagged by their wrapper key (transcription / speechStarted
-  // / speechStopped / error), matching the documented streamBidirectional shapes.
+  // / speechStopped / error).
 
   if ('transcription' in record) {
     const transcription = asRecord(record['transcription']);
