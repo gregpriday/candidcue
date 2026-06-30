@@ -5,6 +5,7 @@ import type {
   SpeechToTextAdapter,
   TextToSpeechAdapter,
   TtsResult,
+  TtsChunk,
   SpeechPlaybackPlan,
   StageStateProjection,
   OperatorSessionSnapshot,
@@ -32,7 +33,12 @@ import type {
   CoverageDelta,
 } from '@shared/domain';
 import { newId } from '@shared/domain';
-import { RUNTIME_DEFAULTS, INWORLD_DEFAULTS } from '@shared/constants/runtime-defaults';
+import {
+  RUNTIME_DEFAULTS,
+  INWORLD_DEFAULTS,
+  STREAM_TTS,
+  STATIC_STAGE_BACKGROUND,
+} from '@shared/constants/runtime-defaults';
 import { AppError } from '@shared/errors/app-error';
 import { withDeadlineFallback, withTimeout, nowMs as defaultNow, splitParagraphs, wordCount } from '@shared/utils';
 
@@ -241,6 +247,10 @@ export class SessionOrchestrator {
   // instead of leaving a multi-second synthesis running for a discarded turn.
   // Null whenever no commit fan-out is in flight.
   private _commitAbort: AbortController | null = null;
+  // Aborts an in-flight streamed-TTS synthesis (C4) when the turn is superseded
+  // (bumpGeneration) or the stage playback deadline lapses, so a stalled or stale
+  // stream can never hang the turn or bleed chunks into a new attempt.
+  private _streamAbort: AbortController | null = null;
   private lastCommittedAnswer = '';
   // Raw PCM captured for the in-flight user turn, buffered so a mid-answer stream
   // drop can be batch re-transcribed via stt.recoverFromAudio (#69). Fed by
@@ -920,6 +930,8 @@ export class SessionOrchestrator {
     this.generationId++;
     this._commitAbort?.abort();
     this._commitAbort = null;
+    this._streamAbort?.abort();
+    this._streamAbort = null;
   }
 
   /** Evaluate whether the conservative/balanced classifier should auto-commit. */
@@ -983,9 +995,22 @@ export class SessionOrchestrator {
   }
 
   // -- core: play the current prepared turn --------------------------------
+  /**
+   * Whether the streamed-TTS path is active (C4): the flag is on, the stage is in
+   * static-background mode (no video clip to sync against), and the TTS adapter
+   * exposes a streaming method. When false, the buffered path below runs as-is.
+   */
+  private streamingEnabled(): boolean {
+    return STREAM_TTS && STATIC_STAGE_BACKGROUND && typeof this.deps.tts.synthesizeStream === 'function';
+  }
+
   private async playCurrentTurn(reason: string): Promise<void> {
     const turn = this.currentTurn;
     if (!turn) throw stateConflict('no prepared turn to play');
+    if (this.streamingEnabled()) {
+      await this.playStreamingTurn(turn, reason);
+      return;
+    }
     // The mic gate must be closed while Mira speaks (spec §13.3). Idempotent.
     this.deps.stage.closeMicGate();
     // Drive to INTERVIEWER_BUFFERING from whatever pre-play state we are in.
@@ -1045,6 +1070,139 @@ export class SessionOrchestrator {
     this.transition('audioEnded', reason);
     this.deps.stage.openMicGate();
     await this.armUserTurn(turn);
+  }
+
+  /**
+   * Streamed-TTS variant of {@link playCurrentTurn} (C4). Mirrors its guards and
+   * transitions, but synthesizes AT PLAY TIME and pushes chunks to the stage as
+   * they arrive, so playback starts on the first chunk instead of after the whole
+   * clip. Static-background only (no video clip to sync against).
+   */
+  private async playStreamingTurn(turn: CurrentTurn, reason: string): Promise<void> {
+    this.deps.stage.closeMicGate();
+    if (this.state === 'READY') this.transition('begin', reason);
+    if (this.state === 'INTERVIEWER_THINKING') this.transition('questionAndTtsReady', reason);
+    const myGen = this.generationId;
+
+    const plan: SpeechPlaybackPlan = {
+      sessionId: this.ctx.session.id,
+      turnId: turn.id,
+      text: turn.question.text,
+      audio: {
+        mimeType: 'audio/wav',
+        bytes: new ArrayBuffer(0),
+        durationMs: 0,
+        outputDeviceId: this.ctx.selectedOutputDeviceId,
+      },
+      media: turn.question.mediaPlan ?? {
+        speechDurationMs: 0,
+        segments: [],
+        selectionReason: 'poster_fallback',
+        diagnosticScore: 0,
+      },
+      captionsEnabled: this.ctx.captionsEnabled,
+      streaming: true,
+    };
+
+    await this.persistAskedTurn(turn);
+    if (myGen !== this.generationId) {
+      this.log.info('session.stale_playback_discarded', { turnId: turn.id, phase: 'preload' });
+      return;
+    }
+
+    // Send the streaming plan FIRST (the stage sets up its player), THEN stream
+    // chunks. Preload resolves on the first decoded chunk. The AbortController
+    // lets a supersede (bumpGeneration) or a stage-deadline lapse stop the stream
+    // so it can never hang the turn or bleed chunks into a new attempt.
+    const abort = new AbortController();
+    this._streamAbort = abort;
+    const readyP = this.deps.stage.preloadSpeechPlan(plan);
+    const streamP = this.streamSynthesis(turn, abort.signal).catch((err) => {
+      this.log.warn('tts.stream_failed', {
+        turnId: turn.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    });
+
+    const preloaded = await readyP;
+    if (myGen !== this.generationId) {
+      abort.abort();
+      void streamP;
+      return;
+    }
+    if (!preloaded) {
+      abort.abort();
+      void streamP;
+      this.failStagePlayback(reason);
+      return;
+    }
+    this.transition('stageReady', reason);
+    const played = await this.deps.stage.playSpeechPlan(plan);
+    // If the stage timed out, abort so a stalled stream resolves instead of
+    // hanging this method on `await streamP`.
+    if (!played) abort.abort();
+    const ttsResult = await streamP;
+    if (this._streamAbort === abort) this._streamAbort = null;
+    if (myGen !== this.generationId) {
+      this.log.info('session.stale_playback_discarded', { turnId: turn.id, phase: 'play' });
+      return;
+    }
+    if (!played || ttsResult === null) {
+      this.failStagePlayback(reason);
+      return;
+    }
+    // Finalize timing now the whole clip is known (calibration + persisted record).
+    this._lastTts = ttsResult;
+    this.calibrator.update(wordCount(turn.question.text), ttsResult.durationMs);
+    turn.question = { ...turn.question, audioDurationMs: ttsResult.durationMs };
+    this.transition('audioEnded', reason);
+    this.deps.stage.openMicGate();
+    await this.armUserTurn(turn);
+  }
+
+  /**
+   * Stream the turn's TTS, pushing each chunk to the stage. One chunk is held
+   * back so the final chunk can be flagged `isFinal` (the stream itself does not
+   * mark the last). Resolves with the full clip for calibration/record.
+   */
+  private async streamSynthesis(turn: CurrentTurn, signal?: AbortSignal): Promise<TtsResult> {
+    const tts = this.deps.tts;
+    if (!tts.synthesizeStream) {
+      throw new AppError('TTS_FAILED', { publicMessage: 'Streaming speech is unavailable.' });
+    }
+    const record = turn.question;
+    const input = {
+      text: record.text,
+      voiceId: this.ctx.voiceId,
+      style: this.ctx.character.voice.style,
+      speakingRate: record.ttsSpeakingRate ?? this.ctx.character.voice.speakingRate,
+      outputFormat: 'wav' as const,
+      sampleRate: this.ctx.ttsSampleRate,
+    };
+    let pending: TtsChunk | null = null;
+    const flush = (isFinal: boolean): void => {
+      if (pending === null) return;
+      this.deps.stage.sendSpeechChunk({
+        sessionId: this.ctx.session.id,
+        turnId: turn.id,
+        sequence: pending.sequence,
+        bytes: pending.bytes.slice(0).buffer,
+        isFinal,
+      });
+      pending = null;
+    };
+    const result = await tts.synthesizeStream(
+      input,
+      (chunk) => {
+        flush(false);
+        pending = chunk;
+      },
+      signal,
+    );
+    flush(true);
+    this.markProvider('inworldTts', 'ok');
+    return result;
   }
 
   /**
@@ -1703,6 +1861,20 @@ export class SessionOrchestrator {
    * fallback throws `TTS_FAILED`.
    */
   private async synthesizeSpeech(record: QuestionRecord, signal?: AbortSignal): Promise<TtsResult> {
+    if (this.streamingEnabled()) {
+      // Streaming defers synthesis to play time (see playStreamingTurn); return a
+      // placeholder so the turn mounts without a buffered clip. The real audio and
+      // duration are produced by the stream and finalized after playback.
+      return {
+        bytes: new Uint8Array(0),
+        mimeType: 'audio/wav',
+        sampleRate: this.ctx.ttsSampleRate,
+        channels: 1,
+        durationMs: 0,
+        providerRequestId: null,
+        latencyMs: 0,
+      };
+    }
     const tts = await withDeadlineFallback(
       this.deps.tts.synthesize(
         {
@@ -1731,7 +1903,11 @@ export class SessionOrchestrator {
    */
   private mountPreparedTurn(record: QuestionRecord, ttsResult: TtsResult): void {
     this.markProvider('inworldTts', 'ok');
-    this.calibrator.update(wordCount(record.text), ttsResult.durationMs);
+    // A streaming placeholder carries durationMs 0 (synthesis happens at play and
+    // calibrates there); only feed a real buffered duration into the calibrator.
+    if (ttsResult.durationMs > 0) {
+      this.calibrator.update(wordCount(record.text), ttsResult.durationMs);
+    }
     const media = planSpeaking(ttsResult.durationMs, this.ctx.clips, this.recentClipIds, {
       seed: record.text,
     });

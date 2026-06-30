@@ -265,3 +265,87 @@ describe('InworldTtsClient', () => {
     });
   });
 });
+
+/** Build a streaming Response whose body emits `lines` as NDJSON bytes. */
+function ndjsonResponse(
+  lines: string[],
+  init: { status?: number; headers?: Record<string, string> } = {},
+): Response {
+  const status = init.status ?? 200;
+  const text = lines.join('\n');
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // Emit in two arbitrary slices so the reader's line-buffering is exercised.
+      const all = new TextEncoder().encode(text);
+      const mid = Math.floor(all.byteLength / 2);
+      controller.enqueue(all.subarray(0, mid));
+      controller.enqueue(all.subarray(mid));
+      controller.close();
+    },
+  });
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: new Headers(init.headers),
+    body,
+  } as unknown as Response;
+}
+
+/** An NDJSON frame carrying a base64 WAV chunk, as Inworld `:stream` returns. */
+function audioFrame(numPcmBytes: number): string {
+  return JSON.stringify({ result: { audioContent: bytesToBase64(wavFixture(numPcmBytes)) } });
+}
+
+describe('InworldTtsClient.synthesizeStream', () => {
+  it('emits each chunk as it arrives and returns the concatenated clip', async () => {
+    let capturedUrl: string | undefined;
+    const fetchImpl: TtsFetch = async (url) => {
+      capturedUrl = String(url);
+      return ndjsonResponse([
+        audioFrame(40),
+        JSON.stringify({ result: { usage: { processedCharactersCount: 5 } } }), // metadata-only
+        audioFrame(60),
+      ]);
+    };
+    const client = new InworldTtsClient({ apiKey: 'k', fetchImpl });
+
+    const chunks: number[] = [];
+    const result = await client.synthesizeStream(ttsInput(), (chunk) => {
+      chunks.push(chunk.bytes.byteLength);
+    });
+
+    // Hits the streaming endpoint.
+    expect(capturedUrl).toBe('https://api.inworld.ai/tts/v1/voice:stream');
+    // Two audio chunks (the metadata-only frame is skipped), each a full WAV.
+    expect(chunks).toEqual([WAV_HEADER_BYTES + 40, WAV_HEADER_BYTES + 60]);
+    // The returned clip concatenates both chunks' PCM into one WAV.
+    expect(result.mimeType).toBe('audio/wav');
+    expect(result.bytes.byteLength).toBe(WAV_HEADER_BYTES + 100);
+  });
+
+  it('throws TTS_FAILED on an error frame mid-stream', async () => {
+    const fetchImpl: TtsFetch = async () =>
+      ndjsonResponse([audioFrame(20), JSON.stringify({ error: { message: 'boom' } })]);
+    const client = new InworldTtsClient({ apiKey: 'k', fetchImpl });
+    await expect(client.synthesizeStream(ttsInput(), () => {})).rejects.toMatchObject({
+      code: 'TTS_FAILED',
+    });
+  });
+
+  it('maps 401 to INWORLD_AUTH', async () => {
+    const fetchImpl: TtsFetch = async () => ndjsonResponse([], { status: 401 });
+    const client = new InworldTtsClient({ apiKey: 'k', fetchImpl });
+    await expect(client.synthesizeStream(ttsInput(), () => {})).rejects.toMatchObject({
+      code: 'INWORLD_AUTH',
+    });
+  });
+
+  it('throws TTS_FAILED when the stream yields no audio', async () => {
+    const fetchImpl: TtsFetch = async () =>
+      ndjsonResponse([JSON.stringify({ result: { usage: { processedCharactersCount: 0 } } })]);
+    const client = new InworldTtsClient({ apiKey: 'k', fetchImpl });
+    await expect(client.synthesizeStream(ttsInput(), () => {})).rejects.toMatchObject({
+      code: 'TTS_FAILED',
+    });
+  });
+});

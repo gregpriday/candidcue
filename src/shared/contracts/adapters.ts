@@ -217,9 +217,30 @@ export interface TtsResult {
   latencyMs: number;
 }
 
+/** One streamed synthesis chunk: a complete, independently-decodable WAV. */
+export interface TtsChunk {
+  /** 0-based order of this chunk within the turn's stream. */
+  sequence: number;
+  /** A self-contained WAV (Inworld emits a full header per LINEAR16 chunk). */
+  bytes: Uint8Array;
+}
+
 export interface TextToSpeechAdapter {
   testVoice(input: TestVoiceInput, signal?: AbortSignal): Promise<TtsResult>;
   synthesize(input: TtsInput, signal?: AbortSignal): Promise<TtsResult>;
+  /**
+   * Streaming synthesis: invokes `onChunk` for each audio chunk as it arrives
+   * (so playback can start on the first one) and resolves with the full
+   * {@link TtsResult} (all chunks concatenated) once the stream completes — so
+   * callers that still need the whole clip (record, repeat) get it too. Optional:
+   * providers without a streaming endpoint omit it and callers fall back to
+   * {@link synthesize}.
+   */
+  synthesizeStream?(
+    input: TtsInput,
+    onChunk: (chunk: TtsChunk) => void,
+    signal?: AbortSignal,
+  ): Promise<TtsResult>;
 }
 
 // ---------------------------------------------------------------------------

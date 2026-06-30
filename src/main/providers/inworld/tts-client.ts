@@ -1,13 +1,14 @@
 import type {
   TextToSpeechAdapter,
   TtsInput,
+  TtsChunk,
   TestVoiceInput,
   TtsResult,
 } from '@shared/contracts/adapters';
 import { AppError } from '@shared/errors/app-error';
 import { INWORLD_DEFAULTS } from '@shared/constants/runtime-defaults';
 import { nowMs } from '@shared/utils/deadline';
-import { isWavFile, wavDurationMs } from './wav';
+import { isWavFile, wavDurationMs, wavPcmPayload, pcm16ToWav, durationMsFromPcm } from './wav';
 
 /** Injectable fetch implementation. Defaults to the global `fetch`. */
 export type TtsFetch = typeof fetch;
@@ -162,10 +163,138 @@ export class InworldTtsClient implements TextToSpeechAdapter {
     };
   }
 
+  /**
+   * Streaming synthesis via Inworld `tts/v1/voice:stream`. The endpoint returns
+   * newline-delimited JSON; each line carries a base64 `result.audioContent` that
+   * (for LINEAR16) is a COMPLETE, independently-decodable WAV. We emit each chunk
+   * through `onChunk` as it arrives so playback can start on the first one, and
+   * concatenate every chunk's PCM into a single WAV for the returned result (so
+   * the record/repeat paths still get the whole clip).
+   * @throws AppError INWORLD_AUTH on 401/403, TTS_FAILED on any other failure.
+   */
+  async synthesizeStream(
+    input: TtsInput,
+    onChunk: (chunk: TtsChunk) => void,
+    signal?: AbortSignal,
+  ): Promise<TtsResult> {
+    const start = nowMs();
+    const response = await this.fetchImpl(`${this.baseUrl}:stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Basic ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        text: input.text,
+        voiceId: input.voiceId,
+        modelId: this.modelId,
+        audioConfig: {
+          audioEncoding: 'LINEAR16',
+          sampleRateHertz: input.sampleRate,
+          speakingRate: input.speakingRate,
+        },
+      }),
+      ...(signal ? { signal } : {}),
+    });
+
+    if (!response.ok) {
+      const code = response.status === 401 || response.status === 403 ? 'INWORLD_AUTH' : 'TTS_FAILED';
+      throw new AppError(code, { message: `Inworld TTS stream failed with status ${response.status}` });
+    }
+    const providerRequestId =
+      response.headers.get('x-request-id') ?? response.headers.get('x-inworld-request-id');
+    const body = response.body;
+    if (!body) {
+      throw new AppError('TTS_FAILED', { message: 'Inworld TTS stream response had no body' });
+    }
+
+    const pcmParts: Uint8Array[] = [];
+    let sequence = 0;
+    const handleLine = (line: string): void => {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) return;
+      let parsed: { result?: { audioContent?: unknown }; error?: { message?: unknown } };
+      try {
+        parsed = JSON.parse(trimmed) as typeof parsed;
+      } catch {
+        throw new AppError('TTS_FAILED', { message: 'Inworld TTS stream emitted a non-JSON line' });
+      }
+      if (parsed.error) {
+        const msg = typeof parsed.error.message === 'string' ? parsed.error.message : 'unknown';
+        throw new AppError('TTS_FAILED', { message: `Inworld TTS stream error: ${msg}` });
+      }
+      const audioContent = parsed.result?.audioContent;
+      // Frames without audio (usage/timestamp metadata) are skipped, not errors.
+      if (typeof audioContent !== 'string' || audioContent.length === 0) return;
+      const wav = base64ToBytes(audioContent);
+      if (!isWavFile(wav)) {
+        throw new AppError('TTS_FAILED', { message: 'Inworld TTS stream chunk was not a valid WAV' });
+      }
+      pcmParts.push(wavPcmPayload(wav));
+      onChunk({ sequence: sequence++, bytes: wav });
+    };
+
+    await readNdjson(body, handleLine);
+
+    if (pcmParts.length === 0) {
+      throw new AppError('TTS_FAILED', { message: 'Inworld TTS stream produced no audio' });
+    }
+    const pcm = concatBytes(pcmParts);
+    const bytes = pcm16ToWav(pcm, input.sampleRate, TTS_CHANNELS);
+    return {
+      bytes,
+      mimeType: 'audio/wav',
+      sampleRate: input.sampleRate,
+      channels: TTS_CHANNELS,
+      durationMs: durationMsFromPcm(pcm.byteLength, input.sampleRate, TTS_CHANNELS),
+      providerRequestId,
+      latencyMs: nowMs() - start,
+    };
+  }
+
   /** Probe a voice configuration. Delegates to {@link synthesize} (spec §13.4). */
   async testVoice(input: TestVoiceInput, signal?: AbortSignal): Promise<TtsResult> {
     return this.synthesize(input, signal);
   }
+}
+
+/** Read a web ReadableStream of NDJSON, invoking `onLine` for each complete line. */
+async function readNdjson(
+  body: ReadableStream<Uint8Array>,
+  onLine: (line: string) => void,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        onLine(buffer.slice(0, nl));
+        buffer = buffer.slice(nl + 1);
+      }
+    }
+    buffer += decoder.decode();
+    if (buffer.length > 0) onLine(buffer);
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/** Concatenate byte arrays into a single contiguous Uint8Array. */
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const p of parts) total += p.byteLength;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.byteLength;
+  }
+  return out;
 }
 
 /** Decode a base64 string to raw bytes (works in both Node and Electron main). */

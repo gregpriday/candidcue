@@ -166,6 +166,31 @@ export function wavDurationMs(bytes: Uint8Array): number {
   throw new Error('WAV: data chunk not found');
 }
 
+/**
+ * Extract the raw 16-bit PCM payload (the `data` chunk body) from a RIFF/WAVE
+ * file, walking sub-chunks like {@link wavDurationMs}. Used to concatenate the
+ * independently-WAV-wrapped chunks of a streamed synthesis back into one clip.
+ * Throws on malformed input or a missing `data` chunk.
+ */
+export function wavPcmPayload(bytes: Uint8Array): Uint8Array {
+  if (!isWavFile(bytes)) {
+    throw new Error('WAV: missing RIFF/WAVE magic');
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 12;
+  while (offset + 8 <= bytes.length) {
+    const id = readTag(bytes, offset);
+    const size = view.getUint32(offset + 4, true);
+    const bodyStart = offset + 8;
+    if (id === 'data') {
+      const dataLength = Math.min(size, bytes.length - bodyStart);
+      return bytes.subarray(bodyStart, bodyStart + dataLength);
+    }
+    offset = bodyStart + size + (size % 2);
+  }
+  throw new Error('WAV: data chunk not found');
+}
+
 /** Write a short ASCII string (e.g. a 4-char chunk id) byte-by-byte into `view`. */
 function writeAscii(view: DataView, offset: number, ascii: string): void {
   for (let i = 0; i < ascii.length; i++) {

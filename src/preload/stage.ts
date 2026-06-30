@@ -39,6 +39,7 @@ const api: CandidCueStageApi = {
   events: {
     onState: (listener) => subscribe(CHANNELS.evtStageState, listener),
     onPlaybackPlan: (listener) => subscribe(CHANNELS.evtPlaybackPlan, listener),
+    onSpeechChunk: (listener) => subscribe(CHANNELS.evtSpeechChunk, listener),
     onPlayBackchannel: (listener) => subscribe(CHANNELS.evtPlayBackchannel, listener),
     onCaptureConfig: (listener) => subscribe(CHANNELS.evtCaptureConfig, listener),
   },

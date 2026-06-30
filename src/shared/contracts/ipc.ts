@@ -65,6 +65,7 @@ export const CHANNELS = {
   // events (main → stage)
   evtStageState: 'evt:stage-state',
   evtPlaybackPlan: 'evt:playback-plan',
+  evtSpeechChunk: 'evt:speech-audio-chunk',
   evtPlayBackchannel: 'evt:play-backchannel',
   evtCaptureConfig: 'evt:capture-config',
 } as const;
@@ -230,6 +231,24 @@ export interface SpeechPlaybackPlan {
   };
   media: SpeakingMediaPlan;
   captionsEnabled: boolean;
+  /**
+   * When true, `audio.bytes` is empty and the audio arrives as a sequence of
+   * {@link SpeechAudioChunk}s on `evt:speech-audio-chunk` (streamed TTS). The
+   * player decodes + schedules chunks gaplessly and reports ready on the first
+   * one. Absent/false = the whole clip is in `audio.bytes` (buffered path).
+   */
+  streaming?: boolean;
+}
+
+/** One streamed TTS audio chunk pushed to the stage (a complete WAV). */
+export interface SpeechAudioChunk {
+  sessionId: string;
+  turnId: string;
+  sequence: number;
+  /** A self-contained WAV the renderer can decodeAudioData directly. */
+  bytes: ArrayBuffer;
+  /** True on the final chunk, so the player knows when playback can end. */
+  isFinal: boolean;
 }
 
 export interface CaptureConfig {
@@ -440,6 +459,8 @@ export interface CandidCueStageApi {
   events: {
     onState(listener: (state: StageStateProjection) => void): Unsubscribe;
     onPlaybackPlan(listener: (plan: SpeechPlaybackPlan) => void): Unsubscribe;
+    /** Streamed TTS audio chunks for a `streaming` playback plan (C4). */
+    onSpeechChunk(listener: (chunk: SpeechAudioChunk) => void): Unsubscribe;
     /** Fire-and-forget cue to play an immediate backchannel acknowledgment (#53). */
     onPlayBackchannel(listener: () => void): Unsubscribe;
     onCaptureConfig(listener: (config: CaptureConfig) => void): Unsubscribe;

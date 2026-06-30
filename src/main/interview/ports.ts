@@ -1,5 +1,6 @@
 import type {
   SpeechPlaybackPlan,
+  SpeechAudioChunk,
   StageStateProjection,
   OperatorSessionSnapshot,
 } from '@shared/contracts';
@@ -44,6 +45,12 @@ export interface StagePort {
    * turn must not be treated as having been spoken.
    */
   playSpeechPlan(plan: SpeechPlaybackPlan): Promise<boolean>;
+  /**
+   * Push one streamed TTS audio chunk to the stage for a `streaming` plan (C4).
+   * Fire-and-forget; the stage decodes + schedules it and reports ready/ended via
+   * the same playback-report path as the buffered plan.
+   */
+  sendSpeechChunk(chunk: SpeechAudioChunk): void;
   setVisualState(projection: StageStateProjection): void;
 }
 

@@ -50,6 +50,36 @@ export class SpeechPlayer {
   /** Set when start() was requested before the buffer finished decoding. */
   private startRequested = false;
 
+  /**
+   * Streaming-playback state (C4), null on the buffered path. Chunks are decoded
+   * in arrival order and scheduled back-to-back on a single time cursor so the
+   * independently-WAV-wrapped chunks play gaplessly. Readiness fires on the first
+   * decoded chunk; end fires when the final chunk has been scheduled AND every
+   * scheduled source has finished.
+   */
+  private stream: {
+    turnId: string;
+    outputDeviceId: string | null;
+    raw: { bytes: ArrayBuffer; isFinal: boolean }[];
+    decoded: { buffer: AudioBuffer; isFinal: boolean }[];
+    decoding: boolean;
+    started: boolean;
+    nextStartTime: number;
+    reportedReady: boolean;
+    liveSources: number;
+    finalScheduled: boolean;
+    ended: boolean;
+    sources: AudioBufferSourceNode[];
+  } | null = null;
+
+  /**
+   * Chunks that arrived before their streaming plan (the plan and chunks ride
+   * different IPC channels, so a chunk can race ahead). Held briefly and drained
+   * when the matching plan's load() sets up the stream, so the start is not
+   * clipped. Capped so a stray turn id cannot grow it without bound.
+   */
+  private earlyChunks: { turnId: string; bytes: ArrayBuffer; isFinal: boolean }[] = [];
+
   constructor(callbacks: SpeechPlayerCallbacks) {
     this.callbacks = callbacks;
     this.context = new AudioContext();
@@ -72,6 +102,38 @@ export class SpeechPlayer {
     const gen = ++this.loadGen;
     // A new plan supersedes any start that was requested for the previous turn.
     this.startRequested = false;
+    // Streaming plan: no bytes up front — set up to receive chunks. Readiness is
+    // reported from the first decoded chunk (see pushChunk), not here.
+    if (plan.streaming === true) {
+      const s = {
+        turnId,
+        outputDeviceId: plan.audio.outputDeviceId,
+        raw: [] as { bytes: ArrayBuffer; isFinal: boolean }[],
+        decoded: [] as { buffer: AudioBuffer; isFinal: boolean }[],
+        decoding: false,
+        started: false,
+        nextStartTime: 0,
+        reportedReady: false,
+        liveSources: 0,
+        finalScheduled: false,
+        ended: false,
+        sources: [] as AudioBufferSourceNode[],
+      };
+      this.stream = s;
+      this.loaded = null;
+      // Drain any chunks that raced ahead of this plan.
+      const early = this.earlyChunks.filter((c) => c.turnId === turnId);
+      this.earlyChunks = [];
+      for (const c of early) {
+        s.raw.push({ bytes: c.bytes, isFinal: c.isFinal });
+      }
+      if (early.length > 0) {
+        void this.decodeStream();
+      }
+      return;
+    }
+    this.stream = null;
+    this.earlyChunks = [];
     try {
       // decodeAudioData detaches the buffer, so decode a copy and keep the
       // original plan bytes intact for any later use.
@@ -104,9 +166,150 @@ export class SpeechPlayer {
    * not already playing.
    */
   start(): void {
+    if (this.stream !== null) {
+      this.startStream();
+      return;
+    }
     // Remember the request; tryStart runs it now or as soon as decode completes.
     this.startRequested = true;
     this.tryStart();
+  }
+
+  /**
+   * Accept one streamed audio chunk (a complete WAV) for the streaming turn.
+   * Decoded in arrival order; the first decoded chunk reports readiness.
+   */
+  pushChunk(turnId: string, bytes: ArrayBuffer, isFinal: boolean): void {
+    const s = this.stream;
+    if (s === null || s.turnId !== turnId) {
+      // The plan for this turn has not arrived yet (or has been superseded). Hold
+      // the chunk briefly so a chunk that raced ahead of its plan isn't lost.
+      if (this.earlyChunks.length < 256) {
+        this.earlyChunks.push({ turnId, bytes, isFinal });
+      }
+      return;
+    }
+    if (s.ended) {
+      return;
+    }
+    s.raw.push({ bytes, isFinal });
+    void this.decodeStream();
+  }
+
+  /** Begin streaming playback (called when the visual state reaches 'speaking'). */
+  private startStream(): void {
+    const s = this.stream;
+    if (s === null || s.started) {
+      return;
+    }
+    s.started = true;
+    void (async () => {
+      await this.routeOutput(s.outputDeviceId);
+      if (this.stream !== s) {
+        return; // superseded while routing
+      }
+      try {
+        await this.context.resume();
+      } catch {
+        return;
+      }
+      if (this.stream !== s) {
+        return;
+      }
+      // Lead the cursor slightly so the first source never starts in the past.
+      s.nextStartTime = this.context.currentTime + 0.05;
+      this.callbacks.reportStarted({ turnId: s.turnId, atMs: Date.now() });
+      this.pumpStream();
+    })();
+  }
+
+  /** Sequentially decode queued chunk WAVs, preserving order. */
+  private async decodeStream(): Promise<void> {
+    const s = this.stream;
+    if (s === null || s.decoding) {
+      return;
+    }
+    s.decoding = true;
+    try {
+      while (s.raw.length > 0) {
+        const item = s.raw.shift();
+        if (item === undefined) break;
+        let buffer: AudioBuffer;
+        try {
+          buffer = await this.context.decodeAudioData(item.bytes.slice(0));
+        } catch {
+          if (this.stream === s) {
+            this.callbacks.reportError({ turnId: s.turnId, reason: 'chunk_decode_failed' });
+          }
+          return;
+        }
+        if (this.stream !== s) {
+          return; // superseded mid-decode
+        }
+        s.decoded.push({ buffer, isFinal: item.isFinal });
+        // The first decoded chunk satisfies the readiness gate for this turn.
+        if (!s.reportedReady) {
+          s.reportedReady = true;
+          this.callbacks.reportReady({ turnId: s.turnId });
+        }
+        if (s.started) {
+          this.pumpStream();
+        }
+      }
+    } finally {
+      if (this.stream === s) {
+        s.decoding = false;
+      }
+    }
+  }
+
+  /** Schedule any decoded-but-unscheduled buffers back-to-back (gapless). */
+  private pumpStream(): void {
+    const s = this.stream;
+    if (s === null || !s.started) {
+      return;
+    }
+    for (;;) {
+      const next = s.decoded.shift();
+      if (next === undefined) break;
+      const source = this.context.createBufferSource();
+      source.buffer = next.buffer;
+      source.connect(this.sinkNode ?? this.context.destination);
+      const startAt = Math.max(this.context.currentTime, s.nextStartTime);
+      s.nextStartTime = startAt + next.buffer.duration;
+      s.liveSources += 1;
+      s.sources.push(source);
+      if (next.isFinal) {
+        s.finalScheduled = true;
+      }
+      source.onended = (): void => {
+        if (this.stream !== s) return;
+        s.liveSources -= 1;
+        this.maybeEndStream();
+      };
+      try {
+        source.start(startAt);
+      } catch {
+        // Context closed/disposed mid-schedule: this source will never fire
+        // 'ended', so release its hold on the end gate here.
+        s.liveSources -= 1;
+      }
+    }
+    this.maybeEndStream();
+  }
+
+  /** Report end once the final chunk is scheduled and all sources have finished. */
+  private maybeEndStream(): void {
+    const s = this.stream;
+    if (s === null || s.ended) {
+      return;
+    }
+    if (s.finalScheduled && s.liveSources === 0 && s.decoded.length === 0 && s.raw.length === 0) {
+      s.ended = true;
+      const { turnId } = s;
+      this.callbacks.reportEnded({ turnId, atMs: Date.now() });
+      this.callbacks.onEnded(turnId);
+    }
   }
 
   private tryStart(): void {
@@ -168,6 +371,18 @@ export class SpeechPlayer {
   /** Stop any in-flight playback without reporting an end for the turn. */
   stop(): void {
     this.startRequested = false;
+    if (this.stream !== null) {
+      const s = this.stream;
+      this.stream = null;
+      for (const src of s.sources) {
+        try {
+          src.onended = null;
+          src.stop();
+        } catch {
+          // Already stopped / never started.
+        }
+      }
+    }
     if (this.source !== null) {
       const source = this.source;
       this.source = null;

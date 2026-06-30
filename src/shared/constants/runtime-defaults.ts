@@ -41,6 +41,15 @@ export const RUNTIME_DEFAULTS = {
  */
 export const STATIC_STAGE_BACKGROUND: boolean = true;
 
+/**
+ * Feature flag: stream the interviewer's TTS audio so playback starts on the
+ * FIRST chunk instead of waiting for the whole clip to synthesize (Inworld
+ * `tts/v1/voice:stream`). Default OFF — the proven buffered path stays the
+ * default until the gapless chunk playback is validated live; flip to `true`
+ * to test streaming (only takes effect in static-background mode).
+ */
+export const STREAM_TTS: boolean = false;
+
 export interface EndpointThresholds {
   minSilenceBeforeClassificationMs: number;
   commitProbability: number;

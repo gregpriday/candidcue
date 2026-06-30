@@ -66,6 +66,7 @@ function installStageBridge(): void {
       onPlaybackPlan: vi.fn(() => () => {}),
       onPlayBackchannel: vi.fn(() => () => {}),
       onCaptureConfig: vi.fn(() => () => {}),
+      onSpeechChunk: vi.fn(() => () => {}),
     },
   };
 }

@@ -220,6 +220,7 @@ async function makeHarness(overrides?: {
     playBackchannel: vi.fn(),
     preloadSpeechPlan: vi.fn(async () => stageResults.preload),
     playSpeechPlan: vi.fn(async () => stageResults.play), // resolves immediately = audio ended
+    sendSpeechChunk: vi.fn(),
     setVisualState: vi.fn(),
     results: stageResults,
   };

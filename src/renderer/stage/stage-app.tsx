@@ -345,11 +345,18 @@ export function StageApp(): JSX.Element {
       void startCapture(config);
     });
 
+    // Streamed TTS audio chunks (C4): hand each to the player, which decodes and
+    // schedules it gaplessly for the matching streaming plan.
+    const offChunk = window.candidcueStage.events.onSpeechChunk((chunk) => {
+      speechPlayerRef.current?.pushChunk(chunk.turnId, chunk.bytes, chunk.isFinal);
+    });
+
     return () => {
       offState();
       offPlan();
       offBackchannel();
       offCapture();
+      offChunk();
     };
   }, [startCapture]);
 

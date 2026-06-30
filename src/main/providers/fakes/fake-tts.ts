@@ -1,6 +1,7 @@
 import type {
   TextToSpeechAdapter,
   TtsInput,
+  TtsChunk,
   TestVoiceInput,
   TtsResult,
 } from '@shared/contracts/adapters';
@@ -72,6 +73,46 @@ export class FakeTts implements TextToSpeechAdapter {
 
   synthesize(input: TtsInput, signal?: AbortSignal): Promise<TtsResult> {
     return this.run(input, signal);
+  }
+
+  /**
+   * Streaming stand-in: emits the clip in a few independently-WAV-wrapped chunks
+   * (like the real `:stream` endpoint) then resolves with the whole clip. Honours
+   * the same delay / fail-after / abort knobs as {@link synthesize}.
+   */
+  async synthesizeStream(
+    input: TtsInput,
+    onChunk: (chunk: TtsChunk) => void,
+    signal?: AbortSignal,
+  ): Promise<TtsResult> {
+    throwIfAborted(signal);
+    if (this.delayMs > 0) await delay(this.delayMs, signal);
+    throwIfAborted(signal);
+
+    this.callCount += 1;
+    if (this.failAfterCalls !== undefined && this.callCount >= this.failAfterCalls) {
+      throw new AppError('TTS_FAILED', { recoverable: true, retryAction: 'retry-tts' });
+    }
+
+    this.seen.push(input);
+    const durationMs = this.deriveDuration(input.text);
+    const pcm = synthBytes(durationMs, input.sampleRate);
+    const perChunk = Math.max(2, Math.ceil(pcm.byteLength / 3 / 2) * 2);
+    let sequence = 0;
+    for (let offset = 0; offset < pcm.byteLength; offset += perChunk) {
+      throwIfAborted(signal);
+      const slice = pcm.subarray(offset, Math.min(offset + perChunk, pcm.byteLength));
+      onChunk({ sequence: sequence++, bytes: pcm16ToWav(slice, input.sampleRate, 1) });
+    }
+    return {
+      bytes: pcm16ToWav(pcm, input.sampleRate, 1),
+      mimeType: 'audio/wav',
+      sampleRate: input.sampleRate,
+      channels: 1,
+      durationMs,
+      providerRequestId: this.providerRequestId,
+      latencyMs: this.delayMs,
+    };
   }
 
   /** Shared synthesis path for `synthesize` and `testVoice`. */

@@ -8,6 +8,7 @@ import type {
   OperatorSessionSnapshot,
   StageStateProjection,
   SpeechPlaybackPlan,
+  SpeechAudioChunk,
   PreflightState,
   PreflightCheck,
   PreparationJobResult,
@@ -1175,12 +1176,27 @@ class IpcStagePort implements StagePort {
 
   async preloadSpeechPlan(plan: SpeechPlaybackPlan): Promise<boolean> {
     this.getStage()?.send(CHANNELS.evtPlaybackPlan, plan);
-    return this.await('ready', plan.turnId, RUNTIME_DEFAULTS.stagePreloadDeadlineMs);
+    // A streaming plan's "ready" waits on the provider's FIRST chunk (network +
+    // synthesis + IPC + decode), not just a renderer decode of buffered bytes, so
+    // it needs the synthesis budget rather than the short preload deadline.
+    const deadline = plan.streaming
+      ? RUNTIME_DEFAULTS.ttsDeadlineMs + 2000
+      : RUNTIME_DEFAULTS.stagePreloadDeadlineMs;
+    return this.await('ready', plan.turnId, deadline);
   }
 
   async playSpeechPlan(plan: SpeechPlaybackPlan): Promise<boolean> {
-    // Audio end is authoritative; fall back after the known duration + slack.
-    return this.await('ended', plan.turnId, plan.audio.durationMs + 2000);
+    // Audio end is authoritative; fall back after the known duration + slack. A
+    // streaming plan has no up-front duration, so use a generous ceiling — the
+    // stage's `ended` report (final chunk played) is what normally resolves it.
+    const deadline = plan.streaming
+      ? RUNTIME_DEFAULTS.maxQuestionAudioMs + 4000
+      : plan.audio.durationMs + 2000;
+    return this.await('ended', plan.turnId, deadline);
+  }
+
+  sendSpeechChunk(chunk: SpeechAudioChunk): void {
+    this.getStage()?.send(CHANNELS.evtSpeechChunk, chunk);
   }
 
   handleReport(kind: 'ready' | 'started' | 'ended' | 'error', turnId: string): void {
