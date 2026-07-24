@@ -548,6 +548,19 @@ export class AlignmentEngine {
     return buildSchedulingContext({
       index: this.index,
       measurement,
+      // The tail exactly as the beam aligned it: `MatchedPair.transcriptIndex`
+      // indexes this array, so it is passed whole and unfiltered.
+      transcriptTail: tail.tokens,
+      itemTiming: (itemId) => {
+        const item = this.ledger.getItem(itemId);
+        if (item === undefined) return undefined;
+        return {
+          audioStartMs: item.audioStartMs,
+          audioEndMs: item.audioEndMs,
+          commitSequence: item.commitSequence,
+          tokenCount: item.normalizedTokens.length,
+        };
+      },
       committedTokenIndex: this.committedTokenIndex,
       largeForwardDistance: this.largeForwardDistance(),
       softThreshold: this.profile.softThreshold,
