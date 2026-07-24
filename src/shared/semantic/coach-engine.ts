@@ -9,6 +9,30 @@
  *   token supplied by the local engine (§39.1, §89).
  * * **At most one tip is visible.** A new tip replaces a visible one only for
  *   a strictly higher-priority safety/fidelity issue; tips never stack (§44.3).
+ *
+ * ---------------------------------------------------------------------------
+ * RELATIONSHIP TO THE COACHING RAIL (`shared/coaching/coach/`)
+ * ---------------------------------------------------------------------------
+ * There are two tip engines in this codebase and they own **different
+ * surfaces**. They must never both feed one output:
+ *
+ * - *This* engine belongs to the primary specification's tip surface: the
+ *   control window's tip list and the stage's motion-status strip. Its status
+ *   codes (`slowing_to_keep_place`, `finding_your_place`, `moved_back`) are
+ *   tracking narration and have no Coaching Rail equivalent.
+ * - `shared/coaching/coach/tip-policy.ts` owns the Coaching Rail's
+ *   `CoachRailState.activeTip` and nothing else. It implements the richer
+ *   model the rail specification requires — priority bands (§24), per-code and
+ *   per-category cooldowns (§25, §26.2), safe-moment scheduling (§9.4), a
+ *   display window, and §26.5 cancellation — none of which this engine has.
+ *
+ * The two catalogs overlap on fidelity: `number_changed` / `name_changed` /
+ * `critical_word_changed` / `meaningful_omission` here correspond to
+ * `CRITICAL_NUMBER` / `CRITICAL_NAME` / `CRITICAL_NEGATION` /
+ * `MATERIAL_MEANING_CHANGE` there. The rail takes its fidelity candidates from
+ * the coaching `fidelity/` analyzer as `CoachCandidate`s, **not** from this
+ * engine's `CoachTipCandidate`s; do not bridge one into the other without
+ * deciding which surface the resulting tip is for.
  */
 import type { SmoothFollowProfile } from '../contracts/smooth-follow';
 import type { AnyTipCode, CoachTip, CoachTipCandidate, CoachTipCategory } from './types';

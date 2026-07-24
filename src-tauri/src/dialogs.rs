@@ -80,6 +80,26 @@ pub async fn pick_image_to_import(app: &AppHandle) -> Result<Option<PathBuf>, Ap
     resolve(rx).await
 }
 
+/// Ask the operator for a FOLDER to write into. `Ok(None)` means cancelled.
+///
+/// C5: `export_all_data` took a `destination: String` the webview was supposed
+/// to supply, but the dialog plugin is deliberately not granted to JavaScript,
+/// so there was no way to obtain one — the command was uninvokable and the
+/// "Export all scripts" button did nothing at all. The picker belongs on this
+/// side for the same reason every other one does (spec §50.7).
+pub async fn pick_destination_folder(
+    app: &AppHandle,
+    title: &str,
+) -> Result<Option<PathBuf>, AppError> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    builder(app)
+        .set_title(title)
+        .pick_folder(move |picked| {
+            let _ = tx.send(picked);
+        });
+    resolve(rx).await
+}
+
 /// Ask the operator where to write an export. `Ok(None)` means cancelled.
 pub async fn pick_export_destination(
     app: &AppHandle,

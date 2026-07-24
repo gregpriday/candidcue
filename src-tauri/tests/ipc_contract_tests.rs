@@ -5,7 +5,9 @@
 //! `tests/unit/control/scripts-ipc-contract.test.ts`.
 
 use candidcue_lib::scripts::import_export::{ExportRequest, ImportRequest};
-use candidcue_lib::scripts::{CreateScriptInput, ScriptId, ScriptMetadataPatch};
+use candidcue_lib::scripts::{
+    CreateScriptInput, PageRequest, ScriptFilter, ScriptId, ScriptMetadataPatch, ScriptStatus,
+};
 
 fn fixture() -> serde_json::Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -17,6 +19,88 @@ fn fixture() -> serde_json::Value {
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
     serde_json::from_str(&raw).expect("fixture parses")
+}
+
+/// C3/C7/S2 — `list_scripts` is the command the shared fixture did not cover,
+/// and it is where the drift lived: the frontend sent `filter.view`, which this
+/// struct has no field for, so serde dropped it and `status` stayed `None`.
+///
+/// Reverting the TypeScript mapping makes the first assertion fail (no
+/// `status`); reverting `deny_unknown_fields` makes the last one fail.
+#[test]
+fn list_scripts_filter_accepts_the_frontend_payload_and_nothing_else() {
+    let f = fixture();
+
+    let trash: ScriptFilter = serde_json::from_value(f["list_scripts_trash"]["filter"].clone())
+        .expect("the Trash view's filter must deserialize");
+    assert_eq!(trash.status, Some(ScriptStatus::Trash));
+    assert!(!trash.opened_only);
+
+    let recent: ScriptFilter = serde_json::from_value(f["list_scripts_recent"]["filter"].clone())
+        .expect("the Recent view's filter must deserialize");
+    assert!(recent.opened_only);
+    assert_eq!(recent.status, None);
+
+    let all: ScriptFilter = serde_json::from_value(f["list_scripts_all"]["filter"].clone())
+        .expect("the All view's filter must deserialize");
+    assert_eq!(all.query.as_deref(), Some("keynote"));
+    assert_eq!(all.status, None);
+    assert!(!all.opened_only);
+
+    // The bug shape: a `view` field is now a hard error rather than a silent
+    // default that lists live scripts under the Trash heading.
+    let err = serde_json::from_value::<ScriptFilter>(serde_json::json!({ "view": "trash" }))
+        .expect_err("`view` is not a field of ScriptFilter and must be rejected");
+    assert!(
+        err.to_string().contains("view"),
+        "the error must name the unknown field, got: {err}"
+    );
+}
+
+/// C7 — the fixture's sort keys must be ones `repo::list_scripts` matches on.
+/// The four the library emits used to match no arm at all.
+#[test]
+fn list_scripts_sort_keys_are_the_ones_rust_implements() {
+    let f = fixture();
+    let repo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("scripts")
+            .join("repo.rs"),
+    )
+    .expect("repo.rs");
+
+    for key in ["list_scripts_all", "list_scripts_recent", "list_scripts_trash"] {
+        let sort = f[key]["sort"].as_str().expect("fixture carries a sort");
+        assert!(
+            repo.contains(&format!("Some(\"{sort}\")")),
+            "{key} sends sort `{sort}`, which repo::list_scripts has no arm for"
+        );
+    }
+
+    // Every option the library's sort control offers must be implemented.
+    for key in ["recently_edited", "name", "created", "estimated_length"] {
+        assert!(
+            repo.contains(&format!("Some(\"{key}\")")),
+            "the library offers `{key}` but repo::list_scripts does not match it"
+        );
+    }
+}
+
+/// S2 — `page` is a struct. The TypeScript wrapper used to type it as a bare
+/// number, which would have been an outright deserialization failure.
+#[test]
+fn list_scripts_page_is_a_page_request_not_a_number() {
+    let f = fixture();
+    let page: PageRequest = serde_json::from_value(f["list_scripts_trash"]["page"].clone())
+        .expect("the paged payload must deserialize");
+    assert_eq!(page.page, 1);
+    assert_eq!(page.page_size, 50);
+
+    assert!(
+        serde_json::from_value::<PageRequest>(serde_json::json!(1)).is_err(),
+        "a bare number is not a PageRequest; the old TS signature sent one"
+    );
 }
 
 #[test]
@@ -126,6 +210,24 @@ fn save_and_create_payloads_deserialize() {
     let input: CreateScriptInput =
         serde_json::from_value(f["create_script"]["input"].clone()).expect("create input");
     assert_eq!(input.title, "Keynote");
+
+    // Both DTOs now reject fields they do not declare, so a TypeScript wrapper
+    // that starts sending one fails immediately instead of having it dropped
+    // (which is exactly how the library `view` filter went missing — C3).
+    assert!(
+        serde_json::from_value::<CreateScriptInput>(
+            serde_json::json!({ "title": "Keynote", "tags": ["x"] })
+        )
+        .is_err(),
+        "CreateScriptInput must reject unknown fields"
+    );
+    assert!(
+        serde_json::from_value::<ScriptMetadataPatch>(
+            serde_json::json!({ "title": "Keynote", "colour": "red" })
+        )
+        .is_err(),
+        "ScriptMetadataPatch must reject unknown fields"
+    );
 }
 
 #[test]

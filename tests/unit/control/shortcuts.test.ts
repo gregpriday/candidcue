@@ -1,5 +1,243 @@
-import { describe, expect, it } from 'vitest';
-import { resolveShortcut } from '../../../src/control/lib/shortcuts';
+/**
+ * Keyboard shortcuts (spec §19).
+ *
+ * Two halves: the pure `resolveShortcut` table, and the installed window
+ * listener — the half that actually decides whether a key reaches the control
+ * under the cursor. The listener used to call `preventDefault()` for every
+ * resolved action, so the plain-Space → play/pause mapping swallowed the
+ * keydown on any focused `<button>`; the browser then never synthesised the
+ * click on keyup and NO button in the control window could be activated with
+ * the space bar (`role="switch"`, where ARIA requires Space, included).
+ *
+ * There is no jsdom in this repo, so the DOM surface `shortcuts.ts` touches
+ * (window listener registration, `HTMLElement`, `closest`, `document`) is
+ * stubbed here. Everything inside the module — `emit`, `installShortcuts`,
+ * `isSelfActivatingTarget`, `isModalOpen`, `resolveShortcut` — is the real
+ * implementation.
+ */
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
+/* --- minimal DOM stubs ------------------------------------------------- */
+
+interface FakeAttrs {
+  role?: string;
+  href?: string;
+  contentEditable?: boolean;
+}
+
+class FakeHTMLElement {
+  tagName: string;
+  isContentEditable: boolean;
+  role: string | undefined;
+  href: string | undefined;
+  parentElement: FakeHTMLElement | null = null;
+
+  constructor(tagName: string, attrs: FakeAttrs = {}) {
+    this.tagName = tagName.toUpperCase();
+    this.isContentEditable = attrs.contentEditable ?? false;
+    this.role = attrs.role;
+    this.href = attrs.href;
+  }
+
+  /** Enough of `Element.closest` for the selector list the module uses. */
+  closest(selector: string): FakeHTMLElement | null {
+    const tokens = selector.split(',').map((t) => t.trim());
+    let node: FakeHTMLElement | null = this;
+    while (node) {
+      for (const token of tokens) {
+        if (token === node.tagName.toLowerCase()) return node;
+        if (token === 'a[href]' && node.tagName === 'A' && node.href) return node;
+        if (node.role && token === `[role="${node.role}"]`) return node;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+}
+
+const listeners = new Set<(e: unknown) => void>();
+/** What `document.querySelector('[role="dialog"][aria-modal="true"]')` finds. */
+let modalElement: unknown = null;
+
+beforeAll(() => {
+  (globalThis as Record<string, unknown>)['HTMLElement'] = FakeHTMLElement;
+  Object.defineProperty(globalThis, 'navigator', {
+    value: { platform: 'MacIntel', userAgent: 'mac' },
+    configurable: true,
+  });
+  (globalThis as Record<string, unknown>)['window'] = {
+    addEventListener: (_type: string, fn: (e: unknown) => void) => listeners.add(fn),
+    removeEventListener: (_type: string, fn: (e: unknown) => void) => listeners.delete(fn),
+  };
+  (globalThis as Record<string, unknown>)['document'] = {
+    querySelector: (selector: string) =>
+      selector === '[role="dialog"][aria-modal="true"]' ? modalElement : null,
+  };
+});
+
+const { installShortcuts, isModalOpen, isSelfActivatingTarget, onShortcut, resolveShortcut } =
+  await import('../../../src/control/lib/shortcuts');
+
+interface Fired {
+  action: string | null;
+  defaultPrevented: boolean;
+}
+
+let lastAction: string | null = null;
+let teardown: (() => void) | null = null;
+let unsubscribe: (() => void) | null = null;
+
+function press(
+  key: string,
+  options: {
+    target?: FakeHTMLElement;
+    metaKey?: boolean;
+    ctrlKey?: boolean;
+    shiftKey?: boolean;
+    altKey?: boolean;
+  } = {},
+): Fired {
+  const event = {
+    key,
+    metaKey: options.metaKey ?? false,
+    ctrlKey: options.ctrlKey ?? false,
+    shiftKey: options.shiftKey ?? false,
+    altKey: options.altKey ?? false,
+    target: options.target ?? new FakeHTMLElement('div'),
+    defaultPrevented: false,
+    preventDefault(this: { defaultPrevented: boolean }) {
+      this.defaultPrevented = true;
+    },
+  };
+  for (const fn of [...listeners]) fn(event);
+  return { action: lastAction, defaultPrevented: event.defaultPrevented };
+}
+
+/** Install the real listener with one real subscriber, as the app does. */
+function installWithSubscriber(): void {
+  unsubscribe = onShortcut((action) => {
+    lastAction = action;
+  });
+  teardown = installShortcuts();
+}
+
+beforeEach(() => {
+  lastAction = null;
+  modalElement = null;
+});
+
+afterEach(() => {
+  teardown?.();
+  unsubscribe?.();
+  teardown = null;
+  unsubscribe = null;
+  listeners.clear();
+});
+
+describe('installShortcuts — what actually reaches the focused control', () => {
+  it('leaves Space alone on a focused <button> so the click still fires', () => {
+    installWithSubscriber();
+    const fired = press(' ', { target: new FakeHTMLElement('button') });
+    expect(fired.defaultPrevented).toBe(false);
+    expect(fired.action).toBeNull();
+  });
+
+  it('leaves Space alone on a role="switch" (Toggle) and role="menuitem" (OverflowMenu)', () => {
+    installWithSubscriber();
+    const toggle = press(' ', { target: new FakeHTMLElement('button', { role: 'switch' }) });
+    expect(toggle.defaultPrevented).toBe(false);
+    expect(toggle.action).toBeNull();
+
+    const menuItem = press(' ', { target: new FakeHTMLElement('button', { role: 'menuitem' }) });
+    expect(menuItem.defaultPrevented).toBe(false);
+    expect(menuItem.action).toBeNull();
+  });
+
+  it('leaves Space alone for an icon nested inside a button', () => {
+    const button = new FakeHTMLElement('button');
+    const icon = new FakeHTMLElement('span');
+    icon.parentElement = button;
+    installWithSubscriber();
+    expect(press(' ', { target: icon }).defaultPrevented).toBe(false);
+  });
+
+  it('still claims Space for play/pause when nothing else owns the key', () => {
+    installWithSubscriber();
+    const fired = press(' ', { target: new FakeHTMLElement('div') });
+    // Prevented so the window does not scroll; the action reaches the screen.
+    expect(fired.defaultPrevented).toBe(true);
+    expect(fired.action).toBe('play-pause');
+  });
+
+  it('does not swallow keys when no screen is subscribed', () => {
+    teardown = installShortcuts(); // no onShortcut subscriber
+    const fired = press(' ', { target: new FakeHTMLElement('div') });
+    expect(fired.defaultPrevented).toBe(false);
+  });
+
+  it('exempts text fields and contenteditable', () => {
+    installWithSubscriber();
+    expect(press(' ', { target: new FakeHTMLElement('input') }).defaultPrevented).toBe(false);
+    expect(press(' ', { target: new FakeHTMLElement('textarea') }).defaultPrevented).toBe(false);
+    expect(
+      press(' ', { target: new FakeHTMLElement('div', { contentEditable: true }) })
+        .defaultPrevented,
+    ).toBe(false);
+  });
+
+  it('fires nothing behind an open modal dialog', () => {
+    installWithSubscriber();
+    modalElement = new FakeHTMLElement('div', { role: 'dialog' });
+    const space = press(' ', { target: new FakeHTMLElement('div') });
+    expect(space.defaultPrevented).toBe(false);
+    expect(space.action).toBeNull();
+    // Cmd+. must not stop a session from behind a confirm sheet either.
+    const stop = press('.', { metaKey: true, target: new FakeHTMLElement('div') });
+    expect(stop.action).toBeNull();
+  });
+
+  it('still delivers modifier shortcuts while a button has focus', () => {
+    installWithSubscriber();
+    const fired = press('s', { metaKey: true, target: new FakeHTMLElement('button') });
+    expect(fired.action).toBe('save');
+    expect(fired.defaultPrevented).toBe(true);
+  });
+
+  it('delivers the other plain keys from a non-interactive target', () => {
+    installWithSubscriber();
+    expect(press('b', { target: new FakeHTMLElement('div') }).action).toBe('blank-stage');
+    expect(press('l', { target: new FakeHTMLElement('div') }).action).toBe('toggle-listener');
+    expect(press('t', { target: new FakeHTMLElement('div') }).action).toBe('take-marker');
+  });
+
+  it('stops listening after teardown', () => {
+    installWithSubscriber();
+    teardown?.();
+    teardown = null;
+    expect(press(' ', { target: new FakeHTMLElement('div') }).action).toBeNull();
+  });
+});
+
+describe('target classification', () => {
+  const target = (tag: string, attrs?: FakeAttrs): EventTarget =>
+    new FakeHTMLElement(tag, attrs) as unknown as EventTarget;
+
+  it('recognises self-activating controls and ignores plain content', () => {
+    expect(isSelfActivatingTarget(target('button'))).toBe(true);
+    expect(isSelfActivatingTarget(target('summary'))).toBe(true);
+    expect(isSelfActivatingTarget(target('a', { href: '#x' }))).toBe(true);
+    expect(isSelfActivatingTarget(target('div', { role: 'switch' }))).toBe(true);
+    expect(isSelfActivatingTarget(target('div'))).toBe(false);
+    expect(isSelfActivatingTarget(target('input'))).toBe(false);
+    expect(isSelfActivatingTarget(null)).toBe(false);
+  });
+
+  it('detects an open modal dialog', () => {
+    expect(isModalOpen()).toBe(false);
+    modalElement = new FakeHTMLElement('div', { role: 'dialog' });
+    expect(isModalOpen()).toBe(true);
+  });
+});
 
 function event(partial: Partial<Parameters<typeof resolveShortcut>[0]> & { key: string }) {
   return {
@@ -51,6 +289,25 @@ describe('resolveShortcut (spec §19)', () => {
 
     expect(resolveShortcut(event({ key: ' ', typing: true }))).toBeNull();
     expect(resolveShortcut(event({ key: 'b', typing: true }))).toBeNull();
+  });
+
+  it('plain keys stand down for a self-activating control', () => {
+    expect(resolveShortcut(event({ key: ' ', selfActivating: true }))).toBeNull();
+    expect(resolveShortcut(event({ key: 'b', selfActivating: true }))).toBeNull();
+    // Modifier combos are unaffected — they are not what the control consumes.
+    expect(resolveShortcut(event({ key: 's', metaKey: true, selfActivating: true }))).toBe('save');
+  });
+
+  it('suppresses everything while a modal dialog is open', () => {
+    expect(resolveShortcut(event({ key: ' ', modal: true }))).toBeNull();
+    expect(resolveShortcut(event({ key: 's', metaKey: true, modal: true }))).toBeNull();
+    expect(resolveShortcut(event({ key: 'ArrowLeft', altKey: true, modal: true }))).toBeNull();
+  });
+
+  it('handles Caps Lock (uppercase key, no Shift) but not Shift+letter', () => {
+    expect(resolveShortcut(event({ key: 'B' }))).toBe('blank-stage');
+    expect(resolveShortcut(event({ key: 'T' }))).toBe('take-marker');
+    expect(resolveShortcut(event({ key: 'B', shiftKey: true }))).toBeNull();
   });
 
   it('modifier shortcuts still fire while typing', () => {

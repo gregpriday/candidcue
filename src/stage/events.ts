@@ -37,7 +37,22 @@ export async function subscribeStageEvent<T>(
 
 let emitBlockedWarned = false;
 
-/** Fire-and-forget emit toward control; never throws (spec §40.5 spirit). */
+/**
+ * Fire-and-forget emit toward Rust; never throws (spec §40.5 spirit).
+ *
+ * S1: this is `emit`, not `emitTo`, and that is deliberate — but it means every
+ * emission is a BROADCAST. Tauri's manager fans a webview `emit` out to the JS
+ * listeners of every webview *and* to the Rust `listen_any` handlers, and a JS
+ * listener registered with the default target (`Any`) matches unconditionally,
+ * so no `emitTo` target can exclude it (`match_any_or_filter`,
+ * tauri/src/event/listener.rs). Narrowing the target here would not have helped.
+ *
+ * The consequence a caller has to respect: an event the stage emits must NOT
+ * share a name with an event control listens for, or control receives it twice
+ * — once straight from the stage with no generation check, and once from the
+ * Rust relay. `escapePressed`/`motionReport` exist for exactly that reason; see
+ * the note in src/shared/contracts/stage.ts.
+ */
 export function emitStageEvent<T>(name: StageEventName, payload: T): void {
   if (!isTauri) {
     // Preview: surface outbound traffic in the console for manual testing.

@@ -35,13 +35,25 @@ pub struct DataExportResult {
 
 /// Export all data (spec §47.7): scripts tree copy + consistent SQLite
 /// snapshot via `VACUUM INTO`.
+///
+/// C5: this used to take `destination: String` from the webview. Nothing could
+/// supply it — the dialog plugin is not granted to JavaScript — so
+/// `exportAllData()` invoked with `{ destination: undefined }`, the key was
+/// dropped from the JSON, deserialization failed, and the un-`catch`ed promise
+/// meant the operator saw no export, no toast and no error. The picker now
+/// runs here, in the same trusted operation as the copy (spec §50.7).
+/// `Ok(None)` means the operator cancelled.
 #[tauri::command]
 pub async fn export_all_data(
+    app: tauri::AppHandle,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
-    destination: String,
-) -> Result<DataExportResult, AppError> {
-    let dest_root = PathBuf::from(&destination);
+) -> Result<Option<DataExportResult>, AppError> {
+    let Some(dest_root) =
+        crate::dialogs::pick_destination_folder(&app, "Choose a folder for the export").await?
+    else {
+        return Ok(None);
+    };
     if !dest_root.is_absolute() || !dest_root.exists() || !dest_root.is_dir() {
         return Err(AppError::unsafe_path(
             "Choose an existing folder for the export.",
@@ -76,11 +88,11 @@ pub async fn export_all_data(
         scripts_copied = fs::read_dir(&target)?.count() as u32;
     }
 
-    Ok(DataExportResult {
+    Ok(Some(DataExportResult {
         path: export_dir.to_string_lossy().to_string(),
         scripts_copied,
         warnings,
-    })
+    }))
 }
 
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
@@ -104,32 +116,77 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()
 pub struct ClearResult {
     pub kind: String,
     pub removed_files: u32,
+    /// Bytes actually reclaimed. The UI reports a size; it used to report
+    /// `removedFiles` under the name `clearedBytes` (C6).
+    pub removed_bytes: u64,
 }
 
-#[tauri::command]
-pub async fn clear_cache(
-    paths: State<'_, DataPaths>,
-    kind: String,
-) -> Result<ClearResult, AppError> {
+/// Total size of a file, or of everything under a directory. Best-effort:
+/// anything unreadable simply counts as zero.
+fn size_of(path: &std::path::Path) -> u64 {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return 0;
+    };
+    if meta.file_type().is_symlink() {
+        return 0; // never follow, never count the target
+    }
+    if meta.is_file() {
+        return meta.len();
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .filter_map(|e| e.ok())
+        .map(|e| size_of(&e.path()))
+        .sum()
+}
+
+/// The directories a `clear_cache` kind empties.
+///
+/// C6: the control window's "Clear logs" mapped onto `all`, which deletes the
+/// compiled-script, vocabulary, thumbnail and download caches and leaves every
+/// log file in place — then reported "Logs cleared." No arm touched
+/// `paths.logs_dir()` at all. `logs` is its own kind now, and it is
+/// deliberately NOT part of `all`: logs are not a cache.
+pub fn clear_cache_targets(paths: &DataPaths, kind: &str) -> Result<Vec<PathBuf>, AppError> {
     let cache_root = paths.cache_dir();
-    let sub_dirs: Vec<&str> = match kind.as_str() {
-        "compiled" => vec!["compiled"],
-        "vocabulary" => vec!["vocabulary"],
-        "thumbnails" => vec!["thumbnails"],
-        "downloads" => vec!["downloads"],
-        "all" => vec!["compiled", "vocabulary", "thumbnails", "downloads"],
+    let cache = |sub: &str| cache_root.join(sub);
+    Ok(match kind {
+        "compiled" => vec![cache("compiled")],
+        "vocabulary" => vec![cache("vocabulary")],
+        "thumbnails" => vec![cache("thumbnails")],
+        "downloads" => vec![cache("downloads")],
+        "all" => vec![
+            cache("compiled"),
+            cache("vocabulary"),
+            cache("thumbnails"),
+            cache("downloads"),
+        ],
+        "logs" => vec![paths.logs_dir()],
         other => {
             return Err(AppError::invalid_input(format!(
                 "Unknown cache kind: {other}."
             )));
         }
-    };
+    })
+}
+
+/// Empty a cache directory — or, for `logs`, the log directory, which is not a
+/// cache and does not live under `cache/`.
+#[tauri::command]
+pub async fn clear_cache(
+    paths: State<'_, DataPaths>,
+    kind: String,
+) -> Result<ClearResult, AppError> {
+    let dirs = clear_cache_targets(&paths, &kind)?;
     let mut removed = 0u32;
-    for sub in sub_dirs {
-        let dir = cache_root.join(sub);
+    let mut removed_bytes = 0u64;
+    for dir in dirs {
         if dir.exists() {
             for entry in fs::read_dir(&dir)?.filter_map(|e| e.ok()) {
                 let path = entry.path();
+                let bytes = size_of(&path);
                 let ok = if path.is_dir() {
                     fs::remove_dir_all(&path).is_ok()
                 } else {
@@ -137,6 +194,7 @@ pub async fn clear_cache(
                 };
                 if ok {
                     removed += 1;
+                    removed_bytes += bytes;
                 }
             }
         }
@@ -144,6 +202,7 @@ pub async fn clear_cache(
     Ok(ClearResult {
         kind,
         removed_files: removed,
+        removed_bytes,
     })
 }
 

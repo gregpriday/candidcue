@@ -156,8 +156,12 @@
     text-decoration: underline;
     text-underline-offset: 3px;
   }
+  /* Small terracotta text must never drop to --accent (it sits right on the
+     AA line); hover darkens to the primary text colour instead, which also
+     reads as the right direction for a hover. */
   .link:hover {
-    color: var(--accent);
+    color: var(--text-primary);
+    text-decoration-thickness: 2px;
   }
   .link.quiet {
     color: var(--text-muted);

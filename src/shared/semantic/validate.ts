@@ -41,6 +41,7 @@ const CRITICAL_MISMATCHES: readonly CriticalMismatch[] = [
   'negation',
   'number',
   'name',
+  'unit',
   'meaning_change',
   'omitted_clause',
   'uncertain',
@@ -110,7 +111,9 @@ const RELATION_ALLOWED_HINTS: Record<AssistRelation, readonly string[]> = {
 
 /** Tip code ⇄ criticalMismatch compatibility (C.4). */
 const TIP_REQUIRES_MISMATCH: Record<Exclude<CoachTipCode, 'none'>, readonly CriticalMismatch[]> = {
-  number_changed: ['number'],
+  // A unit swap is reported through the number tip until the rail's own
+  // CRITICAL_UNIT copy is wired; the mismatch kind stays honest either way.
+  number_changed: ['number', 'unit'],
   name_changed: ['name'],
   critical_word_changed: ['negation', 'meaning_change'],
   meaningful_omission: ['omitted_clause'],

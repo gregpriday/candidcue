@@ -14,6 +14,7 @@
   import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
   import { openExternal } from '../lib/app-actions';
+  import { describeError } from '../services/errors';
   import * as secretsService from '../services/secrets';
   import * as settingsService from '../services/settings';
   import type { OpenAiKeyStatus } from '../services/secrets-types';
@@ -84,6 +85,11 @@
     keyNote = '';
   }
 
+  /**
+   * C6: this used to invoke the Rust `all` cache kind, which empties the
+   * compiled/vocabulary/thumbnail/download caches and never touches a log
+   * file — then reported "Logs cleared." It now calls the real `logs` arm.
+   */
   async function clearLogs(): Promise<void> {
     const accepted = await requestConfirm({
       title: 'Clear all logs?',
@@ -92,19 +98,53 @@
       danger: true,
     });
     if (!accepted) return;
-    await settingsService.clearCache('logs');
-    showToast('Logs cleared', 'success');
+    await runMaintenance(
+      () => settingsService.clearCache('logs'),
+      (result) => (result.clearedFiles === 0 ? 'No logs to clear' : 'Logs cleared'),
+    );
+  }
+
+  /**
+   * C5/C6: every one of these buttons was `void …then(showToast)` with no
+   * `.catch`, so a rejected command produced no export, no toast and no error.
+   * A failure is now reported, and a cancelled picker says nothing at all.
+   */
+  async function runMaintenance<T>(
+    run: () => Promise<T>,
+    describeSuccess: (result: T) => string | null,
+  ): Promise<void> {
+    try {
+      const message = describeSuccess(await run());
+      if (message) showToast(message, 'success');
+    } catch (err) {
+      showToast(describeError(err), 'danger');
+    }
+  }
+
+  async function runExportAllData(): Promise<void> {
+    await runMaintenance(
+      () => settingsService.exportAllData(),
+      // Rust runs the folder picker; a cancelled picker is not a failure and
+      // is not worth a toast.
+      (result) => (result.cancelled ? null : 'Export ready'),
+    );
   }
 
   async function runUpdateCheck(): Promise<void> {
     updateNote = 'Checking…';
-    const result = await settingsService.checkForUpdate();
-    updateNote =
-      result.status === 'available'
-        ? `Update available: ${result.availableVersion}`
-        : result.status === 'up_to_date'
-          ? 'CandidCue is up to date.'
-          : 'Could not check for updates.';
+    try {
+      const result = await settingsService.checkForUpdate();
+      updateNote =
+        result.status === 'available'
+          ? `Update available: ${result.availableVersion}`
+          : result.status === 'up_to_date'
+            ? 'CandidCue is up to date.'
+            : result.status === 'unsupported'
+              ? 'Update checks are not available in this build.'
+              : `Could not check for updates: ${result.message ?? 'unknown error'}`;
+    } catch (err) {
+      updateNote = `Could not check for updates: ${describeError(err)}`;
+    }
   }
 </script>
 
@@ -472,13 +512,27 @@
           </div>
 
           <div class="row-actions">
-            <Button onclick={() => void settingsService.exportAllData().then(() => showToast('Export ready', 'success'))}>
+            <Button onclick={() => void runExportAllData()}>
               Export all scripts
             </Button>
-            <Button variant="ghost" onclick={() => void settingsService.clearCache('analysis').then(() => showToast('Analysis cache cleared', 'success'))}>
+            <Button
+              variant="ghost"
+              onclick={() =>
+                void runMaintenance(
+                  () => settingsService.clearCache('analysis'),
+                  () => 'Analysis cache cleared',
+                )}
+            >
               Clear analysis cache
             </Button>
-            <Button variant="ghost" onclick={() => void settingsService.clearCache('listeners').then(() => showToast('Listener downloads cleared', 'success'))}>
+            <Button
+              variant="ghost"
+              onclick={() =>
+                void runMaintenance(
+                  () => settingsService.clearCache('listeners'),
+                  () => 'Listener downloads cleared',
+                )}
+            >
               Clear Listener downloads
             </Button>
             <Button variant="ghost" onclick={() => clearLogs()}>Clear logs</Button>

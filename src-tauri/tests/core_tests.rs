@@ -177,8 +177,8 @@ async fn create_save_revision_trash_lifecycle() {
     let trashed = repo::list_scripts(
         &h.pool,
         ScriptFilter {
-            query: None,
             status: Some(ScriptStatus::Trash),
+            ..Default::default()
         },
         None,
         PageRequest::default(),
@@ -307,7 +307,7 @@ async fn search_and_pagination() {
         &h.pool,
         ScriptFilter {
             query: Some("zebras".into()),
-            status: None,
+            ..Default::default()
         },
         None,
         PageRequest::default(),
@@ -315,6 +315,167 @@ async fn search_and_pagination() {
     .await
     .unwrap();
     assert_eq!(zebra.total, 5);
+}
+
+/// C7: every sort key the library offers must reorder the result. All four of
+/// them used to fall through to `updated_at DESC`, because the only arms Rust
+/// implemented — `title_asc` and `opened_desc` — are names no caller sends.
+///
+/// This test fails if the arms are reverted: `name` would return creation
+/// order rather than alphabetical order.
+#[tokio::test]
+async fn every_library_sort_key_actually_orders_the_result() {
+    let h = harness().await;
+    // Created in an order that is neither alphabetical nor length-ordered.
+    for (title, body) in [
+        ("Middle", "one two three four five six"),
+        ("Alpha", "one two"),
+        ("Zulu", "one two three four five six seven eight nine ten eleven"),
+    ] {
+        repo::create_script(&h.pool, &h.paths, create_input(title, body))
+            .await
+            .expect("create");
+    }
+
+    let titles = |page: &candidcue_lib::scripts::ScriptPage| -> Vec<String> {
+        page.items.iter().map(|s| s.title.clone()).collect()
+    };
+
+    let by_name = repo::list_scripts(
+        &h.pool,
+        ScriptFilter::default(),
+        Some("name".into()),
+        PageRequest::default(),
+    )
+    .await
+    .expect("sort by name");
+    assert_eq!(titles(&by_name), vec!["Alpha", "Middle", "Zulu"]);
+
+    let by_length = repo::list_scripts(
+        &h.pool,
+        ScriptFilter::default(),
+        Some("estimated_length".into()),
+        PageRequest::default(),
+    )
+    .await
+    .expect("sort by estimated length");
+    assert_eq!(titles(&by_length).first().map(String::as_str), Some("Zulu"));
+    assert_eq!(titles(&by_length).last().map(String::as_str), Some("Alpha"));
+
+    for key in ["recently_edited", "created", "last_opened"] {
+        repo::list_scripts(
+            &h.pool,
+            ScriptFilter::default(),
+            Some(key.into()),
+            PageRequest::default(),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{key} must be a sort Rust understands: {e}"));
+    }
+
+    // The fallback is LOUD. A key nobody implements is an error, not a silent
+    // `updated_at DESC` that makes the sort control look broken.
+    let unknown = repo::list_scripts(
+        &h.pool,
+        ScriptFilter::default(),
+        Some("title_asc".into()),
+        PageRequest::default(),
+    )
+    .await;
+    assert!(
+        unknown.is_err(),
+        "an unrecognised sort key must fail, not silently default"
+    );
+}
+
+/// C3: the Trash view and the Recent view must actually select what they name.
+#[tokio::test]
+async fn trash_and_recent_views_select_the_right_scripts() {
+    let h = harness().await;
+    let live = repo::create_script(&h.pool, &h.paths, create_input("Live", "Still here."))
+        .await
+        .expect("create live");
+    let doomed = repo::create_script(&h.pool, &h.paths, create_input("Doomed", "On its way out."))
+        .await
+        .expect("create doomed");
+    let doomed_id = sid(&doomed.id);
+    repo::trash_script(&h.pool, &h.locks, &doomed_id, doomed.script_revision)
+        .await
+        .expect("trash");
+
+    let trash = repo::list_scripts(
+        &h.pool,
+        ScriptFilter {
+            status: Some(ScriptStatus::Trash),
+            ..Default::default()
+        },
+        None,
+        PageRequest::default(),
+    )
+    .await
+    .expect("list trash");
+    assert_eq!(trash.total, 1);
+    assert_eq!(trash.items[0].id, doomed.id);
+
+    // Recent: nothing has been opened yet, so the view is empty even though
+    // one live script exists.
+    let recent_before = repo::list_scripts(
+        &h.pool,
+        ScriptFilter {
+            opened_only: true,
+            ..Default::default()
+        },
+        Some("last_opened".into()),
+        PageRequest::default(),
+    )
+    .await
+    .expect("list recent");
+    assert_eq!(recent_before.total, 0);
+
+    repo::get_script(&h.pool, &h.paths, &h.locks, &sid(&live.id))
+        .await
+        .expect("open");
+    let recent_after = repo::list_scripts(
+        &h.pool,
+        ScriptFilter {
+            opened_only: true,
+            ..Default::default()
+        },
+        Some("last_opened".into()),
+        PageRequest::default(),
+    )
+    .await
+    .expect("list recent");
+    assert_eq!(recent_after.total, 1);
+    assert_eq!(recent_after.items[0].id, live.id);
+}
+
+/// C6: "Clear logs" must clear the LOGS. It mapped onto the `all` cache kind,
+/// which empties four caches and touches nothing in `logs/`, while the toast
+/// said "Logs cleared."
+///
+/// Reverting the `logs` arm makes the first assertion fail outright (unknown
+/// kind); reverting it to an alias for `all` makes the second fail.
+#[tokio::test]
+async fn clearing_logs_targets_the_log_directory_and_no_cache() {
+    let h = harness().await;
+    let logs = candidcue_lib::commands::settings_cmds::clear_cache_targets(&h.paths, "logs")
+        .expect("`logs` must be a kind clear_cache understands");
+    assert_eq!(logs, vec![h.paths.logs_dir()]);
+
+    let all = candidcue_lib::commands::settings_cmds::clear_cache_targets(&h.paths, "all")
+        .expect("`all` targets");
+    assert!(
+        !all.contains(&h.paths.logs_dir()),
+        "logs are not a cache and must not be swept up by `all`"
+    );
+    assert!(all.iter().all(|d| d.starts_with(h.paths.cache_dir())));
+
+    assert!(
+        candidcue_lib::commands::settings_cmds::clear_cache_targets(&h.paths, "everything")
+            .is_err(),
+        "an unknown kind must be rejected, not silently mapped onto something"
+    );
 }
 
 // ---------------------------------------------------------------------------

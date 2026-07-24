@@ -131,8 +131,24 @@ function ensureWorker(): WorkerLike {
   return worker;
 }
 
+/**
+ * Per-session compile switches the caller may override (spec A.4). Everything
+ * else about a compile is derived from the source itself.
+ */
+export interface CompileOverrides {
+  /** Track heading text as spoken words (Preflight → "Read headings aloud"). */
+  readHeadings?: boolean;
+  readImageAltText?: boolean;
+  readInlineCode?: boolean;
+  wordsPerMinute?: number;
+}
+
 /** Compile a script source off the UI thread (latest request wins). */
-export function compileScript(scriptId: string, source: string): Promise<CompileOutput> {
+export function compileScript(
+  scriptId: string,
+  source: string,
+  overrides: CompileOverrides = {},
+): Promise<CompileOutput> {
   const w = ensureWorker();
   latestRequestId += 1;
   const requestId = latestRequestId;
@@ -142,7 +158,7 @@ export function compileScript(scriptId: string, source: string): Promise<Compile
     editorRevision: requestId,
     scriptId,
     source,
-    options: { scriptId },
+    options: { ...overrides, scriptId },
     operation: 'full',
   };
   return new Promise<CompileOutput>((resolve, reject) => {

@@ -4,7 +4,7 @@
  * (spec §45.3).
  */
 import { writable } from 'svelte/store';
-import { compileScript, type CompileOutput } from '../services/compiler';
+import { compileScript, type CompileOutput, type CompileOverrides } from '../services/compiler';
 
 export type CompileStatus = 'idle' | 'compiling' | 'ready' | 'error';
 
@@ -24,11 +24,12 @@ export async function requestCompile(
   scriptId: string,
   source: string,
   editorRevision: number,
+  options?: CompileOverrides,
 ): Promise<void> {
   latestRequestedRevision = editorRevision;
   state.update((s) => ({ ...s, status: 'compiling' }));
   try {
-    const output = await compileScript(scriptId, source);
+    const output = await compileScript(scriptId, source, options);
     if (editorRevision !== latestRequestedRevision || output.stale) return; // superseded
     state.set({ status: 'ready', editorRevision, result: output, error: null });
   } catch (err) {

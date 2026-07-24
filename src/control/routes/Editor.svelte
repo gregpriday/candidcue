@@ -19,6 +19,8 @@
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
   import * as inserts from '../lib/markdown-insert';
   import { onShortcut } from '../lib/shortcuts';
+  import * as assetsService from '../services/assets';
+  import { describeError } from '../services/errors';
   import * as scriptsService from '../services/scripts';
   import { compiled } from '../stores/compiled';
   import { requestConfirm } from '../stores/confirm';
@@ -122,6 +124,27 @@
   function withView(fn: (view: NonNullable<ReturnType<MarkdownEditor['getView']>>) => void): void {
     const view = editorRef?.getView();
     if (view) fn(view);
+  }
+
+  /**
+   * C10: "Insert image" used to type a hardcoded `./assets/image.png` — a file
+   * that never existed — while `import_image` had no caller at all, so the
+   * Rust picker and the MIME/size validation behind it were unreachable. The
+   * image is imported first; the path written into the document is the one the
+   * importer created.
+   */
+  async function insertImage(): Promise<void> {
+    const view = editorRef?.getView();
+    if (!view) return;
+    try {
+      const asset = await assetsService.importImage(scriptId);
+      if (!asset) return; // operator cancelled the picker
+      // Alt text stays a placeholder on purpose: it is spoken when a script
+      // enables `readImageAltText`, so a file name would be the wrong default.
+      inserts.insertImage(view, asset.markdownPath);
+    } catch (err) {
+      showToast(`Could not add that image: ${describeError(err)}`, 'danger');
+    }
   }
 
   /** Move the editor cursor to a source offset and reveal it. */
@@ -302,7 +325,7 @@
       <IconButton icon="link" label="Insert link" onclick={() => withView(inserts.insertLink)} />
       <span class="toolbar-rule" aria-hidden="true"></span>
       <IconButton icon="flag" label="Insert cue" onclick={() => withView(inserts.insertCue)} />
-      <IconButton icon="image" label="Insert image" onclick={() => withView(inserts.insertImage)} />
+      <IconButton icon="image" label="Insert image" onclick={() => void insertImage()} />
       <IconButton icon="diagram" label="Insert diagram block" onclick={() => withView(inserts.insertDiagram)} />
       <IconButton icon="restore" label="Insert take marker" onclick={() => withView(inserts.insertTakeMarker)} />
     </div>

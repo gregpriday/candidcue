@@ -309,15 +309,28 @@ pub struct ScriptPage {
     pub page_size: u32,
 }
 
+/// Twin of the wire filter built by `listScripts` in
+/// src/control/services/scripts.ts.
+///
+/// C3: `deny_unknown_fields` is the point of this struct now. Control used to
+/// send `{ view: 'trash' }`; serde silently discarded `view`, `status` stayed
+/// `None`, and the Trash view listed live scripts — which the per-row
+/// "Delete permanently" and "Empty Trash" controls then acted on. The library
+/// view is mapped to `status`/`openedOnly` on the TypeScript side, and any
+/// field this struct does not declare is now a hard deserialization error
+/// rather than a silent default.
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ScriptFilter {
     pub query: Option<String>,
     pub status: Option<ScriptStatus>,
+    /// Recent view: only scripts that have actually been opened.
+    #[serde(default)]
+    pub opened_only: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PageRequest {
     pub page: u32,
     pub page_size: u32,
@@ -333,7 +346,7 @@ impl Default for PageRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateScriptInput {
     pub title: String,
     #[serde(default)]
@@ -345,7 +358,7 @@ pub struct CreateScriptInput {
 /// Optional metadata changes carried with a save (spec §46.2
 /// `metadata_patch`).
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ScriptMetadataPatch {
     pub title: Option<String>,
     pub status: Option<ScriptStatus>,

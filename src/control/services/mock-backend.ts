@@ -11,7 +11,7 @@
  * Nothing outside `src/control/services/` may import this module.
  * ============================================================================
  */
-import type { ScriptDocument, ScriptSummary } from '../../shared/contracts';
+import type { ScriptDocument, ScriptSummary, StageStatus } from '../../shared/contracts';
 import {
   countWords,
   estimateDurationSeconds,
@@ -267,10 +267,11 @@ export const mockSettings = {
     return structuredClone(state.settings);
   },
   clearCache(kind: string): ClearResult {
-    return { kind, clearedBytes: 0 };
+    return { kind, clearedFiles: 0, clearedBytes: 0 };
   },
   checkForUpdate(): UpdateCheckResult {
-    return { status: 'up_to_date', currentVersion: '0.1.0-dev' };
+    // Browser dev has no updater either; say so rather than claim currency.
+    return { status: 'unsupported', currentVersion: '0.1.0-dev' };
   },
 };
 
@@ -362,6 +363,23 @@ export const mockStage = {
       nativeFullscreen: false,
       displayFingerprint: 'dsp-mock-prompter',
       stageGeneration: mockStageGeneration,
+    };
+  },
+  /**
+   * C12: browser dev used to answer `null` here, which is why the service
+   * declared `StageStatus | null`. Rust always returns a status — "no stage"
+   * is `exists: false` — so the mock says the same thing.
+   */
+  stageStatus(): StageStatus {
+    return {
+      exists: mockStageGeneration > 0,
+      visible: mockStageGeneration > 0,
+      fullscreen: false,
+      displayFingerprint: 'dsp-mock-prompter',
+      stageGeneration: mockStageGeneration,
+      hydrated: mockStageGeneration > 0,
+      layoutReady: mockStageGeneration > 0,
+      mediaHealthy: true,
     };
   },
 };

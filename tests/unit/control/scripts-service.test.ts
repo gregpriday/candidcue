@@ -14,7 +14,7 @@ describe('scripts service — invoke wiring', () => {
       return {} as T;
     });
 
-    await scripts.listScripts({ view: 'all' }, 'name', 1);
+    await scripts.listScripts({ view: 'all' }, 'name', { page: 1, pageSize: 50 });
     await scripts.getScript('id-1');
     await scripts.saveScript('id-1', 3, '# Hello', { title: 'Hello' });
     await scripts.renameScript('id-1', 'New name', 3);
@@ -44,6 +44,12 @@ describe('scripts service — invoke wiring', () => {
       metadataPatch: { title: 'Hello' },
     });
     expect(calls[3]?.args).toEqual({ scriptId: 'id-1', title: 'New name', expectedRevision: 3 });
+    // S2: `page` is Rust's `PageRequest` struct, not a bare number.
+    expect(calls[0]?.args).toEqual({
+      filter: {},
+      sort: 'name',
+      page: { page: 1, pageSize: 50 },
+    });
   });
 
   it('propagates real backend errors instead of masking them', async () => {
@@ -54,7 +60,22 @@ describe('scripts service — invoke wiring', () => {
   });
 });
 
-describe('scripts service — mock fallback (no backend)', () => {
+/**
+ * READ THIS BEFORE ADDING A TEST HERE.
+ *
+ * Everything below runs against `mock-backend.ts`, not Rust. The mock is a
+ * *stronger* implementation than production in places, so an assertion that
+ * passes here proves only that the mock behaves — it can and did conceal a
+ * real defect: `listScripts({ view: 'trash' })` returned the trashed script
+ * from the mock while the Rust query was returning the LIVE scripts, because
+ * serde discarded the `view` field entirely (C3).
+ *
+ * These are browser-dev-parity tests and are labelled as such. Anything that
+ * asserts what Rust receives belongs in `scripts-ipc-contract.test.ts`, which
+ * drives the same wrappers against the shared fixture that
+ * `src-tauri/tests/ipc_contract_tests.rs` deserializes.
+ */
+describe('scripts service — mock fallback (browser dev parity only, proves nothing about Rust)', () => {
   it('supports the full library lifecycle', async () => {
     const created = await scripts.createScript({ title: 'Lifecycle', source: '# One\n\nHello world.\n' });
     expect(created.id).toBeTruthy();
@@ -75,6 +96,10 @@ describe('scripts service — mock fallback (no backend)', () => {
     expect(conflict.status).toBe('conflict');
 
     await scripts.trashScript(created.id, loaded.scriptRevision + 1);
+    // MOCK ONLY. The mock honours `view` directly; Rust never sees it. That
+    // the Trash view lists trashed scripts *in production* is proven by
+    // `trash_and_recent_views_select_the_right_scripts` (core_tests.rs) and by
+    // the payload assertions in scripts-ipc-contract.test.ts.
     const trash = await scripts.listScripts({ view: 'trash' });
     expect(trash.items.some((s) => s.id === created.id)).toBe(true);
     const all = await scripts.listScripts({ view: 'all' });

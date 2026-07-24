@@ -64,8 +64,17 @@ export function insertCue(view: EditorView): void {
   wrapSelection(view, '[Cue: ', ']', 'stage direction');
 }
 
-export function insertImage(view: EditorView): void {
-  insertBlock(view, '![Image description](./assets/image.png)');
+/**
+ * Insert a reference to an image that has ALREADY been imported.
+ *
+ * C10: this used to insert the literal `![Image description](./assets/image.png)`
+ * — a file that does not exist and never would, because nothing in the product
+ * called `import_image`. The path now comes from the importer's `markdownPath`,
+ * which is what the compiler and the asset-protocol scope both resolve.
+ */
+export function insertImage(view: EditorView, markdownPath: string, altText = 'Image description'): void {
+  const alt = altText.replace(/[[\]]/g, '');
+  insertBlock(view, `![${alt}](${markdownPath})`);
 }
 
 export function insertDiagram(view: EditorView): void {

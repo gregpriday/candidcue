@@ -36,6 +36,28 @@ describe('script command IPC payloads match the Rust DTOs', () => {
     calls.length = 0;
   });
 
+  /**
+   * C3/C7/S2. These drive the REAL wrapper, so they fail the moment the
+   * `view` → `status` mapping is reverted — unlike the mock-backed assertions
+   * in scripts-service.test.ts, which the mock satisfied on its own.
+   */
+  it('the Trash view sends status, not the view name Rust discards', async () => {
+    await scripts.listScripts({ view: 'trash' }, 'recently_edited', { page: 1, pageSize: 50 });
+    const payload = payloadFor('list_scripts') as Record<string, unknown>;
+    expect(payload).toEqual(fixture.list_scripts_trash);
+    expect(Object.keys(payload.filter as object)).not.toContain('view');
+  });
+
+  it('the Recent view sends openedOnly and orders by last opened', async () => {
+    await scripts.listScripts({ view: 'recent' }, 'name');
+    expect(payloadFor('list_scripts')).toEqual(fixture.list_scripts_recent);
+  });
+
+  it('the All view sends neither status nor openedOnly', async () => {
+    await scripts.listScripts({ view: 'all', query: 'keynote' }, 'name');
+    expect(payloadFor('list_scripts')).toEqual(fixture.list_scripts_all);
+  });
+
   it('import_script sends only a title — never a path', async () => {
     await scripts.importScript({ title: 'Keynote' });
     expect(payloadFor('import_script')).toEqual(fixture.import_script);

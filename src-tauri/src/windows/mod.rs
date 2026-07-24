@@ -53,6 +53,18 @@ pub mod events {
     pub const STAGE_LAYOUT_READY: &str = "stage://layout-ready";
     pub const STAGE_HEARTBEAT_ACK: &str = "stage://heartbeat-ack";
     pub const STAGE_MEDIA_ERROR: &str = "stage://media-error";
+    // S1: the stage emits these two under names control does NOT listen for.
+    // A webview `emit` is a broadcast — Tauri delivers it to every webview's JS
+    // listeners as well as to the Rust `listen_any` handlers, and a listener
+    // with the default `Any` target matches whatever the emitter targeted. When
+    // the stage emitted `stage://escape-requested` and the bridge below
+    // re-emitted the same name to control, control ran its handler twice: once
+    // ungated, once after the generation check. Same shape as `layout-ready` →
+    // `stage://ready` and `media-error` → `stage://error`.
+    pub const STAGE_ESCAPE_PRESSED: &str = "stage://escape-pressed";
+    pub const STAGE_MOTION_REPORT: &str = "stage://motion-report";
+
+    // Rust → control, after the coordinator's generation check.
     pub const STAGE_ESCAPE_REQUESTED: &str = "stage://escape-requested";
     // Periodic stage motion report, relayed to control (companion §54).
     pub const STAGE_MOTION_ACK: &str = "stage://motion-ack";
@@ -427,7 +439,7 @@ fn schedule_identify_close(app: &AppHandle, delay_ms: u32) {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OpenStageRequest {
     #[serde(default)]
     pub display_fingerprint: Option<String>,
@@ -928,24 +940,66 @@ pub fn validate_stage_payload_header(
     Ok(HeaderVerdict::Accept)
 }
 
+/// Whether a stage document envelope may be emitted.
+///
+/// C4: `publish_stage_document` used to call `validate_stage_payload_header`
+/// with a bare `?` and discard the `HeaderVerdict` it returns, so a `Drop` — an
+/// envelope carrying a session generation that is no longer current — was
+/// emitted to the stage anyway. `publish_stage_snapshot` honours the same
+/// verdict, so the two commands disagreed about what a stale generation means.
+/// The decision lives here, on its own, where it can be tested without a
+/// window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishPlan {
+    Emit,
+    /// Stale: dropped silently, per spec §43.5.
+    DropSilently,
+}
+
+pub fn plan_stage_document_publish(
+    document_envelope: &serde_json::Value,
+    session_id: &str,
+    stage_generation: u64,
+    session_generation: u64,
+) -> Result<PublishPlan, AppError> {
+    let serialized = serde_json::to_vec(document_envelope)
+        .map_err(|e| AppError::Internal(format!("envelope serialize: {e}")))?;
+    if serialized.len() > MAX_STAGE_DOCUMENT_BYTES {
+        return Err(AppError::invalid_input("The stage document is too large."));
+    }
+    match validate_stage_payload_header(
+        document_envelope,
+        session_id,
+        stage_generation,
+        session_generation,
+        true,
+    )? {
+        HeaderVerdict::Accept => Ok(PublishPlan::Emit),
+        HeaderVerdict::Drop => Ok(PublishPlan::DropSilently),
+    }
+}
+
 pub fn publish_stage_document(
     app: &AppHandle,
     session_id: &str,
     document_envelope: serde_json::Value,
 ) -> Result<StageAck, AppError> {
     let active = require_active_stage(app, session_id)?;
-    let serialized = serde_json::to_vec(&document_envelope)
-        .map_err(|e| AppError::Internal(format!("envelope serialize: {e}")))?;
-    if serialized.len() > MAX_STAGE_DOCUMENT_BYTES {
-        return Err(AppError::invalid_input("The stage document is too large."));
-    }
-    validate_stage_payload_header(
+    let plan = plan_stage_document_publish(
         &document_envelope,
         session_id,
         active.generation,
         active.session_generation,
-        true,
     )?;
+    // A dropped document is not an error (spec §43.5); it is an ack that says
+    // `accepted: false`, so control can see its envelope did not land.
+    if plan == PublishPlan::DropSilently {
+        return Ok(StageAck {
+            accepted: false,
+            stage_generation: active.generation,
+            session_id: Some(session_id.to_string()),
+        });
+    }
     app.emit_to(STAGE_LABEL, events::STAGE_LOAD_SESSION, &document_envelope)?;
     Ok(StageAck {
         accepted: true,
@@ -1194,6 +1248,8 @@ mod tests {
             events::STAGE_LAYOUT_READY,
             events::STAGE_HEARTBEAT_ACK,
             events::STAGE_MEDIA_ERROR,
+            events::STAGE_ESCAPE_PRESSED,
+            events::STAGE_MOTION_REPORT,
             events::STAGE_ESCAPE_REQUESTED,
             events::STAGE_MOTION_ACK,
             events::STAGE_INTENT,
@@ -1216,6 +1272,58 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// S1: a webview `emit` is a BROADCAST. Tauri's manager delivers it to
+    /// every webview's JS listeners AND to the Rust `listen_any` handlers, and
+    /// a JS listener registered with the default `Any` target matches
+    /// regardless of what the emitter targeted (`match_any_or_filter` in
+    /// tauri/src/event/listener.rs) — so no `emitTo` can exclude control.
+    ///
+    /// The only defence is name separation: what the stage emits and what the
+    /// bridge relays to control must never be the same string, or control's
+    /// handler runs twice, and the first run bypasses the generation check.
+    #[test]
+    fn no_relayed_control_event_reuses_a_name_the_stage_emits() {
+        let emitted_by_stage = [
+            events::STAGE_HYDRATED,
+            events::STAGE_LAYOUT_READY,
+            events::STAGE_HEARTBEAT_ACK,
+            events::STAGE_MEDIA_ERROR,
+            events::STAGE_ESCAPE_PRESSED,
+            events::STAGE_MOTION_REPORT,
+        ];
+        let relayed_to_control = [
+            events::STAGE_READY,
+            events::STAGE_ERROR,
+            events::STAGE_ESCAPE_REQUESTED,
+            events::STAGE_MOTION_ACK,
+        ];
+        for relayed in relayed_to_control {
+            assert!(
+                !emitted_by_stage.contains(&relayed),
+                "{relayed} is both emitted by the stage and relayed to control; \
+                 control would receive it twice, the first time ungated (S1)"
+            );
+        }
+
+        // And the bridge must listen for the stage's names, not the relayed
+        // ones — listening for a relayed name would make the relay re-trigger
+        // itself.
+        let app_rs = include_str!("../app.rs");
+        for name in ["STAGE_ESCAPE_PRESSED", "STAGE_MOTION_REPORT"] {
+            assert!(
+                app_rs.contains(&format!("listen_any(events::{name}")),
+                "the stage event bridge must listen for events::{name}"
+            );
+        }
+        for name in ["STAGE_ESCAPE_REQUESTED", "STAGE_MOTION_ACK"] {
+            assert!(
+                !app_rs.contains(&format!("listen_any(events::{name}")),
+                "events::{name} is a control-facing name; listening for it here \
+                 would relay the stage's own broadcast a second time"
+            );
         }
     }
 
@@ -1415,6 +1523,56 @@ mod tests {
             "stageGeneration": 7,
         });
         assert!(validate_stage_payload_header(&bad_schema, "s-1", 7, 3, true).is_err());
+    }
+
+    /// C4: `publish_stage_document` computed the header verdict and threw it
+    /// away, so a `Drop` still reached the stage — while `publish_stage_snapshot`
+    /// honoured the identical verdict. The two commands must agree.
+    ///
+    /// This test fails if the `Drop` arm is reverted to an unconditional emit:
+    /// the stale-session envelope would plan `Emit`.
+    #[test]
+    fn a_stale_session_document_is_not_published() {
+        let live = serde_json::json!({
+            "schemaVersion": 1,
+            "sessionId": "s-1",
+            "stageGeneration": 7,
+            "sessionGeneration": 3,
+        });
+        assert_eq!(
+            plan_stage_document_publish(&live, "s-1", 7, 3).unwrap(),
+            PublishPlan::Emit
+        );
+
+        // Same envelope, a session generation that has moved on. The snapshot
+        // path drops this; the document path used to publish it.
+        assert_eq!(
+            plan_stage_document_publish(&live, "s-1", 7, 4).unwrap(),
+            PublishPlan::DropSilently
+        );
+        assert_eq!(
+            validate_stage_payload_header(&live, "s-1", 7, 4, false).unwrap(),
+            HeaderVerdict::Drop,
+            "the two commands must reach the same verdict for the same envelope"
+        );
+
+        // A stale STAGE generation stays an error for documents (unchanged).
+        let stale_stage = serde_json::json!({
+            "schemaVersion": 1,
+            "sessionId": "s-1",
+            "stageGeneration": 6,
+            "sessionGeneration": 3,
+        });
+        assert!(plan_stage_document_publish(&stale_stage, "s-1", 7, 3).is_err());
+
+        // Oversize is still rejected before anything else is decided.
+        let huge = serde_json::json!({
+            "schemaVersion": 1,
+            "sessionId": "s-1",
+            "stageGeneration": 7,
+            "blocks": "x".repeat(MAX_STAGE_DOCUMENT_BYTES + 1),
+        });
+        assert!(plan_stage_document_publish(&huge, "s-1", 7, 3).is_err());
     }
 
     /// The defect: `close_stage` destroyed the window unconditionally. A close

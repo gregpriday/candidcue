@@ -18,10 +18,11 @@
  *                                    close-session
  *   control → stage (direct emitTo): heartbeat (§43.5, ~1s cadence),
  *                                    semantic-frame (companion §26.1, 15–30 Hz)
- *   stage → Rust bridge (+ control) : hydrated, layout-ready, heartbeat-ack,
- *                                    media-error, escape-requested, motion-ack
+ *   stage → Rust bridge             : hydrated, layout-ready, heartbeat-ack,
+ *                                    media-error, escape-pressed, motion-report
  *   stage → control (direct)        : intent
- *   Rust → control                  : ready, closed, error (CONTROL_EVENT)
+ *   Rust → control                  : ready, closed, error (CONTROL_EVENT),
+ *                                    escape-requested, motion-ack
  */
 import type { Uuid } from './core';
 import type { StageSessionEnvelope, StageSettings } from './display';
@@ -62,12 +63,36 @@ export const STAGE_EVENT = {
   heartbeatAck: 'stage://heartbeat-ack',
   /** stage → Rust: nonfatal media/Listener failure (§40.5 containment). */
   mediaError: 'stage://media-error',
-  /** stage → Rust → control: Escape pressed on the stage (§16.9). */
+
+  /*
+   * S1 — why these come in pairs.
+   *
+   * A webview `emit()` is a BROADCAST: Tauri's manager fans it out to every
+   * webview's JS listeners AND to the Rust `listen_any` handlers, and a JS
+   * listener registered with the default target `Any` matches unconditionally
+   * (`match_any_or_filter` in tauri/src/event/listener.rs), so no `emitTo`
+   * target can exclude it. When the stage emitted `stage://escape-requested`
+   * and Rust re-emitted the SAME name to control, control's handler ran twice —
+   * once ungated, straight from the stage, and once after the generation check
+   * in app.rs. A double Escape stopped the session twice; motion acks were
+   * ingested twice into the §61 degradation logic.
+   *
+   * So the stage's own emission and Rust's relay have different names, which is
+   * already the pattern for `layout-ready` → `stage://ready` and `media-error`
+   * → `stage://error`. Control listens only for the relayed name, and the only
+   * path to it runs through the coordinator's generation check.
+   */
+
+  /** stage → Rust: Escape pressed on the stage (§16.9). Relayed as below. */
+  escapePressed: 'stage://escape-pressed',
+  /** Rust → control: a generation-checked Escape from the live stage (§16.9). */
   escapeRequested: 'stage://escape-requested',
+  /** stage → Rust: periodic `StageMotionAck` (companion §54). Relayed as below. */
+  motionReport: 'stage://motion-report',
   /**
-   * stage → Rust → control: periodic `StageMotionAck` (companion §54).
-   * Diagnostics and recovery only — deliberately NOT a high-frequency feedback
-   * loop into the semantic aligner.
+   * Rust → control: a generation-checked periodic `StageMotionAck`
+   * (companion §54). Diagnostics and recovery only — deliberately NOT a
+   * high-frequency feedback loop into the semantic aligner.
    */
   motionAck: 'stage://motion-ack',
   /** stage → control: other keyboard/pointer intents — control decides. */
@@ -197,13 +222,17 @@ export interface StageHeartbeatAckPayload {
 }
 
 /**
+ * `stage://motion-report` (stage → Rust), relayed to control as
  * `stage://motion-ack` — periodic motion report (companion §54). Carries the
  * stage's current layout generation, which is how control learns that the stage
  * rebuilt its line map and that older frames are being rejected (§33).
  */
 export type StageMotionAckPayload = StageMotionAck & { stageGeneration: number };
 
-/** `stage://escape-requested` — Escape pressed once or twice within 1.5 s. */
+/**
+ * `stage://escape-pressed` (stage → Rust), relayed to control as
+ * `stage://escape-requested` — Escape pressed once or twice within 1.5 s.
+ */
 export interface StageEscapePayload {
   stageGeneration: number;
   presses: 1 | 2;
@@ -213,7 +242,7 @@ export interface StageEscapePayload {
 /**
  * `stage://intent` — the stage never acts on privileged decisions itself; it
  * reports what the user did and control decides (spec §16.9). Escape travels
- * separately as `stage://escape-requested` so Rust can relay it.
+ * separately as `stage://escape-pressed` so Rust can relay it.
  */
 export type StageIntent =
   /** Mouse-wheel manual scroll, in logical stage pixels (already applied locally). */

@@ -3,6 +3,7 @@ import { get } from 'svelte/store';
 import {
   addTakeMarker,
   clearSession,
+  connectionPill,
   hardPause,
   liveStatusLabel,
   moveSentences,
@@ -15,12 +16,16 @@ import {
   stopSession,
   togglePlayPause,
 } from '../../../src/control/stores/session';
+import type { SessionMode } from '../../../src/control/services/settings-types';
 
-function start(): string {
+/** Published rate for the default realtime model (§35.1). */
+const RATE_USD_PER_MINUTE = 0.017;
+
+function start(mode: SessionMode = 'voice'): string {
   return startLiveSession({
     scriptId: 'script-1',
     scriptTitle: 'Launch video',
-    mode: 'voice',
+    mode,
     displayLabel: 'Teleprompter Display',
     outline: [],
     sentences: [],
@@ -104,11 +109,84 @@ describe('live session store', () => {
     expect(summary.commands).toBe(1);
     expect(summary.durationSeconds).toBeGreaterThanOrEqual(59);
     expect(summary.transcriptSaved).toBe(false);
-    expect(summary.estimatedCostUsd).toBeGreaterThan(0);
 
     const s = get(session);
     expect(s.active).toBe(false);
     expect(s.summary).toEqual(summary);
+  });
+
+  /*
+   * The estimate used to be `Math.round((elapsedSeconds / 60) * 0.6) / 100`,
+   * which quantised in ~$0.01-per-100-seconds steps: $0.00 for the first 49 s,
+   * then nothing between $0.01 and $0.02. The status-bar popover and the F.17
+   * summary also computed it two different ways.
+   */
+  describe('cost estimate (§35)', () => {
+    it('tracks elapsed time continuously instead of in 100-second steps', () => {
+      start();
+      startPrompting();
+
+      vi.advanceTimersByTime(49_000);
+      expect(get(session).estimatedCostUsd).toBeCloseTo((49 / 60) * RATE_USD_PER_MINUTE, 6);
+
+      vi.advanceTimersByTime(51_000); // 100 s total
+      expect(get(session).estimatedCostUsd).toBeCloseTo((100 / 60) * RATE_USD_PER_MINUTE, 6);
+      // The old formula gave the same $0.01 for both of the above.
+      expect(get(session).estimatedCostUsd).not.toBeCloseTo((49 / 60) * RATE_USD_PER_MINUTE, 4);
+    });
+
+    it('reports a realistic figure for a 30-minute take', () => {
+      start();
+      startPrompting();
+      vi.advanceTimersByTime(1_800_000);
+      const summary = stopSession();
+      // 30 min × $0.017/min = $0.51; the old formula reported $0.18.
+      expect(summary.estimatedCostUsd).toBe(0.51);
+    });
+
+    it('is the same number the summary reports', () => {
+      start();
+      startPrompting();
+      vi.advanceTimersByTime(600_000);
+      const live = get(session).estimatedCostUsd;
+      const summary = stopSession();
+      expect(summary.estimatedCostUsd).toBe(Math.round(live * 100) / 100);
+    });
+
+    it('charges nothing when no realtime stream exists (manual mode)', () => {
+      start('manual');
+      startPrompting();
+      vi.advanceTimersByTime(600_000);
+      expect(get(session).estimatedCostUsd).toBe(0);
+      expect(stopSession().estimatedCostUsd).toBe(0);
+    });
+  });
+
+  it('does not manufacture a summary when there is no session to stop', () => {
+    // Live opens the F.17 dialog on `!active && summary !== null`; a spurious
+    // stop used to pop it with a zeroed summary.
+    const summary = stopSession();
+    expect(summary.durationSeconds).toBe(0);
+    expect(get(session).summary).toBeNull();
+    expect(get(liveStatusLabel)).toBe('Ready to start');
+  });
+
+  it('keeps the first summary when stop is called twice', () => {
+    start();
+    startPrompting();
+    vi.advanceTimersByTime(60_000);
+    const first = stopSession();
+    const second = stopSession();
+    expect(second).toEqual(first);
+    expect(get(session).summary).toEqual(first);
+  });
+
+  it('names the connection state honestly, including a fatal offline', () => {
+    // `offline` is non-recoverable — nothing is retrying, so it must not read
+    // as a warning-toned "Reconnecting".
+    expect(connectionPill('connected')).toEqual({ tone: 'success', label: 'Connected' });
+    expect(connectionPill('reconnecting')).toEqual({ tone: 'warning', label: 'Reconnecting' });
+    expect(connectionPill('offline')).toEqual({ tone: 'danger', label: 'Disconnected' });
   });
 
   it('clearSession resets to the initial state', () => {

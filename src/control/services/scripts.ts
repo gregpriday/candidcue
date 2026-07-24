@@ -12,18 +12,45 @@ import type {
   ImportOptions,
   ImportResult,
   SaveResult,
+  ScriptFilterPayload,
   ScriptListFilter,
   ScriptPage,
+  ScriptPageRequest,
   ScriptSort,
+  ScriptSortPayload,
 } from './scripts-types';
+
+/**
+ * Translate the library's `view` into the fields Rust's `ScriptFilter`
+ * declares. Rust has no `view`; sending one is what made the Trash view list
+ * live scripts, and `deny_unknown_fields` now makes that mistake fail loudly.
+ *
+ *  - `trash`  → `status: 'trash'`
+ *  - `recent` → live scripts that have been opened, ordered by when
+ *  - `all`    → neither field, which Rust reads as "everything but trash"
+ */
+export function toScriptFilterPayload(filter?: ScriptListFilter): ScriptFilterPayload | undefined {
+  if (!filter) return undefined;
+  const payload: ScriptFilterPayload = {};
+  if (filter.query !== undefined && filter.query !== '') payload.query = filter.query;
+  if (filter.view === 'trash') payload.status = 'trash';
+  if (filter.view === 'recent') payload.openedOnly = true;
+  return payload;
+}
 
 export async function listScripts(
   filter?: ScriptListFilter,
   sort?: ScriptSort,
-  page?: number,
+  page?: ScriptPageRequest,
 ): Promise<ScriptPage> {
-  return invokeOrMock<ScriptPage>('list_scripts', { filter, sort, page }, () =>
-    mockScripts.list(filter, sort),
+  // The Recent view is ordered by when a script was last opened; the sort
+  // control is hidden there (Library.svelte) because it would not apply.
+  const wireSort: ScriptSortPayload | undefined =
+    filter?.view === 'recent' ? 'last_opened' : sort;
+  return invokeOrMock<ScriptPage>(
+    'list_scripts',
+    { filter: toScriptFilterPayload(filter), sort: wireSort, page },
+    () => mockScripts.list(filter, sort),
   );
 }
 

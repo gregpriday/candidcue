@@ -45,6 +45,12 @@
   ];
 
   const inTrash = $derived($library.view === 'trash');
+  /**
+   * Recent is ordered by when a script was last opened — that IS the view — so
+   * the sort control has nothing to say there, the same way it has nothing to
+   * say in Trash.
+   */
+  const showsSort = $derived($library.view === 'all');
   const pageTitle = $derived(
     $library.view === 'trash' ? 'Trash' : $library.view === 'recent' ? 'Recent' : 'Scripts',
   );
@@ -172,7 +178,7 @@
         oninput={onSearchInput}
       />
     </div>
-    {#if !inTrash}
+    {#if showsSort}
       <div class="sort">
         <Select
           value={$library.sort}

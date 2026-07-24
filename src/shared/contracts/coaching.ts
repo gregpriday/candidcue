@@ -186,6 +186,53 @@ export interface PitchReliability {
 }
 
 // ---------------------------------------------------------------------------
+// Script progress (§14.10) — the alignment engine's input to pace projection
+// ---------------------------------------------------------------------------
+
+/**
+ * §14.10. Where the presenter is in the authored script, as the alignment
+ * engine sees it.
+ *
+ * This is the one coaching input that comes from neither the audio path nor
+ * the transcript. `remainingSpokenWordEquivalents` is a property of the script
+ * *and* the cursor, so target-duration pacing —
+ * `requiredWpm = remaining / remainingTargetMinutes` — is not computable
+ * without it. It was missing from the first cut of this contract, which made
+ * §14.10 unbuildable as specified.
+ *
+ * Note the direction of the dependency, because it is the whole reason this is
+ * safe: coaching *reads* the cursor and never writes it. There is no inverse
+ * of this type, and adding one would breach the advisory-only rule at the top
+ * of this file.
+ *
+ * Every field other than the remainder exists so a consumer can decide whether
+ * to *believe* the cursor. A projection built on a stale or re-acquiring
+ * cursor twitches, and §14.10 is explicit that a twitching projection is worse
+ * than none — so the correct response to an untrusted cursor is to emit no
+ * projection at all, never a fallback value.
+ */
+export interface ScriptProgress {
+  /** Spoken-unit index the alignment cursor has reached, 0-based. */
+  cursorUnitIndex: number;
+  /** Total spoken units in the script's planned path. */
+  totalUnits: number;
+  /**
+   * Spoken-word equivalents from the cursor to the end of the planned path.
+   * Supplied rather than derived, because a "unit" is not always a word and a
+   * skipped section changes the remainder without changing the index.
+   */
+  remainingSpokenWordEquivalents: number;
+  /** 0–1 alignment confidence in the cursor. */
+  confidence: number;
+  /** Audio-clock time the cursor was established, ms (§5.4). */
+  observedAtMs: number;
+  /** Tracking epoch the cursor belongs to; a change invalidates it (§5.4). */
+  trackingEpoch: number;
+  /** True while the engine is re-acquiring and the cursor is not trustworthy. */
+  reacquiring: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Rail modes and display state (§6, §27)
 // ---------------------------------------------------------------------------
 
@@ -276,11 +323,26 @@ export type FillerKind =
  * §27.3. One detected disfluency.
  *
  * `confidence` is a three-state *ladder*, not a number, because the detection
- * pipeline is layered (§2.3): a realtime hit is `probable`, and only local
- * audio, a precision transcript, or Luna can promote it to `confirmed` or
- * demote it to `rejected`. `countedLive` records whether it was already shown
- * to the presenter, so a later demotion can correct the count without
- * retroactively rewriting what they saw.
+ * pipeline is layered (§2.3). Per §16.5 the ladder is:
+ *
+ * - `confirmed` — a **final** transcript (Realtime *or* precision) contains the
+ *   event, contextual classification passes, **and** timing is credible. All
+ *   three are required. Local audio and Luna may also promote.
+ * - `probable` — acoustic or local evidence is meaningful but lexical evidence
+ *   is incomplete. A hit on a *provisional* tail never rises above this.
+ * - `rejected` — a later transcript revision or context shows a legitimate word.
+ *
+ * Note the asymmetry the three-part rule creates, which is the point of it: a
+ * `strict_vocalized` "um" sitting in a final transcript clears all three easily,
+ * while a `contextual` "like" turns on the classification gate, which is where
+ * §2.4 does its work. Requiring acoustic corroboration for the former as well
+ * would be stricter than the spec and would leave `confirmedCount` pinned at
+ * zero whenever the local audio path is unavailable — a silent, permanent lie
+ * on the rail rather than a visible failure.
+ *
+ * `countedLive` records whether the event was already shown to the presenter,
+ * so a later demotion can correct the count without retroactively rewriting
+ * what they saw.
  */
 export interface FillerEvent {
   eventId: string;

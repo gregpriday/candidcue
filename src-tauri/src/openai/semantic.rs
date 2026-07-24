@@ -78,7 +78,7 @@ pub fn classification_schema() -> Value {
             "candidateCoverage": { "type": "number", "minimum": 0, "maximum": 1 },
             "shouldInfluenceTracking": { "type": "boolean" },
             "criticalMismatch": { "type": "string", "enum": [
-                "none", "negation", "number", "name",
+                "none", "negation", "number", "name", "unit",
                 "meaning_change", "omitted_clause", "uncertain"
             ]},
             "coachTipCode": { "type": "string", "enum": [

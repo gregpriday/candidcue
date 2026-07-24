@@ -31,8 +31,14 @@ export async function listDisplays(): Promise<DisplayDescriptor[]> {
   );
 }
 
-export async function identifyDisplays(): Promise<IdentificationSession | null> {
-  return invokeOrMock<IdentificationSession | null>('identify_displays', undefined, () =>
+/**
+ * C12: this used to be typed `| null`. Rust's `identify_displays` returns an
+ * `IdentificationSession` or an error — never null — and the mock returns one
+ * too, so the null branch was unreachable and every `?.` guarding it was
+ * protecting against nothing.
+ */
+export async function identifyDisplays(): Promise<IdentificationSession> {
+  return invokeOrMock<IdentificationSession>('identify_displays', undefined, () =>
     mockStage.identifyDisplays(),
   );
 }
@@ -107,8 +113,14 @@ export async function publishListenerState(
   return invokeOrMock<void>('publish_listener_state', { sessionId, state }, () => undefined);
 }
 
-export async function getStageStatus(): Promise<StageStatus | null> {
-  return invokeOrMock<StageStatus | null>('get_stage_status', undefined, () => null);
+/**
+ * C12: also used to be typed `| null`. Rust's `get_stage_status` returns a
+ * `StageStatus` unconditionally — "no stage" is `exists: false`, not null — so
+ * the browser-dev mock now answers the same way instead of returning null and
+ * making every caller write a check that can never fire in Tauri.
+ */
+export async function getStageStatus(): Promise<StageStatus> {
+  return invokeOrMock<StageStatus>('get_stage_status', undefined, () => mockStage.stageStatus());
 }
 
 /**
@@ -156,7 +168,6 @@ export async function waitForStageReady(
     poll = setInterval(() => {
       void getStageStatus().then((status) => {
         if (
-          status &&
           status.stageGeneration === stageGeneration &&
           status.hydrated &&
           status.layoutReady

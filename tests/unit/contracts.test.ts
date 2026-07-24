@@ -37,7 +37,10 @@ describe('shared contracts', () => {
     expect(STAGE_EVENT.layoutReady).toBe('stage://layout-ready');
     expect(STAGE_EVENT.heartbeatAck).toBe('stage://heartbeat-ack');
     expect(STAGE_EVENT.mediaError).toBe('stage://media-error');
+    expect(STAGE_EVENT.escapePressed).toBe('stage://escape-pressed');
     expect(STAGE_EVENT.escapeRequested).toBe('stage://escape-requested');
+    expect(STAGE_EVENT.motionReport).toBe('stage://motion-report');
+    expect(STAGE_EVENT.motionAck).toBe('stage://motion-ack');
     expect(STAGE_EVENT.intent).toBe('stage://intent');
     expect(CONTROL_EVENT.stageReady).toBe('stage://ready');
     expect(CONTROL_EVENT.stageClosed).toBe('stage://closed');

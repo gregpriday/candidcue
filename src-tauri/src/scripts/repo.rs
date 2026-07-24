@@ -244,16 +244,40 @@ pub async fn list_scripts(
     let page_size = page.page_size.clamp(1, 500);
     let offset = (page.page as i64) * (page_size as i64);
 
+    // C7: these keys are the ones `ScriptSort` in
+    // src/control/services/scripts-types.ts actually emits, plus the
+    // `last_opened` the Recent view maps onto. The arms used to be
+    // `title_asc`/`opened_desc`, which no caller has ever sent, so every sort
+    // the library offered fell through to `updated_at DESC` and the sort
+    // control did nothing. An unrecognised key is now an ERROR rather than a
+    // silent default: the next drift fails on the first click instead of
+    // quietly ignoring the user.
     let order = match sort.as_deref() {
-        Some("title_asc") => "s.title COLLATE NOCASE ASC",
-        Some("opened_desc") => "s.last_opened_at DESC NULLS LAST",
-        _ => "s.updated_at DESC",
+        None | Some("recently_edited") => "s.updated_at DESC",
+        Some("name") => "s.title COLLATE NOCASE ASC",
+        Some("created") => "s.created_at DESC",
+        Some("estimated_length") => "s.estimated_duration_seconds DESC",
+        Some("last_opened") => "s.last_opened_at DESC NULLS LAST",
+        Some(other) => {
+            return Err(AppError::invalid_input(format!(
+                "Unknown script sort: {other}."
+            )));
+        }
     };
 
-    let status_clause = match filter.status {
+    // C3: `status` is what the control window's library *view* maps onto —
+    // `trash` for the Trash view, absent everywhere else. It used to be
+    // impossible to set, because control sent a `view` field that this struct
+    // does not have and serde dropped on the floor, so the Trash view listed
+    // the LIVE scripts.
+    let mut where_clauses = vec![match filter.status {
         Some(status) => format!("s.status = '{}'", status.as_str()),
         None => "s.status != 'trash'".to_string(),
-    };
+    }];
+    if filter.opened_only {
+        where_clauses.push("s.last_opened_at IS NOT NULL".to_string());
+    }
+    let status_clause = where_clauses.join(" AND ");
 
     let fts = filter.query.as_deref().and_then(sanitize_fts_query);
     let (join, match_clause) = if fts.is_some() {

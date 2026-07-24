@@ -197,7 +197,11 @@
   function handleMotionAck(ack: StageMotionAck) {
     // A periodic report for diagnostics and recovery — explicitly not a
     // high-frequency feedback loop into the aligner.
-    emitStageEvent<StageMotionAckPayload>(STAGE_EVENT.motionAck, {
+    // S1: emitted under the stage's OWN name. A webview emit is a broadcast
+    // that reaches control directly as well as Rust, so reusing the name Rust
+    // relays under (`motionAck`) delivered every ack to control twice — once
+    // without the generation check.
+    emitStageEvent<StageMotionAckPayload>(STAGE_EVENT.motionReport, {
       ...ack,
       stageGeneration: app.envelope?.stageGeneration ?? 0,
     });
@@ -213,8 +217,9 @@
   }
 
   function sendEscape(presses: 1 | 2) {
-    // Escape travels on its own event so the Rust bridge can relay it (§46.9).
-    emitStageEvent<StageEscapePayload>(STAGE_EVENT.escapeRequested, {
+    // Escape travels on its own event so the Rust bridge can relay it (§46.9),
+    // under a name control does NOT listen for — see S1 on motionReport above.
+    emitStageEvent<StageEscapePayload>(STAGE_EVENT.escapePressed, {
       stageGeneration: app.envelope?.stageGeneration ?? 0,
       presses,
       atMs: Date.now(),

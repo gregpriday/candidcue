@@ -80,13 +80,24 @@ export interface AppSettings {
 
 export interface ClearResult {
   kind: string;
+  /** Number of entries removed. */
+  clearedFiles: number;
+  /** Bytes actually reclaimed — a size, not a count (C6). */
   clearedBytes: number;
 }
 
+/**
+ * `unsupported` is the honest v1 answer: no updater plugin is wired
+ * (spec §44.10), so `check_for_update` returns NOT_IMPLEMENTED. It used to be
+ * reported as `up_to_date`, which is a claim CandidCue cannot make, and which
+ * would have hidden real network/auth failures once an updater shipped (C8).
+ */
 export interface UpdateCheckResult {
-  status: 'up_to_date' | 'available' | 'error';
+  status: 'up_to_date' | 'available' | 'error' | 'unsupported';
   currentVersion: string;
   availableVersion?: string;
+  /** Present on `error`: what actually went wrong. */
+  message?: string;
 }
 
 export function defaultAppSettings(): AppSettings {

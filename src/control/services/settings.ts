@@ -13,6 +13,7 @@
  *    toggles, …) persist in a local overlay (localStorage) — they belong to
  *    display profiles / frontend state per §52, not the Rust document.
  */
+import { describeError, errorCode } from './errors';
 import { ipcInvoke, isTauriRuntime, BackendUnavailableError } from './ipc';
 import { mockSettings } from './mock-backend';
 import {
@@ -252,9 +253,20 @@ export async function updateSettings(
   return fromRust(revisioned);
 }
 
-export async function exportAllData(destination?: string): Promise<{ path?: string; cancelled: boolean }> {
-  if (!isTauriRuntime()) return { cancelled: false };
-  const result = await ipcInvoke<{ path: string }>('export_all_data', { destination });
+/**
+ * Export every script plus a consistent database snapshot (spec §47.7).
+ *
+ * C5: this used to take a `destination` the caller had no way to obtain — the
+ * dialog plugin is deliberately not granted to JavaScript — and passed
+ * `undefined`, which JSON drops, which made Rust's non-optional `String`
+ * parameter fail to deserialize. Rust now runs the folder picker itself, the
+ * same as `import_script`/`export_script`, and returns `null` when the
+ * operator cancels.
+ */
+export async function exportAllData(): Promise<{ path?: string; cancelled: boolean }> {
+  if (!isTauriRuntime()) return { cancelled: true };
+  const result = await ipcInvoke<{ path: string } | null>('export_all_data');
+  if (result === null) return { cancelled: true };
   return { path: result.path, cancelled: false };
 }
 
@@ -262,22 +274,43 @@ export async function clearCache(
   kind: 'analysis' | 'listeners' | 'logs',
 ): Promise<ClearResult> {
   if (!isTauriRuntime()) return mockSettings.clearCache(kind);
-  // UI cache kinds map onto the Rust cache directories (§46.8).
-  const rustKind = kind === 'analysis' ? 'vocabulary' : kind === 'listeners' ? 'downloads' : 'all';
-  const result = await ipcInvoke<{ kind: string; removedFiles: number }>('clear_cache', {
-    kind: rustKind,
-  });
-  return { kind, clearedBytes: result.removedFiles };
+  /*
+   * UI kinds map onto the Rust kinds (§46.8).
+   *
+   * C6: `logs` used to map onto `all`, which empties the compiled, vocabulary,
+   * thumbnail and download caches and never touches the log directory — so
+   * "Clear logs" destroyed four caches, left the logs, and reported success.
+   * There is a real `logs` arm now.
+   */
+  const rustKind = kind === 'analysis' ? 'vocabulary' : kind === 'listeners' ? 'downloads' : 'logs';
+  const result = await ipcInvoke<{ kind: string; removedFiles: number; removedBytes: number }>(
+    'clear_cache',
+    { kind: rustKind },
+  );
+  // `clearedBytes` used to be handed `removedFiles` — a count wearing the name
+  // of a size. Rust reports both now.
+  return { kind, clearedFiles: result.removedFiles, clearedBytes: result.removedBytes };
 }
 
+/**
+ * Check for an application update.
+ *
+ * C8: every error used to be swallowed into `{ status: 'up_to_date' }`, so the
+ * `'error'` branch was unreachable and a network or auth failure would read as
+ * "you are up to date" the moment a real updater shipped. NOT_IMPLEMENTED — the
+ * v1 state, where no updater plugin is wired (spec §44.10) — is now reported as
+ * `unsupported`; everything else is reported as the failure it is.
+ */
 export async function checkForUpdate(): Promise<UpdateCheckResult> {
   if (!isTauriRuntime()) return mockSettings.checkForUpdate();
+  const version = await getAppVersion().catch(() => '0.1.0');
   try {
     return await ipcInvoke<UpdateCheckResult>('check_for_update');
-  } catch {
-    // Updater is NOT_IMPLEMENTED in v1 Rust (spec §44.10) — report cleanly.
-    const version = await getAppVersion().catch(() => '0.1.0');
-    return { status: 'up_to_date', currentVersion: version };
+  } catch (err) {
+    if (errorCode(err) === 'NOT_IMPLEMENTED') {
+      return { status: 'unsupported', currentVersion: version };
+    }
+    return { status: 'error', currentVersion: version, message: describeError(err) };
   }
 }
 

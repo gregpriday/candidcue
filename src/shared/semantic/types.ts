@@ -34,6 +34,21 @@ export type CriticalMismatch =
   | 'negation'
   | 'number'
   | 'name'
+  /**
+   * A different unit of the *same dimension* was spoken — milliseconds read as
+   * seconds, kilometres as miles. Distinct from `number` because the digits are
+   * usually correct and only the unit changed, and because the coaching rail
+   * has its own `CRITICAL_UNIT` copy for it. Folding it into `number` would
+   * label a real milliseconds-for-seconds error as a number error, which is a
+   * small lie that survives into the presenter's tip.
+   *
+   * Note this enum spans both directions of the Luna exchange: it types the
+   * locally-computed `CriticalCheck.kind` we send *and* the `criticalMismatch`
+   * the model returns, so a value added here must also be added to
+   * `CRITICAL_MISMATCHES` in `validate.ts` and to the strict response schema in
+   * `src-tauri/src/openai/semantic.rs`, or the two ends disagree.
+   */
+  | 'unit'
   | 'meaning_change'
   | 'omitted_clause'
   | 'uncertain';

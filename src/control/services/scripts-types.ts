@@ -14,6 +14,35 @@ export interface ScriptListFilter {
   query?: string;
 }
 
+/**
+ * Twin of Rust `ScriptFilter` (scripts/mod.rs) — the shape that actually goes
+ * over the wire.
+ *
+ * `view` is a UI concept and Rust has never had a field for it. It used to be
+ * sent anyway; serde discarded it, so `status` stayed unset and the Trash view
+ * listed the LIVE scripts. `listScripts` now translates the view here, and
+ * Rust rejects any field it does not declare (`deny_unknown_fields`).
+ */
+export interface ScriptFilterPayload {
+  query?: string;
+  status?: 'draft' | 'ready' | 'archived' | 'trash';
+  /** Recent view: only scripts that have been opened at least once. */
+  openedOnly?: boolean;
+}
+
+/**
+ * Sort keys Rust accepts. The four `ScriptSort` values are the library's own
+ * options; `last_opened` exists for the Recent view, which orders by when a
+ * script was last opened rather than by the sort control.
+ */
+export type ScriptSortPayload = ScriptSort | 'last_opened';
+
+/** Twin of Rust `PageRequest`. Rust deserializes a struct, never a number. */
+export interface ScriptPageRequest {
+  page: number;
+  pageSize: number;
+}
+
 export interface ScriptPage {
   items: ScriptSummary[];
   total: number;

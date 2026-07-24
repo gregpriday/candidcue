@@ -23,6 +23,8 @@
     addTakeMarker,
     adjustStageFontSize,
     clearSession,
+    connectionPill,
+    goToToken,
     hardPause,
     liveStatusLabel,
     moveSentences,
@@ -50,9 +52,13 @@
   let { sessionId, scriptId }: Props = $props();
 
   let costOpen = $state(false);
+  /** Display-only until a fixed-speed transport exists (see the slider below). */
   let manualWpm = $state(150);
 
   const stageFontSize = $derived($session.stageFontSizePx);
+  /** §62: the stage window is gone; its quick-controls have nothing to talk to. */
+  const stageAlive = $derived($session.stageAlive);
+  const connection = $derived(connectionPill($session.connection));
 
   const snapshot = $derived($session.snapshot);
   const modeLabel = $derived(
@@ -82,9 +88,9 @@
     }));
   });
 
-  const estimatedCost = $derived(
-    (Math.round(($session.elapsedSeconds / 60) * 0.6) / 100).toFixed(2),
-  );
+  // Same source as the F.17 summary — the two used to disagree by an order of
+  // magnitude for the same take.
+  const estimatedCost = $derived($session.estimatedCostUsd.toFixed(2));
 
   const currentSectionTitle = $derived(
     currentSectionIndex >= 0 ? (flatOutline[currentSectionIndex]?.node.title ?? null) : null,
@@ -108,15 +114,25 @@
     return out;
   }
 
+  /**
+   * Outline navigation. `moveSentences` is a relative move and needs a cursor,
+   * so before the first snapshot (i.e. before Start) it can express nothing —
+   * clicking a section used to do nothing at all. An absolute move to the
+   * section's first token is the honest answer for "go here before I start".
+   */
   function jumpToSection(node: OutlineNode): void {
-    if ($session.sentences.length === 0 || sentenceIndex < 0) return;
-    const targetIndex = $session.sentences.findIndex(
-      (s) => s.startTokenIndex >= node.startTokenIndex,
-    );
-    if (targetIndex >= 0) {
-      moveSentences(targetIndex - sentenceIndex);
-      showToast(node.title, 'info');
+    if (sentenceIndex >= 0) {
+      const targetIndex = $session.sentences.findIndex(
+        (s) => s.startTokenIndex >= node.startTokenIndex,
+      );
+      if (targetIndex >= 0) {
+        moveSentences(targetIndex - sentenceIndex);
+        showToast(node.title, 'info');
+        return;
+      }
     }
+    goToToken(node.startTokenIndex);
+    showToast(node.title, 'info');
   }
 
   async function requestStop(): Promise<void> {
@@ -230,10 +246,10 @@
     </div>
     <div class="status-right">
       <StatusPill tone="accent" label={modeLabel} dot={false} />
-      <StatusPill
-        tone={$session.connection === 'connected' ? 'success' : 'warning'}
-        label={$session.connection === 'connected' ? 'Connected' : 'Reconnecting'}
-      />
+      <StatusPill tone={connection.tone} label={connection.label} />
+      {#if !stageAlive}
+        <StatusPill tone="danger" label="Stage closed" />
+      {/if}
       <StatusPill
         tone={$session.micState === 'live' ? 'success' : $session.micState === 'muted' ? 'neutral' : 'danger'}
         label={$session.micState === 'live' ? 'Mic live' : $session.micState === 'muted' ? 'Mic off' : 'Mic lost'}
@@ -336,16 +352,49 @@
       <p class="region-label">Stage</p>
       <div class="quick-controls">
         <div class="font-row">
-          <IconButton icon="chevron-down" label="Decrease stage text" onclick={() => adjustFontSize(-2)} />
+          <IconButton
+            icon="chevron-down"
+            label="Decrease stage text"
+            disabled={!stageAlive}
+            onclick={() => adjustFontSize(-2)}
+          />
           <span class="font-value">{stageFontSize} px</span>
-          <IconButton icon="chevron-up" label="Increase stage text" onclick={() => adjustFontSize(2)} />
+          <IconButton
+            icon="chevron-up"
+            label="Increase stage text"
+            disabled={!stageAlive}
+            onclick={() => adjustFontSize(2)}
+          />
         </div>
-        <Button size="sm" onclick={() => toggleMirror()}>Mirror text</Button>
-        <Button size="sm" onclick={() => toggleListener()}>Listener</Button>
+        <Button size="sm" disabled={!stageAlive} onclick={() => toggleMirror()}>Mirror text</Button>
+        <Button size="sm" disabled={!stageAlive} onclick={() => toggleListener()}>Listener</Button>
       </div>
+      {#if !stageAlive}
+        <p class="region-empty" role="status">
+          The stage window closed. Stop and restart the session to reopen it — until then these
+          controls have nothing to talk to.
+        </p>
+      {/if}
 
       {#if $session.mode !== 'voice' || !$session.voiceFollow}
-        <Slider label="Manual speed" bind:value={manualWpm} min={60} max={260} format={(v) => `${v} wpm`} />
+        <!--
+          Fixed-speed scrolling has no transport yet: neither the tracking
+          driver nor `StageDirective` carries a speed, so this slider had
+          nothing to set. It stays visible and disabled rather than looking
+          live and doing nothing.
+        -->
+        <Slider
+          label="Manual speed"
+          bind:value={manualWpm}
+          min={60}
+          max={260}
+          disabled
+          format={(v) => `${v} wpm`}
+        />
+        <p class="region-empty">
+          Fixed-speed scrolling is not available yet — use the transport or voice following to move
+          the stage.
+        </p>
       {/if}
     </aside>
   </div>
@@ -400,8 +449,13 @@
       />
       <IconButton
         icon="eye-off"
-        label={$session.stageBlanked ? 'Unblank stage' : 'Blank stage'}
+        label={stageAlive
+          ? $session.stageBlanked
+            ? 'Unblank stage'
+            : 'Blank stage'
+          : 'Blank stage — the stage window is closed'}
         active={$session.stageBlanked}
+        disabled={!stageAlive}
         onclick={() => toggleBlankStage()}
       />
     </div>

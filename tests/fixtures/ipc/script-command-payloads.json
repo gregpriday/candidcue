@@ -13,6 +13,26 @@
     "`suggestedName` only seeds the save dialog's default file name."
   ],
   "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+  "_list_scripts_comment": [
+    "C3/C7/S2. The library's `view` is a UI concept with no field in Rust's",
+    "ScriptFilter; control used to send it anyway, serde dropped it, and the",
+    "Trash view listed the LIVE scripts. The view is mapped to status /",
+    "openedOnly here, `sort` uses the keys repo.rs matches on, and `page` is a",
+    "PageRequest struct — it was typed as a bare number on the TS side."
+  ],
+  "list_scripts_all": {
+    "filter": { "query": "keynote" },
+    "sort": "name"
+  },
+  "list_scripts_recent": {
+    "filter": { "openedOnly": true },
+    "sort": "last_opened"
+  },
+  "list_scripts_trash": {
+    "filter": { "status": "trash" },
+    "sort": "recently_edited",
+    "page": { "page": 1, "pageSize": 50 }
+  },
   "import_script": {
     "request": {
       "title": "Keynote"

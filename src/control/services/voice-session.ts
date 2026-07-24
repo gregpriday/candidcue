@@ -64,6 +64,16 @@ export interface VoicePipelineDeps {
   /** Voice-command listening toggle (§14.2 D); alignment still runs. */
   commandsEnabled?: boolean;
   deviceId?: string;
+  /**
+   * §28.3 capture processing. These are the user's Settings → Audio toggles;
+   * without them here the settings were persisted and then ignored by every
+   * `getUserMedia` call in the app.
+   */
+  audioProcessing?: {
+    echoCancellation?: boolean;
+    noiseSuppression?: boolean;
+    autoGainControl?: boolean;
+  };
   getCursorTokenIndex(): number;
   getPosition(): { blockId: string; sentenceId: string; tokenIndex: number };
   getScrollMode(): 'voice' | 'manual' | 'fixed';
@@ -209,7 +219,17 @@ export class VoiceSessionPipeline {
   async start(): Promise<void> {
     this.running = true;
     this.scheduleCommandTick();
-    await this.controller.start(this.deps.config);
+    try {
+      await this.controller.start(this.deps.config);
+    } catch (err) {
+      // A start that never connected has no session to tick for. The 250 ms
+      // ticker reschedules itself off `running`, so leaving it armed kept a
+      // timer alive until the user happened to stop a session that had never
+      // begun.
+      this.running = false;
+      this.stopCommandTick();
+      throw err;
+    }
     this.controller.startHealthChecks();
     this.watchDevices();
     this.deps.onConnectionState('connected');
@@ -322,7 +342,10 @@ export class VoiceSessionPipeline {
     const mediaDevices = navigator.mediaDevices as unknown as Parameters<
       typeof requestMicrophoneAccess
     >[0];
-    const result = await requestMicrophoneAccess(mediaDevices, { deviceId });
+    const result = await requestMicrophoneAccess(mediaDevices, {
+      deviceId,
+      ...(this.deps.audioProcessing ?? {}),
+    });
     if (!result.ok) {
       throw new Error(result.code);
     }

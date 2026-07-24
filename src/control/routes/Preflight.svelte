@@ -35,6 +35,7 @@
   } from '../services/listeners';
   import { offsetSliderBound } from '../../shared/listener/geometry';
   import { newSessionId } from '../services/session';
+  import { acquireCancellable, runCheck } from './preflight-load';
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
   import type { OpenAiKeyStatus } from '../services/secrets-types';
@@ -53,7 +54,7 @@
   import { saveNow } from '../stores/editor';
   import { navigate } from '../stores/router';
   import { settings, loadSettings, patchSettings } from '../stores/settings';
-  import { startLiveSession } from '../stores/session';
+  import { clearSession, startLiveSession, stopSession } from '../stores/session';
   import { showToast } from '../stores/toasts';
   import type { AudioDeviceInfo, AudioLevelSnapshot } from '../../shared/contracts';
 
@@ -78,9 +79,10 @@
    */
   let stageError = $state<string | null>(null);
   let micError = $state<string | null>(null);
+  let scriptError = $state<string | null>(null);
+  let openAiError = $state<string | null>(null);
   let startError = $state<string | null>(null);
   let fullscreen = $state(true);
-  let alwaysOnTop = $state(false);
   let mirrorX = $state(false);
   let mirrorY = $state(false);
   let starting = $state(false);
@@ -104,6 +106,13 @@
   let micPartial = $state('');
   let micFinal = $state('');
   let stopMicTest: (() => void) | null = null;
+  /**
+   * Cancellation token for microphone acquisition. `startTranscriptionTest`
+   * only hands back its disposer after the capture is already running, so a
+   * navigation during acquisition used to leak the microphone for the lifetime
+   * of the app.
+   */
+  let micTestGeneration = 0;
 
   /* ----------------------------------------------------------- tracking */
   let mode = $state<SessionMode>('voice');
@@ -162,49 +171,155 @@
   );
 
   /* ------------------------------------------------------- initial load */
+
+  /**
+   * Load generation. Every step of the load can reject, and each rejection has
+   * to leave a row in a state the operator can act on — the whole page used to
+   * hang on `stage: 'checking'` ("Opening…", forever) if display enumeration
+   * threw, with no error text and no way to retry. The generation also makes
+   * `scriptId` a real dependency: a preflight → preflight move for a different
+   * script re-runs the load and discards anything still in flight for the old
+   * one.
+   */
+  let loadGeneration = 0;
+
   $effect(() => {
-    // Note: only `scriptId` is a tracked dependency here — the async body
-    // reads state after awaits, which Svelte does not track.
+    const id = scriptId; // tracked: a different script re-runs the whole load
     resetPreflight('voice');
-    void (async () => {
-      await loadSettings();
-      mode = $settings.general.defaultSessionMode;
-      fontSizePx = $settings.teleprompter.fontSizePx;
-      lineHeight = $settings.teleprompter.lineHeight;
-      readingBandCenterPercent = $settings.teleprompter.readingBandCenterPercent;
-      followSystemDefault = $settings.audio.followSystemDefault;
-
-      // §29.2 step 1: flush any pending editor autosave before reading.
-      await saveNow().catch(() => {});
-      const doc = await scriptsService.getScript(scriptId);
-      scriptTitle = doc.title;
-      scriptSource = doc.source;
-      updatePreflight({ script: 'checking' });
-      void requestCompile(doc.id, doc.source, 0);
-
-      updatePreflight({ stage: 'checking' });
-      displays = await stageService.listDisplays();
-      const preferred = displays.find((d) => !d.primary) ?? displays[0];
-      selectedFingerprint = preferred?.fingerprint ?? null;
-      if (selectedFingerprint === null) {
-        updatePreflight({ stage: 'blocked' });
-        stageError = 'No displays were detected. Connect the teleprompter display and try again.';
-      }
-      // else: the auto-readiness effect below validates it.
-
-      updatePreflight({ openai: 'checking' });
-      keyStatus = await secretsService.getOpenAiKeyStatus();
-      updatePreflight({ openai: openAiStatusToCheck(keyStatus) });
-    })();
+    void loadPreflight(id);
     return () => {
-      stopMicTest?.();
+      loadGeneration += 1; // invalidate whatever is still in flight
     };
   });
+
+  /** Microphone capture is disposed on unmount even mid-acquisition. */
+  $effect(() => {
+    return () => {
+      micTestGeneration += 1;
+      stopMicTest?.();
+      stopMicTest = null;
+    };
+  });
+
+  async function loadPreflight(id: string): Promise<void> {
+    const generation = (loadGeneration += 1);
+    const stale = (): boolean => generation !== loadGeneration;
+
+    startError = null;
+    await loadSettings().catch(() => {});
+    if (stale()) return;
+    mode = $settings.general.defaultSessionMode;
+    fontSizePx = $settings.teleprompter.fontSizePx;
+    lineHeight = $settings.teleprompter.lineHeight;
+    readingBandCenterPercent = $settings.teleprompter.readingBandCenterPercent;
+    followSystemDefault = $settings.audio.followSystemDefault;
+
+    await loadScript(id, generation);
+    if (stale()) return;
+    await loadDisplays(generation);
+    if (stale()) return;
+    await refreshKeyStatus(generation);
+  }
+
+  async function loadScript(id = scriptId, generation = loadGeneration): Promise<void> {
+    await runCheck({
+      isStale: () => generation !== loadGeneration,
+      onStart: () => {
+        scriptError = null;
+        updatePreflight({ script: 'checking' });
+      },
+      run: async () => {
+        // §29.2 step 1: flush any pending editor autosave before reading.
+        await saveNow().catch(() => {});
+        return scriptsService.getScript(id);
+      },
+      onSuccess: (doc) => {
+        scriptTitle = doc.title;
+        scriptSource = doc.source;
+        compiledWithHeadings = readHeadings;
+        void requestCompile(doc.id, doc.source, 0, { readHeadings });
+      },
+      onFailure: (err) => {
+        updatePreflight({ script: 'blocked' });
+        scriptError = `CandidCue could not open this script. ${describeError(err)}`;
+      },
+    });
+  }
+
+  async function loadDisplays(generation = loadGeneration): Promise<void> {
+    await runCheck({
+      isStale: () => generation !== loadGeneration,
+      onStart: () => {
+        stageError = null;
+        stageValidated = false;
+        updatePreflight({ stage: 'checking' });
+      },
+      run: () => stageService.listDisplays(),
+      onSuccess: async (found) => {
+        displays = found;
+        const preferred = found.find((d) => !d.primary) ?? found[0];
+        const fingerprint = preferred?.fingerprint ?? null;
+        selectedFingerprint = fingerprint;
+        if (fingerprint === null) {
+          updatePreflight({ stage: 'blocked' });
+          stageError = 'No displays were detected. Connect the teleprompter display and try again.';
+          return;
+        }
+        // Claim the probe here rather than leaving it to the auto-readiness
+        // effect: on a retry the fingerprint is usually unchanged, so the
+        // effect would not re-run and the row would sit at "Opening…" again.
+        stageCheckedFingerprint = fingerprint;
+        await validateStageDisplay(fingerprint);
+      },
+      onFailure: (err) => {
+        displays = [];
+        selectedFingerprint = null;
+        stageCheckedFingerprint = null;
+        updatePreflight({ stage: 'blocked' });
+        stageError = `CandidCue could not list the connected displays. ${describeError(err)}`;
+      },
+    });
+  }
+
+  async function refreshKeyStatus(generation = loadGeneration): Promise<void> {
+    await runCheck({
+      isStale: () => generation !== loadGeneration,
+      onStart: () => {
+        openAiError = null;
+        updatePreflight({ openai: 'checking' });
+      },
+      run: () => secretsService.getOpenAiKeyStatus(),
+      onSuccess: (status) => {
+        keyStatus = status;
+        updatePreflight({ openai: openAiStatusToCheck(status) });
+      },
+      onFailure: (err) => {
+        keyStatus = null;
+        updatePreflight({ openai: 'blocked' });
+        openAiError = `CandidCue could not check the OpenAI connection. ${describeError(err)}`;
+      },
+    });
+  }
 
   /* Script section reflects the compiler (F.10 row 1). */
   $effect(() => {
     const { status, warnings } = scriptStatusFromDiagnostics(diagnostics, $compiled.status);
     updatePreflight({ script: status, warnings });
+  });
+
+  /*
+   * "Read headings aloud" changes what counts as a spoken token, so it has to
+   * go through the compiler — the toggle used to set a variable nothing read.
+   * The session starts from this compile result, so the flag really does reach
+   * the take.
+   */
+  let compiledWithHeadings = false;
+  $effect(() => {
+    const wanted = readHeadings;
+    const source = scriptSource;
+    if (source === '' || wanted === compiledWithHeadings) return;
+    compiledWithHeadings = wanted;
+    void requestCompile(scriptId, source, 0, { readHeadings: wanted });
   });
 
   const installedMira = $derived(
@@ -461,20 +576,22 @@
   }
 
   async function removeKey(): Promise<void> {
-    await secretsService.deleteOpenAiKey();
-    keyStatus = await secretsService.getOpenAiKeyStatus();
     keyMessage = null;
-    updatePreflight({ openai: openAiStatusToCheck(keyStatus) });
+    try {
+      await secretsService.deleteOpenAiKey();
+    } catch (err) {
+      keyMessage = { tone: 'danger', text: `Could not remove the key. ${describeError(err)}` };
+      return;
+    }
+    await refreshKeyStatus();
   }
 
   async function testConnection(): Promise<void> {
     keyBusy = true;
-    updatePreflight({ openai: 'checking' });
     try {
-      keyStatus = await secretsService.getOpenAiKeyStatus();
+      await refreshKeyStatus();
     } finally {
       keyBusy = false;
-      updatePreflight({ openai: openAiStatusToCheck(keyStatus) });
     }
   }
 
@@ -504,36 +621,63 @@
   async function allowMicrophone(): Promise<void> {
     micError = null;
     updatePreflight({ microphone: 'checking' });
-    const granted = await getVoiceFacade().requestMicrophoneAccess();
-    if (granted === 'granted') {
-      micAdopted = false;
-      await adoptGrantedMicrophone();
-    } else {
-      micPermission = 'denied';
+    try {
+      const granted = await getVoiceFacade().requestMicrophoneAccess();
+      if (granted === 'granted') {
+        micAdopted = false;
+        await adoptGrantedMicrophone();
+      } else {
+        micPermission = 'denied';
+        updatePreflight({ microphone: 'blocked' });
+      }
+    } catch (err) {
+      // A rejected request used to leave the row at "Testing…" forever.
+      micPermission = 'unknown';
       updatePreflight({ microphone: 'blocked' });
+      micError = `CandidCue could not ask for microphone access. ${describeError(err)}`;
     }
   }
 
   async function runTranscriptionTest(): Promise<void> {
     stopMicTest?.();
+    stopMicTest = null;
+    const generation = (micTestGeneration += 1);
     micTest = 'listening';
     micPartial = '';
     micFinal = '';
     micError = null;
-    stopMicTest = await getVoiceFacade().startTranscriptionTest(micDeviceId, {
-      onPartial(text) {
-        micTest = 'waiting';
-        micPartial = text;
-      },
-      onFinal(text) {
-        micTest = 'success';
-        micFinal = text;
-      },
-      onError(message) {
-        micTest = 'idle';
-        micError = message;
-      },
-    });
+    const acquisition = await acquireCancellable(
+      () =>
+        getVoiceFacade().startTranscriptionTest(micDeviceId, {
+          onPartial(text) {
+            if (generation !== micTestGeneration) return;
+            micTest = 'waiting';
+            micPartial = text;
+          },
+          onFinal(text) {
+            if (generation !== micTestGeneration) return;
+            micTest = 'success';
+            micFinal = text;
+          },
+          onError(message) {
+            if (generation !== micTestGeneration) return;
+            micTest = 'idle';
+            micError = message;
+          },
+        }),
+      () => generation !== micTestGeneration,
+    );
+    // Cancelled (unmount, or a second press) while the capture was opening:
+    // `acquireCancellable` has already disposed it.
+    if (acquisition.cancelled) return;
+    if (acquisition.error !== null) {
+      // The button is disabled while 'listening'; leaving it there on a
+      // rejection made it permanently unusable with nothing said.
+      micTest = 'idle';
+      micError = `The transcription test could not start. ${describeError(acquisition.error)}`;
+      return;
+    }
+    stopMicTest = acquisition.stop;
   }
 
   /* ------------------------------------------------------------- start */
@@ -645,15 +789,40 @@
         },
         commandsEnabled: commandListening && $settings.commands.enabled,
         following: $settings.following,
-        micDeviceId: micDeviceId,
+        // "Follow system default" means exactly that: no pinned device id, so
+        // the pipeline opens (and keeps following) the system input.
+        ...(followSystemDefault ? {} : { micDeviceId }),
+        audioProcessing: {
+          echoCancellation: $settings.audio.echoCancellation,
+          noiseSuppression: $settings.audio.noiseSuppression,
+          autoGainControl: $settings.audio.autoGainControl,
+        },
       });
-      await navigate({ name: 'live', sessionId, scriptId });
+      const arrived = await navigate({ name: 'live', sessionId, scriptId });
+      if (!arrived) {
+        // A guard vetoed the move. The session is already live behind this
+        // screen — tear it down rather than leave the mic, the worker and the
+        // billing meter running under a Preflight page.
+        await abandonSession(sessionId);
+        startError = 'Could not open the Live screen, so the session was stopped.';
+      }
     } catch (err) {
+      await abandonSession(sessionId);
       startError = `Could not start the session: ${describeError(err)}`;
-      void stageService.closeStage(sessionId).catch(() => {});
     } finally {
       starting = false;
     }
+  }
+
+  /**
+   * Undo a partially-started session. `closeStage` alone left the tracking
+   * worker, the realtime transport, the microphone capture, the billing meter,
+   * the elapsed clock and the heartbeat all running.
+   */
+  async function abandonSession(sessionId: string): Promise<void> {
+    stopSession();
+    clearSession();
+    await stageService.closeStage(sessionId).catch(() => {});
   }
 
   function sectionTone(status: CheckStatus): PillTone {
@@ -745,10 +914,23 @@
       </div>
       {#if stageError}
         <p class="inline-alert" role="alert">{stageError}</p>
+        <div class="row-actions">
+          <Button disabled={stageTesting} onclick={() => loadDisplays()}>
+            Check displays again
+          </Button>
+        </div>
       {/if}
       <div class="toggle-grid">
         <Toggle bind:checked={fullscreen} label="Full screen" />
-        <Toggle bind:checked={alwaysOnTop} label="Always on top" description="Windowed stage only" />
+        <!-- The stage window is created always-on-top and re-asserts it on
+             every show (§52.7); there is no command to turn that off, so the
+             switch is shown as the fixed behaviour it is rather than a lie. -->
+        <Toggle
+          checked={true}
+          disabled
+          label="Always on top"
+          description="Always on in this release — the stage must sit above other windows"
+        />
         <Toggle bind:checked={mirrorX} label="Horizontal mirror" />
         <Toggle bind:checked={mirrorY} label="Vertical mirror" />
       </div>
@@ -806,6 +988,12 @@
       {#if keyMessage}
         <p class="key-message {keyMessage.tone}">{keyMessage.text}</p>
       {/if}
+      {#if openAiError}
+        <p class="inline-alert" role="alert">{openAiError}</p>
+        <div class="row-actions">
+          <Button disabled={keyBusy} onclick={() => refreshKeyStatus()}>Try again</Button>
+        </div>
+      {/if}
     </Section>
 
     <!-- C. Microphone -->
@@ -841,10 +1029,18 @@
           <Select
             label="Input device"
             value={micDeviceId ?? ''}
+            disabled={followSystemDefault}
             options={micDevices.map((d) => ({ value: d.deviceId, label: d.label }))}
             onchange={(value) => (micDeviceId = value)}
           />
-          <Toggle bind:checked={followSystemDefault} label="Follow system default" />
+          <!-- Persisted AND honoured at Start: following the system default
+               means the session pins no device id at all. -->
+          <Toggle
+            bind:checked={followSystemDefault}
+            label="Follow system default"
+            description="Use whichever input macOS is set to, including changes mid-session"
+            onchange={(value) => void patchSettings('audio', { followSystemDefault: value })}
+          />
         </div>
         <MicMeter level={micLevel} />
         <div class="row-actions">
@@ -866,16 +1062,33 @@
         {#if micPartial || micFinal}
           <p class="transcript" class:final={Boolean(micFinal)}>{micFinal || micPartial}</p>
         {/if}
-        {#if micError}
-          <p class="inline-alert" role="alert">{micError}</p>
-        {/if}
+        <!-- §28.3 capture processing. These are the saved audio settings and
+             they are applied to the session's getUserMedia constraints at
+             Start; they were previously hardcoded switches nothing read. -->
         <Disclosure label="Advanced audio processing">
           <div class="toggle-grid">
-            <Toggle checked={true} label="Noise suppression" />
-            <Toggle checked={true} label="Echo cancellation" />
-            <Toggle checked={true} label="Automatic gain control" />
+            <Toggle
+              checked={$settings.audio.noiseSuppression}
+              label="Noise suppression"
+              onchange={(value) => void patchSettings('audio', { noiseSuppression: value })}
+            />
+            <Toggle
+              checked={$settings.audio.echoCancellation}
+              label="Echo cancellation"
+              onchange={(value) => void patchSettings('audio', { echoCancellation: value })}
+            />
+            <Toggle
+              checked={$settings.audio.autoGainControl}
+              label="Automatic gain control"
+              onchange={(value) => void patchSettings('audio', { autoGainControl: value })}
+            />
           </div>
         </Disclosure>
+      {/if}
+      {#if micError}
+        <!-- Outside the permission branches: a failure while asking for access
+             (or while the row still reads 'unknown') has to be visible too. -->
+        <p class="inline-alert" role="alert">{micError}</p>
       {/if}
     </Section>
 
@@ -973,11 +1186,14 @@
           format={(v) => v.toFixed(2)}
         />
         <Slider label="Text column width" bind:value={columnWidthPercent} min={40} max={100} format={(v) => `${v}%`} />
+        <!-- `StageSettings` carries no horizontal offset, so there is nothing
+             to send: shown disabled rather than live-looking and inert. -->
         <Slider
           label="Horizontal offset"
           bind:value={horizontalOffsetPercent}
           min={-20}
           max={20}
+          disabled
           format={(v) => `${v}%`}
         />
         <Slider
@@ -991,8 +1207,17 @@
       <div class="toggle-grid">
         <Toggle bind:checked={phraseHighlight} label="Current phrase highlight" />
         <Toggle bind:checked={pastDimming} label="Past-text dimming" />
-        <Toggle bind:checked={focusFade} label="Top/bottom focus fade" />
+        <Toggle
+          bind:checked={focusFade}
+          label="Top/bottom focus fade"
+          description="Not adjustable yet — the stage applies its own fade"
+          disabled
+        />
       </div>
+      <p class="field-note">
+        Horizontal offset and the focus fade are not part of the stage settings this release sends;
+        both use the stage's own values.
+      </p>
     </Section>
 
     <!-- F. Listener -->
@@ -1083,6 +1308,12 @@
           label={sectionLabel('script', $preflightChecks.script)}
         />
       {/snippet}
+      {#if scriptError}
+        <p class="inline-alert" role="alert">{scriptError}</p>
+        <div class="row-actions">
+          <Button onclick={() => loadScript()}>Try again</Button>
+        </div>
+      {/if}
       <p class="readiness-meta">
         {wordCount.toLocaleString()} spoken words · {formatSpeakingDuration(durationSeconds)} at a
         natural pace

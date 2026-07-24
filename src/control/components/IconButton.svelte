@@ -12,11 +12,30 @@
     active?: boolean;
     danger?: boolean;
     size?: number;
+    /**
+     * Set for a control that opens a popup. A menu button is NOT a toggle
+     * button, so `aria-pressed` is dropped in favour of
+     * `aria-haspopup`/`aria-expanded` — announcing "pressed" for something
+     * that opens a menu is simply the wrong promise.
+     */
+    haspopup?: 'menu' | 'dialog' | 'listbox' | 'true';
+    expanded?: boolean;
     onclick?: (event: MouseEvent) => void;
+    onkeydown?: (event: KeyboardEvent) => void;
   }
 
-  let { icon, label, disabled = false, active = false, danger = false, size = 18, onclick }: Props =
-    $props();
+  let {
+    icon,
+    label,
+    disabled = false,
+    active = false,
+    danger = false,
+    size = 18,
+    haspopup,
+    expanded,
+    onclick,
+    onkeydown,
+  }: Props = $props();
 </script>
 
 <button
@@ -25,10 +44,13 @@
   class:active
   class:danger
   aria-label={label}
-  aria-pressed={active ? 'true' : undefined}
+  aria-pressed={haspopup === undefined && active ? 'true' : undefined}
+  aria-haspopup={haspopup}
+  aria-expanded={haspopup === undefined ? undefined : expanded ? 'true' : 'false'}
   title={label}
   {disabled}
   {onclick}
+  {onkeydown}
 >
   <Icon name={icon} {size} />
 </button>

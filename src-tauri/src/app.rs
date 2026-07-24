@@ -308,8 +308,15 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
     // report or an escape press from a stage generation that is already gone
     // therefore reached control and was acted on, which for escape means
     // tearing down the take that is running now.
+    //
+    // S1: they also used to be relayed under the SAME name the stage emits.
+    // A webview emit is a broadcast, so control's listener fired once directly
+    // from the stage (bypassing the check right below) and once from this
+    // relay. The stage now emits `escape-pressed`/`motion-report`; control
+    // listens only for `escape-requested`/`motion-ack`, which only this code
+    // path produces.
     let handle = app.clone();
-    app.listen_any(events::STAGE_MOTION_ACK, move |event| {
+    app.listen_any(events::STAGE_MOTION_REPORT, move |event| {
         if let Some((gen, value)) = generation(event.payload()) {
             let coordinator = handle.state::<AppCoordinator>();
             if coordinator.stage_event(gen, |_| {}) {
@@ -319,7 +326,7 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
     });
 
     let handle = app.clone();
-    app.listen_any(events::STAGE_ESCAPE_REQUESTED, move |event| {
+    app.listen_any(events::STAGE_ESCAPE_PRESSED, move |event| {
         // Relay to control, which owns session shutdown policy — but only for
         // the stage that is actually live.
         if let Some((gen, value)) = generation(event.payload()) {

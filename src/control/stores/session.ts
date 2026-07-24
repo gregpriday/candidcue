@@ -25,6 +25,7 @@ import type { CommandSettings } from '../../shared/commands';
 import type { FollowingSettings, SessionMode } from '../services/settings-types';
 import { createTrackingDriver, newSessionId, type TrackingDriver } from '../services/session';
 import { VoiceSessionPipeline } from '../services/voice-session';
+import { estimateTranscriptionCostUsd } from '../services/realtime/costEstimator';
 import { isTauriRuntime } from '../services/ipc';
 import { describeError } from '../services/errors';
 import * as stageService from '../services/stage';
@@ -82,6 +83,14 @@ export interface SessionState {
   voiceFollow: boolean;
   connection: 'connected' | 'reconnecting' | 'offline';
   micState: 'live' | 'muted' | 'disconnected';
+  /**
+   * False once the stage window is gone (§62). Everything that publishes to the
+   * stage stands down; the UI must say so rather than keep offering controls
+   * that write into the void.
+   */
+  stageAlive: boolean;
+  /** Running realtime cost estimate — the same number the F.17 summary uses. */
+  estimatedCostUsd: number;
   snapshot: TrackingSnapshot | null;
   transcriptTail: string[];
   outline: OutlineNode[];
@@ -107,6 +116,8 @@ const initial: SessionState = {
   voiceFollow: true,
   connection: 'connected',
   micState: 'live',
+  stageAlive: true,
+  estimatedCostUsd: 0,
   snapshot: null,
   transcriptTail: [],
   outline: [],
@@ -132,7 +143,17 @@ let listenerVisible = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let heartbeatRevision = 0;
 let stageEventUnlisteners: Array<() => void> = [];
+/**
+ * Monotonic token for the stage bridge. `listen()` resolves asynchronously, so
+ * a stop/restart that happens before it settles must be able to prove that the
+ * arriving unlisteners belong to a dead session — otherwise they are installed
+ * with no disposer and keep firing into the NEXT session.
+ */
+let stageBridgeToken = 0;
 let lastRelayAtMs = 0;
+/** The realtime model whose published rate the cost estimate uses. */
+const DEFAULT_COST_MODEL = 'gpt-realtime-whisper';
+let costModel = DEFAULT_COST_MODEL;
 
 /* Smooth-following bridge state (companion §50.1). The v2 producers are
  * landing in parallel; until then the control UI is fed by bridging today's
@@ -177,6 +198,12 @@ export interface StartSessionInput {
   commandSettings?: Partial<CommandSettings>;
   commandsEnabled?: boolean;
   micDeviceId?: string;
+  /** §28.3 capture processing (Settings → Audio / Preflight → Advanced). */
+  audioProcessing?: {
+    echoCancellation?: boolean;
+    noiseSuppression?: boolean;
+    autoGainControl?: boolean;
+  };
   /** §47 follow settings for this session; defaults to the saved settings. */
   following?: FollowingSettings;
 }
@@ -192,6 +219,7 @@ export function startLiveSession(input: StartSessionInput): string {
   listenerVisible = listenerSelection !== null;
   heartbeatRevision = 0;
   lastRelayAtMs = 0;
+  costModel = input.transcription?.model ?? DEFAULT_COST_MODEL;
   sessionStartedAtMs = Date.now();
   lastMotionFrame = null;
   usingWorkerFrames = false;
@@ -291,6 +319,7 @@ export function startLiveSession(input: StartSessionInput): string {
       commandSettings: input.commandSettings,
       commandsEnabled: input.commandsEnabled,
       deviceId: input.micDeviceId,
+      audioProcessing: input.audioProcessing,
       getCursorTokenIndex: () => get(state).snapshot?.tokenIndex ?? 0,
       getPosition: () => {
         const snap = get(state).snapshot;
@@ -402,9 +431,11 @@ export function startLiveSession(input: StartSessionInput): string {
   }
 
   clock = setInterval(() => {
-    state.update((s) =>
-      s.active ? { ...s, elapsedSeconds: Math.floor((Date.now() - s.startedAtMs) / 1000) } : s,
-    );
+    state.update((s) => {
+      if (!s.active) return s;
+      const elapsedSeconds = Math.floor((Date.now() - s.startedAtMs) / 1000);
+      return { ...s, elapsedSeconds, estimatedCostUsd: currentCostUsd(s.mode, elapsedSeconds) };
+    });
   }, 1000);
 
   startStageBridge(sessionId);
@@ -575,6 +606,15 @@ const followActions = {
 function startStageBridge(sessionId: string): void {
   if (!isTauriRuntime() || stageGeneration === 0) return;
 
+  /*
+   * Both of these are captured, never read from module scope inside the
+   * handlers. A handler that outlived its session used to re-read the CURRENT
+   * generation, pass its own `payload.stageGeneration !== stageGeneration`
+   * guard for a different session, and (for `escapeRequested`) stop it.
+   */
+  const generation = stageGeneration;
+  const token = (stageBridgeToken += 1);
+
   // Stage motion acks (§54) feed motion health and §61 degradation.
   stopMotionAcks = subscribeStageMotionAcks((ack) => smoothFollow.ingestStageAck(ack));
 
@@ -584,7 +624,7 @@ function startStageBridge(sessionId: string): void {
     void (async () => {
       const { emitTo } = await import('@tauri-apps/api/event');
       await emitTo('stage', STAGE_EVENT.heartbeat, {
-        stageGeneration,
+        stageGeneration: generation,
         revision: heartbeatRevision,
         sentAtMs: Date.now(),
       });
@@ -595,7 +635,7 @@ function startStageBridge(sessionId: string): void {
     const { listen } = await import('@tauri-apps/api/event');
     const unlisteners = await Promise.all([
       listen<StageEscapePayload>(STAGE_EVENT.escapeRequested, (event) => {
-        if (event.payload.stageGeneration !== stageGeneration) return;
+        if (event.payload.stageGeneration !== generation) return;
         if (event.payload.presses >= 2) {
           stopSession();
           showToast('Session stopped from the stage', 'info');
@@ -604,7 +644,7 @@ function startStageBridge(sessionId: string): void {
         }
       }),
       listen<StageIntentPayload>(STAGE_EVENT.intent, (event) => {
-        if (event.payload.stageGeneration !== stageGeneration) return;
+        if (event.payload.stageGeneration !== generation) return;
         const intent = event.payload.intent;
         if (intent.kind === 'toggle_pause') togglePlayPause();
         else if (intent.kind === 'manual_step') {
@@ -617,25 +657,46 @@ function startStageBridge(sessionId: string): void {
       listen<{ stageGeneration: number; code?: string; message?: string }>(
         CONTROL_EVENT.stageError,
         (event) => {
-          if (event.payload.stageGeneration !== stageGeneration) return;
+          if (event.payload.stageGeneration !== generation) return;
           const code = event.payload.code ?? '';
           if (!/layout|line[-_ ]?map/i.test(`${code} ${event.payload.message ?? ''}`)) return;
           smoothFollow.reportLineMapInvalid(event.payload.message ?? code);
         },
       ),
       listen<{ stageGeneration: number }>(CONTROL_EVENT.stageClosed, (event) => {
-        if (event.payload.stageGeneration !== stageGeneration) return;
-        const s = get(state);
-        if (s.active) showToast('The stage window closed. Stop and restart the session to reopen it.', 'danger');
+        if (event.payload.stageGeneration !== generation) return;
+        handleStageClosed();
       }),
     ]);
+    // The session this bridge belongs to may already be gone.
+    if (token !== stageBridgeToken) {
+      for (const unlisten of unlisteners) unlisten();
+      return;
+    }
     stageEventUnlisteners = unlisteners;
   })().catch(() => {});
 }
 
+/**
+ * §62: the stage window is gone and this session cannot reopen it. Stop
+ * pretending otherwise — the heartbeat stops, directives stop being published,
+ * and the UI is told so it can stand its stage controls down.
+ */
+function handleStageClosed(): void {
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+  stageGeneration = 0;
+  const s = get(state);
+  if (!s.stageAlive) return;
+  state.update((prev) => ({ ...prev, stageAlive: false }));
+  if (s.active) {
+    showToast('The stage window closed. Stop and restart the session to reopen it.', 'danger');
+  }
+}
+
 function sendDirective(directive: StageDirective): void {
   const s = get(state);
-  if (!s.sessionId || stageGeneration === 0) return;
+  if (!s.sessionId || !s.stageAlive || stageGeneration === 0) return;
   if (directive.kind === 'listener') {
     void stageService
       .publishListenerState(s.sessionId, stageGeneration, directive)
@@ -740,6 +801,18 @@ export function moveSentences(delta: number): void {
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
+/**
+ * Absolute move to a token (§15.1 outline navigation). `moveSentences` is a
+ * RELATIVE move and needs a cursor, so it cannot express "put me here" before
+ * the first snapshot exists — which is every moment before Start.
+ */
+export function goToToken(tokenIndex: number): void {
+  if (!get(state).active) return;
+  invalidateSemantics();
+  driver?.moveToToken(Math.max(0, tokenIndex), 'manual');
+  state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
+}
+
 export function restartParagraph(): void {
   invalidateSemantics();
   driver?.restartParagraph();
@@ -752,6 +825,8 @@ export function addTakeMarker(): void {
 
 export function toggleBlankStage(): void {
   const s = get(state);
+  // Nothing to blank once the stage window is gone (§62).
+  if (!s.stageAlive) return;
   const blanked = !s.stageBlanked;
   sendDirective({ kind: 'blank', blanked, keepListener: false });
   state.update((prev) => ({ ...prev, stageBlanked: blanked }));
@@ -976,13 +1051,33 @@ function jumpSection(delta: number): boolean {
  * Stop / teardown
  * ------------------------------------------------------------------------- */
 
+/**
+ * Running realtime cost estimate (§35). ONE source for the Live status-bar
+ * popover and the F.17 summary: they used to compute it differently and
+ * disagreed by an order of magnitude for the same take.
+ *
+ * The live pipeline meters real connected time, which is the correct number
+ * whenever there is one. Without a pipeline there is no billable stream at all
+ * in manual and fixed modes; voice mode without a pipeline (browser dev, no
+ * compiled script) falls back to elapsed minutes at the published rate so the
+ * figure is still of the right order.
+ */
+function currentCostUsd(mode: SessionMode, elapsedSeconds: number): number {
+  if (pipeline) return pipeline.estimatedCostUsd();
+  if (mode !== 'voice') return 0;
+  return estimateTranscriptionCostUsd(elapsedSeconds, costModel).usd;
+}
+
 /** Stop the session and produce the F.17 summary. */
 export function stopSession(): SessionSummary {
   const s = get(state);
-  const minutes = s.elapsedSeconds / 60;
-  const estimatedCostUsd = pipeline
-    ? Math.round(pipeline.estimatedCostUsd() * 100) / 100
-    : Math.round(minutes * 0.6) / 100;
+  // A stop with nothing running must not manufacture an end-of-session
+  // summary — Live opens the F.17 dialog on `!active && summary !== null`.
+  if (!s.active) {
+    stopInternals();
+    return s.summary ?? emptySummary(s);
+  }
+  const estimatedCostUsd = Math.round(currentCostUsd(s.mode, s.elapsedSeconds) * 100) / 100;
   const summary: SessionSummary = {
     durationSeconds: s.elapsedSeconds,
     mode: s.mode,
@@ -1005,6 +1100,21 @@ export function clearSession(): void {
   stopInternals();
   smoothFollow.reset();
   state.set({ ...initial });
+}
+
+/** Shape-complete zero summary for a stop that had no session to stop. */
+function emptySummary(s: SessionState): SessionSummary {
+  return {
+    durationSeconds: 0,
+    mode: s.mode,
+    sectionsReached: 0,
+    retakes: 0,
+    commands: 0,
+    reconnects: 0,
+    estimatedCostUsd: 0,
+    endingLocation: 'Beginning',
+    transcriptSaved: false,
+  };
 }
 
 function locateEnding(s: SessionState): string {
@@ -1047,6 +1157,9 @@ function stopInternals(): void {
   stopSidecarFeed?.();
   stopSidecarFeed = null;
   lastMotionFrame = null;
+  // Invalidate any bridge whose `listen()` calls have not settled yet, then
+  // dispose the ones that have.
+  stageBridgeToken += 1;
   for (const unlisten of stageEventUnlisteners) unlisten();
   stageEventUnlisteners = [];
   compiledScript = null;
@@ -1056,9 +1169,30 @@ function stopInternals(): void {
   listenerVisible = false;
 }
 
+/**
+ * The realtime connection pill (§15.1). Three states, not two: `offline` is a
+ * non-recoverable failure and nothing is retrying, so labelling it
+ * "Reconnecting" in a warning tone tells the operator to wait for a recovery
+ * that is never coming.
+ */
+export function connectionPill(connection: SessionState['connection']): {
+  tone: 'success' | 'warning' | 'danger';
+  label: string;
+} {
+  switch (connection) {
+    case 'connected':
+      return { tone: 'success', label: 'Connected' };
+    case 'reconnecting':
+      return { tone: 'warning', label: 'Reconnecting' };
+    default:
+      return { tone: 'danger', label: 'Disconnected' };
+  }
+}
+
 /** F.11 status line for the top bar and tracking visualization. */
 export const liveStatusLabel = derived(state, (s): string => {
   if (!s.active) return s.summary ? 'Session complete' : 'Ready to start';
+  if (s.connection === 'offline') return 'Disconnected — voice following has stopped';
   if (s.connection === 'reconnecting') return 'Reconnecting — position held';
   if (s.micState === 'disconnected') return 'Microphone disconnected — position held';
   if (s.paused === 'hard') return 'Hard paused — microphone off';

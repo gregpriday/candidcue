@@ -5,6 +5,7 @@
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import { FOCUSABLE_SELECTOR, nextTrapFocus } from './dialog-focus';
 
   interface Props {
     open: boolean;
@@ -23,10 +24,14 @@
   $effect(() => {
     if (open && panel) {
       previousFocus = document.activeElement as HTMLElement | null;
+      // `:not(:disabled)` matches the Tab trap below — focusing a disabled
+      // control silently leaves focus on the body, which is the state that
+      // used to break Escape.
       const target =
         panel.querySelector<HTMLElement>('[data-autofocus]') ??
-        panel.querySelector<HTMLElement>('button, input, select, textarea, a[href]');
-      target?.focus();
+        panel.querySelector<HTMLElement>(FOCUSABLE_SELECTOR) ??
+        panel; // the panel itself is tabindex="-1"
+      target.focus();
       return () => {
         previousFocus?.focus();
       };
@@ -34,30 +39,39 @@
     return undefined;
   });
 
-  function handleKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
-      event.stopPropagation();
-      onclose?.();
-      return;
-    }
-    if (event.key === 'Tab' && panel) {
-      const focusables = [
-        ...panel.querySelectorAll<HTMLElement>(
-          'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]',
-        ),
-      ];
-      if (focusables.length === 0) return;
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+  /**
+   * The handler lives on the window, not the panel. Clicking non-focusable
+   * dialog content (the summary `<dl>`, the shortcuts table, a confirm
+   * paragraph) makes `document.activeElement` the `<body>`, and a
+   * panel-scoped handler then never sees the key: Escape stopped closing and
+   * Tab walked the page behind an `aria-modal="true"` scrim.
+   */
+  $effect(() => {
+    if (!open || !panel) return undefined;
+    const onKeydown = (event: KeyboardEvent): void => {
+      if (!panel) return;
+      // Topmost dialog only, so a stacked dialog does not close its parent.
+      const dialogs = document.querySelectorAll('[role="dialog"][aria-modal="true"]');
+      if (dialogs.length > 0 && dialogs[dialogs.length - 1] !== panel) return;
+
+      if (event.key === 'Escape') {
+        event.stopPropagation();
         event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
+        onclose?.();
+        return;
       }
-    }
-  }
+      if (event.key !== 'Tab') return;
+      const focusables = [...panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)];
+      const active = document.activeElement as HTMLElement | null;
+      const next = nextTrapFocus(focusables, active, event.shiftKey, panel.contains(active));
+      if (next) {
+        event.preventDefault();
+        next.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeydown, true);
+    return () => window.removeEventListener('keydown', onKeydown, true);
+  });
 </script>
 
 {#if open}
@@ -70,7 +84,6 @@
       aria-modal="true"
       aria-labelledby="{uid}-title"
       bind:this={panel}
-      onkeydown={handleKeydown}
     >
       <h2 class="title" id="{uid}-title">{title}</h2>
       <div class="body">
