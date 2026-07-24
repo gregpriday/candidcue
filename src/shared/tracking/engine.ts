@@ -110,6 +110,12 @@ const RETAKE_LEAD_INS = [
 ];
 
 const MAX_CHECKPOINTS = 12;
+/**
+ * How far apart two candidates must be to count as *different readings* rather
+ * than two descriptions of the same one (§31.13, §23.2). Anything closer is the
+ * same place seen through two windows, and the margin between them says nothing.
+ */
+const MATERIALLY_SEPARATE_TOKENS = 10;
 const RETAKE_SUPPORT_REQUIRED = 2;
 const RETAKE_POSITION_TOLERANCE = 6;
 /** Prune `maskedItemIds` against the ledger once it grows past this (§30.3). */
@@ -648,7 +654,9 @@ export class AlignmentEngine {
     for (let k = 1; k < scored.length; k++) {
       const other = scored[k];
       if (other === undefined) continue;
-      if (Math.abs(other.absolutePosition - best.absolutePosition) > 10) {
+      if (
+        Math.abs(other.absolutePosition - best.absolutePosition) > MATERIALLY_SEPARATE_TOKENS
+      ) {
         margin = best.confidence - other.confidence;
         break;
       }
@@ -801,10 +809,159 @@ export class AlignmentEngine {
       return this.commitDecision(best, 'retake', margin);
     }
 
-    // §31.13: two well-separated candidates nearly tied → hold, don't guess.
+    // §31.13/§23.2: two well-separated candidates nearly tied. The policy is a
+    // *preference order*, not a stop — see `resolveAmbiguity`.
     if (margin < profile.ambiguityMargin && best.confidence >= profile.softThreshold) {
-      return this.holdDecision('ambiguous_candidates', all, margin);
+      const resolved = this.resolveAmbiguity(best, all, tail);
+      if (resolved === undefined) {
+        // §23.2 "reduce motion and hold if ambiguity is material": nothing in
+        // the tied set continues the reading, so every reading of this evidence
+        // is a jump, and a repeated phrase may never trigger one.
+        return this.holdDecision('ambiguous_candidates', all, margin);
+      }
+      return this.decideForward(resolved.candidate, resolved.margin, all);
     }
+
+    return this.decideForward(best, margin, all);
+  }
+
+  /**
+   * The §23.2 ambiguity policy: *what to do* when two eligible candidates are
+   * too close to separate on text alone.
+   *
+   * The engine used to hold here unconditionally, which is only half of §23.2 —
+   * the half that says "reduce motion and hold if ambiguity is material". An
+   * exact duplicate phrase is never separable on text, by construction, so that
+   * hold never ends: the presenter reads a refrain, the near copy and the copy
+   * two hundred tokens back score identically, and the engine sits at the
+   * ambiguity margin until it degrades to `searching` — which per Appendix E
+   * does not widen across sections, so the only way out was manual navigation,
+   * live. §23.2 states the missing half first: **prefer continuity**.
+   *
+   * The order implemented here is §23.2's own, read as a filter followed by
+   * tie-breaks:
+   *
+   *   1. *Prefer continuity* — as a hard filter, not a nudge. Only a candidate
+   *      whose matched span **begins within ordinary reading reach of where the
+   *      cursor already is**, and which does not move backward, may win an
+   *      ambiguity. That is also the last clause of §23.2 enforced positively:
+   *      a tie can never authorize a large jump, because nothing far enough
+   *      away to *be* a jump is eligible to win one.
+   *   2. *Prefer the current retake epoch* — evidence belonging to a superseded
+   *      take loses to evidence that does not (§21.4).
+   *   3. *Prefer candidates supported by surrounding content* — more matched
+   *      content, then the longer ordered run: the reading the rest of the tail
+   *      agrees with.
+   *   4. Minimal motion, then confidence, as final tie-breaks — of two readings
+   *      that continue the script equally well, the nearer one moves the stage
+   *      least.
+   *
+   * Returns `undefined` when no tied candidate passes the continuity filter,
+   * which is the genuinely material ambiguity §23.2 asks the engine to hold on.
+   *
+   * The reach is `largeForwardDistance()` — already section-relative through
+   * `scales.ts`, so "ordinary reading reach" means the same thing on a 40-word
+   * clip as on a 4,000-word keynote.
+   */
+  private resolveAmbiguity(
+    best: ScoredCandidate,
+    all: readonly ScoredCandidate[],
+    tail: AlignableTail,
+  ): { candidate: ScoredCandidate; margin: number } | undefined {
+    const profile = this.profile;
+    const cursor = this.committedTokenIndex;
+    const reach = this.largeForwardDistance();
+
+    // `all` is sorted by confidence descending, so everything indistinguishable
+    // from the leader is a prefix of it.
+    let tiedCount = 0;
+    while (tiedCount < all.length) {
+      const candidate = all[tiedCount];
+      if (candidate === undefined) break;
+      if (best.confidence - candidate.confidence >= profile.ambiguityMargin) break;
+      tiedCount++;
+    }
+
+    const spanStart = (candidate: ScoredCandidate): number =>
+      this.index.clampTokenIndex(
+        candidate.window.startTokenIndex + candidate.sequence.scriptStartOffset,
+      );
+
+    // 1. Continuity, as a filter.
+    const continuous: ScoredCandidate[] = [];
+    for (let i = 0; i < tiedCount; i++) {
+      const candidate = all[i];
+      if (candidate === undefined) continue;
+      if (candidate.absolutePosition < cursor) continue; // never backward
+      if (spanStart(candidate) - cursor > reach) continue; // began too far ahead
+      continuous.push(candidate);
+    }
+    let winner = continuous[0];
+    if (winner === undefined) return undefined;
+
+    for (const candidate of continuous.slice(1)) {
+      // 2. Current retake epoch.
+      const staleWinner = this.isStalePostRetakeEvidence(winner.absolutePosition, tail);
+      const staleCandidate = this.isStalePostRetakeEvidence(candidate.absolutePosition, tail);
+      if (staleWinner !== staleCandidate) {
+        if (staleWinner) winner = candidate;
+        continue;
+      }
+      // 3. Support from surrounding content.
+      const support = candidate.sequence.contentMatches - winner.sequence.contentMatches;
+      if (support !== 0) {
+        if (support > 0) winner = candidate;
+        continue;
+      }
+      const run = candidate.sequence.longestOrderedRun - winner.sequence.longestOrderedRun;
+      if (run !== 0) {
+        if (run > 0) winner = candidate;
+        continue;
+      }
+      // 4. Least motion, then confidence. Both are at or ahead of the cursor,
+      // so the nearer position is the smaller move.
+      const motion = candidate.absolutePosition - winner.absolutePosition;
+      if (motion !== 0) {
+        if (motion < 0) winner = candidate;
+        continue;
+      }
+      if (candidate.confidence > winner.confidence) winner = candidate;
+    }
+
+    // The tied set is settled by the policy, so its members are no longer
+    // evidence of doubt. What still is: any *untied* candidate at a materially
+    // different position, which is exactly the §31.13 measurement, retaken
+    // against the winner.
+    let margin = 1;
+    for (let k = tiedCount; k < all.length; k++) {
+      const other = all[k];
+      if (other === undefined) continue;
+      if (
+        Math.abs(other.absolutePosition - winner.absolutePosition) > MATERIALLY_SEPARATE_TOKENS
+      ) {
+        margin = winner.confidence - other.confidence;
+        break;
+      }
+    }
+
+    return { candidate: winner, margin };
+  }
+
+  /**
+   * The forward half of G.4, applied to whichever candidate the decision layer
+   * settled on. Split out of `decideTransition` so that a candidate re-selected
+   * by the §23.2 ambiguity policy goes through *exactly* the same thresholds,
+   * content requirements and anchor requirements as the leader would have —
+   * resolving an ambiguity chooses between candidates, it never admits one.
+   */
+  private decideForward(
+    best: ScoredCandidate,
+    margin: number,
+    all: ScoredCandidate[],
+  ): AlignmentDecision {
+    const profile = this.profile;
+    const distance = best.absolutePosition - this.committedTokenIndex;
+    const isLargeForward = distance > this.largeForwardDistance();
 
     const threshold = this.localThreshold(distance, best);
     const neededMargin = isLargeForward ? profile.minimumBackwardMargin : profile.minimumForwardMargin;

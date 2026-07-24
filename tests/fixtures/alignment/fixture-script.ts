@@ -346,3 +346,54 @@ export function preambleDocument(): TrackingDocument {
     rareWords: ['paneled', 'quarterly', 'harbor', 'auction', 'chairman', 'folder'],
   });
 }
+
+/**
+ * A refrain — one block of four sentences repeated *verbatim*, once early and
+ * once as the closing beat. The shape of every talk with a call-back in it, and
+ * the §23.1/§23.2 shape.
+ *
+ * Three properties are load-bearing, and each is here for a measured reason:
+ *
+ *   - **The refrain is repeated exactly twice.** Every content word in it then
+ *     occurs twice in the whole script, which is what `DocumentIndex` calls
+ *     rare — so both copies carry the distinctive anchors that §31.14 uses to
+ *     decide a candidate is worth trusting when the engine has lost confidence.
+ *   - **Both copies live in the same section.** The section gate is upstream of
+ *     the decision layer and it already refuses a backward edge into a previous
+ *     section, so a refrain spread across headings never reaches the ambiguity
+ *     policy at all. One section is what makes the two copies genuinely
+ *     eligible rivals — and a talk delivered under a single title is the
+ *     ordinary case, not a contrived one.
+ *   - **The refrain is four sentences (~48 tokens), longer than the 30-token
+ *     rolling tail.** Its interior utterances therefore carry *no* surrounding
+ *     context: the tail is entirely duplicated text, so nothing but the
+ *     preference order can decide which copy is being read.
+ *
+ * The verses between the copies are deliberately distinctive, so a failure is
+ * unambiguously about the refrain and not about a script the aligner cannot
+ * follow at all.
+ */
+export const REFRAIN_LINES = `We build the thing in the open and we ship it on a Friday. Nobody signs off on a plan that nobody outside this room has read. The work is finished when somebody else can run it without our help. That is the promise and we intend to keep making it out loud.`;
+
+export const REFRAIN_SOURCE = `# The Whole Talk
+
+${REFRAIN_LINES}
+
+Nobody remembers the quarterly slide deck from a conference they attended reluctantly. The teams we studied described the same frustration in almost identical language. Their tooling assumed a tidy world that none of them actually inhabited. Every planning ritual produced a document nobody consulted again afterwards. The estimates were wrong in the same direction every single quarter. Somebody eventually printed them and pinned them above the coffee machine.
+
+Our researchers followed eleven engineering teams through an ordinary working week. They recorded interruptions the way an ornithologist records migrations across a season. Nobody was asked to estimate anything or to fill in a survey afterwards. The notebooks filled with small observations about hallway conversations and abandoned tabs. One team kept a whiteboard of questions that nobody had answered yet. Another rewrote its onboarding guide twice in a fortnight without telling anyone.
+
+Deployment frequency doubled within a quarter and the rollback rate fell sharply. Reviewers spent their attention on design questions instead of formatting arguments. The archive of abandoned branches shrank to almost nothing by the summer. Support tickets stopped arriving in the shape of confused apologies. The oncall rotation became something people volunteered for again. Nobody has proposed reinstating the old process since the trial ended.
+
+Thank you for the questions you sent ahead of tonight's unusually long session. Everything demonstrated here runs from a public repository with a permissive licence. Bring a laptop tomorrow morning and we will walk through the installation together.
+
+${REFRAIN_LINES}`;
+
+/**
+ * No `rareWords`: rarity here is a property of the script, derived by
+ * `DocumentIndex` from frequency alone. Naming the refrain's words as rare
+ * would be tuning the fixture to the defect.
+ */
+export function refrainDocument(): TrackingDocument {
+  return compileFixtureScript(REFRAIN_SOURCE);
+}

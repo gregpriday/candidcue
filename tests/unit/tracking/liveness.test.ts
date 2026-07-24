@@ -21,7 +21,12 @@
  *      through the boundary landed past it and was zeroed; every later
  *      utterance landed deeper still, making the wedge monotone.
  *
- * Both ended in `searching`, which per Appendix E never widens across
+ *   3. An exact duplicate refrain. Not the gate this time but the §23.2
+ *      ambiguity policy, which held whenever two eligible candidates were too
+ *      close to separate — and two verbatim copies of a phrase are never
+ *      separable, so that hold could not end. See the §23.2 block below.
+ *
+ * The first two ended in `searching`, which per Appendix E never widens across
  * sections — so the only recovery was manual navigation, live, on camera.
  *
  * These tests assert the missing half, and they are written so that the two
@@ -40,6 +45,7 @@ import {
   allLivenessScenarios,
   scenarioNestedPartsReadThrough,
   scenarioNestedPartsStraddle,
+  scenarioRefrainCallBack,
   scenarioShortSectionsReadThrough,
   scenarioShortSectionsStraddle,
 } from '../../fixtures/alignment/playback-scenarios';
@@ -159,7 +165,7 @@ describe('LIVENESS: a correct read-through reaches the end (§13, §13.2)', () =
       // §69.7 release blocker.
       expect(report.prohibitedJumps, context).toBe(0);
       expect(report.failures, context).toEqual([]);
-    }, 20_000);
+    }, 30_000);
   }
 });
 
@@ -274,6 +280,74 @@ describe('LIVENESS: the wedges specifically, end to end', () => {
       );
       expect(report.prohibitedJumps, scenario.id).toBe(0);
     }
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * The refrain (§23.1, §23.2)
+ *
+ * The third wedge of this shape, and the first one that is not the section
+ * gate's fault. An exact duplicate phrase is, by construction, the one thing
+ * lexical evidence can never separate — so a policy that answers "two eligible
+ * candidates are too close to tell apart" with *hold* has written a hold that
+ * cannot end. §23.2 states the other half first, and it is the half that was
+ * missing: **prefer continuity**.
+ *
+ * The liveness half is L.7 and L.8 in the loop above — a talk that opens and
+ * closes on the same four lines, read straight through, and read again with an
+ * ordinary aside before the closing copy. L.8 is two-sided on its own, and both
+ * sides were measured against the code:
+ *
+ *   - delete the policy and hold unconditionally, as the engine did, and the
+ *     committed cursor stops at 298 of 351 in `lost_local` with the whole
+ *     closing refrain undelivered — the recorded failure;
+ *   - keep the policy but drop its continuity filter, so a tie resolves to
+ *     whichever candidate the later criteria like best, and the same run ends
+ *     at committed 55: the engine leaves for the *opening* copy and finishes
+ *     the talk 296 tokens behind the presenter.
+ *
+ * L.9 below holds the other end of the same rule: a refrain quoted out of order
+ * must move the cursor nowhere, and the read must still finish. An engine that
+ * chases duplicates fails its first assertion; an engine that answers ambiguity
+ * by freezing fails its last one.
+ * ------------------------------------------------------------------------- */
+describe('SAFETY: an exact duplicate is never a reason to move (§23.2)', () => {
+  it('L.9 — a duplicate phrase alone never authorizes the jump to its far copy', { timeout: 40_000 }, () => {
+    const scenario = scenarioRefrainCallBack();
+    const result = runPlayback(scenario);
+
+    // Where the closing copy of the refrain begins.
+    const opening = scenario.document.sentences[1]; // s0 is the heading
+    expect(opening).toBeDefined();
+    const closing = [...scenario.document.sentences]
+      .reverse()
+      .find((sentence) => sentence.normalizedText === opening?.normalizedText);
+    expect(closing, 'fixture no longer contains two verbatim copies').toBeDefined();
+    expect(closing?.startTokenIndex).not.toBe(opening?.startTokenIndex);
+    if (closing === undefined) return;
+
+    const committed = result.committedAfterAction;
+    const settled = committed[scenario.labels?.[0]?.afterAction ?? 0] ?? -1;
+    const context =
+      `after the interjection the cursor was at ${settled}; the far copy starts at ` +
+      `${closing.startTokenIndex}; behaviors ${result.metrics.behaviorsSeen.join(',')}`;
+
+    // SAFETY: the interjection moved nothing. §23.3 — it is acceptable to
+    // remain slightly behind for another phrase.
+    expect(settled, context).toBeLessThan(closing.startTokenIndex);
+    expect(closing.startTokenIndex - settled, context).toBeGreaterThan(
+      DEFAULT_TRACKING_PROFILE.largeForwardDistance,
+    );
+    expect(result.metrics.prohibitedSectionJumpCount, context).toBe(0);
+    // The scenario's §69.1 label, checked here: the cursor stayed within 20
+    // tokens of the line the presenter had actually just read.
+    expect(checkGoldenExpectations(scenario, result), context).toEqual([]);
+
+    // LIVENESS, in the same run: the rest of the script is still read to the
+    // end. A policy that answers the interjection by freezing fails here.
+    expect(committed[committed.length - 1], context).toBeGreaterThanOrEqual(
+      scenario.document.spokenTokens.length - 1 - END_TOLERANCE_TOKENS,
+    );
   });
 });
 

@@ -22,6 +22,7 @@ import {
   demoDocument,
   nestedPartsDocument,
   preambleDocument,
+  refrainDocument,
   shortSectionsDocument,
 } from './fixture-script';
 import { TranscriptScripter, type SpeechTurn } from '../transcript-events/builder';
@@ -458,6 +459,135 @@ export function scenarioDemoReadThrough(): PlaybackScenario {
   );
 }
 
+/** Three sentences of ordinary live patter that appear nowhere in any script. */
+const OFF_SCRIPT_ASIDE = [
+  'Sorry give me one second while I find the right slide on this laptop.',
+  'The clicker keeps disconnecting and I never trust hotel audio visual equipment.',
+  'Anyway you can all see the screen now so let me pick this back up.',
+];
+
+export function scenarioRefrainReadThrough(): PlaybackScenario {
+  return scenarioVerbatimReadThrough(
+    'L.7',
+    'A talk whose closing beat repeats its opening refrain word for word.',
+    refrainDocument(),
+  );
+}
+
+/**
+ * The refrain reached after an aside — the §23.2 shape that wedged.
+ *
+ * The presenter breaks off for three sentences of ordinary live patter (a
+ * clicker that will not connect) and then rejoins the script on the closing
+ * refrain. Two things are true at that moment and both are ordinary:
+ *
+ *   - the rolling tail holds the *aside*, not the script, so the refrain
+ *     utterance arrives with no surrounding content to say which copy it is;
+ *   - nothing has matched confidently for several seconds, so §31.14 flattens
+ *     the continuity prior — deliberately, so that global reacquisition stays
+ *     reachable — and with it goes the only thing that had been separating the
+ *     near copy from the far one.
+ *
+ * The two copies then score *identically*, to three decimals, and the ambiguity
+ * policy is the only thing left that can decide between them. Since the refrain
+ * is the last block of the script, an engine that will not decide never reaches
+ * the end of it: the recorded failure was a committed cursor 53 tokens short
+ * with the whole closing refrain undelivered, on camera, with manual navigation
+ * the only way out.
+ *
+ * The aside is *not* what makes this a fair test — it is what makes it a
+ * frequent one. Any lapse in confidence flattens the same prior.
+ */
+export function scenarioRefrainAfterAside(): PlaybackScenario {
+  const document = refrainDocument();
+  const sentences = bodySentenceTexts(document);
+  const refrainOpening = sentences[0] ?? '';
+
+  const turns: TurnSpec[] = [];
+  let copiesSeen = 0;
+  for (const text of sentences) {
+    if (text === refrainOpening) {
+      copiesSeen++;
+      // Break off immediately before the *closing* copy, not the opening one.
+      if (copiesSeen === 2) {
+        for (const line of OFF_SCRIPT_ASIDE) turns.push({ text: line, gapMs: 900 });
+      }
+    }
+    turns.push({ text });
+  }
+  const { actions } = build(turns);
+
+  return {
+    id: 'L.8',
+    description: 'An aside, then the script rejoined on a verbatim closing refrain.',
+    document,
+    actions,
+    // The presenter only ever moves forward: coming back on the refrain is a
+    // continuation, and reading it as a return to the opening copy would be a
+    // false retake of two hundred tokens.
+    forbidBehaviors: ['retake'],
+  };
+}
+
+/**
+ * The safety counterpart to `scenarioRefrainAfterAside`.
+ *
+ * Same aside as L.8 — so the continuity prior is flattened and the tail carries
+ * no script context, exactly the conditions that make two copies of a refrain
+ * score identically — but this time the presenter comes back with the tagline
+ * quoted *out of order*, from the middle of the second verse. The two copies
+ * are now roughly equidistant, one behind and one ahead, and neither of them is
+ * where the presenter actually is.
+ *
+ * §23.2's last clause is unconditional: never use one common repeated phrase as
+ * a large-jump trigger. Nothing in this evidence continues the reading, so the
+ * right answer is to stay where the presenter is and let the next line settle
+ * it (§23.3) — and then finish the script.
+ *
+ * The two assertions pull opposite ways in one run: the interjection must move
+ * the cursor nowhere, *and* the read must still reach the end. An engine that
+ * chases the duplicate fails the first; an engine that answers ambiguity by
+ * freezing fails the second.
+ */
+export function scenarioRefrainCallBack(): PlaybackScenario {
+  const document = refrainDocument();
+  const sentences = bodySentenceTexts(document);
+  const refrainOpening = sentences[0] ?? '';
+  // Four sentences of refrain, then two whole verses: far from both copies.
+  const interjectAfter = 4 + 6;
+
+  const turns: TurnSpec[] = [];
+  let interjection = -1;
+  sentences.forEach((text, index) => {
+    turns.push({ text });
+    if (index === interjectAfter - 1) {
+      for (const line of OFF_SCRIPT_ASIDE) turns.push({ text: line, gapMs: 900 });
+      turns.push({ text: refrainOpening, gapMs: 700 });
+      interjection = turns.length - 1;
+    }
+  });
+  const { actions, endOfTurn } = build(turns);
+
+  return {
+    id: 'L.9',
+    description: 'A refrain quoted out of order after an aside: a duplicate is not a jump trigger.',
+    document,
+    actions,
+    labels: [
+      {
+        afterAction: endOfTurn[interjection] ?? 0,
+        // Where the presenter actually is: the end of the last line they read.
+        intendedTokenIndex: document.sentences[interjectAfter]?.endTokenIndex ?? 0,
+        // Wide enough for the ordinary provisional lead and the ordinary §23.3
+        // lag; far narrower than the distance to either copy of the refrain.
+        toleranceTokens: 20,
+        sectionId: 'h0',
+      },
+    ],
+    forbidBehaviors: ['large_skip', 'retake'],
+  };
+}
+
 /** Every liveness scenario, for the shared assertion loop. */
 export function allLivenessScenarios(): PlaybackScenario[] {
   return [
@@ -467,6 +597,8 @@ export function allLivenessScenarios(): PlaybackScenario[] {
     scenarioShortSectionsStraddle(),
     scenarioPreambleReadThrough(),
     scenarioDemoReadThrough(),
+    scenarioRefrainReadThrough(),
+    scenarioRefrainAfterAside(),
   ];
 }
 
