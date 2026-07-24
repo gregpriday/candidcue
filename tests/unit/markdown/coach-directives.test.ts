@@ -384,15 +384,25 @@ describe('§19.4 directive scope', () => {
 
   /**
    * `- <!-- cc:x --> text` is an HTML *block* in CommonMark: the trailing text
-   * is part of the comment's raw value, not a separate comment. The classifier
-   * requires the whole node to be one comment, so this is not read as a
-   * directive at all rather than half-read as one.
+   * is part of the comment's raw value, not a separate comment. The compiler
+   * used to discard the node whole, which read the directive as nothing at all
+   * *and* silently deleted the presenter's line. Both halves are now split
+   * apart — the directive scopes from the end of the comment, the words are
+   * spoken. See `html-comment-text.test.ts` for the full property set.
    */
-  it('does not half-read a comment that runs into other text', () => {
+  it('reads a comment that runs into other text without eating the text', () => {
     const result = compileSource(
       ['- First item is coached.', '- <!-- cc:coach off --> Second item.', ''].join('\n'),
     );
-    expect(result.coaching?.spans).toEqual([]);
+    expect(spanTexts(result, (s) => s.coachingOff === true)).toEqual(['second item']);
+    expect(result.spokenTokens.map((t) => t.surface)).toEqual([
+      'First',
+      'item',
+      'is',
+      'coached',
+      'Second',
+      'item',
+    ]);
     expect(result.diagnostics).toEqual([]);
   });
 });

@@ -38,6 +38,7 @@ function makeCoachRail(
       fillerRibbon: true,
       gutterMarks: false,
       liveTips: true,
+      deliveryScore: false,
     },
     audioTimeMs: 1000,
     visible: true,
@@ -50,6 +51,7 @@ function makeCoachRail(
     activeTip: null,
     ribbonEvents: [],
     gutterMarks: [],
+    score: null,
     ...overrides,
   };
 }

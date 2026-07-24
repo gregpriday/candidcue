@@ -43,6 +43,7 @@ function railState(overrides: Partial<CoachRailState> = {}): CoachRailState {
       fillerRibbon: true,
       gutterMarks: false,
       liveTips: true,
+      deliveryScore: false,
     },
     audioTimeMs: 1000,
     visible: true,
@@ -55,6 +56,7 @@ function railState(overrides: Partial<CoachRailState> = {}): CoachRailState {
     activeTip: null,
     ribbonEvents: [],
     gutterMarks: [],
+    score: null,
     ...overrides,
   };
 }

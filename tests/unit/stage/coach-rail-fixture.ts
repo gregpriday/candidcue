@@ -42,6 +42,9 @@ export function railState(overrides: Partial<CoachRailState> = {}): CoachRailSta
     activeTip: null,
     ribbonEvents: [],
     gutterMarks: [],
+    // Not scored by default. Tests that care about the score opt in, so a
+    // fixture default can never be mistaken for a real measurement.
+    score: null,
     ...overrides,
   };
 }

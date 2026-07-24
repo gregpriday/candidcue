@@ -103,6 +103,10 @@ describe('§2.1 the rail cannot move the script', () => {
         'reducedMotion',
         'ribbonEvents',
         'schemaVersion',
+        // The delivery score is a judgement about *how* the presenter spoke,
+        // never about where they are. It carries no token, unit or scroll
+        // position, which is why it is allowed across this boundary at all.
+        'score',
         'sessionId',
         'stageRevision',
         'takePassId',

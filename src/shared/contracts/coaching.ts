@@ -581,6 +581,127 @@ export interface CoachRailTip {
 }
 
 // ---------------------------------------------------------------------------
+// Delivery score (Speaking Score report §9, §11.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * The seven scored dimensions and their point weights out of 100
+ * (Speaking Score report §9.5). Weights live here rather than in the engine so
+ * the contract states what the number is made of.
+ */
+export const DELIVERY_SCORE_WEIGHTS = {
+  pace: 18,
+  pausing: 18,
+  variety: 18,
+  emphasis: 14,
+  fluency: 18,
+  clarity: 9,
+  consistency: 5,
+} as const;
+
+export type DeliveryDimension = keyof typeof DELIVERY_SCORE_WEIGHTS;
+
+/**
+ * One dimension's contribution.
+ *
+ * `score` is `null` when the dimension is **unavailable**, which is a different
+ * claim from zero and must never be rendered as one. §9.4 is explicit: if the
+ * confidence-weighted denominator is too small the dimension is unavailable
+ * rather than assumed to be 100 — and by the same argument it is not assumed to
+ * be 0. A speaker who has not yet produced enough voiced audio to judge their
+ * emphasis has not thereby failed at emphasis.
+ */
+export interface DimensionScore {
+  dimension: DeliveryDimension;
+  /** 0–100, or `null` when there is not enough evidence to judge. */
+  score: number | null;
+  /** 0–1 evidence confidence for this dimension. */
+  confidence: number;
+  /** Points this dimension can contribute, from {@link DELIVERY_SCORE_WEIGHTS}. */
+  weight: number;
+}
+
+/**
+ * Speaking Score report §9.7. How far the score may be trusted, and therefore
+ * how the rail is allowed to present it.
+ *
+ * This is deliberately a small ladder rather than a raw number on screen —
+ * §9.7 says confidence "should not be shown as another large number". It
+ * controls presentation (opacity, an ellipsis, a subdued treatment), never a
+ * second figure competing with the score for attention.
+ */
+export type DeliveryScoreConfidenceTier =
+  /** < 0.35 — show "Listening…"; no score, no prompt. */
+  | 'warming_up'
+  /** 0.35–0.55 — subdued/estimated score; only urgent acoustic prompts. */
+  | 'estimated'
+  /** 0.55–0.75 — normal score; conservative prompts. */
+  | 'usable'
+  /** > 0.75 — full coaching policy available. */
+  | 'confident';
+
+/**
+ * Speaking Score report §9, §11.3. The delivery score as the rail renders it.
+ *
+ * ---------------------------------------------------------------------------
+ * WHAT THIS NUMBER MEANS, AND WHAT IT MUST NOT BECOME
+ * ---------------------------------------------------------------------------
+ * §1.2: 100 means the recent delivery sits strongly inside the *configured
+ * target ranges*, not that the speaker is objectively a perfect orator. It is a
+ * live instrument, not a verdict on a person. §1.3 lists what it must never
+ * penalise — a naturally high or low voice, accent or dialect, age- or
+ * disability-related speech characteristics, vocal gender presentation, a quiet
+ * preamp, uncontrollable room noise, or a recogniser that stumbles on an
+ * unusual name. Absolute pitch in hertz is specifically unsuitable; pitch is
+ * judged in semitones against the speaker's own median.
+ *
+ * Recording faults are therefore **not** in this number. §15 keeps delivery and
+ * recording quality apart, and `MicrophoneCoachState` already carries the
+ * latter: a speaker on a bad microphone is not a worse speaker, and scoring
+ * them as one would teach them to distrust the whole rail.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY IT IS DELIBERATELY SLUGGISH
+ * ---------------------------------------------------------------------------
+ * A number that twitches invites the presenter to watch it instead of the
+ * script, and a teleprompter that steals the reader's eyes has failed at its
+ * only job. §11.3 therefore requires: no animation of every sub-point change, a
+ * 2–5 Hz numeric update even though the engine runs at 10 Hz, a cap on visible
+ * movement so it cannot behave like a slot machine, holding through ordinary
+ * pauses, and fading rather than showing a false low score when confidence
+ * collapses. `displayScore` is the value after all of that; `rawScore` is what
+ * the engine actually computed, exposed for diagnostics and the post-take
+ * report so the smoothing can be audited rather than trusted.
+ */
+export interface DeliveryScoreState {
+  /**
+   * 0–100 as the rail should display it, already smoothed and rate-capped, or
+   * `null` while warming up. `null` renders as "Listening…" — never as 0.
+   */
+  displayScore: number | null;
+  /** The unsmoothed computed score, for diagnostics and post-take review. */
+  rawScore: number | null;
+  /** 0–1 overall evidence confidence (§9.7: coverage × quality × stability × calibration). */
+  confidence: number;
+  tier: DeliveryScoreConfidenceTier;
+  /**
+   * Per-dimension breakdown. Not rendered live — §11.2 forbids showing seven
+   * dimension scores during a take — but carried so the post-take report and
+   * diagnostics can explain the number without recomputing it.
+   */
+  dimensions: DimensionScore[];
+  /**
+   * The dimension currently dragging the score down hardest, or `null`. This is
+   * the §9.6 weak-dimension component made legible: it is what makes a
+   * persistent flaw visible instead of averaged away, and it is what a coaching
+   * prompt should usually be about.
+   */
+  weakestDimension: DeliveryDimension | null;
+  /** Direction of travel over the recent window, for a trend indicator. */
+  trend: 'rising' | 'steady' | 'falling';
+}
+
+// ---------------------------------------------------------------------------
 // Ribbon (§10, §27.4)
 // ---------------------------------------------------------------------------
 
@@ -652,6 +773,8 @@ export interface CoachRailModules {
   fillerRibbon: boolean;
   gutterMarks: boolean;
   liveTips: boolean;
+  /** The 0–100 delivery score (Speaking Score report §11.1). */
+  deliveryScore: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -714,6 +837,13 @@ export interface CoachRailState {
   variety: VarietyDisplayState;
   fillers: FillerDisplayState;
   microphone: MicrophoneCoachState;
+  /**
+   * The delivery score. `null` when scoring is disabled for the take — which is
+   * a different state from a score that exists but is still warming up, and the
+   * rail must not conflate them: one means "not measured", the other means "not
+   * yet". Recording faults stay in `microphone` and never move this number.
+   */
+  score: DeliveryScoreState | null;
   /** At most one tip is ever visible (§9). */
   activeTip: CoachRailTip | null;
   /** Oldest first. Bounded by the producer; the stage does not trim. */

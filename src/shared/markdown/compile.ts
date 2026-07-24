@@ -228,6 +228,80 @@ function noteCoachComment(
   into.push({ directive, srcStart, srcEnd });
 }
 
+/** A comment, and any text the author wrote after it, inside one HTML block. */
+interface HtmlBlockSplit {
+  comments: { raw: string; start: number; end: number }[];
+  /** Source range of the text following the comments, or `null` if there is none. */
+  rest: { start: number; end: number } | null;
+}
+
+/**
+ * Split an HTML block into its leading comments and the text after them.
+ *
+ * CommonMark closes an HTML comment block at the *line* containing `-->`, so
+ * `- <!-- note --> and then the line` is a single `html` node whose value holds
+ * the presenter's words. Discarding the node — which is the right thing to do
+ * with a comment — therefore used to delete a line of the script silently: the
+ * author saw it in the editor and never on the glass, with no diagnostic. That
+ * is worse than a compile error, because nothing tells them to look.
+ *
+ * Returns `null` when the block is not a run of complete comments followed by
+ * text, in which case the caller keeps its existing behaviour: an unterminated
+ * `<!--` is not something to guess about, and a node whose value the parser has
+ * rewritten cannot be sliced back out of the source safely.
+ */
+function splitHtmlBlock(
+  source: string,
+  start: number,
+  end: number,
+  value: string,
+): HtmlBlockSplit | null {
+  if (start >= end || end > source.length) return null;
+  if (source.slice(start, end).trim() !== value.trim()) return null;
+
+  const comments: HtmlBlockSplit['comments'] = [];
+  let cursor = start;
+  for (;;) {
+    while (cursor < end && /\s/u.test(source[cursor]!)) cursor += 1;
+    if (!source.startsWith('<!--', cursor)) break;
+    const close = source.indexOf('-->', cursor + 4);
+    if (close < 0 || close + 3 > end) break;
+    comments.push({ raw: source.slice(cursor, close + 3), start: cursor, end: close + 3 });
+    cursor = close + 3;
+  }
+  if (comments.length === 0) return null;
+
+  let restStart = cursor;
+  while (restStart < end && /\s/u.test(source[restStart]!)) restStart += 1;
+  let restEnd = end;
+  while (restEnd > restStart && /\s/u.test(source[restEnd - 1]!)) restEnd -= 1;
+  return { comments, rest: restEnd > restStart ? { start: restStart, end: restEnd } : null };
+}
+
+/**
+ * Whether the text after a comment is itself markup rather than script.
+ *
+ * `<!-- note --> <span>x</span>` is raw HTML, which §22.2 renders as plain text
+ * and never speaks; `<!-- note --> And then the line` is the presenter's words.
+ * The distinction is a tag-open, which is the only thing that made the parser
+ * treat the line as HTML in the first place.
+ */
+function looksLikeMarkup(text: string): boolean {
+  return /<[a-zA-Z/!?]/u.test(text);
+}
+
+/** A `text` node standing in for a source range the parser handed us raw. */
+function syntheticTextNode(source: string, start: number, end: number): MdNode {
+  return {
+    type: 'text',
+    value: source.slice(start, end),
+    position: {
+      start: { line: 1, column: 1, offset: start },
+      end: { line: 1, column: 1, offset: end },
+    },
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* Inline walking                                                       */
 /* ------------------------------------------------------------------ */
@@ -972,17 +1046,55 @@ function appendNestedBlock(
       draft.lastSpokenSrcEnd = -1;
       return;
     case 'html': {
-      // A comment nested in a list item or blockquote still carries directives.
-      const value = (child.value ?? '').trim();
-      if (value.startsWith('<!--')) {
+      // A comment nested in a list item or blockquote still carries directives —
+      // and, because CommonMark swallows the rest of the line into the same
+      // node, may be carrying the presenter's words with it.
+      const split = splitHtmlBlock(state.source, nodeStart(child), nodeEnd(child), child.value ?? '');
+      if (split === null) {
+        const value = (child.value ?? '').trim();
+        if (value.startsWith('<!--')) {
+          noteCoachComment(
+            state.coachDirectives,
+            state.diagnostics,
+            value,
+            nodeStart(child),
+            nodeEnd(child),
+          );
+        }
+        return;
+      }
+      for (const comment of split.comments) {
+        // The *comment's* own range, not the node's: §19.4 scopes a directive
+        // from where it ends, and a range that reached past the words after it
+        // would leave the directive governing nothing.
         noteCoachComment(
           state.coachDirectives,
           state.diagnostics,
-          value,
-          nodeStart(child),
-          nodeEnd(child),
+          comment.raw,
+          comment.start,
+          comment.end,
         );
       }
+      const rest = split.rest;
+      if (rest === null) return;
+      const text = state.source.slice(rest.start, rest.end);
+      if (looksLikeMarkup(text)) {
+        // §22.2: raw HTML is visible and silent, the same as at the top level.
+        state.diagnostics.push({
+          code: 'raw_html_blocked',
+          severity: 'warning',
+          message: 'Raw HTML is not supported; it renders as plain text.',
+          blocking: false,
+          source: { utf16Start: rest.start, utf16End: rest.end },
+          suggestedAction: 'open_source',
+        });
+        pushRenderText(draft, draft.renderNodes, text, []);
+        draft.lastSpokenSrcEnd = -1;
+        return;
+      }
+      // Ordinary script. Walked as text so it tokenizes, renders and carries
+      // inline cues exactly as it would have without the comment in front of it.
+      walkTextValue(ctx, draft.renderNodes, syntheticTextNode(state.source, rest.start, rest.end));
       return;
     }
     case 'definition':
@@ -1171,10 +1283,38 @@ function buildTable(state: CompilerState, node: MdNode): BlockDraft {
   return draft;
 }
 
-function buildHtmlBlock(state: CompilerState, node: MdNode): BlockDraft | null {
+function buildHtmlBlock(state: CompilerState, node: MdNode, spoken: boolean): BlockDraft | null {
   const value = (node.value ?? '').trim();
-  if (value.startsWith('<!--')) {
-    // HTML comment: not rendered, not spoken. §19.4 directives are read here.
+  const split = splitHtmlBlock(state.source, nodeStart(node), nodeEnd(node), node.value ?? '');
+  if (split !== null) {
+    for (const comment of split.comments) {
+      // HTML comment: not rendered, not spoken. §19.4 directives are read here,
+      // and scoped from the end of the comment itself.
+      noteCoachComment(
+        state.coachDirectives,
+        state.diagnostics,
+        comment.raw,
+        comment.start,
+        comment.end,
+      );
+    }
+    const rest = split.rest;
+    // `<!-- note --> and then the line` is one HTML block: the comment goes,
+    // the line stays and is spoken, exactly as if the comment were not there.
+    if (rest === null) return null;
+    const text = state.source.slice(rest.start, rest.end);
+    if (!looksLikeMarkup(text)) {
+      const draft = newDraft('paragraph', rest.start, rest.end);
+      const ctx = makeWalkContext(state, draft, spoken);
+      walkTextValue(ctx, draft.renderNodes, syntheticTextNode(state.source, rest.start, rest.end));
+      draft.spoken = spoken && draft.tokens.length > 0;
+      draft.idText = draft.spokenText || text;
+      return draft;
+    }
+    // Raw markup after the comment: visible, silent, and reported — the same
+    // treatment a raw HTML block gets, applied to the part that is actually raw.
+    return rawHtmlDraft(state, rest.start, rest.end, text);
+  } else if (value.startsWith('<!--')) {
     noteCoachComment(
       state.coachDirectives,
       state.diagnostics,
@@ -1184,7 +1324,17 @@ function buildHtmlBlock(state: CompilerState, node: MdNode): BlockDraft | null {
     );
     return null;
   }
-  const draft = newDraft('paragraph', nodeStart(node), nodeEnd(node));
+  return rawHtmlDraft(state, nodeStart(node), nodeEnd(node), node.value ?? '');
+}
+
+/** §22.2. Raw HTML: rendered as plain text, never spoken, always reported. */
+function rawHtmlDraft(
+  state: CompilerState,
+  srcStart: number,
+  srcEnd: number,
+  text: string,
+): BlockDraft {
+  const draft = newDraft('paragraph', srcStart, srcEnd);
   state.diagnostics.push({
     code: 'raw_html_blocked',
     severity: 'warning',
@@ -1193,10 +1343,10 @@ function buildHtmlBlock(state: CompilerState, node: MdNode): BlockDraft | null {
     source: { utf16Start: draft.srcStart, utf16End: draft.srcEnd },
     suggestedAction: 'open_source',
   });
-  pushRenderText(draft, draft.renderNodes, node.value ?? '', []);
+  pushRenderText(draft, draft.renderNodes, text, []);
   draft.spoken = false;
   draft.layoutHints = { rawSource: true };
-  draft.idText = value.slice(0, 200);
+  draft.idText = text.trim().slice(0, 200);
   return draft;
 }
 
@@ -1359,7 +1509,7 @@ export function compile(source: string, options: CompileOptions): CompiledScript
         break;
       }
       case 'html': {
-        const draft = buildHtmlBlock(state, node);
+        const draft = buildHtmlBlock(state, node, spokenDefault);
         if (draft) state.drafts.push(applyContainer(draft, region));
         break;
       }

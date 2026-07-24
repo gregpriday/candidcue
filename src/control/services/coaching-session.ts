@@ -10,7 +10,8 @@
  *     worklet, and pumps `handleFrame` from it (§5.3);
  *   - feeds finalized transcript from the voice pipeline (fillers + pace);
  *   - pushes {@link CoachingHostState} — visibility, mirror, alignment
- *     confidence, script progress — every tracking tick;
+ *     confidence, script progress, and the §9.4/§14.8 sentence-cursor facts —
+ *     every tracking tick;
  *   - forwards each published {@link CoachRailState} to an injected sink, which
  *     the session store points at the stage transport.
  *
@@ -54,6 +55,7 @@ import {
   resolveScriptDirectives,
 } from '../../shared/coaching/integration';
 import { STRICT_FILLER_FORMS } from '../../shared/coaching/disfluency/filler-lexicon';
+import { DEFAULT_PACE_PROFILE } from '../../shared/coaching/pace/pace-analyzer';
 import type { CoachObserverTransport } from '../../shared/coaching/coach/luna-observer';
 import type {
   AuthoredSpanContext,
@@ -68,6 +70,34 @@ import {
   type CoachingAnalyzerNotice,
 } from './coaching-analyzer';
 import type { MediaStreamLike } from './audio';
+
+/**
+ * §14.8. How long an observed sentence boundary keeps a pace tip eligible, ms.
+ *
+ * §14.8 asks for "at least one sentence boundary has passed" alongside "pace
+ * has remained above the fast threshold for at least 6 seconds". The two
+ * clauses describe the *same* stretch of delivery: the point is that the
+ * sustained reading spanned a boundary rather than being one long clause taken
+ * at a gallop. So the window is the tip's own persistence requirement, read off
+ * the profile the pace lane actually runs with rather than restated as a
+ * number here — a boundary older than the evidence window is not part of the
+ * evidence the tip rests on.
+ *
+ * Deliberately *not* a latch that stays set for the rest of the take: that
+ * would make the gate read "not the very first sentence", which is a gate in
+ * name only.
+ */
+const BOUNDARY_EVIDENCE_WINDOW_MS = Math.max(
+  DEFAULT_PACE_PROFILE.fastTipPersistenceMs,
+  DEFAULT_PACE_PROFILE.slowTipPersistenceMs,
+);
+
+/**
+ * §9.4. How far into a sentence still counts as a low-load moment: "during the
+ * first third of a new sentence", which also covers "immediately after a
+ * sentence boundary" — the cursor's first token of a sentence is both.
+ */
+const SAFE_MOMENT_SENTENCE_FRACTION = 1 / 3;
 
 /** A finalized transcript item, in the shape the voice pipeline already emits. */
 export interface CoachingTranscriptItem {
@@ -126,6 +156,25 @@ export interface CoachingSessionDeps {
 }
 
 /**
+ * §9.4/§14.8. Sentence id → inclusive spoken-token range, from the compiler.
+ *
+ * `null` compiled script yields an empty map, which reads as "no sentence
+ * geometry": no safe moment is ever claimed, rather than one being guessed.
+ */
+function buildSentenceRanges(
+  compiled: CompiledScript | null | undefined,
+): ReadonlyMap<string, { start: number; end: number }> {
+  const ranges = new Map<string, { start: number; end: number }>();
+  for (const sentence of compiled?.sentences ?? []) {
+    ranges.set(sentence.id, {
+      start: sentence.startTokenIndex,
+      end: sentence.endTokenIndex,
+    });
+  }
+  return ranges;
+}
+
+/**
  * Owns the orchestrator, the analyzer graph, and the host-state feed for one
  * live session. Constructed at session start and disposed on stop.
  */
@@ -144,10 +193,27 @@ export class CoachingSessionController {
   private readonly directives: ScriptDirectiveMap;
   /** §19.5. The persisted settings with the script's front matter applied. */
   private readonly settings: CoachingSettings;
+  /**
+   * §9.4/§14.8. Authored sentence id → its inclusive spoken-token range.
+   *
+   * The tracking snapshot reports the sentence the cursor is in and the token
+   * index inside it; the *shape* of that sentence is a fact of the compiled
+   * script, so it is read once here rather than asked of the engine.
+   */
+  private readonly sentenceRanges: ReadonlyMap<string, { start: number; end: number }>;
+  /** The sentence the cursor was in at the previous snapshot, or `null`. */
+  private previousSentenceId: string | null = null;
+  /** Audio-clock time of the last boundary the presenter actually crossed. */
+  private boundaryCrossedAtMs: number | null = null;
+  /** §17.9. Forward sentence boundaries crossed this take pass. */
+  private completedSentences = 0;
+  /** The epoch the previous snapshot was read under (§5.4). */
+  private lastTrackingEpoch = 0;
 
   constructor(deps: CoachingSessionDeps) {
     this.deps = deps;
     this.totalUnits = deps.compiled?.spokenTokens.length ?? 0;
+    this.sentenceRanges = buildSentenceRanges(deps.compiled);
 
     // §19.5 first, then §19.4: an authored pace directive is judged against the
     // band the session will actually run with, which the front matter may have
@@ -243,6 +309,80 @@ export class CoachingSessionController {
     };
   }
 
+  /**
+   * §9.4 / §14.8 / §17.9. The three facts that fall out of watching the
+   * alignment cursor move through the script's sentences.
+   *
+   * The tracking engine reports which sentence the cursor is in, not that a
+   * boundary went past; "a boundary passed" is the *transition* between two
+   * snapshots, and it is only real when the presenter actually read across it:
+   *
+   * - both sides must be known sentences. Acquiring the cursor for the first
+   *   time, or losing it, is not a boundary;
+   * - the cursor must have moved **forward**. A sentence change with the cursor
+   *   standing still or going backwards is a re-anchor, not delivery;
+   * - the engine must not be reacquiring, and the epoch must not have moved. A
+   *   command jump, a retake, or a re-anchor relocates the cursor across any
+   *   number of boundaries the presenter never spoke, and §5.4 says evidence
+   *   taken across that seam describes a different performance.
+   *
+   * The last clause is what keeps §14.8 honest in the direction that matters:
+   * the boundary at the end of the sentence the presenter is *currently in* has
+   * not been crossed yet, and nothing here reports it as though it had.
+   */
+  private observeSentenceCursor(tracking: CoachingTrackingState): {
+    safeMoment: boolean;
+    sentenceBoundaryPassed: boolean;
+    completedSentences: number;
+  } {
+    const spanId = tracking.activeScriptSpanId;
+    const nowMs = this.analyzerNowMs;
+
+    const epochMoved = tracking.trackingEpoch !== this.lastTrackingEpoch;
+    this.lastTrackingEpoch = tracking.trackingEpoch;
+    if (epochMoved) this.boundaryCrossedAtMs = null;
+
+    const crossed =
+      !epochMoved &&
+      !tracking.reacquiring &&
+      spanId !== null &&
+      this.previousSentenceId !== null &&
+      spanId !== this.previousSentenceId &&
+      tracking.tokenIndex > this.lastTokenIndex;
+    if (crossed) {
+      this.boundaryCrossedAtMs = nowMs;
+      this.completedSentences += 1;
+    }
+    this.previousSentenceId = spanId;
+
+    return {
+      safeMoment: !tracking.reacquiring && this.inOpeningThird(spanId, tracking.tokenIndex),
+      sentenceBoundaryPassed:
+        this.boundaryCrossedAtMs !== null &&
+        nowMs - this.boundaryCrossedAtMs <= BOUNDARY_EVIDENCE_WINDOW_MS,
+      completedSentences: this.completedSentences,
+    };
+  }
+
+  /**
+   * §9.4 second bullet. Whether the cursor sits in the opening third of its
+   * sentence — the low-load moment a tip is allowed to land in.
+   *
+   * A sentence the compiled script does not know, or a cursor outside the
+   * sentence it claims to be in, is not a safe moment: §9.4 is an assertion
+   * about where the presenter is, and we would be guessing.
+   */
+  private inOpeningThird(spanId: string | null, tokenIndex: number): boolean {
+    if (spanId === null) return false;
+    const range = this.sentenceRanges.get(spanId);
+    if (range === undefined) return false;
+    const length = range.end - range.start + 1;
+    if (length <= 0) return false;
+    const offset = tokenIndex - range.start;
+    if (offset < 0 || offset >= length) return false;
+    return offset < Math.max(1, Math.ceil(length * SAFE_MOMENT_SENTENCE_FRACTION));
+  }
+
   private handleFrames(frames: AudioFrameFeatures[]): void {
     if (this.disposed) return;
     for (const frame of frames) {
@@ -262,6 +402,7 @@ export class CoachingSessionController {
    */
   setTrackingState(tracking: CoachingTrackingState): void {
     if (this.disposed) return;
+    const cursor = this.observeSentenceCursor(tracking);
     this.lastTokenIndex = tracking.tokenIndex;
     const scriptProgress = this.scriptProgressFrom(tracking);
     try {
@@ -270,6 +411,8 @@ export class CoachingSessionController {
         reacquiring: tracking.reacquiring,
         commandActive: tracking.commandActive,
         activeScriptSpanId: tracking.activeScriptSpanId,
+        // §9.4 / §14.8 / §17.9. Everything the cursor's sentence tells us.
+        ...cursor,
         // §19.4. The authored suppressions for the span the presenter is on.
         ...this.spanDirectives(tracking.activeScriptSpanId),
         // §5.4/§20.5. The real epoch, pushed every snapshot. Safe to propagate
@@ -401,6 +544,11 @@ export class CoachingSessionController {
   /** §11.3. Start a new take pass. Nothing crosses the boundary. */
   beginTakePass(takePassId: string): void {
     if (this.disposed) return;
+    // §11.3. The sentence history is take-pass state: the boundaries of the
+    // previous pass were crossed in a performance this one does not inherit.
+    this.previousSentenceId = null;
+    this.boundaryCrossedAtMs = null;
+    this.completedSentences = 0;
     try {
       this.orchestrator.beginTakePass(takePassId, this.analyzerNowMs);
       this.analyzer?.reset();

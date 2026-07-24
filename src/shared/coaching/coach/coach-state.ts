@@ -15,6 +15,7 @@
  */
 import type {
   CoachGutterMark,
+  DeliveryScoreState,
   CoachRailMode,
   CoachRailModules,
   CoachRailState,
@@ -51,6 +52,12 @@ export interface CoachRailInputs {
   /** §11 marks for already-read lines. Ignored unless the mode enables them. */
   gutterMarks?: readonly CoachGutterMark[];
   /**
+   * The delivery score. Omitted or `null` means scoring is not running for this
+   * take, which the rail must not confuse with a score that exists and is still
+   * warming up.
+   */
+  score?: DeliveryScoreState | null;
+  /**
    * §6.6 custom-mode module toggles. Required when `mode` is `'custom'`;
    * ignored otherwise, because the named modes define their own flags.
    */
@@ -68,6 +75,7 @@ const ALL_OFF: CoachRailModules = {
   fillerRibbon: false,
   gutterMarks: false,
   liveTips: false,
+  deliveryScore: false,
 };
 
 /**
@@ -103,6 +111,7 @@ export function resolveRailModules(
         fillerCount: true,
         fillerRibbon: true,
         liveTips: true,
+        deliveryScore: true,
       };
     // §6.4: everything in Coach plus the numeric score, sparkline and marks.
     case 'studio':
@@ -117,6 +126,7 @@ export function resolveRailModules(
         fillerRibbon: true,
         gutterMarks: true,
         liveTips: true,
+        deliveryScore: true,
       };
     // §6.6: start from nothing and enable exactly what the user chose. Starting
     // from Coach would silently re-enable a module the user had turned off.
@@ -194,6 +204,9 @@ export class CoachRailStateBuilder {
       gutterMarks: modules.gutterMarks
         ? (inputs.gutterMarks ?? []).filter((mark) => mark.takePassId === inputs.takePassId)
         : [],
+      // Withheld rather than zeroed when the mode disables it: a score of 0 is
+      // a judgement, and "not scored" is not a judgement.
+      score: modules.deliveryScore ? (inputs.score ?? null) : null,
     };
   }
 }
