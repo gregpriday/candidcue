@@ -79,6 +79,16 @@ export interface CoachingTrackingState {
   commandActive: boolean;
   /** Authored span the presenter is on, or `null`. Never a token id (§26.5). */
   activeScriptSpanId: string | null;
+  /**
+   * §5.4. The tracking engine's semantic epoch — bumped by a command jump, a
+   * retake, or a re-anchor.
+   *
+   * This is what makes §23.1's staleness rules fireable at all: without it the
+   * orchestrator's epoch never moves, so an in-flight Luna answer computed
+   * against the pre-jump position can still be applied after the jump, and a
+   * candidate queued before it can still become a tip.
+   */
+  trackingEpoch: number;
 }
 
 export interface CoachingSessionDeps {
@@ -214,6 +224,11 @@ export class CoachingSessionController {
         reacquiring: tracking.reacquiring,
         commandActive: tracking.commandActive,
         activeScriptSpanId: tracking.activeScriptSpanId,
+        // §5.4/§20.5. The real epoch, pushed every snapshot. Safe to propagate
+        // now that the disfluency lane distinguishes a jump from a new take
+        // pass: an epoch change drops queued and in-flight coaching state and
+        // leaves the presenter's cumulative filler total standing.
+        trackingEpoch: tracking.trackingEpoch,
         ...(scriptProgress ? { scriptProgress } : { scriptProgress: null }),
       });
       // Drive the schedule so a silent stretch still ages tips and publishes.
@@ -374,6 +389,18 @@ export class CoachingSessionController {
     return this.orchestrator.lastRailState();
   }
 
+  /**
+   * Diagnostics and test seam: the host state the orchestrator is reading.
+   *
+   * Read-only, and mirrors the orchestrator's own `hostState()`. Most of what
+   * this module pushes in is observable on the published rail; `trackingEpoch`
+   * is not, and "did the epoch actually reach the orchestrator" is the one
+   * question a §23.1 staleness bug turns on.
+   */
+  hostState(): Readonly<CoachingHostState> {
+    return this.orchestrator.hostState();
+  }
+
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
@@ -414,7 +441,9 @@ export class CoachingSessionController {
       remainingSpokenWordEquivalents: Math.max(0, this.totalUnits - cursor),
       confidence: tracking.alignmentConfidence,
       observedAtMs: this.analyzerNowMs,
-      trackingEpoch: this.orchestrator.hostState().trackingEpoch,
+      // The epoch this cursor belongs to is the one it was read under, not the
+      // one the orchestrator happens to still be holding (§14.10, §5.4).
+      trackingEpoch: tracking.trackingEpoch,
       reacquiring: tracking.reacquiring,
     };
   }

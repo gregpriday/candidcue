@@ -149,6 +149,50 @@ describe('coaching session controller — frame → orchestrator → stage sink'
     await controller.dispose();
   });
 
+  /**
+   * §5.4/§20.5. The controller used to omit `trackingEpoch` from the host state
+   * it pushes, which bought a working filler count at the price of every
+   * staleness rule in §23.1: the orchestrator's epoch never moved, so an
+   * in-flight Luna answer computed against the pre-jump position could still be
+   * applied after a re-anchor. The epoch is propagated now, and the count is
+   * preserved by the disfluency lane rather than by not telling it.
+   *
+   * No frames are pushed on purpose: this is the documented degraded path where
+   * the analyzer never attached and filler coaching runs on the transcript
+   * alone (§16.5 — "a rail that reads FILLERS 0 through a take full of them
+   * because the audio worklet never started is a silent lie").
+   */
+  it('propagates the tracking epoch without zeroing the filler count (§5.4)', async () => {
+    const published: CoachRailState[] = [];
+    const { controller } = makeController('coach', published);
+
+    const tracking = {
+      tokenIndex: 12,
+      alignmentConfidence: 0.9,
+      reacquiring: false,
+      commandActive: false,
+      activeScriptSpanId: 'span-1',
+    };
+
+    controller.noteFinalTranscript({
+      itemId: 'item-1',
+      commitSequence: 1,
+      transcript: 'so um we should start with the second section',
+    });
+    controller.setTrackingState({ ...tracking, trackingEpoch: 3 });
+    expect(controller.hostState().trackingEpoch).toBe(3);
+    const before = published[published.length - 1];
+    expect(before?.fillers.confirmedCount).toBe(1);
+
+    // A command jump / re-anchor: the engine's epoch moves inside the take.
+    controller.setTrackingState({ ...tracking, trackingEpoch: 4 });
+    expect(controller.hostState().trackingEpoch).toBe(4);
+    // The epoch reached the orchestrator *and* the presenter's total survived.
+    expect(controller.lastRailState()?.fillers.confirmedCount).toBe(1);
+
+    await controller.dispose();
+  });
+
   it('carries the display toggle into the published snapshot (§27)', async () => {
     const published: CoachRailState[] = [];
     const { controller, analyzer } = makeController('coach', published);

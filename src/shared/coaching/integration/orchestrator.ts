@@ -310,10 +310,13 @@ export class CoachingOrchestrator {
     this.proposedEvidenceIds.clear();
     this.pendingCandidates = [];
     this.lastObservedSignature = '';
-    // The disfluency lane's own contract: "A new take pass or a new tracking
-    // epoch invalidates everything held."
+    // The disfluency lane gets the *narrow* reset, not `setTake`. An epoch bump
+    // is a command jump, a retake or a re-anchor — all of them inside one take
+    // pass — so it invalidates the lane's position-sensitive state and leaves
+    // the per-take-pass filler total alone. Routing this through `setTake`
+    // zeroed the number on the presenter's rail every time they jumped.
     this.guard.runVoid('disfluency', 'epoch', this.nowMs, () =>
-      this.lanes.fillers.setTake(this.takeIdentity(), this.nowMs),
+      this.lanes.fillers.handleEpochChange(this.takeIdentity(), this.nowMs),
     );
   }
 

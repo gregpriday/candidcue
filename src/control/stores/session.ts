@@ -891,6 +891,11 @@ function feedCoachingTracking(snapshot: TrackingSnapshot): void {
     // §26.5: the authored SPAN the presenter is on, never a token id. The
     // aligner reports the sentence; that is the coarsest honest span we have.
     activeScriptSpanId: snapshot.sentenceId || null,
+    // §5.4: the engine's semantic epoch, which only reaches the control layer
+    // on the v2 motion frame. It bumps on a command jump, a retake and a
+    // re-anchor, and it is what lets the coaching subsystem disown evidence
+    // taken against a position the engine has since abandoned.
+    trackingEpoch: lastMotionFrame?.epoch ?? 0,
   });
 }
 
@@ -906,13 +911,15 @@ function handleSnapshot(snapshot: TrackingSnapshot): void {
       ? s.blocksSeen
       : [...s.blocksSeen, snapshot.blockId],
   }));
-  // §5.4/§14.10: the coaching subsystem reads the alignment cursor and the
-  // active span from the same snapshot. It is advisory — nothing it does here
-  // reaches back into motion (§2.1).
-  feedCoachingTracking(snapshot);
   // Feed the smooth-following store. The worker's own SemanticMotionFrames
   // take precedence; this bridge only covers drivers that emit none.
-  if (usingWorkerFrames) return relaySnapshot(snapshot);
+  if (usingWorkerFrames) {
+    // §5.4/§14.10: the coaching subsystem reads the alignment cursor and the
+    // active span from the same snapshot. It is advisory — nothing it does here
+    // reaches back into motion (§2.1).
+    feedCoachingTracking(snapshot);
+    return relaySnapshot(snapshot);
+  }
   const frame = motionFrameFromSnapshot(snapshot, {
     sessionId: snapshot.sessionId,
     sessionGeneration,
@@ -923,6 +930,9 @@ function handleSnapshot(snapshot: TrackingSnapshot): void {
     previous: lastMotionFrame,
   });
   lastMotionFrame = frame;
+  // Fed *after* the bridged frame so the coaching lane reads this snapshot's
+  // epoch rather than the previous one.
+  feedCoachingTracking(snapshot);
   smoothFollow.ingestMotionFrame(frame);
   publishSemanticFrame(frame);
   relaySnapshot(snapshot);

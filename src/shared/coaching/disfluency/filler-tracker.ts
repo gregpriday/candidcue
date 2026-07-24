@@ -132,7 +132,15 @@ export class FillerTracker {
     this.precisionEnabled = options.precisionEnabled ?? false;
   }
 
-  /** A new take pass or a new tracking epoch invalidates everything held. */
+  /**
+   * A new take pass invalidates everything held, `confirmedCount` included.
+   *
+   * A take pass is a new *performance*: the presenter starts again, and the
+   * number on the tile is a total for the pass they are in. Nothing crosses
+   * the boundary (§11.3).
+   *
+   * A tracking-epoch change is **not** this. See {@link handleEpochChange}.
+   */
   setTake(take: TakeIdentity, takeStartAudioMs: number): void {
     this.take = take;
     this.takeStartAudioMs = takeStartAudioMs;
@@ -145,6 +153,63 @@ export class FillerTracker {
     this.hadFillersEarlier = false;
     this.revisedEventIds.clear();
     this.detector.reset();
+  }
+
+  /**
+   * §5.4 / §20.5 / §23.1. The tracking epoch moved *within* a take pass — a
+   * command jump ("go to the conclusion"), a retake, or a re-anchor.
+   *
+   * This used to be routed through {@link setTake}, and that was a real defect:
+   * an epoch bump is a change of *position*, not of performance. The presenter
+   * did not start a new take, so their cumulative filler total must not drop to
+   * zero on the rail mid-take — the same failure the {@link trim} comment
+   * describes for age-expiry, arriving by a different door.
+   *
+   * So the two concerns are separated here. What is cleared is what a *jump*
+   * makes untrue; what is kept is what the presenter actually did.
+   *
+   * **Cleared**
+   * - `openers` — the only state holding a baked-in script-alignment verdict.
+   *   Each {@link OpenerObservation} carries `authored`, decided against the
+   *   alignment the engine has just disowned, and §15.3 may only coach an
+   *   opener run that is *confidently absent from the script*. That claim has
+   *   to be re-earned after the jump, so the sequence starts again.
+   *
+   * **Kept**
+   * - `detections` — the count itself, and every past "um" is still a thing the
+   *   presenter said. This is the whole point of the method.
+   * - `hadFillersEarlier` — a per-take-pass cumulative fact of exactly the same
+   *   class as `detections` (and re-derived from them at the next publish).
+   * - `speechIntervals` / `vadObservedUpToMs` — VAD observations on the *audio*
+   *   clock. A jump does not un-observe audio, and dropping the watermark would
+   *   put {@link hasCredibleTiming} back on its permissive branch across audio
+   *   the VAD has already scanned — re-opening the hallucinated-filler window
+   *   {@link noteVadObservedThrough} exists to close.
+   * - `recentTokens` — an audio-clock ruler for §16.3.4 placement with no
+   *   script content in it. {@link applyPrecisionResult} already refuses any
+   *   result from another epoch, so clearing these could only degrade the
+   *   placement of a chunk that straddles the jump.
+   * - `revisedEventIds` — a pending demotion notification is a fact about an
+   *   event, not about a position. The integrator's epoch handling happens to
+   *   cancel everything those ids would have cancelled; dropping the queue here
+   *   would quietly make that coincidence load-bearing.
+   * - the detector's contextual repetition history — §16.4's repetition gate
+   *   measures a delivery habit over the last 60 s of audio. Clearing it would
+   *   make a jump suppress contextual filler detection for a minute afterwards.
+   */
+  handleEpochChange(take: TakeIdentity, atAudioMs: number): void {
+    // A different take pass is a different performance whatever the epoch says.
+    // Delegating rather than trusting the caller means this method can never
+    // become the door a new take pass carries its predecessor's total through.
+    if (take.takePassId !== this.take.takePassId) {
+      this.setTake(take, atAudioMs);
+      return;
+    }
+    // §23.1: evidence stamped from here on belongs to the new epoch, and the
+    // precision/Luna staleness guards compare against this value.
+    this.take = take;
+    this.openers = [];
+    this.trim(atAudioMs);
   }
 
   setPrecisionEnabled(enabled: boolean): void {
@@ -573,7 +638,8 @@ export class FillerTracker {
     // Detections are *not* trimmed by age: `confirmedCount` is a per-take-pass
     // total, and expiring events would quietly walk the presenter's number
     // backwards on a long take. They are bounded by count instead, and cleared
-    // wholesale by `setTake`.
+    // wholesale by `setTake` — and *only* by `setTake`, which is why
+    // `handleEpochChange` exists as a separate, narrower reset.
     if (this.detections.size > MAX_RETAINED_DETECTIONS) {
       const ordered = [...this.detections.entries()].sort(
         (a, b) => a[1].event.audioStartMs - b[1].event.audioStartMs,

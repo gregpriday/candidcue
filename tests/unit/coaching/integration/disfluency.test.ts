@@ -99,6 +99,50 @@ describe('coaching integration — disfluency', () => {
     expect(corrected?.activeTip).toBeNull();
   });
 
+  it('keeps the filler count across a tracking-epoch change while dropping the coaching state (§5.4, §20.5)', () => {
+    const harness = new TakeHarness();
+    // §16.7's `filler_cluster` pattern: three inside twenty seconds.
+    harness.say('um we should start here', 2_000);
+    harness.say('um the next part matters', 2_000);
+    harness.say('um and then we finish', 2_000);
+
+    const before = harness.latest();
+    expect(before?.fillers.confirmedCount).toBe(3);
+    expect(before?.activeTip?.code).toBe('USE_SILENT_PAUSE');
+    expect(harness.orchestrator.telemetry().activeCandidates.length).toBeGreaterThan(0);
+
+    // "Go to the conclusion." The presenter's position was re-established
+    // inside the same take pass — they did not start a new take.
+    harness.orchestrator.setHostState({ trackingEpoch: 1 });
+
+    // Everything the epoch bump is *supposed* to invalidate is gone, before a
+    // single further aggregation pass runs.
+    const lanes = harness.orchestrator.laneBundle();
+    expect(lanes.policy.getActiveTip()).toBeNull();
+    expect(harness.orchestrator.telemetry().activeCandidates).toEqual([]);
+
+    // …and the presenter's cumulative total is untouched, on the lane and on
+    // the glass. Routing this through `setTake` put both at zero.
+    expect(lanes.fillers.events().filter((event) => event.confidence === 'confirmed')).toHaveLength(
+      3,
+    );
+    harness.settle(400);
+    expect(harness.latest()?.fillers.confirmedCount).toBe(3);
+  });
+
+  it('zeroes the count on a new take pass, which an epoch change is not (§11.3)', () => {
+    const harness = new TakeHarness();
+    harness.say('um we should start here', 2_000);
+    harness.say('um the next part matters', 2_000);
+    expect(harness.latest()?.fillers.confirmedCount).toBe(2);
+
+    // A genuinely new performance. Nothing crosses the boundary.
+    harness.orchestrator.beginTakePass('take-2', harness.audioMs);
+    harness.settle(400);
+    harness.orchestrator.tick();
+    expect(harness.latest()?.fillers.confirmedCount).toBe(0);
+  });
+
   it('feeds the VAD watermark every frame, so a filler outside speech is not confirmed', () => {
     const harness = new TakeHarness();
     // Speak, then a long silence the VAD scans and reports as silent, then a

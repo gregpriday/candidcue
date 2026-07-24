@@ -198,6 +198,35 @@ describe('coaching integration — Luna', () => {
     expect(harness.published.every((state) => state.activeTip === null)).toBe(true);
   });
 
+  it('disowns the in-flight answer without walking the filler count back (§20.5)', async () => {
+    // The two halves of an epoch change, asserted together, because fixing one
+    // by breaking the other is exactly what happened before: the count was kept
+    // by never propagating the epoch (so nothing was ever disowned), and the
+    // epoch was propagated by clearing the count.
+    const transport = new ScriptedTransport(materialityDecision, true);
+    const harness = new TakeHarness({ deps: { lunaTransport: transport } });
+    harness.say('um we should start here', 2_000);
+    harness.say('um the next part matters', 2_000);
+    const span = harness.say(prose(15), 6_000);
+    harness.orchestrator.noteFidelitySpan(
+      paraphrasedSpan(span.startMs, span.endMs, harness.orchestrator.hostState().takePassId),
+    );
+    harness.settle(1_200);
+    expect(transport.requests.length).toBeGreaterThan(0);
+    expect(harness.latest()?.fillers.confirmedCount).toBe(2);
+
+    harness.orchestrator.setHostState({ trackingEpoch: 1 });
+    transport.releaseHeld();
+    await harness.orchestrator.lunaObserver()?.settle();
+    harness.settle(400);
+
+    // The answer was computed against the pre-jump position and is never
+    // applied…
+    expect(harness.orchestrator.diagnostics().lunaResponses).toBe(0);
+    // …while the number the presenter has been reading all take stands.
+    expect(harness.latest()?.fillers.confirmedCount).toBe(2);
+  });
+
   it('does not call Luna for purely local candidates (§20.2)', async () => {
     const transport = new ScriptedTransport(materialityDecision);
     const harness = new TakeHarness({ deps: { lunaTransport: transport } });

@@ -514,3 +514,107 @@ describe('take pass isolation (§23.1)', () => {
     expect(tracker.peekDisplayState(24_000).confirmedCount).toBe(0);
   });
 });
+
+/**
+ * The distinction this whole module turns on: a new take pass is a new
+ * *performance*, and a tracking-epoch bump is a new *position*.
+ *
+ * A command jump ("go to the conclusion"), a retake and a re-anchor all bump
+ * the epoch **inside one take pass**. Routing that through `setTake` cleared
+ * `detections` — and `confirmedCount` is derived from `detections` — so the
+ * presenter's cumulative total dropped to zero on the rail every time they
+ * jumped. That is the same failure `trim` refuses to commit by age-expiry,
+ * arriving through a different door.
+ */
+describe('a tracking-epoch change inside a take pass (§5.4, §20.5)', () => {
+  const NEXT_EPOCH = { takePassId: TAKE.takePassId, trackingEpoch: TAKE.trackingEpoch + 1 };
+
+  it('keeps the per-take-pass count, and the tile still shows it', () => {
+    const tracker = new FillerTracker({ take: TAKE, precisionEnabled: true });
+    tracker.observeFinalTranscript(item('We should, um, ship it now.', 10_000, 14_000), AUTHORED);
+    tracker.observeSpeechInterval(speech(10_000, 14_000));
+    tracker.observeFinalTranscript(item('Then, um, we finish here.', 16_000, 20_000), AUTHORED);
+    tracker.observeSpeechInterval(speech(16_000, 20_000));
+    expect(tracker.publishDisplayState(20_000).confirmedCount).toBe(2);
+
+    // The presenter jumped. They did not start again.
+    tracker.handleEpochChange(NEXT_EPOCH, 21_000);
+
+    expect(tracker.events()).toHaveLength(2);
+    const state = tracker.publishDisplayState(21_000);
+    expect(state.confirmedCount).toBe(2);
+    expect(state.confirmedLast60s).toBe(2);
+    expect(state.dominantForm).toBe('um');
+  });
+
+  it('stamps evidence with the new epoch and refuses the old epoch’s precision result', () => {
+    const tracker = new FillerTracker({ take: TAKE, precisionEnabled: true });
+    tracker.observeFinalTranscript(item('We should, um, ship it now.', 10_000, 14_000), AUTHORED);
+    tracker.handleEpochChange(NEXT_EPOCH, 15_000);
+
+    // §23.1: a verbatim pass computed against the position the engine has since
+    // abandoned may not demote anything. Without the epoch actually moving on
+    // the tracker, this guard could never fire.
+    const outcome = tracker.applyPrecisionResult(
+      precision('We should ship it now.', 10_000, 14_000),
+      AUTHORED,
+    );
+    expect(outcome.demoted).toEqual([]);
+    expect(tracker.peekDisplayState(15_000).confirmedCount).toBe(1);
+  });
+
+  it('keeps the VAD watermark, so a jump cannot re-open the permissive timing branch', () => {
+    const tracker = new FillerTracker({ take: TAKE, precisionEnabled: true });
+    tracker.observeSpeechInterval(speech(5_000, 9_000));
+    // The VAD has scanned through 20 s and found silence after 9 s.
+    tracker.noteVadObservedThrough(20_000);
+    tracker.handleEpochChange(NEXT_EPOCH, 20_000);
+
+    // A jump does not un-observe audio. Clearing `vadObservedUpToMs` here would
+    // confirm this hallucinated "um" sitting in scanned silence.
+    tracker.observeFinalTranscript(item('We should, um, ship it now.', 10_000, 14_000), AUTHORED);
+    expect(tracker.events()[0]?.confidence).toBe('probable');
+    expect(tracker.peekDisplayState(20_000).confirmedCount).toBe(0);
+  });
+
+  it('drops the opener sequence, whose authored verdict belongs to the old alignment (§15.3)', () => {
+    const openerText =
+      'And we shipped. And they tested. And I reviewed. And she deployed. ' +
+      'And nobody complained. And the metrics held. And the team celebrated. And that was that.';
+    const tracker = new FillerTracker({
+      take: TAKE,
+      precisionEnabled: true,
+      candidateConfig: { repetitiveOpenerLiveTips: true },
+    });
+    tracker.observeFinalTranscript(item(openerText, 10_000, 26_000), {
+      spanId: 'span-4',
+      scriptAnchorTokenId: 'tok-4',
+      text: 'We shipped, they tested, I reviewed, she deployed.',
+    });
+    expect(tracker.openerObservations()).toHaveLength(8);
+    expect(tracker.candidates(26_000).map((candidate) => candidate.type)).toEqual([
+      'repetitive_opener',
+    ]);
+
+    tracker.handleEpochChange(NEXT_EPOCH, 26_000);
+
+    // §15.3 may only coach a run that is *confidently absent from the script*,
+    // and every one of those `authored` verdicts was decided against the
+    // alignment the epoch change just disowned. The run has to be re-earned.
+    expect(tracker.openerObservations()).toEqual([]);
+    expect(tracker.candidates(26_000)).toEqual([]);
+  });
+
+  it('still resets everything when the take pass changes underneath it', () => {
+    const tracker = new FillerTracker({ take: TAKE, precisionEnabled: true });
+    tracker.observeFinalTranscript(item('We should, um, ship it now.', 10_000, 14_000), AUTHORED);
+    expect(tracker.peekDisplayState(14_000).confirmedCount).toBe(1);
+
+    // A new take pass is a new performance whatever the epoch says, so this
+    // method can never be the door a pass carries its predecessor's total
+    // through.
+    tracker.handleEpochChange({ takePassId: 'take-2', trackingEpoch: 9 }, 20_000);
+    expect(tracker.events()).toEqual([]);
+    expect(tracker.peekDisplayState(24_000).confirmedCount).toBe(0);
+  });
+});
