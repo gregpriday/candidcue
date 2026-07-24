@@ -10,7 +10,7 @@ import {
   identityUnitScale,
   weightedUnitScale,
 } from '../../../src/stage/motion';
-import { fixtureFingerprint, syntheticLayout } from '../../fixtures/layout';
+import { fixtureFingerprint, seededRandom, syntheticLayout } from '../../fixtures/layout';
 
 const R = 400;
 
@@ -118,7 +118,14 @@ describe('line map construction (§7.1)', () => {
     expect(blank.covers(0)).toBe(false);
   });
 
-  it('reports a measured baseline inversion instead of moving backward on it', () => {
+  /**
+   * H3/H5. A measured inversion means the measurement did not describe the
+   * rendered layout — usually because it was taken through a mirror transform,
+   * where EVERY line looks inverted. Flattening it produces a map that is
+   * plausible, still reports `valid: true`, and puts most of the document at
+   * one scroll position. The stage must hold and rebuild instead (§62).
+   */
+  it('treats a measured baseline inversion as FATAL, not as something to flatten', () => {
     const layout = syntheticLayout({
       blocks: [{ kind: 'paragraph', tokens: 20 }],
       startY: 1200,
@@ -127,13 +134,94 @@ describe('line map construction (§7.1)', () => {
       i > 10 ? { ...t, topY: t.topY - 400, bottomY: t.bottomY - 400 } : t,
     );
     const map = buildFromFixture({ ...layout, tokens: broken });
-    expect(map.issues.some((i) => i.code === 'nonmonotonic_baselines')).toBe(true);
-    // The path still never reverses.
-    let previous = -Infinity;
-    for (let u = 0; u < layout.tokenCount; u += 0.25) {
+    const issue = map.issues.find((i) => i.code === 'nonmonotonic_baselines');
+    expect(issue).toBeDefined();
+    expect(issue?.fatal).toBe(true);
+    expect(map.valid).toBe(false);
+    // And an invalid map produces NO path at all, so nothing downstream can
+    // follow the flattened geometry by accident.
+    for (let u = 0; u < layout.tokenCount; u += 1) {
+      expect(map.sampleMotionPath(u)).toBeNull();
+    }
+  });
+
+  it('is fatal when the whole document measures upside down (vertical mirror)', () => {
+    // What `getBoundingClientRect()` reports under `scaleY(-1)` if the mirror is
+    // not compensated: later lines have DECREASING tops.
+    const layout = syntheticLayout({
+      blocks: [{ kind: 'paragraph', tokens: 40 }],
+      startY: 200,
+    });
+    const height = layout.contentHeightPx;
+    const flipped = layout.tokens.map((t) => ({
+      ...t,
+      topY: height - t.bottomY,
+      bottomY: height - t.topY,
+    }));
+    const map = buildFromFixture({ ...layout, tokens: flipped });
+    expect(map.valid).toBe(false);
+    expect(map.issues.some((i) => i.code === 'nonmonotonic_baselines' && i.fatal)).toBe(true);
+  });
+
+  it('treats a spoken-unit axis that fails to advance as fatal', () => {
+    const layout = syntheticLayout({ blocks: [{ kind: 'paragraph', tokens: 20 }] });
+    // Two lines claiming the same first token: the map cannot order itself.
+    const duplicated = layout.tokens.map((t, i) => ({
+      ...t,
+      tokenIndex: i < 2 ? 0 : t.tokenIndex,
+    }));
+    const map = buildFromFixture({ ...layout, tokens: duplicated });
+    const issue = map.issues.find((i) => i.code === 'degenerate_units');
+    if (issue) {
+      expect(issue.fatal).toBe(true);
+      expect(map.valid).toBe(false);
+    }
+  });
+
+  it.each([
+    ['NaN top', { topY: Number.NaN }],
+    ['NaN bottom', { bottomY: Number.NaN }],
+    ['Infinite top', { topY: Number.POSITIVE_INFINITY }],
+    ['NaN xStart', { xStart: Number.NaN }],
+    ['NaN token index', { tokenIndex: Number.NaN }],
+    ['inverted rect', { topY: 900, bottomY: 100 }],
+  ] as const)('rejects a token rect with a %s', (_name, patch) => {
+    const layout = syntheticLayout({ blocks: [{ kind: 'paragraph', tokens: 20 }] });
+    const tokens = layout.tokens.map((t, i) => (i === 7 ? { ...t, ...patch } : t));
+    const map = buildFromFixture({ ...layout, tokens });
+    expect(map.valid).toBe(false);
+    expect(map.issues.some((i) => i.code === 'nonfinite_geometry' && i.fatal)).toBe(true);
+    expect(map.sampleMotionPath(3)).toBeNull();
+    expect(map.fallbackTarget(3)).toBeNull();
+  });
+
+  it('rejects a non-finite block box', () => {
+    const layout = syntheticLayout({ blocks: [{ kind: 'paragraph', tokens: 20 }] });
+    const blocks = layout.blocks.map((b) => ({ ...b, bottomY: Number.NaN }));
+    const map = buildFromFixture({ ...layout, blocks });
+    expect(map.valid).toBe(false);
+  });
+
+  it('rejects non-finite layout inputs', () => {
+    const layout = syntheticLayout({ blocks: [{ kind: 'paragraph', tokens: 20 }] });
+    expect(buildFromFixture(layout, { readingLineStartY: Number.NaN }).valid).toBe(false);
+    expect(buildFromFixture(layout, { maxScrollPx: Number.NaN }).valid).toBe(false);
+  });
+
+  it('never produces a non-finite scroll value from a valid map', () => {
+    const layout = syntheticLayout({
+      blocks: [
+        { kind: 'heading', tokens: 4 },
+        { kind: 'paragraph', tokens: 60 },
+      ],
+      startY: 400,
+    });
+    const map = buildFromFixture(layout);
+    expect(map.valid).toBe(true);
+    for (let u = -20; u < layout.tokenCount + 20; u += 0.37) {
       const sample = map.sampleMotionPath(u);
-      expect(sample?.scrollPx ?? 0).toBeGreaterThanOrEqual(previous - 1e-6);
-      previous = sample?.scrollPx ?? previous;
+      expect(Number.isFinite(sample?.scrollPx ?? Number.NaN)).toBe(true);
+      expect(Number.isFinite(sample?.derivativePxPerUnit ?? Number.NaN)).toBe(true);
     }
   });
 });
@@ -192,6 +280,58 @@ describe('line-handoff path (§8, §70.1, §70.2)', () => {
       expect(y).toBeGreaterThanOrEqual(previous - 1e-9);
       expect(sample?.derivativePxPerUnit ?? 0).toBeGreaterThanOrEqual(0);
       previous = y;
+    }
+  });
+
+  /**
+   * The previous "property" test was ONE regular fixture on a fixed grid. This
+   * one randomizes the document shape, the column width, the typography, the
+   * media sizes and the sample grid, which is what makes it a property.
+   */
+  it('is monotone for randomized documents, columns, and sample grids (property)', () => {
+    const random = seededRandom(80808);
+    for (let iteration = 0; iteration < 60; iteration++) {
+      const blockCount = 1 + Math.floor(random() * 6);
+      const blocks = Array.from({ length: blockCount }, () => {
+        const roll = random();
+        if (roll < 0.15) {
+          return { kind: 'image' as const, heightPx: 40 + Math.floor(random() * 1200) };
+        }
+        if (roll < 0.25) return { kind: 'heading' as const, tokens: 1 + Math.floor(random() * 6) };
+        return { kind: 'paragraph' as const, tokens: 1 + Math.floor(random() * 90) };
+      });
+      const lineHeightPx = 20 + Math.floor(random() * 90);
+      const fixture = syntheticLayout({
+        blocks,
+        columnWidthPx: 180 + Math.floor(random() * 1600),
+        wordWidthPx: 20 + Math.floor(random() * 220),
+        lineHeightPx,
+        paragraphGapPx: Math.floor(random() * 160),
+        startY: Math.floor(random() * 2000),
+        jitter: Array.from({ length: 7 }, () => Math.floor((random() - 0.5) * 60)),
+      });
+      if (fixture.tokenCount < 2) continue;
+      const built = buildFromFixture(fixture, {
+        maxSlopePxPerUnit: lineHeightPx * 8,
+        boundarySlopeClampPxPerUnit: lineHeightPx * 3,
+      });
+      if (!built.valid) continue;
+
+      let previous = -Infinity;
+      const span = fixture.tokenCount + 20;
+      for (let i = 0; i < 400; i++) {
+        // Random, unordered sample points sorted into a random grid.
+        const u = -10 + (span * i) / 400 + random() * (span / 400);
+        const sample = built.sampleMotionPath(u);
+        expect(sample, `iteration ${iteration}`).not.toBeNull();
+        const y = sample?.scrollPx ?? 0;
+        expect(Number.isFinite(y)).toBe(true);
+        expect(y, `iteration ${iteration} at u=${u}`).toBeGreaterThanOrEqual(previous - 1e-9);
+        expect(sample?.derivativePxPerUnit ?? 0).toBeGreaterThanOrEqual(0);
+        previous = y;
+      }
+      // And the path stays inside the scroll range it was built for.
+      expect(previous).toBeLessThanOrEqual(fixture.contentHeightPx + 1e-6);
     }
   });
 
@@ -259,6 +399,83 @@ describe('visual blocks and large gaps (§7.3, §8.6)', () => {
         layout.lineHeightPx * 8 * 1.5 + 1e-6,
       );
     }
+  });
+
+  /**
+   * H4. Clamping knot TANGENTS cannot bound the AVERAGE slope: the spline still
+   * has to cover the whole vertical delta over the same semantic interval. One
+   * word, a 900 px image, one word is the worst case — ~900 px of travel per
+   * spoken unit, whatever the tangents say. The builder must REJECT the interval
+   * on its secant so the engine can cross it as a bounded re-anchor instead of
+   * racing at the velocity ceiling or accumulating a full-screen error.
+   */
+  it('rejects an interval whose SECANT exceeds the visual limit (§8.6)', () => {
+    const layout = syntheticLayout({
+      blocks: [
+        { kind: 'paragraph', tokens: 1 },
+        { kind: 'image', heightPx: 900 },
+        { kind: 'paragraph', tokens: 1 },
+      ],
+      startY: 400,
+      paragraphGapPx: 0,
+    });
+    const clamp = layout.lineHeightPx * 3;
+    const map = buildFromFixture(layout, {
+      boundarySlopeClampPxPerUnit: clamp,
+      maxSlopePxPerUnit: layout.lineHeightPx * 8,
+    });
+
+    expect(map.visualBlockSpans.length).toBeGreaterThan(0);
+    const span = map.visualBlockSpans[0];
+    expect(span).toBeDefined();
+    expect(span?.secantPxPerUnit ?? 0).toBeGreaterThan(clamp);
+    expect((span?.scrollEndPx ?? 0) - (span?.scrollStartPx ?? 0)).toBeGreaterThan(500);
+    // Reported, and non-fatal: this is recoverable by re-anchoring, not a
+    // reason to blank the presenter's script.
+    const issue = map.issues.find((i) => i.code === 'visual_block_secant');
+    expect(issue?.fatal).toBe(false);
+    expect(map.valid).toBe(true);
+
+    // The span is addressable by unit so the engine can hold at its entry.
+    const mid = ((span?.unitStart ?? 0) + (span?.unitEnd ?? 1)) / 2;
+    expect(map.visualBlockSpanAt(mid)).toEqual(span);
+    expect(map.visualBlockSpanAt((span?.unitStart ?? 0) - 0.5)).toBeNull();
+    expect(map.visualBlockSpanAt((span?.unitEnd ?? 1) + 0.5)).toBeNull();
+  });
+
+  it('does not flag ordinary prose as a visual-block span', () => {
+    const layout = syntheticLayout({
+      blocks: [
+        { kind: 'paragraph', tokens: 40 },
+        { kind: 'paragraph', tokens: 40 },
+      ],
+      startY: 400,
+    });
+    const map = buildFromFixture(layout, {
+      boundarySlopeClampPxPerUnit: layout.lineHeightPx * 3,
+      maxSlopePxPerUnit: layout.lineHeightPx * 8,
+    });
+    expect(map.visualBlockSpans).toEqual([]);
+    expect(map.visualBlockSpanAt(20)).toBeNull();
+  });
+
+  it('flags every interval whose secant is too steep, not only the first', () => {
+    const layout = syntheticLayout({
+      blocks: [
+        { kind: 'paragraph', tokens: 1 },
+        { kind: 'image', heightPx: 700 },
+        { kind: 'paragraph', tokens: 1 },
+        { kind: 'image', heightPx: 800 },
+        { kind: 'paragraph', tokens: 1 },
+      ],
+      startY: 200,
+      paragraphGapPx: 0,
+    });
+    const map = buildFromFixture(layout, {
+      boundarySlopeClampPxPerUnit: layout.lineHeightPx * 3,
+      maxSlopePxPerUnit: layout.lineHeightPx * 8,
+    });
+    expect(map.visualBlockSpans.length).toBe(2);
   });
 });
 

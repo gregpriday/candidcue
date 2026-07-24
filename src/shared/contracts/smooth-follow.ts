@@ -191,6 +191,15 @@ export interface RenderedLineMap {
 /**
  * Companion §7.2. The layout inputs a line map is valid for. Any change here
  * invalidates the map and requires a rebuild plus a `layout_recovery` transition.
+ *
+ * EVERY input that can move a rendered glyph belongs here. A field that changes
+ * geometry but is missing from the fingerprint produces the worst failure mode
+ * available: the map is silently rebuilt from new measurements under the OLD
+ * generation, so control still believes the geometry it is addressing, and the
+ * §33 semantic re-anchor that should have preserved the reading position never
+ * runs. `sameLayout()` in `stage/motion/measure.ts` compares this type through
+ * an exhaustive `Record<keyof LayoutFingerprint, …>` table so a field added here
+ * fails compilation until it is classified there.
  */
 export interface LayoutFingerprint {
   scriptCompileHash: string;
@@ -203,10 +212,25 @@ export interface LayoutFingerprint {
   fontHash?: string;
   fontSizePx: number;
   lineHeight: number;
+  /** Tracking, em. Changes line wrapping without changing anything else. */
+  letterSpacingEm: number;
+  /** Vertical rhythm between blocks, em — changes every block's offset. */
+  paragraphSpacingEm: number;
   marginTopPx: number;
   marginBottomPx: number;
   marginHorizontalPx: number;
+  /**
+   * Kept for the published §7.2 shape. The individual axes below are what the
+   * measurement pass actually depends on: a vertical mirror inverts measured
+   * viewport-space tops, a horizontal one does not.
+   */
   mirrored: boolean;
+  mirrorX: boolean;
+  mirrorY: boolean;
+  /** Reading-band centre, percent of the viewport — this is `R` in §8. */
+  readingBandCenterPercent: number;
+  /** Reading-band half height, percent of the viewport. */
+  readingBandHalfHeightPercent: number;
   cueLayout: string;
   listenerGeometryHash: string;
 }

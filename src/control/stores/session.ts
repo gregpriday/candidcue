@@ -32,9 +32,13 @@ import {
   isNontrivialMovement,
   motionFrameFromSnapshot,
   movementRecordFromDiagnostic,
+  setActiveSemanticSidecar,
   subscribeFollowSidecar,
   subscribeStageMotionAcks,
 } from '../services/smooth-follow-adapter';
+import { SemanticSidecar } from '../services/semantic-sidecar';
+import type { AssistSchedulingContext } from '../../shared/semantic';
+import { resolveSmoothFollowProfile } from '../../shared/tracking/profile';
 import { defaultFollowingSettings } from '../lib/follow-profiles';
 import { configureFollowActions, smoothFollow } from './smooth-follow';
 import { getSettingsSnapshot, patchSettings } from './settings';
@@ -139,6 +143,15 @@ let followProfileId = defaultFollowingSettings().motionProfileId;
 let scriptCompileHash = '';
 let stopMotionAcks: (() => void) | null = null;
 let stopSidecarFeed: (() => void) | null = null;
+/**
+ * The take's semantic sidecar (companion §36, H6). One per take, disposed with
+ * it. Null in manual/fixed modes, outside Tauri, and whenever the worker-backed
+ * driver is not in use — there is no candidate feed in those cases, so a
+ * scheduler would have nothing to schedule.
+ */
+let semanticSidecar: SemanticSidecar | null = null;
+/** The sidecar's attached candidate sink, or null while nothing is attached. */
+let pushSemanticContext: ((context: AssistSchedulingContext) => void) | null = null;
 /** True once the worker has sent a real v2 frame — the bridge then stands down. */
 let usingWorkerFrames = false;
 
@@ -236,6 +249,12 @@ export function startLiveSession(input: StartSessionInput): string {
       usingWorkerFrames = true;
       smoothFollow.ingestMovementRecord(record);
     },
+    // Companion §37.1: the aligner's post-section-gate candidate set. This is
+    // the sidecar's ONLY input — without it the scheduler is inert and no
+    // semantic assist can ever occur.
+    onSemanticContext(context) {
+      pushSemanticContext?.(context);
+    },
     // Fallback for drivers without a v2 output (the mock driver used in
     // browser dev, manual/fixed modes, and node tests).
     onDiagnostic(diagnostic) {
@@ -248,6 +267,14 @@ export function startLiveSession(input: StartSessionInput): string {
       );
     },
   });
+
+  // Semantic sidecar (companion §36, H6): session-owned, take-scoped, and fed
+  // by the worker's candidate emissions. `local_only` is handled inside the
+  // scheduler (it simply never issues a request), so the wiring is unconditional
+  // once a real worker-backed driver exists.
+  if (useRealDriver) {
+    startSemanticSidecar(sessionId, following);
+  }
 
   // Voice pipeline: realtime transcription + command routing (§29, §33).
   if (input.mode === 'voice' && input.compiled && isTauriRuntime()) {
@@ -276,6 +303,9 @@ export function startLiveSession(input: StartSessionInput): string {
       getScrollMode: () => (get(state).voiceFollow ? 'voice' : 'manual'),
       onTrackingEvent: (event) => driver?.feedTranscript(event),
       onMaskItems: (itemIds) => driver?.maskItems(itemIds),
+      // §33.4 tail: the router decided the phrase was authored script after
+      // all, so alignment gets those items back.
+      onReleaseItems: (itemIds) => driver?.releaseItems(itemIds),
       onCommandPending: (pending) => driver?.setCommandPending(pending),
       executeCommand: (command) => executeValidatedCommand(command),
       // H8: real execution context for the §33.9 confirmation policy.
@@ -382,6 +412,53 @@ export function startLiveSession(input: StartSessionInput): string {
 }
 
 /* ---------------------------------------------------------------------------
+ * Semantic sidecar (companion §36–§40)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Stand up the take's sidecar and connect both halves of the loop:
+ *
+ *   worker `semantic_context` → sidecar scheduler → Rust → validate → fuse
+ *                             → worker `semantic_assist` (bounded, re-clamped)
+ *
+ * The `SmoothFollowProfile` is the resolved default, which is exactly what the
+ * tracking worker's engine resolves for itself (the driver sends no
+ * `smoothProfile`), so `semanticInfluenceMax` is the same number on both sides
+ * of the seam — the fused adjustment is clamped to the identical bound that the
+ * beam re-clamps it to.
+ */
+function startSemanticSidecar(sessionId: string, following: FollowingSettings): void {
+  const sidecar = new SemanticSidecar({
+    sessionId,
+    sessionGeneration,
+    profile: resolveSmoothFollowProfile(),
+    mode: following.intelligenceMode,
+    // Only fused + validated evidence gets here; the scheduler owns that work
+    // and the beam re-checks epoch, TTL, source items and candidate membership.
+    postAssistEvidence: (evidence) => driver?.applySemanticAssist(evidence),
+    // §47.4: publish real scheduler availability as it changes.
+    onAvailabilityChange: () => setActiveSemanticSidecar(semanticSidecar),
+  });
+  sidecar.attachContextSource((emit) => {
+    pushSemanticContext = emit;
+    return () => {
+      if (pushSemanticContext === emit) pushSemanticContext = null;
+    };
+  });
+  semanticSidecar = sidecar;
+  setActiveSemanticSidecar(sidecar);
+}
+
+/**
+ * §36.5: any authorized discontinuity invalidates everything in flight. The
+ * engine also bumps its semantic epoch on `moveTo`, so a late response would be
+ * rejected anyway — cancelling is the cheaper half of the same guarantee.
+ */
+function invalidateSemantics(): void {
+  semanticSidecar?.cancelInFlight();
+}
+
+/* ---------------------------------------------------------------------------
  * Stage bridge: snapshot relay, heartbeat (§43.5), stage-originated events.
  * ------------------------------------------------------------------------- */
 
@@ -455,10 +532,12 @@ const followActions = {
   reAnchor(): void {
     const token = get(state).snapshot?.tokenIndex;
     if (token === undefined) return;
+    invalidateSemantics();
     driver?.moveToToken(token, 'manual');
     showToast('Re-finding your place', 'info', { durationMs: 1600 });
   },
   acceptCandidate(candidate: { tokenIndex: number }): void {
+    invalidateSemantics();
     driver?.moveToToken(candidate.tokenIndex, 'manual');
   },
   /**
@@ -472,6 +551,10 @@ const followActions = {
     state.update((s) => ({ ...s, voiceFollow: !paused }));
   },
   setIntelligenceMode(mode: FollowingSettings['intelligenceMode']): void {
+    // §35: the live scheduler must follow the switch immediately — flipping to
+    // local_only cancels everything in flight rather than waiting for a restart.
+    semanticSidecar?.setMode(mode);
+    setActiveSemanticSidecar(semanticSidecar);
     void patchSettings('following', { intelligenceMode: mode }).catch(() => {});
   },
   setCoachingDisplay(display: FollowingSettings['coachingDisplay']): void {
@@ -652,11 +735,13 @@ export function togglePlayPause(): void {
 }
 
 export function moveSentences(delta: number): void {
+  invalidateSemantics();
   driver?.moveSentences(delta);
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
 export function restartParagraph(): void {
+  invalidateSemantics();
   driver?.restartParagraph();
   state.update((s) => ({ ...s, counts: { ...s.counts, retakes: s.counts.retakes + 1 } }));
 }
@@ -826,6 +911,7 @@ function applyCommandAction(action: CommandAction): boolean {
     case 'go_to_target': {
       const target = compiledScript?.navigationTargets.find((t) => t.id === action.targetId);
       if (!target) return false;
+      invalidateSemantics();
       driver?.moveToToken(target.tokenIndex, 'command');
       state.update((prev) => ({ ...prev, counts: { ...prev.counts, jumps: prev.counts.jumps + 1 } }));
       return true;
@@ -880,6 +966,7 @@ function jumpSection(delta: number): boolean {
   });
   const target = flat[Math.max(0, Math.min(flat.length - 1, currentIndex + delta))];
   if (!target) return false;
+  invalidateSemantics();
   driver?.moveToToken(target.startTokenIndex, 'command');
   state.update((prev) => ({ ...prev, counts: { ...prev.counts, jumps: prev.counts.jumps + 1 } }));
   return true;
@@ -938,6 +1025,12 @@ function locateEnding(s: SessionState): string {
 }
 
 function stopInternals(): void {
+  // H6: the scheduler is created and cancelled with the take. Dispose it before
+  // the driver so nothing in flight can post evidence at a dead worker.
+  semanticSidecar?.dispose();
+  semanticSidecar = null;
+  pushSemanticContext = null;
+  setActiveSemanticSidecar(null);
   driver?.dispose();
   driver = null;
   if (pipeline) {

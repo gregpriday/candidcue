@@ -76,6 +76,28 @@ export function createCalibratingUnitAxis(
     return dt > 0 ? dt / du : 1;
   }
 
+  /**
+   * Restore strict monotonicity around a freshly written sample by DISCARDING
+   * the samples that contradict it, never by rewriting them.
+   *
+   * The previous version repaired a regression by dragging every later sample's
+   * token up to match — which silently flattens the tail of the table. A
+   * regression is not noise: it is a retake, and the samples on the far side of
+   * it describe a take the presenter has abandoned. Dropping them lets the
+   * calibration re-learn from the new take instead of carrying a fabricated
+   * plateau for the rest of the session.
+   */
+  function reconcile(index: number): void {
+    const anchor = samples[index];
+    if (!anchor) return;
+    let lo = index - 1;
+    while (lo >= 0 && (samples[lo]?.token ?? -Infinity) >= anchor.token) lo--;
+    let hi = index + 1;
+    while (hi < samples.length && (samples[hi]?.token ?? Infinity) <= anchor.token) hi++;
+    if (hi - index > 1) samples.splice(index + 1, hi - index - 1);
+    if (index - lo > 1) samples.splice(lo + 1, index - lo - 1);
+  }
+
   function indexFor(unit: number): number {
     let lo = 0;
     let hi = samples.length - 1;
@@ -105,16 +127,12 @@ export function createCalibratingUnitAxis(
       if (neighbour && Math.abs(neighbour.unit - semanticUnit) <= mergeTolerance) {
         // Same place, fresher evidence.
         neighbour.token = tokenIndex;
+        // The correction may now contradict its own neighbours.
+        reconcile(at);
         return;
       }
       samples.splice(at + 1, 0, sample);
-      // Keep the table monotone in token space: a later unit can never map to
-      // an earlier token, even if a frame arrived out of order.
-      for (let i = 1; i < samples.length; i++) {
-        const prev = samples[i - 1];
-        const next = samples[i];
-        if (prev && next && next.token < prev.token) next.token = prev.token;
-      }
+      reconcile(at + 1);
       if (samples.length > maxSamples) {
         // Uniform decimation keeps coverage across the whole script.
         for (let i = samples.length - 2; i > 0; i -= 2) {

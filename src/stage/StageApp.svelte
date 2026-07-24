@@ -72,6 +72,10 @@
   let heartbeatSeen = false;
   /** Layout generation the stage is currently measured at (companion §7.2). */
   let layoutGeneration = $state(0);
+  /** §62: fatal line-map issues after the bounded rebuild retry. */
+  let layoutIssues = $state<string[]>([]);
+  /** Never block the script on a font that may never resolve. */
+  const FONT_READY_TIMEOUT_MS = 1500;
 
   function dispatch(action: StageAction) {
     app = stageReducer(app, action);
@@ -132,9 +136,25 @@
       else unsubs.push(...subs);
     })();
 
-    void document.fonts.ready.then(() => {
+    // §7.1 wants the map built once fonts are final — but `document.fonts.ready`
+    // is not guaranteed to settle: one font that never resolves would otherwise
+    // hold the entire script off the glass for the whole take. Mount with
+    // whatever is available after a bounded wait; the map rebuild triggered by
+    // the fingerprint's `fontHash`/metrics change picks the real font up when it
+    // lands.
+    const fontTimeout = window.setTimeout(() => {
       fontsReady = true;
-    });
+    }, FONT_READY_TIMEOUT_MS);
+    void document.fonts.ready.then(
+      () => {
+        clearTimeout(fontTimeout);
+        fontsReady = true;
+      },
+      () => {
+        clearTimeout(fontTimeout);
+        fontsReady = true;
+      },
+    );
 
     // Watchdog (§43.5): if control's heartbeat stops while live, freeze
     // locally and wait. Only armed once a heartbeat has actually been seen,
@@ -151,6 +171,7 @@
     return () => {
       disposed = true;
       unsubs.forEach((u) => u());
+      clearTimeout(fontTimeout);
       clearInterval(watchdog);
       previewDriver?.stop();
     };
@@ -376,6 +397,7 @@
             onlayoutready={handleLayoutReady}
             onmotionack={handleMotionAck}
             onlayoutgeneration={(generation) => (layoutGeneration = generation)}
+            onlayouterror={(issues) => (layoutIssues = issues)}
           />
         </div>
       {/if}
@@ -421,6 +443,9 @@
       <div>token: {app.tracking?.tokenIndex ?? '—'} ({app.tracking?.state ?? 'n/a'})</div>
       <div>viewport: {vw}×{vh}{compact ? ' compact' : ''}</div>
       <div>layout gen: {layoutGeneration}</div>
+      {#if layoutIssues.length > 0}
+        <div>layout: HELD ({layoutIssues.join(', ')})</div>
+      {/if}
       <div>media: {mediaHealthy ? 'healthy' : 'degraded'}</div>
     </div>
   {/if}

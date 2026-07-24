@@ -102,6 +102,19 @@ export interface TrackingProfile {
    */
   commandPendingTimeoutMs: number;
 
+  /**
+   * Minimum interval between emitted semantic scheduling contexts (companion
+   * §36.3, §63).
+   *
+   * The candidate list is the sidecar's only input, and building it costs real
+   * work (script text per candidate). Emitting it on every transcript event
+   * would add that work to the ~19 ms per-event alignment budget, which has no
+   * headroom. The sidecar's own fastest cadence is a 1.5 s burst interval, so
+   * sampling the candidate set at 2 Hz is already three times more often than
+   * anything downstream can act on. Set to 0 to disable emission entirely.
+   */
+  semanticContextIntervalMs: number;
+
   /* Snapshot cadence (spec §31.16). */
   maxSnapshotsPerSecond: number;
 
@@ -276,6 +289,7 @@ export const DEFAULT_TRACKING_PROFILE: TrackingProfile = {
 
   manualCorrectionGraceMs: 2500, // §31.15 suppression grace period
   commandPendingTimeoutMs: 4_000, // §33.11 lunaHardTimeoutMs (3 s) plus slack
+  semanticContextIntervalMs: 500, // companion §36.3 — 2 Hz, see the field docs
 
   maxSnapshotsPerSecond: 30, // §31.16
 

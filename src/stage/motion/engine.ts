@@ -42,7 +42,7 @@ import {
   type SemanticFrameGate,
   type SemanticFrameReceiver,
 } from './frameReceiver';
-import type { StageRenderedLineMap } from './lineMap';
+import type { StageRenderedLineMap, VisualBlockSpan } from './lineMap';
 import { createLineHandoffPlanner, type LineHandoffPlanner, type LineTarget } from './planner';
 import { predictSemanticPosition, type SemanticPrediction } from './predictor';
 import { limitsForState, type MotionLimits } from './profiles';
@@ -129,6 +129,8 @@ export interface StageMotionEngine {
   readonly profile: SmoothFollowProfile;
   readonly lastPrediction: SemanticPrediction | null;
   readonly unitAxis: UnitAxisAdapter;
+  /** Backward target revisions suppressed by the forward latch (§70.5). */
+  readonly targetRegressions: number;
 
   configureSession(gate: SemanticFrameGate, nowMs: number): void;
   setLineMap(map: StageRenderedLineMap | null): void;
@@ -146,6 +148,28 @@ export interface StageMotionEngine {
   layoutRecovery(request: LayoutRecoveryRequest): void;
   visibilityRestored(positionPx: number, nowMs: number): void;
   reset(positionPx: number): void;
+}
+
+/**
+ * States whose `(estimatedUnit, tokenIndex)` pair is a real observation of the
+ * worker's cumulative weight function rather than a guess the tracker is
+ * carrying while it works something out.
+ */
+const CALIBRATION_STATES: ReadonlySet<TrackingStateV2> = new Set<TrackingStateV2>([
+  'following',
+  'catching_up',
+]);
+
+/** Minimum confidence a frame needs before it may move the unit axis. */
+const CALIBRATION_MIN_CONFIDENCE = 0.6;
+
+export function isCalibrationEvidence(frame: SemanticMotionFrame): boolean {
+  return (
+    CALIBRATION_STATES.has(frame.state) &&
+    frame.confidence >= CALIBRATION_MIN_CONFIDENCE &&
+    frame.behavior !== 'retake' &&
+    frame.behavior !== 'retake_candidate'
+  );
 }
 
 /**
@@ -215,6 +239,26 @@ export function createStageMotionEngine(
   let lastPrediction: SemanticPrediction | null = null;
   let lastTarget = 0;
   let lastLineId: string | null = null;
+  /**
+   * §70.5. Under a forward-only profile the desired position is latched
+   * monotonically: a revised target that moves BACKWARD cannot be followed
+   * (reverse is forbidden), so honouring it would only park the plant past a
+   * target it can never reach and leave a permanent tracking error. A genuine
+   * regression arrives as a backward-capable state or a re-anchor directive,
+   * both of which clear the latch.
+   */
+  let forwardTargetLatchPx: number | null = null;
+  /** Target regressions suppressed by the latch — diagnostics only. */
+  let targetRegressions = 0;
+  /** Visual-block span the plant is currently held at (§8.6). */
+  let heldVisualSpan: VisualBlockSpan | null = null;
+
+  /** Every authorized plant write goes through here so the latch stays honest. */
+  function reanchorTo(positionPx: number, velocityPxS?: number) {
+    controller.reanchor(positionPx, velocityPxS === undefined ? undefined : { velocityPxS });
+    forwardTargetLatchPx = null;
+    heldVisualSpan = null;
+  }
 
   function rebuildPlanner() {
     planner =
@@ -260,8 +304,18 @@ export function createStageMotionEngine(
     // cross the same axis change before it becomes feed-forward pixels.
     const mapVelocity =
       prediction.velocityUnitsPerSecond * unitAxis.slopeAt(prediction.unit);
+    // §C1: the unit axis and the prediction are arithmetic over values the
+    // stage did not produce. A non-finite result here must never reach the
+    // planner, let alone the plant.
+    if (!Number.isFinite(mapUnit) || !Number.isFinite(mapVelocity)) return null;
     const target = planner.target(mapUnit, mapVelocity);
     if (target.source === 'none') return null;
+    if (
+      !Number.isFinite(target.scrollPx) ||
+      !Number.isFinite(target.feedForwardVelocityPxS)
+    ) {
+      return null;
+    }
     return { target, prediction, mapUnit, frame };
   }
 
@@ -292,6 +346,9 @@ export function createStageMotionEngine(
     get lastPrediction() {
       return lastPrediction;
     },
+    get targetRegressions() {
+      return targetRegressions;
+    },
 
     configureSession(gate, nowMs) {
       receiver.setGate(gate, nowMs);
@@ -301,6 +358,9 @@ export function createStageMotionEngine(
       unitAxis.reset();
       fallback = null;
       lastPrediction = null;
+      forwardTargetLatchPx = null;
+      heldVisualSpan = null;
+      targetRegressions = 0;
     },
 
     setLineMap(next) {
@@ -324,8 +384,14 @@ export function createStageMotionEngine(
       const outcome = receiver.accept(frame, nowMs);
       if (!outcome.accepted) return false;
       clock.observe(nowMs, frame.sessionTimeMs);
-      // One sampled point of the worker's cumulative speech-weight function.
-      unitAxis.observe(frame.estimatedUnit, frame.tokenIndex);
+      // One sampled point of the worker's cumulative speech-weight function —
+      // but only from evidence worth calibrating on. A frame emitted while the
+      // tracker is uncertain, coasting on stale evidence, or mid-retake carries
+      // a `(unit, tokenIndex)` pair the tracker itself does not stand behind,
+      // and a bad sample distorts the axis for every later frame.
+      if (isCalibrationEvidence(frame)) {
+        unitAxis.observe(frame.estimatedUnit, frame.tokenIndex);
+      }
       if (frame.transition) {
         const sessionNow = clock.sessionTime(nowMs) ?? frame.sessionTimeMs;
         transitions.submit(frame.transition, sessionNow);
@@ -351,7 +417,7 @@ export function createStageMotionEngine(
       const overwrite = transitions.consumePlantOverwrite();
       if (overwrite) {
         const destination = destinationScrollPx(overwrite.destinationTokenIndex, overwrite.toUnit);
-        if (destination !== null) controller.reanchor(destination);
+        if (destination !== null) reanchorTo(destination);
         // A re-anchor *is* the discontinuity: once applied it is finished, so
         // its backward-capable profile cannot linger and let ordinary following
         // reverse afterwards.
@@ -360,6 +426,13 @@ export function createStageMotionEngine(
 
       const semantic = semanticTarget(nowMs);
       const manualGrace = nowMs < manualUntilMs;
+      // §62: an invalid map means the stage does not know where anything is.
+      // The semantic planner is already disabled — the *guessed* fallback has
+      // to go with it, because its off-window branch estimates positions from
+      // block offsets and estimated heights, which is exactly the "moving on
+      // guessed geometry" the hold exists to prevent.
+      const mapUnresolved = map === null || !map.valid;
+      const fallbackUsable = fallback !== null && !mapUnresolved;
 
       let source: MotionSource = 'hold';
       let targetPx = lastTarget;
@@ -368,6 +441,7 @@ export function createStageMotionEngine(
       let lineId: string | null = lastLineId;
       let lineProgress = 0;
       let activeTokenIndex: number | null = null;
+      let visualSpanHold = false;
 
       if (semantic) {
         source = 'semantic';
@@ -378,14 +452,34 @@ export function createStageMotionEngine(
         lineProgress = semantic.target.lineProgress;
         lastPrediction = semantic.prediction;
         activeTokenIndex = activeTokenFor(semantic.mapUnit, lineId);
-      } else if (fallback) {
+
+        // §8.6: an interval whose SECANT exceeds the visual-block limit cannot
+        // be followed — the path would race the whole image height inside one
+        // spoken token. Hold at the entry while the presenter is inside it, and
+        // cross it as one authorized re-anchor on the way out.
+        const span = map?.visualBlockSpanAt(semantic.mapUnit) ?? null;
+        if (span) {
+          targetPx = span.scrollStartPx;
+          feedForward = 0;
+          visualSpanHold = true;
+          heldVisualSpan = span;
+        } else if (heldVisualSpan !== null) {
+          const exitedForward = semantic.mapUnit >= heldVisualSpan.unitEnd;
+          heldVisualSpan = null;
+          // Leaving forward means the presenter is past the media: the
+          // re-anchor IS the discontinuity (§53), and it is bounded because the
+          // destination is the far knot of a measured interval. Leaving
+          // backward needs no discontinuity — the plant is already there.
+          if (exitedForward) reanchorTo(targetPx);
+        }
+      } else if (fallbackUsable && fallback) {
         source = 'fallback';
         targetPx = fallback.scrollPx;
         feedForward = 0;
         state = 'following';
         if (fallback.disposition === 'reanchor' || fallback.disposition === 'instant') {
           // Explicit command/manual navigation: an authorized reposition.
-          controller.reanchor(fallback.scrollPx);
+          reanchorTo(fallback.scrollPx);
           fallback = { ...fallback, disposition: 'follow' };
         }
       }
@@ -403,6 +497,27 @@ export function createStageMotionEngine(
       // No map, no accepted frame, no fallback: hold. Never move on guessed
       // geometry (§62).
       const holding = source === 'hold';
+
+      // §70.5 forward latch. Applied only to ordinary (forward-only) following;
+      // a backward-capable profile is an explicit classification of the
+      // regression and releases the latch.
+      let regressed = false;
+      if (!holding && !visualSpanHold) {
+        if (limits.allowBackward || manualGrace) {
+          // A backward-capable profile is an explicit classification of the
+          // regression; manual authority suspends automatic correction outright
+          // (§30.6), and re-latching to the pre-interaction target during the
+          // grace would fight the presenter's own reposition afterwards.
+          forwardTargetLatchPx = null;
+        } else if (forwardTargetLatchPx !== null && targetPx < forwardTargetLatchPx) {
+          targetPx = forwardTargetLatchPx;
+          regressed = true;
+          targetRegressions++;
+        } else {
+          forwardTargetLatchPx = targetPx;
+        }
+      }
+
       const step = controller.step({
         dtMs,
         targetPx: holding ? controller.state.q : targetPx,
@@ -420,6 +535,10 @@ export function createStageMotionEngine(
         activeTransition ? activeTransition.directive.type : null,
         diagnostics.degraded ? 'degraded' : null,
         manualGrace ? 'manual' : null,
+        mapUnresolved ? 'map_unresolved' : null,
+        visualSpanHold ? 'visual_block' : null,
+        regressed ? 'target_regression' : null,
+        step.fused ? 'fused' : null,
       ]
         .filter(Boolean)
         .join(':');
@@ -436,6 +555,8 @@ export function createStageMotionEngine(
         jerkPxS3: step.jerkPxS3,
         lineId,
         controllerState,
+        saturated: step.saturated,
+        fused: step.fused,
         frameCostMs:
           typeof performance === 'undefined' ? undefined : performance.now() - costStart,
       });
@@ -484,7 +605,7 @@ export function createStageMotionEngine(
     manualOverride(positionPx, nowMs) {
       // §30.6: manual interaction has immediate authority; reacquire without
       // snapping once the grace interval expires.
-      controller.reanchor(positionPx);
+      reanchorTo(positionPx);
       manualUntilMs = nowMs + manualGraceMs;
       fallback = null;
     },
@@ -505,22 +626,23 @@ export function createStageMotionEngine(
             viewportY === undefined
               ? destination.scrollPx
               : destination.scrollPx + (request.map.readingLineStartY - viewportY);
-          controller.reanchor(anchored);
+          reanchorTo(anchored);
         }
       } else if (previous === null) {
-        controller.reanchor(controller.state.q);
+        reanchorTo(controller.state.q);
       }
+      forwardTargetLatchPx = null;
       receiver.setGate({ layoutGeneration: request.map.generation }, request.nowMs);
     },
 
     visibilityRestored(positionPx, nowMs) {
       // §32.4: re-anchor to what is on screen; never replay missed motion.
-      controller.reanchor(positionPx);
+      reanchorTo(positionPx);
       lastFrameAtMs = nowMs;
     },
 
     reset(positionPx) {
-      controller.reanchor(positionPx);
+      reanchorTo(positionPx);
       transitions.reset();
       receiver.reset();
       diagnostics.reset();
@@ -530,6 +652,7 @@ export function createStageMotionEngine(
       lastFrameAtMs = null;
       lastTarget = positionPx;
       lastLineId = null;
+      targetRegressions = 0;
     },
   };
 }

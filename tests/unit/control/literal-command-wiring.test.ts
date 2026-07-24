@@ -108,6 +108,7 @@ function pipeline(cursorTokenIndex: number): {
     getScrollMode: () => 'voice',
     onTrackingEvent: () => {},
     onMaskItems: () => {},
+    onReleaseItems: () => {},
     onCommandPending: () => {},
     executeCommand: (command) => executed.push(command),
     onUnknownCommand: () => {},

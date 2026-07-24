@@ -7,15 +7,71 @@ import { describe, it, expect } from 'vitest';
 import { DEFAULT_SMOOTH_FOLLOW_PROFILE } from '../../../src/shared/contracts';
 import {
   approach,
+  CONTROLLER_SUBSTEP_MS,
   createJerkLimitedScrollController,
   limitsForState,
   MAX_FRAME_DT_MS,
+  stoppingDistancePx,
   type MotionLimits,
 } from '../../../src/stage/motion';
 import { seededRandom } from '../../fixtures/layout';
 
 const profile = DEFAULT_SMOOTH_FOLLOW_PROFILE;
 const following = limitsForState('following', profile);
+
+/**
+ * Drive the controller one integration SUB-STEP per call, so every returned
+ * sample is a real integration point and the realized acceleration and jerk can
+ * be recovered by finite differences of the rendered `q`/`v`.
+ *
+ * This is the whole point of the harness (H1): the old tests measured jerk from
+ * the STORED `plant.a`, which the overshoot guard did not go through. It could
+ * rewrite `v` by a full `aMax·dt` in one sub-step — a realized jerk over
+ * 600 000 px/s³ against a 12 000 px/s³ limit — while `plant.a` stayed positive
+ * and the assertion stayed green.
+ */
+function substepTrace(
+  limits: MotionLimits,
+  frames: Array<{ targetPx: number; feedForwardVelocityPxS?: number }>,
+  options: { initialPositionPx?: number; maxPx?: number; minPx?: number } = {},
+) {
+  const dtSec = CONTROLLER_SUBSTEP_MS / 1000;
+  const controller = createJerkLimitedScrollController({
+    initialPositionPx: options.initialPositionPx ?? 0,
+    minPx: options.minPx ?? 0,
+    maxPx: options.maxPx ?? 1e7,
+    substepMs: CONTROLLER_SUBSTEP_MS,
+  });
+  const q: number[] = [];
+  const v: number[] = [];
+  const wall: boolean[] = [];
+  for (const f of frames) {
+    const step = controller.step({
+      dtMs: CONTROLLER_SUBSTEP_MS,
+      targetPx: f.targetPx,
+      feedForwardVelocityPxS: f.feedForwardVelocityPxS ?? 0,
+      limits,
+    });
+    q.push(step.q);
+    v.push(step.v);
+    wall.push(step.hardStop);
+  }
+  // Realized acceleration/jerk from the RENDERED trace, not from stored state.
+  const a = v.map((value, i) => (i === 0 ? 0 : (value - (v[i - 1] ?? 0)) / dtSec));
+  const jerk = a.map((value, i) => (i === 0 ? 0 : (value - (a[i - 1] ?? 0)) / dtSec));
+  return { controller, q, v, a, jerk, wall, dtSec };
+}
+
+/**
+ * A wall (document edge, §30.5 reverse-travel budget) is a genuine
+ * discontinuity, so the sub-step it happens on and the one after it are the two
+ * places realized jerk is legitimately unbounded. Everything else must obey the
+ * profile. `hardStop` makes that exemption explicit instead of a loosened
+ * tolerance that would hide a real defect.
+ */
+function nearWall(wall: boolean[], i: number): boolean {
+  return wall[i] === true || wall[i - 1] === true;
+}
 
 function run(
   limits: MotionLimits,
@@ -283,5 +339,376 @@ describe('approach()', () => {
     expect(approach(0, 10, 3)).toBe(3);
     expect(approach(0, -10, 3)).toBe(-3);
     expect(approach(0, 2, 3)).toBe(2);
+  });
+});
+
+describe('stoppingDistancePx()', () => {
+  const { aMax, maxJerkPxS3: jerk } = {
+    aMax: profile.motion.maxAccelerationPxS2 * 0.6,
+    maxJerkPxS3: profile.motion.maxJerkPxS3,
+  };
+
+  it('is zero at rest and grows with speed', () => {
+    expect(stoppingDistancePx(0, 0, aMax, jerk)).toBe(0);
+    expect(stoppingDistancePx(-50, 0, aMax, jerk)).toBe(0);
+    expect(stoppingDistancePx(600, 0, aMax, jerk)).toBeGreaterThan(
+      stoppingDistancePx(300, 0, aMax, jerk),
+    );
+  });
+
+  it('accounts for the acceleration the plant is CURRENTLY carrying', () => {
+    // The whole reason the old guard did not work: `v²/2a` assumes braking can
+    // begin instantly. A jerk-limited plant still accelerating at aMax has
+    // already committed to a large amount of extra travel.
+    const coasting = stoppingDistancePx(500, 0, aMax, jerk);
+    const accelerating = stoppingDistancePx(500, profile.motion.maxAccelerationPxS2, aMax, jerk);
+    expect(accelerating).toBeGreaterThan(coasting * 1.5);
+  });
+
+  it('predicts the real stopping distance to within the reserved authority', () => {
+    // Sanity: brake from a standstill target and compare the prediction against
+    // what the controller actually travels.
+    const predicted = stoppingDistancePx(400, 0, aMax, jerk);
+    const controller = createJerkLimitedScrollController({ maxPx: 1e7 });
+    controller.reanchor(0, { velocityPxS: 400 });
+    const start = controller.state.q;
+    for (let i = 0; i < 400; i++) {
+      controller.step({
+        dtMs: CONTROLLER_SUBSTEP_MS,
+        targetPx: 0, // "stop here" — error is always ≤ 0, so brake at once
+        feedForwardVelocityPxS: 0,
+        limits: following,
+      });
+    }
+    const travelled = controller.state.q - start;
+    expect(travelled).toBeGreaterThan(0);
+    // Real braking uses the full aMax, so it stops sooner than the 0.6-authority
+    // prediction — the guard is conservative, which is the safe direction.
+    expect(travelled).toBeLessThanOrEqual(predicted + 1);
+  });
+});
+
+/**
+ * H1 — the motion limits measured from the RENDERED trace.
+ *
+ * Every assertion here derives acceleration and jerk from finite differences of
+ * `q`/`v` per integration sub-step, so a guard that reaches around the
+ * acceleration state to rewrite velocity is visible instead of invisible.
+ */
+describe('realized motion limits (§29.2, §70)', () => {
+  it('keeps realized acceleration and jerk inside the limits under adversarial targets', () => {
+    const random = seededRandom(70705);
+    for (let iteration = 0; iteration < 12; iteration++) {
+      let target = 4000;
+      const frames = Array.from({ length: 1200 }, () => {
+        if (random() < 0.05) target += (random() - 0.35) * 4000;
+        return {
+          targetPx: Math.max(0, target),
+          feedForwardVelocityPxS: (random() - 0.3) * 2000,
+        };
+      });
+      const trace = substepTrace(following, frames, { initialPositionPx: 1000 });
+      // Forward-only following never reaches a wall in this corpus.
+      expect(trace.wall.some(Boolean)).toBe(false);
+      for (let i = 2; i < trace.a.length; i++) {
+        expect(Math.abs(trace.a[i] ?? 0)).toBeLessThanOrEqual(following.aMax + 1e-6);
+        expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(following.jerkMax + 1e-6);
+      }
+    }
+  });
+
+  it('keeps them inside the limits for a backward-capable profile too', () => {
+    // Under `rewinding` the reverse-travel clamp used to slam `v` to zero from
+    // full rewind speed — a 60 000 px/s³ realized jerk that the stored-`a`
+    // assertions could not see.
+    const rewinding = limitsForState('rewinding', profile);
+    const random = seededRandom(30503);
+    let target = 6000;
+    const frames = Array.from({ length: 1500 }, () => {
+      if (random() < 0.05) target += (random() - 0.7) * 5000;
+      return {
+        targetPx: Math.max(0, target),
+        feedForwardVelocityPxS: (random() - 0.6) * 1500,
+      };
+    });
+    const trace = substepTrace(rewinding, frames, { initialPositionPx: 6000 });
+    for (let i = 2; i < trace.a.length; i++) {
+      if (nearWall(trace.wall, i)) continue;
+      expect(Math.abs(trace.a[i] ?? 0)).toBeLessThanOrEqual(rewinding.aMax + 1e-6);
+      expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(rewinding.jerkMax + 1e-6);
+    }
+    // The guard brakes INTO the travel budget, so the speed left when the wall
+    // does arrive is a fraction of a rendered line per second — not the
+    // full-speed dead stop the old clamp produced.
+    for (let i = 1; i < trace.wall.length; i++) {
+      if (!trace.wall[i]) continue;
+      const step = Math.abs((trace.v[i] ?? 0) - (trace.v[i - 1] ?? 0));
+      expect(step, `wall velocity step at ${i}`).toBeLessThan(60);
+    }
+  });
+
+  it('brakes without a jerk step when the target regresses mid-motion (§70.5)', () => {
+    // The scenario: the plant is at 1000 px moving forward, a newer ordinary
+    // frame revises the target BACKWARD to 950 while still reporting positive
+    // speech velocity. The old guard answered by rewriting `v` — realized
+    // acceleration jumped to −aMax in one sub-step while `plant.a` stayed
+    // positive.
+    const frames = [
+      ...Array.from({ length: 60 }, () => ({
+        targetPx: 1400,
+        feedForwardVelocityPxS: 300,
+      })),
+      ...Array.from({ length: 400 }, () => ({
+        targetPx: 950,
+        feedForwardVelocityPxS: 300,
+      })),
+    ];
+    const trace = substepTrace(following, frames, { initialPositionPx: 1000 });
+    for (let i = 2; i < trace.a.length; i++) {
+      expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(following.jerkMax + 1e-6);
+    }
+    // Forward-only, so it cannot come back — but it must not sail far past
+    // either. (The engine's forward latch is what stops the regression reaching
+    // the controller at all in production; see engine.test.ts.)
+    expect(trace.controller.state.v).toBeGreaterThanOrEqual(0);
+  });
+
+  it('stops within the remaining error instead of sailing past it', () => {
+    // A large forward correction, then the target stops moving: the plant must
+    // arrive without overshooting, because reverse is forbidden and any
+    // overshoot is therefore permanent.
+    for (const distance of [200, 900, 3000]) {
+      const trace = substepTrace(
+        following,
+        Array.from({ length: 1500 }, () => ({ targetPx: distance })),
+      );
+      const overshoot = Math.max(...trace.q) - distance;
+      expect(overshoot, `overshoot at ${distance}px`).toBeLessThanOrEqual(
+        following.restDeadbandPx,
+      );
+      expect(trace.controller.state.q).toBeCloseTo(distance, 3);
+    }
+  });
+
+  it('never snaps the position backward inside the rest deadband', () => {
+    // §29.3's settle may close a sub-deadband gap, but "ordinary following never
+    // moves backward" has to hold at 1.5 px as much as at 150 px.
+    const trace = substepTrace(
+      following,
+      [
+        ...Array.from({ length: 900 }, () => ({ targetPx: 500 })),
+        // Target creeps back inside the deadband.
+        ...Array.from({ length: 200 }, () => ({ targetPx: 499 })),
+      ],
+      { initialPositionPx: 0 },
+    );
+    let previous = -Infinity;
+    for (const value of trace.q) {
+      expect(value).toBeGreaterThanOrEqual(previous - 1e-9);
+      previous = value;
+    }
+  });
+
+  it('comes to a stop in bounded time and distance when evidence stops (§27)', () => {
+    // Evidence loss shows up as feed-forward going to zero with the target
+    // frozen: the plant must settle, not drift.
+    const spinUp = Array.from({ length: 200 }, () => ({
+      targetPx: 100000,
+      feedForwardVelocityPxS: 800,
+    }));
+    const trace = substepTrace(following, [
+      ...spinUp,
+      ...Array.from({ length: 600 }, (_, i) => ({
+        // The last target it ever saw, held.
+        targetPx: 0,
+        feedForwardVelocityPxS: 0,
+        _: i,
+      })),
+    ]);
+    const stopIndex = trace.v.findIndex((value, i) => i > spinUp.length && value === 0);
+    expect(stopIndex).toBeGreaterThan(spinUp.length);
+    const stopTimeMs = (stopIndex - spinUp.length) * CONTROLLER_SUBSTEP_MS;
+    // Bounded by the jerk ramp plus the brake, not by the size of the error.
+    expect(stopTimeMs).toBeLessThan(1200);
+    const stopDistance = (trace.q[stopIndex] ?? 0) - (trace.q[spinUp.length] ?? 0);
+    expect(stopDistance).toBeLessThan(400);
+  });
+
+  it('crosses the catch-up safety bound without exceeding it (§30.3)', () => {
+    const catching = limitsForState('catching_up', profile);
+    expect(catching.jerkMax).toBe(following.jerkMax);
+    const trace = substepTrace(
+      catching,
+      Array.from({ length: 900 }, () => ({ targetPx: 20000, feedForwardVelocityPxS: 900 })),
+    );
+    expect(Math.max(...trace.v)).toBeLessThanOrEqual(catching.vForwardMax + 1e-6);
+    for (let i = 2; i < trace.a.length; i++) {
+      expect(Math.abs(trace.a[i] ?? 0)).toBeLessThanOrEqual(catching.aMax + 1e-6);
+      expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(catching.jerkMax + 1e-6);
+    }
+  });
+
+  it('reports saturation while limiting, and not while cruising', () => {
+    const controller = createJerkLimitedScrollController({ maxPx: 1e7 });
+    const hard = controller.step({
+      dtMs: 16.7,
+      targetPx: 1e6,
+      feedForwardVelocityPxS: 5000,
+      limits: following,
+    });
+    expect(hard.saturated).toBe(true);
+    for (let i = 0; i < 600; i++) {
+      controller.step({ dtMs: 16.7, targetPx: 400, feedForwardVelocityPxS: 0, limits: following });
+    }
+    const settled = controller.step({
+      dtMs: 16.7,
+      targetPx: 400,
+      feedForwardVelocityPxS: 0,
+      limits: following,
+    });
+    expect(settled.atRest).toBe(true);
+    expect(settled.saturated).toBe(false);
+  });
+
+  it('survives varied-refresh jitter without a jerk excursion', () => {
+    // 60 Hz that drops the odd frame, plus vsync jitter — the shape of a real
+    // 120 Hz panel sharing a GPU with a video decode.
+    const random = seededRandom(120120);
+    const controller = createJerkLimitedScrollController({ maxPx: 1e7 });
+    let target = 0;
+    let previousV = 0;
+    let previousA = 0;
+    let previousDtSec = 1 / 120;
+    for (let i = 0; i < 2000; i++) {
+      target += 6;
+      const dtMs = random() < 0.1 ? 8 + random() * 40 : 1000 / 120 + (random() - 0.5) * 2;
+      const step = controller.step({
+        dtMs,
+        targetPx: target,
+        feedForwardVelocityPxS: 360,
+        limits: following,
+      });
+      const dtSec = Math.min(dtMs, MAX_FRAME_DT_MS) / 1000;
+      const realizedA = (step.v - previousV) / dtSec;
+      // Averaged over a whole frame, realized acceleration stays inside the
+      // profile: a longer frame can only average, never amplify. Frame-averaged
+      // jerk is compared over the span the two averages cover, because two
+      // frames of very different length have their averages centred at
+      // different times.
+      expect(Math.abs(realizedA)).toBeLessThanOrEqual(following.aMax + 1e-6);
+      expect(Math.abs(realizedA - previousA)).toBeLessThanOrEqual(
+        following.jerkMax * (dtSec + previousDtSec) + 1e-6,
+      );
+      previousV = step.v;
+      previousA = realizedA;
+      previousDtSec = dtSec;
+    }
+  });
+});
+
+/**
+ * C1 — the finite-value fuse. The plant is persistent, so a single non-finite
+ * input must hold safely rather than propagate.
+ */
+describe('finite-value fuse (C1)', () => {
+  function healthyController() {
+    const controller = createJerkLimitedScrollController({ maxPx: 1e6 });
+    for (let i = 0; i < 40; i++) {
+      controller.step({ dtMs: 16.7, targetPx: 4000, feedForwardVelocityPxS: 300, limits: following });
+    }
+    return controller;
+  }
+
+  it.each([
+    ['targetPx', { targetPx: Number.NaN }],
+    ['targetPx infinite', { targetPx: Number.POSITIVE_INFINITY }],
+    ['feedForwardVelocityPxS', { feedForwardVelocityPxS: Number.NaN }],
+  ] as const)('holds without mutating plant state on a non-finite %s', (_name, patch) => {
+    const controller = healthyController();
+    const before = { ...controller.state };
+    const step = controller.step({
+      dtMs: 16.7,
+      targetPx: 4000,
+      feedForwardVelocityPxS: 300,
+      limits: following,
+      ...patch,
+    });
+    expect(step.fused).toBe(true);
+    expect(controller.state.q).toBe(before.q);
+    expect(controller.state.v).toBe(before.v);
+    expect(controller.state.a).toBe(before.a);
+    expect(Number.isFinite(step.q)).toBe(true);
+  });
+
+  it.each([
+    'omega',
+    'zeta',
+    'vForwardMax',
+    'vBackwardMax',
+    'aMax',
+    'jerkMax',
+    'feedForwardScale',
+    'restDeadbandPx',
+    'reverseTravelMaxPx',
+    'reanchorThresholdPx',
+  ] as const)('holds on a non-finite %s limit', (key) => {
+    const controller = healthyController();
+    const before = { ...controller.state };
+    const step = controller.step({
+      dtMs: 16.7,
+      targetPx: 4000,
+      feedForwardVelocityPxS: 300,
+      limits: { ...following, [key]: Number.NaN },
+    });
+    expect(step.fused).toBe(true);
+    expect(controller.state).toEqual(before);
+  });
+
+  it('resumes normally on the very next sound frame', () => {
+    const controller = healthyController();
+    const before = { ...controller.state };
+    controller.step({
+      dtMs: 16.7,
+      targetPx: Number.NaN,
+      feedForwardVelocityPxS: 300,
+      limits: following,
+    });
+    const resumed = controller.step({
+      dtMs: 16.7,
+      targetPx: 4000,
+      feedForwardVelocityPxS: 300,
+      limits: following,
+    });
+    expect(resumed.fused).toBe(false);
+    expect(Number.isFinite(resumed.q)).toBe(true);
+    // Momentum was preserved, so there is no restart kick.
+    expect(resumed.q).toBeGreaterThan(before.q);
+  });
+
+  it('refuses a non-finite reanchor rather than poisoning the plant', () => {
+    const controller = healthyController();
+    const before = { ...controller.state };
+    controller.reanchor(Number.NaN);
+    expect(controller.state).toEqual(before);
+    controller.reanchor(500, { velocityPxS: Number.NaN });
+    expect(controller.state.q).toBe(500);
+    expect(controller.state.v).toBe(0);
+  });
+
+  it('never renders a non-finite position after a poisoned frame', () => {
+    const controller = createJerkLimitedScrollController({ maxPx: 1e6 });
+    for (let i = 0; i < 300; i++) {
+      const poisoned = i % 7 === 0;
+      const step = controller.step({
+        dtMs: 16.7,
+        targetPx: poisoned ? Number.NaN : 3000,
+        feedForwardVelocityPxS: poisoned ? Number.NaN : 250,
+        limits: following,
+      });
+      expect(Number.isFinite(step.q)).toBe(true);
+      expect(Number.isFinite(step.v)).toBe(true);
+      expect(Number.isFinite(step.a)).toBe(true);
+    }
+    expect(controller.state.q).toBeGreaterThan(100);
   });
 });

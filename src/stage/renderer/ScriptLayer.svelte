@@ -70,6 +70,7 @@
     onlayoutready = undefined,
     onmotionack = undefined,
     onlayoutgeneration = undefined,
+    onlayouterror = undefined,
   }: {
     doc: StageRenderDocument;
     settings: StageSettings;
@@ -84,6 +85,8 @@
     onlayoutready?: () => void;
     onmotionack?: (ack: StageMotionAck) => void;
     onlayoutgeneration?: (generation: number) => void;
+    /** §62: the measurement is unusable after a bounded retry; the stage holds. */
+    onlayouterror?: (issues: string[]) => void;
   } = $props();
 
   /* ---- viewport + derived layout ---- */
@@ -114,6 +117,11 @@
   let lineMapPending = false;
   let lastMapBuildAtMs = 0;
   const MAP_REBUILD_THROTTLE_MS = 250;
+  /** §62 recovery: one bounded retry, then report and stay held. */
+  let mapRetries = 0;
+  let layoutErrorReported = false;
+  const MAX_MAP_RETRIES = 1;
+  const MAP_RETRY_DELAY_MS = 300;
 
   /* ---- capped-rate styling (§26.2 step 7) ---- */
   let activeTokenIndex = $state<number | null>(null);
@@ -174,13 +182,9 @@
   /* ---- block measurement pass ---- */
   $effect(() => {
     // Re-measure when the document, typography, viewport, or window changes.
+    // Anything that moves a glyph belongs here AND in `layoutInputs()`.
     void doc;
-    void settings.fontSizePx;
-    void settings.lineHeight;
-    void settings.letterSpacingEm;
-    void settings.columnWidthPercent;
-    void vw;
-    void vh;
+    void layoutInputs();
     void renderWindow;
     if (!planeEl || vh === 0) return;
     const raf = requestAnimationFrame(() => measureBlocks());
@@ -214,22 +218,42 @@
     }
   }
 
+  /**
+   * Every layout-affecting input, read reactively in one place.
+   *
+   * This list and `buildLayoutFingerprint` have to agree: an input read here but
+   * missing from the fingerprint schedules a rebuild that `sameLayout()` then
+   * calls identical, so the map is silently replaced under the OLD generation
+   * and the §33 semantic re-anchor is skipped. The fingerprint side is now
+   * enforced by an exhaustive table in `measure.ts`; this side is enforced by
+   * `measure.test.ts`, which walks every settings field that moves a glyph.
+   */
+  function layoutInputs(): string {
+    return [
+      settings.fontSizePx,
+      settings.lineHeight,
+      settings.letterSpacingEm,
+      settings.paragraphSpacingEm,
+      settings.columnWidthPercent,
+      settings.fontFamilyId,
+      settings.showCues,
+      settings.mirrorX,
+      settings.mirrorY,
+      settings.readingBandCenterPercent,
+      settings.readingBandHalfHeightPercent,
+      padTopPx,
+      padBottomPx,
+      vw,
+      vh,
+    ].join('|');
+  }
+
   /* ---- rendered line map (companion §7, §33) ---- */
   $effect(() => {
-    // Every layout-affecting input. A change here invalidates the map, bumps
-    // the layout generation, and requests a bounded layout_recovery re-anchor.
+    // A change here invalidates the map, bumps the layout generation, and
+    // requests a bounded layout_recovery re-anchor.
     void doc;
-    void settings.fontSizePx;
-    void settings.lineHeight;
-    void settings.letterSpacingEm;
-    void settings.columnWidthPercent;
-    void settings.fontFamilyId;
-    void settings.showCues;
-    void settings.mirrorX;
-    void settings.mirrorY;
-    void settings.readingBandCenterPercent;
-    void vw;
-    void vh;
+    void layoutInputs();
     void measureVersion;
     void renderWindow;
     if (!planeEl || vh === 0 || vw === 0) return;
@@ -262,6 +286,10 @@
       viewportWidthPx: vw,
       viewportHeightPx: vh,
       displayScaleFactor: typeof window === 'undefined' ? 1 : window.devicePixelRatio,
+      // The real rendered padding, not a hard-coded zero: `stagePadding()`
+      // changes with the compact-viewport breakpoint and moves every block.
+      paddingTopPx: padTopPx,
+      paddingBottomPx: padBottomPx,
     };
     // A real layout change always rebuilds and bumps the generation; a
     // coverage-only rebuild (windowed rendering scrolled) reuses it and is
@@ -281,6 +309,10 @@
       plane: planeEl,
       blocks: doc.blocks,
       fallbackLineHeightPx: linePx,
+      // §16.7: the script sits inside the mirror plane, and
+      // getBoundingClientRect() reports post-transform viewport space.
+      mirrorX: settings.mirrorX,
+      mirrorY: settings.mirrorY,
     });
     const fingerprint = buildLayoutFingerprint({ ...base, layoutGeneration });
 
@@ -314,6 +346,27 @@
       engine.receiver.setGate({ layoutGeneration }, now);
     }
     if (layoutChanged) onlayoutgeneration?.(layoutGeneration);
+
+    // §62: an unusable measurement is recoverable — layout may simply not have
+    // settled yet. Rebuild ONCE, then stop retrying and report it. The stage
+    // holds throughout (the engine suspends both the semantic planner and the
+    // guessed snapshot fallback while the map is unresolved), so a retry loop
+    // would only burn frames on the presenter's glass.
+    if (!next.valid) {
+      if (mapRetries < MAX_MAP_RETRIES) {
+        mapRetries++;
+        window.setTimeout(() => {
+          lastMapBuildAtMs = 0;
+          scheduleLineMapBuild();
+        }, MAP_RETRY_DELAY_MS);
+      } else if (!layoutErrorReported) {
+        layoutErrorReported = true;
+        onlayouterror?.(next.issues.filter((i) => i.fatal).map((i) => i.code));
+      }
+    } else {
+      mapRetries = 0;
+      layoutErrorReported = false;
+    }
   }
 
   /* ---- session gate (companion §26.1) ---- */
@@ -349,6 +402,11 @@
     if (performance.now() < manualUntilMs) return;
     const pos = tokenRect(snap.tokenIndex);
     if (!pos) return;
+    // §62: the off-window branch of `tokenRect` estimates a position from block
+    // offsets and ESTIMATED heights. That is guessed geometry, and it is exactly
+    // what must not drive motion while the rendered map is unresolved. A
+    // genuinely measured rect is fine — it is the same DOM the map reads.
+    if (!pos.measured && (lineMap === null || !lineMap.valid)) return;
     const band = computeReadingBand(vh, {
       centerPercent: settings.readingBandCenterPercent,
       halfHeightPercent: settings.readingBandHalfHeightPercent,
@@ -382,14 +440,25 @@
     engine.setFallbackTarget({ scrollPx: target, disposition, atMs: performance.now() });
   }
 
+  /**
+   * Document-space top of a viewport rect, undoing the mirror plane's flip
+   * (§16.7). `getBoundingClientRect()` is post-transform, so under `scaleY(-1)`
+   * an element's measured `top` is its distance from the plane's bottom.
+   */
+  function docTopOf(rect: DOMRect, planeRect: DOMRect): number {
+    return settings.mirrorY ? planeRect.bottom - rect.bottom : rect.top - planeRect.top;
+  }
+
   /* ---- token position resolution (degraded path only) ---- */
-  function tokenRect(tokenIndex: number): { topDoc: number; height: number } | null {
+  function tokenRect(
+    tokenIndex: number,
+  ): { topDoc: number; height: number; measured: boolean } | null {
     if (!planeEl) return null;
-    const planeTop = planeEl.getBoundingClientRect().top;
+    const planeRect = planeEl.getBoundingClientRect();
     const el = planeEl.querySelector<HTMLElement>(`[data-t="${tokenIndex}"]`);
     if (el) {
       const r = el.getBoundingClientRect();
-      return { topDoc: r.top - planeTop, height: r.height };
+      return { topDoc: docTopOf(r, planeRect), height: r.height, measured: true };
     }
     // Off-window or unmapped: estimate from the block's offsets.
     const entry = findTokenEntry(tokenIndex);
@@ -399,7 +468,9 @@
     const blockEl = planeEl.querySelector<HTMLElement>(`[data-block-id="${entry.blockId}"]`);
     if (blockEl) {
       const r = blockEl.getBoundingClientRect();
-      return { topDoc: r.top - planeTop + r.height / 2, height: linePx };
+      // The block is rendered, but the token inside it is not: the position is
+      // a midpoint guess, not a measurement.
+      return { topDoc: docTopOf(r, planeRect) + r.height / 2, height: linePx, measured: false };
     }
     const top = offsets[idx] ?? 0;
     const h = heights[idx] ?? linePx;
@@ -417,7 +488,7 @@
         1,
       );
     }
-    return { topDoc: top + h * fraction, height: linePx };
+    return { topDoc: top + h * fraction, height: linePx, measured: false };
   }
 
   function findTokenEntry(tokenIndex: number): { blockId: string; nodeKey: string } | null {
@@ -540,9 +611,13 @@
     }
     const padX = settings.fontSizePx * 0.35;
     const padY = settings.fontSizePx * 0.12;
+    // Same mirror compensation as the measurement pass: the underlay is
+    // positioned in the plane's untransformed coordinate space.
+    const docTop = settings.mirrorY ? planeRect.bottom - bottom : top - planeRect.top;
+    const docLeft = settings.mirrorX ? planeRect.right - right : left - planeRect.left;
     underlay = {
-      top: top - planeRect.top - padY,
-      left: left - planeRect.left - padX,
+      top: docTop - padY,
+      left: docLeft - padX,
       width: right - left + padX * 2,
       height: bottom - top + padY * 2,
     };

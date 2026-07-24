@@ -32,6 +32,9 @@ importers:
       '@lezer/highlight':
         specifier: ^1.2.3
         version: 1.2.3
+      '@lucide/svelte':
+        specifier: ^1.26.0
+        version: 1.26.0(svelte@5.56.7)
       '@tauri-apps/api':
         specifier: ^2.9.0
         version: 2.11.1
@@ -324,6 +327,11 @@ packages:
 
   '@lezer/markdown@1.7.2':
     resolution: {integrity: sha512-iTkYvoVcKt3WkeL7qUDyXHONZEwLio4wj8KTNi2dnjQEXBZKMV63BpQrPqfsM+OkvuRbiSTAcycYAsQzLhRNoQ==}
+
+  '@lucide/svelte@1.26.0':
+    resolution: {integrity: sha512-KUfLTlNRVrHZ460Um7jdrvh46hI/8Sw4+1k/Ttj4g6JI9bCrjD7HZVG4cqhh7LasjfDz5b+CuKrjd/k/3obYcA==}
+    peerDependencies:
+      svelte: ^5
 
   '@marijn/find-cluster-break@1.0.3':
     resolution: {integrity: sha512-FY+MKLBoTsLNJF/eLWaOsXGdz6uh3Iu1axjPf6TUq92IYumcTcXWHoS747JARLkcdlJ/Waiaxc5wQfFO8jC6NA==}
@@ -1409,6 +1417,10 @@ snapshots:
     dependencies:
       '@lezer/common': 1.5.2
       '@lezer/highlight': 1.2.3
+
+  '@lucide/svelte@1.26.0(svelte@5.56.7)':
+    dependencies:
+      svelte: 5.56.7
 
   '@marijn/find-cluster-break@1.0.3': {}
 

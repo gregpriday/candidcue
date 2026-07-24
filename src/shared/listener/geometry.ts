@@ -38,6 +38,22 @@
  * ±(z-1)/2 × 100 percent, and it GROWS WITH ZOOM — at the pack default zoom
  * 1.15 it is ±7.5%, at 1.5 it is ±25%. To reposition further, zoom in.
  * At z <= 1 there is no slack at all and the only safe offset is 0.
+ *
+ * ZOOM FLOOR
+ * ----------
+ * The transform scales the crop LAYER, which is `inset: 0` inside the media
+ * box. A zoom below 1 therefore shrinks the clip inside its own container and
+ * uncovers the container's edges — black bars around the listener, which is the
+ * same failure the offset clamp exists to prevent, arriving by a different
+ * route. Zeroing the offsets (correct, and what `maxSafeOffsetPercent` does) is
+ * not enough on its own: the shortfall is symmetric, so no offset can hide it.
+ * `effectiveCropZoom` is therefore the single place a zoom becomes a scale, and
+ * it never returns less than 1.
+ *
+ * This is deliberately NOT a clamp on the stored `cropZoom`: the producer keeps
+ * whatever the operator configured, both sides derive the same effective value
+ * from it, and the documented invariant — offsets are independent of zoom and
+ * mirroring — is unchanged.
  */
 
 /** The subset of `ListenerGeometry` that the crop transform depends on. */
@@ -60,11 +76,20 @@ function finite(value: number | undefined, fallback: number): number {
 }
 
 /**
+ * The zoom actually applied to the crop layer: never below 1, because the crop
+ * layer fills the media box and scaling it down exposes the box behind it.
+ * Both the producer and the consumer must use this, never the raw `cropZoom`.
+ */
+export function effectiveCropZoom(cropZoom: number): number {
+  return Math.max(1, finite(cropZoom, 1));
+}
+
+/**
  * Largest offset (percent of the frame) that keeps the media edge outside the
  * frame at this zoom. Zero when the clip has no overhang to spend.
  */
 export function maxSafeOffsetPercent(cropZoom: number): number {
-  const zoom = finite(cropZoom, 1);
+  const zoom = effectiveCropZoom(cropZoom);
   if (zoom <= 1) return 0;
   return round3(((zoom - 1) / 2) * 100);
 }
@@ -91,7 +116,7 @@ export function offsetSliderBound(cropZoom: number): number {
  * only place the order is decided.
  */
 export function listenerCropTransform(geometry: ListenerCropGeometry): string {
-  const zoom = finite(geometry.cropZoom, 1);
+  const zoom = effectiveCropZoom(geometry.cropZoom);
   const x = clampOffsetPercent(geometry.cropX, zoom);
   const y = clampOffsetPercent(geometry.cropY, zoom);
   const mirror = geometry.mirrorVideo ? -1 : 1;
@@ -104,7 +129,7 @@ export function listenerCropTransform(geometry: ListenerCropGeometry): string {
  * order-independent statement of what the transform is supposed to do.
  */
 export function listenerFocusPoint(geometry: ListenerCropGeometry): { x: number; y: number } {
-  const zoom = finite(geometry.cropZoom, 1);
+  const zoom = effectiveCropZoom(geometry.cropZoom);
   return {
     x: round3(0.5 + clampOffsetPercent(geometry.cropX, zoom) / 100),
     y: round3(0.5 + clampOffsetPercent(geometry.cropY, zoom) / 100),

@@ -19,6 +19,7 @@
  * control-side consumers keep working without modification.
  */
 import type { NavigationTarget } from '../contracts/compiler';
+import type { AssistSchedulingContext } from '../semantic/types';
 import type { SemanticMotionFrame } from '../contracts/smooth-follow';
 import type { TrackingSnapshot, TrackingState } from '../contracts/tracking';
 import type { MovementDecisionRecord } from './decision-log';
@@ -75,6 +76,19 @@ export type TrackingWorkerOutbound =
   | { type: 'snapshot'; snapshot: TrackingSnapshot }
   | { type: 'state_change'; state: TrackingState }
   | { type: 'diagnostic'; diagnostic: AlignmentDiagnostic }
+  /**
+   * Companion §37.1 — the local aligner's post-section-gate candidate set and
+   * the state the Luna sidecar schedules against.
+   *
+   * This is the *inverse* of `semantic_assist`: the worker offers candidates,
+   * the sidecar ranks them, and the ranking comes back bounded. Without it the
+   * sidecar has no input at all and no semantic assist can ever happen.
+   *
+   * Rate-limited inside the engine by `profile.semanticContextIntervalMs`
+   * (2 Hz) and emitted only on finalized evidence — it is NOT a per-event
+   * message and must never become one (§63).
+   */
+  | { type: 'semantic_context'; revision: number; context: AssistSchedulingContext }
   /** Companion §26.1 — the stage's motion input. */
   | { type: 'semantic_frame'; frame: SemanticMotionFrame }
   /** Companion §65 — developer diagnostics, text-free. */

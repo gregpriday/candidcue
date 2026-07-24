@@ -9,6 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   clampOffsetPercent,
+  effectiveCropZoom,
   listenerCropTransform,
   listenerFocusPoint,
   maxSafeOffsetPercent,
@@ -142,6 +143,50 @@ describe('buildListenerGeometry', () => {
     const geometry = buildListenerGeometry(1.15, { zoomPercent: 60, offsetXPercent: 20 });
     expect(geometry.cropX).toBe(0);
     expect(geometry.cropY).toBe(0);
+  });
+
+  /**
+   * M2. Zeroing the offset is necessary but NOT sufficient: the transform scales
+   * the crop layer, which is `inset: 0` inside the media box, so a zoom below 1
+   * shrinks the clip inside its own container and uncovers the container edges.
+   * The shortfall is symmetric, so no offset can hide it — the only fix is a
+   * floor on the effective zoom. This test asserts full media coverage, which is
+   * what the old zero-offset assertion silently stopped short of.
+   */
+  it('never scales the crop layer below full coverage of its container', () => {
+    const zoomedOut = buildListenerGeometry(1.15, { zoomPercent: 60, offsetXPercent: 20 });
+    expect(zoomedOut.cropZoom).toBeCloseTo(0.69, 6);
+    // The STORED zoom keeps what the operator configured...
+    expect(effectiveCropZoom(zoomedOut.cropZoom)).toBe(1);
+    // ...but nothing below 1 ever reaches the transform.
+    expect(listenerCropTransform(zoomedOut)).toBe('translate(0%, 0%) scale(1) scaleX(1)');
+  });
+
+  it.each([0, 0.1, 0.5, 0.69, 0.99, 1])(
+    'covers the media box at an effective zoom of %s',
+    (zoom) => {
+      expect(effectiveCropZoom(zoom)).toBeGreaterThanOrEqual(1);
+      const transform = listenerCropTransform({ cropX: 30, cropY: -30, cropZoom: zoom });
+      const scale = Number(/scale\(([-\d.]+)\)/.exec(transform)?.[1] ?? '0');
+      expect(scale).toBeGreaterThanOrEqual(1);
+      // With no overhang there is no legal offset either.
+      expect(transform).toContain('translate(0%, 0%)');
+    },
+  );
+
+  it('leaves zooms at or above 1 untouched', () => {
+    expect(effectiveCropZoom(1.15)).toBeCloseTo(1.15, 6);
+    expect(effectiveCropZoom(2)).toBe(2);
+    // A defective value falls back to the safe identity, never below it.
+    expect(effectiveCropZoom(Number.NaN)).toBe(1);
+    expect(effectiveCropZoom(Number.NEGATIVE_INFINITY)).toBe(1);
+  });
+
+  it('keeps the focus point centred when the clip has no overhang to spend', () => {
+    expect(listenerFocusPoint({ cropX: 40, cropY: -40, cropZoom: 0.69 })).toEqual({
+      x: 0.5,
+      y: 0.5,
+    });
   });
 
   it('defaults to a centred, unmirrored frame', () => {

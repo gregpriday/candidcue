@@ -27,6 +27,10 @@ export interface MotionSample {
   jerkPxS3: number;
   lineId: string | null;
   controllerState: string;
+  /** Acceleration/velocity limiting was active (§70 saturation counts). */
+  saturated?: boolean;
+  /** The controller's finite-value fuse held this frame (§C1). */
+  fused?: boolean;
   /** Wall time the frame's motion work took, ms (§63 budget). */
   frameCostMs?: number;
 }
@@ -43,6 +47,14 @@ export interface MotionMetrics {
   velocitySignChanges: number;
   /** Largest single-frame position change (§70.8 "visible single-frame jumps"). */
   maxFrameStepPx: number;
+  /** Frames on which a limit was actively saturating (§70). */
+  saturatedFrames: number;
+  /**
+   * Frames the controller's finite-value fuse held (§C1). Any value above zero
+   * means something upstream produced a non-finite target; the display was
+   * protected, but the cause is a defect.
+   */
+  fusedFrames: number;
   p95FrameCostMs: number;
   meanFrameCostMs: number;
 }
@@ -104,6 +116,8 @@ export function createStageMotionDiagnostics(
     maxTrackingErrorPx: 0,
     velocitySignChanges: 0,
     maxFrameStepPx: 0,
+    saturatedFrames: 0,
+    fusedFrames: 0,
     p95FrameCostMs: 0,
     meanFrameCostMs: 0,
   };
@@ -149,6 +163,8 @@ export function createStageMotionDiagnostics(
     sample(sample) {
       metrics.frames++;
       if (sample.hitch) metrics.droppedFrames++;
+      if (sample.saturated) metrics.saturatedFrames++;
+      if (sample.fused) metrics.fusedFrames++;
 
       metrics.maxAbsJerkPxS3 = Math.max(metrics.maxAbsJerkPxS3, Math.abs(sample.jerkPxS3));
       metrics.maxAbsAccelerationPxS2 = Math.max(
@@ -223,6 +239,8 @@ export function createStageMotionDiagnostics(
       metrics.maxTrackingErrorPx = 0;
       metrics.velocitySignChanges = 0;
       metrics.maxFrameStepPx = 0;
+      metrics.saturatedFrames = 0;
+      metrics.fusedFrames = 0;
       metrics.p95FrameCostMs = 0;
       metrics.meanFrameCostMs = 0;
       frameCosts.length = 0;

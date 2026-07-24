@@ -87,6 +87,14 @@ export class CommandRouter {
     return this.log;
   }
 
+  /**
+   * Is a Luna interpretation outstanding? The pipeline keeps its §33.11 tick
+   * armed while this is true, so the expiry fires even with no transcript.
+   */
+  hasPendingLuna(): boolean {
+    return this.pendingLuna !== undefined;
+  }
+
   /** Stage chip currently visible, if any (spec §33.10). */
   stageAcknowledgement(nowMs: number): StageAcknowledgement | undefined {
     if (this.stageAck !== undefined && nowMs < this.stageAck.untilMs) return this.stageAck;

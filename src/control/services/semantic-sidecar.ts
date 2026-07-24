@@ -6,14 +6,12 @@
  * validated + fused evidence — the scheduler's own validation/fusion/clamp
  * layers do that work and are deliberately left untouched.
  *
- * WHAT THIS DOES NOT DO YET, and why: `AssistSchedulingContext.candidates`
- * must be `LocalCandidate[]` produced by the alignment engine. The tracking
- * worker does not emit candidates today (`TrackingWorkerOutbound` has no such
- * message), so nothing can build a context. That emission is a change to
- * `src/shared/tracking/**` + `worker-protocol.ts`, which this pass does not
- * own. Until a candidate source is attached via `attachContextSource`, the
- * sidecar deliberately stays inert rather than inventing assist activity — an
- * un-instrumented build shows no semantic activity, which is honest.
+ * The candidate feed is the tracking worker's `semantic_context` message
+ * (companion §37.1): the alignment engine emits its post-section-gate candidate
+ * list at ~2 Hz on finalized evidence, the session store attaches it here via
+ * `attachContextSource`, and fused evidence goes back to the worker's
+ * `semantic_assist` input. A sidecar with no source attached stays inert by
+ * design rather than inventing assist activity.
  */
 import {
   SemanticAssistScheduler,

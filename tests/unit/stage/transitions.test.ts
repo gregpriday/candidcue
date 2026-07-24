@@ -94,6 +94,77 @@ describe('plant-state authority (§26.3)', () => {
     }
   });
 
+  /**
+   * M1. The overwrite token is a licence to TELEPORT the plant, and it used to
+   * outlive the transition that granted it. The frame loop consumes it on the
+   * next frame it runs — which, after a freeze, a blank, or a hidden window, can
+   * be seconds later and several supersessions after the fact.
+   */
+  it('revokes the token when another transition supersedes the re-anchor', () => {
+    const c = createStageTransitionController();
+    c.submit(directive({ id: 'r1', type: 'reanchor', reason: 'distant_retake' }), 1000);
+    // A higher-authority directive takes over before the loop ever ran.
+    c.submit(
+      directive({ id: 'm1', type: 'settle', authority: 'manual', reason: 'manual_navigation' }),
+      1001,
+    );
+    expect(c.active?.directive.id).toBe('m1');
+    expect(c.consumePlantOverwrite()).toBeNull();
+  });
+
+  it('revokes the token when the re-anchor expires unconsumed', () => {
+    const c = createStageTransitionController();
+    c.submit(
+      directive({ id: 'r1', type: 'reanchor', reason: 'distant_retake', expiresAtMs: 2000 }),
+      1000,
+    );
+    // The frame loop was stopped (frozen stage / hidden window) past the
+    // deadline. The stale destination must not be applied on resume.
+    c.update(2500);
+    expect(c.active).toBeNull();
+    expect(c.consumePlantOverwrite()).toBeNull();
+  });
+
+  it('revokes the token when the transition is completed first', () => {
+    const c = createStageTransitionController();
+    c.submit(directive({ id: 'r1', type: 'reanchor', reason: 'distant_retake' }), 1000);
+    c.complete('r1');
+    expect(c.consumePlantOverwrite()).toBeNull();
+  });
+
+  it('keeps the token for a re-anchor that is still the active transition', () => {
+    const c = createStageTransitionController();
+    c.submit(directive({ id: 'r1', type: 'reanchor', reason: 'distant_retake' }), 1000);
+    c.update(1500); // not expired
+    expect(c.consumePlantOverwrite()?.id).toBe('r1');
+  });
+
+  it('grants the NEWER token when one re-anchor supersedes another', () => {
+    const c = createStageTransitionController();
+    c.submit(directive({ id: 'r1', type: 'reanchor', reason: 'distant_retake' }), 1000);
+    c.submit(
+      directive({
+        id: 'r2',
+        type: 'reanchor',
+        authority: 'command',
+        reason: 'command_navigation',
+        destinationTokenIndex: 900,
+      }),
+      1001,
+    );
+    const token = c.consumePlantOverwrite();
+    expect(token?.id).toBe('r2');
+    expect(token?.destinationTokenIndex).toBe(900);
+    expect(c.consumePlantOverwrite()).toBeNull();
+  });
+
+  it('drops the token on reset', () => {
+    const c = createStageTransitionController();
+    c.submit(directive({ id: 'r1', type: 'reanchor', reason: 'distant_retake' }), 1000);
+    c.reset();
+    expect(c.consumePlantOverwrite()).toBeNull();
+  });
+
   it('forgets old ids beyond the history window so it cannot grow unbounded', () => {
     const c = createStageTransitionController({ historySize: 4 });
     for (let i = 0; i < 10; i++) {

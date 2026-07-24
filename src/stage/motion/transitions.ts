@@ -63,8 +63,22 @@ export function createStageTransitionController(
   const seen = new Set<string>();
   const order: string[] = [];
   let active: ActiveTransition | null = null;
+  /**
+   * The plant-overwrite licence, bound to the directive that granted it. It is
+   * only ever consumed while that exact directive is still the ACTIVE
+   * transition, so a supersession, an expiry, or a completion revokes it
+   * implicitly — a token that outlives its transition is a stale re-anchor
+   * waiting to teleport the plant on the next frame the loop happens to run
+   * (which, after a freeze or a hidden window, can be seconds later).
+   */
   let pendingOverwrite: StageTransitionDirective | null = null;
   let highestEpoch = Number.NEGATIVE_INFINITY;
+
+  function revokeOverwrite(id: string | undefined) {
+    if (pendingOverwrite && (id === undefined || pendingOverwrite.id === id)) {
+      pendingOverwrite = null;
+    }
+  }
 
   function remember(id: string) {
     if (seen.has(id)) return;
@@ -112,6 +126,8 @@ export function createStageTransitionController(
 
       remember(directive.id);
       highestEpoch = Math.max(highestEpoch, directive.semanticEpoch);
+      // This directive supersedes whatever was active; its licence goes with it.
+      revokeOverwrite(active?.directive.id);
       active = {
         directive,
         startedAtMs: nowMs,
@@ -127,6 +143,7 @@ export function createStageTransitionController(
 
     update(nowMs) {
       if (active && nowMs >= active.expiresAtMs) {
+        revokeOverwrite(active.directive.id);
         active = null;
       }
     },
@@ -134,10 +151,15 @@ export function createStageTransitionController(
     consumePlantOverwrite() {
       const directive = pendingOverwrite;
       pendingOverwrite = null;
+      // Re-check at consumption: the licence is only valid while its own
+      // directive is still the active transition.
+      if (!directive) return null;
+      if (!active || active.directive.id !== directive.id) return null;
       return directive;
     },
 
     complete(id) {
+      revokeOverwrite(id);
       if (active && active.directive.id === id) active = null;
     },
 

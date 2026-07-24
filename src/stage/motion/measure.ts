@@ -43,12 +43,48 @@ export interface MeasureStageOptions {
   plane: HTMLElement;
   blocks: readonly CompiledBlock[];
   fallbackLineHeightPx: number;
+  /**
+   * Whether the plane is inside an active mirror transform (§16.7). MUST be
+   * passed: `getBoundingClientRect()` reports VIEWPORT-space rects, which
+   * include every ancestor transform, so under `scaleY(-1)` later lines have
+   * DECREASING tops and the whole document measures upside down. Mirror mode is
+   * a core teleprompter feature (glass rigs), not an edge case.
+   */
+  mirrorX?: boolean;
+  mirrorY?: boolean;
+}
+
+/**
+ * Convert a viewport-space rect into document coordinates relative to the
+ * plane, undoing the mirror plane's flip.
+ *
+ * A flip about the mirror plane's centre maps viewport `y` to `C − y`, so under
+ * a vertical mirror an element's measured `top` is the distance from the
+ * plane's BOTTOM to the element's bottom. Reflecting both the element rect and
+ * the plane rect through the same flip recovers the layout-space offset
+ * exactly — `planeRect.bottom − rect.bottom` — with no dependency on where the
+ * mirror's centre actually is. The same argument applies per-axis, so a
+ * `scale(-1, -1)` plane is handled by composing the two independent cases.
+ */
+export function toDocumentRect(
+  rect: { top: number; bottom: number; left: number; right: number },
+  plane: { top: number; bottom: number; left: number; right: number },
+  mirrorX: boolean,
+  mirrorY: boolean,
+): { topY: number; bottomY: number; xStart: number; xEnd: number } {
+  const topY = mirrorY ? plane.bottom - rect.bottom : rect.top - plane.top;
+  const bottomY = mirrorY ? plane.bottom - rect.top : rect.bottom - plane.top;
+  const xStart = mirrorX ? plane.right - rect.right : rect.left - plane.left;
+  const xEnd = mirrorX ? plane.right - rect.left : rect.right - plane.left;
+  return { topY, bottomY, xStart, xEnd };
 }
 
 /** Measure every rendered spoken token and block box in document coordinates. */
 export function measureStageLayout(options: MeasureStageOptions): StageMeasurement {
   const { plane, blocks, fallbackLineHeightPx } = options;
-  const planeTop = plane.getBoundingClientRect().top;
+  const mirrorX = options.mirrorX === true;
+  const mirrorY = options.mirrorY === true;
+  const planeRect = plane.getBoundingClientRect();
   const sections = sectionIdsForBlocks(blocks);
   const blockMeta = new Map(blocks.map((b) => [b.id, b]));
 
@@ -58,9 +94,12 @@ export function measureStageLayout(options: MeasureStageOptions): StageMeasureme
     const id = el.dataset.blockId;
     if (!id) continue;
     const meta = blockMeta.get(id);
-    const rect = el.getBoundingClientRect();
-    const topY = rect.top - planeTop;
-    const bottomY = rect.bottom - planeTop;
+    const { topY, bottomY } = toDocumentRect(
+      el.getBoundingClientRect(),
+      planeRect,
+      mirrorX,
+      mirrorY,
+    );
     measuredBlocks.push({
       blockId: id,
       sectionId: sections.get(id) ?? 'section:0',
@@ -94,10 +133,7 @@ export function measureStageLayout(options: MeasureStageOptions): StageMeasureme
     tokens.push({
       tokenIndex,
       blockId,
-      xStart: rect.left,
-      xEnd: rect.right,
-      topY: rect.top - planeTop,
-      bottomY: rect.bottom - planeTop,
+      ...toDocumentRect(rect, planeRect, mirrorX, mirrorY),
     });
   }
   range.detach?.();
@@ -133,6 +169,10 @@ export interface FingerprintInput {
   viewportWidthPx: number;
   viewportHeightPx: number;
   displayScaleFactor: number;
+  /** Actual rendered top padding, px — NOT a constant (§16 compact viewports). */
+  paddingTopPx: number;
+  /** Actual rendered bottom padding, px. */
+  paddingBottomPx: number;
   listenerGeometryHash?: string;
   fontHash?: string;
 }
@@ -151,33 +191,72 @@ export function buildLayoutFingerprint(input: FingerprintInput): LayoutFingerpri
     fontHash: input.fontHash,
     fontSizePx: s.fontSizePx,
     lineHeight: s.lineHeight,
-    marginTopPx: 0,
-    marginBottomPx: 0,
+    letterSpacingEm: s.letterSpacingEm,
+    paragraphSpacingEm: s.paragraphSpacingEm ?? DEFAULT_PARAGRAPH_SPACING_EM,
+    marginTopPx: input.paddingTopPx,
+    marginBottomPx: input.paddingBottomPx,
     marginHorizontalPx: s.columnWidthPercent,
     mirrored: s.mirrorX || s.mirrorY,
+    mirrorX: s.mirrorX,
+    mirrorY: s.mirrorY,
+    readingBandCenterPercent: s.readingBandCenterPercent,
+    readingBandHalfHeightPercent: s.readingBandHalfHeightPercent,
     cueLayout: s.showCues ? 'cues' : 'none',
     listenerGeometryHash: input.listenerGeometryHash ?? 'none',
   };
 }
 
+/** Renderer default when the setting is absent (A.3). Keep in sync with ScriptLayer. */
+export const DEFAULT_PARAGRAPH_SPACING_EM = 0.7;
+
+/**
+ * Which fingerprint fields identify the LAYOUT, as opposed to identifying the
+ * map instance built from it.
+ *
+ * Typed `Record<keyof LayoutFingerprint, boolean>`: a field added to the
+ * contract fails compilation here until it is classified, which is the only
+ * reliable way to stop the omissions this table exists to prevent. Only
+ * `layoutGeneration` is excluded — it is the *name* the stage gives a layout,
+ * not an input to it, so two fingerprints that differ only in generation
+ * describe the same geometry.
+ */
+const IDENTIFIES_LAYOUT: Record<keyof LayoutFingerprint, boolean> = {
+  layoutGeneration: false,
+
+  scriptCompileHash: true,
+  stageGeneration: true,
+  displayScaleFactor: true,
+  viewportWidthPx: true,
+  viewportHeightPx: true,
+  fontFamily: true,
+  fontHash: true,
+  fontSizePx: true,
+  lineHeight: true,
+  letterSpacingEm: true,
+  paragraphSpacingEm: true,
+  marginTopPx: true,
+  marginBottomPx: true,
+  marginHorizontalPx: true,
+  mirrored: true,
+  mirrorX: true,
+  mirrorY: true,
+  readingBandCenterPercent: true,
+  readingBandHalfHeightPercent: true,
+  cueLayout: true,
+  listenerGeometryHash: true,
+};
+
+const LAYOUT_KEYS = (
+  Object.keys(IDENTIFIES_LAYOUT) as Array<keyof LayoutFingerprint>
+).filter((key) => IDENTIFIES_LAYOUT[key]);
+
 /** True when two fingerprints describe the same layout (§33 invalidation). */
 export function sameLayout(a: LayoutFingerprint | null, b: LayoutFingerprint | null): boolean {
   if (!a || !b) return false;
-  return (
-    a.scriptCompileHash === b.scriptCompileHash &&
-    a.stageGeneration === b.stageGeneration &&
-    a.displayScaleFactor === b.displayScaleFactor &&
-    a.viewportWidthPx === b.viewportWidthPx &&
-    a.viewportHeightPx === b.viewportHeightPx &&
-    a.fontFamily === b.fontFamily &&
-    a.fontHash === b.fontHash &&
-    a.fontSizePx === b.fontSizePx &&
-    a.lineHeight === b.lineHeight &&
-    a.marginHorizontalPx === b.marginHorizontalPx &&
-    a.mirrored === b.mirrored &&
-    a.cueLayout === b.cueLayout &&
-    a.listenerGeometryHash === b.listenerGeometryHash
-  );
+  for (const key of LAYOUT_KEYS) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
 }
 
 /**

@@ -3,12 +3,18 @@
  * (companion §26.2, §32, §33, §54, §61, §70).
  */
 import { describe, it, expect } from 'vitest';
-import type { SemanticMotionFrame, StageTransitionDirective } from '../../../src/shared/contracts';
+import {
+  DEFAULT_SMOOTH_FOLLOW_PROFILE as DEFAULT_PROFILE,
+  type SemanticMotionFrame,
+  type StageTransitionDirective,
+} from '../../../src/shared/contracts';
 import {
   buildRenderedLineMap,
   createStageMotionEngine,
   emptyRenderedLineMap,
   identityUnitAxis,
+  isCalibrationEvidence,
+  limitsForState,
   type StageMotionEngine,
   type StageRenderedLineMap,
 } from '../../../src/stage/motion';
@@ -200,6 +206,104 @@ describe('holding and degraded operation (§62, §32)', () => {
     expect(trace[trace.length - 1]?.scrollPx).toBe(0);
   });
 
+  /**
+   * H3. The previous version of the test above never installed the tracking
+   * fallback, so it proved a hold that production did not provide: an invalid
+   * map disabled the semantic planner while the snapshot fallback stayed
+   * eligible, and that path estimates positions from block offsets and
+   * ESTIMATED heights. The stage moved on guessed geometry at exactly the
+   * moment §62 requires it to hold.
+   */
+  it('holds even with an ACTIVE tracking fallback while the map is invalid (§62)', () => {
+    const engine = makeEngine(emptyRenderedLineMap(fixtureFingerprint()), 10_000);
+    engine.setFallbackTarget({ scrollPx: 4200, disposition: 'follow', atMs: 0 });
+    const trace = drive(engine, { durationMs: 2000 });
+    expect(trace.every((f) => f.source === 'hold')).toBe(true);
+    expect(engine.controller.state.q).toBe(0);
+    expect(trace[trace.length - 1]?.controllerState).toContain('map_unresolved');
+  });
+
+  it('holds against a fallback that would re-anchor, too', () => {
+    // `reanchor`/`instant` dispositions write plant state directly. While the
+    // map is unresolved that write has no trustworthy destination.
+    const engine = makeEngine(emptyRenderedLineMap(fixtureFingerprint()), 10_000);
+    engine.setFallbackTarget({ scrollPx: 7777, disposition: 'reanchor', atMs: 0 });
+    engine.frame(0);
+    engine.frame(16.7);
+    expect(engine.controller.state.q).toBe(0);
+  });
+
+  it('holds before any map has been built at all', () => {
+    const engine = createStageMotionEngine({ unitAxis: identityUnitAxis() });
+    engine.configureSession(
+      { sessionId: 'session-a', sessionGeneration: 1, scriptCompileHash: 'hash-a', layoutGeneration: 1 },
+      0,
+    );
+    engine.setBounds(0, 10_000);
+    engine.setFallbackTarget({ scrollPx: 3000, disposition: 'follow', atMs: 0 });
+    for (let t = 0; t < 1000; t += 16.7) engine.frame(t);
+    expect(engine.controller.state.q).toBe(0);
+  });
+
+  it('resumes the fallback as soon as a valid map arrives', () => {
+    const engine = makeEngine(emptyRenderedLineMap(fixtureFingerprint()), 10_000);
+    engine.setFallbackTarget({ scrollPx: 2000, disposition: 'follow', atMs: 0 });
+    for (let t = 0; t < 500; t += 16.7) engine.frame(t);
+    expect(engine.controller.state.q).toBe(0);
+
+    const { map, layout } = mapFor();
+    engine.setLineMap(map);
+    engine.setBounds(0, layout.contentHeightPx);
+    let last = engine.frame(500);
+    for (let t = 500; t < 5000; t += 16.7) last = engine.frame(t);
+    expect(last.source).toBe('fallback');
+    expect(last.scrollPx).toBeCloseTo(2000, 0);
+  });
+
+  it('reports a non-finite fallback target through the fuse instead of rendering NaN (C1)', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    drive(engine, { durationMs: 1000 });
+    const before = engine.controller.state.q;
+    engine.setFallbackTarget({ scrollPx: Number.NaN, disposition: 'follow', atMs: 4000 });
+    let last = engine.frame(5000);
+    for (let t = 5000; t < 6000; t += 16.7) last = engine.frame(t);
+    expect(Number.isFinite(last.scrollPx)).toBe(true);
+    expect(engine.controller.state.q).toBe(before);
+    expect(engine.diagnostics.metrics.fusedFrames).toBeGreaterThan(0);
+    expect(last.controllerState).toContain('fused');
+  });
+
+  it('discards a poisoned frame at the gate and keeps rendering finite pixels (C1)', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    drive(engine, { durationMs: 1500 });
+
+    for (const field of [
+      'estimatedUnit',
+      'committedUnit',
+      'velocityUnitsPerSecond',
+      'accelerationUnitsPerSecond2',
+      'confidence',
+      'tokenIndex',
+      'layoutGeneration',
+      'positionVariance',
+    ] as const) {
+      const accepted = engine.receiveFrame(
+        frame({ revision: 9000, sessionTimeMs: 1500, [field]: Number.NaN } as never),
+        1500,
+      );
+      expect(accepted, field).toBe(false);
+    }
+
+    let last = engine.frame(1520);
+    for (let t = 1520; t < 3000; t += 16.7) last = engine.frame(t);
+    expect(Number.isFinite(last.scrollPx)).toBe(true);
+    expect(Number.isFinite(engine.controller.state.v)).toBe(true);
+    expect(Number.isFinite(engine.controller.state.a)).toBe(true);
+    expect(engine.receiver.stats.byReason.malformed).toBe(8);
+  });
+
   it('falls back to snapshot-driven pixel targets when frames go stale', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
@@ -317,6 +421,219 @@ describe('transitions and authority (§53, §26.3)', () => {
   });
 });
 
+/**
+ * H1, engine side. Under a forward-only profile the desired position is latched
+ * monotonically: reverse is forbidden, so a target that moves BACKWARD can only
+ * park the plant somewhere it can never leave. A genuine regression arrives as a
+ * backward-capable state or a re-anchor directive, both of which release it.
+ */
+describe('forward target latch (§70.5)', () => {
+  it('ignores a backward target revision while ordinary following', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    drive(engine, { durationMs: 4000, unitsPerSecond: 6 });
+    const advanced = engine.controller.state.q;
+    expect(advanced).toBeGreaterThan(200);
+
+    // A newer frame that revises the position backward, still reporting
+    // positive speech velocity — the exact scenario the review named.
+    let last = engine.frame(4000);
+    for (let t = 4000; t < 6000; t += 16.7) {
+      engine.receiveFrame(
+        frame({
+          revision: 100000 + t,
+          sessionTimeMs: t,
+          estimatedUnit: 4,
+          committedUnit: 3,
+          tokenIndex: 4,
+          velocityUnitsPerSecond: 6,
+        }),
+        t,
+      );
+      last = engine.frame(t);
+    }
+    expect(engine.targetRegressions).toBeGreaterThan(0);
+    expect(last.controllerState).toContain('target_regression');
+    // The plant did not chase a target it cannot reach, and did not move
+    // backward either.
+    expect(engine.controller.state.q).toBeGreaterThanOrEqual(advanced - 1e-6);
+    expect(last.targetPx).toBeGreaterThanOrEqual(advanced - map.linePitchPx);
+  });
+
+  it('never renders backward motion while the latch is engaged', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    drive(engine, { durationMs: 3000, unitsPerSecond: 8 });
+    let previous = engine.controller.state.q;
+    for (let t = 3000; t < 5000; t += 16.7) {
+      engine.receiveFrame(
+        frame({
+          revision: 200000 + t,
+          sessionTimeMs: t,
+          estimatedUnit: t % 200 < 100 ? 2 : 40,
+          tokenIndex: 2,
+          velocityUnitsPerSecond: 5,
+        }),
+        t,
+      );
+      const result = engine.frame(t);
+      expect(result.scrollPx).toBeGreaterThanOrEqual(previous - 1e-9);
+      previous = result.scrollPx;
+    }
+  });
+
+  it('releases the latch for a backward-capable state (an explicit regression)', () => {
+    expect(limitsForState('rewinding', DEFAULT_PROFILE).allowBackward).toBe(true);
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    drive(engine, { durationMs: 4000, unitsPerSecond: 6 });
+    const advanced = engine.controller.state.q;
+
+    let last = engine.frame(4000);
+    for (let t = 4000; t < 7000; t += 16.7) {
+      engine.receiveFrame(
+        frame({
+          revision: 300000 + t,
+          sessionTimeMs: t,
+          estimatedUnit: 3,
+          committedUnit: 3,
+          tokenIndex: 3,
+          velocityUnitsPerSecond: -2,
+          state: 'rewinding',
+          behavior: 'return',
+        }),
+        t,
+      );
+      last = engine.frame(t);
+    }
+    expect(last.controllerState).not.toContain('target_regression');
+    expect(engine.controller.state.q).toBeLessThan(advanced);
+  });
+
+  it('releases the latch on an authorized re-anchor', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    drive(engine, { durationMs: 4000, unitsPerSecond: 6 });
+    engine.manualOverride(50, 4000);
+    // The re-anchor releases the latch, so the tracker's re-acquired (lower)
+    // position is followed instead of being clamped to the pre-override one.
+    let last = engine.frame(4000);
+    for (let t = 4016; t < 9000; t += 16.7) {
+      engine.receiveFrame(
+        frame({ revision: 400000 + Math.round(t), sessionTimeMs: t, estimatedUnit: 5, tokenIndex: 5 }),
+        t,
+      );
+      last = engine.frame(t);
+    }
+    // The latch does not drag the plant back toward the position it held before
+    // the manual reposition: the target is the path's own answer for unit 5.
+    expect(last.controllerState).not.toContain('target_regression');
+    expect(engine.targetRegressions).toBe(0);
+    expect(last.targetPx).toBeCloseTo(map.sampleMotionPath(5)?.scrollPx ?? -1, 0);
+  });
+});
+
+/**
+ * H4. An interval whose SECANT exceeds the visual-block limit cannot be
+ * followed: the path would have to cover the whole image height inside one
+ * spoken token. The stage holds at the entry and crosses it as one authorized
+ * re-anchor (§53) instead of racing at the velocity ceiling.
+ */
+describe('visual-block spans (§8.6)', () => {
+  function visualMap() {
+    const layout = syntheticLayout({
+      blocks: [
+        { kind: 'paragraph', tokens: 6 },
+        { kind: 'paragraph', tokens: 1 },
+        { kind: 'image', heightPx: 900 },
+        { kind: 'paragraph', tokens: 1 },
+        { kind: 'paragraph', tokens: 30 },
+      ],
+      startY: 400,
+      paragraphGapPx: 0,
+    });
+    const map = buildRenderedLineMap({
+      fingerprint: fixtureFingerprint(),
+      tokens: layout.tokens,
+      blocks: layout.blocks,
+      readingLineStartY: R,
+      lineHeightPx: layout.lineHeightPx,
+      viewportHeightPx: 1080,
+      maxScrollPx: layout.contentHeightPx,
+      maxSlopePxPerUnit: layout.lineHeightPx * 8,
+      boundarySlopeClampPxPerUnit: layout.lineHeightPx * 3,
+    });
+    return { map, layout };
+  }
+
+  it('holds at the span entry rather than racing across the image', () => {
+    const { map, layout } = visualMap();
+    const span = map.visualBlockSpans[0];
+    expect(span).toBeDefined();
+
+    const engine = makeEngine(map, layout.contentHeightPx);
+    const inside = ((span?.unitStart ?? 0) + (span?.unitEnd ?? 1)) / 2;
+    let last = engine.frame(0);
+    for (let t = 0; t < 2500; t += 16.7) {
+      engine.receiveFrame(
+        frame({
+          revision: 1 + Math.round(t),
+          sessionTimeMs: t,
+          estimatedUnit: inside,
+          committedUnit: inside,
+          tokenIndex: Math.floor(inside),
+          velocityUnitsPerSecond: 0.2,
+        }),
+        t,
+      );
+      last = engine.frame(t);
+    }
+    expect(last.controllerState).toContain('visual_block');
+    // Parked at the entry, not somewhere in the middle of the image.
+    expect(engine.controller.state.q).toBeCloseTo(span?.scrollStartPx ?? 0, 0);
+    expect(Math.abs(engine.controller.state.v)).toBeLessThan(5);
+  });
+
+  it('crosses the span as one authorized re-anchor when the presenter passes it', () => {
+    const { map, layout } = visualMap();
+    const span = map.visualBlockSpans[0];
+    const engine = makeEngine(map, layout.contentHeightPx);
+    const inside = ((span?.unitStart ?? 0) + (span?.unitEnd ?? 1)) / 2;
+    let t = 0;
+    for (; t < 2000; t += 16.7) {
+      engine.receiveFrame(
+        frame({
+          revision: 1 + Math.round(t),
+          sessionTimeMs: t,
+          estimatedUnit: inside,
+          tokenIndex: Math.floor(inside),
+          velocityUnitsPerSecond: 0.2,
+        }),
+        t,
+      );
+      engine.frame(t);
+    }
+    const beyond = (span?.unitEnd ?? 1) + 0.5;
+    engine.receiveFrame(
+      frame({
+        revision: 999999,
+        sessionTimeMs: t,
+        estimatedUnit: beyond,
+        tokenIndex: Math.ceil(beyond),
+        velocityUnitsPerSecond: 2,
+      }),
+      t,
+    );
+    const crossed = engine.frame(t);
+    expect(crossed.controllerState).not.toContain('visual_block');
+    // ONE discontinuity: the plant lands past the image immediately instead of
+    // racing ~900 px at the velocity ceiling for a second.
+    expect(crossed.scrollPx).toBeGreaterThanOrEqual((span?.scrollEndPx ?? 0) - 5);
+    // ...and it arrives calmly, not carrying the speed a race would have built.
+    expect(Math.abs(crossed.velocityPxS)).toBeLessThan(50);
+  });
+});
+
 describe('layout invalidation during Live (§33)', () => {
   it('preserves the semantic position across a rebuild instead of raw scrollTop', () => {
     const wide = mapFor(1, { columnWidthPx: 900 });
@@ -348,6 +665,72 @@ describe('layout invalidation during Live (§33)', () => {
     );
     expect(stale).toBe(false);
     expect(engine.receiver.stats.byReason.layout_generation).toBeGreaterThan(0);
+  });
+});
+
+describe('unit-axis calibration evidence (§6 seam)', () => {
+  it('only calibrates on frames the tracker actually stands behind', () => {
+    expect(isCalibrationEvidence(frame())).toBe(true);
+    expect(isCalibrationEvidence(frame({ state: 'catching_up' }))).toBe(true);
+
+    // States that are guessing, coasting, or mid-correction.
+    for (const state of [
+      'uncertain',
+      'coasting',
+      'acquiring',
+      'adlib_hold',
+      'retake_pending',
+      'rewinding',
+      'reanchoring',
+      'paused',
+      'lost_local',
+    ] as const) {
+      expect(isCalibrationEvidence(frame({ state })), state).toBe(false);
+    }
+    // Low confidence, and an in-flight retake, are also not evidence.
+    expect(isCalibrationEvidence(frame({ confidence: 0.2 }))).toBe(false);
+    expect(isCalibrationEvidence(frame({ behavior: 'retake' }))).toBe(false);
+    expect(isCalibrationEvidence(frame({ behavior: 'retake_candidate' }))).toBe(false);
+  });
+
+  it('does not let uncertain frames distort the learned axis', () => {
+    const clean = createStageMotionEngine();
+    const polluted = createStageMotionEngine();
+    for (const engine of [clean, polluted]) {
+      engine.configureSession(
+        { sessionId: 'session-a', sessionGeneration: 1, scriptCompileHash: 'hash-a', layoutGeneration: 1 },
+        0,
+      );
+    }
+    let revision = 0;
+    for (let token = 0; token <= 60; token += 4) {
+      revision++;
+      const sound = frame({
+        revision,
+        sessionTimeMs: revision * 50,
+        estimatedUnit: token * 1.25,
+        tokenIndex: token,
+      });
+      clean.receiveFrame(sound, revision * 50);
+      polluted.receiveFrame(sound, revision * 50);
+      // The polluted feed also carries a low-confidence guess that is wrong by
+      // a wide margin — the kind a tracker emits while it is unsure.
+      revision++;
+      polluted.receiveFrame(
+        frame({
+          revision,
+          sessionTimeMs: revision * 50,
+          estimatedUnit: token * 1.25 + 0.6,
+          tokenIndex: token + 25,
+          state: 'uncertain',
+          confidence: 0.2,
+          behavior: 'lost',
+        }),
+        revision * 50,
+      );
+    }
+    expect(clean.unitAxis.toMapUnit(50)).toBeCloseTo(40, 3);
+    expect(polluted.unitAxis.toMapUnit(50)).toBeCloseTo(clean.unitAxis.toMapUnit(50), 3);
   });
 });
 

@@ -2,6 +2,8 @@
   Native select restyled on tokens; quiet focus (bg/border shift only).
 -->
 <script lang="ts">
+  import Icon from './Icon.svelte';
+
   export interface SelectOption {
     value: string;
     label: string;
@@ -36,9 +38,7 @@
         <option value={option.value} disabled={option.disabled}>{option.label}</option>
       {/each}
     </select>
-    <svg class="chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M6 9.5l6 6 6-6" />
-    </svg>
+    <span class="chevron"><Icon name="chevron-down" size={14} /></span>
   </div>
 </div>
 
@@ -93,6 +93,7 @@
 
   .chevron {
     position: absolute;
+    display: flex;
     right: var(--space-3);
     top: 50%;
     transform: translateY(-50%);

@@ -40,8 +40,20 @@ import {
   ManualCommitDriver,
   RealtimeSessionController,
   WebRtcTranscriptionTransport,
+  type TransportTimers,
 } from './realtime';
 import { ipcInvoke } from './ipc';
+
+/**
+ * §33.11: how often `CommandRouter.tick` is driven. The router's time-based
+ * expiry (`expireLuna`) otherwise only runs when new transcript arrives, which
+ * is precisely what does NOT happen while the aligner is frozen in
+ * COMMAND_PENDING waiting for a Luna handoff that never returns.
+ *
+ * 250 ms is well inside the 3 s hard timeout and costs nothing measurable — the
+ * tick is a single comparison unless something is actually pending.
+ */
+export const COMMAND_TICK_INTERVAL_MS = 250;
 
 export interface VoicePipelineDeps {
   sessionId: string;
@@ -59,6 +71,13 @@ export interface VoicePipelineDeps {
   onTrackingEvent(event: TrackingEvent): void;
   /** Command-consumed items to exclude from alignment (§33.4). */
   onMaskItems(itemIds: string[]): void;
+  /**
+   * §33.4 tail: the phrase turned out to be authored script, so items an
+   * earlier `pending` masked must go BACK to the aligner. Without this binding
+   * a spurious wake permanently excludes the sentence the presenter was
+   * reading and the engine's masked-item set only ever grows.
+   */
+  onReleaseItems(itemIds: string[]): void;
   onCommandPending(pending: boolean): void;
   executeCommand(command: ValidatedCommand): void;
   onUnknownCommand(message: string): void;
@@ -90,6 +109,14 @@ export interface VoicePipelineDeps {
   onSessionFailure?(code: string, fatal: boolean): void;
   /** M3: soft pause will auto-disconnect in `msRemaining` (A.6). */
   onPauseWarning?(msRemaining: number): void;
+  /**
+   * Timer seam. Every deadline this pipeline owns — the Luna hard timeout and
+   * the §33.11 router tick — goes through it, so tests drive a virtual clock
+   * instead of waiting in real time. Defaults to the host timers.
+   */
+  timers?: TransportTimers;
+  /** Clock seam, paired with `timers`. Defaults to `Date.now`. */
+  now?: () => number;
 }
 
 export class VoiceSessionPipeline {
@@ -107,8 +134,19 @@ export class VoiceSessionPipeline {
   /** H5: `devicechange` watcher for unplug / default-device changes. */
   private deviceManager: MicrophoneDeviceManager | null = null;
   private stopDeviceWatch: (() => void) | null = null;
+  private readonly timers: TransportTimers;
+  private readonly now: () => number;
+  /** §33.11 router tick handle; non-null exactly while the ticker is armed. */
+  private commandTickTimer: unknown | null = null;
+  /** True once `start()` ran, so the ticker survives an idle stretch. */
+  private running = false;
 
   constructor(private readonly deps: VoicePipelineDeps) {
+    this.timers = deps.timers ?? {
+      setTimeout: (cb, ms) => setTimeout(cb, ms),
+      clearTimeout: (handle) => clearTimeout(handle as Parameters<typeof clearTimeout>[0]),
+    };
+    this.now = deps.now ?? (() => Date.now());
     this.ledger.setSessionGeneration(deps.sessionGeneration);
     this.router = new CommandRouter(
       {
@@ -145,6 +183,8 @@ export class VoiceSessionPipeline {
     this.controller = new RealtimeSessionController({
       transport: this.transport,
       commitDriver: this.commitDriver,
+      ...(deps.timers ? { timers: deps.timers } : {}),
+      ...(deps.now ? { now: deps.now } : {}),
       hooks: {
         onTranscriptEvent: (event) => this.handleTransportEvent(event),
         onStateChange: (state) => deps.onRealtimeState?.(state),
@@ -167,10 +207,48 @@ export class VoiceSessionPipeline {
 
   /** §29.2 start sequence; ends in `ready`. Billable streaming begins here. */
   async start(): Promise<void> {
+    this.running = true;
+    this.scheduleCommandTick();
     await this.controller.start(this.deps.config);
     this.controller.startHealthChecks();
     this.watchDevices();
     this.deps.onConnectionState('connected');
+  }
+
+  /**
+   * §33.11: drive `CommandRouter.tick` on a timer.
+   *
+   * `expireLuna` used to run only from `observe`, i.e. only when new transcript
+   * arrived — and the whole failure it exists for is a Luna handoff that never
+   * returns, which freezes the aligner in COMMAND_PENDING so no further
+   * transcript is ever processed. The expiry could therefore never fire in the
+   * one situation it was written for.
+   *
+   * The ticker is armed while the session is running and also for the lifetime
+   * of any Luna handoff, so a pipeline that has not started a transport (and a
+   * unit test) still gets the expiry.
+   */
+  private scheduleCommandTick(): void {
+    if (this.commandTickTimer !== null || this.stopped) return;
+    this.commandTickTimer = this.timers.setTimeout(() => {
+      this.commandTickTimer = null;
+      if (this.stopped) return;
+      const observation = this.router.tick(this.now());
+      // A bare `none` from `tick` means "nothing expired" — NOT "no command is
+      // pending". Running it through `applyObservation` would call
+      // `setPending(false)` and un-freeze the aligner on the very first tick,
+      // which is the opposite of what the freeze is for.
+      if (observation.kind !== 'none' || (observation.releaseItemIds?.length ?? 0) > 0) {
+        this.applyObservation(observation);
+      }
+      if (this.running || this.router.hasPendingLuna()) this.scheduleCommandTick();
+    }, COMMAND_TICK_INTERVAL_MS);
+  }
+
+  private stopCommandTick(): void {
+    if (this.commandTickTimer === null) return;
+    this.timers.clearTimeout(this.commandTickTimer);
+    this.commandTickTimer = null;
   }
 
   /**
@@ -220,9 +298,11 @@ export class VoiceSessionPipeline {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    this.running = false;
+    this.stopCommandTick();
     this.stopDeviceWatch?.();
     this.stopDeviceWatch = null;
-    this.router.cancelPending('session_stopped', Date.now());
+    this.router.cancelPending('session_stopped', this.now());
     try {
       await this.controller.stop();
     } finally {
@@ -312,6 +392,13 @@ export class VoiceSessionPipeline {
     switch (observation.kind) {
       case 'none':
         this.setPending(false);
+        // §33.4 tail: a wake-like phrase the collision scorer ruled authored
+        // script hands its items BACK to alignment. Without this the sentence
+        // the presenter was reading when a spurious wake fired is excluded for
+        // the rest of the session.
+        if (observation.releaseItemIds !== undefined && observation.releaseItemIds.length > 0) {
+          this.deps.onReleaseItems(observation.releaseItemIds);
+        }
         return;
       case 'pending':
         this.setPending(true);
@@ -327,7 +414,12 @@ export class VoiceSessionPipeline {
         void this.executeWithPolicy(observation.command);
         return;
       case 'needs_luna':
+        // The aligner is frozen for the whole handoff. Saying so explicitly
+        // (rather than relying on a preceding `pending` having done it) is what
+        // makes the un-freeze in `resolveLuna` unconditional and provable.
+        this.setPending(true);
         this.deps.onMaskItems(observation.itemIds);
+        this.scheduleCommandTick();
         void this.resolveLuna(observation.candidate.id, observation.request);
         return;
       case 'unknown':
@@ -351,13 +443,13 @@ export class VoiceSessionPipeline {
     const decision = decideExecution(command.action, state, command.requiresConfirmation === true);
 
     if (decision.decision === 'reject') {
-      this.router.acknowledgeRejected(command.humanLabel, Date.now());
+      this.router.acknowledgeRejected(command.humanLabel, this.now());
       this.deps.onCommandRejected?.(command, decision.reason);
       return;
     }
 
     if (decision.decision === 'confirm') {
-      this.router.acknowledgeConfirmRequired(command, Date.now());
+      this.router.acknowledgeConfirmRequired(command, this.now());
       // No confirmation surface wired: refuse rather than act. Executing an
       // ambiguous jump or a stop the user did not confirm is worse than
       // doing nothing.
@@ -379,22 +471,40 @@ export class VoiceSessionPipeline {
     }
 
     this.deps.executeCommand(command);
-    this.router.acknowledgeExecuted(command, Date.now(), true);
+    this.router.acknowledgeExecuted(command, this.now(), true);
   }
 
   /**
    * Luna handoff (§33.7): `interpret_command` is NOT_IMPLEMENTED in v1 Rust;
    * failures resolve the candidate as unknown so parsing stays deterministic.
+   *
+   * §33.11: the invoke is raced against `lunaHardTimeoutMs` and the freeze is
+   * released in a `finally`, so a rejected, hung, or superseded handoff ALWAYS
+   * un-freezes the aligner. The engine's `commandPendingTimeoutMs` backstop
+   * still exists, but a four-second stall mid-take is a ruined take — the
+   * backstop is a safety net, not the fix.
    */
   private async resolveLuna(candidateId: string, request: unknown): Promise<void> {
-    let raw: unknown = null;
+    let timeout: unknown = null;
     try {
-      raw = await ipcInvoke('interpret_command', { request });
+      const raw = await Promise.race<unknown>([
+        // Luna unavailable → deterministic-only degradation, never a throw.
+        ipcInvoke('interpret_command', { request }).catch(() => null),
+        new Promise<null>((resolve) => {
+          timeout = this.timers.setTimeout(
+            () => resolve(null),
+            this.router.settings.lunaHardTimeoutMs,
+          );
+        }),
+      ]);
+      if (this.stopped) return;
+      this.applyObservation(this.router.resolveLuna(candidateId, raw, this.now()));
     } catch {
-      raw = null; // Luna unavailable — deterministic-only degradation.
+      // Nothing above is allowed to reject; a defect here must still un-freeze.
+    } finally {
+      if (timeout !== null) this.timers.clearTimeout(timeout);
+      this.setPending(false);
     }
-    const observation = this.router.resolveLuna(candidateId, raw, Date.now());
-    this.applyObservation(observation);
   }
 
   private setPending(pending: boolean): void {
@@ -404,7 +514,7 @@ export class VoiceSessionPipeline {
   }
 
   private toTrackingEvent(event: TransportEvent): TrackingEvent | null {
-    const receivedAtMs = Date.now();
+    const receivedAtMs = this.now();
     const sessionGeneration = this.deps.sessionGeneration;
     switch (event.type) {
       case 'item_started':

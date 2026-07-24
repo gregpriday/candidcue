@@ -90,7 +90,7 @@ describe('frame gating (§26.1)', () => {
     expect(r.current?.epoch).toBe(3);
   });
 
-  it('skips the script hash check when either side does not assert one', () => {
+  it('skips the script hash check when the STAGE does not assert one', () => {
     const r = createSemanticFrameReceiver({
       gate: {
         sessionId: 'session-a',
@@ -100,6 +100,141 @@ describe('frame gating (§26.1)', () => {
       },
     });
     expect(r.accept(frame({ scriptCompileHash: 'anything' }), 0).accepted).toBe(true);
+  });
+
+  it('rejects an incomplete hash rather than weakening the identity gate (C1)', () => {
+    // The stage asserts a hash; a frame that omits one is an INCOMPLETE claim,
+    // not a licence to skip the check.
+    const r = receiver();
+    expect(r.accept(frame({ scriptCompileHash: '' }), 0).reason).toBe('script_hash');
+    expect(r.current).toBeNull();
+  });
+});
+
+/**
+ * C1 — the stage does not trust control.
+ *
+ * The motion plant is persistent for the life of the session, so ONE frame
+ * carrying a non-finite value in any numeric field poisons prediction → target
+ * → acceleration → velocity → position, and every later frame renders
+ * `translate3d(0, NaNpx, 0)` forever. `layoutGeneration: NaN` was the live
+ * example: `NaN !== gen` entered the mismatch branch, `NaN > gen` was false, and
+ * the frame was "tolerated" as stale.
+ */
+describe('hostile and defective frames (C1)', () => {
+  const NUMERIC_FIELDS = [
+    'sessionGeneration',
+    'layoutGeneration',
+    'revision',
+    'epoch',
+    'sessionTimeMs',
+    'estimatedUnit',
+    'committedUnit',
+    'velocityUnitsPerSecond',
+    'accelerationUnitsPerSecond2',
+    'positionVariance',
+    'confidence',
+    'tokenIndex',
+  ] as const;
+
+  it.each(NUMERIC_FIELDS)('rejects a frame carrying NaN in %s', (field) => {
+    const r = receiver();
+    const outcome = r.accept(frame({ [field]: Number.NaN } as never), 0);
+    expect(outcome.accepted).toBe(false);
+    expect(outcome.reason).toBe('malformed');
+    expect(outcome.field).toBe(field);
+    expect(outcome.tolerated).toBeUndefined();
+    expect(r.current).toBeNull();
+  });
+
+  it.each(NUMERIC_FIELDS)('rejects a frame carrying Infinity in %s', (field) => {
+    const r = receiver();
+    expect(r.accept(frame({ [field]: Number.POSITIVE_INFINITY } as never), 0).reason).toBe(
+      'malformed',
+    );
+    expect(r.accept(frame({ [field]: Number.NEGATIVE_INFINITY } as never), 0).reason).toBe(
+      'malformed',
+    );
+  });
+
+  it('never reports a NaN layout generation as a tolerated stale layout', () => {
+    const r = receiver();
+    r.setGate({ layoutGeneration: 8 }, 0);
+    const outcome = r.accept(frame({ layoutGeneration: Number.NaN }), 999999);
+    expect(outcome.accepted).toBe(false);
+    expect(outcome.reason).toBe('malformed');
+    expect(r.stats.toleratedStaleLayout).toBe(0);
+  });
+
+  it.each([
+    ['sessionGeneration', 3.5],
+    ['layoutGeneration', 7.25],
+    ['revision', 10.5],
+    ['epoch', 2.5],
+    ['tokenIndex', 120.5],
+  ] as const)('requires an exact integer for %s', (field, value) => {
+    const r = receiver();
+    expect(r.accept(frame({ [field]: value } as never), 0).reason).toBe('malformed');
+  });
+
+  it.each([
+    ['state', 'sprinting'],
+    ['behavior', 'vibing'],
+    ['sessionId', 42],
+    ['blockId', null],
+    ['finalEvidence', 'yes'],
+  ] as const)('rejects a bad %s', (field, value) => {
+    const r = receiver();
+    const outcome = r.accept(frame({ [field]: value } as never), 0);
+    expect(outcome.accepted).toBe(false);
+    expect(outcome.reason).toBe('malformed');
+    expect(outcome.field).toBe(field);
+  });
+
+  it('validates the nested transition directive too', () => {
+    const sound = {
+      id: 't1',
+      type: 'reanchor',
+      authority: 'ordinary',
+      fromUnit: 1,
+      toUnit: 2,
+      destinationTokenIndex: 40,
+      issuedAtMs: 0,
+      expiresAtMs: 5000,
+      semanticEpoch: 2,
+      reason: 'large_forward_skip',
+    } as const;
+    expect(receiver().accept(frame({ transition: { ...sound } }), 0).accepted).toBe(true);
+
+    for (const [field, value] of [
+      ['toUnit', Number.NaN],
+      ['destinationTokenIndex', Number.NaN],
+      ['destinationTokenIndex', 40.5],
+      ['semanticEpoch', Number.POSITIVE_INFINITY],
+      ['expiresAtMs', Number.NaN],
+      ['type', 'teleport'],
+      ['authority', 'root'],
+      ['reason', 'because'],
+      ['id', ''],
+    ] as const) {
+      const r = receiver();
+      const outcome = r.accept(
+        frame({ transition: { ...sound, [field]: value } as never }),
+        0,
+      );
+      expect(outcome.accepted, `transition.${field} = ${String(value)}`).toBe(false);
+      expect(outcome.reason).toBe('malformed');
+      expect(outcome.field).toBe(`transition.${field}`);
+    }
+  });
+
+  it('does not let a rejected frame disturb the accepted one', () => {
+    const r = receiver();
+    r.accept(frame({ revision: 10 }), 0);
+    r.accept(frame({ revision: 11, velocityUnitsPerSecond: Number.NaN }), 1);
+    expect(r.current?.revision).toBe(10);
+    // The revision baseline is untouched, so the next sound frame still lands.
+    expect(r.accept(frame({ revision: 11 }), 2).accepted).toBe(true);
   });
 });
 

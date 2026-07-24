@@ -73,6 +73,11 @@
   type Timer = ReturnType<typeof setTimeout>;
   const stallTimers: (Timer | null)[] = [null, null];
   const retryTimers: (Timer | null)[] = [null, null];
+  /**
+   * Watchdog budgets parked while the layer was frozen/blanked/page-hidden, per
+   * slot. A parked watchdog is re-armed on resume; a consumed one is gone.
+   */
+  const suspendedWatchdogs: (number | null)[] = [null, null];
   let settleTimer: Timer | null = null;
   let autoplayTimer: Timer | null = null;
 
@@ -89,6 +94,7 @@
     if (retryTimers[slot] !== null) clearTimeout(retryTimers[slot]!);
     stallTimers[slot] = null;
     retryTimers[slot] = null;
+    suspendedWatchdogs[slot] = null;
   }
 
   function clearAllTimers(): void {
@@ -190,7 +196,16 @@
     if (stallTimers[slot] !== null) clearTimeout(stallTimers[slot]!);
     stallTimers[slot] = setTimeout(() => {
       stallTimers[slot] = null;
-      if (posterMode || frozen || hidden) return;
+      // Paused on purpose: the watchdog has nothing to judge, so it must be
+      // RE-ARMED on resume rather than consumed. Returning here used to leave
+      // the slot with no watchdog at all — a back buffer that stalled during a
+      // freeze stayed dead forever and the active clip hard-looped for the rest
+      // of the session with no health report anywhere (§40.5).
+      if (posterMode) return;
+      if (frozen || hidden || isPageHidden()) {
+        suspendedWatchdogs[slot] = budgetMs;
+        return;
+      }
       handleSlotError(slot);
     }, budgetMs);
   }
@@ -198,11 +213,47 @@
   function clearStallWatchdog(slot: number) {
     if (stallTimers[slot] !== null) clearTimeout(stallTimers[slot]!);
     stallTimers[slot] = null;
+    suspendedWatchdogs[slot] = null;
+  }
+
+  function isPageHidden(): boolean {
+    return typeof document !== 'undefined' && document.hidden;
+  }
+
+  /**
+   * Re-arm every watchdog that was suspended while the layer was frozen,
+   * blanked, or the page was hidden — for BOTH slots, not just the active one.
+   * The back buffer is the one that silently dies, and its death is invisible
+   * until the crossfade that never happens.
+   */
+  function resumeWatchdogs() {
+    if (posterMode || !started) return;
+    if (frozen || hidden || isPageHidden()) return;
+    for (let slot = 0; slot < 2; slot++) {
+      const budget = suspendedWatchdogs[slot];
+      if (budget === null || budget === undefined) continue;
+      suspendedWatchdogs[slot] = null;
+      if (!slotPlans[slot]) continue;
+      armStallWatchdog(slot, budget);
+    }
+    // A slot that has a plan but neither readiness nor a live watchdog is in
+    // the same dead state by a different route (its timer fired and was
+    // consumed before this fix existed, or a load was interrupted).
+    for (let slot = 0; slot < 2; slot++) {
+      if (!slotPlans[slot] || slotReady[slot] || stallTimers[slot] !== null) continue;
+      armStallWatchdog(slot, LOAD_STALL_MS);
+    }
   }
 
   function onStalled(slot: number) {
-    // Paused-on-purpose elements are expected to go quiet.
-    if (posterMode || frozen || hidden) return;
+    // Paused-on-purpose elements are expected to go quiet — but remember that
+    // they were stalling, so the watchdog comes back with them.
+    if (posterMode) return;
+    if (frozen || hidden || isPageHidden()) {
+      suspendedWatchdogs[slot] =
+        slot === active && slotReady[slot] ? PLAYBACK_STALL_MS : LOAD_STALL_MS;
+      return;
+    }
     // Mid-playback the active clip must recover fast; a slot that has not
     // reached `canplay` yet is still legitimately loading.
     armStallWatchdog(slot, slot === active && slotReady[slot] ? PLAYBACK_STALL_MS : LOAD_STALL_MS);
@@ -351,16 +402,24 @@
     const shouldPause = frozen || hidden;
     const el = videoEls[active];
     if (!el || posterMode || !started) return;
-    if (shouldPause) el.pause();
-    else playActive();
+    if (shouldPause) {
+      el.pause();
+    } else {
+      playActive();
+      resumeWatchdogs();
+    }
   });
 
   $effect(() => {
     const onVisibility = () => {
       const el = videoEls[active];
       if (!el || posterMode || !started) return;
-      if (document.hidden) el.pause();
-      else if (!frozen && !hidden) playActive();
+      if (document.hidden) {
+        el.pause();
+      } else if (!frozen && !hidden) {
+        playActive();
+        resumeWatchdogs();
+      }
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);

@@ -53,13 +53,61 @@ export type LineMapIssueCode =
   | 'nonmonotonic_baselines'
   | 'degenerate_units'
   | 'insufficient_knots'
-  | 'unknown_block';
+  | 'unknown_block'
+  | 'nonfinite_geometry'
+  | 'visual_block_secant';
 
 export interface LineMapIssue {
   code: LineMapIssueCode;
   detail: string;
   /** Fatal issues make the map invalid; the stage must hold rather than guess (§62). */
   fatal: boolean;
+}
+
+/**
+ * Which measurement faults are fatal (§62: "hold rather than move on guessed
+ * geometry"). Typed `Record<LineMapIssueCode, boolean>` so a new code has to be
+ * classified rather than silently defaulting to survivable.
+ *
+ * Inverted baselines and a spoken-unit axis that fails to advance used to be
+ * non-fatal — the builder flattened the inversion and carried on with a map it
+ * still reported as `valid`. That is precisely the "moves on guessed geometry"
+ * failure §62 forbids: under a vertical mirror EVERY line looks inverted, the
+ * flattening collapses most knots onto the first line's scroll position, and
+ * the stage follows that with complete confidence.
+ */
+const FATAL_ISSUE: Record<LineMapIssueCode, boolean> = {
+  no_tokens: true,
+  nonmonotonic_tokens: true,
+  nonmonotonic_baselines: true,
+  degenerate_units: true,
+  insufficient_knots: true,
+  nonfinite_geometry: true,
+  // A block the measurement pass did not see costs the map its section identity
+  // for that block, not its geometry.
+  unknown_block: false,
+  // Recoverable: the interval is recorded so the engine can re-anchor across it
+  // instead of racing (§8.6).
+  visual_block_secant: false,
+};
+
+/**
+ * A spoken interval whose average slope (SECANT, not knot tangent) exceeds the
+ * visual-block limit — companion §8.6.
+ *
+ * Clamping knot TANGENTS cannot bound the average slope: the spline still has
+ * to traverse the whole vertical delta over the same semantic interval, so a
+ * one-word paragraph either side of a 900 px image forces ~900 px of travel per
+ * spoken unit no matter what the tangents say. The stage records the interval
+ * and crosses it as an explicit, bounded re-anchor rather than racing the
+ * controller at its velocity ceiling or accumulating a full-screen error.
+ */
+export interface VisualBlockSpan {
+  unitStart: number;
+  unitEnd: number;
+  scrollStartPx: number;
+  scrollEndPx: number;
+  secantPxPerUnit: number;
 }
 
 export interface LineMapCoverage {
@@ -90,6 +138,11 @@ export interface LineMapBuildOptions {
   boundarySlopeClampPxPerUnit?: number;
   /** A vertical gap this large between spoken lines is a visual-block boundary. */
   visualBlockGapPx?: number;
+  /**
+   * Largest average slope (secant) a spoken interval may have before it is
+   * recorded as a `VisualBlockSpan`. Defaults to `boundarySlopeClampPxPerUnit`.
+   */
+  maxVisualSecantPxPerUnit?: number;
 }
 
 /**
@@ -104,6 +157,10 @@ export interface StageRenderedLineMap extends RenderedLineMap {
   readonly coverage: LineMapCoverage | null;
   readonly readingLineStartY: number;
   readonly linePitchPx: number;
+  /** Intervals the path cannot traverse at a readable speed (§8.6). */
+  readonly visualBlockSpans: readonly VisualBlockSpan[];
+  /** The span containing `spokenUnit`, if any. */
+  visualBlockSpanAt(spokenUnit: number): VisualBlockSpan | null;
   lineForUnit(spokenUnit: number): RenderedLine | null;
   lineForToken(tokenIndex: number): RenderedLine | null;
   /** Degraded per-line interpolation (Appendix B.4), used when no path exists. */
@@ -135,12 +192,21 @@ export function emptyRenderedLineMap(
     coverage: null,
     readingLineStartY: 0,
     linePitchPx: 0,
+    visualBlockSpans: [],
+    visualBlockSpanAt: () => null,
     sampleMotionPath: () => null,
     lineForUnit: () => null,
     lineForToken: () => null,
     fallbackTarget: () => null,
     covers: () => false,
   };
+}
+
+function isFiniteRect(...values: number[]): boolean {
+  for (const value of values) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+  }
+  return true;
 }
 
 interface LineDraft {
@@ -167,6 +233,43 @@ export function buildRenderedLineMap(options: LineMapBuildOptions): StageRendere
 
   const blockById = new Map(options.blocks.map((b) => [b.blockId, b]));
 
+  function raise(code: LineMapIssueCode, detail: string) {
+    if (issues.some((issue) => issue.code === code)) return;
+    issues.push({ code, detail, fatal: FATAL_ISSUE[code] });
+  }
+
+  /* ---- 0. reject geometry that cannot describe a rendered layout ----
+   * A single NaN top propagates through the knot list into the spline and out
+   * as `translate3d(0, NaNpx, 0)`; an inverted rect means the measurement was
+   * taken through a transform the builder does not model. Neither is something
+   * to smooth over — the stage holds and reports (§62).
+   */
+  for (const token of options.tokens) {
+    if (
+      !isFiniteRect(token.tokenIndex, token.xStart, token.xEnd, token.topY, token.bottomY) ||
+      token.bottomY < token.topY ||
+      token.xEnd < token.xStart
+    ) {
+      raise('nonfinite_geometry', `token ${token.tokenIndex} has unusable measured geometry`);
+      break;
+    }
+  }
+  for (const block of options.blocks) {
+    if (!isFiniteRect(block.topY, block.bottomY) || block.bottomY < block.topY) {
+      raise('nonfinite_geometry', `block ${block.blockId} has unusable measured geometry`);
+      break;
+    }
+  }
+  if (
+    !isFiniteRect(R, lineHeightPx, maxScroll, options.viewportHeightPx) ||
+    !isFiniteRect(tolerance, visualGapPx)
+  ) {
+    raise('nonfinite_geometry', 'layout inputs are not finite');
+  }
+  if (issues.some((issue) => issue.fatal)) {
+    return emptyRenderedLineMap(options.fingerprint, issues);
+  }
+
   const sorted = [...options.tokens].sort((a, b) => a.tokenIndex - b.tokenIndex);
   if (sorted.length === 0) {
     return emptyRenderedLineMap(options.fingerprint);
@@ -180,12 +283,8 @@ export function buildRenderedLineMap(options: LineMapBuildOptions): StageRendere
     if (token.tokenIndex === previousToken) continue; // duplicate anchor: keep the first
     previousToken = token.tokenIndex;
     const block = blockById.get(token.blockId);
-    if (!block && !issues.some((i) => i.code === 'unknown_block')) {
-      issues.push({
-        code: 'unknown_block',
-        detail: `token ${token.tokenIndex} references unmeasured block ${token.blockId}`,
-        fatal: false,
-      });
+    if (!block) {
+      raise('unknown_block', `token ${token.tokenIndex} references unmeasured block ${token.blockId}`);
     }
     const sectionId = block?.sectionId ?? token.blockId;
     const sameLine =
@@ -287,28 +386,20 @@ export function buildRenderedLineMap(options: LineMapBuildOptions): StageRendere
     if (!line) continue;
     const u = line.spokenUnitStart;
     if (knotXs.length > 0 && u <= (knotXs[knotXs.length - 1] ?? 0)) {
-      // Spoken lines must have strictly increasing start coordinates (§8.3).
-      if (!issues.some((issue) => issue.code === 'degenerate_units')) {
-        issues.push({
-          code: 'degenerate_units',
-          detail: `line ${line.lineId} does not advance the spoken-unit axis`,
-          fatal: false,
-        });
-      }
+      // Spoken lines must have strictly increasing start coordinates (§8.3). A
+      // map that cannot order its own lines is not a map.
+      raise('degenerate_units', `line ${line.lineId} does not advance the spoken-unit axis`);
       continue;
     }
-    let y = clamp(line.baselineY - R, 0, maxScroll);
+    const y = clamp(line.baselineY - R, 0, maxScroll);
     if (y < lastY) {
-      // A measured inversion would make the path move backward. Flatten it and
-      // report; never let guessed geometry drive motion (§62).
-      if (!issues.some((issue) => issue.code === 'nonmonotonic_baselines')) {
-        issues.push({
-          code: 'nonmonotonic_baselines',
-          detail: `line ${line.lineId} measured above its predecessor`,
-          fatal: false,
-        });
-      }
-      y = lastY;
+      // A measured inversion means the measurement did not describe the
+      // rendered layout — most often because it was taken through a mirror
+      // transform. Flattening it produces a plausible-looking map that puts
+      // most of the document at one scroll position; the stage must hold and
+      // rebuild instead (§62, §7.2).
+      raise('nonmonotonic_baselines', `line ${line.lineId} measured above its predecessor`);
+      continue;
     }
     lastY = y;
     knotXs.push(u);
@@ -336,6 +427,37 @@ export function buildRenderedLineMap(options: LineMapBuildOptions): StageRendere
     slopeClamp.push(undefined);
   }
 
+  /* ---- 5b. secant check (§8.6) ----
+   * A knot-tangent clamp cannot bound the AVERAGE slope of an interval: the
+   * spline still has to cover `Δy` over `Δu` whatever the tangents are. Reject
+   * the interval on its secant and hand it to the engine as an explicit
+   * re-anchor rather than pretending the clamp did the job.
+   */
+  const visualBlockSpans: VisualBlockSpan[] = [];
+  const secantLimit = options.maxVisualSecantPxPerUnit ?? boundaryClamp;
+  if (secantLimit !== undefined && Number.isFinite(secantLimit) && secantLimit > 0) {
+    for (let i = 1; i < knotXs.length; i++) {
+      const du = (knotXs[i] ?? 0) - (knotXs[i - 1] ?? 0);
+      const dy = (knotYs[i] ?? 0) - (knotYs[i - 1] ?? 0);
+      if (du <= 0 || dy <= 0) continue;
+      const secant = dy / du;
+      if (secant <= secantLimit) continue;
+      visualBlockSpans.push({
+        unitStart: knotXs[i - 1] ?? 0,
+        unitEnd: knotXs[i] ?? 0,
+        scrollStartPx: knotYs[i - 1] ?? 0,
+        scrollEndPx: knotYs[i] ?? 0,
+        secantPxPerUnit: secant,
+      });
+    }
+  }
+  if (visualBlockSpans.length > 0) {
+    raise(
+      'visual_block_secant',
+      `${visualBlockSpans.length} interval(s) exceed ${secantLimit?.toFixed(0)} px per spoken unit`,
+    );
+  }
+
   const spline: MonotoneSpline | null =
     knotXs.length >= 2
       ? createMonotoneSpline(knotXs, knotYs, {
@@ -345,11 +467,7 @@ export function buildRenderedLineMap(options: LineMapBuildOptions): StageRendere
       : null;
 
   if (!spline) {
-    issues.push({
-      code: 'insufficient_knots',
-      detail: `${knotXs.length} usable line knots`,
-      fatal: true,
-    });
+    raise('insufficient_knots', `${knotXs.length} usable line knots`);
   }
 
   const motionKnots: LineMotionKnot[] = knotXs.map((x, i) => ({
@@ -400,6 +518,14 @@ export function buildRenderedLineMap(options: LineMapBuildOptions): StageRendere
     coverage,
     readingLineStartY: R,
     linePitchPx,
+    visualBlockSpans,
+
+    visualBlockSpanAt(spokenUnit: number): VisualBlockSpan | null {
+      for (const span of visualBlockSpans) {
+        if (spokenUnit > span.unitStart && spokenUnit < span.unitEnd) return span;
+      }
+      return null;
+    },
 
     sampleMotionPath(spokenUnit: number): LineMotionSample | null {
       if (!spline || !valid) return null;

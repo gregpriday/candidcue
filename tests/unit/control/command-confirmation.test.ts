@@ -66,6 +66,7 @@ function harness(options: {
     getScrollMode: () => 'voice',
     onTrackingEvent: () => {},
     onMaskItems: () => {},
+    onReleaseItems: () => {},
     onCommandPending: () => {},
     executeCommand: (cmd) => executed.push(cmd),
     onUnknownCommand: () => {},

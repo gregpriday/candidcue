@@ -51,6 +51,16 @@ function flush(output: EngineOutput, nowMs: number, force = false): void {
   if (output.diagnostic) {
     post({ type: 'diagnostic', diagnostic: output.diagnostic });
   }
+  // Companion §37.1: the sidecar's only input. Already rate-limited (2 Hz,
+  // finalized evidence only) by the engine, so it is never subject to the
+  // snapshot cadence cap and never lands on the per-event path.
+  if (output.semanticContext) {
+    post({
+      type: 'semantic_context',
+      revision: output.semanticContext.transcriptRevision,
+      context: output.semanticContext,
+    });
+  }
 }
 
 self.onmessage = (event: MessageEvent<TrackingWorkerInbound>) => {

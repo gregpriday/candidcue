@@ -293,13 +293,9 @@ export function getActiveSemanticSidecar(): SemanticSidecar | null {
  * scheduler when a take is running; it reports `disabled` when no sidecar is
  * registered, rather than inventing activity.
  *
- * REMAINING GAP (H6, deliberately not faked): the scheduler still has no
- * candidate feed. `AssistSchedulingContext.candidates` must be
- * `LocalCandidate[]` from the alignment engine, and the tracking worker does
- * not emit candidates — `TrackingWorkerOutbound` has no such message. Adding
- * it is a change to `src/shared/tracking/**` + `worker-protocol.ts`, outside
- * this pass's ownership. Until `SemanticSidecar.attachContextSource` is given
- * a real source, the scheduler stays inert and this feed reports it honestly.
+ * The candidate feed is bound: the tracking worker emits `semantic_context`
+ * (companion §37.1) and the session store attaches it to the sidecar, so a
+ * running take with a worker-backed driver reports genuine scheduler activity.
  *
  * TODO(integration, Agents A + B): report §63 budget overruns — worker
  * alignment-update time and stage per-frame controller time — through

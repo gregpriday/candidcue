@@ -62,6 +62,49 @@ describe('calibrating unit axis', () => {
     expect(axis.toMapUnit(110)).toBeLessThan(110);
   });
 
+  it('discards the abandoned take on a retake instead of flattening it', () => {
+    // The presenter reads to token 60, then restarts from token 20. The samples
+    // beyond the restart describe a take that no longer exists; keeping them and
+    // dragging their tokens up to match (the previous behaviour) leaves a
+    // fabricated plateau in the axis for the rest of the session.
+    const axis = createCalibratingUnitAxis({ mergeToleranceUnits: 0 });
+    for (let token = 0; token <= 60; token += 10) axis.observe(token * 1.25, token);
+    expect(axis.toMapUnit(75)).toBeCloseTo(60, 6);
+
+    // The retake: a much later unit reporting a much earlier token.
+    axis.observe(100, 20);
+
+    // Monotone, and the contradicted samples are gone rather than flattened.
+    let previous = -Infinity;
+    for (let u = 0; u <= 200; u += 1) {
+      const mapped = axis.toMapUnit(u);
+      expect(mapped).toBeGreaterThanOrEqual(previous - 1e-9);
+      previous = mapped;
+    }
+    expect(axis.toMapUnit(100)).toBeCloseTo(20, 6);
+    // Re-learning from the new take moves the axis, rather than being pinned by
+    // a plateau of rewritten samples.
+    axis.observe(140, 40);
+    expect(axis.toMapUnit(140)).toBeCloseTo(40, 6);
+    expect(axis.toMapUnit(120)).toBeGreaterThan(20);
+    expect(axis.toMapUnit(120)).toBeLessThan(40);
+  });
+
+  it('drops earlier samples that contradict a correction, too', () => {
+    const axis = createCalibratingUnitAxis({ mergeToleranceUnits: 0 });
+    axis.observe(10, 5);
+    axis.observe(20, 40); // an outlier
+    axis.observe(30, 12); // the truth catches up
+    let previous = -Infinity;
+    for (let u = 0; u <= 60; u += 0.5) {
+      const mapped = axis.toMapUnit(u);
+      expect(mapped).toBeGreaterThanOrEqual(previous - 1e-9);
+      previous = mapped;
+    }
+    expect(axis.toMapUnit(30)).toBeCloseTo(12, 6);
+    expect(axis.toMapUnit(10)).toBeCloseTo(5, 6);
+  });
+
   it('identityUnitAxis is a no-op bridge for a real speech-unit map', () => {
     const axis = identityUnitAxis();
     axis.observe(10, 3);

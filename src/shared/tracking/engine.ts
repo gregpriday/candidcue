@@ -59,6 +59,8 @@ import {
 import { scaleToSection } from './scales';
 import { SectionGraph, type SectionTransitionContext, type TransitionAuthority } from './section-graph';
 import type { SemanticAssistEvidence } from './semantic-assist';
+import { buildSchedulingContext } from './semantic-context';
+import type { AssistSchedulingContext } from '../semantic/types';
 import { SemanticFilter } from './semantic-filter';
 import { SpeechUnitScale } from './speech-units';
 import type {
@@ -87,6 +89,12 @@ export interface EngineOutput {
   frame?: SemanticMotionFrame;
   /** Companion §65 — present only for nontrivial movement transitions. */
   decision?: MovementDecisionRecord;
+  /**
+   * Companion §37.1 — the post-section-gate candidate set plus the state the
+   * Luna sidecar schedules against. Rate-limited by
+   * `profile.semanticContextIntervalMs`; absent on most events by design.
+   */
+  semanticContext?: AssistSchedulingContext;
 }
 
 /** Explicit retake lead-in phrases (G.5 `transcriptContainsRetakeLeadIn`). */
@@ -174,6 +182,15 @@ export class AlignmentEngine {
   private lastPaceRejection: PaceSampleRejection | undefined;
   private offScript = false;
   private lastFrameTransitionId: string | undefined;
+  /* --- semantic sidecar feed (companion §37.1) -------------------------- */
+  /** Session time the last scheduling context was emitted (0 = never). */
+  private lastSemanticContextAtMs = -Infinity;
+  /** Meaningful FINAL tokens observed since that emission (§36.2). */
+  private finalTokensSinceContext = 0;
+  /** Dedupe guard so a repeated completion cannot inflate the count. */
+  private lastContextCountedItem = '';
+  /** Session time local confidence last sat at or above `lockedThreshold`. */
+  private confidentSinceMs = 0;
   /** Authority of the emission in flight; only `moveTo` raises this (§56.1). */
   private emitAuthority: TransitionAuthority = 'ordinary';
   /** Committed position before the decision currently being emitted (§65). */
@@ -398,6 +415,11 @@ export class AlignmentEngine {
     this.lastMeasurement = undefined;
     this.lastCorrection = 'none';
     this.lastPaceSpan = undefined;
+    // A reset invalidates the sidecar's whole view; nothing carries over.
+    this.lastSemanticContextAtMs = -Infinity;
+    this.finalTokensSinceContext = 0;
+    this.lastContextCountedItem = '';
+    this.confidentSinceMs = nowMs;
     this.beam.clear();
     this.paceEstimator.reset();
     this.decisions.clear();
@@ -452,8 +474,88 @@ export class AlignmentEngine {
       return {};
     }
 
+    this.countFinalTokens(update.itemId, update.final);
     const decision = this.align(tail, update.final, nowMs);
-    return this.applyDecision(decision, tail, update.final, nowMs);
+    const output = this.applyDecision(decision, tail, update.final, nowMs);
+    const context = this.maybeBuildSemanticContext(tail, update.final, nowMs);
+    if (context !== undefined) output.semanticContext = context;
+    return output;
+  }
+
+  /* -------------------------------------------------------------------------
+   * Semantic sidecar feed (companion §37.1, §40.2, §51 step 6).
+   * ----------------------------------------------------------------------- */
+
+  /** Meaningful FINAL tokens seen since the last emitted context (§36.2). */
+  private countFinalTokens(itemId: string, final: boolean): void {
+    if (!final || itemId === this.lastContextCountedItem) return;
+    this.lastContextCountedItem = itemId;
+    const item = this.ledger.getItem(itemId);
+    if (item === undefined) return;
+    for (const token of item.normalizedTokens) {
+      if (token.content) this.finalTokensSinceContext++;
+    }
+  }
+
+  /**
+   * Build the sidecar's scheduling context — the candidate set plus everything
+   * `SemanticAssistScheduler` decides against.
+   *
+   * Cadence (companion §36.3, §63): explicitly throttled to
+   * `profile.semanticContextIntervalMs` (2 Hz by default) AND restricted to
+   * finalized evidence. Provisional deltas carry no new final tokens, so the
+   * scheduler's own `hasMinimumUsefulInput` gate would reject them anyway —
+   * building a candidate list for them would be pure per-event cost on a budget
+   * (~19 ms/event) that has no headroom. What remains on the hot path is one
+   * subtraction and one comparison.
+   *
+   * The candidates come from `lastMeasurement`, which the beam fills from its
+   * post-eligibility-gate list, so a prohibited candidate is never offered.
+   */
+  private maybeBuildSemanticContext(
+    tail: AlignableTail,
+    final: boolean,
+    nowMs: number,
+  ): AssistSchedulingContext | undefined {
+    const interval = this.profile.semanticContextIntervalMs;
+    if (interval <= 0 || !final) return undefined;
+    if (nowMs - this.lastSemanticContextAtMs < interval) return undefined;
+    const measurement = this.lastMeasurement;
+    if (measurement === undefined) return undefined;
+
+    const newFinalTokenCount = this.finalTokensSinceContext;
+    this.finalTokensSinceContext = 0;
+    this.lastSemanticContextAtMs = nowMs;
+
+    if (this.lastConfidence >= this.profile.lockedThreshold) this.confidentSinceMs = nowMs;
+    const directive = this.directives.active(nowMs);
+
+    return buildSchedulingContext({
+      index: this.index,
+      measurement,
+      committedTokenIndex: this.committedTokenIndex,
+      largeForwardDistance: this.largeForwardDistance(),
+      softThreshold: this.profile.softThreshold,
+      lockedThreshold: this.profile.lockedThreshold,
+      sessionId: this.session.sessionId,
+      sessionGeneration: this.session.sessionGeneration,
+      scriptCompileHash: this.scriptCompileHash,
+      semanticEpoch: this.epoch,
+      transcriptRevision: this.revision,
+      sessionTimeMs: nowMs,
+      trackingState: this.stateV2,
+      behavior: this.behavior,
+      recentFinalTranscript: joinSurfaces(tail, true),
+      provisionalTail: joinSurfaces(tail, false),
+      newFinalTokenCount,
+      atPhraseBoundary: final,
+      commandPending: this.commandPending,
+      sessionPaused: this.state === 'paused',
+      reanchorActive: directive?.type === 'reanchor',
+      localConfidence: measurement.confidence,
+      sustainedAmbiguityMs: Math.max(0, nowMs - this.confidentSinceMs),
+      lexicalFailureMs: Math.max(0, nowMs - this.lastConfidentAtMs),
+    });
   }
 
   /* -------------------------------------------------------------------------
@@ -1501,6 +1603,15 @@ export class AlignmentEngine {
       ...(directive !== undefined ? { transitionId: directive.id } : {}),
     });
   }
+}
+
+/** §37.1/§57.2: finalized tail and provisional tail are sent separately. */
+function joinSurfaces(tail: AlignableTail, final: boolean): string {
+  const parts: string[] = [];
+  for (const token of tail.tokens) {
+    if (token.final === final) parts.push(token.surface);
+  }
+  return parts.join(' ');
 }
 
 /** Companion §65 `visualDisposition`. */
