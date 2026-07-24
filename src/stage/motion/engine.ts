@@ -156,6 +156,11 @@ export interface StageMotionEngine {
    * bare — diagnostics only.
    */
   readonly reanchorFades: number;
+  /**
+   * Catch-up episodes that hit the §30.3 duration cap with the gap still open
+   * and were handed back to ordinary following — diagnostics only.
+   */
+  readonly catchUpCapExpiries: number;
 
   configureSession(gate: SemanticFrameGate, nowMs: number): void;
   /**
@@ -380,6 +385,18 @@ export function createStageMotionEngine(
   let deferredPlantOverwrites = 0;
   /** Visual-block span the plant is currently held at (§8.6). */
   let heldVisualSpan: VisualBlockSpan | null = null;
+  /**
+   * §30.3 duration cap. When the current catch-up licence first appeared, or
+   * null while none is in force. One continuous licence is one episode: losing
+   * it (the tracker leaves `catching_up`, the directive expires, manual
+   * authority takes over) ends the episode and re-acquiring it starts a fresh
+   * one, because that is a new thing to catch up with.
+   */
+  let catchUpSinceMs: number | null = null;
+  /** One `catchUpCapExpiries` increment per episode, not per frame. */
+  let catchUpCapCounted = false;
+  /** Catch-up episodes retired by the §30.3 duration cap — diagnostics only. */
+  let catchUpCapExpiries = 0;
 
   /* ---- §20.4 re-anchor fade ---- */
   let fadePhase: ReanchorFadePhase = 'idle';
@@ -556,6 +573,9 @@ export function createStageMotionEngine(
     get reanchorFades() {
       return reanchorFades;
     },
+    get catchUpCapExpiries() {
+      return catchUpCapExpiries;
+    },
 
     configureSession(gate, nowMs) {
       receiver.setGate(gate, nowMs);
@@ -571,6 +591,9 @@ export function createStageMotionEngine(
       targetRegressions = 0;
       latchReanchors = 0;
       deferredPlantOverwrites = 0;
+      catchUpSinceMs = null;
+      catchUpCapCounted = false;
+      catchUpCapExpiries = 0;
       // A new session cannot inherit a half-finished fade from the old one.
       resetFade();
       reanchorFades = 0;
@@ -793,16 +816,68 @@ export function createStageMotionEngine(
       if (paused) state = 'paused';
 
       const activeTransition = transitions.active;
-      const limits: MotionLimits = limitsForState(state ?? 'uncertain', profile, {
-        reducedMotion,
-        degraded: diagnostics.degraded,
-        transition: activeTransition?.directive.type,
-        manualGrace,
-      });
 
       // No map, no accepted frame, no fallback: hold. Never move on guessed
       // geometry (§62).
       const holding = source === 'hold';
+      /*
+       * §20.3 step 4 + §20.4. Behind the fade the plant aims at where it
+       * already is, so the controller decelerates to rest under its own jerk
+       * limits instead of creeping toward the destination under a
+       * half-transparent layer. That is both the spec's "decelerate briefly"
+       * and the reason the re-anchor stays a single invisible step: nothing
+       * visible moves between the fade starting and the transform changing.
+       */
+      const frozen = holding || fadeHold;
+
+      /* ------------------------------------------------------------ §30.3 --
+       * The catch-up licence.
+       *
+       * Catch-up is boosted motion, and §30.3 bounds it three ways: a duration
+       * cap, a boost that decays as the gap closes, and a position the spoken
+       * line may not be carried above. All three are scoped to exactly the
+       * frames on which the boost is in force — the tracker's own
+       * `catching_up`, or a `catch_up` directive — because that is what the
+       * spec bounds and because a ceiling left standing in ordinary following
+       * would fight the very corrections it is meant to protect.
+       *
+       * A `catch_up` DIRECTIVE already carries `expiresAtMs`, and
+       * `transitions.update()` retires it: that is a real duration bound and
+       * this does not duplicate it. What has no bound at all is the state — the
+       * worker can report `catching_up` for as long as it likes, and the
+       * profile multiplier simply stays applied. The clock below runs over the
+       * licence however it arrived, so a directive is bounded by whichever of
+       * its TTL and the cap comes first, and the state is bounded at all.
+       */
+      const catchUpLicensed =
+        !frozen &&
+        !manualGrace &&
+        (state === 'catching_up' || activeTransition?.directive.type === 'catch_up');
+      if (catchUpLicensed) catchUpSinceMs ??= nowMs;
+      else {
+        catchUpSinceMs = null;
+        catchUpCapCounted = false;
+      }
+      const catchUpElapsedMs = catchUpSinceMs === null ? 0 : nowMs - catchUpSinceMs;
+
+      const limitOptions = {
+        reducedMotion,
+        degraded: diagnostics.degraded,
+        transition: activeTransition?.directive.type,
+        manualGrace,
+      };
+      /**
+       * The state/transition shape of the limits, with no §30.3 bounds applied.
+       * The latch below needs `allowBackward` and `reanchorThresholdPx` to
+       * decide the target, and the §30.3 bounds are measured against that
+       * decided target — so the bounded limits cannot be built until it exists.
+       * Neither field is touched by the bounds, so this is the same answer.
+       */
+      const structuralLimits: MotionLimits = limitsForState(
+        state ?? 'uncertain',
+        profile,
+        limitOptions,
+      );
 
       // §70.5 forward latch. Applied only to ordinary (forward-only) following;
       // a backward-capable profile is an explicit classification of the
@@ -814,7 +889,7 @@ export function createStageMotionEngine(
       // stale bookkeeping for the frame after the re-anchor. `reanchorTo`
       // clears the latch on the way through.
       if (!holding && !visualSpanHold && !fadeHold) {
-        if (limits.allowBackward || manualGrace) {
+        if (structuralLimits.allowBackward || manualGrace) {
           // A backward-capable profile is an explicit classification of the
           // regression; manual authority suspends automatic correction outright
           // (§30.6), and re-latching to the pre-interaction target during the
@@ -841,7 +916,7 @@ export function createStageMotionEngine(
            * for `LATCH_REANCHOR_PERSISTENCE_MS` first.
            */
           const excessPx = forwardTargetLatchPx - targetPx;
-          if (excessPx > Math.max(0, limits.reanchorThresholdPx)) {
+          if (excessPx > Math.max(0, structuralLimits.reanchorThresholdPx)) {
             latchExcessSinceMs ??= nowMs;
             if (nowMs - latchExcessSinceMs >= LATCH_REANCHOR_PERSISTENCE_MS) {
               reanchorTo(targetPx);
@@ -863,15 +938,93 @@ export function createStageMotionEngine(
         }
       }
 
-      /*
-       * §20.3 step 4 + §20.4. Behind the fade the plant aims at where it
-       * already is, so the controller decelerates to rest under its own jerk
-       * limits instead of creeping toward the destination under a
-       * half-transparent layer. That is both the spec's "decelerate briefly"
-       * and the reason the re-anchor stays a single invisible step: nothing
-       * visible moves between the fade starting and the transform changing.
+      /* ------------------------------------------------------------ §30.3 --
+       * The three bounds, now that the target they are measured against exists.
+       *
+       *   1. DURATION CAP. `catchUpMaxDurationMs` from the frame the licence
+       *      appeared, ramped out over its final `catchUpReleaseMs` rather than
+       *      dropped: a limit that steps underneath a jerk-limited plant is the
+       *      exact shape that once put a −175,500 px/s² sub-step into the
+       *      position trace when a `catch_up` directive hit its TTL.
+       *
+       *      The EXIT when the cap runs out with the gap still open is ordinary
+       *      following, not a re-anchor. Two reasons. The gap is forward, and
+       *      forward gaps still close under ordinary limits — 900 px/s is most
+       *      of a screen a second, so nothing is stuck; what ends is the
+       *      spectacle, which is the part §30.3 is bounding. And the stage
+       *      already has exactly one path from "we are somewhere the presenter
+       *      is not" to an authorized discontinuity — the §70.5 latch's
+       *      `reanchorThresholdPx` escape hatch, with its own persistence
+       *      window — so a timer that minted its own re-anchor would be a
+       *      second mechanism for one idea, which is how two of them diverge.
+       *
+       *   2. CORRIDOR-RELATIVE BOOST DECAY. The gap is what closes, so the gap
+       *      is what the decay is measured on: full boost while the spoken line
+       *      is more than `catchUpDecayCorridors` corridor half-heights below
+       *      the corridor's entry edge, falling to none by the time it reaches
+       *      that edge. The boost is therefore spent bringing the line back to
+       *      the corridor, and ordinary following carries it the last stretch
+       *      to `R` — so a small catch-up finishes gently and a large one still
+       *      moves, which a time-relative decay cannot do in both directions.
+       *
+       *   3. UPPER SAFETY BOUNDARY. See `catchUpCeilingPx` below. It is handed
+       *      to the plant as a position, not a speed, because the failure it
+       *      exists for has no speed: a plant sitting ahead of a target that is
+       *      moving at the same pace has zero relative velocity, and the
+       *      overshoot guard — which is deliberately measured relative to the
+       *      target's feed-forward velocity — cannot see it. That is the shape
+       *      that once left the document 908 px ahead permanently.
        */
-      const frozen = holding || fadeHold;
+      const corridorHalfPx = map?.readingBandHalfHeightPx ?? 0;
+      let catchUpBoost = 1;
+      let catchUpCeilingPx = Number.POSITIVE_INFINITY;
+      let catchUpCapped = false;
+      if (catchUpLicensed) {
+        const capMs = Math.max(0, profile.motion.catchUpMaxDurationMs);
+        const releaseMs = Math.min(Math.max(0, profile.motion.catchUpReleaseMs), capMs);
+        const remainingMs = capMs - catchUpElapsedMs;
+        catchUpCapped = remainingMs <= 0;
+        const timeFactor =
+          releaseMs <= 0
+            ? (catchUpCapped ? 0 : 1)
+            : Math.max(0, Math.min(1, remainingMs / releaseMs));
+
+        let corridorFactor = 1;
+        if (corridorHalfPx > 0) {
+          /* The corridor's entry edge, in gap terms.
+           *
+           * The target places the spoken line's baseline at `R`, and the plant
+           * is `gapPx` short of the target, so the line is sitting `gapPx`
+           * BELOW `R` — it enters the corridor when `gapPx` falls to the
+           * corridor half-height, and the boost is gone by then.
+           */
+          const gapPx = targetPx - controller.state.q;
+          const decayPx = Math.max(0, profile.motion.catchUpDecayCorridors) * corridorHalfPx;
+          corridorFactor =
+            decayPx <= 0
+              ? (gapPx > corridorHalfPx ? 1 : 0)
+              : Math.max(0, Math.min(1, (gapPx - corridorHalfPx) / decayPx));
+          // §30.3, §8.8/§16.3: the line may not be carried above the corridor's
+          // UPPER edge. Scrolling forward by one pixel past the target lifts
+          // the line one pixel above `R`, so the corridor half-height is
+          // precisely how far past the target the plant may be carried.
+          catchUpCeilingPx = targetPx + corridorHalfPx;
+        }
+        catchUpBoost = Math.min(timeFactor, corridorFactor);
+        if (catchUpCapped && !catchUpCapCounted) {
+          catchUpCapCounted = true;
+          catchUpCapExpiries++;
+        }
+      }
+
+      const limits: MotionLimits = catchUpLicensed
+        ? limitsForState(state ?? 'uncertain', profile, {
+            ...limitOptions,
+            catchUpBoost,
+            forwardPositionCeilingPx: catchUpCeilingPx,
+          })
+        : structuralLimits;
+
       const step = controller.step({
         dtMs,
         targetPx: frozen ? controller.state.q : targetPx,
@@ -895,6 +1048,7 @@ export function createStageMotionEngine(
         latchReanchored ? 'latch_reanchor' : null,
         deferredOverwrite ? 'transition_deferred' : null,
         fadeHold ? 'reanchor_fade' : null,
+        catchUpCapped ? 'catch_up_capped' : null,
         step.fused ? 'fused' : null,
       ]
         .filter(Boolean)
@@ -1045,6 +1199,9 @@ export function createStageMotionEngine(
       latchReanchors = 0;
       latchExcessSinceMs = null;
       deferredPlantOverwrites = 0;
+      catchUpSinceMs = null;
+      catchUpCapCounted = false;
+      catchUpCapExpiries = 0;
       resetFade();
       reanchorFades = 0;
     },

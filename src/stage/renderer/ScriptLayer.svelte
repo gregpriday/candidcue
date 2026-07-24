@@ -463,6 +463,10 @@
             tokens: measurement.tokens,
             blocks: measurement.blocks,
             readingLineStartY: band.centerPx,
+            // §30.3's upper safety boundary is the corridor's top edge, so what
+            // the motion engine needs is the distance from `R` up to it — the
+            // computed band, including its clamps, not the raw setting.
+            readingBandHalfHeightPx: band.centerPx - band.topPx,
             lineHeightPx: measurement.lineHeightPx,
             viewportHeightPx: vh,
             maxScrollPx: maxScroll,

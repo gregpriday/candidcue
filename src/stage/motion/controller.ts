@@ -231,6 +231,11 @@ const LIMIT_IS_NUMERIC: Record<keyof MotionLimits, boolean> = {
   restDeadbandPx: true,
   reverseTravelMaxPx: true,
   reanchorThresholdPx: true,
+  // §30.3. `Number.POSITIVE_INFINITY` is this field's resting value — "no
+  // ceiling" — so a finite check here would fuse the plant on every ordinary
+  // frame. Its use sites test `Number.isFinite` instead, which also rejects the
+  // NaN a poisoned profile could produce.
+  forwardPositionCeilingPx: false,
   allowBackward: false,
   snap: false,
 };
@@ -439,6 +444,9 @@ export function createJerkLimitedScrollController(
 
         const error = target - plant.q;
         const vTarget = input.feedForwardVelocityPxS * limits.feedForwardScale;
+        // §30.3 upper safety boundary; enforced on `q` at the end of the step.
+        const ceilingPx = limits.forwardPositionCeilingPx;
+        const ceilingActive = Number.isFinite(ceilingPx);
 
         /* ---- 1. velocity envelope for the PROFILE limits ----
          * `vForwardMax` / `vBackwardMax` are constants for the frame, so the
@@ -626,7 +634,47 @@ export function createJerkLimitedScrollController(
         }
 
         plant.v = v;
+        const qPrev = plant.q;
         plant.q += plant.v * dt;
+
+        /* ---- §30.3 upper safety boundary ----
+         * "Never let catch-up place the spoken line above the user's configured
+         * upper safety boundary." A bound on WHERE the plant may be carried, so
+         * it acts on POSITION.
+         *
+         * Deliberately no braking guard of its own. The boundary the frame loop
+         * supplies sits a whole reading corridor beyond the target, and the
+         * overshoot guard above already brakes at `error + restDeadbandPx` —
+         * strictly tighter, on the same relative speed. A second guard on the
+         * looser bound could never demand braking the first has not already
+         * demanded, and two guards for one idea is how they later disagree. The
+         * gap the overshoot guard genuinely cannot cover is this one: when it
+         * commits to braking and the jerk-limited plant physically cannot stop
+         * in time, nothing bounds how far past the target the document ends up,
+         * and `following` is forward-only so it never comes back.
+         *
+         * The plant RIDES the boundary rather than bouncing off it: velocity is
+         * clipped to the boundary's own speed — the same feed-forward estimate
+         * the overshoot guard uses — instead of to zero. Zeroing it would stall
+         * the document dead while the boundary moved off at speaking pace, and
+         * the plant would chase and stall again, once per frame.
+         *
+         * It may only ever *stop* forward motion. Pulling `q` back would be
+         * backward motion, which ordinary following is forbidden to produce at
+         * any scale; and the plant can legitimately start a sub-step above a
+         * boundary that moved (a target regression the forward latch has not
+         * resolved yet, or a corridor that shrank with the viewport). Holding
+         * is the honest answer there.
+         */
+        if (ceilingActive && plant.q > ceilingPx) {
+          const rideV = Math.max(0, vTarget);
+          if (plant.v > rideV) {
+            plant.q = Math.max(qPrev, ceilingPx);
+            plant.v = rideV;
+            hardStop = true;
+            saturated = true;
+          }
+        }
 
         if (plant.q <= minPx) {
           plant.q = minPx;

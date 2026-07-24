@@ -124,6 +124,16 @@ export interface LineMapBuildOptions {
   unitScale?: SpokenUnitScale;
   /** `R` in companion §8: the preferred line-entry baseline, viewport pixels. */
   readingLineStartY: number;
+  /**
+   * Distance from `R` to the reading corridor's upper edge, viewport pixels
+   * (§8.8, §16.3). The COMPUTED half-height, not the raw setting: the renderer
+   * clamps the percentage and the corridor's top edge is clipped at the
+   * viewport, so recomputing it from `fingerprint.readingBandHalfHeightPercent`
+   * here would be a second source of truth for one number. Optional so a caller
+   * that has no corridor (tests, degraded builders) gets no §30.3 ceiling
+   * rather than a wrong one.
+   */
+  readingBandHalfHeightPx?: number;
   lineHeightPx: number;
   viewportHeightPx: number;
   /** Scroll range the map may target; knots are clamped into it. */
@@ -156,6 +166,12 @@ export interface StageRenderedLineMap extends RenderedLineMap {
   readonly issues: readonly LineMapIssue[];
   readonly coverage: LineMapCoverage | null;
   readonly readingLineStartY: number;
+  /**
+   * §30.3's corridor scale: how far above `R` the reading corridor's upper edge
+   * sits. Zero means the corridor is unknown, and the §30.3 ceiling is then not
+   * applied at all rather than guessed at.
+   */
+  readonly readingBandHalfHeightPx: number;
   readonly linePitchPx: number;
   /** Intervals the path cannot traverse at a readable speed (§8.6). */
   readonly visualBlockSpans: readonly VisualBlockSpan[];
@@ -191,6 +207,7 @@ export function emptyRenderedLineMap(
     issues,
     coverage: null,
     readingLineStartY: 0,
+    readingBandHalfHeightPx: 0,
     linePitchPx: 0,
     visualBlockSpans: [],
     visualBlockSpanAt: () => null,
@@ -517,6 +534,7 @@ export function buildRenderedLineMap(options: LineMapBuildOptions): StageRendere
     issues,
     coverage,
     readingLineStartY: R,
+    readingBandHalfHeightPx: Math.max(0, options.readingBandHalfHeightPx ?? 0),
     linePitchPx,
     visualBlockSpans,
 

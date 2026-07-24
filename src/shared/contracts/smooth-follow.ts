@@ -279,6 +279,31 @@ export interface SmoothFollowProfile {
     maxAccelerationPxS2: number;
     maxJerkPxS3: number;
     catchUpMultiplier: number;
+    /**
+     * §30.3 duration cap. Longest one continuous catch-up episode may hold the
+     * boost, measured from the frame the catch-up licence appears.
+     */
+    catchUpMaxDurationMs: number;
+    /**
+     * Window at the end of `catchUpMaxDurationMs` over which the boost ramps
+     * out. The cap is a deadline, but a deadline applied as a step is a limit
+     * that moved underneath a jerk-limited plant — the exact shape that once
+     * produced a −175,500 px/s² sub-step. Ramping means the limits the plant is
+     * tracking never move faster than it can follow them.
+     */
+    catchUpReleaseMs: number;
+    /**
+     * §30.3 boost decay, in reading-corridor half-heights.
+     *
+     * The boost falls to nothing over this many corridor half-heights of gap
+     * ABOVE the corridor's entry edge, so it is spent bringing the spoken line
+     * back to the corridor and ordinary following covers the rest. Expressed in
+     * corridors rather than pixels or milliseconds because the corridor is the
+     * only scale that means the same thing on a 1080p stage and a 4K one, and
+     * because a time-relative decay makes a long catch-up crawl at the end and
+     * a short one snap.
+     */
+    catchUpDecayCorridors: number;
     reverseTravelMaxPx: number;
     reanchorThresholdPx: number;
     restDeadbandPx: number;
@@ -350,6 +375,20 @@ export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
     maxAccelerationPxS2: 2600,
     maxJerkPxS3: 12000,
     catchUpMultiplier: 1.6,
+    // A.4/§30.3. Long enough to absorb a sentence-length stumble or a transcript
+    // stall at 1.6× (at 900 px/s base that is ~3600 px, several screens); short
+    // enough that a catch-up which is not closing stops being a spectacle before
+    // the presenter has finished the next sentence.
+    catchUpMaxDurationMs: 2500,
+    catchUpReleaseMs: 250,
+    // Sized so the decay LEADS the plant's own braking rather than being masked
+    // by it. Fourteen corridor half-heights is ~605 px on a 1080p stage with the
+    // default 4% band, against a 565 px full-authority stop from boosted top
+    // speed (1440 px/s, aMax 4160, jerk 12000) — so the ceiling is already
+    // coming down by the time the overshoot guard would otherwise slam on, and
+    // the approach is shaped instead of braked. Below about 13 the guard fires
+    // first and the decay is decoration.
+    catchUpDecayCorridors: 14,
     reverseTravelMaxPx: 420,
     reanchorThresholdPx: 360,
     restDeadbandPx: 1.5,

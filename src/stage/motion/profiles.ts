@@ -56,6 +56,16 @@ export interface MotionLimits {
   restDeadbandPx: number;
   reverseTravelMaxPx: number;
   reanchorThresholdPx: number;
+  /**
+   * §30.3 upper safety boundary — a POSITION the plant may not be carried past,
+   * in the same scroll-pixel space as `targetPx`.
+   *
+   * `Number.POSITIVE_INFINITY` means "no ceiling", which is the value for every
+   * state except catch-up. It is deliberately NOT one of the fields the §C1
+   * finite fuse checks: infinity is the legitimate resting value here, and every
+   * use site tests `Number.isFinite` before doing arithmetic with it.
+   */
+  forwardPositionCeilingPx: number;
   /** False forbids any backward motion (ordinary following, retake pending). */
   allowBackward: boolean;
   /** Reduced motion: follow the target exactly, with no easing dynamics. */
@@ -74,11 +84,31 @@ interface StateMultipliers {
   allowBackward?: boolean;
 }
 
+/**
+ * The catch-up boost actually in force this frame (§30.3).
+ *
+ * `boost` is the fraction of the profile's boost the frame loop has licensed —
+ * 1 while the spoken line is still well outside the reading corridor and the
+ * duration cap has time left, falling to 0 as either bound closes. The
+ * multiplier lands on 1 (ordinary following limits), never below: a bound that
+ * is spent is a return to ordinary motion, not a brake.
+ */
+export function catchUpMultiplierFor(profile: SmoothFollowProfile, boost: number): number {
+  const full = Math.max(1, profile.motion.catchUpMultiplier);
+  const fraction = Number.isFinite(boost) ? Math.min(1, Math.max(0, boost)) : 1;
+  return 1 + (full - 1) * fraction;
+}
+
 /** Companion §30.1–30.5, plus the states that simply hold. */
 function stateMultipliers(
   state: TrackingStateV2,
   profile: SmoothFollowProfile,
+  /** §30.3 catch-up multiplier after the boost bounds; see `limitsForState`. */
+  boostedCatchUp: number,
 ): StateMultipliers {
+  // The undecayed value. `reanchoring` is not §30.3 catch-up: it is an
+  // authorized discontinuity being flown out, and its bound is the destination,
+  // not the reading corridor.
   const catchUp = Math.max(1, profile.motion.catchUpMultiplier);
   switch (state) {
     case 'following':
@@ -94,8 +124,11 @@ function stateMultipliers(
     case 'adlib_hold':
       return { vForward: 0.15, accel: 0.5, zeta: 1.4, feedForward: 0, omega: 0.7 };
     case 'catching_up':
-      // §30.3: more velocity and acceleration, jerk limit preserved.
-      return { vForward: catchUp, accel: catchUp, feedForward: 1, omega: 1.15 };
+      // §30.3: more velocity and acceleration, jerk limit preserved. The boost
+      // is the only part that decays; ω stays raised so the loop keeps its
+      // bandwidth all the way into the corridor rather than going soft exactly
+      // where it has to settle.
+      return { vForward: boostedCatchUp, accel: boostedCatchUp, feedForward: 1, omega: 1.15 };
     case 'retake_pending':
       // §30.4: decelerate toward zero, do not reverse until commit.
       return { vForward: 0.3, accel: 0.6, zeta: 1.3, feedForward: 0.3, allowBackward: false };
@@ -129,13 +162,14 @@ function stateMultipliers(
 function transitionMultipliers(
   type: StageTransitionDirective['type'] | undefined,
   profile: SmoothFollowProfile,
+  boostedCatchUp: number,
 ): StateMultipliers {
   const catchUp = Math.max(1, profile.motion.catchUpMultiplier);
   switch (type) {
     case 'settle':
       return { vForward: 0.7, accel: 0.8, zeta: 1.25, feedForward: 0.9, omega: 0.95 };
     case 'catch_up':
-      return { vForward: catchUp, accel: catchUp, feedForward: 1, omega: 1.15 };
+      return { vForward: boostedCatchUp, accel: boostedCatchUp, feedForward: 1, omega: 1.15 };
     case 'rewind':
       return { vBackward: 0.9, zeta: 1.25, feedForward: 0.6, allowBackward: true };
     case 'reanchor':
@@ -153,6 +187,19 @@ export interface MotionLimitOptions {
   transition?: StageTransitionDirective['type'];
   /** Manual authority suppresses automatic correction for a grace interval. */
   manualGrace?: boolean;
+  /**
+   * §30.3. Fraction of the profile's catch-up boost the frame loop licenses
+   * this frame — the smaller of the corridor-relative decay and the duration
+   * cap's release ramp. Defaults to 1 (undecayed), so a caller that does not
+   * track catch-up episodes gets exactly today's behaviour.
+   */
+  catchUpBoost?: number;
+  /**
+   * §30.3 upper safety boundary, in scroll pixels. Omitted (or non-finite)
+   * means no ceiling; the frame loop supplies one only while a catch-up licence
+   * is in force, because that is the only motion the spec bounds this way.
+   */
+  forwardPositionCeilingPx?: number;
 }
 
 export function limitsForState(
@@ -161,8 +208,9 @@ export function limitsForState(
   options: MotionLimitOptions = {},
 ): MotionLimits {
   const m = profile.motion;
-  const s = stateMultipliers(state, profile);
-  const t = transitionMultipliers(options.transition, profile);
+  const boostedCatchUp = catchUpMultiplierFor(profile, options.catchUpBoost ?? 1);
+  const s = stateMultipliers(state, profile, boostedCatchUp);
+  const t = transitionMultipliers(options.transition, profile, boostedCatchUp);
   /**
    * Combine a state multiplier with a transition multiplier — WITHOUT letting
    * them compound past either one on its own.
@@ -216,6 +264,13 @@ export function limitsForState(
     restDeadbandPx: m.restDeadbandPx * (s.deadband ?? 1) * degradeDeadband,
     reverseTravelMaxPx: m.reverseTravelMaxPx,
     reanchorThresholdPx: m.reanchorThresholdPx,
+    // §30.3. A safety boundary, so it is a position and not a speed: the boost
+    // decay above only shapes how fast the gap closes, and a plant that is
+    // already level with a target moving at the same speed closes nothing at
+    // all. Non-finite in every state but catch-up.
+    forwardPositionCeilingPx: Number.isFinite(options.forwardPositionCeilingPx)
+      ? (options.forwardPositionCeilingPx as number)
+      : Number.POSITIVE_INFINITY,
     allowBackward: t.allowBackward ?? s.allowBackward ?? false,
     snap: options.reducedMotion === true,
   };
@@ -227,6 +282,9 @@ export function limitsForState(
     limits.vBackwardMax = 0;
     limits.feedForwardScale = 0;
     limits.snap = false;
+    // Nothing automatic may move, so there is nothing for a safety ceiling to
+    // bound — and the presenter's own position may legitimately be past it.
+    limits.forwardPositionCeilingPx = Number.POSITIVE_INFINITY;
   }
 
   return limits;
