@@ -51,6 +51,8 @@ export {
   DEFAULT_SILENT_INPUT_MS,
   DEFAULT_SOFT_PAUSE_AUTO_DISCONNECT_MS,
   MIC_TEST_METER_SECONDS,
+  VAD_SENSITIVITY_BOUNDS,
+  vadConfigForSensitivity,
   type VadConfig,
 } from './defaults';
 export type {

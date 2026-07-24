@@ -65,8 +65,15 @@ class VirtualClock {
   }
 }
 
-function makePipeline(clock: VirtualClock): VoiceSessionPipeline {
+interface StartSequenceGate {
+  flushScriptSave(): Promise<void>;
+  ensureCompiled(): Promise<void>;
+  awaitStageAck(): Promise<void>;
+}
+
+function makePipeline(clock: VirtualClock, startSequence?: StartSequenceGate): VoiceSessionPipeline {
   return new VoiceSessionPipeline({
+    ...(startSequence ? { startSequence } : {}),
     sessionId: 'sess-start-failure',
     sessionGeneration: 1,
     compiled: script,
@@ -111,5 +118,60 @@ describe('pipeline start failure', () => {
     await pipe.start().catch(() => {});
     await expect(pipe.stop()).resolves.toBeUndefined();
     expect(clock.armedCommandTicks()).toBe(0);
+  });
+});
+
+/**
+ * §29.2 — the pipeline forwards its caller's start sequence into the controller.
+ *
+ * This is the hop between "the session store supplies a gate" and "the
+ * controller enforces it". Both halves were previously asserted and this middle
+ * one was not, which is exactly the shape of the original defect: a value
+ * carried faithfully to the last call site and then not passed.
+ */
+describe('§29.2 the pipeline hands its start sequence to the controller', () => {
+  it('runs steps 1–3 in order and stops on the first rejection', async () => {
+    const clock = new VirtualClock();
+    const calls: string[] = [];
+    const pipe = makePipeline(clock, {
+      flushScriptSave: async () => {
+        calls.push('flush');
+      },
+      ensureCompiled: async () => {
+        calls.push('compile');
+        throw new Error('the script has not finished compiling');
+      },
+      awaitStageAck: async () => {
+        calls.push('stage_ack');
+      },
+    });
+
+    await expect(pipe.start()).rejects.toThrow('the script has not finished compiling');
+    // Step 3 never ran, so nothing downstream of it did either — and the
+    // transport was never asked for a credential, which is what makes this a
+    // cost guarantee rather than a tidiness one.
+    expect(calls).toEqual(['flush', 'compile']);
+    expect(pipe.controller.state).not.toBe('ready');
+  });
+
+  it('reaches the microphone step when every precondition is met', async () => {
+    const clock = new VirtualClock();
+    const calls: string[] = [];
+    const pipe = makePipeline(clock, {
+      flushScriptSave: async () => {
+        calls.push('flush');
+      },
+      ensureCompiled: async () => {
+        calls.push('compile');
+      },
+      awaitStageAck: async () => {
+        calls.push('stage_ack');
+      },
+    });
+
+    // There is no `navigator.mediaDevices` here, so the start still fails —
+    // but it fails AFTER the sequence, which is the whole point.
+    await expect(pipe.start()).rejects.toBeDefined();
+    expect(calls).toEqual(['flush', 'compile', 'stage_ack']);
   });
 });

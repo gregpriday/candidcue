@@ -130,6 +130,83 @@ export async function appendSessionTranscript(
   return invokeOrMock<number>('append_session_transcript', { sessionId, items }, () => 0);
 }
 
+/* ---------------------------------------------------------------------------
+ * §36.3 take history
+ * ------------------------------------------------------------------------- */
+
+/** A position the take passed through. Mirrors `sessions::TakeCheckpoint`. */
+export interface TakeCheckpointInput {
+  /** Milliseconds since the take started — never wall clock. */
+  atMs: number;
+  tokenIndex: number;
+  blockId?: string;
+  sentenceId?: string;
+  kind: 'take' | 'paragraph_start' | 'command' | 'manual';
+}
+
+/** Mirror of `sessions::SessionTakeInput`. */
+export interface SessionTakeInput {
+  /**
+   * `${sessionId}:${passOrdinal}` — the SAME identity the post-take review lane
+   * keys `TakePassRecord` by, so the two are one history rather than two.
+   */
+  takePassId: string;
+  /** 1-based and ascending. A retake opens the next one. */
+  passOrdinal: number;
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  startTokenIndex?: number;
+  endTokenIndex?: number;
+  /** Authored block ids in the order they were first reached. */
+  sections?: string[];
+  checkpoints?: TakeCheckpointInput[];
+  /** §36.3: retakes the ALIGNER detected inside this pass. */
+  automaticRetakes?: number;
+  /** §36.3 confidence summary. Omitted when the pass had no snapshots. */
+  confidenceMean?: number;
+}
+
+/** Mirror of `sessions::SessionTakeRecord`. */
+export interface SessionTakeRecord {
+  id: string;
+  sessionId: string;
+  takePassId: string;
+  passOrdinal: number;
+  startedAt: string;
+  endedAt?: string;
+  durationMs?: number;
+  startTokenIndex: number;
+  endTokenIndex?: number;
+  sections: string[];
+  checkpoints: TakeCheckpointInput[];
+  automaticRetakes: number;
+  confidenceMean?: number;
+}
+
+/**
+ * §36.3. Record (or complete) one take.
+ *
+ * Upserts on `(sessionId, passOrdinal)` in Rust, so the store may write a take
+ * while it is still running and complete it later without duplicating — and a
+ * second take can never overwrite the first, because a different ordinal is a
+ * different row by table constraint rather than by caller discipline.
+ */
+export async function recordSessionTake(
+  sessionId: string,
+  take: SessionTakeInput,
+): Promise<SessionTakeRecord | null> {
+  return invokeOrMock<SessionTakeRecord | null>(
+    'record_session_take',
+    { sessionId, take },
+    () => null,
+  );
+}
+
+export async function listSessionTakes(sessionId: string): Promise<SessionTakeRecord[]> {
+  return invokeOrMock<SessionTakeRecord[]>('list_session_takes', { sessionId }, () => []);
+}
+
 export async function listSessionRecords(
   scriptId?: string,
   limit?: number,

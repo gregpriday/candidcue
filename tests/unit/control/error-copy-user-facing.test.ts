@@ -31,6 +31,9 @@ const records = vi.hoisted(() => ({
   endSessionRecord: vi.fn(async () => null),
   startSessionRecord: vi.fn(),
   listSessionRecords: vi.fn(async () => []),
+  // §36.3 take history — part of the same module the store imports.
+  recordSessionTake: vi.fn(async () => null),
+  listSessionTakes: vi.fn(async () => []),
 }));
 
 const pipeline = vi.hoisted(() => {

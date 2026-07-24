@@ -448,3 +448,184 @@ async fn startup_closes_sessions_that_were_never_ended() {
     // Idempotent: a clean launch closes nothing.
     assert_eq!(sessions::close_orphaned_sessions(&h.pool).await.unwrap(), 0);
 }
+
+// ---------------------------------------------------------------------------
+// §36.3 take history
+//
+// `sessions` is one row per SESSION with scalar counters. `retake_count` could
+// say four takes happened and nothing about any of them — not when they ran,
+// not where they started or stopped, not which sections they covered, not where
+// the presenter marked a checkpoint. `session_takes` is that detail, and the
+// thing worth pinning is that it is a HISTORY: a second take must never
+// overwrite the first.
+// ---------------------------------------------------------------------------
+
+fn take_input(ordinal: i64, take_pass_id: &str) -> sessions::SessionTakeInput {
+    serde_json::from_value(serde_json::json!({
+        "takePassId": take_pass_id,
+        "passOrdinal": ordinal,
+        "startedAt": "2026-07-25T09:00:00.000Z",
+        "endedAt": "2026-07-25T09:04:00.000Z",
+        "durationMs": 240_000,
+        "startTokenIndex": 0,
+        "endTokenIndex": 412,
+        "sections": ["block-1", "block-2"],
+        "checkpoints": [
+            { "atMs": 12_000, "tokenIndex": 40, "blockId": "block-1", "sentenceId": "s-3", "kind": "take" },
+            { "atMs": 96_000, "tokenIndex": 300, "blockId": "block-2", "sentenceId": "s-19", "kind": "manual" }
+        ]
+    }))
+    .expect("take input deserializes")
+}
+
+#[tokio::test]
+async fn a_take_round_trips_with_its_times_sections_and_checkpoints() {
+    let h = harness().await;
+    let script_id = a_script(&h).await;
+    let f = fixture();
+    let session = sessions::start_session(&h.pool, &start_input(&f, &script_id), false)
+        .await
+        .expect("session started");
+
+    let written = sessions::record_take(&h.pool, &session.id, take_input(1, "pass-1"))
+        .await
+        .expect("take recorded");
+    assert_eq!(written.pass_ordinal, 1);
+    assert_eq!(written.take_pass_id, "pass-1");
+
+    let takes = sessions::list_takes(&h.pool, &session.id)
+        .await
+        .expect("takes listed");
+    assert_eq!(takes.len(), 1);
+    let take = &takes[0];
+    assert_eq!(take.duration_ms, Some(240_000));
+    assert_eq!(take.start_token_index, 0);
+    assert_eq!(take.end_token_index, Some(412));
+    assert_eq!(take.sections, vec!["block-1".to_string(), "block-2".to_string()]);
+    assert_eq!(take.checkpoints.len(), 2);
+    assert_eq!(take.checkpoints[0].kind, "take");
+    assert_eq!(take.checkpoints[0].at_ms, 12_000);
+    assert_eq!(take.checkpoints[0].token_index, 40);
+    assert_eq!(take.checkpoints[1].kind, "manual");
+    assert_eq!(take.checkpoints[1].sentence_id.as_deref(), Some("s-19"));
+}
+
+/// The assertion the whole table exists for.
+#[tokio::test]
+async fn a_second_take_does_not_overwrite_the_first() {
+    let h = harness().await;
+    let script_id = a_script(&h).await;
+    let f = fixture();
+    let session = sessions::start_session(&h.pool, &start_input(&f, &script_id), false)
+        .await
+        .expect("session started");
+
+    sessions::record_take(&h.pool, &session.id, take_input(1, "pass-1"))
+        .await
+        .expect("first take");
+
+    let mut second = take_input(2, "pass-2");
+    second.duration_ms = Some(61_000);
+    second.end_token_index = Some(90);
+    second.sections = vec!["block-1".into()];
+    second.checkpoints.clear();
+    sessions::record_take(&h.pool, &session.id, second)
+        .await
+        .expect("second take");
+
+    let takes = sessions::list_takes(&h.pool, &session.id)
+        .await
+        .expect("takes listed");
+    assert_eq!(takes.len(), 2, "both passes survive");
+    // Ascending by ordinal, and the first take is untouched.
+    assert_eq!(takes[0].pass_ordinal, 1);
+    assert_eq!(takes[0].take_pass_id, "pass-1");
+    assert_eq!(takes[0].duration_ms, Some(240_000));
+    assert_eq!(takes[0].checkpoints.len(), 2);
+    assert_eq!(takes[1].pass_ordinal, 2);
+    assert_eq!(takes[1].duration_ms, Some(61_000));
+    assert!(takes[1].checkpoints.is_empty());
+}
+
+/// A take may be written while it is still open and completed later, so a crash
+/// mid-session costs the tail of the current take rather than the whole history.
+#[tokio::test]
+async fn re_recording_the_same_ordinal_completes_it_rather_than_duplicating() {
+    let h = harness().await;
+    let script_id = a_script(&h).await;
+    let f = fixture();
+    let session = sessions::start_session(&h.pool, &start_input(&f, &script_id), false)
+        .await
+        .expect("session started");
+
+    let mut open = take_input(1, "pass-1");
+    open.ended_at = None;
+    open.duration_ms = None;
+    open.end_token_index = None;
+    sessions::record_take(&h.pool, &session.id, open)
+        .await
+        .expect("open take");
+
+    sessions::record_take(&h.pool, &session.id, take_input(1, "pass-1"))
+        .await
+        .expect("completed take");
+
+    let takes = sessions::list_takes(&h.pool, &session.id)
+        .await
+        .expect("takes listed");
+    assert_eq!(takes.len(), 1, "one row, not two");
+    assert_eq!(takes[0].ended_at.as_deref(), Some("2026-07-25T09:04:00.000Z"));
+    assert_eq!(takes[0].end_token_index, Some(412));
+}
+
+#[tokio::test]
+async fn take_history_is_refused_for_a_session_that_does_not_exist() {
+    let h = harness().await;
+    let err = sessions::record_take(&h.pool, "11111111-1111-4111-8111-111111111111", take_input(1, "p"))
+        .await
+        .expect_err("no such session");
+    assert!(format!("{err:?}").to_lowercase().contains("session"));
+}
+
+#[tokio::test]
+async fn take_history_rejects_a_checkpoint_kind_it_does_not_know() {
+    let h = harness().await;
+    let script_id = a_script(&h).await;
+    let f = fixture();
+    let session = sessions::start_session(&h.pool, &start_input(&f, &script_id), false)
+        .await
+        .expect("session started");
+    let mut bad = take_input(1, "pass-1");
+    bad.checkpoints[0].kind = "whatever".into();
+    assert!(sessions::record_take(&h.pool, &session.id, bad).await.is_err());
+}
+
+/// Deleting a session takes its takes with it — the history must not outlive
+/// the thing it is a history of.
+#[tokio::test]
+async fn takes_are_removed_with_their_session() {
+    let h = harness().await;
+    let script_id = a_script(&h).await;
+    let f = fixture();
+    let session = sessions::start_session(&h.pool, &start_input(&f, &script_id), false)
+        .await
+        .expect("session started");
+    sessions::record_take(&h.pool, &session.id, take_input(1, "pass-1"))
+        .await
+        .expect("take recorded");
+
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&h.pool)
+        .await
+        .expect("fk on");
+    sqlx::query("DELETE FROM sessions WHERE id = ?")
+        .bind(&session.id)
+        .execute(&h.pool)
+        .await
+        .expect("session deleted");
+
+    let takes = sessions::list_takes(&h.pool, &session.id)
+        .await
+        .expect("takes listed");
+    assert!(takes.is_empty());
+}

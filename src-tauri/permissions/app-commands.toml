@@ -84,4 +84,6 @@ commands.allow = [
   "end_session",
   "append_session_transcript",
   "list_sessions",
+  "record_session_take",
+  "list_session_takes",
 ]

@@ -31,9 +31,11 @@ import {
   createAnalyserGraph,
   MicrophoneDeviceManager,
   MicrophoneMonitor,
+  queryMicrophonePermission,
   releaseStream,
   requestMicrophoneAccess,
   SilentInputDetector,
+  vadConfigForSensitivity,
   type MediaStreamLike,
 } from './audio';
 import {
@@ -57,6 +59,32 @@ import type { ModelCapabilities } from './capabilities';
  * tick is a single comparison unless something is actually pending.
  */
 export const COMMAND_TICK_INTERVAL_MS = 250;
+
+/**
+ * §29.2 steps 1–3, as the *caller's* half of the start sequence.
+ *
+ * `RealtimeSessionController` has always had hooks for these three and the only
+ * production caller supplied none of them. The steps did happen — in
+ * `Preflight.svelte`, before `startLiveSession` — so the behaviour was right by
+ * accident, and an accident is exactly the problem: a controller cannot enforce
+ * an ordering it does not own, so a retake, a resumed session or a second entry
+ * point would get none of it. The controller also re-runs `start()` on every
+ * resume-after-sleep and hard-pause recovery, where Preflight is long gone.
+ *
+ * Each of these is therefore a PRECONDITION CHECK, not a second performance of
+ * the step. Flushing an already-flushed save is a no-op; asking whether the
+ * compile is current and the stage has acked is cheap and idempotent; and any
+ * of them rejecting aborts the start before the transport is touched, so nothing
+ * billable begins on a session that was not ready.
+ */
+export interface StartSequenceGate {
+  /** §29.2 step 1 — the script's pending save must be on disk. */
+  flushScriptSave(): Promise<void>;
+  /** §29.2 step 2 — a current compile with no blocking diagnostics. */
+  ensureCompiled(): Promise<void>;
+  /** §29.2 step 3 — the stage has hydrated and reported its layout ready. */
+  awaitStageAck(): Promise<void>;
+}
 
 /** One finalized transcript item, ready for §36.2 retention. */
 export interface FinalizedTranscriptItem {
@@ -87,6 +115,30 @@ export interface VoicePipelineDeps {
     noiseSuppression?: boolean;
     autoGainControl?: boolean;
   };
+  /**
+   * §28.4 Settings → Audio "Local voice-detection sensitivity", 0–1 with 0.5 =
+   * the A.6 defaults. Persisted since the setting shipped and read by nothing:
+   * every session ran on the constants regardless of what the slider said.
+   *
+   * It moves the speech THRESHOLD only. See `vadConfigForSensitivity` for why
+   * the commit cadence is deliberately not on the slider — this VAD's turn
+   * boundaries are the Realtime commit cue, so they are latency and money, not
+   * just detection.
+   */
+  vadSensitivity?: number;
+  /**
+   * §29.2 steps 1–3. Supplied by the session store for every real take; the
+   * type stays optional only so a unit test can stand up a bare pipeline
+   * without a script store, a compiler and a stage window behind it.
+   */
+  startSequence?: StartSequenceGate;
+  /**
+   * §29.2 step 9 — the controller is clearing transcript state, so the alignment
+   * cursor and any transcript the session store is holding go with it. The
+   * pipeline resets what it owns (router, commit driver, silence detector)
+   * unconditionally; this is the part that lives above it.
+   */
+  onResetTranscriptState?(): void;
   getCursorTokenIndex(): number;
   getPosition(): { blockId: string; sentenceId: string; tokenIndex: number };
   getScrollMode(): 'voice' | 'manual' | 'fixed';
@@ -175,6 +227,13 @@ export class VoiceSessionPipeline {
   private readonly commitDriver: ManualCommitDriver;
   private monitor: MicrophoneMonitor | null = null;
   private activeStream: MediaStreamLike | null = null;
+  /**
+   * §29.2 step 8: true between the controller's `startVad` and its `stopVad`.
+   * A re-acquisition inside that window restarts the VAD itself; one outside it
+   * (the very first connect) waits for the controller, which is what makes the
+   * step the controller's rather than the transport's.
+   */
+  private vadRequested = false;
   private commandPending = false;
   private stopped = false;
   /** H5: sustained no-signal detection on the captured stream (§28.6). */
@@ -259,6 +318,40 @@ export class VoiceSessionPipeline {
       ...(deps.timers ? { timers: deps.timers } : {}),
       ...(deps.now ? { now: deps.now } : {}),
       hooks: {
+        /*
+         * §29.2 steps 1–3. Supplied here rather than performed in the screen
+         * that happens to precede the session, so the ORDER is owned by the
+         * thing that specifies it. A rejection aborts `start()` before the
+         * transport is subscribed or connected — nothing billable begins on a
+         * session whose script, compile or stage was not ready.
+         */
+        ...(deps.startSequence
+          ? {
+              flushScriptSave: () => deps.startSequence!.flushScriptSave(),
+              ensureCompiled: () => deps.startSequence!.ensureCompiled(),
+              awaitStageAck: () => deps.startSequence!.awaitStageAck(),
+            }
+          : {}),
+        /*
+         * §28.1 explicit permission step. Strictly passive — `getUserMedia` is
+         * the only thing that may prompt, it happens later inside
+         * `acquireMicrophone`, and it may only follow an explicit user action.
+         * All this does is refuse to walk the rest of the sequence when the OS
+         * has already said no, which is the difference between "the microphone
+         * failed to open" and "you have denied CandidCue the microphone".
+         */
+        requestPermission: () => this.checkMicrophonePermission(),
+        /*
+         * §29.2 step 8. The VAD used to start as a side effect of the transport
+         * acquiring the microphone, which is both earlier than the spec says and
+         * — worse — never stopped: a `start()` that threw took the
+         * `failFromError` path, which called an unsupplied `stopVad`, and left a
+         * polling AudioContext running on a session that never existed.
+         */
+        startVad: () => this.startVad(),
+        stopVad: () => this.stopVad(),
+        /** §29.2 step 9. */
+        resetTranscriptState: () => this.resetTranscriptState(),
         onTranscriptEvent: (event) => this.handleTransportEvent(event),
         onStateChange: (state) => deps.onRealtimeState?.(state),
         onRecoverableIssue: (issue) => {
@@ -436,6 +529,67 @@ export class VoiceSessionPipeline {
 
   /* ---------------------------------------------------------------------- */
 
+  /**
+   * §28.1/§29.2 step 4 precondition. Passive only: `queryMicrophonePermission`
+   * uses the Permissions API and never calls `getUserMedia`, so this cannot
+   * raise the OS prompt. `unsupported` and `prompt` both proceed — plenty of
+   * WebViews do not answer the query, and the microphone open resolves
+   * permission implicitly there, which is what the controller's hook contract
+   * already says. Only an explicit `denied` stops the sequence.
+   */
+  private async checkMicrophonePermission(): Promise<boolean> {
+    const permissions = (globalThis as { navigator?: { permissions?: unknown } }).navigator
+      ?.permissions;
+    if (!permissions) return true;
+    const state = await queryMicrophonePermission(
+      permissions as Parameters<typeof queryMicrophonePermission>[0],
+    );
+    return state !== 'denied';
+  }
+
+  /**
+   * §29.2 step 8. Idempotent, and safe to call before a stream exists: the
+   * transport acquires the microphone during `connect`, which is step 5–7, so
+   * by the time the controller reaches step 8 there is always a monitor waiting.
+   */
+  private async startVad(): Promise<void> {
+    this.vadRequested = true;
+    const monitor = this.monitor;
+    if (!monitor || monitor.running || !this.activeStream) return;
+    await monitor.start(this.activeStream);
+  }
+
+  /**
+   * §29.2 step 8's counterpart, reached from stop, hard pause, AND the failed
+   * start path. That last one is why this matters: nothing used to tear the
+   * monitor down when the start sequence threw.
+   */
+  private async stopVad(): Promise<void> {
+    this.vadRequested = false;
+    await this.stopMonitor();
+  }
+
+  /**
+   * §29.2 step 9 — clear old transcript state.
+   *
+   * The pipeline resets what it owns: any command handoff in flight, the commit
+   * driver's buffered-turn bookkeeping, and the silence detector's history. The
+   * alignment cursor and the session store's transcript tail live above this
+   * layer and are reset through `onResetTranscriptState`.
+   *
+   * The `TranscriptLedger` is deliberately not cleared here: it is keyed by
+   * session generation and clears itself when the generation moves, and forcing
+   * it empty under an unchanged generation would discard commit ordering that
+   * `UNIQUE(session_id, commit_sequence)` still depends on.
+   */
+  private resetTranscriptState(): void {
+    this.router.cancelPending('session_stopped', this.now());
+    this.commitDriver.reset();
+    this.silentInput.reset();
+    this.setPending(false);
+    this.deps.onResetTranscriptState?.();
+  }
+
   private async acquireMicrophone(deviceId?: string): Promise<MediaStreamLike> {
     await this.stopMonitor();
     const mediaDevices = navigator.mediaDevices as unknown as Parameters<
@@ -450,7 +604,12 @@ export class VoiceSessionPipeline {
     }
     this.activeStream = result.stream;
     // Local VAD drives manual commit boundaries (§28.4/§29.3).
-    this.monitor = new MicrophoneMonitor({ createGraph: createAnalyserGraph });
+    this.monitor = new MicrophoneMonitor({
+      createGraph: createAnalyserGraph,
+      ...(this.deps.vadSensitivity === undefined
+        ? {}
+        : { vadConfig: vadConfigForSensitivity(this.deps.vadSensitivity) }),
+    });
     this.monitor.onVadEvent((event) => this.commitDriver.handleVadEvent(event));
     // H5: real captured audio is the precondition for the
     // `no_transcripts_despite_audio` health branch. Without a production
@@ -466,7 +625,15 @@ export class VoiceSessionPipeline {
       const code = this.silentInput.observe(snapshot);
       if (code) this.deps.onInputDeviceLost?.(code);
     });
-    await this.monitor.start(result.stream);
+    /*
+     * §29.2 step 8 belongs to the controller, so the FIRST start leaves the
+     * monitor built but idle and waits for `startVad`. Every later acquisition
+     * — a reconnect, a mid-take device switch — happens underneath a session
+     * that is already past step 8 and never re-enters it, so those restart the
+     * VAD immediately or the session would come back with no commit boundaries
+     * at all.
+     */
+    if (this.vadRequested) await this.monitor.start(result.stream);
     // §5.3: fan the SAME capture out to any extra consumer (the coaching
     // analyzer). This is deliberately after the monitor starts and before the
     // stream is returned to the transport, so all three consumers — peer

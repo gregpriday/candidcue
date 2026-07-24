@@ -45,15 +45,26 @@ import { CoachingSessionController } from '../services/coaching-session';
 import { createCoachingObserverTransport } from '../services/coaching-luna';
 import type { MediaStreamLike } from '../services/audio';
 import type { CoachRailState } from '../../shared/contracts';
-import { appendSessionTranscript, endSessionRecord } from '../services/session-records';
+import {
+  appendSessionTranscript,
+  endSessionRecord,
+  recordSessionTake,
+  type TakeCheckpointInput,
+} from '../services/session-records';
 import type { AssistSchedulingContext, SemanticAvailability } from '../../shared/semantic';
 import { DEFAULT_SEMANTIC_BUDGET } from '../../shared/semantic';
 import { getModelCapabilities } from '../services/capabilities';
 import { resolveSmoothFollowProfile } from '../../shared/tracking/profile';
 import { defaultFollowingSettings } from '../lib/follow-profiles';
+import {
+  TranscriptConfidenceWatch,
+  type TranscriptConfidenceInput,
+} from '../lib/transcript-confidence-watch';
 import { configureFollowActions, smoothFollow } from './smooth-follow';
 import { getSettingsSnapshot, patchSettings } from './settings';
 import { showToast } from './toasts';
+import { compiled as compiledStore } from './compiled';
+import { saveNow } from './editor';
 
 export type PauseKind = 'none' | 'listening' | 'hard';
 
@@ -364,6 +375,22 @@ let pushSemanticContext: ((context: AssistSchedulingContext) => void) | null = n
 let usingWorkerFrames = false;
 
 /**
+ * §60 low transcript confidence.
+ *
+ * The realtime session is billed for `requestLogprobs: true` and the per-token
+ * confidences derived from them already widen the semantic filter's measurement
+ * variance — so following really does get vaguer while the recogniser struggles.
+ * Until now nothing told the presenter why: `TranscriptFeedStatus` has always
+ * had a `'low_confidence'` member and `deriveNotices` has always rendered it,
+ * and nothing ever produced it.
+ *
+ * Take-scoped, like every other per-session detector here. The thresholds and
+ * the hysteresis live in the watcher; see that module for why they are what they
+ * are.
+ */
+let transcriptConfidence = new TranscriptConfidenceWatch();
+
+/**
  * The take's coaching subsystem (companion Part II). Session-owned and disposed
  * with the take, exactly like the semantic sidecar. Null in manual/fixed modes,
  * outside Tauri, when there is no compiled script, and when coaching mode is
@@ -375,6 +402,69 @@ let usingWorkerFrames = false;
  * and nothing it does can reach motion (§2.1/§5.2).
  */
 let coaching: CoachingSessionController | null = null;
+
+/* ---------------------------------------------------------------------------
+ * §36.3 take history
+ *
+ * The §36.1 session record has always been able to say "four takes happened"
+ * and nothing about any of them: `retake_count` is a scalar, `sectionsReached`
+ * was a single number folded into `metrics_json` at the end, and
+ * `addTakeMarker` — the handler for the "mark this" voice command — incremented
+ * a counter and stored no marker at all.
+ *
+ * This is the per-take detail on top: when each pass ran, where it started and
+ * stopped, which sections it traversed, and where the presenter marked a
+ * checkpoint. It reuses the sections the store was ALREADY accumulating
+ * (`blocksSeen`) and is keyed by the review lane's own `takePassId`, so the two
+ * are one history rather than two.
+ * ------------------------------------------------------------------------- */
+
+/** The take currently being performed. Null outside a session. */
+interface ActiveTake {
+  /** 1-based; a retake opens the next one and never rewrites this one. */
+  passOrdinal: number;
+  /** `${sessionId}:${passOrdinal}` — the review lane's take-pass identity. */
+  takePassId: string;
+  startedAtIso: string;
+  /** Monotonic, so a clock step cannot invent or erase a take's duration. */
+  startedAtMs: number;
+  startTokenIndex: number;
+  /** Authored block ids in the order this pass first reached them. */
+  sections: string[];
+  checkpoints: TakeCheckpointInput[];
+  /**
+   * §36.3 automatic retake transitions — the aligner deciding the presenter went
+   * back and re-read. Distinct from a MANUAL retake, which opens a new pass and
+   * so is a row of its own rather than a counter.
+   */
+  automaticRetakes: number;
+  /** §36.3 confidence summary, accumulated rather than sampled. */
+  confidenceSum: number;
+  confidenceSamples: number;
+}
+
+let activeTake: ActiveTake | null = null;
+
+/**
+ * §36.3's own words: "within the current live session, keep an IN-MEMORY take
+ * history ... this powers 'restart this take' and can be discarded at Stop".
+ *
+ * So the list is held here for the session's own use, and each pass is ALSO
+ * written through to `session_takes` as it closes. The persistence is the part
+ * the spec does not require and the review screen does: a take history that only
+ * exists until Stop cannot answer "how did the third take go" ten minutes later,
+ * which is the one moment anybody wants to know.
+ */
+let sessionTakes: ActiveTake[] = [];
+
+/**
+ * Checkpoints per take. These are deliberate operator actions — a spoken "mark
+ * this", a paragraph restart, an outline jump — so two hundred inside a single
+ * pass is already far past anything real. The cap keeps the row bounded; the
+ * EARLIEST are kept because this is a history, and a history that loses its
+ * beginning is not one.
+ */
+const MAX_TAKE_CHECKPOINTS = 200;
 
 /* Session record (§36.1) + transcript retention (§36.2). */
 interface PendingTranscriptItem {
@@ -448,6 +538,12 @@ export interface StartSessionInput {
     noiseSuppression?: boolean;
     autoGainControl?: boolean;
   };
+  /**
+   * §28.4 local voice-detection sensitivity (0–1, 0.5 = A.6 defaults). Omitted
+   * means "read the saved setting", which is what production does — the value
+   * is only ever passed explicitly by a preview or a test.
+   */
+  vadSensitivity?: number;
   /** §47 follow settings for this session; defaults to the saved settings. */
   following?: FollowingSettings;
 }
@@ -474,6 +570,13 @@ export function startLiveSession(input: StartSessionInput): string {
   lastMotionFrame = null;
   usingWorkerFrames = false;
   scriptCompileHash = input.compiled?.sourceHash ?? '';
+  // §60: evidence never crosses a take boundary. A fresh watcher is cheaper and
+  // more obviously correct than resetting one, and it is the same lifetime as
+  // every other take-scoped detector in this store.
+  transcriptConfidence = new TranscriptConfidenceWatch();
+  // §36.3: the session's first take opens with it, on a fresh history.
+  sessionTakes = [];
+  beginTake(sessionId, 1, 0);
 
   // Smooth-following store (§50.1): user-visible following state + §48 actions.
   const following = input.following ?? currentFollowingSettings();
@@ -580,6 +683,17 @@ export function startLiveSession(input: StartSessionInput): string {
       commandsEnabled: input.commandsEnabled,
       deviceId: input.micDeviceId,
       audioProcessing: input.audioProcessing,
+      // §28.4: the slider had no reader at all. The saved value is the default
+      // so every caller of `startLiveSession` gets it, not only Preflight.
+      vadSensitivity: input.vadSensitivity ?? currentVadSensitivity(),
+      // §29.2 steps 1–3, enforced by the controller that specifies them rather
+      // than by whichever screen happened to run first.
+      startSequence: buildStartSequenceGate(input),
+      // §29.2 step 9, the half that lives above the pipeline.
+      onResetTranscriptState: () => {
+        state.update((s) => ({ ...s, transcriptTail: [] }));
+        transcriptConfidence.reset();
+      },
       getCursorTokenIndex: () => get(state).snapshot?.tokenIndex ?? 0,
       getPosition: () => {
         const snap = get(state).snapshot;
@@ -590,11 +704,27 @@ export function startLiveSession(input: StartSessionInput): string {
         };
       },
       getScrollMode: () => (get(state).voiceFollow ? 'voice' : 'manual'),
-      onTrackingEvent: (event) => driver?.feedTranscript(event),
+      onTrackingEvent: (event) => {
+        // §60: the same `completed` event that feeds the aligner carries the
+        // provider's log probabilities, so the confidence evidence is read here
+        // one step before the worker sees it — no new worker protocol needed.
+        if (event.type === 'completed') {
+          noteTranscriptConfidence({
+            itemId: event.itemId,
+            text: event.text,
+            ...(event.logprobs ? { logprobs: event.logprobs } : {}),
+            receivedAtMs: event.receivedAtMs,
+          });
+        }
+        driver?.feedTranscript(event);
+      },
       onMaskItems: (itemIds) => {
         // §36.2: an item the command channel consumed is a command phrase, not
         // performed script, and the retained transcript must say so.
         labelTranscriptItems(itemIds, 'command');
+        // §60: nor is a wake phrase evidence about how well the recogniser is
+        // hearing the script — retract it from the confidence window.
+        transcriptConfidence.forget(itemIds);
         driver?.maskItems(itemIds);
       },
       // §33.4 tail: the router decided the phrase was authored script after
@@ -762,6 +892,114 @@ export function startLiveSession(input: StartSessionInput): string {
 
   startStageBridge(sessionId);
   return sessionId;
+}
+
+/* ---------------------------------------------------------------------------
+ * §29.2 start sequence, steps 1–3
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A precondition of the start sequence was not met. Thrown out of the gate,
+ * caught by `RealtimeSessionController.start`, which tears the attempt down and
+ * rethrows — so the transport is never subscribed and nothing billable begins.
+ */
+export class StartSequenceError extends Error {
+  constructor(
+    readonly step: 'script_save' | 'compile' | 'stage_ack',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'StartSequenceError';
+  }
+}
+
+/**
+ * Build the §29.2 steps 1–3 gate for this take.
+ *
+ * These steps were being performed in `Preflight.svelte` before
+ * `startLiveSession` was ever called, which made the ordering true by accident.
+ * The accident is the defect: the controller re-runs its whole start sequence on
+ * every resume-after-sleep and every recovery from a hard pause, long after
+ * Preflight is gone, and any future caller — a retake, a restored session, a
+ * second entry point — inherits nothing.
+ *
+ * So each step is expressed as the CHECK it really is. Step 1 flushes, which is
+ * a no-op when there is nothing pending. Steps 2 and 3 ask whether the compile
+ * is current and the stage has acked, and refuse the start when they are not.
+ * Running them a second time therefore costs nothing on the happy path and is
+ * the only thing standing between a future caller and a take that starts against
+ * a stale script or a stage that never hydrated.
+ */
+function buildStartSequenceGate(input: StartSessionInput): {
+  flushScriptSave(): Promise<void>;
+  ensureCompiled(): Promise<void>;
+  awaitStageAck(): Promise<void>;
+} {
+  const expectedStageGeneration = input.stageGeneration ?? 0;
+  return {
+    async flushScriptSave(): Promise<void> {
+      // Idempotent: `saveNow` returns immediately when nothing is dirty, and it
+      // flushes any debounced compile on the way through.
+      await saveNow();
+    },
+
+    async ensureCompiled(): Promise<void> {
+      const compiledScript = input.compiled ?? null;
+      if (compiledScript === null) {
+        throw new StartSequenceError(
+          'compile',
+          'The script has not finished compiling, so the session cannot start.',
+        );
+      }
+      const store = get(compiledStore);
+      // An idle store means nobody has compiled through it this run — a test,
+      // or a caller with its own compiler. The supplied script is then the only
+      // authority and it has already been checked.
+      if (store.status === 'idle') return;
+      if (store.status === 'error') {
+        throw new StartSequenceError('compile', store.error ?? 'The script failed to compile.');
+      }
+      const blocking = (store.result?.diagnostics ?? []).filter(
+        (diagnostic) => diagnostic.blocking || diagnostic.severity === 'error',
+      );
+      if (blocking.length > 0) {
+        throw new StartSequenceError(
+          'compile',
+          `The script has ${blocking.length === 1 ? 'a problem' : `${blocking.length} problems`} that must be fixed first: ${blocking[0]?.message ?? ''}`,
+        );
+      }
+      // §45.3: a compile that has moved on since this session was assembled
+      // means the stage is prompting text the aligner was not built from.
+      if (
+        store.status === 'ready' &&
+        store.result !== null &&
+        store.result.sourceHash !== compiledScript.sourceHash
+      ) {
+        throw new StartSequenceError(
+          'compile',
+          'The script changed after the session was prepared. Start again from Preflight.',
+        );
+      }
+    },
+
+    async awaitStageAck(): Promise<void> {
+      // No stage window for this session (browser dev, headless tests): there is
+      // no handshake to insist on, and inventing one would make the store
+      // untestable without a Tauri runtime.
+      if (expectedStageGeneration === 0 || !isTauriRuntime()) return;
+      const status = await stageService.getStageStatus();
+      if (
+        status.stageGeneration !== expectedStageGeneration ||
+        !status.hydrated ||
+        !status.layoutReady
+      ) {
+        throw new StartSequenceError(
+          'stage_ack',
+          'The stage has not finished preparing, so the session cannot start.',
+        );
+      }
+    },
+  };
 }
 
 /* ---------------------------------------------------------------------------
@@ -994,6 +1232,23 @@ function feedCoachingTracking(snapshot: TrackingSnapshot): void {
  * ------------------------------------------------------------------------- */
 
 function handleSnapshot(snapshot: TrackingSnapshot): void {
+  // §36.3: sections traversed, per take. `blocksSeen` below is the same fact
+  // for the whole session and has only ever been read as a count; this is the
+  // per-pass list, which is what makes "take 2 never reached the close" sayable.
+  if (activeTake !== null) {
+    if (snapshot.blockId && !activeTake.sections.includes(snapshot.blockId)) {
+      activeTake.sections.push(snapshot.blockId);
+    }
+    // §36.3 confidence summary, accumulated over every snapshot the pass saw.
+    if (Number.isFinite(snapshot.confidence)) {
+      activeTake.confidenceSum += snapshot.confidence;
+      activeTake.confidenceSamples += 1;
+    }
+    // §36.3 automatic retake transitions: the ALIGNER concluded the presenter
+    // went back and re-read. A manual retake opens a new pass instead, so the
+    // two are never conflated into one number.
+    if (snapshot.movement === 'retake') activeTake.automaticRetakes += 1;
+  }
   state.update((s) => ({
     ...s,
     snapshot,
@@ -1112,6 +1367,136 @@ function relaySnapshot(snapshot: TrackingSnapshot): void {
   void stageService.publishStageSnapshot(current.sessionId, snapshot).catch(() => {});
 }
 
+/**
+ * §60. Feed one finalized item to the confidence watcher and, when its verdict
+ * changes, say so.
+ *
+ * The status field is shared with §59, so the two must not fight over it. An
+ * `interrupted` feed outranks a weak one — there is no transcript at all to be
+ * unconfident about — so the notice is only raised from `live`, and only ever
+ * cleared back to `live` from `low_confidence`. Whichever of the two conditions
+ * ends last therefore leaves the field describing reality rather than describing
+ * whichever producer spoke most recently.
+ */
+function noteTranscriptConfidence(item: TranscriptConfidenceInput): void {
+  const verdict = transcriptConfidence.observe(item);
+  if (verdict === null) return;
+  const status = smoothFollow.snapshot().transcript.status;
+  if (verdict.status === 'low_confidence') {
+    if (status !== 'live') return;
+    smoothFollow.reportTranscriptStatus('low_confidence', verdict.detail);
+    return;
+  }
+  if (status === 'low_confidence') smoothFollow.reportTranscriptStatus('live');
+}
+
+/* ---------------------------------------------------------------------------
+ * §36.3 take history — lifecycle
+ * ------------------------------------------------------------------------- */
+
+/** Open a take pass. `startLiveSession` opens the first; a retake opens the next. */
+function beginTake(sessionId: string, passOrdinal: number, startTokenIndex: number): void {
+  activeTake = {
+    passOrdinal,
+    // The same scheme the coaching subsystem stamps on its own take passes, so
+    // a review report and a take row for the same pass carry one identifier.
+    takePassId: `${sessionId}:${passOrdinal}`,
+    startedAtIso: new Date().toISOString(),
+    startedAtMs: monotonicNowMs(),
+    startTokenIndex,
+    sections: [],
+    checkpoints: [],
+    automaticRetakes: 0,
+    confidenceSum: 0,
+    confidenceSamples: 0,
+  };
+  sessionTakes.push(activeTake);
+}
+
+/**
+ * §36.3 in-memory take history for this session, oldest pass first. The open
+ * take is the last entry. Empty outside a session — it is discarded at Stop, as
+ * the spec says, while the persisted rows outlive it.
+ */
+export function takeHistory(): ReadonlyArray<{
+  passOrdinal: number;
+  takePassId: string;
+  startedAtIso: string;
+  startTokenIndex: number;
+  sections: readonly string[];
+  checkpoints: readonly TakeCheckpointInput[];
+  automaticRetakes: number;
+  /** Mean alignment confidence over the pass; null when it saw no snapshots. */
+  confidenceMean: number | null;
+  /** True for the pass currently being performed. */
+  open: boolean;
+}> {
+  return sessionTakes.map((take) => ({
+    passOrdinal: take.passOrdinal,
+    takePassId: take.takePassId,
+    startedAtIso: take.startedAtIso,
+    startTokenIndex: take.startTokenIndex,
+    sections: take.sections,
+    checkpoints: take.checkpoints,
+    automaticRetakes: take.automaticRetakes,
+    confidenceMean: takeConfidenceMean(take),
+    open: take === activeTake,
+  }));
+}
+
+/** §36.3 confidence summary. Null, never 0, when the pass saw no snapshots. */
+function takeConfidenceMean(take: ActiveTake): number | null {
+  if (take.confidenceSamples === 0) return null;
+  return take.confidenceSum / take.confidenceSamples;
+}
+
+/**
+ * Note a position worth returning to. Times are measured from the START OF THE
+ * TAKE on the monotonic clock: a checkpoint at "02:14 into take 3" survives an
+ * NTP step, and a wall-clock timestamp would not.
+ */
+function noteCheckpoint(kind: TakeCheckpointInput['kind']): void {
+  const take = activeTake;
+  if (take === null) return;
+  if (take.checkpoints.length >= MAX_TAKE_CHECKPOINTS) return;
+  const snapshot = get(state).snapshot;
+  take.checkpoints.push({
+    atMs: Math.max(0, Math.round(monotonicNowMs() - take.startedAtMs)),
+    tokenIndex: snapshot?.tokenIndex ?? take.startTokenIndex,
+    ...(snapshot?.blockId ? { blockId: snapshot.blockId } : {}),
+    ...(snapshot?.sentenceId ? { sentenceId: snapshot.sentenceId } : {}),
+    kind,
+  });
+}
+
+/**
+ * Close the open take and persist it. Best-effort by construction: a take
+ * history that cannot be written must never interrupt a take or block a stop.
+ */
+function finishTake(sessionId: string | null, endTokenIndex: number | undefined): void {
+  const take = activeTake;
+  activeTake = null;
+  if (take === null || sessionId === null) return;
+  const durationMs = Math.max(0, Math.round(monotonicNowMs() - take.startedAtMs));
+  const confidenceMean = takeConfidenceMean(take);
+  void recordSessionTake(sessionId, {
+    takePassId: take.takePassId,
+    passOrdinal: take.passOrdinal,
+    startedAt: take.startedAtIso,
+    endedAt: new Date().toISOString(),
+    durationMs,
+    startTokenIndex: take.startTokenIndex,
+    ...(endTokenIndex === undefined ? {} : { endTokenIndex }),
+    sections: [...take.sections],
+    checkpoints: [...take.checkpoints],
+    automaticRetakes: take.automaticRetakes,
+    ...(confidenceMean === null ? {} : { confidenceMean }),
+  }).catch(() => {
+    // §36.3 is history, not state. Losing a row costs a line in the review
+    // screen; failing the stop path would cost the take.
+  });
+}
+
 function pushTranscriptLine(line: string): void {
   state.update((s) => ({
     ...s,
@@ -1193,6 +1578,20 @@ function flushTranscript(sessionId: string, force: boolean): void {
  * Smooth-following actions (companion §48) — the store owns the state, this
  * store owns the effects.
  * ------------------------------------------------------------------------- */
+
+/**
+ * §28.4. The saved local voice-detection sensitivity, or the neutral midpoint
+ * when settings are unavailable (browser dev, tests). Never an extreme: an
+ * unreadable setting must not silently become the most aggressive VAD on offer.
+ */
+function currentVadSensitivity(): number {
+  try {
+    const value = getSettingsSnapshot().audio?.vadSensitivity;
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0.5;
+  } catch {
+    return 0.5;
+  }
+}
 
 function currentFollowingSettings(): FollowingSettings {
   try {
@@ -1836,16 +2235,37 @@ export function goToToken(tokenIndex: number): void {
   if (!get(state).active) return;
   invalidateSemantics();
   driver?.moveToToken(Math.max(0, tokenIndex), 'manual');
+  // §36.3: an outline jump is a position the operator deliberately went to, and
+  // "where did I skip to" is half of what a take history is for.
+  noteCheckpoint('manual');
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
+/**
+ * §15.2 retake. This is also the §36.3 take boundary: the pass that was being
+ * performed is over, and the next one starts here. Closing it first means the
+ * completed take is written with its own times, sections and checkpoints rather
+ * than being merged into whatever follows.
+ */
 export function restartParagraph(): void {
   invalidateSemantics();
   driver?.restartParagraph();
+  const before = get(state);
+  noteCheckpoint('paragraph_start');
+  finishTake(before.sessionId, before.snapshot?.tokenIndex);
+  if (before.sessionId !== null) {
+    beginTake(before.sessionId, before.counts.retakes + 2, before.snapshot?.tokenIndex ?? 0);
+  }
   state.update((s) => ({ ...s, counts: { ...s.counts, retakes: s.counts.retakes + 1 } }));
 }
 
+/**
+ * The "mark this" voice command (§36.3). It used to increment the command
+ * counter and store no marker whatsoever, which made it the one voice command
+ * whose entire effect was invisible.
+ */
 export function addTakeMarker(): void {
+  noteCheckpoint('take');
   state.update((s) => ({ ...s, counts: { ...s.counts, commands: s.counts.commands + 1 } }));
 }
 
@@ -2165,6 +2585,10 @@ export function stopSession(): SessionSummary {
   // the last few seconds of a take are not silently dropped.
   if (s.sessionId) {
     flushTranscript(s.sessionId, true);
+    // §36.3: close the take that was running. Before the session row is closed,
+    // so a listener reading the history the moment the session ends sees the
+    // last take rather than a session with one pass missing.
+    finishTake(s.sessionId, s.snapshot?.tokenIndex);
     void endSessionRecord(s.sessionId, {
       endTokenIndex: s.snapshot?.tokenIndex,
       commandCount: s.counts.commands,
@@ -2288,6 +2712,9 @@ function stopInternals(): void {
   listenerVisible = false;
   listenerRetiredForSession = false;
   failedClipIds = [];
+  // §36.3: `stopSession` closes the open take first, so anything still here got
+  // past the normal stop path and belongs to a session that is already gone.
+  activeTake = null;
 }
 
 /**

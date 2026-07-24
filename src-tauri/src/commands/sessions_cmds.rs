@@ -8,7 +8,8 @@ use crate::database::Database;
 use crate::errors::AppError;
 use crate::scripts::{repo, DataPaths, ScriptId, ScriptLocks};
 use crate::sessions::{
-    self, EndSessionSummary, SessionRecord, StartSessionInput, TranscriptItemInput,
+    self, EndSessionSummary, SessionRecord, SessionTakeInput, SessionTakeRecord, StartSessionInput,
+    TranscriptItemInput,
 };
 
 #[tauri::command]
@@ -61,6 +62,26 @@ pub async fn append_session_transcript(
     items: Vec<TranscriptItemInput>,
 ) -> Result<u32, AppError> {
     sessions::append_transcript_items(db.pool(), &session_id, items).await
+}
+
+/// §36.3 take history. Upserts on `(session_id, passOrdinal)`, so a take may be
+/// written while it is open and completed later; a different ordinal is always a
+/// different take.
+#[tauri::command]
+pub async fn record_session_take(
+    db: State<'_, Database>,
+    session_id: String,
+    take: SessionTakeInput,
+) -> Result<SessionTakeRecord, AppError> {
+    sessions::record_take(db.pool(), &session_id, take).await
+}
+
+#[tauri::command]
+pub async fn list_session_takes(
+    db: State<'_, Database>,
+    session_id: String,
+) -> Result<Vec<SessionTakeRecord>, AppError> {
+    sessions::list_takes(db.pool(), &session_id).await
 }
 
 #[tauri::command]

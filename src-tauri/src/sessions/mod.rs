@@ -87,6 +87,209 @@ pub struct TranscriptItemInput {
     pub disposition: String,
 }
 
+/// One take within a session (spec §36.3 take history).
+///
+/// The §36.1 session record is one row per session with scalar counters, which
+/// can say "four takes happened" and nothing about any of them. This is the
+/// per-take detail: when it ran, where it started and stopped, which sections it
+/// traversed, and where the presenter marked a checkpoint.
+///
+/// `take_pass_id` is the review lane's identifier for the same thing
+/// (`TakePassRecord.takePassId`), carried verbatim so the two attach rather than
+/// fork into parallel histories.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTakeRecord {
+    pub id: String,
+    pub session_id: String,
+    pub take_pass_id: String,
+    pub pass_ordinal: i64,
+    pub started_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+    pub start_token_index: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_token_index: Option<i64>,
+    /// Authored block ids, in the order they were first reached.
+    pub sections: Vec<String>,
+    pub checkpoints: Vec<TakeCheckpoint>,
+    /// §36.3: retakes the ALIGNER detected within this pass. A manual retake is
+    /// a pass of its own, so it is never counted here.
+    pub automatic_retakes: i64,
+    /// §36.3 confidence summary. `None` when the pass produced no snapshots —
+    /// unknown, never a confident zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_mean: Option<f64>,
+}
+
+/// A position the take passed through and is worth being able to return to
+/// (spec §36.3). `kind` mirrors the engine's own `AlignmentCheckpoint` kinds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TakeCheckpoint {
+    /// Milliseconds since the take started — not wall clock, so it stays
+    /// meaningful when the machine's clock steps.
+    pub at_ms: i64,
+    pub token_index: i64,
+    #[serde(default)]
+    pub block_id: Option<String>,
+    #[serde(default)]
+    pub sentence_id: Option<String>,
+    /// 'take' | 'paragraph_start' | 'command' | 'manual'.
+    pub kind: String,
+}
+
+/// One take, as the frontend reports it (spec §36.3).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTakeInput {
+    pub take_pass_id: String,
+    pub pass_ordinal: i64,
+    pub started_at: String,
+    #[serde(default)]
+    pub ended_at: Option<String>,
+    #[serde(default)]
+    pub duration_ms: Option<i64>,
+    #[serde(default)]
+    pub start_token_index: i64,
+    #[serde(default)]
+    pub end_token_index: Option<i64>,
+    #[serde(default)]
+    pub sections: Vec<String>,
+    #[serde(default)]
+    pub checkpoints: Vec<TakeCheckpoint>,
+    #[serde(default)]
+    pub automatic_retakes: i64,
+    #[serde(default)]
+    pub confidence_mean: Option<f64>,
+}
+
+const CHECKPOINT_KINDS: [&str; 4] = ["take", "paragraph_start", "command", "manual"];
+
+fn take_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<SessionTakeRecord, sqlx::Error> {
+    // A malformed JSON column yields an EMPTY list, never an error: a take whose
+    // checkpoint blob got corrupted is still a take that happened, and refusing
+    // to list the session's history because of it would lose the rows that are
+    // fine along with the one that is not.
+    let sections: Vec<String> = serde_json::from_str(&row.try_get::<String, _>("sections_json")?)
+        .unwrap_or_default();
+    let checkpoints: Vec<TakeCheckpoint> =
+        serde_json::from_str(&row.try_get::<String, _>("checkpoints_json")?).unwrap_or_default();
+    Ok(SessionTakeRecord {
+        id: row.try_get("id")?,
+        session_id: row.try_get("session_id")?,
+        take_pass_id: row.try_get("take_pass_id")?,
+        pass_ordinal: row.try_get("pass_ordinal")?,
+        started_at: row.try_get("started_at")?,
+        ended_at: row.try_get("ended_at")?,
+        duration_ms: row.try_get("duration_ms")?,
+        start_token_index: row.try_get("start_token_index")?,
+        end_token_index: row.try_get("end_token_index")?,
+        sections,
+        checkpoints,
+        automatic_retakes: row.try_get("automatic_retakes")?,
+        confidence_mean: row.try_get("confidence_mean")?,
+    })
+}
+
+/// Record one take (spec §36.3).
+///
+/// Upserts on `(session_id, pass_ordinal)` so a take can be written while it is
+/// still open and completed later without duplicating — a crash mid-session then
+/// costs the tail of the current take rather than the whole history. A DIFFERENT
+/// ordinal is always a different row: a second take can never overwrite the
+/// first, which the table's own UNIQUE constraint guarantees rather than the
+/// caller's discipline.
+pub async fn record_take(
+    pool: &SqlitePool,
+    session_id: &str,
+    input: SessionTakeInput,
+) -> Result<SessionTakeRecord, AppError> {
+    if input.pass_ordinal < 1 {
+        return Err(AppError::invalid_input("Take pass ordinal starts at 1."));
+    }
+    if input.take_pass_id.trim().is_empty() {
+        return Err(AppError::invalid_input("A take needs a take pass id."));
+    }
+    for checkpoint in &input.checkpoints {
+        if !CHECKPOINT_KINDS.contains(&checkpoint.kind.as_str()) {
+            return Err(AppError::invalid_input(
+                "Checkpoint kind must be take, paragraph_start, command, or manual.",
+            ));
+        }
+    }
+    let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM sessions WHERE id = ?")
+        .bind(session_id)
+        .fetch_optional(pool)
+        .await?;
+    if exists.is_none() {
+        return Err(AppError::not_found("session"));
+    }
+
+    let sections_json = serde_json::to_string(&input.sections).unwrap_or_else(|_| "[]".into());
+    let checkpoints_json =
+        serde_json::to_string(&input.checkpoints).unwrap_or_else(|_| "[]".into());
+    let now = now_iso();
+
+    sqlx::query(
+        "INSERT INTO session_takes
+            (id, session_id, take_pass_id, pass_ordinal, started_at, ended_at, duration_ms,
+             start_token_index, end_token_index, sections_json, checkpoints_json,
+             automatic_retakes, confidence_mean, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(session_id, pass_ordinal) DO UPDATE SET
+            take_pass_id = excluded.take_pass_id,
+            ended_at = excluded.ended_at,
+            duration_ms = excluded.duration_ms,
+            end_token_index = excluded.end_token_index,
+            sections_json = excluded.sections_json,
+            checkpoints_json = excluded.checkpoints_json,
+            automatic_retakes = excluded.automatic_retakes,
+            confidence_mean = excluded.confidence_mean",
+    )
+    .bind(new_uuid())
+    .bind(session_id)
+    .bind(&input.take_pass_id)
+    .bind(input.pass_ordinal)
+    .bind(&input.started_at)
+    .bind(&input.ended_at)
+    .bind(input.duration_ms)
+    .bind(input.start_token_index)
+    .bind(input.end_token_index)
+    .bind(&sections_json)
+    .bind(&checkpoints_json)
+    .bind(input.automatic_retakes.max(0))
+    .bind(input.confidence_mean)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+
+    let row = sqlx::query("SELECT * FROM session_takes WHERE session_id = ? AND pass_ordinal = ?")
+        .bind(session_id)
+        .bind(input.pass_ordinal)
+        .fetch_one(pool)
+        .await?;
+    Ok(take_from_row(&row)?)
+}
+
+/// The session's takes in the order they were performed (spec §36.3).
+pub async fn list_takes(
+    pool: &SqlitePool,
+    session_id: &str,
+) -> Result<Vec<SessionTakeRecord>, AppError> {
+    let rows =
+        sqlx::query("SELECT * FROM session_takes WHERE session_id = ? ORDER BY pass_ordinal ASC")
+            .bind(session_id)
+            .fetch_all(pool)
+            .await?;
+    rows.iter()
+        .map(take_from_row)
+        .collect::<Result<Vec<_>, sqlx::Error>>()
+        .map_err(Into::into)
+}
+
 fn record_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<SessionRecord, sqlx::Error> {
     Ok(SessionRecord {
         id: row.try_get("id")?,

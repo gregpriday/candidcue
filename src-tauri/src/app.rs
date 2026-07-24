@@ -91,6 +91,9 @@ pub fn run() {
             commands::end_session,
             commands::append_session_transcript,
             commands::list_sessions,
+            // §36.3 take history
+            commands::record_session_take,
+            commands::list_session_takes,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

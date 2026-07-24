@@ -12,8 +12,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildListenerGeometry,
+  listenerDimPercentFromOpacity,
+  listenerSaturationPercentFromFactor,
   listenerScalePercentFromCropZoom,
+  listenerSizePercentFromScale,
+  type ListenerGeometryOverrides,
 } from '../../../src/control/services/listeners';
+import type { ListenerPlacementMode } from '../../../src/shared/contracts';
 
 /** Mira's published `defaultZoom`, the only pack that ships today. */
 const MIRA_DEFAULT_ZOOM = 1.15;
@@ -57,6 +62,87 @@ describe('listener scale survives a display-profile round trip', () => {
       expect(Number.isFinite(restored)).toBe(true);
       expect(restored).toBe(115);
     }
+  });
+
+  it('is a fixed point for EVERY persisted field, not only the zoom', () => {
+    /*
+     * The rule this file exists to enforce, applied to the whole object. Each
+     * of these is a Preflight control that `buildListenerGeometry` converts on
+     * the way into a display profile and `restoreDisplayProfile` inverts on the
+     * way out; a single pass looks fine even when the inverse is wrong, so the
+     * loop below runs the cycle ten times and demands the same numbers back.
+     *
+     * `placement`, `scale`, `saturation` and `mirrorVideo` are the fields added
+     * when the four unreachable placement modes were exposed. They are here
+     * because the last geometry field restored by eye compounded 15% a session.
+     */
+    const controls: Required<
+      Pick<
+        ListenerGeometryOverrides,
+        | 'placement'
+        | 'sizePercent'
+        | 'zoomPercent'
+        | 'offsetXPercent'
+        | 'offsetYPercent'
+        | 'dimPercent'
+        | 'blurPx'
+        | 'saturationPercent'
+        | 'mirrorVideo'
+      >
+    > = {
+      placement: 'lens_right',
+      sizePercent: 130,
+      zoomPercent: 140,
+      offsetXPercent: 6.4,
+      offsetYPercent: -3.1,
+      dimPercent: 55,
+      blurPx: 7,
+      saturationPercent: 40,
+      mirrorVideo: true,
+    };
+
+    /** Exactly what `restoreDisplayProfile` does, in one place. */
+    const restore = (geometry: ReturnType<typeof buildListenerGeometry>): typeof controls => ({
+      placement: (geometry.placement ?? 'background') as ListenerPlacementMode,
+      sizePercent: listenerSizePercentFromScale(geometry.scale),
+      zoomPercent: listenerScalePercentFromCropZoom(geometry.cropZoom, MIRA_DEFAULT_ZOOM),
+      offsetXPercent: geometry.cropX,
+      offsetYPercent: geometry.cropY,
+      dimPercent: listenerDimPercentFromOpacity(geometry.opacity),
+      blurPx: geometry.blurPx,
+      saturationPercent: listenerSaturationPercentFromFactor(geometry.saturation),
+      mirrorVideo: geometry.mirrorVideo,
+    });
+
+    let current = { ...controls };
+    let geometry = buildListenerGeometry(MIRA_DEFAULT_ZOOM, current);
+    for (let session = 0; session < 10; session++) {
+      current = restore(geometry);
+      geometry = buildListenerGeometry(MIRA_DEFAULT_ZOOM, current);
+    }
+    expect(current).toEqual(controls);
+    // And the resolved geometry itself has stopped moving.
+    expect(geometry).toEqual(buildListenerGeometry(MIRA_DEFAULT_ZOOM, controls));
+  });
+
+  it('restores the anchors from the placement rather than persisting them twice', () => {
+    // The anchors are derived, not stored-and-inverted, so there is no third
+    // copy to drift. Restoring the placement restores them exactly.
+    for (const placement of ['background', 'lens_left', 'lens_right', 'top_strip', 'pip'] as const) {
+      const first = buildListenerGeometry(MIRA_DEFAULT_ZOOM, { placement });
+      const second = buildListenerGeometry(MIRA_DEFAULT_ZOOM, {
+        placement: first.placement ?? 'background',
+      });
+      expect(second.anchorX).toBe(first.anchorX);
+      expect(second.anchorY).toBe(first.anchorY);
+    }
+  });
+
+  it('reads a profile saved before placement was selectable as the mode it was saved under', () => {
+    // Those profiles have no `placement` key at all, and every one of them was
+    // written while the producer hard-coded 'background'.
+    const legacy = { ...buildListenerGeometry(MIRA_DEFAULT_ZOOM), placement: undefined };
+    expect(legacy.placement ?? 'background').toBe('background');
   });
 
   it('keeps the offset range stable, which is what the drift silently widened', () => {

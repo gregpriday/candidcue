@@ -1178,3 +1178,143 @@ fn coaching_defaults_never_retain_or_spend_without_being_asked() {
     assert!(!coaching.post_take_report_enabled);
     assert_eq!(coaching.precision_transcription_mode, "off");
 }
+
+// ---------------------------------------------------------------------------
+// §37 Listener settings — one structure, not two
+// ---------------------------------------------------------------------------
+
+use candidcue_lib::settings::ListenerSettings as RustListenerSettings;
+
+fn listener_settings_fixture() -> serde_json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("ipc")
+        .join("listener-settings-payload.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
+    serde_json::from_str(&raw).expect("fixture parses")
+}
+
+/// The round trip, closed on the Rust side: the patch the TypeScript adapter
+/// emits deserializes into the struct, and the struct serializes back to the
+/// identical document the adapter reads.
+///
+/// This is the assertion the previous arrangement could not have passed at all.
+/// `listener` was `Record<string, unknown>` on the TypeScript side and was never
+/// mapped in either direction, so the fields Rust declared here and the fields
+/// the UI wrote were two disjoint sets that never met.
+#[test]
+fn listener_settings_survive_the_round_trip_unchanged() {
+    let f = listener_settings_fixture();
+    let sent = f["settings"].clone();
+
+    let listener: RustListenerSettings = serde_json::from_value(sent.clone())
+        .expect("the frontend's listener patch must deserialize");
+    let stored = serde_json::to_value(&listener).expect("serializes");
+
+    assert_eq!(
+        stored, sent,
+        "a listener setting changed shape between the UI and the stored document"
+    );
+
+    // The values are the ones that were sent, not defaults that happen to
+    // serialize to the same JSON.
+    assert_eq!(listener.default_pack_id.as_deref(), Some("mira"));
+    assert!(!listener.autoplay);
+    assert_eq!(listener.dim_percent, 62.0);
+    assert_eq!(listener.blur_px, 6.5);
+    assert_eq!(listener.saturation, 0.3);
+
+    // And the whole document validates, so the round trip is not passing values
+    // the backend would reject on the next write.
+    let settings = RustAppSettings {
+        listener,
+        ..RustAppSettings::default()
+    };
+    validate_settings(&settings).expect("the fixture must be a legal document");
+}
+
+/// The five deleted fields stay deleted. Each declared a decision another
+/// mechanism already owns (`scale` → the display profile's ListenerGeometry;
+/// `softPause`/`hardPause` → the stage `freeze` directive; `hideOnBlank` → the
+/// `keepListener` flag on the stage `blank` directive; `crossfadeMs` → a stage
+/// constant that reduced-motion and §61 degradation both vary).
+#[test]
+fn the_unreachable_listener_fields_are_gone_not_renamed() {
+    let json = serde_json::to_value(RustListenerSettings::default()).expect("serializes");
+    let object = json.as_object().expect("an object");
+    for dead in [
+        "opacityAfterDim",
+        "scale",
+        "crossfadeMs",
+        "softPause",
+        "hardPause",
+        "hideOnBlank",
+    ] {
+        assert!(
+            !object.contains_key(dead),
+            "{dead} was declared and unreachable; it must not come back"
+        );
+    }
+    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        ["autoplay", "blurPx", "defaultPackId", "dimPercent", "saturation"]
+    );
+}
+
+/// The ranges Rust enforces are the ranges the Preflight sliders offer. They
+/// used to disagree in BOTH directions — `opacityAfterDim <= 0.75` rejected a
+/// dim of 0, and `blurPx <= 12` rejected the top half of a slider that goes to
+/// 24 — so a value the UI could produce was a value Rust would refuse to store.
+#[test]
+fn listener_ranges_accept_everything_the_sliders_offer_and_nothing_beyond() {
+    for (dim, blur, saturation, legal) in [
+        (0.0, 0.0, 0.0, true),
+        (80.0, 24.0, 1.0, true),
+        (40.0, 12.0, 0.85, true),
+        (80.1, 0.0, 0.5, false),
+        (-1.0, 0.0, 0.5, false),
+        (40.0, 24.1, 0.5, false),
+        (40.0, 0.0, 1.1, false),
+    ] {
+        let settings = RustAppSettings {
+            listener: RustListenerSettings {
+                dim_percent: dim,
+                blur_px: blur,
+                saturation,
+                ..RustListenerSettings::default()
+            },
+            ..RustAppSettings::default()
+        };
+        assert_eq!(
+            validate_settings(&settings).is_ok(),
+            legal,
+            "dim={dim} blur={blur} saturation={saturation}"
+        );
+    }
+}
+
+/// A document written before this section had these fields still loads: every
+/// missing key falls to its default rather than failing the whole read.
+#[test]
+fn a_listener_section_from_an_older_document_still_loads() {
+    let listener: RustListenerSettings =
+        serde_json::from_value(serde_json::json!({})).expect("an empty section must load");
+    assert_eq!(listener, RustListenerSettings::default());
+
+    // Including one carrying only the fields that were deleted.
+    let legacy: RustListenerSettings = serde_json::from_value(serde_json::json!({
+        "opacityAfterDim": 0.22,
+        "scale": 1.0,
+        "crossfadeMs": 160,
+        "softPause": "continue",
+        "hardPause": "freeze",
+        "hideOnBlank": true,
+    }))
+    .expect("a pre-reconciliation section must load");
+    assert_eq!(legacy, RustListenerSettings::default());
+}
