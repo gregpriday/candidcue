@@ -241,6 +241,8 @@ export class HypothesisBeam {
   private challengerFinalTokens = 0;
   /** Transcript items already folded into `challengerFinalTokens` (§16.5). */
   private challengerCountedItemIds: ReadonlySet<string> = new Set();
+  /** Lineage the §16.2 hold branch is currently carrying, if any. */
+  private holdLineageId: string | null = null;
   private lastUpdateAtMs = 0;
   private assist: SemanticAssistEvidence | undefined;
 
@@ -279,6 +281,7 @@ export class HypothesisBeam {
     this.challengerSinceMs = 0;
     this.challengerFinalTokens = 0;
     this.challengerCountedItemIds = new Set();
+    this.holdLineageId = null;
     this.assist = undefined;
   }
 
@@ -472,9 +475,21 @@ export class HypothesisBeam {
     // §16.2: the hold / ad-lib branch. Staying put while speech contains
     // insertions is always plausible — this is what stops continuous speech
     // from automatically consuming script.
-    produced.push(
-      this.holdBranch(input, predicted.get(this.activeLineageId ?? '') , input.sessionTimeMs),
-    );
+    //
+    // Claiming the inherited lineage means *taking* it, exactly as the
+    // candidate loop above does. Without the delete, a surviving active
+    // lineage that no candidate adopted was pushed twice: once as the hold
+    // branch sitting at the committed cursor, and again by the leftover loop
+    // at its predicted-forward position. Two hypotheses with one lineage id,
+    // far enough apart that `mergeHypotheses` keeps both — so the beam
+    // double-counted the same trajectory in its softmax and in its variance,
+    // and `markCommitted` could no longer name one branch.
+    const heldLineage =
+      predicted.get(this.activeLineageId ?? '') ?? predicted.get(this.holdLineageId ?? '');
+    if (heldLineage !== undefined) predicted.delete(heldLineage.lineageId);
+    const hold = this.holdBranch(input, heldLineage, input.sessionTimeMs);
+    this.holdLineageId = hold.lineageId;
+    produced.push(hold);
 
     // Surviving-but-unsupported branches keep their decayed score (§23.3).
     for (const leftover of predicted.values()) {
@@ -633,7 +648,11 @@ export class HypothesisBeam {
     atMs: number,
   ): AlignmentHypothesis {
     const position = this.index.clampTokenIndex(input.committedTokenIndex);
-    const lineageId = inherited?.lineageId ?? 'lin-hold';
+    // A minted id, not the constant `'lin-hold'` this used to be. A constant
+    // meant every hold branch the beam ever produced shared one lineage, so
+    // two of them could coexist (one held, one predicted forward from an
+    // earlier update) and `markCommitted` could not name either.
+    const lineageId = inherited?.lineageId ?? `lin-${this.nextId++}`;
     return {
       id: `hyp-${this.nextId++}`,
       lineageId,

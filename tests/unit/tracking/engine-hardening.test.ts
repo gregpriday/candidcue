@@ -589,3 +589,38 @@ describe('§16.5 challenger hysteresis is real machinery, not a comment', () => 
     expect(gatedRetakes).toBe(0);
   });
 });
+
+describe('the beam never carries one lineage twice (§16.1, §16.5)', () => {
+  /**
+   * The hold branch inherits the active lineage from the predict-forward map
+   * but used not to remove it, while the candidate loop above it did. A
+   * surviving active lineage that no candidate adopted was therefore pushed
+   * twice — once as the hold branch at the committed cursor, once by the
+   * leftover loop at its predicted-forward position — and the two are far
+   * enough apart that `mergeHypotheses` keeps both. The softmax then split one
+   * trajectory's weight across two entries, the §16.6 position variance
+   * counted it twice, and `markCommitted(lineageId)` no longer identified a
+   * single branch.
+   */
+  it('every hypothesis in the beam has a distinct lineage', () => {
+    const e = engine('lineage-unique');
+    const s = new TranscriptScripter(10_000, 1);
+    const turns = [
+      'Hello everyone and welcome to the channel.',
+      'Today we are talking about building a teleprompter that actually listens.',
+      // Off-script speech: the hold branch is the interesting one exactly when
+      // no candidate is strong enough to adopt the active lineage.
+      'anyway my neighbour bought an enormous inflatable flamingo last weekend',
+      "Let's get started with the basics right away.",
+      'The first principle is that the prompter follows you instead of forcing you to follow it.',
+    ];
+    for (const text of turns) {
+      speak(e, s, text);
+      const hypotheses = e.measurement?.hypotheses ?? [];
+      const lineages = hypotheses.map((h) => h.lineageId);
+      expect(new Set(lineages).size, `duplicated lineage in [${lineages.join(', ')}]`).toBe(
+        lineages.length,
+      );
+    }
+  });
+});
