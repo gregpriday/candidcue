@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "mira",
+  "version": "1.0.0",
+  "displayName": "Mira",
+  "description": "A calm, attentive listener with two neutral listening loops.",
+  "poster": "poster.webp",
+  "profileImage": "profile.png",
+  "defaultZoom": 1.15,
+  "fit": "cover",
+  "clips": [
+    {
+      "id": "listening-7s",
+      "role": "neutral",
+      "path": "listening/mira-listening-7s.mp4",
+      "mime": "video/mp4",
+      "durationMs": 7042,
+      "sizeBytes": 1727275
+    },
+    {
+      "id": "listening-10s",
+      "role": "neutral",
+      "path": "listening/mira-listening-10s.mp4",
+      "mime": "video/mp4",
+      "durationMs": 10042,
+      "sizeBytes": 2956966
+    }
+  ]
+}

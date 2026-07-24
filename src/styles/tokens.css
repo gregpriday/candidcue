@@ -1,0 +1,459 @@
+/* ============================================================================
+   CandidCue design tokens — "warm editorial workspace + focused dark studio"
+
+   Two themes share one set of token NAMES so components never hard-code a
+   palette. Theme is chosen by a `data-theme` attribute:
+
+     [data-theme='workspace'] → calm light surfaces for preparing & reviewing
+     [data-theme='studio']    → restrained dark surfaces for the live session
+
+   The dark studio palette is ALSO the un-themed default on :root, so the stage
+   window (which sets no attribute) stays dark exactly as before. The control
+   shell sets data-theme per route (workspace at rest, studio when live).
+
+   Depth here comes from spacing, type, and controlled contrast — NOT from
+   glows, gradients, grain, or perpetual motion.
+   ============================================================================ */
+
+:root {
+  /* ---- Spacing (4px base) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-9: 40px;
+  --space-10: 48px;
+
+  /* ---- Type scale (px) ---- */
+  --text-2xs: 11px;
+  --text-xs: 12px; /* metadata */
+  --text-sm: 13px; /* form labels, controls */
+  --text-base: 15px; /* body */
+  --text-md: 15px;
+  --text-lg: 17px; /* transcript / lead body */
+  --text-xl: 18px; /* section titles */
+  --text-2xl: 22px;
+  --text-3xl: 28px; /* page titles */
+
+  /* Semantic display sizes (adopted as screens are rebuilt) */
+  --text-page-title: 28px;
+  --lh-page-title: 34px;
+  --text-section: 18px;
+  --lh-section: 26px;
+  --lh-body: 23px;
+  --text-transcript: 17px;
+  --lh-transcript: 28px;
+  --text-label: 13px;
+  --lh-label: 18px;
+  --text-meta: 12px;
+  --lh-meta: 17px;
+
+  --ls-caps: 0.06em;
+  --ls-tight: 0;
+  --ls-title: -0.018em; /* page titles — tightened editorial tracking */
+  --ls-prose: 0.01em;
+  --prose-leading: 1.6;
+
+  /* Live "current question" — the dominant text on the studio console. */
+  --text-live-question: clamp(28px, 3vw, 42px);
+  --text-live-question-leading: 1.22;
+  /* Stage captions — legible at teleprompter distance. */
+  --text-caption: clamp(28px, 2.4vw, 44px);
+  --text-caption-leading: 1.25;
+  /* Reading measure for editors / transcripts. */
+  --prose-measure: 70ch;
+  --prose-measure-narrow: 52ch;
+
+  /* ---- Geometry ---- */
+  --radius-sm: 8px; /* buttons, inputs, selects, small menu items */
+  --radius-md: 12px; /* cards, sheets, larger compound controls */
+  --radius-lg: 16px; /* stage previews, large visual areas */
+  --radius-pill: 999px; /* status capsules, toggles */
+
+  --titlebar-h: 48px;
+  --toolbar-h: 56px; /* per-screen page header */
+  --panel-header-h: 36px;
+  --row-h: 40px;
+  --sidebar-w: 224px;
+  --rail-w: 0px;
+  --statusbar-h: 0px;
+  --control-h: 40px; /* standard form control height */
+  --control-h-sm: 32px;
+  --control-h-lg: 42px; /* legacy — superseded by --button-h / --transport-control-h */
+
+  /* Explicit control geometry (refinement §4) — four sizes only: form controls
+     40px (--control-h), buttons 36px, compact icon controls 32px, live
+     transport 44px. Adjoining controls share a height so they read as related. */
+  --button-h: 36px;
+  --icon-control-h: 32px;
+  --transport-control-h: 44px;
+
+  /* Sticky-header offsets (refinement §6) — the page header is taller than
+     --page-y, so sticky columns must clear the real header height. */
+  --header-back-h: 103px; /* back control + title */
+  --header-back-meta-h: 123px; /* back control + title + metadata */
+
+  /* Shared horizontal page inset — one rhythm across headers, page bodies,
+     steppers, editor/review content, and bottom action bars. */
+  --page-x: var(--space-8); /* 32px */
+  --page-y: var(--space-7); /* 28px */
+
+  /* ---- Motion: three durations, two curves ----
+     Enough to feel responsive; never decorative. Honor the reduced-motion
+     guard below. Legacy easing names are aliased so nothing breaks. */
+  --dur-press: 80ms; /* button depress */
+  --dur-fast: 120ms; /* hover / press */
+  --dur-med: 160ms; /* selection / disclosure */
+  --dur-slow: 200ms; /* screen / readiness transition */
+  --dur-slower: 240ms;
+  /* Spec-named aliases (refinement §19): background/text 120ms, border/shadow
+     160ms, sheet entrance / route 200ms. Same values as --dur-*. */
+  --motion-fast: 120ms;
+  --motion-base: 160ms;
+  --motion-slow: 200ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: var(--ease-out);
+  --ease-breathe: var(--ease-inout);
+  --ease-signature: var(--ease-out);
+
+  /* ---- Type families ----
+     System stack for application chrome (resolves to SF Pro on macOS). An
+     optional editorial serif is reserved for the live question and quotations
+     only — every control / label / metric stays in the UI font. */
+  --font-ui: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  /* Bundled via @fontsource (control entry) so it renders deterministically;
+     Georgia is the only fallback if the bundle somehow fails to load. */
+  --font-serif: 'Source Serif 4', Georgia, serif;
+  --font-prose: var(--font-ui);
+
+  /* Decorative atmosphere is gone; tokens kept as no-ops so stray references
+     resolve. */
+  --sheen-app: none;
+  --grain-opacity: 0;
+  --grain-url: none;
+
+  /* One keyboard-focus ring color, themed via --focus (refinement §3). */
+  --focus-ring: var(--focus);
+}
+
+/* ============================================================================
+   DARK studio palette — also the un-themed default (stage window).
+   ============================================================================ */
+:root,
+[data-theme='studio'] {
+  color-scheme: dark;
+
+  /* Surfaces: canvas → chrome → panel → control */
+  --bg-app: #0f1115;
+  --bg-canvas: #0f1115;
+  --bg-chrome: #14171d;
+  --bg-panel: #171a20;
+  --bg-panel-header: #1c2027;
+  --bg-secondary: #20242c;
+  --bg-elevated: #20242c;
+  --bg-sunken: #0d0f13;
+  --bg-hover: #242932;
+  --bg-hover-chrome: #242932; /* chrome surfaces (nav/toolbar) */
+  --bg-hover-surface: #242932; /* rows/cards on panels */
+  --accent-wash: rgba(224, 138, 99, 0.08); /* selected radio/index wash */
+  --bg-selected: rgba(224, 138, 99, 0.16);
+
+  /* Text */
+  --text-primary: #f5f6f8;
+  --text-secondary: #a8afbc;
+  --text-muted: #858d9b;
+  --text-faint: #6b7280;
+
+  /* Lines */
+  --border: #303641;
+  --border-control: #3b424e; /* resting control outline (strengthens on hover/focus) */
+  --border-strong: #474e5b; /* emphasis only: hover, focus, active drag */
+  --border-faint: #262b33;
+  --border-seam: #262b33;
+
+  /* Accent + status — terracotta "clay", nudged toward amber so it stays clearly
+     apart from the on-air red (--live) and the danger red on dark surfaces. */
+  --accent: #e08a63;
+  --accent-strong: #ec9d7a;
+  --accent-contrast: #241510;
+  --accent-soft: #3a2018;
+  --focus: #ec9d7a;
+  --success: #55b894;
+  --success-soft: rgba(85, 184, 148, 0.16);
+  --warning: #dea94d;
+  --warning-soft: rgba(222, 169, 77, 0.16);
+  --danger: #ef7168;
+  --danger-soft: rgba(239, 113, 104, 0.16);
+
+  /* Flat fills — no machined highlight, no gradient, no glow. */
+  --highlight-edge: transparent;
+  --highlight-edge-strong: transparent;
+  --accent-gradient-top: var(--accent);
+  --accent-gradient-bottom: var(--accent);
+  --accent-glow: transparent;
+
+  /* Live "on-air" — reserved for the LIVE indicator, active mic, and
+     end-session control only. Never recolors the shell. */
+  --live: #e05a4f;
+  --live-soft: rgba(224, 90, 79, 0.18);
+  --live-glow: rgba(224, 90, 79, 0.3);
+
+  /* Audio meter zones (kept distinct from shared status hues) */
+  --meter-low: #55b894;
+  --meter-mid: #dea94d;
+  --meter-high: #ef7168;
+
+  /* Elevation — shadows ONLY on genuinely floating things. */
+  --shadow-panel: none;
+  --shadow-well: none;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-card-hover: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-transport: 0 -8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.38);
+  --shadow-hover: var(--shadow-card-hover); /* card lift on hover */
+  --shadow-preview: var(--shadow-pop); /* studio preview surface */
+
+  /* Empty-state invitations */
+  --empty-bg: rgba(224, 138, 99, 0.08);
+  --empty-border: #303641;
+  --empty-text: var(--text-secondary);
+  --empty-text-muted: var(--text-muted);
+  --empty-hover-bg: rgba(224, 138, 99, 0.12);
+  --empty-hover-border: #474e5b;
+
+  /* Warm reading text (transcripts / source prose) */
+  --prose-text-warm: #e8ecf5;
+  --prose-secondary-warm: #c5ccd8;
+  --prose-muted-warm: #9aa5b5;
+
+  --selection: rgba(224, 138, 99, 0.22);
+}
+
+/* ============================================================================
+   LIGHT workspace palette — calm warm editorial surfaces.
+   Declared after the dark block so it wins at equal specificity on the shell.
+   ============================================================================ */
+[data-theme='workspace'] {
+  color-scheme: light;
+
+  --bg-app: #f6f4f0;
+  --bg-canvas: #f6f4f0;
+  --bg-chrome: #efebe5; /* sidebar — slightly quieter than the content */
+  --bg-panel: #ffffff;
+  --bg-panel-header: #f3f0ea;
+  --bg-secondary: #efebe5;
+  --bg-elevated: #ffffff;
+  --bg-sunken: #f1eee8;
+  --bg-hover: #ece8e1; /* legacy shared hover — migrate to chrome/surface below */
+  --bg-hover-chrome: #e8e3db; /* sidebar, nav, toolbar, breadcrumb/back controls */
+  --bg-hover-surface: #f7f4ef; /* rows & cards on white panels */
+  --bg-selected: rgba(183, 94, 59, 0.1);
+
+  --text-primary: #18191d;
+  --text-secondary: #5d626c;
+  --text-muted: #676b74; /* nudged darker so 12-13px text clears AA on chrome */
+  --text-faint: #868b94;
+
+  --border: #dedad3; /* decorative divider */
+  --border-control: #c7c1b6; /* resting control outline — medium-light warm gray */
+  --border-strong: #99948c; /* emphasis only: hover, focus, active drag */
+  --border-faint: #e7e3dc;
+  --border-seam: #e7e3dc;
+
+  /* Terracotta "clay". --accent is AA-legible as text on the warm canvas
+     (~4.5:1); --accent-strong is the darker hover/press + safest text weight. */
+  --accent: #b35a38;
+  --accent-strong: #9c4a2c;
+  --accent-contrast: #ffffff;
+  --accent-soft: #f6e7df;
+  --accent-wash: rgba(179, 90, 56, 0.05); /* 5% terracotta — selected radio/index */
+  --focus: #b35a38;
+  /* Status foregrounds are darkened from the source palette so 12-13px text on
+     the translucent -soft fills clears WCAG AA (the lighter source hues sat
+     ~3.8:1 on the warm canvas). */
+  --success: #1f6b52;
+  --success-soft: rgba(47, 125, 101, 0.12);
+  --warning: #7a5310;
+  --warning-soft: rgba(154, 103, 22, 0.12);
+  --danger: #a6342b;
+  --danger-soft: rgba(185, 65, 56, 0.1);
+
+  --highlight-edge: transparent;
+  --highlight-edge-strong: transparent;
+  --accent-gradient-top: var(--accent);
+  --accent-gradient-bottom: var(--accent);
+  --accent-glow: transparent;
+
+  --live: #e05a4f;
+  --live-soft: rgba(224, 90, 79, 0.12);
+  --live-glow: transparent;
+
+  --meter-low: #2f9e76;
+  --meter-mid: #c58a2e;
+  --meter-high: #d2564b;
+
+  --shadow-panel: none;
+  --shadow-well: none;
+  --shadow-card: 0 1px 2px rgba(24, 25, 29, 0.06);
+  --shadow-card-hover: 0 6px 16px rgba(24, 25, 29, 0.1);
+  --shadow-transport: 0 -2px 12px rgba(24, 25, 29, 0.05);
+  --shadow-pop: 0 12px 32px rgba(24, 25, 29, 0.16), 0 2px 8px rgba(24, 25, 29, 0.08);
+  --shadow-hover: 0 4px 12px rgba(24, 25, 29, 0.09); /* card lift on hover */
+  --shadow-preview: 0 10px 28px rgba(24, 25, 29, 0.14), 0 2px 6px rgba(24, 25, 29, 0.06);
+
+  --empty-bg: #faf1ec;
+  --empty-border: #dedad3;
+  --empty-text: var(--text-secondary);
+  --empty-text-muted: var(--text-muted);
+  --empty-hover-bg: #f6e7df;
+  --empty-hover-border: #e6c8b6;
+
+  --prose-text-warm: #2a2b30;
+  --prose-secondary-warm: #4f535c;
+  --prose-muted-warm: #6b707a;
+
+  --selection: rgba(183, 94, 59, 0.16);
+}
+
+/* ---- Base reset ---- */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+html {
+  font-size: 14px;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: var(--lh-body);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'kern' 1;
+}
+
+::selection {
+  background: var(--selection);
+}
+
+/* A single calm keyboard-focus ring for SMALL interactive controls only —
+   exactly one treatment, so it never doubles with a component's own accent
+   border. Deliberately NOT extended to `[tabindex]`: large composite surfaces
+   (the source listbox, a sheet panel) carry tabindex, and an accent ring around
+   a whole surface looks wrong — those indicate focus with a quiet bg/border
+   shift instead (see CLAUDE.md "Focus indication"). Kept as `outline` (never
+   box-shadow) so panel overflow never clips it and dimensions never change. */
+:where(button, a, input, textarea, select):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Native form controls wear the brand, not the OS accent. Checkboxes/radios on
+   macOS read as native when simply re-tinted; the range slider is fully restyled
+   so no platform thumb or track shows through. (Tauri renders in WKWebView on
+   macOS and WebView2 on Windows — both honor the -webkit- pseudo-elements, so
+   only those are needed.) */
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--accent);
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 20px;
+  background: transparent;
+  cursor: pointer;
+}
+input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--border-control);
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  margin-top: -6px; /* center the 16px thumb over the 4px track */
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-panel);
+  box-shadow: var(--shadow-card);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+input[type='range']:hover::-webkit-slider-thumb {
+  background: var(--accent-strong);
+}
+input[type='range']:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* Dragging the thumb deepens it to the press accent — completing rest/hover/
+   focus/active so the slider has the same state matrix as every other control. */
+input[type='range']:active::-webkit-slider-thumb {
+  background: var(--accent-strong);
+}
+
+/* Thin chrome scrollbars. */
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-faint);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+/* A distinct grab step while actively dragging the bar. */
+::-webkit-scrollbar-thumb:active {
+  background: var(--text-secondary);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Mandatory motion guard. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

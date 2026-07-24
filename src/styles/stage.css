@@ -1,0 +1,31 @@
+/* ============================================================================
+   CandidCue stage palette (spec §11.3) — layered on top of the studio tokens.
+
+   The stage window sets no data-theme attribute, so it inherits the dark
+   studio defaults from tokens.css; these variables define the near-black
+   presentation surface for teleprompter glass and camera-facing use. Users
+   may select light stage themes later, but the default stays near-black.
+   ============================================================================ */
+
+:root {
+  --stage-bg: #080808;
+  --stage-text: #f5f3ef;
+  --stage-text-past: rgba(245, 243, 239, 0.42);
+  --stage-text-future: rgba(245, 243, 239, 0.86);
+  --stage-accent: rgba(210, 205, 255, 0.2);
+  --stage-cue: #d8b46a;
+  --stage-overlay: rgba(0, 0, 0, 0.72);
+}
+
+html,
+body,
+#root {
+  background: var(--stage-bg);
+  color: var(--stage-text);
+  overflow: hidden;
+  /* The stage is a display surface, not a document: no text selection,
+     no context cursor noise. */
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}

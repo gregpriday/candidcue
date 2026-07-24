@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CandidCue",
+  "version": "0.1.0",
+  "identifier": "com.candidcue.app",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "control",
+        "title": "CandidCue",
+        "url": "control.html",
+        "width": 1240,
+        "height": 820,
+        "minWidth": 980,
+        "minHeight": 680,
+        "visible": true,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' asset: customprotocol:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: blob: data:; media-src 'self' asset: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://api.openai.com; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    },
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" }
+    }
+  }
+}

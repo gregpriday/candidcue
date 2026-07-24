@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "stage-capability",
+  "description": "The minimally privileged stage window: it may only listen to events pushed from Rust/control (spec Appendix D.3).",
+  "windows": ["stage"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "control-capability",
+  "description": "The privileged control window: dialogs and approved-link opening on top of core defaults. Updater/window-state/global-shortcut permissions are added when those plugins ship (spec Appendix D.2).",
+  "windows": ["control"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "opener:default"
+  ]
+}
