@@ -9,10 +9,13 @@ import { describe, it, expect } from 'vitest';
 import type { CompiledBlock, StageSettings } from '../../../src/shared/contracts';
 import {
   buildLayoutFingerprint,
+  buildRenderedLineMap,
+  maxPathDisagreementPx,
   sameLayout,
   sectionIdsForBlocks,
   toDocumentRect,
 } from '../../../src/stage/motion';
+import { fixtureFingerprint, syntheticLayout } from '../../fixtures/layout';
 
 const settings: StageSettings = {
   schemaVersion: 1,
@@ -251,5 +254,88 @@ describe('layout fingerprint (§7.2, §33)', () => {
     expect(sameLayout(base, { ...base, scriptCompileHash: 'hash-b' })).toBe(false);
     expect(sameLayout(base, { ...base, stageGeneration: 2 })).toBe(false);
     expect(sameLayout(base, null)).toBe(false);
+  });
+});
+
+/**
+ * `sameLayout()` answers "should the geometry have changed?" from the declared
+ * inputs. `maxPathDisagreementPx()` answers "did it?" from the measurements.
+ * The gap between those two questions is where a font file swapped under an
+ * unchanged family id lives, and where a virtualized height estimate corrected
+ * by a real measurement lives — both move every glyph after them with an
+ * identical fingerprint, so the rebuild is classified coverage-only and the §33
+ * re-anchor that would have hidden the shift never runs.
+ */
+describe('measured geometry drift (§7.2, §33)', () => {
+  function mapFor(options: { wordWidthPx?: number; startY?: number; tokens?: number } = {}) {
+    const layout = syntheticLayout({
+      blocks: [
+        { kind: 'paragraph', tokens: options.tokens ?? 90 },
+        { kind: 'paragraph', tokens: options.tokens ?? 90 },
+      ],
+      columnWidthPx: 800,
+      wordWidthPx: options.wordWidthPx ?? 90,
+      startY: options.startY ?? 800,
+    });
+    return buildRenderedLineMap({
+      fingerprint: fixtureFingerprint({ layoutGeneration: 1 }),
+      tokens: layout.tokens,
+      blocks: layout.blocks,
+      readingLineStartY: 400,
+      lineHeightPx: layout.lineHeightPx,
+      viewportHeightPx: 1080,
+      maxScrollPx: layout.contentHeightPx,
+    });
+  }
+
+  it('reports zero for a map rebuilt from identical measurements', () => {
+    expect(maxPathDisagreementPx(mapFor(), mapFor())).toBeLessThan(1e-6);
+  });
+
+  it('sees a whole-document shift a corrected height estimate would produce', () => {
+    // Every block after the corrected one moves by the correction.
+    const shifted = mapFor({ startY: 860 });
+    expect(maxPathDisagreementPx(mapFor(), shifted)).toBeGreaterThan(50);
+  });
+
+  it('sees a re-wrap a font file swap would produce under the same family', () => {
+    // Wider glyphs at the same family id and size: different line breaks, so
+    // the unit → scroll path moves even though nothing in the fingerprint did.
+    const wider = mapFor({ wordWidthPx: 130 });
+    expect(maxPathDisagreementPx(mapFor(), wider)).toBeGreaterThan(1);
+  });
+
+  it('does not call a coverage-only rebuild a disagreement', () => {
+    // The overlap is what is compared: a map that simply measured MORE of the
+    // document — virtualization scrolled and another block came into the
+    // window — agrees with the old one everywhere the old one knew about.
+    const layout = syntheticLayout({
+      blocks: [
+        { kind: 'paragraph', tokens: 90 },
+        { kind: 'paragraph', tokens: 90 },
+      ],
+      columnWidthPx: 800,
+      startY: 800,
+    });
+    const build = (tokenCount: number) =>
+      buildRenderedLineMap({
+        fingerprint: fixtureFingerprint({ layoutGeneration: 1 }),
+        tokens: layout.tokens.slice(0, tokenCount),
+        blocks: layout.blocks,
+        readingLineStartY: 400,
+        lineHeightPx: layout.lineHeightPx,
+        viewportHeightPx: 1080,
+        // Identical bounds: only the measured COVERAGE differs.
+        maxScrollPx: layout.contentHeightPx,
+      });
+    expect(maxPathDisagreementPx(build(70), build(layout.tokens.length))).toBeLessThan(1);
+  });
+
+  it('refuses to compare when either side has no path', () => {
+    expect(maxPathDisagreementPx(null, mapFor())).toBe(Number.POSITIVE_INFINITY);
+    expect(maxPathDisagreementPx(mapFor(), null)).toBe(Number.POSITIVE_INFINITY);
+    expect(
+      maxPathDisagreementPx({ motionKnots: [], sampleMotionPath: () => null }, mapFor()),
+    ).toBe(Number.POSITIVE_INFINITY);
   });
 });

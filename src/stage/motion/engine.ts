@@ -29,8 +29,8 @@ import {
   type TrackingStateV2,
 } from '../../shared/contracts';
 import {
+  createFrameIntervalEstimator,
   createJerkLimitedScrollController,
-  HITCH_THRESHOLD_MS,
   type JerkLimitedScrollController,
 } from './controller';
 import {
@@ -131,6 +131,16 @@ export interface StageMotionEngine {
   readonly unitAxis: UnitAxisAdapter;
   /** Backward target revisions suppressed by the forward latch (§70.5). */
   readonly targetRegressions: number;
+  /**
+   * Times the latch gave way to an authorized re-anchor because the suppressed
+   * regression exceeded `reanchorThresholdPx` and stayed there (§30, §53).
+   */
+  readonly latchReanchors: number;
+  /**
+   * Frames on which an authorized plant overwrite could not be resolved (no
+   * line map) and was parked rather than spent (§62, §53).
+   */
+  readonly deferredPlantOverwrites: number;
 
   configureSession(gate: SemanticFrameGate, nowMs: number): void;
   setLineMap(map: StageRenderedLineMap | null): void;
@@ -182,6 +192,14 @@ const DEFAULT_FRAME_STALE_MS = 3000;
 const DEFAULT_STYLE_INTERVAL_MS = 100;
 const DEGRADED_STYLE_INTERVAL_MS = 250;
 const DEFAULT_MANUAL_GRACE_MS = 2500;
+/**
+ * How long a beyond-threshold backward disagreement must persist before the
+ * forward latch gives way to an authorized re-anchor. Long enough that a single
+ * bad frame or a one-off tracker wobble never repositions the document; short
+ * enough that a presenter who really is a third of a viewport behind is not
+ * left reading text that is no longer on the glass.
+ */
+const LATCH_REANCHOR_PERSISTENCE_MS = 400;
 
 /**
  * Session clock (§9.1). Frames carry session-relative timestamps; the stage
@@ -221,11 +239,18 @@ export function createStageMotionEngine(
       scriptCompileHash: '',
       layoutGeneration: 0,
     },
+    profile,
   });
   const controller = createJerkLimitedScrollController();
   const transitions = createStageTransitionController();
   const diagnostics = createStageMotionDiagnostics({ ackIntervalMs: options.ackIntervalMs });
   const clock = createSessionClock();
+  /**
+   * §70.8. A hitch is a MISSED REFRESH, so the threshold has to come from the
+   * refresh the display actually has — a fixed one is a 60 Hz assumption, and
+   * on a 30 Hz panel it made every healthy frame a dropped frame.
+   */
+  const frameInterval = createFrameIntervalEstimator();
   const unitAxis = options.unitAxis ?? createCalibratingUnitAxis();
 
   let map: StageRenderedLineMap | null = null;
@@ -250,6 +275,15 @@ export function createStageMotionEngine(
   let forwardTargetLatchPx: number | null = null;
   /** Target regressions suppressed by the latch — diagnostics only. */
   let targetRegressions = 0;
+  /**
+   * When the latched target first got further than `reanchorThresholdPx` ahead
+   * of where the tracker says the presenter is, or null while it has not.
+   */
+  let latchExcessSinceMs: number | null = null;
+  /** Re-anchors the latch escape hatch performed — diagnostics only. */
+  let latchReanchors = 0;
+  /** Frames on which a plant-overwrite licence was parked (§62) — diagnostics. */
+  let deferredPlantOverwrites = 0;
   /** Visual-block span the plant is currently held at (§8.6). */
   let heldVisualSpan: VisualBlockSpan | null = null;
 
@@ -349,6 +383,12 @@ export function createStageMotionEngine(
     get targetRegressions() {
       return targetRegressions;
     },
+    get latchReanchors() {
+      return latchReanchors;
+    },
+    get deferredPlantOverwrites() {
+      return deferredPlantOverwrites;
+    },
 
     configureSession(gate, nowMs) {
       receiver.setGate(gate, nowMs);
@@ -359,8 +399,11 @@ export function createStageMotionEngine(
       fallback = null;
       lastPrediction = null;
       forwardTargetLatchPx = null;
+      latchExcessSinceMs = null;
       heldVisualSpan = null;
       targetRegressions = 0;
+      latchReanchors = 0;
+      deferredPlantOverwrites = 0;
     },
 
     setLineMap(next) {
@@ -415,13 +458,37 @@ export function createStageMotionEngine(
 
       // §26.3: the only authorized overwrite of plant state during following.
       const overwrite = transitions.consumePlantOverwrite();
+      let deferredOverwrite = false;
       if (overwrite) {
         const destination = destinationScrollPx(overwrite.destinationTokenIndex, overwrite.toUnit);
-        if (destination !== null) reanchorTo(destination);
-        // A re-anchor *is* the discontinuity: once applied it is finished, so
-        // its backward-capable profile cannot linger and let ordinary following
-        // reverse afterwards.
-        transitions.complete(overwrite.id);
+        if (destination !== null) {
+          reanchorTo(destination);
+          // A re-anchor *is* the discontinuity: once applied it is finished, so
+          // its backward-capable profile cannot linger and let ordinary
+          // following reverse afterwards.
+          transitions.complete(overwrite.id);
+        } else {
+          /* §62: there is no line map, so there is no destination — yet.
+           *
+           * This used to complete the directive regardless, which threw the
+           * discontinuity away. Directives are idempotent by `id`, so the
+           * worker's re-sent copies on every later frame are all
+           * `duplicate`-ignored: nothing retries, ever. A distant BACKWARD
+           * retake arriving during a rebuild window is then unrecoverable by
+           * ordinary motion — the §30.5 reverse-travel budget hard-caps the
+           * rewind at 420 px, so the plant parks above the retake point and
+           * stays there. Forward destinations "recover" by rolling at full
+           * speed for a couple of seconds, which is the exact spectacle §53
+           * re-anchors exist to prevent.
+           *
+           * Park the licence instead. It stays valid while its directive is
+           * active, so it is spent on the first frame after the map resolves,
+           * and it dies with the directive's own expiry if the map never does.
+           */
+          transitions.deferPlantOverwrite(overwrite);
+          deferredPlantOverwrites++;
+          deferredOverwrite = true;
+        }
       }
 
       const semantic = semanticTarget(nowMs);
@@ -502,6 +569,7 @@ export function createStageMotionEngine(
       // a backward-capable profile is an explicit classification of the
       // regression and releases the latch.
       let regressed = false;
+      let latchReanchored = false;
       if (!holding && !visualSpanHold) {
         if (limits.allowBackward || manualGrace) {
           // A backward-capable profile is an explicit classification of the
@@ -509,12 +577,46 @@ export function createStageMotionEngine(
           // (§30.6), and re-latching to the pre-interaction target during the
           // grace would fight the presenter's own reposition afterwards.
           forwardTargetLatchPx = null;
+          latchExcessSinceMs = null;
         } else if (forwardTargetLatchPx !== null && targetPx < forwardTargetLatchPx) {
-          targetPx = forwardTargetLatchPx;
-          regressed = true;
-          targetRegressions++;
+          /* §30 `reanchorThresholdPx` — the latch's escape hatch.
+           *
+           * The latch is right about small regressions: reverse is forbidden
+           * here, so following one would only park the plant past a target it
+           * can never reach. It was WRONG about large ones. A latch with no
+           * upper bound turns any single bad frame that raced the plant forward
+           * into a permanent error — the corrective targets that follow are all
+           * "backward", all suppressed, and forward-only means nothing on the
+           * stage can ever bring it back. `reanchorThresholdPx` existed for
+           * exactly this and was read nowhere.
+           *
+           * Past that distance the honest reading is not "the tracker glitched"
+           * but "we are somewhere the presenter is not", and §53's answer to
+           * that is an authorized, bounded discontinuity rather than a
+           * permanent error or a full-speed roll. Persistence keeps a momentary
+           * backward blip from teleporting anyone: the disagreement has to hold
+           * for `LATCH_REANCHOR_PERSISTENCE_MS` first.
+           */
+          const excessPx = forwardTargetLatchPx - targetPx;
+          if (excessPx > Math.max(0, limits.reanchorThresholdPx)) {
+            latchExcessSinceMs ??= nowMs;
+            if (nowMs - latchExcessSinceMs >= LATCH_REANCHOR_PERSISTENCE_MS) {
+              reanchorTo(targetPx);
+              latchExcessSinceMs = null;
+              latchReanchors++;
+              latchReanchored = true;
+            }
+          } else {
+            latchExcessSinceMs = null;
+          }
+          if (!latchReanchored) {
+            targetPx = forwardTargetLatchPx;
+            regressed = true;
+            targetRegressions++;
+          }
         } else {
           forwardTargetLatchPx = targetPx;
+          latchExcessSinceMs = null;
         }
       }
 
@@ -538,12 +640,15 @@ export function createStageMotionEngine(
         mapUnresolved ? 'map_unresolved' : null,
         visualSpanHold ? 'visual_block' : null,
         regressed ? 'target_regression' : null,
+        latchReanchored ? 'latch_reanchor' : null,
+        deferredOverwrite ? 'transition_deferred' : null,
         step.fused ? 'fused' : null,
       ]
         .filter(Boolean)
         .join(':');
 
-      const hitch = step.hitch || dtMs > HITCH_THRESHOLD_MS;
+      const hitchThresholdMs = frameInterval.observe(dtMs);
+      const hitch = step.hitch || dtMs > hitchThresholdMs;
       diagnostics.sample({
         nowMs,
         dtMs,
@@ -567,13 +672,26 @@ export function createStageMotionEngine(
       const styleTick = nowMs - lastStyleAtMs >= styleInterval;
       if (styleTick) lastStyleAtMs = nowMs;
 
+      /*
+       * C1: the ack is the ONLY channel that carries the stage's layout
+       * generation back to control, and control is the only party that can
+       * hand it on to the frame producers. Gating the ack on an accepted frame
+       * therefore closed a loop that had to stay open to work: the gate bumps
+       * to a generation control has never heard of, every frame is rejected
+       * because of it, and no ack goes out to say so — the stage sits in a
+       * self-sustaining blackout until the stale-layout tolerance opens at
+       * 900 ms. So a frameless ack still reports identity, position, and
+       * generation; `revision`/`epoch` of -1 say "no accepted frame yet"
+       * rather than borrowing a stale frame's counters.
+       */
       const frameForAck = receiver.current;
+      const ackSessionId = frameForAck ? frameForAck.sessionId : receiver.gate.sessionId;
       const ack =
-        frameForAck && diagnostics.shouldEmitAck(nowMs)
+        ackSessionId.length > 0 && diagnostics.shouldEmitAck(nowMs)
           ? diagnostics.buildAck({
-              sessionId: frameForAck.sessionId,
-              revision: frameForAck.revision,
-              epoch: frameForAck.epoch,
+              sessionId: ackSessionId,
+              revision: frameForAck ? frameForAck.revision : -1,
+              epoch: frameForAck ? frameForAck.epoch : -1,
               layoutGeneration: receiver.gate.layoutGeneration,
               targetPx: holding ? controller.state.q : targetPx,
               positionPx: step.q,
@@ -653,6 +771,9 @@ export function createStageMotionEngine(
       lastTarget = positionPx;
       lastLineId = null;
       targetRegressions = 0;
+      latchReanchors = 0;
+      latchExcessSinceMs = null;
+      deferredPlantOverwrites = 0;
     },
   };
 }

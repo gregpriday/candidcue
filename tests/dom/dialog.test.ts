@@ -14,7 +14,7 @@
  * never fired and neither Escape nor the trap did anything.
  */
 import { render } from '@testing-library/svelte';
-import { createRawSnippet, flushSync } from 'svelte';
+import { createRawSnippet, flushSync, type ComponentProps } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 import Dialog from '../../src/control/components/Dialog.svelte';
 
@@ -31,8 +31,10 @@ interface DialogOpts {
   title?: string;
 }
 
+type DialogProps = ComponentProps<typeof Dialog>;
+
 function renderDialog(opts: DialogOpts = {}) {
-  const props: Record<string, unknown> = {
+  const props: DialogProps = {
     open: opts.open ?? true,
     title: opts.title ?? 'Delete script',
   };

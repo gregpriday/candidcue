@@ -20,6 +20,7 @@ import type {
   CoachRailTip,
   CoachTipCode,
   DeliveryStyle,
+  LunaCoachDecision,
 } from '../../contracts/coaching';
 import { isEvidenceCurrent } from '../../contracts/coaching';
 import {
@@ -91,8 +92,18 @@ export interface TipProposal {
   authoredTerm?: string | null;
   /** §26.1 persistence input, ms. Defaults to the evidence span length. */
   persistenceMs?: number;
-  /** Script token the tip anchors to, for §26.5 scope cancellation. */
+  /**
+   * Script **token** the tip anchors to, for gutter marks and quoting. Never
+   * used for scope comparison — see {@link CoachCandidate.scriptSpanId}.
+   */
   scriptAnchorTokenId?: string | null;
+  /**
+   * §23. Luna's own scope for this decision, when the proposal came back from
+   * the observer. `session_pattern` and `none` describe something that is not
+   * anchored to the span the presenter happens to be on, so §26.5's
+   * out-of-scope cancellation must not apply to them.
+   */
+  lunaScope?: LunaCoachDecision['scope'];
 }
 
 export type PolicyRejection =
@@ -103,6 +114,7 @@ export type PolicyRejection =
   | 'studio_only'
   | 'positive_disabled'
   | 'provisional_evidence'
+  | 'requires_semantic_validation'
   | 'stale_epoch'
   | 'stale_take_pass'
   | 'below_local_confidence_floor'
@@ -157,6 +169,20 @@ const PREFERENCE_FACTOR: Record<'low' | 'normal' | 'high', number> = {
 };
 
 const clamp01 = (value: number): number => (value < 0 ? 0 : value > 1 ? 1 : value);
+
+/**
+ * §26.5. The span a tip's scope is measured against, or `null` when it has no
+ * span scope to leave.
+ *
+ * Luna's own `scope` wins when it is present, because the model is the one
+ * that judged whether the issue is about this phrase or about the session. A
+ * `session_pattern` verdict — a repetitive opener, a filler habit — is not
+ * invalidated by walking into the next sentence.
+ */
+function scopeSpanIdFor(proposal: TipProposal): string | null {
+  if (proposal.lunaScope === 'session_pattern' || proposal.lunaScope === 'none') return null;
+  return proposal.candidate.scriptSpanId;
+}
 
 /* ---------------------------------------------------------------------------
  * Scoring (§26.1)
@@ -289,6 +315,23 @@ interface PendingTip {
   tip: CoachRailTip;
   /** Evidence ids used for the §26.3 cluster test when it is actually shown. */
   evidenceIds: readonly string[];
+  /**
+   * §26.5. The authored **span** whose scope the tip lives in, or `null` for a
+   * tip that is not scoped to one.
+   *
+   * Held here rather than on {@link CoachRailTip} because the stage has no use
+   * for it: the span is a policy concern, and putting a script span id on the
+   * payload that crosses to the stage would edge against Rule 1. Kept as a
+   * span — never a token — because comparing a token id against the active
+   * span id is a comparison that can only ever be false, which is how a
+   * priority-90 critical alert used to survive exactly one tick.
+   */
+  scopeSpanId: string | null;
+  /**
+   * §26.5. Ids of the underlying evidence records the candidate aggregated, so
+   * a demoted event can cancel the tip that rests on it.
+   */
+  contributingEventIds: readonly string[];
   highFrequency: boolean;
   mode: CoachRailMode;
 }
@@ -308,10 +351,19 @@ export class CoachTipPolicy {
   private pending: PendingTip | null = null;
   private counter = 0;
 
-  /** §37 diagnostics. Proposed / shown / suppressed. */
+  /**
+   * §37 diagnostics. Proposed / shown / suppressed / not selected.
+   *
+   * `suppressed` counts proposals a *rule* refused: a cooldown, a mode, a
+   * confidence floor, a state suppression. `notSelected` counts proposals that
+   * lost a ranking to a better one in the same window. Keeping them apart is
+   * the whole value of the pair — "the rail is too chatty" and "the rail had
+   * more to say than it could fit" are opposite diagnoses.
+   */
   private proposedCount = 0;
   private shownCount = 0;
   private suppressedCount = 0;
+  private notSelectedCount = 0;
 
   constructor(config: PolicyConfig = {}) {
     const { safeMomentWaitMs, recencyHorizonMs, minimumAlignmentConfidence, ...cooldown } = config;
@@ -330,11 +382,17 @@ export class CoachTipPolicy {
     return this.pending?.tip ?? null;
   }
 
-  getCounters(): { proposed: number; shown: number; suppressed: number } {
+  getCounters(): {
+    proposed: number;
+    shown: number;
+    suppressed: number;
+    notSelected: number;
+  } {
     return {
       proposed: this.proposedCount,
       shown: this.shownCount,
       suppressed: this.suppressedCount,
+      notSelected: this.notSelectedCount,
     };
   }
 
@@ -344,6 +402,14 @@ export class CoachTipPolicy {
     this.visible = null;
     this.visibleSinceMs = null;
     this.pending = null;
+  }
+
+  /** §37. Zero the counters — a new session, not a new take pass. */
+  resetCounters(): void {
+    this.proposedCount = 0;
+    this.shownCount = 0;
+    this.suppressedCount = 0;
+    this.notSelectedCount = 0;
   }
 
   /** §26.2. Report an event that opens a suppression window. */
@@ -387,8 +453,16 @@ export class CoachTipPolicy {
     const definition = COACH_TIP_CATALOG[held.tip.code];
     switch (reason) {
       case 'evidence_revised':
-        // Only the tip resting on that evidence.
-        return options.evidenceId !== undefined && held.tip.evidenceIds.includes(options.evidenceId);
+        // Only the tip resting on that evidence — either the candidate itself
+        // or one of the underlying records it aggregated. The disfluency lane
+        // demotes by `FillerEvent.eventId`, which is not the candidate's
+        // `evidenceId`, so without the second test §26.5 was unreachable from
+        // the only producer that has demotions.
+        if (options.evidenceId === undefined) return false;
+        return (
+          held.tip.evidenceIds.includes(options.evidenceId) ||
+          held.contributingEventIds.includes(options.evidenceId)
+        );
       case 'critical_notice':
         // §26.5: a critical notice cancels ordinary tips. It does not cancel
         // itself, and it does not cancel a system alert about the microphone.
@@ -398,9 +472,20 @@ export class CoachTipPolicy {
       case 'retake_started':
         return definition.ordinary;
       case 'span_out_of_scope': {
-        // §26.5: only when the tip actually had a scope to leave.
-        if (held.tip.scriptAnchorTokenId === null) return false;
-        return held.tip.scriptAnchorTokenId !== options.activeSpanId;
+        // A hardware fault and a misread number are not scoped to a span: the
+        // microphone is still clipping wherever the presenter has got to, and
+        // the number was still wrong. §26.5's scope rule is about advice that
+        // stops applying once the moment passes, and these two bands are
+        // neither advice nor momentary. Left in, a `fidelity_critical` alert —
+        // which `fidelity/comparator.ts` can only emit *after* the presenter
+        // has demonstrably moved on — died on the first tick after it appeared.
+        if (definition.band === 'fidelity_critical' || definition.band === 'system_critical') {
+          return false;
+        }
+        // §26.5: only when the tip actually had a scope to leave. Span against
+        // span; a token id in this comparison never matches anything.
+        if (held.scopeSpanId === null) return false;
+        return held.scopeSpanId !== options.activeSpanId;
       }
       case 'coaching_disabled':
       case 'take_ended':
@@ -424,6 +509,10 @@ export class CoachTipPolicy {
       for (const proposal of proposals) {
         rejected.push(this.reject(proposal, 'coaching_disabled'));
       }
+      // §37: these were proposed and not shown. The early return used to skip
+      // the counter entirely, so turning coaching off silently pushed
+      // `proposed` and `suppressed` out of agreement.
+      this.suppressedCount += rejected.length;
       return { accepted: null, displayed: false, rejected };
     }
 
@@ -457,9 +546,17 @@ export class CoachTipPolicy {
       return b.breakdown.score - a.breakdown.score;
     });
 
+    // §37: everything rejected before ranking was *suppressed* — a gate said
+    // no. Counted here, once, rather than at each `return` below, where it used
+    // to be added on the success path and where the ranking losers appended
+    // afterwards were swept in with it. `not_selected` is not suppression: the
+    // issue was real and something more important was shown instead, and
+    // counting it as suppression is what would have made the contract's
+    // "rail too chatty" ratio wrong from the first take.
+    this.suppressedCount += rejected.length;
+
     const winner = ranked[0];
     if (winner === undefined) {
-      this.suppressedCount += rejected.length;
       return { accepted: null, displayed: false, rejected };
     }
     for (const loser of ranked.slice(1)) {
@@ -468,6 +565,7 @@ export class CoachTipPolicy {
         code: loser.code,
         reason: 'not_selected',
       });
+      this.notSelectedCount += 1;
     }
 
     // §9.1: one tip. A new tip may take the screen only for a strictly higher
@@ -486,7 +584,7 @@ export class CoachTipPolicy {
           code: winner.code,
           reason: 'lower_priority_than_visible',
         });
-        this.suppressedCount += rejected.length;
+        this.suppressedCount += 1;
         return { accepted: null, displayed: false, rejected };
       }
     }
@@ -495,18 +593,18 @@ export class CoachTipPolicy {
     const held: PendingTip = {
       tip,
       evidenceIds: tip.evidenceIds,
+      scopeSpanId: scopeSpanIdFor(winner.proposal),
+      contributingEventIds: [...winner.proposal.candidate.contributingEventIds],
       highFrequency: context.highFrequency === true,
       mode: context.mode,
     };
 
     if (context.safeMoment) {
       this.show(held, context.audioTimeMs);
-      this.suppressedCount += rejected.length;
       return { accepted: tip, displayed: true, rejected };
     }
     // §9.4: wait up to three seconds for a safe opportunity.
     this.pending = held;
-    this.suppressedCount += rejected.length;
     return { accepted: tip, displayed: false, rejected };
   }
 
@@ -612,6 +710,12 @@ export class CoachTipPolicy {
     // §22/§27: a provisional tail is routinely revised away.
     if (!proposal.candidate.finalEvidence) return fail('provisional_evidence');
 
+    // §25.5 / §20.1: the local layer may propose a materiality question but may
+    // never answer one. Structural, so no caller can forget it.
+    if (definition.requiresLunaValidation && proposal.source !== 'luna_validated') {
+      return fail('requires_semantic_validation');
+    }
+
     if (proposal.candidate.stamp.trackingEpoch !== context.trackingEpoch) return fail('stale_epoch');
     if (proposal.candidate.stamp.takePassId !== context.takePassId) return fail('stale_take_pass');
 
@@ -664,7 +768,9 @@ export class CoachTipPolicy {
       cooldownKey: definition.cooldownKey,
       trackingEpoch: context.trackingEpoch,
       takePassId: context.takePassId,
-      scriptAnchorTokenId: proposal.scriptAnchorTokenId ?? proposal.candidate.scriptSpanId,
+      // Token to token. This used to fall back to `candidate.scriptSpanId`,
+      // mixing the two namespaces on the payload that reaches the stage.
+      scriptAnchorTokenId: proposal.scriptAnchorTokenId ?? proposal.candidate.scriptAnchorTokenId,
       evidenceIds: [proposal.candidate.evidenceId],
       source: proposal.source,
     };

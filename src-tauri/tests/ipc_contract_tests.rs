@@ -655,6 +655,119 @@ fn destination_taking_export_commands_run_their_own_picker() {
 }
 
 // ---------------------------------------------------------------------------
+// §26.5 vocabulary analysis + §27.8 model capability registry
+// ---------------------------------------------------------------------------
+
+use candidcue_lib::openai::luna_ops::{VocabularyRequest, VocabularyTerm};
+use candidcue_lib::openai::ModelCapabilities;
+
+fn openai_fixture() -> serde_json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("ipc")
+        .join("openai-command-payloads.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
+    serde_json::from_str(&raw).expect("fixture parses")
+}
+
+/// `SemanticRequestOptions` is `#[serde(flatten)]`ed into `VocabularyRequest`,
+/// so the options live at the TOP level of `request`. A TypeScript wrapper that
+/// nests them under `options` would deserialize fine — serde ignores unknown
+/// fields here — and silently apply none of them, which is the same shape as
+/// the `view` filter Rust discarded.
+#[test]
+fn vocabulary_request_accepts_the_frontend_payload() {
+    let f = openai_fixture();
+    let request: VocabularyRequest =
+        serde_json::from_value(f["analyze_vocabulary"]["request"].clone())
+            .expect("the frontend's vocabulary payload must deserialize");
+    assert_eq!(request.language, "en");
+    assert_eq!(request.candidates.len(), 2);
+    assert_eq!(request.candidates[0].surface, "CandidCue");
+    assert!(!request.candidates[0].contexts.is_empty());
+    assert!(request.existing_dictionary.is_empty());
+
+    let with_options: VocabularyRequest =
+        serde_json::from_value(f["analyze_vocabulary_with_options"]["request"].clone())
+            .expect("options ride at the top level of the request");
+    assert_eq!(with_options.options.timeout_ms, Some(45_000));
+    assert_eq!(with_options.options.reasoning_effort.as_deref(), Some("low"));
+    assert_eq!(with_options.options.max_output_tokens, Some(2_048));
+
+    // The nesting mistake, made explicit: it parses, and every option is lost.
+    let nested: VocabularyRequest = serde_json::from_value(serde_json::json!({
+        "language": "en",
+        "candidates": [],
+        "options": { "timeoutMs": 45000 },
+    }))
+    .expect("unknown fields are ignored");
+    assert_eq!(
+        nested.options.timeout_ms, None,
+        "nesting the options under `options` must not appear to work"
+    );
+
+    // The command takes one argument named `request`.
+    assert!(f["analyze_vocabulary"].get("request").is_some());
+    assert_eq!(
+        f["analyze_vocabulary"].as_object().unwrap().len(),
+        1,
+        "analyze_vocabulary takes exactly one argument"
+    );
+}
+
+/// `VocabularyTerm` is the one payload in this file that is NOT camelCase: it
+/// is the strict response schema of Appendix E.6 and the struct carries no
+/// rename attribute. A TypeScript twin written in camelCase out of habit would
+/// read `undefined` for every field.
+#[test]
+fn vocabulary_term_stays_snake_case() {
+    let f = openai_fixture();
+    let term = VocabularyTerm {
+        surface: "CandidCue".into(),
+        canonical_spoken: "Candid Cue".into(),
+        aliases: vec!["candy cue".into(), "candid q".into()],
+        category: "brand".into(),
+        importance: 0.96,
+        case_sensitive: true,
+        notes: "Application name".into(),
+    };
+    let encoded = serde_json::to_value(&term).expect("serializes");
+    assert_eq!(encoded, f["expectedVocabularyTerm"]);
+    assert!(encoded.get("canonicalSpoken").is_none());
+    assert!(encoded.get("canonical_spoken").is_some());
+}
+
+/// §27.8 registry, and the assumption §26.1 requires it to isolate.
+///
+/// The registry used to claim `realtimePromptSteering: true` for
+/// `gpt-realtime-whisper` while NOTHING read it — a free claim. §26.1 says the
+/// opposite in as many words ("this model does not provide prompt steering"),
+/// and the control window now gates the transcription-session `prompt` on this
+/// flag, so a `true` here would start putting an unsupported field in every
+/// `session.update`.
+#[test]
+fn capability_registry_matches_the_frontend_twin_and_section_26_1() {
+    let f = openai_fixture();
+    let capabilities = ModelCapabilities::default();
+    assert_eq!(
+        serde_json::to_value(&capabilities).expect("serializes"),
+        f["expectedModelCapabilities"]
+    );
+    assert!(
+        !capabilities.realtime_prompt_steering,
+        "§26.1: the primary realtime transcription model does not accept a \
+         vocabulary prompt. Flip this only alongside a verified model that does."
+    );
+    assert!(
+        capabilities.semantic_structured_outputs,
+        "vocabulary analysis is gated on this in the control window"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // §52 / §46.6 display profiles
 // ---------------------------------------------------------------------------
 

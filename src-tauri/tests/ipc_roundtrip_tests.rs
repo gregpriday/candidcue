@@ -957,3 +957,235 @@ fn stage_payloads_have_no_typed_boundary_to_guard() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// 4. The control → stage hop, using the payload control really publishes
+// ---------------------------------------------------------------------------
+
+/// The defect that started all of this, closed across both languages.
+///
+/// `tests/e2e/stage-publish-contract.test.ts` runs the real control-side
+/// session store and writes down the exact `publish_stage_snapshot` payloads it
+/// produced. This feeds them to the real header gate. Between them there is no
+/// hand-written fixture and no mock: if control publishes a header Rust drops,
+/// one of the two fails.
+///
+/// The generations in the fixture are deliberately not 1. A control side that
+/// hard-codes `1` — which is what shipped — passes every test whose fixture
+/// happens to use 1, and drops every snapshot in production.
+#[test]
+fn the_captured_stage_snapshots_pass_rusts_header_gate() {
+    use candidcue_lib::windows::{validate_stage_payload_header, HeaderVerdict};
+
+    let path = repo_root().join("tests/fixtures/ipc/stage-publish-capture.json");
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "{} must exist — regenerate with `UPDATE_STAGE_CAPTURE=1 \
+             ./node_modules/.bin/vitest run tests/e2e/stage-publish-contract.test.ts`: {e}",
+            path.display()
+        )
+    });
+    let f: Value = serde_json::from_str(&raw).expect("the stage capture parses");
+
+    let session_id = f["sessionId"].as_str().expect("sessionId");
+    let session_generation = f["sessionGeneration"].as_u64().expect("sessionGeneration");
+    let stage_generation = f["stageGeneration"].as_u64().expect("stageGeneration");
+
+    // Guard on the guard: an empty capture would make the loop vacuous, and the
+    // generations must not be the value that hides the defect.
+    let headers = f["headers"].as_array().expect("headers");
+    assert!(!headers.is_empty(), "the capture recorded no snapshots at all");
+    assert_ne!(
+        session_generation, 1,
+        "the capture must use a session generation other than 1, or a hard-coded \
+         1 on the control side would pass"
+    );
+
+    let snapshot = &f["snapshot"];
+    assert_eq!(
+        validate_stage_payload_header(
+            snapshot,
+            session_id,
+            stage_generation,
+            session_generation,
+            false,
+        )
+        .expect("a payload control really publishes must not be an outright error"),
+        HeaderVerdict::Accept,
+        "Rust dropped the snapshot control actually publishes. This is the shipped \
+         bug: the stage hydrates and then never moves, while control reports a \
+         healthy session."
+    );
+
+    for header in headers {
+        assert_eq!(
+            validate_stage_payload_header(
+                header,
+                session_id,
+                stage_generation,
+                session_generation,
+                false,
+            )
+            .expect("header validates"),
+            HeaderVerdict::Accept
+        );
+    }
+
+    // The gate must still be a gate: a stale stage generation is dropped, and a
+    // foreign session is an error. Without these the assertion above could be
+    // satisfied by a validator that accepts everything.
+    assert_eq!(
+        validate_stage_payload_header(
+            snapshot,
+            session_id,
+            stage_generation + 1,
+            session_generation,
+            false,
+        )
+        .expect("a stale stage generation is a silent drop, not an error"),
+        HeaderVerdict::Drop
+    );
+    assert_eq!(
+        validate_stage_payload_header(
+            snapshot,
+            session_id,
+            stage_generation,
+            session_generation + 1,
+            false,
+        )
+        .expect("a stale session generation is a silent drop"),
+        HeaderVerdict::Drop
+    );
+    assert!(
+        validate_stage_payload_header(
+            snapshot,
+            "a-different-session",
+            stage_generation,
+            session_generation,
+            false,
+        )
+        .is_err(),
+        "a payload aimed at another session must be an error, not a drop"
+    );
+}
+
+/// Coverage ceiling, made visible.
+///
+/// A command declared `app: AppHandle` is `AppHandle<Wry>`, which cannot be
+/// bound on the `MockRuntime` — so it can never be reached through
+/// `generate_handler!` in a headless test, no matter how good the fixture is.
+/// That is why every stage command, every asset command and `get_script` are
+/// absent from the replay set above.
+///
+/// Making them generic (`fn f<R: Runtime>(app: AppHandle<R>, …)`) would unlock
+/// them. This test records the current ceiling so it can only move in one
+/// direction: shrink the list and the assertion tells you to extend `REPLAYED`.
+#[test]
+fn commands_pinned_to_the_wry_runtime_are_the_known_set() {
+    const PINNED: &[&str] = &[
+        // commands/mod.rs
+        "app_version",
+        // scripts_cmds.rs
+        "get_script",
+        "import_script",
+        "export_script",
+        // assets_cmds.rs
+        "import_image",
+        "import_remote_image",
+        "resolve_asset_urls",
+        // listeners_cmds.rs
+        "get_listener_catalogue",
+        "resolve_listener_media",
+        // settings_cmds.rs
+        "export_all_data",
+        "get_system_diagnostics",
+        "export_support_bundle",
+        // stage_cmds.rs — the whole window surface
+        "list_displays",
+        "identify_displays",
+        "open_stage",
+        "close_stage",
+        "set_stage_fullscreen",
+        "publish_stage_document",
+        "publish_stage_snapshot",
+        "publish_stage_command",
+        "publish_listener_state",
+        "get_stage_status",
+    ];
+
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands");
+    let mut found: BTreeSet<String> = BTreeSet::new();
+    for entry in std::fs::read_dir(&dir).expect("commands dir").flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("command module");
+        // Walk each `#[tauri::command]` item and look for a non-generic
+        // AppHandle in its parameter list.
+        //
+        // The parameter list is delimited by BALANCED parentheses, not by the
+        // first `)`. Doc comments above these functions are full of `(spec
+        // §52.7)`, and a naive `find(')')` truncates the signature before the
+        // parameters — which silently under-reports and is why the guard on
+        // the guard below insists on a minimum count.
+        for chunk in source.split("#[tauri::command]").skip(1) {
+            let Some(name_start) = chunk.find("fn ") else {
+                continue;
+            };
+            let after_fn = &chunk[name_start + 3..];
+            let name: String = after_fn
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let Some(open) = after_fn.find('(') else {
+                continue;
+            };
+            let mut depth = 0usize;
+            let mut close = None;
+            for (index, ch) in after_fn[open..].char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(open + index);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let Some(close) = close else { continue };
+            let params = &after_fn[open + 1..close];
+            // `AppHandle<R>` is the generic, runtime-agnostic form and is fine.
+            if params.contains("AppHandle") && !params.contains("AppHandle<") {
+                found.insert(name);
+            }
+        }
+    }
+
+    // Guard on the guard: the scan must find something, or the comparison below
+    // is a comparison of two empty sets.
+    assert!(
+        found.len() > 10,
+        "the scan found only {} Wry-pinned commands; the parser has stopped \
+         matching real signatures",
+        found.len()
+    );
+
+    let expected: BTreeSet<String> = PINNED.iter().map(|s| (*s).to_string()).collect();
+    let newly_pinned: Vec<&String> = found.difference(&expected).collect();
+    assert!(
+        newly_pinned.is_empty(),
+        "{newly_pinned:?} now take a concrete `AppHandle`, which makes them \
+         unreachable from any MockRuntime integration test. Prefer \
+         `fn f<R: tauri::Runtime>(app: tauri::AppHandle<R>, …)`."
+    );
+    let unpinned: Vec<&String> = expected.difference(&found).collect();
+    assert!(
+        unpinned.is_empty(),
+        "{unpinned:?} are no longer pinned to Wry — add them to REPLAYED so the \
+         round-trip actually covers them, and drop them from PINNED."
+    );
+}

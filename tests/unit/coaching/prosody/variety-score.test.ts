@@ -413,6 +413,55 @@ describe('VarietyAnalyzer smoothing (§17.3)', () => {
   });
 });
 
+/**
+ * §25.6 authors `POSITIVE_VARIETY` copy and the catalog prices it at a 60 s
+ * cooldown and a 20 s persistence requirement — but §24 defined no candidate
+ * type, so nothing could produce it and the code was unreachable. The type now
+ * exists; this is its producer.
+ */
+describe('VarietyAnalyzer positive candidate (§25.6)', () => {
+  const POSITIVE = { ...IMMEDIATE, positiveTipEnabled: true, positiveTipSustainMs: 5_000 };
+
+  /** Drop below the band, come back into it, and hold. */
+  function recover(analyzer: VarietyAnalyzer): CoachCandidate[] {
+    const out: CoachCandidate[] = [];
+    // Well below the natural band: something to improve on.
+    for (let at = 0; at <= 4_000; at += 1_000) out.push(...update(analyzer, at, 0.2).candidates);
+    // Back inside it, and held past the sustain window.
+    for (let at = 5_000; at <= 12_000; at += 1_000) out.push(...update(analyzer, at, 0.55).candidates);
+    return out;
+  }
+
+  it('proposes positive_variety after the delivery comes back into band', () => {
+    const analyzer = new VarietyAnalyzer({ profile: POSITIVE });
+    expect(recover(analyzer).map((c) => c.type)).toContain('positive_variety');
+  });
+
+  it('is off by default, like every §25.6 positive', () => {
+    const analyzer = new VarietyAnalyzer({ profile: IMMEDIATE });
+    expect(recover(analyzer).map((c) => c.type)).not.toContain('positive_variety');
+  });
+
+  it('§2.5: says nothing to a presenter who was never out of band', () => {
+    // Praising someone for maintaining a state they never left is the
+    // patronizing failure §25.6 warns about.
+    const analyzer = new VarietyAnalyzer({ profile: POSITIVE });
+    const out: CoachCandidate[] = [];
+    for (let at = 0; at <= 30_000; at += 1_000) out.push(...update(analyzer, at, 0.55).candidates);
+    expect(out.map((c) => c.type)).not.toContain('positive_variety');
+  });
+
+  it('says nothing while the microphone is the problem', () => {
+    const analyzer = new VarietyAnalyzer({ profile: POSITIVE });
+    const out: CoachCandidate[] = [];
+    for (let at = 0; at <= 4_000; at += 1_000) out.push(...update(analyzer, at, 0.2).candidates);
+    for (let at = 5_000; at <= 12_000; at += 1_000) {
+      out.push(...update(analyzer, at, 0.55, { microphoneProblem: true }).candidates);
+    }
+    expect(out.map((c) => c.type)).not.toContain('positive_variety');
+  });
+});
+
 describe('VarietyAnalyzer low-variety candidate (§17.9)', () => {
   it('proposes low_variety once the score sits well below target', () => {
     const analyzer = new VarietyAnalyzer({ profile: IMMEDIATE });

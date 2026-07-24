@@ -5,6 +5,7 @@
  */
 import { get, writable } from 'svelte/store';
 import type { ScriptDocument } from '../../shared/contracts';
+import { describeError, errorCode } from '../services/errors';
 import * as scriptsService from '../services/scripts';
 import { requestCompile, resetCompiled } from './compiled';
 
@@ -134,6 +135,8 @@ export async function saveNow(): Promise<void> {
     const result = await scriptsService.saveScript(s.scriptId, s.scriptRevision, savedSource, {
       title: s.title,
     });
+    // Only the mock backend answers with a `status`. Rust's SaveResult has no
+    // such field — see the catch below, which is the real conflict path.
     if (result.status === 'conflict') {
       state.update((prev) => ({ ...prev, saveState: 'conflict' }));
       return;
@@ -148,7 +151,28 @@ export async function saveNow(): Promise<void> {
     }));
     if (savedBadgeTimer) clearTimeout(savedBadgeTimer);
   } catch (err) {
-    state.update((prev) => ({ ...prev, saveState: 'error', lastError: String(err) }));
+    /*
+     * F.8 external-change conflict.
+     *
+     * Rust signals a file that changed outside CandidCue as an ERROR
+     * (`SCRIPT_CONFLICT`), not as a `SaveResult.status` — its SaveResult has no
+     * status field at all. The `status === 'conflict'` branch above is
+     * satisfied only by the mock backend, so against the real backend the
+     * conflict state was unreachable and every external change surfaced as the
+     * generic "Save failed" sheet: no "keep mine / load disk / save both"
+     * choice, on the one failure where the user's text and the disk's text are
+     * both real. The mock being STRONGER than production is exactly what hid
+     * this.
+     */
+    if (errorCode(err) === 'SCRIPT_CONFLICT') {
+      state.update((prev) => ({
+        ...prev,
+        saveState: 'conflict',
+        lastError: describeError(err),
+      }));
+      return;
+    }
+    state.update((prev) => ({ ...prev, saveState: 'error', lastError: describeError(err) }));
   }
 }
 

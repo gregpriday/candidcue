@@ -9,6 +9,8 @@
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
+    "test:dom": "vitest run --config vitest.dom.config.ts",
+    "test:all": "vitest run && vitest run --config vitest.dom.config.ts",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -136,7 +136,41 @@ export function limitsForState(
   const m = profile.motion;
   const s = stateMultipliers(state, profile);
   const t = transitionMultipliers(options.transition, profile);
-  const mul = (a?: number, b?: number) => (a ?? 1) * (b ?? 1);
+  /**
+   * Combine a state multiplier with a transition multiplier — WITHOUT letting
+   * them compound past either one on its own.
+   *
+   * This was a plain product, and the product is where the profile table stops
+   * describing motion anyone chose. `reanchoring` × `catch_up` and
+   * `catching_up` × `reanchor`/`reset` reached vMax 2765 and aMax 5824 — three
+   * and 2.2 times the base — against a `jerkMax` that is deliberately never
+   * relaxed (§30.3). A jerk-limited actuator needs `2·aMax/jerkMax` to swing
+   * acceleration from one rail to the other, which at aMax 5824 is 0.97 s; run
+   * that much actuator lag inside a loop whose stacked ω is 7.5 rad/s and the
+   * phase margin is gone. The result was not overshoot but a sustained LIMIT
+   * CYCLE: 106–162 px of tail oscillation with 63–78 reversals over 32 s
+   * against a *static* target, the guard saturated on ~99% of sub-steps, and
+   * the text visibly rocking about two and a half lines. `reanchoring` with a
+   * `catch_up` transition is an ordinary combination that can hold for the
+   * whole 4 s directive TTL.
+   *
+   * So the product is capped to the more extreme of its two factors: a
+   * transition may take the limits as far as it would on its own, and a state
+   * may too, but the two together may not go further than the bolder of them.
+   * This is strictly narrowing — every combination comes out no more extreme
+   * than it is today, and combinations that never stacked are untouched (one
+   * factor is 1, and `clamp(x·1, min(x,1), max(x,1))` is exactly `x`).
+   *
+   * The alternative — letting a transition REPLACE the state's multiplier — is
+   * also clean across the whole space, but it is not narrowing: it would let a
+   * `catch_up` directive run at full catch-up speed while the tracker is
+   * `uncertain`, which today's product deliberately damps to 0.56.
+   */
+  const mul = (a?: number, b?: number) => {
+    const x = a ?? 1;
+    const y = b ?? 1;
+    return Math.min(Math.max(x, y, 1), Math.max(Math.min(x, y, 1), x * y));
+  };
 
   // §61 degradation: a calmer, cheaper profile — never event-driven jumps.
   const degradeOmega = options.degraded ? 0.85 : 1;

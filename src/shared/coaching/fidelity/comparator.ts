@@ -455,6 +455,10 @@ export function compareSpanFidelity(observation: FidelitySpanObservation): Fidel
       localConfidence: clampConfidence(finding.localConfidence),
       stamp: evidence.stamp,
       scriptSpanId: observation.spanId,
+      // The comparator locates the term by word offset inside the span, not by
+      // authored token id; §11 gutter marks for fidelity come from review.
+      scriptAnchorTokenId: null,
+      contributingEventIds: [],
       detailCode: finding.detailCode,
       spokenFragment: safeFragment(finding.spokenFragment, MAX_FRAGMENT_CHARS),
       authoredFragment: safeFragment(term.authoredText, MAX_FRAGMENT_CHARS),

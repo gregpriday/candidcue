@@ -20,8 +20,108 @@ import type { MotionLimits } from './profiles';
 export const MAX_FRAME_DT_MS = 50;
 /** Fixed integration sub-step — keeps behavior refresh-rate independent. */
 export const CONTROLLER_SUBSTEP_MS = 8;
-/** A frame gap beyond this is counted as a hitch/dropped frame (§70.8). */
+/**
+ * Hitch threshold used until the real refresh interval is known (§70.8).
+ *
+ * This was a FIXED 28 ms, which is a 60 Hz assumption wearing a constant's
+ * clothing. A 30 Hz display has a 33.3 ms frame period, so on one of those
+ * every single healthy frame counted as a dropped frame: the ratio pinned at
+ * 1.0, §61 degradation tripped after 4 s and could never clear (the 0.05
+ * recovery ratio is unreachable when the numerator is every frame), ω was cut
+ * 15%, the deadband doubled, styling dropped to 250 ms, and control was told
+ * the stage was dropping frames for the whole session. 4K@30 over HDMI is a
+ * real and cheap teleprompter monitor, not a corner case.
+ *
+ * A hitch is a MISSED REFRESH, which is only definable against the refresh the
+ * display actually has — so the live threshold comes from
+ * `createFrameIntervalEstimator` and this value is just the seed before enough
+ * frames have been seen to measure one.
+ */
 export const HITCH_THRESHOLD_MS = 28;
+
+/**
+ * A frame is a hitch when it took this many nominal periods or more. Halfway
+ * between "on time" (1 period) and "one refresh missed" (2 periods), so vsync
+ * jitter does not read as a drop and a genuinely missed refresh always does.
+ */
+export const HITCH_INTERVAL_RATIO = 1.5;
+
+/** Frames of history the nominal-period estimate is taken over. */
+const FRAME_INTERVAL_WINDOW = 60;
+/** How often the median is recomputed — every frame would be pure overhead. */
+const FRAME_INTERVAL_RECOMPUTE_EVERY = 15;
+/** Samples needed before the measured period is trusted over the seed. */
+const FRAME_INTERVAL_MIN_SAMPLES = 20;
+
+export interface FrameIntervalEstimator {
+  /** Feed one measured inter-frame delta. Returns the current hitch threshold. */
+  observe(dtMs: number): number;
+  /** Best estimate of the display's frame period, or null while unknown. */
+  readonly nominalMs: number | null;
+  readonly thresholdMs: number;
+  reset(): void;
+}
+
+/**
+ * Estimate the display's frame period from what the loop actually sees.
+ *
+ * The MEDIAN, not the mean: dropped frames, GC pauses, and hidden-window
+ * catch-ups are exactly the samples this must not be moved by, and they are
+ * always long. A median over a one-second window is unaffected by anything
+ * short of the majority of frames being late — at which point the stage is
+ * genuinely degraded and should say so.
+ */
+export function createFrameIntervalEstimator(
+  options: { windowSize?: number; ratio?: number; seedThresholdMs?: number } = {},
+): FrameIntervalEstimator {
+  const windowSize = options.windowSize ?? FRAME_INTERVAL_WINDOW;
+  const ratio = options.ratio ?? HITCH_INTERVAL_RATIO;
+  const seed = options.seedThresholdMs ?? HITCH_THRESHOLD_MS;
+  const samples: number[] = [];
+  let sinceRecompute = 0;
+  let nominal: number | null = null;
+  let threshold = seed;
+
+  function recompute() {
+    if (samples.length < FRAME_INTERVAL_MIN_SAMPLES) return;
+    const sorted = [...samples].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)] ?? seed;
+    nominal = median;
+    // Never tighter than the seed: a 120 Hz display would otherwise call an
+    // ordinary 60 Hz-equivalent frame a hitch, and the point of the metric is
+    // missed refreshes, not refresh rate.
+    threshold = Math.min(MAX_FRAME_DT_MS, Math.max(seed, median * ratio));
+  }
+
+  return {
+    get nominalMs() {
+      return nominal;
+    },
+    get thresholdMs() {
+      return threshold;
+    },
+    observe(dtMs) {
+      // A non-positive delta is the first frame or a repeated timestamp, and a
+      // multi-second one is a resumed window — neither describes the refresh.
+      if (dtMs > 0 && dtMs <= 1000) {
+        samples.push(dtMs);
+        if (samples.length > windowSize) samples.shift();
+        sinceRecompute++;
+        if (sinceRecompute >= FRAME_INTERVAL_RECOMPUTE_EVERY || nominal === null) {
+          sinceRecompute = 0;
+          recompute();
+        }
+      }
+      return threshold;
+    },
+    reset() {
+      samples.length = 0;
+      sinceRecompute = 0;
+      nominal = null;
+      threshold = seed;
+    },
+  };
+}
 
 const VELOCITY_EPSILON_PX_S = 4;
 /**
@@ -438,12 +538,17 @@ export function createJerkLimitedScrollController(
           }
         }
 
-        if (plant.v > vHi) {
+        // Did the plant BEGIN this sub-step outside the profile's own velocity
+        // limits? Only a profile that changed between frames can do that, and it
+        // decides whether the residual net below may act at all.
+        const startedAboveCeiling = plant.v > vHi;
+        const startedBelowFloor = plant.v < vLo;
+        if (startedAboveCeiling) {
           // Outside the profile's own velocity limit (a profile change between
           // frames). Brake as hard as the *other* edge still permits.
           aDesired = aLower;
           saturated = true;
-        } else if (plant.v < vLo) {
+        } else if (startedBelowFloor) {
           aDesired = aUpper;
           saturated = true;
         } else {
@@ -463,11 +568,31 @@ export function createJerkLimitedScrollController(
         plant.a = approach(plant.a, aDesired, limits.jerkMax * dt);
         let v = plant.v + plant.a * dt;
 
-        // Residual net for the profile's hard velocity limits. The discrete
-        // envelope above keeps this within a fraction of a px/s, but a profile
-        // that changes between frames can leave the plant outside its own new
-        // limits, and forward-only means forward-only.
-        const vNet = clamp(v, vLo, vHi);
+        /* Residual net for the profile's hard velocity limits.
+         *
+         * This is a net for DISCRETIZATION SLOP — the fraction of a px/s the
+         * jerk-aware envelope above can leave on the table — and nothing else.
+         * It used to be applied unconditionally, which quietly made it the
+         * mechanism for something entirely different: a profile that shrinks
+         * between frames leaves the plant *starting* the sub-step outside its
+         * own new limits, and clamping straight to the new ceiling is a
+         * one-sub-step velocity STEP. Measured on a stacked catch-up
+         * (2304 px/s) expiring into `following`: Δv −1404 px/s in 8 ms, a
+         * realized −175,500 px/s² against an aMax of 2600 and a jerk two orders
+         * of magnitude past `jerkMax` — and not flagged as a wall, so nothing in
+         * the suite could see it. The trigger is mundane (a `catch_up`
+         * transition hitting its 4 s timer), and the presenter sees a snag.
+         *
+         * A jerk-limited plant cannot honour a limit that moved underneath it in
+         * zero time, and pretending otherwise is the whole defect. The
+         * `startedAboveCeiling` / `startedBelowFloor` branches above already
+         * demand maximum braking toward the new limit; the net's job is to stay
+         * out of their way until they have brought the plant back inside, which
+         * they do smoothly in a few hundred ms.
+         */
+        const vCeiling = startedAboveCeiling ? Math.max(vHi, v) : vHi;
+        const vFloor = startedBelowFloor ? Math.min(vLo, v) : vLo;
+        const vNet = clamp(v, vFloor, vCeiling);
         if (vNet !== v) {
           v = vNet;
           saturated = true;

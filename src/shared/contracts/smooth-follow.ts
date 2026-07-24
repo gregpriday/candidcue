@@ -246,6 +246,19 @@ export interface SmoothFollowProfile {
     maxCoastUnits: number;
     leadSecondsMin: number;
     leadSecondsMax: number;
+    /**
+     * Fastest spoken-unit rate the stage will believe, units/s.
+     *
+     * A frame's `velocityUnitsPerSecond` is a claim about how fast a human is
+     * SPEAKING, and speech has a ceiling. Producers derive it by finite
+     * difference, so a position correction — a skipped paragraph, a retake, a
+     * command jump — divides a large unit delta by a small time delta and
+     * reports a pace no mouth can produce. That number is then extrapolated
+     * over the prediction horizon and becomes pixels.
+     */
+    maxUnitsPerSecond: number;
+    /** Fastest believable CHANGE of speaking rate, units/s². */
+    maxAccelerationUnitsPerSecond2: number;
   };
 
   alignment: {
@@ -294,6 +307,16 @@ export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
     maxCoastUnits: 0.9,
     leadSecondsMin: 0.15,
     leadSecondsMax: 0.6,
+    // Conversational delivery runs 130–160 wpm and a fast read tops out near
+    // 250 wpm; the fastest competitive speech ever recorded is about 640 wpm.
+    // A spoken unit is a weighted token, so 8 units/s ≈ 480 wpm — far above
+    // anything a presenter will ever do, and two orders of magnitude below the
+    // rates a finite-difference producer emits across a position correction.
+    maxUnitsPerSecond: 8,
+    // Reaching that ceiling from a standstill inside a third of a second is
+    // already faster than speech can change; anything above this is a
+    // measurement artefact, not a pace.
+    maxAccelerationUnitsPerSecond2: 24,
   },
 
   alignment: {

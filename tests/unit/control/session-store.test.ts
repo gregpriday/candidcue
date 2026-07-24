@@ -160,6 +160,36 @@ describe('live session store', () => {
       expect(get(session).estimatedCostUsd).toBe(0);
       expect(stopSession().estimatedCostUsd).toBe(0);
     });
+
+    /*
+     * §42.1: Luna sidecar spend is a SECOND figure, from a different
+     * subsystem with a different unit (tokens, not audio minutes) and a rate
+     * that is configured rather than published in the app. The trap this
+     * guards is reading the transcription number as "the OpenAI cost": the
+     * two must stay in separate fields and must never be summed.
+     */
+    it('keeps Luna spend separate from the transcription estimate', () => {
+      start();
+      startPrompting();
+      vi.advanceTimersByTime(600_000);
+
+      const live = get(session);
+      expect(live.estimatedCostUsd).toBeCloseTo((600 / 60) * RATE_USD_PER_MINUTE, 6);
+      // No sidecar in this mode: no requests, no tokens, and — critically —
+      // an UNKNOWN cost rather than a confident $0.00.
+      expect(live.semanticSpend.requests).toBe(0);
+      expect(live.semanticSpend.totalTokens).toBe(0);
+      expect(live.semanticSpend.estimatedCostUsd).toBeNull();
+      // The §42 default cap is in force until the user sets their own.
+      expect(live.semanticSpend.requestLimit).toBe(400);
+
+      const summary = stopSession();
+      expect(summary.estimatedCostUsd).toBe(0.17);
+      expect(summary.semanticCostUsd).toBeNull();
+      expect(summary.semanticRequests).toBe(0);
+      // Transcription is not silently inflated by (or folded into) Luna.
+      expect(summary.estimatedCostUsd).not.toBe(summary.semanticCostUsd);
+    });
   });
 
   it('does not manufacture a summary when there is no session to stop', () => {

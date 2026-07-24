@@ -16,12 +16,13 @@ import {
   shouldConsultLuna,
   validateCoachDecision,
   type CoachDecisionExpectation,
+  type CoachLiveContext,
   type CoachObserverResponse,
   type CoachRequestInput,
   type DecisionRejection,
 } from '../../../../src/shared/coaching/coach';
 import type { LunaCoachRequest } from '../../../../src/shared/contracts/coaching';
-import { EPOCH, TAKE, candidate, coachRequest, decision, liveState } from './fixtures';
+import { EPOCH, TAKE, candidate, coachRequest, decision, liveState, requestInput } from './fixtures';
 
 /* ---------------------------------------------------------------------------
  * §23.1
@@ -235,26 +236,6 @@ describe('§23.1 local response validation', () => {
  * §22
  * ------------------------------------------------------------------------- */
 
-function requestInput(overrides: Partial<CoachRequestInput> = {}): CoachRequestInput {
-  const template = coachRequest();
-  return {
-    sessionId: template.sessionId,
-    scriptId: template.scriptId,
-    scriptRevision: template.scriptRevision,
-    trackingEpoch: EPOCH,
-    takePassId: TAKE,
-    requestAudioTimeMs: 10_000,
-    language: 'en',
-    state: liveState(),
-    profile: template.profile,
-    authoredSpans: [],
-    speech: template.speech,
-    metrics: template.metrics,
-    candidates: [candidate()],
-    ...overrides,
-  };
-}
-
 describe('§22 request assembly', () => {
   it('sets validUntilAudioTimeMs so a late answer is discarded, not applied', () => {
     const request = buildCoachRequest(requestInput());
@@ -339,15 +320,39 @@ describe('§20.2 when to consult Luna', () => {
     expect(shouldConsultLuna([candidate({ type: 'low_variety' })])).toBe(false);
   });
 
-  it('calls when semantic judgement or arbitration is actually needed', () => {
+  it('calls when semantic judgement is actually needed', () => {
     expect(shouldConsultLuna([candidate({ type: 'contextual_filler' })])).toBe(true);
     expect(shouldConsultLuna([candidate({ type: 'material_meaning_change' })])).toBe(true);
+    // A judgement-needing candidate in company still calls.
+    expect(
+      shouldConsultLuna([
+        candidate({ evidenceId: 'a', type: 'pace_too_fast' }),
+        candidate({ evidenceId: 'b', type: 'contextual_filler' }),
+      ]),
+    ).toBe(true);
+  });
+
+  /**
+   * §20.2 forbids calling to compute WPM or to notice that pitch moved. The
+   * "multiple candidates compete" clause short-circuited before the
+   * judgement test, so a pace candidate and a variety candidate landing in the
+   * same window — a common coincidence, and two things the model is explicitly
+   * not allowed an opinion about — became a billable call to rank them.
+   */
+  it('does not call to arbitrate between two purely local candidates', () => {
     expect(
       shouldConsultLuna([
         candidate({ evidenceId: 'a', type: 'pace_too_fast' }),
         candidate({ evidenceId: 'b', type: 'low_variety' }),
       ]),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      shouldConsultLuna([
+        candidate({ evidenceId: 'a', type: 'terminal_rush' }),
+        candidate({ evidenceId: 'b', type: 'filler_cluster' }),
+        candidate({ evidenceId: 'c', type: 'run_on_delivery' }),
+      ]),
+    ).toBe(false);
   });
 });
 
@@ -355,16 +360,33 @@ describe('§20.2 when to consult Luna', () => {
  * §20.3 / §23.2
  * ------------------------------------------------------------------------- */
 
+/**
+ * The observer reads the clock, the epoch and the take pass through
+ * `liveContext` at *apply* time, so a test drives staleness by moving this
+ * object between issuing a request and resolving it — which is exactly what
+ * the app does when a re-anchor lands while a request is in flight.
+ */
+function liveClock(overrides: Partial<CoachLiveContext> = {}) {
+  return {
+    audioTimeMs: 0,
+    trackingEpoch: EPOCH,
+    takePassId: TAKE,
+    ...overrides,
+  } as CoachLiveContext & { audioTimeMs: number; trackingEpoch: number; takePassId: string };
+}
+
 function observerWith(
   classify: (request: LunaCoachRequest) => Promise<CoachObserverResponse>,
   deps: Partial<ConstructorParameters<typeof LunaCoachObserver>[0]> = {},
 ) {
   const cancel = vi.fn();
+  const live = liveClock();
   const observer = new LunaCoachObserver({
     transport: { classify, cancel },
+    liveContext: () => live,
     ...deps,
   });
-  return { observer, cancel };
+  return { observer, cancel, live };
 }
 
 describe('§20.3 scheduling', () => {

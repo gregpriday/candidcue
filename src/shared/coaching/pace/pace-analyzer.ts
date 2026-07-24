@@ -599,6 +599,9 @@ export class PaceAnalyzer {
       localConfidence: Math.min(1, Math.max(0, confidence)),
       stamp: createEvidenceStamp(startMs, endMs, context),
       scriptSpanId,
+      // Pace is a continuous measurement over a span, not a token.
+      scriptAnchorTokenId: null,
+      contributingEventIds: [],
       detailCode: extra.detailCode,
       spokenFragment: '',
       authoredFragment: '',

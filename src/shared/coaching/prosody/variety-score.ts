@@ -188,6 +188,17 @@ export interface VarietyProfile {
   highTipEnabled: boolean;
   /** §17.10 the tip is only allowed for a restrained style. */
   restrainedStyle: boolean;
+  /**
+   * §25.6 `POSITIVE_VARIETY`. Off by default, like every positive tip.
+   *
+   * §25.6 authors the copy ("Nice vocal balance") and the catalog prices it at
+   * a 60 s cooldown and a 20 s persistence requirement — but §24 defined no
+   * candidate type, so nothing could ever produce it. The type exists now, and
+   * this is its producer.
+   */
+  positiveTipEnabled: boolean;
+  /** §25.6 how long the level must sit inside the band first, ms. */
+  positiveTipSustainMs: number;
 }
 
 export const DEFAULT_VARIETY_PROFILE: VarietyProfile = {
@@ -208,6 +219,10 @@ export const DEFAULT_VARIETY_PROFILE: VarietyProfile = {
   highTipExtremeNorm: 0.8,
   highTipEnabled: false,
   restrainedStyle: false,
+  positiveTipEnabled: false,
+  // Matches `POSITIVE_VARIETY.requiredPersistenceMs` in the catalog: a tip
+  // scored on persistence it does not actually have would always score 0.
+  positiveTipSustainMs: 20_000,
 };
 
 const RESTRAINED_STYLES: ReadonlySet<DeliveryStyle> = new Set<DeliveryStyle>(['calm', 'broadcast']);
@@ -287,8 +302,11 @@ export class VarietyAnalyzer {
   private pendingSinceMs: number | null = null;
 
   private aboveHighSinceMs: number | null = null;
+  private inBandSinceMs: number | null = null;
+  private leftBandThisTake = false;
   private lastLowTipMs: number | null = null;
   private lastHighTipMs: number | null = null;
+  private lastPositiveTipMs: number | null = null;
   private candidateSequence = 0;
 
   constructor(options: { style?: DeliveryStyle; profile?: Partial<VarietyProfile> } = {}) {
@@ -308,6 +326,9 @@ export class VarietyAnalyzer {
     this.pendingRank = null;
     this.pendingSinceMs = null;
     this.aboveHighSinceMs = null;
+    this.inBandSinceMs = null;
+    this.leftBandThisTake = false;
+    this.lastPositiveTipMs = null;
   }
 
   update(input: VarietyUpdateInput): VarietyAnalyzerResult {
@@ -603,11 +624,49 @@ export class VarietyAnalyzer {
       );
     }
 
+    // §25.6 positive reinforcement. Tracked unconditionally so that enabling
+    // the tip mid-take does not have to wait for the window to restart.
+    const inBand = level >= this.profile.targetLow && level <= this.profile.targetHigh;
+    if (inBand) {
+      this.inBandSinceMs = this.inBandSinceMs ?? nowMs;
+    } else {
+      this.inBandSinceMs = null;
+      // §2.5 / §25.6: "more variety is not better", and neither is telling
+      // someone they are doing well before they have done anything. A positive
+      // tip only means something once the take has been outside the band.
+      if (this.state !== 'learning' && this.state !== 'low_confidence') {
+        this.leftBandThisTake = true;
+      }
+    }
+
+    if (
+      !blocked &&
+      this.profile.positiveTipEnabled &&
+      this.leftBandThisTake &&
+      this.state === 'balanced' &&
+      this.inBandSinceMs !== null &&
+      nowMs - this.inBandSinceMs >= this.profile.positiveTipSustainMs &&
+      input.reliability.usable &&
+      this.cooledDown(this.lastPositiveTipMs, nowMs)
+    ) {
+      this.lastPositiveTipMs = nowMs;
+      out.push(
+        this.candidate(
+          'positive_variety',
+          this.inBandSinceMs,
+          nowMs,
+          input,
+          confidence,
+          finalEvidence,
+        ),
+      );
+    }
+
     return out;
   }
 
   private candidate(
-    type: 'low_variety' | 'high_variety',
+    type: 'low_variety' | 'high_variety' | 'positive_variety',
     startMs: number,
     endMs: number,
     input: VarietyUpdateInput,
@@ -621,6 +680,8 @@ export class VarietyAnalyzer {
       localConfidence: clamp01(confidence),
       stamp: createEvidenceStamp(startMs, endMs, input.context),
       scriptSpanId: input.scriptSpanId ?? null,
+      scriptAnchorTokenId: null,
+      contributingEventIds: [],
       detailCode: this.state,
       spokenFragment: '',
       authoredFragment: '',

@@ -70,6 +70,14 @@ export {
 } from './microphone-health';
 
 export {
+  activeMicrophoneConditions,
+  MicrophoneCandidateSource,
+  type MicrophoneCandidateContext,
+  type MicrophoneCandidateOptions,
+  type MicrophoneCandidateType,
+} from './mic-candidates';
+
+export {
   COACHING_WORKLET_PROCESSOR,
   WorkletAudioCore,
   type CoachingWorkletCommand,

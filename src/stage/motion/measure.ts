@@ -260,6 +260,60 @@ export function sameLayout(a: LayoutFingerprint | null, b: LayoutFingerprint | n
 }
 
 /**
+ * Largest scroll disagreement, in px, between two maps over the spoken-unit
+ * range they BOTH cover — or `Infinity` when they cannot be compared.
+ *
+ * `sameLayout()` answers "should the geometry have changed?" from the declared
+ * inputs. This answers "did it?" from the measurements, and the two are not the
+ * same question. Three known ways they diverge, all of which move glyphs with an
+ * identical fingerprint:
+ *
+ *  - a FONT FILE swapped under the same family id. `fontFamily` is a settings
+ *    string, so every advance width and every line break can change without one
+ *    fingerprint field moving. (`fontHash` exists in the §7.2 contract for this
+ *    and no renderer has ever populated it.)
+ *  - a VIRTUALIZED height ESTIMATE corrected by a real measurement. Every block
+ *    after it shifts, under a scroll transform that did not move.
+ *  - anything nobody has thought of yet, which is the point: a predicted check
+ *    can only cover the causes someone enumerated, and this one covers the
+ *    effect.
+ *
+ * Comparing over the common range matters: a coverage-only rebuild legitimately
+ * gains knots at the ends, and a newly measured region is not a disagreement.
+ */
+export function maxPathDisagreementPx(
+  a: { motionKnots: readonly { spokenUnit: number }[]; sampleMotionPath(u: number): { scrollPx: number } | null } | null,
+  b: { motionKnots: readonly { spokenUnit: number }[]; sampleMotionPath(u: number): { scrollPx: number } | null } | null,
+  samples = 24,
+): number {
+  if (!a || !b) return Number.POSITIVE_INFINITY;
+  const aFirst = a.motionKnots[0]?.spokenUnit;
+  const aLast = a.motionKnots[a.motionKnots.length - 1]?.spokenUnit;
+  const bFirst = b.motionKnots[0]?.spokenUnit;
+  const bLast = b.motionKnots[b.motionKnots.length - 1]?.spokenUnit;
+  if (
+    aFirst === undefined ||
+    aLast === undefined ||
+    bFirst === undefined ||
+    bLast === undefined
+  ) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const from = Math.max(aFirst, bFirst);
+  const to = Math.min(aLast, bLast);
+  if (!(to > from)) return 0;
+  let worst = 0;
+  for (let i = 0; i <= samples; i++) {
+    const unit = from + ((to - from) * i) / samples;
+    const sa = a.sampleMotionPath(unit);
+    const sb = b.sampleMotionPath(unit);
+    if (!sa || !sb) continue;
+    worst = Math.max(worst, Math.abs(sa.scrollPx - sb.scrollPx));
+  }
+  return worst;
+}
+
+/**
  * Resolve once fonts and layout-affecting assets are final (§7.1). Images that
  * are still loading change line positions, so the map must wait for them.
  */

@@ -200,6 +200,13 @@ pub enum CriticalMismatch {
     Negation,
     Number,
     Name,
+    /// A different unit of the same dimension was spoken (milliseconds read as
+    /// seconds). Must stay in lockstep with `classification_schema()`'s enum
+    /// above and with `CriticalMismatch` in `src/shared/semantic/types.ts`: a
+    /// value the schema advertises but this enum lacks makes a *schema-valid*
+    /// response fail `parse_structured` and be discarded as `out_of_schema` —
+    /// a paid model call thrown away, silently, for a critical mismatch.
+    Unit,
     MeaningChange,
     OmittedClause,
     Uncertain,
@@ -591,6 +598,51 @@ mod tests {
     #[test]
     fn accepts_a_well_formed_classification() {
         assert!(validate_classification(&good_result(), &classification_request()).is_ok());
+    }
+
+    /// Every enum the strict schema advertises must actually deserialize.
+    ///
+    /// The schema is what the model is *told* it may return; these enums are
+    /// what we can *accept*. When they drift apart the failure is silent and
+    /// expensive: the model answers correctly, `parse_structured` rejects it as
+    /// `out_of_schema`, and a paid call is discarded. That is exactly what
+    /// happened when `"unit"` was added to the schema and to the TypeScript
+    /// type but not to `CriticalMismatch` — so the highest-severity mismatch
+    /// class was the one being thrown away.
+    ///
+    /// This walks the schema itself rather than a hand-written list, so a value
+    /// added there is covered without anyone remembering to update a test.
+    #[test]
+    fn every_schema_enum_value_deserializes() {
+        let schema = classification_schema();
+        let properties = schema["properties"]
+            .as_object()
+            .expect("schema exposes properties");
+
+        let mut checked = 0usize;
+        for (field, spec) in properties {
+            let Some(values) = spec.get("enum").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            for value in values {
+                let mut result = serde_json::to_value(good_result()).expect("serializes");
+                result[field] = value.clone();
+                let envelope = json!({ "output_text": result.to_string() });
+                assert!(
+                    parse_structured::<SemanticAssistResult>(&envelope).is_ok(),
+                    "schema advertises {field} = {value} but the Rust enum cannot accept it, \
+                     so a schema-valid model response would be discarded as out_of_schema",
+                );
+                checked += 1;
+            }
+        }
+
+        // Guard on the guard: if the schema shape changes so that no enum is
+        // found, this test would pass vacuously and stop protecting anything.
+        assert!(
+            checked >= 20,
+            "expected to exercise the schema's enum values, only checked {checked}",
+        );
     }
 
     #[test]

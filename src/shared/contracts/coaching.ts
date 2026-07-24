@@ -44,7 +44,10 @@
  *   FillerEvent, FillerDisplayState                       → coaching/disfluency
  *   ScriptProgress                                        → tracking engine
  *   CoachCandidate  → coaching/{pace,prosody,disfluency,fidelity,audio}
- *   CoachRibbonEvent, CoachGutterMark                     → coaching/coach
+ *     …the `system_*` types specifically  → coaching/audio/mic-candidates
+ *     …`positive_variety`                 → coaching/prosody/variety-score
+ *   CoachRibbonEvent  → coaching/coach/ribbon
+ *   CoachGutterMark   → coaching/coach/gutter-marks
  *   CoachRailTip, CoachRailState, CoachRailModules        → coaching/coach
  *   LunaCoachRequest/Decision                             → coaching/coach
  *   CoachDiagnostics                                      → coaching/coach
@@ -439,6 +442,15 @@ export type CoachCandidateType =
   | 'system_mic_low'
   | 'system_noise_high'
   | 'system_transcription_degraded'
+  /**
+   * §25.1 lists `MIC_DISCONNECTED` as a critical persistent alert with authored
+   * copy, so the rail is required to be able to say it. §24 forgot to give it a
+   * candidate type, which made the code unreachable by construction — the same
+   * shape of gap as an alert whose only input was a hard-coded empty array.
+   * Device loss may *also* reach the user through the app's system-notice path
+   * (§6.1); that is not a reason for the rail to stay silent.
+   */
+  | 'system_mic_disconnected'
   | 'critical_number_mismatch'
   | 'critical_name_mismatch'
   | 'critical_unit_mismatch'
@@ -457,7 +469,9 @@ export type CoachCandidateType =
   | 'repetitive_opener'
   | 'repeated_stumble'
   | 'positive_pace'
-  | 'positive_filler_streak';
+  | 'positive_filler_streak'
+  /** §25.6 authors `POSITIVE_VARIETY` copy; §24 omitted the candidate type. */
+  | 'positive_variety';
 
 /**
  * §24 priority bands. Higher wins. These are *band floors*: the scheduler may

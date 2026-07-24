@@ -217,6 +217,8 @@ export class TerminalRushAnalyzer {
       localConfidence: clamp01(0.5 + 0.3 * excess + 0.2 * coverage) * sentence.confidence,
       stamp: createEvidenceStamp(startMs, measurement.endMs, context),
       scriptSpanId: sentence.scriptSpanId,
+      scriptAnchorTokenId: null,
+      contributingEventIds: [],
       detailCode: `ratio_${measurement.ratio.toFixed(2)}`,
       spokenFragment: '',
       authoredFragment: '',

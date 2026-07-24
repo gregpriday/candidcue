@@ -28,6 +28,13 @@
   import * as stageService from '../services/stage';
   import { buildStageEnvelope, buildStageSettings, resolveDocumentAssets } from '../services/stage-envelope';
   import {
+    applyProfileToStageOverrides,
+    buildDisplayProfile,
+    listDisplayProfiles,
+    profileForDisplay,
+    saveDisplayProfile,
+  } from '../services/display-profiles';
+  import {
     buildListenerSelection,
     listInstalledListeners,
     resolveListenerMedia,
@@ -70,6 +77,8 @@
   /* -------------------------------------------------------------- stage */
   let displays = $state<DisplayDescriptor[]>([]);
   let selectedFingerprint = $state<string | null>(null);
+  /** §52: the profile this display's appearance was restored from, so saving updates it rather than accumulating duplicates. */
+  let rememberedProfileId = $state<string | null>(null);
   let stageValidated = $state(false);
   let stageTesting = $state(false);
   /*
@@ -269,6 +278,7 @@
         // effect: on a retry the fingerprint is usually unchanged, so the
         // effect would not re-run and the row would sit at "Opening…" again.
         stageCheckedFingerprint = fingerprint;
+        await restoreDisplayProfile(fingerprint);
         await validateStageDisplay(fingerprint);
       },
       onFailure: (err) => {
@@ -453,6 +463,53 @@
     stageValidated = false;
     stageError = null;
     updatePreflight({ stage: 'idle' });
+    void restoreDisplayProfile(fingerprint);
+  }
+
+  /**
+   * Spec §52. Re-apply the appearance this display was last used with.
+   *
+   * Without this, every session began by re-positioning the Listener and
+   * re-setting type from scratch — the settings were saved and then read by
+   * nothing. Matching is by display fingerprint only: a profile with no
+   * fingerprint is never auto-applied, because silently restyling the stage
+   * for the *wrong* monitor is worse than not restoring at all.
+   *
+   * Failure is deliberately silent. A remembered preference is a convenience,
+   * and not being able to read one must never block getting to a take.
+   */
+  async function restoreDisplayProfile(fingerprint: string): Promise<void> {
+    try {
+      const profile = profileForDisplay(await listDisplayProfiles(), fingerprint);
+      if (profile === null) {
+        rememberedProfileId = null;
+        return;
+      }
+      rememberedProfileId = profile.id;
+      const stage = applyProfileToStageOverrides(profile.stage);
+      fontFamilyId = stage.fontFamilyId;
+      fontSizePx = stage.fontSizePx;
+      lineHeight = stage.lineHeight;
+      columnWidthPercent = stage.columnWidthPercent;
+      readingBandCenterPercent = stage.readingBandCenterPercent;
+      mirrorX = stage.mirrorX;
+      mirrorY = stage.mirrorY;
+      pastDimming = stage.pastDimming;
+      phraseHighlight = stage.phraseHighlight;
+      stageBackground = stage.background === '#000000' ? 'high-contrast' : 'near-black';
+      if (profile.listener) {
+        // The profile stores the resolved geometry; these controls hold the
+        // percent-scale inputs `buildListenerSelection` converts from, so the
+        // conversion is inverted here rather than storing a second copy.
+        listenerScale = Math.round(profile.listener.cropZoom * 100);
+        listenerX = profile.listener.cropX;
+        listenerY = profile.listener.cropY;
+        listenerDim = Math.round((1 - profile.listener.opacity) * 100);
+        listenerBlur = profile.listener.blurPx;
+      }
+    } catch {
+      rememberedProfileId = null;
+    }
   }
 
   /**
@@ -757,6 +814,28 @@
         phraseHighlight,
         background: stageBackground === 'high-contrast' ? '#000000' : '#050505',
       });
+
+      // Spec §52: remember this appearance for this display. Fire-and-forget
+      // with an explicit catch — a preference that fails to save must never
+      // stop a take from starting.
+      const profileFingerprint = selectedFingerprint;
+      if (profileFingerprint !== null) {
+        void saveDisplayProfile(
+          buildDisplayProfile(
+            display?.name ?? 'Stage display',
+            profileFingerprint,
+            stageSettings,
+            listener?.geometry,
+            rememberedProfileId ?? undefined,
+          ),
+        )
+          .then((saved) => {
+            rememberedProfileId = saved.id;
+          })
+          .catch(() => {
+            /* remembered settings are a convenience, never a gate */
+          });
+      }
 
       // 1. Open the stage hidden on the chosen display.
       const opened = await stageService.openStage({

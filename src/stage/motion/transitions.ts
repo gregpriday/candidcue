@@ -40,6 +40,15 @@ export interface StageTransitionController {
    * this token is the only licence the frame loop has to write plant state.
    */
   consumePlantOverwrite(): StageTransitionDirective | null;
+  /**
+   * Hand an UNSPENT licence back (§62). The frame loop consumes the licence
+   * before it knows whether it can resolve a destination — with no line map
+   * there is nowhere to re-anchor to — and completing the directive anyway
+   * destroys it: directives are idempotent by `id`, so every re-sent copy is
+   * `duplicate`-ignored and the authorized discontinuity is lost for good.
+   * Parking it here keeps it valid until the map resolves or it expires.
+   */
+  deferPlantOverwrite(directive: StageTransitionDirective): void;
   /** Mark the active transition finished (arrived at destination). */
   complete(id: string): void;
   reset(): void;
@@ -156,6 +165,14 @@ export function createStageTransitionController(
       if (!directive) return null;
       if (!active || active.directive.id !== directive.id) return null;
       return directive;
+    },
+
+    deferPlantOverwrite(directive) {
+      // Only while it is still the active transition — the same rule
+      // `consumePlantOverwrite` applies. A licence that outlived its directive
+      // is a stale re-anchor waiting to teleport the plant.
+      if (!active || active.directive.id !== directive.id) return;
+      pendingOverwrite = directive;
     },
 
     complete(id) {

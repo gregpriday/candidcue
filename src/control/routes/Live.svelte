@@ -22,6 +22,7 @@
   import {
     addTakeMarker,
     adjustStageFontSize,
+    chooseAnotherListenerClip,
     clearSession,
     connectionPill,
     goToToken,
@@ -31,7 +32,9 @@
     pauseListening,
     restartParagraph,
     resumeSession,
+    retryListenerMedia,
     session,
+    setSemanticRequestLimit,
     startPrompting,
     stopSession,
     toggleBlankStage,
@@ -39,6 +42,9 @@
     togglePlayPause,
     toggleStageMirror,
     toggleVoiceFollow,
+    turnOffListenerForSession,
+    useListenerPoster,
+    type ListenerFault,
   } from '../stores/session';
   import { settings } from '../stores/settings';
   import { smoothFollow, type FollowNotice } from '../stores/smooth-follow';
@@ -88,9 +94,88 @@
     }));
   });
 
+  /*
+   * Two costs, never one number (§35.1 + §42.1).
+   *
+   * `estimatedCostUsd` is realtime TRANSCRIPTION: per connected audio minute,
+   * metered by the voice pipeline. `semanticSpend` is the Luna sidecar: per
+   * million tokens, metered by the scheduler. They come from different
+   * subsystems with different units and different rates, and a user paying
+   * with their own key needs to see which one is spending their money. Summing
+   * them would produce a figure that describes neither.
+   */
   // Same source as the F.17 summary — the two used to disagree by an order of
   // magnitude for the same take.
   const estimatedCost = $derived($session.estimatedCostUsd.toFixed(2));
+  const spend = $derived($session.semanticSpend);
+  const lunaTokens = $derived(spend.inputTokens + spend.outputTokens);
+
+  /** Draft value for the §42.1 request cap; blank means "use the default". */
+  let requestLimitDraft = $state('');
+  let requestLimitTouched = $state(false);
+  $effect(() => {
+    const saved = $settings.following.semanticRequestLimit;
+    if (!requestLimitTouched) requestLimitDraft = saved === null ? '' : String(saved);
+  });
+
+  function commitRequestLimit(): void {
+    const raw = requestLimitDraft.trim();
+    if (raw === '') {
+      setSemanticRequestLimit(null);
+      requestLimitTouched = false;
+      return;
+    }
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 1) return;
+    setSemanticRequestLimit(Math.floor(parsed));
+    requestLimitTouched = false;
+  }
+
+  /**
+   * A cost with no configured rate is reported as unknown, never as `$0.00`.
+   * Sub-cent amounts keep four places for the same reason: this sidecar is
+   * usually cheap, and rounding "cheap" to "free" is the lie that makes a
+   * spend readout worthless.
+   */
+  function formatLunaCost(usd: number | null): string {
+    if (usd === null) return 'Not priced';
+    if (usd > 0 && usd < 0.01) return `$${usd.toFixed(4)}`;
+    return `$${usd.toFixed(2)}`;
+  }
+
+  /* --- §40.5 Listener media failure ------------------------------------- */
+
+  function listenerFaultTitle(fault: ListenerFault): string {
+    switch (fault.resolution) {
+      case 'off':
+        return 'Listener off for the rest of this session';
+      case 'poster':
+        return 'Listener is showing its still image';
+      case 'retrying':
+        return 'Reloading the Listener…';
+      default:
+        return 'The Listener video stopped';
+    }
+  }
+
+  function listenerFaultCause(fault: ListenerFault): string {
+    switch (fault.code) {
+      case 'unsupported_codec':
+        return 'This clip’s format is not supported on this machine.';
+      case 'source_unavailable':
+        return 'The clip file could not be read.';
+      case 'decode_failure':
+        return 'The video failed to decode.';
+      default:
+        return 'Playback was refused and did not recover.';
+    }
+  }
+
+  function chooseAnotherListener(): void {
+    if (!chooseAnotherListenerClip()) {
+      showToast('No other clip in this pack to try.', 'info');
+    }
+  }
 
   const currentSectionTitle = $derived(
     currentSectionIndex >= 0 ? (flatOutline[currentSectionIndex]?.node.title ?? null) : null,
@@ -259,9 +344,49 @@
         <IconButton icon="info" label="Estimated session cost" active={costOpen} onclick={() => (costOpen = !costOpen)} />
         {#if costOpen}
           <div class="cost-pop">
-            <p class="cost-line">Estimated OpenAI transcription cost</p>
-            <p class="cost-value">≈ ${estimatedCost}</p>
-            <p class="cost-note">An estimate based on elapsed realtime minutes. Rates can change.</p>
+            <div class="cost-group">
+              <p class="cost-line">Realtime transcription</p>
+              <p class="cost-value">≈ ${estimatedCost}</p>
+              <p class="cost-note">
+                Estimated from connected realtime minutes. Rates can change.
+              </p>
+            </div>
+
+            <div class="cost-group">
+              <p class="cost-line">Luna assist</p>
+              <p class="cost-value" class:unpriced={spend.estimatedCostUsd === null}>
+                {formatLunaCost(spend.estimatedCostUsd)}
+              </p>
+              <p class="cost-note">
+                {spend.requests} of {spend.requestLimit} requests · {lunaTokens.toLocaleString()} tokens
+                {#if spend.cachedInputTokens > 0}
+                  ({spend.cachedInputTokens.toLocaleString()} cached){/if}
+              </p>
+              {#if spend.estimatedCostUsd === null}
+                <p class="cost-note">
+                  No verified token price is configured, so CandidCue will not put a figure on
+                  this. The request and token counts above are real.
+                </p>
+              {/if}
+              {#if spend.availability === 'budget_exhausted'}
+                <p class="cost-note">Assist has stopped for this session: the limit was reached.</p>
+              {/if}
+              <label class="cost-budget">
+                <span>Request limit this session</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  inputmode="numeric"
+                  placeholder="400"
+                  bind:value={requestLimitDraft}
+                  oninput={() => (requestLimitTouched = true)}
+                  onchange={() => commitRequestLimit()}
+                  onblur={() => commitRequestLimit()}
+                />
+              </label>
+              <p class="cost-note">Leave blank to use the default cap.</p>
+            </div>
           </div>
         {/if}
       </div>
@@ -350,6 +475,40 @@
       {/if}
 
       <p class="region-label">Stage</p>
+      <!--
+        §40.5 Listener failure containment. The stage reports a nonfatal media
+        failure; this is where the operator gets the four recoveries. None of
+        them touches the script, the scroll, or the tracking cursor — a video
+        that stopped decoding is a cosmetic problem, and the take continues
+        through all of it.
+      -->
+      {#if $session.listenerFault}
+        {@const fault = $session.listenerFault}
+        <div class="listener-fault" data-resolution={fault.resolution} role="status">
+          <p class="lf-title">{listenerFaultTitle(fault)}</p>
+          <p class="lf-note">
+            {listenerFaultCause(fault)} Your script, position and scrolling are unaffected.
+          </p>
+          {#if fault.resolution !== 'off'}
+            <div class="lf-actions">
+              <Button size="sm" disabled={!stageAlive} onclick={() => retryListenerMedia()}>
+                Retry
+              </Button>
+              {#if fault.resolution !== 'poster'}
+                <Button size="sm" onclick={() => useListenerPoster()}>Use poster</Button>
+              {/if}
+              <Button
+                size="sm"
+                disabled={!stageAlive || fault.alternativeClips === 0}
+                onclick={() => chooseAnotherListener()}
+              >
+                Choose another
+              </Button>
+              <Button size="sm" onclick={() => turnOffListenerForSession()}>Turn off</Button>
+            </div>
+          {/if}
+        </div>
+      {/if}
       <div class="quick-controls">
         <div class="font-row">
           <IconButton
@@ -496,8 +655,14 @@
       <dd>{summary.reconnects}</dd>
       <dt>Ending location</dt>
       <dd>{summary.endingLocation}</dd>
-      <dt>OpenAI cost</dt>
+      <dt>Transcription cost</dt>
       <dd>≈ ${summary.estimatedCostUsd.toFixed(2)} (estimate)</dd>
+      <!-- Its own line: a different subsystem, a different rate (§42.1). -->
+      <dt>Luna assist</dt>
+      <dd>
+        {summary.semanticRequests} requests · {formatLunaCost(summary.semanticCostUsd)}
+        {#if summary.semanticCostUsd === null}(no rate configured){/if}
+      </dd>
       <dt>Transcript</dt>
       <dd>Not saved</dd>
     </dl>
@@ -603,6 +768,86 @@
     font-size: var(--text-2xs);
     color: var(--text-muted);
     line-height: 1.4;
+  }
+  /* Two costs, visibly two things: a plain separator between the groups, not
+     a border on either box. */
+  .cost-group + .cost-group {
+    margin-top: var(--space-3);
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--border);
+  }
+  .cost-value.unpriced {
+    font-size: var(--text-base);
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+  .cost-budget {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin: var(--space-2) 0 var(--space-1);
+    font-size: var(--text-2xs);
+    color: var(--text-secondary);
+  }
+  .cost-budget input {
+    width: 72px;
+    padding: 3px var(--space-2);
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+    color: var(--text-primary);
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  /* Quiet focus: a background/border shift, never an accent ring. */
+  .cost-budget input:focus-visible {
+    outline: none;
+    background: var(--bg-elevated);
+    border-color: var(--border-strong);
+  }
+
+  /* --- §40.5 Listener failure --- */
+  .listener-fault {
+    position: relative;
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+  }
+  /* Leading rule as an inset bar — never a one-sided border on a rounded box. */
+  .listener-fault::before {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: var(--space-3);
+    bottom: var(--space-3);
+    width: 3px;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+  }
+  .listener-fault[data-resolution='off']::before,
+  .listener-fault[data-resolution='poster']::before {
+    background: var(--text-faint);
+  }
+  .lf-title {
+    margin: 0 0 2px;
+    font-size: var(--text-xs);
+    font-weight: 650;
+    color: var(--text-primary);
+  }
+  .lf-note {
+    margin: 0;
+    font-size: var(--text-2xs);
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+  .lf-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    margin-top: var(--space-2);
   }
 
   /* --- main regions --- */

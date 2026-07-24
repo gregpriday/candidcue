@@ -1,0 +1,71 @@
+{
+  "_comment": [
+    "Vocabulary analysis and the model capability registry (spec §26.5, §27.8,",
+    "Appendix E.6). Read by BOTH sides:",
+    "  - tests/unit/control/vocabulary-ipc-contract.test.ts asserts the real",
+    "    wrappers in src/control/services/{vocabulary,capabilities}.ts emit and",
+    "    read these shapes;",
+    "  - src-tauri/tests/ipc_contract_tests.rs asserts the Rust DTOs do.",
+    "TWO casings live here on purpose. Command arguments and ModelCapabilities",
+    "are camelCase (Tauri/serde rename_all). VocabularyTerm is snake_case,",
+    "because it is the strict response schema of Appendix E.6 and the Rust",
+    "struct carries no rename attribute. Getting either wrong reads as",
+    "undefined on the other side."
+  ],
+  "analyze_vocabulary": {
+    "request": {
+      "language": "en",
+      "candidates": [
+        {
+          "surface": "CandidCue",
+          "contexts": ["Welcome to CandidCue, the teleprompter that listens."]
+        },
+        { "surface": "SiteOrigin", "contexts": ["Built by SiteOrigin in Cape Town."] }
+      ]
+    }
+  },
+  "_options_are_flattened_comment": [
+    "SemanticRequestOptions is #[serde(flatten)]ed into VocabularyRequest, so",
+    "timeoutMs and friends sit at the TOP level of `request` — nesting them",
+    "under `options` would silently apply neither."
+  ],
+  "analyze_vocabulary_with_options": {
+    "request": {
+      "language": "en",
+      "candidates": [{ "surface": "CandidCue", "contexts": [] }],
+      "timeoutMs": 45000,
+      "reasoningEffort": "low",
+      "maxOutputTokens": 2048
+    }
+  },
+  "expectedVocabularyTerm": {
+    "surface": "CandidCue",
+    "canonical_spoken": "Candid Cue",
+    "aliases": ["candy cue", "candid q"],
+    "category": "brand",
+    "importance": 0.96,
+    "case_sensitive": true,
+    "notes": "Application name"
+  },
+  "expectedModelCapabilities": {
+    "realtimeModel": "gpt-realtime-whisper",
+    "commandModel": "gpt-5.6-luna",
+    "realtimePromptSteering": false,
+    "realtimeLogprobs": true,
+    "supportedDelayLevels": ["minimal", "low", "medium", "high"],
+    "supportsClientSecretForTranscription": true,
+    "commandStructuredOutputs": true,
+    "semanticModel": "gpt-5.6-luna",
+    "semanticStructuredOutputs": true,
+    "semanticReasoningEfforts": ["none", "minimal", "low"],
+    "semanticDefaultReasoningEffort": "low",
+    "semanticSupportsPromptCacheKey": true,
+    "promptCacheMinTokens": 1024,
+    "semanticDefaultMaxOutputTokens": 320,
+    "semanticDefaultTimeoutMs": 2500,
+    "semanticInputPricePerMtok": null,
+    "semanticCachedInputPricePerMtok": null,
+    "semanticOutputPricePerMtok": null,
+    "registryVersion": 2
+  }
+}

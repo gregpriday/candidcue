@@ -21,8 +21,24 @@
   import * as inserts from '../lib/markdown-insert';
   import { onShortcut } from '../lib/shortcuts';
   import * as assetsService from '../services/assets';
+  import {
+    getModelCapabilities,
+    supportsVocabularyAnalysis,
+    UNKNOWN_CAPABILITIES,
+    type ModelCapabilities,
+  } from '../services/capabilities';
   import { describeError } from '../services/errors';
   import * as scriptsService from '../services/scripts';
+  import {
+    analyzeVocabulary,
+    buildVocabularyRequest,
+    cacheAnalysis,
+    cachedAnalysis,
+    vocabularyRows,
+    type VocabularyAnalysis,
+  } from '../services/vocabulary';
+  import { extractVocabularyCandidates } from '../../shared/markdown/vocabulary';
+  import { settings } from '../stores/settings';
   import { compiled } from '../stores/compiled';
   import { requestConfirm } from '../stores/confirm';
   import {
@@ -89,6 +105,78 @@
   );
   const wordCount = $derived(result?.spokenWordCount ?? 0);
   const durationSeconds = $derived(estimateDurationSeconds(wordCount));
+
+  /* --- §26 script vocabulary ------------------------------------------- */
+
+  let capabilities = $state<ModelCapabilities>(UNKNOWN_CAPABILITIES);
+  let analysis = $state<VocabularyAnalysis | null>(null);
+  let analyzing = $state(false);
+  let analysisNote = $state('');
+
+  $effect(() => {
+    void getModelCapabilities().then((c) => (capabilities = c));
+  });
+
+  /**
+   * An analysis describes the text it was run on. When the source changes the
+   * in-memory result is dropped rather than re-attached to new candidates —
+   * `vocabularyRows` would discard the terms that no longer match, but a
+   * partial carry-over reads as a fresh analysis of the new text.
+   */
+  $effect(() => {
+    const hash = result?.sourceHash;
+    void hash;
+    analysis = null;
+    analysisNote = '';
+  });
+
+  /**
+   * Local candidate extraction (§26.4) is deterministic, offline and needs no
+   * API key — so the panel is never empty for want of a network call.
+   */
+  const candidates = $derived(result?.script ? extractVocabularyCandidates(result.script) : []);
+
+  // A cached analysis is keyed by source hash, so an edited script shows its
+  // own candidates with no stale pronunciations attached.
+  const cached = $derived(
+    result?.script ? cachedAnalysis(result.script.scriptId, result.script.sourceHash) : null,
+  );
+  const rows = $derived(vocabularyRows(candidates, analysis ?? cached));
+
+  const analysisEnabled = $derived($settings.openai.scriptAnalysis);
+  const analysisAvailable = $derived(supportsVocabularyAnalysis(capabilities));
+  const analysisBlockedReason = $derived(
+    !analysisEnabled
+      ? 'Turn on Smart vocabulary analysis in Settings → OpenAI.'
+      : !analysisAvailable
+        ? 'The configured model cannot run vocabulary analysis.'
+        : candidates.length === 0
+          ? 'There are no unusual terms to analyse yet.'
+          : '',
+  );
+
+  async function runVocabularyAnalysis(): Promise<void> {
+    const script = result?.script;
+    if (!script || analysisBlockedReason !== '') return;
+    analyzing = true;
+    analysisNote = '';
+    try {
+      // The document language lives on ScriptDocument, which the editor store
+      // does not retain; 'en' is the compiler's own default until it does.
+      const request = buildVocabularyRequest(script, 'en', candidates);
+      const outcome = await analyzeVocabulary(request);
+      analysis = outcome;
+      cacheAnalysis(script.scriptId, script.sourceHash, outcome);
+      analysisNote =
+        outcome.terms.length === 0
+          ? 'No pronunciations were suggested for these terms.'
+          : `${outcome.terms.length} ${outcome.terms.length === 1 ? 'term' : 'terms'} analysed.`;
+    } catch (err) {
+      analysisNote = describeError(err);
+    } finally {
+      analyzing = false;
+    }
+  }
 
   const meta = $derived(
     wordCount > 0
@@ -448,18 +536,50 @@
           </div>
         {:else}
           <div class="panel-body">
-            <p class="panel-empty">
-              CandidCue will suggest unusual names and terms when you prepare the script.
-            </p>
+            {#if rows.length === 0}
+              <p class="panel-empty">
+                CandidCue will suggest unusual names and terms as you write.
+              </p>
+            {:else}
+              <ul class="vocab">
+                {#each rows as row (row.term)}
+                  <li class="vocab-row">
+                    <span class="vocab-head">
+                      <span class="vocab-term">{row.term}</span>
+                      <span class="vocab-kind">{row.label}</span>
+                    </span>
+                    {#if row.spoken}
+                      <span class="vocab-spoken">spoken “{row.spoken}”</span>
+                    {/if}
+                    {#if row.aliases.length > 0}
+                      <span class="vocab-aliases">heard as {row.aliases.join(', ')}</span>
+                    {/if}
+                    {#if row.generated}
+                      <!-- §26.5: model output is labelled, never presented as authority. -->
+                      <span class="vocab-generated">Suggested by analysis</span>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
             <p class="panel-note">
               Vocabulary helps CandidCue match imperfect transcript words to your script. The
               current live transcription model does not accept a custom dictionary directly.
             </p>
-            <!-- Enrichment is stubbed pending the analysis service integration. -->
-            <Button size="sm" disabled title="Available after vocabulary analysis is connected">
+            <Button
+              size="sm"
+              disabled={analyzing || analysisBlockedReason !== ''}
+              title={analysisBlockedReason || 'Send these terms to GPT-5.6 Luna for pronunciations'}
+              onclick={() => void runVocabularyAnalysis()}
+            >
               <Icon name="refresh" size={14} />
-              Re-analyze
+              {analyzing ? 'Analysing…' : 'Analyze'}
             </Button>
+            {#if analysisBlockedReason}
+              <p class="panel-note">{analysisBlockedReason}</p>
+            {:else if analysisNote}
+              <p class="panel-note">{analysisNote}</p>
+            {/if}
           </div>
         {/if}
 
@@ -729,6 +849,51 @@
     margin: 0;
     font-size: var(--text-meta);
     color: var(--text-muted);
+  }
+
+  .vocab {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .vocab-row {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+  .vocab-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .vocab-term {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .vocab-kind {
+    flex: 0 0 auto;
+    font-size: var(--text-2xs);
+    color: var(--text-faint);
+  }
+  .vocab-spoken,
+  .vocab-aliases {
+    font-size: var(--text-2xs);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
+  }
+  .vocab-generated {
+    font-size: var(--text-2xs);
+    color: var(--accent-strong);
   }
   .panel-empty {
     margin: 0;

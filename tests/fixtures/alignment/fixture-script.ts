@@ -193,3 +193,149 @@ export function demoDocument(): TrackingDocument {
     rareWords: ['kaleidoscope', 'metronome', 'teleprompter', 'subscribe'],
   });
 }
+
+/* ---------------------------------------------------------------------------
+ * Liveness fixtures — document *shapes*, not document content
+ *
+ * The tracking suite had thorough safety coverage ("no illegal jump ever
+ * happens") and no liveness coverage at all ("a presenter reading correctly
+ * gets to the end"). Safety alone cannot distinguish a correct section gate
+ * from one that refuses everything, and two ordinary shapes made it refuse
+ * everything. These are those shapes.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * `# Part` immediately followed by `## Scene`, three times over — the shape of
+ * every screenplay, course module, and chaptered talk. The parent owns only
+ * its own heading words, which nobody reads aloud, so the cursor can never
+ * land in it and the boundary has to be crossed *through* it (§13.2).
+ */
+export const NESTED_PARTS_SOURCE = `# Part One
+
+## Scene A
+
+The morning market opened with vendors calling across the narrow lanes. Fresh bread and roasted chestnuts scented the cold air near the stone fountain.
+
+## Scene B
+
+Later the painter arrived carrying a folding easel and a wooden box of brushes. She worked quickly capturing the bustling crowd before the light could change.
+
+# Part Two
+
+## Scene C
+
+That evening the square emptied and the lanterns flickered along the colonnade. A violinist played softly while the waiter stacked the heavy iron chairs.
+
+## Scene D
+
+Rain began after midnight and washed the cobbles clean of the day's dust. The baker unlocked his shutters and the ovens breathed warmth into the alley.
+
+# Part Three
+
+## Scene E
+
+By dawn the gulls had claimed the empty awnings above the shuttered stalls. A postman wheeled his bicycle past the cathedral steps whistling an old tune.
+
+## Scene F
+
+The market reopened and the whole cycle began again without any ceremony. Nobody remembered the rain except the puddles drying slowly in the sunlight.`;
+
+export function nestedPartsDocument(): TrackingDocument {
+  return compileFixtureScript(NESTED_PARTS_SOURCE, {
+    rareWords: [
+      'chestnuts',
+      'easel',
+      'colonnade',
+      'violinist',
+      'cobbles',
+      'shutters',
+      'awnings',
+      'cathedral',
+      'puddles',
+      'lanterns',
+    ],
+  });
+}
+
+/**
+ * Many short sections. The boundary corridor is clamped to a fraction of the
+ * enclosing section, so with sections this size it collapses to one or two
+ * tokens — which is where an entry test that keys on where the matched span
+ * *ended* rather than where it *entered* becomes a near-certain wedge.
+ */
+export const SHORT_SECTIONS_SOURCE = `# Sunrise
+
+The lighthouse dimmed as the horizon turned pale amber. Gulls lifted off the breakwater in one loose ragged sheet.
+
+# Harbor
+
+Fishing boats returned early with a modest catch of mackerel. Their diesel engines coughed twice and then settled into idle.
+
+# Auction
+
+Dockworkers shouted bids beneath the circling herring gulls. Crates changed hands faster than anyone outside could follow.
+
+# Ledger
+
+The harbormaster recorded every crate in a leather ledger. His handwriting sloped downward whenever the tally ran long.
+
+# Tide
+
+Water climbed the seawall and retreated before anyone noticed. Weed marked the highest reach in a dark uneven line.
+
+# Dusk
+
+Lamps flickered along the quay while the nets dried overhead. Two children counted the lamps aloud and lost their place.
+
+# Anchor
+
+A rusting anchor leaned against the chandlery like a monument. Nobody could remember which vessel had abandoned it there.
+
+# Silence
+
+Nothing moved on the water except one late returning trawler. Its wake folded quietly against the pilings and disappeared.`;
+
+export function shortSectionsDocument(): TrackingDocument {
+  return compileFixtureScript(SHORT_SECTIONS_SOURCE, {
+    rareWords: [
+      'lighthouse',
+      'mackerel',
+      'dockworkers',
+      'harbormaster',
+      'seawall',
+      'quay',
+      'chandlery',
+      'trawler',
+      'herring',
+      'amber',
+      'breakwater',
+      'diesel',
+      'pilings',
+    ],
+  });
+}
+
+/**
+ * Flat sections with a preamble before the first heading. The preamble is an
+ * unowned token range, and the flat successor lookup had no entry for it, so
+ * progressing out of it into the first real section was prohibited too.
+ */
+export const PREAMBLE_SOURCE = `Before we begin I want to thank everyone who sent questions during the week. Your notes shaped almost every example you are about to see.
+
+# Foundations
+
+The committee gathered in the paneled room to review the quarterly figures. Revenue climbed steadily while expenses stayed flat across the whole region.
+
+# Consequences
+
+Outside the harbor the fishing boats returned early carrying a modest catch. By noon the auction house echoed with rapid bids and unexpected laughter.
+
+# Reflections
+
+Everyone agreed the plan deserved another season of patient careful funding. The chairman closed his folder and thanked the room for its attention.`;
+
+export function preambleDocument(): TrackingDocument {
+  return compileFixtureScript(PREAMBLE_SOURCE, {
+    rareWords: ['paneled', 'quarterly', 'harbor', 'auction', 'chairman', 'folder'],
+  });
+}

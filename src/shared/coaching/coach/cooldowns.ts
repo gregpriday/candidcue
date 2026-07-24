@@ -236,6 +236,16 @@ export class TipCooldownLedger {
    * - past it but inside the escalated gap → `repetition_escalation_gap`;
    * - past both, but no second wording, no new evidence cluster, or the
    *   per-take showing budget is used up → `repetition_exhausted`.
+   *
+   * §26.3's escalation rules apply to *advice*. A tip whose
+   * {@link CoachTipDefinition.repeatsOnCooldown} is set states a fact about
+   * the world — the microphone is clipping, that number was wrong — and a fact
+   * does not become less true or more annoying by being stated twice about two
+   * different occurrences. Those codes are gated by their own §25 cooldown and
+   * by needing a *new* evidence cluster, and by nothing else. Applying the
+   * style rules to them inverted §25.1: `MIC_CLIPPING`'s 15-second cooldown
+   * plainly implies repetition, but the code has no second wording, so clipping
+   * that recurred five minutes into a take showed nothing at all.
    */
   private repetitionBlock(
     definition: CoachTipDefinition,
@@ -249,6 +259,13 @@ export class TipCooldownLedger {
     // §25.2–§25.4 minimum cooldown for this exact code.
     if (elapsed < definition.cooldownMs) return 'code_cooldown';
 
+    if (definition.repeatsOnCooldown) {
+      // Past the cooldown, but still about the same occurrence: the comment
+      // above `blockedBy` promises system tips do not repeat "every frame", and
+      // requiring fresh evidence is what makes that true.
+      return this.hasNewEvidence(previous, query) ? null : 'repetition_exhausted';
+    }
+
     if (previous.length >= this.config.maxShowingsPerCode) return 'repetition_exhausted';
 
     // §26.3: "only after a long cooldown and a new evidence cluster".
@@ -261,11 +278,16 @@ export class TipCooldownLedger {
     if (definition.alternate === null || definition.alternate.interpolation !== 'none') {
       return 'repetition_exhausted';
     }
-    const seen = new Set<string>();
-    for (const record of previous) for (const id of record.evidenceIds) seen.add(id);
-    if (!query.evidenceIds.some((id) => !seen.has(id))) return 'repetition_exhausted';
+    if (!this.hasNewEvidence(previous, query)) return 'repetition_exhausted';
 
     return null;
+  }
+
+  /** §26.3 "a new evidence cluster": at least one id we have not shown before. */
+  private hasNewEvidence(previous: readonly ShownRecord[], query: CooldownQuery): boolean {
+    const seen = new Set<string>();
+    for (const record of previous) for (const id of record.evidenceIds) seen.add(id);
+    return query.evidenceIds.some((id) => !seen.has(id));
   }
 
   private lastAt(predicate: (record: ShownRecord) => boolean): number | null {

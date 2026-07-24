@@ -156,7 +156,16 @@ export interface AlignmentMeasurement {
   blockedCount: number;
   semanticAssistId?: string;
   transitionProposal: TransitionProposal;
-  /** How long the leading challenger has held its lead (§16.5 hysteresis). */
+  /**
+   * §16.5 hysteresis. How long the *leading* lineage has led, in meaningful
+   * final transcript tokens and in milliseconds. It becomes a challenger — the
+   * thing the gate is about — when `activeLineageId` names a different lineage,
+   * which the consumer can see because both are on this measurement.
+   *
+   * `finalTokens` used to re-add the whole 30-token rolling tail on every final
+   * event, so it over-counted by 5–10× and would have made any threshold built
+   * on it fire almost immediately. Each transcript item is now counted once.
+   */
   challengerPersistence: { finalTokens: number; ms: number };
   activeLineageId: string | null;
 }
@@ -230,6 +239,8 @@ export class HypothesisBeam {
   private challengerLineageId: string | null = null;
   private challengerSinceMs = 0;
   private challengerFinalTokens = 0;
+  /** Transcript items already folded into `challengerFinalTokens` (§16.5). */
+  private challengerCountedItemIds: ReadonlySet<string> = new Set();
   private lastUpdateAtMs = 0;
   private assist: SemanticAssistEvidence | undefined;
 
@@ -267,6 +278,7 @@ export class HypothesisBeam {
     this.challengerLineageId = null;
     this.challengerSinceMs = 0;
     this.challengerFinalTokens = 0;
+    this.challengerCountedItemIds = new Set();
     this.assist = undefined;
   }
 
@@ -346,10 +358,23 @@ export class HypothesisBeam {
     let blocked: AlignmentMeasurement['blocked'];
     let blockedCount = 0;
     for (const candidate of scored) {
+      // `startTokenPosition` is where the matched alignment *began*. Without
+      // it the gate can only see where the span stopped, and one fluent
+      // sentence straddling a section boundary looks identical to a jump into
+      // the middle of the next section — which zeroed the candidate and, since
+      // every later utterance lands deeper still, wedged the engine for good.
+      //
+      // It is offered only for a *dense* alignment. The gate reads the span
+      // start as a claim that the presenter read continuously from there, and
+      // that claim is only worth anything if the alignment actually matched
+      // the script it spans. A sparse match on two distant phrases spans just
+      // as many tokens and means nothing, so it is handed no span start and
+      // faces the strict corridor test on its endpoint alone.
       const verdict = this.graph.evaluate(
         input.committedTokenIndex,
         candidate.tokenPosition,
         input.eligibility,
+        isDenseAlignment(candidate) ? candidate.startTokenPosition : undefined,
       );
       if (verdict.eligible) {
         eligible.push(candidate);
@@ -704,9 +729,20 @@ export class HypothesisBeam {
       this.challengerLineageId = leaderLineage;
       this.challengerSinceMs = input.sessionTimeMs;
       this.challengerFinalTokens = 0;
+      this.challengerCountedItemIds = new Set();
     }
     if (input.finalEvidence) {
-      this.challengerFinalTokens += countMeaningful(input.tail.tokens);
+      // Per *item*, once. The tail is a 30-token rolling window, so adding all
+      // of it on every final event counted the same speech five to ten times
+      // over — and this is the counter a persistence threshold reads, so an
+      // over-count is a threshold that fires on the first utterance.
+      for (const itemId of input.tail.itemIds) {
+        if (this.challengerCountedItemIds.has(itemId)) continue;
+        this.challengerFinalTokens += countMeaningfulFrom(input.tail.tokens, itemId);
+      }
+      // Only items still in the tail can be offered again, so the memo never
+      // needs to outlive it.
+      this.challengerCountedItemIds = new Set(input.tail.itemIds);
     }
 
     const bestTokenPosition = best?.tokenPosition ?? input.committedTokenIndex;
@@ -806,6 +842,36 @@ export function buildTails(
   return tails;
 }
 
+/**
+ * Minimum share of a matched span's script tokens that must actually be
+ * matched for the span to count as a continuous read. Half, because the
+ * transcript legitimately drops stopwords, contractions and filler, so a
+ * faithful verbatim read rarely pairs every script token — while a spurious
+ * long span (two distant phrases that happen to appear in one tail) matches
+ * far less than half of what it covers.
+ */
+const MIN_SPAN_COVERAGE = 0.5;
+
+/**
+ * Did this alignment match most of the script it spans?
+ *
+ * Exported because it is a *safety* predicate, not an implementation detail:
+ * it is the only thing standing between "the span start proves a continuous
+ * read" and "two distant phrases in one transcript tail buy a section
+ * crossing". Nothing else in the suite can observe it — a sparse span that
+ * happens to reach the right places is hard to provoke through a real engine —
+ * so it is pinned directly.
+ */
+export function isDenseAlignment(candidate: {
+  tokenPosition: number;
+  startTokenPosition: number;
+  sequence: Pick<SequenceAlignment, 'matchedPairs'>;
+}): boolean {
+  const spanTokens = candidate.tokenPosition - candidate.startTokenPosition + 1;
+  if (spanTokens <= 1) return true;
+  return candidate.sequence.matchedPairs.length >= spanTokens * MIN_SPAN_COVERAGE;
+}
+
 function classifyMode(distanceTokens: number, largeForwardDistance: number): HypothesisMode {
   if (distanceTokens < 0) return 'retake';
   if (distanceTokens > largeForwardDistance) return 'skip';
@@ -821,9 +887,10 @@ function phoneticShare(sequence: SequenceAlignment): number {
   return phonetic / sequence.matchedPairs.length;
 }
 
-function countMeaningful(tokens: readonly LedgerToken[]): number {
+/** Meaningful tokens contributed to the tail by one transcript item (§30.6). */
+function countMeaningfulFrom(tokens: readonly LedgerToken[], itemId: string): number {
   let count = 0;
-  for (const token of tokens) if (token.content) count++;
+  for (const token of tokens) if (token.content && token.itemId === itemId) count++;
   return count;
 }
 

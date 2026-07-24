@@ -25,19 +25,45 @@
  * motion ack). Frames stamped with the *previous* generation are rejected
  * during a short grace window and then tolerated, because the semantic unit
  * they carry is layout-independent and holding the stage forever is worse than
- * following a frame whose geometry we recompute ourselves anyway. A *newer*
- * generation than our own is always rejected: our generation only ever advances
- * locally, so a frame ahead of it is not describing a layout we ever published.
+ * following a frame whose geometry we recompute ourselves anyway.
+ *
+ * A *newer* generation than our own is a stronger claim — our generation only
+ * advances locally, so such a frame is not describing a layout we ever
+ * published — and it is rejected outright while there is any prospect of the
+ * two sides re-synchronising. But it used to be rejected FOREVER, with neither
+ * grace nor tolerance, and that is a wedge rather than a gate: a stage window
+ * reopened mid-session restarts its local counter at 1 while control's producer
+ * kept climbing, and every subsequent frame in the session was dropped in
+ * silence. The same grace window therefore applies from the moment the
+ * disagreement is first observed; after it, a persistently newer generation is
+ * tolerated on the identical reasoning as a stale one (the spoken unit is
+ * layout-independent) and counted separately, because a nonzero count is
+ * evidence that the ack loop is broken.
  *
  * The script compile hash is NOT softened. If the stage asserts a hash, a frame
  * that omits one is rejected: an incomplete identity claim is a reason to
  * discard the frame, never a reason to weaken the gate.
+ *
+ * "The stage does not trust control" also has to mean MAGNITUDE, not only
+ * finiteness. A `velocityUnitsPerSecond` of 150 is a perfectly finite number
+ * and a perfectly impossible speaking rate: producers derive that field by
+ * finite difference, so any position correction — a skipped paragraph, a
+ * retake, a command jump — divides a large unit delta by a small time delta and
+ * emits a pace no mouth can produce. The predictor then extrapolates it over
+ * the horizon, the plant chases the result at full speed, and under a
+ * forward-only profile the excursion is permanent. Frames are therefore CLAMPED
+ * into a plausible-speech envelope rather than rejected: the position they
+ * carry is still a real measurement and worth following; only the derivatives
+ * are nonsense, and a clamped derivative is strictly better evidence than a
+ * dropped frame. Clamps are counted so a producer emitting garbage is visible.
  */
-import type {
-  SemanticMotionFrame,
-  StageTransitionDirective,
-  TrackingBehavior,
-  TrackingStateV2,
+import {
+  DEFAULT_SMOOTH_FOLLOW_PROFILE,
+  type SemanticMotionFrame,
+  type SmoothFollowProfile,
+  type StageTransitionDirective,
+  type TrackingBehavior,
+  type TrackingStateV2,
 } from '../../shared/contracts';
 
 export type FrameRejectReason =
@@ -63,6 +89,19 @@ export interface FrameReceiverStats {
   byReason: Record<FrameRejectReason, number>;
   /** Frames accepted despite a stale layout generation, after the grace window. */
   toleratedStaleLayout: number;
+  /**
+   * Frames accepted despite claiming a NEWER layout generation than ours, after
+   * the grace window. Any value above zero means the ack loop that feeds the
+   * stage's generation back to control is not closing — the display was
+   * protected, but the cause is a defect.
+   */
+  toleratedFutureLayout: number;
+  /**
+   * Frames whose reported speaking rate or rate-of-change was outside the
+   * plausible-speech envelope and was clamped. Nonzero means a producer is
+   * reporting a finite-difference artefact as a pace.
+   */
+  clampedImplausibleRate: number;
   /** Field name of the most recent structural rejection — diagnostics only. */
   lastMalformedField: string | null;
   lastAcceptedAtMs: number | null;
@@ -93,8 +132,35 @@ export interface SemanticFrameReceiverOptions {
   gate: SemanticFrameGate;
   /** How long stale-layout frames are rejected before being tolerated. */
   layoutGraceMs?: number;
+  /** Supplies the plausible-speech envelope (§55, `prediction.maxUnitsPerSecond`). */
+  profile?: SmoothFollowProfile;
 }
 
+/**
+ * How long a layout-generation disagreement is rejected before it is tolerated.
+ *
+ * Kept at 900 ms deliberately, and the reasoning is worth writing down because
+ * this number was under suspicion for a long time for the wrong reason. The
+ * "900 ms semantic blackout at every relayout" was never the window's fault: it
+ * was the layout-generation loop being open, so the producer NEVER re-synced
+ * and the window ran to its full length every single time. With the loop closed
+ * the window is no longer the binding constraint — the 500 ms ack cadence is,
+ * and re-sync now completes inside it (10 rejected frames at 20 Hz, not 17).
+ *
+ * It must stay comfortably ABOVE that cadence. A window shorter than one ack
+ * round trip means every relayout is resolved by tolerating a stale frame
+ * rather than by re-syncing, which is precisely the "permanently running on its
+ * own escape hatch" degeneracy the loop fix removed. 900 leaves 400 ms of
+ * margin over the cadence; 750 would leave 250 ms.
+ *
+ * The one argument for lowering it — `900 > normalHorizonMs` (750), so the last
+ * ~150 ms of a mid-take window shows the predictor's coast decay — is not a
+ * defect to fix. That decay is bounded by `maxCoastUnits` (0.9 units, under one
+ * rendered line) and reads as a gentle deceleration rather than a hard freeze;
+ * and it only appears when re-sync has ALREADY failed to complete in 750 ms,
+ * which is exactly the situation where the stage should look like it has lost
+ * the feed rather than pretending otherwise.
+ */
 const DEFAULT_LAYOUT_GRACE_MS = 900;
 
 /* ---------------------------------------------------------------------------
@@ -300,6 +366,8 @@ function emptyStats(): FrameReceiverStats {
       revision: 0,
     },
     toleratedStaleLayout: 0,
+    toleratedFutureLayout: 0,
+    clampedImplausibleRate: 0,
     lastMalformedField: null,
     lastAcceptedAtMs: null,
     lastRevision: null,
@@ -307,12 +375,36 @@ function emptyStats(): FrameReceiverStats {
   };
 }
 
+/**
+ * Fold a frame's derivatives into the plausible-speech envelope (§55).
+ *
+ * Returns the frame unchanged when it is already plausible, so the common case
+ * allocates nothing and the identity check below is a cheap way to count the
+ * exceptions.
+ */
+export function clampFrameToSpeechEnvelope(
+  frame: SemanticMotionFrame,
+  profile: SmoothFollowProfile,
+): SemanticMotionFrame {
+  const vMax = Math.max(0, profile.prediction.maxUnitsPerSecond);
+  const aMax = Math.max(0, profile.prediction.maxAccelerationUnitsPerSecond2);
+  const v = Math.max(-vMax, Math.min(vMax, frame.velocityUnitsPerSecond));
+  const a = Math.max(-aMax, Math.min(aMax, frame.accelerationUnitsPerSecond2));
+  if (v === frame.velocityUnitsPerSecond && a === frame.accelerationUnitsPerSecond2) {
+    return frame;
+  }
+  return { ...frame, velocityUnitsPerSecond: v, accelerationUnitsPerSecond2: a };
+}
+
 export function createSemanticFrameReceiver(
   options: SemanticFrameReceiverOptions,
 ): SemanticFrameReceiver {
   const graceMs = options.layoutGraceMs ?? DEFAULT_LAYOUT_GRACE_MS;
+  const profile = options.profile ?? DEFAULT_SMOOTH_FOLLOW_PROFILE;
   let gate: SemanticFrameGate = { ...options.gate };
   let layoutChangedAtMs = Number.NEGATIVE_INFINITY;
+  /** When we first saw a frame claiming a newer generation than our own. */
+  let futureLayoutSinceMs: number | null = null;
   let current: SemanticMotionFrame | null = null;
   const stats = emptyStats();
 
@@ -353,17 +445,29 @@ export function createSemanticFrameReceiver(
       }
 
       let tolerated: FrameAcceptance['tolerated'];
+      let toleratedFuture = false;
       if (frame.layoutGeneration !== gate.layoutGeneration) {
-        // Newer than us: the control side claims a layout change we never
-        // published. Our generation only advances locally, so this frame is not
-        // describing any geometry we have ever had.
         if (frame.layoutGeneration > gate.layoutGeneration) {
-          return reject('layout_generation');
+          // Newer than us: the control side claims a layout change we never
+          // published. Our generation only advances locally, so this frame is
+          // not describing any geometry we have ever had — reject it while the
+          // ack loop still has a chance to bring the two sides back together,
+          // then tolerate rather than let the disagreement kill the session.
+          if (futureLayoutSinceMs === null) futureLayoutSinceMs = nowMs;
+          if (nowMs - futureLayoutSinceMs < graceMs) {
+            return reject('layout_generation');
+          }
+          tolerated = 'layout_generation';
+          toleratedFuture = true;
+        } else {
+          if (nowMs - layoutChangedAtMs < graceMs) {
+            return reject('layout_generation');
+          }
+          tolerated = 'layout_generation';
         }
-        if (nowMs - layoutChangedAtMs < graceMs) {
-          return reject('layout_generation');
-        }
-        tolerated = 'layout_generation';
+      } else {
+        // The two sides agree again; the next disagreement gets a fresh window.
+        futureLayoutSinceMs = null;
       }
 
       // Epoch is the authority counter: a newer epoch supersedes revision
@@ -377,12 +481,19 @@ export function createSemanticFrameReceiver(
         }
       }
 
-      current = frame;
+      // Accepted — but only the identity and the POSITION are taken as given.
+      // The derivatives are folded into what a human mouth can do first.
+      const sane = clampFrameToSpeechEnvelope(frame, profile);
+      if (sane !== frame) stats.clampedImplausibleRate++;
+      current = sane;
       stats.accepted++;
       stats.lastAcceptedAtMs = nowMs;
       stats.lastRevision = frame.revision;
       stats.lastEpoch = frame.epoch;
-      if (tolerated) stats.toleratedStaleLayout++;
+      if (tolerated) {
+        if (toleratedFuture) stats.toleratedFutureLayout++;
+        else stats.toleratedStaleLayout++;
+      }
       return tolerated ? { accepted: true, tolerated } : { accepted: true };
     },
 
@@ -390,12 +501,16 @@ export function createSemanticFrameReceiver(
       const nextLayout = patch.layoutGeneration;
       if (nextLayout !== undefined && nextLayout !== gate.layoutGeneration) {
         layoutChangedAtMs = nowMs;
+        // Our own generation moved: whatever we were disagreeing with before is
+        // no longer the same disagreement.
+        futureLayoutSinceMs = null;
       }
       gate = { ...gate, ...patch };
     },
 
     reset() {
       current = null;
+      futureLayoutSinceMs = null;
       stats.lastRevision = null;
       stats.lastEpoch = null;
     },

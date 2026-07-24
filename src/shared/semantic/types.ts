@@ -128,6 +128,29 @@ export interface LunaUsage {
   totalTokens: number;
 }
 
+/**
+ * Verified per-million-token prices for the semantic model (companion §42.2).
+ *
+ * Every field is nullable and there is no default rate anywhere in the
+ * frontend: §42.2 forbids hard-coding a permanent currency estimate, and this
+ * is a bring-your-own-key product, so a made-up rate would be a made-up bill.
+ * The prices come from the Rust capability registry
+ * (`ModelCapabilities::semantic_*_price_per_mtok`), which reads them from the
+ * operator's configuration and leaves them `None` when none is configured.
+ */
+export interface SemanticPricing {
+  inputPerMTokUsd: number | null;
+  /** Discounted rate for cached prompt prefixes, when one is published. */
+  cachedInputPerMTokUsd: number | null;
+  outputPerMTokUsd: number | null;
+}
+
+export const NO_SEMANTIC_PRICING: SemanticPricing = {
+  inputPerMTokUsd: null,
+  cachedInputPerMTokUsd: null,
+  outputPerMTokUsd: null,
+};
+
 export interface PromptCacheMetadata {
   cachedInputTokens: number;
   cacheHit: boolean;
@@ -458,7 +481,19 @@ export interface SemanticDiagnostics {
   usage: LunaUsage;
   cacheHits: number;
   latencySamplesMs: number[];
-  /** Present only when the capability registry carries verified prices. */
+  /**
+   * Luna spend for this take, in USD.
+   *
+   * `null` means "no configured rate", which is a different statement from
+   * `0` and must be displayed as such: a confident `$0.00` over a real bill is
+   * the worst answer this readout can give. It is `null` until the capability
+   * registry carries a verified input AND output price, and is computed from
+   * the accumulated {@link LunaUsage} — never from request counts.
+   *
+   * This is NOT the realtime transcription cost (§35.1). That is a per-minute
+   * figure from a different subsystem, metered by
+   * `services/realtime/costEstimator`. The two are shown separately.
+   */
   estimatedCostUsd: number | null;
   backoffUntilMs: number | null;
 }

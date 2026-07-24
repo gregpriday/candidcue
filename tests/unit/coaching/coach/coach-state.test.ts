@@ -92,8 +92,11 @@ describe('§2.1 the rail cannot move the script', () => {
     expect(Object.keys(state).sort()).toEqual(
       [
         'activeTip',
+        'audioTimeMs',
         'fillers',
+        'gutterMarks',
         'microphone',
+        'modules',
         'mirrored',
         'mode',
         'pace',

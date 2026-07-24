@@ -82,6 +82,20 @@ export interface TrackingDriver {
    * membership, so this can never be the sole authority for a move.
    */
   applySemanticAssist(evidence: SemanticAssistEvidence): void;
+  /**
+   * Companion §7.2 — close the layout-generation loop.
+   *
+   * The stage owns the counter: it bumps a LOCAL generation on every real
+   * layout change and stamps its `StageMotionAck`s with it. The worker stamps
+   * every `SemanticMotionFrame` with whatever generation it was last told, and
+   * the stage's receiver rejects frames whose generation differs from its own.
+   * Without this message the worker's generation is frozen at its initial value
+   * for the whole session, so every frame is stale by construction and survives
+   * only through the receiver's stale-layout tolerance — the gate is running
+   * permanently on its own escape hatch. Control is the only party that hears
+   * both sides, so control is the only party that can close the loop.
+   */
+  setLayoutGeneration(generation: number): void;
 }
 
 export function newSessionId(): string {
@@ -223,6 +237,10 @@ export function createWorkerTrackingDriver(options: TrackingDriverOptions): Trac
     applySemanticAssist(evidence: SemanticAssistEvidence) {
       post({ type: 'semantic_assist', evidence });
     },
+    setLayoutGeneration(generation: number) {
+      if (!Number.isInteger(generation) || generation < 0) return;
+      post({ type: 'set_layout_generation', generation, nowMs: Date.now() });
+    },
   };
 }
 
@@ -351,6 +369,9 @@ export function createMockTrackingDriver(options: TrackingDriverOptions): Tracki
     releaseItems() {},
     setCommandPending() {},
     applySemanticAssist() {},
+    // The mock emits no semantic frames of its own; the store's v1 bridge is
+    // what carries the generation on this path.
+    setLayoutGeneration() {},
     moveToToken(tokenIndex: number) {
       let best = 0;
       sentences.forEach((s, i) => {

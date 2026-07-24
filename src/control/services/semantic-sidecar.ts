@@ -18,6 +18,8 @@ import {
   createSemanticInvoker,
   type AssistSchedulingContext,
   type SemanticAvailability,
+  type SemanticBudget,
+  type SemanticPricing,
 } from '../../shared/semantic';
 import type { SmoothFollowProfile } from '../../shared/contracts/smooth-follow';
 import type { SemanticAssistEvidence } from '../../shared/tracking/semantic-assist';
@@ -34,6 +36,8 @@ export interface SemanticSidecarDeps {
    * `semantic_assist` input. This is the single integration point.
    */
   postAssistEvidence(evidence: SemanticAssistEvidence): void;
+  /** §42.1 per-session spend bound; defaults apply to whatever is omitted. */
+  budget?: Partial<SemanticBudget>;
   onAvailabilityChange?(availability: SemanticAvailability): void;
   onCoachTipCandidate?(candidate: unknown): void;
   now?: () => number;
@@ -63,6 +67,7 @@ export class SemanticSidecar {
       sessionId: deps.sessionId,
       sessionGeneration: deps.sessionGeneration,
       ...(deps.mode ? { mode: deps.mode } : {}),
+      ...(deps.budget ? { budget: deps.budget } : {}),
       // Only fused + validated evidence reaches the worker; the scheduler
       // performs the validation and clamping and must not be bypassed.
       onTrackingAssist: (evidence) => {
@@ -97,6 +102,22 @@ export class SemanticSidecar {
 
   setMode(mode: IntelligenceMode): void {
     this.scheduler.setMode(mode);
+  }
+
+  /** §42.1: tighten (or relax) the per-session request cap mid-take. */
+  setRequestLimit(maxRequestsPerSession: number): void {
+    if (this.disposed) return;
+    this.scheduler.setBudget({ maxRequestsPerSession });
+  }
+
+  /**
+   * §42.2: verified per-million-token prices from the Rust capability
+   * registry. Until these arrive the scheduler reports an unknown cost, which
+   * is the honest state — not a zero.
+   */
+  setPrices(prices: SemanticPricing): void {
+    if (this.disposed) return;
+    this.scheduler.setPrices(prices);
   }
 
   /** End of take: detach the feed and cancel everything outstanding. */

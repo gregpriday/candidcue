@@ -30,8 +30,10 @@ import type {
   SemanticDiagnostics,
   SemanticLandmarkRetrievalResult,
   SemanticOperationResponse,
+  SemanticPricing,
   SemanticRetrievalRequest,
 } from './types';
+import { NO_SEMANTIC_PRICING } from './types';
 import { validateLandmarkRetrieval, validateSemanticAssist } from './validate';
 
 /* ---------------------------------------------------------------------------
@@ -222,6 +224,55 @@ export const DEFAULT_SEMANTIC_BUDGET: SemanticBudget = {
 };
 
 /* ---------------------------------------------------------------------------
+ * Cost — companion §42.1/§42.2
+ * ------------------------------------------------------------------------- */
+
+const TOKENS_PER_MILLION = 1_000_000;
+
+/**
+ * USD cost of the accumulated Luna usage, or `null` when no verified rate is
+ * configured (§42.2).
+ *
+ * Shape of the arithmetic, deliberately:
+ *
+ *  - The division happens BEFORE anything else and no rounding happens at all.
+ *    Rounding a token count (or a sub-cent product) before dividing by a
+ *    million turns every small session into either `$0.00` or a wild
+ *    over-estimate; the transcription path shipped exactly that bug once.
+ *  - `inputTokens` from the Responses API INCLUDES `cached_input_tokens`
+ *    (`input_tokens_details.cached_tokens` is a subset), so the uncached
+ *    remainder is priced at the input rate and the cached part at the cached
+ *    rate. Double-counting the cached tokens would silently inflate every
+ *    prompt-cached session, which is most of them.
+ *  - `outputTokens` likewise already includes `reasoningTokens`, so reasoning
+ *    is not added again.
+ *  - When no cached rate is published, cached tokens are priced at the full
+ *    input rate. That is an upper bound and it is stated in the UI copy —
+ *    over-reporting your own bill is recoverable, under-reporting is not.
+ */
+export function estimateSemanticCostUsd(
+  usage: LunaUsage,
+  prices: SemanticPricing,
+): number | null {
+  const inputRate = prices.inputPerMTokUsd;
+  const outputRate = prices.outputPerMTokUsd;
+  // Both halves must be known. A half-priced answer is a wrong answer, and a
+  // wrong number about money reads as authoritative in a way a blank does not.
+  if (inputRate === null || outputRate === null) return null;
+  const cachedRate = prices.cachedInputPerMTokUsd ?? inputRate;
+
+  const cachedTokens = Math.max(0, usage.cachedInputTokens);
+  const uncachedTokens = Math.max(0, usage.inputTokens - cachedTokens);
+  const outputTokens = Math.max(0, usage.outputTokens);
+
+  return (
+    (uncachedTokens / TOKENS_PER_MILLION) * inputRate +
+    (cachedTokens / TOKENS_PER_MILLION) * cachedRate +
+    (outputTokens / TOKENS_PER_MILLION) * outputRate
+  );
+}
+
+/* ---------------------------------------------------------------------------
  * Degraded operation — companion §58
  * ------------------------------------------------------------------------- */
 
@@ -269,7 +320,17 @@ export interface SchedulerDeps {
   mode?: IntelligenceMode;
   cadence?: Partial<CadenceConfig>;
   thresholds?: Partial<TriggerThresholds>;
+  /**
+   * §42.1: the session budget is the USER's, not a module constant. Whatever
+   * is omitted here falls back to {@link DEFAULT_SEMANTIC_BUDGET}.
+   */
   budget?: Partial<SemanticBudget>;
+  /**
+   * Verified prices from the Rust capability registry. Omitted means "no rate
+   * is configured", and the diagnostics then report a `null` cost rather than
+   * a made-up one (§42.2).
+   */
+  prices?: SemanticPricing;
   landmarkIndex?: SemanticLandmarkIndex;
   /** Monotonic request-id factory; defaults to an internal counter. */
   nextRequestId?: (lane: AssistLane) => string;
@@ -327,7 +388,8 @@ export class SemanticAssistScheduler {
   private mode: IntelligenceMode;
   private cadence: CadenceConfig;
   private readonly thresholds: TriggerThresholds;
-  private readonly budget: SemanticBudget;
+  private budget: SemanticBudget;
+  private prices: SemanticPricing;
 
   private readonly active = new Map<AssistLane, ActiveRequest>();
   private lastRequestAtMs: number | null = null;
@@ -350,7 +412,8 @@ export class SemanticAssistScheduler {
     this.mode = deps.mode ?? 'balanced';
     this.cadence = { ...CADENCE_BY_MODE[this.mode], ...deps.cadence };
     this.thresholds = { ...DEFAULT_TRIGGER_THRESHOLDS, ...deps.thresholds };
-    this.budget = { ...DEFAULT_SEMANTIC_BUDGET, ...deps.budget };
+    this.budget = normalizeBudget(deps.budget);
+    this.prices = deps.prices ?? NO_SEMANTIC_PRICING;
     this.availability = this.mode === 'local_only' ? 'disabled' : 'ready';
     this.diagnostics = {
       mode: this.mode,
@@ -387,7 +450,33 @@ export class SemanticAssistScheduler {
       usage: { ...this.diagnostics.usage },
       requestsByLane: { ...this.diagnostics.requestsByLane },
       latencySamplesMs: [...this.diagnostics.latencySamplesMs],
+      // Derived on read from the usage actually reported by Rust, so it can
+      // never drift from the token counters it is computed from.
+      estimatedCostUsd: estimateSemanticCostUsd(this.diagnostics.usage, this.prices),
     };
+  }
+
+  /** The budget in force, for a UI that has to show what it is bounded by. */
+  getBudget(): SemanticBudget {
+    return { ...this.budget };
+  }
+
+  /**
+   * §42.1: change the session budget mid-take.
+   *
+   * The operator watching the token readout climb is exactly the person who
+   * wants to cap it, and asking them to stop the take to do so is asking them
+   * to stop the take. A tightened cap that is already exceeded takes effect on
+   * the next `observe`, which reports `budget_exhausted` — no request in flight
+   * is cancelled, because a cap is a spending decision, not an emergency.
+   */
+  setBudget(budget: Partial<SemanticBudget>): void {
+    this.budget = normalizeBudget({ ...this.budget, ...budget });
+  }
+
+  /** Verified prices from the capability registry (§42.2). */
+  setPrices(prices: SemanticPricing): void {
+    this.prices = prices;
   }
 
   getAvailability(): SemanticAvailability {
@@ -865,6 +954,34 @@ export class SemanticAssistScheduler {
   private track(promise: Promise<void>): void {
     this.settling.push(promise);
   }
+}
+
+/**
+ * Merge a partial budget onto the defaults, rejecting values that would make
+ * the sidecar dead on arrival. A `0`, a negative, or a `NaN` request cap
+ * arriving from a settings document is a corrupt value, not a user asking for
+ * "never run" — that intent is expressed by `local_only` mode. `Infinity` is
+ * accepted and means no cap.
+ */
+function normalizeBudget(patch: Partial<SemanticBudget> | undefined): SemanticBudget {
+  const merged = { ...DEFAULT_SEMANTIC_BUDGET, ...patch };
+  const usable = (value: number, fallback: number): number =>
+    Number.isFinite(value) || value === Number.POSITIVE_INFINITY
+      ? value > 0
+        ? value
+        : fallback
+      : fallback;
+  return {
+    maxRequestsPerSession: usable(
+      merged.maxRequestsPerSession,
+      DEFAULT_SEMANTIC_BUDGET.maxRequestsPerSession,
+    ),
+    maxRequestsPerHour: usable(
+      merged.maxRequestsPerHour,
+      DEFAULT_SEMANTIC_BUDGET.maxRequestsPerHour,
+    ),
+    maxTotalTokens: usable(merged.maxTotalTokens, DEFAULT_SEMANTIC_BUDGET.maxTotalTokens),
+  };
 }
 
 /** H7: order-insensitive set equality for source item ids. */

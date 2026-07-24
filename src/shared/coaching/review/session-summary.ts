@@ -864,7 +864,15 @@ export function computeTakeMetrics(
   };
 }
 
-/** §31.2. The whole summary for one recorded session. */
+/**
+ * §31.2. The whole summary for one recorded session.
+ *
+ * `profile` and `versions` are re-projected field by field rather than passed
+ * through. The summary is what gets persisted (§36.2 `summary_json`), and
+ * §32.3 forbids storing inferred labels — an allowlist here means a producer
+ * that starts hanging extra properties off the profile cannot leak them into
+ * storage by accident.
+ */
 export function summarizeSession(
   record: CoachingSessionRecord,
   options: SummaryOptions = {},
@@ -877,8 +885,23 @@ export function summarizeSession(
     scriptRevision: record.scriptRevision,
     startedAtIso: record.startedAtIso,
     endedAtIso: record.endedAtIso,
-    versions: record.versions,
-    profile: record.profile,
+    versions: {
+      coachingSchemaVersion: record.versions.coachingSchemaVersion,
+      algorithmVersion: record.versions.algorithmVersion,
+      tipPolicyVersion: record.versions.tipPolicyVersion,
+      lunaPromptVersion: record.versions.lunaPromptVersion,
+      transcriptionModels: [...record.versions.transcriptionModels],
+      precisionTranscriptionActive: record.versions.precisionTranscriptionActive,
+    },
+    profile: {
+      deliveryStyle: record.profile.deliveryStyle,
+      targetWpmLow: record.profile.targetWpmLow,
+      targetWpmHigh: record.profile.targetWpmHigh,
+      targetVarietyLow: record.profile.targetVarietyLow,
+      targetVarietyHigh: record.profile.targetVarietyHigh,
+      targetDurationMs: record.profile.targetDurationMs,
+      terminalRushRatioThreshold: record.profile.terminalRushRatioThreshold,
+    },
     takePassCount: passes.length,
     retakeCount: Math.max(0, passes.length - 1),
     metrics: computeTakeMetrics(passes, record.profile, options),

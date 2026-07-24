@@ -137,13 +137,67 @@ describe('§25.2–§25.4 per-code cooldown and §26.3 escalation', () => {
     ).toBeNull();
   });
 
-  it('§26.3: a code with no second wording is once per take', () => {
+  it('§26.3: an ordinary code with no second wording is once per take', () => {
     const ledger = new TipCooldownLedger();
-    ledger.noteShown(query({ code: 'USE_SILENT_PAUSE', atAudioMs: 0 }));
+    // `SETTLE_DELIVERY` is the remaining ordinary code with no alternate copy.
+    ledger.noteShown(query({ code: 'SETTLE_DELIVERY', atAudioMs: 0 }));
     expect(
       ledger.blockedBy(
-        query({ code: 'USE_SILENT_PAUSE', atAudioMs: 300_000, evidenceIds: ['ev-new'] }),
+        query({ code: 'SETTLE_DELIVERY', atAudioMs: 300_000, evidenceIds: ['ev-new'] }),
       ),
+    ).toBe('repetition_exhausted');
+  });
+
+  /**
+   * §25.1. `MIC_CLIPPING` has no second wording and never will — there is one
+   * true thing to say about a clipping microphone. Under the §26.3 style rules
+   * that made it a once-per-take alert: shown at ten seconds, then silent for
+   * the rest of the take however badly the input clipped. §25.1's 15 s cooldown
+   * only makes sense if the alert can be shown again.
+   */
+  it('§25.1: a system alert repeats once its own cooldown has elapsed', () => {
+    const ledger = new TipCooldownLedger();
+    ledger.noteShown(query({ code: 'MIC_CLIPPING', atAudioMs: 10_000, evidenceIds: ['clip-1'] }));
+
+    // Inside the 15 s cooldown, and about the same episode: still blocked.
+    expect(
+      ledger.blockedBy(query({ code: 'MIC_CLIPPING', atAudioMs: 20_000, evidenceIds: ['clip-1'] })),
+    ).toBe('code_cooldown');
+    // Past the cooldown but still the same episode: it is already on the glass.
+    expect(
+      ledger.blockedBy(query({ code: 'MIC_CLIPPING', atAudioMs: 30_000, evidenceIds: ['clip-1'] })),
+    ).toBe('repetition_exhausted');
+    // A new clipping episode five minutes later: shown again.
+    expect(
+      ledger.blockedBy(query({ code: 'MIC_CLIPPING', atAudioMs: 310_000, evidenceIds: ['clip-2'] })),
+    ).toBeNull();
+  });
+
+  it('§25.1: a system alert is not capped by the per-take showing budget', () => {
+    const ledger = new TipCooldownLedger();
+    for (let episode = 1; episode <= 4; episode += 1) {
+      const at = episode * 60_000;
+      expect(
+        ledger.blockedBy(
+          query({ code: 'MIC_CLIPPING', atAudioMs: at, evidenceIds: [`clip-${episode}`] }),
+        ),
+      ).toBeNull();
+      ledger.noteShown(query({ code: 'MIC_CLIPPING', atAudioMs: at, evidenceIds: [`clip-${episode}`] }));
+    }
+    expect(ledger.showingCount('MIC_CLIPPING')).toBe(4);
+  });
+
+  /** §25.5: two different misread numbers are two different facts. */
+  it('§25.5: a critical fidelity alert repeats for new evidence', () => {
+    const ledger = new TipCooldownLedger();
+    ledger.noteShown(query({ code: 'CRITICAL_NUMBER', atAudioMs: 0, evidenceIds: ['fid-1'] }));
+    ledger.noteShown(query({ code: 'CRITICAL_NUMBER', atAudioMs: 30_000, evidenceIds: ['fid-2'] }));
+    expect(
+      ledger.blockedBy(query({ code: 'CRITICAL_NUMBER', atAudioMs: 90_000, evidenceIds: ['fid-3'] })),
+    ).toBeNull();
+    // …but not for evidence the presenter has already been told about.
+    expect(
+      ledger.blockedBy(query({ code: 'CRITICAL_NUMBER', atAudioMs: 90_000, evidenceIds: ['fid-2'] })),
     ).toBe('repetition_exhausted');
   });
 

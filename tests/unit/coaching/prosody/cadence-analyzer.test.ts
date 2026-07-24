@@ -193,6 +193,10 @@ describe('CadenceAnalyzer run-on pattern (§18.4)', () => {
 describe('CadenceAnalyzer choppy pattern (§18.5)', () => {
   it('proposes choppy_delivery on the third unexplained mid-clause pause', () => {
     const analyzer = new CadenceAnalyzer();
+    // §18.5 requires a trustworthy alignment, and the analyzer now starts with
+    // none — "we do not know" gates the claim shut rather than open. The caller
+    // has to say what the alignment is worth before a choppy claim is possible.
+    analyzer.setAlignmentConfidence(0.9);
     expect(analyzer.notePause(pause(1_000, 300), ctx(1_300))).toBeNull();
     expect(analyzer.notePause(pause(4_000, 500), ctx(4_500))).toBeNull();
     const candidate = analyzer.notePause(pause(8_000, 300), ctx(8_300));
@@ -220,6 +224,51 @@ describe('CadenceAnalyzer choppy pattern (§18.5)', () => {
       ).toBeNull();
     }
     expect(analyzer.metrics(10_000).choppyPauseCount).toBe(0);
+  });
+
+  /**
+   * §18.5. The gate used to default open: `lastAlignmentConfidence` started at
+   * `1`, i.e. perfect confidence in an alignment nobody had reported. The only
+   * thing that can go wrong with that is a choppy-delivery claim the alignment
+   * never supported.
+   */
+  it('says nothing until someone reports an alignment confidence', () => {
+    const analyzer = new CadenceAnalyzer();
+    for (const startMs of [1_000, 4_000, 8_000]) {
+      expect(analyzer.notePause(pause(startMs, 300), ctx(startMs))).toBeNull();
+    }
+    // The evidence was still gathered — it is the *claim* that is gated.
+    expect(analyzer.metrics(10_000).choppyPauseCount).toBe(3);
+
+    // With a confidence reported, the same pattern speaks.
+    const trusted = new CadenceAnalyzer();
+    trusted.setAlignmentConfidence(0.9);
+    for (const startMs of [1_000, 4_000]) trusted.notePause(pause(startMs, 300), ctx(startMs));
+    expect(trusted.notePause(pause(8_000, 300), ctx(8_300))?.type).toBe('choppy_delivery');
+  });
+
+  /**
+   * §12.4. A dropout is not a pause. An integrator deriving pauses from gaps
+   * between speech intervals cannot tell the difference without a way to say
+   * so, and feeding a buffer underrun into choppy-delivery evidence tells the
+   * presenter their phrasing is broken because the audio thread starved.
+   */
+  it('ignores unmeasured silence — a dropout is not a pause', () => {
+    const analyzer = new CadenceAnalyzer();
+    analyzer.setAlignmentConfidence(0.9);
+    for (const startMs of [1_000, 4_000, 8_000]) {
+      expect(
+        analyzer.notePause(pause(startMs, 800, { unmeasured: true }), ctx(startMs)),
+      ).toBeNull();
+    }
+    expect(analyzer.metrics(10_000).choppyPauseCount).toBe(0);
+
+    // The identical silences, measured, do produce the claim — which is what
+    // proves the exclusion came from `unmeasured` and not from the durations.
+    const measured = new CadenceAnalyzer();
+    measured.setAlignmentConfidence(0.9);
+    for (const startMs of [1_000, 4_000]) measured.notePause(pause(startMs, 800), ctx(startMs));
+    expect(measured.notePause(pause(8_000, 800), ctx(8_800))?.type).toBe('choppy_delivery');
   });
 
   it('ignores manual and system pauses', () => {

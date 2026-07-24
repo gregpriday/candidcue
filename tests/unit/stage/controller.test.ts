@@ -8,7 +8,9 @@ import { DEFAULT_SMOOTH_FOLLOW_PROFILE } from '../../../src/shared/contracts';
 import {
   approach,
   CONTROLLER_SUBSTEP_MS,
+  createFrameIntervalEstimator,
   createJerkLimitedScrollController,
+  HITCH_THRESHOLD_MS,
   limitsForState,
   MAX_FRAME_DT_MS,
   stoppingDistancePx,
@@ -22,13 +24,22 @@ const following = limitsForState('following', profile);
 /**
  * Drive the controller one integration SUB-STEP per call, so every returned
  * sample is a real integration point and the realized acceleration and jerk can
- * be recovered by finite differences of the rendered `q`/`v`.
+ * be recovered by finite differences of the rendered POSITION.
  *
  * This is the whole point of the harness (H1): the old tests measured jerk from
  * the STORED `plant.a`, which the overshoot guard did not go through. It could
  * rewrite `v` by a full `aMax·dt` in one sub-step — a realized jerk over
  * 600 000 px/s³ against a 12 000 px/s³ limit — while `plant.a` stayed positive
  * and the assertion stayed green.
+ *
+ * `q` is the only field with that property. Deriving from the reported `v`
+ * fixed one instance of the mistake and left the class of it open: `v` is
+ * itself a stored field the controller writes, so any path that moves the
+ * document WITHOUT going through it — the §29.3 rest snap does exactly that,
+ * assigning `q = target` and `v = 0` together — is invisible to a `v`-based
+ * trace in precisely the way `plant.a` was. Only `q` is what the presenter
+ * sees, so `q` is what the limits are measured from. Everything below is
+ * `Δq/Δt` and its differences.
  */
 function substepTrace(
   limits: MotionLimits,
@@ -43,8 +54,10 @@ function substepTrace(
     substepMs: CONTROLLER_SUBSTEP_MS,
   });
   const q: number[] = [];
-  const v: number[] = [];
+  /** What the controller SAYS its velocity is — never used for the limits. */
+  const reportedV: number[] = [];
   const wall: boolean[] = [];
+  const rest: boolean[] = [];
   for (const f of frames) {
     const step = controller.step({
       dtMs: CONTROLLER_SUBSTEP_MS,
@@ -53,24 +66,50 @@ function substepTrace(
       limits,
     });
     q.push(step.q);
-    v.push(step.v);
+    reportedV.push(step.v);
     wall.push(step.hardStop);
+    rest.push(step.atRest);
   }
-  // Realized acceleration/jerk from the RENDERED trace, not from stored state.
-  const a = v.map((value, i) => (i === 0 ? 0 : (value - (v[i - 1] ?? 0)) / dtSec));
-  const jerk = a.map((value, i) => (i === 0 ? 0 : (value - (a[i - 1] ?? 0)) / dtSec));
-  return { controller, q, v, a, jerk, wall, dtSec };
+  // Realized velocity/acceleration/jerk from the RENDERED trace, not from any
+  // stored state. Each difference costs one more leading sample.
+  const v = q.map((value, i) => (i === 0 ? 0 : (value - (q[i - 1] ?? 0)) / dtSec));
+  const a = v.map((value, i) => (i <= 1 ? 0 : (value - (v[i - 1] ?? 0)) / dtSec));
+  const jerk = a.map((value, i) => (i <= 2 ? 0 : (value - (a[i - 1] ?? 0)) / dtSec));
+  return { controller, q, v, reportedV, a, jerk, wall, rest, dtSec };
 }
+
+/** First sample at which every derivative above is a real measurement. */
+const FIRST_DERIVED_SAMPLE = 3;
+
+/**
+ * Relative slack for a limit compared against a value recovered by THREE finite
+ * differences of `q`. Dividing by `dtSec³` (5.12e-7 at an 8 ms sub-step)
+ * amplifies double-precision error in a ~6000 px position by a factor of ~2e6,
+ * which is a few parts in 1e10 of `jerkMax` — and nothing like the orders of
+ * magnitude a real violation shows.
+ */
+const LIMIT_SLACK = 1 + 1e-6;
 
 /**
  * A wall (document edge, §30.5 reverse-travel budget) is a genuine
- * discontinuity, so the sub-step it happens on and the one after it are the two
+ * discontinuity, so the sub-step it happens on and the two after it are the
  * places realized jerk is legitimately unbounded. Everything else must obey the
  * profile. `hardStop` makes that exemption explicit instead of a loosened
  * tolerance that would hide a real defect.
  */
 function nearWall(wall: boolean[], i: number): boolean {
-  return wall[i] === true || wall[i - 1] === true;
+  return wall[i] === true || wall[i - 1] === true || wall[i - 2] === true;
+}
+
+/**
+ * The §29.3 rest snap closes a sub-deadband gap by writing `q` directly. It is
+ * a settle, not motion, and it is bounded by `restDeadbandPx` — but measured
+ * from `q` it is a step, so it gets the same explicit exemption a wall does
+ * rather than a loosened tolerance. (Measuring from `v` hid it entirely, which
+ * is the reason this exemption has to be written down at all.)
+ */
+function nearRest(rest: boolean[], i: number): boolean {
+  return rest[i] === true || rest[i - 1] === true || rest[i - 2] === true;
 }
 
 function run(
@@ -410,9 +449,10 @@ describe('realized motion limits (§29.2, §70)', () => {
       const trace = substepTrace(following, frames, { initialPositionPx: 1000 });
       // Forward-only following never reaches a wall in this corpus.
       expect(trace.wall.some(Boolean)).toBe(false);
-      for (let i = 2; i < trace.a.length; i++) {
-        expect(Math.abs(trace.a[i] ?? 0)).toBeLessThanOrEqual(following.aMax + 1e-6);
-        expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(following.jerkMax + 1e-6);
+      for (let i = FIRST_DERIVED_SAMPLE; i < trace.a.length; i++) {
+        if (nearRest(trace.rest, i)) continue;
+        expect(Math.abs(trace.a[i] ?? 0)).toBeLessThanOrEqual(following.aMax * LIMIT_SLACK);
+        expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(following.jerkMax * LIMIT_SLACK);
       }
     }
   });
@@ -432,10 +472,10 @@ describe('realized motion limits (§29.2, §70)', () => {
       };
     });
     const trace = substepTrace(rewinding, frames, { initialPositionPx: 6000 });
-    for (let i = 2; i < trace.a.length; i++) {
-      if (nearWall(trace.wall, i)) continue;
-      expect(Math.abs(trace.a[i] ?? 0)).toBeLessThanOrEqual(rewinding.aMax + 1e-6);
-      expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(rewinding.jerkMax + 1e-6);
+    for (let i = FIRST_DERIVED_SAMPLE; i < trace.a.length; i++) {
+      if (nearWall(trace.wall, i) || nearRest(trace.rest, i)) continue;
+      expect(Math.abs(trace.a[i] ?? 0)).toBeLessThanOrEqual(rewinding.aMax * LIMIT_SLACK);
+      expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(rewinding.jerkMax * LIMIT_SLACK);
     }
     // The guard brakes INTO the travel budget, so the speed left when the wall
     // does arrive is a fraction of a rendered line per second — not the
@@ -464,8 +504,9 @@ describe('realized motion limits (§29.2, §70)', () => {
       })),
     ];
     const trace = substepTrace(following, frames, { initialPositionPx: 1000 });
-    for (let i = 2; i < trace.a.length; i++) {
-      expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(following.jerkMax + 1e-6);
+    for (let i = FIRST_DERIVED_SAMPLE; i < trace.a.length; i++) {
+      if (nearRest(trace.rest, i)) continue;
+      expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(following.jerkMax * LIMIT_SLACK);
     }
     // Forward-only, so it cannot come back — but it must not sail far past
     // either. (The engine's forward latch is what stops the regression reaching
@@ -542,9 +583,10 @@ describe('realized motion limits (§29.2, §70)', () => {
       Array.from({ length: 900 }, () => ({ targetPx: 20000, feedForwardVelocityPxS: 900 })),
     );
     expect(Math.max(...trace.v)).toBeLessThanOrEqual(catching.vForwardMax + 1e-6);
-    for (let i = 2; i < trace.a.length; i++) {
-      expect(Math.abs(trace.a[i] ?? 0)).toBeLessThanOrEqual(catching.aMax + 1e-6);
-      expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(catching.jerkMax + 1e-6);
+    for (let i = FIRST_DERIVED_SAMPLE; i < trace.a.length; i++) {
+      if (nearRest(trace.rest, i)) continue;
+      expect(Math.abs(trace.a[i] ?? 0)).toBeLessThanOrEqual(catching.aMax * LIMIT_SLACK);
+      expect(Math.abs(trace.jerk[i] ?? 0)).toBeLessThanOrEqual(catching.jerkMax * LIMIT_SLACK);
     }
   });
 
@@ -710,5 +752,106 @@ describe('finite-value fuse (C1)', () => {
       expect(Number.isFinite(step.a)).toBe(true);
     }
     expect(controller.state.q).toBeGreaterThan(100);
+  });
+});
+
+/**
+ * §70.8. A hitch is a MISSED REFRESH, and "missed" is only definable against
+ * the refresh the display actually has. The threshold was a fixed 28 ms, which
+ * is below a 30 Hz panel's 33.3 ms period — so on one of those every healthy
+ * frame was a dropped frame, degradation tripped in 4 s, and the 0.05 recovery
+ * ratio could never be met because the numerator was every frame.
+ */
+describe('frame-interval estimator (§70.8)', () => {
+  function feed(
+    estimator: ReturnType<typeof createFrameIntervalEstimator>,
+    intervalMs: number,
+    count: number,
+  ): number {
+    let threshold = 0;
+    for (let i = 0; i < count; i++) threshold = estimator.observe(intervalMs);
+    return threshold;
+  }
+
+  it('learns 60, 30 and 120 Hz from the deltas alone', () => {
+    for (const hz of [120, 60, 30]) {
+      const estimator = createFrameIntervalEstimator();
+      feed(estimator, 1000 / hz, 120);
+      expect(estimator.nominalMs, `${hz} Hz`).toBeCloseTo(1000 / hz, 6);
+    }
+  });
+
+  it('does not call a display’s own refresh interval a hitch', () => {
+    for (const hz of [120, 90, 60, 30, 24]) {
+      const estimator = createFrameIntervalEstimator();
+      const threshold = feed(estimator, 1000 / hz, 120);
+      expect(threshold, `${hz} Hz`).toBeGreaterThan(1000 / hz);
+    }
+  });
+
+  it('does call a missed refresh a hitch at 60 Hz and below', () => {
+    for (const hz of [60, 30, 24]) {
+      const estimator = createFrameIntervalEstimator();
+      const threshold = feed(estimator, 1000 / hz, 120);
+      // One dropped refresh is two periods.
+      expect(threshold, `${hz} Hz`).toBeLessThan(2000 / hz);
+    }
+  });
+
+  it('never tightens below the seed, so 120 Hz is not held to a 12 ms budget', () => {
+    // Deliberate policy, not an oversight: motion is refresh-rate independent
+    // (§32.3), and a frame that lands inside a 60 Hz budget is not something a
+    // presenter can see. Holding a 144 Hz panel to 8 ms would report dropped
+    // frames — and trip §61 degradation — for output that looks perfect.
+    const estimator = createFrameIntervalEstimator();
+    const threshold = feed(estimator, 1000 / 120, 120);
+    expect(threshold).toBeGreaterThanOrEqual(HITCH_THRESHOLD_MS);
+    expect(estimator.nominalMs).toBeCloseTo(1000 / 120, 6);
+  });
+
+  it('uses the seed until it has enough samples to measure with', () => {
+    const estimator = createFrameIntervalEstimator();
+    expect(estimator.nominalMs).toBeNull();
+    expect(estimator.thresholdMs).toBe(HITCH_THRESHOLD_MS);
+    expect(feed(estimator, 1000 / 30, 5)).toBe(HITCH_THRESHOLD_MS);
+  });
+
+  it('is not moved by the outliers it exists to detect', () => {
+    // A 60 Hz display dropping a third of its frames must still measure 60 Hz;
+    // a mean would drift up until the drops stopped being visible at all.
+    const estimator = createFrameIntervalEstimator();
+    for (let i = 0; i < 300; i++) estimator.observe(i % 3 === 2 ? 50 : 1000 / 60);
+    expect(estimator.nominalMs).toBeCloseTo(1000 / 60, 6);
+    expect(estimator.thresholdMs).toBeLessThan(50);
+  });
+
+  it('ignores a resumed-window gap rather than adopting it as the period', () => {
+    const estimator = createFrameIntervalEstimator();
+    feed(estimator, 1000 / 60, 120);
+    const before = estimator.nominalMs;
+    estimator.observe(9000); // hidden window, then restored
+    for (let i = 0; i < 20; i++) estimator.observe(1000 / 60);
+    expect(estimator.nominalMs).toBeCloseTo(before ?? -1, 6);
+  });
+
+  it('adapts when the stage window moves to a different display', () => {
+    const estimator = createFrameIntervalEstimator();
+    feed(estimator, 1000 / 60, 120);
+    feed(estimator, 1000 / 30, 120);
+    expect(estimator.nominalMs).toBeCloseTo(1000 / 30, 6);
+  });
+
+  it('never lets the threshold exceed the integration cap', () => {
+    const estimator = createFrameIntervalEstimator();
+    const threshold = feed(estimator, 200, 120); // a 5 Hz slideshow
+    expect(threshold).toBeLessThanOrEqual(MAX_FRAME_DT_MS);
+  });
+
+  it('resets to the seed', () => {
+    const estimator = createFrameIntervalEstimator();
+    feed(estimator, 1000 / 30, 120);
+    estimator.reset();
+    expect(estimator.nominalMs).toBeNull();
+    expect(estimator.thresholdMs).toBe(HITCH_THRESHOLD_MS);
   });
 });

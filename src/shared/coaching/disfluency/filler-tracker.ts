@@ -106,6 +106,16 @@ export class FillerTracker {
   private recentTokens: UtteranceToken[] = [];
   private positiveStreakEmitted = false;
   private hadFillersEarlier = false;
+  /**
+   * §26.5. Events this tracker stopped believing since the last drain.
+   *
+   * Every demotion path writes here — the late-VAD timing reassessment, a
+   * precision transcript that revised the event away, and a Luna rejection —
+   * so a caller has one place to ask "what changed?" rather than three.
+   * Without it the correction was visible on the tile (the count drops) but
+   * invisible to the policy, and a tip built on the demoted event stayed up.
+   */
+  private revisedEventIds = new Set<string>();
 
   constructor(options: FillerTrackerOptions) {
     this.lexicon = options.lexicon ?? createFillerLexicon(options.lexiconOptions ?? {});
@@ -133,6 +143,7 @@ export class FillerTracker {
     this.recentTokens = [];
     this.positiveStreakEmitted = false;
     this.hadFillersEarlier = false;
+    this.revisedEventIds.clear();
     this.detector.reset();
   }
 
@@ -195,6 +206,34 @@ export class FillerTracker {
     this.trim(interval.endMs);
   }
 
+  /**
+   * §12.5 / §16.5 conjunct 3. The VAD has processed local audio through
+   * `audioTimeMs`, whether or not a run closed there.
+   *
+   * `observeSpeechInterval` advances the same watermark, but only ever to the
+   * *end of a closed run* — and a run closes on a silence gap. So the region
+   * the VAD had already scanned and found silent read as "the VAD has not got
+   * here yet", and {@link hasCredibleTiming} took its permissive branch across
+   * exactly the audio where it should have been strictest.
+   *
+   * That matters because of where hallucinated fillers come from: a
+   * transcription model invents an "um" during *silence*, and a Realtime commit
+   * carries roughly 420 ms of endpoint tail past the last speech. Both land in
+   * the window this heartbeat closes. Without it the event was permissively
+   * confirmed, the tile counted it, and the *next* interval close demoted it —
+   * so the presenter watched the number tick up and then back down.
+   *
+   * The VAD runs 20 ms frames and is always ahead of a commit, so a caller
+   * folding local audio in should call this as it goes; the permissive branch
+   * then means what it was documented to mean — "no local audio at all" —
+   * rather than "no local audio since the last gap".
+   */
+  noteVadObservedThrough(audioTimeMs: number): void {
+    if (this.vadObservedUpToMs !== null && audioTimeMs <= this.vadObservedUpToMs) return;
+    this.vadObservedUpToMs = audioTimeMs;
+    this.reassessTiming();
+  }
+
   /** §16.2. A hesitation-like region; promotes the forms that need one. */
   observeAcousticCandidate(candidate: AcousticHesitationCandidate): void {
     for (const detection of this.detections.values()) {
@@ -253,6 +292,7 @@ export class FillerTracker {
     }
     for (const eventId of outcome.demoted) {
       this.applyConfidence(eventId, 'rejected', 'precision_transcript');
+      this.revisedEventIds.add(eventId);
     }
     for (const eventId of [...outcome.deduplicated, ...outcome.corroborated]) {
       this.addEvidenceSource(eventId, 'precision_transcript');
@@ -268,7 +308,37 @@ export class FillerTracker {
   applyLunaVerdict(eventId: string, verdict: 'confirmed' | 'rejected'): boolean {
     if (!this.detections.has(eventId)) return false;
     this.applyConfidence(eventId, verdict, 'luna');
+    if (verdict === 'rejected') this.revisedEventIds.add(eventId);
     return true;
+  }
+
+  /**
+   * §26.5. Take the events demoted or rejected since the last call, and clear
+   * the buffer.
+   *
+   * Drained rather than observed so the caller cannot miss one by subscribing
+   * late, and so the tracker holds no callback into the coach layer — the
+   * disfluency lane knows nothing about tips, and it stays that way.
+   *
+   * The intended wiring, in the integrator that owns both objects:
+   *
+   * ```ts
+   * for (const eventId of tracker.drainRevisedEventIds()) {
+   *   for (const evidenceId of registry.invalidateByContributingEvent(eventId, 'demoted_to_probable')) {
+   *     policy.cancel('evidence_revised', { evidenceId });
+   *   }
+   *   policy.cancel('evidence_revised', { evidenceId: eventId });
+   * }
+   * ```
+   *
+   * The second `cancel` covers a tip already on the glass whose candidate the
+   * registry has since pruned: the policy also matches against the tip's own
+   * `contributingEventIds`.
+   */
+  drainRevisedEventIds(): string[] {
+    const ids = [...this.revisedEventIds];
+    this.revisedEventIds.clear();
+    return ids;
   }
 
   /* --------------------------------------------------------------------- */
@@ -386,6 +456,9 @@ export class FillerTracker {
       }
       if (hasCredibleTiming(event, evidence)) continue;
       event.confidence = 'probable';
+      // §26.5: the count is about to correct downward. Anything the scheduler
+      // built on this event must come down with it.
+      this.revisedEventIds.add(event.eventId);
       // The veto is itself local-audio evidence about this event.
       this.addEvidenceSource(event.eventId, 'local_audio');
     }

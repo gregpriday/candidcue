@@ -102,6 +102,14 @@ export interface SpeechClockSnapshot {
   deliveryMs: number;
   /** Voiced milliseconds accumulated from closed speech intervals. */
   voicedMs: number;
+  /**
+   * Voiced milliseconds in the run the VAD has not closed yet, ms.
+   *
+   * Deliberately separate from {@link voicedMs}: closed intervals remain the
+   * accounting authority (§12.5), and this is the *provisional* evidence that
+   * keeps the §14.4 floor reachable during fluent, gapless speech.
+   */
+  openVoicedMs: number;
   /** Silence the VAD preserved inside speech runs, ms (§12.5). */
   internalPauseMs: number;
   /** Audio removed from delivery time because no claim can be made about it. */
@@ -141,6 +149,27 @@ export class SpeechClock {
 
   private lastVoiceActivityMs: number | null = null;
 
+  /**
+   * §12.5 / §14.4. Provisional voiced evidence from the run the VAD has *not*
+   * closed yet.
+   *
+   * Closed intervals are the accounting authority and stay that way: they are
+   * the only thing `voicedMsTotal` moves on. But a presenter speaking fluently
+   * never leaves a gap long enough for the VAD to close a run, so with closed
+   * intervals as the *only* source of evidence the §14.4 floor (3 500 ms of
+   * voiced audio) was never reached and the tile read `learning` / `wpm: null`
+   * thirty seconds into a monologue while final commits were arriving. The best
+   * speakers got the least telemetry, which is the opposite of the intent.
+   *
+   * So the open run contributes to the *evidence* queries — `voicedMsIn` and
+   * `voicedTimeAt` — without contributing to the closed-interval totals. The
+   * §14.4 floor itself is untouched; it is now reachable.
+   */
+  private openStartMs: number | null = null;
+  private openVoicedMs = 0;
+  private openEndMs = 0;
+  private lastClosedEndMs = -Infinity;
+
   constructor(options: Partial<SpeechClockOptions> = {}) {
     this.options = { ...DEFAULT_SPEECH_CLOCK_OPTIONS, ...options };
   }
@@ -156,6 +185,7 @@ export class SpeechClock {
     this.intervals.length = 0;
     this.voicedPrefix.length = 0;
     this.lastVoiceActivityMs = null;
+    this.clearOpenRun();
   }
 
   /** Advance the clock without new evidence (a silent frame gap, a tick). */
@@ -185,7 +215,43 @@ export class SpeechClock {
 
     if (frame.speechProbability >= this.options.liveSpeechProbability) {
       this.lastVoiceActivityMs = frameEndMs;
+      // Only audio the VAD has not already accounted for. A frame replayed
+      // inside a closed interval must not be counted twice — closed intervals
+      // remain the accounting path, exactly as before.
+      if (frame.audioTimeMs >= this.lastClosedEndMs) {
+        this.openStartMs = this.openStartMs ?? frame.audioTimeMs;
+        this.openVoicedMs += this.options.frameDurationMs;
+        this.openEndMs = frameEndMs;
+      }
     }
+  }
+
+  /**
+   * The run the VAD has not closed yet, or `null`. Diagnostics and tests; the
+   * evidence queries fold it in themselves.
+   */
+  openRun(): { startMs: number; endMs: number; voicedMs: number } | null {
+    if (this.openStartMs === null || this.openVoicedMs <= 0) return null;
+    return { startMs: this.openStartMs, endMs: this.openEndMs, voicedMs: this.openVoicedMs };
+  }
+
+  private clearOpenRun(): void {
+    this.openStartMs = null;
+    this.openVoicedMs = 0;
+    this.openEndMs = 0;
+    this.lastClosedEndMs = -Infinity;
+  }
+
+  /** The open run's voiced share overlapping `[startMs, endMs]`. */
+  private openVoicedMsIn(startMs: number, endMs: number): number {
+    const run = this.openRun();
+    if (run === null) return 0;
+    const lo = Math.max(startMs, run.startMs);
+    const hi = Math.min(endMs, run.endMs);
+    if (hi <= lo) return 0;
+    const span = run.endMs - run.startMs;
+    if (span <= 0) return 0;
+    return run.voicedMs * ((hi - lo) / span);
   }
 
   /**
@@ -202,6 +268,13 @@ export class SpeechClock {
       this.lastVoiceActivityMs = interval.endMs;
     }
     this.intervals.push(interval);
+    // The closed interval now accounts for this audio; the provisional copy of
+    // it must go, or the evidence would be double-counted the moment the
+    // presenter finally drew breath.
+    this.openStartMs = null;
+    this.openVoicedMs = 0;
+    this.openEndMs = 0;
+    this.lastClosedEndMs = Math.max(this.lastClosedEndMs, interval.endMs);
     this.trimIntervals();
   }
 
@@ -258,7 +331,7 @@ export class SpeechClock {
       }
       total += interval.voicedMs * ((hi - lo) / span);
     }
-    return total;
+    return total + this.openVoicedMsIn(startMs, endMs);
   }
 
   /** Unmeasured milliseconds inside `[startMs, endMs]`. */
@@ -293,9 +366,16 @@ export class SpeechClock {
    * silence that was already absent.
    */
   voicedTimeAt(audioTimeMs: number): number {
+    // The open run always sits after every closed interval, so its share adds
+    // on top of whatever the closed accounting reports at this time.
+    const open = this.openVoicedMsIn(-Infinity, audioTimeMs);
     if (this.intervals.length === 0) {
-      return this.voicedMsTotal;
+      return this.voicedMsTotal + open;
     }
+    return this.closedVoicedTimeAt(audioTimeMs) + open;
+  }
+
+  private closedVoicedTimeAt(audioTimeMs: number): number {
     const first = this.intervals[0];
     if (first !== undefined && audioTimeMs <= first.startMs) {
       return this.voicedPrefix[0] ?? 0;
@@ -335,6 +415,7 @@ export class SpeechClock {
       audioTimeMs: this.nowMs,
       deliveryMs: this.deliveryMsIn(this.takeStartMs, this.nowMs),
       voicedMs: this.voicedMsTotal,
+      openVoicedMs: this.openVoicedMs,
       internalPauseMs: this.internalPauseMsTotal,
       unmeasuredMs: this.unmeasuredMsIn(this.takeStartMs, this.nowMs),
       silenceSinceSpeechMs,

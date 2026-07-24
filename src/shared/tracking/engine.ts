@@ -474,9 +474,24 @@ export class AlignmentEngine {
       return {};
     }
 
+    // §30.7 out-of-order arrival. Finality has to be true of *both* the event
+    // that woke the pass and the evidence the pass will actually align:
+    //
+    //   `update.final` alone — the old behaviour — let a late completion for
+    //   an *older* item mark the whole pass final while the tail's newest
+    //   tokens were still provisional. Everything gated on finality (retake
+    //   commits, large-skip commits, `filterMeasurementNoiseFinal`, and above
+    //   all `authorizedDiscontinuity`, which now re-anchors the filter
+    //   outright) then fired on majority-provisional evidence.
+    //
+    //   `tail.final` alone is not enough either: an event that carries no
+    //   tokens at all (`item_started`, a transport frame) leaves the tail
+    //   entirely final, so the pass would re-commit already-consumed evidence
+    //   and log a zero-distance pace span across the silence before it.
+    const final = update.final && tail.final;
     this.countFinalTokens(update.itemId, update.final);
-    const decision = this.align(tail, update.final, nowMs);
-    const output = this.applyDecision(decision, tail, update.final, nowMs);
+    const decision = this.align(tail, final, nowMs);
+    const output = this.applyDecision(decision, tail, final, nowMs);
     const context = this.maybeBuildSemanticContext(tail, update.final, nowMs);
     if (context !== undefined) output.semanticContext = context;
     return output;
@@ -753,6 +768,7 @@ export class AlignmentEngine {
       const threshold = this.backwardThreshold(-distance);
       if (
         best.confidence < threshold ||
+        !this.challengerHasPersisted() ||
         best.sequence.contentMatches < profile.minimumBackwardContentMatches ||
         margin < profile.minimumBackwardMargin
       ) {
@@ -1110,6 +1126,7 @@ export class AlignmentEngine {
 
     if (
       supports >= RETAKE_SUPPORT_REQUIRED &&
+      this.challengerHasPersisted() &&
       best.confidence >= this.profile.shortRetakeThreshold &&
       best.sequence.contentMatches >= Math.min(this.profile.minimumBackwardContentMatches, 4)
     ) {
@@ -1126,6 +1143,34 @@ export class AlignmentEngine {
       best,
       margin,
     };
+  }
+
+  /**
+   * §16.5 challenger hysteresis, the real thing.
+   *
+   * The beam has always computed `challengerPersistence`, and nothing in the
+   * codebase read it; `smoothProfile.alignment.retakePersistenceTokens` and
+   * `retakePersistenceMs` were likewise read by nothing. Commit-flap
+   * protection rested entirely on thresholds, softmax, and the local
+   * `RETAKE_SUPPORT_REQUIRED` count of consecutive supporting events — which
+   * measures how often the same *position* recurred, not whether the beam's
+   * leading *lineage* actually held its lead. Those are different questions,
+   * and §16.5 asks the second one.
+   *
+   * Applied to both backward-commit paths, so the weaker one cannot be more
+   * permissive than the stronger. Either measure suffices — a presenter who
+   * restarts and keeps talking clears the token bar quickly, one who restarts
+   * and pauses clears the time bar — because requiring both would make a quiet
+   * retake wait for speech that is not coming.
+   */
+  private challengerHasPersisted(): boolean {
+    const persistence = this.lastMeasurement?.challengerPersistence;
+    if (persistence === undefined) return true; // no beam evidence to weigh
+    const { retakePersistenceTokens, retakePersistenceMs } = this.smoothProfile.alignment;
+    return (
+      persistence.finalTokens >= retakePersistenceTokens ||
+      persistence.ms >= retakePersistenceMs
+    );
   }
 
   private holdDecision(

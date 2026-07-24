@@ -169,3 +169,53 @@ describe('H6: the sidecar feed reports real scheduler state', () => {
     setActiveSemanticSidecar(null);
   });
 });
+
+/*
+ * §42.1–42.2. `deps.budget` had no caller at all — the 400-request cap was a
+ * module constant that no setting could reach — and the prices had no path
+ * into the scheduler, so the cost readout was permanently null by
+ * construction rather than by honesty.
+ */
+describe('§42: the take’s budget and prices are the caller’s', () => {
+  it('passes a caller-supplied request cap through to the scheduler', () => {
+    const sidecar = new SemanticSidecar({
+      sessionId: 's1',
+      sessionGeneration: 1,
+      profile: DEFAULT_SMOOTH_FOLLOW_PROFILE,
+      postAssistEvidence: vi.fn(),
+      budget: { maxRequestsPerSession: 60 },
+    });
+    expect(sidecar.scheduler.getBudget().maxRequestsPerSession).toBe(60);
+  });
+
+  it('defaults to the §42 cap when the caller supplies none', () => {
+    expect(makeSidecar().scheduler.getBudget().maxRequestsPerSession).toBe(400);
+  });
+
+  it('re-caps a running take', () => {
+    const sidecar = makeSidecar();
+    sidecar.setRequestLimit(12);
+    expect(sidecar.scheduler.getBudget().maxRequestsPerSession).toBe(12);
+  });
+
+  it('reports an unknown cost until real prices arrive, then a real one', () => {
+    const sidecar = makeSidecar();
+    expect(sidecar.scheduler.getDiagnostics().estimatedCostUsd).toBeNull();
+    sidecar.setPrices({
+      inputPerMTokUsd: 2,
+      cachedInputPerMTokUsd: 0.2,
+      outputPerMTokUsd: 10,
+    });
+    // No usage yet, so the honest answer is now a genuine zero, not "unknown".
+    expect(sidecar.scheduler.getDiagnostics().estimatedCostUsd).toBe(0);
+  });
+
+  it('a disposed sidecar accepts neither a new cap nor new prices', () => {
+    const sidecar = makeSidecar();
+    sidecar.dispose();
+    sidecar.setRequestLimit(3);
+    sidecar.setPrices({ inputPerMTokUsd: 9, cachedInputPerMTokUsd: 9, outputPerMTokUsd: 9 });
+    expect(sidecar.scheduler.getBudget().maxRequestsPerSession).toBe(400);
+    expect(sidecar.scheduler.getDiagnostics().estimatedCostUsd).toBeNull();
+  });
+});

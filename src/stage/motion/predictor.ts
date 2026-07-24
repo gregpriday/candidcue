@@ -137,7 +137,20 @@ export function predictSemanticPosition(
   const effectiveSec = Math.min(ageMs / 1000, horizonSec);
   // Inside the trusted horizon this is ordinary continuous following, bounded
   // by the horizon itself.
-  const trustedDrift = v0 * effectiveSec + 0.5 * a0 * effectiveSec * effectiveSec;
+  //
+  // "Bounded by the horizon" is only a bound if the velocity is bounded too.
+  // The coast budget below deliberately does not apply here — clamping
+  // in-horizon motion to under one rendered line would make the horizon
+  // meaningless at ordinary speaking rates — which left `v0·t + ½a0·t²`
+  // completely unbounded, so a single frame reporting an impossible pace
+  // extrapolated to a hundred-plus units inside 750 ms. The envelope that DOES
+  // belong here is the one that made the horizon a reasonable idea in the first
+  // place: the fastest rate a human can speak. Nothing may predict further than
+  // a presenter could actually have spoken in the elapsed time.
+  const paceCeiling = Math.max(0, profile.prediction.maxUnitsPerSecond) * effectiveSec;
+  const rawTrustedDrift = v0 * effectiveSec + 0.5 * a0 * effectiveSec * effectiveSec;
+  const trustedDrift = Math.max(-paceCeiling, Math.min(paceCeiling, rawTrustedDrift));
+  const trustedClamped = trustedDrift !== rawTrustedDrift;
   let velocity = v0 + a0 * effectiveSec;
 
   const excessSec = Math.max(0, ageMs / 1000 - horizonSec);
@@ -163,12 +176,18 @@ export function predictSemanticPosition(
   if (coastClamped) velocity = 0;
 
   let drift = trustedDrift + clampedCoast;
-  let driftClamped = coastClamped;
+  let driftClamped = coastClamped || trustedClamped;
   if (!policy.allowBackward && drift < 0) {
     drift = 0;
     driftClamped = true;
   }
   if (!policy.allowBackward && velocity < 0) velocity = 0;
+  // The predicted velocity is feed-forward: it becomes pixels per second at the
+  // plant. Integrating an implausible acceleration over the horizon can carry
+  // it past the pace ceiling even from a plausible `v0`, so it is bounded by
+  // the same envelope the drift is.
+  const vCeiling = Math.max(0, profile.prediction.maxUnitsPerSecond);
+  velocity = Math.max(-vCeiling, Math.min(vCeiling, velocity));
 
   return {
     unit: anchorUnit + drift,

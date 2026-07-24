@@ -157,6 +157,30 @@ export class SemanticFilter {
    */
   observe(observation: FilterObservation): void {
     this.predict(observation.atMs);
+
+    // §25.1: an authorized discontinuity is not evidence to be weighed against
+    // the prior — the prior is *known* to be wrong, because the engine has
+    // already committed the retake or the large skip that invalidated it. It
+    // re-anchors, exactly as `resetTo` does for command/manual navigation
+    // (§24.2), keeping epoch and state so the caller stays in charge of both.
+    //
+    // Weighing it was unrecoverable in two compounding ways. The innovation
+    // clamp used to lift only in REANCHORING/REWINDING, but this observation
+    // is fed from `applyDecision` *before* `emit` mints the directive those
+    // states are derived from, so the filter was still FOLLOWING and the lift
+    // could never fire. And `measurementVariance` adds `beamVariance × 0.25`,
+    // while beam variance is at its largest precisely at a retake, where the
+    // beam is bimodal — so the measurement was trusted least exactly when it
+    // was most authoritative (measured gain ≈ 0.036). The result was a
+    // ~28-unit gap between the committed destination and the trajectory the
+    // stage follows, which closed only if the presenter kept talking through
+    // the directive's 1.5 s TTL. A presenter who pauses after "let me take
+    // that again" — the normal case — was left pointing at the old position.
+    if (observation.finalEvidence && observation.authorizedDiscontinuity === true) {
+      this.reanchorTo(observation);
+      return;
+    }
+
     const variance = this.measurementVariance(observation);
     const clamp = this.innovationClamp(observation);
     const rawInnovation = finite(observation.positionUnits, this.position) - this.position;
@@ -202,6 +226,31 @@ export class SemanticFilter {
     // past the last accepted measurement (§24.6); re-anchoring first is what
     // stops it from clamping the measurement itself.
     if (!Number.isFinite(this.position)) this.position = this.anchorUnits;
+    this.anchorUnits = this.position;
+    this.applyConstraints();
+  }
+
+  /**
+   * Fuse the destination of an authorized discontinuity (§25.1). Position and
+   * covariance are replaced rather than blended; velocity and acceleration are
+   * zeroed because the trajectory that produced them belongs to the superseded
+   * take. Unlike `resetTo` this preserves `epoch` and `state`: the engine owns
+   * both, and this is a measurement it has already authorized, not a new
+   * authority event.
+   */
+  private reanchorTo(observation: FilterObservation): void {
+    const target = finite(observation.positionUnits, this.position);
+    this.position = target;
+    this.velocity = 0;
+    this.acceleration = 0;
+    this.covariance = diag(this.profile.filterMeasurementNoiseFinal, 0.5, 0.25);
+    this.lastMeasurementAtMs = observation.atMs;
+    if (observation.confidence >= this.profile.lockedThreshold) {
+      this.lastStrongMeasurementAtMs = observation.atMs;
+    }
+    // The coast budget in `applyConstraints` is measured from the anchor, so
+    // the anchor has to move first or the clamp bounds the very measurement it
+    // exists to protect (see the ordering note in `observe`).
     this.anchorUnits = this.position;
     this.applyConstraints();
   }
@@ -347,6 +396,13 @@ export class SemanticFilter {
    *
    * The clamp is lifted only for the single observation that *is* the
    * authorized destination, and only when it carries final evidence.
+   *
+   * The lift is keyed to the *observation*, never to the state. Requiring
+   * REANCHORING/REWINDING as well made it unreachable: the engine feeds the
+   * committed retake to the filter before it mints the directive those states
+   * are projected from. `observe` now re-anchors on such an observation and
+   * never reaches here, but the predicate is kept correct so the function
+   * means what it says when read or tested on its own.
    */
   private innovationClamp(observation?: FilterObservation): number {
     const base = this.profile.filterInnovationClampUnits;
@@ -354,10 +410,10 @@ export class SemanticFilter {
       observation !== undefined &&
       observation.finalEvidence &&
       observation.authorizedDiscontinuity === true;
+    if (authorized) return Number.POSITIVE_INFINITY;
     switch (this.state) {
       case 'reanchoring':
       case 'rewinding':
-        if (authorized) return Number.POSITIVE_INFINITY;
         return base;
       case 'catching_up':
         return base * this.smooth.motion.catchUpMultiplier;

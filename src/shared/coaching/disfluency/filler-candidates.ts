@@ -332,11 +332,23 @@ function buildCandidate(input: {
 
 /**
  * Confidence from the margin over the threshold: exactly at the threshold is
- * a weak claim, twice the threshold is a strong one. Deliberately never 1.
+ * the weakest claim worth making, twice the threshold is a strong one.
+ * Deliberately never 1.
+ *
+ * The base is {@link THRESHOLD_CONFIDENCE} rather than something lower for a
+ * blunt reason: it is the catalog's `localConfidenceFloor` for the codes these
+ * candidates map to (`REPEATED_FILLER`, `REPETITIVE_OPENER`,
+ * `TAKE_SENTENCE_FROM_TOP`). With a lower base, a candidate produced at
+ * exactly the configured trigger count was rejected by the policy every time,
+ * so `sameStrictFillerCount: 3` silently meant "four", `stumbleCount: 2` meant
+ * "three" and `openerMinRun: 5` meant "six". A configured count must be the
+ * count the presenter actually experiences.
  */
+export const THRESHOLD_CONFIDENCE = 0.6;
+
 function marginConfidence(count: number, threshold: number): number {
   if (threshold <= 0) return 0.5;
-  return clamp(0.55 + 0.1 * (count - threshold), 0.55, 0.95);
+  return clamp(THRESHOLD_CONFIDENCE + 0.1 * (count - threshold), THRESHOLD_CONFIDENCE, 0.95);
 }
 
 function clamp(value: number, low = 0, high = 1): number {

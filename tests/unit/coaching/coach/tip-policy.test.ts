@@ -650,4 +650,60 @@ describe('the copy boundary at the policy', () => {
       expect(Object.keys(tip ?? {})).not.toContain(forbidden);
     }
   });
+
+  /* -------------------------------------------------------------------------
+   * §37 accounting
+   * ---------------------------------------------------------------------- */
+
+  /**
+   * `tipsShown / tipsProposed` is the ratio the contract advertises as the one
+   * that tells you the rail is too chatty, and `tipsSuppressed` used to include
+   * the ranking losers — added on the *success* path, so a window where one tip
+   * beat two others recorded three suppressions and one showing. The two
+   * diagnoses are opposites: "the rail refuses most of what it finds" and "the
+   * rail found more than it could fit".
+   */
+  it('§37: counts ranking losers apart from rule-based suppression', () => {
+    const policy = new CoachTipPolicy();
+    const outcome = policy.propose(
+      [
+        proposal({ candidate: candidate({ evidenceId: 'a', type: 'critical_number_mismatch' }) }),
+        proposal({ candidate: candidate({ evidenceId: 'b', type: 'pace_too_fast' }) }),
+        proposal({ candidate: candidate({ evidenceId: 'c', type: 'low_variety' }) }),
+      ],
+      context({ audioTimeMs: 10_000 }),
+    );
+    expect(outcome.displayed).toBe(true);
+    expect(outcome.rejected.map((r) => r.reason)).toEqual(['not_selected', 'not_selected']);
+
+    const counters = policy.getCounters();
+    expect(counters).toEqual({ proposed: 3, shown: 1, suppressed: 0, notSelected: 2 });
+  });
+
+  it('§37: counts a proposal a rule refused as suppressed', () => {
+    const policy = new CoachTipPolicy();
+    policy.propose(
+      [proposal({ candidate: candidate({ localConfidence: 0.1 }) })],
+      context({ audioTimeMs: 10_000 }),
+    );
+    expect(policy.getCounters()).toEqual({
+      proposed: 1,
+      shown: 0,
+      suppressed: 1,
+      notSelected: 0,
+    });
+  });
+
+  it('§37: the master switch counts what it refused', () => {
+    const policy = new CoachTipPolicy();
+    policy.propose([proposal(), proposal()], context({ audioTimeMs: 10_000, coachingEnabled: false }));
+    // This branch used to bump `proposed` and return without touching
+    // `suppressed`, so the two silently stopped agreeing.
+    expect(policy.getCounters()).toEqual({
+      proposed: 2,
+      shown: 0,
+      suppressed: 2,
+      notSelected: 0,
+    });
+  });
 });

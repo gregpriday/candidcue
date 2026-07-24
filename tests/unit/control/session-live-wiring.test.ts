@@ -70,12 +70,31 @@ vi.mock('../../../src/control/services/voice-session', () => ({
 vi.mock('../../../src/control/services/semantic-sidecar', () => ({
   SemanticSidecar: class {
     scheduler = {
-      getDiagnostics: () => ({ requestsByLane: {} }),
+      getDiagnostics: () => ({
+        requestsByLane: {},
+        usage: {
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+          totalTokens: 0,
+        },
+        availability: 'disabled' as const,
+        // §42.2: unknown, never a confident zero.
+        estimatedCostUsd: null,
+      }),
       getAvailability: () => 'disabled' as const,
+      getBudget: () => ({
+        maxRequestsPerSession: 400,
+        maxRequestsPerHour: 600,
+        maxTotalTokens: 1_500_000,
+      }),
     };
     attachContextSource(): void {}
     cancelInFlight(): void {}
     setMode(): void {}
+    setRequestLimit(): void {}
+    setPrices(): void {}
     dispose(): void {}
   },
 }));

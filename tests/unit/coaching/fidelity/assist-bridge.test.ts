@@ -85,6 +85,8 @@ describe('toCriticalChecks', () => {
             takePassId: 't',
           },
           scriptSpanId: null,
+          scriptAnchorTokenId: null,
+          contributingEventIds: [],
           detailCode: '',
           spokenFragment: '',
           authoredFragment: '',

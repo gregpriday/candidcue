@@ -43,6 +43,9 @@ import {
   type TransportTimers,
 } from './realtime';
 import { ipcInvoke } from './ipc';
+import { getModelCapabilities, UNKNOWN_CAPABILITIES } from './capabilities';
+import { vocabularyPromptFor } from './vocabulary';
+import type { ModelCapabilities } from './capabilities';
 
 /**
  * §33.11: how often `CommandRouter.tick` is driven. The router's time-based
@@ -169,6 +172,12 @@ export class VoiceSessionPipeline {
   private commandTickTimer: unknown | null = null;
   /** True once `start()` ran, so the ticker survives an idle stretch. */
   private running = false;
+  /**
+   * §27.8 model capability registry, resolved at `start()`. Defaults to
+   * everything-off so an unreached registry can never be mistaken for
+   * "supported" — an unknown capability must fail closed.
+   */
+  private capabilities: ModelCapabilities = UNKNOWN_CAPABILITIES;
 
   constructor(private readonly deps: VoicePipelineDeps) {
     this.timers = deps.timers ?? {
@@ -199,6 +208,23 @@ export class VoiceSessionPipeline {
     this.transport = new WebRtcTranscriptionTransport({
       invoke: ipcInvoke,
       acquireMicrophone: (deviceId) => this.acquireMicrophone(deviceId ?? deps.deviceId),
+      // §26.5 vocabulary boost. The transport has always had this injection
+      // point and nothing ever filled it, so every unusual name in every
+      // script was transcribed unassisted.
+      //
+      // The dep must be synchronous, so this reads the capability registry
+      // fetched during `start()` rather than awaiting one here. Until that
+      // resolves — and today in every case, because §26.1 says the realtime
+      // model does not accept prompt steering — it returns `undefined`. The
+      // point of wiring it is that a capability flag now decides, rather than
+      // an absent call site.
+      getVocabularyPrompt: () =>
+        vocabularyPromptFor(
+          deps.compiled.scriptId,
+          deps.compiled.sourceHash,
+          this.capabilities,
+          deps.config.model,
+        ),
     });
     this.commitDriver = new ManualCommitDriver({
       sendCommit: (reason) => this.transport.commit(reason),
@@ -238,6 +264,12 @@ export class VoiceSessionPipeline {
   async start(): Promise<void> {
     this.running = true;
     this.scheduleCommandTick();
+    // Resolve capabilities before connecting, so the vocabulary supplier above
+    // has an answer by the time the transport asks. A failure here is not a
+    // session failure: `getModelCapabilities` already falls back to
+    // UNKNOWN_CAPABILITIES, which is everything-off, so the session proceeds
+    // without prompt steering rather than not at all.
+    this.capabilities = await getModelCapabilities();
     try {
       await this.controller.start(this.deps.config);
     } catch (err) {

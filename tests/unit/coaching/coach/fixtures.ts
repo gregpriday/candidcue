@@ -11,7 +11,11 @@ import type {
   LunaCoachDecision,
   LunaCoachRequest,
 } from '../../../../src/shared/contracts/coaching';
-import type { CoachLiveState, CoachPolicyContext } from '../../../../src/shared/coaching/coach';
+import type {
+  CoachLiveState,
+  CoachPolicyContext,
+  CoachRequestInput,
+} from '../../../../src/shared/coaching/coach';
 
 export const EPOCH = 7;
 export const TAKE = 'take-1';
@@ -31,6 +35,8 @@ export function candidate(overrides: Partial<CoachCandidate> = {}): CoachCandida
       ...overrides.stamp,
     },
     scriptSpanId: 'span-3',
+    scriptAnchorTokenId: null,
+    contributingEventIds: [],
     detailCode: 'sustained',
     spokenFragment: 'we shipped it last week',
     authoredFragment: 'we shipped it last week',
@@ -112,6 +118,34 @@ export function coachRequest(overrides: Partial<LunaCoachRequest> = {}): LunaCoa
       confirmedFillersLast60s: 0,
     },
     candidates: [],
+    ...overrides,
+  };
+}
+
+/**
+ * The observer's input, matching {@link coachRequest}.
+ *
+ * Shared rather than per-file so a test that drives the real `observe → tick →
+ * transport → apply` path uses the same values as the ones that hand-build an
+ * expectation, and a divergence between the two shows up as a failure instead
+ * of as a test that quietly proves nothing.
+ */
+export function requestInput(overrides: Partial<CoachRequestInput> = {}): CoachRequestInput {
+  const template = coachRequest();
+  return {
+    sessionId: template.sessionId,
+    scriptId: template.scriptId,
+    scriptRevision: template.scriptRevision,
+    trackingEpoch: EPOCH,
+    takePassId: TAKE,
+    requestAudioTimeMs: 10_000,
+    language: 'en',
+    state: liveState(),
+    profile: template.profile,
+    authoredSpans: [],
+    speech: template.speech,
+    metrics: template.metrics,
+    candidates: [candidate()],
     ...overrides,
   };
 }

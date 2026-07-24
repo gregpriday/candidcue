@@ -57,6 +57,15 @@ import type { TrackingDocument, TranscriptEvent } from './types';
  */
 const METRIC_CORRIDOR_FRACTION = 0.35;
 
+/**
+ * Slack on the sentence floors below. The committed cursor lands on the last
+ * token the *aligner matched*, and a sequence alignment is entitled to drop
+ * trailing stopwords, so a commit that finished a sentence routinely parks a
+ * token or two short of that sentence's last token. Small, literal, and about
+ * tokenization rather than about §13.
+ */
+const METRIC_SENTENCE_SLACK_TOKENS = 3;
+
 /* ---------------------------------------------------------------------------
  * Scenario model
  * ------------------------------------------------------------------------- */
@@ -429,6 +438,33 @@ interface MetricSection {
   id: string;
   startTokenIndex: number;
   endTokenIndex: number;
+  /**
+   * Last token this section owns once deeper subsections have taken theirs.
+   * `endTokenIndex` is widened over the whole subtree by the compiler, so for
+   * a parent it names a token its child owns. Reading order is the sequence of
+   * *owned* spans, and every boundary question here is about those.
+   */
+  ownEndTokenIndex: number;
+  /**
+   * The owned span is nothing but the heading line. Presenters do not read
+   * headings aloud, so the cursor can never land in such a section, and §13.2
+   * says an unspoken heading between two sections does not have to be spoken —
+   * a `# Part Two` sitting between `## Scene B` and `## Scene C` is stepped
+   * over, not jumped past.
+   */
+  headingOnly: boolean;
+  /**
+   * Last token of the section's first non-heading sentence. A commit lands
+   * where an *utterance* ended, and the smallest utterance a presenter can
+   * make is one sentence — so reading a short section's opening sentence
+   * lands past any percentage-of-length corridor while having skipped
+   * precisely nothing. Entering a section by reading its opening sentence is
+   * what §13 means by entering at the start; entering three paragraphs deep
+   * is not, and that still fails.
+   */
+  firstSentenceEndTokenIndex: number;
+  /** First token of the section's last non-heading sentence — see `corridorOf`. */
+  lastSentenceStartTokenIndex: number;
 }
 
 /**
@@ -436,16 +472,24 @@ interface MetricSection {
  * `tokenIndex → sectionIndex` array. Written out here on purpose: it must not
  * share an implementation with `DocumentIndex`, because "which section owns
  * this token" is one of the things the metric is supposed to check the engine
- * on rather than agree with it about.
+ * on rather than agree with it about. The heading-only test likewise reads
+ * `spokenTokens[i].blockId` directly rather than asking `DocumentIndex` which
+ * block a token belongs to.
  */
 function buildSectionOwnership(document: TrackingDocument): {
   sections: MetricSection[];
   ownerOf: (tokenIndex: number) => number;
 } {
-  const flat: MetricSection[] = [];
+  const drafts: Omit<
+    MetricSection,
+    | 'ownEndTokenIndex'
+    | 'headingOnly'
+    | 'firstSentenceEndTokenIndex'
+    | 'lastSentenceStartTokenIndex'
+  >[] = [];
   const walk = (nodes: readonly OutlineNode[]): void => {
     for (const node of nodes) {
-      flat.push({
+      drafts.push({
         id: node.id,
         startTokenIndex: node.startTokenIndex,
         endTokenIndex: node.endTokenIndex,
@@ -454,9 +498,41 @@ function buildSectionOwnership(document: TrackingDocument): {
     }
   };
   walk(document.outline);
-  flat.sort((a, b) => a.startTokenIndex - b.startTokenIndex);
+  drafts.sort((a, b) => a.startTokenIndex - b.startTokenIndex);
 
   const tokenCount = document.spokenTokens.length;
+  const blockAt = (tokenIndex: number): string | undefined =>
+    document.spokenTokens[Math.max(0, Math.min(tokenCount - 1, tokenIndex))]?.blockId;
+
+  const sentencesByStart = [...document.sentences].sort(
+    (a, b) => a.startTokenIndex - b.startTokenIndex,
+  );
+
+  const flat: MetricSection[] = drafts.map((draft, i) => {
+    const next = drafts[i + 1];
+    const ownEndTokenIndex =
+      next !== undefined
+        ? Math.min(draft.endTokenIndex, next.startTokenIndex - 1)
+        : draft.endTokenIndex;
+    const headingBlock = blockAt(draft.startTokenIndex);
+    const bodySentences = sentencesByStart.filter(
+      (sentence) =>
+        sentence.startTokenIndex >= draft.startTokenIndex &&
+        sentence.startTokenIndex <= ownEndTokenIndex &&
+        blockAt(sentence.startTokenIndex) !== headingBlock,
+    );
+    const firstBodySentence = bodySentences[0];
+    const lastBodySentence = bodySentences[bodySentences.length - 1];
+    return {
+      ...draft,
+      ownEndTokenIndex,
+      headingOnly:
+        ownEndTokenIndex < draft.startTokenIndex || blockAt(ownEndTokenIndex) === headingBlock,
+      firstSentenceEndTokenIndex: firstBodySentence?.endTokenIndex ?? draft.startTokenIndex,
+      lastSentenceStartTokenIndex: lastBodySentence?.startTokenIndex ?? ownEndTokenIndex,
+    };
+  });
+
   const owner = new Int32Array(Math.max(0, tokenCount)).fill(-1);
   flat.forEach((section, sectionIndex) => {
     const from = Math.max(0, section.startTokenIndex);
@@ -492,12 +568,64 @@ function findProhibitedJumps(input: ReduceInput): ProhibitedJump[] {
     }
   });
 
-  /** Corridor length for a section, as a fraction of its own length. */
+  /**
+   * Corridor length for a section, as a fraction of its *owned* length, with a
+   * floor of one sentence.
+   *
+   * The floor is a statement about this metric's resolution, not a relaxation
+   * of §13. The committed cursor moves in *utterance*-sized steps, and the
+   * smallest utterance a presenter can make is one sentence — so a commit that
+   * skipped nothing at all still shows up here as a jump of up to a sentence
+   * on each side of the boundary. An endpoint-only observer cannot distinguish
+   * that from a real jump of the same size, and a pure percentage would flag
+   * every correct crossing of a short section while flagging nothing extra on
+   * a long one. Everything beyond a sentence is still script the presenter
+   * demonstrably did not say, and still fails.
+   */
   const corridorOf = (sectionIndex: number): number => {
     const section = sections[sectionIndex];
     if (section === undefined) return 0;
-    const length = Math.max(1, section.endTokenIndex - section.startTokenIndex + 1);
-    return Math.max(1, length * METRIC_CORRIDOR_FRACTION);
+    const length = Math.max(1, section.ownEndTokenIndex - section.startTokenIndex + 1);
+    return Math.max(
+      1,
+      length * METRIC_CORRIDOR_FRACTION,
+      // Leaving through the boundary: the cursor may sit a whole sentence
+      // short of the section end when the utterance that crosses it begins —
+      // it is parked on the last token of the previous sentence, one before
+      // the closing sentence starts, hence the inclusive count.
+      section.ownEndTokenIndex -
+        section.lastSentenceStartTokenIndex +
+        1 +
+        METRIC_SENTENCE_SLACK_TOKENS,
+    );
+  };
+
+  /**
+   * How far into a section it may be *entered*: as above, but floored by the
+   * section's *opening* sentence, since reading that sentence from its first
+   * word lands the cursor at its last one.
+   */
+  const entryCorridorOf = (sectionIndex: number): number => {
+    const section = sections[sectionIndex];
+    if (section === undefined) return 0;
+    return Math.max(
+      corridorOf(sectionIndex),
+      section.firstSentenceEndTokenIndex - section.startTokenIndex + METRIC_SENTENCE_SLACK_TOKENS,
+    );
+  };
+
+  /**
+   * Adjacency in *reading* terms: neighbouring sections, or sections separated
+   * only by heading-only ones (§13.2). Anything with a body between them is a
+   * non-contiguous jump and stays a release blocker.
+   */
+  const readingAdjacent = (fromIndex: number, toIndex: number): boolean => {
+    const low = Math.min(fromIndex, toIndex);
+    const high = Math.max(fromIndex, toIndex);
+    for (let i = low + 1; i < high; i++) {
+      if (sections[i]?.headingOnly !== true) return false;
+    }
+    return true;
   };
 
   const jumps: ProhibitedJump[] = [];
@@ -549,8 +677,9 @@ function findProhibitedJumps(input: ReduceInput): ProhibitedJump[] {
       });
     };
 
-    // (1) Adjacency: only the immediately neighbouring section is reachable.
-    if (Math.abs(toSectionIndex - fromSectionIndex) !== 1) {
+    // (1) Adjacency: only the neighbouring section is reachable, treating a
+    //     heading-only section between the two as the heading it is (§13.2).
+    if (!readingAdjacent(fromSectionIndex, toSectionIndex)) {
       flag('non_contiguous');
       return;
     }
@@ -558,15 +687,15 @@ function findProhibitedJumps(input: ReduceInput): ProhibitedJump[] {
     //     boundary and enter the destination near the same shared boundary.
     const forward = toSectionIndex > fromSectionIndex;
     const leftNearBoundary = forward
-      ? from.endTokenIndex - fromToken <= corridorOf(fromSectionIndex)
+      ? from.ownEndTokenIndex - fromToken <= corridorOf(fromSectionIndex)
       : fromToken - from.startTokenIndex <= corridorOf(fromSectionIndex);
     if (!leftNearBoundary) {
       flag('left_section_body');
       return;
     }
     const enteredNearBoundary = forward
-      ? current - to.startTokenIndex <= corridorOf(toSectionIndex)
-      : to.endTokenIndex - current <= corridorOf(toSectionIndex);
+      ? current - to.startTokenIndex <= entryCorridorOf(toSectionIndex)
+      : to.ownEndTokenIndex - current <= entryCorridorOf(toSectionIndex);
     if (!enteredNearBoundary) flag('entered_section_body');
   });
 

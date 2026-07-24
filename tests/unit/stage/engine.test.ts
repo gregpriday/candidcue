@@ -426,26 +426,51 @@ describe('transitions and authority (§53, §26.3)', () => {
  * monotonically: reverse is forbidden, so a target that moves BACKWARD can only
  * park the plant somewhere it can never leave. A genuine regression arrives as a
  * backward-capable state or a re-anchor directive, both of which release it.
+ *
+ * The latch is bounded, though. Without an upper bound it converts a single
+ * spiky frame that raced the plant forward into a PERMANENT error: every
+ * corrective target afterwards is "backward", every one is suppressed, and
+ * forward-only means nothing on the stage can bring it back. `§30
+ * reanchorThresholdPx` is where the latch stops being a filter and starts being
+ * a lie, so past it — and only once the disagreement has persisted — the stage
+ * spends an authorized §53 discontinuity instead.
+ *
+ * Note on revisions below: `revision` is a finite INTEGER by contract, and the
+ * receiver enforces it. These loops used to stamp `100000 + t` at a 16.7 ms
+ * step, so all but a handful of frames were structurally malformed and never
+ * reached the engine at all — the oscillation and the regression they claimed
+ * to drive never happened. `Math.round` is load-bearing.
  */
 describe('forward target latch (§70.5)', () => {
-  it('ignores a backward target revision while ordinary following', () => {
+  const THRESHOLD_PX = limitsForState('following', DEFAULT_PROFILE).reanchorThresholdPx;
+
+  /** Scroll distance between two spoken units on the built path. */
+  function gapPx(map: StageRenderedLineMap, fromUnit: number, toUnit: number): number {
+    return (
+      (map.sampleMotionPath(toUnit)?.scrollPx ?? 0) - (map.sampleMotionPath(fromUnit)?.scrollPx ?? 0)
+    );
+  }
+
+  it('suppresses a sub-threshold backward target revision while ordinary following', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
     drive(engine, { durationMs: 4000, unitsPerSecond: 6 });
     const advanced = engine.controller.state.q;
     expect(advanced).toBeGreaterThan(200);
 
-    // A newer frame that revises the position backward, still reporting
-    // positive speech velocity — the exact scenario the review named.
+    // Revised backward by less than the re-anchor threshold: tracker noise, not
+    // a reposition. Speech velocity stays positive — the exact scenario named.
+    const revisedUnit = 20;
+    expect(gapPx(map, revisedUnit, 24)).toBeLessThan(THRESHOLD_PX);
     let last = engine.frame(4000);
     for (let t = 4000; t < 6000; t += 16.7) {
       engine.receiveFrame(
         frame({
-          revision: 100000 + t,
+          revision: 100000 + Math.round(t),
           sessionTimeMs: t,
-          estimatedUnit: 4,
-          committedUnit: 3,
-          tokenIndex: 4,
+          estimatedUnit: revisedUnit,
+          committedUnit: revisedUnit - 1,
+          tokenIndex: revisedUnit,
           velocityUnitsPerSecond: 6,
         }),
         t,
@@ -454,32 +479,123 @@ describe('forward target latch (§70.5)', () => {
     }
     expect(engine.targetRegressions).toBeGreaterThan(0);
     expect(last.controllerState).toContain('target_regression');
+    // Suppressed, not resolved: no discontinuity was spent on tracker noise.
+    expect(engine.latchReanchors).toBe(0);
     // The plant did not chase a target it cannot reach, and did not move
     // backward either.
     expect(engine.controller.state.q).toBeGreaterThanOrEqual(advanced - 1e-6);
     expect(last.targetPx).toBeGreaterThanOrEqual(advanced - map.linePitchPx);
   });
 
-  it('never renders backward motion while the latch is engaged', () => {
+  it('never renders backward motion while a sub-threshold target oscillates', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
     drive(engine, { durationMs: 3000, unitsPerSecond: 8 });
+    // A flapping tracker, entirely inside the threshold.
+    expect(gapPx(map, 20, 40)).toBeLessThan(THRESHOLD_PX);
     let previous = engine.controller.state.q;
+    let accepted = 0;
     for (let t = 3000; t < 5000; t += 16.7) {
-      engine.receiveFrame(
-        frame({
-          revision: 200000 + t,
-          sessionTimeMs: t,
-          estimatedUnit: t % 200 < 100 ? 2 : 40,
-          tokenIndex: 2,
-          velocityUnitsPerSecond: 5,
-        }),
-        t,
-      );
+      if (
+        engine.receiveFrame(
+          frame({
+            revision: 200000 + Math.round(t),
+            sessionTimeMs: t,
+            estimatedUnit: t % 200 < 100 ? 20 : 40,
+            tokenIndex: 20,
+            velocityUnitsPerSecond: 5,
+          }),
+          t,
+        )
+      ) {
+        accepted++;
+      }
       const result = engine.frame(t);
       expect(result.scrollPx).toBeGreaterThanOrEqual(previous - 1e-9);
       previous = result.scrollPx;
     }
+    // The oscillation genuinely reached the engine — see the note above.
+    expect(accepted).toBeGreaterThan(100);
+    expect(engine.targetRegressions).toBeGreaterThan(0);
+    expect(engine.latchReanchors).toBe(0);
+  });
+
+  it('gives way to an authorized re-anchor past reanchorThresholdPx', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    drive(engine, { durationMs: 4000, unitsPerSecond: 12 });
+    const advanced = engine.controller.state.q;
+    const trueUnit = 2;
+    const truePx = map.sampleMotionPath(trueUnit)?.scrollPx ?? 0;
+    expect(advanced - truePx).toBeGreaterThan(THRESHOLD_PX);
+
+    // The tracker insists, frame after frame, that the presenter is far behind
+    // where the document sits. Forward-only following can never close that.
+    let firstReanchorAtMs: number | null = null;
+    let last = engine.frame(4000);
+    for (let t = 4016; t < 8000; t += 16.7) {
+      engine.receiveFrame(
+        frame({
+          revision: 500000 + Math.round(t),
+          sessionTimeMs: t,
+          estimatedUnit: trueUnit,
+          committedUnit: trueUnit,
+          tokenIndex: trueUnit,
+          velocityUnitsPerSecond: 3,
+        }),
+        t,
+      );
+      last = engine.frame(t);
+      if (last.controllerState.includes('latch_reanchor')) firstReanchorAtMs ??= t;
+    }
+
+    expect(engine.latchReanchors).toBe(1);
+    // Persistence, not a hair trigger: nothing moved for the first 400 ms.
+    expect(firstReanchorAtMs).not.toBeNull();
+    expect((firstReanchorAtMs ?? 0) - 4016).toBeGreaterThanOrEqual(400);
+    // And the document ends up where the presenter actually is, rather than a
+    // third of a viewport ahead of it for the rest of the session.
+    expect(Math.abs(last.scrollPx - truePx)).toBeLessThan(map.linePitchPx);
+  });
+
+  it('does not re-anchor on a momentary beyond-threshold blip', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    drive(engine, { durationMs: 4000, unitsPerSecond: 12 });
+    const advanced = engine.controller.state.q;
+    expect(advanced - (map.sampleMotionPath(2)?.scrollPx ?? 0)).toBeGreaterThan(THRESHOLD_PX);
+
+    // 300 ms of "you are at unit 2" — under the persistence window — then the
+    // tracker recovers. A blip must not reposition the document.
+    for (let t = 4016; t < 4316; t += 16.7) {
+      engine.receiveFrame(
+        frame({
+          revision: 600000 + Math.round(t),
+          sessionTimeMs: t,
+          estimatedUnit: 2,
+          tokenIndex: 2,
+          velocityUnitsPerSecond: 3,
+        }),
+        t,
+      );
+      engine.frame(t);
+    }
+    expect(engine.latchReanchors).toBe(0);
+    for (let t = 4316; t < 5200; t += 16.7) {
+      engine.receiveFrame(
+        frame({
+          revision: 600000 + Math.round(t),
+          sessionTimeMs: t,
+          estimatedUnit: 48 + (3 * (t - 4316)) / 1000,
+          tokenIndex: 48,
+          velocityUnitsPerSecond: 3,
+        }),
+        t,
+      );
+      engine.frame(t);
+    }
+    expect(engine.latchReanchors).toBe(0);
+    expect(engine.controller.state.q).toBeGreaterThanOrEqual(advanced - 1e-6);
   });
 
   it('releases the latch for a backward-capable state (an explicit regression)', () => {
@@ -493,7 +609,7 @@ describe('forward target latch (§70.5)', () => {
     for (let t = 4000; t < 7000; t += 16.7) {
       engine.receiveFrame(
         frame({
-          revision: 300000 + t,
+          revision: 300000 + Math.round(t),
           sessionTimeMs: t,
           estimatedUnit: 3,
           committedUnit: 3,
@@ -508,6 +624,9 @@ describe('forward target latch (§70.5)', () => {
     }
     expect(last.controllerState).not.toContain('target_regression');
     expect(engine.controller.state.q).toBeLessThan(advanced);
+    // A backward-capable state classifies the regression itself; the latch's
+    // escape hatch is for the case where nothing else will.
+    expect(engine.latchReanchors).toBe(0);
   });
 
   it('releases the latch on an authorized re-anchor', () => {
@@ -752,24 +871,68 @@ describe('acknowledgement and degradation (§54, §61)', () => {
     expect(ack?.droppedFrameCountWindow).toBe(0);
   });
 
-  it('degrades to a simpler profile after sustained missed frames (§61)', () => {
-    const { map, layout } = mapFor();
-    const engine = makeEngine(map, layout.contentHeightPx);
+  /** Run the loop on a fixed cadence pattern and report the final frame. */
+  function runCadence(engine: StageMotionEngine, intervalsMs: number[], frames: number) {
     let t = 0;
-    for (let i = 0; i < 200; i++) {
-      // Every frame overruns the budget badly.
-      t += 45;
+    let last = engine.frame(0);
+    for (let i = 0; i < frames; i++) {
+      t += intervalsMs[i % intervalsMs.length] ?? 16.7;
       engine.receiveFrame(
         frame({ revision: i + 1, sessionTimeMs: t, estimatedUnit: i * 0.2, tokenIndex: i }),
         t,
       );
-      engine.frame(t);
+      last = engine.frame(t);
     }
+    return { last, t };
+  }
+
+  it('degrades to a simpler profile after sustained missed frames (§61)', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    // A 60 Hz display genuinely dropping a third of its frames.
+    const { last, t } = runCadence(engine, [16.7, 16.7, 50], 300);
     expect(engine.diagnostics.degraded).toBe(true);
-    const result = engine.frame(t + 45);
-    expect(result.degraded).toBe(true);
+    expect(last.degraded).toBe(true);
+    const result = engine.frame(t + 50);
     expect(result.controllerState).toContain('degraded');
     // Still a controller, never event-driven jumps.
     expect(result.source).toBe('semantic');
+  });
+
+  /**
+   * §70.8. `HITCH_THRESHOLD_MS` was a fixed 28 ms — a 60 Hz assumption wearing
+   * a constant's clothing. A 30 Hz panel has a 33.3 ms period, so EVERY healthy
+   * frame counted as a dropped one: the ratio pinned at 1.0, degradation
+   * tripped in 4 s, and the 0.05 recovery ratio was unreachable because the
+   * numerator was every frame. 4K@30 over HDMI is an ordinary cheap
+   * teleprompter monitor.
+   */
+  it('does not call a steady 30 Hz display degraded (§70.8)', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    const { last } = runCadence(engine, [1000 / 30], 600);
+    expect(engine.diagnostics.degraded).toBe(false);
+    expect(last.degraded).toBe(false);
+    expect(last.hitch).toBe(false);
+    expect(engine.diagnostics.metrics.droppedFrames).toBeLessThan(
+      engine.diagnostics.metrics.frames * 0.05,
+    );
+  });
+
+  it('still catches a 30 Hz display that is missing refreshes', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    // Nominal 30 Hz, but every third refresh is missed (66.7 ms).
+    const { last } = runCadence(engine, [1000 / 30, 1000 / 30, 1000 / 15], 400);
+    expect(engine.diagnostics.degraded).toBe(true);
+    expect(last.degraded).toBe(true);
+  });
+
+  it('does not call an ordinary 120 Hz frame a hitch on a 120 Hz display', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    const { last } = runCadence(engine, [1000 / 120], 600);
+    expect(engine.diagnostics.degraded).toBe(false);
+    expect(last.hitch).toBe(false);
   });
 });

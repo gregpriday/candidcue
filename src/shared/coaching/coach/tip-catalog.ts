@@ -140,6 +140,39 @@ export interface CoachTipDefinition {
   /** §25.3: "normally Studio mode or review". */
   studioOnly: boolean;
   /**
+   * §26.3 exemption. `true` for codes that state a *fact* rather than offer
+   * advice — hardware faults (§25.1) and critical fidelity discrepancies
+   * (§25.5). They may be shown again with identical copy once their own §25
+   * cooldown has elapsed and a new evidence cluster exists, and they are not
+   * subject to the per-take showing budget.
+   *
+   * §26.3's "do not repeat identical copy at the same severity" was written for
+   * style coaching, where the second identical nudge is nagging. Applied to a
+   * microphone alert it means a presenter is told once that their mic is
+   * clipping and then never again for the rest of the take, which is the
+   * opposite of what §25.1's fifteen-second cooldown is for.
+   */
+  repeatsOnCooldown: boolean;
+  /**
+   * §25.5 / §20.1. `true` when the local layer may *propose* this code but may
+   * never display it on its own: only a `luna_validated` proposal is admitted.
+   *
+   * Exactly one code needs this, and it is the one that was deadlocked between
+   * two individually-correct rules. `fidelity/comparator.ts` refuses to produce
+   * `material_meaning_change` because materiality is a semantic judgement
+   * reserved to Luna (§25.5); the observer refuses any Luna code not permitted
+   * by the local candidate types (§23.1). Composed, the code, its
+   * `LunaCoachTipCode`, this catalog entry and the
+   * `MATERIAL_DIFFERENCE_CONFIRMED` reason code were all unreachable.
+   *
+   * The resolution is a candidate that asserts "this span was not delivered as
+   * written, and that is worth judging" — a purely lexical observation the
+   * local layer *can* make honestly — with the materiality verdict left to
+   * Luna, and this flag making "left to Luna" structural rather than a
+   * convention a future caller could forget.
+   */
+  requiresLunaValidation: boolean;
+  /**
    * `null` when Luna may never select this code — the system codes are local
    * acoustic facts Luna cannot observe (§21 authority boundaries), so they are
    * absent from `LunaCoachTipCode` and rejected if they somehow arrive.
@@ -173,6 +206,9 @@ function systemTip(
     enabledByDefault: true,
     studioOnly: false,
     lunaSelectable: false,
+    // §25.1: these recur, and the presenter needs to be told each time.
+    repeatsOnCooldown: true,
+    requiresLunaValidation: false,
     ...overrides,
   };
 }
@@ -181,6 +217,7 @@ function criticalTip(
   code: CoachTipCode,
   quoted: string,
   plain: string,
+  overrides: Partial<CoachTipDefinition> = {},
 ): CoachTipDefinition {
   return {
     code,
@@ -202,6 +239,10 @@ function criticalTip(
     enabledByDefault: true,
     studioOnly: false,
     lunaSelectable: true,
+    // §25.5: two different misread numbers are two different facts.
+    repeatsOnCooldown: true,
+    requiresLunaValidation: false,
+    ...overrides,
   };
 }
 
@@ -258,6 +299,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.5,
     enabledByDefault: true,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: true,
   },
   PACE_LIFT_SLIGHTLY: {
@@ -284,6 +327,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.5,
     enabledByDefault: true,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: true,
   },
   TERMINAL_RUSH: {
@@ -310,6 +355,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.5,
     enabledByDefault: true,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: true,
   },
 
@@ -324,7 +371,14 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
       text: 'Use a silent pause',
       interpolation: 'none',
     },
-    alternate: null,
+    // §26.3: the second showing must not be the same sentence again. Without a
+    // second wording this was a once-per-take tip, which is not what §25.3's
+    // thirty-second cooldown describes.
+    alternate: {
+      textKey: 'coach.tip.USE_SILENT_PAUSE.alt',
+      text: 'Let the gap sit',
+      interpolation: 'none',
+    },
     cooldownMs: 30_000,
     cooldownKey: 'filler',
     ...ORDINARY_DISPLAY,
@@ -334,6 +388,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.5,
     enabledByDefault: true,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: true,
   },
   REPEATED_FILLER: {
@@ -347,8 +403,14 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
       interpolation: 'filler',
     },
     // A.3: without an allowlisted filler the copy degrades to the generic tip;
-    // `resolveTipCopy` switches the CODE, so there is no unquoted variant here.
-    alternate: null,
+    // `resolveTipCopy` switches the CODE, so the variant below is never a
+    // *quoted* fallback — it is the §26.3 second wording, which deliberately
+    // drops the quotation rather than repeating "Pause instead of “um”" twice.
+    alternate: {
+      textKey: 'coach.tip.REPEATED_FILLER.alt',
+      text: 'Try a pause there instead',
+      interpolation: 'none',
+    },
     cooldownMs: 30_000,
     cooldownKey: 'filler',
     ...ORDINARY_DISPLAY,
@@ -358,6 +420,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.6,
     enabledByDefault: true,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: true,
   },
   REPETITIVE_OPENER: {
@@ -370,7 +434,11 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
       text: 'Vary the sentence openings',
       interpolation: 'none',
     },
-    alternate: null,
+    alternate: {
+      textKey: 'coach.tip.REPETITIVE_OPENER.alt',
+      text: 'Try a different opening',
+      interpolation: 'none',
+    },
     cooldownMs: 45_000,
     cooldownKey: 'style',
     ...ORDINARY_DISPLAY,
@@ -381,6 +449,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.6,
     enabledByDefault: true,
     studioOnly: true,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: true,
   },
   TAKE_SENTENCE_FROM_TOP: {
@@ -393,7 +463,11 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
       text: 'Take the sentence from the top',
       interpolation: 'none',
     },
-    alternate: null,
+    alternate: {
+      textKey: 'coach.tip.TAKE_SENTENCE_FROM_TOP.alt',
+      text: 'Reset and run the line again',
+      interpolation: 'none',
+    },
     cooldownMs: 45_000,
     cooldownKey: 'progress',
     ...ORDINARY_DISPLAY,
@@ -403,6 +477,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.6,
     enabledByDefault: true,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: true,
   },
 
@@ -432,6 +508,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.5,
     enabledByDefault: true,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: true,
   },
   KEEP_SENTENCE_FLOWING: {
@@ -458,6 +536,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.5,
     enabledByDefault: true,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: true,
   },
   LIFT_KEY_WORDS: {
@@ -466,7 +546,11 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     severity: 'gentle',
     ordinary: true,
     primary: { textKey: 'coach.tip.LIFT_KEY_WORDS', text: 'Lift the key words', interpolation: 'none' },
-    alternate: null,
+    alternate: {
+      textKey: 'coach.tip.LIFT_KEY_WORDS.alt',
+      text: 'Colour the important words',
+      interpolation: 'none',
+    },
     cooldownMs: 45_000,
     cooldownKey: 'variety',
     ...ORDINARY_DISPLAY,
@@ -477,6 +561,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.5,
     enabledByDefault: true,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: true,
   },
   SETTLE_DELIVERY: {
@@ -500,6 +586,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     // §25.4: disabled by default.
     enabledByDefault: false,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: true,
   },
 
@@ -512,10 +600,21 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     'Script says “{term}”',
     'Check the meaning',
   ),
+  /**
+   * §25.5. The one code the local layer may propose but never show.
+   *
+   * `localConfidenceFloor` is low on purpose and is not a weakening: for every
+   * other critical code it measures how sure the *comparator* is that a term
+   * was misread, which is the thing that authorizes the alert. Here the local
+   * claim is only "this was not delivered as written", and it is Luna's
+   * `lunaConfidenceFloor` of 0.85 — plus `requiresLunaValidation` — that
+   * decides whether anything is shown.
+   */
   MATERIAL_MEANING_CHANGE: criticalTip(
     'MATERIAL_MEANING_CHANGE',
     'Script says “{term}”',
     'Check that phrase',
+    { localConfidenceFloor: 0.35, requiresLunaValidation: true },
   ),
 
   // ---- §25.6 positive reinforcement (disabled by default) ----------------
@@ -537,6 +636,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.7,
     enabledByDefault: false,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: false,
   },
   POSITIVE_FILLER_STREAK: {
@@ -560,6 +661,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.7,
     enabledByDefault: false,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: false,
   },
   POSITIVE_VARIETY: {
@@ -583,6 +686,8 @@ export const COACH_TIP_CATALOG: Record<CoachTipCode, CoachTipDefinition> = {
     localConfidenceFloor: 0.7,
     enabledByDefault: false,
     studioOnly: false,
+    repeatsOnCooldown: false,
+    requiresLunaValidation: false,
     lunaSelectable: false,
   },
 };
@@ -602,16 +707,19 @@ export function bandFloorFor(code: CoachTipCode): number {
  * which is exactly how the response validator rejects a Luna code the local
  * layer never offered evidence for.
  *
- * `MIC_DISCONNECTED` and `POSITIVE_VARIETY` are deliberately absent from the
- * value set: §24 defines no candidate type for either. Device loss reaches the
- * user through the application's existing system-notice mechanism (§6.1), not
- * the rail. See the module report for the spec gap.
+ * The mapping is now *onto* {@link CoachTipCode}: every authored code has a
+ * candidate type behind it. `MIC_DISCONNECTED` and `POSITIVE_VARIETY`
+ * previously had none, which meant §25.1's critical persistent alert and
+ * §25.6's variety copy were authored, catalogued, priced into a priority band
+ * — and unreachable. Routing around authored copy is not a fix; the missing
+ * candidate types were added to §24's set instead.
  */
 export const CANDIDATE_TIP_CODE: Record<CoachCandidateType, CoachTipCode> = {
   system_mic_clipping: 'MIC_CLIPPING',
   system_mic_low: 'MIC_LEVEL_LOW',
   system_noise_high: 'NOISE_HIGH',
   system_transcription_degraded: 'TRANSCRIPTION_DEGRADED',
+  system_mic_disconnected: 'MIC_DISCONNECTED',
   critical_number_mismatch: 'CRITICAL_NUMBER',
   critical_name_mismatch: 'CRITICAL_NAME',
   critical_unit_mismatch: 'CRITICAL_UNIT',
@@ -631,6 +739,7 @@ export const CANDIDATE_TIP_CODE: Record<CoachCandidateType, CoachTipCode> = {
   repeated_stumble: 'TAKE_SENTENCE_FROM_TOP',
   positive_pace: 'POSITIVE_PACE',
   positive_filler_streak: 'POSITIVE_FILLER_STREAK',
+  positive_variety: 'POSITIVE_VARIETY',
 };
 
 /**

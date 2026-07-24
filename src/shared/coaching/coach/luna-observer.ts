@@ -172,10 +172,17 @@ const NEEDS_SEMANTIC_JUDGEMENT: ReadonlySet<CoachCandidateType> = new Set<CoachC
  * §20.2. Never call to compute WPM or to notice that pitch moved — those are
  * local facts and paying a model to restate them is the failure mode §2.2
  * exists to prevent.
+ *
+ * The "multiple candidates compete" clause used to short-circuit to `true`
+ * before this test, which meant any coincidence of two purely local candidates
+ * — a pace candidate and a variety candidate arriving in the same window, which
+ * is common — became a billable call to have the model rank two things it is
+ * explicitly forbidden to have an opinion about. Competition is a reason to
+ * *ask which one*, and it only arises once something is worth asking about at
+ * all; `BEST_OF_MULTIPLE_CANDIDATES` is a reason code for the answer, not a
+ * trigger for the question.
  */
 export function shouldConsultLuna(candidates: readonly CoachCandidate[]): boolean {
-  if (candidates.length === 0) return false;
-  if (candidates.length > 1) return true; // §20.2: multiple candidates compete
   return candidates.some((candidate) => NEEDS_SEMANTIC_JUDGEMENT.has(candidate.type));
 }
 
@@ -413,8 +420,51 @@ export interface CoachObserverDiagnostics {
   availability: SemanticAvailability;
 }
 
+/**
+ * §23.1. What is true **now**, read at the moment an answer is about to be
+ * applied — not what was true when the request was issued.
+ *
+ * This distinction is the whole of §23.1's staleness section. The observer used
+ * to build its expectation from issue-time values: `audioTimeMs` was the clock
+ * reading at `tick()`, and `currentTrackingEpoch` / `currentTakePassId` were
+ * copied straight off the request's own input. So `stale_epoch`,
+ * `stale_take_pass`, `stale_evidence` and `locally_invalidated_evidence`
+ * compared the request against itself and could not fire under any input, and
+ * `past_valid_until` measured the queue→issue gap rather than the round trip.
+ * The module's own header promises "a late answer is discarded, not applied";
+ * with a frozen clock that promise was decorative.
+ *
+ * Supplied as a function rather than a value because the gap this closes is
+ * exactly the elapsed time between the two.
+ */
+export interface CoachLiveContext {
+  /** Monotonic audio clock, ms, read now (§5.4). */
+  audioTimeMs: number;
+  trackingEpoch: number;
+  takePassId: string;
+  /**
+   * Current live state. `undefined` falls back to the state captured in the
+   * request, which is the pre-existing behaviour and is only ever right when
+   * nothing has changed.
+   */
+  state?: CoachLiveState;
+  /**
+   * §23.1 final bullet: evidence a local deterministic rule has invalidated
+   * since the request went out — a filler demoted to `rejected`, a discrepancy
+   * the presenter self-corrected. Read live for the same reason as the clock:
+   * the invalidation almost always happens *while* the request is in flight.
+   */
+  invalidatedEvidenceIds?: ReadonlySet<string>;
+}
+
 export interface CoachObserverDeps {
   transport: CoachObserverTransport;
+  /**
+   * §23.1. The live clock/epoch/take-pass provider. Required: an observer with
+   * no way to read the present cannot implement any of the staleness rules, and
+   * making this optional would restore the vacuous path it exists to remove.
+   */
+  liveContext: () => CoachLiveContext;
   lunaMode?: 'standard' | 'enhanced';
   cadence?: Partial<CoachObserverCadence>;
   /**
@@ -524,9 +574,17 @@ export class LunaCoachObserver {
     ) {
       return false;
     }
+    // §33 bounded memory: prune before counting, or the array grows for the
+    // whole session to answer a question about the last sixty seconds.
     const windowStart = nowAudioMs - 60_000;
-    const inWindow = this.requestTimestampsMs.filter((t) => t > windowStart).length;
-    if (inWindow >= this.cadence.maxRequestsPerMinute) return false;
+    let keep = 0;
+    while (keep < this.requestTimestampsMs.length) {
+      const timestamp = this.requestTimestampsMs[keep];
+      if (timestamp !== undefined && timestamp > windowStart) break;
+      keep += 1;
+    }
+    if (keep > 0) this.requestTimestampsMs.splice(0, keep);
+    if (this.requestTimestampsMs.length >= this.cadence.maxRequestsPerMinute) return false;
     if (this.deps.isBudgetExhausted?.() === true) {
       this.setAvailability('budget_exhausted');
       return false;
@@ -612,21 +670,28 @@ export class LunaCoachObserver {
         // Cancelled while in flight: the answer describes a performance that
         // no longer exists, so it is discarded without being validated.
         if (generation !== this.generation) return;
+        // §23.1: read the clock *here*. `nowAudioMs` is the issue time and the
+        // whole point of the check is what happened after it.
+        const live = this.deps.liveContext();
         this.applyResponse(response, {
           request,
-          audioTimeMs: nowAudioMs,
-          currentTrackingEpoch: input.trackingEpoch,
-          currentTakePassId: input.takePassId,
-          state: input.state,
+          audioTimeMs: live.audioTimeMs,
+          currentTrackingEpoch: live.trackingEpoch,
+          currentTakePassId: live.takePassId,
+          state: live.state ?? input.state,
           mode: input.profile.coachingMode,
           deliveryStyle: input.profile.deliveryStyle,
           candidates: input.candidates,
+          ...(live.invalidatedEvidenceIds === undefined
+            ? {}
+            : { invalidatedEvidenceIds: live.invalidatedEvidenceIds }),
         });
       })
       .catch((error: unknown) => {
         this.inFlight -= 1;
-        // §23.2: timeout, malformed result, quota error, network failure.
-        this.handleFailure(error, nowAudioMs);
+        // §23.2: timeout, malformed result, quota error, network failure. The
+        // backoff runs from when the failure landed, not from when we asked.
+        this.handleFailure(error, this.deps.liveContext().audioTimeMs);
       });
     this.settling.push(promise);
   }

@@ -11,3 +11,6 @@ export * from './luna-schema';
 export * from './luna-observer';
 export * from './candidate-generator';
 export * from './coach-state';
+export * from './ribbon';
+export * from './gutter-marks';
+export * from './diagnostics';

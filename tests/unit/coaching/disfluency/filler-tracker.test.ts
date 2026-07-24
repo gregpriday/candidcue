@@ -146,6 +146,48 @@ describe('the §16.5 three-part ladder', () => {
     expect(tracker.events()[0]?.confidence).toBe('confirmed');
   });
 
+  /**
+   * The watermark used to advance only on interval *closes*, and a run closes
+   * on a silence gap — so trailing silence read as "the VAD has not got here
+   * yet" and took the permissive branch. That is exactly the audio a
+   * transcription model hallucinates fillers into, and exactly where a Realtime
+   * commit's ~420 ms endpoint tail lands. The event was confirmed, the tile
+   * counted it, and the next close demoted it: the presenter watched the number
+   * go up and then back down.
+   */
+  it('rejects a filler in silence the VAD has scanned but not closed a run over', () => {
+    const tracker = new FillerTracker({ take: TAKE, precisionEnabled: true });
+    tracker.observeSpeechInterval(speech(5_000, 9_000));
+    // The VAD has now processed frames through 20 s and found no speech after
+    // 9 s. No run closed, because there was nothing to close.
+    tracker.noteVadObservedThrough(20_000);
+    tracker.observeFinalTranscript(item('We should, um, ship it now.', 10_000, 14_000), AUTHORED);
+    expect(tracker.events()[0]?.confidence).toBe('probable');
+    expect(tracker.peekDisplayState(20_000).confirmedCount).toBe(0);
+  });
+
+  it('the heartbeat demotes an already-counted filler exactly once', () => {
+    const tracker = new FillerTracker({ take: TAKE, precisionEnabled: true });
+    tracker.observeFinalTranscript(item('We should, um, ship it now.', 10_000, 14_000), AUTHORED);
+    expect(tracker.publishDisplayState(14_000).confirmedCount).toBe(1);
+
+    tracker.noteVadObservedThrough(20_000);
+    expect(tracker.events()[0]?.confidence).toBe('probable');
+    // `countedLive` still records what the presenter actually saw (§27.3).
+    expect(tracker.events()[0]?.countedLive).toBe(true);
+    // A second heartbeat that does not advance is a no-op.
+    tracker.noteVadObservedThrough(15_000);
+    expect(tracker.events()[0]?.confidence).toBe('probable');
+  });
+
+  it('the heartbeat does not veto a filler the VAD covered with speech', () => {
+    const tracker = new FillerTracker({ take: TAKE, precisionEnabled: true });
+    tracker.observeSpeechInterval(speech(10_000, 14_000));
+    tracker.noteVadObservedThrough(20_000);
+    tracker.observeFinalTranscript(item('We should, um, ship it now.', 10_000, 14_000), AUTHORED);
+    expect(tracker.events()[0]?.confidence).toBe('confirmed');
+  });
+
   it('holds a contextual filler at probable until classification passes', () => {
     const authored: AuthoredSpanContext = {
       spanId: 'span-2',

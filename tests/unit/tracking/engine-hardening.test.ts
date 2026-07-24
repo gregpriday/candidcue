@@ -183,6 +183,90 @@ describe('the innovation clamp is not lifted for a whole time window (§24.2, B.
   it('only the observation that IS the authorized destination fuses unclamped', () => {
     expect(fuse('reanchoring', true)).toBeGreaterThan(fuse('reanchoring', false));
   });
+
+  /**
+   * …and the lift may not depend on the state, because the state can never be
+   * right when it matters. `applyDecision` feeds the committed retake to the
+   * filter (`observeCommittedPosition`) *before* `emit` mints the directive
+   * that REANCHORING/REWINDING are projected from, so the one observation
+   * carrying `authorizedDiscontinuity` always arrived while the filter was
+   * still FOLLOWING. The lift whose doc comment described exactly this case
+   * could therefore never fire, and the measurement was clamped like any
+   * other.
+   */
+  it('the authorized destination fuses from FOLLOWING too — the state is never right in time', () => {
+    const clamp = DEFAULT_TRACKING_PROFILE.filterInnovationClampUnits;
+    const filter = new SemanticFilter(DEFAULT_TRACKING_PROFILE, smooth);
+    filter.resetTo(100, 0, 1, 'following');
+    filter.observe({
+      positionUnits: 40, // a committed retake, 60 units back
+      confidence: 0.95,
+      margin: 1,
+      // The beam is bimodal at exactly this moment, so `measurementVariance`
+      // used to distrust the measurement most when it was most authoritative
+      // (measured Kalman gain ≈ 0.036). An authorized destination is not
+      // weighed at all now, so beam variance cannot hold it back either.
+      beamVariance: 900,
+      finalEvidence: true,
+      authorizedDiscontinuity: true,
+      atMs: 100,
+    });
+    expect(filter.estimate().positionUnits).toBeCloseTo(40, 6);
+    // The trajectory belonged to the superseded take; it does not survive.
+    expect(filter.estimate().velocityUnitsPerSecond).toBe(0);
+    // Sanity: without the authorization the same observation stays clamped.
+    const ordinary = new SemanticFilter(DEFAULT_TRACKING_PROFILE, smooth);
+    ordinary.resetTo(100, 0, 1, 'following');
+    ordinary.observe({
+      positionUnits: 40,
+      confidence: 0.95,
+      margin: 1,
+      beamVariance: 900,
+      finalEvidence: true,
+      atMs: 100,
+    });
+    expect(ordinary.estimate().positionUnits).toBeGreaterThan(100 - clamp - 1e-9);
+  });
+
+  /**
+   * End to end: the quantity that actually reaches the stage is the frame, and
+   * before the fix it carried `committedUnit 17.5` against `estimatedUnit ≈
+   * 45.8` after a committed retake — a 28-unit gap, roughly three rendered
+   * lines. It closed only if the presenter kept talking through the
+   * directive's 1.5 s TTL; one who pauses after "let me take that again" was
+   * left with the trajectory pointing at the abandoned position.
+   */
+  it('a committed retake leaves the trajectory at the retake destination', () => {
+    const engine = new AlignmentEngine(demoDocument(), {
+      sessionId: 'retake-anchor',
+      sessionGeneration: 1,
+      stageGeneration: 1,
+    });
+    const scripter = new TranscriptScripter(10_000, 1);
+    for (const text of [
+      'Hello everyone and welcome to the channel.',
+      'Today we are talking about building a teleprompter that actually listens.',
+      "Let's get started with the basics right away.",
+      'The first principle is that the prompter follows you instead of forcing you to follow it.',
+    ]) {
+      for (const event of scripter.speak({ text })) engine.handleTranscriptEvent(event);
+    }
+    const deep = engine.cursor.committedTokenIndex;
+
+    // The presenter restarts from the very top.
+    for (const event of scripter.speak({
+      text: 'Hello everyone and welcome to the channel today we are talking about building a teleprompter.',
+    })) {
+      engine.handleTranscriptEvent(event);
+    }
+    const committed = engine.cursor.committedTokenIndex;
+    expect(committed).toBeLessThan(deep); // the retake really committed
+
+    const gap = Math.abs(
+      engine.filter.estimate().positionUnits - engine.units.unitAt(committed),
+    );
+    expect(gap).toBeLessThan(1);
+  });
 });
 
 describe('the filter cannot latch a non-finite position (§24.2.1)', () => {
@@ -379,5 +463,129 @@ describe('SectionGraph does not alias a mutable array (§13)', () => {
     expect(nextBefore).toBe('h1');
     index.sections.splice(1, 1); // something else drops a section from the list
     expect(graph.nextSectionId('h0')).toBe(nextBefore);
+  });
+});
+
+describe('evidence finality follows the tail, not the triggering event (§30.7)', () => {
+  /**
+   * `handleTranscriptEvent` passed `update.final` — the finality of whichever
+   * event happened to arrive — into the alignment pass. Transcription
+   * providers complete items out of order, so a late completion for an *older*
+   * item marked the whole pass final while the tail's newest tokens were still
+   * provisional deltas. Everything gated on finality then fired on
+   * majority-provisional evidence: retake commits, large-skip commits, the low
+   * final measurement noise, and `authorizedDiscontinuity`, which now
+   * re-anchors the semantic filter outright.
+   *
+   * `tail.final` — the ledger's own newest-contributing-item status — existed
+   * for exactly this and had zero consumers.
+   */
+  it('a late completion for an older item does not finalize a provisional tail', () => {
+    const e = engine('ooo-finality');
+    const s = new TranscriptScripter(10_000, 1);
+    speak(e, s, 'Hello everyone and welcome to the channel.');
+
+    // Item A opens and streams; its completion is held back by the provider.
+    const itemA = s.speak({
+      text: 'Today we are talking about building a teleprompter that actually listens.',
+    });
+    for (const event of itemA) {
+      if (event.type !== 'completed') e.handleTranscriptEvent(event);
+    }
+    // Item B opens behind it and is still streaming deltas.
+    const itemB = s.speak({ text: "Let's get started with the basics" });
+    for (const event of itemB) {
+      if (event.type !== 'completed') e.handleTranscriptEvent(event);
+    }
+    expect(e.measurement?.finalEvidence).toBe(false);
+
+    // A's completion finally lands, out of order. It finalizes *A*, but the
+    // newest tokens in the tail are still B's provisional deltas, so this
+    // alignment pass is not running on final evidence.
+    const completionA = itemA.find((event) => event.type === 'completed');
+    expect(completionA).toBeDefined();
+    if (completionA === undefined) return;
+    e.handleTranscriptEvent({ ...completionA, receivedAtMs: s.clockMs });
+
+    expect(e.measurement?.finalEvidence).toBe(false);
+  });
+});
+
+describe('§16.5 challenger hysteresis is real machinery, not a comment', () => {
+  /**
+   * `AlignmentMeasurement.challengerPersistence` was computed on every update
+   * and consumed by nothing in `src/`; `retakePersistenceTokens` and
+   * `retakePersistenceMs` in the smooth-follow profile were likewise read by
+   * nothing. Commit-flap protection rested entirely on thresholds and softmax.
+   * The counter was wrong too, which is why it mattered that nobody read it:
+   * it re-added the *whole* 30-token rolling tail on every final event, so it
+   * over-counted the same speech five to ten times over.
+   */
+  const say = (e: AlignmentEngine, s: TranscriptScripter, text: string): void => {
+    for (const event of s.speak({ text })) e.handleTranscriptEvent(event);
+  };
+  const turns = [
+    'Hello everyone and welcome to the channel.',
+    'Today we are talking about building a teleprompter that actually listens.',
+    "Let's get started with the basics right away.",
+    'The first principle is that the prompter follows you instead of forcing you to follow it.',
+    'When you pause the prompter pauses.',
+  ];
+
+  it('counts each transcript item once, not once per rolling-tail appearance', () => {
+    const e = engine('challenger-count');
+    const s = new TranscriptScripter(10_000, 1);
+    let spokenMeaningful = 0;
+    for (const text of turns) {
+      say(e, s, text);
+      // A generous upper bound on meaningful tokens: every word counts, even
+      // the stopwords the ledger does not.
+      spokenMeaningful += text.split(/\s+/).filter((w) => w.length > 0).length;
+      // The counter can only ever describe speech that actually happened.
+      expect(e.measurement?.challengerPersistence.finalTokens ?? 0).toBeLessThanOrEqual(
+        spokenMeaningful,
+      );
+    }
+  });
+
+  it('a retake waits for the challenger to persist (`retakePersistence*`)', () => {
+    const document = demoDocument();
+    const session = {
+      sessionId: 'challenger-gate',
+      sessionGeneration: 1,
+      stageGeneration: 1,
+      layoutGeneration: 1,
+    };
+    const run = (smooth?: { alignment?: Record<string, number> }): AlignmentEngine => {
+      const e = new AlignmentEngine(document, session, undefined, smooth as never);
+      const s = new TranscriptScripter(10_000, 1);
+      for (const text of turns) say(e, s, text);
+      s.advance(1_200);
+      // The previous sentence restarts — an ordinary retake.
+      say(
+        e,
+        s,
+        'The first principle is that the prompter follows you instead of forcing you to follow it',
+      );
+      return e;
+    };
+
+    const ordinary = run();
+    const ordinaryRetakes = ordinary
+      .decisionRecords()
+      .filter((record) => record.behavior === 'retake').length;
+    expect(ordinaryRetakes).toBeGreaterThan(0);
+
+    // With a persistence requirement no single utterance can satisfy, the same
+    // speech must not commit the backward move. If the profile fields were
+    // still unread this would be identical to the run above.
+    const gated = run({
+      alignment: {
+        retakePersistenceTokens: Number.MAX_SAFE_INTEGER,
+        retakePersistenceMs: Number.MAX_SAFE_INTEGER,
+      },
+    });
+    const gatedRetakes = gated.decisionRecords().filter((r) => r.behavior === 'retake').length;
+    expect(gatedRetakes).toBe(0);
   });
 });

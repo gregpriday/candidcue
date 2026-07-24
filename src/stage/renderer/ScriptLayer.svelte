@@ -50,6 +50,7 @@
     buildRenderedLineMap,
     createStageMotionEngine,
     emptyRenderedLineMap,
+    maxPathDisagreementPx,
     measureStageLayout,
     sameLayout,
     type FallbackTarget,
@@ -122,6 +123,12 @@
   let layoutErrorReported = false;
   const MAX_MAP_RETRIES = 1;
   const MAP_RETRY_DELAY_MS = 300;
+  /**
+   * How far the motion path may move between two rebuilds of the "same" layout
+   * before it counts as a new one. Sub-pixel differences are measurement noise;
+   * anything the presenter could see is not.
+   */
+  const GEOMETRY_DRIFT_TOLERANCE_PX = 1;
 
   /* ---- capped-rate styling (§26.2 step 7) ---- */
   let activeTokenIndex = $state<number | null>(null);
@@ -161,6 +168,48 @@
     return computeWindow(offsets, untrack(() => scrollY), vh, DEFAULT_OVERSCAN_PX);
   });
 
+  /**
+   * The window's IDENTITY, as opposed to the object `computeWindow` returns.
+   *
+   * `renderWindow` is a fresh object on every 400 px scroll bucket, so anything
+   * that reads it re-runs on every bucket — including the line-map effect,
+   * which turns a scroll into a full `Range.getClientRects()` measurement pass
+   * over the whole rendered document (§63: no layout reads after map creation).
+   * Only a change in which blocks are rendered can change the geometry, and
+   * that is what this key says.
+   */
+  const renderWindowKey = $derived(
+    `${renderWindow.startIndex}:${renderWindow.endIndex}:${Math.round(renderWindow.leadingSpacePx)}:${Math.round(renderWindow.trailingSpacePx)}`,
+  );
+
+  /**
+   * Device pixel ratio, as a reactive value.
+   *
+   * `displayScaleFactor` is in the §7.2 fingerprint, but nothing ever observed
+   * it: dragging the stage window between a Retina display and an external
+   * monitor re-rasterizes every glyph at a different device scale — which moves
+   * sub-pixel advances and therefore line breaks — and scheduled no rebuild at
+   * all. A DPR change fires the `resolution` media query, which is the only
+   * event browsers offer for it.
+   */
+  let displayScale = $state(typeof window === 'undefined' ? 1 : window.devicePixelRatio);
+  $effect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    let query: MediaQueryList | null = null;
+    const onChange = () => {
+      displayScale = window.devicePixelRatio;
+      watch();
+    };
+    // The query has to be re-armed after every change: it tests for ONE ratio.
+    function watch() {
+      query?.removeEventListener?.('change', onChange);
+      query = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      query.addEventListener?.('change', onChange);
+    }
+    watch();
+    return () => query?.removeEventListener?.('change', onChange);
+  });
+
   const blockIndexById = $derived(new Map(doc.blocks.map((b, i) => [b.id, i])));
   const sentencesById = $derived(new Map((doc.sentences ?? []).map((s) => [s.id, s])));
   const currentBlockIndex = $derived(
@@ -185,7 +234,7 @@
     // Anything that moves a glyph belongs here AND in `layoutInputs()`.
     void doc;
     void layoutInputs();
-    void renderWindow;
+    void renderWindowKey;
     if (!planeEl || vh === 0) return;
     const raf = requestAnimationFrame(() => measureBlocks());
     // Hidden windows can throttle rAF (§43.3 publishes while hidden); a
@@ -204,7 +253,13 @@
     els.forEach((el) => {
       const id = el.dataset.blockId;
       if (!id) return;
-      const h = el.offsetHeight;
+      // `offsetHeight` is a ROUNDED integer. The line map measures the same
+      // boxes with `getBoundingClientRect()`, so every block contributed up to
+      // half a pixel of disagreement between `maxScroll` (computed from these)
+      // and the path (computed from those) — and it accumulates in one
+      // direction over a long script. Read the same sub-pixel geometry the map
+      // reads; the layout cost is identical.
+      const h = el.getBoundingClientRect().height;
       const prev = measuredHeights.get(id);
       if (prev === undefined || Math.abs(prev - h) > 0.5) {
         measuredHeights.set(id, h);
@@ -245,6 +300,7 @@
       padBottomPx,
       vw,
       vh,
+      displayScale,
     ].join('|');
   }
 
@@ -255,7 +311,7 @@
     void doc;
     void layoutInputs();
     void measureVersion;
-    void renderWindow;
+    void renderWindowKey;
     if (!planeEl || vh === 0 || vw === 0) return;
     scheduleLineMapBuild();
   });
@@ -285,7 +341,13 @@
       settings,
       viewportWidthPx: vw,
       viewportHeightPx: vh,
-      displayScaleFactor: typeof window === 'undefined' ? 1 : window.devicePixelRatio,
+      displayScaleFactor: displayScale,
+      // `listenerGeometryHash` is deliberately left at its default. The listener
+      // is an absolutely positioned sibling inside the mirror plane; it does not
+      // reflow the script column, so no listener geometry can move a glyph here.
+      // `fontHash` is likewise not predicted — a font file swapped under the
+      // same family id is caught by the MEASURED check below, which covers it
+      // and every other unpredicted cause at once.
       // The real rendered padding, not a hard-coded zero: `stagePadding()`
       // changes with the compact-viewport breakpoint and moves every block.
       paddingTopPx: padTopPx,
@@ -333,7 +395,34 @@
           })
         : emptyRenderedLineMap(fingerprint);
 
-    const hadValidMap = lineMap !== null && lineMap.valid;
+    const previousMap = lineMap;
+    const hadValidMap = previousMap !== null && previousMap.valid;
+
+    /* A rebuild the fingerprint called "the same layout" can still have moved
+     * every glyph (§33). The two ways it happens in production are a font file
+     * swapped under an unchanged family id, and a virtualized height ESTIMATE
+     * replaced by a real measurement — the latter shifts the spacer under a
+     * scroll transform that did not move, so the text visibly jumps on long
+     * scripts and no §33 re-anchor ever runs because the rebuild was classified
+     * coverage-only. Measure the disagreement instead of trying to predict its
+     * causes: if the path moved where both maps cover it, the §33 re-anchor has
+     * to run whatever the declared inputs say.
+     *
+     * The generation is deliberately NOT bumped here. A generation bump is a
+     * claim that what the stage published about this layout is stale, and it
+     * costs a re-sync window during which frames are only coasting. Nothing
+     * downstream holds pixel geometry — frames and directives are in spoken
+     * units, and the stage recomputes every pixel from its own map — so a map
+     * that merely got MORE ACCURATE about inputs that did not change has
+     * nothing to invalidate. What it does need is the re-anchor, and that is
+     * what it gets.
+     */
+    const disagreementPx =
+      !layoutChanged && hadValidMap && next.valid
+        ? maxPathDisagreementPx(previousMap, next)
+        : 0;
+    const geometryMoved = disagreementPx > GEOMETRY_DRIFT_TOLERANCE_PX;
+
     lineMap = next;
     engine.setBounds(0, maxScroll);
 
@@ -341,6 +430,19 @@
       // Live relayout: preserve semantic position, not raw scrollTop (§33).
       // `layoutRecovery` also advances the receiver gate to the new generation.
       engine.layoutRecovery({ map: next, nowMs: now });
+    } else if (geometryMoved && previousMap) {
+      // The presenter did not ask for anything: the map simply got more
+      // accurate. Preserve the position ON THE GLASS rather than snapping the
+      // reading line, so a corrected estimate is invisible instead of a jump.
+      const anchorUnit = engine.lastPrediction?.unit ?? null;
+      const wasAt = anchorUnit === null ? null : previousMap.sampleMotionPath(anchorUnit)?.scrollPx;
+      engine.layoutRecovery({
+        map: next,
+        nowMs: now,
+        ...(anchorUnit !== null && wasAt !== undefined && wasAt !== null
+          ? { anchorUnit, anchorViewportY: next.readingLineStartY + wasAt - scrollY }
+          : {}),
+      });
     } else {
       engine.setLineMap(next);
       engine.receiver.setGate({ layoutGeneration }, now);

@@ -28,7 +28,14 @@ function typeScriptFiles(directory: string): string[] {
   try {
     entries = readdirSync(directory);
   } catch {
-    return out;
+    // A missing directory is not "no offenders" — it is a scan that never ran.
+    // Swallowing it silently is how a rename turns every rule below into a
+    // vacuous pass over zero files, which is a guard that reports success
+    // precisely when it has stopped working.
+    throw new Error(
+      `boundaries.test.ts cannot scan ${directory}. If the directory moved, ` +
+        'update the constant; do not let the scan pass over nothing.',
+    );
   }
   for (const entry of entries) {
     const full = join(directory, entry);
@@ -37,6 +44,37 @@ function typeScriptFiles(directory: string): string[] {
   }
   return out;
 }
+
+/**
+ * The guard on the guard.
+ *
+ * Every rule below is of the form "collect offenders, expect none", which is
+ * satisfied just as well by scanning zero files as by scanning a clean
+ * codebase. These assertions make the difference visible: they fail if a
+ * directory constant goes stale, before the rules quietly stop being enforced.
+ */
+describe('the boundary scan is actually scanning something', () => {
+  it('finds a substantial number of coaching modules', () => {
+    const files = typeScriptFiles(COACHING_DIR);
+    expect(files.length).toBeGreaterThan(30);
+    // …and specifically the audio lane, which is what most of the rules are
+    // about. A subdirectory rename would keep the count up and still skip it.
+    expect(files.some((file) => file.includes('/coaching/audio/vad.ts'))).toBe(true);
+    expect(files.some((file) => file.includes('/coaching/coach/tip-policy.ts'))).toBe(true);
+  });
+
+  it('finds files in every transport directory it claims to check', () => {
+    for (const directory of TRANSPORT_DIRS) {
+      expect(typeScriptFiles(directory).length, directory).toBeGreaterThan(0);
+    }
+  });
+
+  it('throws rather than returning empty for a directory that is not there', () => {
+    expect(() => typeScriptFiles(join(ROOT, 'src/shared/coaching/does-not-exist'))).toThrow(
+      /cannot scan/,
+    );
+  });
+});
 
 /** Strip comments so prose describing a rule is not mistaken for breaking it. */
 function codeOf(path: string): string {

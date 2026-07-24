@@ -39,6 +39,10 @@ const MAX_RESPONSE_BYTES: u64 = 2 * 1024 * 1024;
 pub struct ModelCapabilities {
     pub realtime_model: String,
     pub command_model: String,
+    /// Whether `realtime_model` accepts a vocabulary `prompt` on the
+    /// transcription session (spec §26.1). This is the one assumption §26.1
+    /// requires to be isolated behind capability metadata, and the control
+    /// window's `supportsVocabularyPrompt` is the only gate on sending one.
     pub realtime_prompt_steering: bool,
     pub realtime_logprobs: bool,
     pub supported_delay_levels: Vec<String>,
@@ -58,10 +62,59 @@ pub struct ModelCapabilities {
     pub semantic_default_timeout_ms: u64,
     /// USD per million tokens. `None` until a verified price is configured —
     /// §42.2 forbids hard-coding a permanent currency estimate.
+    ///
+    /// Configured through the environment (see
+    /// [`ModelCapabilities::from_environment`]), never defaulted: this is a
+    /// bring-your-own-key product, so an invented rate is an invented bill.
+    /// While these stay `None` the control window reports Luna spend as
+    /// "no rate configured" rather than as `$0.00`.
     pub semantic_input_price_per_mtok: Option<f64>,
     pub semantic_cached_input_price_per_mtok: Option<f64>,
     pub semantic_output_price_per_mtok: Option<f64>,
     pub registry_version: u32,
+}
+
+/// Environment variables carrying verified per-million-token prices (§42.2).
+pub const SEMANTIC_INPUT_PRICE_ENV: &str = "CANDIDCUE_SEMANTIC_INPUT_PRICE_PER_MTOK";
+pub const SEMANTIC_CACHED_INPUT_PRICE_ENV: &str =
+    "CANDIDCUE_SEMANTIC_CACHED_INPUT_PRICE_PER_MTOK";
+pub const SEMANTIC_OUTPUT_PRICE_ENV: &str = "CANDIDCUE_SEMANTIC_OUTPUT_PRICE_PER_MTOK";
+
+/// Parse a configured price.
+///
+/// Anything that is not a finite, non-negative number is rejected rather than
+/// coerced: a typo that silently becomes `0` would make the cost readout claim
+/// the sidecar is free, which is the exact failure §42.2 exists to prevent.
+/// A rejected value leaves the price `None`, and the UI then says the rate is
+/// unknown.
+pub fn parse_price_per_mtok(raw: &str) -> Option<f64> {
+    let value: f64 = raw.trim().parse().ok()?;
+    if value.is_finite() && value >= 0.0 {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn price_from_env(key: &str) -> Option<f64> {
+    parse_price_per_mtok(&std::env::var(key).ok()?)
+}
+
+impl ModelCapabilities {
+    /// The registry with any operator-configured semantic prices applied.
+    ///
+    /// The prices are the one part of the registry that cannot be shipped as a
+    /// constant — they change on the provider's schedule, not ours — so they
+    /// are read from the environment at client construction. Unset or invalid
+    /// leaves them `None`, which is a reportable state, not a zero.
+    pub fn from_environment() -> Self {
+        Self {
+            semantic_input_price_per_mtok: price_from_env(SEMANTIC_INPUT_PRICE_ENV),
+            semantic_cached_input_price_per_mtok: price_from_env(SEMANTIC_CACHED_INPUT_PRICE_ENV),
+            semantic_output_price_per_mtok: price_from_env(SEMANTIC_OUTPUT_PRICE_ENV),
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for ModelCapabilities {
@@ -69,7 +122,16 @@ impl Default for ModelCapabilities {
         Self {
             realtime_model: DEFAULT_TRANSCRIPTION_MODEL.into(),
             command_model: DEFAULT_COMMAND_MODEL.into(),
-            realtime_prompt_steering: true,
+            // §26.1, verbatim: "CandidCue must not assume that the primary
+            // `gpt-realtime-whisper` session can accept a custom prompt or
+            // dictionary. In the current Realtime transcription interface,
+            // this model does not provide prompt steering." The registry
+            // claimed the opposite while nothing read it, so the claim was
+            // free; now that the control window gates on it, `true` here would
+            // put an unsupported field in every `session.update` — a change to
+            // the live transcription path that no evidence supports. Flip it
+            // only alongside a verified model that accepts one.
+            realtime_prompt_steering: false,
             realtime_logprobs: true,
             supported_delay_levels: vec![
                 "minimal".into(),
@@ -273,7 +335,7 @@ impl OpenAiClient {
         Self {
             http,
             base_url,
-            capabilities: ModelCapabilities::default(),
+            capabilities: ModelCapabilities::from_environment(),
             credential_generation: std::sync::atomic::AtomicU64::new(0),
             inflight: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
@@ -558,6 +620,23 @@ pub fn map_provider_status(status: u16, body: Option<&[u8]>) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// §42.2: the registry must never invent a currency rate, and a bad one
+    /// must not degrade into a confident zero.
+    #[test]
+    fn semantic_prices_are_absent_unless_validly_configured() {
+        assert_eq!(ModelCapabilities::default().semantic_input_price_per_mtok, None);
+        assert_eq!(parse_price_per_mtok("2.50"), Some(2.5));
+        assert_eq!(parse_price_per_mtok("  0.30  "), Some(0.3));
+        // Zero is a legitimate configured rate (a free tier); it is only a lie
+        // when it is the *default*, which the assertion above pins.
+        assert_eq!(parse_price_per_mtok("0"), Some(0.0));
+        assert_eq!(parse_price_per_mtok("-1"), None);
+        assert_eq!(parse_price_per_mtok("free"), None);
+        assert_eq!(parse_price_per_mtok(""), None);
+        assert_eq!(parse_price_per_mtok("NaN"), None);
+        assert_eq!(parse_price_per_mtok("inf"), None);
+    }
 
     #[test]
     fn maps_provider_failures_per_e7() {

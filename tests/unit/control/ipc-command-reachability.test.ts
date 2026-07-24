@@ -33,12 +33,6 @@ const SRC = join(ROOT, 'src');
  */
 const UNWIRED_BY_DESIGN: Record<string, string> = {
   remove_asset_reference: 'Asset GC runs from the compiler side; no UI affordance yet.',
-  get_model_capabilities: 'Model capability probing is only used by preflight validation today.',
-  analyze_vocabulary: 'Vocabulary analysis UI is not built yet (§25).',
-  save_display_profile:
-    'Service + tests exist (services/display-profiles.ts); the remaining wiring is in Preflight (§52).',
-  list_display_profiles:
-    'Service + tests exist (services/display-profiles.ts); the remaining wiring is in Preflight (§52).',
   download_listener:
     'NOT_IMPLEMENTED in Rust (no CandidCue pack host); Settings deliberately shows no download affordance.',
   cancel_listener_download:

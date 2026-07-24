@@ -16,7 +16,14 @@ import type {
   PlaybackAction,
   PlaybackScenario,
 } from '../../../src/shared/tracking/playback-harness';
-import { demoDocument } from './fixture-script';
+import type { OutlineNode } from '../../../src/shared/contracts/compiler';
+import type { TrackingDocument } from '../../../src/shared/tracking/types';
+import {
+  demoDocument,
+  nestedPartsDocument,
+  preambleDocument,
+  shortSectionsDocument,
+} from './fixture-script';
 import { TranscriptScripter, type SpeechTurn } from '../transcript-events/builder';
 
 interface TurnSpec extends SpeechTurn {
@@ -301,6 +308,166 @@ export function scenarioCommandToOtherChapter(): PlaybackScenario {
     skipIsExpected: true,
     expectBehaviors: ['command_navigation'],
   };
+}
+
+/* ---------------------------------------------------------------------------
+ * Liveness scenarios (the property the suite had no assertion for)
+ *
+ * Every existing section-graph property is one-sided: "no illegal jump ever
+ * happens". Replace the gate with a function that returns *always ineligible*
+ * and all of them still pass, because a gate that refuses everything never
+ * jumps anywhere. These scenarios assert the other half — a presenter who
+ * reads the script correctly reaches the end of it — so a refuse-everything
+ * gate fails, and both properties have to hold at once.
+ * ------------------------------------------------------------------------- */
+
+/** Blocks that are headings; presenters do not read these aloud. */
+function headingBlockIds(document: TrackingDocument): Set<string> {
+  const ids = new Set<string>();
+  const walk = (nodes: readonly OutlineNode[]): void => {
+    for (const node of nodes) {
+      ids.add(node.blockId);
+      walk(node.children);
+    }
+  };
+  walk(document.outline);
+  return ids;
+}
+
+/** Every body sentence, verbatim, in reading order. */
+function bodySentenceTexts(document: TrackingDocument): string[] {
+  const headings = headingBlockIds(document);
+  return document.sentences
+    .filter((sentence) => !headings.has(sentence.blockId))
+    .sort((a, b) => a.startTokenIndex - b.startTokenIndex)
+    .map((sentence) =>
+      document.spokenTokens
+        .slice(sentence.startTokenIndex, sentence.endTokenIndex + 1)
+        .map((token) => token.surface)
+        .join(' '),
+    );
+}
+
+export interface ReadThroughOptions {
+  /**
+   * Sentences per spoken utterance. `1` is a careful reader who pauses at
+   * every full stop; `2` is a fluent one.
+   */
+  sentencesPerTurn?: number;
+  /**
+   * Offset the grouping by one sentence. In these fixtures every section holds
+   * exactly two body sentences, so `sentencesPerTurn: 2` with `offset: 1`
+   * makes every utterance after the first straddle exactly one section
+   * boundary: it begins on the previous section's closing sentence and runs
+   * on, unbroken, into the next section's opening one. That is the shape that
+   * produced a matched span *ending* far past the entry corridor, and with it
+   * the monotone wedge — each following utterance landed deeper than the last.
+   *
+   * Exactly one boundary per utterance is deliberate. §13 permits advancing to
+   * the *immediate* next section, so an utterance that swallowed two whole
+   * sections would be asking for a transition the specification prohibits,
+   * which is a different question from the one these scenarios ask.
+   */
+  offset?: number;
+  gapMs?: number;
+}
+
+/**
+ * A verbatim read-through of a whole document: the plainest possible correct
+ * behaviour, and the thing that has to work.
+ */
+export function scenarioVerbatimReadThrough(
+  id: string,
+  description: string,
+  document: TrackingDocument,
+  options?: ReadThroughOptions,
+): PlaybackScenario {
+  const perTurn = Math.max(1, options?.sentencesPerTurn ?? 1);
+  const offset = Math.max(0, Math.min(perTurn - 1, options?.offset ?? 0));
+  const sentences = bodySentenceTexts(document);
+  const turns: TurnSpec[] = [];
+  const push = (parts: string[]): void => {
+    if (parts.length === 0) return;
+    turns.push({
+      text: parts.join(' '),
+      ...(options?.gapMs !== undefined ? { gapMs: options.gapMs } : {}),
+    });
+  };
+  if (offset > 0) push(sentences.slice(0, offset));
+  for (let i = offset; i < sentences.length; i += perTurn) {
+    push(sentences.slice(i, i + perTurn));
+  }
+  const { actions } = build(turns);
+  return {
+    id,
+    description,
+    document,
+    actions,
+    // Nothing here is a retake or a jump: it is one pass through the script.
+    forbidBehaviors: ['retake'],
+  };
+}
+
+export function scenarioNestedPartsReadThrough(): PlaybackScenario {
+  return scenarioVerbatimReadThrough(
+    'L.1',
+    'Verbatim read-through of a `# Part` / `## Scene` document, one sentence per breath.',
+    nestedPartsDocument(),
+  );
+}
+
+export function scenarioNestedPartsStraddle(): PlaybackScenario {
+  return scenarioVerbatimReadThrough(
+    'L.2',
+    'Same nested document read fluently, so utterances straddle every part boundary.',
+    nestedPartsDocument(),
+    { sentencesPerTurn: 2, offset: 1 },
+  );
+}
+
+export function scenarioShortSectionsReadThrough(): PlaybackScenario {
+  return scenarioVerbatimReadThrough(
+    'L.3',
+    'Eight short sections: the entry corridor clamps to a token or two.',
+    shortSectionsDocument(),
+  );
+}
+
+export function scenarioShortSectionsStraddle(): PlaybackScenario {
+  return scenarioVerbatimReadThrough(
+    'L.4',
+    'Eight short sections read fluently, so every utterance crosses a boundary.',
+    shortSectionsDocument(),
+    { sentencesPerTurn: 2, offset: 1 },
+  );
+}
+
+export function scenarioPreambleReadThrough(): PlaybackScenario {
+  return scenarioVerbatimReadThrough(
+    'L.5',
+    'Unowned preamble before the first heading, then three flat sections.',
+    preambleDocument(),
+  );
+}
+
+export function scenarioDemoReadThrough(): PlaybackScenario {
+  return scenarioVerbatimReadThrough(
+    'L.6',
+    'Verbatim read-through of the shared demo script, flat `#` sections.',
+    demoDocument(),
+  );
+}
+
+/** Every liveness scenario, for the shared assertion loop. */
+export function allLivenessScenarios(): PlaybackScenario[] {
+  return [
+    scenarioNestedPartsReadThrough(),
+    scenarioNestedPartsStraddle(),
+    scenarioShortSectionsReadThrough(),
+    scenarioShortSectionsStraddle(),
+    scenarioPreambleReadThrough(),
+    scenarioDemoReadThrough(),
+  ];
 }
 
 export function allPlaybackScenarios(): PlaybackScenario[] {

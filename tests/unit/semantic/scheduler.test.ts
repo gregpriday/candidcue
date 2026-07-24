@@ -8,6 +8,7 @@ import { DEFAULT_SMOOTH_FOLLOW_PROFILE } from '../../../src/shared/contracts/smo
 import { SemanticLandmarkIndex } from '../../../src/shared/semantic/landmark-index';
 import {
   classifyAssistTrigger,
+  estimateSemanticCostUsd,
   landmarkRecoveryAllowed,
   SemanticAssistScheduler,
   type SemanticInvoker,
@@ -20,6 +21,7 @@ import type {
   SemanticAssistMessage,
   SemanticAvailability,
   SemanticOperationResponse,
+  SemanticPricing,
 } from '../../../src/shared/semantic/types';
 
 /* ------------------------------------------------------------------ setup */
@@ -128,6 +130,7 @@ function harness(
     retrieveImpl?: (request: unknown) => Promise<SemanticOperationResponse<unknown>>;
     landmarkIndex?: SemanticLandmarkIndex;
     budget?: { maxRequestsPerSession?: number };
+    prices?: SemanticPricing;
   } = {},
 ): Harness {
   let nowMs = 100_000;
@@ -155,6 +158,7 @@ function harness(
     mode: options.mode ?? 'balanced',
     landmarkIndex: options.landmarkIndex,
     budget: options.budget,
+    ...(options.prices ? { prices: options.prices } : {}),
     onAssist: (message) => assists.push(message),
     onTipCandidate: (tip) => tips.push(tip),
     onAvailabilityChange: (value) => availability.push(value),
@@ -867,5 +871,180 @@ describe('tip candidates', () => {
     h.scheduler.observe(context({ provisionalTail: 'then expand' }));
     await h.scheduler.settle();
     expect(h.tips[0]?.finalEvidence).toBe(false);
+  });
+});
+
+/*
+ * §42.1–42.2 spend visibility.
+ *
+ * Every assertion here is an EXACT expected value derived from known token
+ * counts and known rates. "cost > 0 after some usage" is the assertion shape
+ * that let a `Math.round` land on the wrong side of a division in the
+ * transcription path and report an 18-cent half-hour; it passes for almost any
+ * arithmetic and proves nothing about the arithmetic that matters.
+ */
+describe('Luna cost accounting (§42.1, §42.2)', () => {
+  const PRICES: SemanticPricing = {
+    inputPerMTokUsd: 2,
+    cachedInputPerMTokUsd: 0.2,
+    outputPerMTokUsd: 10,
+  };
+
+  function usage(overrides: Partial<Record<string, number>> = {}) {
+    return {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      totalTokens: 0,
+      ...overrides,
+    };
+  }
+
+  it('prices uncached input, cached input and output at their own rates', () => {
+    // 400k uncached @ $2/M = $0.80; 100k cached @ $0.20/M = $0.02;
+    // 50k output @ $10/M = $0.50. Total $1.32.
+    const cost = estimateSemanticCostUsd(
+      usage({ inputTokens: 500_000, cachedInputTokens: 100_000, outputTokens: 50_000 }),
+      PRICES,
+    );
+    expect(cost).toBeCloseTo(1.32, 10);
+  });
+
+  it('never double-counts cached tokens as full-price input', () => {
+    // The whole prompt was a cache hit: $0.20/M, not $2/M. Charging both would
+    // give $2.20 for the same call.
+    const cost = estimateSemanticCostUsd(
+      usage({ inputTokens: 1_000_000, cachedInputTokens: 1_000_000 }),
+      PRICES,
+    );
+    expect(cost).toBeCloseTo(0.2, 10);
+  });
+
+  it('does not add reasoning tokens on top of the output tokens that contain them', () => {
+    // `reasoning_tokens` is a detail OF `output_tokens`, so a doubled charge
+    // here would be invisible in every "cost > 0" assertion.
+    const cost = estimateSemanticCostUsd(
+      usage({ outputTokens: 100_000, reasoningTokens: 90_000 }),
+      PRICES,
+    );
+    expect(cost).toBeCloseTo(1, 10);
+  });
+
+  it('divides before it rounds — a single token is not free', () => {
+    // The exact failure shape from the transcription path: round anything
+    // before dividing by a million and this is 0.
+    const cost = estimateSemanticCostUsd(usage({ inputTokens: 1, outputTokens: 1 }), {
+      inputPerMTokUsd: 1,
+      cachedInputPerMTokUsd: null,
+      outputPerMTokUsd: 1,
+    });
+    expect(cost).toBe(2e-6);
+  });
+
+  it('prices cached tokens at the full input rate when no cached rate is published', () => {
+    const cost = estimateSemanticCostUsd(
+      usage({ inputTokens: 1_000_000, cachedInputTokens: 1_000_000 }),
+      { inputPerMTokUsd: 3, cachedInputPerMTokUsd: null, outputPerMTokUsd: 5 },
+    );
+    expect(cost).toBe(3);
+  });
+
+  it('reports an unknown cost — not zero — when a rate is missing', () => {
+    const noInput = estimateSemanticCostUsd(usage({ inputTokens: 10_000, outputTokens: 500 }), {
+      inputPerMTokUsd: null,
+      cachedInputPerMTokUsd: 0.2,
+      outputPerMTokUsd: 10,
+    });
+    const noOutput = estimateSemanticCostUsd(usage({ inputTokens: 10_000, outputTokens: 500 }), {
+      inputPerMTokUsd: 2,
+      cachedInputPerMTokUsd: 0.2,
+      outputPerMTokUsd: null,
+    });
+    expect(noInput).toBeNull();
+    expect(noOutput).toBeNull();
+  });
+
+  it('costs the usage the scheduler actually accumulated', async () => {
+    const h = harness({ prices: PRICES });
+    h.scheduler.observe(context());
+    await h.scheduler.settle();
+
+    // One response: 1200 input of which 1024 cached, 30 output.
+    //   176/1e6*2 + 1024/1e6*0.2 + 30/1e6*10 = 0.000352 + 0.0002048 + 0.0003
+    const diagnostics = h.scheduler.getDiagnostics();
+    expect(diagnostics.usage.inputTokens).toBe(1200);
+    expect(diagnostics.usage.outputTokens).toBe(30);
+    expect(diagnostics.estimatedCostUsd).toBeCloseTo(0.0008568, 12);
+  });
+
+  it('accumulates cost across calls rather than reporting the last one', async () => {
+    const h = harness({ prices: PRICES });
+    h.setNow(900_000);
+    h.scheduler.observe(context());
+    await h.scheduler.settle();
+    h.setNow(1_000_000);
+    h.scheduler.observe(context({ transcriptRevision: 994 }));
+    await h.scheduler.settle();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+    expect(h.scheduler.getDiagnostics().estimatedCostUsd).toBeCloseTo(0.0017136, 12);
+  });
+
+  it('starts reporting a cost as soon as prices arrive from the registry', async () => {
+    const h = harness();
+    h.scheduler.observe(context());
+    await h.scheduler.settle();
+    expect(h.scheduler.getDiagnostics().estimatedCostUsd).toBeNull();
+    h.scheduler.setPrices(PRICES);
+    expect(h.scheduler.getDiagnostics().estimatedCostUsd).toBeCloseTo(0.0008568, 12);
+  });
+});
+
+describe('user-configurable session budget (§42.1)', () => {
+  it('honours a caller-supplied cap instead of the module default', () => {
+    const h = harness({ budget: { maxRequestsPerSession: 25 } });
+    expect(h.scheduler.getBudget().maxRequestsPerSession).toBe(25);
+    // The untouched fields still come from the §42 defaults.
+    expect(h.scheduler.getBudget().maxTotalTokens).toBe(1_500_000);
+  });
+
+  it('applies a cap tightened mid-take without restarting the session', async () => {
+    const h = harness();
+    h.setNow(1_100_000);
+    h.scheduler.observe(context());
+    await h.scheduler.settle();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+
+    h.scheduler.setBudget({ maxRequestsPerSession: 1 });
+    h.setNow(1_200_000);
+    h.scheduler.observe(context({ transcriptRevision: 994 }));
+    await h.scheduler.settle();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+    expect(h.scheduler.getAvailability()).toBe('budget_exhausted');
+  });
+
+  it('a relaxed cap lets the sidecar run again', async () => {
+    const h = harness({ budget: { maxRequestsPerSession: 1 } });
+    h.setNow(1_300_000);
+    h.scheduler.observe(context());
+    await h.scheduler.settle();
+    h.setNow(1_400_000);
+    h.scheduler.observe(context({ transcriptRevision: 994 }));
+    await h.scheduler.settle();
+    expect(h.classify).toHaveBeenCalledTimes(1);
+
+    h.scheduler.setBudget({ maxRequestsPerSession: 50 });
+    h.setNow(1_500_000);
+    h.scheduler.observe(context({ transcriptRevision: 995 }));
+    await h.scheduler.settle();
+    expect(h.classify).toHaveBeenCalledTimes(2);
+  });
+
+  it('treats a corrupt zero cap as a corrupt value, not as "never run"', () => {
+    // `local_only` is how a user says "no live requests". A 0 arriving from a
+    // settings document is damage, and silently disabling the sidecar forever
+    // would be a very quiet way to lose the whole feature.
+    const h = harness({ budget: { maxRequestsPerSession: 0 } });
+    expect(h.scheduler.getBudget().maxRequestsPerSession).toBe(400);
   });
 });

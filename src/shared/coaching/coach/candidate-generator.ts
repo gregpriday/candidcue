@@ -101,6 +101,32 @@ export class CoachCandidateRegistry {
     return true;
   }
 
+  /**
+   * §26.5. Invalidate every candidate that aggregated a now-revised underlying
+   * event, and return their evidence ids.
+   *
+   * This is the missing half of the invalidation channel. The disfluency lane
+   * demotes by `FillerEvent.eventId` (`fil_…`) while a tip is built on a
+   * `CoachCandidate.evidenceId` (`cand_…`), and there was no mapping between
+   * them — so `invalidate`, `invalidatedIds()` and
+   * `CoachTipPolicy.cancel('evidence_revised')` had no producer-side caller at
+   * all and §26.5 was unimplementable. The count would correct downward while
+   * the tip built on that very demoted "um" stayed on the presenter's glass.
+   *
+   * The returned ids are exactly what to pass to
+   * `CoachTipPolicy.cancel('evidence_revised', { evidenceId })`.
+   */
+  invalidateByContributingEvent(eventId: string, reason: InvalidationReason): string[] {
+    const affected: string[] = [];
+    for (const [id, entry] of this.entries) {
+      if (entry.invalidatedBy !== null) continue;
+      if (!entry.candidate.contributingEventIds.includes(eventId)) continue;
+      entry.invalidatedBy = reason;
+      affected.push(id);
+    }
+    return affected;
+  }
+
   has(evidenceId: string): boolean {
     return this.entries.has(evidenceId);
   }

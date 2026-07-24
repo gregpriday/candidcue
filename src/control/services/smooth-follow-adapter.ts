@@ -30,7 +30,7 @@ import type {
   TrackingState,
   TrackingStateV2,
 } from '../../shared/contracts';
-import { STAGE_EVENT } from '../../shared/contracts';
+import { DEFAULT_SMOOTH_FOLLOW_PROFILE, STAGE_EVENT } from '../../shared/contracts';
 import type { AlignmentDiagnostic } from '../../shared/tracking/types';
 import type { MovementDecisionRecord } from '../lib/follow-language';
 import type { AssistStatus, BudgetBreach, CoachTipView } from '../stores/smooth-follow';
@@ -104,6 +104,32 @@ export interface MotionFrameBridgeContext {
 }
 
 /**
+ * Movements whose position delta is a CORRECTION rather than speech.
+ *
+ * A finite difference over one of these divides a jump by a frame interval and
+ * calls the result a speaking rate — 30 tokens across 200 ms reads as 150
+ * units/s, which the stage then extrapolates over its 750 ms horizon into a
+ * hundred-plus units of scroll. The presenter's pace did not change when the
+ * tracker re-located them; only the position did.
+ */
+const NON_SPEECH_MOVEMENTS: ReadonlySet<TrackingSnapshot['movement']> = new Set([
+  'skip',
+  'retake',
+  'command',
+  'manual',
+]);
+
+/**
+ * Monotonic wall clock. `Date.now()` is subject to NTP steps and manual clock
+ * changes; a backward step inflates every subsequent evidence age (and a
+ * forward one hides real staleness), which is exactly the input the prediction
+ * horizon is measured against.
+ */
+export function monotonicNowMs(): number {
+  return typeof performance === 'undefined' ? Date.now() : performance.now();
+}
+
+/**
  * Bridge a v1 `TrackingSnapshot` into a `SemanticMotionFrame` so the control
  * UI is exercised today.
  *
@@ -114,22 +140,32 @@ export interface MotionFrameBridgeContext {
  *    estimate, and acceleration is reported as zero rather than invented;
  *  - `positionVariance` is left at zero — v1 does not estimate one.
  *
+ * The finite difference is bounded on both sides: it is not taken across a
+ * position correction at all, and what it does produce is folded into the
+ * profile's plausible-speech envelope. The stage clamps this again on receipt —
+ * it does not trust control — but a producer should not be emitting a rate no
+ * mouth can make in the first place.
+ *
  * TODO(integration, Agent A): delete once the worker emits real frames.
  */
 export function motionFrameFromSnapshot(
   snapshot: TrackingSnapshot,
   context: MotionFrameBridgeContext,
 ): SemanticMotionFrame {
-  const nowMs = context.nowMs ?? Date.now();
+  const nowMs = context.nowMs ?? monotonicNowMs();
   const sessionTimeMs = Math.max(0, nowMs - context.sessionStartedAtMs);
   const previous = context.previous ?? null;
   const elapsedSeconds =
     previous && sessionTimeMs > previous.sessionTimeMs
       ? (sessionTimeMs - previous.sessionTimeMs) / 1000
       : 0;
+  const paceMax = DEFAULT_SMOOTH_FOLLOW_PROFILE.prediction.maxUnitsPerSecond;
   const velocity =
-    elapsedSeconds > 0
-      ? Math.max(0, (snapshot.tokenIndex - previous!.estimatedUnit) / elapsedSeconds)
+    elapsedSeconds > 0 && !NON_SPEECH_MOVEMENTS.has(snapshot.movement)
+      ? Math.min(
+          paceMax,
+          Math.max(0, (snapshot.tokenIndex - previous!.estimatedUnit) / elapsedSeconds),
+        )
       : 0;
 
   return {
@@ -183,7 +219,7 @@ export function movementRecordFromDiagnostic(
   diagnostic: AlignmentDiagnostic,
   context: { sessionStartedAtMs: number; previousState: TrackingStateV2; nowMs?: number },
 ): MovementDecisionRecord {
-  const nowMs = context.nowMs ?? Date.now();
+  const nowMs = context.nowMs ?? monotonicNowMs();
   return {
     revision: diagnostic.revision,
     sessionTimeMs: Math.max(0, nowMs - context.sessionStartedAtMs),

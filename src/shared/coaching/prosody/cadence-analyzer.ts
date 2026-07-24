@@ -88,6 +88,22 @@ export interface PauseEvent {
   explained?: boolean;
   /** §18.2: a manual or system pause, excluded from delivery scoring. */
   manual?: boolean;
+  /**
+   * §12.4 / §18.2: the silence is **unmeasured**, not delivered — a worklet
+   * dropout, a device change, thread starvation, a region the VAD never
+   * scanned.
+   *
+   * Without this the type could express only "deliberate" and "explained", so
+   * an integrator deriving pauses from gaps between speech intervals had no way
+   * to say "we do not know what happened here" and a dropout arrived as an
+   * ordinary mid-clause silence. The audio lane's hard rule is that a dropout
+   * is not a pause; counting one as choppy-delivery evidence tells a presenter
+   * their phrasing is broken because a buffer underran.
+   *
+   * Treated exactly like `manual`: excluded from the choppy pattern, and it
+   * does not reset or contribute to any cadence window.
+   */
+  unmeasured?: boolean;
 }
 
 export interface BoundaryEvent {
@@ -250,7 +266,16 @@ export class CadenceAnalyzer {
   private shapedBoundaries = 0;
 
   private midClausePauses: number[] = [];
-  private lastAlignmentConfidence = 1;
+  /**
+   * §18.5. Zero until someone says otherwise — "we do not know" must gate the
+   * choppy pattern shut, not open.
+   *
+   * This defaulted to `1`, i.e. perfect confidence in an alignment nobody had
+   * reported yet, which left the §18.5 gate wide open until the first boundary
+   * happened to close it. The failure is silent and one-directional: it can
+   * only ever produce a choppy-delivery claim the alignment did not support.
+   */
+  private lastAlignmentConfidence = 0;
   private observedMs = 0;
   private firstEventMs: number | null = null;
 
@@ -275,6 +300,8 @@ export class CadenceAnalyzer {
     this.firstEventMs = null;
     this.lastRunOnTipMs = null;
     this.lastChoppyTipMs = null;
+    // A new take pass knows nothing about alignment either.
+    this.lastAlignmentConfidence = 0;
   }
 
   /** A run of continuous active speech began (VAD onset). */
@@ -347,6 +374,8 @@ export class CadenceAnalyzer {
         boundary.alignmentConfidence,
       stamp: createEvidenceStamp(runStartMs, boundary.atMs, context),
       scriptSpanId: null,
+      scriptAnchorTokenId: null,
+      contributingEventIds: [],
       detailCode: `unshaped_${this.runUnshapedStrongBoundaries}`,
       spokenFragment: '',
       authoredFragment: '',
@@ -362,7 +391,11 @@ export class CadenceAnalyzer {
   notePause(pause: PauseEvent, context: CoachClockContext): CoachCandidate | null {
     this.observe(pause.endMs);
     const durationMs = pause.endMs - pause.startMs;
-    const pauseClass = pause.manual === true ? 'excluded' : classifyPause(durationMs, this.profile.thresholds);
+    // §12.4: a dropout is not a pause, and neither is a manual one.
+    const pauseClass =
+      pause.manual === true || pause.unmeasured === true
+        ? 'excluded'
+        : classifyPause(durationMs, this.profile.thresholds);
     if (!this.isMidClauseInterruption(pause, pauseClass)) {
       return null;
     }
@@ -387,6 +420,8 @@ export class CadenceAnalyzer {
       localConfidence: clamp01(0.5 + 0.1 * this.midClausePauses.length) * this.lastAlignmentConfidence,
       stamp: createEvidenceStamp(startMs, pause.endMs, context),
       scriptSpanId: null,
+      scriptAnchorTokenId: null,
+      contributingEventIds: [],
       detailCode: `mid_clause_${this.midClausePauses.length}`,
       spokenFragment: '',
       authoredFragment: '',
