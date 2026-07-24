@@ -26,7 +26,7 @@ import {
 
 export function railState(overrides: Partial<CoachRailState> = {}): CoachRailState {
   const mode = overrides.mode ?? 'coach';
-  return {
+  const state: CoachRailState = {
     schemaVersion: 1,
     stageRevision: 1,
     sessionId: 'session-1',
@@ -51,6 +51,27 @@ export function railState(overrides: Partial<CoachRailState> = {}): CoachRailSta
     score: null,
     ...overrides,
   };
+  // The producer bounds the ribbon against its own `audioTimeMs` and stamps
+  // every tip and pace sample from the same clock, so a real snapshot can never
+  // carry evidence from *after* the time it claims to describe. A fixture that
+  // did would be testing a payload the producer cannot emit — so unless a test
+  // states a time deliberately (which is how the clock's own behaviour is
+  // exercised), the fixture derives one that is consistent with its evidence.
+  return overrides.audioTimeMs === undefined
+    ? { ...state, audioTimeMs: newestEvidenceMs(state) }
+    : state;
+}
+
+function newestEvidenceMs(state: CoachRailState): number {
+  let newest = 0;
+  const consider = (value: number | null | undefined): void => {
+    if (typeof value === 'number' && Number.isFinite(value) && value > newest) newest = value;
+  };
+  for (const event of state.ribbonEvents) consider(event.endMs);
+  consider(state.activeTip?.createdAudioTimeMs);
+  const series = state.pace.recentSeries;
+  consider(series[series.length - 1]?.audioTimeMs);
+  return newest;
 }
 
 /**

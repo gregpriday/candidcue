@@ -165,15 +165,17 @@
           <!-- §7.3 step 4: one compact telemetry row, the tip beside it. -->
           {#if view.pace || view.variety || view.fillers}
             <div class="zone zone-compact" data-zone="telemetry">
-              {#if view.pace}
+              {#if view.pace && view.layout.showPaceNumber}
                 <span class="value" class:dim={view.pace.dim} data-field="pace-number">
                   {view.pace.number}
                 </span>
+              {/if}
+              {#if view.pace && view.layout.showPaceStatus}
                 <span class="line-status" data-tone={view.pace.tone} data-field="pace-state">
                   {view.pace.label}
                 </span>
               {/if}
-              {#if view.variety}
+              {#if view.variety && view.layout.showVarietyLabel}
                 <span class="sep">·</span>
                 <span class="line-status" data-field="variety-state">{view.variety.label}</span>
               {/if}
@@ -185,22 +187,28 @@
           {/if}
         {:else if view?.pace}
           <div class="zone zone-pace" data-zone="pace">
-            <div class="line-value">
-              <span class="caption">PACE</span>
-              <span class="value" class:dim={view.pace.dim} data-field="pace-number">
-                {view.pace.number}
-              </span>
-              {#if view.sparkline}
-                <svg class="sparkline" viewBox="0 0 100 24" preserveAspectRatio="none">
-                  <polyline
-                    points={view.sparkline.map((p) => `${p.x * 100},${p.y * 24}`).join(' ')}
-                  />
-                </svg>
-              {/if}
-            </div>
-            <div class="line-status" data-tone={view.pace.tone} data-field="pace-state">
-              {view.pace.label}
-            </div>
+            {#if view.layout.showPaceNumber || view.sparkline}
+              <div class="line-value">
+                <span class="caption">PACE</span>
+                {#if view.layout.showPaceNumber}
+                  <span class="value" class:dim={view.pace.dim} data-field="pace-number">
+                    {view.pace.number}
+                  </span>
+                {/if}
+                {#if view.sparkline}
+                  <svg class="sparkline" viewBox="0 0 100 24" preserveAspectRatio="none">
+                    <polyline
+                      points={view.sparkline.map((p) => `${p.x * 100},${p.y * 24}`).join(' ')}
+                    />
+                  </svg>
+                {/if}
+              </div>
+            {/if}
+            {#if view.layout.showPaceStatus}
+              <div class="line-status" data-tone={view.pace.tone} data-field="pace-state">
+                {view.pace.label}
+              </div>
+            {/if}
           </div>
         {/if}
 
@@ -223,8 +231,8 @@
               </div>
             {/if}
             <div class="line-status">
-              {#if view.variety}<span data-field="variety-state">{view.variety.label}</span>{/if}
-              {#if view.variety && view.fillers}<span class="sep">·</span>{/if}
+              {#if view.variety && view.layout.showVarietyLabel}<span data-field="variety-state">{view.variety.label}</span>{/if}
+              {#if view.variety && view.layout.showVarietyLabel && view.fillers}<span class="sep">·</span>{/if}
               {#if view.fillers}<span data-field="filler-count">{view.fillers}</span>{/if}
             </div>
           </div>

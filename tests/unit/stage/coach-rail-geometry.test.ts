@@ -15,13 +15,32 @@ import {
   coachRailReservedHeightPx,
   coachRailScriptInsetPx,
   modePermissions,
+  railPermissionsFromModules,
   railTier,
   resolveRailLayout,
+  type RailLayout,
 } from '../../../src/stage/renderer/coach/railGeometry';
 import { CoachRailPresenter } from '../../../src/stage/renderer/coach/presenter';
+import { resolveRailModules } from '../../../src/shared/coaching/coach/coach-state';
 import { railState } from './coach-rail-fixture';
+import type { CoachRailMode, CoachRailModules } from '../../../src/shared/contracts/coaching';
 
 const VIEWPORTS = [0, 320, 600, 650, 720, 800, 1080, 1440, 2160];
+
+/** One width per §7.3 tier, widest first. */
+const TIER_WIDTHS = [1280, 820, 700, 560, 420, 320];
+
+/** The layout as a stable, readable string: the enabled flags, in order. */
+function enabled(layout: RailLayout): string {
+  const on = (Object.keys(layout) as Array<keyof RailLayout>)
+    .filter((key) => key !== 'tier' && layout[key] === true)
+    .map(String);
+  return on.length === 0 ? '(nothing)' : on.join(' ');
+}
+
+function layoutTable(mode: CoachRailMode, modules?: CoachRailModules): string[] {
+  return TIER_WIDTHS.map((width) => enabled(resolveRailLayout(mode, width, modules)));
+}
 
 describe('§7.1 reserved band', () => {
   it('reserves the same height whether the rail is visible or hidden', () => {
@@ -144,6 +163,159 @@ describe('§6 mode permissions', () => {
     expect(review.varietyTile).toBe(false);
     expect(review.ribbon).toBe(false);
     expect(review.criticalTipsOnly).toBe(true);
+  });
+});
+
+describe('§6.6 the rail renders the modules it was sent', () => {
+  const NAMED: readonly CoachRailMode[] = ['off', 'minimal', 'coach', 'studio', 'review_only'];
+
+  /**
+   * The guard that matters. Routing the layout through `state.modules` is only
+   * safe if the producer's reading of a *named* mode is the same reading the
+   * stage's own fallback makes — otherwise picking Coach in Settings would
+   * quietly start showing something else.
+   */
+  it('reads a named mode identically through its flags and through its own fallback', () => {
+    for (const mode of NAMED) {
+      const fromFlags = railPermissionsFromModules(resolveRailModules(mode));
+      expect(`${mode}: ${JSON.stringify(fromFlags)}`).toBe(
+        `${mode}: ${JSON.stringify(modePermissions(mode))}`,
+      );
+      // And therefore at every width, which is what actually reaches the glass.
+      expect(layoutTable(mode, resolveRailModules(mode))).toEqual(layoutTable(mode));
+    }
+  });
+
+  /**
+   * The same fact pinned to literal values rather than to the other
+   * implementation, so a change that moved *both* readings together still
+   * fails. Each row is one §7.3 tier, widest first.
+   */
+  it('renders each named mode exactly as specified, at every tier', () => {
+    const full = 'showScore showPace showPaceNumber showPaceStatus';
+    expect(layoutTable('studio')).toEqual([
+      `${full} showSparkline showVariety showVarietyNumber showVarietyLabel showFillerCount showRibbon`,
+      `${full} showVariety showVarietyNumber showVarietyLabel showFillerCount showRibbon`,
+      `${full} showVariety showVarietyLabel showFillerCount showRibbon`,
+      `${full} showVariety showVarietyLabel showRibbon`,
+      `${full} showVariety showVarietyLabel showRibbon compactTelemetry`,
+      'compactTelemetry',
+    ]);
+    // §6.3: Coach has no sparkline and no numeric variety — the word only.
+    expect(layoutTable('coach')).toEqual([
+      `${full} showVariety showVarietyLabel showFillerCount showRibbon`,
+      `${full} showVariety showVarietyLabel showFillerCount showRibbon`,
+      `${full} showVariety showVarietyLabel showFillerCount showRibbon`,
+      `${full} showVariety showVarietyLabel showRibbon`,
+      `${full} showVariety showVarietyLabel showRibbon compactTelemetry`,
+      'compactTelemetry',
+    ]);
+    // §6.2: pace and critical alerts only.
+    expect(layoutTable('minimal')).toEqual([
+      'showPace showPaceNumber showPaceStatus',
+      'showPace showPaceNumber showPaceStatus',
+      'showPace showPaceNumber showPaceStatus',
+      'showPace showPaceNumber showPaceStatus',
+      'showPace showPaceNumber showPaceStatus compactTelemetry',
+      'compactTelemetry',
+    ]);
+    // §6.5 / §6.1: nothing but the critical-alert slot, which is not a module.
+    for (const mode of ['review_only', 'off'] as const) {
+      expect(layoutTable(mode)).toEqual([
+        '(nothing)',
+        '(nothing)',
+        '(nothing)',
+        '(nothing)',
+        'compactTelemetry',
+        'compactTelemetry',
+      ]);
+    }
+  });
+
+  /**
+   * Every module the user can turn off in Settings, turned off one at a time.
+   * The failure this replaces is a module that was routed through the *mode*
+   * instead of the flags: `custom` then rendered as Coach and the toggle did
+   * nothing.
+   */
+  it('keeps a module the user turned off hidden at every width', () => {
+    const CASES: ReadonlyArray<[keyof CoachRailModules, keyof RailLayout]> = [
+      ['deliveryScore', 'showScore'],
+      ['paceNumber', 'showPaceNumber'],
+      ['paceStatus', 'showPaceStatus'],
+      ['paceSparkline', 'showSparkline'],
+      ['varietyScore', 'showVarietyNumber'],
+      ['varietyLabel', 'showVarietyLabel'],
+      ['fillerCount', 'showFillerCount'],
+      ['fillerRibbon', 'showRibbon'],
+    ];
+    // Everything on, so each case turns off exactly one thing.
+    const all = resolveRailModules('studio');
+    for (const [module, flag] of CASES) {
+      const off = resolveRailModules('custom', { ...all, [module]: false });
+      for (const width of TIER_WIDTHS) {
+        expect(`${module}@${width}: ${resolveRailLayout('custom', width, off)[flag]}`).toBe(
+          `${module}@${width}: false`,
+        );
+      }
+      // …and it is genuinely this module doing the hiding: with it on, the
+      // widest layout shows it.
+      expect(`${module}: ${resolveRailLayout('custom', 1280, resolveRailModules('custom', all))[flag]}`)
+        .toBe(`${module}: true`);
+    }
+  });
+
+  it('drops a zone only when both of its halves are off', () => {
+    const all = resolveRailModules('studio');
+    const noVarietyNumber = resolveRailModules('custom', { ...all, varietyScore: false });
+    const noVarietyAtAll = resolveRailModules('custom', {
+      ...all,
+      varietyScore: false,
+      varietyLabel: false,
+    });
+    expect(resolveRailLayout('custom', 1280, noVarietyNumber).showVariety).toBe(true);
+    expect(resolveRailLayout('custom', 1280, noVarietyAtAll).showVariety).toBe(false);
+
+    const noPaceNumber = resolveRailModules('custom', { ...all, paceNumber: false });
+    const noPaceAtAll = resolveRailModules('custom', {
+      ...all,
+      paceNumber: false,
+      paceStatus: false,
+    });
+    expect(resolveRailLayout('custom', 1280, noPaceNumber).showPace).toBe(true);
+    expect(resolveRailLayout('custom', 1280, noPaceAtAll).showPace).toBe(false);
+    // The sparkline lives inside the pace tile; without the tile it has no home.
+    expect(resolveRailLayout('custom', 1280, noPaceAtAll).showSparkline).toBe(false);
+  });
+
+  /**
+   * §6.6 and §7.3 are separate axes and they compose in one direction only:
+   * width may drop what the user enabled, and nothing may restore what the user
+   * disabled.
+   */
+  it('lets width drop an enabled module but never restores a disabled one', () => {
+    const all = resolveRailModules('studio');
+    const enabledEverywhere = resolveRailLayout('custom', 1280, resolveRailModules('custom', all));
+    expect(enabledEverywhere.showSparkline).toBe(true);
+    // Enabled, then dropped for width.
+    expect(resolveRailLayout('custom', 820, resolveRailModules('custom', all)).showSparkline).toBe(
+      false,
+    );
+    // Disabled: no width brings it back, including the "not measured yet" width
+    // that resolves to the full layout.
+    const off = resolveRailModules('custom', { ...all, paceSparkline: false });
+    for (const width of [...TIER_WIDTHS, 0, Number.NaN, 4000]) {
+      expect(resolveRailLayout('custom', width, off).showSparkline).toBe(false);
+    }
+  });
+
+  it('falls back to the mode only when the snapshot carries no flags', () => {
+    // A caller with a mode and nothing else still gets a sensible rail…
+    expect(resolveRailLayout('custom', 1280).showPace).toBe(true);
+    // …but flags always win, including an all-off set, which is exactly what a
+    // user who turned everything off asked for.
+    const nothing = resolveRailModules('custom');
+    expect(enabled(resolveRailLayout('custom', 1280, nothing))).toBe('(nothing)');
   });
 });
 

@@ -63,6 +63,71 @@ describe('§27 snapshot arrival', () => {
   });
 });
 
+describe('§10.2 the ribbon rides the payload clock', () => {
+  it('puts the payload clock at the now edge, not the newest event', () => {
+    // The take is 60 s in and the last confirmed filler was at 50 s. The right
+    // edge is 60 s, so the filler sits halfway through the 20 s window — a rail
+    // that anchored on the newest *event* would pin it to the edge and claim
+    // the presenter had just said it.
+    const view = frame(
+      new CoachRailPresenter(),
+      railState({
+        audioTimeMs: 60_000,
+        ribbonEvents: [ribbonEvent('confirmed_filler', 50_000, 50_000)],
+      }),
+      0,
+    );
+    expect(view.ribbon.nowMs).toBe(60_000);
+    expect(view.ribbon.marks[0]!.leftPercent).toBeCloseTo(50, 6);
+  });
+
+  it('keeps the now edge on the payload clock over a long take', () => {
+    // Five minutes of 5 Hz snapshots whose audio clock runs slightly behind the
+    // wall clock. An estimate that only ever ran forward would end the take
+    // seconds ahead of the audio it is describing.
+    const presenter = new CoachRailPresenter();
+    let audioMs = 0;
+    let monotonicMs = 0;
+    let view = frame(presenter, railState({ audioTimeMs: audioMs }), monotonicMs);
+    for (let i = 1; i <= 1_500; i += 1) {
+      monotonicMs += 200;
+      audioMs += 196;
+      view = frame(
+        presenter,
+        railState({ stageRevision: i + 1, audioTimeMs: audioMs }),
+        monotonicMs,
+      );
+    }
+    expect(view.ribbon.nowMs).toBeGreaterThanOrEqual(audioMs);
+    expect(view.ribbon.nowMs - audioMs).toBeLessThanOrEqual(500);
+  });
+
+  it('keeps the ribbon moving through a gap in the snapshots', () => {
+    // Control publishes nothing for three seconds. The ribbon must keep
+    // scrolling — the take did not stop happening (§10.2).
+    const presenter = new CoachRailPresenter();
+    const state = railState({
+      audioTimeMs: 20_000,
+      ribbonEvents: [ribbonEvent('confirmed_filler', 20_000, 20_000)],
+    });
+    const first = frame(presenter, state, 0);
+    const during = frame(presenter, state, 1_500);
+    const after = frame(presenter, state, 3_000);
+    expect(during.ribbon.nowMs).toBe(first.ribbon.nowMs + 1_500);
+    expect(after.ribbon.nowMs).toBe(first.ribbon.nowMs + 3_000);
+    // …and the mark it already had slides left rather than sticking to the edge.
+    expect(first.ribbon.marks[0]!.leftPercent).toBeCloseTo(100, 6);
+    expect(after.ribbon.marks[0]!.leftPercent).toBeCloseTo(85, 6);
+    // The next real snapshot picks the clock back up where the producer is.
+    const resumed = frame(
+      presenter,
+      railState({ stageRevision: 2, audioTimeMs: 23_100, ribbonEvents: state.ribbonEvents }),
+      3_000,
+    );
+    expect(resumed.ribbon.nowMs).toBe(23_100);
+  });
+});
+
 describe('§9.3 the rail ages a tip on its own clock', () => {
   it('expires a tip while control repeats the same snapshot forever', () => {
     const presenter = new CoachRailPresenter();

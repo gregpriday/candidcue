@@ -118,7 +118,12 @@ export class PaceTilePresenter {
   private lastStableLabel = PACE_STATE_LABEL.learning;
   private pausedSinceMs: number | null = null;
 
-  update(pace: PaceDisplayState, nowMs: number): PaceTileView {
+  /**
+   * @param scheduleStatus §6.6 `targetDurationStatus`. False replaces the
+   *   §8.2 schedule line with the ordinary pace state; the schedule is never
+   *   *computed* differently, only withheld.
+   */
+  update(pace: PaceDisplayState, nowMs: number, scheduleStatus = true): PaceTileView {
     if (pace.state === 'paused') return this.updatePaused(pace, nowMs);
     this.pausedSinceMs = null;
 
@@ -137,7 +142,7 @@ export class PaceTilePresenter {
     }
     if (this.displayedWpm !== null) this.lastStableWpm = this.displayedWpm;
 
-    const label = this.resolveLabel(pace);
+    const label = this.resolveLabel(pace, scheduleStatus);
     this.lastStableLabel = label;
     return {
       number: this.displayedWpm === null ? UNKNOWN_VALUE : String(this.displayedWpm),
@@ -172,10 +177,11 @@ export class PaceTilePresenter {
     };
   }
 
-  private resolveLabel(pace: PaceDisplayState): string {
+  private resolveLabel(pace: PaceDisplayState, scheduleStatus: boolean): string {
     // §8.2: with a target duration the second line becomes schedule status,
     // but only once there is something to project from.
     if (
+      scheduleStatus &&
       pace.targetDurationMs !== null &&
       pace.projectedFinishDeltaMs !== null &&
       pace.state !== 'learning' &&

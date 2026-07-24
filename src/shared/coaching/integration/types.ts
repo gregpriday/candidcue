@@ -301,7 +301,11 @@ export function railModulesFromSettings(settings: CoachingSettings): Partial<Coa
     varietyScore: settings.modules.varietyScore,
     // §30 has one variety toggle and the rail has two. The label is the weaker
     // claim of the pair, so it follows the score rather than being invented.
-    varietyLabel: settings.modules.varietyScore,
+    // §6.3/§6.4: the word and the number are different features. The settings
+    // copy promises "Hidden, variety still shows as a word", so deriving the
+    // label from the numeric toggle took the word away with it — the opposite
+    // of what the control said would happen.
+    varietyLabel: true,
     fillerCount: settings.modules.fillerCount,
     fillerRibbon: settings.modules.fillerRibbon,
     gutterMarks: settings.modules.inlineGutterMarks,

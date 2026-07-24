@@ -97,10 +97,31 @@ export function railTier(widthPx: number): RailTier {
   return 'tip_only';
 }
 
-/** What each mode is permitted to show at all (§6), before width degradation. */
+/**
+ * What the rail is permitted to show at all (§6), before width degradation.
+ *
+ * One field per drawable thing, mirroring {@link CoachRailModules} rather than
+ * summarising it: §6.6 lets the user turn any single one of them off, so a
+ * permission that stood for two modules at once could not express the state the
+ * user asked for. `paceTile` and `varietyTile` are the only aggregates, and both
+ * are *derived* from their halves by {@link permissions} so they cannot drift
+ * from them.
+ */
 export interface RailModulePermissions {
+  /** The pace zone as a whole: either half of it is reason enough to draw it. */
   paceTile: boolean;
+  /** §8.1 the WPM figure. */
+  paceNumber: boolean;
+  /** §8.1 the pace state line. */
+  paceStatus: boolean;
+  /** §8.2 / §14.10: the state line becomes schedule status against a target. */
+  scheduleStatus: boolean;
+  /** The variety zone as a whole. */
   varietyTile: boolean;
+  /** §6.4 the numeric variety score. §6.3 Coach shows the word alone. */
+  varietyNumber: boolean;
+  /** §8.3 the variety state word. */
+  varietyLabel: boolean;
   fillerCount: boolean;
   sparkline: boolean;
   ribbon: boolean;
@@ -110,50 +131,95 @@ export interface RailModulePermissions {
   criticalTipsOnly: boolean;
 }
 
+type RailModuleParts = Omit<RailModulePermissions, 'paceTile' | 'varietyTile'>;
+
+/** The one place the two aggregates are computed, so they cannot disagree. */
+function permissions(parts: RailModuleParts): RailModulePermissions {
+  return {
+    ...parts,
+    paceTile: parts.paceNumber || parts.paceStatus,
+    varietyTile: parts.varietyNumber || parts.varietyLabel,
+  };
+}
+
+const NOTHING: RailModuleParts = {
+  paceNumber: false,
+  paceStatus: false,
+  scheduleStatus: false,
+  varietyNumber: false,
+  varietyLabel: false,
+  fillerCount: false,
+  sparkline: false,
+  ribbon: false,
+  deliveryScore: false,
+  criticalTipsOnly: true,
+};
+
+/**
+ * §6.6. The snapshot's own resolved flags, read as rail permissions.
+ *
+ * This is the path every rail should take. `resolveRailModules` on the control
+ * side is the single interpretation of a mode; everything here does is rename
+ * its fields into the shape the layout wants. Nothing in this function knows
+ * what mode it is looking at, which is the point: a mode cannot be re-read
+ * differently by the stage than it was resolved by the producer.
+ */
+export function railPermissionsFromModules(modules: CoachRailModules): RailModulePermissions {
+  return permissions({
+    paceNumber: modules.paceNumber,
+    paceStatus: modules.paceStatus,
+    scheduleStatus: modules.targetDurationStatus,
+    varietyNumber: modules.varietyScore,
+    varietyLabel: modules.varietyLabel,
+    fillerCount: modules.fillerCount,
+    sparkline: modules.paceSparkline,
+    ribbon: modules.fillerRibbon,
+    deliveryScore: modules.deliveryScore,
+    // §6.2 / §6.5 are exactly "no ordinary tips": the flag is the same fact
+    // stated the other way round.
+    criticalTipsOnly: !modules.liveTips,
+  });
+}
+
+/**
+ * The fallback reading of a mode for a caller that has no flags.
+ *
+ * Every named mode here is value-identical to
+ * `railPermissionsFromModules(resolveRailModules(mode))` — there is a test that
+ * asserts it field by field, because two readings of the same mode that drift
+ * apart is precisely the failure `CoachRailModules` was added to end.
+ */
 export function modePermissions(mode: CoachRailMode): RailModulePermissions {
   switch (mode) {
     case 'off':
-      return {
-        paceTile: false,
-        varietyTile: false,
-        fillerCount: false,
-        sparkline: false,
-        ribbon: false,
-        deliveryScore: false,
-        criticalTipsOnly: true,
-      };
+      return permissions({ ...NOTHING });
     case 'minimal':
-      return {
-        paceTile: true,
-        varietyTile: false,
-        fillerCount: false,
-        sparkline: false,
-        ribbon: false,
-        deliveryScore: false,
-        criticalTipsOnly: true,
-      };
+      // §6.2: pace and critical alerts only.
+      return permissions({
+        ...NOTHING,
+        paceNumber: true,
+        paceStatus: true,
+        scheduleStatus: true,
+      });
     case 'review_only':
-      return {
-        paceTile: false,
-        varietyTile: false,
-        fillerCount: false,
-        sparkline: false,
-        ribbon: false,
-        // §6.5: the take is still scored — the number is simply never shown
-        // live. It waits in the post-take report.
-        deliveryScore: false,
-        criticalTipsOnly: true,
-      };
+      // §6.5: the take is still scored — the number is simply never shown live.
+      // It waits in the post-take report.
+      return permissions({ ...NOTHING });
     case 'studio':
-      return {
-        paceTile: true,
-        varietyTile: true,
+      // §6.4: everything in Coach plus the numeric variety score and the
+      // sparkline.
+      return permissions({
+        paceNumber: true,
+        paceStatus: true,
+        scheduleStatus: true,
+        varietyNumber: true,
+        varietyLabel: true,
         fillerCount: true,
         sparkline: true,
         ribbon: true,
         deliveryScore: true,
         criticalTipsOnly: false,
-      };
+      });
     // §6.6 `custom` is defined by individual module toggles, which is why
     // `CoachRailState.modules` exists: the producer resolves them and the stage
     // reads them. This branch is only the fallback for a caller that has a mode
@@ -163,16 +229,32 @@ export function modePermissions(mode: CoachRailMode): RailModulePermissions {
     case 'custom':
     case 'coach':
     default:
-      return {
-        paceTile: true,
-        varietyTile: true,
+      // §6.3: variety as a *status label*. The numeric score is the Studio
+      // addition of §6.4, and the settings copy promises the same thing —
+      // "Hidden, variety still shows as a word".
+      return permissions({
+        ...NOTHING,
+        paceNumber: true,
+        paceStatus: true,
+        scheduleStatus: true,
+        varietyLabel: true,
         fillerCount: true,
-        sparkline: false,
         ribbon: true,
         deliveryScore: true,
         criticalTipsOnly: false,
-      };
+      });
   }
+}
+
+/**
+ * §6.6. The permissions for a snapshot: its own flags when it carries them, the
+ * mode's fallback reading when it does not.
+ */
+export function railPermissions(
+  mode: CoachRailMode,
+  modules?: CoachRailModules,
+): RailModulePermissions {
+  return modules ? railPermissionsFromModules(modules) : modePermissions(mode);
 }
 
 /** The resolved layout after mode permissions and width degradation. */
@@ -191,11 +273,16 @@ export interface RailLayout {
    * before the tip — which §7.3 step 5 preserves above everything.
    */
   showScore: boolean;
+  /** The pace zone. False when both its halves are off. */
   showPace: boolean;
+  showPaceNumber: boolean;
+  showPaceStatus: boolean;
   showSparkline: boolean;
+  /** The variety zone. False when both its halves are off. */
   showVariety: boolean;
   /** §7.3 step 2: numeric variety becomes a bare label. */
   showVarietyNumber: boolean;
+  showVarietyLabel: boolean;
   showFillerCount: boolean;
   showRibbon: boolean;
   /** §7.3 step 4: left and right telemetry collapse into one row. */
@@ -203,6 +290,14 @@ export interface RailLayout {
 }
 
 /**
+ * Two independent axes, composed in one direction only.
+ *
+ * §6.6 says what the user enabled; §7.3 says what fits. A module the user
+ * enabled may still be dropped for width, but a module the user turned off must
+ * never come back at any width — which is why every flag below reads
+ * `permission && widthAdmits` and never the other way round, and why nothing
+ * here falls back to a mode reading when a permission is false.
+ *
  * @param modules §6.6 resolved module flags from the snapshot. Supplying them
  *   is what lets `custom` mean what the user actually chose rather than being
  *   rendered as Coach — see the note on the `custom` branch of
@@ -213,7 +308,7 @@ export function resolveRailLayout(
   widthPx: number,
   modules?: CoachRailModules,
 ): RailLayout {
-  const permissions = modePermissions(mode);
+  const allowed = railPermissions(mode, modules);
   const tier = railTier(widthPx);
   const rank = (t: RailTier): number =>
     ['full', 'no_sparkline', 'variety_label', 'no_filler_count', 'compact', 'tip_only'].indexOf(t);
@@ -221,15 +316,20 @@ export function resolveRailLayout(
   const telemetryVisible = at < rank('tip_only');
   return {
     tier,
-    showScore: (modules?.deliveryScore ?? permissions.deliveryScore) && telemetryVisible,
-    showPace: permissions.paceTile && telemetryVisible,
-    showSparkline: permissions.sparkline && at < rank('no_sparkline'),
-    showVariety: permissions.varietyTile && telemetryVisible,
-    showVarietyNumber: permissions.varietyTile && at < rank('variety_label'),
-    showFillerCount: permissions.fillerCount && at < rank('no_filler_count'),
+    showScore: allowed.deliveryScore && telemetryVisible,
+    showPace: allowed.paceTile && telemetryVisible,
+    showPaceNumber: allowed.paceNumber && telemetryVisible,
+    showPaceStatus: allowed.paceStatus && telemetryVisible,
+    // The sparkline sits inside the pace tile: without the tile there is
+    // nothing to draw it in.
+    showSparkline: allowed.sparkline && allowed.paceTile && at < rank('no_sparkline'),
+    showVariety: allowed.varietyTile && telemetryVisible,
+    showVarietyNumber: allowed.varietyNumber && at < rank('variety_label'),
+    showVarietyLabel: allowed.varietyLabel && telemetryVisible,
+    showFillerCount: allowed.fillerCount && at < rank('no_filler_count'),
     // The ribbon survives the compact tier: §7.3 step 3 keeps the event ticks
     // when the filler *count* goes. It goes only at the smallest layout.
-    showRibbon: permissions.ribbon && telemetryVisible,
+    showRibbon: allowed.ribbon && telemetryVisible,
     compactTelemetry: at >= rank('compact'),
   };
 }

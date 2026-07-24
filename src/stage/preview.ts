@@ -8,7 +8,9 @@
  * receives resolved URLs inside the event payloads instead.
  */
 import type {
+  CoachRailState,
   CompiledBlock,
+  DeliveryScoreState,
   ListenerStageSelection,
   SemanticMotionFrame,
   StageDirective,
@@ -19,6 +21,13 @@ import type {
   TrackingSnapshot,
 } from '../shared/contracts';
 import { STAGE_EVENT } from '../shared/contracts';
+import {
+  initialFillerState,
+  initialMicrophoneState,
+  initialPaceState,
+  initialVarietyState,
+  resolveRailModules,
+} from '../shared/coaching/coach/coach-state';
 import { dispatchLocalStageEvent } from './events';
 import { isCompactViewport } from './renderer/geometry';
 
@@ -203,6 +212,38 @@ export interface PreviewDriver {
   toggleCalibration(): void;
   ack(label: string): void;
   jump(): void;
+  /**
+   * §11.1. Put the Coaching Rail's delivery score into a given state — `null`
+   * for "not scored at all", a partial for anything else. The next rail
+   * snapshot carries it.
+   *
+   * This exists because the score's states are exactly what the rail must
+   * survive without reflowing (`Listening…` → `84` → `100`), and that is a
+   * property only a real layout engine can be asked about. The browser suite
+   * drives it through {@link PREVIEW_DRIVER_KEY}.
+   */
+  setDeliveryScore(score: Partial<DeliveryScoreState> | null): void;
+}
+
+/** Where {@link startPreviewDriver} parks the driver for the browser suite. */
+export const PREVIEW_DRIVER_KEY = '__stagePreview';
+
+/**
+ * A believable mid-take rail (§27). The numbers are settled rather than
+ * learning, so the preview shows the layout a presenter actually reads — and so
+ * a test can change one thing (the score) with everything else held still.
+ */
+function previewDeliveryScore(overrides: Partial<DeliveryScoreState>): DeliveryScoreState {
+  return {
+    displayScore: 84,
+    rawScore: 84,
+    confidence: 0.72,
+    tier: 'usable',
+    dimensions: [],
+    weakestDimension: null,
+    trend: 'steady',
+    ...overrides,
+  };
 }
 
 const STAGE_GEN = 1;
@@ -308,6 +349,97 @@ export function startPreviewDriver(): PreviewDriver {
     dispatchLocalStageEvent(STAGE_EVENT.semanticFrame, frame);
   }
 
+  /**
+   * The Coaching Rail (§27), published at the producer's own §12.2 rate so the
+   * preview exercises the real snapshot path: an advancing `audioTimeMs`, a
+   * bounded ribbon, and one delivery score the rail rate-limits for itself.
+   */
+  const RAIL_PUBLISH_MS = 200;
+  const RAIL_MODE = 'coach' as const;
+  let railRevision = 0;
+  let railScore: DeliveryScoreState | null = previewDeliveryScore({});
+
+  function railTick() {
+    railRevision += 1;
+    const audioTimeMs = performance.now() - sessionStartMs;
+    const snapshot: CoachRailState = {
+      schemaVersion: 1,
+      stageRevision: railRevision,
+      sessionId: envelope.sessionId,
+      takePassId: 'preview-pass-1',
+      mode: RAIL_MODE,
+      modules: resolveRailModules(RAIL_MODE),
+      audioTimeMs,
+      visible: true,
+      mirrored: settings.mirrorX,
+      reducedMotion: settings.reducedMotion,
+      pace: {
+        ...initialPaceState(115, 160),
+        wpm: 142,
+        confidence: 0.9,
+        state: 'on_target',
+      },
+      variety: {
+        ...initialVarietyState(40, 75),
+        level: 61,
+        confidence: 0.8,
+        state: 'balanced',
+      },
+      fillers: { ...initialFillerState(), confirmedCount: 2, confirmedLast60s: 2 },
+      microphone: initialMicrophoneState(),
+      score: railScore,
+      // A tip that outlives the preview, so the centre zone is occupied and the
+      // rail looks like a rail. A real producer bounds these tightly (§9.3);
+      // this one is a demo of the layout, not of the tip policy.
+      activeTip: {
+        tipId: 'preview-tip-1',
+        code: 'USE_SILENT_PAUSE',
+        textKey: 'coach.tip.USE_SILENT_PAUSE',
+        interpolations: {},
+        severity: 'gentle',
+        priority: 60,
+        createdAudioTimeMs: 0,
+        evidenceStartMs: 0,
+        evidenceEndMs: 0,
+        earliestDisplayMs: 0,
+        expiresAudioTimeMs: Number.MAX_SAFE_INTEGER,
+        minimumDisplayMs: 2_500,
+        maximumDisplayMs: Number.MAX_SAFE_INTEGER,
+        cooldownKey: 'filler',
+        trackingEpoch: 1,
+        takePassId: 'preview-pass-1',
+        scriptAnchorTokenId: null,
+        evidenceIds: [],
+        source: 'local',
+      },
+      // A speech trace across the whole window plus one confirmed filler a few
+      // seconds back, so the ribbon has something to slide.
+      ribbonEvents: [
+        {
+          eventId: 'preview-speech',
+          type: 'speech',
+          startMs: Math.max(0, audioTimeMs - 18_000),
+          endMs: audioTimeMs,
+          confidence: 1,
+          takePassId: 'preview-pass-1',
+        },
+        {
+          eventId: 'preview-filler',
+          type: 'confirmed_filler',
+          startMs: Math.max(0, audioTimeMs - 6_000),
+          endMs: Math.max(0, audioTimeMs - 5_800),
+          confidence: 1,
+          takePassId: 'preview-pass-1',
+        },
+      ],
+      gutterMarks: [],
+    };
+    dispatchLocalStageEvent(STAGE_EVENT.coachRail, snapshot);
+  }
+
+  railTick();
+  const railTimer = window.setInterval(railTick, RAIL_PUBLISH_MS);
+
   const semanticTimer = window.setInterval(semanticTick, 1000 / SEMANTIC_HZ);
   const trackingTimer = window.setInterval(trackingTick, 340);
   const heartbeatTimer = window.setInterval(() => {
@@ -325,11 +457,13 @@ export function startPreviewDriver(): PreviewDriver {
       directive: d,
     });
 
-  return {
+  const driver: PreviewDriver = {
     stop() {
       clearInterval(semanticTimer);
       clearInterval(trackingTimer);
       clearInterval(heartbeatTimer);
+      clearInterval(railTimer);
+      delete (window as unknown as Record<string, unknown>)[PREVIEW_DRIVER_KEY];
     },
     toggleListener() {
       listenerOn = !listenerOn;
@@ -398,5 +532,17 @@ export function startPreviewDriver(): PreviewDriver {
       });
       emitTracking('skip', false);
     },
+    setDeliveryScore(score: Partial<DeliveryScoreState> | null) {
+      railScore = score === null ? null : previewDeliveryScore(score);
+      // Publish immediately rather than waiting out the interval: a caller that
+      // just set a state wants to see it.
+      railTick();
+    },
   };
+
+  // Dev-only, and only inside `?preview=1`: the browser suite drives the same
+  // object the keyboard shortcuts drive, so there is no second protocol to keep
+  // in step with this one.
+  (window as unknown as Record<string, unknown>)[PREVIEW_DRIVER_KEY] = driver;
+  return driver;
 }

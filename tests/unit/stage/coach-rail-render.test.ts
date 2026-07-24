@@ -24,8 +24,9 @@ import {
   coachRailReservedHeightPx,
 } from '../../../src/stage/renderer/coach/railGeometry';
 import { RIBBON_SHAPE } from '../../../src/stage/renderer/coach/ribbon';
+import { resolveRailModules } from '../../../src/shared/coaching/coach/coach-state';
 import { railState, ribbonEvent, tip } from './coach-rail-fixture';
-import type { CoachRailState } from '../../../src/shared/contracts/coaching';
+import type { CoachRailModules, CoachRailState } from '../../../src/shared/contracts/coaching';
 
 function html(
   state: CoachRailState | null,
@@ -103,16 +104,32 @@ describe('§8 telemetry on the glass', () => {
     expect(field(markup, 'pace-state')).toBe('LEARNING');
   });
 
-  it('renders VARIETY — / LEARNING before calibration', () => {
-    const markup = html(railState());
+  it('renders VARIETY — / LEARNING before calibration, in the mode that has the figure', () => {
+    // §6.4. The numeric variety score is a Studio module (`varietyScore`);
+    // §6.3 Coach gets the state word alone, and the settings copy promises the
+    // user the same thing — "Hidden, variety still shows as a word".
+    const markup = html(railState({ mode: 'studio' }));
     expect(field(markup, 'variety-number')).toBe('—');
     expect(field(markup, 'variety-state')).toBe('LEARNING');
     expect(text(markup)).toContain('VARIETY —');
   });
 
+  it('gives Coach the variety word without the figure (§6.3)', () => {
+    // The rail used to draw the figure in Coach too, because the zone was
+    // gated on "the mode may show variety at all" rather than on the
+    // `varietyScore` module the payload actually carries.
+    const coach = html(railState({ variety: { ...railState().variety, level: 68, state: 'balanced' } }));
+    expect(field(coach, 'variety-state')).toBe('BALANCED');
+    expect(field(coach, 'variety-number')).toBeNull();
+    expect(text(coach)).not.toContain('VARIETY');
+  });
+
   it('renders the settled tiles the spec draws in §7.2', () => {
     const markup = html(
       railState({
+        // Studio: §7.2's illustration is the fullest layout, numeric variety
+        // included.
+        mode: 'studio',
         pace: { ...railState().pace, wpm: 142, confidence: 0.9, state: 'on_target' },
         variety: { ...railState().variety, level: 68, state: 'balanced' },
         fillers: { ...railState().fillers, confirmedCount: 2 },
@@ -137,6 +154,83 @@ describe('§8 telemetry on the glass', () => {
     expect(field(markup, 'variety-state')).toBeNull();
     expect(field(markup, 'filler-count')).toBeNull();
     expect(text(markup)).not.toContain('FILLERS');
+  });
+});
+
+describe('§6.6 a module the user turned off does not reach the glass', () => {
+  const busy = {
+    pace: { ...railState().pace, wpm: 142, confidence: 0.9, state: 'on_target' as const },
+    variety: { ...railState().variety, level: 68, state: 'balanced' as const },
+    fillers: { ...railState().fillers, confirmedCount: 2 },
+    ribbonEvents: [ribbonEvent('speech', 0, 10_000), ribbonEvent('confirmed_filler', 8_000, 8_200)],
+  };
+
+  /** Everything a user can toggle, on. */
+  const ALL = resolveRailModules('studio');
+
+  function custom(overrides: Partial<CoachRailModules>, widthProps = {}): string {
+    return html(
+      railState({ mode: 'custom', modules: { ...ALL, ...overrides }, ...busy }),
+      widthProps,
+    );
+  }
+
+  /**
+   * Each row: the module, and a string that appears on the glass only because
+   * that module is on. The failure being guarded is a rail that reads the
+   * *mode* — `custom` then renders as Coach and the toggle does nothing.
+   */
+  const CASES: ReadonlyArray<[keyof CoachRailModules, string, string]> = [
+    ['deliveryScore', 'data-zone="score"', 'the score zone'],
+    ['paceNumber', 'data-field="pace-number"', 'the WPM figure'],
+    ['paceStatus', 'data-field="pace-state"', 'the pace state line'],
+    ['varietyScore', 'data-field="variety-number"', 'the numeric variety score'],
+    ['varietyLabel', 'data-field="variety-state"', 'the variety word'],
+    ['fillerCount', 'data-field="filler-count"', 'the filler count'],
+    ['fillerRibbon', 'data-shape="now"', 'the event ribbon'],
+  ];
+
+  for (const [module, marker, what] of CASES) {
+    it(`hides ${what} when \`${module}\` is off`, () => {
+      expect(custom({})).toContain(marker);
+      expect(custom({ [module]: false })).not.toContain(marker);
+    });
+  }
+
+  it('replaces the schedule line with the pace state when `targetDurationStatus` is off', () => {
+    const scheduled = {
+      ...busy.pace,
+      targetDurationMs: 120_000,
+      projectedFinishDeltaMs: 42_000,
+    };
+    const on = html(railState({ mode: 'custom', modules: ALL, ...busy, pace: scheduled }));
+    const off = html(
+      railState({
+        mode: 'custom',
+        modules: { ...ALL, targetDurationStatus: false },
+        ...busy,
+        pace: scheduled,
+      }),
+    );
+    expect(field(on, 'pace-state')).toBe('42 SEC BEHIND');
+    // Withheld, not recomputed: the tile falls back to the state it always had.
+    expect(field(off, 'pace-state')).toBe('ON TARGET');
+  });
+
+  it('keeps a disabled module hidden at every §7.3 width', () => {
+    // §7.3 may drop what the user enabled; nothing may restore what they
+    // disabled. `viewportHeightPx` is the only width-ish prop the server
+    // render takes, so the ladder is asserted on the layout the component is
+    // handed — see coach-rail-geometry for the width sweep itself.
+    for (const viewportHeightPx of [1080, 720, 600, 400]) {
+      const markup = custom({ fillerRibbon: false, deliveryScore: false }, { viewportHeightPx });
+      expect(`${viewportHeightPx}: ${markup.includes('data-shape="now"')}`).toBe(
+        `${viewportHeightPx}: false`,
+      );
+      expect(`${viewportHeightPx}: ${markup.includes('data-zone="score"')}`).toBe(
+        `${viewportHeightPx}: false`,
+      );
+    }
   });
 });
 

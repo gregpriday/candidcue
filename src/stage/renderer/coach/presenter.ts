@@ -23,7 +23,7 @@ import {
   RAIL_SCRIPT_GAP_PX,
   clampRailTextScale,
   coachRailReservedHeightPx,
-  modePermissions,
+  railPermissions,
   resolveRailLayout,
   type RailLayout,
 } from './railGeometry';
@@ -144,7 +144,10 @@ export class CoachRailPresenter {
     const state = this.adopt(input.state);
     const nowAudioMs = this.clock.sync(state, input.monotonicMs);
 
-    const permissions = modePermissions(state.mode);
+    // §6.6: one reading of the modules, shared by the layout and by the
+    // presenters below it. Both go through `state.modules` when the snapshot
+    // carries them, so the stage never interprets a mode for itself.
+    const allowed = railPermissions(state.mode, state.modules);
     const layout = resolveRailLayout(state.mode, input.widthPx, state.modules);
     const reservedHeightPx = coachRailReservedHeightPx(input.viewportHeightPx);
 
@@ -152,8 +155,11 @@ export class CoachRailPresenter {
     // continuous record of what the presenter was shown; letting it freeze
     // under `visible: false` would make an un-hide replay a stale tip or a
     // pause ladder from minutes ago.
-    const paceView = this.paceTile.update(state.pace, nowAudioMs);
-    const tipView = this.tip.update(state.activeTip, nowAudioMs, permissions.criticalTipsOnly);
+    //
+    // §8.2's schedule line is a *module*, not a width tier: the user who turned
+    // "target-duration status" off gets the pace state back, at every width.
+    const paceView = this.paceTile.update(state.pace, nowAudioMs, allowed.scheduleStatus);
+    const tipView = this.tip.update(state.activeTip, nowAudioMs, allowed.criticalTipsOnly);
     // Runs even when the zone is not drawn, for the same reason the pace tile
     // does: the 2–5 Hz limiter is a record of what the presenter was shown, and
     // freezing it would let a re-widened rail flash a stale number.

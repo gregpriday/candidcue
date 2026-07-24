@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  RAIL_CLOCK_MAX_CATCHUP_MS,
+  RAIL_CLOCK_MAX_LEAD_MS,
   RailClock,
   railClockAnchorMs,
 } from '../../../src/stage/renderer/coach/railClock';
@@ -24,7 +24,10 @@ import {
   ribbonWindowMs,
 } from '../../../src/stage/renderer/coach/ribbon';
 import { railState, ribbonEvent, tip } from './coach-rail-fixture';
-import type { CoachRibbonEventType } from '../../../src/shared/contracts/coaching';
+import type {
+  CoachRailState,
+  CoachRibbonEventType,
+} from '../../../src/shared/contracts/coaching';
 
 const ALL: ReadonlySet<CoachRibbonEventType> = new Set(
   Object.keys(RIBBON_SHAPE) as CoachRibbonEventType[],
@@ -142,22 +145,86 @@ describe('§10.5 restraint', () => {
 });
 
 describe('the rail audio clock', () => {
-  it('takes its anchor from the newest audio stamp in the snapshot', () => {
-    expect(railClockAnchorMs(railState())).toBeNull();
-    expect(
-      railClockAnchorMs(
-        railState({
-          ribbonEvents: [ribbonEvent('speech', 1_000, 4_000)],
-          activeTip: tip({ createdAudioTimeMs: 9_000 }),
-          pace: { ...railState().pace, recentSeries: [{ audioTimeMs: 6_000, wpm: 140 }] },
-        }),
-      ),
-    ).toBe(9_000);
+  /** A snapshot at a stated audio time, with evidence that says otherwise. */
+  function atAudioTime(audioTimeMs: number, extra: Partial<CoachRailState> = {}): CoachRailState {
+    return railState({
+      audioTimeMs,
+      ribbonEvents: [ribbonEvent('speech', 0, 5_000)],
+      activeTip: tip({ createdAudioTimeMs: 9_000 }),
+      pace: { ...railState().pace, recentSeries: [{ audioTimeMs: 6_000, wpm: 140 }] },
+      ...extra,
+    });
+  }
+
+  it('takes its anchor from the payload clock, not from the newest stamp it can find', () => {
+    // The producer sends the clock; deriving one from the evidence was the
+    // estimate this replaced. The evidence here peaks at 9 000 and is ignored.
+    expect(railClockAnchorMs(atAudioTime(12_345))).toBe(12_345);
+    expect(railClockAnchorMs(railState({ audioTimeMs: 0 }))).toBe(0);
+  });
+
+  it('falls back to the newest stamp only when the payload carries no clock', () => {
+    // A payload that crossed the window boundary without the field. The type is
+    // a claim, not a fact, and a rail pinned at zero would draw nothing.
+    const malformed = atAudioTime(12_345);
+    delete (malformed as { audioTimeMs?: number }).audioTimeMs;
+    expect(railClockAnchorMs(malformed)).toBe(9_000);
+  });
+
+  it('reads the payload clock back exactly, with no catch-up crawl', () => {
+    const clock = new RailClock();
+    expect(clock.sync(atAudioTime(10_000), 0)).toBe(10_000);
+    // The producer's clock jumped 500 ms in one snapshot — a stall, a resync,
+    // or simply a late publish. The rail is told the time; it does not haggle.
+    expect(clock.sync(atAudioTime(10_500, { stageRevision: 2 }), 0)).toBe(10_500);
+  });
+
+  it('tracks the payload clock instead of drifting away from it', () => {
+    const clock = new RailClock();
+    let audioMs = 30_000;
+    clock.sync(atAudioTime(audioMs), 0);
+    // Sixty seconds of 5 Hz snapshots, with the payload clock running 3% slow
+    // against the wall clock — dropped frames, a busy analyzer. A free-running
+    // estimate would end nearly two seconds ahead of the take.
+    let monotonicMs = 0;
+    let reading = 0;
+    for (let i = 1; i <= 300; i += 1) {
+      monotonicMs += 200;
+      audioMs += 194;
+      reading = clock.sync(atAudioTime(audioMs, { stageRevision: i + 1 }), monotonicMs);
+    }
+    expect(reading - audioMs).toBeLessThanOrEqual(RAIL_CLOCK_MAX_LEAD_MS);
+    expect(reading).toBeGreaterThanOrEqual(audioMs);
+    // Free-running from the first anchor would have reached 30 000 + 60 000.
+    expect(reading).toBeLessThan(30_000 + 60_000 - 1_000);
+  });
+
+  it('never drags the ribbon rightward while it converges', () => {
+    const clock = new RailClock();
+    clock.sync(atAudioTime(10_000), 0);
+    // A long silence in the publisher: the rail free-ran five seconds while the
+    // audio clock only advanced one.
+    const drifted = clock.read(5_000);
+    expect(drifted).toBe(15_000);
+    let previous = drifted;
+    let audioMs = 11_000;
+    let monotonicMs = 5_000;
+    for (let i = 0; i < 40; i += 1) {
+      monotonicMs += 200;
+      audioMs += 200;
+      const reading = clock.sync(atAudioTime(audioMs, { stageRevision: i + 2 }), monotonicMs);
+      // The correction holds the clock still; it never runs it backward, which
+      // would move a mark toward "now" (§10.4).
+      expect(reading).toBeGreaterThanOrEqual(previous);
+      previous = reading;
+    }
+    // …and it did converge, rather than holding the drift forever.
+    expect(previous - audioMs).toBeLessThanOrEqual(RAIL_CLOCK_MAX_LEAD_MS);
   });
 
   it('advances with elapsed time, not with the number of reads', () => {
     const clock = new RailClock();
-    const state = railState({ ribbonEvents: [ribbonEvent('speech', 0, 10_000)] });
+    const state = atAudioTime(10_000);
     clock.sync(state, 1_000);
     // A frame-counting implementation would drift with how often it is polled.
     const busy = new RailClock();
@@ -169,48 +236,49 @@ describe('the rail audio clock', () => {
 
   it('keeps moving while snapshots stop arriving', () => {
     const clock = new RailClock();
-    clock.sync(railState({ ribbonEvents: [ribbonEvent('speech', 0, 10_000)] }), 0);
+    clock.sync(atAudioTime(10_000), 0);
     expect(clock.read(0)).toBe(10_000);
     expect(clock.read(5_000)).toBe(15_000);
   });
 
-  it('never runs backward when an older stamp arrives', () => {
+  it('keeps moving while the same snapshot is re-rendered', () => {
+    // The component re-evaluates this on its own 10 Hz tick, with whatever
+    // snapshot it last accepted. A clock that only advanced on new payloads
+    // would freeze the ribbon between publishes.
     const clock = new RailClock();
-    clock.sync(railState({ ribbonEvents: [ribbonEvent('speech', 0, 10_000)] }), 0);
+    const stuck = atAudioTime(10_000);
+    clock.sync(stuck, 0);
+    expect(clock.sync(stuck, 1_000)).toBe(11_000);
+    expect(clock.sync(stuck, 2_000)).toBe(12_000);
+  });
+
+  it('is idempotent for a fixed monotonic time', () => {
+    const clock = new RailClock();
+    clock.sync(atAudioTime(10_000), 0);
+    const state = atAudioTime(10_600, { stageRevision: 2 });
+    const first = clock.sync(state, 100);
+    for (let i = 0; i < 20; i += 1) expect(clock.sync(state, 100)).toBe(first);
+  });
+
+  it('never runs backward when an older payload clock arrives', () => {
+    const clock = new RailClock();
+    clock.sync(atAudioTime(10_000), 0);
     const before = clock.read(2_000);
-    // A snapshot whose newest evidence is older than what we already saw.
-    const after = clock.sync(
-      railState({ stageRevision: 2, ribbonEvents: [ribbonEvent('speech', 0, 5_000)] }),
-      2_000,
-    );
+    // Out-of-order delivery is normal (§27) and a lower clock is not a
+    // correction.
+    const after = clock.sync(atAudioTime(5_000, { stageRevision: 2 }), 2_000);
     expect(after).toBe(before);
     expect(clock.read(2_000)).toBe(before);
   });
 
-  it('catches up gently for small errors and snaps for large ones', () => {
-    const clock = new RailClock();
-    clock.sync(railState({ ribbonEvents: [ribbonEvent('speech', 0, 10_000)] }), 0);
-    // 500 ms ahead of the estimate: correct, but not in one visible jump.
-    const gentle = clock.sync(
-      railState({ stageRevision: 2, ribbonEvents: [ribbonEvent('speech', 0, 10_500)] }),
-      0,
-    );
-    expect(gentle).toBe(10_000 + RAIL_CLOCK_MAX_CATCHUP_MS);
-    // Joining a take already in progress is not a drift; it is a resync.
-    const snapped = clock.sync(
-      railState({ stageRevision: 3, ribbonEvents: [ribbonEvent('speech', 0, 90_000)] }),
-      0,
-    );
-    expect(snapped).toBe(90_000);
-  });
-
   it('starts over for a new take pass', () => {
     const clock = new RailClock();
-    clock.sync(railState({ ribbonEvents: [ribbonEvent('speech', 0, 90_000)] }), 0);
+    clock.sync(atAudioTime(90_000), 0);
     const restarted = clock.sync(
       railState({
         stageRevision: 2,
         takePassId: 'pass-2',
+        audioTimeMs: 400,
         ribbonEvents: [ribbonEvent('speech', 0, 400, { takePassId: 'pass-2' })],
       }),
       0,
