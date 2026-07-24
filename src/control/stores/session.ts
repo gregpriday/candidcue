@@ -513,6 +513,13 @@ export function startLiveSession(input: StartSessionInput): string {
     compiled: useRealDriver ? (input.compiled ?? null) : null,
     sessionGeneration,
     stageGeneration: stageGeneration || 1,
+    // §47.1: the worker must resolve the *same* follow profile the stage
+    // envelope did. It falls back to the settings snapshot when this is
+    // omitted, which matches production — but a session started with a
+    // `following` that differs from saved settings (a calibration preview)
+    // would otherwise resolve the stage from the passed value and the aligner
+    // from the stored one, which is the split-brain this field exists to close.
+    following,
     onSnapshot: handleSnapshot,
     onTranscript(line) {
       pushTranscriptLine(line);
@@ -767,11 +774,14 @@ export function startLiveSession(input: StartSessionInput): string {
  *   worker `semantic_context` → sidecar scheduler → Rust → validate → fuse
  *                             → worker `semantic_assist` (bounded, re-clamped)
  *
- * The `SmoothFollowProfile` is the resolved default, which is exactly what the
- * tracking worker's engine resolves for itself (the driver sends no
- * `smoothProfile`), so `semanticInfluenceMax` is the same number on both sides
- * of the seam — the fused adjustment is clamped to the identical bound that the
- * beam re-clamps it to.
+ * The `SmoothFollowProfile` here is the resolved default while the worker now
+ * receives the user's resolved profile, and the seam still holds — but for a
+ * narrower reason than it used to. §47.1 keeps `alignment` untouched across
+ * every follow feel, so `semanticInfluenceMax` is the same number on both
+ * sides regardless of which feel is selected, and the fused adjustment is
+ * clamped to the identical bound the beam re-clamps it to. If a future profile
+ * ever varies an `alignment` field, this must take the same resolved profile
+ * the driver does rather than the default.
  */
 function startSemanticSidecar(sessionId: string, following: FollowingSettings): void {
   const sidecar = new SemanticSidecar({

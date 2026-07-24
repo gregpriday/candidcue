@@ -31,6 +31,12 @@ import type {
   TrackingWorkerInbound,
   TrackingWorkerOutbound,
 } from '../../shared/tracking/worker-protocol';
+import {
+  defaultFollowingSettings,
+  resolveFollowProfile,
+  type FollowingSettings,
+} from '../lib/follow-profiles';
+import { getSettingsSnapshot } from '../stores/settings';
 
 export interface TrackingDriverOptions {
   sessionId: string;
@@ -43,6 +49,24 @@ export interface TrackingDriverOptions {
   sessionGeneration?: number;
   stageGeneration?: number;
   profile?: Partial<TrackingProfile>;
+  /**
+   * §47 follow settings for this session, resolved here into the §55
+   * `SmoothFollowProfile` the tracking worker's engine runs on.
+   *
+   * This is the SAME resolution the stage envelope performs
+   * (`buildStageEnvelope` → `resolveFollowProfile`), through the same single
+   * authority, because the two are two halves of one behaviour: the worker owns
+   * prediction horizons, lead seconds and `catchUpMultiplier`, the stage owns
+   * the motion limits those predictions are rendered through. Resolving them
+   * from different settings is split-brain following — Calm limits on the glass
+   * driven by Responsive horizons underneath, with nothing on either side able
+   * to detect it.
+   *
+   * Omitted falls back to the saved settings (see `sessionFollowingSettings`),
+   * never to a hardcoded default, so a caller that has not been taught to pass
+   * it still gets the user's chosen feel rather than silently reverting.
+   */
+  following?: FollowingSettings;
   onSnapshot(snapshot: TrackingSnapshot): void;
   onTranscript(line: string): void;
   /**
@@ -132,6 +156,24 @@ function workerAvailable(): boolean {
   return workerFactory !== null || typeof Worker !== 'undefined';
 }
 
+/**
+ * The §47 settings this session's tracking worker should run on.
+ *
+ * Prefers what the caller passed; otherwise reads the loaded settings snapshot,
+ * which is exactly what the live-session caller resolves from. Reading it
+ * defensively (the store may be unloaded in browser dev, in a unit test, or
+ * outside Tauri) keeps a settings failure from being able to stop a take —
+ * consistent with how every other consumer of this snapshot behaves.
+ */
+function sessionFollowingSettings(explicit?: FollowingSettings): FollowingSettings {
+  if (explicit) return explicit;
+  try {
+    return getSettingsSnapshot().following ?? defaultFollowingSettings();
+  } catch {
+    return defaultFollowingSettings();
+  }
+}
+
 export function createWorkerTrackingDriver(options: TrackingDriverOptions): TrackingDriver {
   const compiled = options.compiled;
   if (!compiled) throw new Error('worker tracking driver needs a compiled script');
@@ -171,6 +213,11 @@ export function createWorkerTrackingDriver(options: TrackingDriverOptions): Trac
     // one is never treated as an address to the app.
     document: buildTrackingDocument(compiled, compiled.literalCommandRanges),
     profile: options.profile ?? {},
+    // §47.1/§55: the user's Follow feel and voice lead, resolved through the
+    // same authority the stage envelope uses. A profile this build cannot
+    // interpret is rejected whole by `resolveSmoothFollowProfile` inside the
+    // engine, so a bad one degrades to the default instead of half-applying.
+    smoothProfile: resolveFollowProfile(sessionFollowingSettings(options.following)),
     session: {
       sessionId: options.sessionId,
       sessionGeneration: options.sessionGeneration ?? 1,

@@ -151,6 +151,13 @@ export interface LedgerItem {
   finalText?: string;
   status: 'open' | 'complete' | 'failed';
   normalizedTokens: LedgerToken[];
+  /**
+   * Provider log probabilities for the final transcript (§30.5), kept so
+   * retokenization can attribute a confidence to each normalized token. Only
+   * ever set from a `completed` event — deltas carry no logprobs, and
+   * provisional text therefore carries no confidence evidence either.
+   */
+  logprobs?: TokenLogprob[];
   commandDisposition: CommandDisposition;
   /** Last wall-clock (worker-clock) time an event touched this item. */
   updatedAtMs: number;

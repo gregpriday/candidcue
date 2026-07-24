@@ -8,6 +8,7 @@
  * (§33.4 — the command router marks items via `setCommandDisposition`).
  */
 import { classifyFillers, tokenizeNormalized, STOPWORDS } from './normalize';
+import { tokenConfidencesFromLogprobs } from './transcript-confidence';
 import type {
   CommandDisposition,
   LedgerItem,
@@ -162,6 +163,13 @@ export class TranscriptLedger {
         item.finalText = event.text;
         item.provisionalText = event.text;
         item.status = 'complete';
+        // §30.5: the provider's per-token log probabilities are the only ASR
+        // evidence in the pipeline, and they arrive only with the authoritative
+        // completion. A conflicting completion replaces them along with the
+        // text they describe — keeping the old ones would attribute the
+        // previous transcript's certainty to this one's words.
+        if (event.logprobs !== undefined) item.logprobs = event.logprobs;
+        else delete item.logprobs;
         if (event.audioEndMs !== undefined) item.audioEndMs = event.audioEndMs;
         item.updatedAtMs = event.receivedAtMs;
         this.retokenize(item, true);
@@ -303,10 +311,20 @@ export class TranscriptLedger {
   }
 
   private retokenize(item: LedgerItem, final: boolean): void {
-    const words = tokenizeNormalized(final ? item.finalText ?? '' : item.provisionalText);
+    const text = final ? item.finalText ?? '' : item.provisionalText;
+    const words = tokenizeNormalized(text);
     const fillers = classifyFillers(words, true);
+    /**
+     * §30.5 per-token ASR confidence. Provisional text has no logprobs (the
+     * provider sends them only with the completion), and an unreconcilable
+     * mapping yields none — in both cases the field stays absent and
+     * `getAlignableTail` falls back to 1, exactly as before. So confidence is
+     * only ever present when it is genuinely known.
+     */
+    const confidences = final ? tokenConfidencesFromLogprobs(text, item.logprobs) : undefined;
     item.normalizedTokens = words.map((word, index) => {
       const filler = fillers[index] ?? false;
+      const confidence = confidences?.[index];
       return {
         itemId: item.itemId,
         indexInItem: index,
@@ -315,6 +333,7 @@ export class TranscriptLedger {
         final,
         filler,
         content: !filler && !STOPWORDS.has(word),
+        ...(confidence !== undefined ? { confidence } : {}),
       };
     });
   }

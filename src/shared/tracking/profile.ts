@@ -13,6 +13,7 @@
  */
 import {
   DEFAULT_SMOOTH_FOLLOW_PROFILE,
+  isInterpretableSmoothFollowProfile,
   type SmoothFollowProfile,
 } from '../contracts/smooth-follow';
 
@@ -435,13 +436,27 @@ export type PartialSmoothFollowProfile = {
  * Merge a partial smooth-follow profile over the seam defaults (companion
  * §55). Sections merge independently so a caller can override only, say,
  * `alignment.beamWidth` without restating the rest.
+ *
+ * Interpretability is checked on the MERGED result, exactly as the stage checks
+ * the profile it is handed (`stageFollowProfile` →
+ * `isInterpretableSmoothFollowProfile`). The aligner is the other half of
+ * following, so it has to answer "can I run this?" the same way the stage does
+ * or the two halves diverge silently:
+ *
+ *   - a partial that names no `version` inherits the base version and merges
+ *     normally — that is the ordinary override case and is unaffected;
+ *   - a profile that declares a version this build does not interpret, or that
+ *     carries a non-finite number, falls back WHOLE to the default rather than
+ *     being partially applied. A version bump means a field's meaning changed,
+ *     so half-applying it produces motion that is neither the sender's profile
+ *     nor the one this build was tuned against.
  */
 export function resolveSmoothFollowProfile(
   partial?: PartialSmoothFollowProfile,
 ): SmoothFollowProfile {
   const base = DEFAULT_SMOOTH_FOLLOW_PROFILE;
   if (partial === undefined) return base;
-  return {
+  const merged: SmoothFollowProfile = {
     version: partial.version ?? base.version,
     id: partial.id ?? base.id,
     prediction: { ...base.prediction, ...(partial.prediction ?? {}) },
@@ -449,4 +464,5 @@ export function resolveSmoothFollowProfile(
     motion: { ...base.motion, ...(partial.motion ?? {}) },
     coaching: { ...base.coaching, ...(partial.coaching ?? {}) },
   };
+  return isInterpretableSmoothFollowProfile(merged) ? merged : base;
 }

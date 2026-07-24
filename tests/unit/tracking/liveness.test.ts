@@ -45,8 +45,10 @@ import {
   allLivenessScenarios,
   distinctForwardSkipTarget,
   scenarioDistinctForwardSkip,
+  scenarioDemoReadThrough,
   scenarioNestedPartsReadThrough,
   scenarioNestedPartsStraddle,
+  scenarioPreambleReadThrough,
   scenarioRefrainCallBack,
   scenarioRefrainQuotedWhileConfident,
   scenarioShortSectionsReadThrough,
@@ -490,4 +492,70 @@ describe('SAFETY: a span start is only evidence when the alignment is dense', ()
       isDenseAlignment({ startTokenPosition: 7, tokenPosition: 7, sequence: pairs(1) as never }),
     ).toBe(true);
   });
+});
+
+/**
+ * LIVENESS under real transcript confidence (§30.5, §60).
+ *
+ * `TranscriptLedger` now attaches per-token ASR confidence from the provider's
+ * log probabilities, which the app has been paying for and discarding. That
+ * value reaches `confidenceModel` as `transcriptConfidence`, and every
+ * threshold in `DEFAULT_TRACKING_PROFILE` — `lockedThreshold`,
+ * `globalThreshold`, `backwardThreshold`, `minimumForwardMargin` — was tuned
+ * while it was pinned at 1.0. A multiplier that has only ever been 1 is exactly
+ * the kind of change that produces a gate which refuses to move while every
+ * safety test stays green.
+ *
+ * So the liveness property is re-asserted with the signal turned down as far as
+ * it goes. `0.05` is a transcript no presenter would tolerate; the point is that
+ * even there the confidence model's bounded `0.85 + 0.15·c` factor cannot wedge
+ * the cursor, and the §69.7 prohibited-jump count is still zero in the same run.
+ */
+function withTranscriptConfidence(
+  scenario: PlaybackScenario,
+  probability: number,
+): PlaybackScenario {
+  const logprob = Math.log(probability);
+  return {
+    ...scenario,
+    id: `${scenario.id}+conf${probability}`,
+    actions: scenario.actions.map((action) => {
+      if (action.kind !== 'transcript' || action.event.type !== 'completed') return action;
+      const words = action.event.text.split(/\s+/).filter((w) => w.length > 0);
+      if (words.length === 0) return action;
+      return {
+        ...action,
+        event: {
+          ...action.event,
+          logprobs: words.map((word, i) => ({ token: i === 0 ? word : ` ${word}`, logprob })),
+        },
+      };
+    }),
+  };
+}
+
+describe('LIVENESS: a hopeless transcript degrades, it does not wedge (§60)', () => {
+  // One scenario per document SHAPE, rather than the whole shared list: each
+  // straddle variant exercises the same gate on the same document, and the
+  // refrain fixture is the slowest in the suite.
+  const shapes = [
+    scenarioNestedPartsReadThrough(),
+    scenarioShortSectionsReadThrough(),
+    scenarioPreambleReadThrough(),
+    scenarioDemoReadThrough(),
+  ];
+  for (const shape of shapes) {
+    it(`${shape.id} at ASR confidence 0.05`, () => {
+      const report = assessLiveness(withTranscriptConfidence(shape, 0.05));
+      const context =
+        `${shape.id}: committed ${report.finalCommitted}/${report.lastTokenIndex}, ` +
+        `state ${report.finalState}`;
+      expect(
+        report.finalCommitted,
+        `${context} — real ASR confidence wedged the cursor`,
+      ).toBeGreaterThanOrEqual(report.lastTokenIndex - END_TOLERANCE_TOKENS);
+      expect(report.finalState, context).not.toBe('searching');
+      expect(report.prohibitedJumps, context).toBe(0);
+    }, 30_000);
+  }
 });
