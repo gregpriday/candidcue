@@ -81,6 +81,39 @@ describe('CoachRail (§6–§11) mount', () => {
     expect(heightPx).toBeGreaterThan(0);
   });
 
+  /*
+   * The property the Live-screen toggle button must not break.
+   *
+   * The button drives `CoachRailState.visible` and nothing else. If hiding ever
+   * reclaimed the band's space, the reading line would shift under a presenter
+   * mid-take — which is the exact failure §7.1 exists to prevent, and the most
+   * likely casualty of a naive "just hide it" implementation. Same snapshot,
+   * one flipped boolean, identical reserved geometry.
+   */
+  it('toggling only `visible` leaves the reserved geometry byte-identical (§7.1)', () => {
+    const shown = render(CoachRail, {
+      props: { snapshot: railState({ visible: true }), viewportHeightPx: 900, columnWidthPercent: 68 },
+    });
+    const hidden = render(CoachRail, {
+      props: { snapshot: railState({ visible: false }), viewportHeightPx: 900, columnWidthPercent: 68 },
+    });
+
+    const shownRail = shown.container.querySelector('.coach-rail') as HTMLElement;
+    const hiddenRail = hidden.container.querySelector('.coach-rail') as HTMLElement;
+    expect(shownRail).not.toBeNull();
+    expect(hiddenRail).not.toBeNull();
+
+    // Every inline geometry declaration the band writes, not just its height —
+    // a reserved band that moved is as bad as one that collapsed.
+    expect(hiddenRail.getAttribute('style')).toBe(shownRail.getAttribute('style'));
+    expect(Number.parseFloat(hiddenRail.style.height)).toBeGreaterThan(0);
+
+    // ...and the contents really did change state, so this is not passing by
+    // rendering the same thing twice.
+    expect(shown.container.querySelector('.contents')?.classList.contains('hidden')).toBe(false);
+    expect(hidden.container.querySelector('.contents')?.classList.contains('hidden')).toBe(true);
+  });
+
   it('hides contents when visible is false but keeps the band reserved (§7.1)', () => {
     const { container } = render(CoachRail, {
       props: { snapshot: railState({ visible: false }), viewportHeightPx: 900 },

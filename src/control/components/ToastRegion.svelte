@@ -1,6 +1,17 @@
 <!--
   Floating toast notices, bottom-center. Announced via a polite live region
   (spec §20) — streaming transcript text never routes through here.
+
+  BOTTOM INSET. The region floats over whatever is beneath it, and each toast
+  is `pointer-events: auto` because it owns a dismiss button. Anchored a flat
+  24px from the viewport bottom, that put every toast squarely on top of the
+  Live screen's always-visible transport bar and ate its clicks — and `danger`
+  toasts never auto-dismiss (deliberately: a failure must not scroll past
+  unseen), so the manual transport was unreachable in exactly the situations
+  that produce a danger toast. Rather than shortening the timeout or making the
+  toast non-interactive, the region reads `--toast-safe-bottom`: a route that
+  owns a fixed bottom bar publishes that bar's height plus the normal inset,
+  and the toasts stack above it. Everywhere else the fallback is unchanged.
 -->
 <script lang="ts">
   import { toasts, dismissToast } from '../stores/toasts';
@@ -51,7 +62,7 @@
   .region {
     position: fixed;
     left: 50%;
-    bottom: var(--space-6);
+    bottom: var(--toast-safe-bottom, var(--space-6));
     transform: translateX(-50%);
     z-index: 120;
     display: flex;

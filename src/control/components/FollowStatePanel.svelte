@@ -26,25 +26,53 @@
     follow: SmoothFollowState;
     /** Resolved heading for the current position, when the outline knows one. */
     sectionTitle?: string | null;
+    /**
+     * Whether this take actually has a microphone and a transcription feed.
+     *
+     * False in a manual or fixed-speed take, where nothing is listening. The
+     * shared copy is written for voice — "still listening for CandidCue,
+     * resume", "Transcription is still connected", "Start speaking and the
+     * stage picks up your place" — and every one of those sentences is a lie
+     * without a microphone. The operator reads this panel to decide whether a
+     * problem is their microphone or their script, so it says what is true.
+     */
+    voiceInput?: boolean;
     onnoticeaction?: (action: NonNullable<FollowNotice['action']>) => void;
   }
 
-  let { follow, sectionTitle = null, onnoticeaction }: Props = $props();
+  let { follow, sectionTitle = null, voiceInput = true, onnoticeaction }: Props = $props();
+
+  /** Copy for a take with no microphone; keys not listed keep the shared text. */
+  const MANUAL_LABELS: Partial<Record<SmoothFollowState['state'], string>> = {
+    paused: 'Paused — the script stays where it is',
+  };
+  const MANUAL_DETAILS: Partial<Record<SmoothFollowState['state'], string>> = {
+    acquiring: 'Manual take — nothing is listening. The transport moves the script.',
+    paused: 'Manual take — nothing is listening. The transport moves the script.',
+    lost_local: 'The text stays where it is. Use the transport to move it.',
+  };
 
   const statusLine = $derived(
     follow.followingPaused
       ? 'Following paused'
       : follow.receivingFrames
-        ? FOLLOW_STATE_LABELS[follow.state]
-        : 'Ready to follow',
+        ? (voiceInput ? undefined : MANUAL_LABELS[follow.state]) ?? FOLLOW_STATE_LABELS[follow.state]
+        : voiceInput
+          ? 'Ready to follow'
+          : 'Manual — no microphone',
   );
 
   const statusDetail = $derived(
     follow.followingPaused
-      ? 'The text stays where it is. Transcription and voice commands keep running.'
+      ? voiceInput
+        ? 'The text stays where it is. Transcription and voice commands keep running.'
+        : 'The text stays where it is. Use the transport to move it.'
       : follow.receivingFrames
-        ? FOLLOW_STATE_DETAIL[follow.state]
-        : 'Start speaking and the stage picks up your place.',
+        ? (voiceInput ? undefined : MANUAL_DETAILS[follow.state]) ??
+          FOLLOW_STATE_DETAIL[follow.state]
+        : voiceInput
+          ? 'Start speaking and the stage picks up your place.'
+          : 'Manual take — nothing is listening. The transport moves the script.',
   );
 
   const bandIndex = $derived(confidenceBandIndex(follow.band));

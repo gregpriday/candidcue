@@ -11,6 +11,7 @@ import {
   restartParagraph,
   resumeSession,
   session,
+  setCoachingRailVisible,
   startLiveSession,
   startPrompting,
   stopSession,
@@ -59,6 +60,53 @@ describe('live session store', () => {
     expect(s.snapshot).not.toBeNull();
     expect(s.transcriptTail.length).toBeGreaterThan(0);
     expect(s.transcriptTail.length).toBeLessThanOrEqual(4);
+  });
+
+  /*
+   * NEVER CLAIM A STATE YOU DO NOT HAVE. `connection` and `micState` start
+   * optimistic and only a running voice pipeline corrects them; a manual take
+   * never builds one, so the status line used to offer a wake word that nothing
+   * was listening for. The voice wording is asserted in the pause test below,
+   * so a fix that just deletes the sentence fails there.
+   */
+  it('a manual take never claims a microphone or a wake word (F.11)', () => {
+    start('manual');
+    expect(get(liveStatusLabel)).toBe('Ready to start');
+    startPrompting();
+    pauseListening();
+    expect(get(session).paused).toBe('listening');
+    expect(get(liveStatusLabel)).toBe('Paused — the script stays where it is');
+    expect(get(liveStatusLabel)).not.toContain('CandidCue');
+
+    hardPause();
+    expect(get(liveStatusLabel)).toBe('Paused');
+    expect(get(liveStatusLabel)).not.toContain('microphone');
+  });
+
+  /*
+   * §27. There is no rail in a manual take (coaching runs on the voice capture),
+   * and coaching mode `off` reserves no band at all. The toggle must decline
+   * rather than flip a flag the stage will never see — which is what the Live
+   * button's disabled state reflects.
+   */
+  it('the coaching-rail toggle declines when there is no rail to toggle (§27)', () => {
+    start('manual');
+    expect(get(session).coachingActive).toBe(false);
+    expect(setCoachingRailVisible()).toBe(false);
+    expect(get(session).coachRailVisible).toBe(false);
+    expect(setCoachingRailVisible(true)).toBe(false);
+    expect(get(session).coachRailVisible).toBe(false);
+  });
+
+  /* Coaching is advisory: the toggle is a display action and never navigation. */
+  it('the coaching-rail toggle never moves the reading position (§2.1)', () => {
+    start('manual');
+    startPrompting();
+    vi.advanceTimersByTime(1600 * 2);
+    const before = get(session).snapshot;
+    setCoachingRailVisible();
+    setCoachingRailVisible(true);
+    expect(get(session).snapshot).toBe(before);
   });
 
   it('distinguishes listening pause from hard pause (§15.3)', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RealtimeSessionController } from './sessionController';
 import { RealtimeTransportError } from './errors';
 import { DEFAULT_TRANSCRIPTION_CONFIG } from './sessionConfig';
+import type { ManualCommitDriver } from './commitDriver';
 import type {
   CommitReason,
   DisconnectReason,
@@ -675,6 +676,62 @@ describe('RealtimeSessionController (spec §29)', () => {
     // Still live: the timer belonged to a pause that ended.
     expect(controller.state).toBe('listening');
     expect(transport.disconnects).toEqual([]);
+  });
+
+  /*
+   * The manual fallback. `fatal_error` has no `start_listening`, `soft_pause`
+   * or `resume` edge, and the Live transport calls all three straight out of a
+   * click handler — a throwing `transition` here escaped as an uncaught
+   * `InvalidTransitionError` and killed the press. Manual driving is the ONLY
+   * thing left once the transport is dead, so this is the exact moment the
+   * transport must not break.
+   */
+  it('does not throw out of the transport once the session is in fatal_error', async () => {
+    const transport = new FakeTransport();
+    transport.connectError = new RealtimeTransportError('AUTH_KEY_INVALID', 'bad key', false);
+    const commits: CommitReason[] = [];
+    const clock = new VirtualClock();
+    const controller = new RealtimeSessionController({
+      transport,
+      timers: clock.timers,
+      now: () => clock.nowMs,
+      commitDriver: {
+        forceCommit: (reason: CommitReason) => {
+          commits.push(reason);
+          return true;
+        },
+      } as unknown as ManualCommitDriver,
+    });
+    await expect(controller.start(DEFAULT_TRANSCRIPTION_CONFIG)).rejects.toMatchObject({
+      code: 'AUTH_KEY_INVALID',
+    });
+    expect(controller.state).toBe('fatal_error');
+
+    expect(() => controller.startListening()).not.toThrow();
+    expect(controller.state).toBe('fatal_error'); // declined, not faked into 'listening'
+
+    expect(() => controller.softPause()).not.toThrow();
+    expect(controller.state).toBe('fatal_error');
+    // A pause that cannot happen must not flush a commit for it either.
+    expect(commits).toEqual([]);
+  });
+
+  /*
+   * `resume` from a live `listening` session is the operator pressing a button
+   * the UI should not have offered. It is a no-op, not an exception — and it
+   * must not be mistaken for the fresh-session path, whose failures still
+   * propagate (see the hard-pause resume tests above).
+   */
+  it('a redundant resume on a listening session is a no-op rather than a throw', async () => {
+    const transport = new FakeTransport();
+    const { controller } = makeController(transport);
+    await controller.start(DEFAULT_TRANSCRIPTION_CONFIG);
+    controller.startListening();
+    expect(controller.state).toBe('listening');
+
+    await expect(controller.resume()).resolves.toBeUndefined();
+    expect(controller.state).toBe('listening');
+    expect(transport.connectCalls).toBe(1); // no fresh negotiation was started
   });
 
   it('forwards transcript events and feeds health markers', async () => {

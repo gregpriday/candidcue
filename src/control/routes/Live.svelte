@@ -34,6 +34,7 @@
     resumeSession,
     retryListenerMedia,
     session,
+    setCoachingRailVisible,
     setSemanticRequestLimit,
     startPrompting,
     stopSession,
@@ -70,6 +71,36 @@
   const modeLabel = $derived(
     $session.mode === 'voice' ? 'Voice' : $session.mode === 'manual' ? 'Manual' : 'Fixed',
   );
+
+  /**
+   * Is there a realtime transport and an open microphone to report on at all?
+   *
+   * `connection` and `micState` are optimistic defaults ('connected' / 'live')
+   * that only a running voice pipeline ever corrects. In a manual or
+   * fixed-speed take nothing ever constructs that pipeline, so the pills sat on
+   * their defaults and the status bar cheerfully read "Connected · Mic live"
+   * over a take with no connection and no microphone — and kept reading it
+   * after the session ended. The operator uses those two pills to decide
+   * whether a problem is their microphone or their script, so a comforting
+   * default is worse than no pill at all.
+   */
+  const hasVoiceTransport = $derived($session.active && $session.mode === 'voice');
+
+  /**
+   * Toast placement (see ToastRegion). The transport is a fixed-height bar the
+   * toasts must never cover, and its height depends on its own controls, so it
+   * is measured rather than guessed. Published on the document element because
+   * the toast region is mounted at the app root, outside this route.
+   */
+  let transportHeightPx = $state(0);
+  $effect(() => {
+    const root = document.documentElement;
+    root.style.setProperty(
+      '--toast-safe-bottom',
+      `calc(${transportHeightPx}px + var(--space-6))`,
+    );
+    return () => root.style.removeProperty('--toast-safe-bottom');
+  });
 
   const flatOutline = $derived(flatten($session.outline));
   const currentSectionIndex = $derived(
@@ -248,6 +279,18 @@
     showToast(visible ? 'Listener on' : 'Listener off', 'info', { durationMs: 1600 });
   }
 
+  /**
+   * §27. Show/hide the Coaching Rail's contents. `setCoachingRailVisible` is
+   * the single mechanism (`CoachRailState.visible`) — hiding fades the contents
+   * and leaves the band reserved, so the reading line cannot shift under a
+   * presenter mid-take (§7.1).
+   */
+  function toggleCoachingRail(): void {
+    if (!$session.coachingActive) return;
+    const visible = setCoachingRailVisible();
+    showToast(visible ? 'Coaching rail on' : 'Coaching rail off', 'info', { durationMs: 1600 });
+  }
+
   $effect(() =>
     onShortcut((action) => {
       switch (action) {
@@ -331,14 +374,25 @@
     </div>
     <div class="status-right">
       <StatusPill tone="accent" label={modeLabel} dot={false} />
-      <StatusPill tone={connection.tone} label={connection.label} />
+      <!--
+        Only a voice take has a realtime connection and an open microphone to
+        report. Anything else says so plainly instead of showing the
+        `initial` optimism of "Connected · Mic live".
+      -->
+      {#if hasVoiceTransport}
+        <StatusPill tone={connection.tone} label={connection.label} />
+      {/if}
       {#if !stageAlive}
         <StatusPill tone="danger" label="Stage closed" />
       {/if}
-      <StatusPill
-        tone={$session.micState === 'live' ? 'success' : $session.micState === 'muted' ? 'neutral' : 'danger'}
-        label={$session.micState === 'live' ? 'Mic live' : $session.micState === 'muted' ? 'Mic off' : 'Mic lost'}
-      />
+      {#if hasVoiceTransport}
+        <StatusPill
+          tone={$session.micState === 'live' ? 'success' : $session.micState === 'muted' ? 'neutral' : 'danger'}
+          label={$session.micState === 'live' ? 'Mic live' : $session.micState === 'muted' ? 'Mic off' : 'Mic lost'}
+        />
+      {:else}
+        <StatusPill tone="neutral" label="No microphone" />
+      {/if}
       <span class="display-name">{$session.displayLabel}</span>
       <div class="cost">
         <IconButton icon="info" label="Estimated session cost" active={costOpen} onclick={() => (costOpen = !costOpen)} />
@@ -452,6 +506,7 @@
       <FollowStatePanel
         follow={$smoothFollow}
         sectionTitle={currentSectionTitle}
+        voiceInput={hasVoiceTransport}
         onnoticeaction={handleNoticeAction}
       />
 
@@ -559,7 +614,7 @@
   </div>
 
   <!-- Bottom transport (§15.1) — always visible -->
-  <footer class="transport">
+  <footer class="transport" bind:clientHeight={transportHeightPx}>
     <div class="transport-left">
       {#if !$session.prompting}
         <Button variant="primary" onclick={() => startPrompting()}>
@@ -616,6 +671,29 @@
         active={$session.stageBlanked}
         disabled={!stageAlive}
         onclick={() => toggleBlankStage()}
+      />
+      <!--
+        §27 Coaching Rail visibility — the button half of the "CandidCue, show
+        me my stats" command. The voice command needs a working realtime
+        transport, so without this there is no way to hide or show the rail in a
+        manual take or when voice is down.
+
+        This is a DISPLAY action and nothing else: it drives `CoachRailState
+        .visible`, which fades the rail's contents while the stage keeps the
+        band's geometry reserved (§7.1). It never touches scroll, cursor or
+        navigation. Coaching mode `off` reserves nothing at all, so there is
+        genuinely nothing to toggle — the button says so rather than pretending.
+      -->
+      <IconButton
+        icon="gauge"
+        label={!$session.coachingActive
+          ? 'Coaching rail — coaching is off for this take'
+          : $session.coachRailVisible
+            ? 'Hide coaching rail'
+            : 'Show coaching rail'}
+        active={$session.coachingActive && $session.coachRailVisible}
+        disabled={!$session.coachingActive}
+        onclick={() => toggleCoachingRail()}
       />
     </div>
 

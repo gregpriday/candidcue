@@ -23,6 +23,7 @@
   import EyeOff from '@lucide/svelte/icons/eye-off';
   import FileText from '@lucide/svelte/icons/file-text';
   import Flag from '@lucide/svelte/icons/flag';
+  import Gauge from '@lucide/svelte/icons/gauge';
   import Image from '@lucide/svelte/icons/image';
   import Import from '@lucide/svelte/icons/import';
   import Info from '@lucide/svelte/icons/info';
@@ -73,6 +74,7 @@
     | 'link'
     | 'image'
     | 'flag'
+    | 'gauge'
     | 'eye'
     | 'eye-off'
     | 'keyboard'
@@ -114,6 +116,7 @@
     link: Link,
     image: Image,
     flag: Flag,
+    gauge: Gauge,
     eye: Eye,
     'eye-off': EyeOff,
     keyboard: Keyboard,

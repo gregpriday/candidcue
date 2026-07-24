@@ -141,6 +141,69 @@ test('Start runs the real §29.2 sequence and the Live screen comes up on the pr
   errors.expectClean();
 });
 
+/*
+ * NEVER SHOW A CONFIDENT STATE YOU DO NOT HAVE.
+ *
+ * `connection` and `micState` start at 'connected'/'live' and are only ever
+ * corrected by a running voice pipeline. A manual take never constructs one, so
+ * the status bar read "Connected · Mic live" over a take with no realtime
+ * session and no open microphone — and the Tracking panel offered a wake word
+ * that nothing was listening for. The operator reads exactly these indicators
+ * to decide whether a failure is their microphone or their script.
+ *
+ * The paired voice-mode assertions live in live-voice-transport.spec.ts, so a
+ * "fix" that simply deletes the indicators fails there.
+ */
+test('a manual take claims no connection, no microphone and no wake word', async ({ page }) => {
+  const errors = watchPageErrors(page);
+  await startManualTake(page);
+
+  const statusBar = page.locator('header.statusbar');
+  await expect(statusBar.getByText('Manual', { exact: true })).toBeVisible();
+  await expect(statusBar.getByText('No microphone', { exact: true })).toBeVisible();
+  await expect(statusBar.getByText('Connected', { exact: true })).toHaveCount(0);
+  await expect(statusBar.getByText('Mic live', { exact: true })).toHaveCount(0);
+
+  // The Tracking panel, before the take has started.
+  const tracking = page.locator('.follow-state');
+  await expect(tracking.getByText('still listening for')).toHaveCount(0);
+  await expect(tracking.getByText('Transcription is still connected')).toHaveCount(0);
+  await expect(tracking.getByText('Manual take — nothing is listening.', { exact: false })).toBeVisible();
+
+  // And after a pause, where the wake-word copy used to reappear in both places.
+  await page.locator('footer.transport').getByRole('button', { name: 'Start', exact: true }).click();
+  await page.locator('footer.transport').getByRole('button', { name: 'Pause', exact: true }).click();
+  await expect(statusBar.getByText('Paused — the script stays where it is')).toBeVisible();
+  await expect(statusBar.getByText('still listening for')).toHaveCount(0);
+  await expect(tracking.getByText('still listening for')).toHaveCount(0);
+  await expect(tracking.getByText('Transcription is still connected')).toHaveCount(0);
+
+  errors.expectClean();
+});
+
+/*
+ * §27 Coaching Rail toggle. The voice command ("CandidCue, show me my stats")
+ * needs a working realtime transport; the button is the half that works when
+ * voice does not. Coaching never runs in a manual take, and mode `off`
+ * reserves no band at all, so here the button must report that honestly rather
+ * than pretending to toggle something that was never reserved.
+ */
+test('the transport carries a coaching-rail toggle that is honest when there is no rail', async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  await startManualTake(page);
+
+  const toggle = page
+    .locator('footer.transport')
+    .getByRole('button', { name: /coaching rail/i });
+  await expect(toggle).toHaveCount(1);
+  await expect(toggle).toHaveAccessibleName('Coaching rail — coaching is off for this take');
+  await expect(toggle).toBeDisabled();
+
+  errors.expectClean();
+});
+
 test('the transport and the outline move the reading position and tell the stage', async ({
   page,
 }, testInfo) => {
@@ -191,9 +254,11 @@ test('the transport and the outline move the reading position and tell the stage
 
   await page.screenshot({ path: testInfo.outputPath('live-transport.png'), fullPage: true });
 
-  // §15.3 pause: still listening, and resumable from the same place.
+  // §15.3 pause: the position is held and resumable. This is a MANUAL take, so
+  // the status line must not offer a wake word nothing is listening for — the
+  // voice wording is asserted in live-voice-transport.spec.ts.
   await transport.getByRole('button', { name: 'Pause', exact: true }).click();
-  await expect(statusBar.getByText('Paused — still listening for “CandidCue, resume”')).toBeVisible();
+  await expect(statusBar.getByText('Paused — the script stays where it is')).toBeVisible();
   await transport.getByRole('button', { name: 'Resume' }).click();
   await expect(transport.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
   await expect(currentSentence).toHaveText('we ship the new onboarding in march');
@@ -236,16 +301,40 @@ test('a stage window that disappears mid-take stands the stage controls down (§
 
   await page.screenshot({ path: testInfo.outputPath('live-stage-closed.png'), fullPage: true });
 
-  // The §62 danger toast is sitting on top of the centre transport controls and
-  // will swallow their clicks until it is dismissed. That is a real defect, not
-  // a test artefact — read the note on `dismissAllToasts` before removing this.
-  await dismissAllToasts(page);
+  /*
+   * GEOMETRY, not existence. The §62 danger toast never auto-dismisses (by
+   * design), and it used to land on top of the centre transport controls and
+   * swallow their clicks — so the manual fallback broke in precisely the
+   * situation that produces the toast. The region now sits above the transport
+   * bar, and both halves of that are asserted: the boxes do not overlap, and
+   * the click lands WITHOUT dismissing anything first.
+   */
+  const toastBox = await page.locator('.toast.danger').first().boundingBox();
+  const transportBox = await page.locator('footer.transport').boundingBox();
+  expect(toastBox, 'the §62 danger toast must be on screen').not.toBeNull();
+  expect(transportBox).not.toBeNull();
+  expect(
+    toastBox!.y + toastBox!.height,
+    'the toast stack must clear the transport bar entirely',
+  ).toBeLessThanOrEqual(transportBox!.y);
 
-  // The take itself continues: the operator can still move their own script.
+  // The take itself continues: the operator can still move their own script,
+  // with the danger toast still up.
+  await expect(page.locator('.toast.danger')).toHaveCount(1);
   await page.getByRole('button', { name: 'Forward one sentence' }).click();
   await expect(page.locator('.preview-sentence.current')).toHaveText(
     'here is what changed this quarter',
   );
+  // Sticky is the point: nothing above dismissed it.
+  await expect(page.locator('.toast.danger')).toHaveCount(1);
+
+  // And it is still dismissable by hand, and still announced assertively.
+  await expect(page.locator('.toast.danger').first().locator('..')).toHaveAttribute(
+    'role',
+    'alert',
+  );
+  await dismissAllToasts(page);
+  await expect(page.locator('.toast.danger')).toHaveCount(0);
 
   errors.expectClean();
 });

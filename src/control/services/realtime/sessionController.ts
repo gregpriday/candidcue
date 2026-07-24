@@ -250,13 +250,29 @@ export class RealtimeSessionController {
     if (phase === 'negotiating') this.machine.tryTransition('credential_minted');
   }
 
-  /** §29.2 step 11–12 — user presses Start; begin committing speech. */
+  /**
+   * §29.2 step 11–12 — user presses Start; begin committing speech.
+   *
+   * Tolerant by construction. The Live transport is the operator's MANUAL
+   * fallback, and it is reached for precisely when the realtime session has
+   * already died — `fatal_error` has no `start_listening` edge, so the throwing
+   * `transition` used to escape the click handler as an uncaught
+   * `InvalidTransitionError` and take the whole press with it. A dead session
+   * has no listening to start; that is a no-op, not an exception. The state is
+   * already reported honestly by the connection/microphone pills, so nothing is
+   * hidden by declining quietly here.
+   */
   startListening(): void {
-    this.machine.transition('start_listening');
+    this.machine.tryTransition('start_listening');
   }
 
   /** Soft pause: session stays connected and billable (§29.7). */
   softPause(): void {
+    // Same reasoning as `startListening`: there is nothing to pause on a dead
+    // or not-yet-listening session, and pausing must never throw out of the
+    // transport. Guarding before the commit keeps the driver from flushing a
+    // commit for a pause that cannot happen.
+    if (!this.machine.canTransition('soft_pause')) return;
     this.deps.commitDriver?.forceCommit('soft_pause');
     this.machine.transition('soft_pause');
     this.startPauseTimer();
@@ -341,7 +357,11 @@ export class RealtimeSessionController {
       this.machine.tryTransition('start_listening');
       return;
     }
-    this.machine.transition('resume');
+    // Tolerant for the same reason as `startListening`/`softPause`: a resume
+    // pressed on a session that is already listening is a no-op, not a crash
+    // out of the transport. A session that genuinely needs a new connection
+    // took the branch above, where failures still propagate to the caller.
+    this.machine.tryTransition('resume');
   }
 
   /**

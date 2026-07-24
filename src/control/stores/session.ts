@@ -2074,14 +2074,29 @@ export function connectionPill(connection: SessionState['connection']): {
   }
 }
 
-/** F.11 status line for the top bar and tracking visualization. */
+const PAUSED_LISTENING_LABEL = 'Paused — still listening for “CandidCue, resume”';
+/** No microphone in this take, so nothing is listening for a wake word. */
+const PAUSED_MANUAL_LABEL = 'Paused — the script stays where it is';
+
+/**
+ * F.11 status line for the top bar and tracking visualization.
+ *
+ * Every connection/microphone clause here is gated on the take actually HAVING
+ * a realtime transport. Only a voice take constructs the pipeline, so in a
+ * manual or fixed-speed take `connection` and `micState` never move off their
+ * optimistic `initial` values — and this line was reporting a microphone that
+ * was never opened and a wake word that nothing is listening for.
+ */
 export const liveStatusLabel = derived(state, (s): string => {
   if (!s.active) return s.summary ? 'Session complete' : 'Ready to start';
-  if (s.connection === 'offline') return 'Disconnected — voice following has stopped';
-  if (s.connection === 'reconnecting') return 'Reconnecting — position held';
-  if (s.micState === 'disconnected') return 'Microphone disconnected — position held';
-  if (s.paused === 'hard') return 'Hard paused — microphone off';
-  if (s.paused === 'listening') return 'Paused — still listening for “CandidCue, resume”';
+  const voice = s.mode === 'voice';
+  if (voice) {
+    if (s.connection === 'offline') return 'Disconnected — voice following has stopped';
+    if (s.connection === 'reconnecting') return 'Reconnecting — position held';
+    if (s.micState === 'disconnected') return 'Microphone disconnected — position held';
+  }
+  if (s.paused === 'hard') return voice ? 'Hard paused — microphone off' : 'Paused';
+  if (s.paused === 'listening') return voice ? PAUSED_LISTENING_LABEL : PAUSED_MANUAL_LABEL;
   if (!s.prompting) return 'Ready to start';
   switch (s.snapshot?.state) {
     case 'following':
@@ -2095,10 +2110,10 @@ export const liveStatusLabel = derived(state, (s): string => {
     case 'command_pending':
       return 'Command heard';
     case 'paused':
-      return 'Paused — still listening for “CandidCue, resume”';
+      return voice ? PAUSED_LISTENING_LABEL : PAUSED_MANUAL_LABEL;
     case 'reconnecting':
       return 'Reconnecting — position held';
     default:
-      return 'Listening';
+      return voice ? 'Listening' : 'Prompting';
   }
 });

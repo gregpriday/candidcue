@@ -35,6 +35,7 @@ const MAPPING: Record<IconName, string> = {
   link: 'link',
   image: 'image',
   flag: 'flag',
+  gauge: 'gauge',
   eye: 'eye',
   'eye-off': 'eye-off',
   keyboard: 'keyboard',

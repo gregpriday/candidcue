@@ -96,61 +96,116 @@ test('a voice take whose realtime transport cannot be established says so instea
 });
 
 /*
- * KNOWN DEFECT — reported, not yet fixed. `test.fixme` so it stays visible in
- * the run without failing the suite; delete the `.fixme` when the fix lands.
+ * THE MANUAL FALLBACK, ON A DEAD TRANSPORT. Two defects met here, and both are
+ * guarded by this one spec because they only appear together in a real browser.
  *
- * Pressing Start on the Live transport after the realtime session has died
- * throws an uncaught `InvalidTransitionError: fatal_error --start_listening-->`
- * out of the click handler:
+ * 1. Pressing Start on the Live transport after the realtime session died threw
+ *    an uncaught `InvalidTransitionError: fatal_error --start_listening-->` out
+ *    of the click handler:
  *
- *   Live.svelte  → startPrompting()                  (stores/session.ts)
- *                → pipeline.startListening()         (voice-session.ts)
- *                → controller.startListening()       (realtime/sessionController.ts:255)
- *                → machine.transition('start_listening')
+ *      Live.svelte  → startPrompting()            (stores/session.ts)
+ *                   → pipeline.startListening()   (voice-session.ts)
+ *                   → controller.startListening() (realtime/sessionController.ts)
+ *                   → machine.transition('start_listening')
  *
- * `fatal_error` has no `start_listening` edge (realtime/stateMachine.ts), and
- * this call site uses the throwing `transition` while the internal one at
- * sessionController.ts:341 uses the tolerant `tryTransition`. `softPause` and
- * `resume` throw the same way from a dead session.
+ *    `fatal_error` has no `start_listening` edge, and that call site used the
+ *    throwing `transition`. `softPause`/`resume` threw the same way.
  *
- * The cost is not the log line. Manual driving is the ONLY thing left when the
- * transport is gone, and the transport bar is where the operator reaches for
- * it — so the fallback breaks in exactly the situation it exists for.
+ * 2. The two danger toasts this failure raises are sticky by design and used to
+ *    sit on top of the centre transport controls, eating their clicks.
+ *
+ * Manual driving is the ONLY thing left when the transport is gone, and the
+ * transport bar is where the operator reaches for it — so BOTH broke in exactly
+ * the situation they exist for. Nothing below dismisses a toast before clicking.
  */
-test.fixme(
-  'a dead realtime transport still leaves the operator a working manual transport',
-  async ({ page }) => {
-    const errors = watchPageErrors(page);
-    await installTauriShim(page, {
-      welcomed: true,
-      seedScripts: [SCRIPT],
-      keyStatus: { present: true, state: 'valid' },
-      promptMode: 'voice',
-    });
-    await page.goto('/control.html');
-    await page.evaluate((err) => {
-      window.__E2E__.setFail('create_realtime_transcription_credential', err);
-    }, MINT_REFUSED);
-    await page
-      .getByRole('list', { name: 'Scripts' })
-      .getByRole('button', { name: 'Present', exact: true })
-      .first()
-      .click();
-    const start = page.getByRole('button', { name: 'Start session' });
-    await expect(start).toBeEnabled({ timeout: 20_000 });
-    await start.click();
-    await expect(page.locator('header.statusbar').getByText('Disconnected', { exact: true })).toBeVisible();
+test('a dead realtime transport still leaves the operator a working manual transport', async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  await installTauriShim(page, {
+    welcomed: true,
+    seedScripts: [SCRIPT],
+    keyStatus: { present: true, state: 'valid' },
+    promptMode: 'voice',
+  });
+  await page.goto('/control.html');
+  await page.evaluate((err) => {
+    window.__E2E__.setFail('create_realtime_transcription_credential', err);
+  }, MINT_REFUSED);
+  await page
+    .getByRole('list', { name: 'Scripts' })
+    .getByRole('button', { name: 'Present', exact: true })
+    .first()
+    .click();
+  const start = page.getByRole('button', { name: 'Start session' });
+  await expect(start).toBeEnabled({ timeout: 20_000 });
+  await start.click();
+  await expect(page.locator('header.statusbar').getByText('Disconnected', { exact: true })).toBeVisible();
 
-    // Two danger toasts are covering the centre transport (see dismissAllToasts).
-    await dismissAllToasts(page);
-
-    await page.locator('footer.transport').getByRole('button', { name: 'Start', exact: true }).click();
-    await page.getByRole('button', { name: 'Forward one sentence' }).click();
-    await expect(page.locator('.preview-sentence.current')).toHaveText(
-      'today we are shipping something new',
+  // The danger toasts really are up — and stay up — while the transport is used.
+  const danger = page.locator('.toast.danger');
+  await expect(danger.first()).toBeVisible();
+  const transportBox = await page.locator('footer.transport').boundingBox();
+  const count = await danger.count();
+  for (let i = 0; i < count; i += 1) {
+    const box = await danger.nth(i).boundingBox();
+    expect(box!.y + box!.height, `danger toast ${i} must clear the transport`).toBeLessThanOrEqual(
+      transportBox!.y,
     );
+  }
 
-    // This is the assertion that fails today.
-    errors.expectClean();
-  },
-);
+  await page.locator('footer.transport').getByRole('button', { name: 'Start', exact: true }).click();
+  await page.getByRole('button', { name: 'Forward one sentence' }).click();
+  await expect(page.locator('.preview-sentence.current')).toHaveText(
+    'today we are shipping something new',
+  );
+  await expect(danger).toHaveCount(count); // sticky: nothing auto-dismissed
+
+  // Pause and resume go through the same dead session and must not throw either.
+  await page.locator('footer.transport').getByRole('button', { name: 'Pause', exact: true }).click();
+  await page.locator('footer.transport').getByRole('button', { name: 'Resume' }).click();
+
+  // Still dismissable by hand.
+  await dismissAllToasts(page);
+  await expect(danger).toHaveCount(0);
+
+  // This is the assertion that used to fail.
+  errors.expectClean();
+});
+
+/*
+ * The other half of the manual-mode honesty pair (live-session.spec.ts). A fix
+ * that simply deletes the connection/microphone indicators passes there and
+ * fails here.
+ */
+test('a voice take still reports its realtime connection and its microphone', async ({ page }) => {
+  const errors = watchPageErrors(page);
+  await installTauriShim(page, {
+    welcomed: true,
+    seedScripts: [SCRIPT],
+    keyStatus: { present: true, state: 'valid' },
+    promptMode: 'voice',
+  });
+  await page.goto('/control.html');
+  await page.evaluate((err) => {
+    window.__E2E__.setFail('create_realtime_transcription_credential', err);
+  }, MINT_REFUSED);
+  await page
+    .getByRole('list', { name: 'Scripts' })
+    .getByRole('button', { name: 'Present', exact: true })
+    .first()
+    .click();
+  const start = page.getByRole('button', { name: 'Start session' });
+  await expect(start).toBeEnabled({ timeout: 20_000 });
+  await start.click();
+
+  const statusBar = page.locator('header.statusbar');
+  // The realtime pills are PRESENT in a voice take — reporting the truth, which
+  // here is a failure. "No microphone" is the manual-mode wording and must not
+  // leak into a take that really does have one.
+  await expect(statusBar.getByText('Disconnected', { exact: true })).toBeVisible();
+  await expect(statusBar.getByText('Mic lost', { exact: true })).toBeVisible();
+  await expect(statusBar.getByText('No microphone', { exact: true })).toHaveCount(0);
+
+  errors.expectClean();
+});
