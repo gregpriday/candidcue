@@ -21,6 +21,13 @@ export interface FixtureOptions {
   scriptId?: string;
   /** Extra weight for these normalized words (rare anchors). */
   rareWords?: readonly string[];
+  /**
+   * Spoken aliases per normalized word (§14.2): pronunciation results, user
+   * dictionary entries, abbreviation expansions. The mini compiler derives
+   * none of its own — the real compiler does that in `markdown/compile.ts` —
+   * so tests that exercise the alias inverted index state them explicitly.
+   */
+  aliases?: Readonly<Record<string, readonly string[]>>;
 }
 
 export function compileFixtureScript(source: string, options?: FixtureOptions): TrackingDocument {
@@ -53,7 +60,7 @@ export function compileFixtureScript(source: string, options?: FixtureOptions): 
         sentenceId,
         surface: word,
         normalized,
-        aliases: [],
+        aliases: [...(options?.aliases?.[normalized] ?? [])],
         weight: rare.has(normalized) ? 1.5 : isStopword ? 0.35 : 1.0,
         source: { utf16Start: start, utf16End: start + word.length },
         flags,

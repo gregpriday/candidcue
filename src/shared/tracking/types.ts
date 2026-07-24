@@ -191,6 +191,8 @@ export type CandidateScope =
   | 'section'
   | 'checkpoint'
   | 'rare_anchor'
+  /** Opened by the alias inverted index (§14.2, §14.4). */
+  | 'alias_anchor'
   | 'ngram'
   | 'global'
   | 'navigation';

@@ -63,6 +63,7 @@ import { buildSchedulingContext } from './semantic-context';
 import type { AssistSchedulingContext } from '../semantic/types';
 import { SemanticFilter } from './semantic-filter';
 import { SpeechUnitScale } from './speech-units';
+import { VisitedSpanRing } from './visited';
 import type {
   AlignmentCheckpoint,
   AlignmentDecision,
@@ -173,6 +174,13 @@ export class AlignmentEngine {
   /** Items whose delayed completions must not undo a retake (§21.4). */
   private staleAfterRetake = new Set<string>();
   private preRetakeHighWaterMark = 0;
+  /**
+   * Spans the committed cursor has actually travelled through, newest last
+   * (§14.4). Feeds §21.1's "the destination was visited recently", which the
+   * engine previously had no way to express — `previouslyPassed` is true of
+   * every token behind the cursor regardless of when, or whether, it was read.
+   */
+  private readonly visited: VisitedSpanRing;
   private lastEventAtMs = 0;
   /** Audio span of the last final item, for pace samples (§24.3). */
   private lastPaceSpan: { tokenIndex: number; atMs: number } | undefined;
@@ -226,6 +234,7 @@ export class AlignmentEngine {
     this.decisions = new MovementDecisionLog(this.profile.decisionLogCapacity);
     this.frames = new SemanticFrameEmitter(this.profile, this.smoothProfile);
     this.directives = new TransitionDirectiveManager(this.profile);
+    this.visited = new VisitedSpanRing(this.profile.visitedSpanCapacity);
     this.applySectionBounds();
   }
 
@@ -371,6 +380,7 @@ export class AlignmentEngine {
     this.pushCheckpoint(target, nowMs, movement === 'manual' ? 'manual' : 'command');
     this.emitAuthority = movement === 'manual' ? 'manual' : 'command';
     this.movedFromTokenIndex = previousCommitted;
+    this.visited.record(target, target, nowMs);
 
     // Companion §56.1: authority increments the semantic epoch, clears the
     // ordinary hypotheses, resets section eligibility to the target, resets
@@ -411,6 +421,7 @@ export class AlignmentEngine {
     this.offScript = false;
     this.staleAfterRetake.clear();
     this.preRetakeHighWaterMark = 0;
+    this.visited.clear();
     this.boundaryCrossedAtMs = -Infinity;
     this.lastMeasurement = undefined;
     this.lastCorrection = 'none';
@@ -775,7 +786,7 @@ export class AlignmentEngine {
       ) {
         return this.commitDecision(best, 'retake', margin);
       }
-      if (!this.looksLikeRetake(best, tail)) {
+      if (!this.looksLikeRetake(best, tail, nowMs)) {
         return this.holdDecision('backward_not_retake', all, margin);
       }
       const threshold = this.backwardThreshold(-distance);
@@ -829,7 +840,11 @@ export class AlignmentEngine {
     const profile = this.profile;
     if (this.state === 'searching') return profile.globalThreshold;
     if (distance > profile.continuityForwardTokens) return profile.globalThreshold;
-    if (best.window.scope === 'rare_anchor' || best.window.scope === 'ngram') {
+    if (
+      best.window.scope === 'rare_anchor' ||
+      best.window.scope === 'alias_anchor' ||
+      best.window.scope === 'ngram'
+    ) {
       return Math.max(profile.lockedThreshold, profile.globalThreshold - 0.02);
     }
     return profile.lockedThreshold;
@@ -843,7 +858,7 @@ export class AlignmentEngine {
   }
 
   /** G.5 retake heuristic. */
-  private looksLikeRetake(best: ScoredCandidate, tail: AlignableTail): boolean {
+  private looksLikeRetake(best: ScoredCandidate, tail: AlignableTail, nowMs: number): boolean {
     const profile = this.profile;
     const startPosition = this.index.clampTokenIndex(
       best.window.startTokenIndex + best.sequence.scriptStartOffset,
@@ -859,9 +874,25 @@ export class AlignmentEngine {
     );
     const explicit = this.transcriptContainsRetakeLeadIn(tail);
     const previouslyPassed = startPosition <= this.committedTokenIndex;
+    // §21.1 "the destination was visited recently" — an evidence feature the
+    // engine could not compute before the visited ring existed. It stands
+    // alongside `repeatedOpening` rather than replacing it: the two fail in
+    // different ways. A repeated opening survives a long silence but not a
+    // transcriber that mangles the destination's first content word; a recent
+    // visit survives the mangling but expires. Requiring both would mean a
+    // restart is only detectable when nothing at all went wrong, which is not
+    // the situation retake detection exists for.
+    const visitedRecently = this.visited.visitedRecently(
+      startPosition,
+      nowMs,
+      profile.retakeVisitedWithinMs,
+    );
 
     return (
-      (startsNearBoundary && repeatedOpening && withinRecentSection && previouslyPassed) ||
+      (startsNearBoundary &&
+        withinRecentSection &&
+        previouslyPassed &&
+        (repeatedOpening || visitedRecently)) ||
       (explicit && best.confidence >= profile.softThreshold)
     );
   }
@@ -982,6 +1013,7 @@ export class AlignmentEngine {
             if (fresh) this.staleAfterRetake.clear();
           }
         }
+        this.visited.record(previousCommitted, this.committedTokenIndex, nowMs);
         this.justAcquired = !this.acquired;
         this.acquired = true;
         if (!this.index.sameSection(previousCommitted, this.committedTokenIndex)) {

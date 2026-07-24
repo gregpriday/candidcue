@@ -28,6 +28,11 @@ const SCOPE_FACTOR: Record<CandidateScope, number> = {
   section: 0.94,
   checkpoint: 0.92,
   rare_anchor: 0.86,
+  // An alias anchor is the same kind of evidence as a rare-token anchor — one
+  // distinctive term, in its spoken form — so it earns the same prior. It is
+  // not weaker: the alias index only admits keys that are distinctive in this
+  // script (see `DocumentIndex.aliasTokenPositions`).
+  alias_anchor: 0.86,
   ngram: 0.86,
   global: 0.8,
 };

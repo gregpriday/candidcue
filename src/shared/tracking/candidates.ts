@@ -1,8 +1,18 @@
 /**
  * Candidate window generation (spec §31.3, G.2). Windows come from the
  * continuity band, the current-paragraph retake window, the active section,
- * recent checkpoints, rare-token anchors, and meaningful n-grams. Windows are
- * deduplicated (merged when overlapping within the same scope) and capped.
+ * recent checkpoints, rare-token anchors, alias anchors, and meaningful
+ * n-grams. Windows are deduplicated (merged when overlapping within the same
+ * scope) and capped. Every window carries the scope that admitted it, which is
+ * §14.4's requirement that the generator be able to explain itself.
+ *
+ * ## Distinctiveness (companion §23.2)
+ *
+ * An anchor only proposes a span *far from the cursor* when it is distinctive
+ * enough in this script to mean something: "never use one common repeated
+ * phrase as a large-jump trigger". Nearby occurrences of a refrain are kept —
+ * confirming where the presenter already is, is exactly what a refrain is good
+ * for.
  *
  * ## Cost (companion §63)
  *
@@ -109,25 +119,85 @@ export function generateCandidates(
   const contentWords = input.transcriptTail.filter((t) => t.content).map((t) => t.normalized);
   const anchorBack = profile.anchorBackTokens * widen;
   const anchorForward = profile.anchorForwardTokens * widen;
+
+  // §23.2: "never use one common repeated phrase as a large-jump trigger." An
+  // anchor that occurs more often than the script's distinctiveness allowance
+  // is a refrain, boilerplate, or a tagline; it may still confirm where the
+  // presenter already is, so its occurrences *inside the continuity band* are
+  // kept, but it may not propose somewhere far away. Without this the rule was
+  // enforced only downstream and only by numeric coincidence — two near-tied
+  // candidates happening to fall inside `ambiguityMargin`.
+  const repeatAllowance = globalAnchorRepeatAllowance(total, profile) * widen;
+  const bandStart = cursor - profile.continuityBackTokens;
+  const bandEnd = cursor + continuityForward;
+  const admits = (occurrences: number, position: number): boolean =>
+    occurrences <= repeatAllowance || (position >= bandStart && position <= bandEnd);
+
   for (const word of contentWords) {
     const positions = index.rareTokenPositions.get(word);
     if (!positions) continue;
     for (const position of nearest(positions, cursor, anchorPositionLimit)) {
+      if (!admits(index.tokenFrequency.get(word) ?? positions.length, position)) continue;
       add(position - anchorBack, position + anchorForward, 'rare_anchor');
+    }
+  }
+  // 5b. Alias anchors (§14.2, §14.4). Same shape as a rare-token anchor, but
+  // keyed on the *spoken* form of a term the script writes differently: "Dr."
+  // read as "doctor", "47" read as "forty seven", "real-time" read as "real
+  // time". Without this the alias score in `matchTokens` could only ever raise
+  // a window some other index had already opened, so a presenter who produced
+  // only the alias form — the case §14.2 exists for — nominated nothing.
+  //
+  // Multi-word alias keys are probed with the same n-gram slices used below,
+  // so the lookup count stays proportional to the transcript tail, not to the
+  // script (§63).
+  for (const word of contentWords) {
+    const positions = index.aliasTokenPositions.get(word);
+    if (!positions) continue;
+    for (const position of nearest(positions, cursor, anchorPositionLimit)) {
+      if (!admits(positions.length, position)) continue;
+      add(position - anchorBack, position + anchorForward, 'alias_anchor');
     }
   }
   for (let size = 3; size >= 2; size--) {
     for (let i = 0; i + size <= contentWords.length; i++) {
       const key = contentWords.slice(i, i + size).join(' ');
       const positions = index.ngramPositions.get(key);
-      if (!positions) continue;
-      for (const position of nearest(positions, cursor, anchorPositionLimit)) {
-        add(position - 30, position + 100, 'ngram'); // G.2 windowAround(position, -30, 100)
+      if (positions) {
+        for (const position of nearest(positions, cursor, anchorPositionLimit)) {
+          if (!admits(positions.length, position)) continue;
+          add(position - 30, position + 100, 'ngram'); // G.2 windowAround(position, -30, 100)
+        }
+      }
+      const aliasPositions = index.aliasTokenPositions.get(key);
+      if (aliasPositions) {
+        for (const position of nearest(aliasPositions, cursor, anchorPositionLimit)) {
+          if (!admits(aliasPositions.length, position)) continue;
+          add(position - anchorBack, position + anchorForward, 'alias_anchor');
+        }
       }
     }
   }
 
   return dedupeAndLimit(windows, windowLimit, profile.maxCandidateWindowTokens);
+}
+
+/**
+ * How many times an anchor may occur and still be allowed to nominate a span
+ * far from the cursor (§23.1, §23.2).
+ *
+ * Scale-relative rather than a fixed count, for the reason given on
+ * `TrackingProfile.globalAnchorTokensPerRepeat`: "repeated" is a property of a
+ * phrase *relative to its script*. On anything up to a couple of thousand
+ * tokens this is 1 — a global anchor must be unique — and it loosens by one
+ * for every further `globalAnchorTokensPerRepeat` tokens of script.
+ */
+export function globalAnchorRepeatAllowance(
+  tokenCount: number,
+  profile: TrackingProfile,
+): number {
+  const perRepeat = Math.max(1, profile.globalAnchorTokensPerRepeat);
+  return Math.max(1, Math.round(tokenCount / perRepeat));
 }
 
 /** The `limit` positions closest to `cursor`, in ascending order. */
@@ -146,8 +216,9 @@ const SCOPE_PRIORITY: Record<CandidateScope, number> = {
   section: 3,
   checkpoint: 4,
   rare_anchor: 5,
-  ngram: 6,
-  global: 7,
+  alias_anchor: 6,
+  ngram: 7,
+  global: 8,
 };
 
 /**

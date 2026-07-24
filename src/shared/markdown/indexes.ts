@@ -16,6 +16,29 @@ import { phoneticKey } from './phonetic';
 const RARE_MAX_FREQUENCY = 2;
 
 /**
+ * An alias only earns a place in the inverted index if it could plausibly be
+ * the *distinctive* part of an utterance. Two rules, both cheap:
+ *
+ *   - the key must contain at least one non-stopword word of >= 3 characters,
+ *     so `&` -> "and" and `no` -> "number" do not turn every occurrence of a
+ *     function word into a retrieval anchor;
+ *   - the key must not already be a frequent token of this script. If the
+ *     script says "minute" thirty times, `min` -> "minute" adds nothing the
+ *     exact-token index does not already have, and it would let one common
+ *     word nominate spans all over the document (§23.2).
+ */
+const ALIAS_MIN_WORD_LENGTH = 3;
+const ALIAS_MAX_OWN_FREQUENCY = 2;
+
+function aliasIsDistinctive(key: string, frequency: ReadonlyMap<string, number>): boolean {
+  if ((frequency.get(key) ?? 0) > ALIAS_MAX_OWN_FREQUENCY) return false;
+  for (const word of key.split(' ')) {
+    if (word.length >= ALIAS_MIN_WORD_LENGTH && !isStopword(word)) return true;
+  }
+  return false;
+}
+
+/**
  * Index records are keyed by arbitrary user text, so they MUST NOT inherit
  * from Object.prototype: a script containing the word "constructor" would
  * otherwise make `record[key] ??= []` see the inherited constructor function
@@ -83,6 +106,20 @@ export function buildSearchIndexes(
     }
   }
 
+  // §14.4: the inverted index covers aliases as well as normalized tokens.
+  // Same single pass, one entry per (alias, position); alias counts per token
+  // are tiny and bounded by `aliasesForToken`, so this stays linear.
+  const aliasToken = emptyIndex<number[]>();
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]!;
+    if (isStopword(token.normalized)) continue;
+    for (const alias of token.aliases) {
+      if (!alias || alias === token.normalized) continue;
+      if (!aliasIsDistinctive(alias, frequency)) continue;
+      push(aliasToken, alias, i);
+    }
+  }
+
   const headingAndTake = emptyIndex<string[]>();
   for (const target of targets) {
     if (target.type === 'heading' || target.type === 'take') {
@@ -117,6 +154,7 @@ export function buildSearchIndexes(
   return {
     exactToken,
     rareToken,
+    aliasToken,
     ngram2,
     ngram3,
     ngram4,

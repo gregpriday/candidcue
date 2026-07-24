@@ -86,9 +86,41 @@ export interface TrackingProfile {
   maxCandidateWindowTokens: number;
   /** Anchor positions considered per transcript word, nearest first (§63). */
   maxAnchorPositionsPerWord: number;
+  /**
+   * Repetition allowance for a *global* anchor (§23.1, §23.2), expressed as
+   * script tokens per permitted repeat.
+   *
+   * §23.2: "never use one common repeated phrase as a large-jump trigger." The
+   * question that rule leaves open is what counts as *common*, and a bare
+   * occurrence count cannot answer it: a phrase said twice in a ninety-token
+   * social clip is that clip's refrain, while a phrase said twice in a
+   * six-thousand-token keynote is nearly unique. So the allowance grows with
+   * the script instead of being fixed — one permitted repeat per this many
+   * spoken tokens, floor one. This is the `scales.ts` discipline applied to a
+   * *count* rather than a distance: the structure-relative term takes over
+   * exactly where the constant would have stopped meaning what it says.
+   */
+  globalAnchorTokensPerRepeat: number;
 
   /* Retake behavior (spec §31.12). */
   retakeBoundaryToleranceTokens: number;
+  /**
+   * Spans held by the recently-visited ring buffer (§14.4). A fixed capacity,
+   * so both memory and the §21.1 lookup stay flat in script length (§63);
+   * consecutive commits coalesce, so one span is a whole paragraph read
+   * straight through rather than one token.
+   */
+  visitedSpanCapacity: number;
+  /**
+   * How long a visited span stays "recent" for §21.1 retake evidence.
+   *
+   * Milliseconds rather than tokens on purpose. Token distances in this
+   * profile all needed `scales.ts` clamping because forty tokens is a clause
+   * in a keynote and most of a social clip; a recency bound is a property of
+   * the presenter's working memory, not of the script, and means the same
+   * thing at both scales.
+   */
+  retakeVisitedWithinMs: number;
   shortRetakeMaxDistance: number;
   shortRetakeThreshold: number;
 
@@ -282,8 +314,11 @@ export const DEFAULT_TRACKING_PROFILE: TrackingProfile = {
   continuityWindowMaxFraction: 1.0, // windows may span their own section
   maxCandidateWindowTokens: 600, // §63 per-event cost must not track script length
   maxAnchorPositionsPerWord: 6, // §63 nearest anchors only
+  globalAnchorTokensPerRepeat: 2000, // §23.2 distinctiveness allowance
 
   retakeBoundaryToleranceTokens: 3, // G.5 isSentenceOrParagraphStart(pos, 3)
+  visitedSpanCapacity: 32, // §14.4 recently visited span ring buffer
+  retakeVisitedWithinMs: 30_000, // §21.1 "the destination was visited recently"
   shortRetakeMaxDistance: 25, // §31.12 restart inside the current paragraph
   shortRetakeThreshold: 0.8, // §31.12 lower threshold for short restarts
 
