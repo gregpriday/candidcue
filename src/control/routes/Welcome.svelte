@@ -39,6 +39,13 @@
         Create your first script
       </Button>
       <Button onclick={() => importMarkdown()}>Import Markdown</Button>
+      <!-- Offered here as well as in the Library's empty state: a first-run
+           user starting from a blank three-line stub has nothing to read
+           aloud, and reading aloud is the only way to see what this app
+           actually does. -->
+      <Button variant="ghost" onclick={() => createAndOpenScript('sample')}>
+        Open the sample script
+      </Button>
     </div>
 
     <ul class="readiness">
