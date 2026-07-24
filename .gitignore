@@ -22,6 +22,8 @@ vite.config.ts.timestamp-*
 coverage/
 test-results/
 playwright-report/
+tests/e2e/browser/.artifacts/
+.playwright/
 
 # Logs
 *.log
