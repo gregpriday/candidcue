@@ -33,8 +33,18 @@ const SCOPE_FACTOR: Record<CandidateScope, number> = {
   // not weaker: the alias index only admits keys that are distinctive in this
   // script (see `DocumentIndex.aliasTokenPositions`).
   alias_anchor: 0.86,
+  // A phonetic key is the lossiest admission this engine has: an authored alias
+  // is something a human or the microphone test observed, a phonetic collision
+  // is something a hash produced. It is real evidence — the index only admits
+  // keys nothing ordinary in the script shares — but it should lose a tie to
+  // every anchor that matched the word itself.
+  phonetic_anchor: 0.82,
+  // A fidelity anchor never leaves its own section, so the thing the scope
+  // factor usually guards against (a distant nomination on thin evidence)
+  // cannot arise; what it does propose is a within-section correction, which is
+  // the same class of move as `section`.
+  fidelity_anchor: 0.9,
   ngram: 0.86,
-  global: 0.8,
 };
 
 export function continuityPrior(

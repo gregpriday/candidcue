@@ -13,7 +13,7 @@
  * Pure and deterministic; every weight comes from `TrackingProfile`.
  */
 import type { TrackingProfile } from './profile';
-import type { SpokenToken, TrackingDocument } from './types';
+import type { PauseAnchor, SpokenToken, TrackingDocument } from './types';
 import { TOKEN_FLAG } from './types';
 import { STOPWORDS } from './normalize';
 
@@ -45,14 +45,32 @@ export class SpeechUnitScale {
     }
     if (tokens.length > 0) blockEnds.add(tokens.length - 1);
 
+    // §6.1 clause boundaries and authored pause directives. Both are derived
+    // once, at projection time (`buildTrackingDocument`), because neither
+    // survives into `SpokenToken`: the compiler emits no punctuation token at
+    // all, and a `[Pause]` is a `CueEvent`, not a token.
+    const clauseEnds = new Set(document.clauseEndTokenIndexes ?? []);
+    const authoredPause = new Map<number, number>();
+    for (const anchor of document.pauseAnchors ?? []) {
+      const at = anchor.tokenIndex;
+      if (!Number.isInteger(at) || at < 0 || at >= tokens.length) continue;
+      authoredPause.set(at, (authoredPause.get(at) ?? 0) + authoredPauseWeight(anchor, profile));
+    }
+
     let running = 0;
     for (let i = 0; i < tokens.length; i++) {
       const token = tokens[i];
       this.boundaries[i] = running;
       const weight = token === undefined ? 0 : speechWeightOf(token, profile);
       let total = weight;
+      // Structural pauses are exclusive — a paragraph end is not additionally a
+      // sentence end and a comma before a full stop is not an extra breath.
       if (blockEnds.has(i)) total += profile.unitBlockEndPause;
       else if (sentenceEnds.has(i)) total += profile.unitSentenceEndPause;
+      else if (clauseEnds.has(i)) total += profile.unitClausePause;
+      // An authored pause is not structural: the writer asked for silence on
+      // top of whatever the punctuation already implies, so it adds.
+      total += authoredPause.get(i) ?? 0;
       this.weights[i] = total;
       running += total;
     }
@@ -109,10 +127,26 @@ export class SpeechUnitScale {
   }
 }
 
+/** Companion §6.1 "explicit pause directive: authored duration or weight". */
+function authoredPauseWeight(anchor: PauseAnchor, profile: TrackingProfile): number {
+  switch (anchor.kind) {
+    case 'beat':
+      return profile.unitBeatPause;
+    case 'breathe':
+      return profile.unitBreathePause;
+    default:
+      return profile.unitAuthoredPause;
+  }
+}
+
 /** Companion §6.1 initial token weighting. */
 export function speechWeightOf(token: SpokenToken, profile: TrackingProfile): number {
   // Non-spoken content contributes no delivery time.
   if ((token.flags & TOKEN_FLAG.nonNavigation) !== 0 && token.normalized.length === 0) return 0;
+  // Kept for producers that mark punctuation as a token; the CandidCue compiler
+  // is not one of them (`markdown/tokenize.ts` never emits one), which is why
+  // §6.1's comma weight arrives through `TrackingDocument.clauseEndTokenIndexes`
+  // instead of through a flag on a token that does not exist.
   if ((token.flags & TOKEN_FLAG.punctuation) !== 0) return 0;
 
   const length = token.normalized.length;

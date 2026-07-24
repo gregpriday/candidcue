@@ -17,6 +17,19 @@
  *
  * Every v1 message and every v1 outbound type is unchanged, so existing
  * control-side consumers keep working without modification.
+ *
+ * ## Time domains (companion §9.1)
+ *
+ * Inbound `nowMs`, `receivedAtMs`, `audioStartMs`, `audioEndMs` and the
+ * sidecar's `receivedAtMs` are all stamps on the **control window's clock**.
+ * The worker converts them into the session domain at the boundary
+ * (`SessionClock`), so `sessionTimeMs = 0` at `initialize` and no downstream
+ * value can move backwards when the host's wall clock does.
+ *
+ * The producer stamps are therefore load-bearing — they carry the *intervals*
+ * the engine measures pace and staleness against — but they are no longer what
+ * anything is ordered on. A producer is free to keep sending `Date.now()`; it
+ * must not assume the value it sent is the value the worker used.
  */
 import type { NavigationTarget } from '../contracts/compiler';
 import type { AssistSchedulingContext } from '../semantic/types';

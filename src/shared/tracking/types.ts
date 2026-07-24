@@ -10,8 +10,11 @@
  */
 import { TOKEN_FLAGS } from '../contracts/compiler';
 import type {
+  CompiledBlock,
+  CueEvent,
   NavigationTarget,
   OutlineNode,
+  SafeRenderNode,
   SentenceUnit,
   SpokenToken,
 } from '../contracts/compiler';
@@ -63,6 +66,30 @@ export interface TrackingDocument {
   navigationTargets: NavigationTarget[];
   /** Token ranges covered by `literal-command` blocks (spec §33.5). */
   literalCommandRanges?: TokenRange[];
+  /**
+   * Companion §6.1 "comma or light clause boundary": spoken-token indexes
+   * *after* which the authored text has a comma, semicolon, colon or dash.
+   *
+   * This has to be derived at projection time and shipped, because it is the
+   * one §6.1 signal that survives nowhere else. The tokenizer never emits a
+   * punctuation token (`markdown/tokenize.ts`: "pure punctuation never becomes
+   * a token"), so no compiled token has ever carried `TOKEN_FLAGS.PUNCTUATION`
+   * and the worker has no access to the source text. What it does have, via
+   * `CompiledBlock.renderNodes`, is the authored text with its punctuation
+   * intact plus the `tokenIndexes` that text produced — enough to recover the
+   * boundary exactly, rather than guessing it from source-offset gaps (which
+   * fire on `**bold**` and on double spaces just as readily as on commas).
+   */
+  clauseEndTokenIndexes?: number[];
+  /** Companion §6.1 "explicit pause directive" (§23.1 `[Pause]`/`[Beat]`/`[Breathe]`). */
+  pauseAnchors?: PauseAnchor[];
+}
+
+/** An authored pause, resolved to the token it follows (companion §6.1). */
+export interface PauseAnchor {
+  /** Spoken-token index the silence falls *after*. */
+  tokenIndex: number;
+  kind: 'pause' | 'beat' | 'breathe';
 }
 
 /**
@@ -76,12 +103,22 @@ export interface CompiledScriptLike {
   sentences: SentenceUnit[];
   outline: OutlineNode[];
   navigationTargets: NavigationTarget[];
+  /**
+   * Optional so a hand-built fixture stays a valid document. When present they
+   * are the only source of the companion §6.1 pause signals; when absent the
+   * unit axis simply carries no clause or authored-pause weight, which is what
+   * it did before those signals existed.
+   */
+  blocks?: readonly CompiledBlock[];
+  cues?: readonly CueEvent[];
 }
 
 export function buildTrackingDocument(
   compiled: CompiledScriptLike,
   literalCommandRanges: TokenRange[] = [],
 ): TrackingDocument {
+  const clauseEndTokenIndexes = deriveClauseEnds(compiled.blocks, compiled.spokenTokens);
+  const pauseAnchors = derivePauseAnchors(compiled.cues, compiled.spokenTokens.length);
   return {
     scriptId: compiled.scriptId,
     spokenTokens: compiled.spokenTokens,
@@ -89,7 +126,111 @@ export function buildTrackingDocument(
     outline: compiled.outline,
     navigationTargets: compiled.navigationTargets,
     literalCommandRanges,
+    ...(clauseEndTokenIndexes.length > 0 ? { clauseEndTokenIndexes } : {}),
+    ...(pauseAnchors.length > 0 ? { pauseAnchors } : {}),
   };
+}
+
+/* ---------------------------------------------------------------------------
+ * Companion §6.1 pause signals
+ * ------------------------------------------------------------------------- */
+
+/** Comma, semicolon, colon, en/em dash — a break in delivery, not a full stop. */
+const CLAUSE_PUNCTUATION = /[,;:–—]/;
+
+/** One run of authored text and the spoken tokens it produced, in order. */
+interface RenderRun {
+  text: string;
+  tokenIndexes: readonly number[];
+}
+
+function flattenRenderNodes(nodes: readonly SafeRenderNode[], into: RenderRun[]): void {
+  for (const node of nodes) {
+    switch (node.type) {
+      case 'text':
+        into.push({ text: node.text, tokenIndexes: node.tokenIndexes ?? [] });
+        break;
+      case 'link':
+        flattenRenderNodes(node.label, into);
+        break;
+      case 'table':
+        for (const row of node.rows) for (const cell of row) flattenRenderNodes(cell, into);
+        break;
+      // A line break, a cue marker and an image contribute no authored
+      // characters *between* two spoken tokens, so they cannot hide a comma.
+      default:
+        break;
+    }
+  }
+}
+
+/**
+ * Spoken-token indexes followed by a clause break.
+ *
+ * The surfaces of a run's tokens appear inside that run's text in order, so a
+ * forward-only `indexOf` walk recovers exactly the characters that sat between
+ * two tokens. Text carried over a node boundary matters — `**first**, we` puts
+ * the comma at the head of the *next* node — so the pending tail is kept across
+ * runs and reset only at a block boundary.
+ *
+ * Any run whose surfaces cannot be located (a `{say="…"}` override writes a
+ * spoken form that is not in the visual text) simply stops contributing; a
+ * missed comma costs a fraction of a unit, and a guessed one is worse.
+ */
+function deriveClauseEnds(
+  blocks: readonly CompiledBlock[] | undefined,
+  tokens: readonly SpokenToken[],
+): number[] {
+  if (blocks === undefined || blocks.length === 0) return [];
+  const clauseEnds: number[] = [];
+  for (const block of blocks) {
+    const runs: RenderRun[] = [];
+    flattenRenderNodes(block.renderNodes, runs);
+    let pending = '';
+    let previousTokenIndex = -1;
+    for (const run of runs) {
+      let cursor = 0;
+      for (const tokenIndex of run.tokenIndexes) {
+        const surface = tokens[tokenIndex]?.surface;
+        if (surface === undefined || surface.length === 0) continue;
+        const at = run.text.indexOf(surface, cursor);
+        if (at < 0) break;
+        const between = pending + run.text.slice(cursor, at);
+        if (previousTokenIndex >= 0 && CLAUSE_PUNCTUATION.test(between)) {
+          clauseEnds.push(previousTokenIndex);
+        }
+        pending = '';
+        cursor = at + surface.length;
+        previousTokenIndex = tokenIndex;
+      }
+      pending += run.text.slice(cursor);
+    }
+  }
+  clauseEnds.sort((a, b) => a - b);
+  return clauseEnds.filter((value, i) => value !== clauseEnds[i - 1]);
+}
+
+/**
+ * `CueEvent.anchorTokenIndex` is the token the cue *precedes*, so the silence
+ * belongs to the token before it. A cue at the very start of the script anchors
+ * to token 0 and is dropped: `unitAt(0)` is 0 by definition, so there is no
+ * interval for it to lengthen. A cue with nothing after it (`-1`) lands on the
+ * last token, where a trailing `[Breathe]` correctly widens the final interval.
+ */
+function derivePauseAnchors(
+  cues: readonly CueEvent[] | undefined,
+  tokenCount: number,
+): PauseAnchor[] {
+  if (cues === undefined || cues.length === 0 || tokenCount === 0) return [];
+  const anchors: PauseAnchor[] = [];
+  for (const cue of cues) {
+    if (cue.cueType !== 'pause' && cue.cueType !== 'beat' && cue.cueType !== 'breathe') continue;
+    const anchor = cue.anchorTokenIndex;
+    const tokenIndex = anchor < 0 ? tokenCount - 1 : anchor - 1;
+    if (tokenIndex < 0 || tokenIndex >= tokenCount) continue;
+    anchors.push({ tokenIndex, kind: cue.cueType });
+  }
+  return anchors;
 }
 
 /* ---------------------------------------------------------------------------
@@ -200,8 +341,14 @@ export type CandidateScope =
   | 'rare_anchor'
   /** Opened by the alias inverted index (§14.2, §14.4). */
   | 'alias_anchor'
+  /** Opened by the phonetic-key index (§14.4) — the ASR mangled a rare term. */
+  | 'phonetic_anchor'
+  /**
+   * Opened by the section-local number/date/currency/negation/proper-noun
+   * index (§14.3, §14.4). Never leaves the section it was keyed in.
+   */
+  | 'fidelity_anchor'
   | 'ngram'
-  | 'global'
   | 'navigation';
 
 export interface CandidateWindow extends TokenRange {

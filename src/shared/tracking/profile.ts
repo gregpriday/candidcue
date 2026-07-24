@@ -182,6 +182,20 @@ export interface TrackingProfile {
   unitShortTokenChars: number;
   unitSentenceEndPause: number;
   unitBlockEndPause: number;
+  /**
+   * §6.1 "comma or light clause boundary: virtual pause weight". Smaller than
+   * a sentence end because a clause break is a breath, not a full stop.
+   */
+  unitClausePause: number;
+  /**
+   * §6.1 "explicit pause directive: authored duration or weight". The syntax
+   * (`[Beat]`, `[Pause]`, `[Breathe]`) carries no duration, so the *only*
+   * thing an implementation can honour is the relative length the three words
+   * already mean in stage direction.
+   */
+  unitBeatPause: number;
+  unitAuthoredPause: number;
+  unitBreathePause: number;
   /** Spoken units in one rendered line — the stage refines this (A.3). */
   unitsPerRenderedLine: number;
 
@@ -354,7 +368,11 @@ export const DEFAULT_TRACKING_PROFILE: TrackingProfile = {
   unitLongTokenChars: 9, // "long or multi-syllable" heuristic
   unitShortTokenChars: 4, // below this a content word is not "long"
   unitSentenceEndPause: 1.6, // companion §6.1 sentence-ending virtual pause
-  unitBlockEndPause: 2.4, // companion §6.1 paragraph/authored pause
+  unitBlockEndPause: 2.4, // companion §6.1 paragraph pause
+  unitClausePause: 0.6, // companion §6.1 comma/light clause boundary
+  unitBeatPause: 1.6, // [Beat] — about one sentence end
+  unitAuthoredPause: 2.4, // [Pause] — about one paragraph break
+  unitBreathePause: 3.2, // [Breathe] — the longest of the three
   unitsPerRenderedLine: 9, // companion §7/A.3 pre-layout estimate
 
   tailShortTokens: 9, // A.2 short tail 6–12 meaningful tokens

@@ -31,6 +31,7 @@
  * not of script length — which is what §63 actually claims.
  */
 import type { DocumentIndex } from './document-index';
+import { phoneticKey } from './normalize';
 import type { TrackingProfile } from './profile';
 import { scaleToSection } from './scales';
 import type {
@@ -159,6 +160,43 @@ export function generateCandidates(
       add(position - anchorBack, position + anchorForward, 'alias_anchor');
     }
   }
+  // 5c. Phonetic anchors (§14.4). The transcriber renders an unusual term by
+  // sound — "Halvorsen" as "halverson" — so neither the normalized form nor
+  // any alias the author wrote down is present, and `phoneticallySimilar` in
+  // `matchTokens` can only confirm a window some other index opened. The index
+  // admits only keys nothing ordinary in this script shares, so the lookup is
+  // a single map probe per transcript content word.
+  for (const word of contentWords) {
+    if (word.length < 4) continue;
+    const positions = index.phoneticKeyPositions.get(phoneticKey(word));
+    if (!positions) continue;
+    for (const position of nearest(positions, cursor, anchorPositionLimit)) {
+      if (!admits(positions.length, position)) continue;
+      add(position - anchorBack, position + anchorForward, 'phonetic_anchor');
+    }
+  }
+  // 5d. Section-local high-fidelity anchors (§14.3, §14.4): numbers, dates,
+  // currency, negations and proper nouns. Probed from the *whole* tail rather
+  // than `contentWords`, because "not" and "no" are stopwords on the transcript
+  // side — §14.3's "preserve function words that change meaning, especially
+  // negation" is unreachable from a content-word-only probe. Retrieval is
+  // confined to the cursor's own section by the index key, so a common short
+  // number cannot nominate the rest of the document.
+  //
+  // No `admits` call here, on purpose: §23.2's distinctiveness allowance is
+  // about *large-jump triggers*, and this index cannot propose one — a
+  // section-local window is a within-section correction. Its analogue of the
+  // allowance is `SECTION_FIDELITY_MAX_OCCURRENCES`, applied at build time and
+  // counted per section, which is the scale that actually matters here: three
+  // "not"s in a chapter is a fact about the chapter, not about the script.
+  for (const token of input.transcriptTail) {
+    if (token.filler) continue;
+    const positions = index.sectionFidelityPositionsNear(cursor, token.normalized);
+    if (positions.length === 0) continue;
+    for (const position of nearest(positions, cursor, anchorPositionLimit)) {
+      add(position - anchorBack, position + anchorForward, 'fidelity_anchor');
+    }
+  }
   for (let size = 3; size >= 2; size--) {
     for (let i = 0; i + size <= contentWords.length; i++) {
       const key = contentWords.slice(i, i + size).join(' ');
@@ -218,7 +256,11 @@ const SCOPE_PRIORITY: Record<CandidateScope, number> = {
   rare_anchor: 5,
   alias_anchor: 6,
   ngram: 7,
-  global: 8,
+  // Last, deliberately. Both admit spans on evidence weaker than the word
+  // itself, and the window cap is a *budget*: when 24 windows are already
+  // competing, the two that should lose their slot are the lossy ones.
+  phonetic_anchor: 8,
+  fidelity_anchor: 9,
 };
 
 /**

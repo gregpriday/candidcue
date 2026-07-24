@@ -348,7 +348,7 @@ describe('behavior projection (companion §17, §52)', () => {
     movement: 'advance' as const,
     acquired: true,
     provisional: false,
-    correction: 'micro' as const,
+    correction: 'local' as const,
     activeTransition: 'none' as const,
     authority: 'ordinary' as const,
     msSinceConfident: 0,

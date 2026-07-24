@@ -56,7 +56,35 @@ import type {
  * Types (companion §11, §16.6)
  * ------------------------------------------------------------------------- */
 
-export type HypothesisMode = 'following' | 'holding' | 'adlib' | 'skip' | 'retake' | 'boundary';
+/**
+ * What kind of thing a hypothesis is (companion §11).
+ *
+ * §11 sketches six members; four of them had no producer, no consumer, or both,
+ * and each one is deleted here rather than left looking handled. The two that
+ * remain are the only distinction any consumer makes, and the reasoning for the
+ * rest is recorded because "the spec lists it" is not the same as "the engine
+ * needs it":
+ *
+ *   - `skip` and `retake` were produced (by distance) and never read. They are
+ *     a second encoding of `tokenPosition - committedTokenIndex`, which
+ *     `continuityPrior` and `classifyCorrection` already take *directly* — so
+ *     feeding the mode back into scoring would have been the same signal
+ *     counted twice, not a missing behaviour.
+ *   - `boundary` had neither producer nor consumer. Section boundaries are
+ *     enforced by `SectionGraph` as an eligibility gate, before scoring sees a
+ *     candidate at all (§13), which is where §24's "the predicted position
+ *     cannot cross a prohibited section boundary" is actually kept.
+ *   - `adlib` had one consumer — zeroing the pace-forward prediction — and no
+ *     producer, so that line was dead. The §19.2 ad-lib behaviour it gestured
+ *     at is implemented, in `SemanticFilter`'s coast → decelerate → hold
+ *     schedule, which owns the trajectory the stage actually follows, and the
+ *     pace estimator already refuses ad-lib spans as contaminated samples. The
+ *     branch was not worth reviving: the predicted position feeds only lineage
+ *     inheritance, whose match tolerance is `continuityForwardTokens`, so
+ *     suppressing one update's drift of roughly a token inside a 260-token
+ *     window is not a behaviour, it is noise wearing a spec citation.
+ */
+export type HypothesisMode = 'following' | 'holding';
 
 /** Companion §11. */
 export interface AlignmentHypothesis {
@@ -107,16 +135,34 @@ export interface AlignmentHypothesisSummary {
   rareAnchorMatches: number;
 }
 
-/** Companion §25.1 correction classes, by rendered distance (A.3). */
+/**
+ * Companion §25.1 correction classes, by rendered distance (A.3).
+ *
+ * Two of §25.1's six names are absent, deliberately:
+ *
+ *   - `micro` and `local` were two names for one behaviour. A.3's table has
+ *     three forward dispositions — absorb, catch up, re-anchor — and both of
+ *     these were "absorb": same `directiveTypeFor` result (`none`), same §65
+ *     `visualDisposition` (`absorbed`), same everything downstream. §25.2 does
+ *     describe micro corrections separately, but what it asks for ("the user
+ *     should not perceive them") is what absorbing *is*; there was no second
+ *     behaviour to reach. `local` is kept over `micro` because §25.3 is the
+ *     more general clause, and `none` is kept distinct because "the innovation
+ *     was below `frameUnitEpsilon`" and "the filter absorbed a correction" are
+ *     different facts to record in a movement decision.
+ *   - `prohibited` could never be produced. A prohibited transition is removed
+ *     by `SectionGraph` as zero probability *before* it can become a
+ *     measurement (§13, D.4 step 5), so classification never sees one; the
+ *     concept's live representation is `AlignmentMeasurement.blocked` /
+ *     `blockedCount`, which is what the diagnostics already read.
+ */
 export type CorrectionClass =
   | 'none'
-  | 'micro'
   | 'local'
   | 'catch_up'
   | 'reanchor'
   | 'backward_near'
-  | 'backward_distant'
-  | 'prohibited';
+  | 'backward_distant';
 
 export interface TransitionProposal {
   kind: CorrectionClass;
@@ -340,8 +386,7 @@ export class HypothesisBeam {
     const predicted = new Map<string, AlignmentHypothesis>();
     for (const hypothesis of this.beam) {
       const advancedUnits =
-        hypothesis.spokenUnitPosition +
-        Math.max(0, input.paceUnitsPerSecond) * dtSeconds * (hypothesis.mode === 'adlib' ? 0 : 1);
+        hypothesis.spokenUnitPosition + Math.max(0, input.paceUnitsPerSecond) * dtSeconds;
       const next: AlignmentHypothesis = {
         ...hypothesis,
         spokenUnitPosition: advancedUnits,
@@ -428,7 +473,6 @@ export class HypothesisBeam {
 
       const unitPosition = this.units.unitAt(candidate.tokenPosition);
       const inherited = this.nearestPredicted(predicted, candidate.tokenPosition);
-      const mode = classifyMode(distanceTokens, input.largeForwardDistance);
       const hypothesis: AlignmentHypothesis = {
         id: `hyp-${this.nextId++}`,
         lineageId: inherited?.lineageId ?? `lin-${this.nextId++}`,
@@ -438,7 +482,9 @@ export class HypothesisBeam {
         tokenPosition: candidate.tokenPosition,
         spokenUnitPosition: unitPosition,
         velocityUnitsPerSecond: input.paceUnitsPerSecond,
-        mode,
+        // Evidence put this hypothesis here, which is the only thing `mode`
+        // distinguishes: the hold branch below is the other case.
+        mode: 'following',
         // Continuity bonus for a branch that survived from the previous
         // update — the transition model, not a fresh guess (§16.1).
         logScore:
@@ -814,8 +860,7 @@ export class HypothesisBeam {
         lines <= profile.catchUpRenderedLines
           ? ('backward_near' as const)
           : ('backward_distant' as const);
-    } else if (lines <= profile.absorbRenderedLines * 0.5) kind = 'micro';
-    else if (lines <= profile.absorbRenderedLines) kind = 'local';
+    } else if (lines <= profile.absorbRenderedLines) kind = 'local';
     else if (lines <= profile.catchUpRenderedLines) kind = 'catch_up';
     else kind = 'reanchor';
     return { kind, fromUnit, toUnit, destinationTokenIndex, renderedLines: lines };
@@ -889,12 +934,6 @@ export function isDenseAlignment(candidate: {
   const spanTokens = candidate.tokenPosition - candidate.startTokenPosition + 1;
   if (spanTokens <= 1) return true;
   return candidate.sequence.matchedPairs.length >= spanTokens * MIN_SPAN_COVERAGE;
-}
-
-function classifyMode(distanceTokens: number, largeForwardDistance: number): HypothesisMode {
-  if (distanceTokens < 0) return 'retake';
-  if (distanceTokens > largeForwardDistance) return 'skip';
-  return 'following';
 }
 
 function phoneticShare(sequence: SequenceAlignment): number {

@@ -4,7 +4,7 @@
  * token positions, and n-gram positions for global reacquisition.
  */
 import type { SentenceUnit } from '../contracts/compiler';
-import { STOPWORDS } from './normalize';
+import { phoneticKey, STOPWORDS } from './normalize';
 import type { SectionSpan, SpokenToken, TrackingDocument } from './types';
 import { TOKEN_FLAG } from './types';
 
@@ -19,6 +19,63 @@ function aliasIsDistinctive(key: string, frequency: ReadonlyMap<string, number>)
     if (word.length >= ALIAS_MIN_WORD_LENGTH && !STOPWORDS.has(word)) return true;
   }
   return false;
+}
+
+/**
+ * §14.4 phonetic-key admission. Deliberately the same shape of gate as the
+ * alias one, and for the same reason: a phonetic key is a lossy hash, so
+ * without a gate it is a machine for nominating spans document-wide.
+ */
+const PHONETIC_MIN_WORD_LENGTH = 4;
+/** A one- or two-symbol key is a bucket, not an identity ("kl" is `Kaggle`, `cagle`, `coil`, `equal`). */
+const PHONETIC_MIN_KEY_LENGTH = 3;
+/** Above this many script tokens sharing a key it is an ordinary sound, not an anchor. */
+const PHONETIC_MAX_OCCURRENCES = 2;
+
+/** §14.3 "preserve function words that change meaning, especially negation". */
+const NEGATIONS: ReadonlySet<string> = new Set([
+  'not',
+  'no',
+  'never',
+  'none',
+  'nothing',
+  'nobody',
+  'neither',
+  'nor',
+  'cannot',
+  "can't",
+  "don't",
+  "won't",
+  "doesn't",
+  "didn't",
+  "isn't",
+  "aren't",
+  "wasn't",
+  "weren't",
+  "shouldn't",
+  "wouldn't",
+  "couldn't",
+  'without',
+]);
+
+/** §14.4 "currency" — the compiler's NUMBER flag already covers `$5` and `5%`. */
+function isFidelityToken(token: SpokenToken): boolean {
+  if ((token.flags & TOKEN_FLAG.number) !== 0) return true;
+  if ((token.flags & TOKEN_FLAG.properNoun) !== 0) return true;
+  return NEGATIONS.has(token.normalized);
+}
+
+/**
+ * Above this many occurrences *inside one section* a fidelity token is that
+ * section's own boilerplate. A section that says "not" eleven times must not
+ * nominate eleven windows when the presenter says it once.
+ */
+const SECTION_FIDELITY_MAX_OCCURRENCES = 3;
+
+const EMPTY_POSITIONS: readonly number[] = [];
+
+function sectionFidelityKey(sectionIndex: number, normalized: string): string {
+  return `${sectionIndex}\u0000${normalized}`;
 }
 
 export class DocumentIndex {
@@ -45,6 +102,34 @@ export class DocumentIndex {
    * map with tail n-grams as well as single words.
    */
   readonly aliasTokenPositions = new Map<string, number[]>();
+  /**
+   * Phonetic key → spoken token positions (§14.4 "phonetic-key index for
+   * unusual and content-heavy words").
+   *
+   * `phoneticKey` previously ran only inside `matchTokens`, i.e. only pairwise
+   * against a script token some *other* index had already put in a window. So
+   * the one thing an ASR reliably does to an unusual name — spell it by sound —
+   * could raise a candidate's score and never nominate one. Same shape as the
+   * alias gap, and the same remedy.
+   *
+   * Keys are single words. A multi-word phonetic key would be guessing at where
+   * the transcriber split the term, and the alias index already covers the
+   * splits a script author or the microphone test actually observed.
+   */
+  readonly phoneticKeyPositions = new Map<string, number[]>();
+  /**
+   * Section index and normalized token, NUL-joined, → positions: §14.4's
+   * "section-local number, date, currency, negation, and proper-noun index".
+   *
+   * These are §14.3's high-fidelity tokens: things that change the meaning of a
+   * sentence but carry no global distinction, so they are worth retrieving
+   * *inside the section the presenter is already in* and worthless outside it.
+   * `rareTokenPositions` cannot stand in for this — it needs weight ≥ 1.5 or
+   * four-plus characters at frequency ≤ 2, which excludes "47", "$5", "12%"
+   * and every negation, and negations are additionally filtered out of the
+   * content-token stream entirely.
+   */
+  readonly sectionFidelityPositions = new Map<string, number[]>();
   /** Document frequency of each normalized token. */
   readonly tokenFrequency = new Map<string, number>();
   /**
@@ -169,6 +254,57 @@ export class DocumentIndex {
         this.aliasTokenPositions.set(alias, list);
       }
     }
+    // Phonetic anchors (§14.4). Two passes, because the gate is a property of
+    // the *key* and not of the token: a key is admissible only when nothing
+    // ordinary in this script also sounds like it. One stopword sharing the key
+    // disqualifies it outright — "no"/"know" and "to"/"too" are how a phonetic
+    // index turns into a document-wide nomination engine.
+    const phoneticCounts = new Map<string, number>();
+    const phoneticBlocked = new Set<string>();
+    for (const token of tokens) {
+      if ((token.flags & TOKEN_FLAG.punctuation) !== 0) continue;
+      const key = phoneticKey(token.normalized);
+      if (key.length < PHONETIC_MIN_KEY_LENGTH) continue;
+      phoneticCounts.set(key, (phoneticCounts.get(key) ?? 0) + 1);
+      const stopword =
+        (token.flags & TOKEN_FLAG.stopword) !== 0 || STOPWORDS.has(token.normalized);
+      if (stopword || token.normalized.length < PHONETIC_MIN_WORD_LENGTH) {
+        phoneticBlocked.add(key);
+      }
+    }
+    for (const token of tokens) {
+      if ((token.flags & TOKEN_FLAG.punctuation) !== 0) continue;
+      if ((token.flags & TOKEN_FLAG.stopword) !== 0) continue;
+      if (STOPWORDS.has(token.normalized)) continue;
+      if (token.normalized.length < PHONETIC_MIN_WORD_LENGTH) continue;
+      const key = phoneticKey(token.normalized);
+      if (key.length < PHONETIC_MIN_KEY_LENGTH) continue;
+      if (phoneticBlocked.has(key)) continue;
+      if ((phoneticCounts.get(key) ?? 0) > PHONETIC_MAX_OCCURRENCES) continue;
+      const list = this.phoneticKeyPositions.get(key) ?? [];
+      list.push(token.index);
+      this.phoneticKeyPositions.set(key, list);
+    }
+
+    // Section-local high-fidelity anchors (§14.3, §14.4). Built after
+    // `sectionByToken`, so the section a token belongs to is an O(1) lookup;
+    // the same two-pass gate, but counted per section rather than per document,
+    // because "section-local" is the whole point of this index.
+    const fidelityDraft = new Map<string, number[]>();
+    for (const token of tokens) {
+      if ((token.flags & TOKEN_FLAG.punctuation) !== 0) continue;
+      if (!isFidelityToken(token)) continue;
+      const sectionIndex = this.sectionByToken[token.index] ?? -1;
+      const key = sectionFidelityKey(sectionIndex, token.normalized);
+      const list = fidelityDraft.get(key) ?? [];
+      list.push(token.index);
+      fidelityDraft.set(key, list);
+    }
+    for (const [key, positions] of fidelityDraft) {
+      if (positions.length > SECTION_FIDELITY_MAX_OCCURRENCES) continue;
+      this.sectionFidelityPositions.set(key, positions);
+    }
+
     for (let size = 2; size <= 3; size++) {
       for (let i = 0; i + size <= contentTokens.length; i++) {
         const slice = contentTokens.slice(i, i + size);
@@ -288,6 +424,18 @@ export class DocumentIndex {
   tokenDistinctiveness(normalized: string): number {
     const base = DocumentIndex.distinctivenessOf(this.tokenFrequency.get(normalized) ?? 0);
     return STOPWORDS.has(normalized) ? base * 0.35 : base;
+  }
+
+  /**
+   * Positions of a high-fidelity token *inside the section owning `at`*
+   * (§14.4). Empty outside that section by construction: the key carries the
+   * section, so a match cannot leak across one.
+   */
+  sectionFidelityPositionsNear(at: number, normalized: string): readonly number[] {
+    if (normalized.length === 0) return EMPTY_POSITIONS;
+    const sectionIndex = this.sectionByToken[this.clampTokenIndex(at)] ?? -1;
+    return this.sectionFidelityPositions.get(sectionFidelityKey(sectionIndex, normalized))
+      ?? EMPTY_POSITIONS;
   }
 
   clampTokenIndex(index: number): number {

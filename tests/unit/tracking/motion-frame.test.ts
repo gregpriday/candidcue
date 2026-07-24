@@ -169,7 +169,9 @@ describe('TransitionDirectiveManager (companion §53)', () => {
   });
 
   it('maps correction classes to directive types per A.3', () => {
-    expect(directiveTypeFor('micro')).toBe('none');
+    expect(directiveTypeFor('none')).toBe('none');
+    // `micro` used to sit here too, mapping to the same `none`. That identity
+    // is why it is gone: A.3 has one "absorb" disposition, not two.
     expect(directiveTypeFor('local')).toBe('none');
     expect(directiveTypeFor('catch_up')).toBe('catch_up');
     expect(directiveTypeFor('reanchor')).toBe('reanchor');

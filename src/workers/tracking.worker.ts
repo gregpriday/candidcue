@@ -9,6 +9,8 @@
  * Protocol types live in src/shared/tracking/worker-protocol.ts.
  */
 import { AlignmentEngine, type EngineOutput } from '../shared/tracking/engine';
+import { SessionClock } from '../shared/tracking/session-clock';
+import type { TranscriptEvent } from '../shared/tracking/types';
 import type {
   TrackingWorkerInbound,
   TrackingWorkerOutbound,
@@ -17,6 +19,28 @@ import type {
 let engine: AlignmentEngine | undefined;
 let lastSnapshotSentAtMs = -Infinity;
 let minSnapshotIntervalMs = 1000 / 30; // §31.16: at most 30 snapshots/second
+
+/**
+ * Companion §9.1. Every stamp arriving from the control window is on that
+ * window's `Date.now()`; the engine's whole time domain — pace, prediction
+ * horizon, evidence age, and the `sessionTimeMs` stamped on every semantic
+ * frame — is whatever it is handed. This is the one place that can make the
+ * domain session-relative and monotone, so it is the only place that reads a
+ * raw producer stamp.
+ */
+const clock = new SessionClock();
+
+/** Carry a transcript event into the session domain (§9.1). */
+function toSessionTime(event: TranscriptEvent): TranscriptEvent {
+  const receivedAtMs = clock.advance(event.receivedAtMs);
+  if (event.type === 'item_started') {
+    return { ...event, receivedAtMs, audioStartMs: clock.map(event.audioStartMs) };
+  }
+  if (event.type === 'completed' && event.audioEndMs !== undefined) {
+    return { ...event, receivedAtMs, audioEndMs: clock.map(event.audioEndMs) };
+  }
+  return { ...event, receivedAtMs };
+}
 
 function post(message: TrackingWorkerOutbound): void {
   (self as unknown as { postMessage(m: TrackingWorkerOutbound): void }).postMessage(message);
@@ -71,6 +95,8 @@ self.onmessage = (event: MessageEvent<TrackingWorkerInbound>) => {
   }
 
   if (message.type === 'initialize') {
+    // §9.1: session start is where `sessionTimeMs = 0` is defined.
+    clock.start(message.nowMs);
     engine = new AlignmentEngine(
       message.document,
       message.session,
@@ -89,49 +115,80 @@ self.onmessage = (event: MessageEvent<TrackingWorkerInbound>) => {
   }
 
   switch (message.type) {
-    case 'transcript_event':
-      flush(engine.handleTranscriptEvent(message.event), message.event.receivedAtMs);
+    case 'transcript_event': {
+      const event = toSessionTime(message.event);
+      flush(engine.handleTranscriptEvent(event), event.receivedAtMs);
       break;
-    case 'manual_move':
-      flush(engine.moveTo(message.target.tokenIndex, 'manual', message.nowMs), message.nowMs, true);
+    }
+    case 'manual_move': {
+      const nowMs = clock.advance(message.nowMs);
+      flush(engine.moveTo(message.target.tokenIndex, 'manual', nowMs), nowMs, true);
       break;
-    case 'command_move':
-      flush(engine.moveTo(message.target.tokenIndex, 'command', message.nowMs), message.nowMs, true);
+    }
+    case 'command_move': {
+      const nowMs = clock.advance(message.nowMs);
+      flush(engine.moveTo(message.target.tokenIndex, 'command', nowMs), nowMs, true);
       break;
-    case 'move_to_token':
-      flush(engine.moveTo(message.tokenIndex, message.movement, message.nowMs), message.nowMs, true);
+    }
+    case 'move_to_token': {
+      const nowMs = clock.advance(message.nowMs);
+      flush(engine.moveTo(message.tokenIndex, message.movement, nowMs), nowMs, true);
       break;
+    }
     case 'mask_items':
       engine.maskItems(message.itemIds);
       break;
     case 'release_items':
       engine.releaseItems(message.itemIds);
       break;
-    case 'set_command_pending':
-      flush(engine.setCommandPending(message.pending, message.nowMs), message.nowMs, true);
+    case 'set_command_pending': {
+      const nowMs = clock.advance(message.nowMs);
+      flush(engine.setCommandPending(message.pending, nowMs), nowMs, true);
       break;
-    case 'pause':
-      flush(engine.pause(message.nowMs), message.nowMs, true);
+    }
+    case 'pause': {
+      const nowMs = clock.advance(message.nowMs);
+      flush(engine.pause(nowMs), nowMs, true);
       break;
-    case 'resume':
-      flush(engine.resume(message.nowMs), message.nowMs, true);
+    }
+    case 'resume': {
+      const nowMs = clock.advance(message.nowMs);
+      flush(engine.resume(nowMs), nowMs, true);
       break;
-    case 'reset':
-      flush(engine.reset(message.nowMs), message.nowMs, true);
+    }
+    case 'reset': {
+      // The epoch resets; the session clock does not. `sessionTimeMs` is
+      // defined once per session (§9.1), and the stage orders frames across a
+      // reset by it.
+      const nowMs = clock.advance(message.nowMs);
+      flush(engine.reset(nowMs), nowMs, true);
       break;
-    case 'tick':
+    }
+    case 'tick': {
       // Between transcript events the continuous estimate keeps moving
       // (companion §3.1); a tick emits a frame only when one is due.
-      flush(engine.tick(message.nowMs), message.nowMs);
+      const nowMs = clock.advance(message.nowMs);
+      flush(engine.tick(nowMs), nowMs);
       break;
+    }
     case 'semantic_assist':
       // Bounded advisory evidence only (companion §3.6, §40). The beam
       // validates epoch, expiry, source items, and candidate membership.
-      engine.applySemanticAssist(message.evidence);
+      //
+      // `receivedAtMs` is stamped by the sidecar on the control window's clock
+      // and is compared against session time by the §25.7 staleness check, so
+      // it is mapped rather than trusted. Advisory evidence must not *move* the
+      // session clock, hence `map` and not `advance`.
+      engine.applySemanticAssist({
+        ...message.evidence,
+        receivedAtMs: clock.map(message.evidence.receivedAtMs),
+      });
       break;
-    case 'set_layout_generation':
-      flush(engine.setLayoutGeneration(message.generation, message.nowMs), message.nowMs, true);
+    case 'set_layout_generation': {
+      const nowMs = clock.advance(message.nowMs);
+      flush(engine.setLayoutGeneration(message.generation, nowMs), nowMs, true);
       break;
+    }
   }
 };
 
