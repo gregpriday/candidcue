@@ -335,6 +335,8 @@ pub struct CoachingModules {
     pub filler_ribbon: bool,
     pub inline_gutter_marks: bool,
     pub live_tips: bool,
+    /// The 0-100 delivery score (Realtime Speaking Score report §11.1).
+    pub delivery_score: bool,
 }
 
 impl Default for CoachingModules {
@@ -349,6 +351,7 @@ impl Default for CoachingModules {
             filler_count: true,
             filler_ribbon: true,
             inline_gutter_marks: false,
+            delivery_score: true,
             live_tips: true,
         }
     }

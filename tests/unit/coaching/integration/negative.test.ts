@@ -106,6 +106,7 @@ describe('coaching integration — mode gating (§6)', () => {
           fillerRibbon: false,
           inlineGutterMarks: false,
           liveTips: false,
+          deliveryScore: false,
         },
       },
     });

@@ -305,6 +305,7 @@ export function railModulesFromSettings(settings: CoachingSettings): Partial<Coa
     fillerCount: settings.modules.fillerCount,
     fillerRibbon: settings.modules.fillerRibbon,
     gutterMarks: settings.modules.inlineGutterMarks,
+    deliveryScore: settings.modules.deliveryScore,
     liveTips: settings.modules.liveTips,
   };
 }

@@ -51,7 +51,8 @@
       "fillerCount": true,
       "fillerRibbon": true,
       "inlineGutterMarks": true,
-      "liveTips": true
+      "liveTips": true,
+      "deliveryScore": true
     }
   },
   "_preset_patch_comment": [

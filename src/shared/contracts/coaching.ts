@@ -1213,6 +1213,14 @@ export interface CoachingSettings {
     fillerRibbon: boolean;
     inlineGutterMarks: boolean;
     liveTips: boolean;
+    /**
+     * The 0–100 delivery score. Present here as well as on
+     * {@link CoachRailModules} because §6.6 says custom mode enables exactly
+     * what the user chose — without a settings field the resolver can only ever
+     * emit `false`, so the score would be unreachable in custom mode however
+     * the user configured it.
+     */
+    deliveryScore: boolean;
   };
 }
 

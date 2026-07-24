@@ -170,6 +170,11 @@
 
   const MODULE_ROWS: Array<{ key: keyof CoachingSettings['modules']; label: string; hint: string }> =
     [
+      {
+        key: 'deliveryScore',
+        label: 'Delivery score',
+        hint: 'The 0–100 figure summarising how closely this take matches your chosen style.',
+      },
       { key: 'paceNumber', label: 'Pace number', hint: 'The live words-per-minute figure.' },
       { key: 'paceStatus', label: 'Pace status', hint: '“On target”, “slightly fast”, and so on.' },
       {

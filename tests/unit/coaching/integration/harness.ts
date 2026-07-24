@@ -85,6 +85,7 @@ export function makeSettings(overrides: Partial<CoachingSettings> = {}): Coachin
       fillerRibbon: true,
       inlineGutterMarks: false,
       liveTips: true,
+      deliveryScore: true,
     },
     ...overrides,
   };

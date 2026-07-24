@@ -97,6 +97,7 @@ export const MODE_MODULE_PRESETS: Record<
     fillerRibbon: false,
     inlineGutterMarks: false,
     liveTips: false,
+    deliveryScore: false,
   },
   minimal: {
     paceNumber: true,
@@ -107,6 +108,7 @@ export const MODE_MODULE_PRESETS: Record<
     fillerRibbon: false,
     inlineGutterMarks: false,
     liveTips: false,
+    deliveryScore: false,
   },
   coach: {
     paceNumber: true,
@@ -117,6 +119,7 @@ export const MODE_MODULE_PRESETS: Record<
     fillerRibbon: true,
     inlineGutterMarks: false,
     liveTips: true,
+    deliveryScore: true,
   },
   studio: {
     paceNumber: true,
@@ -127,6 +130,7 @@ export const MODE_MODULE_PRESETS: Record<
     fillerRibbon: true,
     inlineGutterMarks: true,
     liveTips: true,
+    deliveryScore: true,
   },
   review_only: {
     paceNumber: false,
@@ -137,6 +141,7 @@ export const MODE_MODULE_PRESETS: Record<
     fillerRibbon: false,
     inlineGutterMarks: false,
     liveTips: false,
+    deliveryScore: false,
   },
 };
 
@@ -610,6 +615,7 @@ export function clampCoaching(
       fillerRibbon: bool(modules.fillerRibbon, defaultModules.fillerRibbon),
       inlineGutterMarks: bool(modules.inlineGutterMarks, defaultModules.inlineGutterMarks),
       liveTips: bool(modules.liveTips, defaultModules.liveTips),
+      deliveryScore: bool(modules.deliveryScore, defaultModules.deliveryScore),
     },
   };
 }
