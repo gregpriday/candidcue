@@ -92,7 +92,10 @@ import type {
   CadenceMetrics,
   PauseEvent,
 } from '../prosody/cadence-analyzer';
+import type { EnergyAggregate } from '../prosody/energy-aggregator';
+import type { PitchAggregate } from '../prosody/pitch-aggregator';
 import type { VarietyAnalyzerResult } from '../prosody/variety-score';
+import { DeliveryScoreEngine, type DeliveryEvidence } from '../score';
 import type {
   AudioFrameFeatures,
   CoachCandidate,
@@ -103,9 +106,11 @@ import type {
   CoachRailState,
   CoachRibbonEvent,
   CoachRibbonEventType,
+  DeliveryScoreState,
   FillerDisplayState,
   MicrophoneCoachState,
   PaceDisplayState,
+  PitchReliability,
   SpeechInterval,
   VarietyDisplayState,
 } from '../../contracts/coaching';
@@ -135,6 +140,37 @@ const EMPTY_CADENCE_METRICS: CadenceMetrics = {
   longestBreathGroupMs: 0,
   eligibleBoundaries: 0,
   shapedBoundaries: 0,
+};
+
+/** §9. The "nothing measured yet" shapes the score engine reads before the
+ * first prosody pass. Every field is absent, so every pitch- and energy-derived
+ * submetric is unavailable rather than zero. */
+const EMPTY_PITCH_AGGREGATE: PitchAggregate = {
+  frameCount: 0,
+  coveredMs: 0,
+  referenceF0Hz: null,
+  spanSemitones: null,
+  iqrSemitones: null,
+  motionSemitonesPerSecond: null,
+  contourTurnsPerMinute: null,
+  phraseFinalMovementSemitones: null,
+};
+
+const EMPTY_ENERGY_AGGREGATE: EnergyAggregate = {
+  frameCount: 0,
+  rangeDb: null,
+  phraseContrastDb: null,
+  narrowLevelRatio: null,
+  clippedFrameRatio: 0,
+  degraded: false,
+};
+
+const INITIAL_PITCH_RELIABILITY: PitchReliability = {
+  usable: false,
+  reliableFrameFraction: 0,
+  usableVoicedMs: 0,
+  referenceF0Hz: null,
+  reason: 'insufficient_voiced_audio',
 };
 
 /** Bound on the in-flight latency map. A take never legitimately exceeds it. */
@@ -189,6 +225,13 @@ export class CoachingOrchestrator {
   private lastFillers: FillerDisplayState = initialFillerState();
   private lastMicrophone: MicrophoneCoachState = initialMicrophoneState();
   private lastCadence: CadenceMetrics = EMPTY_CADENCE_METRICS;
+
+  /** §9. The delivery score and the lane outputs it is computed from. */
+  private readonly scorer = new DeliveryScoreEngine();
+  private lastScore: DeliveryScoreState | null = null;
+  private lastPitchAggregate: PitchAggregate = EMPTY_PITCH_AGGREGATE;
+  private lastEnergyAggregate: EnergyAggregate = EMPTY_ENERGY_AGGREGATE;
+  private lastPitchReliability: PitchReliability = INITIAL_PITCH_RELIABILITY;
 
   /** §22 speech context, accumulated from finalized transcript items. */
   private finalText = '';
@@ -397,6 +440,15 @@ export class CoachingOrchestrator {
     this.lastCadence = EMPTY_CADENCE_METRICS;
     this.lastPaceResult = null;
     this.lastVarietyResult = null;
+    // §9 / §11.3. A new take pass is a new performance: the smoothed score,
+    // the word ledger and the drift ring all belong to the pass that produced
+    // them, and carrying any of them over would score the first seconds of this
+    // take with the last one's delivery.
+    this.guard.runVoid('coach', 'take-pass', now, () => this.scorer.reset());
+    this.lastScore = null;
+    this.lastPitchAggregate = EMPTY_PITCH_AGGREGATE;
+    this.lastEnergyAggregate = EMPTY_ENERGY_AGGREGATE;
+    this.lastPitchReliability = INITIAL_PITCH_RELIABILITY;
     this.aggregationPasses = 0;
     this.lastAggregationMs = null;
     this.lastPublicationMs = null;
@@ -650,6 +702,13 @@ export class CoachingOrchestrator {
       () => [] as CoachCandidate[],
     );
     this.pendingCandidates.push(...candidates);
+    // §9.8. The score's own word ledger: a filler rate per 100 words needs a
+    // word count over time, and no lane exposes one. Stamped with the segment's
+    // audio *end* — §3.2, transcript arrival time is not speech time — and a
+    // provisional segment replaces the overlay rather than stacking onto it.
+    this.guard.runVoid('coach', 'score-words', this.nowMs, () =>
+      this.scorer.noteSpokenWords(segment.audioEndMs, segment.words.length, segment.final),
+    );
   }
 
   /** §16.1. A finalized Realtime item for the disfluency lane. */
@@ -909,11 +968,17 @@ export class CoachingOrchestrator {
       nowMs,
       () => {
         const reliability = lanes.pitchTracker.reliability;
+        // Held for the §9 delivery score, which consumes the same aggregates
+        // rather than asking the aggregators for a second, differently-windowed
+        // answer that could disagree with the variety tile.
+        this.lastPitchReliability = reliability;
+        this.lastPitchAggregate = lanes.pitch.aggregate(nowMs, reliability);
+        this.lastEnergyAggregate = lanes.energy.aggregate(nowMs);
         return lanes.variety.update({
           context: this.clockContext(nowMs),
           reliability,
-          pitch: lanes.pitch.aggregate(nowMs, reliability),
-          energy: lanes.energy.aggregate(nowMs),
+          pitch: this.lastPitchAggregate,
+          energy: this.lastEnergyAggregate,
           // §17.2 wants phrase-to-phrase WPM variation. The pace lane does not
           // expose per-phrase rates, so the term is declared unavailable and
           // §17.5 redistributes its weight — which is the designed behaviour
@@ -971,6 +1036,18 @@ export class CoachingOrchestrator {
       () => [] as CoachCandidate[],
     );
     this.pendingCandidates.push(...fillerCandidates);
+
+    // (6a) §9. The delivery score, computed from the lane outputs above and
+    // from nothing else. It measures nothing itself, it never proposes a
+    // candidate, and — §15 — the microphone state it reads can only lower the
+    // score's *confidence*, never the score.
+    this.lastScore = this.guard.run(
+      'coach',
+      'score',
+      nowMs,
+      () => this.scorer.update(this.scoreEvidence(nowMs)),
+      () => this.lastScore,
+    );
 
     // (7) Admission. §19.4's `<!-- cc:coach off -->` spans are refused here.
     const batch = this.pendingCandidates;
@@ -1045,6 +1122,65 @@ export class CoachingOrchestrator {
         lanes.policy.cancel('evidence_revised', { evidenceId: eventId });
       }
     });
+  }
+
+  /**
+   * §9. The measurement snapshot handed to the scoring engine.
+   *
+   * Assembled entirely from values this pass already computed, so the score can
+   * never disagree with the tile beside it: the same pace estimate, the same
+   * pitch and energy aggregates, the same cadence metrics, the same filler
+   * events the ribbon draws. The only thing read afresh is the accounting
+   * clock's windowed voiced and delivery time, which is a cheap prefix query.
+   *
+   * `pauses` is the ribbon's already-pruned derived-pause list. §12.4: a
+   * dropout is never in it, so a device hiccup cannot read as phrasing.
+   */
+  private scoreEvidence(nowMs: number): DeliveryEvidence {
+    const lanes = this.lanes;
+    const windowStartMs = nowMs - this.scorer.options.windowMs;
+    const voicedMsInWindow = this.guard.run(
+      'pace',
+      'score',
+      nowMs,
+      () => lanes.clock.voicedMsIn(windowStartMs, nowMs),
+      () => 0,
+    );
+    const deliveryMsInWindow = this.guard.run(
+      'pace',
+      'score',
+      nowMs,
+      () => lanes.clock.deliveryMsIn(windowStartMs, nowMs),
+      () => 0,
+    );
+    return {
+      audioTimeMs: nowMs,
+      takePassId: this.host.takePassId,
+      pace: this.lastPace,
+      rates: this.lastPaceResult?.rates ?? {
+        audibleWpm: null,
+        contentWpm: null,
+        articulationWpm: null,
+      },
+      terminalRushRatio: this.lastPaceResult?.terminalRushRatio ?? null,
+      suppressed: this.host.commandActive || this.host.retakeState !== 'none',
+      voicedMsInWindow,
+      deliveryMsInWindow,
+      cadence: this.lastCadence,
+      alignmentConfidence: this.host.alignmentConfidence,
+      pitch: this.lastPitchAggregate,
+      energy: this.lastEnergyAggregate,
+      pitchReliability: this.lastPitchReliability,
+      fillerEvents: this.guard.run(
+        'disfluency',
+        'score',
+        nowMs,
+        () => lanes.fillers.events(),
+        () => [],
+      ),
+      pauses: this.ribbonPauses,
+      microphone: this.lastMicrophone,
+    };
   }
 
   /** §12.7.1. Track clipping as an episode so the ribbon can draw its span. */
@@ -1368,6 +1504,10 @@ export class CoachingOrchestrator {
       activeTip,
       ribbonEvents: this.buildRibbon(nowMs),
       audioTimeMs: nowMs,
+      // §9. Passed through as computed; `CoachRailStateBuilder` withholds it
+      // when the mode has no delivery-score module, because "not scored" is not
+      // a judgement and must not be rendered as one.
+      score: this.lastScore,
       gutterMarks: modules.gutterMarks ? this.buildGutter() : [],
       ...(this.customModules() === undefined ? {} : { customModules: this.customModules() }),
     };
@@ -1465,6 +1605,16 @@ export class CoachingOrchestrator {
   /** The most recent snapshot handed to the stage, or `null`. */
   lastRailState(): CoachRailState | null {
     return this.lastRail;
+  }
+
+  /**
+   * §9. The delivery score as last computed, whether or not the mode publishes
+   * it — the same distinction `telemetry()` draws for every other lane, and the
+   * only way to show that `off` and `review_only` are still *scoring* rather
+   * than merely silent.
+   */
+  deliveryScore(): DeliveryScoreState | null {
+    return this.lastScore;
   }
 
   /** §37. */
