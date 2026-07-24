@@ -199,6 +199,15 @@ export interface SessionState {
   connection: 'connected' | 'reconnecting' | 'offline';
   micState: 'live' | 'muted' | 'disconnected';
   /**
+   * §28.2/§28.6: the INPUT is the thing that failed — unplugged, silent, or
+   * refused — as opposed to the realtime transport dying, which also leaves
+   * `micState` at 'disconnected'. Only this one is fixable by choosing another
+   * device, so it is what gates the Live screen's input picker. Offering a
+   * microphone switch as the cure for a rejected API key would be the same
+   * unfollowable-instruction defect in a new place.
+   */
+  inputDeviceLost: boolean;
+  /**
    * False once the stage window is gone (§62). Everything that publishes to the
    * stage stands down; the UI must say so rather than keep offering controls
    * that write into the void.
@@ -247,6 +256,7 @@ const initial: SessionState = {
   voiceFollow: true,
   connection: 'connected',
   micState: 'live',
+  inputDeviceLost: false,
   stageAlive: true,
   estimatedCostUsd: 0,
   semanticSpend: { ...NO_SEMANTIC_SPEND },
@@ -664,13 +674,35 @@ export function startLiveSession(input: StartSessionInput): string {
       onInputDeviceLost: (code) => {
         // §12.7: device loss outranks every acoustic reading on the mic tile.
         coaching?.setMicrophoneDisconnected(true);
-        state.update((s) => ({ ...s, micState: 'disconnected' }));
+        state.update((s) => ({ ...s, micState: 'disconnected', inputDeviceLost: true }));
+        // §28.2/§28.6: the remedy named here is one the Live screen can
+        // actually perform — `switchMicrophone` below drives the transport's
+        // track replacement, and the status bar grows an input picker while
+        // `micState` is 'disconnected'.
         showToast(
           code === 'MIC_NO_SIGNAL'
-            ? 'No sound is reaching the microphone. Following is on hold.'
-            : 'The microphone disconnected. Choose an input to continue following.',
+            ? 'No sound is reaching the microphone. Following is on hold until audio comes back.'
+            : 'The microphone disconnected. Reconnect it or pick another input in the status bar, and following resumes.',
           'danger',
         );
+      },
+      /*
+       * §28.6: the input came back on its own — the mic was replugged, or the
+       * track unmuted. "Reconnect it and we resume" is a promise the product
+       * has to keep without being asked twice, so the pills clear themselves.
+       */
+      onInputRestored: () => {
+        const before = get(state);
+        if (!before.inputDeviceLost) return;
+        coaching?.setMicrophoneDisconnected(false);
+        state.update((s) => ({
+          ...s,
+          inputDeviceLost: false,
+          // Only undo the loss this flag recorded; a transport that is also
+          // down keeps its own honest 'disconnected'.
+          micState: s.micState === 'disconnected' ? 'live' : s.micState,
+        }));
+        showToast('The microphone is back. Voice following has resumed.', 'success');
       },
       // H1: a session-level provider failure must never leave a green UI.
       onSessionFailure: (code, fatal) => {
@@ -679,10 +711,11 @@ export function startLiveSession(input: StartSessionInput): string {
           connection: fatal ? 'offline' : 'reconnecting',
           micState: fatal ? 'disconnected' : s.micState,
         }));
+        // §44.12 / E.7: the code is an internal contract. `describeError`
+        // turns it into authored copy that says what happened and what to do;
+        // the raw code goes to Settings → Diagnostics, not to the toast.
         showToast(
-          fatal
-            ? `Voice following stopped: ${describeError(code)}`
-            : `Voice following interrupted: ${describeError(code)}`,
+          `${fatal ? 'Voice following stopped.' : 'Voice following interrupted.'} ${describeError(code)}`,
           'danger',
         );
       },
@@ -696,7 +729,7 @@ export function startLiveSession(input: StartSessionInput): string {
     });
     void pipeline.start().catch((err) => {
       state.update((s) => ({ ...s, connection: 'offline' }));
-      showToast(`Voice tracking is unavailable: ${describeError(err)}`, 'danger');
+      showToast(`Voice tracking is unavailable. ${describeError(err)}`, 'danger');
     });
   }
 
@@ -1461,7 +1494,7 @@ export async function identifyStageDisplays(): Promise<void> {
   try {
     await stageService.identifyDisplays();
   } catch (err) {
-    showToast(`Could not number the displays: ${describeError(err)}`, 'danger');
+    showToast(`Could not number the displays. ${describeError(err)}`, 'danger');
   }
 }
 
@@ -1674,7 +1707,7 @@ export function hardPause(): void {
   state.update((s) => ({ ...s, paused: 'hard', micState: 'muted' }));
   driver?.pause();
   void pipeline?.hardPause().catch((err) => {
-    showToast(`Could not pause cleanly: ${describeError(err)}`, 'danger');
+    showToast(`Could not pause cleanly. ${describeError(err)}`, 'danger');
   });
 }
 
@@ -1711,8 +1744,50 @@ export function resumeSession(): void {
         micState: 'disconnected',
         connection: 'offline',
       }));
-      showToast(`Could not resume voice following: ${describeError(err)}`, 'danger');
+      showToast(`Could not resume voice following. ${describeError(err)}`, 'danger');
     });
+}
+
+/**
+ * §28.2 — is a mid-session input change possible right now?
+ *
+ * False in manual/fixed takes and in browser dev, where there is no transport
+ * to replace a track on. The Live screen uses this to decide whether to offer
+ * the picker at all: an affordance that cannot work is worse than none.
+ */
+export function canSwitchMicrophone(): boolean {
+  return pipeline !== null;
+}
+
+/**
+ * §28.2 mid-session microphone switch — the recovery for `MIC_DEVICE_LOST`.
+ *
+ * The transport has always been able to replace its sender track without a
+ * renegotiation; nothing in production ever called it, so the device-lost
+ * toast pointed at a control that did not exist. This is that call site.
+ *
+ * Resolves `true` when the take is following the new input again. On failure
+ * the session is left exactly as it was — still held, still saying so — and
+ * the reason is shown, because a switch that silently does nothing is the
+ * worst possible answer to "my microphone died".
+ */
+export async function switchMicrophone(deviceId: string): Promise<boolean> {
+  if (!pipeline || deviceId === '') return false;
+  try {
+    await pipeline.switchMicrophone(deviceId);
+  } catch (err) {
+    showToast(`Could not switch to that microphone. ${describeError(err)}`, 'danger');
+    return false;
+  }
+  coaching?.setMicrophoneDisconnected(false);
+  state.update((s) => ({ ...s, micState: 'live', inputDeviceLost: false }));
+  // §28.1: remember the choice, so the next take opens the input that worked
+  // rather than the one that just vanished.
+  void patchSettings('audio', { preferredDeviceId: deviceId }).catch(() => {
+    /* a remembered preference is a convenience, never a gate */
+  });
+  showToast('Microphone switched. Voice following has resumed.', 'success');
+  return true;
 }
 
 function describeHold(reason: string | null): string {

@@ -16,12 +16,15 @@
   import Slider from '../components/Slider.svelte';
   import { formatClock } from '../lib/format';
   import { onShortcut } from '../lib/shortcuts';
+  import { describeError } from '../services/errors';
   import * as stageService from '../services/stage';
+  import { getVoiceFacade } from '../services/voice-facade';
   import { requestConfirm } from '../stores/confirm';
   import { navigate } from '../stores/router';
   import {
     addTakeMarker,
     adjustStageFontSize,
+    canSwitchMicrophone,
     chooseAnotherListenerClip,
     clearSession,
     connectionPill,
@@ -40,6 +43,7 @@
     setSemanticRequestLimit,
     startPrompting,
     stopSession,
+    switchMicrophone,
     toggleBlankStage,
     toggleListenerVisible,
     togglePlayPause,
@@ -52,7 +56,7 @@
   import { settings } from '../stores/settings';
   import { smoothFollow, type FollowNotice } from '../stores/smooth-follow';
   import { showToast } from '../stores/toasts';
-  import type { OutlineNode } from '../../shared/contracts';
+  import type { AudioDeviceInfo, OutlineNode } from '../../shared/contracts';
 
   interface Props {
     sessionId: string;
@@ -87,6 +91,56 @@
    * default is worse than no pill at all.
    */
   const hasVoiceTransport = $derived($session.active && $session.mode === 'voice');
+
+  /* ------------------------------------------------- §28.2 input recovery */
+
+  /**
+   * A microphone that dies mid-take is recoverable: the WebRTC sender's track
+   * can be replaced without renegotiating the session, so the take keeps its
+   * position, its transcript and its connection.
+   *
+   * The picker only appears when the INPUT is what failed (`inputDeviceLost`,
+   * not the broader `micState === 'disconnected'`, which a dead transport also
+   * produces) and there is a transport to switch on. Offering a microphone
+   * swap as the cure for a rejected API key, or in a manual take with no
+   * pipeline at all, would be the same promise-the-UI-cannot-keep defect this
+   * replaced.
+   */
+  let micInputs = $state<AudioDeviceInfo[]>([]);
+  let micChoice = $state('');
+  let micSwitching = $state(false);
+  const micRecoveryOffered = $derived(
+    hasVoiceTransport && $session.inputDeviceLost && canSwitchMicrophone(),
+  );
+
+  $effect(() => {
+    if (!micRecoveryOffered) return;
+    void refreshMicInputs();
+  });
+
+  async function refreshMicInputs(): Promise<void> {
+    try {
+      const found = await getVoiceFacade().listMicrophones();
+      micInputs = found.filter((device) => device.available !== false);
+      if (!micInputs.some((device) => device.deviceId === micChoice)) {
+        micChoice =
+          micInputs.find((device) => device.isDefault)?.deviceId ?? micInputs[0]?.deviceId ?? '';
+      }
+    } catch (err) {
+      micInputs = [];
+      showToast(`Could not list microphones. ${describeError(err)}`, 'danger');
+    }
+  }
+
+  async function useMicrophone(): Promise<void> {
+    if (micChoice === '' || micSwitching) return;
+    micSwitching = true;
+    try {
+      await switchMicrophone(micChoice);
+    } finally {
+      micSwitching = false;
+    }
+  }
 
   /**
    * Toast placement (see ToastRegion). The transport is a fixed-height bar the
@@ -392,6 +446,37 @@
           tone={$session.micState === 'live' ? 'success' : $session.micState === 'muted' ? 'neutral' : 'danger'}
           label={$session.micState === 'live' ? 'Mic live' : $session.micState === 'muted' ? 'Mic off' : 'Mic lost'}
         />
+        <!--
+          §28.2. Losing a microphone mid-take used to be a dead end: the toast
+          said "choose an input" and there was nowhere to choose one. The
+          transport can replace its sender track without renegotiating, so the
+          recovery is a picker right where the failure is reported.
+        -->
+        {#if micRecoveryOffered}
+          <div class="mic-recovery">
+            <select
+              class="mic-picker"
+              aria-label="Input device"
+              disabled={micSwitching || micInputs.length === 0}
+              bind:value={micChoice}
+            >
+              {#each micInputs as input (input.deviceId)}
+                <option value={input.deviceId}>{input.label}</option>
+              {/each}
+            </select>
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={micSwitching || micChoice === ''}
+              onclick={() => useMicrophone()}
+            >
+              {micSwitching ? 'Switching…' : 'Use this input'}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={micSwitching} onclick={() => refreshMicInputs()}>
+              Rescan
+            </Button>
+          </div>
+        {/if}
       {:else}
         <StatusPill tone="neutral" label="No microphone" />
       {/if}
@@ -909,6 +994,32 @@
     outline: none;
     background: var(--bg-elevated);
     border-color: var(--border-strong);
+  }
+
+  /* --- §28.2 mid-session input recovery --- */
+  .mic-recovery {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .mic-picker {
+    max-width: 180px;
+    padding: 3px var(--space-2);
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--text-sm);
+  }
+  /* Quiet focus: a background/border shift, never an accent ring. */
+  .mic-picker:focus-visible {
+    outline: none;
+    background: var(--bg-elevated);
+    border-color: var(--border-strong);
+  }
+  .mic-picker:disabled {
+    opacity: 0.6;
   }
 
   /* --- §40.5 Listener failure --- */

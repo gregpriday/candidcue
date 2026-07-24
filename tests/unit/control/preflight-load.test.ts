@@ -11,7 +11,7 @@
  * mid-acquisition leaked the capture.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { acquireCancellable, runCheck } from '../../../src/control/routes/preflight-load';
+import { runCheck } from '../../../src/control/routes/preflight-load';
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
   let resolve!: (v: T) => void;
@@ -127,43 +127,5 @@ describe('runCheck', () => {
     gate.reject(new Error('too late'));
     await running;
     expect(onFailure).not.toHaveBeenCalled();
-  });
-});
-
-describe('acquireCancellable', () => {
-  it('disposes a resource whose disposer arrives after cancellation', async () => {
-    let stale = false;
-    const stop = vi.fn();
-    const gate = deferred<() => void>();
-
-    const running = acquireCancellable(() => gate.promise, () => stale);
-    stale = true; // the screen unmounted while the microphone was opening
-    gate.resolve(stop);
-    const result = await running;
-
-    expect(stop).toHaveBeenCalledOnce(); // the capture is released, not leaked
-    expect(result.stop).toBeNull();
-    expect(result.cancelled).toBe(true);
-  });
-
-  it('hands back the disposer when nothing was cancelled', async () => {
-    const stop = vi.fn();
-    const result = await acquireCancellable(async () => stop, () => false);
-    expect(result.stop).toBe(stop);
-    expect(result.cancelled).toBe(false);
-    expect(result.error).toBeNull();
-    expect(stop).not.toHaveBeenCalled();
-  });
-
-  it('reports a failed acquisition instead of throwing', async () => {
-    // A throwing `startTranscriptionTest` used to strand micTest at
-    // 'listening', which permanently disables the "Test transcription" button.
-    const result = await acquireCancellable(
-      () => Promise.reject(new Error('mic busy')),
-      () => false,
-    );
-    expect(result.stop).toBeNull();
-    expect(result.cancelled).toBe(false);
-    expect(String(result.error)).toContain('mic busy');
   });
 });

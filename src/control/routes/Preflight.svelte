@@ -45,7 +45,12 @@
   } from '../services/listeners';
   import { offsetSliderBound } from '../../shared/listener/geometry';
   import { endSessionRecord, startSessionRecord } from '../services/session-records';
-  import { acquireCancellable, runCheck } from './preflight-load';
+  import { runCheck } from './preflight-load';
+  import {
+    MicTestSession,
+    micTestStopNotice,
+    type MicTestSnapshot,
+  } from './preflight-mic-test';
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
   import type { OpenAiKeyStatus } from '../services/secrets-types';
@@ -127,17 +132,33 @@
   let micDeviceId = $state<string | undefined>(undefined);
   let followSystemDefault = $state(true);
   let micLevel = $state<AudioLevelSnapshot | null>(null);
-  let micTest = $state<'idle' | 'listening' | 'waiting' | 'success'>('idle');
-  let micPartial = $state('');
-  let micFinal = $state('');
-  let stopMicTest: (() => void) | null = null;
   /**
-   * Cancellation token for microphone acquisition. `startTranscriptionTest`
-   * only hands back its disposer after the capture is already running, so a
-   * navigation during acquisition used to leak the microphone for the lifetime
-   * of the app.
+   * §14.2 C. The transcription test opens a BILLABLE realtime session, so its
+   * whole lifecycle — Stop, the idle timeout and the duration cap — lives in
+   * `preflight-mic-test.ts` where each closing path is provable. This screen
+   * only renders what that session reports.
    */
-  let micTestGeneration = 0;
+  let micTestSnapshot = $state<MicTestSnapshot>({
+    state: 'idle',
+    partial: '',
+    final: '',
+    error: null,
+    stoppedReason: null,
+  });
+  const micTest = $derived(micTestSnapshot.state);
+  const micPartial = $derived(micTestSnapshot.partial);
+  const micFinal = $derived(micTestSnapshot.final);
+  const micTestRunning = $derived(micTest === 'opening' || micTest === 'listening' || micTest === 'waiting');
+  const micTestNotice = $derived(micTestStopNotice(micTestSnapshot.stoppedReason));
+
+  const micTestSession = new MicTestSession({
+    open: (deviceId, events) => getVoiceFacade().startTranscriptionTest(deviceId, events),
+    onChange: (snapshot) => {
+      micTestSnapshot = snapshot;
+      if (snapshot.error !== null) micError = snapshot.error;
+    },
+    describe: describeError,
+  });
 
   /* ----------------------------------------------------------- tracking */
   let mode = $state<SessionMode>('voice');
@@ -219,11 +240,7 @@
 
   /** Microphone capture is disposed on unmount even mid-acquisition. */
   $effect(() => {
-    return () => {
-      micTestGeneration += 1;
-      stopMicTest?.();
-      stopMicTest = null;
-    };
+    return () => micTestSession.dispose();
   });
 
   async function loadPreflight(id: string): Promise<void> {
@@ -688,7 +705,17 @@
     updatePreflight({ microphone: 'checking' });
     try {
       micDevices = await getVoiceFacade().listMicrophones();
-      micDeviceId = micDevices.find((d) => d.isDefault)?.deviceId ?? micDevices[0]?.deviceId;
+      // §28.1: the remembered input wins, when it is still connected. This
+      // setting was declared and read by nothing, so "Input device" reset to
+      // the system default before every take — including after a mid-session
+      // switch away from a microphone that had just failed.
+      const remembered = $settings.audio.preferredDeviceId;
+      micDeviceId =
+        (remembered !== undefined && micDevices.some((d) => d.deviceId === remembered)
+          ? remembered
+          : undefined) ??
+        micDevices.find((d) => d.isDefault)?.deviceId ??
+        micDevices[0]?.deviceId;
       micPermission = 'granted';
       micError = null;
       updatePreflight({ microphone: micDevices.length > 0 ? 'ready' : 'blocked' });
@@ -734,45 +761,8 @@
   }
 
   async function runTranscriptionTest(): Promise<void> {
-    stopMicTest?.();
-    stopMicTest = null;
-    const generation = (micTestGeneration += 1);
-    micTest = 'listening';
-    micPartial = '';
-    micFinal = '';
     micError = null;
-    const acquisition = await acquireCancellable(
-      () =>
-        getVoiceFacade().startTranscriptionTest(micDeviceId, {
-          onPartial(text) {
-            if (generation !== micTestGeneration) return;
-            micTest = 'waiting';
-            micPartial = text;
-          },
-          onFinal(text) {
-            if (generation !== micTestGeneration) return;
-            micTest = 'success';
-            micFinal = text;
-          },
-          onError(message) {
-            if (generation !== micTestGeneration) return;
-            micTest = 'idle';
-            micError = message;
-          },
-        }),
-      () => generation !== micTestGeneration,
-    );
-    // Cancelled (unmount, or a second press) while the capture was opening:
-    // `acquireCancellable` has already disposed it.
-    if (acquisition.cancelled) return;
-    if (acquisition.error !== null) {
-      // The button is disabled while 'listening'; leaving it there on a
-      // rejection made it permanently unusable with nothing said.
-      micTest = 'idle';
-      micError = `The transcription test could not start. ${describeError(acquisition.error)}`;
-      return;
-    }
-    stopMicTest = acquisition.stop;
+    await micTestSession.start(micDeviceId);
   }
 
   /* ------------------------------------------------------------- start */
@@ -978,7 +968,7 @@
       }
     } catch (err) {
       await abandonSession(sessionId);
-      startError = `Could not start the session: ${describeError(err)}`;
+      startError = `Could not start the session. ${describeError(err)}`;
     } finally {
       starting = false;
     }
@@ -1205,7 +1195,13 @@
             value={micDeviceId ?? ''}
             disabled={followSystemDefault}
             options={micDevices.map((d) => ({ value: d.deviceId, label: d.label }))}
-            onchange={(value) => (micDeviceId = value)}
+            onchange={(value) => {
+              micDeviceId = value;
+              // Remembered for the next take (§28.1). Persisted whether or not
+              // "Follow system default" is on, so turning that off later
+              // restores the input the user actually chose.
+              void patchSettings('audio', { preferredDeviceId: value });
+            }}
           />
           <!-- Persisted AND honoured at Start: following the system default
                means the session pins no device id at all. -->
@@ -1217,13 +1213,24 @@
           />
         </div>
         <MicMeter level={micLevel} />
+        <!--
+          The test is a billable OpenAI realtime session, so it says so while
+          it is open, it can always be stopped, and it closes itself if it is
+          forgotten (see preflight-mic-test.ts for the two deadlines).
+        -->
         <div class="row-actions">
-          <Button onclick={() => runTranscriptionTest()} disabled={micTest === 'listening' || micTest === 'waiting'}>
+          <Button onclick={() => runTranscriptionTest()} disabled={micTestRunning}>
             Test transcription
           </Button>
+          {#if micTestRunning}
+            <Button variant="danger" onclick={() => micTestSession.stop('user')}>Stop test</Button>
+          {/if}
           {#if micTest !== 'idle'}
-            <span class="mic-test-state" aria-live="polite">
-              {#if micTest === 'listening'}
+            <span class="mic-test-state" class:live={micTestRunning} aria-live="polite">
+              {#if micTestRunning}<span class="mic-test-dot" aria-hidden="true"></span>{/if}
+              {#if micTest === 'opening'}
+                Connecting to OpenAI…
+              {:else if micTest === 'listening'}
                 Say: “CandidCue is following my voice.” — Listening…
               {:else if micTest === 'waiting'}
                 Audio detected. Waiting for transcription…
@@ -1233,6 +1240,14 @@
             </span>
           {/if}
         </div>
+        {#if micTestRunning}
+          <p class="mic-test-note">
+            Connected to OpenAI and billing your key. It stops on its own after 30 seconds with
+            nothing transcribed, and after two minutes in any case.
+          </p>
+        {:else if micTestNotice}
+          <p class="mic-test-note">{micTestNotice}</p>
+        {/if}
         {#if micPartial || micFinal}
           <p class="transcript" class:final={Boolean(micFinal)}>{micFinal || micPartial}</p>
         {/if}
@@ -1711,8 +1726,43 @@
     color: var(--danger);
   }
   .mic-test-state {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
     font-size: var(--text-sm);
     color: var(--text-secondary);
+  }
+  /* A live billable session must be unmistakable at a glance. */
+  .mic-test-state.live {
+    color: var(--accent-strong);
+    font-weight: 600;
+  }
+  .mic-test-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent-strong);
+    animation: mic-test-pulse 1.4s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .mic-test-dot {
+      animation: none;
+    }
+  }
+  @keyframes mic-test-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+  .mic-test-note {
+    margin: 0;
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
   }
   .transcript {
     margin: 0;

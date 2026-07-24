@@ -1,0 +1,218 @@
+/**
+ * §14.2 C — the Preflight transcription test must not be able to stay
+ * connected to OpenAI on the owner's key while nobody is watching.
+ *
+ * Before this, `runTranscriptionTest` stored the session's disposer and the
+ * ONLY two callers of it were component unmount and the top of
+ * `runTranscriptionTest` itself. There was no Stop and no timeout: starting
+ * the test and then reading something else on the page held a billable
+ * realtime session open until the user navigated away.
+ *
+ * Every test here asserts THE DISPOSER RAN. "A timer was scheduled" is not the
+ * same claim — a scheduled timer whose callback forgets the disposer leaks
+ * exactly as badly as no timer at all.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  MIC_TEST_IDLE_TIMEOUT_MS,
+  MIC_TEST_MAX_DURATION_MS,
+  MicTestSession,
+  micTestStopNotice,
+  type MicTestSnapshot,
+} from '../../../src/control/routes/preflight-mic-test';
+import type { TranscriptTestEvents } from '../../../src/control/services/voice-facade';
+
+interface Harness {
+  session: MicTestSession;
+  /** The disposer the facade handed back — i.e. "close the billable session". */
+  dispose: ReturnType<typeof vi.fn>;
+  snapshots: MicTestSnapshot[];
+  events: TranscriptTestEvents;
+  deviceIds: Array<string | undefined>;
+  last(): MicTestSnapshot;
+}
+
+function harness(options: { openRejection?: unknown } = {}): Harness {
+  const dispose = vi.fn();
+  const snapshots: MicTestSnapshot[] = [];
+  const deviceIds: Array<string | undefined> = [];
+  let events: TranscriptTestEvents | null = null;
+
+  const session = new MicTestSession({
+    open: async (deviceId, handlers) => {
+      deviceIds.push(deviceId);
+      if (options.openRejection !== undefined) throw options.openRejection;
+      events = handlers;
+      return dispose;
+    },
+    onChange: (snapshot) => snapshots.push(snapshot),
+    describe: (error) => (error instanceof Error ? error.message : String(error)),
+  });
+
+  return {
+    session,
+    dispose,
+    snapshots,
+    deviceIds,
+    get events(): TranscriptTestEvents {
+      if (events === null) throw new Error('the test session was never opened');
+      return events;
+    },
+    last: () => snapshots[snapshots.length - 1] as MicTestSnapshot,
+  };
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  return () => vi.useRealTimers();
+});
+
+describe('Stop closes the session', () => {
+  it('runs the disposer when the user presses Stop', async () => {
+    const h = harness();
+    await h.session.start('mic-1');
+    expect(h.dispose).not.toHaveBeenCalled();
+    expect(h.session.running).toBe(true);
+
+    h.session.stop('user');
+
+    expect(h.dispose).toHaveBeenCalledOnce();
+    expect(h.session.running).toBe(false);
+    expect(h.last().state).toBe('idle');
+  });
+
+  it('is idempotent — a second Stop does not double-dispose', async () => {
+    const h = harness();
+    await h.session.start('mic-1');
+    h.session.stop('user');
+    h.session.stop('user');
+    expect(h.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('disposes a session whose disposer arrives after the user left', async () => {
+    // `startTranscriptionTest` only resolves once the capture is already open,
+    // so a stop during acquisition must still close what arrives afterwards.
+    const dispose = vi.fn();
+    const opened: Array<(disposer: () => void) => void> = [];
+    const session = new MicTestSession({
+      open: () => new Promise<() => void>((resolve) => opened.push(resolve)),
+      onChange: () => {},
+      describe: String,
+    });
+
+    const running = session.start('mic-1');
+    session.dispose(); // the screen unmounted mid-acquisition
+    opened[0]?.(dispose);
+    await running;
+
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+});
+
+describe('the session closes itself when it is forgotten', () => {
+  it('runs the disposer after the idle timeout with nothing transcribed', async () => {
+    const h = harness();
+    await h.session.start('mic-1');
+
+    vi.advanceTimersByTime(MIC_TEST_IDLE_TIMEOUT_MS - 1);
+    expect(h.dispose).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(h.dispose).toHaveBeenCalledOnce();
+    expect(h.last().stoppedReason).toBe('idle_timeout');
+    // The user is told, rather than finding a silently dead test.
+    expect(micTestStopNotice(h.last().stoppedReason)).toMatch(/stopped itself/);
+  });
+
+  it('extends the idle deadline while transcription is actually arriving', async () => {
+    const h = harness();
+    await h.session.start('mic-1');
+
+    vi.advanceTimersByTime(MIC_TEST_IDLE_TIMEOUT_MS - 1000);
+    h.events.onPartial('CandidCue is');
+    vi.advanceTimersByTime(MIC_TEST_IDLE_TIMEOUT_MS - 1000);
+    // Without the reset this would already be past the deadline.
+    expect(h.dispose).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1000);
+    expect(h.dispose).toHaveBeenCalledOnce();
+    expect(h.last().stoppedReason).toBe('idle_timeout');
+  });
+
+  it('runs the disposer at the duration cap even under constant activity', async () => {
+    const h = harness();
+    await h.session.start('mic-1');
+
+    // A noisy room: a partial every second forever. The idle timer alone would
+    // never fire, which is exactly why the hard cap exists.
+    for (let elapsed = 0; elapsed < MIC_TEST_MAX_DURATION_MS; elapsed += 1000) {
+      vi.advanceTimersByTime(1000);
+      if (h.dispose.mock.calls.length === 0) h.events.onPartial(`word ${String(elapsed)}`);
+    }
+
+    expect(h.dispose).toHaveBeenCalledOnce();
+    expect(h.last().stoppedReason).toBe('max_duration');
+  });
+
+  it('stops billing once the transport reports it cannot transcribe', async () => {
+    const h = harness();
+    await h.session.start('mic-1');
+    h.events.onError('OpenAI rejected the API key.');
+
+    expect(h.dispose).toHaveBeenCalledOnce();
+    expect(h.last().error).toBe('OpenAI rejected the API key.');
+  });
+
+  it('leaves no timer armed after the session closed', async () => {
+    const h = harness();
+    await h.session.start('mic-1');
+    h.session.stop('user');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('restarting', () => {
+  it('closes the previous session before opening another', async () => {
+    const h = harness();
+    await h.session.start('mic-1');
+    await h.session.start('mic-2');
+
+    expect(h.dispose).toHaveBeenCalledOnce(); // the FIRST session was closed
+    expect(h.deviceIds).toEqual(['mic-1', 'mic-2']);
+    expect(h.session.running).toBe(true);
+  });
+
+  it('re-arms both deadlines for the new session', async () => {
+    const h = harness();
+    await h.session.start('mic-1');
+    vi.advanceTimersByTime(MIC_TEST_IDLE_TIMEOUT_MS - 1);
+    await h.session.start('mic-2');
+
+    vi.advanceTimersByTime(MIC_TEST_IDLE_TIMEOUT_MS - 1);
+    expect(h.dispose).toHaveBeenCalledTimes(1); // only the restart's own close
+    vi.advanceTimersByTime(1);
+    expect(h.dispose).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('a failed start leaves the screen usable', () => {
+  it('reports the failure and arms no timers', async () => {
+    const h = harness({ openRejection: new Error('mic busy') });
+    await h.session.start('mic-1');
+
+    expect(h.session.running).toBe(false); // the button is pressable again
+    expect(h.last().state).toBe('idle');
+    expect(h.last().error).toContain('mic busy');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe('the chosen deadlines', () => {
+  it('are short enough to be about proving a microphone works', () => {
+    // The test answers one question and one sentence answers it. These are the
+    // numbers the copy on the screen promises, so they are asserted here too.
+    expect(MIC_TEST_IDLE_TIMEOUT_MS).toBe(30_000);
+    expect(MIC_TEST_MAX_DURATION_MS).toBe(120_000);
+    expect(MIC_TEST_IDLE_TIMEOUT_MS).toBeLessThan(MIC_TEST_MAX_DURATION_MS);
+  });
+});

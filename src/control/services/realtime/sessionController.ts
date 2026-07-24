@@ -266,6 +266,37 @@ export class RealtimeSessionController {
     this.machine.tryTransition('start_listening');
   }
 
+  /**
+   * §28.2: swap the input device without ending the take.
+   *
+   * This is the recovery path for `MIC_DEVICE_LOST`. The transport has always
+   * been able to replace the sender track without renegotiating — it just had
+   * no production caller, so the toast told the operator to "choose an input"
+   * and there was nothing in the UI that could.
+   *
+   * Order matters. Buffered speech is committed FIRST (§29.3, commit before
+   * switch); otherwise the audio captured by the old microphone is either
+   * dropped or attributed to the new one. Then the track is replaced, and the
+   * input hold is released so following resumes — nothing else releases it,
+   * because `input_restored` only fires when the ORIGINAL track unmutes, which
+   * an unplugged device never does.
+   */
+  async switchMicrophone(deviceId: string): Promise<void> {
+    if (this.machine.state === 'idle' || this.machine.state === 'stopping') {
+      throw new RealtimeTransportError(
+        'REALTIME_CONNECTION_LOST',
+        'No session to switch the microphone on',
+        false,
+      );
+    }
+    this.deps.commitDriver?.forceCommit('mic_disconnect');
+    await this.deps.transport.setMicrophone(deviceId);
+    this.deps.commitDriver?.reset();
+    this.releaseHold('input_lost');
+    this.releaseHold('input_silent');
+    this.hooks.onRecoverableIssue?.('input_restored');
+  }
+
   /** Soft pause: session stays connected and billable (§29.7). */
   softPause(): void {
     // Same reasoning as `startListening`: there is nothing to pause on a dead

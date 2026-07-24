@@ -233,7 +233,7 @@
       // enables `readImageAltText`, so a file name would be the wrong default.
       inserts.insertImage(view, asset.markdownPath);
     } catch (err) {
-      showToast(`Could not add that image: ${describeError(err)}`, 'danger');
+      showToast(`Could not add that image. ${describeError(err)}`, 'danger');
     }
   }
 

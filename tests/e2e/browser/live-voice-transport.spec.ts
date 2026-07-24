@@ -86,8 +86,20 @@ test('a voice take whose realtime transport cannot be established says so instea
   expect(config['language']).toBe('en');
   expect(config['delay']).toBe('low');
 
-  // The failure is announced, and the transport is still offered as the way out.
-  await expect(page.getByText('Voice tracking is unavailable', { exact: false })).toBeVisible();
+  /*
+   * The failure is announced in English (§44.12 / E.7). The toast used to be
+   * built by interpolating whatever `describeError` returned, and for the
+   * codes that arrive as bare strings that WAS the code — "Voice following
+   * stopped: QUOTA_EXHAUSTED". Nothing shaped like a code may appear in it.
+   */
+  const failureToast = page.getByText('Voice tracking is unavailable', { exact: false });
+  await expect(failureToast).toBeVisible();
+  const failureText = (await failureToast.innerText()).trim();
+  expect(failureText).not.toMatch(/\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/);
+  // …and it says what to do next, not just that something broke.
+  expect(failureText).toMatch(/Try again/i);
+
+  // The transport is still offered as the way out.
   await expect(
     page.locator('footer.transport').getByRole('button', { name: 'Start', exact: true }),
   ).toBeEnabled();
@@ -206,6 +218,16 @@ test('a voice take still reports its realtime connection and its microphone', as
   await expect(statusBar.getByText('Disconnected', { exact: true })).toBeVisible();
   await expect(statusBar.getByText('Mic lost', { exact: true })).toBeVisible();
   await expect(statusBar.getByText('No microphone', { exact: true })).toHaveCount(0);
+
+  /*
+   * §28.2. "Mic lost" here means the TRANSPORT died, not the input device, and
+   * swapping microphones cannot fix a credential that was refused. The
+   * mid-session input picker is therefore not offered — an affordance that
+   * cannot help is the same unfollowable-instruction defect as the copy that
+   * used to send the user looking for a control that did not exist.
+   */
+  await expect(statusBar.getByRole('combobox', { name: 'Input device' })).toHaveCount(0);
+  await expect(statusBar.getByRole('button', { name: 'Use this input' })).toHaveCount(0);
 
   errors.expectClean();
 });

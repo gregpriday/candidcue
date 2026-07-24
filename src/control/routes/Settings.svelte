@@ -23,7 +23,11 @@
     type SystemDiagnostics,
   } from '../lib/diagnostics-format';
   import * as diagnosticsService from '../services/diagnostics';
-  import { describeError } from '../services/errors';
+  import {
+    describeError,
+    recentErrorDiagnostics,
+    type ErrorDiagnosticEntry,
+  } from '../services/errors';
   import { BackendUnavailableError } from '../services/ipc';
   import {
     DOWNLOADS_SUPPORTED,
@@ -70,6 +74,12 @@
   let diagnostics = $state<SystemDiagnostics | null>(null);
   let diagnosticsError = $state<string | null>(null);
   let diagnosticsLoading = $state(false);
+  /**
+   * §44.12: the toast tells the user what to do in English; the stable code is
+   * kept here, where a support request is actually assembled from. This is the
+   * only surface in the app that shows a raw error code, and it is deliberate.
+   */
+  let recentErrors = $state<ErrorDiagnosticEntry[]>([]);
 
   $effect(() => {
     void loadSettings();
@@ -123,9 +133,15 @@
     await loadPacks();
   }
 
+  /** Local time, seconds resolution — enough to match a code to "just now". */
+  function errorTime(atMs: number): string {
+    return new Date(atMs).toLocaleTimeString();
+  }
+
   async function loadDiagnostics(): Promise<void> {
     diagnosticsLoading = true;
     diagnosticsError = null;
+    recentErrors = recentErrorDiagnostics();
     try {
       diagnostics = await diagnosticsService.getSystemDiagnostics();
     } catch (err) {
@@ -261,7 +277,7 @@
               ? 'Update checks are not available in this build.'
               : `Could not check for updates: ${result.message ?? 'unknown error'}`;
     } catch (err) {
-      updateNote = `Could not check for updates: ${describeError(err)}`;
+      updateNote = `Could not check for updates. ${describeError(err)}`;
     }
   }
 </script>
@@ -755,6 +771,28 @@
             </dl>
           {/if}
 
+          <!--
+            §44.12: user-facing failures are shown as English everywhere else in
+            the app. The stable code is what a bug report needs, so it lives
+            here — one place, clearly labelled as a technical detail.
+          -->
+          <div class="recent-errors">
+            <p class="recent-errors-title">Recent errors</p>
+            {#if recentErrors.length === 0}
+              <p class="hint-line">Nothing has failed in this session.</p>
+            {:else}
+              <ul class="recent-errors-list">
+                {#each recentErrors as entry, index (String(entry.atMs) + String(index))}
+                  <li class="recent-error">
+                    <span class="recent-error-time">{errorTime(entry.atMs)}</span>
+                    <span class="recent-error-code">{entry.code ?? 'no code'}</span>
+                    <span class="recent-error-shown">{entry.shown}</span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
+
           <div class="row-actions">
             <Button size="sm" disabled={!diagnostics} onclick={() => void copyDiagnostics()}>
               Copy diagnostics
@@ -951,6 +989,49 @@
     font-size: var(--text-meta);
     line-height: var(--lh-meta);
     color: var(--text-faint);
+  }
+
+  .recent-errors {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .recent-errors-title {
+    margin: 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .recent-errors-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .recent-error {
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    align-items: baseline;
+    gap: var(--space-2) var(--space-3);
+  }
+  .recent-error-time {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    color: var(--text-faint);
+  }
+  .recent-error-code {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    color: var(--text-secondary);
+    word-break: break-word;
+  }
+  .recent-error-shown {
+    min-width: 0;
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
   }
 
   .bundle-contents {

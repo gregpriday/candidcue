@@ -145,6 +145,14 @@ export interface VoicePipelineDeps {
   onFollowingHold?(held: boolean, reason: string | null): void;
   /** H5: the input device is gone; the user must pick another (§28.6). */
   onInputDeviceLost?(code: string): void;
+  /**
+   * §28.6: audio is flowing from the input again — the track unmuted, or the
+   * device was plugged back in. The counterpart to `onInputDeviceLost`, so the
+   * UI can stop saying the microphone is gone without the user doing anything.
+   * Without it a recovered input left the Live screen reading "Mic lost" for
+   * the rest of the take.
+   */
+  onInputRestored?(): void;
   /** H1: a session-level provider failure ended or interrupted the session. */
   onSessionFailure?(code: string, fatal: boolean): void;
   /** M3: soft pause will auto-disconnect in `msRemaining` (A.6). */
@@ -173,6 +181,8 @@ export class VoiceSessionPipeline {
   private readonly silentInput = new SilentInputDetector();
   /** H5: `devicechange` watcher for unplug / default-device changes. */
   private deviceManager: MicrophoneDeviceManager | null = null;
+  /** §28.2: the device chosen mid-session, which outranks `deps.deviceId`. */
+  private deviceOverride: string | undefined;
   private stopDeviceWatch: (() => void) | null = null;
   private readonly timers: TransportTimers;
   private readonly now: () => number;
@@ -215,7 +225,7 @@ export class VoiceSessionPipeline {
 
     this.transport = new WebRtcTranscriptionTransport({
       invoke: ipcInvoke,
-      acquireMicrophone: (deviceId) => this.acquireMicrophone(deviceId ?? deps.deviceId),
+      acquireMicrophone: (deviceId) => this.acquireMicrophone(deviceId ?? this.preferredDeviceId),
       // §26.5 vocabulary boost. The transport has always had this injection
       // point and nothing ever filled it, so every unusual name in every
       // script was transcribed unassisted.
@@ -254,7 +264,11 @@ export class VoiceSessionPipeline {
         onRecoverableIssue: (issue) => {
           // H5/H1: 'input_restored' is good news; everything else means the
           // session is not currently transcribing and must not read as live.
-          if (issue !== 'input_restored') deps.onConnectionState('reconnecting');
+          if (issue === 'input_restored') {
+            deps.onInputRestored?.();
+            return;
+          }
+          deps.onConnectionState('reconnecting');
         },
         // H1: the UI must never stay green through a session-level failure.
         onSessionFailure: (code, fatal) => {
@@ -346,8 +360,9 @@ export class VoiceSessionPipeline {
       );
       // Seed the baseline so the first diff is meaningful, then watch.
       void this.deviceManager.listInputs().catch(() => {});
-      if (this.deps.deviceId) {
-        this.deviceManager.select({ mode: 'specific', deviceId: this.deps.deviceId });
+      const pinned = this.preferredDeviceId;
+      if (pinned) {
+        this.deviceManager.select({ mode: 'specific', deviceId: pinned });
       }
       this.stopDeviceWatch = this.deviceManager.onDeviceChange((report) => {
         if (report.selectedDeviceLost) this.deps.onInputDeviceLost?.('MIC_DEVICE_LOST');
@@ -359,6 +374,31 @@ export class VoiceSessionPipeline {
 
   startListening(): void {
     this.controller.startListening();
+  }
+
+  /**
+   * §28.2 mid-session input change — the recovery for a microphone unplugged
+   * mid-take.
+   *
+   * The chosen id becomes this pipeline's device for everything that comes
+   * after, not just the one track swap: a later reconnect mints a fresh
+   * session and re-acquires, and re-opening the device that just vanished
+   * would put the take straight back into the hold it was rescued from. The
+   * `devicechange` watcher is re-pointed for the same reason.
+   */
+  async switchMicrophone(deviceId: string): Promise<void> {
+    this.deviceOverride = deviceId;
+    await this.controller.switchMicrophone(deviceId);
+    try {
+      this.deviceManager?.select({ mode: 'specific', deviceId });
+    } catch {
+      // Enumeration is a nicety; the track swap already succeeded.
+    }
+  }
+
+  /** The device this pipeline should open, honouring any mid-session switch. */
+  private get preferredDeviceId(): string | undefined {
+    return this.deviceOverride ?? this.deps.deviceId;
   }
 
   softPause(): void {
