@@ -39,6 +39,7 @@
 import type {
   CoachTipCode,
   CoachTipSeverity,
+  DeliveryScoreState,
   DeliveryStyle,
   FillerEvent,
   MicrophoneCoachState,
@@ -282,6 +283,25 @@ export interface TakePassRecord {
   criticalFindings: readonly CriticalFindingRecord[];
   /** Authored spans this pass actually covered — the basis of "repeated passage". */
   coveredSpanIds: readonly string[];
+  /**
+   * The delivery score as it stood at the end of this pass, or `null` when the
+   * pass was not scored at all.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY THE WHOLE STATE AND NOT JUST THE NUMBER
+   * ---------------------------------------------------------------------------
+   * Speaking Score report §11.2 forbids seven dimension scores *live* and says
+   * in the same breath that they "belong in a post-take review". This is that
+   * review's copy of them, and it is the only place they are ever rendered. The
+   * record keeps `rawScore` beside `displayScore` for the reason the contract
+   * gives: the live smoothing should be auditable rather than trusted, and it
+   * cannot be audited from the smoothed figure alone.
+   *
+   * `null` here means "not scored", which is not a score of zero and is not a
+   * score that never left warm-up. `session-summary.ts` keeps the three apart
+   * and states which one applies.
+   */
+  deliveryScore: DeliveryScoreState | null;
   /** Final projected total take duration, ms, or `null` when not projectable. */
   projectedTotalMs: number | null;
   /** Present only with §32.2 transcript consent. `null` otherwise. */

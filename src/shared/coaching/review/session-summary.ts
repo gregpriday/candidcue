@@ -20,7 +20,12 @@
  *    over an explicit list of passes, and a filler-free streak can never span
  *    a retake boundary.
  */
-import type { FillerEvent } from '../../contracts/coaching';
+import {
+  DELIVERY_SCORE_WEIGHTS,
+  type DeliveryDimension,
+  type DeliveryScoreConfidenceTier,
+  type FillerEvent,
+} from '../../contracts/coaching';
 import { isCountableDisfluency, isCountableFiller } from '../disfluency/types';
 import type { UnmeasuredSpan } from '../pace/speech-clock';
 import {
@@ -63,7 +68,13 @@ export type AbsenceReason =
   | 'no_fillers'
   | 'no_microphone_data'
   | 'no_prior_sessions'
-  | 'metric_not_comparable';
+  | 'metric_not_comparable'
+  /** Delivery scoring was not running for this take at all. */
+  | 'not_scored'
+  /** It was running, but never gathered enough evidence to state a figure. */
+  | 'score_never_left_warm_up'
+  /** One dimension of the score had too little evidence to judge (§9.4). */
+  | 'dimension_unavailable';
 
 /** A value that may legitimately not exist. `value` and `absent` are exclusive. */
 export interface Measurement<T> {
@@ -769,6 +780,136 @@ export function summarizeMicrophone(record: MicrophoneSessionRecord): Microphone
  * The summary
  * ------------------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------------------
+ * Delivery score (Speaking Score report §9, §11.2)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * One dimension of the delivery score, as the review states it.
+ *
+ * `score` is a {@link Measurement} rather than a bare number because §9.4 is
+ * explicit that a dimension with too small a confidence-weighted denominator is
+ * *unavailable*, not zero — a speaker who has not yet produced enough voiced
+ * audio to judge their emphasis has not thereby failed at emphasis. Rendering
+ * that as `0/14` would be the review inventing a failure.
+ */
+export interface DeliveryDimensionSummary {
+  dimension: DeliveryDimension;
+  score: Measurement<number>;
+  /** Points this dimension can contribute out of 100 (§9.5). */
+  weight: number;
+  /** 0–1 evidence confidence for this dimension. */
+  confidence: number;
+}
+
+/**
+ * The delivery score for a set of passes.
+ *
+ * §11.2 forbids this breakdown *live* and places it here instead, so this is
+ * the only surface in the product that shows seven dimension scores.
+ *
+ * Three absences are kept apart, because collapsing them is how a review starts
+ * lying: `not_scored` (the take was never scored), `score_never_left_warm_up`
+ * (it was scored, and never gathered enough evidence to state a figure) and a
+ * per-dimension `dimension_unavailable`. None of them is a zero.
+ */
+export interface DeliveryScoreSummary {
+  /** The smoothed 0–100 figure the presenter was actually shown. */
+  displayScore: Measurement<number>;
+  /**
+   * The unsmoothed figure the engine computed. Carried so §11.3's rate cap and
+   * smoothing can be *audited* rather than trusted — the contract's own reason
+   * for exposing it. Never shown beside `displayScore` as a competing number.
+   */
+  rawScore: Measurement<number>;
+  /** §9.7 trust ladder, as a tier. Never rendered as a second large number. */
+  tier: DeliveryScoreConfidenceTier | null;
+  /** Always seven entries, in {@link DELIVERY_SCORE_WEIGHTS} order. */
+  dimensions: readonly DeliveryDimensionSummary[];
+  /**
+   * §9.6. The dimension dragging the score down hardest. Carried for the
+   * recommendation lane to reach for; it is not display copy.
+   */
+  weakestDimension: DeliveryDimension | null;
+  /**
+   * Which pass this score came from, or `null` when none was scored. An
+   * aggregate over several passes reports the *latest scored pass* rather than
+   * averaging two performances into a figure neither of them earned.
+   */
+  sourcePassOrdinal: number | null;
+}
+
+/** The seven dimensions with no evidence behind any of them. */
+function unscoredDimensions(reason: AbsenceReason): DeliveryDimensionSummary[] {
+  return (Object.keys(DELIVERY_SCORE_WEIGHTS) as DeliveryDimension[]).map((dimension) => ({
+    dimension,
+    score: unmeasured<number>(reason),
+    weight: DELIVERY_SCORE_WEIGHTS[dimension],
+    confidence: 0,
+  }));
+}
+
+/**
+ * §9, §11.2. The score for an explicit set of passes.
+ *
+ * Passes are separate performances (§11.3), so nothing is averaged across them.
+ * The latest pass that carries a score is the one reported, and it says which
+ * pass that was.
+ */
+export function summarizeDeliveryScore(
+  passes: readonly TakePassRecord[],
+): DeliveryScoreSummary {
+  const scored = [...passes]
+    .sort((a, b) => a.passOrdinal - b.passOrdinal)
+    .filter((pass) => pass.deliveryScore !== null);
+  const latest = scored[scored.length - 1];
+
+  if (latest === undefined) {
+    return {
+      displayScore: unmeasured<number>('not_scored'),
+      rawScore: unmeasured<number>('not_scored'),
+      tier: null,
+      dimensions: unscoredDimensions('not_scored'),
+      weakestDimension: null,
+      sourcePassOrdinal: null,
+    };
+  }
+
+  const score = latest.deliveryScore!;
+  const byDimension = new Map(score.dimensions.map((entry) => [entry.dimension, entry]));
+  const dimensions = (Object.keys(DELIVERY_SCORE_WEIGHTS) as DeliveryDimension[]).map(
+    (dimension) => {
+      const entry = byDimension.get(dimension);
+      return {
+        dimension,
+        score:
+          entry === undefined || entry.score === null
+            ? unmeasured<number>('dimension_unavailable')
+            : measured(Math.round(entry.score)),
+        // The weight is the contract's, never the producer's: a record written
+        // by an older algorithm cannot restate what a dimension is worth today.
+        weight: DELIVERY_SCORE_WEIGHTS[dimension],
+        confidence: entry?.confidence ?? 0,
+      } satisfies DeliveryDimensionSummary;
+    },
+  );
+
+  return {
+    displayScore:
+      score.displayScore === null
+        ? unmeasured<number>('score_never_left_warm_up')
+        : measured(Math.round(score.displayScore)),
+    rawScore:
+      score.rawScore === null
+        ? unmeasured<number>('score_never_left_warm_up')
+        : measured(Math.round(score.rawScore)),
+    tier: score.tier,
+    dimensions,
+    weakestDimension: score.weakestDimension,
+    sourcePassOrdinal: latest.passOrdinal,
+  };
+}
+
 export interface TipsShownSummary {
   total: number;
   /** Descending by count, then alphabetical, so the order is deterministic. */
@@ -786,6 +927,8 @@ export interface TakeMetrics {
   cadence: CadenceSummary;
   fidelity: FidelitySummary;
   tips: TipsShownSummary;
+  /** §11.2's forbidden-live breakdown, in the one place it belongs. */
+  deliveryScore: DeliveryScoreSummary;
 }
 
 export interface PassSummary {
@@ -861,6 +1004,7 @@ export function computeTakeMetrics(
     cadence: summarizeCadence(passes, profile, options.pauseThresholds ?? DEFAULT_PAUSE_THRESHOLDS),
     fidelity: summarizeFidelity(passes),
     tips: summarizeTips(passes),
+    deliveryScore: summarizeDeliveryScore(passes),
   };
 }
 

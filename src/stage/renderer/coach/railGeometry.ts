@@ -13,7 +13,7 @@
  * {@link coachRailReservedHeightPx}; both read the same numbers, so the band and
  * the hole left for it cannot drift apart.
  */
-import type { CoachRailMode } from '../../../shared/contracts/coaching';
+import type { CoachRailMode, CoachRailModules } from '../../../shared/contracts/coaching';
 
 /** §7.1 minimum height, CSS px. */
 export const RAIL_MIN_HEIGHT_PX = 52;
@@ -104,6 +104,8 @@ export interface RailModulePermissions {
   fillerCount: boolean;
   sparkline: boolean;
   ribbon: boolean;
+  /** Speaking Score report §11.1. The 0–100 delivery score. */
+  deliveryScore: boolean;
   /** §6.2 / §6.5: everything except critical alerts is withheld. */
   criticalTipsOnly: boolean;
 }
@@ -117,6 +119,7 @@ export function modePermissions(mode: CoachRailMode): RailModulePermissions {
         fillerCount: false,
         sparkline: false,
         ribbon: false,
+        deliveryScore: false,
         criticalTipsOnly: true,
       };
     case 'minimal':
@@ -126,6 +129,7 @@ export function modePermissions(mode: CoachRailMode): RailModulePermissions {
         fillerCount: false,
         sparkline: false,
         ribbon: false,
+        deliveryScore: false,
         criticalTipsOnly: true,
       };
     case 'review_only':
@@ -135,6 +139,9 @@ export function modePermissions(mode: CoachRailMode): RailModulePermissions {
         fillerCount: false,
         sparkline: false,
         ribbon: false,
+        // §6.5: the take is still scored — the number is simply never shown
+        // live. It waits in the post-take report.
+        deliveryScore: false,
         criticalTipsOnly: true,
       };
     case 'studio':
@@ -144,13 +151,15 @@ export function modePermissions(mode: CoachRailMode): RailModulePermissions {
         fillerCount: true,
         sparkline: true,
         ribbon: true,
+        deliveryScore: true,
         criticalTipsOnly: false,
       };
-    // §6.6 `custom` resolves its module flags in `CoachingSettings`, which does
-    // not cross to the stage. Rendering it as Coach is the only honest option
-    // available from `CoachRailState`; a producer that wants a module hidden
-    // must express that in the payload (see the module note in the rail's
-    // report) rather than relying on the stage to guess.
+    // §6.6 `custom` is defined by individual module toggles, which is why
+    // `CoachRailState.modules` exists: the producer resolves them and the stage
+    // reads them. This branch is only the fallback for a caller that has a mode
+    // and no flags — pass `modules` to {@link resolveRailLayout} and the user's
+    // own set wins. Coach is the honest default for a mode with no other
+    // information; it must never be the *answer* when flags were supplied.
     case 'custom':
     case 'coach':
     default:
@@ -160,6 +169,7 @@ export function modePermissions(mode: CoachRailMode): RailModulePermissions {
         fillerCount: true,
         sparkline: false,
         ribbon: true,
+        deliveryScore: true,
         criticalTipsOnly: false,
       };
   }
@@ -168,6 +178,19 @@ export function modePermissions(mode: CoachRailMode): RailModulePermissions {
 /** The resolved layout after mode permissions and width degradation. */
 export interface RailLayout {
   tier: RailTier;
+  /**
+   * Speaking Score report §11.1: the score sits left-most and survives the
+   * whole §7.3 ladder except its last rung.
+   *
+   * Its place in the drop order is deliberate. The score costs two glyphs and
+   * carries the rail's whole summary; the sparkline and the numeric variety
+   * cost far more width for detail their own labels already imply, which is
+   * exactly why §7.3 drops those two first. Dropping the score before either
+   * of them would trade the cheapest information on the rail for the most
+   * expensive. So it goes last, with the rest of the telemetry, one rung
+   * before the tip — which §7.3 step 5 preserves above everything.
+   */
+  showScore: boolean;
   showPace: boolean;
   showSparkline: boolean;
   showVariety: boolean;
@@ -179,7 +202,17 @@ export interface RailLayout {
   compactTelemetry: boolean;
 }
 
-export function resolveRailLayout(mode: CoachRailMode, widthPx: number): RailLayout {
+/**
+ * @param modules §6.6 resolved module flags from the snapshot. Supplying them
+ *   is what lets `custom` mean what the user actually chose rather than being
+ *   rendered as Coach — see the note on the `custom` branch of
+ *   {@link modePermissions}. Omitted, the mode's own reading stands.
+ */
+export function resolveRailLayout(
+  mode: CoachRailMode,
+  widthPx: number,
+  modules?: CoachRailModules,
+): RailLayout {
   const permissions = modePermissions(mode);
   const tier = railTier(widthPx);
   const rank = (t: RailTier): number =>
@@ -188,6 +221,7 @@ export function resolveRailLayout(mode: CoachRailMode, widthPx: number): RailLay
   const telemetryVisible = at < rank('tip_only');
   return {
     tier,
+    showScore: (modules?.deliveryScore ?? permissions.deliveryScore) && telemetryVisible,
     showPace: permissions.paceTile && telemetryVisible,
     showSparkline: permissions.sparkline && at < rank('no_sparkline'),
     showVariety: permissions.varietyTile && telemetryVisible,

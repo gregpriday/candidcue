@@ -16,6 +16,7 @@
 export * from './railGeometry';
 export * from './railClock';
 export * from './paceTile';
+export * from './deliveryScore';
 export * from './statusText';
 export * from './activeTip';
 export * from './ribbon';

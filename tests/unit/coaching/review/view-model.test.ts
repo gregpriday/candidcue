@@ -24,6 +24,9 @@ describe('assembly', () => {
 
   it('carries the §31.2 cards in specification order', () => {
     expect(model.cards.map((card) => card.id)).toEqual([
+      // Speaking Score report §11.1 puts the score first: it is the one figure
+      // that summarises the twelve behind it.
+      'delivery_score',
       'audible_wpm',
       'articulation_wpm',
       'time_in_target_pace',

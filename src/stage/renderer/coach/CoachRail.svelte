@@ -31,6 +31,7 @@
 <script lang="ts">
   import type { CoachRailState } from '../../../shared/contracts/coaching';
   import { CoachRailPresenter } from './presenter';
+  import { SCORE_CARET_GLYPH } from './deliveryScore';
   import { coachRailReservedHeightPx, RAIL_RIBBON_HEIGHT_PX } from './railGeometry';
   import EventRibbon from './EventRibbon.svelte';
 
@@ -123,7 +124,43 @@
       style:width={columnWidthPercent === null ? undefined : `${columnWidthPercent}%`}
       style:max-width={columnWidthPercent === null ? undefined : 'none'}
     >
-      <div class="row" data-compact={view ? String(view.layout.compactTelemetry) : 'false'}>
+      <div
+        class="row"
+        data-compact={view ? String(view.layout.compactTelemetry) : 'false'}
+        data-score={view?.score ? 'true' : 'false'}
+      >
+        <!--
+          Speaking Score report §11.1: the score is first and left-most.
+
+          Its grid track is a fixed length and its own value slot reserves three
+          tabular characters, so `—` → `84` → `91` → `100`, a caret arriving,
+          and a tier change to `estimated` are all changes of *ink* inside a box
+          whose size nothing in this snapshot can influence. Neither the tip
+          beside it nor the reading line above it can be moved by the score.
+        -->
+        {#if view?.score}
+          <div class="zone zone-score" data-zone="score">
+            <div class="line-value">
+              <span
+                class="score-value"
+                class:subdued={view.score.subdued}
+                data-field="score-value"
+                data-subdued={String(view.score.subdued)}
+              >
+                {view.score.value}
+              </span>
+              <!-- §11.3: `steady` renders nothing. A neutral glyph blinking in
+                   and out is still movement on the presenter's glass. -->
+              {#if view.score.caret}
+                <span class="caret" data-field="score-trend" data-trend={view.score.caret}>
+                  {SCORE_CARET_GLYPH[view.score.caret]}
+                </span>
+              {/if}
+            </div>
+            <div class="line-status" data-field="score-state">{view.score.label}</div>
+          </div>
+        {/if}
+
         {#if view && view.layout.compactTelemetry}
           <!-- §7.3 step 4: one compact telemetry row, the tip beside it. -->
           {#if view.pace || view.variety || view.fillers}
@@ -227,6 +264,11 @@
     pointer-events: none;
     /* §7.4: smaller than the script, and it never moves vertically. */
     font-size: calc(13px * var(--rail-scale, 1));
+    /* §7.1 applied horizontally: the score's grid track is a fixed length, so
+       the width of what the score has to say — `—`, `84`, `LISTENING…` — can
+       never move the pace tile or the tip beside it. Wide enough for the
+       warm-up label at the rail's own letter-spacing; anything longer clips. */
+    --score-col: 5.4em;
     line-height: 1.25;
     letter-spacing: var(--ls-caps, 0.06em);
     font-variant-numeric: tabular-nums;
@@ -257,6 +299,12 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+  /* The score lives inside its fixed track and clips. It must not be able to
+     grow the track, and a track that grew would push the whole row. */
+  .zone-score {
+    overflow: hidden;
+    white-space: nowrap;
   }
   .zone-variety {
     align-items: flex-end;
@@ -292,6 +340,46 @@
      disappearing or falling toward zero. */
   .value.dim {
     color: rgba(245, 243, 239, 0.34);
+  }
+
+  /* Speaking Score report §11.1: "large enough to glance at, but not visually
+     dominant". Larger than the pace figure, and its line box is deliberately
+     *shorter* than the pace tile's (1.45 × 1.0 < 1.25 × 1.25), so the tallest
+     thing in the row is still the pace tile and the band's content height is
+     unchanged by the score existing at all.
+
+     The colour is the stage's own text colour (`--stage-text`, #f5f3ef) at the
+     opacity the rest of the rail's figures use — §7.4 keeps stable telemetry
+     below the script in contrast. */
+  .score-value {
+    display: inline-block;
+    /* Three tabular characters, always. `—`, `84`, `91` and `100` occupy an
+       identical box, so the number never resizes and the caret beside it never
+       shifts. This is the horizontal half of §7.1. */
+    min-width: 3ch;
+    font-size: 1.45em;
+    line-height: 1;
+    font-weight: 600;
+    color: rgba(245, 243, 239, 0.82);
+    /* §7.4: no rolling digits, no counter animation — only opacity. */
+    transition: opacity var(--rail-fade-ms, 160ms) var(--ease-out, ease-out);
+  }
+  /* §9.7 `estimated`: the same figure, quieter. Opacity and not font-weight —
+     a lighter weight changes glyph advance and would resize the number. */
+  .score-value.subdued {
+    opacity: 0.5;
+  }
+
+  /* §11.3 trend caret. Vertical rather than horizontal so it stays correct
+     through the stage's mirror transform (§7.5), low contrast because it is
+     stable telemetry (§7.4), and a shape rather than a colour because §7.6
+     forbids meaning carried by colour alone. */
+  .caret {
+    display: inline-block;
+    min-width: 1em;
+    font-size: 0.6em;
+    line-height: 1;
+    color: rgba(245, 243, 239, 0.42);
   }
 
   /* Status colour never carries meaning on its own — the label already says
@@ -353,11 +441,21 @@
     width: 100%;
   }
 
+  /* The score claims a fixed track ahead of everything else (§11.1). It is a
+     *length*, never `auto` or `max-content`: a content-sized track would let a
+     tier change from `LISTENING…` to `SCORE` shove the pace tile sideways. */
+  .row[data-score='true'] {
+    grid-template-columns: var(--score-col) minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+  }
+
   /* §7.3 step 4: left and right telemetry collapse into one row, and the tip
      keeps the space it needs. Step 6 leaves the tip alone in the row. */
   .row[data-compact='true'] {
     grid-template-columns: minmax(0, auto) minmax(0, 1fr);
     gap: 12px;
+  }
+  .row[data-compact='true'][data-score='true'] {
+    grid-template-columns: var(--score-col) minmax(0, auto) minmax(0, 1fr);
   }
   .zone-compact {
     flex-direction: row;

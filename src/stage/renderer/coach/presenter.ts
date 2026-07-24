@@ -15,6 +15,7 @@
  */
 import type { CoachRailState } from '../../../shared/contracts/coaching';
 import { ActiveTipPresenter, type ActiveTipView } from './activeTip';
+import { DeliveryScorePresenter, type DeliveryScoreView } from './deliveryScore';
 import { PaceTilePresenter, sparklinePoints, type PaceTileView } from './paceTile';
 import { RailClock } from './railClock';
 import {
@@ -62,6 +63,13 @@ export interface RailView {
   reducedMotion: boolean;
   textScale: number;
   layout: RailLayout;
+  /**
+   * Speaking Score report §11.1. `null` when the mode or the width does not
+   * admit the score at all — which is a different thing from a score that
+   * exists and is still warming up, and the view keeps them apart: a warming-up
+   * score is a {@link DeliveryScoreView} whose value is `—`.
+   */
+  score: DeliveryScoreView | null;
   pace: PaceTileView | null;
   sparkline: Array<{ x: number; y: number }> | null;
   variety: VarietyTileView | null;
@@ -92,6 +100,7 @@ export class CoachRailPresenter {
   private clock = new RailClock();
   private paceTile = new PaceTilePresenter();
   private tip = new ActiveTipPresenter();
+  private score = new DeliveryScorePresenter();
   private applied: CoachRailState | null = null;
 
   /**
@@ -114,6 +123,7 @@ export class CoachRailPresenter {
       this.clock = new RailClock();
       this.paceTile = new PaceTilePresenter();
       this.tip = new ActiveTipPresenter();
+      this.score = new DeliveryScorePresenter();
       this.applied = incoming;
       return incoming;
     }
@@ -135,7 +145,7 @@ export class CoachRailPresenter {
     const nowAudioMs = this.clock.sync(state, input.monotonicMs);
 
     const permissions = modePermissions(state.mode);
-    const layout = resolveRailLayout(state.mode, input.widthPx);
+    const layout = resolveRailLayout(state.mode, input.widthPx, state.modules);
     const reservedHeightPx = coachRailReservedHeightPx(input.viewportHeightPx);
 
     // The presenters still run when the rail is hidden. Their state is a
@@ -144,6 +154,10 @@ export class CoachRailPresenter {
     // pause ladder from minutes ago.
     const paceView = this.paceTile.update(state.pace, nowAudioMs);
     const tipView = this.tip.update(state.activeTip, nowAudioMs, permissions.criticalTipsOnly);
+    // Runs even when the zone is not drawn, for the same reason the pace tile
+    // does: the 2–5 Hz limiter is a record of what the presenter was shown, and
+    // freezing it would let a re-widened rail flash a stale number.
+    const scoreView = this.score.update(state.score, nowAudioMs);
 
     const windowMs = ribbonWindowMs(state.mode);
     return {
@@ -156,6 +170,7 @@ export class CoachRailPresenter {
       reducedMotion: state.reducedMotion,
       textScale: clampRailTextScale(input.textScale),
       layout,
+      score: layout.showScore ? scoreView : null,
       pace: layout.showPace ? paceView : null,
       sparkline: layout.showSparkline
         ? sparklinePoints(state.pace.recentSeries, state.pace.targetLowWpm, state.pace.targetHighWpm)

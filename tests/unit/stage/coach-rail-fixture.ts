@@ -13,11 +13,15 @@ import {
   initialVarietyState,
   resolveRailModules,
 } from '../../../src/shared/coaching/coach/coach-state';
-import type {
-  CoachRailState,
-  CoachRailTip,
-  CoachRibbonEvent,
-  CoachRibbonEventType,
+import {
+  DELIVERY_SCORE_WEIGHTS,
+  type CoachRailState,
+  type CoachRailTip,
+  type CoachRibbonEvent,
+  type CoachRibbonEventType,
+  type DeliveryDimension,
+  type DeliveryScoreState,
+  type DimensionScore,
 } from '../../../src/shared/contracts/coaching';
 
 export function railState(overrides: Partial<CoachRailState> = {}): CoachRailState {
@@ -45,6 +49,46 @@ export function railState(overrides: Partial<CoachRailState> = {}): CoachRailSta
     // Not scored by default. Tests that care about the score opt in, so a
     // fixture default can never be mistaken for a real measurement.
     score: null,
+    ...overrides,
+  };
+}
+
+/**
+ * A delivery score with deliberately *distinctive* dimension figures.
+ *
+ * §11.2 forbids the seven dimension scores on the glass, and the cheapest way
+ * to prove they never arrive is to make each one a number that could not have
+ * come from anywhere else on the rail. Nothing here shares a value with the
+ * pace target, the variety band, or the display score.
+ */
+export function deliveryScore(overrides: Partial<DeliveryScoreState> = {}): DeliveryScoreState {
+  const DISTINCTIVE: Record<DeliveryDimension, number> = {
+    pace: 31,
+    pausing: 33,
+    variety: 37,
+    emphasis: 39,
+    fluency: 41,
+    clarity: 43,
+    consistency: 47,
+  };
+  const dimensions: DimensionScore[] = (
+    Object.keys(DELIVERY_SCORE_WEIGHTS) as DeliveryDimension[]
+  ).map((dimension) => ({
+    dimension,
+    score: DISTINCTIVE[dimension],
+    confidence: 0.71,
+    weight: DELIVERY_SCORE_WEIGHTS[dimension],
+  }));
+  return {
+    displayScore: 84,
+    // Deliberately far from `displayScore`: diagnostics only, and a rail that
+    // ever printed it would be caught by the digits rather than by the field.
+    rawScore: 57,
+    confidence: 0.62,
+    tier: 'usable',
+    dimensions,
+    weakestDimension: 'pace',
+    trend: 'steady',
     ...overrides,
   };
 }

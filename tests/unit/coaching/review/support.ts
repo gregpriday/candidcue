@@ -7,7 +7,13 @@
  * hundred whatever `session-summary.ts` happens to do — and the assertions name
  * the number, never `toBeGreaterThan(0)`.
  */
-import type { FillerEvent, FillerKind } from '../../../../src/shared/contracts/coaching';
+import {
+  DELIVERY_SCORE_WEIGHTS,
+  type DeliveryDimension,
+  type DeliveryScoreState,
+  type FillerEvent,
+  type FillerKind,
+} from '../../../../src/shared/contracts/coaching';
 import type { CadenceMetrics } from '../../../../src/shared/coaching/prosody/cadence-analyzer';
 import type {
   BoundaryRecord,
@@ -57,6 +63,44 @@ export const EMPTY_MICROPHONE: MicrophoneSessionRecord = {
   levelSamples: [],
   transcriptionDegradedMs: 0,
 };
+
+/**
+ * A recorded delivery score with deliberately distinctive figures.
+ *
+ * Every dimension gets a value that appears nowhere else in these fixtures, so
+ * a test asserting a figure reached (or did not reach) the screen is checking
+ * that specific dimension rather than a number that could have come from the
+ * pace band or the variety target.
+ */
+export function makeDeliveryScore(
+  overrides: Partial<DeliveryScoreState> = {},
+): DeliveryScoreState {
+  const scores: Record<DeliveryDimension, number | null> = {
+    pace: 71,
+    pausing: 73,
+    variety: 77,
+    // §9.4: too little evidence is an absence, not a zero.
+    emphasis: null,
+    fluency: 79,
+    clarity: 83,
+    consistency: 89,
+  };
+  return {
+    displayScore: 84,
+    rawScore: 86,
+    confidence: 0.68,
+    tier: 'usable',
+    dimensions: (Object.keys(DELIVERY_SCORE_WEIGHTS) as DeliveryDimension[]).map((dimension) => ({
+      dimension,
+      score: scores[dimension],
+      confidence: scores[dimension] === null ? 0.1 : 0.7,
+      weight: DELIVERY_SCORE_WEIGHTS[dimension],
+    })),
+    weakestDimension: 'pace',
+    trend: 'steady',
+    ...overrides,
+  };
+}
 
 let fillerSeq = 0;
 
@@ -116,6 +160,7 @@ export interface PassOptions {
   criticalFindings?: readonly CriticalFindingRecord[];
   coveredSpanIds?: readonly string[];
   projectedTotalMs?: number | null;
+  deliveryScore?: TakePassRecord['deliveryScore'];
   pauses?: TakePassRecord['pauses'];
   scriptPositions?: TakePassRecord['scriptPositions'];
   speechIntervals?: TakePassRecord['speechIntervals'];
@@ -153,6 +198,9 @@ export function makePass(options: PassOptions = {}): TakePassRecord {
     criticalFindings: options.criticalFindings ?? [],
     coveredSpanIds: options.coveredSpanIds ?? [],
     projectedTotalMs: options.projectedTotalMs ?? null,
+    // Unscored by default, so a fixture default can never be mistaken for a
+    // real measurement — the same discipline `coach-rail-fixture.ts` applies.
+    deliveryScore: options.deliveryScore ?? null,
     transcript: options.transcript ?? null,
   };
 }

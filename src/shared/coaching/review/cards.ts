@@ -13,7 +13,16 @@
  * and a critical script discrepancy. Pace, variety and filler cards stay
  * neutral — they report, they do not grade.
  */
-import type { AbsenceReason, Measurement, SessionSummary } from './session-summary';
+import type {
+  DeliveryDimension,
+  DeliveryScoreConfidenceTier,
+} from '../../contracts/coaching';
+import type {
+  AbsenceReason,
+  DeliveryScoreSummary,
+  Measurement,
+  SessionSummary,
+} from './session-summary';
 import type { MicrophoneStatus } from './types';
 
 /** §12.7 status copy. Authored, never derived from a model. */
@@ -28,6 +37,7 @@ const MIC_STATUS_COPY: Record<MicrophoneStatus, string> = {
 };
 
 export type ReviewCardId =
+  | 'delivery_score'
   | 'audible_wpm'
   | 'articulation_wpm'
   | 'time_in_target_pace'
@@ -112,6 +122,9 @@ const ABSENCE_COPY: Record<AbsenceReason, string> = {
   no_microphone_data: 'No microphone measurements were recorded.',
   no_prior_sessions: 'No earlier sessions to compare with.',
   metric_not_comparable: 'Not comparable with this take.',
+  not_scored: 'This take was not scored.',
+  score_never_left_warm_up: 'The take never gathered enough evidence to state a score.',
+  dimension_unavailable: 'Not enough evidence to judge this.',
 };
 
 export function absenceCopy(reason: AbsenceReason): string {
@@ -150,15 +163,91 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`): s
 }
 
 /* ---------------------------------------------------------------------------
+ * Delivery score (Speaking Score report §9, §11.2)
+ * ------------------------------------------------------------------------- */
+
+/** Authored dimension names. Never a raw contract key on the screen. */
+export const DELIVERY_DIMENSION_LABEL: Record<DeliveryDimension, string> = {
+  pace: 'Pace',
+  pausing: 'Pausing',
+  variety: 'Vocal variety',
+  emphasis: 'Emphasis',
+  fluency: 'Fluency',
+  clarity: 'Clarity',
+  consistency: 'Consistency',
+};
+
+/**
+ * §9.7 as words rather than a second number.
+ *
+ * The report says confidence "should not be shown as another large number", and
+ * that is as true on the review screen as it is on the rail: a presenter given
+ * `84` and `0.62` will try to reconcile them. The tier says what the figure is
+ * worth in a sentence, which is the thing they actually needed to know.
+ */
+export const DELIVERY_TIER_COPY: Record<DeliveryScoreConfidenceTier, string> = {
+  warming_up: 'Too little evidence to stand behind this figure',
+  estimated: 'An estimate — the take was short on evidence',
+  usable: 'Enough evidence to be worth reading',
+  confident: 'Well-evidenced across the take',
+};
+
+/**
+ * One row per dimension, in {@link DELIVERY_SCORE_WEIGHTS} order.
+ *
+ * The weight travels with the score because a dimension score means nothing on
+ * its own: 60 on `consistency` costs 2 points of the total and 60 on `pace`
+ * costs 7, and a reader shown seven bare numbers would weigh them equally.
+ */
+export interface DeliveryDimensionRow {
+  dimension: DeliveryDimension;
+  label: string;
+  /** `0–100`, or `null` when this dimension had too little evidence (§9.4). */
+  value: string | null;
+  /** Authored explanation of why `value` is `null`. */
+  absentLabel: string | null;
+  /** `Worth 18 points`. */
+  detail: string;
+}
+
+export function buildDeliveryDimensionRows(
+  score: DeliveryScoreSummary,
+): DeliveryDimensionRow[] {
+  return score.dimensions.map((dimension) => ({
+    dimension: dimension.dimension,
+    label: DELIVERY_DIMENSION_LABEL[dimension.dimension],
+    value: dimension.score.value === null ? null : String(dimension.score.value),
+    absentLabel:
+      dimension.score.absent === null ? null : absenceCopy(dimension.score.absent),
+    detail: `Worth ${plural(dimension.weight, 'point')} of 100`,
+  }));
+}
+
+/* ---------------------------------------------------------------------------
  * §31.2
  * ------------------------------------------------------------------------- */
 
-/** Build the thirteen §31.2 cards, in the order the specification lists them. */
+/**
+ * Build the §31.2 cards, in the order the specification lists them, with the
+ * delivery score first — it is the one figure that summarises the rest.
+ */
 export function buildSummaryCards(summary: SessionSummary): ReviewCard[] {
   const { metrics, microphone, profile } = summary;
-  const { pace, duration, fillers, variety, cadence, fidelity } = metrics;
+  const { pace, duration, fillers, variety, cadence, fidelity, deliveryScore } = metrics;
 
   const cards: ReviewCard[] = [];
+
+  cards.push(
+    card(
+      'delivery_score',
+      'Delivery score',
+      formatMeasurement(deliveryScore.displayScore, (score) => `${score} / 100`),
+      // Never a confidence percentage beside the score (§9.7), and never the
+      // raw figure beside the smoothed one — the two would read as a
+      // disagreement rather than as an audit trail.
+      deliveryScore.tier === null ? null : DELIVERY_TIER_COPY[deliveryScore.tier],
+    ),
+  );
 
   cards.push(
     card(

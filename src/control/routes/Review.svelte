@@ -13,6 +13,7 @@
 -->
 <script lang="ts">
   import {
+    buildDeliveryDimensionRows,
     selectPassage,
     type ReviewModel,
     type ScriptAnnotation,
@@ -110,6 +111,15 @@
   }
 
   const passLabel = (ordinal: number): string => `Take ${ordinal}`;
+
+  /**
+   * Speaking Score report §11.2. The seven dimension scores are forbidden on
+   * the rail during a take and belong here instead. Formatted in
+   * `shared/coaching/review/cards.ts` like everything else on this screen —
+   * this component still computes nothing.
+   */
+  const deliveryScore = $derived(model.summary.metrics.deliveryScore);
+  const dimensionRows = $derived(buildDeliveryDimensionRows(deliveryScore));
 </script>
 
 <div class="page" data-testid="review">
@@ -145,6 +155,40 @@
         {/if}
       </article>
     {/each}
+  </section>
+
+  <!-- Speaking Score report §11.2: the breakdown the rail is not allowed to
+       show during a take. -->
+  <section class="block" aria-label="Delivery score breakdown">
+    <div class="block-head">
+      <h2 class="block-title">What the score is made of</h2>
+      {#if deliveryScore.sourcePassOrdinal !== null}
+        <p class="quiet" data-testid="score-source-pass">
+          From {passLabel(deliveryScore.sourcePassOrdinal)}
+        </p>
+      {/if}
+    </div>
+    {#if deliveryScore.displayScore.value === null && deliveryScore.sourcePassOrdinal === null}
+      <p class="quiet" data-testid="score-absent">This take was not scored.</p>
+    {:else}
+      <ul class="dimensions">
+        {#each dimensionRows as row (row.dimension)}
+          <li class="dimension" data-dimension={row.dimension}>
+            <span class="dimension-label">{row.label}</span>
+            {#if row.value === null}
+              <span class="quiet" data-testid="dimension-absent">{row.absentLabel}</span>
+            {:else}
+              <span class="dimension-value">{row.value}</span>
+            {/if}
+            <span class="dimension-weight">{row.detail}</span>
+          </li>
+        {/each}
+      </ul>
+      <p class="quiet">
+        Each dimension is scored against your own targets, not against anyone else. The number on
+        the rail is these seven, weighted and smoothed.
+      </p>
+    {/if}
   </section>
 
   <!-- §31.5 -->
@@ -509,6 +553,42 @@
     line-height: var(--lh-label);
     color: var(--text-muted);
     max-width: var(--prose-measure-narrow);
+  }
+
+  .dimensions {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    max-width: var(--prose-measure-narrow);
+  }
+  .dimension {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+    column-gap: var(--space-4);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-faint);
+    font-size: var(--text-sm);
+  }
+  .dimension-label {
+    color: var(--text-secondary);
+  }
+  .dimension-value {
+    color: var(--text-primary);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  /* The weight sits under the label: a dimension score is meaningless without
+     the points it can move. */
+  .dimension-weight {
+    grid-column: 1 / -1;
+    font-size: var(--text-2xs);
+    color: var(--text-muted);
   }
 
   .recommendations {

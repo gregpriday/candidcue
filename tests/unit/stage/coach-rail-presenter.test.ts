@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { CoachRailPresenter } from '../../../src/stage/renderer/coach/presenter';
+import { resolveRailModules } from '../../../src/shared/coaching/coach/coach-state';
 import { railState, ribbonEvent, tip } from './coach-rail-fixture';
 import type { CoachRailState } from '../../../src/shared/contracts/coaching';
 
@@ -179,11 +180,34 @@ describe('§6 modes end to end', () => {
     expect(view.centre.text).toBe('MIC IS CLIPPING');
   });
 
-  it('renders Custom as Coach, because the module flags never cross to the stage', () => {
-    const custom = frame(new CoachRailPresenter(), railState({ mode: 'custom', ...busy }), 0);
+  it('renders Custom from the flags it was sent, not from a guess', () => {
+    // §6.6. `CoachRailModules` crosses in the snapshot precisely so the stage
+    // never has to interpret `custom` for itself — the failure this replaced
+    // was `custom` being indistinguishable from Coach on the glass, so a module
+    // the user had turned off stayed on.
     const coach = frame(new CoachRailPresenter(), railState({ mode: 'coach', ...busy }), 0);
-    expect(custom.layout).toEqual(coach.layout);
-    expect(custom.ribbon.windowMs).toBe(coach.ribbon.windowMs);
+    const asCoach = frame(
+      new CoachRailPresenter(),
+      railState({ mode: 'custom', modules: resolveRailModules('coach'), ...busy }),
+      0,
+    );
+    expect(asCoach.layout).toEqual(coach.layout);
+    expect(asCoach.ribbon.windowMs).toBe(coach.ribbon.windowMs);
+
+    const withoutScore = frame(
+      new CoachRailPresenter(),
+      railState({
+        mode: 'custom',
+        modules: resolveRailModules('custom', { ...resolveRailModules('coach'), deliveryScore: false }),
+        ...busy,
+      }),
+      0,
+    );
+    expect(withoutScore.layout.showScore).toBe(false);
+    expect(coach.layout.showScore).toBe(true);
+    // Everything else about the two layouts is the same: turning one module off
+    // must not quietly change another.
+    expect({ ...withoutScore.layout, showScore: true }).toEqual(coach.layout);
   });
 
   it('mode off removes the rail from the layout entirely', () => {

@@ -381,6 +381,23 @@
             />
           {/each}
         </div>
+        <!--
+          Two rail modules have no toggle of their own, and saying so is the
+          honest option. `CoachingSettings.modules` is the list above; the
+          sparkline and the delivery score are decided by the mode alone
+          (§6.4, Speaking Score report §11.1). A panel that silently omitted
+          them would leave a user hunting for a switch that is not there.
+        -->
+        <div class="statement">
+          <p class="statement-line">
+            The delivery score follows the coaching mode: Coach and Studio show it, Minimal and
+            Review only do not. Review only still measures it — the figure waits in the post-take
+            report.
+          </p>
+          <p class="statement-line">
+            The pace sparkline is a Studio affordance and has no separate switch either.
+          </p>
+        </div>
       </div>
     {/if}
 

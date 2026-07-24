@@ -101,6 +101,19 @@ describe('§30.1 the panel reports every change upward', () => {
     ).toBe(false);
   });
 
+  it('says which rail modules the mode decides, instead of silently omitting them', () => {
+    // `CoachingSettings.modules` has no `deliveryScore` or `paceSparkline`
+    // field, so neither can have a switch here. A panel that simply left them
+    // out would leave a user hunting for a control that does not exist; the
+    // panel states what governs them instead (Speaking Score report §11.1).
+    const { container } = renderPanel({ mode: 'custom' });
+    const body = text(container);
+    expect(body).toContain('The delivery score follows the coaching mode');
+    expect(body).toContain('Coach and Studio show it, Minimal and Review only do not');
+    expect(body).toContain('the figure waits in the post-take report');
+    expect(body).toContain('The pace sparkline is a Studio affordance');
+  });
+
   it('turning a goal on chooses a starting threshold rather than saving zero', async () => {
     const { getByRole, onchange } = renderPanel();
     getByRole('switch', { name: 'Fewer than N fillers a minute' }).click();
