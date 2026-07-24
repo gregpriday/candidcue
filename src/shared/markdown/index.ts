@@ -28,7 +28,6 @@ export {
 } from './directives';
 export { phoneticKey } from './phonetic';
 export { STOPWORDS, isStopword } from './stopwords';
-export { buildSearchIndexes } from './indexes';
 export { computeTokenWeight } from './weights';
 export {
   extractVocabularyCandidates,

@@ -45,7 +45,6 @@ import { aliasesForToken, normalizePhrase, normalizeToken } from './normalize';
 import { tokenizeText } from './tokenize';
 import { segmentSentences } from './segment';
 import { computeTokenWeight } from './weights';
-import { buildSearchIndexes } from './indexes';
 import { isStopword } from './stopwords';
 
 export const COMPILER_VERSION = '1.0.0';
@@ -1956,7 +1955,6 @@ function finalize(
     assets,
     diagnostics,
     statistics,
-    indexes: buildSearchIndexes(spokenTokens, sentences, blocks, navigationTargets),
     literalCommandRanges,
     coaching: resolveCoachDirectives(state, blocks, sentences),
   };

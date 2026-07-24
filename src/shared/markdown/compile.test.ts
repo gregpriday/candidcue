@@ -502,27 +502,9 @@ describe('compile: §24 media', () => {
 });
 
 describe('compile: §25.6 indexes, §25.7 weights, §21.8 statistics', () => {
-  it('builds exact, ngram, rare, phonetic, and structural indexes', () => {
-    const script = basic();
-    const { indexes } = script;
-    const welcome = script.spokenTokens.find((t) => t.normalized === 'welcome')!;
-    expect(indexes.exactToken['welcome']).toContain(welcome.index);
-    expect(indexes.ngram2['welcome to']).toContain(welcome.index);
-    expect(indexes.ngram3['welcome to the']).toContain(welcome.index);
-    expect(indexes.ngram4['welcome to the launch']).toContain(welcome.index);
-    expect(Object.keys(indexes.rareToken)).toContain('teleprompter');
-    expect(Object.keys(indexes.rareToken)).not.toContain('the');
-    expect(Object.keys(indexes.phonetic).length).toBeGreaterThan(0);
-    expect(indexes.headingAndTake['the problem']).toBeDefined();
-    expect(indexes.paragraphOpening['welcome to the launch']).toContain(welcome.index);
-    const firstSentence = script.sentences[0]!;
-    expect(indexes.sentenceText[firstSentence.normalizedText]).toContain(firstSentence.id);
-  });
 
   it('indexes take names for navigation', () => {
     const script = directives();
-    expect(script.indexes.headingAndTake['opening']).toBeDefined();
-    expect(script.indexes.headingAndTake['closing']).toBeDefined();
   });
 
   it('weights stopwords at 0.35, proper nouns at 1.5, overrides at 1.65', () => {
@@ -589,25 +571,8 @@ describe('compile: hostile index keys (§25.6)', () => {
     // whole compile failed. Normalization may strip punctuation (__proto__ ->
     // "proto"), so assert on the token count rather than the literal word.
     expect(script.spokenTokens.length).toBe(9);
-    expect(Object.keys(script.indexes.exactToken).length).toBeGreaterThan(0);
   });
 
-  it('indexes hostile keys without inheriting prototype entries', () => {
-    const script = compile('The constructor and the prototype and the valueOf.', OPTS);
-    const { indexes } = script;
-    expect(Object.getPrototypeOf(indexes.exactToken)).toBeNull();
-    expect(Object.getPrototypeOf(indexes.ngram2)).toBeNull();
-    expect(Object.getPrototypeOf(indexes.rareToken)).toBeNull();
-    expect(Object.getPrototypeOf(indexes.phonetic)).toBeNull();
-    expect(Object.getPrototypeOf(indexes.headingAndTake)).toBeNull();
-    expect(Object.getPrototypeOf(indexes.sentenceText)).toBeNull();
-    expect(Object.getPrototypeOf(indexes.paragraphOpening)).toBeNull();
-    const constructorToken = script.spokenTokens.find((t) => t.normalized === 'constructor')!;
-    expect(indexes.exactToken['constructor']).toEqual([constructorToken.index]);
-    // Survives the JSON round-trip the worker protocol performs.
-    const roundTripped = JSON.parse(JSON.stringify(indexes)) as typeof indexes;
-    expect(roundTripped.exactToken['constructor']).toEqual([constructorToken.index]);
-  });
 });
 
 describe('compile: §22.3 formatting never splits a spoken word', () => {

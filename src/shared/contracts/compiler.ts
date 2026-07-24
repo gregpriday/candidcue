@@ -98,7 +98,7 @@ export type SafeRenderNode =
 /* -------------------------------------------------------------------------
  * Additions beyond Appendix C.1 — the IR types referenced by §25.3
  * (CompiledScript, SpokenToken) plus the supporting shapes they require
- * (CueEvent, CompiledAsset, ScriptStatistics, SerializedSearchIndexes,
+ * (CueEvent, CompiledAsset, ScriptStatistics,
  * CompileOptions, token flags). Appendix C.1 names these in CompiledScript
  * but does not define them; definitions follow §25 exactly.
  * ---------------------------------------------------------------------- */
@@ -173,38 +173,6 @@ export interface ScriptStatistics {
 }
 
 /** JSON-serializable candidate-generation indexes (spec §25.6). */
-export interface SerializedSearchIndexes {
-  /** exact normalized token -> spoken token indexes */
-  exactToken: Record<string, number[]>;
-  /** rare (low-frequency, non-stopword) normalized token -> spoken token indexes */
-  rareToken: Record<string, number[]>;
-  /**
-   * normalized *alias* -> spoken token indexes (§14.4 "normalized token **and
-   * alias** inverted index").
-   *
-   * Aliases were previously consulted only while scoring an already-open
-   * window, so a presenter who produced only the alias form of a term — the
-   * exact case §14.2 exists for — opened no window to score. Keys may be
-   * multi-word ("forty seven" for `47`, "real time" for `real-time`) because
-   * transcript normalization splits hyphens and number words; retrieval is
-   * expected to probe both single words and short n-grams of the transcript
-   * tail against this map.
-   */
-  aliasToken: Record<string, number[]>;
-  /** space-joined normalized 2/3/4-grams -> start token indexes */
-  ngram2: Record<string, number[]>;
-  ngram3: Record<string, number[]>;
-  ngram4: Record<string, number[]>;
-  /** phonetic key -> candidate spoken token indexes */
-  phonetic: Record<string, number[]>;
-  /** normalized heading/take label -> navigation target ids */
-  headingAndTake: Record<string, string[]>;
-  /** normalized sentence text -> sentence ids */
-  sentenceText: Record<string, string[]>;
-  /** normalized opening phrase (first tokens of a paragraph) -> start token indexes */
-  paragraphOpening: Record<string, number[]>;
-}
-
 /** Compile settings honoured by the pure compiler (spec §22.2, §21.8, §33). */
 export interface CompileOptions {
   scriptId: string;
@@ -232,7 +200,6 @@ export interface CompiledScript {
   assets: CompiledAsset[];
   diagnostics: CompileDiagnostic[];
   statistics: ScriptStatistics;
-  indexes: SerializedSearchIndexes;
   /**
    * Spoken-token ranges inside `:::literal-command` blocks (spec §23.7).
    *

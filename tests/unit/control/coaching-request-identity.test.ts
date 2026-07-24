@@ -110,7 +110,6 @@ function compiledScript(scriptId: string): CompiledScript {
     assets: [],
     diagnostics: [],
     statistics: {} as CompiledScript['statistics'],
-    indexes: {} as CompiledScript['indexes'],
     literalCommandRanges: [],
   };
 }
