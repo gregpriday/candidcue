@@ -36,7 +36,28 @@ export default defineConfig({
   forbidOnly: !!process.env['CI'],
   retries: 0,
   reporter: [['list']],
-  outputDir: './tests/e2e/browser/.artifacts',
+  /*
+   * Artifacts go somewhere the Vite dev server does NOT watch, and that is the
+   * whole reason for this path.
+   *
+   * This used to be `./tests/e2e/browser/.artifacts`. Playwright writes trace
+   * resources and screenshots there WHILE a test is running, Vite's watcher saw
+   * every write, and the dev server issued a full page reload to the page under
+   * test for each one:
+   *
+   *     [vite] (client) page reload tests/e2e/browser/.artifacts/
+   *         .playwright-artifacts-0/traces/resources/75a8c5fa….html
+   *
+   * The suite was reloading the app out from under itself, in proportion to how
+   * much it traced — a flake generator that gets worse with every spec added.
+   * Vite's watcher ignores `**\/node_modules/**` unconditionally, so this is the
+   * one location a Playwright-only config change can reach; nothing here needs
+   * a `vite.config.ts` edit. (A `server.watch.ignored` entry there would be the
+   * tidier home for the rule if that file is ever open anyway.)
+   *
+   * Screenshots therefore land in `node_modules/.cache/candidcue-e2e/<test>/`.
+   */
+  outputDir: './node_modules/.cache/candidcue-e2e',
   timeout: 30_000,
   expect: { timeout: 7_000 },
   use: {

@@ -1,4 +1,4 @@
-import { chromium, expect } from '@playwright/test';
+import { chromium, expect, type Browser } from '@playwright/test';
 import { installTauriShim } from './tauri-shim';
 
 /**
@@ -30,7 +30,7 @@ import { installTauriShim } from './tauri-shim';
 
 const BASE_URL = 'http://localhost:1420';
 const WARMUP_SCRIPT = {
-  id: '00000000-0000-4000-8000-00000000warm'.slice(0, 36),
+  id: '00000000-0000-4000-8000-000000000000',
   title: 'Dependency warm-up',
   source: '# Warm up\n\nA sentence with **emphasis**, a [link](https://example.com) and a list:\n\n- one\n- two\n',
 };
@@ -50,6 +50,33 @@ async function waitForServer(timeoutMs = 60_000): Promise<void> {
   }
 }
 
+/** Drive one script through a real compile. Throws if it never finishes. */
+async function compileOnce(browser: Browser): Promise<void> {
+  const page = await browser.newPage({ baseURL: BASE_URL });
+  try {
+    await installTauriShim(page, { welcomed: true, seedScripts: [WARMUP_SCRIPT] });
+    await page.goto('/control.html');
+    await page
+      .getByRole('list', { name: 'Scripts' })
+      .getByRole('button', { name: 'Present', exact: true })
+      .first()
+      .click();
+    /*
+     * Wait on the COMPILER's own result line, not on Start: Start is gated by
+     * the OpenAI/microphone/stage checks too, and a warm-up that waits on those
+     * is waiting for the wrong thing.
+     */
+    await expect(page.getByText('Script compiled and ready to present.')).toBeVisible({
+      timeout: 30_000,
+    });
+    // Let any optimizer-triggered reload land and settle before we leave.
+    await page.goto('/control.html');
+    await page.waitForLoadState('networkidle');
+  } finally {
+    await page.close();
+  }
+}
+
 export default async function warmDependencyOptimizer(): Promise<void> {
   await waitForServer();
 
@@ -61,28 +88,18 @@ export default async function warmDependencyOptimizer(): Promise<void> {
      * server, so this terminates rather than spinning.
      */
     for (let attempt = 1; attempt <= 3; attempt += 1) {
-      const page = await browser.newPage({ baseURL: BASE_URL });
       try {
-        await installTauriShim(page, { welcomed: true, seedScripts: [WARMUP_SCRIPT] });
-        await page.goto('/control.html');
-        await page
-          .getByRole('list', { name: 'Scripts' })
-          .getByRole('button', { name: 'Present', exact: true })
-          .first()
-          .click();
-        // An enabled Start proves the compile worker ran to completion, which
-        // is the only thing that pulls the remark chain into the graph.
-        await expect(page.getByRole('button', { name: 'Start session' })).toBeEnabled({
-          timeout: 30_000,
-        });
-        // Let any optimizer-triggered reload land and settle before we leave.
-        await page.goto('/control.html');
-        await page.waitForLoadState('networkidle');
+        await compileOnce(browser);
         return;
       } catch (error) {
-        if (attempt === 3) throw error;
-      } finally {
-        await page.close();
+        // Never fail the run from here. The warm-up is a flake guard, not a
+        // gate — if it cannot complete, the specs are no worse off than before
+        // it existed, and their own failures will say more than this one would.
+        if (attempt === 3) {
+          console.warn(
+            `[e2e] dependency warm-up did not complete; cold-cache reload flakiness may return.\n${String(error)}`,
+          );
+        }
       }
     }
   } finally {
