@@ -13,7 +13,9 @@
  */
 import {
   CoachingOrchestrator,
+  FIRST_TAKE_PASS_ORDINAL,
   initialHostState,
+  takePassIdFor,
   type AudioClock,
   type CoachingHostState,
   type CoachingLaneFailure,
@@ -37,7 +39,12 @@ import type {
 export const FRAME_MS = 20;
 export const SESSION_ID = '2f8a1c4e-3b7d-4f2a-9c1e-5d6b7a8c9e01' as Uuid;
 export const SCRIPT_ID = '9d1e2f3a-4b5c-4d6e-8f90-1a2b3c4d5e6f' as Uuid;
-export const TAKE = 'take-1';
+/**
+ * The first take pass of {@link SESSION_ID}, minted through the one
+ * authoritative scheme rather than written out — a harness that spelled its own
+ * id would let the lanes drift again without a test noticing.
+ */
+export const TAKE = takePassIdFor(SESSION_ID, FIRST_TAKE_PASS_ORDINAL);
 
 export class FakeAudioClock implements AudioClock {
   ms = 0;

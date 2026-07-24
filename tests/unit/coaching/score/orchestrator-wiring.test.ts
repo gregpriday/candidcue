@@ -74,7 +74,7 @@ describe('the delivery score reaches the rail', () => {
     harness.orchestrator.tick();
     expect(harness.orchestrator.deliveryScore()?.rawScore).not.toBeNull();
 
-    harness.orchestrator.beginTakePass('take-2', harness.audioMs);
+    harness.orchestrator.beginTakePass(2, harness.audioMs);
     // Immediately, before a single frame of the new pass: the previous take's
     // number must not be readable for even one aggregation cycle. A stale score
     // on the glass is indistinguishable from a live one.

@@ -137,7 +137,7 @@ describe('coaching integration — disfluency', () => {
     expect(harness.latest()?.fillers.confirmedCount).toBe(2);
 
     // A genuinely new performance. Nothing crosses the boundary.
-    harness.orchestrator.beginTakePass('take-2', harness.audioMs);
+    harness.orchestrator.beginTakePass(2, harness.audioMs);
     harness.settle(400);
     harness.orchestrator.tick();
     expect(harness.latest()?.fillers.confirmedCount).toBe(0);

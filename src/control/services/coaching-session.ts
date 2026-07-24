@@ -50,9 +50,15 @@ import type {
   ScriptDirectiveMap,
 } from '../../shared/coaching/integration';
 import {
+  FIRST_TAKE_PASS_ORDINAL,
   applyCoachFrontMatter,
+  authoredSpanWindow,
+  buildAuthoredSpans,
   initialHostState,
+  normalizeTakePassOrdinal,
+  parseTakePassId,
   resolveScriptDirectives,
+  takePassIdFor,
 } from '../../shared/coaching/integration';
 import { STRICT_FILLER_FORMS } from '../../shared/coaching/disfluency/filler-lexicon';
 import { DEFAULT_PACE_PROFILE } from '../../shared/coaching/pace/pace-analyzer';
@@ -70,6 +76,9 @@ import {
   type CoachingAnalyzerNotice,
 } from './coaching-analyzer';
 import type { MediaStreamLike } from './audio';
+
+/** §22. The bounded authored-sentence window carried on the host state. */
+type AuthoredSpanWindow = CoachingHostState['authoredSpans'];
 
 /**
  * §14.8. How long an observed sentence boundary keeps a pace tip eligible, ms.
@@ -144,8 +153,23 @@ export interface CoachingSessionDeps {
   scriptRevision?: number;
   /** The capture stream the pipeline already owns (§5.3). Never acquired here. */
   stream: MediaStreamLike;
-  /** The take pass id at session start. */
-  takePassId: string;
+  /**
+   * §36.3. The pass ordinal this session starts on. Defaults to the first.
+   *
+   * An *ordinal*, not an id: the id is minted from it by
+   * {@link takePassIdFor}, the one authoritative scheme, so the coaching lane
+   * and the take history cannot name the same pass differently.
+   */
+  initialPassOrdinal?: number;
+  /**
+   * @deprecated Supply {@link initialPassOrdinal} instead.
+   *
+   * The take-pass *id* at session start. Retained so the session store's
+   * existing call site keeps compiling; the ordinal is recovered from it and
+   * the id is re-minted, so a foreign scheme cannot enter through here. An
+   * unparseable value falls back to the first pass rather than being adopted.
+   */
+  takePassId?: string;
   /** §27. Each published rail snapshot. The store points this at the stage. */
   publish: (state: CoachRailState) => void;
   /** §20.3. A budgeted Luna transport, or omit for local-only coaching. */
@@ -186,6 +210,22 @@ function buildSentenceRanges(
 }
 
 /**
+ * §36.3. The pass ordinal this controller starts on.
+ *
+ * `initialPassOrdinal` is the supported input. The deprecated `takePassId` is
+ * accepted only so the store's existing call site compiles, and even then only
+ * its *ordinal* is taken — an id in some other scheme cannot be adopted, it
+ * falls back to the first pass.
+ */
+function initialPassOrdinal(deps: CoachingSessionDeps): number {
+  if (deps.initialPassOrdinal !== undefined) {
+    return normalizeTakePassOrdinal(deps.initialPassOrdinal);
+  }
+  if (deps.takePassId === undefined) return FIRST_TAKE_PASS_ORDINAL;
+  return parseTakePassId(deps.takePassId)?.passOrdinal ?? FIRST_TAKE_PASS_ORDINAL;
+}
+
+/**
  * Owns the orchestrator, the analyzer graph, and the host-state feed for one
  * live session. Constructed at session start and disposed on stop.
  */
@@ -220,6 +260,17 @@ export class CoachingSessionController {
   private completedSentences = 0;
   /** The epoch the previous snapshot was read under (§5.4). */
   private lastTrackingEpoch = 0;
+  /** §36.3. The pass ordinal this controller is currently on. */
+  private passOrdinal: number;
+  /**
+   * §20.4/§22. One authored span per sentence of the compiled script.
+   *
+   * Built once — the script does not move, only the cursor does — so the
+   * per-snapshot cost of §22 is a three-element slice.
+   */
+  private readonly authoredSpans: ReturnType<typeof buildAuthoredSpans>;
+  /** The span id the last `authoredSpans` window was pushed for. */
+  private lastAuthoredSpanId: string | null = null;
 
   constructor(deps: CoachingSessionDeps) {
     this.deps = deps;
@@ -245,8 +296,13 @@ export class CoachingSessionController {
      * correlated with the script it is actually about.
      */
     const scriptId = deps.compiled?.scriptId ?? deps.scriptId ?? '';
+    this.passOrdinal = initialPassOrdinal(deps);
+    this.authoredSpans = buildAuthoredSpans(
+      deps.compiled,
+      this.directives.coachingDisabledSpanIds,
+    );
     const host: CoachingHostState = {
-      ...initialHostState(scriptId, deps.takePassId),
+      ...initialHostState(scriptId, takePassIdFor(deps.sessionId, this.passOrdinal)),
       scriptRevision: deps.scriptRevision ?? 0,
       // §19.4: the disabled set is a property of the script, not of the cursor,
       // so it is pushed once and never recomputed per frame.
@@ -444,6 +500,11 @@ export class CoachingSessionController {
         // pass: an epoch change drops queued and in-flight coaching state and
         // leaves the presenter's cumulative filler total standing.
         trackingEpoch: tracking.trackingEpoch,
+        // §20.4/§22. The 1–3 authored sentences around the cursor. Recomputed
+        // only when the presenter actually moved to a different sentence: the
+        // window is a function of the span alone, and pushing an identical
+        // array every snapshot would churn the host state 50 times a second.
+        ...this.authoredSpanPatch(tracking.activeScriptSpanId),
         ...(scriptProgress ? { scriptProgress } : { scriptProgress: null }),
       });
       // Drive the schedule so a silent stretch still ages tips and publishes.
@@ -451,6 +512,16 @@ export class CoachingSessionController {
     } catch {
       /* §5.2 */
     }
+  }
+
+  /**
+   * §20.4/§22. The authored-span window for `spanId`, or nothing when the
+   * cursor has not left the sentence it was already in.
+   */
+  private authoredSpanPatch(spanId: string | null): { authoredSpans?: AuthoredSpanWindow } {
+    if (spanId === this.lastAuthoredSpanId) return {};
+    this.lastAuthoredSpanId = spanId;
+    return { authoredSpans: authoredSpanWindow(this.authoredSpans, spanId) };
   }
 
   /** §7.1 / §27. Rail visibility and mirror state, pushed from the stage settings. */
@@ -565,20 +636,43 @@ export class CoachingSessionController {
     };
   }
 
-  /** §11.3. Start a new take pass. Nothing crosses the boundary. */
-  beginTakePass(takePassId: string): void {
+  /**
+   * §11.3/§36.3. Start a new take pass. Nothing crosses the boundary.
+   *
+   * Called from the take-history boundary in the session store with the same
+   * `passOrdinal` the §36.3 row is opened with — the two lanes advance from one
+   * number, and the id each of them ends up holding comes from the one
+   * {@link takePassIdFor}. This is the caller `beginTakePass` never had: the
+   * coaching lane used to keep counting into pass 1 for the whole session while
+   * the take history opened pass 2, 3, 4.
+   *
+   * This is deliberately **not** driven by the tracking epoch. An epoch bump is
+   * a *position* jump inside one take (command jump, re-anchor, automatic
+   * retake); it invalidates position-sensitive state but leaves the presenter's
+   * cumulative filler total standing, and `setHostState` already routes it to
+   * the narrow reset. Only a real new pass reaches here.
+   */
+  beginTakePass(passOrdinal: number): void {
     if (this.disposed) return;
     // §11.3. The sentence history is take-pass state: the boundaries of the
     // previous pass were crossed in a performance this one does not inherit.
     this.previousSentenceId = null;
     this.boundaryCrossedAtMs = null;
     this.completedSentences = 0;
+    // Kept in step with the id the orchestrator will mint, so the reported
+    // ordinal and the stamped id can never describe different passes.
+    this.passOrdinal = normalizeTakePassOrdinal(passOrdinal);
     try {
-      this.orchestrator.beginTakePass(takePassId, this.analyzerNowMs);
+      this.orchestrator.beginTakePass(this.passOrdinal, this.analyzerNowMs);
       this.analyzer?.reset();
     } catch {
       /* §5.2 */
     }
+  }
+
+  /** §36.3. The pass ordinal this controller is on. */
+  currentPassOrdinal(): number {
+    return this.passOrdinal;
   }
 
   /** The take ended: run a last aggregation, clear the glass, drop retained PCM. */

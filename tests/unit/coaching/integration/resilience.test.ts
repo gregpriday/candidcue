@@ -9,7 +9,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { TakeHarness, prose } from './harness';
+import { SESSION_ID, TakeHarness, prose } from './harness';
+import { takePassIdFor } from '../../../../src/shared/coaching/integration';
 import { PaceAnalyzer } from '../../../../src/shared/coaching/pace/pace-analyzer';
 import { VarietyAnalyzer } from '../../../../src/shared/coaching/prosody/variety-score';
 import { MicrophoneHealthMonitor } from '../../../../src/shared/coaching/audio/microphone-health';
@@ -91,13 +92,13 @@ describe('coaching integration — lane failure isolation (§5.2)', () => {
     harness.say(prose(15), 6_000);
     expect(harness.orchestrator.telemetry().disabledLanes).toEqual(['prosody']);
 
-    harness.orchestrator.beginTakePass('take-2', harness.audioMs);
+    harness.orchestrator.beginTakePass(2, harness.audioMs);
     // The lane is given another chance — and immediately throws again, which is
     // the honest outcome for a lane that is genuinely broken.
     expect(harness.orchestrator.telemetry().disabledLanes).toEqual([]);
     harness.say(prose(15), 6_000);
     expect(harness.orchestrator.telemetry().disabledLanes).toEqual(['prosody']);
-    expect(harness.latest()?.takePassId).toBe('take-2');
+    expect(harness.latest()?.takePassId).toBe(takePassIdFor(SESSION_ID, 2));
   });
 
   it('does not let a throwing stage sink stop the subsystem', () => {

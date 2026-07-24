@@ -7,6 +7,18 @@
  * host state, and forward the `CoachRailState` it publishes.
  */
 export { CoachingOrchestrator } from './orchestrator';
+export {
+  FIRST_TAKE_PASS_ORDINAL,
+  nextTakePassOrdinal,
+  normalizeTakePassOrdinal,
+  parseTakePassId,
+  takePassIdFor,
+} from '../take-pass';
+export {
+  MAX_AUTHORED_SPAN_SENTENCES,
+  authoredSpanWindow,
+  buildAuthoredSpans,
+} from './authored-spans';
 export { LaneGuard, type LaneGuardOptions } from './lane-guard';
 export {
   PauseDeriver,

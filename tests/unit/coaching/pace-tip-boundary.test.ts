@@ -109,7 +109,7 @@ function makeTake(): Take {
     settings: defaultCoachingSettings(),
     compiled,
     stream,
-    takePassId: 'take-1',
+    initialPassOrdinal: 1,
     publish: (state) => published.push(state),
     startAnalyzer,
   });
@@ -303,7 +303,7 @@ describe('§9.4 the safe display opportunity comes from the cursor', () => {
       settings: defaultCoachingSettings(),
       compiled: null,
       stream,
-      takePassId: 'take-1',
+      initialPassOrdinal: 1,
       publish: () => {},
     });
     controller.setTrackingState({
@@ -334,7 +334,7 @@ describe('§17.9 completed sentences are counted from the cursor', () => {
     take.cursor(2, 1);
     expect(take.controller.hostState().completedSentences).toBe(2);
 
-    take.controller.beginTakePass('take-2');
+    take.controller.beginTakePass(2);
     take.cursor(0, 1);
     expect(take.controller.hostState().completedSentences).toBe(0);
     await take.controller.dispose();

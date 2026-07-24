@@ -84,7 +84,7 @@ function makeController(
     settings: { ...defaultCoachingSettings(), mode },
     compiled: null,
     stream,
-    takePassId: 'take-1',
+    initialPassOrdinal: 1,
     publish: (state) => published.push(state),
     startAnalyzer: analyzer.startAnalyzer,
     ...extra,

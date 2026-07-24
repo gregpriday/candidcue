@@ -96,6 +96,7 @@ import type { EnergyAggregate } from '../prosody/energy-aggregator';
 import type { PitchAggregate } from '../prosody/pitch-aggregator';
 import type { VarietyAnalyzerResult } from '../prosody/variety-score';
 import { DeliveryScoreEngine, type DeliveryEvidence } from '../score';
+import { takePassIdFor } from '../take-pass';
 import type {
   AudioFrameFeatures,
   CoachCandidate,
@@ -367,8 +368,18 @@ export class CoachingOrchestrator {
   /* Take lifecycle                                                          */
   /* ---------------------------------------------------------------------- */
 
-  /** §11.3. Start a new take pass. Nothing crosses the boundary. */
-  beginTakePass(takePassId: string, atAudioMs: number): void {
+  /**
+   * §11.3. Start a new take pass. Nothing crosses the boundary.
+   *
+   * The **ordinal** is the parameter, not the id: the id is minted here from
+   * the orchestrator's own session id through the one authoritative
+   * {@link takePassIdFor}, so the coaching lane cannot be handed a string that
+   * disagrees with the §36.3 take row for the same pass. Handing an id in was
+   * exactly how the two lanes drifted — the store minted one scheme, the
+   * coaching subsystem was constructed with another, and nothing compared them.
+   */
+  beginTakePass(passOrdinal: number, atAudioMs: number): void {
+    const takePassId = takePassIdFor(this.deps.sessionId, passOrdinal);
     this.advanceTo(atAudioMs);
     const previous = this.guard.run(
       'audio',

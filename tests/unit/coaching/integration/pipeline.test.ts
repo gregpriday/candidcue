@@ -12,7 +12,8 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { TakeHarness, prose } from './harness';
+import { SESSION_ID, TakeHarness, prose } from './harness';
+import { takePassIdFor } from '../../../../src/shared/coaching/integration';
 
 describe('coaching integration — pace reaches the rail', () => {
   it('publishes a plausible WPM that tracks the synthesized speaking rate', () => {
@@ -109,14 +110,16 @@ describe('coaching integration — pace reaches the rail', () => {
     harness.say('um we should start here', 2_000, { spanId: 'span-1' });
     expect(harness.latest()?.fillers.confirmedCount).toBe(1);
 
-    harness.orchestrator.beginTakePass('take-2', harness.audioMs);
+    harness.orchestrator.beginTakePass(2, harness.audioMs);
     harness.say(prose(12), 4_000, { spanId: 'span-1' });
 
     const rail = harness.latest();
-    expect(rail?.takePassId).toBe('take-2');
+    expect(rail?.takePassId).toBe(takePassIdFor(SESSION_ID, 2));
     expect(rail?.fillers.confirmedCount).toBe(0);
     expect(rail?.gutterMarks).toHaveLength(0);
-    expect(rail?.ribbonEvents.every((event) => event.takePassId === 'take-2')).toBe(true);
+    expect(
+      rail?.ribbonEvents.every((event) => event.takePassId === takePassIdFor(SESSION_ID, 2)),
+    ).toBe(true);
     // §27: the revision counter never restarts, including across take passes.
     expect(rail?.stageRevision).toBeGreaterThan(1);
   });
