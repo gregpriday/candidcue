@@ -231,7 +231,7 @@ export function startPreviewDriver(): PreviewDriver {
     initialTokenIndex: 0,
   };
 
-  dispatchLocalStageEvent(STAGE_EVENT.snapshot, envelope);
+  dispatchLocalStageEvent(STAGE_EVENT.loadSession, envelope);
 
   const trackingTick = () => {
     if (frozen || blanked) return;
@@ -260,7 +260,7 @@ export function startPreviewDriver(): PreviewDriver {
       sourceItemIds: [],
       generatedAtMs: Date.now(),
     };
-    dispatchLocalStageEvent(STAGE_EVENT.tracking, snapshot);
+    dispatchLocalStageEvent(STAGE_EVENT.trackingSnapshot, snapshot);
   }
 
   const trackingTimer = window.setInterval(trackingTick, 340);
@@ -274,7 +274,7 @@ export function startPreviewDriver(): PreviewDriver {
   }, 1000);
 
   const directive = (d: StageDirective) =>
-    dispatchLocalStageEvent<StageStatePayload>(STAGE_EVENT.state, {
+    dispatchLocalStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, {
       stageGeneration: STAGE_GEN,
       directive: d,
     });

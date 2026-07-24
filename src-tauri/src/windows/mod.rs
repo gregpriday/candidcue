@@ -13,7 +13,9 @@ use crate::util::{new_uuid, now_iso};
 pub const STAGE_LABEL: &str = "stage";
 pub const CONTROL_LABEL: &str = "control";
 
-// Event names (spec §46.9).
+// Event names (spec §46.9). Mirrored verbatim by the TypeScript constants in
+// src/shared/contracts/stage.ts (STAGE_EVENT / CONTROL_EVENT); the
+// `stage_event_names_match_ts_contract` test enforces the pairing.
 pub mod events {
     // Rust → control.
     pub const SCRIPT_EXTERNAL_CHANGE: &str = "script://external-change";
@@ -35,12 +37,18 @@ pub mod events {
     pub const STAGE_LISTENER_STATE: &str = "stage://listener-state";
     pub const STAGE_CLOSE_SESSION: &str = "stage://close-session";
 
+    // Control → stage (emitted directly from the control webview, §43.5).
+    pub const STAGE_HEARTBEAT: &str = "stage://heartbeat";
+
     // Stage → Rust (listened in app setup).
     pub const STAGE_HYDRATED: &str = "stage://hydrated";
     pub const STAGE_LAYOUT_READY: &str = "stage://layout-ready";
-    pub const STAGE_HEARTBEAT: &str = "stage://heartbeat";
+    pub const STAGE_HEARTBEAT_ACK: &str = "stage://heartbeat-ack";
     pub const STAGE_MEDIA_ERROR: &str = "stage://media-error";
     pub const STAGE_ESCAPE_REQUESTED: &str = "stage://escape-requested";
+
+    // Stage → control (listened directly by the control webview).
+    pub const STAGE_INTENT: &str = "stage://intent";
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +384,8 @@ pub fn set_stage_fullscreen(
         window.set_fullscreen(true)?;
         window.set_focus().ok();
     } else {
+        // Windowed stage (preview/test): still make it visible (§43.3).
+        window.show()?;
         window.set_fullscreen(false)?;
     }
     let visible = window.is_visible().unwrap_or(false);
@@ -439,6 +449,17 @@ pub fn publish_stage_document(
             "The stage document targets another session.",
         ));
     }
+    // The envelope must target the live stage generation (spec §43.5).
+    if let Some(envelope_generation) = document_envelope
+        .get("stageGeneration")
+        .and_then(|v| v.as_u64())
+    {
+        if envelope_generation != generation {
+            return Err(AppError::invalid_input(
+                "The stage document targets a stale stage generation.",
+            ));
+        }
+    }
     app.emit_to(STAGE_LABEL, events::STAGE_LOAD_SESSION, &document_envelope)?;
     Ok(StageAck {
         accepted: true,
@@ -494,43 +515,54 @@ pub fn publish_stage_snapshot(
     Ok(())
 }
 
-/// Allow-listed stage command actions (src/shared/contracts/commands.ts).
-const ALLOWED_STAGE_ACTIONS: &[&str] = &[
-    "start",
-    "pause",
-    "resume",
-    "hard_pause",
-    "stop",
-    "go_to_target",
-    "next_section",
-    "previous_section",
-    "move_relative",
-    "restart_unit",
-    "set_font_size",
-    "adjust_font_size",
-    "set_margins",
-    "toggle_mirror",
-    "blank_stage",
-    "unblank_stage",
-    "set_listener",
-    "adjust_reading_band",
-    "set_scroll_mode",
+/// Allow-listed stage directive kinds (StageDirective in
+/// src/shared/contracts/stage.ts). Control translates high-level command
+/// actions into these small imperative directives; the stage never receives
+/// raw command actions.
+const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[
+    "blank",
+    "freeze",
+    "ack",
+    "settings",
+    "listener",
+    "calibration",
+    "diagnostics",
 ];
+
+/// Validate a `StageStatePayload` ({ stageGeneration, directive }) against
+/// the live stage generation. Returns Ok(None) for silently dropped stale
+/// generations (spec §43.5) and Ok(Some(payload)) when it may be emitted.
+fn validate_stage_directive(
+    generation: u64,
+    payload: &serde_json::Value,
+) -> Result<bool, AppError> {
+    let directive_kind = payload
+        .get("directive")
+        .and_then(|d| d.get("kind"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::invalid_input("A stage directive needs a kind."))?;
+    if !ALLOWED_STAGE_DIRECTIVES.contains(&directive_kind) {
+        return Err(AppError::invalid_input(format!(
+            "Unknown stage directive kind: {directive_kind}"
+        )));
+    }
+    match payload.get("stageGeneration").and_then(|v| v.as_u64()) {
+        Some(payload_generation) if payload_generation == generation => Ok(true),
+        Some(_) => Ok(false), // stale generation: dropped silently (§43.5)
+        None => Err(AppError::invalid_input(
+            "A stage directive needs a stageGeneration.",
+        )),
+    }
+}
 
 pub fn publish_stage_command(
     app: &AppHandle,
     session_id: &str,
     action: serde_json::Value,
 ) -> Result<(), AppError> {
-    require_active_session(app, session_id)?;
-    let action_name = action
-        .get("action")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::invalid_input("A stage command needs an action."))?;
-    if !ALLOWED_STAGE_ACTIONS.contains(&action_name) {
-        return Err(AppError::invalid_input(format!(
-            "Unknown stage command action: {action_name}"
-        )));
+    let generation = require_active_session(app, session_id)?;
+    if !validate_stage_directive(generation, &action)? {
+        return Ok(());
     }
     app.emit_to(STAGE_LABEL, events::STAGE_APPLY_COMMAND, &action)?;
     Ok(())
@@ -541,7 +573,20 @@ pub fn publish_listener_state(
     session_id: &str,
     state: serde_json::Value,
 ) -> Result<(), AppError> {
-    require_active_session(app, session_id)?;
+    let generation = require_active_session(app, session_id)?;
+    if !validate_stage_directive(generation, &state)? {
+        return Ok(());
+    }
+    if state
+        .get("directive")
+        .and_then(|d| d.get("kind"))
+        .and_then(|v| v.as_str())
+        != Some("listener")
+    {
+        return Err(AppError::invalid_input(
+            "publish_listener_state only carries listener directives.",
+        ));
+    }
     app.emit_to(STAGE_LABEL, events::STAGE_LISTENER_STATE, &state)?;
     Ok(())
 }
@@ -642,6 +687,77 @@ pub async fn list_display_profiles(pool: &SqlitePool) -> Result<Vec<DisplayProfi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The TS side of the protocol lives in src/shared/contracts/stage.ts;
+    /// every event name Rust emits or listens for must appear there verbatim
+    /// (and vice versa for the stage:// namespace).
+    #[test]
+    fn stage_event_names_match_ts_contract() {
+        let ts = include_str!("../../../src/shared/contracts/stage.ts");
+        let rust_names = [
+            events::STAGE_READY,
+            events::STAGE_CLOSED,
+            events::STAGE_ERROR,
+            events::IDENTIFY_DISPLAYS,
+            events::SCRIPT_EXTERNAL_CHANGE,
+            events::DEVICE_OR_DISPLAY_CHANGE,
+            events::DIAGNOSTIC_WARNING,
+            events::STAGE_LOAD_SESSION,
+            events::STAGE_TRACKING_SNAPSHOT,
+            events::STAGE_APPLY_COMMAND,
+            events::STAGE_LISTENER_STATE,
+            events::STAGE_CLOSE_SESSION,
+            events::STAGE_HEARTBEAT,
+            events::STAGE_HYDRATED,
+            events::STAGE_LAYOUT_READY,
+            events::STAGE_HEARTBEAT_ACK,
+            events::STAGE_MEDIA_ERROR,
+            events::STAGE_ESCAPE_REQUESTED,
+            events::STAGE_INTENT,
+        ];
+        for name in rust_names {
+            assert!(
+                ts.contains(&format!("'{name}'")),
+                "event name {name} is missing from src/shared/contracts/stage.ts"
+            );
+        }
+        // And every stage:// literal in the TS contract must be a Rust const.
+        for line in ts.lines() {
+            if let Some(start) = line.find("'stage://") {
+                let rest = &line[start + 1..];
+                if let Some(end) = rest.find('\'') {
+                    let ts_name = &rest[..end];
+                    assert!(
+                        rust_names.contains(&ts_name),
+                        "TS event name {ts_name} has no Rust constant"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stage_directive_validation_accepts_live_generation_only() {
+        let live = serde_json::json!({
+            "stageGeneration": 4,
+            "directive": { "kind": "blank", "blanked": true }
+        });
+        assert!(validate_stage_directive(4, &live).unwrap());
+
+        // Stale generation: silently dropped, not an error (§43.5).
+        assert!(!validate_stage_directive(5, &live).unwrap());
+
+        let unknown = serde_json::json!({
+            "stageGeneration": 4,
+            "directive": { "kind": "explode" }
+        });
+        assert!(validate_stage_directive(4, &unknown).is_err());
+
+        let missing_generation = serde_json::json!({
+            "directive": { "kind": "freeze", "frozen": true }
+        });
+        assert!(validate_stage_directive(4, &missing_generation).is_err());
+    }
 
     #[test]
     fn fingerprint_is_stable_and_distinct() {

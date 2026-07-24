@@ -40,17 +40,11 @@ export async function ipcInvoke<T>(command: string, args?: Record<string, unknow
   return invoke<T>(command, args);
 }
 
-function isMissingCommandError(err: unknown, command: string): boolean {
-  if (err instanceof BackendUnavailableError) return true;
-  const text = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
-  // Tauri reports unregistered commands as "Command <name> not found".
-  return /not found|unknown command|no handler/i.test(text) && text.includes(command);
-}
-
 /**
- * Invoke a backend command, falling back to the typed mock backend while the
- * Rust side is not implemented yet. The fallback ONLY engages when the
- * runtime/command is genuinely absent — real backend errors propagate.
+ * Invoke a backend command, falling back to the typed mock backend ONLY when
+ * the Tauri runtime itself is absent (plain-browser dev). Every command in
+ * spec §46 is registered in src-tauri/src/app.rs, so inside Tauri all errors
+ * — including NOT_IMPLEMENTED stubs — propagate as real AppError payloads.
  */
 export async function invokeOrMock<T>(
   command: string,
@@ -60,7 +54,7 @@ export async function invokeOrMock<T>(
   try {
     return await ipcInvoke<T>(command, args);
   } catch (err) {
-    if (isMissingCommandError(err, command)) return mock();
+    if (err instanceof BackendUnavailableError) return mock();
     throw err;
   }
 }

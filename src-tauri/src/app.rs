@@ -215,33 +215,46 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
     app.listen_any(events::STAGE_HYDRATED, move |event| {
         if let Some((gen, _)) = generation(event.payload()) {
             let coordinator = handle.state::<AppCoordinator>();
-            if coordinator.stage_event(gen, |stage| stage.hydrated = true) {
+            coordinator.stage_event(gen, |stage| stage.hydrated = true);
+        }
+    });
+
+    // The handshake completes at layout-ready (§43.3 hydration → fonts →
+    // layout); only then does control learn the stage is ready to show.
+    let handle = app.clone();
+    app.listen_any(events::STAGE_LAYOUT_READY, move |event| {
+        if let Some((gen, value)) = generation(event.payload()) {
+            let coordinator = handle.state::<AppCoordinator>();
+            if coordinator.stage_event(gen, |stage| {
+                stage.hydrated = true;
+                stage.layout_ready = true;
+            }) {
                 let _ = handle.emit_to(
                     CONTROL_LABEL,
                     events::STAGE_READY,
-                    serde_json::json!({ "stageGeneration": gen }),
+                    serde_json::json!({
+                        "stageGeneration": gen,
+                        "sessionId": value.get("sessionId"),
+                        "layoutReady": true,
+                    }),
                 );
             }
         }
     });
 
     let handle = app.clone();
-    app.listen_any(events::STAGE_LAYOUT_READY, move |event| {
-        if let Some((gen, _)) = generation(event.payload()) {
-            let coordinator = handle.state::<AppCoordinator>();
-            coordinator.stage_event(gen, |stage| stage.layout_ready = true);
-        }
-    });
-
-    let handle = app.clone();
-    app.listen_any(events::STAGE_HEARTBEAT, move |event| {
+    app.listen_any(events::STAGE_HEARTBEAT_ACK, move |event| {
         if let Some((gen, value)) = generation(event.payload()) {
             let coordinator = handle.state::<AppCoordinator>();
             let revision = value.get("trackingRevision").and_then(|v| v.as_i64());
+            let media_healthy = value.get("mediaHealthy").and_then(|v| v.as_bool());
             coordinator.stage_event(gen, |stage| {
                 stage.last_heartbeat_ms = Some(chrono::Utc::now().timestamp_millis());
                 if revision.is_some() {
                     stage.last_tracking_revision = revision;
+                }
+                if let Some(healthy) = media_healthy {
+                    stage.media_healthy = healthy;
                 }
             });
         }

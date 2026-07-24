@@ -1,14 +1,23 @@
 /**
- * Live-session service — owns session identity and the tracking feed the Live
- * screen consumes (TrackingSnapshot from the shared contracts).
+ * Live-session tracking driver — owns the seam between the session store and
+ * the tracking worker (src/workers/tracking.worker.ts, protocol in
+ * src/shared/tracking/worker-protocol.ts).
  *
- * The real feed will be wired to the tracking worker + realtime transport at
- * integration time; the driver below is a MOCK (clearly marked) that walks
- * the compiled sentences so the Live screen is complete and reviewable.
- * Integration replaces `createTrackingDriver`'s internals only — the
- * interface is the contract the UI depends on.
+ * Two implementations share one interface:
+ *  - the REAL driver hosts the deterministic alignment engine in a Web
+ *    Worker, initialized with buildTrackingDocument(compiledScript) and fed
+ *    provider-neutral TranscriptEvents from the realtime layer;
+ *  - a MOCK driver (timer-driven) remains for environments without Worker
+ *    support (node unit tests, degraded browser dev) and for manual/fixed
+ *    modes in the plain browser.
  */
-import type { SentenceUnit, TrackingSnapshot, TrackingState } from '../../shared/contracts';
+import type { CompiledScript, SentenceUnit, TrackingSnapshot, TrackingState } from '../../shared/contracts';
+import { buildTrackingDocument, type TranscriptEvent } from '../../shared/tracking/types';
+import type { TrackingProfile } from '../../shared/tracking/profile';
+import type {
+  TrackingWorkerInbound,
+  TrackingWorkerOutbound,
+} from '../../shared/tracking/worker-protocol';
 
 export interface TrackingDriverOptions {
   sessionId: string;
@@ -16,6 +25,11 @@ export interface TrackingDriverOptions {
   sentences: SentenceUnit[];
   /** Total spoken tokens (fallback range when sentences are unavailable). */
   totalTokens: number;
+  /** Full compile result; required for the real worker-backed driver. */
+  compiled?: CompiledScript | null;
+  sessionGeneration?: number;
+  stageGeneration?: number;
+  profile?: Partial<TrackingProfile>;
   onSnapshot(snapshot: TrackingSnapshot): void;
   onTranscript(line: string): void;
 }
@@ -28,6 +42,12 @@ export interface TrackingDriver {
   moveSentences(delta: number): void;
   restartParagraph(): void;
   dispose(): void;
+  /** Real-pipeline surface; no-ops on the mock driver. */
+  feedTranscript(event: TranscriptEvent): void;
+  maskItems(itemIds: string[]): void;
+  releaseItems(itemIds: string[]): void;
+  setCommandPending(pending: boolean): void;
+  moveToToken(tokenIndex: number, movement: 'manual' | 'command'): void;
 }
 
 export function newSessionId(): string {
@@ -36,7 +56,140 @@ export function newSessionId(): string {
 }
 
 /* ============================================================================
- * MOCK TRACKING DRIVER — awaiting tracking-worker + realtime integration.
+ * Worker-backed driver (the real pipeline)
+ * ========================================================================== */
+
+/** Minimal worker surface so tests can inject a fake. */
+export interface TrackingWorkerLike {
+  postMessage(message: unknown): void;
+  addEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
+  terminate(): void;
+}
+
+type TrackingWorkerFactory = () => TrackingWorkerLike;
+
+const defaultWorkerFactory: TrackingWorkerFactory = () =>
+  new Worker(new URL('../../workers/tracking.worker.ts', import.meta.url), {
+    type: 'module',
+  }) as unknown as TrackingWorkerLike;
+
+let workerFactory: TrackingWorkerFactory | null = null;
+
+/** Inject a fake tracking worker in unit tests. Pass null to restore. */
+export function setTrackingWorkerFactoryForTesting(factory: TrackingWorkerFactory | null): void {
+  workerFactory = factory;
+}
+
+function workerAvailable(): boolean {
+  return workerFactory !== null || typeof Worker !== 'undefined';
+}
+
+export function createWorkerTrackingDriver(options: TrackingDriverOptions): TrackingDriver {
+  const compiled = options.compiled;
+  if (!compiled) throw new Error('worker tracking driver needs a compiled script');
+  const worker = (workerFactory ?? defaultWorkerFactory)();
+  const sentences = compiled.sentences;
+  let lastSnapshot: TrackingSnapshot | null = null;
+  let disposed = false;
+
+  const post = (message: TrackingWorkerInbound) => {
+    if (!disposed) worker.postMessage(message);
+  };
+
+  worker.addEventListener('message', (event: MessageEvent) => {
+    const data = event.data as TrackingWorkerOutbound | null;
+    if (!data || typeof data !== 'object' || !('type' in data)) return;
+    if (data.type === 'snapshot') {
+      lastSnapshot = data.snapshot;
+      options.onSnapshot(data.snapshot);
+    } else if (data.type === 'error') {
+      console.warn(`tracking worker: ${data.code} — ${data.message}`);
+    }
+    // state_change is folded into snapshots; diagnostics are dev-only.
+  });
+
+  post({
+    type: 'initialize',
+    document: buildTrackingDocument(compiled),
+    profile: options.profile ?? {},
+    session: {
+      sessionId: options.sessionId,
+      sessionGeneration: options.sessionGeneration ?? 1,
+      stageGeneration: options.stageGeneration ?? 1,
+    },
+    nowMs: Date.now(),
+  });
+  // Hold position until the user explicitly starts prompting (§9.1).
+  post({ type: 'pause', nowMs: Date.now() });
+
+  function currentSentenceIndex(): number {
+    if (!lastSnapshot) return 0;
+    const bySentence = sentences.findIndex((s) => s.id === lastSnapshot?.sentenceId);
+    if (bySentence >= 0) return bySentence;
+    const token = lastSnapshot.tokenIndex;
+    let best = 0;
+    sentences.forEach((s, i) => {
+      if (s.startTokenIndex <= token) best = i;
+    });
+    return best;
+  }
+
+  return {
+    start() {
+      post({ type: 'resume', nowMs: Date.now() });
+    },
+    pause() {
+      post({ type: 'pause', nowMs: Date.now() });
+    },
+    resume() {
+      post({ type: 'resume', nowMs: Date.now() });
+    },
+    moveSentences(delta: number) {
+      if (sentences.length === 0) return;
+      const index = Math.max(0, Math.min(sentences.length - 1, currentSentenceIndex() + delta));
+      const target = sentences[index];
+      if (target) post({ type: 'move_to_token', tokenIndex: target.startTokenIndex, movement: 'manual', nowMs: Date.now() });
+    },
+    restartParagraph() {
+      const sentence = sentences[currentSentenceIndex()];
+      if (!sentence) return;
+      const first = sentences.find((s) => s.blockId === sentence.blockId) ?? sentence;
+      post({ type: 'move_to_token', tokenIndex: first.startTokenIndex, movement: 'manual', nowMs: Date.now() });
+    },
+    dispose() {
+      disposed = true;
+      worker.terminate();
+    },
+    feedTranscript(event: TranscriptEvent) {
+      post({ type: 'transcript_event', event });
+    },
+    maskItems(itemIds: string[]) {
+      if (itemIds.length > 0) post({ type: 'mask_items', itemIds });
+    },
+    releaseItems(itemIds: string[]) {
+      if (itemIds.length > 0) post({ type: 'release_items', itemIds });
+    },
+    setCommandPending(pending: boolean) {
+      post({ type: 'set_command_pending', pending, nowMs: Date.now() });
+    },
+    moveToToken(tokenIndex: number, movement: 'manual' | 'command') {
+      post({ type: 'move_to_token', tokenIndex, movement, nowMs: Date.now() });
+    },
+  };
+}
+
+/**
+ * Factory used by the session store: the real worker driver whenever a
+ * compiled script and Worker support exist, the mock otherwise.
+ */
+export function createTrackingDriver(options: TrackingDriverOptions): TrackingDriver {
+  if (options.compiled && workerAvailable()) return createWorkerTrackingDriver(options);
+  return createMockTrackingDriver(options);
+}
+
+/* ============================================================================
+ * MOCK TRACKING DRIVER — used where Web Workers are unavailable (node unit
+ * tests) so the Live screen and store semantics stay fully exercisable.
  * Emits contract-correct TrackingSnapshot values by walking the compiled
  * sentence list on a timer, with occasional "holding" wobbles so the
  * confidence UI exercises every state.
@@ -48,7 +201,7 @@ const FALLBACK_LINES = [
   'Pause any time — the script simply waits.',
 ];
 
-export function createTrackingDriver(options: TrackingDriverOptions): TrackingDriver {
+export function createMockTrackingDriver(options: TrackingDriverOptions): TrackingDriver {
   const { sessionId, scriptId, sentences, onSnapshot, onTranscript } = options;
   const totalTokens = Math.max(options.totalTokens, 1);
   let revision = 0;
@@ -71,8 +224,8 @@ export function createTrackingDriver(options: TrackingDriverOptions): TrackingDr
       schemaVersion: 1,
       revision,
       sessionId,
-      sessionGeneration: 1,
-      stageGeneration: 1,
+      sessionGeneration: options.sessionGeneration ?? 1,
+      stageGeneration: options.stageGeneration ?? 1,
       scriptId,
       tokenIndex,
       committedTokenIndex: Math.max(0, tokenIndex - 2),
@@ -132,6 +285,18 @@ export function createTrackingDriver(options: TrackingDriverOptions): TrackingDr
     dispose() {
       if (timer) clearInterval(timer);
       timer = null;
+    },
+    feedTranscript() {},
+    maskItems() {},
+    releaseItems() {},
+    setCommandPending() {},
+    moveToToken(tokenIndex: number) {
+      let best = 0;
+      sentences.forEach((s, i) => {
+        if (s.startTokenIndex <= tokenIndex) best = i;
+      });
+      sentenceIndex = best;
+      emit(paused ? 'paused' : 'following', 'manual', 0.95);
     },
   };
 }

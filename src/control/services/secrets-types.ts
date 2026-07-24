@@ -4,7 +4,7 @@
  */
 
 export interface KeyValidationResult {
-  status: 'valid' | 'partial' | 'invalid' | 'quota';
+  status: 'valid' | 'partial' | 'invalid' | 'quota' | 'network';
   /** When partial: which capability failed, for F.2 copy interpolation. */
   missing?: string;
   models?: { realtime: boolean; command: boolean };

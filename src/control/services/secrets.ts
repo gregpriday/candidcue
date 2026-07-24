@@ -2,29 +2,75 @@
  * OpenAI key lifecycle (spec §46.4). The candidate key crosses the boundary
  * exactly once per validate/save call and is never retained, logged, or
  * echoed back — callers must clear their field state after submission.
+ *
+ * Adapters: Rust returns `KeyValidationResult { status: valid_ready | … }`
+ * and redacted `{ hint }` metadata; this service maps both onto the UI view
+ * shapes in `secrets-types.ts`.
  */
-import { invokeOrMock } from './ipc';
+import { ipcInvoke, isTauriRuntime, BackendUnavailableError } from './ipc';
 import { mockSecrets } from './mock-backend';
 import type { KeyValidationResult, OpenAiKeyStatus } from './secrets-types';
 
+interface RustKeyValidationResult {
+  status: string;
+  realtimeModelAvailable: boolean;
+  commandModelAvailable: boolean;
+  message?: string;
+}
+
+function mapValidation(rust: RustKeyValidationResult): KeyValidationResult {
+  const models = { realtime: rust.realtimeModelAvailable, command: rust.commandModelAvailable };
+  switch (rust.status) {
+    case 'valid_ready':
+      return { status: 'valid', models };
+    case 'valid_realtime_unavailable':
+      return { status: 'partial', missing: 'Realtime transcription', models };
+    case 'valid_model_unavailable':
+      return { status: 'partial', missing: 'the command model', models };
+    case 'quota_exhausted':
+      return { status: 'quota' };
+    case 'network_error':
+    case 'provider_error':
+      return { status: 'network' };
+    default:
+      return { status: 'invalid' };
+  }
+}
+
+function statusFromHint(hint: string | undefined, present: boolean): OpenAiKeyStatus {
+  if (!present) return { present: false, state: 'unknown' };
+  const lastFour = hint ? hint.slice(-4) : undefined;
+  return {
+    present: true,
+    ...(lastFour ? { lastFour } : {}),
+    state: 'connected',
+  };
+}
+
 export async function validateOpenAiKey(candidateKey: string): Promise<KeyValidationResult> {
-  return invokeOrMock<KeyValidationResult>('validate_openai_key', { candidateKey }, () =>
-    mockSecrets.validate(candidateKey),
-  );
+  if (!isTauriRuntime()) return mockSecrets.validate(candidateKey);
+  try {
+    const rust = await ipcInvoke<RustKeyValidationResult>('validate_openai_key', { candidateKey });
+    return mapValidation(rust);
+  } catch (err) {
+    if (err instanceof BackendUnavailableError) return mockSecrets.validate(candidateKey);
+    throw err;
+  }
 }
 
 export async function saveOpenAiKey(candidateKey: string): Promise<OpenAiKeyStatus> {
-  return invokeOrMock<OpenAiKeyStatus>('save_openai_key', { candidateKey }, () =>
-    mockSecrets.save(candidateKey),
-  );
+  if (!isTauriRuntime()) return mockSecrets.save(candidateKey);
+  const metadata = await ipcInvoke<{ hint: string }>('save_openai_key', { candidateKey });
+  return statusFromHint(metadata.hint, true);
 }
 
 export async function getOpenAiKeyStatus(): Promise<OpenAiKeyStatus> {
-  return invokeOrMock<OpenAiKeyStatus>('get_openai_key_status', undefined, () =>
-    mockSecrets.status(),
-  );
+  if (!isTauriRuntime()) return mockSecrets.status();
+  const rust = await ipcInvoke<{ present: boolean; hint?: string }>('get_openai_key_status');
+  return statusFromHint(rust.hint, rust.present);
 }
 
 export async function deleteOpenAiKey(): Promise<void> {
-  return invokeOrMock<void>('delete_openai_key', undefined, () => mockSecrets.remove());
+  if (!isTauriRuntime()) return mockSecrets.remove();
+  return ipcInvoke<void>('delete_openai_key');
 }

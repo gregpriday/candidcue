@@ -18,6 +18,7 @@
   import { navigate } from '../stores/router';
   import {
     addTakeMarker,
+    adjustStageFontSize,
     clearSession,
     hardPause,
     liveStatusLabel,
@@ -29,7 +30,9 @@
     startPrompting,
     stopSession,
     toggleBlankStage,
+    toggleListenerVisible,
     togglePlayPause,
+    toggleStageMirror,
     toggleVoiceFollow,
   } from '../stores/session';
   import { settings } from '../stores/settings';
@@ -43,8 +46,9 @@
   let { sessionId, scriptId }: Props = $props();
 
   let costOpen = $state(false);
-  let stageFontSize = $state(64);
   let manualWpm = $state(150);
+
+  const stageFontSize = $derived($session.stageFontSizePx);
 
   const snapshot = $derived($session.snapshot);
   const modeLabel = $derived(
@@ -114,17 +118,18 @@
   }
 
   function adjustFontSize(delta: number): void {
-    stageFontSize = Math.min(160, Math.max(24, stageFontSize + delta));
-    void stageService.publishStageCommand(sessionId, {
-      action: 'set_font_size',
-      valuePx: stageFontSize,
-    });
-    showToast(`Text ${stageFontSize} px`, 'info', { durationMs: 1600 });
+    const next = adjustStageFontSize(delta);
+    showToast(`Text ${next} px`, 'info', { durationMs: 1600 });
   }
 
   function toggleMirror(): void {
-    void stageService.publishStageCommand(sessionId, { action: 'toggle_mirror', axis: 'x' });
+    toggleStageMirror('x');
     showToast('Text mirrored', 'info', { durationMs: 1600 });
+  }
+
+  function toggleListener(): void {
+    const visible = toggleListenerVisible();
+    showToast(visible ? 'Listener on' : 'Listener off', 'info', { durationMs: 1600 });
   }
 
   $effect(() =>
@@ -165,7 +170,7 @@
           toggleBlankStage();
           break;
         case 'toggle-listener':
-          showToast('Listener on', 'info', { durationMs: 1600 });
+          toggleListener();
           break;
         case 'take-marker':
           addTakeMarker();
@@ -310,9 +315,7 @@
           <IconButton icon="chevron-up" label="Increase stage text" onclick={() => adjustFontSize(2)} />
         </div>
         <Button size="sm" onclick={() => toggleMirror()}>Mirror text</Button>
-        <Button size="sm" onclick={() => showToast('Listener on', 'info', { durationMs: 1600 })}>
-          Listener
-        </Button>
+        <Button size="sm" onclick={() => toggleListener()}>Listener</Button>
       </div>
 
       {#if $session.mode !== 'voice' || !$session.voiceFollow}

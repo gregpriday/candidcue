@@ -1,13 +1,33 @@
 /**
  * Live session store (spec §15, §45.2 RealtimeStore/TrackingStore facade for
- * the Live screen). Owns transport actions, pause semantics (§15.3), the
- * elapsed clock, transcript tail, and the end-of-session summary (F.17).
+ * the Live screen). Owns session identity, the tracking worker feed, the
+ * realtime voice pipeline, §15.3 pause semantics, the elapsed clock, the
+ * transcript tail, stage heartbeats (§43.5), and the F.17 summary.
  */
 import { derived, get, writable } from 'svelte/store';
-import type { OutlineNode, SentenceUnit, TrackingSnapshot } from '../../shared/contracts';
+import type {
+  CommandAction,
+  CompiledScript,
+  ListenerStageSelection,
+  OutlineNode,
+  SentenceUnit,
+  StageDirective,
+  StageEscapePayload,
+  StageIntentPayload,
+  StageSettings,
+  TrackingSnapshot,
+  TranscriptionConfig,
+  ValidatedCommand,
+} from '../../shared/contracts';
+import { STAGE_EVENT, CONTROL_EVENT } from '../../shared/contracts';
+import type { CommandSettings } from '../../shared/commands';
 import type { SessionMode } from '../services/settings-types';
 import { createTrackingDriver, newSessionId, type TrackingDriver } from '../services/session';
+import { VoiceSessionPipeline } from '../services/voice-session';
+import { isTauriRuntime } from '../services/ipc';
+import { describeError } from '../services/errors';
 import * as stageService from '../services/stage';
+import { showToast } from './toasts';
 
 export type PauseKind = 'none' | 'listening' | 'hard';
 
@@ -54,6 +74,7 @@ export interface SessionState {
   counts: SessionCounts;
   summary: SessionSummary | null;
   blocksSeen: string[];
+  stageFontSizePx: number;
 }
 
 const initial: SessionState = {
@@ -78,6 +99,7 @@ const initial: SessionState = {
   counts: { jumps: 0, retakes: 0, commands: 0, reconnects: 0 },
   summary: null,
   blocksSeen: [],
+  stageFontSizePx: 64,
 };
 
 const state = writable<SessionState>({ ...initial });
@@ -85,6 +107,20 @@ export const session = { subscribe: state.subscribe };
 
 let driver: TrackingDriver | null = null;
 let clock: ReturnType<typeof setInterval> | null = null;
+let pipeline: VoiceSessionPipeline | null = null;
+let compiledScript: CompiledScript | null = null;
+let stageGeneration = 0;
+let sessionGeneration = 1;
+let stageSettings: StageSettings | null = null;
+let listenerSelection: ListenerStageSelection | null = null;
+let listenerVisible = false;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let heartbeatRevision = 0;
+let stageEventUnlisteners: Array<() => void> = [];
+let lastRelayAtMs = 0;
+
+/** Stage relay throttle (§46.6): the worker caps at 30/s; the stage gets ~15/s. */
+const STAGE_RELAY_MIN_INTERVAL_MS = 66;
 
 export interface StartSessionInput {
   scriptId: string;
@@ -94,11 +130,31 @@ export interface StartSessionInput {
   outline: OutlineNode[];
   sentences: SentenceUnit[];
   totalTokens: number;
+  /** Integration inputs — optional so the store degrades in browser dev. */
+  sessionId?: string;
+  compiled?: CompiledScript | null;
+  sessionGeneration?: number;
+  stageGeneration?: number;
+  stageSettings?: StageSettings | null;
+  listener?: ListenerStageSelection | null;
+  transcription?: TranscriptionConfig;
+  commandSettings?: Partial<CommandSettings>;
+  commandsEnabled?: boolean;
+  micDeviceId?: string;
 }
 
 export function startLiveSession(input: StartSessionInput): string {
   stopInternals();
-  const sessionId = newSessionId();
+  const sessionId = input.sessionId ?? newSessionId();
+  compiledScript = input.compiled ?? null;
+  stageGeneration = input.stageGeneration ?? 0;
+  sessionGeneration = input.sessionGeneration ?? 1;
+  stageSettings = input.stageSettings ?? null;
+  listenerSelection = input.listener ?? null;
+  listenerVisible = listenerSelection !== null;
+  heartbeatRevision = 0;
+  lastRelayAtMs = 0;
+
   state.set({
     ...initial,
     active: true,
@@ -111,37 +167,186 @@ export function startLiveSession(input: StartSessionInput): string {
     voiceFollow: input.mode === 'voice',
     outline: input.outline,
     sentences: input.sentences,
+    stageFontSizePx: stageSettings?.fontSizePx ?? 64,
   });
+
+  // Voice mode without a Tauri runtime has no realtime feed — keep the
+  // animated mock driver so browser dev stays demonstrable.
+  const useRealDriver = Boolean(input.compiled) && (isTauriRuntime() || input.mode !== 'voice');
   driver = createTrackingDriver({
     sessionId,
     scriptId: input.scriptId,
-    sentences: input.sentences,
+    sentences: input.compiled?.sentences ?? input.sentences,
     totalTokens: input.totalTokens,
-    onSnapshot(snapshot) {
-      state.update((s) => ({
-        ...s,
-        snapshot,
-        blocksSeen: s.blocksSeen.includes(snapshot.blockId)
-          ? s.blocksSeen
-          : [...s.blocksSeen, snapshot.blockId],
-      }));
-      const current = get(state);
-      if (current.sessionId) void stageService.publishStageSnapshot(current.sessionId, snapshot);
-    },
+    compiled: useRealDriver ? (input.compiled ?? null) : null,
+    sessionGeneration,
+    stageGeneration: stageGeneration || 1,
+    onSnapshot: handleSnapshot,
     onTranscript(line) {
-      state.update((s) => ({
-        ...s,
-        transcriptTail: [...s.transcriptTail, line].slice(-4),
-      }));
+      pushTranscriptLine(line);
     },
   });
+
+  // Voice pipeline: realtime transcription + command routing (§29, §33).
+  if (input.mode === 'voice' && input.compiled && isTauriRuntime()) {
+    pipeline = new VoiceSessionPipeline({
+      sessionId,
+      sessionGeneration,
+      compiled: input.compiled,
+      config: input.transcription ?? {
+        model: 'gpt-realtime-whisper',
+        language: 'en',
+        delay: 'low',
+        requestLogprobs: true,
+      },
+      commandSettings: input.commandSettings,
+      commandsEnabled: input.commandsEnabled,
+      deviceId: input.micDeviceId,
+      getCursorTokenIndex: () => get(state).snapshot?.tokenIndex ?? 0,
+      getPosition: () => {
+        const snap = get(state).snapshot;
+        return {
+          blockId: snap?.blockId ?? '',
+          sentenceId: snap?.sentenceId ?? '',
+          tokenIndex: snap?.tokenIndex ?? 0,
+        };
+      },
+      getScrollMode: () => (get(state).voiceFollow ? 'voice' : 'manual'),
+      onTrackingEvent: (event) => driver?.feedTranscript(event),
+      onMaskItems: (itemIds) => driver?.maskItems(itemIds),
+      onCommandPending: (pending) => driver?.setCommandPending(pending),
+      executeCommand: (command) => executeValidatedCommand(command),
+      onUnknownCommand: (message) => showToast(message, 'info'),
+      onTranscriptLine: (line) => pushTranscriptLine(line),
+      onConnectionState: (connection) => {
+        state.update((s) => {
+          const reconnects =
+            connection === 'reconnecting' && s.connection !== 'reconnecting'
+              ? s.counts.reconnects + 1
+              : s.counts.reconnects;
+          return { ...s, connection, counts: { ...s.counts, reconnects } };
+        });
+      },
+      onRealtimeState: (realtimeState) => {
+        state.update((s) => ({
+          ...s,
+          micState:
+            realtimeState === 'listening' || realtimeState === 'ready'
+              ? 'live'
+              : realtimeState === 'fatal_error' || realtimeState === 'recoverable_error'
+                ? 'disconnected'
+                : s.micState,
+        }));
+      },
+    });
+    void pipeline.start().catch((err) => {
+      state.update((s) => ({ ...s, connection: 'offline' }));
+      showToast(`Voice tracking is unavailable: ${describeError(err)}`, 'danger');
+    });
+  }
+
   clock = setInterval(() => {
     state.update((s) =>
       s.active ? { ...s, elapsedSeconds: Math.floor((Date.now() - s.startedAtMs) / 1000) } : s,
     );
   }, 1000);
+
+  startStageBridge(sessionId);
   return sessionId;
 }
+
+/* ---------------------------------------------------------------------------
+ * Stage bridge: snapshot relay, heartbeat (§43.5), stage-originated events.
+ * ------------------------------------------------------------------------- */
+
+function handleSnapshot(snapshot: TrackingSnapshot): void {
+  state.update((s) => ({
+    ...s,
+    snapshot,
+    blocksSeen: s.blocksSeen.includes(snapshot.blockId)
+      ? s.blocksSeen
+      : [...s.blocksSeen, snapshot.blockId],
+  }));
+  const current = get(state);
+  if (!current.sessionId || stageGeneration === 0) return;
+  const important =
+    !snapshot.provisional || snapshot.movement !== 'advance' || snapshot.state !== 'following';
+  const now = Date.now();
+  if (!important && now - lastRelayAtMs < STAGE_RELAY_MIN_INTERVAL_MS) return;
+  lastRelayAtMs = now;
+  void stageService.publishStageSnapshot(current.sessionId, snapshot).catch(() => {});
+}
+
+function pushTranscriptLine(line: string): void {
+  state.update((s) => ({
+    ...s,
+    transcriptTail: [...s.transcriptTail, line].slice(-4),
+  }));
+}
+
+function startStageBridge(sessionId: string): void {
+  if (!isTauriRuntime() || stageGeneration === 0) return;
+
+  // Heartbeat: control → stage at ~1 s cadence; the stage acks to Rust.
+  heartbeatTimer = setInterval(() => {
+    heartbeatRevision += 1;
+    void (async () => {
+      const { emitTo } = await import('@tauri-apps/api/event');
+      await emitTo('stage', STAGE_EVENT.heartbeat, {
+        stageGeneration,
+        revision: heartbeatRevision,
+        sentAtMs: Date.now(),
+      });
+    })().catch(() => {});
+  }, 1000);
+
+  void (async () => {
+    const { listen } = await import('@tauri-apps/api/event');
+    const unlisteners = await Promise.all([
+      listen<StageEscapePayload>(STAGE_EVENT.escapeRequested, (event) => {
+        if (event.payload.stageGeneration !== stageGeneration) return;
+        if (event.payload.presses >= 2) {
+          stopSession();
+          showToast('Session stopped from the stage', 'info');
+        } else {
+          showToast('Press Escape again on the stage to end the session', 'info');
+        }
+      }),
+      listen<StageIntentPayload>(STAGE_EVENT.intent, (event) => {
+        if (event.payload.stageGeneration !== stageGeneration) return;
+        const intent = event.payload.intent;
+        if (intent.kind === 'toggle_pause') togglePlayPause();
+        else if (intent.kind === 'manual_step') {
+          moveSentences(intent.direction === 'forward' ? 1 : -1);
+        }
+        // manual_scroll is already applied locally on the stage; the tracker
+        // re-acquires around it (§16.9).
+      }),
+      listen<{ stageGeneration: number }>(CONTROL_EVENT.stageClosed, (event) => {
+        if (event.payload.stageGeneration !== stageGeneration) return;
+        const s = get(state);
+        if (s.active) showToast('The stage window closed. Stop and restart the session to reopen it.', 'danger');
+      }),
+    ]);
+    stageEventUnlisteners = unlisteners;
+  })().catch(() => {});
+}
+
+function sendDirective(directive: StageDirective): void {
+  const s = get(state);
+  if (!s.sessionId || stageGeneration === 0) return;
+  if (directive.kind === 'listener') {
+    void stageService
+      .publishListenerState(s.sessionId, stageGeneration, directive)
+      .catch(() => {});
+    return;
+  }
+  void stageService.publishStageDirective(s.sessionId, stageGeneration, directive).catch(() => {});
+}
+
+/* ---------------------------------------------------------------------------
+ * Transport actions (§15.3)
+ * ------------------------------------------------------------------------- */
 
 /** Start (or restart) prompting — the stage begins following. */
 export function startPrompting(): void {
@@ -149,23 +354,27 @@ export function startPrompting(): void {
   if (!s.active || s.prompting) return;
   state.update((prev) => ({ ...prev, prompting: true, paused: 'none' }));
   driver?.start();
+  pipeline?.startListening();
 }
 
 /** Listening pause — transcription stays connected (§15.3). */
 export function pauseListening(): void {
   state.update((s) => ({ ...s, paused: 'listening' }));
   driver?.pause();
+  pipeline?.softPause();
 }
 
 /** Hard pause — the realtime connection closes; voice cannot resume (§15.3). */
 export function hardPause(): void {
   state.update((s) => ({ ...s, paused: 'hard', micState: 'muted' }));
   driver?.pause();
+  void pipeline?.hardPause().catch(() => {});
 }
 
 export function resumeSession(): void {
   state.update((s) => ({ ...s, paused: 'none', micState: 'live' }));
   driver?.resume();
+  void pipeline?.resume().catch(() => {});
 }
 
 export function togglePlayPause(): void {
@@ -192,22 +401,230 @@ export function addTakeMarker(): void {
 
 export function toggleBlankStage(): void {
   const s = get(state);
-  if (s.sessionId) {
-    void stageService.publishStageCommand(s.sessionId, {
-      action: s.stageBlanked ? 'unblank_stage' : 'blank_stage',
-    });
-  }
-  state.update((prev) => ({ ...prev, stageBlanked: !prev.stageBlanked }));
+  const blanked = !s.stageBlanked;
+  sendDirective({ kind: 'blank', blanked, keepListener: false });
+  state.update((prev) => ({ ...prev, stageBlanked: blanked }));
 }
 
 export function toggleVoiceFollow(): void {
   state.update((s) => ({ ...s, voiceFollow: !s.voiceFollow }));
 }
 
+/* ---------------------------------------------------------------------------
+ * Stage appearance quick-controls (Live screen + voice commands)
+ * ------------------------------------------------------------------------- */
+
+function pushSettings(): void {
+  if (stageSettings) sendDirective({ kind: 'settings', settings: { ...stageSettings } });
+}
+
+export function adjustStageFontSize(deltaPx: number): number {
+  const next = Math.min(160, Math.max(24, (stageSettings?.fontSizePx ?? get(state).stageFontSizePx) + deltaPx));
+  if (stageSettings) {
+    stageSettings = { ...stageSettings, fontSizePx: next };
+    pushSettings();
+  }
+  state.update((s) => ({ ...s, stageFontSizePx: next }));
+  return next;
+}
+
+export function toggleStageMirror(axis: 'x' | 'y' = 'x'): void {
+  if (!stageSettings) return;
+  stageSettings =
+    axis === 'x'
+      ? { ...stageSettings, mirrorX: !stageSettings.mirrorX }
+      : { ...stageSettings, mirrorY: !stageSettings.mirrorY };
+  pushSettings();
+}
+
+export function toggleListenerVisible(): boolean {
+  listenerVisible = !listenerVisible && listenerSelection !== null;
+  sendDirective({ kind: 'listener', listener: listenerVisible ? listenerSelection : null });
+  return listenerVisible;
+}
+
+/* ---------------------------------------------------------------------------
+ * Validated voice-command execution (§33.9, §34)
+ * ------------------------------------------------------------------------- */
+
+function executeValidatedCommand(command: ValidatedCommand): void {
+  const executed = applyCommandAction(command.action);
+  if (!executed) {
+    showToast('That command is not available during prompting.', 'info');
+    return;
+  }
+  state.update((s) => ({ ...s, counts: { ...s.counts, commands: s.counts.commands + 1 } }));
+  sendDirective({ kind: 'ack', label: command.humanLabel, durationMs: 900 });
+  showToast(command.humanLabel, 'info', { durationMs: 1600 });
+}
+
+function applyCommandAction(action: CommandAction): boolean {
+  const s = get(state);
+  switch (action.action) {
+    case 'start':
+      startPrompting();
+      return true;
+    case 'pause':
+      pauseListening();
+      return true;
+    case 'resume':
+      resumeSession();
+      return true;
+    case 'hard_pause':
+      hardPause();
+      return true;
+    case 'stop':
+      stopSession();
+      return true;
+    case 'blank_stage':
+      if (!s.stageBlanked) toggleBlankStage();
+      return true;
+    case 'unblank_stage':
+      if (s.stageBlanked) toggleBlankStage();
+      return true;
+    case 'toggle_mirror':
+      toggleStageMirror(action.axis);
+      return true;
+    case 'set_font_size':
+      adjustStageFontSize(action.valuePx - (stageSettings?.fontSizePx ?? s.stageFontSizePx));
+      return true;
+    case 'adjust_font_size':
+      adjustStageFontSize(action.deltaSteps * 4);
+      return true;
+    case 'set_margins':
+      if (stageSettings) {
+        stageSettings = {
+          ...stageSettings,
+          columnWidthPercent: Math.min(100, Math.max(40, 100 - 2 * action.valuePercent)),
+        };
+        pushSettings();
+      }
+      return true;
+    case 'adjust_margins':
+      if (stageSettings) {
+        stageSettings = {
+          ...stageSettings,
+          columnWidthPercent: Math.min(
+            100,
+            Math.max(40, stageSettings.columnWidthPercent - 2 * action.deltaPercent),
+          ),
+        };
+        pushSettings();
+      }
+      return true;
+    case 'adjust_reading_band':
+      if (stageSettings) {
+        stageSettings = {
+          ...stageSettings,
+          readingBandCenterPercent: Math.min(
+            70,
+            Math.max(20, stageSettings.readingBandCenterPercent + action.deltaPercent),
+          ),
+        };
+        pushSettings();
+      }
+      return true;
+    case 'set_cue_visibility':
+      if (stageSettings) {
+        stageSettings = { ...stageSettings, showCues: action.visible };
+        pushSettings();
+      }
+      return true;
+    case 'set_listener':
+      if (action.enabled !== listenerVisible) toggleListenerVisible();
+      return true;
+    case 'adjust_listener_opacity':
+      if (listenerSelection) {
+        listenerSelection = {
+          ...listenerSelection,
+          geometry: {
+            ...listenerSelection.geometry,
+            opacity: Math.min(
+              1,
+              Math.max(0.05, listenerSelection.geometry.opacity + action.deltaPercent / 100),
+            ),
+          },
+        };
+        if (listenerVisible) sendDirective({ kind: 'listener', listener: listenerSelection });
+      }
+      return true;
+    case 'next_section':
+      return jumpSection(1);
+    case 'previous_section':
+      return jumpSection(-1);
+    case 'go_to_target': {
+      const target = compiledScript?.navigationTargets.find((t) => t.id === action.targetId);
+      if (!target) return false;
+      driver?.moveToToken(target.tokenIndex, 'command');
+      state.update((prev) => ({ ...prev, counts: { ...prev.counts, jumps: prev.counts.jumps + 1 } }));
+      return true;
+    }
+    case 'move_relative': {
+      const sign = action.direction === 'forward' ? 1 : -1;
+      if (action.unit === 'sentence') {
+        driver?.moveSentences(sign * action.amount);
+        return true;
+      }
+      if (action.unit === 'section') return jumpSection(sign * action.amount);
+      // paragraph: approximate as three sentences per paragraph move.
+      driver?.moveSentences(sign * action.amount * 3);
+      return true;
+    }
+    case 'restart_unit':
+      if (action.unit === 'sentence') {
+        driver?.moveSentences(0);
+        return true;
+      }
+      restartParagraph();
+      return true;
+    case 'retake':
+      restartParagraph();
+      return true;
+    case 'mark_checkpoint':
+      addTakeMarker();
+      return true;
+    case 'set_scroll_mode':
+      state.update((prev) => ({ ...prev, voiceFollow: action.mode === 'voice' }));
+      return true;
+    default:
+      return false;
+  }
+}
+
+function jumpSection(delta: number): boolean {
+  const s = get(state);
+  const flat: OutlineNode[] = [];
+  const walk = (nodes: OutlineNode[]) => {
+    for (const n of nodes) {
+      flat.push(n);
+      walk(n.children);
+    }
+  };
+  walk(s.outline);
+  if (flat.length === 0) return false;
+  const token = s.snapshot?.tokenIndex ?? 0;
+  let currentIndex = -1;
+  flat.forEach((n, i) => {
+    if (n.startTokenIndex <= token) currentIndex = i;
+  });
+  const target = flat[Math.max(0, Math.min(flat.length - 1, currentIndex + delta))];
+  if (!target) return false;
+  driver?.moveToToken(target.startTokenIndex, 'command');
+  state.update((prev) => ({ ...prev, counts: { ...prev.counts, jumps: prev.counts.jumps + 1 } }));
+  return true;
+}
+
+/* ---------------------------------------------------------------------------
+ * Stop / teardown
+ * ------------------------------------------------------------------------- */
+
 /** Stop the session and produce the F.17 summary. */
 export function stopSession(): SessionSummary {
   const s = get(state);
   const minutes = s.elapsedSeconds / 60;
+  const estimatedCostUsd = pipeline
+    ? Math.round(pipeline.estimatedCostUsd() * 100) / 100
+    : Math.round(minutes * 0.6) / 100;
   const summary: SessionSummary = {
     durationSeconds: s.elapsedSeconds,
     mode: s.mode,
@@ -215,13 +632,12 @@ export function stopSession(): SessionSummary {
     retakes: s.counts.retakes,
     commands: s.counts.commands,
     reconnects: s.counts.reconnects,
-    // MOCK estimate — replaced by real usage accounting at integration.
-    estimatedCostUsd: Math.round(minutes * 0.6) / 100,
+    estimatedCostUsd,
     endingLocation: locateEnding(s),
     transcriptSaved: false,
   };
   stopInternals();
-  if (s.sessionId) void stageService.closeStage(s.sessionId);
+  if (s.sessionId) void stageService.closeStage(s.sessionId).catch(() => {});
   state.update((prev) => ({ ...prev, active: false, prompting: false, summary }));
   return summary;
 }
@@ -251,8 +667,22 @@ function locateEnding(s: SessionState): string {
 function stopInternals(): void {
   driver?.dispose();
   driver = null;
+  if (pipeline) {
+    const p = pipeline;
+    pipeline = null;
+    void p.stop().catch(() => {});
+  }
   if (clock) clearInterval(clock);
   clock = null;
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+  for (const unlisten of stageEventUnlisteners) unlisten();
+  stageEventUnlisteners = [];
+  compiledScript = null;
+  stageGeneration = 0;
+  stageSettings = null;
+  listenerSelection = null;
+  listenerVisible = false;
 }
 
 /** F.11 status line for the top bar and tracking visualization. */

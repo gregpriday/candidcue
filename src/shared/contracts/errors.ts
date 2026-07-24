@@ -76,6 +76,10 @@ export const APP_ERROR_CODES = [
   'UPDATE_SIGNATURE_INVALID',
   'UPDATE_INSTALL_FAILED',
   'INTERNAL_UNEXPECTED',
+  // Structured codes minted by src-tauri/src/errors.rs constructors.
+  'NOT_IMPLEMENTED',
+  'NOT_FOUND',
+  'VALIDATION_FAILED',
 ] as const;
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number];

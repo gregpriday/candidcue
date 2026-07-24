@@ -14,8 +14,10 @@
   import {
     STAGE_EVENT,
     STAGE_HEARTBEAT_GRACE_MS,
+    type StageEscapePayload,
     type StageHeartbeatAckPayload,
     type StageHeartbeatPayload,
+    type StageHydratedPayload,
     type StageIntent,
     type StageIntentPayload,
     type StageListenerHealthPayload,
@@ -74,24 +76,32 @@
     const unsubs: Unsubscribe[] = [];
     let disposed = false;
 
+    const onDirective = (payload: StageStatePayload) => {
+      lastInboundAt = performance.now();
+      dispatch({
+        type: 'directive',
+        stageGeneration: payload.stageGeneration,
+        directive: payload.directive,
+      });
+    };
+
     void (async () => {
       const subs = await Promise.all([
-        subscribeStageEvent<StageSnapshotPayload>(STAGE_EVENT.snapshot, (envelope) => {
+        subscribeStageEvent<StageSnapshotPayload>(STAGE_EVENT.loadSession, (envelope) => {
           lastInboundAt = performance.now();
           dispatch({ type: 'snapshot', envelope });
+          // Handshake step 1 (§43.3): confirm hydration to Rust.
+          emitStageEvent<StageHydratedPayload>(STAGE_EVENT.hydrated, {
+            stageGeneration: envelope.stageGeneration,
+            sessionId: envelope.sessionId,
+          });
         }),
-        subscribeStageEvent<StageTrackingPayload>(STAGE_EVENT.tracking, (snapshot) => {
+        subscribeStageEvent<StageTrackingPayload>(STAGE_EVENT.trackingSnapshot, (snapshot) => {
           lastInboundAt = performance.now();
           dispatch({ type: 'tracking', snapshot });
         }),
-        subscribeStageEvent<StageStatePayload>(STAGE_EVENT.state, (payload) => {
-          lastInboundAt = performance.now();
-          dispatch({
-            type: 'directive',
-            stageGeneration: payload.stageGeneration,
-            directive: payload.directive,
-          });
-        }),
+        subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
+        subscribeStageEvent<StageStatePayload>(STAGE_EVENT.listenerState, onDirective),
         subscribeStageEvent<StageHeartbeatPayload>(STAGE_EVENT.heartbeat, (payload) => {
           lastInboundAt = performance.now();
           heartbeatSeen = true;
@@ -99,7 +109,7 @@
           emitStageEvent<StageHeartbeatAckPayload>(STAGE_EVENT.heartbeatAck, {
             stageGeneration: payload.stageGeneration,
             revision: payload.revision,
-            lastTrackingRevision: app.lastTrackingRevision,
+            trackingRevision: app.lastTrackingRevision,
             mediaHealthy,
             respondedAtMs: Date.now(),
           });
@@ -137,7 +147,7 @@
   function handleLayoutReady() {
     dispatch({ type: 'layout_ready' });
     if (!app.envelope) return;
-    emitStageEvent<StageReadyPayload>(STAGE_EVENT.ready, {
+    emitStageEvent<StageReadyPayload>(STAGE_EVENT.layoutReady, {
       stageGeneration: app.envelope.stageGeneration,
       sessionId: app.envelope.sessionId,
       hydrated: true,
@@ -154,6 +164,15 @@
     emitStageEvent<StageIntentPayload>(STAGE_EVENT.intent, {
       stageGeneration: app.envelope?.stageGeneration ?? 0,
       intent,
+      atMs: Date.now(),
+    });
+  }
+
+  function sendEscape(presses: 1 | 2) {
+    // Escape travels on its own event so the Rust bridge can relay it (§46.9).
+    emitStageEvent<StageEscapePayload>(STAGE_EVENT.escapeRequested, {
+      stageGeneration: app.envelope?.stageGeneration ?? 0,
+      presses,
       atMs: Date.now(),
     });
   }
@@ -188,7 +207,7 @@
         const now = performance.now();
         const double = now - lastEscapeAt <= ESCAPE_DOUBLE_MS;
         lastEscapeAt = double ? 0 : now;
-        sendIntent({ kind: 'escape', presses: double ? 2 : 1 });
+        sendEscape(double ? 2 : 1);
         break;
       }
       case 'ArrowDown':
@@ -272,7 +291,10 @@
     clipId?: string,
   ) {
     mediaHealthy = status === 'ok';
-    emitStageEvent<StageListenerHealthPayload>(STAGE_EVENT.listenerHealth, {
+    // Only degradations cross the boundary; recovery shows up in the next
+    // heartbeat ack's mediaHealthy flag (§40.5).
+    if (status === 'ok') return;
+    emitStageEvent<StageListenerHealthPayload>(STAGE_EVENT.mediaError, {
       stageGeneration: app.envelope?.stageGeneration ?? 0,
       status,
       code,

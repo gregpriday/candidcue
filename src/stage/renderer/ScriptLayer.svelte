@@ -154,7 +154,13 @@
     void renderWindow;
     if (!planeEl || vh === 0) return;
     const raf = requestAnimationFrame(() => measureBlocks());
-    return () => cancelAnimationFrame(raf);
+    // Hidden windows can throttle rAF (§43.3 publishes while hidden); a
+    // timer fallback keeps the layout-ready handshake from stalling.
+    const fallback = window.setTimeout(() => measureBlocks(), 350);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(fallback);
+    };
   });
 
   function measureBlocks() {

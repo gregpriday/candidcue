@@ -28,7 +28,12 @@ import type {
   KeyValidationResult,
   OpenAiKeyStatus,
 } from './secrets-types';
-import type { DisplayDescriptor, StageOpenResult, StageWindowState } from './stage-types';
+import type {
+  DisplayDescriptor,
+  IdentificationSession,
+  StageOpenResult,
+  StageWindowState,
+} from './stage-types';
 import type { SaveResult, ScriptListFilter, ScriptPage, ScriptSort } from './scripts-types';
 
 const STORAGE_KEY = 'candidcue.mock.scripts.v1';
@@ -296,34 +301,61 @@ export const mockSecrets = {
 
 /* ------------------------------------------------------------------ stage */
 
+let mockStageGeneration = 0;
+
 export const mockStage = {
   listDisplays(): DisplayDescriptor[] {
     return [
       {
-        id: 'display-1',
-        label: 'Built-in Display',
-        widthPx: 3024,
-        heightPx: 1964,
+        id: 'display-0',
+        name: 'Built-in Display',
+        physicalPosition: { x: 0, y: 0 },
+        physicalSize: { width: 3024, height: 1964 },
         scaleFactor: 2,
-        isPrimary: true,
+        logicalSize: { width: 1512, height: 982 },
+        primary: true,
+        fingerprint: 'dsp-mock-builtin',
       },
       {
-        id: 'display-2',
-        label: 'Teleprompter Display',
-        widthPx: 1920,
-        heightPx: 1080,
+        id: 'display-1',
+        name: 'Teleprompter Display',
+        physicalPosition: { x: 3024, y: 0 },
+        physicalSize: { width: 1920, height: 1080 },
         scaleFactor: 1,
-        isPrimary: false,
-        profileName: 'Studio glass',
+        logicalSize: { width: 1920, height: 1080 },
+        primary: false,
+        fingerprint: 'dsp-mock-prompter',
       },
     ];
   },
-  async openStage(displayId: string): Promise<StageOpenResult> {
+  identifyDisplays(): IdentificationSession {
+    return {
+      sessionId: makeId(),
+      durationMs: 6000,
+      displays: this.listDisplays().map((d, index) => ({
+        number: index + 1,
+        fingerprint: d.fingerprint,
+        name: d.name,
+        logicalSize: d.logicalSize,
+        primary: d.primary,
+      })),
+    };
+  },
+  async openStage(displayFingerprint?: string): Promise<StageOpenResult> {
     await delay(400);
-    return { opened: true, displayId, stageGeneration: 1 };
+    mockStageGeneration += 1;
+    return {
+      stageGeneration: mockStageGeneration,
+      displayFingerprint: displayFingerprint ?? 'dsp-mock-prompter',
+    };
   },
   setFullscreen(enabled: boolean): StageWindowState {
-    return { fullscreen: enabled, visible: true };
+    return {
+      exists: true,
+      visible: true,
+      fullscreen: enabled,
+      stageGeneration: mockStageGeneration,
+    };
   },
 };
 

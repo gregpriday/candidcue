@@ -20,13 +20,18 @@
   import Toggle from '../components/Toggle.svelte';
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
   import { openExternal } from '../lib/app-actions';
+  import { describeError } from '../services/errors';
   import * as scriptsService from '../services/scripts';
   import * as secretsService from '../services/secrets';
   import * as stageService from '../services/stage';
+  import { buildStageEnvelope, buildStageSettings, resolveDocumentAssets } from '../services/stage-envelope';
+  import { buildListenerSelection, listInstalledListeners, type InstalledListener } from '../services/listeners';
+  import { newSessionId } from '../services/session';
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
   import type { OpenAiKeyStatus } from '../services/secrets-types';
   import type { SessionMode } from '../services/settings-types';
+  import type { ListenerStageSelection } from '../../shared/contracts';
   import { compiled, requestCompile } from '../stores/compiled';
   import {
     computeReadiness,
@@ -37,6 +42,7 @@
     updatePreflight,
     type CheckStatus,
   } from '../stores/preflight';
+  import { saveNow } from '../stores/editor';
   import { navigate } from '../stores/router';
   import { settings, loadSettings } from '../stores/settings';
   import { startLiveSession } from '../stores/session';
@@ -54,13 +60,14 @@
 
   /* -------------------------------------------------------------- stage */
   let displays = $state<DisplayDescriptor[]>([]);
-  let selectedDisplayId = $state<string | null>(null);
+  let selectedFingerprint = $state<string | null>(null);
   let stageValidated = $state(false);
   let stageTesting = $state(false);
   let fullscreen = $state(true);
   let alwaysOnTop = $state(false);
   let mirrorX = $state(false);
   let mirrorY = $state(false);
+  let starting = $state(false);
 
   /* ------------------------------------------------------------- openai */
   let keyStatus = $state<OpenAiKeyStatus | null>(null);
@@ -107,6 +114,8 @@
   let listenerScale = $state(100);
   let listenerX = $state(0);
   let listenerY = $state(0);
+  let installedListeners = $state<InstalledListener[]>([]);
+  let listenersLoaded = $state(false);
 
   const result = $derived($compiled.result);
   const diagnostics = $derived(result?.diagnostics ?? []);
@@ -147,6 +156,8 @@
       readingBandCenterPercent = $settings.teleprompter.readingBandCenterPercent;
       followSystemDefault = $settings.audio.followSystemDefault;
 
+      // §29.2 step 1: flush any pending editor autosave before reading.
+      await saveNow().catch(() => {});
       const doc = await scriptsService.getScript(scriptId);
       scriptTitle = doc.title;
       scriptSource = doc.source;
@@ -155,9 +166,9 @@
 
       updatePreflight({ stage: 'checking' });
       displays = await stageService.listDisplays();
-      const preferred = displays.find((d) => !d.isPrimary) ?? displays[0];
-      selectedDisplayId = preferred?.id ?? null;
-      updatePreflight({ stage: selectedDisplayId ? 'idle' : 'blocked' });
+      const preferred = displays.find((d) => !d.primary) ?? displays[0];
+      selectedFingerprint = preferred?.fingerprint ?? null;
+      updatePreflight({ stage: selectedFingerprint ? 'idle' : 'blocked' });
 
       updatePreflight({ openai: 'checking' });
       keyStatus = await secretsService.getOpenAiKeyStatus();
@@ -174,13 +185,37 @@
     updatePreflight({ script: status, warnings });
   });
 
+  const installedMira = $derived(
+    installedListeners.find((l) => l.packId === 'mira' && l.state === 'installed') ?? null,
+  );
+
   /* Keep the derived mode/listener requirement in the store. */
   $effect(() => {
-    updatePreflight({
-      mode,
-      listenerEnabled,
-      listener: listenerEnabled ? (listenerPack === 'mira' ? 'ready' : 'blocked') : 'idle',
-    });
+    const listenerStatus = !listenerEnabled
+      ? 'idle'
+      : listenerPack !== 'mira'
+        ? 'blocked'
+        : !listenersLoaded
+          ? 'checking'
+          : installedMira
+            ? 'ready'
+            : 'blocked';
+    updatePreflight({ mode, listenerEnabled, listener: listenerStatus });
+  });
+
+  /* Resolve the installed pack list the first time a Listener is wanted. */
+  $effect(() => {
+    if (!listenerEnabled || listenersLoaded) return;
+    void listInstalledListeners()
+      .then((packs) => {
+        installedListeners = packs;
+      })
+      .catch(() => {
+        installedListeners = [];
+      })
+      .finally(() => {
+        listenersLoaded = true;
+      });
   });
 
   /* Mic level meter while permission is granted (local, pre-OpenAI). */
@@ -206,37 +241,52 @@
   }
 
   /* ------------------------------------------------------ stage actions */
-  function selectDisplay(id: string): void {
-    selectedDisplayId = id;
+  function selectDisplay(fingerprint: string): void {
+    selectedFingerprint = fingerprint;
     stageValidated = false;
     updatePreflight({ stage: 'idle' });
   }
 
   async function identifyDisplays(): Promise<void> {
-    await stageService.identifyDisplays();
-    showToast('Look for the number shown on each display', 'info');
+    try {
+      const identification = await stageService.identifyDisplays();
+      if (identification && identification.displays.length > 0) {
+        const lines = identification.displays
+          .map((d) => `${d.number} — ${d.name ?? 'Display'}${d.primary ? ' (primary)' : ''}`)
+          .join(' · ');
+        showToast(lines, 'info', { durationMs: 6000 });
+      } else {
+        showToast('Look for the number shown on each display', 'info');
+      }
+    } catch (err) {
+      showToast(describeError(err), 'danger');
+    }
   }
 
+  /**
+   * Display test (§14.2 A): opens a real stage window on the selected
+   * display under a throwaway session id, shows it, and closes it again.
+   */
   async function runDisplayTest(windowedPreview: boolean): Promise<void> {
-    if (!selectedDisplayId) return;
+    if (!selectedFingerprint) return;
     stageTesting = true;
     updatePreflight({ stage: 'checking' });
+    const testSessionId = `display-test-${Date.now().toString(36)}`;
     try {
-      const opened = await stageService.openStage({
-        displayId: selectedDisplayId,
-        fullscreen: !windowedPreview && fullscreen,
-        alwaysOnTop,
-        windowedPreview,
+      await stageService.openStage({
+        displayFingerprint: selectedFingerprint,
+        sessionId: testSessionId,
       });
-      stageValidated = opened.opened;
-      updatePreflight({ stage: opened.opened ? 'ready' : 'blocked' });
-      if (!opened.opened) {
-        showToast('CandidCue could not create the prompt window on this display.', 'danger');
-      }
+      await stageService.setStageFullscreen(testSessionId, !windowedPreview && fullscreen);
+      stageValidated = true;
+      updatePreflight({ stage: 'ready' });
+      window.setTimeout(() => {
+        void stageService.closeStage(testSessionId).catch(() => {});
+      }, 4000);
     } catch (err) {
       stageValidated = false;
       updatePreflight({ stage: 'blocked' });
-      showToast(`Stage did not open: ${String(err)}`, 'danger');
+      showToast(`Stage did not open: ${describeError(err)}`, 'danger');
     } finally {
       stageTesting = false;
     }
@@ -265,6 +315,11 @@
         keyMessage = {
           tone: 'warning',
           text: 'The key is valid, but the OpenAI project has no available quota or billing access.',
+        };
+      } else if (validation.status === 'network') {
+        keyMessage = {
+          tone: 'warning',
+          text: 'CandidCue could not reach OpenAI to verify the key. Check your connection and try again.',
         };
       } else {
         keyMessage = {
@@ -334,20 +389,121 @@
   }
 
   /* ------------------------------------------------------------- start */
+
+  /** Latency preset → Realtime delay profile (spec A.6). */
+  function delayForLatency(): 'minimal' | 'low' | 'high' {
+    return latency === 'fast' ? 'minimal' : latency === 'accurate' ? 'high' : 'low';
+  }
+
+  /**
+   * Start sequence (spec §29.2 / §43.3): compile is already flushed to the
+   * store; open the stage hidden → publish the session envelope → await the
+   * stage handshake → full screen → route to Live. The realtime transport is
+   * started by the session store (voice mode only).
+   */
   async function startSession(): Promise<void> {
     const readiness = computeReadiness($preflightChecks);
-    if (!readiness.canStart) return;
-    const display = displays.find((d) => d.id === selectedDisplayId);
-    const sessionId = startLiveSession({
-      scriptId,
-      scriptTitle,
-      mode,
-      displayLabel: display?.label ?? 'Stage display',
-      outline: result?.outline ?? [],
-      sentences: result?.sentences ?? [],
-      totalTokens: Math.max(wordCount, 1),
-    });
-    await navigate({ name: 'live', sessionId, scriptId });
+    if (!readiness.canStart || starting) return;
+    const compiledScript = result?.script ?? null;
+    if (!compiledScript) {
+      showToast('The script has not finished compiling yet.', 'danger');
+      return;
+    }
+    starting = true;
+    const display = displays.find((d) => d.fingerprint === selectedFingerprint);
+    const sessionId = newSessionId();
+    try {
+      // Listener selection (§14.2 F): resolve real pack media through Rust.
+      let listener: ListenerStageSelection | undefined;
+      if (listenerEnabled && listenerPack === 'mira') {
+        const version = installedMira?.version ?? '1.0.0';
+        listener = await buildListenerSelection('mira', version, {
+          zoomPercent: listenerScale,
+          offsetXPercent: listenerX,
+          offsetYPercent: listenerY,
+          dimPercent: listenerDim,
+          blurPx: listenerBlur,
+        });
+      }
+
+      const stageSettings = buildStageSettings({
+        fontFamilyId,
+        fontSizePx,
+        lineHeight,
+        columnWidthPercent,
+        readingBandCenterPercent,
+        mirrorX,
+        mirrorY,
+        pastDimming,
+        phraseHighlight,
+        background: stageBackground === 'high-contrast' ? '#000000' : '#050505',
+      });
+
+      // 1. Open the stage hidden on the chosen display.
+      const opened = await stageService.openStage({
+        displayFingerprint: selectedFingerprint,
+        sessionId,
+      });
+
+      // 2. Publish the full session envelope and await the handshake.
+      const assets = await resolveDocumentAssets(compiledScript);
+      const envelope = buildStageEnvelope({
+        script: compiledScript,
+        sessionId,
+        sessionGeneration: 1,
+        stageGeneration: opened.stageGeneration,
+        stageSettings,
+        ...(listener ? { listener } : {}),
+        assets,
+      });
+      const ready = stageService.waitForStageReady(opened.stageGeneration);
+      await stageService.publishStageDocument(sessionId, envelope);
+      await ready;
+
+      // 3. Show it (full screen unless the user opted out).
+      await stageService.setStageFullscreen(sessionId, fullscreen);
+
+      // 4. Bind the tracking worker + realtime pipeline and go live.
+      startLiveSession({
+        scriptId,
+        scriptTitle,
+        mode,
+        displayLabel: display?.name ?? 'Stage display',
+        outline: result?.outline ?? [],
+        sentences: result?.sentences ?? [],
+        totalTokens: Math.max(wordCount, 1),
+        sessionId,
+        compiled: compiledScript,
+        sessionGeneration: 1,
+        stageGeneration: opened.stageGeneration,
+        stageSettings,
+        listener: listener ?? null,
+        transcription: {
+          model: $settings.openai.realtimeModel,
+          language,
+          delay: delayForLatency(),
+          requestLogprobs: true,
+        },
+        commandSettings: {
+          wakePhrase: $settings.commands.wakePhrase,
+          wakeAliases: [
+            $settings.commands.wakePhrase.toLowerCase(),
+            ...$settings.commands.wakeAliases.map((a) => a.toLowerCase()),
+          ],
+          wakeMode: $settings.commands.strictWake ? 'strict' : 'double_gate',
+          lunaFallback: $settings.openai.commandFallback,
+          commandModel: $settings.openai.commandModel,
+        },
+        commandsEnabled: commandListening && $settings.commands.enabled,
+        micDeviceId: micDeviceId,
+      });
+      await navigate({ name: 'live', sessionId, scriptId });
+    } catch (err) {
+      showToast(`Could not start the session: ${describeError(err)}`, 'danger');
+      void stageService.closeStage(sessionId).catch(() => {});
+    } finally {
+      starting = false;
+    }
   }
 
   function sectionTone(status: CheckStatus): PillTone {
@@ -407,31 +563,30 @@
         />
       {/snippet}
       <div class="display-grid">
-        {#each displays as display (display.id)}
+        {#each displays as display (display.fingerprint)}
           <button
             type="button"
             class="monitor-tile"
-            class:selected={selectedDisplayId === display.id}
-            onclick={() => selectDisplay(display.id)}
+            class:selected={selectedFingerprint === display.fingerprint}
+            onclick={() => selectDisplay(display.fingerprint)}
           >
             <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
-            <span class="monitor-name">{display.label}</span>
+            <span class="monitor-name">{display.name ?? 'Display'}</span>
             <span class="monitor-meta">
-              {display.widthPx} × {display.heightPx} · {display.scaleFactor}×
+              {display.physicalSize.width} × {display.physicalSize.height} · {display.scaleFactor}×
             </span>
             <span class="monitor-badges">
-              {#if display.isPrimary}<StatusPill tone="neutral" dot={false} label="Primary" />{/if}
-              {#if display.profileName}<StatusPill tone="accent" dot={false} label={display.profileName} />{/if}
+              {#if display.primary}<StatusPill tone="neutral" dot={false} label="Primary" />{/if}
             </span>
           </button>
         {/each}
       </div>
       <div class="row-actions">
         <Button onclick={() => identifyDisplays()}>Identify displays</Button>
-        <Button disabled={!selectedDisplayId || stageTesting} onclick={() => runDisplayTest(false)}>
+        <Button disabled={!selectedFingerprint || stageTesting} onclick={() => runDisplayTest(false)}>
           {stageTesting ? 'Opening…' : 'Show display test'}
         </Button>
-        <Button variant="ghost" disabled={!selectedDisplayId} onclick={() => runDisplayTest(true)}>
+        <Button variant="ghost" disabled={!selectedFingerprint} onclick={() => runDisplayTest(true)}>
           Open stage preview
         </Button>
         {#if stageValidated}
@@ -666,7 +821,8 @@
       </div>
       {#if listenerEnabled}
         <div class="appearance-grid">
-          <!-- Placeholders — bound to stage geometry at Listener integration. -->
+          <!-- Bound to ListenerGeometry: cropZoom = defaultZoom × zoom%, and
+               cropX/cropY offsets, flowing into the session envelope. -->
           <Slider label="Mira zoom" bind:value={listenerScale} min={60} max={160} format={(v) => `${v}%`} />
           <Slider label="Mira horizontal position" bind:value={listenerX} min={-50} max={50} format={(v) => `${v}%`} />
           <Slider label="Mira vertical position" bind:value={listenerY} min={-50} max={50} format={(v) => `${v}%`} />
@@ -762,8 +918,12 @@
         <span class="blocked-reason">{$preflightReadiness.blockedReason}</span>
       {/if}
       <Button variant="ghost" onclick={() => navigate({ name: 'editor', scriptId })}>Cancel</Button>
-      <Button variant="primary" disabled={!$preflightReadiness.canStart} onclick={() => startSession()}>
-        {$preflightReadiness.startLabel}
+      <Button
+        variant="primary"
+        disabled={!$preflightReadiness.canStart || starting}
+        onclick={() => startSession()}
+      >
+        {starting ? 'Preparing stage…' : $preflightReadiness.startLabel}
       </Button>
     </div>
   </footer>
