@@ -38,6 +38,7 @@
   } from '../services/display-profiles';
   import {
     buildListenerSelection,
+    listenerScalePercentFromCropZoom,
     listInstalledListeners,
     resolveListenerMedia,
     type InstalledListener,
@@ -517,7 +518,17 @@
         // The profile stores the resolved geometry; these controls hold the
         // percent-scale inputs `buildListenerSelection` converts from, so the
         // conversion is inverted here rather than storing a second copy.
-        listenerScale = Math.round(profile.listener.cropZoom * 100);
+        //
+        // `buildListenerGeometry` computes `cropZoom = defaultZoom × scale/100`,
+        // so the inverse must divide the pack's default zoom back out. Omitting
+        // it made the scale compound: a pack whose `defaultZoom` is 1.15 came
+        // back as 115%, saved as 1.3225, came back as 132%, and Mira grew by
+        // 15% of herself every session while the offset sliders' range silently
+        // widened underneath her.
+        listenerScale = listenerScalePercentFromCropZoom(
+          profile.listener.cropZoom,
+          listenerDefaultZoom,
+        );
         listenerX = profile.listener.cropX;
         listenerY = profile.listener.cropY;
         listenerDim = Math.round((1 - profile.listener.opacity) * 100);

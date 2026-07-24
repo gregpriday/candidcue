@@ -89,6 +89,26 @@ export interface ListenerGeometryOverrides {
   mirrorVideo?: boolean;
 }
 
+/**
+ * The inverse of `buildListenerGeometry`'s zoom conversion.
+ *
+ * A display profile stores the *resolved* geometry, so restoring the slider
+ * has to undo `cropZoom = defaultZoom × scale/100`. Doing that by eye is how
+ * this went wrong: multiplying by 100 without dividing the pack's default zoom
+ * back out made the scale compound across sessions — a pack whose
+ * `defaultZoom` is 1.15 restored as 115%, saved as 1.3225, restored as 132% —
+ * so the Listener grew by 15% of herself every time the profile round-tripped,
+ * and the offset sliders' range silently widened underneath her.
+ *
+ * Kept beside the forward conversion so the two cannot drift apart, and
+ * guarded so a missing or nonsensical `defaultZoom` falls back to the stored
+ * zoom rather than dividing by zero.
+ */
+export function listenerScalePercentFromCropZoom(cropZoom: number, defaultZoom: number): number {
+  const base = Number.isFinite(defaultZoom) && defaultZoom > 0 ? defaultZoom : 1;
+  return Math.round((cropZoom / base) * 100);
+}
+
 export function buildListenerGeometry(
   defaultZoom: number,
   overrides: ListenerGeometryOverrides = {},
