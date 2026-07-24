@@ -1045,3 +1045,133 @@ fn credential_serializes_to_the_frontend_shape() {
         "the unitless field name is what caused C1; it must not come back"
     );
 }
+
+// ---------------------------------------------------------------------------
+// §30 Live Coaching settings — the round trip, not one direction of it
+// ---------------------------------------------------------------------------
+
+use candidcue_lib::settings::{
+    validate as validate_settings, AppSettings as RustAppSettings,
+    CoachingSettings as RustCoachingSettings,
+};
+
+fn coaching_fixture() -> serde_json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("ipc")
+        .join("coaching-settings-payload.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
+    serde_json::from_str(&raw).expect("fixture parses")
+}
+
+/// The round trip, closed on the Rust side: the patch the TypeScript adapter
+/// emits deserializes into the struct, and the struct serializes back to the
+/// identical document the adapter reads.
+///
+/// This is the assertion that a one-directional mapping cannot survive. A field
+/// Rust does not declare is dropped by serde on the way in and simply absent on
+/// the way out, so the comparison fails naming it; a field whose name differs by
+/// a single character comes back as its default, which — every value in the
+/// fixture being non-default — also fails.
+#[test]
+fn coaching_settings_survive_the_round_trip_unchanged() {
+    let f = coaching_fixture();
+    let sent = f["settings"].clone();
+
+    let coaching: RustCoachingSettings =
+        serde_json::from_value(sent.clone()).expect("the frontend's coaching patch must deserialize");
+    let stored = serde_json::to_value(&coaching).expect("serializes");
+
+    assert_eq!(
+        stored, sent,
+        "a coaching setting changed shape between the UI and the stored document"
+    );
+
+    // And the values are the ones that were sent, not defaults that happen to
+    // serialize to the same JSON.
+    assert_eq!(coaching.mode, "studio");
+    assert_eq!(coaching.precision_transcription_mode, "on_candidates");
+    assert_eq!(coaching.filler_detection_scope, "broad");
+    assert_eq!(coaching.target_duration_seconds, Some(330));
+    assert!(coaching.retain_audio_recording_enabled);
+    assert_eq!(coaching.goals.max_fillers_per_minute, Some(3.0));
+    assert_eq!(coaching.custom_filler_words.len(), 3);
+    assert_eq!(
+        coaching.personal_calibration_reset_at_epoch_ms,
+        Some(1_782_000_000_000)
+    );
+
+    // The whole document validates, so the round trip is not passing values the
+    // backend would reject on the next write.
+    let settings = RustAppSettings {
+        coaching,
+        ..RustAppSettings::default()
+    };
+    validate_settings(&settings).expect("the fixture must be a legal document");
+}
+
+/// §29.3. The four cost modes are all reachable. This replaced a boolean, and
+/// a boolean could express exactly two of them — a user who wanted the cheap
+/// "only when something is ambiguous" pass and one who wanted every eligible
+/// chunk sent were the same `true`.
+#[test]
+fn all_four_precision_cost_modes_are_accepted_and_nothing_else_is() {
+    for mode in ["off", "on_candidates", "full", "review_only"] {
+        let settings = RustAppSettings {
+            coaching: RustCoachingSettings {
+                precision_transcription_mode: mode.into(),
+                ..RustCoachingSettings::default()
+            },
+            ..RustAppSettings::default()
+        };
+        validate_settings(&settings).unwrap_or_else(|e| panic!("{mode} must be legal: {e}"));
+    }
+
+    let settings = RustAppSettings {
+        coaching: RustCoachingSettings {
+            precision_transcription_mode: "true".into(),
+            ..RustCoachingSettings::default()
+        },
+        ..RustAppSettings::default()
+    };
+    assert!(
+        validate_settings(&settings).is_err(),
+        "the old boolean's stringified value must not be silently accepted"
+    );
+}
+
+/// §14.6. The band travels with the preset. Both sides read the same expected
+/// patch, so a UI that stops sending the band, or a Rust struct that stops
+/// accepting it, fails here.
+#[test]
+fn a_pace_preset_patch_carries_the_band_the_preset_means() {
+    let f = coaching_fixture();
+    let expected = &f["presetPatch"]["expected"];
+
+    let mut document = serde_json::to_value(RustCoachingSettings::default()).expect("serializes");
+    let object = document.as_object_mut().expect("object");
+    for (key, value) in expected.as_object().expect("expected patch is an object") {
+        object.insert(key.clone(), value.clone());
+    }
+
+    let coaching: RustCoachingSettings =
+        serde_json::from_value(document).expect("the preset patch must deserialize");
+    assert_eq!(coaching.pace_preset, "calm_explainer");
+    assert_eq!(coaching.target_wpm_low, 110);
+    assert_eq!(coaching.target_wpm_high, 145);
+}
+
+/// §32.1/§32.2. The consents that decide whether bytes reach the disk, and the
+/// mode that decides whether the user's API key is spent, all default to the
+/// quiet side — asserted here as well as in the unit tests, because this is the
+/// file that a reviewer of the IPC surface reads.
+#[test]
+fn coaching_defaults_never_retain_or_spend_without_being_asked() {
+    let coaching = RustCoachingSettings::default();
+    assert!(!coaching.retain_audio_recording_enabled);
+    assert!(!coaching.post_take_report_enabled);
+    assert_eq!(coaching.precision_transcription_mode, "off");
+}

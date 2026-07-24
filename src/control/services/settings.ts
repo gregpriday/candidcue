@@ -17,6 +17,16 @@ import { describeError, errorCode } from './errors';
 import { ipcInvoke, isTauriRuntime, BackendUnavailableError } from './ipc';
 import { mockSettings } from './mock-backend';
 import {
+  RETENTION_PURGE_FAILURE,
+  revokedRetentions,
+  runRetentionRevocation,
+} from './settings-retention';
+import {
+  coachingFromRust,
+  coachingToRustPatch,
+  type RustCoachingSettings,
+} from './settings-coaching';
+import {
   followingFromRust,
   followingToRustPatch,
   type RustFollowingSettings,
@@ -71,6 +81,8 @@ interface RustSettings {
   };
   /** Companion §47 — absent in documents written before the section existed. */
   following?: Partial<RustFollowingSettings>;
+  /** Companion §30 — likewise absent in older documents. */
+  coaching?: Partial<RustCoachingSettings>;
   listener: Record<string, unknown>;
 }
 
@@ -140,6 +152,10 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     // Following settings are Rust-owned end to end (§47) — no overlay merge,
     // so a stale local overlay can never resurrect an old assist mode.
     following: followingFromRust(rust.following),
+    // §30. Rust-owned end to end for the same reason, with the addition that
+    // two of these are §32.2 retention consents — a stale overlay must never be
+    // able to claim the user consented to keeping audio.
+    coaching: coachingFromRust(rust.coaching),
     commands: {
       ...defaults.commands,
       wakePhrase: rust.commands.wakePhrase,
@@ -209,6 +225,12 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     const following = followingToRustPatch(patch.following);
     for (const [key, value] of Object.entries(following)) put('following', key, value);
   }
+  if (patch.coaching) {
+    const coaching = coachingToRustPatch(patch.coaching);
+    // `put` drops `undefined` but keeps `null`, which is what clearing a target
+    // duration or a goal threshold has to send (see settings-coaching.ts).
+    for (const [key, value] of Object.entries(coaching)) put('coaching', key, value);
+  }
   if (patch.commands) {
     put('commands', 'wakePhrase', patch.commands.wakePhrase);
     if (patch.commands.strictWake !== undefined) {
@@ -225,12 +247,15 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
 
 /**
  * Everything in the patch persists in the overlay so the UI view sticks —
- * except `following`, which is Rust-owned in both directions (§47).
+ * except `following` (§47) and `coaching` (§30), which are Rust-owned in both
+ * directions. A cached copy of a retention consent is exactly the thing that
+ * must not exist.
  */
 function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
   for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
-    if (key === 'revision' || key === 'schemaVersion' || key === 'following') continue;
+    if (key === 'revision' || key === 'schemaVersion') continue;
+    if (key === 'following' || key === 'coaching') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
     // Rust-owned fields never enter the overlay (§36.2, §47) — a cached copy
@@ -276,7 +301,38 @@ export async function updateSettings(
     expectedRevision,
     patch: rustPatch,
   });
+
+  /*
+   * §32.2. A retention toggle that is off must remove what earlier takes left,
+   * not merely stop future writes — the rule `ReportStore` applies per session,
+   * applied here across all of them. Run after the write succeeds, so a failed
+   * save never deletes anything, and report a failed purge rather than letting
+   * the user believe the data is gone (see settings-retention.ts).
+   */
+  const revocation = await runRetentionRevocation(patch);
+  const firstFailure = revocation.failed[0];
+  if (firstFailure) {
+    lastRetentionPurgeFailure = RETENTION_PURGE_FAILURE[firstFailure.kind];
+  } else if (revokedRetentions(patch).length > 0) {
+    lastRetentionPurgeFailure = null;
+  }
+
   return fromRust(revisioned);
+}
+
+/**
+ * The message for the most recent failed retention purge, or `null`.
+ *
+ * Read by the settings screen after a save. It is not thrown, because the
+ * settings write itself succeeded and reverting the UI would be a lie in the
+ * other direction; but it is not swallowed either.
+ */
+let lastRetentionPurgeFailure: string | null = null;
+
+export function takeRetentionPurgeFailure(): string | null {
+  const message = lastRetentionPurgeFailure;
+  lastRetentionPurgeFailure = null;
+  return message;
 }
 
 /**

@@ -937,23 +937,141 @@ export interface LunaCoachDecision {
 // Settings (§30)
 // ---------------------------------------------------------------------------
 
+/** §14.6 pace target presets. Producer: the control settings panel. */
+export type PaceTargetPreset =
+  | 'calm_explainer'
+  | 'natural_presentation'
+  | 'conversational_camera'
+  | 'energetic_short_form'
+  | 'custom';
+
+/**
+ * §29.3 precision-transcription cost modes.
+ *
+ * This replaced a `precisionTranscriptionEnabled: boolean`, which could not
+ * express three of the four modes the queue actually implements — a user who
+ * wanted the cheap "only when something is ambiguous" behaviour and a user who
+ * wanted every eligible chunk sent were the same `true`, and "after the take"
+ * was unreachable. §30.2 labels `off` **Basic** and the other three
+ * **Precision**; see {@link CoachingSettings.precisionTranscriptionMode}.
+ */
+export type PrecisionTranscriptionMode = 'off' | 'on_candidates' | 'full' | 'review_only';
+
+/** §30.2. How wide the filler lexicon is. Orthogonal to the cost mode. */
+export type FillerDetectionScope = 'strict' | 'broad';
+
+/**
+ * §30.4. Goals influence tips and the post-take review, and **never** script
+ * tracking — nothing here may reach the motion controller (Rule 1).
+ *
+ * Every field is `null`/`false` when the goal is not set, so "no goal" is a
+ * value rather than an absent key: a goal that quietly disappeared from a
+ * persisted document must read as off, not as a default threshold nobody
+ * chose.
+ *
+ * §30.4's sixth goal, "review only, with no live interruption", is deliberately
+ * NOT a field here: it is exactly `mode: 'review_only'` (§6.5). Storing it
+ * twice would let the two disagree, and the rail would then have to pick a
+ * winner. The settings panel offers it as a goal and sets the mode.
+ */
+export interface CoachingGoals {
+  /** §30.4 "fewer than 3 fillers per minute". `null` = not a goal. */
+  maxFillersPerMinute: number | null;
+  /** §30.4 "fewer than 2 fillers per 100 words". `null` = not a goal. */
+  maxFillersPerHundredWords: number | null;
+  /** §30.4 "pace within a range" — the range is `targetWpmLow`/`High`. */
+  paceWithinTargetRange: boolean;
+  /** §30.4 "finish within a target duration" — the target is `targetDurationSeconds`. */
+  finishWithinTargetDuration: boolean;
+  /** §30.4 "keep variety within a profile band" — the band is `targetVarietyLow`/`High`. */
+  varietyWithinTargetBand: boolean;
+}
+
 /**
  * §30. User-facing coaching configuration. `custom` mode reads the individual
  * module flags; the named modes derive them.
+ *
+ * ---------------------------------------------------------------------------
+ * ONE CONTROL, ONE FIELD.
+ * ---------------------------------------------------------------------------
+ * §30.1 lists eighteen *controls*, not eighteen fields. Several of them are
+ * views onto state that already exists here, and they are deliberately not
+ * duplicated:
+ *
+ * - "show numeric variety score" → `modules.varietyScore`;
+ * - "show event ribbon"          → `modules.fillerRibbon`;
+ * - "show past-line marks"       → `modules.inlineGutterMarks`;
+ * - "custom pace range"          → `targetWpmLow`/`targetWpmHigh`, authoritative
+ *                                  when `pacePreset === 'custom'`;
+ * - "custom variety target"      → `targetVarietyLow`/`targetVarietyHigh`,
+ *                                  authoritative when `deliveryStyle === 'custom'`;
+ * - "reset personal calibration" → an action, recorded as
+ *                                  `personalCalibrationResetAtEpochMs`.
+ *
+ * A second field carrying the same fact is how a user turns a module off and
+ * watches it stay on (see {@link CoachRailModules}), so it is not done here.
  */
 export interface CoachingSettings {
   mode: CoachRailMode;
+  /** §30.1 "vocal style"; sets the variety band via §17.6. */
   deliveryStyle: DeliveryStyle;
+  /** §14.6. `custom` means `targetWpmLow`/`High` are the user's own numbers. */
+  pacePreset: PaceTargetPreset;
   targetWpmLow: number;
   targetWpmHigh: number;
   targetVarietyLow: number;
   targetVarietyHigh: number;
+  /**
+   * §30.1 target duration for the whole take. `null` = no target, which is
+   * different from `0`; the rail's target-duration status is hidden rather
+   * than reporting an instantly-blown budget.
+   */
+  targetDurationSeconds: number | null;
   liveTipFrequency: 'low' | 'normal' | 'high';
-  /** §12.6. Precision transcription keeps a short in-memory PCM ring buffer. */
-  precisionTranscriptionEnabled: boolean;
+  /**
+   * §29.3, §30.2. `off` is labelled **Basic** in the UI and runs on the live
+   * transcript plus local audio cues; the other three are **Precision** and
+   * each makes additional OpenAI transcription calls on the user's own key.
+   *
+   * §12.6: any non-`off` value keeps a short in-memory PCM ring buffer.
+   */
+  precisionTranscriptionMode: PrecisionTranscriptionMode;
+  /** §30.2. `strict` counts only clear fillers; `broad` adds contextual phrases. */
+  fillerDetectionScope: FillerDetectionScope;
+  /**
+   * §30.1. Extra forms this speaker wants counted, normalized lower-case.
+   *
+   * Unbounded by design: this is the user's own vocabulary and CandidCue does
+   * not decide how many words a person is allowed to work on.
+   */
+  customFillerWords: string[];
+  /** §30.1, §20.2. Repeated sentence openers are a `broad`-scope pattern. */
+  trackRepeatedOpeners: boolean;
   /** §25.6. Off by default; positive tips must never feel patronizing. */
   positiveReinforcementEnabled: boolean;
+  /** §32.2. Saving a report never implies saving audio; these are separate. */
   postTakeReportEnabled: boolean;
+  /**
+   * §32.1/§32.2. **Off by default.** Audio is memory-only unless this is on.
+   * Turning it off must delete what earlier takes stored, not merely stop
+   * future writes — the same rule `ReportStore` applies per session.
+   */
+  retainAudioRecordingEnabled: boolean;
+  /** §17.7. Persistent personal calibration is opt-in and stays on-device. */
+  personalCalibrationEnabled: boolean;
+  /**
+   * §30.1 "reset personal calibration", as a tombstone rather than a button
+   * with nowhere to write: wall-clock epoch **milliseconds** of the last reset,
+   * or `null` if never reset. Any stored calibration learned before this
+   * instant is invalid and must be relearned.
+   *
+   * Wall clock is correct here and does not violate Rule 3: this timestamp is
+   * never on an evidence or decision path — it only compares two persisted
+   * records that outlive every audio clock in the process.
+   */
+  personalCalibrationResetAtEpochMs: number | null;
+  /** §30.4. Influences tips and review only; never script tracking. */
+  goals: CoachingGoals;
   /** §7.6. Rail text scale, 0.8–1.5. */
   railTextScale: number;
   modules: {

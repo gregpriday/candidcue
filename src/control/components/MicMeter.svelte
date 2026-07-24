@@ -31,10 +31,31 @@
     if (!first) return INITIAL_MIC_ADVICE_STATE;
     return reduceMicLevel(INITIAL_MIC_ADVICE_STATE, first, first.generatedAtMs);
   }
-  let held = $state<MicAdviceState>(seed());
+  /*
+   * The fold runs on a PLAIN accumulator and publishes into `held`.
+   *
+   * It used to be `held = reduceMicLevel(held, …)` inside the effect — an
+   * effect that reads and writes the same `$state`. `reduceMicLevel` always
+   * returns a fresh object, so the write re-triggered the effect, which wrote
+   * again, and Svelte 5 aborted the whole component with
+   * `effect_update_depth_exceeded` on the very first level frame. The meter on
+   * Preflight's microphone section died as soon as audio arrived; the DOM test
+   * project (tests/dom/mic-meter.test.ts) is what made it visible.
+   */
+  let accumulator: MicAdviceState = seed();
+  /** The frame `seed()` already folded, so the effect does not fold it twice. */
+  function seedFrameMs(): number | null {
+    return level?.generatedAtMs ?? null;
+  }
+  let lastFrameAtMs: number | null = seedFrameMs();
+  let held = $state<MicAdviceState>(accumulator);
   $effect(() => {
-    if (!level) return;
-    held = reduceMicLevel(held, level, level.generatedAtMs);
+    const frame = level;
+    if (!frame) return;
+    if (frame.generatedAtMs === lastFrameAtMs) return;
+    lastFrameAtMs = frame.generatedAtMs;
+    accumulator = reduceMicLevel(accumulator, frame, frame.generatedAtMs);
+    held = accumulator;
   });
 
   const percent = $derived(Math.round(Math.min(1, level?.rms ?? 0) * 100));

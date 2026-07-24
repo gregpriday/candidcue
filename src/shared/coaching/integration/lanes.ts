@@ -109,7 +109,10 @@ export function createCoachingLanes(options: CoachingLanesOptions): CoachingLane
     fillers: new FillerTracker({
       take,
       takeStartAudioMs,
-      precisionEnabled: settings.precisionTranscriptionEnabled,
+      // §29.3/§30.2. `off` is Basic; every other mode makes precision calls, so
+      // the tile's `degraded` flag is off for all three. `review_only` counts:
+      // the queue still runs, just after the take.
+      precisionEnabled: settings.precisionTranscriptionMode !== 'off',
     }),
     registry: new CoachCandidateRegistry(),
     policy: new CoachTipPolicy(),

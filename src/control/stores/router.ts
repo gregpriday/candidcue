@@ -12,6 +12,8 @@ export type SettingsSection =
   | 'teleprompter'
   /** Companion §47 follow settings. */
   | 'following'
+  /** Companion §30 live-coaching settings. */
+  | 'coaching'
   | 'commands'
   | 'listeners'
   | 'privacy';

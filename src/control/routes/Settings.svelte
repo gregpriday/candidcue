@@ -5,6 +5,7 @@
 -->
 <script lang="ts">
   import Button from '../components/Button.svelte';
+  import CoachingSettingsFields from '../components/CoachingSettingsFields.svelte';
   import FollowSettingsFields from '../components/FollowSettingsFields.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import Section from '../components/Section.svelte';
@@ -37,6 +38,7 @@
   import * as secretsService from '../services/secrets';
   import * as settingsService from '../services/settings';
   import type { OpenAiKeyStatus } from '../services/secrets-types';
+  import type { CoachingSettings } from '../../shared/contracts';
   import { appStatus } from '../stores/app-status';
   import { requestConfirm } from '../stores/confirm';
   import { navigate, route, type SettingsSection } from '../stores/router';
@@ -54,6 +56,7 @@
     { id: 'audio', label: 'Audio' },
     { id: 'teleprompter', label: 'Teleprompter' },
     { id: 'following', label: 'Following' },
+    { id: 'coaching', label: 'Live coaching' },
     { id: 'commands', label: 'Commands' },
     { id: 'listeners', label: 'Listeners' },
     { id: 'privacy', label: 'Data, privacy & updates' },
@@ -222,6 +225,18 @@
     } catch (err) {
       showToast(describeError(err), 'danger');
     }
+  }
+
+  /**
+   * §30 / §32.2. Save a coaching change, then say out loud if a retention
+   * purge failed. Turning a retention toggle off promises the user that what
+   * earlier takes stored is gone; if the deletion failed, telling them nothing
+   * would leave them believing a promise CandidCue did not keep.
+   */
+  async function saveCoaching(patch: Partial<CoachingSettings>): Promise<void> {
+    await patchSettings('coaching', patch);
+    const failure = settingsService.takeRetentionPurgeFailure();
+    if (failure) showToast(failure, 'danger');
   }
 
   async function runExportAllData(): Promise<void> {
@@ -509,6 +524,17 @@
           <FollowSettingsFields
             following={$settings.following}
             onchange={(patch) => void patchSettings('following', patch)}
+          />
+        </Section>
+      {:else if section === 'coaching'}
+        <Section
+          title="Live coaching"
+          description="What CandidCue tells you about your delivery while you read, and what it keeps afterwards. Coaching never moves the script — it only ever comments on it."
+        >
+          <CoachingSettingsFields
+            coaching={$settings.coaching}
+            transcriptRetention={$settings.privacy.saveTranscript}
+            onchange={(patch) => void saveCoaching(patch)}
           />
         </Section>
       {:else if section === 'commands'}

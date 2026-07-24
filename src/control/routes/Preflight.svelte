@@ -8,6 +8,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import Button from '../components/Button.svelte';
+  import CalibrationPreview from '../components/CalibrationPreview.svelte';
+  import CoachingSettingsFields from '../components/CoachingSettingsFields.svelte';
   import Disclosure from '../components/Disclosure.svelte';
   import FollowSettingsFields from '../components/FollowSettingsFields.svelte';
   import Icon from '../components/Icon.svelte';
@@ -46,6 +48,8 @@
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
   import type { OpenAiKeyStatus } from '../services/secrets-types';
+  import { takeRetentionPurgeFailure } from '../services/settings';
+  import type { CoachingSettings } from '../../shared/contracts';
   import type { SessionMode } from '../services/settings-types';
   import type { ListenerStageSelection } from '../../shared/contracts';
   import { compiled, requestCompile } from '../stores/compiled';
@@ -675,6 +679,17 @@
     }
   }
 
+  /**
+   * §30 / §32.2. Same handler as Settings → Live coaching: save, then report a
+   * failed retention purge instead of silently leaving the user believing that
+   * turning a toggle off deleted what earlier takes stored.
+   */
+  async function saveCoaching(patch: Partial<CoachingSettings>): Promise<void> {
+    await patchSettings('coaching', patch);
+    const failure = takeRetentionPurgeFailure();
+    if (failure) showToast(failure, 'danger');
+  }
+
   async function allowMicrophone(): Promise<void> {
     micError = null;
     updatePreflight({ microphone: 'checking' });
@@ -1172,6 +1187,21 @@
         {#if micPartial || micFinal}
           <p class="transcript" class:final={Boolean(micFinal)}>{micFinal || micPartial}</p>
         {/if}
+        <!-- §30.3. Optional, and deliberately not wired into the readiness
+             store: live adaptation remains authoritative, so a preview that
+             has not seen enough audio must never be able to block Start. -->
+        <Disclosure label="Calibration preview">
+          <p class="calibration-intro">
+            Read the first paragraph of your script, or any neutral sentence, while the microphone
+            test is running. This is optional — CandidCue adapts to your voice during the take
+            whether you do this or not.
+          </p>
+          <CalibrationPreview
+            level={micLevel}
+            transcript={micFinal || micPartial}
+            coaching={$settings.coaching}
+          />
+        </Disclosure>
         <!-- §28.3 capture processing. These are the saved audio settings and
              they are applied to the session's getUserMedia constraints at
              Start; they were previously hardcoded switches nothing read. -->
@@ -1260,6 +1290,19 @@
           />
         </Disclosure>
       {/if}
+    </Section>
+
+    <!-- D2. Live coaching (companion §30.1) -->
+    <Section
+      title="Live coaching"
+      description="What CandidCue tells you about your delivery during this take. Coaching never moves the script."
+    >
+      <CoachingSettingsFields
+        compact
+        coaching={$settings.coaching}
+        transcriptRetention={$settings.privacy.saveTranscript}
+        onchange={(patch) => void saveCoaching(patch)}
+      />
     </Section>
 
     <!-- E. Appearance -->
@@ -1634,6 +1677,13 @@
   }
   .transcript.final {
     color: var(--prose-text-warm);
+  }
+  .calibration-intro {
+    margin: 0;
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
+    max-width: var(--prose-measure-narrow);
   }
 
   /* --- tracking + appearance --- */

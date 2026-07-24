@@ -2,7 +2,11 @@
  * Validated application-settings view consumed by the Settings screen
  * (spec §18) and defaults used until `get_settings` lands in Rust.
  */
+import { defaultCoachingSettings } from '../lib/coaching-profiles';
 import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
+import type { CoachingSettings } from '../../shared/contracts';
+
+export type { CoachingSettings };
 
 export type {
   CoachingDisplay,
@@ -61,6 +65,14 @@ export interface AppSettings {
    * `lib/follow-profiles.ts` rather than exposing control-system parameters.
    */
   following: FollowingSettings;
+  /**
+   * Live-coaching controls (companion §30). Rust-owned in both directions, like
+   * `following`: two of these are retention consents (§32.2) and one decides
+   * whether the precision-transcription queue spends the user's OpenAI key
+   * (§29.3), so none of them may live in a localStorage overlay that a profile
+   * reset can silently return to its default.
+   */
+  coaching: CoachingSettings;
   commands: {
     enabled: boolean;
     wakePhrase: string;
@@ -149,6 +161,7 @@ export function defaultAppSettings(): AppSettings {
       hidePointer: true,
     },
     following: defaultFollowingSettings(),
+    coaching: defaultCoachingSettings(),
     commands: {
       enabled: true,
       wakePhrase: 'CandidCue',
