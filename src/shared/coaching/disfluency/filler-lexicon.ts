@@ -44,6 +44,18 @@ const STRICT_ENTRIES: readonly StrictFillerEntry[] = [
   { form: 'ah', variants: ['ah', 'ahh', 'ahhh'], displayForm: 'ah', unconditional: false },
 ];
 
+/**
+ * The canonical strict forms, for callers that need to name "every vocalized
+ * filler" — §19.4's `cc:filler intentional` covers a passage rather than a
+ * word, and `AuthoredSpanContext.intentionalForms` is a list of forms.
+ *
+ * Strict forms only: the contextual layer never accepts an authored-intentional
+ * marking anyway (`realtime-filler-detector` passes `authoredIntentional:
+ * false` for contextual matches by construction), so listing contextual phrases
+ * here would be a promise this codebase does not keep.
+ */
+export const STRICT_FILLER_FORMS: readonly string[] = STRICT_ENTRIES.map((entry) => entry.form);
+
 /** §15.2. Candidate contextual fillers; every one of these needs context. */
 const CONTEXTUAL_PHRASES: readonly string[] = [
   'you know',

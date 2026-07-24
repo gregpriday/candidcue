@@ -32,6 +32,12 @@ export const SAMPLE_SCRIPT_TITLE = 'Sample: read this aloud';
  *    first take doubles as a tour. The sentences are written the way someone
  *    would actually say them, contractions and all — a teleprompter script
  *    that reads like prose is a script the aligner will fight you on.
+ *
+ * It also carries one §19.4 coaching directive, on the paragraph that asks the
+ * presenter to slow right down. Without it the coaching rail would offer to
+ * lift the pace on the exact line whose instruction is to drop it — which is
+ * both the clearest demonstration of what the directive is for and the fastest
+ * way to make someone turn the rail off on their first take.
  */
 export const SAMPLE_SCRIPT_SOURCE = `# Getting started
 
@@ -44,6 +50,8 @@ You should see the line you're on stay roughly in the middle of the screen. The 
 [Cue: relax your shoulders and look at the lens]
 
 ## Try slowing down
+
+<!-- cc:style calm -->
 
 Now try slowing right down for a sentence or two, and put a real pause in the middle of this one — like that. The text should ease off and wait for you rather than running ahead.
 

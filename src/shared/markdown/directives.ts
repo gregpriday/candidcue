@@ -10,7 +10,7 @@
  * blanked with spaces of identical length so remark sees blank lines there
  * and every other source offset survives unchanged.
  */
-import type { CompileDiagnostic } from '../contracts';
+import type { CoachDirectiveStyle, CoachFrontMatter, CompileDiagnostic } from '../contracts';
 
 export type ContainerKind = 'spoken' | 'silent' | 'stage' | 'literal-command';
 
@@ -388,3 +388,371 @@ export function classifyBracketDirective(label: string): InlineDirective {
 
 /** Inline spoken alias: Word{say="Spoken Form"} (spec §23.4). */
 export const INLINE_SAY_PATTERN = /\{say="([^"\n]*)"\}/;
+
+/* ------------------------------------------------------------------ */
+/* §19.4 coaching directives                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * §19.4 writes coaching directives as HTML comments (`<!-- cc:coach off -->`).
+ *
+ * That syntax is free of the one hazard every directive has to clear: the
+ * compiler already discards HTML comments at the AST level (§22.2), in both
+ * `buildHtmlBlock` and `walkPhrasing`, so a `cc:` comment cannot contribute a
+ * spoken token or shift a token index no matter what it says. This module only
+ * classifies the comment text; the compiler decides what it scopes over.
+ *
+ * The directive *keyword* is deliberately not a mdast extension and not a new
+ * fence: a second scanning mechanism would be a second way to get the masking
+ * wrong.
+ */
+
+const COACH_DIRECTIVE_STYLES: ReadonlySet<string> = new Set<CoachDirectiveStyle>([
+  'calm',
+  'natural',
+  'conversational',
+  'expressive',
+  'broadcast',
+]);
+
+export type CoachDirective =
+  /** `cc:coach off` opens a no-coaching scope; `cc:coach on` closes one. */
+  | { kind: 'coach'; enabled: boolean }
+  | { kind: 'style'; style: CoachDirectiveStyle }
+  | { kind: 'pace'; lowWpm: number; highWpm: number }
+  | { kind: 'filler' }
+  /** Explicit end of every scope opened since the previous `cc:end`. */
+  | { kind: 'end' }
+  /** Recognized as a `cc:` comment but not usable; carries its own report. */
+  | { kind: 'diagnostic'; code: string; message: string }
+  /** Not a `cc:` comment at all. */
+  | { kind: 'none' };
+
+/**
+ * §19.4 directives with no consumer in this build.
+ *
+ * These are reported rather than silently accepted. A directive that parses
+ * and does nothing is worse than one that is missing, because the author
+ * believes it worked:
+ *
+ * - `cc:pause` would have to reach the cadence lane's pause *location* input,
+ *   which is an alignment fact nothing currently supplies;
+ * - `cc:emphasis` would have to reach the variety lane's emphasis-contrast
+ *   term, which the orchestrator hard-codes to `null` (§17.5 redistributes it);
+ * - `cc:duration` is a per-section budget, and the only duration projection
+ *   that exists (§14.10) is whole-script — that one is settable from §19.5
+ *   front matter instead.
+ */
+const UNSUPPORTED_COACH_DIRECTIVES: ReadonlySet<string> = new Set([
+  'pause',
+  'emphasis',
+  'duration',
+]);
+
+/** Matches the whole comment; the `cc:` prefix is what makes it ours. */
+const COACH_COMMENT_PATTERN = /^<!--\s*cc:\s*([\s\S]*?)\s*-->$/i;
+
+/**
+ * Classify the raw text of an HTML comment as a §19.4 directive.
+ *
+ * `raw` is the comment exactly as it appears in the source, including the
+ * `<!--` and `-->` delimiters. Anything that is not a `cc:` comment returns
+ * `none` and is left to the compiler's ordinary comment handling.
+ */
+export function classifyCoachComment(raw: string): CoachDirective {
+  const match = COACH_COMMENT_PATTERN.exec(raw.trim());
+  if (!match) return { kind: 'none' };
+  const body = match[1]!.trim();
+  if (!body) {
+    return {
+      kind: 'diagnostic',
+      code: 'coach_directive_unknown',
+      message: 'An empty "cc:" directive has no effect.',
+    };
+  }
+  const split = /^([A-Za-z][A-Za-z-]*)\s*([\s\S]*)$/.exec(body);
+  if (!split) {
+    return {
+      kind: 'diagnostic',
+      code: 'coach_directive_unknown',
+      message: `Unrecognized coaching directive "cc:${body}"; it has no effect.`,
+    };
+  }
+  const name = split[1]!.toLowerCase();
+  const value = split[2]!.trim();
+
+  switch (name) {
+    case 'coach': {
+      const state = value.toLowerCase();
+      if (state === 'off') return { kind: 'coach', enabled: false };
+      if (state === 'on') return { kind: 'coach', enabled: true };
+      return badValue('coach', value, 'Use "cc:coach off" or "cc:coach on".');
+    }
+    case 'style': {
+      const style = value.toLowerCase();
+      if (COACH_DIRECTIVE_STYLES.has(style)) {
+        return { kind: 'style', style: style as CoachDirectiveStyle };
+      }
+      return badValue(
+        'style',
+        value,
+        'Use one of: calm, natural, conversational, expressive, broadcast.',
+      );
+    }
+    case 'pace': {
+      // An en dash or em dash is what a word processor produces from "125-145",
+      // and rejecting it would fail a script the author cannot see anything
+      // wrong with.
+      const range = /^(\d{2,3})\s*[-–—]\s*(\d{2,3})$/.exec(value);
+      if (!range) {
+        return badValue('pace', value, 'Use a words-per-minute range, e.g. "cc:pace 125-145".');
+      }
+      const lowWpm = Number.parseInt(range[1]!, 10);
+      const highWpm = Number.parseInt(range[2]!, 10);
+      if (lowWpm < 60 || highWpm > 300 || lowWpm >= highWpm) {
+        return badValue(
+          'pace',
+          value,
+          'A pace range must read low-to-high and sit between 60 and 300 wpm.',
+        );
+      }
+      return { kind: 'pace', lowWpm, highWpm };
+    }
+    case 'filler': {
+      if (value.toLowerCase() === 'intentional') return { kind: 'filler' };
+      return badValue('filler', value, 'The only supported form is "cc:filler intentional".');
+    }
+    case 'end': {
+      if (value) {
+        return badValue('end', value, '"cc:end" takes no value.');
+      }
+      return { kind: 'end' };
+    }
+    default: {
+      if (UNSUPPORTED_COACH_DIRECTIVES.has(name)) {
+        return {
+          kind: 'diagnostic',
+          code: 'coach_directive_unsupported',
+          message: `"cc:${name}" is recognized but has no effect in this version, so it is ignored rather than silently accepted.`,
+        };
+      }
+      return {
+        kind: 'diagnostic',
+        code: 'coach_directive_unknown',
+        message: `Unknown coaching directive "cc:${name}"; it has no effect.`,
+      };
+    }
+  }
+}
+
+function badValue(name: string, value: string, hint: string): CoachDirective {
+  const shown = value ? `"${value}"` : 'an empty value';
+  return {
+    kind: 'diagnostic',
+    code: 'coach_directive_bad_value',
+    message: `"cc:${name}" does not accept ${shown}. ${hint}`,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* §19.5 front matter                                                  */
+/* ------------------------------------------------------------------ */
+
+export interface FrontMatterScanResult {
+  /** Source with the front-matter block space-blanked; every offset survives. */
+  maskedSource: string;
+  frontMatter: CoachFrontMatter | null;
+  diagnostics: CompileDiagnostic[];
+}
+
+const COACH_RAIL_MODES: ReadonlySet<string> = new Set([
+  'off',
+  'minimal',
+  'coach',
+  'studio',
+  'review_only',
+  'custom',
+]);
+
+/**
+ * Recognize a §19.5 front-matter block.
+ *
+ * ---------------------------------------------------------------------------
+ * THE `---` AMBIGUITY
+ * ---------------------------------------------------------------------------
+ * A leading `---` is already valid CandidCue Markdown: it is a horizontal
+ * rule, and `Title\n---` is a setext heading. Front matter cannot be allowed
+ * to eat either. Three conditions must all hold, and the third is the one that
+ * makes this safe:
+ *
+ *  1. the very first line of the document is exactly `---`;
+ *  2. a later line is exactly `---` (or `...`), closing the block;
+ *  3. the block contains a **top-level `coach:` key**.
+ *
+ * (3) is deliberately narrower than YAML. It means the *only* documents whose
+ * meaning changes are documents that contain the literal word this feature is
+ * about — `---` / `# Heading` / `---` is still a rule, a heading and a rule,
+ * and `---` / `Note: something` / `---` is still a rule, a paragraph and a
+ * rule, exactly as before. A script that opens with front matter carrying no
+ * `coach:` key keeps whatever behaviour it has today rather than silently
+ * changing; that is a smaller promise than "we parse YAML front matter", and
+ * it is the promise §19.5 actually needs.
+ *
+ * A setext heading cannot reach here at all: it requires text on line 1.
+ */
+export function scanFrontMatter(source: string): FrontMatterScanResult {
+  const unchanged: FrontMatterScanResult = {
+    maskedSource: source,
+    frontMatter: null,
+    diagnostics: [],
+  };
+  const lines = splitLines(source);
+  const first = lines[0];
+  if (!first || first.text.trim() !== '---') return unchanged;
+
+  let closeIndex = -1;
+  for (let i = 1; i < lines.length; i++) {
+    const text = lines[i]!.text.trim();
+    if (text === '---' || text === '...') {
+      closeIndex = i;
+      break;
+    }
+  }
+  if (closeIndex < 0) return unchanged;
+
+  const body = lines.slice(1, closeIndex);
+  if (!body.some((line) => /^coach\s*:/.test(line.text))) return unchanged;
+
+  const diagnostics: CompileDiagnostic[] = [];
+  const frontMatter = parseCoachBlock(body, diagnostics);
+
+  const chars = source.split('');
+  const end = lines[closeIndex]!.end;
+  blankRange(chars, 0, end);
+  return { maskedSource: chars.join(''), frontMatter, diagnostics };
+}
+
+/**
+ * Parse the `coach:` mapping out of a front-matter body.
+ *
+ * A deliberately small YAML subset — one nested mapping of scalars and inline
+ * two-element sequences — because that is all §19.5 defines and because a
+ * general YAML parser is a dependency, an attack surface, and a source of
+ * behaviour nobody wrote down. Anything outside the subset is reported and
+ * skipped; nothing here can fail the compile.
+ */
+function parseCoachBlock(
+  body: readonly SourceLine[],
+  diagnostics: CompileDiagnostic[],
+): CoachFrontMatter {
+  const frontMatter: CoachFrontMatter = { unknownFields: {} };
+  let inCoach = false;
+
+  const report = (line: SourceLine, message: string) => {
+    diagnostics.push({
+      code: 'coach_front_matter_bad_value',
+      severity: 'warning',
+      message,
+      blocking: false,
+      source: { utf16Start: line.start, utf16End: line.end, line: line.lineNumber },
+      suggestedAction: 'fix_directive',
+    });
+  };
+
+  for (const line of body) {
+    const text = line.text;
+    if (!text.trim() || text.trim().startsWith('#')) continue;
+    const indented = /^\s/.test(text);
+    if (!indented) {
+      inCoach = /^coach\s*:/.test(text);
+      continue;
+    }
+    if (!inCoach) continue;
+
+    const pair = /^\s+([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/.exec(text);
+    if (!pair) continue;
+    const key = pair[1]!.toLowerCase();
+    const raw = stripQuotes(pair[2]!.trim());
+
+    switch (key) {
+      case 'mode': {
+        if (COACH_RAIL_MODES.has(raw)) frontMatter.mode = raw as CoachFrontMatter['mode'];
+        else report(line, `Unknown coaching mode "${raw}" in front matter; ignored.`);
+        break;
+      }
+      case 'style': {
+        if (COACH_DIRECTIVE_STYLES.has(raw)) frontMatter.style = raw as CoachDirectiveStyle;
+        else report(line, `Unknown delivery style "${raw}" in front matter; ignored.`);
+        break;
+      }
+      case 'target_wpm': {
+        const pairValue = parseNumberPair(raw, 60, 300);
+        if (pairValue) frontMatter.targetWpm = pairValue;
+        else report(line, `"target_wpm" needs a low-to-high pair such as [130, 165]; ignored.`);
+        break;
+      }
+      case 'target_variety': {
+        const pairValue = parseNumberPair(raw, 0, 100);
+        if (pairValue) frontMatter.targetVariety = pairValue;
+        else report(line, `"target_variety" needs a low-to-high pair such as [45, 75]; ignored.`);
+        break;
+      }
+      case 'target_duration': {
+        const seconds = parseDurationSeconds(raw);
+        if (seconds !== null) frontMatter.targetDurationSeconds = seconds;
+        else report(line, `"target_duration" needs a "MM:SS" or "HH:MM:SS" value; ignored.`);
+        break;
+      }
+      case 'filler_detection': {
+        if (raw === 'strict' || raw === 'broad') frontMatter.fillerDetection = raw;
+        else {
+          report(
+            line,
+            `"filler_detection" accepts "strict" or "broad"; "${raw}" is not a lexicon width and is ignored. Transcription cost modes are chosen in Settings, never by a script.`,
+          );
+        }
+        break;
+      }
+      case 'live_tips': {
+        if (raw === 'low' || raw === 'normal' || raw === 'high') frontMatter.liveTips = raw;
+        else report(line, `"live_tips" accepts "low", "normal" or "high"; ignored.`);
+        break;
+      }
+      case 'positive_feedback': {
+        if (raw === 'true' || raw === 'false') frontMatter.positiveFeedback = raw === 'true';
+        else report(line, `"positive_feedback" accepts true or false; ignored.`);
+        break;
+      }
+      default:
+        // §19.5: preserved but ignored.
+        frontMatter.unknownFields[key] = raw;
+    }
+  }
+  return frontMatter;
+}
+
+function stripQuotes(value: string): string {
+  const match = /^"([\s\S]*)"$|^'([\s\S]*)'$/.exec(value);
+  return match ? (match[1] ?? match[2] ?? '') : value;
+}
+
+function parseNumberPair(raw: string, min: number, max: number): [number, number] | null {
+  const match = /^\[\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\]$/.exec(raw);
+  if (!match) return null;
+  const low = Number.parseFloat(match[1]!);
+  const high = Number.parseFloat(match[2]!);
+  if (!Number.isFinite(low) || !Number.isFinite(high)) return null;
+  if (low < min || high > max || low >= high) return null;
+  return [low, high];
+}
+
+function parseDurationSeconds(raw: string): number | null {
+  const match = /^(?:(\d{1,2}):)?(\d{1,3}):(\d{2})$/.exec(raw);
+  if (!match) return null;
+  const hours = match[1] ? Number.parseInt(match[1], 10) : 0;
+  const minutes = Number.parseInt(match[2]!, 10);
+  const seconds = Number.parseInt(match[3]!, 10);
+  if (seconds > 59) return null;
+  const total = hours * 3600 + minutes * 60 + seconds;
+  return total > 0 ? total : null;
+}

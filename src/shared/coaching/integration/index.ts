@@ -19,6 +19,12 @@ export {
   type CoachingLanesOptions,
 } from './lanes';
 export {
+  EMPTY_SCRIPT_DIRECTIVES,
+  applyCoachFrontMatter,
+  resolveScriptDirectives,
+  type ScriptDirectiveMap,
+} from './script-directives';
+export {
   DEFAULT_COACHING_SCHEDULE,
   initialHostState,
   liveStateFrom,

@@ -178,6 +178,19 @@ export interface SerializedSearchIndexes {
   exactToken: Record<string, number[]>;
   /** rare (low-frequency, non-stopword) normalized token -> spoken token indexes */
   rareToken: Record<string, number[]>;
+  /**
+   * normalized *alias* -> spoken token indexes (§14.4 "normalized token **and
+   * alias** inverted index").
+   *
+   * Aliases were previously consulted only while scoring an already-open
+   * window, so a presenter who produced only the alias form of a term — the
+   * exact case §14.2 exists for — opened no window to score. Keys may be
+   * multi-word ("forty seven" for `47`, "real time" for `real-time`) because
+   * transcript normalization splits hyphens and number words; retrieval is
+   * expected to probe both single words and short n-grams of the transcript
+   * tail against this map.
+   */
+  aliasToken: Record<string, number[]>;
   /** space-joined normalized 2/3/4-grams -> start token indexes */
   ngram2: Record<string, number[]>;
   ngram3: Record<string, number[]>;
@@ -231,10 +244,87 @@ export interface CompiledScript {
    * Ranges are inclusive, non-overlapping, and in ascending token order.
    */
   literalCommandRanges: SpokenTokenRange[];
+  /**
+   * §19.4 / §19.5 coaching directives derived from the script.
+   *
+   * Optional rather than required because a `CompiledScript` outlives the
+   * process that produced it: a cached document compiled before this field
+   * existed is still a valid document, and a type that claims otherwise would
+   * be lying to every consumer that reads it back. The compiler always emits
+   * it; readers must still treat its absence as "no directives".
+   */
+  coaching?: CompiledCoachingDirectives;
 }
 
 /** Inclusive range over `CompiledScript.spokenTokens` indexes. */
 export interface SpokenTokenRange {
   startTokenIndex: number;
   endTokenIndex: number;
+}
+
+/* -------------------------------------------------------------------------
+ * §19.4 script directives and §19.5 front matter
+ * ---------------------------------------------------------------------- */
+
+/**
+ * The delivery styles a script may name (§19.4 `cc:style`, §19.5 `style:`).
+ *
+ * `custom` is absent on purpose: it means "the numbers the *user* chose in
+ * Settings", which a script cannot know and must not claim.
+ */
+export type CoachDirectiveStyle =
+  | 'calm'
+  | 'natural'
+  | 'conversational'
+  | 'expressive'
+  | 'broadcast';
+
+/** §19.5 `coach:` front matter, after validation. */
+export interface CoachFrontMatter {
+  mode?: 'off' | 'minimal' | 'coach' | 'studio' | 'review_only' | 'custom';
+  style?: CoachDirectiveStyle;
+  targetWpm?: [number, number];
+  targetVariety?: [number, number];
+  targetDurationSeconds?: number;
+  fillerDetection?: 'strict' | 'broad';
+  liveTips?: 'low' | 'normal' | 'high';
+  positiveFeedback?: boolean;
+  /**
+   * §19.5: "Unknown fields are preserved but ignored." Preserved verbatim, so
+   * a key a later version will understand is never destroyed in transit.
+   */
+  unknownFields: Record<string, string>;
+}
+
+/**
+ * The §19.4 directives in force over one authored span.
+ *
+ * `spanId` is a {@link SentenceUnit} id — the same identity the coaching
+ * subsystem calls a *script span* and compares `activeScriptSpanId` against.
+ * It is never a token index and never a block id.
+ */
+export interface CoachDirectiveSpan {
+  spanId: string;
+  /** `<!-- cc:coach off -->`: no coaching evidence may be raised here. */
+  coachingOff?: boolean;
+  /** `<!-- cc:filler intentional -->`: authored disfluency, not a mistake. */
+  fillerIntentional?: boolean;
+  /** `<!-- cc:style … -->`. */
+  style?: CoachDirectiveStyle;
+  /** `<!-- cc:pace low-high -->`, words per minute. */
+  paceLowWpm?: number;
+  paceHighWpm?: number;
+}
+
+/**
+ * Everything §19 asks the compiler to derive from the script itself.
+ *
+ * Resolved to span ids here rather than left as source offsets, because the
+ * consumer (the coaching orchestrator's host state) speaks in span ids and has
+ * no access to the source text at all.
+ */
+export interface CompiledCoachingDirectives {
+  frontMatter: CoachFrontMatter | null;
+  /** Only spans that carry at least one directive. Ascending span order. */
+  spans: CoachDirectiveSpan[];
 }

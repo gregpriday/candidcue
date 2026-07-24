@@ -46,8 +46,14 @@ import type {
   AudioClock,
   CoachingHostState,
   CoachingLaneFailure,
+  ScriptDirectiveMap,
 } from '../../shared/coaching/integration';
-import { initialHostState } from '../../shared/coaching/integration';
+import {
+  applyCoachFrontMatter,
+  initialHostState,
+  resolveScriptDirectives,
+} from '../../shared/coaching/integration';
+import { STRICT_FILLER_FORMS } from '../../shared/coaching/disfluency/filler-lexicon';
 import type { CoachObserverTransport } from '../../shared/coaching/coach/luna-observer';
 import type {
   AuthoredSpanContext,
@@ -134,14 +140,27 @@ export class CoachingSessionController {
   private readonly totalUnits: number;
   /** Last cursor token index, so a transcript item anchors to the live line. */
   private lastTokenIndex = 0;
+  /** §19.4 authored directives, resolved to span ids by the compiler. */
+  private readonly directives: ScriptDirectiveMap;
+  /** §19.5. The persisted settings with the script's front matter applied. */
+  private readonly settings: CoachingSettings;
 
   constructor(deps: CoachingSessionDeps) {
     this.deps = deps;
     this.totalUnits = deps.compiled?.spokenTokens.length ?? 0;
 
+    // §19.5 first, then §19.4: an authored pace directive is judged against the
+    // band the session will actually run with, which the front matter may have
+    // just moved.
+    this.settings = applyCoachFrontMatter(deps.settings, deps.compiled?.coaching?.frontMatter);
+    this.directives = resolveScriptDirectives(deps.compiled?.coaching, this.settings);
+
     const audioClock: AudioClock = { nowMs: () => this.analyzerNowMs };
     const host: CoachingHostState = {
       ...initialHostState(deps.sessionId, deps.takePassId),
+      // §19.4: the disabled set is a property of the script, not of the cursor,
+      // so it is pushed once and never recomputed per frame.
+      coachingDisabledSpanIds: this.directives.coachingDisabledSpanIds,
       // §11: the token → line map is a fact of the compiled script; without it
       // there are no gutter marks.
       ...(deps.compiled ? { lineForToken: this.buildLineForToken(deps.compiled) } : {}),
@@ -150,7 +169,7 @@ export class CoachingSessionController {
     this.orchestrator = new CoachingOrchestrator({
       sessionId: deps.sessionId,
       audioClock,
-      settings: deps.settings,
+      settings: this.settings,
       host,
       publish: (state) => this.forward(state),
       ...(deps.lunaTransport ? { lunaTransport: deps.lunaTransport } : {}),
@@ -194,7 +213,34 @@ export class CoachingSessionController {
   }
 
   private retainPcmFromSettings(): boolean {
+    // Deliberately the *persisted* setting, not the front-matter overlay: §19.5
+    // may not switch on a mode that spends the user's API budget.
     return this.deps.settings.precisionTranscriptionMode !== 'off';
+  }
+
+  /**
+   * §19.4. The authored suppressions in force at the presenter's current span.
+   *
+   * Recomputed per tracking snapshot rather than cached, because the span is
+   * the only thing that moves — the sets themselves are fixed for the script.
+   */
+  private spanDirectives(spanId: string | null): {
+    authoredFastSection: boolean;
+    suppressSlowTip: boolean;
+    suppressVarietyCoaching: boolean;
+  } {
+    if (spanId === null) {
+      return {
+        authoredFastSection: false,
+        suppressSlowTip: false,
+        suppressVarietyCoaching: false,
+      };
+    }
+    return {
+      authoredFastSection: this.directives.authoredFastSpanIds.has(spanId),
+      suppressSlowTip: this.directives.suppressSlowTipSpanIds.has(spanId),
+      suppressVarietyCoaching: this.directives.suppressVarietySpanIds.has(spanId),
+    };
   }
 
   private handleFrames(frames: AudioFrameFeatures[]): void {
@@ -224,6 +270,8 @@ export class CoachingSessionController {
         reacquiring: tracking.reacquiring,
         commandActive: tracking.commandActive,
         activeScriptSpanId: tracking.activeScriptSpanId,
+        // §19.4. The authored suppressions for the span the presenter is on.
+        ...this.spanDirectives(tracking.activeScriptSpanId),
         // §5.4/§20.5. The real epoch, pushed every snapshot. Safe to propagate
         // now that the disfluency lane distinguishes a jump from a new take
         // pass: an epoch change drops queued and in-flight coaching state and
@@ -327,14 +375,26 @@ export class CoachingSessionController {
   private authoredContext(_item: CoachingTranscriptItem): AuthoredSpanContext {
     const host = this.orchestrator.hostState();
     const trustworthy = host.alignmentConfidence >= 0.5;
+    const spanId = host.activeScriptSpanId;
     return {
-      spanId: host.activeScriptSpanId,
+      spanId,
       // The cursor token drives gutter-mark anchoring; `lineForToken` maps the
       // stringified index back to a sentence-line. `null` when the cursor is
       // not trustworthy, so §11.2's "never invent a position" holds.
       scriptAnchorTokenId: trustworthy ? String(this.lastTokenIndex) : null,
       text: '',
       alignmentUnreliable: !trustworthy,
+      // §19.4. `cc:coach off` stops the disfluency lane from producing an event
+      // at all, rather than producing one and hiding it — an event that exists
+      // reaches the post-take report, and the author said not here.
+      ...(spanId !== null && this.directives.coachingDisabledSpanIds.has(spanId)
+        ? { coachingDisabled: true }
+        : {}),
+      // §15.5 / §19.4. `cc:filler intentional` marks every vocalized filler in
+      // the passage as authored delivery.
+      ...(spanId !== null && this.directives.intentionalFillerSpanIds.has(spanId)
+        ? { intentionalForms: STRICT_FILLER_FORMS }
+        : {}),
     };
   }
 
@@ -399,6 +459,19 @@ export class CoachingSessionController {
    */
   hostState(): Readonly<CoachingHostState> {
     return this.orchestrator.hostState();
+  }
+
+  /**
+   * Diagnostics and test seam: everything the orchestrator measured this pass,
+   * including the candidates currently alive in the registry.
+   *
+   * §6.1/§6.5 keep analysing while publishing nothing, so the rail is not a
+   * complete account of what the subsystem did — and "was this candidate
+   * refused at the door" (§19.4) is invisible on the rail by construction,
+   * because a refused candidate is precisely one that never shows.
+   */
+  telemetry(): ReturnType<CoachingOrchestrator['telemetry']> {
+    return this.orchestrator.telemetry();
   }
 
   async dispose(): Promise<void> {

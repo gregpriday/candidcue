@@ -72,6 +72,31 @@ describe('starter scripts', () => {
     }
   });
 
+  it('demonstrates a §19.4 coaching directive on the line that needs one', () => {
+    // The "slow right down" paragraph is the one place in the sample where the
+    // rail would otherwise coach against the script's own instruction.
+    expect(SAMPLE_SCRIPT_SOURCE).toMatch(/<!-- cc:style calm -->/);
+
+    const result = compileSource(SAMPLE_SCRIPT_SOURCE);
+    expect(result.coaching?.spans.length).toBeGreaterThan(0);
+    expect(result.coaching?.spans.every((span) => span.style === 'calm')).toBe(true);
+
+    const slowSentence = result.sentences.find((sentence) =>
+      sentence.normalizedText.startsWith('now try slowing right down'),
+    );
+    expect(slowSentence).toBeDefined();
+    expect(result.coaching?.spans.map((span) => span.spanId)).toContain(slowSentence?.id);
+
+    // Silent, like every other directive in this file.
+    const spoken = ` ${result.spokenTokens.map((token) => token.normalized).join(' ')} `;
+    for (const leaked of ['cc', 'style', 'calm']) {
+      expect(
+        spoken.includes(` ${leaked} `),
+        `directive keyword "${leaked}" leaked into the spoken stream`,
+      ).toBe(false);
+    }
+  });
+
   it('has a title that says what to do with it', () => {
     expect(SAMPLE_SCRIPT_TITLE.length).toBeGreaterThan(0);
     expect(SAMPLE_SCRIPT_TITLE).not.toMatch(/untitled/i);

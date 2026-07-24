@@ -225,7 +225,7 @@ export const DEFAULT_VARIETY_PROFILE: VarietyProfile = {
   positiveTipSustainMs: 20_000,
 };
 
-const RESTRAINED_STYLES: ReadonlySet<DeliveryStyle> = new Set<DeliveryStyle>(['calm', 'broadcast']);
+export const RESTRAINED_STYLES: ReadonlySet<DeliveryStyle> = new Set<DeliveryStyle>(['calm', 'broadcast']);
 
 export function varietyProfileFor(
   style: DeliveryStyle,

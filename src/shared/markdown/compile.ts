@@ -14,10 +14,12 @@ import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import { toString as mdastToString } from 'mdast-util-to-string';
 import type {
+  CoachDirectiveSpan,
   CompileDiagnostic,
   CompileOptions,
   CompiledAsset,
   CompiledBlock,
+  CompiledCoachingDirectives,
   CompiledScript,
   CueEvent,
   NavigationTarget,
@@ -32,8 +34,11 @@ import { hashString, shortHash } from './hash';
 import {
   ContainerIndex,
   classifyBracketDirective,
+  classifyCoachComment,
   resolveContainerSemantics,
   scanContainers,
+  scanFrontMatter,
+  type CoachDirective,
   type ContainerRegion,
 } from './directives';
 import { aliasesForToken, normalizePhrase, normalizeToken } from './normalize';
@@ -177,7 +182,50 @@ interface WalkContext {
   diagnostics: CompileDiagnostic[];
   assets: Map<string, CompiledAsset>;
   definitions: Map<string, string>;
+  /** §19.4 directives seen so far, in source order. */
+  coachDirectives: CoachDirectiveDraft[];
   pendingBlockId: () => string;
+}
+
+/** One `<!-- cc:… -->` occurrence, before its scope is worked out (§19.4). */
+interface CoachDirectiveDraft {
+  directive: CoachDirective;
+  srcStart: number;
+  srcEnd: number;
+}
+
+/**
+ * Classify an HTML comment as a §19.4 directive and record it.
+ *
+ * Called from every place the compiler discards a comment, so the directive
+ * scanner sees exactly the set of comments the document contains — no separate
+ * source scan, and therefore no second chance to disagree with the parser about
+ * what is inside a fenced code block or an inline code span.
+ *
+ * Returns nothing and consumes nothing: the comment still vanishes, so no
+ * directive can contribute a spoken token or move a token index.
+ */
+function noteCoachComment(
+  into: CoachDirectiveDraft[],
+  diagnostics: CompileDiagnostic[],
+  raw: string,
+  srcStart: number,
+  srcEnd: number,
+): void {
+  const directive = classifyCoachComment(raw);
+  if (directive.kind === 'none') return;
+  if (directive.kind === 'diagnostic') {
+    diagnostics.push({
+      code: directive.code,
+      severity: 'warning',
+      message: directive.message,
+      blocking: false,
+      source: { utf16Start: srcStart, utf16End: srcEnd },
+      suggestedAction: 'fix_directive',
+    });
+    return;
+  }
+  into.push({ directive, srcStart, srcEnd });
 }
 
 /* ------------------------------------------------------------------ */
@@ -780,7 +828,18 @@ function walkPhrasing(ctx: WalkContext, container: SafeRenderNode[], node: MdNod
     }
     case 'html': {
       const value = (node.value ?? '').trim();
-      if (value.startsWith('<!--')) return; // comments vanish (§22.2)
+      if (value.startsWith('<!--')) {
+        // Comments vanish (§22.2); a `cc:` comment is recorded on the way out
+        // (§19.4) and still contributes nothing to the spoken stream.
+        noteCoachComment(
+          ctx.coachDirectives,
+          ctx.diagnostics,
+          value,
+          nodeStart(node),
+          nodeEnd(node),
+        );
+        return;
+      }
       ctx.diagnostics.push({
         code: 'raw_html_blocked',
         severity: 'warning',
@@ -819,6 +878,10 @@ interface CompilerState {
   assets: Map<string, CompiledAsset>;
   /** Link/image reference definitions, keyed by normalized identifier. */
   definitions: Map<string, string>;
+  /** §19.4 `cc:` comments, in source order. */
+  coachDirectives: CoachDirectiveDraft[];
+  /** §19.5 `coach:` front matter, or `null`. */
+  frontMatter: CompiledCoachingDirectives['frontMatter'];
 }
 
 function newDraft(kind: CompiledBlock['kind'], srcStart: number, srcEnd: number): BlockDraft {
@@ -850,6 +913,7 @@ function makeWalkContext(state: CompilerState, draft: BlockDraft, collectTokens:
     diagnostics: state.diagnostics,
     assets: state.assets,
     definitions: state.definitions,
+    coachDirectives: state.coachDirectives,
     pendingBlockId: () => '',
   };
 }
@@ -907,7 +971,20 @@ function appendNestedBlock(
       draft.renderNodes.push({ type: 'line_break' });
       draft.lastSpokenSrcEnd = -1;
       return;
-    case 'html':
+    case 'html': {
+      // A comment nested in a list item or blockquote still carries directives.
+      const value = (child.value ?? '').trim();
+      if (value.startsWith('<!--')) {
+        noteCoachComment(
+          state.coachDirectives,
+          state.diagnostics,
+          value,
+          nodeStart(child),
+          nodeEnd(child),
+        );
+      }
+      return;
+    }
     case 'definition':
     case 'footnoteDefinition':
       return;
@@ -1096,7 +1173,17 @@ function buildTable(state: CompilerState, node: MdNode): BlockDraft {
 
 function buildHtmlBlock(state: CompilerState, node: MdNode): BlockDraft | null {
   const value = (node.value ?? '').trim();
-  if (value.startsWith('<!--')) return null; // HTML comment: not rendered, not spoken
+  if (value.startsWith('<!--')) {
+    // HTML comment: not rendered, not spoken. §19.4 directives are read here.
+    noteCoachComment(
+      state.coachDirectives,
+      state.diagnostics,
+      value,
+      nodeStart(node),
+      nodeEnd(node),
+    );
+    return null;
+  }
   const draft = newDraft('paragraph', nodeStart(node), nodeEnd(node));
   state.diagnostics.push({
     code: 'raw_html_blocked',
@@ -1197,10 +1284,17 @@ export function compile(source: string, options: CompileOptions): CompiledScript
     drafts: [],
     assets: new Map(),
     definitions: new Map(),
+    coachDirectives: [],
+    frontMatter: null,
   };
 
-  // 1. Container scan (spec §23) then Markdown parse of the masked source.
-  const scan = scanContainers(source);
+  // 1. Front matter (§19.5), then the container scan (§23), then the Markdown
+  // parse. Both scans blank their own region with spaces of identical length,
+  // so every source offset the parser reports still indexes the real document.
+  const front = scanFrontMatter(source);
+  state.diagnostics.push(...front.diagnostics);
+  state.frontMatter = front.frontMatter;
+  const scan = scanContainers(front.maskedSource);
   state.diagnostics.push(...scan.diagnostics);
   const tree = parser.parse(scan.maskedSource) as unknown as MdNode;
   collectDefinitions(tree, state.definitions);
@@ -1714,7 +1808,182 @@ function finalize(
     statistics,
     indexes: buildSearchIndexes(spokenTokens, sentences, blocks, navigationTargets),
     literalCommandRanges,
+    coaching: resolveCoachDirectives(state, blocks, sentences),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* §19.4 directive scoping                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Resolve every `cc:` directive to the authored spans it governs.
+ *
+ * ---------------------------------------------------------------------------
+ * SCOPE, STATED ONCE
+ * ---------------------------------------------------------------------------
+ * §19.4: "Directives apply to the following block or explicitly bounded
+ * range." Two rules, and which one applies is decided by the document, not by
+ * a guess:
+ *
+ *  - **Explicitly bounded.** `<!-- cc:end -->` closes the *group* of
+ *    directives written immediately above the range — the run of `cc:`
+ *    comments with no spoken text between them. `<!-- cc:coach on -->` is the
+ *    same barrier for `cc:coach off` alone, because that pairing reads
+ *    naturally. Closing the group rather than one directive means a range is
+ *    never half-open; restricting it to the *immediately preceding* group is
+ *    what stops a `cc:end` written for one passage from silently swallowing an
+ *    unrelated directive three paragraphs above it.
+ *  - **Otherwise, one block.** A directive standing on its own between blocks
+ *    governs the next block that contains spoken words — a block with no
+ *    spoken words is not a delivery unit and cannot be coached either way. A
+ *    directive written *inside* a block governs the rest of that block, which
+ *    is the only reading that does not silently reach past the paragraph the
+ *    author was looking at.
+ *
+ * A directive that ends up governing no spoken text is reported. That is the
+ * failure mode this whole feature exists to avoid: the author believes they
+ * turned coaching off, and nothing did.
+ */
+function resolveCoachDirectives(
+  state: CompilerState,
+  blocks: readonly CompiledBlock[],
+  sentences: readonly SentenceUnit[],
+): CompiledCoachingDirectives {
+  const drafts = state.coachDirectives;
+  const empty: CompiledCoachingDirectives = { frontMatter: state.frontMatter, spans: [] };
+  if (drafts.length === 0) return empty;
+
+  const isBarrier = (d: CoachDirectiveDraft) =>
+    d.directive.kind === 'end' || (d.directive.kind === 'coach' && d.directive.enabled);
+  const genericBarriers = drafts.filter((d) => d.directive.kind === 'end');
+  const coachBarriers = drafts.filter((d) => d.directive.kind === 'coach' && d.directive.enabled);
+  const openers = drafts.filter((d) => !isBarrier(d));
+
+  // Group openers: a run of `cc:` comments with no spoken sentence between
+  // them is one group, and one group shares one closer.
+  const sentenceStartsBetween = (from: number, to: number): boolean =>
+    sentences.some((s) => s.source.utf16Start >= from && s.source.utf16Start < to);
+  const groupOf = new Map<CoachDirectiveDraft, number>();
+  const groupEnd: number[] = [];
+  let group = -1;
+  for (let i = 0; i < openers.length; i++) {
+    const opener = openers[i]!;
+    const previous = openers[i - 1];
+    if (!previous || sentenceStartsBetween(previous.srcEnd, opener.srcStart)) {
+      group++;
+      groupEnd[group] = opener.srcEnd;
+    } else {
+      groupEnd[group] = Math.max(groupEnd[group]!, opener.srcEnd);
+    }
+    groupOf.set(opener, group);
+  }
+
+  const usedBarriers = new Set<CoachDirectiveDraft>();
+  const byId = new Map<string, CoachDirectiveSpan>();
+  const order: string[] = [];
+
+  const spanFor = (spanId: string): CoachDirectiveSpan => {
+    let span = byId.get(spanId);
+    if (!span) {
+      span = { spanId };
+      byId.set(spanId, span);
+      order.push(spanId);
+    }
+    return span;
+  };
+
+  const noScope = (draft: CoachDirectiveDraft) => {
+    state.diagnostics.push({
+      code: 'coach_directive_no_scope',
+      severity: 'warning',
+      message:
+        'This coaching directive covers no spoken text, so it has no effect. Put it before the block it applies to, or close it with "<!-- cc:end -->".',
+      blocking: false,
+      source: { utf16Start: draft.srcStart, utf16End: draft.srcEnd },
+      suggestedAction: 'fix_directive',
+    });
+  };
+
+  for (const draft of openers) {
+    const directive = draft.directive;
+    const openerGroup = groupOf.get(draft)!;
+    const groupCloseFrom = groupEnd[openerGroup]!;
+
+    // Explicit barrier first: the document said where this ends.
+    let scopeEnd: number | null = null;
+    let barrier = genericBarriers.find((b) => b.srcStart >= groupCloseFrom);
+    if (directive.kind === 'coach') {
+      const coachOn = coachBarriers.find((b) => b.srcStart >= groupCloseFrom);
+      if (coachOn && (!barrier || coachOn.srcStart < barrier.srcStart)) barrier = coachOn;
+    }
+    // A barrier belongs to the group written immediately above it. If another
+    // group opened in between, that group owns the barrier and this one falls
+    // back to block scope.
+    if (barrier) {
+      const intervening = openers.find(
+        (o) => groupOf.get(o) !== openerGroup && o.srcStart > groupCloseFrom && o.srcStart < barrier!.srcStart,
+      );
+      if (intervening) barrier = undefined;
+    }
+    if (barrier) {
+      scopeEnd = barrier.srcStart;
+      usedBarriers.add(barrier);
+    } else {
+      const containing = blocks.find(
+        (b) => b.source.utf16Start <= draft.srcStart && draft.srcStart < b.source.utf16End,
+      );
+      const target =
+        containing ??
+        blocks.find(
+          (b) => b.source.utf16Start >= draft.srcEnd && b.startTokenIndex !== undefined,
+        );
+      scopeEnd = target ? target.source.utf16End : null;
+    }
+    if (scopeEnd === null) {
+      noScope(draft);
+      continue;
+    }
+
+    const scopeStart = draft.srcEnd;
+    let covered = 0;
+    for (const sentence of sentences) {
+      if (sentence.source.utf16Start < scopeStart) continue;
+      if (sentence.source.utf16Start >= scopeEnd) continue;
+      covered++;
+      const span = spanFor(sentence.id);
+      switch (directive.kind) {
+        case 'coach':
+          span.coachingOff = true;
+          break;
+        case 'filler':
+          span.fillerIntentional = true;
+          break;
+        case 'style':
+          span.style = directive.style;
+          break;
+        case 'pace':
+          span.paceLowWpm = directive.lowWpm;
+          span.paceHighWpm = directive.highWpm;
+          break;
+      }
+    }
+    if (covered === 0) noScope(draft);
+  }
+
+  for (const barrier of [...genericBarriers, ...coachBarriers]) {
+    if (usedBarriers.has(barrier)) continue;
+    state.diagnostics.push({
+      code: 'coach_directive_stray_end',
+      severity: 'warning',
+      message: 'This closing coaching directive has no open directive to close; it is ignored.',
+      blocking: false,
+      source: { utf16Start: barrier.srcStart, utf16End: barrier.srcEnd },
+      suggestedAction: 'fix_directive',
+    });
+  }
+
+  return { frontMatter: state.frontMatter, spans: order.map((id) => byId.get(id)!) };
 }
 
 function checkWakeCollision(
