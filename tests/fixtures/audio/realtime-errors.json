@@ -1,0 +1,56 @@
+{
+  "description": "Provider failure events: transcription failure for one item, session-level auth error, rate limit, and an expired-session error (spec E.7 mapping).",
+  "events": [
+    {
+      "type": "conversation.item.input_audio_transcription.failed",
+      "event_id": "event_3001",
+      "item_id": "item_009",
+      "content_index": 0,
+      "error": {
+        "type": "server_error",
+        "code": "audio_transcription_failed",
+        "message": "The audio could not be transcribed."
+      }
+    },
+    {
+      "type": "error",
+      "event_id": "event_3002",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "invalid_api_key",
+        "message": "Incorrect API key provided.",
+        "param": null
+      }
+    },
+    {
+      "type": "error",
+      "event_id": "event_3003",
+      "error": {
+        "type": "rate_limit_error",
+        "code": "rate_limit_exceeded",
+        "message": "Rate limit reached.",
+        "param": null
+      }
+    },
+    {
+      "type": "error",
+      "event_id": "event_3004",
+      "error": {
+        "type": "invalid_request_error",
+        "code": "session_expired",
+        "message": "Your session hit the maximum duration.",
+        "param": null
+      }
+    },
+    {
+      "type": "error",
+      "event_id": "event_3005",
+      "error": {
+        "type": "insufficient_quota",
+        "code": "insufficient_quota",
+        "message": "You exceeded your current quota.",
+        "param": null
+      }
+    }
+  ]
+}

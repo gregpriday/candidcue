@@ -1,0 +1,61 @@
+{
+  "description": "One committed utterance: manual commit acknowledged, item created, streaming deltas, then completion with logprobs (spec E.4 shapes).",
+  "events": [
+    {
+      "type": "input_audio_buffer.committed",
+      "event_id": "event_1001",
+      "previous_item_id": null,
+      "item_id": "item_001"
+    },
+    {
+      "type": "conversation.item.created",
+      "event_id": "event_1002",
+      "previous_item_id": null,
+      "item": {
+        "id": "item_001",
+        "object": "realtime.item",
+        "type": "message",
+        "status": "in_progress",
+        "role": "user",
+        "content": [{ "type": "input_audio", "transcript": null }]
+      }
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.delta",
+      "event_id": "event_1003",
+      "item_id": "item_001",
+      "content_index": 0,
+      "delta": "CandidCue "
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.delta",
+      "event_id": "event_1004",
+      "item_id": "item_001",
+      "content_index": 0,
+      "delta": "is following "
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.delta",
+      "event_id": "event_1005",
+      "item_id": "item_001",
+      "content_index": 0,
+      "delta": "my voice."
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.completed",
+      "event_id": "event_1006",
+      "item_id": "item_001",
+      "content_index": 0,
+      "transcript": "CandidCue is following my voice.",
+      "logprobs": [
+        { "token": "Candid", "logprob": -0.12 },
+        { "token": "Cue", "logprob": -0.31 },
+        { "token": " is", "logprob": -0.02 },
+        { "token": " following", "logprob": -0.05 },
+        { "token": " my", "logprob": -0.01 },
+        { "token": " voice", "logprob": -0.04 },
+        { "token": ".", "logprob": -0.01 }
+      ]
+    }
+  ]
+}

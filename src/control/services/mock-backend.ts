@@ -1,0 +1,332 @@
+/**
+ * ============================================================================
+ * MOCK BACKEND — awaiting Rust integration.
+ *
+ * A typed in-memory stand-in for the spec §46 command surface. It exists so
+ * every control-window screen is fully drivable before the Rust commands
+ * land. `invokeOrMock` in `ipc.ts` only routes here when the real command is
+ * unregistered or the app runs outside Tauri; once a Rust command ships, the
+ * matching mock path silently stops being used.
+ *
+ * Nothing outside `src/control/services/` may import this module.
+ * ============================================================================
+ */
+import type { ScriptDocument, ScriptSummary } from '../../shared/contracts';
+import {
+  countWords,
+  estimateDurationSeconds,
+  hashSource,
+  plainExcerpt,
+} from '../lib/format';
+import type {
+  AppSettings,
+  ClearResult,
+  UpdateCheckResult,
+} from './settings-types';
+import { defaultAppSettings } from './settings-types';
+import type {
+  KeyValidationResult,
+  OpenAiKeyStatus,
+} from './secrets-types';
+import type { DisplayDescriptor, StageOpenResult, StageWindowState } from './stage-types';
+import type { SaveResult, ScriptListFilter, ScriptPage, ScriptSort } from './scripts-types';
+
+const STORAGE_KEY = 'candidcue.mock.scripts.v1';
+
+interface MockScriptRecord {
+  doc: ScriptDocument;
+  trashedAt?: string;
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function makeId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  return `mock-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+}
+
+function defaultScriptSettings(): ScriptDocument['settings'] {
+  return {
+    schemaVersion: 1,
+    readHeadings: false,
+    readImageAltText: false,
+    readInlineCode: false,
+    cueVisibility: 'subtle',
+    silentBlockVisibility: 'dim',
+    wordsPerMinuteEstimate: 150,
+  };
+}
+
+class MockState {
+  scripts = new Map<string, MockScriptRecord>();
+  settings: AppSettings = defaultAppSettings();
+  /** Only redacted metadata is retained — never the key itself. */
+  keyStatus: OpenAiKeyStatus = { present: false, state: 'unknown' };
+  loaded = false;
+
+  load(): void {
+    if (this.loaded) return;
+    this.loaded = true;
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as MockScriptRecord[];
+      for (const record of parsed) this.scripts.set(record.doc.id, record);
+    } catch {
+      // Corrupt dev storage is discarded; the mock starts empty.
+    }
+  }
+
+  persist(): void {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([...this.scripts.values()]));
+    } catch {
+      // Quota/serialization problems are non-fatal in the mock.
+    }
+  }
+}
+
+const state = new MockState();
+
+function refreshDerived(doc: ScriptDocument): void {
+  const words = countWords(doc.source);
+  doc.spokenWordCount = words;
+  doc.estimatedDurationSeconds = estimateDurationSeconds(words, doc.settings.wordsPerMinuteEstimate);
+  doc.previewText = plainExcerpt(doc.source);
+  doc.sourceHash = hashSource(doc.source);
+}
+
+function toSummary(doc: ScriptDocument): ScriptSummary {
+  const {
+    id, title, status, language, spokenWordCount, estimatedDurationSeconds,
+    updatedAt, lastOpenedAt, previewText, hasWarnings,
+  } = doc;
+  return {
+    id, title, status, language, spokenWordCount, estimatedDurationSeconds,
+    updatedAt, previewText, hasWarnings,
+    ...(lastOpenedAt ? { lastOpenedAt } : {}),
+  };
+}
+
+/* ---------------------------------------------------------------- scripts */
+
+export const mockScripts = {
+  list(filter?: ScriptListFilter, sort?: ScriptSort): ScriptPage {
+    state.load();
+    const view = filter?.view ?? 'all';
+    let items = [...state.scripts.values()];
+    items = items.filter((r) => (view === 'trash' ? r.doc.status === 'trash' : r.doc.status !== 'trash'));
+    if (view === 'recent') {
+      items = items.filter((r) => r.doc.lastOpenedAt !== undefined);
+      items.sort((a, b) => (b.doc.lastOpenedAt ?? '').localeCompare(a.doc.lastOpenedAt ?? ''));
+    }
+    const query = filter?.query?.trim().toLowerCase();
+    if (query) {
+      items = items.filter(
+        (r) =>
+          r.doc.title.toLowerCase().includes(query) ||
+          r.doc.source.toLowerCase().includes(query),
+      );
+    }
+    const key = sort ?? 'recently_edited';
+    if (view !== 'recent') {
+      items.sort((a, b) => {
+        switch (key) {
+          case 'name':
+            return a.doc.title.localeCompare(b.doc.title);
+          case 'created':
+            return a.doc.id.localeCompare(b.doc.id);
+          case 'estimated_length':
+            return b.doc.estimatedDurationSeconds - a.doc.estimatedDurationSeconds;
+          default:
+            return b.doc.updatedAt.localeCompare(a.doc.updatedAt);
+        }
+      });
+    }
+    return { items: items.map((r) => toSummary(r.doc)), total: items.length };
+  },
+
+  create(input: { title: string; source: string }): ScriptDocument {
+    state.load();
+    const id = makeId();
+    const doc: ScriptDocument = {
+      id,
+      title: input.title,
+      status: 'draft',
+      language: 'en',
+      spokenWordCount: 0,
+      estimatedDurationSeconds: 0,
+      updatedAt: nowIso(),
+      previewText: '',
+      hasWarnings: false,
+      source: input.source,
+      sourceHash: '',
+      scriptRevision: 1,
+      settings: defaultScriptSettings(),
+    };
+    refreshDerived(doc);
+    state.scripts.set(id, { doc });
+    state.persist();
+    return structuredClone(doc);
+  },
+
+  get(scriptId: string): ScriptDocument {
+    state.load();
+    const record = state.scripts.get(scriptId);
+    if (!record) throw new Error(`SCRIPT_FILE_MISSING: ${scriptId}`);
+    record.doc.lastOpenedAt = nowIso();
+    state.persist();
+    return structuredClone(record.doc);
+  },
+
+  save(scriptId: string, expectedRevision: number, source: string, metadataPatch?: { title?: string }): SaveResult {
+    state.load();
+    const record = state.scripts.get(scriptId);
+    if (!record) throw new Error(`SCRIPT_FILE_MISSING: ${scriptId}`);
+    if (record.doc.scriptRevision !== expectedRevision) {
+      return { status: 'conflict', scriptRevision: record.doc.scriptRevision, savedAt: record.doc.updatedAt };
+    }
+    record.doc.source = source;
+    if (metadataPatch?.title !== undefined) record.doc.title = metadataPatch.title;
+    record.doc.scriptRevision += 1;
+    record.doc.updatedAt = nowIso();
+    refreshDerived(record.doc);
+    state.persist();
+    return { status: 'saved', scriptRevision: record.doc.scriptRevision, savedAt: record.doc.updatedAt };
+  },
+
+  rename(scriptId: string, title: string): ScriptSummary {
+    state.load();
+    const record = state.scripts.get(scriptId);
+    if (!record) throw new Error(`SCRIPT_FILE_MISSING: ${scriptId}`);
+    record.doc.title = title;
+    record.doc.updatedAt = nowIso();
+    state.persist();
+    return toSummary(record.doc);
+  },
+
+  duplicate(scriptId: string): ScriptSummary {
+    state.load();
+    const record = state.scripts.get(scriptId);
+    if (!record) throw new Error(`SCRIPT_FILE_MISSING: ${scriptId}`);
+    const copy = this.create({ title: `${record.doc.title} copy`, source: record.doc.source });
+    return toSummary(copy);
+  },
+
+  trash(scriptId: string): void {
+    state.load();
+    const record = state.scripts.get(scriptId);
+    if (!record) return;
+    record.doc.status = 'trash';
+    record.trashedAt = nowIso();
+    state.persist();
+  },
+
+  restore(scriptId: string): ScriptSummary {
+    state.load();
+    const record = state.scripts.get(scriptId);
+    if (!record) throw new Error(`SCRIPT_FILE_MISSING: ${scriptId}`);
+    record.doc.status = 'draft';
+    delete record.trashedAt;
+    state.persist();
+    return toSummary(record.doc);
+  },
+
+  deletePermanently(scriptId: string): void {
+    state.load();
+    state.scripts.delete(scriptId);
+    state.persist();
+  },
+};
+
+/* --------------------------------------------------------------- settings */
+
+export const mockSettings = {
+  get(): AppSettings {
+    return structuredClone(state.settings);
+  },
+  update(expectedRevision: number, patch: Partial<AppSettings>): AppSettings {
+    if (state.settings.revision !== expectedRevision) return structuredClone(state.settings);
+    state.settings = {
+      ...state.settings,
+      ...patch,
+      revision: state.settings.revision + 1,
+    };
+    return structuredClone(state.settings);
+  },
+  clearCache(kind: string): ClearResult {
+    return { kind, clearedBytes: 0 };
+  },
+  checkForUpdate(): UpdateCheckResult {
+    return { status: 'up_to_date', currentVersion: '0.1.0-dev' };
+  },
+};
+
+/* ---------------------------------------------------------------- secrets */
+
+export const mockSecrets = {
+  async validate(candidateKey: string): Promise<KeyValidationResult> {
+    await delay(500);
+    if (!/^sk-/.test(candidateKey.trim())) {
+      return { status: 'invalid' };
+    }
+    return { status: 'valid', models: { realtime: true, command: true } };
+  },
+  save(candidateKey: string): OpenAiKeyStatus {
+    // Only the redacted tail is retained, mirroring the Rust contract.
+    state.keyStatus = {
+      present: true,
+      lastFour: candidateKey.trim().slice(-4),
+      state: 'connected',
+      lastValidatedAt: nowIso(),
+    };
+    return { ...state.keyStatus };
+  },
+  status(): OpenAiKeyStatus {
+    return { ...state.keyStatus };
+  },
+  remove(): void {
+    state.keyStatus = { present: false, state: 'unknown' };
+  },
+};
+
+/* ------------------------------------------------------------------ stage */
+
+export const mockStage = {
+  listDisplays(): DisplayDescriptor[] {
+    return [
+      {
+        id: 'display-1',
+        label: 'Built-in Display',
+        widthPx: 3024,
+        heightPx: 1964,
+        scaleFactor: 2,
+        isPrimary: true,
+      },
+      {
+        id: 'display-2',
+        label: 'Teleprompter Display',
+        widthPx: 1920,
+        heightPx: 1080,
+        scaleFactor: 1,
+        isPrimary: false,
+        profileName: 'Studio glass',
+      },
+    ];
+  },
+  async openStage(displayId: string): Promise<StageOpenResult> {
+    await delay(400);
+    return { opened: true, displayId, stageGeneration: 1 };
+  },
+  setFullscreen(enabled: boolean): StageWindowState {
+    return { fullscreen: enabled, visible: true };
+  },
+};
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

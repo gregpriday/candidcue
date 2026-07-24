@@ -34,6 +34,15 @@ export interface ListenerGeometry {
   mirrorVideo: boolean;
 }
 
+/** Placement modes for the Listener layer on the stage (spec §37.4). */
+export type ListenerPlacementMode =
+  | 'background'
+  | 'lens_left'
+  | 'lens_right'
+  | 'top_strip'
+  | 'pip'
+  | 'off';
+
 export interface ListenerStageSelection extends ListenerSelection {
   geometry: ListenerGeometry;
   clipUrls: Array<{
@@ -43,6 +52,8 @@ export interface ListenerStageSelection extends ListenerSelection {
     durationMs: number;
     posterUrl: string;
   }>;
+  /** Stage placement mode; defaults to 'background' when omitted (§37.4). */
+  placement?: ListenerPlacementMode;
 }
 
 /* ---------------------------------------------------------------------------

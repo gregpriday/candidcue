@@ -26,6 +26,8 @@ export interface StageSettings {
   showCues: boolean;
   stageAcknowledgements: boolean;
   reducedMotion: boolean;
+  /** Vertical rhythm between blocks in em of the stage font (A.3, default 0.7). */
+  paragraphSpacingEm?: number;
 }
 
 export interface DisplayProfile {
@@ -57,6 +59,16 @@ export interface StageRenderDocument {
   blocks: CompiledBlock[];
   tokenToNode: Array<{ tokenIndex: number; blockId: string; nodeKey: string }>;
   assets: Record<string, { url: string; mime: string; width?: number; height?: number }>;
+  /**
+   * Optional sentence spans (compiler SentenceUnits, reduced) so the stage can
+   * draw the current-phrase underlay without re-parsing (spec §16.2).
+   */
+  sentences?: Array<{
+    id: string;
+    blockId: string;
+    startTokenIndex: number;
+    endTokenIndex: number;
+  }>;
 }
 
 export interface StageStatus {

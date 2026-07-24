@@ -1,10 +1,17 @@
 //! Tauri builder, plugin registration, startup wiring (spec §44.1).
 
-use tauri::Manager;
+use std::sync::Arc;
 
-use crate::commands;
+use tauri::{Emitter, Listener, Manager};
+
+use crate::commands::{self, openai_cmds::Secrets};
 use crate::coordinator::AppCoordinator;
 use crate::database::{self, Database};
+use crate::listeners::ListenerLibrary;
+use crate::openai::OpenAiClient;
+use crate::scripts::{DataPaths, ScriptLocks};
+use crate::secrets::OsSecretStore;
+use crate::windows::{events, CONTROL_LABEL};
 
 pub fn run() {
     diagnostics_init();
@@ -14,24 +21,249 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
+            // Scripts (spec §46.2)
             commands::list_scripts,
+            commands::create_script,
+            commands::get_script,
+            commands::save_script,
+            commands::rename_script,
+            commands::duplicate_script,
+            commands::trash_script,
+            commands::restore_script,
+            commands::permanently_delete_script,
+            commands::list_revisions,
+            commands::get_revision,
+            commands::restore_revision,
+            commands::import_script,
+            commands::export_script,
+            commands::reveal_script_folder,
+            // Assets (spec §46.3)
+            commands::import_image,
+            commands::import_remote_image,
+            commands::resolve_asset_urls,
+            commands::remove_asset_reference,
+            // Secrets / OpenAI (spec §46.4)
+            commands::validate_openai_key,
+            commands::save_openai_key,
+            commands::get_openai_key_status,
+            commands::delete_openai_key,
+            commands::create_realtime_transcription_credential,
+            commands::get_model_capabilities,
+            commands::interpret_command,
+            commands::analyze_vocabulary,
+            // Stage / windows (spec §46.6)
+            commands::list_displays,
+            commands::identify_displays,
+            commands::open_stage,
+            commands::close_stage,
+            commands::set_stage_fullscreen,
+            commands::publish_stage_document,
+            commands::publish_stage_snapshot,
+            commands::publish_stage_command,
+            commands::publish_listener_state,
+            commands::get_stage_status,
+            commands::save_display_profile,
+            commands::list_display_profiles,
+            // Listeners (spec §46.7)
+            commands::get_listener_catalogue,
+            commands::list_installed_listeners,
+            commands::download_listener,
+            commands::cancel_listener_download,
+            commands::remove_listener,
+            commands::resolve_listener_media,
+            // Settings / diagnostics (spec §46.8)
+            commands::get_settings,
+            commands::update_settings,
+            commands::export_all_data,
+            commands::clear_cache,
+            commands::get_system_diagnostics,
+            commands::export_support_bundle,
+            commands::check_for_update,
+            commands::install_update,
+            // Sessions (spec §36)
+            commands::start_session,
+            commands::end_session,
+            commands::append_session_transcript,
+            commands::list_sessions,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
 
-            // Database: connect + run migrations before any command can run.
+            // Data directory layout (spec §47.1).
             let data_dir = handle.path().app_data_dir()?;
+            let paths = DataPaths::new(data_dir.clone());
+            std::fs::create_dir_all(paths.scripts_dir())?;
+            std::fs::create_dir_all(paths.listeners_dir())?;
+            std::fs::create_dir_all(paths.cache_dir())?;
+            std::fs::create_dir_all(paths.logs_dir())?;
+
+            // Database: connect + run migrations before any command can run.
             let pool = tauri::async_runtime::block_on(database::init(&data_dir))?;
-            handle.manage(Database::new(pool));
+            handle.manage(Database::new(pool.clone()));
+            handle.manage(paths.clone());
+            handle.manage(ScriptLocks::default());
 
             // Cross-window authority (spec §43.4).
             handle.manage(AppCoordinator::default());
+
+            // Secrets: OS credential store only (spec §44.6).
+            handle.manage(Secrets(Arc::new(OsSecretStore)));
+
+            // Rust-owned OpenAI client (spec §27.6).
+            handle.manage(OpenAiClient::new());
+
+            // Listener library: bundled packs from the repo assets dir in
+            // dev, from Tauri resources in production builds.
+            let library = ListenerLibrary {
+                bundled_dir: resolve_bundled_listeners_dir(&handle),
+                installed_dir: paths.listeners_dir(),
+            };
+            handle.manage(library.clone());
+
+            // Asset protocol scope for the managed roots (spec §47.8).
+            let _ = handle
+                .asset_protocol_scope()
+                .allow_directory(paths.scripts_dir(), true);
+            let _ = handle
+                .asset_protocol_scope()
+                .allow_directory(paths.listeners_dir(), true);
+            if library.bundled_dir.exists() {
+                let _ = handle
+                    .asset_protocol_scope()
+                    .allow_directory(&library.bundled_dir, true);
+            }
+
+            register_stage_event_bridge(&handle);
+
+            // Startup reconciliation + retention enforcement, off the main
+            // thread (spec §47.6, §36.2).
+            let recon_handle = handle.clone();
+            let recon_paths = paths.clone();
+            let recon_pool = pool.clone();
+            tauri::async_runtime::spawn(async move {
+                let locks = ScriptLocks::default();
+                match crate::scripts::reconcile::run_startup_reconciliation(
+                    &recon_pool,
+                    &recon_paths,
+                    &locks,
+                )
+                .await
+                {
+                    Ok(report) => {
+                        if report.has_findings() {
+                            tracing::warn!(?report, "startup reconciliation had findings");
+                            let _ = recon_handle.emit_to(
+                                CONTROL_LABEL,
+                                events::DIAGNOSTIC_WARNING,
+                                serde_json::json!({
+                                    "kind": "startup_reconciliation",
+                                    "report": report,
+                                }),
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "startup reconciliation failed");
+                    }
+                }
+                if let Ok(settings) = crate::settings::get_settings(&recon_pool).await {
+                    let _ = crate::sessions::enforce_transcript_retention(
+                        &recon_pool,
+                        &settings.value.general.save_transcript,
+                    )
+                    .await;
+                }
+            });
 
             tracing::info!("CandidCue started; database ready at {:?}", data_dir);
             Ok(())
         })
         .run(tauri::generate_context!())
         .expect("error while running CandidCue");
+}
+
+/// Bundled listener packs directory: `<repo>/assets/listeners` in dev,
+/// `<resource dir>/listeners` in production (bundled via tauri.conf.json
+/// `bundle.resources`).
+fn resolve_bundled_listeners_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    if cfg!(debug_assertions) {
+        let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("assets")
+            .join("listeners");
+        if dev.exists() {
+            return dev;
+        }
+    }
+    app.path()
+        .resource_dir()
+        .map(|dir| dir.join("listeners"))
+        .unwrap_or_else(|_| std::path::PathBuf::from("listeners"))
+}
+
+/// Stage → Rust event bridge (spec §43.5, §46.9): handshake progress,
+/// heartbeat, media errors, and escape requests update the coordinator and
+/// are relayed to control where relevant. Stale generations are ignored.
+fn register_stage_event_bridge(app: &tauri::AppHandle) {
+    fn generation(payload: &str) -> Option<(u64, serde_json::Value)> {
+        let value: serde_json::Value = serde_json::from_str(payload).ok()?;
+        let generation = value.get("stageGeneration")?.as_u64()?;
+        Some((generation, value))
+    }
+
+    let handle = app.clone();
+    app.listen_any(events::STAGE_HYDRATED, move |event| {
+        if let Some((gen, _)) = generation(event.payload()) {
+            let coordinator = handle.state::<AppCoordinator>();
+            if coordinator.stage_event(gen, |stage| stage.hydrated = true) {
+                let _ = handle.emit_to(
+                    CONTROL_LABEL,
+                    events::STAGE_READY,
+                    serde_json::json!({ "stageGeneration": gen }),
+                );
+            }
+        }
+    });
+
+    let handle = app.clone();
+    app.listen_any(events::STAGE_LAYOUT_READY, move |event| {
+        if let Some((gen, _)) = generation(event.payload()) {
+            let coordinator = handle.state::<AppCoordinator>();
+            coordinator.stage_event(gen, |stage| stage.layout_ready = true);
+        }
+    });
+
+    let handle = app.clone();
+    app.listen_any(events::STAGE_HEARTBEAT, move |event| {
+        if let Some((gen, value)) = generation(event.payload()) {
+            let coordinator = handle.state::<AppCoordinator>();
+            let revision = value.get("trackingRevision").and_then(|v| v.as_i64());
+            coordinator.stage_event(gen, |stage| {
+                stage.last_heartbeat_ms = Some(chrono::Utc::now().timestamp_millis());
+                if revision.is_some() {
+                    stage.last_tracking_revision = revision;
+                }
+            });
+        }
+    });
+
+    let handle = app.clone();
+    app.listen_any(events::STAGE_MEDIA_ERROR, move |event| {
+        if let Some((gen, value)) = generation(event.payload()) {
+            let coordinator = handle.state::<AppCoordinator>();
+            if coordinator.stage_event(gen, |stage| stage.media_healthy = false) {
+                let _ = handle.emit_to(CONTROL_LABEL, events::STAGE_ERROR, value);
+            }
+        }
+    });
+
+    let handle = app.clone();
+    app.listen_any(events::STAGE_ESCAPE_REQUESTED, move |event| {
+        // Relay to control, which owns session shutdown policy.
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(event.payload()) {
+            let _ = handle.emit_to(CONTROL_LABEL, events::STAGE_ESCAPE_REQUESTED, value);
+        }
+    });
 }
 
 fn diagnostics_init() {

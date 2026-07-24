@@ -1,19 +1,121 @@
 <!--
-  Control window shell — placeholder. Routes, library, editor, settings and
-  live controls replace this (spec §43.1, §45). Keeps the workspace theme and
-  the sidebar + content layout other agents will build into.
+  Control window shell (spec §10, §45.1): store-based route machine, library
+  sidebar while browsing/editing, contextual Editor → Preflight → Live
+  transitions, workspace theme at rest and studio theme during Live.
 -->
 <script lang="ts">
-  // Placeholder shell — no state yet.
+  import { onMount } from 'svelte';
+  import ConfirmHost from './components/ConfirmHost.svelte';
+  import ShortcutsDialog from './components/ShortcutsDialog.svelte';
+  import Sidebar from './components/Sidebar.svelte';
+  import ToastRegion from './components/ToastRegion.svelte';
+  import Editor from './routes/Editor.svelte';
+  import Library from './routes/Library.svelte';
+  import Live from './routes/Live.svelte';
+  import Preflight from './routes/Preflight.svelte';
+  import Settings from './routes/Settings.svelte';
+  import Welcome from './routes/Welcome.svelte';
+  import { createAndOpenScript } from './lib/app-actions';
+  import { installShortcuts, onShortcut } from './lib/shortcuts';
+  import { initAppStatus } from './stores/app-status';
+  import { requestConfirm } from './stores/confirm';
+  import { saveNow } from './stores/editor';
+  import { loadLibrary } from './stores/library';
+  import { navigate, registerNavigationGuard, route, setInitialRoute } from './stores/router';
+  import { clearSession, session, stopSession } from './stores/session';
+  import { loadSettings } from './stores/settings';
+
+  let ready = $state(false);
+  let shortcutsOpen = $state(false);
+
+  const theme = $derived($route.name === 'live' ? 'studio' : 'workspace');
+  const showSidebar = $derived(
+    $route.name === 'library' || $route.name === 'editor' || $route.name === 'settings',
+  );
+
+  /* Keep the document root in sync so scrollbars/body match the shell. */
+  $effect(() => {
+    document.documentElement.dataset['theme'] = theme;
+  });
+
+  onMount(() => {
+    const teardownShortcuts = installShortcuts();
+    const teardownHelp = onShortcut((action) => {
+      if (action === 'command-help') shortcutsOpen = true;
+    });
+
+    /* Leaving an active live session requires an explicit stop (spec §45.1). */
+    const unregisterLiveGuard = registerNavigationGuard(async (to, from) => {
+      if (from.name === 'live' && to.name !== 'live' && $session.active) {
+        const accepted = await requestConfirm({
+          title: 'Stop the session?',
+          body: 'Leaving Live stops the session: the realtime connection closes and the stage leaves full screen.',
+          confirmLabel: 'Stop session',
+          danger: true,
+        });
+        if (!accepted) return false;
+        stopSession();
+        clearSession();
+      }
+      return true;
+    });
+
+    /* Flush any pending editor autosave when navigating away (spec §13.5). */
+    const unregisterSaveGuard = registerNavigationGuard(async (_to, from) => {
+      if (from.name === 'editor') await saveNow();
+      return true;
+    });
+
+    void (async () => {
+      const status = await initAppStatus();
+      await loadSettings();
+      await loadLibrary();
+      setInitialRoute(status.firstLaunch ? { name: 'welcome' } : { name: 'library', view: 'all' });
+      ready = true;
+    })();
+
+    return () => {
+      teardownShortcuts();
+      teardownHelp();
+      unregisterLiveGuard();
+      unregisterSaveGuard();
+    };
+  });
+
+  async function newScriptFromSidebar(): Promise<void> {
+    await createAndOpenScript('new');
+  }
 </script>
 
-<div class="shell" data-theme="workspace">
-  <aside class="sidebar">
-    <div class="wordmark">CandidCue</div>
-  </aside>
-  <main class="content">
-    <p class="placeholder">Control window scaffold — library, editor, and live controls land here.</p>
-  </main>
+<div class="shell" data-theme={theme}>
+  {#if !ready}
+    <div class="boot">
+      <p class="boot-mark">CandidCue</p>
+    </div>
+  {:else}
+    {#if showSidebar}
+      <Sidebar onnew={() => void newScriptFromSidebar()} onshortcuts={() => (shortcutsOpen = true)} />
+    {/if}
+    <main class="content">
+      {#if $route.name === 'welcome'}
+        <Welcome />
+      {:else if $route.name === 'library'}
+        <Library />
+      {:else if $route.name === 'editor'}
+        <Editor scriptId={$route.scriptId} />
+      {:else if $route.name === 'preflight'}
+        <Preflight scriptId={$route.scriptId} />
+      {:else if $route.name === 'live'}
+        <Live sessionId={$route.sessionId} scriptId={$route.scriptId} />
+      {:else if $route.name === 'settings'}
+        <Settings section={$route.section} />
+      {/if}
+    </main>
+  {/if}
+
+  <ToastRegion />
+  <ConfirmHost />
+  <ShortcutsDialog open={shortcutsOpen} onclose={() => (shortcutsOpen = false)} />
 </div>
 
 <style>
@@ -22,34 +124,27 @@
     height: 100%;
     background: var(--bg-app);
     color: var(--text-primary);
-  }
-
-  .sidebar {
-    width: var(--sidebar-w);
-    flex: none;
-    background: var(--bg-chrome);
-    border-right: 1px solid var(--border-seam);
-    padding: var(--space-6) var(--space-4);
-  }
-
-  .wordmark {
-    font-size: var(--text-lg);
-    font-weight: 650;
-    letter-spacing: var(--ls-title);
-    color: var(--text-primary);
+    transition: background var(--dur-slow) var(--ease-out);
   }
 
   .content {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .boot {
     flex: 1;
     display: grid;
     place-items: center;
-    padding: var(--page-y) var(--page-x);
   }
-
-  .placeholder {
+  .boot-mark {
+    margin: 0;
+    font-size: var(--text-lg);
+    font-weight: 650;
+    letter-spacing: var(--ls-title);
     color: var(--text-muted);
-    font-size: var(--text-sm);
-    max-width: var(--prose-measure-narrow);
-    text-align: center;
   }
 </style>

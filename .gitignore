@@ -17,7 +17,27 @@ Thumbs.db
 # JavaScript
 node_modules/
 dist/
+.vite/
+vite.config.ts.timestamp-*
+coverage/
+test-results/
+playwright-report/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
 
 # Rust
 target/
 src-tauri/gen/schemas/
+
+# Build/signing artifacts
+*.app
+*.dmg
+*.msi
+*.sig
+
+# Scratch
+.tmp/
+*.tmp

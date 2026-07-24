@@ -1,8 +1,392 @@
-//! Script asset management (spec §44.5): validated image import, MIME
-//! sniffing, hash/deduplication, scoped asset URLs, garbage collection.
-//! Stub — nothing implemented yet.
+//! Script asset management (spec §44.5, §47.8): validated image import,
+//! MIME sniffing by magic bytes, hash/deduplication into per-script asset
+//! directories, scoped asset-protocol URLs, and basic garbage collection.
 
-#![allow(dead_code)]
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use serde::Serialize;
+use sqlx::{Row, SqlitePool};
+
+use crate::errors::{AppError, ErrorCategory};
+use crate::scripts::DataPaths;
+use crate::util::{new_uuid, now_iso, sha256_hex};
 
 /// Hard limit for an imported image (spec Appendix A.10).
 pub const MAX_IMPORTED_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Twin of the `ImportedAsset` shape used by the editor.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedAsset {
+    pub asset_id: String,
+    pub sha256: String,
+    pub mime: String,
+    pub extension: String,
+    pub size_bytes: u64,
+    /// Markdown-relative path (`assets/<sha256>.<ext>`) for source insertion.
+    pub markdown_path: String,
+    /// Scoped asset-protocol URL for immediate preview.
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetUrlEntry {
+    pub url: String,
+    pub mime: String,
+}
+
+/// Magic-byte MIME sniffing for the supported image formats. Never trusts
+/// the file extension alone.
+pub fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() < 12 {
+        return None;
+    }
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("image/gif");
+    }
+    if bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    // SVG (text): allowed only as a static image; sniff for the root tag.
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]);
+    let head_trim = head.trim_start();
+    if head_trim.starts_with("<svg") || (head_trim.starts_with("<?xml") && head.contains("<svg")) {
+        return Some("image/svg+xml");
+    }
+    None
+}
+
+pub fn extension_for_mime(mime: &str) -> &'static str {
+    match mime {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        _ => "bin",
+    }
+}
+
+fn unsupported_asset() -> AppError {
+    AppError::structured(
+        "ASSET_UNSUPPORTED",
+        ErrorCategory::Media,
+        "Only PNG, JPEG, GIF, WebP, and SVG images can be imported.",
+        true,
+    )
+}
+
+fn asset_too_large() -> AppError {
+    AppError::structured(
+        "ASSET_TOO_LARGE",
+        ErrorCategory::Media,
+        "Images larger than 25 MB cannot be imported.",
+        true,
+    )
+}
+
+/// Platform-appropriate Tauri asset protocol URL for an absolute path.
+/// Frontends must use these instead of converting arbitrary paths.
+pub fn asset_url(path: &Path) -> String {
+    let encoded = utf8_percent_encode(&path.to_string_lossy(), NON_ALPHANUMERIC).to_string();
+    if cfg!(windows) {
+        format!("http://asset.localhost/{encoded}")
+    } else {
+        format!("asset://localhost/{encoded}")
+    }
+}
+
+async fn register_asset(
+    pool: &SqlitePool,
+    script_id: &str,
+    sha: &str,
+    mime: &str,
+    extension: &str,
+    size: u64,
+    rel_path: &str,
+    original_name: Option<&str>,
+    original_url: Option<&str>,
+) -> Result<String, AppError> {
+    let now = now_iso();
+    sqlx::query(
+        "INSERT INTO assets (id, sha256, mime_type, extension, size_bytes, rel_path, original_name, original_url, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(sha256, rel_path) DO NOTHING",
+    )
+    .bind(new_uuid())
+    .bind(sha)
+    .bind(mime)
+    .bind(extension)
+    .bind(size as i64)
+    .bind(rel_path)
+    .bind(original_name)
+    .bind(original_url)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    let asset_id: String = sqlx::query_scalar("SELECT id FROM assets WHERE rel_path = ? LIMIT 1")
+        .bind(rel_path)
+        .fetch_one(pool)
+        .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO script_asset_references (script_id, asset_id, role, created_at)
+         VALUES (?, ?, 'image', ?)",
+    )
+    .bind(script_id)
+    .bind(&asset_id)
+    .bind(&now)
+    .execute(pool)
+    .await?;
+    Ok(asset_id)
+}
+
+fn store_bytes(
+    paths: &DataPaths,
+    script_id: &str,
+    bytes: &[u8],
+) -> Result<(String, String, String, PathBuf), AppError> {
+    let mime = sniff_mime(bytes).ok_or_else(unsupported_asset)?;
+    let sha = sha256_hex(bytes);
+    let extension = extension_for_mime(mime);
+    let file_name = format!("{sha}.{extension}");
+    let dest = paths.assets_dir(script_id).join(&file_name);
+    if !dest.exists() {
+        crate::util::atomic_write(&dest, bytes)?;
+    }
+    Ok((mime.to_string(), sha, file_name, dest))
+}
+
+/// Import a local image file (path from the native open dialog) into the
+/// per-script asset directory, deduplicated by content hash.
+pub async fn import_image(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    script_id: &str,
+    source_file: &str,
+) -> Result<ImportedAsset, AppError> {
+    if !crate::scripts::repo::script_exists(pool, script_id).await? {
+        return Err(AppError::not_found("script"));
+    }
+    let source_path = PathBuf::from(source_file);
+    if !source_path.is_absolute() {
+        return Err(AppError::unsafe_path("Image paths must come from the file picker."));
+    }
+    let meta = fs::symlink_metadata(&source_path)?;
+    if meta.file_type().is_symlink() {
+        return Err(AppError::unsafe_path("Symbolic links cannot be imported."));
+    }
+    if meta.len() > MAX_IMPORTED_IMAGE_BYTES {
+        return Err(asset_too_large());
+    }
+    let bytes = fs::read(&source_path)?;
+    let (mime, sha, file_name, dest) = store_bytes(paths, script_id, &bytes)?;
+    let rel_path = format!("scripts/{script_id}/assets/{file_name}");
+    let original_name = source_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string());
+    let asset_id = register_asset(
+        pool,
+        script_id,
+        &sha,
+        &mime,
+        extension_for_mime(&mime),
+        bytes.len() as u64,
+        &rel_path,
+        original_name.as_deref(),
+        None,
+    )
+    .await?;
+    Ok(ImportedAsset {
+        asset_id,
+        sha256: sha,
+        mime: mime.clone(),
+        extension: extension_for_mime(&mime).to_string(),
+        size_bytes: bytes.len() as u64,
+        markdown_path: format!("assets/{file_name}"),
+        url: asset_url(&dest),
+        original_name,
+    })
+}
+
+/// Download a remote image over HTTPS with a size cap, then store it like a
+/// local import (spec §46.3 `import_remote_image`).
+pub async fn import_remote_image(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    http: &reqwest::Client,
+    script_id: &str,
+    url: &str,
+) -> Result<ImportedAsset, AppError> {
+    if !crate::scripts::repo::script_exists(pool, script_id).await? {
+        return Err(AppError::not_found("script"));
+    }
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|_| AppError::invalid_input("The image URL is not valid."))?;
+    if parsed.scheme() != "https" {
+        return Err(AppError::invalid_input("Only https image URLs are allowed."));
+    }
+
+    let response = http
+        .get(parsed.clone())
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await?
+        .error_for_status()
+        .map_err(|e| {
+            AppError::structured(
+                "ASSET_UNSUPPORTED",
+                ErrorCategory::Network,
+                "The image could not be downloaded.",
+                true,
+            )
+            .with_log(format!("remote image status: {e}"))
+        })?;
+    if let Some(len) = response.content_length() {
+        if len > MAX_IMPORTED_IMAGE_BYTES {
+            return Err(asset_too_large());
+        }
+    }
+    let bytes = response.bytes().await?;
+    if bytes.len() as u64 > MAX_IMPORTED_IMAGE_BYTES {
+        return Err(asset_too_large());
+    }
+
+    let (mime, sha, file_name, dest) = store_bytes(paths, script_id, &bytes)?;
+    let rel_path = format!("scripts/{script_id}/assets/{file_name}");
+    let asset_id = register_asset(
+        pool,
+        script_id,
+        &sha,
+        &mime,
+        extension_for_mime(&mime),
+        bytes.len() as u64,
+        &rel_path,
+        None,
+        Some(parsed.as_str()),
+    )
+    .await?;
+    Ok(ImportedAsset {
+        asset_id,
+        sha256: sha,
+        mime: mime.clone(),
+        extension: extension_for_mime(&mime).to_string(),
+        size_bytes: bytes.len() as u64,
+        markdown_path: format!("assets/{file_name}"),
+        url: asset_url(&dest),
+        original_name: None,
+    })
+}
+
+/// Resolve scoped asset URLs for a script (spec §46.3). Paths are validated
+/// to stay inside the script's asset directory.
+pub async fn resolve_asset_urls(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    script_id: &str,
+    asset_ids: &[String],
+) -> Result<std::collections::HashMap<String, AssetUrlEntry>, AppError> {
+    let mut map = std::collections::HashMap::new();
+    let assets_root = paths.assets_dir(script_id);
+    for asset_id in asset_ids {
+        let row = sqlx::query(
+            "SELECT a.rel_path, a.mime_type FROM assets a
+             JOIN script_asset_references r ON r.asset_id = a.id
+             WHERE a.id = ? AND r.script_id = ?",
+        )
+        .bind(asset_id)
+        .bind(script_id)
+        .fetch_optional(pool)
+        .await?;
+        let Some(row) = row else { continue };
+        let rel_path: String = row.try_get("rel_path")?;
+        let mime: String = row.try_get("mime_type")?;
+        let absolute = paths.root().join(&rel_path);
+        if !absolute.exists() || !crate::util::is_within_root(&absolute, &assets_root) {
+            continue;
+        }
+        map.insert(
+            asset_id.clone(),
+            AssetUrlEntry {
+                url: asset_url(&absolute),
+                mime,
+            },
+        );
+    }
+    Ok(map)
+}
+
+/// Drop a script→asset reference; the file itself is collected by GC once
+/// nothing references it.
+pub async fn remove_asset_reference(
+    pool: &SqlitePool,
+    script_id: &str,
+    asset_id: &str,
+) -> Result<(), AppError> {
+    sqlx::query("DELETE FROM script_asset_references WHERE script_id = ? AND asset_id = ?")
+        .bind(script_id)
+        .bind(asset_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Garbage collection basics (spec §24.8): remove asset rows/files that no
+/// script references any more. Returns the number of files removed.
+pub async fn collect_garbage(pool: &SqlitePool, paths: &DataPaths) -> Result<u32, AppError> {
+    let rows = sqlx::query(
+        "SELECT a.id, a.rel_path FROM assets a
+         LEFT JOIN script_asset_references r ON r.asset_id = a.id
+         WHERE r.asset_id IS NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut removed = 0u32;
+    for row in &rows {
+        let id: String = row.try_get("id")?;
+        let rel_path: String = row.try_get("rel_path")?;
+        sqlx::query("DELETE FROM assets WHERE id = ?")
+            .bind(&id)
+            .execute(pool)
+            .await?;
+        let absolute = paths.root().join(&rel_path);
+        if absolute.exists() && crate::util::is_within_root(&absolute, &paths.scripts_dir()) {
+            let _ = fs::remove_file(&absolute);
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sniffs_common_formats() {
+        assert_eq!(
+            sniff_mime(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0]),
+            Some("image/png")
+        );
+        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        jpeg.extend_from_slice(&[0; 12]);
+        assert_eq!(sniff_mime(&jpeg), Some("image/jpeg"));
+        assert_eq!(sniff_mime(b"GIF89a-not-really" as &[u8]), Some("image/gif"));
+        let mut webp = b"RIFF".to_vec();
+        webp.extend_from_slice(&[0, 0, 0, 0]);
+        webp.extend_from_slice(b"WEBPVP8 ");
+        assert_eq!(sniff_mime(&webp), Some("image/webp"));
+        assert_eq!(sniff_mime(b"<svg xmlns='x'></svg>" as &[u8]), Some("image/svg+xml"));
+        assert_eq!(sniff_mime(&[0u8; 32]), None);
+    }
+}

@@ -13,7 +13,8 @@ use sqlx::SqlitePool;
 
 use crate::errors::AppError;
 
-pub const DB_FILE_NAME: &str = "candidcue.db";
+/// Spec §47.1 data-directory layout.
+pub const DB_FILE_NAME: &str = "candidcue.sqlite3";
 
 /// Managed Tauri state wrapping the pool. Typed repositories (spec §44.3)
 /// hang off this as they are implemented.

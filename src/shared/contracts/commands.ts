@@ -24,6 +24,24 @@ export type CommandAction =
   | { action: 'set_listener'; enabled: boolean }
   | { action: 'adjust_reading_band'; deltaPercent: number }
   | { action: 'set_scroll_mode'; mode: 'voice' | 'manual' | 'fixed' }
+  /* -------------------------------------------------------------------------
+   * Additive extensions beyond Appendix C.5 — required to cover the full §34
+   * command catalogue, which includes commands with no C.5 action variant:
+   *  - adjust_margins:        "widen/narrow margins" (§34.4)
+   *  - set_cue_visibility:    "hide/show cues" (§34.4)
+   *  - adjust_listener_opacity: "dim Listener more/less" (§34.5)
+   *  - set_scroll_speed:      "set speed to <n> words per minute" (§34.6)
+   *  - adjust_scroll_speed:   "speed up / slow down" (§34.6)
+   *  - retake:                "CandidCue, retake." (§34.7)
+   *  - mark_checkpoint:       "CandidCue, mark here." (§34.7)
+   * ----------------------------------------------------------------------- */
+  | { action: 'adjust_margins'; deltaPercent: number }
+  | { action: 'set_cue_visibility'; visible: boolean }
+  | { action: 'adjust_listener_opacity'; deltaPercent: number }
+  | { action: 'set_scroll_speed'; wordsPerMinute: number }
+  | { action: 'adjust_scroll_speed'; deltaPercent: number }
+  | { action: 'retake' }
+  | { action: 'mark_checkpoint' }
   | { action: 'unknown'; reason?: string };
 
 export interface CommandCandidate {

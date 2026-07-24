@@ -1,0 +1,17 @@
+{
+  "description": "Global reacquisition: after being lost, distinctive anchors relock the cursor anywhere in the script (spec 31.14).",
+  "turns": [
+    { "text": "quick side note my dog jumped straight into the neighbor's swimming pool this morning it was absolutely chaotic honestly" },
+    { "text": "anyway sorry random story the poor gardener nearly fainted seeing him splash around while everyone laughed loudly outside" },
+    { "text": "The engine scores candidate windows using exact matches aliases numbers and phonetic similarity." }
+  ],
+  "expect": [
+    { "afterTurn": 1, "stateIn": ["holding", "searching"] },
+    {
+      "afterTurn": 2,
+      "stateIn": ["following"],
+      "nearWord": "similarity",
+      "tolerance": 2
+    }
+  ]
+}

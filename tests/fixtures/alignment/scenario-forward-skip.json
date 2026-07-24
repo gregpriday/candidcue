@@ -1,0 +1,17 @@
+{
+  "description": "Forward skip: strongly matching a later passage with rare anchors commits a skip without scrolling through skipped text (spec 31.11).",
+  "turns": [
+    { "text": "Hello everyone and welcome to the channel." },
+    { "text": "Now watch the kaleidoscope demo carefully because the colors shift like a metronome keeping perfect time." }
+  ],
+  "expect": [
+    { "afterTurn": 0, "stateIn": ["following"], "nearWord": "channel", "tolerance": 2 },
+    {
+      "afterTurn": 1,
+      "stateIn": ["following"],
+      "sawMovement": "skip",
+      "nearWord": "time",
+      "tolerance": 3
+    }
+  ]
+}

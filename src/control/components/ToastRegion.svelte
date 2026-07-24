@@ -1,0 +1,106 @@
+<!--
+  Floating toast notices, bottom-center. Announced via a polite live region
+  (spec §20) — streaming transcript text never routes through here.
+-->
+<script lang="ts">
+  import { toasts, dismissToast } from '../stores/toasts';
+  import Icon from './Icon.svelte';
+</script>
+
+<div class="region" role="status" aria-live="polite">
+  {#each $toasts as toast (toast.id)}
+    <div class="toast {toast.tone}">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="message">{toast.message}</span>
+      <button
+        type="button"
+        class="dismiss"
+        aria-label="Dismiss notification"
+        onclick={() => dismissToast(toast.id)}
+      >
+        <Icon name="x" size={14} />
+      </button>
+    </div>
+  {/each}
+</div>
+
+<style>
+  .region {
+    position: fixed;
+    left: 50%;
+    bottom: var(--space-6);
+    transform: translateX(-50%);
+    z-index: 120;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    align-items: center;
+    pointer-events: none;
+  }
+
+  .toast {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    max-width: 420px;
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-pop);
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+    pointer-events: auto;
+    animation: toast-in var(--dur-med) var(--ease-out);
+  }
+
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex: 0 0 auto;
+  }
+  .success .dot {
+    background: var(--success);
+  }
+  .info .dot {
+    background: var(--accent);
+  }
+  .danger .dot {
+    background: var(--danger);
+  }
+
+  .message {
+    min-width: 0;
+  }
+
+  .dismiss {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin: -2px;
+    flex: 0 0 auto;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: var(--radius-sm);
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      color var(--dur-fast) var(--ease-out);
+  }
+  .dismiss:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover-surface);
+  }
+</style>

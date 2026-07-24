@@ -1,0 +1,12 @@
+{
+  "description": "Duplicate completions are harmless; stale-generation events are ignored; conflicting completion is an anomaly with latest-wins (spec 30.7).",
+  "events": [
+    { "type": "item_started", "sessionGeneration": 2, "itemId": "x", "commitSequence": 1, "audioStartMs": 0, "receivedAtMs": 1000 },
+    { "type": "completed", "sessionGeneration": 2, "itemId": "x", "text": "the first principle", "receivedAtMs": 1500 },
+    { "type": "completed", "sessionGeneration": 2, "itemId": "x", "text": "the first principle", "receivedAtMs": 1600 },
+    { "type": "completed", "sessionGeneration": 1, "itemId": "old", "text": "ghost from previous connection", "receivedAtMs": 1700 },
+    { "type": "completed", "sessionGeneration": 2, "itemId": "x", "text": "the first principle is", "receivedAtMs": 1800 }
+  ],
+  "expectedOrderedText": "the first principle is",
+  "expectedAnomalyCodes": ["stale_generation", "conflicting_completion"]
+}

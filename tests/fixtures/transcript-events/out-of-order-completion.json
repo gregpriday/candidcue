@@ -1,0 +1,12 @@
+{
+  "description": "Server completion order differs from commit order; the ledger must stay commit-ordered and never move evidence backward (spec 30.2/30.7).",
+  "events": [
+    { "type": "item_started", "sessionGeneration": 1, "itemId": "a", "commitSequence": 1, "audioStartMs": 0, "receivedAtMs": 1000 },
+    { "type": "item_started", "sessionGeneration": 1, "itemId": "b", "commitSequence": 2, "audioStartMs": 900, "receivedAtMs": 1900 },
+    { "type": "delta", "sessionGeneration": 1, "itemId": "a", "text": "hello everyone", "receivedAtMs": 2000 },
+    { "type": "delta", "sessionGeneration": 1, "itemId": "b", "text": "today we", "receivedAtMs": 2100 },
+    { "type": "completed", "sessionGeneration": 1, "itemId": "b", "text": "today we are talking", "receivedAtMs": 2500 },
+    { "type": "completed", "sessionGeneration": 1, "itemId": "a", "text": "hello everyone and welcome", "receivedAtMs": 2600 }
+  ],
+  "expectedOrderedText": "hello everyone and welcome today we are talking"
+}

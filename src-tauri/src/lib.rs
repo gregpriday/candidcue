@@ -15,7 +15,10 @@ pub mod listeners;
 pub mod openai;
 pub mod scripts;
 pub mod secrets;
+pub mod sessions;
+pub mod settings;
 pub mod updates;
+pub mod util;
 pub mod windows;
 
 pub use errors::AppError;

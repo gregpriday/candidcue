@@ -1,51 +1,99 @@
 /// <reference lib="webworker" />
 /**
- * Tracking worker shell — the deterministic local alignment engine runs off
- * the UI thread (spec §42.1, non-negotiable decision 7: no LLM decides the
- * user's script position). Instantiate from the control window with:
+ * Tracking worker (spec §42.1, §45.4) — hosts the deterministic local
+ * alignment engine off the UI thread (non-negotiable decision 7: no LLM
+ * decides the user's script position). Instantiate from the control window:
  *
  *   new Worker(new URL('../workers/tracking.worker.ts', import.meta.url), { type: 'module' })
+ *
+ * Protocol types live in src/shared/tracking/worker-protocol.ts.
  */
-import type { FinalTranscriptItem, TrackingSnapshot } from '../shared/contracts';
+import { AlignmentEngine, type EngineOutput } from '../shared/tracking/engine';
+import type {
+  TrackingWorkerInbound,
+  TrackingWorkerOutbound,
+} from '../shared/tracking/worker-protocol';
 
-export interface TrackingConfigureRequest {
-  type: 'configure';
-  sessionId: string;
-  sessionGeneration: number;
-  stageGeneration: number;
-  scriptId: string;
-  /** Tracking profile settings JSON (spec Appendix A.7). */
-  profile: Record<string, number>;
+let engine: AlignmentEngine | undefined;
+let lastSnapshotSentAtMs = -Infinity;
+let minSnapshotIntervalMs = 1000 / 30; // §31.16: at most 30 snapshots/second
+
+function post(message: TrackingWorkerOutbound): void {
+  (self as unknown as { postMessage(m: TrackingWorkerOutbound): void }).postMessage(message);
 }
 
-export interface TrackingTranscriptRequest {
-  type: 'transcript';
-  item: FinalTranscriptItem;
+function flush(output: EngineOutput, nowMs: number, force = false): void {
+  if (output.stateChanged !== undefined) {
+    post({ type: 'state_change', state: output.stateChanged });
+  }
+  if (output.snapshot) {
+    // Cap emission rate (§31.16); state changes and committed movement are
+    // always forwarded so the stage never misses a transition.
+    const important =
+      force ||
+      output.stateChanged !== undefined ||
+      output.snapshot.movement !== 'advance' ||
+      !output.snapshot.provisional;
+    if (important || nowMs - lastSnapshotSentAtMs >= minSnapshotIntervalMs) {
+      lastSnapshotSentAtMs = nowMs;
+      post({ type: 'snapshot', snapshot: output.snapshot });
+    }
+  }
+  if (output.diagnostic) {
+    post({ type: 'diagnostic', diagnostic: output.diagnostic });
+  }
 }
 
-export interface TrackingResetRequest {
-  type: 'reset';
-  tokenIndex: number;
-}
+self.onmessage = (event: MessageEvent<TrackingWorkerInbound>) => {
+  const message = event.data;
+  if (message === null || typeof message !== 'object' || typeof message.type !== 'string') {
+    post({ type: 'error', code: 'bad_message', message: 'malformed worker message' });
+    return;
+  }
 
-export interface TrackingSnapshotResponse {
-  type: 'snapshot';
-  snapshot: TrackingSnapshot;
-}
+  if (message.type === 'initialize') {
+    engine = new AlignmentEngine(message.document, message.session, message.profile);
+    minSnapshotIntervalMs = 1000 / Math.max(1, engine.profile.maxSnapshotsPerSecond);
+    lastSnapshotSentAtMs = -Infinity;
+    post({ type: 'ready', sessionGeneration: message.session.sessionGeneration });
+    return;
+  }
 
-export type TrackingWorkerRequest =
-  | TrackingConfigureRequest
-  | TrackingTranscriptRequest
-  | TrackingResetRequest;
-export type TrackingWorkerResponse = TrackingSnapshotResponse;
+  if (!engine) {
+    post({ type: 'error', code: 'not_initialized', message: `dropped ${message.type}` });
+    return;
+  }
 
-self.onmessage = (event: MessageEvent<TrackingWorkerRequest>) => {
-  const request = event.data;
-  switch (request.type) {
-    case 'configure':
-    case 'transcript':
+  switch (message.type) {
+    case 'transcript_event':
+      flush(engine.handleTranscriptEvent(message.event), message.event.receivedAtMs);
+      break;
+    case 'manual_move':
+      flush(engine.moveTo(message.target.tokenIndex, 'manual', message.nowMs), message.nowMs, true);
+      break;
+    case 'command_move':
+      flush(engine.moveTo(message.target.tokenIndex, 'command', message.nowMs), message.nowMs, true);
+      break;
+    case 'move_to_token':
+      flush(engine.moveTo(message.tokenIndex, message.movement, message.nowMs), message.nowMs, true);
+      break;
+    case 'mask_items':
+      engine.maskItems(message.itemIds);
+      break;
+    case 'release_items':
+      engine.releaseItems(message.itemIds);
+      break;
+    case 'set_command_pending':
+      flush(engine.setCommandPending(message.pending, message.nowMs), message.nowMs, true);
+      break;
+    case 'pause':
+      flush(engine.pause(message.nowMs), message.nowMs, true);
+      break;
+    case 'resume':
+      flush(engine.resume(message.nowMs), message.nowMs, true);
+      break;
     case 'reset':
-      // Stub: the alignment engine lands here. No snapshots are emitted yet.
+      flush(engine.reset(message.nowMs), message.nowMs, true);
       break;
   }
 };

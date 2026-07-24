@@ -9,4 +9,5 @@ export * from './audio';
 export * from './tracking';
 export * from './commands';
 export * from './listener';
+export * from './stage';
 export * from './errors';

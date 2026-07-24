@@ -1,0 +1,12 @@
+{
+  "description": "Hesitations and fillers carry near-zero penalty and do not stall the cursor (spec 30.6).",
+  "turns": [
+    { "text": "Hello everyone um and welcome to the uh channel." },
+    { "text": "um Today we are you know talking about building a teleprompter that um actually listens." },
+    { "text": "Let's get started erm with the basics uh right away." }
+  ],
+  "expect": [
+    { "afterTurn": 0, "stateIn": ["following"], "nearWord": "channel", "tolerance": 2 },
+    { "afterTurn": 2, "stateIn": ["following"], "nearWord": "away", "tolerance": 3 }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "description": "Repeated refrain: a generic repeated phrase must freeze rather than jump between duplicate passages (spec 31.13).",
+  "turns": [
+    { "text": "Now watch the kaleidoscope demo carefully because the colors shift like a metronome keeping perfect time." },
+    { "text": "Let's get started with the" }
+  ],
+  "expect": [
+    { "afterTurn": 0, "stateIn": ["following"], "nearWord": "time", "tolerance": 3 },
+    {
+      "afterTurn": 1,
+      "stateIn": ["following", "holding"],
+      "nearWord": "time",
+      "tolerance": 3,
+      "committed": true,
+      "forbidMovements": ["skip", "retake"]
+    }
+  ]
+}

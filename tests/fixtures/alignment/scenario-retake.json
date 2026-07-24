@@ -1,0 +1,18 @@
+{
+  "description": "Retake: re-speaking a previously read paragraph opening moves the cursor backward with a retake commit (spec 31.12).",
+  "turns": [
+    { "text": "Let's get started with the basics right away." },
+    { "text": "The first principle is that the prompter follows you instead of forcing you to follow it." },
+    { "text": "When you pause the prompter pauses." },
+    { "text": "The first principle is that the prompter follows you instead of forcing you to follow it" }
+  ],
+  "expect": [
+    { "afterTurn": 2, "stateIn": ["following"], "nearWord": "pauses", "tolerance": 2 },
+    {
+      "afterTurn": 3,
+      "sawMovement": "retake",
+      "nearWord": "forcing",
+      "tolerance": 8
+    }
+  ]
+}

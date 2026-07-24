@@ -1,0 +1,20 @@
+{
+  "description": "Ad-lib: the stage freezes near the last locked position instead of scrolling, then relocks on return (spec 31.10).",
+  "turns": [
+    { "text": "Hello everyone and welcome to the channel. Today we are talking about building a teleprompter that actually listens." },
+    { "text": "quick side note my dog jumped straight into the neighbor's swimming pool this morning it was absolutely chaotic honestly" },
+    { "text": "anyway sorry random story the poor gardener nearly fainted seeing him splash around while everyone laughed loudly outside" },
+    { "text": "Let's get started with the basics right away." }
+  ],
+  "expect": [
+    { "afterTurn": 0, "stateIn": ["following"], "nearWord": "listens", "tolerance": 2 },
+    {
+      "afterTurn": 2,
+      "stateIn": ["holding", "searching"],
+      "nearWord": "listens",
+      "tolerance": 3,
+      "committed": true
+    },
+    { "afterTurn": 3, "stateIn": ["following"], "nearWord": "away", "tolerance": 2 }
+  ]
+}

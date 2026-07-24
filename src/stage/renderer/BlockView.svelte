@@ -1,0 +1,223 @@
+<!--
+  One compiled block on stage (spec §16.2): headings and take markers, cue
+  rows, silent/stage-only treatment, images, and ordinary spoken text.
+  Past/current/future zoning is applied per block; the current block also
+  receives per-token treatment through `cursor`.
+-->
+<script lang="ts">
+  import type { CompiledBlock } from '../../shared/contracts';
+  import InlineNodes from './InlineNodes.svelte';
+
+  let {
+    block,
+    zone,
+    cursor = null,
+    assets = {},
+    showCues = true,
+    gapPx = 0,
+  }: {
+    block: CompiledBlock;
+    zone: 'past' | 'current' | 'future';
+    cursor?: number | null;
+    assets?: Record<string, { url: string; mime: string; width?: number; height?: number }>;
+    showCues?: boolean;
+    gapPx?: number;
+  } = $props();
+
+  const headingLevel = $derived(
+    typeof block.layoutHints?.level === 'number' ? (block.layoutHints.level as number) : 2,
+  );
+  const takeLabel = $derived(
+    typeof block.layoutHints?.takeLabel === 'string'
+      ? (block.layoutHints.takeLabel as string)
+      : block.layoutHints?.take
+        ? 'Take'
+        : null,
+  );
+  const hidden = $derived(block.kind === 'cue' && !showCues);
+</script>
+
+{#if !hidden}
+  <div
+    class="block k-{block.kind}"
+    class:zone-past={zone === 'past'}
+    class:zone-future={zone === 'future'}
+    class:unspoken={!block.spoken && block.kind !== 'cue'}
+    data-block-id={block.id}
+    style:padding-bottom="{gapPx}px"
+  >
+    {#if takeLabel}
+      <span class="take-marker">{takeLabel}</span>
+    {/if}
+
+    {#if block.kind === 'heading'}
+      <div class="heading" data-level={headingLevel}>
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} />
+      </div>
+    {:else if block.kind === 'cue'}
+      <div class="cue-row">
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} showCues={true} />
+      </div>
+    {:else if block.kind === 'divider'}
+      <div class="divider" aria-hidden="true"></div>
+    {:else if block.kind === 'image'}
+      <div class="figure">
+        {#each block.renderNodes as node}
+          {#if node.type === 'image' && assets[node.assetId]}
+            <img src={assets[node.assetId]?.url} alt={node.alt} draggable="false" />
+          {/if}
+        {/each}
+      </div>
+    {:else if block.kind === 'code'}
+      <pre class="code"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} /></pre>
+    {:else if block.kind === 'blockquote'}
+      <div class="quote">
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} />
+      </div>
+    {:else if block.kind === 'list_item'}
+      <div class="list-item">
+        <span class="bullet" aria-hidden="true"></span>
+        <span class="list-body"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} /></span>
+      </div>
+    {:else if block.kind === 'table' || block.kind === 'diagram'}
+      <div class="visual-fallback">
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} />
+      </div>
+    {:else}
+      <!-- paragraph / silent / stage_only -->
+      <p class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} /></p>
+    {/if}
+  </div>
+{/if}
+
+<style>
+  .block {
+    position: relative;
+  }
+  /* Past/future zoning (spec §11.3): applied to whole blocks; the current
+     block's words are zoned individually in InlineNodes. */
+  .zone-past {
+    opacity: var(--stage-past-opacity, 0.42);
+  }
+  .zone-future {
+    opacity: var(--stage-future-opacity, 0.92);
+  }
+  .block {
+    transition: opacity 300ms var(--ease-out, ease-out);
+  }
+
+  /* Silent / stage-only material reads as quiet stage direction. */
+  .unspoken {
+    opacity: 0.45;
+    font-size: 0.7em;
+    line-height: 1.35;
+  }
+
+  .take-marker {
+    display: inline-block;
+    color: var(--stage-cue);
+    font-size: 0.42em;
+    font-weight: 650;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    padding: 0.2em 0.9em;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--stage-cue) 14%, transparent);
+    margin-bottom: 0.45em;
+  }
+
+  .heading {
+    font-weight: 640;
+    letter-spacing: -0.012em;
+  }
+  .heading[data-level='1'] {
+    font-size: 1.3em;
+    line-height: 1.18;
+  }
+  .heading[data-level='2'] {
+    font-size: 1.16em;
+    line-height: 1.2;
+  }
+  .heading:not([data-level='1']):not([data-level='2']) {
+    font-size: 1.05em;
+    line-height: 1.22;
+  }
+
+  .cue-row {
+    font-size: 0.9em;
+  }
+
+  .divider {
+    height: 2px;
+    width: 22%;
+    margin: 0.3em auto;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--stage-text) 22%, transparent);
+  }
+
+  .figure img {
+    display: block;
+    max-width: 100%;
+    max-height: var(--stage-image-max-h, 78vh);
+    margin: 0 auto;
+    border-radius: 16px;
+  }
+
+  .code {
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.6em;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    margin: 0;
+    padding: 0.8em 1em;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--stage-text) 7%, transparent);
+  }
+
+  /* Leading rule as an inset bar, never a one-sided border on a rounded box. */
+  .quote {
+    position: relative;
+    padding-left: 0.85em;
+    font-style: italic;
+  }
+  .quote::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.18em;
+    bottom: 0.18em;
+    width: 0.09em;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--stage-text) 30%, transparent);
+  }
+
+  .list-item {
+    display: flex;
+    gap: 0.55em;
+    align-items: baseline;
+  }
+  .bullet {
+    flex: none;
+    width: 0.28em;
+    height: 0.28em;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--stage-text) 55%, transparent);
+    transform: translateY(-0.18em);
+  }
+  .list-body {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .visual-fallback {
+    padding: 0.5em 0.8em;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--stage-text) 6%, transparent);
+    font-size: 0.7em;
+    line-height: 1.4;
+  }
+
+  p.para {
+    margin: 0;
+  }
+</style>

@@ -8,7 +8,10 @@
    ============================================================================ */
 
 :root {
-  --stage-bg: #080808;
+  /* Product direction: the default stage is pure black with no Listener —
+     the deepest possible background for teleprompter glass. (Spec §11.3
+     suggested #080808; the owner overrode it to true black.) */
+  --stage-bg: #000000;
   --stage-text: #f5f3ef;
   --stage-text-past: rgba(245, 243, 239, 0.42);
   --stage-text-future: rgba(245, 243, 239, 0.86);
@@ -28,4 +31,11 @@ body,
   user-select: none;
   -webkit-user-select: none;
   cursor: default;
+  /* Never rubber-band or chain-scroll the presentation surface. */
+  overscroll-behavior: none;
+}
+
+#root {
+  /* The stage shell positions its layers absolutely against the window. */
+  position: relative;
 }

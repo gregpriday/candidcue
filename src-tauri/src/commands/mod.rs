@@ -1,27 +1,27 @@
-//! Typed IPC commands exposed to the control window.
+//! Typed IPC commands exposed to the control window (spec §46).
 //!
 //! Every command returns `Result<T, AppError>` so failures always cross the
-//! boundary as the stable error payload (spec §44.12).
+//! boundary as the stable error payload (spec §44.12). Invoke argument names
+//! are the camelCase forms of the Rust parameter names.
 
-use tauri::State;
+pub mod assets_cmds;
+pub mod listeners_cmds;
+pub mod openai_cmds;
+pub mod scripts_cmds;
+pub mod sessions_cmds;
+pub mod settings_cmds;
+pub mod stage_cmds;
 
-use crate::database::Database;
-use crate::errors::AppError;
-use crate::scripts::ScriptSummary;
+pub use assets_cmds::*;
+pub use listeners_cmds::*;
+pub use openai_cmds::*;
+pub use scripts_cmds::*;
+pub use sessions_cmds::*;
+pub use settings_cmds::*;
+pub use stage_cmds::*;
 
 /// Application version string, e.g. "0.1.0".
 #[tauri::command]
 pub fn app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
-}
-
-/// Script library listing. Stub: returns an empty library until the scripts
-/// repository lands; already touches the pool so wiring is proven.
-#[tauri::command]
-pub async fn list_scripts(db: State<'_, Database>) -> Result<Vec<ScriptSummary>, AppError> {
-    // Cheap liveness check that the pool + migrations are actually wired.
-    sqlx::query_scalar::<_, i64>("SELECT count(*) FROM scripts")
-        .fetch_one(db.pool())
-        .await?;
-    Ok(Vec::new())
 }

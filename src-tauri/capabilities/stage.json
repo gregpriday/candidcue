@@ -1,10 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "stage-capability",
-  "description": "The minimally privileged stage window: it may only listen to events pushed from Rust/control (spec Appendix D.3).",
+  "description": "The minimally privileged stage window: it listens to events pushed from Rust/control and emits the spec §46.9 stage→Rust handshake/heartbeat events (hydrated, layout-ready, heartbeat, media-error, escape-requested). No other capabilities (spec Appendix D.3).",
   "windows": ["stage"],
   "permissions": [
     "core:event:allow-listen",
-    "core:event:allow-unlisten"
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "core:event:allow-emit-to"
   ]
 }

@@ -1,0 +1,61 @@
+{
+  "description": "Two committed utterances whose completion events arrive out of order — chronological application must use local commit order, never arrival order (spec §29.3).",
+  "events": [
+    {
+      "type": "input_audio_buffer.committed",
+      "event_id": "event_2001",
+      "previous_item_id": null,
+      "item_id": "item_001"
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.delta",
+      "event_id": "event_2002",
+      "item_id": "item_001",
+      "content_index": 0,
+      "delta": "Welcome back to "
+    },
+    {
+      "type": "input_audio_buffer.committed",
+      "event_id": "event_2003",
+      "previous_item_id": "item_001",
+      "item_id": "item_002"
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.delta",
+      "event_id": "event_2004",
+      "item_id": "item_002",
+      "content_index": 0,
+      "delta": "today we are "
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.delta",
+      "event_id": "event_2005",
+      "item_id": "item_002",
+      "content_index": 0,
+      "delta": "testing the teleprompter."
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.completed",
+      "event_id": "event_2006",
+      "item_id": "item_002",
+      "content_index": 0,
+      "transcript": "Today we are testing the teleprompter.",
+      "logprobs": null
+    },
+    {
+      "type": "conversation.item.input_audio_transcription.completed",
+      "event_id": "event_2007",
+      "item_id": "item_001",
+      "content_index": 0,
+      "transcript": "Welcome back to the channel.",
+      "logprobs": [
+        { "token": "Welcome", "logprob": -0.03 },
+        { "token": " back", "logprob": -0.02 },
+        { "token": " to", "logprob": -0.01 },
+        { "token": " the", "logprob": -0.09 },
+        { "token": " channel", "logprob": -0.2 },
+        { "token": ".", "logprob": -0.01 }
+      ]
+    }
+  ]
+}
