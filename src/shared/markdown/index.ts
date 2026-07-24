@@ -17,10 +17,13 @@ export { segmentSentences, type SentenceRange } from './segment';
 export {
   scanContainers,
   containerAt,
+  ContainerIndex,
+  resolveContainerSemantics,
   classifyBracketDirective,
   type ContainerKind,
   type ContainerRegion,
   type ContainerScanResult,
+  type ContainerSemantics,
   type InlineDirective,
 } from './directives';
 export { phoneticKey } from './phonetic';

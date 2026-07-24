@@ -15,3 +15,15 @@ export * from './engine';
 export * from './pace';
 export * from './stage-target';
 export * from './worker-protocol';
+
+/* Alignment v2 (companion specification §50.1). */
+export * from './speech-units';
+export * from './section-graph';
+export * from './semantic-assist';
+export * from './alignment-v2';
+export * from './semantic-filter';
+export * from './pace-estimator';
+export * from './behavior';
+export * from './motion-frame';
+export * from './decision-log';
+export * from './playback-harness';

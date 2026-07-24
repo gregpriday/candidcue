@@ -107,12 +107,17 @@ export function buildStageRenderDocument(
 export async function resolveDocumentAssets(
   script: CompiledScript,
 ): Promise<StageRenderDocument['assets']> {
-  const localIds = script.assets.filter((a) => !a.remote).map((a) => a.id);
-  if (localIds.length === 0) return {};
+  // The compiler's `img-<hash>` ids are node keys derived from the authored
+  // URL, never database ids, so the href must travel with them: Rust resolves
+  // by canonical path and answers under the id we sent (§24.1).
+  const local = script.assets
+    .filter((a) => !a.remote && a.kind === 'image')
+    .map((a) => ({ id: a.id, href: a.href }));
+  if (local.length === 0) return {};
   try {
     const entries = await invokeOrMock<Record<string, { url: string; mime: string }>>(
       'resolve_asset_urls',
-      { scriptId: script.scriptId, assetIds: localIds },
+      { scriptId: script.scriptId, assetsToResolve: local },
       () => ({}),
     );
     const resolved: StageRenderDocument['assets'] = {};

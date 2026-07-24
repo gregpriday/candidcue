@@ -2,7 +2,19 @@
  * Tracking profile (spec Appendix A.7) — every scoring weight, threshold, and
  * window size used by the alignment engine lives here so the evaluation
  * package can tune release defaults without touching engine code.
+ *
+ * The `v2` block carries the numeric parameters introduced by the companion
+ * specification (`CandidCue_Smooth_Following_and_Intelligent_Alignment_
+ * Specification.md`) that are *not* part of the shared seam contract's
+ * `SmoothFollowProfile`. Seam-owned values (beam width, prediction horizons,
+ * retake persistence, semantic influence bound, motion limits) always come
+ * from `SmoothFollowProfile`; everything else lives here. Nothing numeric may
+ * be inlined in engine code.
  */
+import {
+  DEFAULT_SMOOTH_FOLLOW_PROFILE,
+  type SmoothFollowProfile,
+} from '../contracts/smooth-follow';
 
 export interface TrackingProfile {
   profileVersion: 1;
@@ -88,6 +100,92 @@ export interface TrackingProfile {
   retakeTransitionMsMin: number;
   retakeTransitionMsMax: number;
   commandTransitionMs: number;
+
+  /* ---------------------------------------------------------------------
+   * Alignment v2 (companion specification). See DEFAULT_TRACKING_PROFILE
+   * for the citation of every starting value.
+   * ------------------------------------------------------------------- */
+
+  /* Weighted speech units (companion §6.1). */
+  unitStopwordWeight: number;
+  unitNormalWeight: number;
+  unitLongWeight: number;
+  unitLongTokenChars: number;
+  unitShortTokenChars: number;
+  unitSentenceEndPause: number;
+  unitBlockEndPause: number;
+  /** Spoken units in one rendered line — the stage refines this (A.3). */
+  unitsPerRenderedLine: number;
+
+  /* Multiple transcript tails (companion §15.2, A.2). */
+  tailShortTokens: number;
+  tailMediumTokens: number;
+  tailLongTokens: number;
+
+  /* Beam maintenance (companion §16). */
+  beamMergeTokens: number;
+  hypothesisDecay: number;
+  minHypothesisWeight: number;
+  hypothesisSoftmaxTemperature: number;
+  hypothesisInheritanceFactor: number;
+  tailAgreementBonus: number;
+  holdBranchScoreFactor: number;
+
+  /* Section eligibility graph (companion §13, B.2). */
+  sectionBoundaryForwardTokens: number;
+  sectionBoundaryBackwardTokens: number;
+  /** Boundary corridors may never exceed this fraction of a section (§13). */
+  sectionBoundaryMaxFraction: number;
+  recentBoundaryCrossingMs: number;
+
+  /* Semantic filter (companion §24.2.1). */
+  filterProcessNoiseFollowing: number;
+  filterProcessNoiseUncertain: number;
+  filterProcessNoiseAcquiring: number;
+  filterMeasurementNoiseFinal: number;
+  filterMeasurementNoiseProvisional: number;
+  filterInnovationClampUnits: number;
+  filterMaxVelocityUnitsPerSecond: number;
+  filterMaxAccelerationUnitsPerSecond2: number;
+  filterInitialVariance: number;
+  filterSemanticOnlyVarianceFactor: number;
+  filterBeamVarianceFactor: number;
+  filterUncertainInnovationFactor: number;
+  filterVelocityScheduleGain: number;
+
+  /* Pace estimator (companion §24.4–§24.5, A.1). */
+  paceShortWindowMs: number;
+  paceBaselineWindowMs: number;
+  paceMinSamples: number;
+  paceTrimFraction: number;
+  paceMinUnitsPerSecond: number;
+  paceMaxUnitsPerSecond: number;
+  paceVelocityBlendWeight: number;
+  paceProvisionalQuality: number;
+  paceMinQuality: number;
+
+  /* Ad-lib coast → decelerate → hold schedule (companion §19.2). */
+  adlibCoastMs: number;
+  adlibDecayMs: number;
+  adlibSettleMs: number;
+  adlibResidualVelocityFraction: number;
+
+  /* Semantic motion frames (companion §26.1). */
+  maxFramesPerSecond: number;
+  heldFrameIntervalMs: number;
+  frameUnitEpsilon: number;
+  frameVelocityEpsilon: number;
+
+  /* Transition directives (companion §53, A.3). */
+  transitionTtlMs: number;
+  absorbRenderedLines: number;
+  catchUpRenderedLines: number;
+
+  /* Semantic assist (companion §40). */
+  semanticAssistTtlMs: number;
+
+  /* Diagnostics ring buffer (companion §65). */
+  decisionLogCapacity: number;
 }
 
 /**
@@ -165,8 +263,109 @@ export const DEFAULT_TRACKING_PROFILE: TrackingProfile = {
   retakeTransitionMsMin: 180, // §32.3
   retakeTransitionMsMax: 300, // §32.3
   commandTransitionMs: 200, // §32.3 manual/command short transition
+
+  /* --- companion specification (alignment v2) ------------------------- */
+
+  unitStopwordWeight: 0.75, // companion §6.1 short function word 0.65–0.85
+  unitNormalWeight: 1.0, // companion §6.1 ordinary word
+  unitLongWeight: 1.45, // companion §6.1 long word 1.1–1.8
+  unitLongTokenChars: 9, // "long or multi-syllable" heuristic
+  unitShortTokenChars: 4, // below this a content word is not "long"
+  unitSentenceEndPause: 1.6, // companion §6.1 sentence-ending virtual pause
+  unitBlockEndPause: 2.4, // companion §6.1 paragraph/authored pause
+  unitsPerRenderedLine: 9, // companion §7/A.3 pre-layout estimate
+
+  tailShortTokens: 9, // A.2 short tail 6–12 meaningful tokens
+  tailMediumTokens: 18, // A.2 medium tail 12–24
+  tailLongTokens: 36, // A.2 long finalized tail 24–50
+
+  beamMergeTokens: 4, // §16 step 8 "merge near-identical hypotheses"
+  hypothesisDecay: 0.55, // §16 unsupported branches fade rather than vanish
+  minHypothesisWeight: 0.01, // §16 step 9 pruning floor
+  hypothesisSoftmaxTemperature: 0.18, // §16 step 7 score normalization
+  hypothesisInheritanceFactor: 0.15, // §16.1 continuity bonus for a surviving branch
+  tailAgreementBonus: 0.03, // §15.2 bounded bonus for independent tail agreement
+  holdBranchScoreFactor: 0.72, // §16.2 hold/ad-lib branch prior, relative to soft evidence
+
+  // §13/B.2 boundary corridors. These must stay tight: "reading has reached
+  // the boundary" means roughly the last sentence, not the last third of a
+  // chapter. SectionGraph additionally clamps them to a fraction of the
+  // section's own length so a short section can never be mostly "corridor".
+  sectionBoundaryForwardTokens: 14,
+  sectionBoundaryBackwardTokens: 10,
+  sectionBoundaryMaxFraction: 0.34, // §13 corridor ≪ section
+  recentBoundaryCrossingMs: 12_000, // §13 "recent-boundary window"
+
+  filterProcessNoiseFollowing: 0.05, // §24.2.1 low Q while stable
+  filterProcessNoiseUncertain: 0.012, // §24.2.1 tightly constrained while uncertain
+  filterProcessNoiseAcquiring: 0.6, // §24.2.1 higher while acquiring/returning
+  filterMeasurementNoiseFinal: 0.35, // §24.2.1 low R for final distinctive matches
+  filterMeasurementNoiseProvisional: 2.5, // §24.2.1 high R for provisional
+  filterInnovationClampUnits: 14, // §24.2 bounded innovation
+  filterMaxVelocityUnitsPerSecond: 8, // §24.2.1 plausible speech profile bound
+  filterMaxAccelerationUnitsPerSecond2: 6, // §24.2.1
+  filterInitialVariance: 25, // §24.2.1 diffuse prior before acquisition
+  filterSemanticOnlyVarianceFactor: 2.5, // §24.2.1 semantically inferred match ⇒ high R
+  filterBeamVarianceFactor: 0.25, // §24.2.1 R also reflects beam position variance
+  filterUncertainInnovationFactor: 0.35, // B.3 tighter clamp while uncertain
+  filterVelocityScheduleGain: 6, // §19.2 dt-normalized approach rate to the schedule
+
+  paceShortWindowMs: 5_500, // A.1 short-term pace window 3–8 s
+  paceBaselineWindowMs: 30_000, // A.1 baseline pace window 15–45 s
+  paceMinSamples: 2, // §24.4 need more than one span to trust a rate
+  paceTrimFraction: 0.2, // §24.4 robust trimming before the baseline update
+  paceMinUnitsPerSecond: 0.4, // §24.4 implausible-rate rejection floor
+  paceMaxUnitsPerSecond: 8, // §24.4 implausible-rate rejection ceiling
+  paceVelocityBlendWeight: 0.35, // §24.2.1 weight of the optional H_v update
+  paceProvisionalQuality: 0.3, // §24.3 provisional spans are noisy observations
+  paceMinQuality: 0.2, // §24.3 floor so a weak final span still counts a little
+
+  adlibCoastMs: 200, // §19.2 step 1: 150–250 ms
+  adlibDecayMs: 350, // §19.2 step 2: 250–450 ms
+  adlibSettleMs: 900, // §19.2 step 3: 700–1100 ms
+  adlibResidualVelocityFraction: 0.375, // §19.2 step 2: 30–45 %
+
+  maxFramesPerSecond: 30, // §26.1 "15–30 Hz when values change"
+  heldFrameIntervalMs: 250, // §26.1 "less frequently while held"
+  frameUnitEpsilon: 0.01, // §26.1 change detection
+  frameVelocityEpsilon: 0.02,
+
+  transitionTtlMs: 1_500, // §53 directives expire rather than linger
+  absorbRenderedLines: 1, // A.3 "< 0.5–1 line" → absorb
+  catchUpRenderedLines: 3, // A.3 "~1–3 lines" → catch up, beyond → re-anchor
+
+  semanticAssistTtlMs: 4_000, // §40.4 short semantic-evidence lifetime
+
+  decisionLogCapacity: 64, // §65 bounded "why did it move?" ring buffer
 };
 
 export function resolveTrackingProfile(partial?: Partial<TrackingProfile>): TrackingProfile {
   return { ...DEFAULT_TRACKING_PROFILE, ...(partial ?? {}) };
+}
+
+/** A section-wise partial of the seam-owned `SmoothFollowProfile`. */
+export type PartialSmoothFollowProfile = {
+  [K in keyof SmoothFollowProfile]?: SmoothFollowProfile[K] extends object
+    ? Partial<SmoothFollowProfile[K]>
+    : SmoothFollowProfile[K];
+};
+
+/**
+ * Merge a partial smooth-follow profile over the seam defaults (companion
+ * §55). Sections merge independently so a caller can override only, say,
+ * `alignment.beamWidth` without restating the rest.
+ */
+export function resolveSmoothFollowProfile(
+  partial?: PartialSmoothFollowProfile,
+): SmoothFollowProfile {
+  const base = DEFAULT_SMOOTH_FOLLOW_PROFILE;
+  if (partial === undefined) return base;
+  return {
+    version: partial.version ?? base.version,
+    id: partial.id ?? base.id,
+    prediction: { ...base.prediction, ...(partial.prediction ?? {}) },
+    alignment: { ...base.alignment, ...(partial.alignment ?? {}) },
+    motion: { ...base.motion, ...(partial.motion ?? {}) },
+    coaching: { ...base.coaching, ...(partial.coaching ?? {}) },
+  };
 }

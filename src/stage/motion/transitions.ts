@@ -1,0 +1,152 @@
+/**
+ * StageTransitionController (companion §53).
+ *
+ * A transition directive is an authorized, bounded change to how the stage
+ * moves. Only one may be active, each runs exactly once (idempotent by `id`, so
+ * a re-sent frame carrying the same directive is a no-op), and only a
+ * `reanchor`/`reset` grants the frame loop permission to overwrite plant state
+ * (§26.3). Everything else just reshapes the controller limits.
+ *
+ * Pure: the caller supplies session time.
+ */
+import type { StageTransitionDirective } from '../../shared/contracts';
+
+export type TransitionIgnoreReason =
+  | 'duplicate'
+  | 'expired'
+  | 'authority'
+  | 'stale_epoch'
+  | 'type_none';
+
+export type TransitionOutcome =
+  | { accepted: true; transition: ActiveTransition }
+  | { accepted: false; reason: TransitionIgnoreReason };
+
+export interface ActiveTransition {
+  directive: StageTransitionDirective;
+  startedAtMs: number;
+  expiresAtMs: number;
+}
+
+export interface StageTransitionController {
+  readonly active: ActiveTransition | null;
+  /** Directives seen (accepted or duplicate) — diagnostics only. */
+  readonly seenIds: number;
+  submit(directive: StageTransitionDirective, nowMs: number): TransitionOutcome;
+  /** Expire the active transition when its deadline passes. */
+  update(nowMs: number): void;
+  /**
+   * Returns the directive exactly once per accepted reanchor/reset. Holding
+   * this token is the only licence the frame loop has to write plant state.
+   */
+  consumePlantOverwrite(): StageTransitionDirective | null;
+  /** Mark the active transition finished (arrived at destination). */
+  complete(id: string): void;
+  reset(): void;
+}
+
+const AUTHORITY_RANK: Record<StageTransitionDirective['authority'], number> = {
+  ordinary: 0,
+  command: 1,
+  manual: 2,
+};
+
+export interface TransitionControllerOptions {
+  /** How many directive ids to remember for idempotency. */
+  historySize?: number;
+}
+
+export function createStageTransitionController(
+  options: TransitionControllerOptions = {},
+): StageTransitionController {
+  const historySize = options.historySize ?? 64;
+  const seen = new Set<string>();
+  const order: string[] = [];
+  let active: ActiveTransition | null = null;
+  let pendingOverwrite: StageTransitionDirective | null = null;
+  let highestEpoch = Number.NEGATIVE_INFINITY;
+
+  function remember(id: string) {
+    if (seen.has(id)) return;
+    seen.add(id);
+    order.push(id);
+    while (order.length > historySize) {
+      const oldest = order.shift();
+      if (oldest !== undefined) seen.delete(oldest);
+    }
+  }
+
+  return {
+    get active() {
+      return active;
+    },
+    get seenIds() {
+      return seen.size;
+    },
+
+    submit(directive, nowMs): TransitionOutcome {
+      if (!directive || directive.type === 'none') {
+        return { accepted: false, reason: 'type_none' };
+      }
+      if (seen.has(directive.id)) {
+        return { accepted: false, reason: 'duplicate' };
+      }
+      if (Number.isFinite(directive.expiresAtMs) && directive.expiresAtMs <= nowMs) {
+        remember(directive.id);
+        return { accepted: false, reason: 'expired' };
+      }
+      // A directive from a superseded semantic epoch is a late arrival.
+      if (directive.semanticEpoch < highestEpoch) {
+        remember(directive.id);
+        return { accepted: false, reason: 'stale_epoch' };
+      }
+      // Only one active transition; a lower authority may not interrupt a
+      // command or manual transition already in flight (§56).
+      if (
+        active &&
+        AUTHORITY_RANK[directive.authority] < AUTHORITY_RANK[active.directive.authority]
+      ) {
+        remember(directive.id);
+        return { accepted: false, reason: 'authority' };
+      }
+
+      remember(directive.id);
+      highestEpoch = Math.max(highestEpoch, directive.semanticEpoch);
+      active = {
+        directive,
+        startedAtMs: nowMs,
+        expiresAtMs: Number.isFinite(directive.expiresAtMs)
+          ? directive.expiresAtMs
+          : nowMs + 4000,
+      };
+      if (directive.type === 'reanchor' || directive.type === 'reset') {
+        pendingOverwrite = directive;
+      }
+      return { accepted: true, transition: active };
+    },
+
+    update(nowMs) {
+      if (active && nowMs >= active.expiresAtMs) {
+        active = null;
+      }
+    },
+
+    consumePlantOverwrite() {
+      const directive = pendingOverwrite;
+      pendingOverwrite = null;
+      return directive;
+    },
+
+    complete(id) {
+      if (active && active.directive.id === id) active = null;
+    },
+
+    reset() {
+      active = null;
+      pendingOverwrite = null;
+      seen.clear();
+      order.length = 0;
+      highestEpoch = Number.NEGATIVE_INFINITY;
+    },
+  };
+}

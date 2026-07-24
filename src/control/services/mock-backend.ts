@@ -108,11 +108,11 @@ function refreshDerived(doc: ScriptDocument): void {
 function toSummary(doc: ScriptDocument): ScriptSummary {
   const {
     id, title, status, language, spokenWordCount, estimatedDurationSeconds,
-    updatedAt, lastOpenedAt, previewText, hasWarnings,
+    updatedAt, lastOpenedAt, previewText, hasWarnings, scriptRevision,
   } = doc;
   return {
     id, title, status, language, spokenWordCount, estimatedDurationSeconds,
-    updatedAt, previewText, hasWarnings,
+    updatedAt, previewText, hasWarnings, scriptRevision,
     ...(lastOpenedAt ? { lastOpenedAt } : {}),
   };
 }
@@ -222,13 +222,15 @@ export const mockScripts = {
     return toSummary(copy);
   },
 
-  trash(scriptId: string): void {
+  trash(scriptId: string): ScriptSummary {
     state.load();
     const record = state.scripts.get(scriptId);
-    if (!record) return;
+    if (!record) throw new Error(`SCRIPT_FILE_MISSING: ${scriptId}`);
     record.doc.status = 'trash';
+    record.doc.scriptRevision += 1;
     record.trashedAt = nowIso();
     state.persist();
+    return toSummary(record.doc);
   },
 
   restore(scriptId: string): ScriptSummary {
@@ -236,6 +238,7 @@ export const mockScripts = {
     const record = state.scripts.get(scriptId);
     if (!record) throw new Error(`SCRIPT_FILE_MISSING: ${scriptId}`);
     record.doc.status = 'draft';
+    record.doc.scriptRevision += 1;
     delete record.trashedAt;
     state.persist();
     return toSummary(record.doc);
@@ -315,6 +318,7 @@ export const mockStage = {
         logicalSize: { width: 1512, height: 982 },
         primary: true,
         fingerprint: 'dsp-mock-builtin',
+        topologyHash: 'top-mock-builtin',
       },
       {
         id: 'display-1',
@@ -325,13 +329,14 @@ export const mockStage = {
         logicalSize: { width: 1920, height: 1080 },
         primary: false,
         fingerprint: 'dsp-mock-prompter',
+        topologyHash: 'top-mock-prompter',
       },
     ];
   },
   identifyDisplays(): IdentificationSession {
     return {
       sessionId: makeId(),
-      durationMs: 6000,
+      durationMs: 2500,
       displays: this.listDisplays().map((d, index) => ({
         number: index + 1,
         fingerprint: d.fingerprint,
@@ -354,6 +359,8 @@ export const mockStage = {
       exists: true,
       visible: true,
       fullscreen: enabled,
+      nativeFullscreen: false,
+      displayFingerprint: 'dsp-mock-prompter',
       stageGeneration: mockStageGeneration,
     };
   },

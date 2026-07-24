@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { classifyBracketDirective, scanContainers } from './directives';
+import {
+  ContainerIndex,
+  classifyBracketDirective,
+  resolveContainerSemantics,
+  scanContainers,
+} from './directives';
 
 describe('classifyBracketDirective (spec §23.2/§23.3)', () => {
   it('recognizes cue directives case-insensitively and preserves user text', () => {
@@ -105,5 +110,82 @@ describe('scanContainers (spec §23.4-§23.7)', () => {
   it('is case-insensitive on the directive name', () => {
     const { regions } = scanContainers(':::SILENT\nnote\n:::\n');
     expect(regions[0]).toMatchObject({ kind: 'silent' });
+  });
+
+  it('nests containers with a stack instead of ending the outer one (§23.6)', () => {
+    const source =
+      ':::stage\nKey result\n\n:::spoken\nvisual: v2.0\nsay: version two\n:::\n\n:::\n';
+    const { regions, diagnostics } = scanContainers(source);
+    expect(diagnostics).toEqual([]);
+    expect(regions.map((r) => r.kind)).toEqual(['stage', 'spoken']);
+    // Sorted outermost-first, and the inner region sits inside the outer one.
+    expect(regions[1]!.start).toBeGreaterThan(regions[0]!.start);
+    expect(regions[1]!.end).toBeLessThan(regions[0]!.end);
+    expect(regions[0]!.spoken).toBeUndefined();
+    expect(regions[1]!.spoken?.say).toBe('version two');
+  });
+
+  it('composes nested semantics innermost-out', () => {
+    const source = ':::silent\nnote\n\n:::literal-command\nCandidCue, go.\n:::\n\n:::\n';
+    const { regions } = scanContainers(source);
+    const index = new ContainerIndex(regions);
+    const inner = index.at(source.indexOf('CandidCue, go.'))!;
+    expect(inner.kind).toBe('literal-command');
+    // Suppression from an enclosing container still applies.
+    expect(resolveContainerSemantics(inner)).toEqual({
+      silent: true,
+      stage: false,
+      literalCommand: true,
+    });
+  });
+
+  it('ignores ::: lines inside a fenced code block', () => {
+    const source =
+      '```markdown\n:::spoken\nvisual: fenced\nsay: fenced\n:::\n[Take: Inside]\n```\n\nAfter.\n';
+    const { regions, diagnostics, maskedSource } = scanContainers(source);
+    expect(regions).toEqual([]);
+    expect(diagnostics).toEqual([]);
+    // The fenced example survives verbatim — it used to be blanked out, which
+    // gutted the code card AND emitted a phantom spoken override.
+    expect(maskedSource).toBe(source);
+  });
+
+  it('ignores ::: lines inside a tilde fence and honours fence lengths', () => {
+    const source = '~~~\n:::silent\nnote\n:::\n~~~\n';
+    expect(scanContainers(source).regions).toEqual([]);
+    const nested = '````\n```\n:::silent\nnote\n:::\n```\n````\n';
+    expect(scanContainers(nested).regions).toEqual([]);
+  });
+
+  it('still scans containers after a fence closes', () => {
+    const source = '```\ncode\n```\n\n:::silent\nnote\n:::\n';
+    const { regions } = scanContainers(source);
+    expect(regions.map((r) => r.kind)).toEqual(['silent']);
+  });
+
+  it('reports unclosed containers in document order', () => {
+    const { diagnostics } = scanContainers(':::silent\na\n\n:::stage\nb\n');
+    const unclosed = diagnostics.filter((d) => d.code === 'directive_unclosed');
+    expect(unclosed.map((d) => d.source?.line)).toEqual([1, 4]);
+    expect(unclosed.map((d) => d.blocking)).toEqual([true, false]);
+  });
+});
+
+describe('ContainerIndex (spec §25.8)', () => {
+  it('answers document-order lookups without rescanning every region', () => {
+    let source = '';
+    const offsets: number[] = [];
+    for (let i = 0; i < 200; i++) {
+      offsets.push(source.length + `:::silent\n`.length);
+      source += `:::silent\nnote ${i}\n:::\n\nParagraph ${i}.\n\n`;
+    }
+    const { regions } = scanContainers(source);
+    expect(regions).toHaveLength(200);
+    const index = new ContainerIndex(regions);
+    for (let i = 0; i < offsets.length; i++) {
+      expect(index.at(offsets[i]!)!.kind).toBe('silent');
+      // Between two containers there is no region at all.
+      expect(index.at(source.indexOf(`Paragraph ${i}.`))).toBeUndefined();
+    }
   });
 });

@@ -10,6 +10,8 @@ export type SettingsSection =
   | 'openai'
   | 'audio'
   | 'teleprompter'
+  /** Companion §47 follow settings. */
+  | 'following'
   | 'commands'
   | 'listeners'
   | 'privacy';

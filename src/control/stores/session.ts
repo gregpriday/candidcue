@@ -20,13 +20,24 @@ import type {
   ValidatedCommand,
 } from '../../shared/contracts';
 import { STAGE_EVENT, CONTROL_EVENT } from '../../shared/contracts';
+import type { SemanticMotionFrame } from '../../shared/contracts';
 import type { CommandSettings } from '../../shared/commands';
-import type { SessionMode } from '../services/settings-types';
+import type { FollowingSettings, SessionMode } from '../services/settings-types';
 import { createTrackingDriver, newSessionId, type TrackingDriver } from '../services/session';
 import { VoiceSessionPipeline } from '../services/voice-session';
 import { isTauriRuntime } from '../services/ipc';
 import { describeError } from '../services/errors';
 import * as stageService from '../services/stage';
+import {
+  isNontrivialMovement,
+  motionFrameFromSnapshot,
+  movementRecordFromDiagnostic,
+  subscribeFollowSidecar,
+  subscribeStageMotionAcks,
+} from '../services/smooth-follow-adapter';
+import { defaultFollowingSettings } from '../lib/follow-profiles';
+import { configureFollowActions, smoothFollow } from './smooth-follow';
+import { getSettingsSnapshot, patchSettings } from './settings';
 import { showToast } from './toasts';
 
 export type PauseKind = 'none' | 'listening' | 'hard';
@@ -119,6 +130,18 @@ let heartbeatRevision = 0;
 let stageEventUnlisteners: Array<() => void> = [];
 let lastRelayAtMs = 0;
 
+/* Smooth-following bridge state (companion §50.1). The v2 producers are
+ * landing in parallel; until then the control UI is fed by bridging today's
+ * v1 snapshots/diagnostics — see services/smooth-follow-adapter.ts. */
+let sessionStartedAtMs = 0;
+let lastMotionFrame: SemanticMotionFrame | null = null;
+let followProfileId = defaultFollowingSettings().motionProfileId;
+let scriptCompileHash = '';
+let stopMotionAcks: (() => void) | null = null;
+let stopSidecarFeed: (() => void) | null = null;
+/** True once the worker has sent a real v2 frame — the bridge then stands down. */
+let usingWorkerFrames = false;
+
 /** Stage relay throttle (§46.6): the worker caps at 30/s; the stage gets ~15/s. */
 const STAGE_RELAY_MIN_INTERVAL_MS = 66;
 
@@ -141,6 +164,8 @@ export interface StartSessionInput {
   commandSettings?: Partial<CommandSettings>;
   commandsEnabled?: boolean;
   micDeviceId?: string;
+  /** §47 follow settings for this session; defaults to the saved settings. */
+  following?: FollowingSettings;
 }
 
 export function startLiveSession(input: StartSessionInput): string {
@@ -154,6 +179,22 @@ export function startLiveSession(input: StartSessionInput): string {
   listenerVisible = listenerSelection !== null;
   heartbeatRevision = 0;
   lastRelayAtMs = 0;
+  sessionStartedAtMs = Date.now();
+  lastMotionFrame = null;
+  usingWorkerFrames = false;
+  scriptCompileHash = input.compiled?.sourceHash ?? '';
+
+  // Smooth-following store (§50.1): user-visible following state + §48 actions.
+  const following = input.following ?? currentFollowingSettings();
+  followProfileId = following.motionProfileId;
+  smoothFollow.beginSession(sessionId, following);
+  configureFollowActions(followActions);
+  smoothFollow.reportTranscriptStatus(input.mode === 'voice' ? 'live' : 'idle');
+  stopSidecarFeed = subscribeFollowSidecar({
+    onAssistStatus: (patch) => smoothFollow.ingestAssistStatus(patch),
+    onCoachTip: (tip) => smoothFollow.ingestCoachTip(tip),
+    onBudgetBreach: (breach) => smoothFollow.reportBudgetBreach(breach),
+  });
 
   state.set({
     ...initial,
@@ -184,6 +225,27 @@ export function startLiveSession(input: StartSessionInput): string {
     onSnapshot: handleSnapshot,
     onTranscript(line) {
       pushTranscriptLine(line);
+    },
+    // Real v2 output from the tracking worker (companion §26.1, §65).
+    onMotionFrame(frame) {
+      usingWorkerFrames = true;
+      lastMotionFrame = frame;
+      smoothFollow.ingestMotionFrame(frame);
+    },
+    onMovementRecord(record) {
+      usingWorkerFrames = true;
+      smoothFollow.ingestMovementRecord(record);
+    },
+    // Fallback for drivers without a v2 output (the mock driver used in
+    // browser dev, manual/fixed modes, and node tests).
+    onDiagnostic(diagnostic) {
+      if (usingWorkerFrames || !isNontrivialMovement(diagnostic)) return;
+      smoothFollow.ingestMovementRecord(
+        movementRecordFromDiagnostic(diagnostic, {
+          sessionStartedAtMs,
+          previousState: smoothFollow.snapshot().state,
+        }),
+      );
     },
   });
 
@@ -226,6 +288,11 @@ export function startLiveSession(input: StartSessionInput): string {
               : s.counts.reconnects;
           return { ...s, connection, counts: { ...s.counts, reconnects } };
         });
+        // §59: an interrupted transcript is a first-class degraded state.
+        smoothFollow.reportTranscriptStatus(
+          connection === 'connected' ? 'live' : 'interrupted',
+          connection === 'offline' ? 'The realtime connection is offline.' : null,
+        );
       },
       onRealtimeState: (realtimeState) => {
         state.update((s) => ({
@@ -267,6 +334,25 @@ function handleSnapshot(snapshot: TrackingSnapshot): void {
       ? s.blocksSeen
       : [...s.blocksSeen, snapshot.blockId],
   }));
+  // Feed the smooth-following store. The worker's own SemanticMotionFrames
+  // take precedence; this bridge only covers drivers that emit none.
+  if (usingWorkerFrames) return relaySnapshot(snapshot);
+  const frame = motionFrameFromSnapshot(snapshot, {
+    sessionId: snapshot.sessionId,
+    sessionGeneration,
+    scriptCompileHash,
+    layoutGeneration: stageGeneration,
+    motionProfileId: followProfileId,
+    sessionStartedAtMs,
+    previous: lastMotionFrame,
+  });
+  lastMotionFrame = frame;
+  smoothFollow.ingestMotionFrame(frame);
+  relaySnapshot(snapshot);
+}
+
+/** Throttled control → stage snapshot relay (§46.6). */
+function relaySnapshot(snapshot: TrackingSnapshot): void {
   const current = get(state);
   if (!current.sessionId || stageGeneration === 0) return;
   const important =
@@ -284,8 +370,71 @@ function pushTranscriptLine(line: string): void {
   }));
 }
 
+/* ---------------------------------------------------------------------------
+ * Smooth-following actions (companion §48) — the store owns the state, this
+ * store owns the effects.
+ * ------------------------------------------------------------------------- */
+
+function currentFollowingSettings(): FollowingSettings {
+  try {
+    return getSettingsSnapshot().following ?? defaultFollowingSettings();
+  } catch {
+    return defaultFollowingSettings();
+  }
+}
+
+const followActions = {
+  nudge(deltaSentences: number): void {
+    moveSentences(deltaSentences);
+  },
+  /**
+   * "Re-find me here" (§48): re-acquire around the position now on screen.
+   * TODO(integration, Agent A): use a dedicated `reacquire` worker message so
+   * the aligner reopens candidate windows instead of being re-seeded with its
+   * own cursor.
+   */
+  reAnchor(): void {
+    const token = get(state).snapshot?.tokenIndex;
+    if (token === undefined) return;
+    driver?.moveToToken(token, 'manual');
+    showToast('Re-finding your place', 'info', { durationMs: 1600 });
+  },
+  acceptCandidate(candidate: { tokenIndex: number }): void {
+    driver?.moveToToken(candidate.tokenIndex, 'manual');
+  },
+  /**
+   * Pausing following is not pausing the session (§15.3, §48): transcription
+   * stays connected and voice commands keep working — only automatic movement
+   * stops.
+   */
+  setFollowingPaused(paused: boolean): void {
+    if (paused) driver?.pause();
+    else driver?.resume();
+    state.update((s) => ({ ...s, voiceFollow: !paused }));
+  },
+  setIntelligenceMode(mode: FollowingSettings['intelligenceMode']): void {
+    void patchSettings('following', { intelligenceMode: mode }).catch(() => {});
+  },
+  setCoachingDisplay(display: FollowingSettings['coachingDisplay']): void {
+    void patchSettings('following', { coachingDisplay: display }).catch(() => {});
+  },
+  /**
+   * §62 recovery. Re-publishing the current stage settings forces the stage to
+   * re-run layout and rebuild its line map.
+   * TODO(integration, Agent B): replace with an explicit rebuild directive once
+   * the stage exposes one.
+   */
+  rebuildStageLayout(): void {
+    pushSettings();
+    showToast('Asked the stage to rebuild its layout', 'info');
+  },
+};
+
 function startStageBridge(sessionId: string): void {
   if (!isTauriRuntime() || stageGeneration === 0) return;
+
+  // Stage motion acks (§54) feed motion health and §61 degradation.
+  stopMotionAcks = subscribeStageMotionAcks((ack) => smoothFollow.ingestStageAck(ack));
 
   // Heartbeat: control → stage at ~1 s cadence; the stage acks to Rust.
   heartbeatTimer = setInterval(() => {
@@ -322,6 +471,16 @@ function startStageBridge(sessionId: string): void {
         // manual_scroll is already applied locally on the stage; the tracker
         // re-acquires around it (§16.9).
       }),
+      // §62: a stage layout/line-map failure is a recoverable, visible state.
+      listen<{ stageGeneration: number; code?: string; message?: string }>(
+        CONTROL_EVENT.stageError,
+        (event) => {
+          if (event.payload.stageGeneration !== stageGeneration) return;
+          const code = event.payload.code ?? '';
+          if (!/layout|line[-_ ]?map/i.test(`${code} ${event.payload.message ?? ''}`)) return;
+          smoothFollow.reportLineMapInvalid(event.payload.message ?? code);
+        },
+      ),
       listen<{ stageGeneration: number }>(CONTROL_EVENT.stageClosed, (event) => {
         if (event.payload.stageGeneration !== stageGeneration) return;
         const s = get(state);
@@ -406,8 +565,13 @@ export function toggleBlankStage(): void {
   state.update((prev) => ({ ...prev, stageBlanked: blanked }));
 }
 
+/**
+ * The transport's "Voice follow" switch and the Live "Pause following" button
+ * are the same decision (§48), so both route through the follow store and stay
+ * in sync.
+ */
 export function toggleVoiceFollow(): void {
-  state.update((s) => ({ ...s, voiceFollow: !s.voiceFollow }));
+  smoothFollow.setFollowingPaused(get(state).voiceFollow);
 }
 
 /* ---------------------------------------------------------------------------
@@ -637,6 +801,7 @@ export function stopSession(): SessionSummary {
     transcriptSaved: false,
   };
   stopInternals();
+  smoothFollow.endSession();
   if (s.sessionId) void stageService.closeStage(s.sessionId).catch(() => {});
   state.update((prev) => ({ ...prev, active: false, prompting: false, summary }));
   return summary;
@@ -644,6 +809,7 @@ export function stopSession(): SessionSummary {
 
 export function clearSession(): void {
   stopInternals();
+  smoothFollow.reset();
   state.set({ ...initial });
 }
 
@@ -676,6 +842,11 @@ function stopInternals(): void {
   clock = null;
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   heartbeatTimer = null;
+  stopMotionAcks?.();
+  stopMotionAcks = null;
+  stopSidecarFeed?.();
+  stopSidecarFeed = null;
+  lastMotionFrame = null;
   for (const unlisten of stageEventUnlisteners) unlisten();
   stageEventUnlisteners = [];
   compiledScript = null;

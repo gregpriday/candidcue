@@ -10,6 +10,7 @@
 import type {
   CompiledBlock,
   ListenerStageSelection,
+  SemanticMotionFrame,
   StageDirective,
   StageRenderDocument,
   StageSessionEnvelope,
@@ -263,6 +264,51 @@ export function startPreviewDriver(): PreviewDriver {
     dispatchLocalStageEvent(STAGE_EVENT.trackingSnapshot, snapshot);
   }
 
+  /**
+   * Semantic motion frames (companion §26.1) at ~20 Hz, so the preview
+   * exercises the real v2 motion path rather than the degraded snapshot one.
+   * The preview "speaks" at a steady pace and the stage interpolates between
+   * frames — which is exactly the behavior worth eyeballing.
+   */
+  const SEMANTIC_HZ = 20;
+  const PREVIEW_UNITS_PER_SECOND = 2.6;
+  const sessionStartMs = performance.now();
+  let semanticRevision = 0;
+  let semanticUnit = 0;
+
+  function semanticTick() {
+    if (frozen || blanked) return;
+    semanticRevision += 1;
+    semanticUnit = (semanticUnit + PREVIEW_UNITS_PER_SECOND / SEMANTIC_HZ) % built.tokenCount;
+    const token = Math.min(built.tokenCount - 1, Math.floor(semanticUnit));
+    const frame: SemanticMotionFrame = {
+      sessionId: envelope.sessionId,
+      sessionGeneration: 1,
+      scriptCompileHash: envelope.sourceHash,
+      // The stage builds its first map as generation 1.
+      layoutGeneration: 1,
+      revision: semanticRevision,
+      epoch: 1,
+      sessionTimeMs: performance.now() - sessionStartMs,
+      estimatedUnit: semanticUnit,
+      committedUnit: Math.max(0, semanticUnit - 2),
+      velocityUnitsPerSecond: PREVIEW_UNITS_PER_SECOND,
+      accelerationUnitsPerSecond2: 0,
+      positionVariance: 0.2,
+      confidence: 0.92,
+      sectionId: 'section:0',
+      tokenIndex: token,
+      sentenceId: built.tokenSentence[token] ?? 's0',
+      blockId: built.tokenBlock[token] ?? 'b0',
+      state: 'following',
+      behavior: 'normal',
+      finalEvidence: true,
+      motionProfileId: 'default-v1',
+    };
+    dispatchLocalStageEvent(STAGE_EVENT.semanticFrame, frame);
+  }
+
+  const semanticTimer = window.setInterval(semanticTick, 1000 / SEMANTIC_HZ);
   const trackingTimer = window.setInterval(trackingTick, 340);
   const heartbeatTimer = window.setInterval(() => {
     heartbeatRevision += 1;
@@ -281,6 +327,7 @@ export function startPreviewDriver(): PreviewDriver {
 
   return {
     stop() {
+      clearInterval(semanticTimer);
       clearInterval(trackingTimer);
       clearInterval(heartbeatTimer);
     },
@@ -308,7 +355,47 @@ export function startPreviewDriver(): PreviewDriver {
       directive({ kind: 'ack', label, durationMs: 900 });
     },
     jump() {
+      // A large forward skip: the semantic position moves and the stage is
+      // told to re-anchor rather than race through the skipped paragraphs.
       tokenIndex = Math.min(built.tokenCount - 1, tokenIndex + 40);
+      semanticUnit = tokenIndex;
+      semanticRevision += 1;
+      const nowMs = performance.now() - sessionStartMs;
+      dispatchLocalStageEvent<SemanticMotionFrame>(STAGE_EVENT.semanticFrame, {
+        sessionId: envelope.sessionId,
+        sessionGeneration: 1,
+        scriptCompileHash: envelope.sourceHash,
+        layoutGeneration: 1,
+        revision: semanticRevision,
+        epoch: 1,
+        sessionTimeMs: nowMs,
+        estimatedUnit: semanticUnit,
+        committedUnit: semanticUnit,
+        velocityUnitsPerSecond: PREVIEW_UNITS_PER_SECOND,
+        accelerationUnitsPerSecond2: 0,
+        positionVariance: 0.5,
+        confidence: 0.85,
+        sectionId: 'section:0',
+        tokenIndex,
+        sentenceId: built.tokenSentence[tokenIndex] ?? 's0',
+        blockId: built.tokenBlock[tokenIndex] ?? 'b0',
+        state: 'reanchoring',
+        behavior: 'large_skip',
+        finalEvidence: true,
+        motionProfileId: 'default-v1',
+        transition: {
+          id: `preview-jump-${semanticRevision}`,
+          type: 'reanchor',
+          authority: 'ordinary',
+          fromUnit: Math.max(0, semanticUnit - 40),
+          toUnit: semanticUnit,
+          destinationTokenIndex: tokenIndex,
+          issuedAtMs: nowMs,
+          expiresAtMs: nowMs + 3000,
+          semanticEpoch: 1,
+          reason: 'large_forward_skip',
+        },
+      });
       emitTracking('skip', false);
     },
   };

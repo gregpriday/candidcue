@@ -1,0 +1,68 @@
+{
+  "_comment": [
+    "Canonical invoke payloads for the script commands (spec §46.2).",
+    "Read by BOTH sides so the DTOs cannot drift apart again:",
+    "  - tests/unit/control/scripts-ipc-contract.test.ts asserts the real",
+    "    TypeScript wrappers in src/control/services/scripts.ts emit exactly",
+    "    these payloads;",
+    "  - src-tauri/tests/ipc_contract_tests.rs asserts the Rust command",
+    "    argument types deserialize exactly these payloads.",
+    "Before the fix, import_script was sent `options.sourcePath` (Rust requires",
+    "`path`) and export_script was sent an optional options object with format",
+    "'candidcue' (Rust requires destination/format and accepts 'bundle'), so",
+    "both commands failed with a Serde missing-field error before running."
+  ],
+  "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+  "import_script": {
+    "options": {
+      "path": "/Users/example/Documents/keynote.md",
+      "title": "Keynote"
+    }
+  },
+  "export_script_markdown": {
+    "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    "options": {
+      "destination": "/Users/example/Desktop/keynote.md",
+      "format": "markdown",
+      "includeAssets": true
+    }
+  },
+  "export_script_bundle": {
+    "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    "options": {
+      "destination": "/Users/example/Desktop/keynote.candidcue",
+      "format": "bundle",
+      "includeAssets": true
+    }
+  },
+  "export_script_text": {
+    "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    "options": {
+      "destination": "/Users/example/Desktop/keynote.txt",
+      "format": "text",
+      "includeAssets": false
+    }
+  },
+  "save_script": {
+    "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    "expectedRevision": 7,
+    "source": "# Keynote\n\nBody.\n",
+    "metadataPatch": { "title": "Keynote" }
+  },
+  "rename_script": {
+    "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    "title": "Keynote",
+    "expectedRevision": 7
+  },
+  "trash_script": {
+    "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    "expectedRevision": 7
+  },
+  "restore_script": {
+    "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    "expectedRevision": 8
+  },
+  "create_script": {
+    "input": { "title": "Keynote", "source": "# Keynote\n" }
+  }
+}

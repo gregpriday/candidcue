@@ -41,26 +41,84 @@ pub fn file_fingerprint(path: &Path) -> Result<String, AppError> {
     Ok(format!("{}:{}", meta.len(), mtime))
 }
 
-/// Write to a temporary file in the same directory, fsync, then atomically
-/// rename over the destination (spec §21.3).
+/// Write to a uniquely named temporary file in the same directory, fsync the
+/// file, atomically rename it over the destination, then fsync the directory
+/// (spec §21.3, §47.5).
+///
+/// The temp name is claimed with `create_new` and a monotonic counter, so two
+/// writers in the same process can never truncate each other's temp file — the
+/// previous `<name>.tmp-<pid>` scheme guaranteed a collision for concurrent
+/// writes to the same destination. The parent-directory sync is what makes the
+/// new directory entry survive power loss; without it the rename itself is not
+/// durable even though the file contents are.
 pub fn atomic_write(dest: &Path, contents: &[u8]) -> Result<(), AppError> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
     let dir = dest
         .parent()
         .ok_or_else(|| AppError::Internal("atomic_write: destination has no parent".into()))?;
     fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(
-        ".{}.tmp-{}",
-        dest.file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".into()),
-        std::process::id()
-    ));
-    {
-        let mut file = fs::File::create(&tmp)?;
+    let base = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".into());
+
+    let mut tmp = None;
+    let mut last_err = None;
+    for _ in 0..32 {
+        let candidate = dir.join(format!(
+            ".{}.tmp-{}-{}",
+            base,
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                tmp = Some((candidate, file));
+                break;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_err = Some(err);
+                continue;
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+    let (tmp_path, mut file) = tmp.ok_or_else(|| {
+        AppError::Internal(format!(
+            "atomic_write: could not claim a temporary file in {}: {:?}",
+            dir.display(),
+            last_err
+        ))
+    })?;
+
+    // From here on any failure must clean up the temp file rather than leave
+    // a partial write behind.
+    let write_result = (|| -> std::io::Result<()> {
         file.write_all(contents)?;
         file.sync_all()?;
+        Ok(())
+    })();
+    drop(file);
+    if let Err(err) = write_result {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err.into());
     }
-    fs::rename(&tmp, dest)?;
+    if let Err(err) = fs::rename(&tmp_path, dest) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err.into());
+    }
+
+    // Make the directory entry itself durable. Best effort: some filesystems
+    // (and Windows) do not support opening a directory for sync.
+    if let Ok(dir_handle) = fs::File::open(dir) {
+        let _ = dir_handle.sync_all();
+    }
     Ok(())
 }
 

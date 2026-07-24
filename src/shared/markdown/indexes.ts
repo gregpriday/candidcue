@@ -15,6 +15,18 @@ import { phoneticKey } from './phonetic';
 
 const RARE_MAX_FREQUENCY = 2;
 
+/**
+ * Index records are keyed by arbitrary user text, so they MUST NOT inherit
+ * from Object.prototype: a script containing the word "constructor" would
+ * otherwise make `record[key] ??= []` see the inherited constructor function
+ * (truthy) and skip the assignment, then throw on `.push`. Null-prototype
+ * objects have no inherited keys, serialize identically over JSON and
+ * structuredClone, and keep `record[key]` a plain lookup.
+ */
+function emptyIndex<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
 function push(record: Record<string, number[]>, key: string, value: number): void {
   (record[key] ??= []).push(value);
 }
@@ -29,11 +41,11 @@ export function buildSearchIndexes(
   blocks: CompiledBlock[],
   targets: NavigationTarget[],
 ): SerializedSearchIndexes {
-  const exactToken: Record<string, number[]> = {};
-  const phonetic: Record<string, number[]> = {};
-  const ngram2: Record<string, number[]> = {};
-  const ngram3: Record<string, number[]> = {};
-  const ngram4: Record<string, number[]> = {};
+  const exactToken = emptyIndex<number[]>();
+  const phonetic = emptyIndex<number[]>();
+  const ngram2 = emptyIndex<number[]>();
+  const ngram3 = emptyIndex<number[]>();
+  const ngram4 = emptyIndex<number[]>();
 
   const frequency = new Map<string, number>();
   for (const token of tokens) {
@@ -60,7 +72,7 @@ export function buildSearchIndexes(
     }
   }
 
-  const rareToken: Record<string, number[]> = {};
+  const rareToken = emptyIndex<number[]>();
   for (const [normalized, positions] of Object.entries(exactToken)) {
     if (
       positions.length <= RARE_MAX_FREQUENCY &&
@@ -71,21 +83,21 @@ export function buildSearchIndexes(
     }
   }
 
-  const headingAndTake: Record<string, string[]> = {};
+  const headingAndTake = emptyIndex<string[]>();
   for (const target of targets) {
     if (target.type === 'heading' || target.type === 'take') {
       pushId(headingAndTake, target.normalizedLabel, target.id);
     }
   }
 
-  const sentenceText: Record<string, string[]> = {};
+  const sentenceText = emptyIndex<string[]>();
   for (const sentence of sentences) {
     if (sentence.normalizedText) pushId(sentenceText, sentence.normalizedText, sentence.id);
   }
 
   // Paragraph opening phrases: first up-to-4 spoken tokens of each spoken
   // block that starts a paragraph-like unit.
-  const paragraphOpening: Record<string, number[]> = {};
+  const paragraphOpening = emptyIndex<number[]>();
   for (const block of blocks) {
     if (!block.spoken || block.startTokenIndex === undefined || block.endTokenIndex === undefined) {
       continue;

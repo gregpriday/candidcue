@@ -12,7 +12,7 @@ use crate::errors::AppError;
 use crate::util::{atomic_write, now_iso};
 
 use super::repo;
-use super::DataPaths;
+use super::{DataPaths, ScriptId};
 
 const STALE_TEMP_AGE: Duration = Duration::from_secs(60 * 60);
 
@@ -25,6 +25,9 @@ pub struct RecoveryReport {
     pub orphan_files_recovered: Vec<String>,
     pub missing_files_restored: Vec<String>,
     pub missing_files_unrecoverable: Vec<String>,
+    /// Rows whose canonical file did not match the recorded hash — the
+    /// "file rename succeeded, database commit did not" crash state.
+    pub hash_mismatches_repaired: Vec<String>,
     pub listener_installs_rolled_back: u32,
     pub trash_purged: u32,
     pub notes: Vec<String>,
@@ -37,6 +40,7 @@ impl RecoveryReport {
             || !self.orphan_files_recovered.is_empty()
             || !self.missing_files_restored.is_empty()
             || !self.missing_files_unrecoverable.is_empty()
+            || !self.hash_mismatches_repaired.is_empty()
             || self.listener_installs_rolled_back > 0
     }
 }
@@ -59,7 +63,18 @@ pub async fn run_startup_reconciliation(
         .unwrap_or_else(|_| "failed".into());
     report.integrity_ok = check == "ok";
     if !report.integrity_ok {
+        // Fail closed (spec §47.6, §48.5): a database that failed its
+        // integrity check must not be written to. Every step below mutates
+        // something — deleting temp files, inserting recovered rows, purging
+        // trash — so none of them may run. The evidence is preserved in the
+        // report and the caller surfaces it to the user.
         report.notes.push(format!("quick_check: {check}"));
+        report.notes.push(
+            "database integrity check failed; reconciliation made no changes".to_string(),
+        );
+        tracing::error!(check = %check, "database integrity check failed; refusing to reconcile");
+        let _ = write_report(paths, &report);
+        return Ok(report);
     }
 
     // 2. Remove abandoned temporary files older than a safe threshold.
@@ -82,6 +97,15 @@ pub async fn run_startup_reconciliation(
             if known.contains(&dir_name) {
                 continue;
             }
+            // A directory whose name is not a canonical UUID is not ours; it
+            // must never be adopted as a script id and turned back into a
+            // path (C1).
+            let Ok(script_id) = ScriptId::parse(&dir_name) else {
+                report
+                    .notes
+                    .push(format!("ignored non-UUID directory in scripts root: {dir_name}"));
+                continue;
+            };
             let canonical = entry.path().join("script.md");
             if !canonical.exists() {
                 continue;
@@ -89,7 +113,7 @@ pub async fn run_startup_reconciliation(
             match fs::read_to_string(&canonical) {
                 Ok(source) => {
                     let title = format!("Recovered script {}", &dir_name[..8.min(dir_name.len())]);
-                    if repo::insert_script_row(pool, paths, &dir_name, &title, &source, "en")
+                    if repo::insert_script_row(pool, paths, &script_id, &title, &source, "en")
                         .await
                         .is_ok()
                     {
@@ -105,17 +129,34 @@ pub async fn run_startup_reconciliation(
         }
     }
 
-    // 4. Database rows with missing canonical files → restore from the
-    // latest revision where possible.
+    // 4. Every row is checked against its canonical file: missing files are
+    // restored from the latest revision, and — the case that used to be
+    // silently treated as healthy — rows whose recorded hash disagrees with
+    // the file on disk are repaired. That mismatch is exactly the crash state
+    // where the atomic rename landed but the database commit did not, so it
+    // must be detected by content, not by mere existence (H3). The file is
+    // the authority for source content (spec §48.1), so the database is
+    // brought up to the file; disk content is never replaced here.
     for (id, _) in repo::all_script_ids_and_paths(pool).await? {
-        let canonical = paths.canonical_file(&id);
-        if canonical.exists() {
+        let Ok(script_id) = ScriptId::parse(&id) else {
+            report
+                .notes
+                .push(format!("script row {id} has a non-UUID id; skipped"));
+            continue;
+        };
+        let canonical = paths.canonical_file(&script_id);
+        if !canonical.exists() {
+            match repo::restore_canonical_from_latest_revision(pool, paths, &script_id).await {
+                Ok(true) => report.missing_files_restored.push(id),
+                Ok(false) => report.missing_files_unrecoverable.push(id),
+                Err(err) => report.notes.push(format!("restore {id}: {err}")),
+            }
             continue;
         }
-        match repo::restore_canonical_from_latest_revision(pool, paths, &id).await {
-            Ok(true) => report.missing_files_restored.push(id),
-            Ok(false) => report.missing_files_unrecoverable.push(id),
-            Err(err) => report.notes.push(format!("restore {id}: {err}")),
+        match repo::repair_row_from_canonical_file(pool, paths, &script_id, locks).await {
+            Ok(true) => report.hash_mismatches_repaired.push(id),
+            Ok(false) => {}
+            Err(err) => report.notes.push(format!("repair {id}: {err}")),
         }
     }
 
@@ -138,19 +179,25 @@ pub async fn run_startup_reconciliation(
     report.trash_purged = repo::purge_expired_trash(pool, paths, locks).await.unwrap_or(0);
 
     // Preserve evidence: write the report to the diagnostics directory.
-    if report.has_findings() {
-        let dir = paths.diagnostics_dir();
-        fs::create_dir_all(&dir)?;
-        let file = dir.join(format!(
-            "recovery-{}.json",
-            chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
-        ));
-        if let Ok(json) = serde_json::to_vec_pretty(&report) {
-            let _ = atomic_write(&file, &json);
-        }
-    }
+    write_report(paths, &report)?;
 
     Ok(report)
+}
+
+fn write_report(paths: &DataPaths, report: &RecoveryReport) -> Result<(), AppError> {
+    if !report.has_findings() {
+        return Ok(());
+    }
+    let dir = paths.diagnostics_dir();
+    fs::create_dir_all(&dir)?;
+    let file = dir.join(format!(
+        "recovery-{}.json",
+        chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ")
+    ));
+    if let Ok(json) = serde_json::to_vec_pretty(report) {
+        let _ = atomic_write(&file, &json);
+    }
+    Ok(())
 }
 
 fn remove_stale_temp_files(paths: &DataPaths) -> Result<u32, AppError> {

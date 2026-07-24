@@ -11,8 +11,19 @@
  *    support (node unit tests, degraded browser dev) and for manual/fixed
  *    modes in the plain browser.
  */
-import type { CompiledScript, SentenceUnit, TrackingSnapshot, TrackingState } from '../../shared/contracts';
-import { buildTrackingDocument, type TranscriptEvent } from '../../shared/tracking/types';
+import type {
+  CompiledScript,
+  SemanticMotionFrame,
+  SentenceUnit,
+  TrackingSnapshot,
+  TrackingState,
+} from '../../shared/contracts';
+import type { MovementDecisionRecord } from '../../shared/tracking/decision-log';
+import {
+  buildTrackingDocument,
+  type AlignmentDiagnostic,
+  type TranscriptEvent,
+} from '../../shared/tracking/types';
 import type { TrackingProfile } from '../../shared/tracking/profile';
 import type {
   TrackingWorkerInbound,
@@ -32,6 +43,16 @@ export interface TrackingDriverOptions {
   profile?: Partial<TrackingProfile>;
   onSnapshot(snapshot: TrackingSnapshot): void;
   onTranscript(line: string): void;
+  /**
+   * Alignment decisions, for the control-side "why did it move?" record
+   * (companion §65). Optional: the mock driver emits a reduced form and a
+   * caller that does not care simply omits it.
+   */
+  onDiagnostic?(diagnostic: AlignmentDiagnostic): void;
+  /** Companion §26.1 motion frames — the worker's v2 output. */
+  onMotionFrame?(frame: SemanticMotionFrame): void;
+  /** Companion §65 records straight from the engine's decision log. */
+  onMovementRecord?(record: MovementDecisionRecord): void;
 }
 
 export interface TrackingDriver {
@@ -102,10 +123,16 @@ export function createWorkerTrackingDriver(options: TrackingDriverOptions): Trac
     if (data.type === 'snapshot') {
       lastSnapshot = data.snapshot;
       options.onSnapshot(data.snapshot);
+    } else if (data.type === 'semantic_frame') {
+      options.onMotionFrame?.(data.frame);
+    } else if (data.type === 'movement_decision') {
+      options.onMovementRecord?.(data.record);
+    } else if (data.type === 'diagnostic') {
+      options.onDiagnostic?.(data.diagnostic);
     } else if (data.type === 'error') {
       console.warn(`tracking worker: ${data.code} — ${data.message}`);
     }
-    // state_change is folded into snapshots; diagnostics are dev-only.
+    // state_change is folded into snapshots.
   });
 
   post({
@@ -220,6 +247,18 @@ export function createMockTrackingDriver(options: TrackingDriverOptions): Tracki
     const tokenIndex = sentence
       ? sentence.startTokenIndex
       : Math.min(totalTokens - 1, Math.round((sentenceIndex / 40) * totalTokens));
+    options.onDiagnostic?.({
+      revision,
+      reason: `mock:${movement}`,
+      state,
+      movement,
+      cursorTokenIndex: tokenIndex,
+      committedTokenIndex: Math.max(0, tokenIndex - 2),
+      confidence,
+      margin: confidence / 2,
+      candidates: [],
+      generatedAtMs: Date.now(),
+    });
     onSnapshot({
       schemaVersion: 1,
       revision,

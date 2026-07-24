@@ -51,6 +51,12 @@ export interface SectionSpan extends TokenRange {
  */
 export interface TrackingDocument {
   scriptId: string;
+  /**
+   * Compile hash of the script revision these tokens came from (companion
+   * §26.1). Stamped on every `SemanticMotionFrame` so the stage can discard
+   * frames belonging to a superseded compile. Defaults to `scriptId`.
+   */
+  scriptCompileHash?: string;
   spokenTokens: SpokenToken[];
   sentences: SentenceUnit[];
   outline: OutlineNode[];

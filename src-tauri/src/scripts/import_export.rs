@@ -17,7 +17,7 @@ use crate::util::{atomic_write, is_safe_relative_path, new_uuid, now_iso, sha256
 
 use super::repo::{self, MAX_SOURCE_BYTES};
 use super::words::{spoken_plain_text, SpokenTextOptions};
-use super::{DataPaths, ScriptLocks, ScriptSummary};
+use super::{DataPaths, ScriptId, ScriptLocks, ScriptSummary};
 
 /// Spec Appendix A.10 limits.
 const MAX_BUNDLE_MANIFEST_BYTES: u64 = 1024 * 1024;
@@ -72,6 +72,69 @@ struct BundleManifest {
     exported_at: Option<String>,
     #[serde(default)]
     assets: Vec<String>,
+}
+
+/// Asset file names a bundle may contain: `<sha256>.<ext>` for an image type
+/// the app actually decodes. SVG is excluded — it is active content, and the
+/// importer has no sanitiser.
+const ALLOWED_BUNDLE_ASSET_EXTENSIONS: [&str; 4] = ["png", "jpg", "gif", "webp"];
+
+/// Spec §21.6 / H6: the manifest is the authority for what a bundle contains.
+fn validate_declared_assets(
+    declared: &[String],
+    actual: &[(String, Vec<u8>)],
+) -> Result<(), AppError> {
+    let mut declared_sorted: Vec<&String> = declared.iter().collect();
+    declared_sorted.sort();
+    let before = declared_sorted.len();
+    declared_sorted.dedup();
+    if declared_sorted.len() != before {
+        return Err(AppError::validation(
+            "The bundle manifest lists the same asset twice.",
+        ));
+    }
+
+    let mut actual_names: Vec<&String> = actual.iter().map(|(name, _)| name).collect();
+    actual_names.sort();
+    if declared_sorted != actual_names {
+        return Err(AppError::validation(
+            "The bundle's files do not match its manifest.",
+        ));
+    }
+
+    for (name, bytes) in actual {
+        let (stem, extension) = name
+            .rsplit_once('.')
+            .ok_or_else(|| AppError::validation("A bundle asset has no file extension."))?;
+        let extension = extension.to_ascii_lowercase();
+        if !ALLOWED_BUNDLE_ASSET_EXTENSIONS.contains(&extension.as_str()) {
+            return Err(AppError::validation(format!(
+                "The bundle contains an unsupported asset type: {name}"
+            )));
+        }
+        // Bind the name to the content: an entry called `<hash>.png` must
+        // actually hash to `<hash>`, so a bundle cannot ship one image under
+        // another's identity.
+        if stem.len() != 64 || !stem.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(AppError::validation(format!(
+                "Bundle assets must be named after their content hash: {name}"
+            )));
+        }
+        if !sha256_hex(bytes).eq_ignore_ascii_case(stem) {
+            return Err(AppError::validation(format!(
+                "A bundle asset does not match its content hash: {name}"
+            )));
+        }
+        // And the bytes must really be the image type the extension claims.
+        let sniffed = crate::assets::sniff_mime(bytes)
+            .ok_or_else(|| AppError::validation(format!("{name} is not a supported image.")))?;
+        if crate::assets::extension_for_mime(sniffed) != extension {
+            return Err(AppError::validation(format!(
+                "{name} is not the image type its name claims."
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn title_from_path(path: &Path) -> String {
@@ -139,9 +202,10 @@ pub async fn import_script(
             )
             .await?;
             // Spec §21.4: revision on first save after import.
+            let new_id = ScriptId::parse(&summary.id)?;
             let (plain, _, _) = (spoken_plain_text(&source, SpokenTextOptions::default()), 0, 0);
             let words = super::words::word_count(&plain);
-            repo::create_revision_snapshot(pool, paths, &summary.id, &source, "import", words)
+            repo::create_revision_snapshot(pool, paths, &new_id, &source, "import", words)
                 .await?;
             let _ = locks; // imports of flat files need no per-script lock: the id is fresh
             Ok(ImportResult {
@@ -149,7 +213,7 @@ pub async fn import_script(
                 warnings: Vec::new(),
             })
         }
-        "candidcue" => import_bundle(pool, paths, &source_path, options.title).await,
+        "candidcue" => import_bundle(pool, paths, locks, &source_path, options.title).await,
         _ => Err(AppError::validation(
             "Only .md, .markdown, .txt, and .candidcue files can be imported.",
         )),
@@ -159,6 +223,7 @@ pub async fn import_script(
 async fn import_bundle(
     pool: &SqlitePool,
     paths: &DataPaths,
+    locks: &ScriptLocks,
     bundle_path: &Path,
     title_override: Option<String>,
 ) -> Result<ImportResult, AppError> {
@@ -175,7 +240,9 @@ async fn import_bundle(
     let mut script_source: Option<String> = None;
     let mut assets: Vec<(String, Vec<u8>)> = Vec::new();
     let mut total_bytes: u64 = 0;
-    let mut warnings = Vec::new();
+    // A bundle either matches its manifest exactly or is rejected, so the
+    // importer no longer accumulates "ignored entry" warnings (H6).
+    let warnings: Vec<String> = Vec::new();
 
     for index in 0..archive.len() {
         let mut entry = archive
@@ -250,6 +317,11 @@ async fn import_bundle(
                 if file_name.contains('/') || !is_safe_relative_path(&file_name) {
                     return Err(AppError::unsafe_path("The bundle contains an unsafe asset path."));
                 }
+                if assets.iter().any(|(existing, _)| existing == &file_name) {
+                    return Err(AppError::validation(
+                        "The bundle contains the same asset twice.",
+                    ));
+                }
                 let mut buf = Vec::new();
                 entry
                     .by_ref()
@@ -261,12 +333,13 @@ async fn import_bundle(
                 assets.push((file_name, buf));
             }
             _ => {
-                warnings.push(format!("Ignored undeclared bundle entry: {name}"));
-                if warnings.len() > 16 {
-                    return Err(AppError::validation(
-                        "The bundle contains too many undeclared files.",
-                    ));
-                }
+                // Undeclared entries used to be accepted with a warning, which
+                // let a bundle smuggle HTML or executables into a managed
+                // directory. A bundle has a fixed shape (spec §21.6): anything
+                // else means the file is not one of ours (H6).
+                return Err(AppError::validation(format!(
+                    "The bundle contains an unexpected entry: {name}"
+                )));
             }
         }
     }
@@ -275,6 +348,12 @@ async fn import_bundle(
         manifest.ok_or_else(|| AppError::validation("The bundle is missing manifest.json."))?;
     let source =
         script_source.ok_or_else(|| AppError::validation("The bundle is missing script.md."))?;
+
+    // The manifest is now enforced, not decorative: the declared asset list
+    // and the actual archive entries must match exactly, and every asset must
+    // be named after its own content hash so a name can never be bound to
+    // content it does not describe (H6).
+    validate_declared_assets(&manifest.assets, &assets)?;
 
     let title = title_override.unwrap_or(manifest.title);
     let summary = repo::create_script(
@@ -289,9 +368,43 @@ async fn import_bundle(
     .await?;
 
     // Write assets into the new script's asset directory and register them.
-    let assets_dir = paths.assets_dir(&summary.id);
+    let new_id = ScriptId::parse(&summary.id)?;
+    let finish = install_bundle_assets(pool, paths, &new_id, &assets, &source).await;
+    if let Err(err) = finish {
+        // A partially imported script is worse than no script: roll the whole
+        // import back rather than leaving a half-populated one behind (H6).
+        if let Err(cleanup) =
+            repo::force_delete_partial_import(pool, paths, locks, &new_id).await
+        {
+            tracing::error!(
+                script_id = new_id.as_str(),
+                error = %cleanup,
+                "could not roll back a failed bundle import"
+            );
+        }
+        return Err(err);
+    }
+
+    let script = repo::get_summary(pool, &new_id).await?;
+    Ok(ImportResult { script, warnings })
+}
+
+/// Asset files, asset rows AND the script→asset references, in one
+/// transaction. The references were previously never created, so imported
+/// assets could not be resolved by `resolve_asset_urls` and were eligible for
+/// garbage collection the moment it ran (H6).
+async fn install_bundle_assets(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    new_id: &ScriptId,
+    assets: &[(String, Vec<u8>)],
+    source: &str,
+) -> Result<(), AppError> {
+    let assets_dir = paths.assets_dir(new_id);
     fs::create_dir_all(&assets_dir)?;
-    for (file_name, bytes) in &assets {
+
+    let mut tx = pool.begin().await?;
+    for (file_name, bytes) in assets {
         let dest = assets_dir.join(file_name);
         atomic_write(&dest, bytes)?;
         let sha = sha256_hex(bytes);
@@ -300,9 +413,10 @@ async fn import_bundle(
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_default();
         let mime = crate::assets::sniff_mime(bytes)
-            .unwrap_or("application/octet-stream")
+            .ok_or_else(|| AppError::validation("A bundle asset is not a supported image."))?
             .to_string();
-        let rel_path = format!("scripts/{}/assets/{}", summary.id, file_name);
+        let rel_path = format!("scripts/{}/assets/{}", new_id.as_str(), file_name);
+        let now = now_iso();
         sqlx::query(
             "INSERT INTO assets (id, sha256, mime_type, extension, size_bytes, rel_path, original_name, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -315,25 +429,38 @@ async fn import_bundle(
         .bind(bytes.len() as i64)
         .bind(&rel_path)
         .bind(file_name)
-        .bind(now_iso())
-        .execute(pool)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+        let asset_id: String =
+            sqlx::query_scalar("SELECT id FROM assets WHERE rel_path = ? LIMIT 1")
+                .bind(&rel_path)
+                .fetch_one(&mut *tx)
+                .await?;
+        sqlx::query(
+            "INSERT OR IGNORE INTO script_asset_references (script_id, asset_id, role, created_at)
+             VALUES (?, ?, 'image', ?)",
+        )
+        .bind(new_id.as_str())
+        .bind(&asset_id)
+        .bind(&now)
+        .execute(&mut *tx)
         .await?;
     }
+    tx.commit().await?;
 
     // Spec §21.4: revision on first save after import.
-    let plain = spoken_plain_text(&source, SpokenTextOptions::default());
+    let plain = spoken_plain_text(source, SpokenTextOptions::default());
     let words = super::words::word_count(&plain);
-    repo::create_revision_snapshot(pool, paths, &summary.id, &source, "import", words).await?;
-
-    let script = repo::get_summary(pool, &summary.id).await?;
-    Ok(ImportResult { script, warnings })
+    repo::create_revision_snapshot(pool, paths, new_id, source, "import", words).await?;
+    Ok(())
 }
 
 pub async fn export_script(
     pool: &SqlitePool,
     paths: &DataPaths,
     locks: &ScriptLocks,
-    script_id: &str,
+    script_id: &ScriptId,
     options: ExportOptions,
 ) -> Result<ExportResult, AppError> {
     let lock = locks.lock_for(script_id);

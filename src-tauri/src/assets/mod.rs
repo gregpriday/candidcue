@@ -10,7 +10,7 @@ use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 
 use crate::errors::{AppError, ErrorCategory};
-use crate::scripts::DataPaths;
+use crate::scripts::{DataPaths, ScriptId};
 use crate::util::{new_uuid, now_iso, sha256_hex};
 
 /// Hard limit for an imported image (spec Appendix A.10).
@@ -109,7 +109,7 @@ pub fn asset_url(path: &Path) -> String {
 
 async fn register_asset(
     pool: &SqlitePool,
-    script_id: &str,
+    script_id: &ScriptId,
     sha: &str,
     mime: &str,
     extension: &str,
@@ -143,7 +143,7 @@ async fn register_asset(
         "INSERT OR IGNORE INTO script_asset_references (script_id, asset_id, role, created_at)
          VALUES (?, ?, 'image', ?)",
     )
-    .bind(script_id)
+    .bind(script_id.as_str())
     .bind(&asset_id)
     .bind(&now)
     .execute(pool)
@@ -153,7 +153,7 @@ async fn register_asset(
 
 fn store_bytes(
     paths: &DataPaths,
-    script_id: &str,
+    script_id: &ScriptId,
     bytes: &[u8],
 ) -> Result<(String, String, String, PathBuf), AppError> {
     let mime = sniff_mime(bytes).ok_or_else(unsupported_asset)?;
@@ -172,7 +172,7 @@ fn store_bytes(
 pub async fn import_image(
     pool: &SqlitePool,
     paths: &DataPaths,
-    script_id: &str,
+    script_id: &ScriptId,
     source_file: &str,
 ) -> Result<ImportedAsset, AppError> {
     if !crate::scripts::repo::script_exists(pool, script_id).await? {
@@ -191,7 +191,7 @@ pub async fn import_image(
     }
     let bytes = fs::read(&source_path)?;
     let (mime, sha, file_name, dest) = store_bytes(paths, script_id, &bytes)?;
-    let rel_path = format!("scripts/{script_id}/assets/{file_name}");
+    let rel_path = format!("scripts/{}/assets/{file_name}", script_id.as_str());
     let original_name = source_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string());
@@ -225,7 +225,7 @@ pub async fn import_remote_image(
     pool: &SqlitePool,
     paths: &DataPaths,
     http: &reqwest::Client,
-    script_id: &str,
+    script_id: &ScriptId,
     url: &str,
 ) -> Result<ImportedAsset, AppError> {
     if !crate::scripts::repo::script_exists(pool, script_id).await? {
@@ -263,7 +263,7 @@ pub async fn import_remote_image(
     }
 
     let (mime, sha, file_name, dest) = store_bytes(paths, script_id, &bytes)?;
-    let rel_path = format!("scripts/{script_id}/assets/{file_name}");
+    let rel_path = format!("scripts/{}/assets/{file_name}", script_id.as_str());
     let asset_id = register_asset(
         pool,
         script_id,
@@ -288,26 +288,60 @@ pub async fn import_remote_image(
     })
 }
 
+/// One asset the compiler wants resolved. `id` is the compiler's synthetic
+/// node key (`img-<hash>`), which is NOT a database id; `href` is the path the
+/// Markdown actually authored (`assets/<file>`). Resolution keys off the path
+/// and answers under the caller's `id`.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetRequest {
+    pub id: String,
+    #[serde(default)]
+    pub href: String,
+}
+
 /// Resolve scoped asset URLs for a script (spec §46.3). Paths are validated
 /// to stay inside the script's asset directory.
+///
+/// Assets are looked up by *canonical path*, not by id. The Markdown compiler
+/// mints `img-<hash-of-url>` node keys while imported assets carry database
+/// UUIDs, so an id-keyed lookup can never match and every imported image
+/// silently vanished from the stage. The authored href (`assets/<file>`) is
+/// the only durable link between the two, and `assets.rel_path` already
+/// encodes the owning script, so matching on it stays script-scoped.
 pub async fn resolve_asset_urls(
     pool: &SqlitePool,
     paths: &DataPaths,
-    script_id: &str,
-    asset_ids: &[String],
+    script_id: &ScriptId,
+    requests: &[AssetRequest],
 ) -> Result<std::collections::HashMap<String, AssetUrlEntry>, AppError> {
     let mut map = std::collections::HashMap::new();
     let assets_root = paths.assets_dir(script_id);
-    for asset_id in asset_ids {
-        let row = sqlx::query(
+    let rel_prefix = format!("scripts/{}/assets/", script_id.as_str());
+    for request in requests {
+        // An id-keyed hit still wins when the caller genuinely has a DB id.
+        let mut row = sqlx::query(
             "SELECT a.rel_path, a.mime_type FROM assets a
              JOIN script_asset_references r ON r.asset_id = a.id
              WHERE a.id = ? AND r.script_id = ?",
         )
-        .bind(asset_id)
-        .bind(script_id)
+        .bind(&request.id)
+        .bind(script_id.as_str())
         .fetch_optional(pool)
         .await?;
+
+        if row.is_none() {
+            if let Some(file_name) = asset_file_name(&request.href) {
+                row = sqlx::query(
+                    "SELECT a.rel_path, a.mime_type FROM assets a
+                     WHERE a.rel_path = ?",
+                )
+                .bind(format!("{rel_prefix}{file_name}"))
+                .fetch_optional(pool)
+                .await?;
+            }
+        }
+
         let Some(row) = row else { continue };
         let rel_path: String = row.try_get("rel_path")?;
         let mime: String = row.try_get("mime_type")?;
@@ -316,7 +350,7 @@ pub async fn resolve_asset_urls(
             continue;
         }
         map.insert(
-            asset_id.clone(),
+            request.id.clone(),
             AssetUrlEntry {
                 url: asset_url(&absolute),
                 mime,
@@ -326,15 +360,30 @@ pub async fn resolve_asset_urls(
     Ok(map)
 }
 
+/// Final path segment of an authored asset reference, rejecting anything that
+/// tries to escape the script's asset directory or name a remote resource.
+fn asset_file_name(href: &str) -> Option<&str> {
+    let href = href.trim();
+    if href.is_empty() || href.contains("..") || href.contains(':') || href.starts_with('/') {
+        return None;
+    }
+    let name = href.rsplit('/').next()?;
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
 /// Drop a script→asset reference; the file itself is collected by GC once
 /// nothing references it.
 pub async fn remove_asset_reference(
     pool: &SqlitePool,
-    script_id: &str,
+    script_id: &ScriptId,
     asset_id: &str,
 ) -> Result<(), AppError> {
     sqlx::query("DELETE FROM script_asset_references WHERE script_id = ? AND asset_id = ?")
-        .bind(script_id)
+        .bind(script_id.as_str())
         .bind(asset_id)
         .execute(pool)
         .await?;
@@ -388,5 +437,29 @@ mod tests {
         assert_eq!(sniff_mime(&webp), Some("image/webp"));
         assert_eq!(sniff_mime(b"<svg xmlns='x'></svg>" as &[u8]), Some("image/svg+xml"));
         assert_eq!(sniff_mime(&[0u8; 32]), None);
+    }
+
+    #[test]
+    fn resolves_authored_asset_paths_to_a_file_name() {
+        // The compiler's `img-<hash>` id can never match a database UUID, so
+        // resolution keys off the authored href instead.
+        assert_eq!(asset_file_name("assets/pipeline.png"), Some("pipeline.png"));
+        assert_eq!(asset_file_name("pipeline.png"), Some("pipeline.png"));
+        assert_eq!(
+            asset_file_name("  assets/nested/deep.webp  "),
+            Some("deep.webp")
+        );
+    }
+
+    #[test]
+    fn rejects_hrefs_that_escape_the_script_asset_directory() {
+        assert_eq!(asset_file_name("../../../etc/passwd"), None);
+        assert_eq!(asset_file_name("assets/../../secret.png"), None);
+        assert_eq!(asset_file_name("/etc/passwd"), None);
+        assert_eq!(asset_file_name("https://example.com/x.png"), None);
+        assert_eq!(asset_file_name("file:///etc/passwd"), None);
+        assert_eq!(asset_file_name(""), None);
+        assert_eq!(asset_file_name("   "), None);
+        assert_eq!(asset_file_name("assets/"), None);
     }
 }

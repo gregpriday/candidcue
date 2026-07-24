@@ -4,6 +4,7 @@
  * asset-protocol URLs minted by Rust (§47.8).
  */
 import type { ListenerGeometry, ListenerStageSelection } from '../../shared/contracts';
+import { clampOffsetPercent } from '../../shared/listener/geometry';
 import { invokeOrMock } from './ipc';
 
 /** Twin of Rust `InstalledListener`. */
@@ -72,12 +73,20 @@ export async function resolveListenerMedia(
 export interface ListenerGeometryOverrides {
   /** 100 = the pack's manifest defaultZoom; percent scale on top of it. */
   zoomPercent?: number;
-  /** -50..50 percent offsets mapped to cropX/cropY (-0.5..0.5). */
+  /**
+   * Framing offsets in PERCENT of the visible frame — positive x = right,
+   * positive y = down. These map 1:1 onto `ListenerGeometry.cropX/cropY`; see
+   * the unit contract in src/shared/listener/geometry.ts. They are clamped to
+   * the zoom-derived safe window, which is ±(cropZoom - 1) / 2 × 100 percent,
+   * so the caller can pass any value without exposing the media edge.
+   */
   offsetXPercent?: number;
   offsetYPercent?: number;
   /** 0..80 dim percent → opacity. */
   dimPercent?: number;
   blurPx?: number;
+  /** Horizontal mirror; applied inside the crop, so it never flips offsets. */
+  mirrorVideo?: boolean;
 }
 
 export function buildListenerGeometry(
@@ -85,17 +94,20 @@ export function buildListenerGeometry(
   overrides: ListenerGeometryOverrides = {},
 ): ListenerGeometry {
   const zoomFactor = (overrides.zoomPercent ?? 100) / 100;
+  const cropZoom = defaultZoom * zoomFactor;
   return {
     anchorX: 0.5,
     anchorY: 0.45,
     scale: 1,
-    cropX: (overrides.offsetXPercent ?? 0) / 100,
-    cropY: (overrides.offsetYPercent ?? 0) / 100,
-    cropZoom: defaultZoom * zoomFactor,
+    // Percent of the frame, NOT a 0..1 fraction — the stage feeds these
+    // straight into `translate(cropX%, cropY%)`.
+    cropX: clampOffsetPercent(overrides.offsetXPercent ?? 0, cropZoom),
+    cropY: clampOffsetPercent(overrides.offsetYPercent ?? 0, cropZoom),
+    cropZoom,
     opacity: Math.max(0.05, 1 - (overrides.dimPercent ?? 40) / 100),
     blurPx: overrides.blurPx ?? 0,
     saturation: 0.85,
-    mirrorVideo: false,
+    mirrorVideo: overrides.mirrorVideo ?? false,
   };
 }
 

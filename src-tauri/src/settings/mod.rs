@@ -20,6 +20,7 @@ pub struct AppSettings {
     pub stage_behavior: StageBehaviorSettings,
     pub audio: AudioSettings,
     pub commands: CommandSettings,
+    pub following: FollowingSettings,
     pub listener: ListenerSettings,
 }
 
@@ -32,6 +33,7 @@ impl Default for AppSettings {
             stage_behavior: StageBehaviorSettings::default(),
             audio: AudioSettings::default(),
             commands: CommandSettings::default(),
+            following: FollowingSettings::default(),
             listener: ListenerSettings::default(),
         }
     }
@@ -171,6 +173,52 @@ impl Default for CommandSettings {
     }
 }
 
+/// Smooth-following controls (companion specification §47). These are
+/// understandable choices, not control-system parameters: the frontend
+/// resolves them into a versioned `SmoothFollowProfile` (§55) in
+/// `src/control/lib/follow-profiles.ts`.
+///
+/// They live in Rust because they change how a session behaves and how much
+/// OpenAI usage it may incur, so they must outlive frontend local storage.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FollowingSettings {
+    /// 'calm' | 'balanced' | 'responsive' (§47.1).
+    pub feel: String,
+    /// 'less' | 'balanced' | 'more' (§47.3).
+    pub voice_lead: String,
+    /// 'local_only' | 'balanced' | 'enhanced' (§35, §47.4).
+    pub intelligence_mode: String,
+    /// 'conversational' | 'balanced' | 'exact' (§45, §47.5).
+    pub fidelity_mode: String,
+    /// 'off' | 'control' | 'stage_and_control' (§47.6).
+    pub coaching_display: String,
+    /// Versioned motion-profile family id; matches
+    /// `DEFAULT_SMOOTH_FOLLOW_PROFILE.id` in
+    /// `src/shared/contracts/smooth-follow.ts`.
+    pub motion_profile_id: String,
+    /// Optional per-session semantic-assist request cap (§42.1). `None` means
+    /// no cap — CandidCue does not invent a limit on the user's own key.
+    pub semantic_request_limit: Option<u32>,
+    /// Reveals the Live diagnostics timeline (§64); off by default (§15.2).
+    pub developer_diagnostics: bool,
+}
+
+impl Default for FollowingSettings {
+    fn default() -> Self {
+        Self {
+            feel: "balanced".into(),
+            voice_lead: "balanced".into(),
+            intelligence_mode: "balanced".into(),
+            fidelity_mode: "balanced".into(),
+            coaching_display: "control".into(),
+            motion_profile_id: "default-v1".into(),
+            semantic_request_limit: None,
+            developer_diagnostics: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ListenerSettings {
@@ -262,6 +310,57 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
         return Err(AppError::invalid_input(
             "Setting general.saveTranscript must be off, 1d, 7d, 30d, or forever.",
         ));
+    }
+
+    // Following settings (companion §47): closed vocabularies, validated here
+    // so a malformed patch cannot leave a session in an unknown assist mode.
+    let following_enums: [(&str, &str, &[&str]); 5] = [
+        (
+            "following.feel",
+            settings.following.feel.as_str(),
+            &["calm", "balanced", "responsive"],
+        ),
+        (
+            "following.voiceLead",
+            settings.following.voice_lead.as_str(),
+            &["less", "balanced", "more"],
+        ),
+        (
+            "following.intelligenceMode",
+            settings.following.intelligence_mode.as_str(),
+            &["local_only", "balanced", "enhanced"],
+        ),
+        (
+            "following.fidelityMode",
+            settings.following.fidelity_mode.as_str(),
+            &["conversational", "balanced", "exact"],
+        ),
+        (
+            "following.coachingDisplay",
+            settings.following.coaching_display.as_str(),
+            &["off", "control", "stage_and_control"],
+        ),
+    ];
+    for (field, value, allowed) in following_enums {
+        if !allowed.contains(&value) {
+            return Err(
+                AppError::invalid_input(format!("Setting {field} must be one of: {}.", allowed.join(", ")))
+                    .with_detail("field", field),
+            );
+        }
+    }
+    if settings.following.motion_profile_id.trim().is_empty() {
+        return Err(AppError::invalid_input(
+            "Setting following.motionProfileId must name a motion profile.",
+        )
+        .with_detail("field", "following.motionProfileId"));
+    }
+    // `None` means "no cap"; a stored cap of zero would silently disable assist.
+    if settings.following.semantic_request_limit == Some(0) {
+        return Err(AppError::invalid_input(
+            "Setting following.semanticRequestLimit must be at least 1, or absent for no limit.",
+        )
+        .with_detail("field", "following.semanticRequestLimit"));
     }
     Ok(())
 }
@@ -355,4 +454,48 @@ pub async fn update_settings(
         revision: next_revision,
         value: merged,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_validate() {
+        assert!(validate(&AppSettings::default()).is_ok());
+    }
+
+    #[test]
+    fn following_defaults_match_the_specified_defaults() {
+        let following = AppSettings::default().following;
+        assert_eq!(following.intelligence_mode, "balanced");
+        assert_eq!(following.fidelity_mode, "balanced");
+        // §47.6: conservative default — no stage coaching until testing shows it helps.
+        assert_eq!(following.coaching_display, "control");
+        assert_eq!(following.semantic_request_limit, None);
+        assert!(!following.developer_diagnostics);
+    }
+
+    #[test]
+    fn rejects_unknown_following_enum_values() {
+        let mut settings = AppSettings::default();
+        settings.following.intelligence_mode = "psychic".into();
+        assert!(validate(&settings).is_err());
+    }
+
+    #[test]
+    fn rejects_a_zero_semantic_request_limit() {
+        let mut settings = AppSettings::default();
+        settings.following.semantic_request_limit = Some(0);
+        assert!(validate(&settings).is_err());
+        settings.following.semantic_request_limit = Some(1);
+        assert!(validate(&settings).is_ok());
+    }
+
+    #[test]
+    fn a_document_without_a_following_section_deserializes_to_defaults() {
+        let json = serde_json::json!({ "schemaVersion": 1 });
+        let settings: AppSettings = serde_json::from_value(json).expect("defaults fill in");
+        assert_eq!(settings.following, FollowingSettings::default());
+    }
 }

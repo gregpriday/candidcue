@@ -6,6 +6,9 @@
 <script lang="ts">
   import Button from '../components/Button.svelte';
   import Dialog from '../components/Dialog.svelte';
+  import FollowControls from '../components/FollowControls.svelte';
+  import FollowDiagnostics from '../components/FollowDiagnostics.svelte';
+  import FollowStatePanel from '../components/FollowStatePanel.svelte';
   import Icon from '../components/Icon.svelte';
   import IconButton from '../components/IconButton.svelte';
   import OverflowMenu from '../components/OverflowMenu.svelte';
@@ -36,6 +39,7 @@
     toggleVoiceFollow,
   } from '../stores/session';
   import { settings } from '../stores/settings';
+  import { smoothFollow, type FollowNotice } from '../stores/smooth-follow';
   import { showToast } from '../stores/toasts';
   import type { OutlineNode } from '../../shared/contracts';
 
@@ -82,7 +86,18 @@
     (Math.round(($session.elapsedSeconds / 60) * 0.6) / 100).toFixed(2),
   );
 
-  const confidencePercent = $derived(Math.round((snapshot?.confidence ?? 0) * 100));
+  const currentSectionTitle = $derived(
+    currentSectionIndex >= 0 ? (flatOutline[currentSectionIndex]?.node.title ?? null) : null,
+  );
+
+  /** Degraded-state actions (Part XI) offered next to the notice itself. */
+  function handleNoticeAction(action: NonNullable<FollowNotice['action']>): void {
+    if (action.id === 'rebuild_layout') {
+      smoothFollow.requestLayoutRebuild();
+      return;
+    }
+    void navigate({ name: 'settings', section: 'following' });
+  }
 
   function flatten(nodes: OutlineNode[], depth = 0): Array<{ node: OutlineNode; depth: number }> {
     const out: Array<{ node: OutlineNode; depth: number }> = [];
@@ -206,6 +221,8 @@
       <span class="live-dot" class:paused={$session.paused !== 'none' || !$session.prompting}></span>
       <span class="script-title">{$session.scriptTitle}</span>
       <span class="elapsed">{formatClock($session.elapsedSeconds)}</span>
+      <!-- F.11 session status; the follow state itself lives in the Tracking panel. -->
+      <span class="session-status" role="status" aria-live="polite">{$liveStatusLabel}</span>
     </div>
     <div class="status-right">
       <StatusPill tone="accent" label={modeLabel} dot={false} />
@@ -287,14 +304,19 @@
 
     <aside class="diagnostics" aria-label="Tracking">
       <p class="region-label">Tracking</p>
-      <p class="tracking-state" aria-live="polite">{$liveStatusLabel}</p>
-      <div class="confidence" role="meter" aria-label="Tracking confidence" aria-valuemin={0} aria-valuemax={100} aria-valuenow={confidencePercent}>
-        <div
-          class="confidence-fill"
-          class:unsure={(snapshot?.confidence ?? 0) < 0.6}
-          style="width: {confidencePercent}%"
-        ></div>
-      </div>
+      <FollowStatePanel
+        follow={$smoothFollow}
+        sectionTitle={currentSectionTitle}
+        onnoticeaction={handleNoticeAction}
+      />
+
+      <p class="region-label">Following</p>
+      <FollowControls follow={$smoothFollow} />
+
+      <FollowDiagnostics
+        follow={$smoothFollow}
+        developerMode={$settings.following.developerDiagnostics}
+      />
 
       <p class="region-label">Transcript</p>
       {#if $session.transcriptTail.length > 0}
@@ -530,11 +552,11 @@
     flex: 1 1 auto;
     min-height: 0;
     display: grid;
-    grid-template-columns: 200px minmax(0, 1fr) 260px;
+    grid-template-columns: 200px minmax(0, 1fr) 304px;
   }
   @media (max-width: 1100px) {
     .main {
-      grid-template-columns: minmax(0, 1fr) 260px;
+      grid-template-columns: minmax(0, 1fr) 288px;
     }
     .outline {
       display: none;
@@ -684,26 +706,13 @@
     background: var(--bg-chrome);
     border-left: 1px solid var(--border);
   }
-  .tracking-state {
-    margin: 0;
-    font-size: var(--text-base);
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-  .confidence {
-    height: 6px;
-    border-radius: var(--radius-pill);
-    background: var(--bg-sunken);
+  .session-status {
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
     overflow: hidden;
-  }
-  .confidence-fill {
-    height: 100%;
-    border-radius: var(--radius-pill);
-    background: var(--success);
-    transition: width var(--dur-med) var(--ease-out);
-  }
-  .confidence-fill.unsure {
-    background: var(--warning);
+    text-overflow: ellipsis;
+    min-width: 0;
   }
 
   .transcript-tail {

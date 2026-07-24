@@ -13,8 +13,8 @@ use super::words::{
 };
 use super::{
     CreateScriptInput, DataPaths, ListenerSelection, PageRequest, RevisionDocument,
-    RevisionSummary, SaveResult, ScriptDocument, ScriptFilter, ScriptLocks, ScriptMetadataPatch,
-    ScriptPage, ScriptSettings, ScriptStatus, ScriptSummary,
+    RevisionSummary, SaveResult, ScriptDocument, ScriptFilter, ScriptId, ScriptLocks,
+    ScriptMetadataPatch, ScriptPage, ScriptSettings, ScriptStatus, ScriptSummary,
 };
 
 /// Spec §21.4: revision cadence during active editing.
@@ -24,7 +24,7 @@ const MAX_REVISIONS_PER_SCRIPT: i64 = 100;
 /// Spec Appendix A.10: Markdown source hard limit.
 pub const MAX_SOURCE_BYTES: usize = 10 * 1024 * 1024;
 
-pub fn file_missing_error(script_id: &str) -> AppError {
+pub fn file_missing_error(script_id: &ScriptId) -> AppError {
     AppError::structured(
         "SCRIPT_FILE_MISSING",
         ErrorCategory::Storage,
@@ -32,7 +32,19 @@ pub fn file_missing_error(script_id: &str) -> AppError {
         true,
     )
     .with_action(RecoveryAction::RevealFolder)
-    .with_detail("scriptId", script_id)
+    .with_detail("scriptId", script_id.as_str())
+}
+
+/// Every authored-state transition writes exactly one row. Anything else is a
+/// lost compare-and-swap and must never be reported as success (spec §48.4).
+fn expect_single_row(rows_affected: u64, expected_revision: i64) -> Result<(), AppError> {
+    match rows_affected {
+        1 => Ok(()),
+        0 => Err(AppError::stale_revision(expected_revision, -1)),
+        n => Err(AppError::Internal(format!(
+            "script update affected {n} rows; expected exactly 1"
+        ))),
+    }
 }
 
 struct ScriptRow {
@@ -83,6 +95,7 @@ fn summary_from_row(row: &ScriptRow, preview: String) -> ScriptSummary {
     ScriptSummary {
         id: row.id.clone(),
         title: row.title.clone(),
+        script_revision: row.revision,
         status: row.status,
         language: row.language.clone(),
         spoken_word_count: row.spoken_word_count.max(0) as u32,
@@ -94,19 +107,19 @@ fn summary_from_row(row: &ScriptRow, preview: String) -> ScriptSummary {
     }
 }
 
-async fn fetch_row(pool: &SqlitePool, script_id: &str) -> Result<ScriptRow, AppError> {
+async fn fetch_row(pool: &SqlitePool, script_id: &ScriptId) -> Result<ScriptRow, AppError> {
     let row = sqlx::query("SELECT * FROM scripts WHERE id = ?")
-        .bind(script_id)
+        .bind(script_id.as_str())
         .fetch_optional(pool)
         .await?
         .ok_or_else(|| AppError::not_found("script"))?;
     Ok(read_row(&row)?)
 }
 
-async fn fetch_preview(pool: &SqlitePool, script_id: &str) -> Result<String, AppError> {
+async fn fetch_preview(pool: &SqlitePool, script_id: &ScriptId) -> Result<String, AppError> {
     let preview: Option<String> =
         sqlx::query_scalar("SELECT substr(plain_text, 1, 220) FROM script_search WHERE script_id = ?")
-            .bind(script_id)
+            .bind(script_id.as_str())
             .fetch_optional(pool)
             .await?;
     Ok(preview.unwrap_or_default())
@@ -125,21 +138,24 @@ fn stats_for(source: &str, settings: &ScriptSettings) -> (String, u32, u32) {
     (plain, words, duration)
 }
 
+/// Search-index maintenance. Takes a connection rather than the pool so it
+/// can run INSIDE the same transaction as the row update (spec §47.5: the
+/// search index must never describe a different revision than the row).
 async fn update_fts(
-    pool: &SqlitePool,
-    script_id: &str,
+    conn: &mut sqlx::SqliteConnection,
+    script_id: &ScriptId,
     title: &str,
     plain: &str,
 ) -> Result<(), AppError> {
     sqlx::query("DELETE FROM script_search WHERE script_id = ?")
-        .bind(script_id)
-        .execute(pool)
+        .bind(script_id.as_str())
+        .execute(&mut *conn)
         .await?;
     sqlx::query("INSERT INTO script_search (script_id, title, plain_text) VALUES (?, ?, ?)")
-        .bind(script_id)
+        .bind(script_id.as_str())
         .bind(title)
         .bind(plain)
-        .execute(pool)
+        .execute(&mut *conn)
         .await?;
     Ok(())
 }
@@ -162,7 +178,7 @@ pub async fn create_script(
         return Err(AppError::validation("The script is larger than the 10 MB limit."));
     }
 
-    let id = new_uuid();
+    let id = ScriptId::parse(&new_uuid())?;
     let now = now_iso();
     let canonical = paths.canonical_file(&id);
     atomic_write(&canonical, source.as_bytes())?;
@@ -177,6 +193,7 @@ pub async fn create_script(
         .relative(&canonical)
         .ok_or_else(|| AppError::Internal("canonical path outside data root".into()))?;
 
+    let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO scripts
             (id, title, canonical_rel_path, source_hash, file_fingerprint, revision,
@@ -184,7 +201,7 @@ pub async fn create_script(
              script_settings_json, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?)",
     )
-    .bind(&id)
+    .bind(id.as_str())
     .bind(title)
     .bind(&rel_path)
     .bind(&source_hash)
@@ -195,10 +212,10 @@ pub async fn create_script(
     .bind(serde_json::to_string(&settings).unwrap_or_else(|_| "{}".into()))
     .bind(&now)
     .bind(&now)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-
-    update_fts(pool, &id, title, &plain).await?;
+    update_fts(&mut tx, &id, title, &plain).await?;
+    tx.commit().await?;
 
     let row = fetch_row(pool, &id).await?;
     Ok(summary_from_row(&row, preview_text(&plain)))
@@ -296,7 +313,7 @@ pub async fn get_script(
     pool: &SqlitePool,
     paths: &DataPaths,
     locks: &ScriptLocks,
-    script_id: &str,
+    script_id: &ScriptId,
 ) -> Result<ScriptDocument, AppError> {
     let lock = locks.lock_for(script_id);
     let _guard = lock.lock().await;
@@ -323,10 +340,11 @@ pub async fn get_script(
         revision += 1;
         source_hash = disk_hash.clone();
         let fingerprint = file_fingerprint(&canonical)?;
-        sqlx::query(
+        let mut tx = pool.begin().await?;
+        let updated = sqlx::query(
             "UPDATE scripts SET source_hash = ?, file_fingerprint = ?, revision = ?,
              spoken_word_count = ?, estimated_duration_seconds = ?, updated_at = ?
-             WHERE id = ?",
+             WHERE id = ? AND revision = ?",
         )
         .bind(&disk_hash)
         .bind(&fingerprint)
@@ -334,30 +352,35 @@ pub async fn get_script(
         .bind(words as i64)
         .bind(duration as i64)
         .bind(now_iso())
-        .bind(script_id)
-        .execute(pool)
+        .bind(script_id.as_str())
+        .bind(row.revision)
+        .execute(&mut *tx)
         .await?;
-        update_fts(pool, script_id, &row.title, &plain).await?;
-        tracing::warn!(script_id, revision_id = %snapshot, "adopted external change to canonical file");
+        expect_single_row(updated.rows_affected(), row.revision)?;
+        update_fts(&mut tx, script_id, &row.title, &plain).await?;
+        tx.commit().await?;
+        tracing::warn!(script_id = script_id.as_str(), revision_id = %snapshot, "adopted external change to canonical file");
     }
 
     // Track recency for the library.
     let now = now_iso();
     sqlx::query("UPDATE scripts SET last_opened_at = ? WHERE id = ?")
         .bind(&now)
-        .bind(script_id)
+        .bind(script_id.as_str())
         .execute(pool)
         .await?;
 
     let preview = fetch_preview(pool, script_id).await?;
     let mut summary = summary_from_row(&row, preview_text(&preview));
     summary.last_opened_at = Some(now);
+    // `row` was read before the external-change adoption above, so the summary
+    // must carry the revision the caller is expected to save against.
+    summary.script_revision = revision;
 
     Ok(ScriptDocument {
         summary,
         source,
         source_hash,
-        script_revision: revision,
         settings,
         selected_display_profile_id: row.selected_display_profile_id.clone(),
         selected_tracking_profile_id: row.selected_tracking_profile_id.clone(),
@@ -372,7 +395,7 @@ pub async fn save_script(
     pool: &SqlitePool,
     paths: &DataPaths,
     locks: &ScriptLocks,
-    script_id: &str,
+    script_id: &ScriptId,
     expected_revision: i64,
     source: String,
     patch: ScriptMetadataPatch,
@@ -388,38 +411,68 @@ pub async fn save_script(
         return Err(AppError::stale_revision(expected_revision, row.revision));
     }
 
-    // External-change detection: never silently overwrite a file changed
-    // outside the application since its last read (spec §21.3).
+    // External-change detection (spec §21.3). The preimage is read once, here,
+    // immediately before the replacement, and is the value both the conflict
+    // check and the revision snapshot use — so the content that is about to be
+    // destroyed is the content that gets preserved (H2), and the check cannot
+    // be separated from the write by a wider TOCTOU window (H1).
     let canonical = paths.canonical_file(script_id);
-    if canonical.exists() {
-        let disk_hash = crate::util::sha256_file(&canonical)?;
+    let preimage: Option<String> = if canonical.exists() {
+        Some(fs::read_to_string(&canonical)?)
+    } else {
+        None
+    };
+    if let Some(ref current) = preimage {
+        let disk_hash = sha256_hex(current.as_bytes());
         if disk_hash != row.source_hash {
+            // Preserve the external version in recovery storage BEFORE
+            // refusing, so an editor's write can never be lost even if a
+            // later save races past this check.
+            let (_, external_words, _) =
+                stats_for(current, &parse_settings(&row.script_settings_json));
+            match create_revision_snapshot(
+                pool,
+                paths,
+                script_id,
+                current,
+                "external_change_preserved",
+                external_words,
+            )
+            .await
+            {
+                Ok(id) => tracing::warn!(
+                    script_id = script_id.as_str(),
+                    revision_id = %id,
+                    "preserved externally edited canonical file before refusing the save"
+                ),
+                Err(err) => tracing::error!(
+                    script_id = script_id.as_str(),
+                    error = %err,
+                    "could not preserve externally edited canonical file"
+                ),
+            }
             return Err(AppError::structured(
                 "SCRIPT_CONFLICT",
                 ErrorCategory::Validation,
                 "This script's file changed outside CandidCue. Resolve the conflict before saving.",
                 true,
             )
-            .with_detail("scriptId", script_id)
+            .with_detail("scriptId", script_id.as_str())
             .with_detail("externalChange", true));
         }
     }
 
-    // 3–4: temp write + atomic rename.
-    atomic_write(&canonical, source.as_bytes())
-        .map_err(|e| AppError::save_failed("CandidCue could not write the script file.")
-            .with_log(format!("canonical write failed: {e}")))?;
-
     let settings = patch.settings.clone().unwrap_or_else(|| parse_settings(&row.script_settings_json));
     let (plain, words, duration) = stats_for(&source, &settings);
     let source_hash = sha256_hex(source.as_bytes());
-    let fingerprint = file_fingerprint(&canonical)?;
     let now = now_iso();
     let next_revision = row.revision + 1;
     let title = patch.title.clone().unwrap_or_else(|| row.title.clone());
 
     // Revision snapshot policy (spec §21.4): explicit reason, first-ever
-    // revision, or the 5-minute cadence.
+    // revision, or the 5-minute cadence. The snapshot captures the PREIMAGE —
+    // the text this save destroys — not the replacement, and it is made
+    // durable before the canonical file is touched.
     let mut revision_created = false;
     let mut revision_id = None;
     let should_snapshot = if let Some(ref reason) = patch.revision_reason {
@@ -428,7 +481,7 @@ pub async fn save_script(
         let last_created: Option<String> = sqlx::query_scalar(
             "SELECT created_at FROM script_revisions WHERE script_id = ? ORDER BY revision_number DESC LIMIT 1",
         )
-        .bind(script_id)
+        .bind(script_id.as_str())
         .fetch_optional(pool)
         .await?;
         match last_created {
@@ -444,15 +497,101 @@ pub async fn save_script(
             }
         }
     };
-    if let Some(reason) = should_snapshot {
-        let id = create_revision_snapshot(pool, paths, script_id, &source, &reason, words).await?;
+    if let (Some(reason), Some(current)) = (should_snapshot, preimage.as_ref()) {
+        let (_, preimage_words, _) = stats_for(current, &settings);
+        let id =
+            create_revision_snapshot(pool, paths, script_id, current, &reason, preimage_words)
+                .await?;
         revision_created = true;
         revision_id = Some(id);
     }
 
-    // 5–8: database transaction.
+    // 3–4: temp write + atomic rename.
+    atomic_write(&canonical, source.as_bytes())
+        .map_err(|e| AppError::save_failed("CandidCue could not write the script file.")
+            .with_log(format!("canonical write failed: {e}")))?;
+    let fingerprint = file_fingerprint(&canonical)?;
+
+    // 5–8: database transaction. If it fails the canonical file is rolled
+    // back to the preimage, so a failed save never leaves new bytes on disk
+    // that the database does not know about (which would surface as a
+    // spurious external-change conflict on the user's next attempt).
+    let db_result = commit_save(
+        pool,
+        script_id,
+        &CommitSave {
+            title: &title,
+            source_hash: &source_hash,
+            fingerprint: &fingerprint,
+            next_revision,
+            expected_revision,
+            status: patch.status.unwrap_or(row.status),
+            words,
+            duration,
+            settings: &settings,
+            now: &now,
+            plain: &plain,
+            patch: &patch,
+        },
+    )
+    .await;
+    if let Err(err) = db_result {
+        if let Some(current) = preimage.as_ref() {
+            if let Err(rollback_err) = atomic_write(&canonical, current.as_bytes()) {
+                tracing::error!(
+                    script_id = script_id.as_str(),
+                    error = %rollback_err,
+                    "could not roll the canonical file back after a failed save commit"
+                );
+            }
+        }
+        return Err(err);
+    }
+
+    // The save is durable from here on. Retention thinning is maintenance:
+    // its failure must never be reported as a failed save (H2).
+    if let Err(err) = prune_revisions(pool, paths, script_id).await {
+        tracing::warn!(
+            script_id = script_id.as_str(),
+            error = %err,
+            "revision pruning failed after a successful save; will retry next save"
+        );
+    }
+
+    Ok(SaveResult {
+        script_revision: next_revision,
+        source_hash,
+        saved_at: now,
+        revision_created,
+        revision_id,
+    })
+}
+
+struct CommitSave<'a> {
+    title: &'a str,
+    source_hash: &'a str,
+    fingerprint: &'a str,
+    next_revision: i64,
+    expected_revision: i64,
+    status: ScriptStatus,
+    words: u32,
+    duration: u32,
+    settings: &'a ScriptSettings,
+    now: &'a str,
+    plain: &'a str,
+    patch: &'a ScriptMetadataPatch,
+}
+
+/// The row update, the compare-and-swap assertion, and the search index all
+/// inside one transaction (spec §47.5).
+async fn commit_save(
+    pool: &SqlitePool,
+    script_id: &ScriptId,
+    c: &CommitSave<'_>,
+) -> Result<(), AppError> {
+    let patch = c.patch;
     let mut tx = pool.begin().await?;
-    sqlx::query(
+    let updated = sqlx::query(
         "UPDATE scripts SET
             title = ?, source_hash = ?, file_fingerprint = ?, revision = ?,
             status = ?, spoken_word_count = ?, estimated_duration_seconds = ?,
@@ -463,15 +602,15 @@ pub async fn save_script(
             last_opened_at = CASE WHEN ? THEN ? ELSE last_opened_at END
          WHERE id = ? AND revision = ?",
     )
-    .bind(&title)
-    .bind(&source_hash)
-    .bind(&fingerprint)
-    .bind(next_revision)
-    .bind(patch.status.unwrap_or(row.status).as_str())
-    .bind(words as i64)
-    .bind(duration as i64)
-    .bind(serde_json::to_string(&settings).unwrap_or_else(|_| "{}".into()))
-    .bind(&now)
+    .bind(c.title)
+    .bind(c.source_hash)
+    .bind(c.fingerprint)
+    .bind(c.next_revision)
+    .bind(c.status.as_str())
+    .bind(c.words as i64)
+    .bind(c.duration as i64)
+    .bind(serde_json::to_string(c.settings).unwrap_or_else(|_| "{}".into()))
+    .bind(c.now)
     .bind(patch.selected_display_profile_id.is_some())
     .bind(patch.selected_display_profile_id.clone().flatten())
     .bind(patch.selected_tracking_profile_id.is_some())
@@ -485,28 +624,26 @@ pub async fn save_script(
             .and_then(|l| serde_json::to_string(l).ok()),
     )
     .bind(patch.last_opened.unwrap_or(false))
-    .bind(&now)
-    .bind(script_id)
-    .bind(expected_revision)
+    .bind(c.now)
+    .bind(script_id.as_str())
+    .bind(c.expected_revision)
     .execute(&mut *tx)
     .await?;
+    // A lost compare-and-swap used to commit anyway and report the new
+    // revision while the row still described the old content (H1).
+    expect_single_row(updated.rows_affected(), c.expected_revision)?;
+    update_fts(&mut tx, script_id, c.title, c.plain).await?;
     tx.commit().await?;
-
-    update_fts(pool, script_id, &title, &plain).await?;
-    prune_revisions(pool, paths, script_id).await?;
-
-    Ok(SaveResult {
-        script_revision: next_revision,
-        source_hash,
-        saved_at: now,
-        revision_created,
-        revision_id,
-    })
+    Ok(())
 }
 
+/// Rename is an authored-state transition: it takes the same per-script lock,
+/// the same optimistic revision, and bumps the revision it returns, so a
+/// concurrent save can never be silently invalidated (spec §48.4).
 pub async fn rename_script(
     pool: &SqlitePool,
-    script_id: &str,
+    locks: &ScriptLocks,
+    script_id: &ScriptId,
     title: &str,
     expected_revision: i64,
 ) -> Result<ScriptSummary, AppError> {
@@ -514,22 +651,34 @@ pub async fn rename_script(
     if title.is_empty() {
         return Err(AppError::invalid_input("A script needs a title."));
     }
+    let lock = locks.lock_for(script_id);
+    let _guard = lock.lock().await;
+
     let row = fetch_row(pool, script_id).await?;
     if row.revision != expected_revision {
         return Err(AppError::stale_revision(expected_revision, row.revision));
     }
     let now = now_iso();
-    sqlx::query("UPDATE scripts SET title = ?, revision = revision + 1, updated_at = ? WHERE id = ?")
-        .bind(title)
-        .bind(&now)
-        .bind(script_id)
-        .execute(pool)
-        .await?;
+    let mut tx = pool.begin().await?;
+    let updated = sqlx::query(
+        "UPDATE scripts SET title = ?, revision = ?, updated_at = ?
+         WHERE id = ? AND revision = ?",
+    )
+    .bind(title)
+    .bind(row.revision + 1)
+    .bind(&now)
+    .bind(script_id.as_str())
+    .bind(expected_revision)
+    .execute(&mut *tx)
+    .await?;
+    expect_single_row(updated.rows_affected(), expected_revision)?;
     sqlx::query("UPDATE script_search SET title = ? WHERE script_id = ?")
         .bind(title)
-        .bind(script_id)
-        .execute(pool)
+        .bind(script_id.as_str())
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
+
     let row = fetch_row(pool, script_id).await?;
     let preview = fetch_preview(pool, script_id).await?;
     Ok(summary_from_row(&row, preview_text(&preview)))
@@ -541,7 +690,7 @@ pub async fn duplicate_script(
     pool: &SqlitePool,
     paths: &DataPaths,
     locks: &ScriptLocks,
-    script_id: &str,
+    script_id: &ScriptId,
 ) -> Result<ScriptSummary, AppError> {
     let lock = locks.lock_for(script_id);
     let _guard = lock.lock().await;
@@ -553,7 +702,7 @@ pub async fn duplicate_script(
     }
     let source = fs::read_to_string(&canonical)?;
 
-    let new_id = new_uuid();
+    let new_id = ScriptId::parse(&new_uuid())?;
     let now = now_iso();
     let new_canonical = paths.canonical_file(&new_id);
     atomic_write(&new_canonical, source.as_bytes())?;
@@ -589,7 +738,7 @@ pub async fn duplicate_script(
              listener_overrides_json, script_settings_json, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
-    .bind(&new_id)
+    .bind(new_id.as_str())
     .bind(&title)
     .bind(&rel_path)
     .bind(sha256_hex(source.as_bytes()))
@@ -614,7 +763,7 @@ pub async fn duplicate_script(
          FROM script_asset_references r JOIN assets a ON a.id = r.asset_id
          WHERE r.script_id = ?",
     )
-    .bind(script_id)
+    .bind(script_id.as_str())
     .fetch_all(&mut *tx)
     .await?;
     for asset in &asset_rows {
@@ -651,7 +800,7 @@ pub async fn duplicate_script(
                 (script_id, asset_id, source_start, source_end, role, block_id, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(&new_id)
+        .bind(new_id.as_str())
         .bind(&effective_asset_id)
         .bind(asset.try_get::<Option<i64>, _>("source_start")?)
         .bind(asset.try_get::<Option<i64>, _>("source_end")?)
@@ -661,43 +810,76 @@ pub async fn duplicate_script(
         .execute(&mut *tx)
         .await?;
     }
+    update_fts(&mut tx, &new_id, &title, &plain).await?;
     tx.commit().await?;
-
-    update_fts(pool, &new_id, &title, &plain).await?;
 
     let row = fetch_row(pool, &new_id).await?;
     Ok(summary_from_row(&row, preview_text(&plain)))
 }
 
-pub async fn trash_script(pool: &SqlitePool, script_id: &str) -> Result<(), AppError> {
+/// Trash is an authored-state transition: same per-script lock, same
+/// optimistic revision, exactly one row (spec §48.4).
+pub async fn trash_script(
+    pool: &SqlitePool,
+    locks: &ScriptLocks,
+    script_id: &ScriptId,
+    expected_revision: i64,
+) -> Result<ScriptSummary, AppError> {
+    let lock = locks.lock_for(script_id);
+    let _guard = lock.lock().await;
+
+    let row = fetch_row(pool, script_id).await?;
+    if row.revision != expected_revision {
+        return Err(AppError::stale_revision(expected_revision, row.revision));
+    }
     let now = now_iso();
     let result = sqlx::query(
-        "UPDATE scripts SET status = 'trash', trashed_at = ?, updated_at = ?, revision = revision + 1 WHERE id = ?",
+        "UPDATE scripts SET status = 'trash', trashed_at = ?, updated_at = ?, revision = ?
+         WHERE id = ? AND revision = ?",
     )
     .bind(&now)
     .bind(&now)
-    .bind(script_id)
+    .bind(row.revision + 1)
+    .bind(script_id.as_str())
+    .bind(expected_revision)
     .execute(pool)
     .await?;
-    if result.rows_affected() == 0 {
-        return Err(AppError::not_found("script"));
-    }
-    Ok(())
+    expect_single_row(result.rows_affected(), expected_revision)?;
+
+    let row = fetch_row(pool, script_id).await?;
+    let preview = fetch_preview(pool, script_id).await?;
+    Ok(summary_from_row(&row, preview_text(&preview)))
 }
 
-pub async fn restore_script(pool: &SqlitePool, script_id: &str) -> Result<ScriptSummary, AppError> {
-    let now = now_iso();
-    let result = sqlx::query(
-        "UPDATE scripts SET status = 'draft', trashed_at = NULL, updated_at = ?, revision = revision + 1
-         WHERE id = ? AND status = 'trash'",
-    )
-    .bind(&now)
-    .bind(script_id)
-    .execute(pool)
-    .await?;
-    if result.rows_affected() == 0 {
+pub async fn restore_script(
+    pool: &SqlitePool,
+    locks: &ScriptLocks,
+    script_id: &ScriptId,
+    expected_revision: i64,
+) -> Result<ScriptSummary, AppError> {
+    let lock = locks.lock_for(script_id);
+    let _guard = lock.lock().await;
+
+    let row = fetch_row(pool, script_id).await?;
+    if row.status != ScriptStatus::Trash {
         return Err(AppError::not_found("trashed script"));
     }
+    if row.revision != expected_revision {
+        return Err(AppError::stale_revision(expected_revision, row.revision));
+    }
+    let now = now_iso();
+    let result = sqlx::query(
+        "UPDATE scripts SET status = 'draft', trashed_at = NULL, updated_at = ?, revision = ?
+         WHERE id = ? AND status = 'trash' AND revision = ?",
+    )
+    .bind(&now)
+    .bind(row.revision + 1)
+    .bind(script_id.as_str())
+    .bind(expected_revision)
+    .execute(pool)
+    .await?;
+    expect_single_row(result.rows_affected(), expected_revision)?;
+
     let row = fetch_row(pool, script_id).await?;
     let preview = fetch_preview(pool, script_id).await?;
     Ok(summary_from_row(&row, preview_text(&preview)))
@@ -710,28 +892,147 @@ pub async fn permanently_delete_script(
     pool: &SqlitePool,
     paths: &DataPaths,
     locks: &ScriptLocks,
-    script_id: &str,
+    script_id: &ScriptId,
 ) -> Result<(), AppError> {
     let lock = locks.lock_for(script_id);
     let _guard = lock.lock().await;
 
+    // The row must exist and must already be in the trash. Permanent deletion
+    // is only ever reachable from the trash flow (spec §21.5), so a delete
+    // aimed at a live — or non-existent — script is a bug or an attack, and
+    // must not touch the filesystem at all.
+    let row = fetch_row(pool, script_id).await?;
+    if row.status != ScriptStatus::Trash {
+        return Err(AppError::validation(
+            "Only scripts in the trash can be deleted permanently.",
+        ));
+    }
+
+    // Move the directory into quarantine BEFORE committing the database
+    // deletion, so an interrupted delete leaves recoverable bytes rather than
+    // a row that points at nothing (spec §47.6).
+    let dir = paths.script_dir(script_id);
+    let quarantined = if dir.exists() {
+        let quarantine = paths.quarantine_dir();
+        fs::create_dir_all(&quarantine)?;
+        let target = quarantine.join(format!(
+            "{}-{}",
+            chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ"),
+            script_id.as_str()
+        ));
+        fs::rename(&dir, &target).map_err(|e| {
+            AppError::save_failed("CandidCue could not remove the script's folder.")
+                .with_log(format!("quarantine rename failed: {e}"))
+        })?;
+        Some(target)
+    } else {
+        None
+    };
+
     // References cascade with the script row; delete asset rows housed in
-    // this script's directory first (they are per-script copies).
+    // this script's directory first (they are per-script copies). The prefix
+    // is compared with `substr` rather than `LIKE` so that `%` and `_` can
+    // never behave as wildcards, independently of id validation (C1).
+    let prefix = format!("scripts/{}/", script_id.as_str());
+    let commit = async {
+        let mut tx = pool.begin().await?;
+        sqlx::query("DELETE FROM script_asset_references WHERE script_id = ?")
+            .bind(script_id.as_str())
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM assets WHERE substr(rel_path, 1, ?) = ?")
+            .bind(prefix.len() as i64)
+            .bind(&prefix)
+            .execute(&mut *tx)
+            .await?;
+        let deleted = sqlx::query("DELETE FROM scripts WHERE id = ?")
+            .bind(script_id.as_str())
+            .execute(&mut *tx)
+            .await?;
+        if deleted.rows_affected() != 1 {
+            return Err(AppError::Internal(format!(
+                "permanent delete removed {} script rows; expected exactly 1",
+                deleted.rows_affected()
+            )));
+        }
+        sqlx::query("DELETE FROM script_search WHERE script_id = ?")
+            .bind(script_id.as_str())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok::<(), AppError>(())
+    }
+    .await;
+
+    match commit {
+        Ok(()) => {
+            if let Some(target) = quarantined {
+                if let Err(err) = fs::remove_dir_all(&target) {
+                    tracing::warn!(
+                        script_id = script_id.as_str(),
+                        error = %err,
+                        "quarantined script folder could not be removed; it will be cleaned up on the next reconciliation"
+                    );
+                }
+            }
+            Ok(())
+        }
+        Err(err) => {
+            // Put the folder back so the row and its files stay consistent.
+            if let Some(target) = quarantined {
+                if let Err(restore_err) = fs::rename(&target, &dir) {
+                    tracing::error!(
+                        script_id = script_id.as_str(),
+                        error = %restore_err,
+                        quarantine = %target.display(),
+                        "could not restore quarantined script folder after a failed permanent delete"
+                    );
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
+/// Roll back a script that was created moments ago and then failed to finish
+/// importing. Unlike `permanently_delete_script` this does NOT require the
+/// trash status — the script never became visible to the user — but it is
+/// still confined to a validated id and never removes more than one row.
+pub async fn force_delete_partial_import(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    locks: &ScriptLocks,
+    script_id: &ScriptId,
+) -> Result<(), AppError> {
+    let lock = locks.lock_for(script_id);
+    let _guard = lock.lock().await;
+
+    let prefix = format!("scripts/{}/", script_id.as_str());
     let mut tx = pool.begin().await?;
     sqlx::query("DELETE FROM script_asset_references WHERE script_id = ?")
-        .bind(script_id)
+        .bind(script_id.as_str())
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM assets WHERE rel_path LIKE ?")
-        .bind(format!("scripts/{script_id}/%"))
+    sqlx::query("DELETE FROM assets WHERE substr(rel_path, 1, ?) = ?")
+        .bind(prefix.len() as i64)
+        .bind(&prefix)
         .execute(&mut *tx)
         .await?;
-    sqlx::query("DELETE FROM scripts WHERE id = ?")
-        .bind(script_id)
+    sqlx::query("DELETE FROM script_revisions WHERE script_id = ?")
+        .bind(script_id.as_str())
         .execute(&mut *tx)
         .await?;
+    let deleted = sqlx::query("DELETE FROM scripts WHERE id = ?")
+        .bind(script_id.as_str())
+        .execute(&mut *tx)
+        .await?;
+    if deleted.rows_affected() > 1 {
+        return Err(AppError::Internal(
+            "partial-import rollback matched more than one script".into(),
+        ));
+    }
     sqlx::query("DELETE FROM script_search WHERE script_id = ?")
-        .bind(script_id)
+        .bind(script_id.as_str())
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
@@ -750,7 +1051,7 @@ pub async fn permanently_delete_script(
 pub async fn create_revision_snapshot(
     pool: &SqlitePool,
     paths: &DataPaths,
-    script_id: &str,
+    script_id: &ScriptId,
     source: &str,
     reason: &str,
     word_count: u32,
@@ -767,7 +1068,7 @@ pub async fn create_revision_snapshot(
     let next_number: i64 = sqlx::query_scalar::<_, Option<i64>>(
         "SELECT MAX(revision_number) FROM script_revisions WHERE script_id = ?",
     )
-    .bind(script_id)
+    .bind(script_id.as_str())
     .fetch_one(pool)
     .await?
     .unwrap_or(0)
@@ -780,7 +1081,7 @@ pub async fn create_revision_snapshot(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
-    .bind(script_id)
+    .bind(script_id.as_str())
     .bind(next_number)
     .bind(&hash)
     .bind(&rel_path)
@@ -793,15 +1094,44 @@ pub async fn create_revision_snapshot(
     Ok(id)
 }
 
+/// Spec §21.4: a session start captures a revision of the script as it is
+/// about to be performed, so the text that was on stage stays recoverable
+/// even if the script is edited afterwards. This is a Rust-owned step of
+/// session start — it was previously specified but never implemented, so no
+/// `pre_session` revision has ever existed (H2).
+///
+/// Returns the revision id, or `None` when the script has no canonical file.
+pub async fn snapshot_pre_session(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    locks: &ScriptLocks,
+    script_id: &ScriptId,
+) -> Result<Option<String>, AppError> {
+    let lock = locks.lock_for(script_id);
+    let _guard = lock.lock().await;
+
+    let canonical = paths.canonical_file(script_id);
+    if !canonical.exists() {
+        return Ok(None);
+    }
+    let source = fs::read_to_string(&canonical)?;
+    let row = fetch_row(pool, script_id).await?;
+    let settings = parse_settings(&row.script_settings_json);
+    let (_, words, _) = stats_for(&source, &settings);
+    let id =
+        create_revision_snapshot(pool, paths, script_id, &source, "pre_session", words).await?;
+    Ok(Some(id))
+}
+
 pub async fn list_revisions(
     pool: &SqlitePool,
-    script_id: &str,
+    script_id: &ScriptId,
 ) -> Result<Vec<RevisionSummary>, AppError> {
     let rows = sqlx::query(
         "SELECT id, revision_number, source_hash, reason, word_count, created_at
          FROM script_revisions WHERE script_id = ? ORDER BY revision_number DESC",
     )
-    .bind(script_id)
+    .bind(script_id.as_str())
     .fetch_all(pool)
     .await?;
     rows.iter()
@@ -821,14 +1151,14 @@ pub async fn list_revisions(
 
 async fn fetch_revision(
     pool: &SqlitePool,
-    script_id: &str,
+    script_id: &ScriptId,
     revision_id: &str,
 ) -> Result<(RevisionSummary, String), AppError> {
     let row = sqlx::query(
         "SELECT id, revision_number, source_hash, rel_path, reason, word_count, created_at
          FROM script_revisions WHERE script_id = ? AND id = ?",
     )
-    .bind(script_id)
+    .bind(script_id.as_str())
     .bind(revision_id)
     .fetch_optional(pool)
     .await?
@@ -848,7 +1178,7 @@ async fn fetch_revision(
 pub async fn get_revision(
     pool: &SqlitePool,
     paths: &DataPaths,
-    script_id: &str,
+    script_id: &ScriptId,
     revision_id: &str,
 ) -> Result<RevisionDocument, AppError> {
     let (summary, rel_path) = fetch_revision(pool, script_id, revision_id).await?;
@@ -862,28 +1192,17 @@ pub async fn restore_revision(
     pool: &SqlitePool,
     paths: &DataPaths,
     locks: &ScriptLocks,
-    script_id: &str,
+    script_id: &ScriptId,
     revision_id: &str,
     expected_revision: i64,
 ) -> Result<SaveResult, AppError> {
     let (_, rel_path) = fetch_revision(pool, script_id, revision_id).await?;
     let restored_source = fs::read_to_string(paths.root().join(&rel_path))?;
 
-    // Snapshot the current canonical content before replacing it.
-    {
-        let lock = locks.lock_for(script_id);
-        let _guard = lock.lock().await;
-        let canonical = paths.canonical_file(script_id);
-        if canonical.exists() {
-            let current = fs::read_to_string(&canonical)?;
-            let row = fetch_row(pool, script_id).await?;
-            let settings = parse_settings(&row.script_settings_json);
-            let (_, words, _) = stats_for(&current, &settings);
-            create_revision_snapshot(pool, paths, script_id, &current, "before_restore", words)
-                .await?;
-        }
-    }
-
+    // `save_script` snapshots the preimage — the content this restore
+    // destroys — under the per-script lock. Doing it here as well would both
+    // duplicate the snapshot and reintroduce a window between the snapshot
+    // and the replacement (H2).
     save_script(
         pool,
         paths,
@@ -892,7 +1211,7 @@ pub async fn restore_revision(
         expected_revision,
         restored_source,
         ScriptMetadataPatch {
-            revision_reason: Some("restored_revision".into()),
+            revision_reason: Some("before_restore".into()),
             ..Default::default()
         },
     )
@@ -904,13 +1223,13 @@ pub async fn restore_revision(
 pub async fn prune_revisions(
     pool: &SqlitePool,
     paths: &DataPaths,
-    script_id: &str,
+    script_id: &ScriptId,
 ) -> Result<u32, AppError> {
     let rows = sqlx::query(
         "SELECT id, rel_path, created_at FROM script_revisions
          WHERE script_id = ? ORDER BY created_at DESC",
     )
-    .bind(script_id)
+    .bind(script_id.as_str())
     .fetch_all(pool)
     .await?;
 
@@ -966,7 +1285,7 @@ pub async fn prune_revisions(
 }
 
 /// Reveal helper: absolute directory containing the canonical file.
-pub fn script_folder(paths: &DataPaths, script_id: &str) -> Result<std::path::PathBuf, AppError> {
+pub fn script_folder(paths: &DataPaths, script_id: &ScriptId) -> Result<std::path::PathBuf, AppError> {
     let dir = paths.script_dir(script_id);
     if !dir.exists() {
         return Err(file_missing_error(script_id));
@@ -991,7 +1310,14 @@ pub async fn purge_expired_trash(
     .await?;
     let mut purged = 0u32;
     for id in ids {
-        permanently_delete_script(pool, paths, locks, &id).await?;
+        // Ids come from our own table, but a row whose id is not a canonical
+        // UUID (hand-edited database, restored backup) must never be turned
+        // into a filesystem path (C1).
+        let Ok(script_id) = ScriptId::parse(&id) else {
+            tracing::error!(script_id = %id, "refusing to purge a script whose id is not a UUID");
+            continue;
+        };
+        permanently_delete_script(pool, paths, locks, &script_id).await?;
         purged += 1;
     }
     Ok(purged)
@@ -1001,7 +1327,7 @@ pub async fn purge_expired_trash(
 pub async fn canonical_path_checked(
     pool: &SqlitePool,
     paths: &DataPaths,
-    script_id: &str,
+    script_id: &ScriptId,
 ) -> Result<std::path::PathBuf, AppError> {
     fetch_row(pool, script_id).await?;
     let canonical = paths.canonical_file(script_id);
@@ -1012,9 +1338,9 @@ pub async fn canonical_path_checked(
 }
 
 /// Internal: expose row fetch for sibling modules.
-pub(crate) async fn script_exists(pool: &SqlitePool, script_id: &str) -> Result<bool, AppError> {
+pub(crate) async fn script_exists(pool: &SqlitePool, script_id: &ScriptId) -> Result<bool, AppError> {
     let found: Option<i64> = sqlx::query_scalar("SELECT 1 FROM scripts WHERE id = ?")
-        .bind(script_id)
+        .bind(script_id.as_str())
         .fetch_optional(pool)
         .await?;
     Ok(found.is_some())
@@ -1026,7 +1352,7 @@ pub(crate) async fn script_exists(pool: &SqlitePool, script_id: &str) -> Result<
 pub(crate) async fn insert_script_row(
     pool: &SqlitePool,
     paths: &DataPaths,
-    id: &str,
+    id: &ScriptId,
     title: &str,
     source: &str,
     language: &str,
@@ -1038,6 +1364,7 @@ pub(crate) async fn insert_script_row(
     let rel_path = paths
         .relative(&canonical)
         .ok_or_else(|| AppError::Internal("canonical path outside data root".into()))?;
+    let mut tx = pool.begin().await?;
     sqlx::query(
         "INSERT INTO scripts
             (id, title, canonical_rel_path, source_hash, file_fingerprint, revision,
@@ -1045,7 +1372,7 @@ pub(crate) async fn insert_script_row(
              script_settings_json, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?)",
     )
-    .bind(id)
+    .bind(id.as_str())
     .bind(title)
     .bind(&rel_path)
     .bind(sha256_hex(source.as_bytes()))
@@ -1056,14 +1383,15 @@ pub(crate) async fn insert_script_row(
     .bind(serde_json::to_string(&settings).unwrap_or_else(|_| "{}".into()))
     .bind(&now)
     .bind(&now)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
-    update_fts(pool, id, title, &plain).await?;
+    update_fts(&mut tx, id, title, &plain).await?;
+    tx.commit().await?;
     Ok(())
 }
 
 /// Fetch a script summary by id (used by import/export commands).
-pub async fn get_summary(pool: &SqlitePool, script_id: &str) -> Result<ScriptSummary, AppError> {
+pub async fn get_summary(pool: &SqlitePool, script_id: &ScriptId) -> Result<ScriptSummary, AppError> {
     let row = fetch_row(pool, script_id).await?;
     let preview = fetch_preview(pool, script_id).await?;
     Ok(summary_from_row(&row, preview_text(&preview)))
@@ -1074,12 +1402,12 @@ pub async fn get_summary(pool: &SqlitePool, script_id: &str) -> Result<ScriptSum
 pub async fn restore_canonical_from_latest_revision(
     pool: &SqlitePool,
     paths: &DataPaths,
-    script_id: &str,
+    script_id: &ScriptId,
 ) -> Result<bool, AppError> {
     let latest: Option<String> = sqlx::query_scalar(
         "SELECT rel_path FROM script_revisions WHERE script_id = ? ORDER BY revision_number DESC LIMIT 1",
     )
-    .bind(script_id)
+    .bind(script_id.as_str())
     .fetch_optional(pool)
     .await?;
     let Some(rel_path) = latest else {
@@ -1098,9 +1426,67 @@ pub async fn restore_canonical_from_latest_revision(
     .bind(sha256_hex(source.as_bytes()))
     .bind(file_fingerprint(&canonical)?)
     .bind(now_iso())
-    .bind(script_id)
+    .bind(script_id.as_str())
     .execute(pool)
     .await?;
+    Ok(true)
+}
+
+/// Reconciliation repair (spec §47.6, §48.1): if the canonical file's content
+/// disagrees with the hash recorded on the row, the row (and the search index)
+/// are brought up to the file. The file is the authority for source content,
+/// so nothing on disk is replaced. Returns true when a repair was made.
+///
+/// This is the "atomic rename landed, database commit did not" crash state.
+/// It is invisible to an existence check, which is why it used to survive
+/// every startup untouched (H3).
+pub async fn repair_row_from_canonical_file(
+    pool: &SqlitePool,
+    paths: &DataPaths,
+    script_id: &ScriptId,
+    locks: &ScriptLocks,
+) -> Result<bool, AppError> {
+    let lock = locks.lock_for(script_id);
+    let _guard = lock.lock().await;
+
+    let row = fetch_row(pool, script_id).await?;
+    let canonical = paths.canonical_file(script_id);
+    if !canonical.exists() {
+        return Ok(false);
+    }
+    let source = fs::read_to_string(&canonical)?;
+    let disk_hash = sha256_hex(source.as_bytes());
+    if disk_hash == row.source_hash {
+        return Ok(false);
+    }
+
+    let settings = parse_settings(&row.script_settings_json);
+    let (plain, words, duration) = stats_for(&source, &settings);
+    let fingerprint = file_fingerprint(&canonical)?;
+    let mut tx = pool.begin().await?;
+    let updated = sqlx::query(
+        "UPDATE scripts SET source_hash = ?, file_fingerprint = ?, revision = ?,
+             spoken_word_count = ?, estimated_duration_seconds = ?, updated_at = ?
+         WHERE id = ? AND revision = ?",
+    )
+    .bind(&disk_hash)
+    .bind(&fingerprint)
+    .bind(row.revision + 1)
+    .bind(words as i64)
+    .bind(duration as i64)
+    .bind(now_iso())
+    .bind(script_id.as_str())
+    .bind(row.revision)
+    .execute(&mut *tx)
+    .await?;
+    expect_single_row(updated.rows_affected(), row.revision)?;
+    update_fts(&mut tx, script_id, &row.title, &plain).await?;
+    tx.commit().await?;
+
+    tracing::warn!(
+        script_id = script_id.as_str(),
+        "repaired script row whose recorded hash disagreed with the canonical file"
+    );
     Ok(true)
 }
 

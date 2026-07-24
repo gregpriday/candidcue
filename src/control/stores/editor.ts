@@ -92,7 +92,10 @@ export async function setTitle(title: string): Promise<void> {
   if (s.scriptId === null || title.trim() === '' || title === s.title) return;
   state.update((prev) => ({ ...prev, title }));
   try {
-    await scriptsService.renameScript(s.scriptId, title, s.scriptRevision);
+    // Rename bumps the revision server-side; adopting it keeps the next body
+    // save from failing with a stale expectation (M4).
+    const renamed = await scriptsService.renameScript(s.scriptId, title, s.scriptRevision);
+    state.update((prev) => ({ ...prev, scriptRevision: renamed.scriptRevision }));
   } catch (err) {
     state.update((prev) => ({ ...prev, saveState: 'error', lastError: String(err) }));
   }

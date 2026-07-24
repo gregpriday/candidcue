@@ -123,6 +123,15 @@ export interface SpokenToken {
   weight: number;
   source: { utf16Start: number; utf16End: number };
   flags: number;
+  /**
+   * Authored visual text of the spoken override this token came from
+   * (`API{say="A P I"}` or a `:::spoken` block, §23.4). A multi-word `say`
+   * value expands into one token per spoken word, so this is the only place
+   * the visual term survives — vocabulary preparation (§26.4) keys
+   * pronunciation candidates on it, because the visual term is what the
+   * transcriber mangles. Present only on DIRECTIVE_ALIAS tokens.
+   */
+  overrideVisual?: string;
 }
 
 export interface CueEvent {
@@ -211,4 +220,21 @@ export interface CompiledScript {
   diagnostics: CompileDiagnostic[];
   statistics: ScriptStatistics;
   indexes: SerializedSearchIndexes;
+  /**
+   * Spoken-token ranges inside `:::literal-command` blocks (spec §23.7).
+   *
+   * Command detection must be suppressed while the alignment cursor is inside
+   * one of these ranges, otherwise reading "CandidCue, go to chapter one"
+   * aloud from the script can fire real navigation — the exact thing the
+   * directive exists to prevent. Consumers pass this straight into
+   * `buildTrackingDocument(...)` and `CommandRouterDeps.literalCommandRanges`.
+   * Ranges are inclusive, non-overlapping, and in ascending token order.
+   */
+  literalCommandRanges: SpokenTokenRange[];
+}
+
+/** Inclusive range over `CompiledScript.spokenTokens` indexes. */
+export interface SpokenTokenRange {
+  startTokenIndex: number;
+  endTokenIndex: number;
 }

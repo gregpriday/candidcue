@@ -12,7 +12,7 @@
   import Select from '../components/Select.svelte';
   import StatusPill from '../components/StatusPill.svelte';
   import { formatSpeakingDuration, relativeTime } from '../lib/format';
-  import { createAndOpenScript, importMarkdown } from '../lib/app-actions';
+  import { createAndOpenScript, exportScriptToFile, importMarkdown } from '../lib/app-actions';
   import { onShortcut } from '../lib/shortcuts';
   import * as scriptsService from '../services/scripts';
   import { requestConfirm } from '../stores/confirm';
@@ -109,7 +109,7 @@
   }
 
   async function exportScript(script: ScriptSummary): Promise<void> {
-    await scriptsService.exportScript(script.id, { format: 'markdown' });
+    await exportScriptToFile(script.id, script.title, 'markdown');
     showToast('Export ready', 'success');
   }
 

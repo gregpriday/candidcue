@@ -1,8 +1,8 @@
 {
-  "description": "Forward skip: strongly matching a later passage with rare anchors commits a skip without scrolling through skipped text (spec 31.11).",
+  "description": "Forward skip: a large omission WITHIN the current section commits a skip without scrolling through the skipped text (spec 31.11; companion 20.3/D.6 — the destination must stay inside the eligible section).",
   "turns": [
     { "text": "Hello everyone and welcome to the channel." },
-    { "text": "Now watch the kaleidoscope demo carefully because the colors shift like a metronome keeping perfect time." }
+    { "text": "When you ad lib the prompter waits patiently for you to come back." }
   ],
   "expect": [
     { "afterTurn": 0, "stateIn": ["following"], "nearWord": "channel", "tolerance": 2 },
@@ -10,7 +10,7 @@
       "afterTurn": 1,
       "stateIn": ["following"],
       "sawMovement": "skip",
-      "nearWord": "time",
+      "nearWord": "back",
       "tolerance": 3
     }
   ]

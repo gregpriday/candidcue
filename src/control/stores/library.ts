@@ -79,13 +79,20 @@ export async function duplicateScript(id: string): Promise<void> {
   await loadLibrary();
 }
 
+/** Look up the revision the library currently believes a script is at. */
+function revisionOf(id: string): number {
+  const found = get(state).scripts.find((script) => script.id === id);
+  if (found === undefined) throw new Error('That script is no longer in the library.');
+  return found.scriptRevision;
+}
+
 export async function moveScriptToTrash(id: string): Promise<void> {
-  await scriptsService.trashScript(id);
+  await scriptsService.trashScript(id, revisionOf(id));
   await loadLibrary();
 }
 
 export async function restoreScriptFromTrash(id: string): Promise<void> {
-  await scriptsService.restoreScript(id);
+  await scriptsService.restoreScript(id, revisionOf(id));
   showToast('Script restored', 'success');
   await loadLibrary();
 }

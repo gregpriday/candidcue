@@ -7,13 +7,24 @@
   degrades to the poster frame and reports health upward (§40.5).
 
   Positioning model (owner direction): clips are framed loosely, so the crop
-  wrapper applies `scale(cropZoom) translate(cropX%, cropY%)` — zoom plus
-  horizontal/vertical offsets — which also powers lens-target calibration.
-  cropX/cropY are percent of the media box (positive = right/down).
+  wrapper applies `translate(cropX%, cropY%) scale(cropZoom) scaleX(mirror)` —
+  zoom, horizontal/vertical offsets, and mirror in ONE transform — which also
+  powers lens-target calibration. cropX/cropY are PERCENT of the media box
+  (positive = right/down), never a 0..1 fraction, and the mirror lives inside
+  the translate so it cannot invert the offsets. The unit contract, transform
+  order, and the zoom-derived safe range all live in
+  src/shared/listener/geometry.ts — do not re-derive them here.
 -->
 <script lang="ts">
   import type { ListenerStageSelection } from '../../shared/contracts';
-  import { createClipScheduler, type ClipPlan, type ClipScheduler } from './scheduler';
+  import { listenerCropTransform } from '../../shared/listener/geometry';
+  import { classifyPlayRejection } from './play-error';
+  import {
+    createClipScheduler,
+    withMeasuredDuration,
+    type ClipPlan,
+    type ClipScheduler,
+  } from './scheduler';
 
   let {
     selection,
@@ -47,9 +58,47 @@
   let transitioning = false;
   let errorCount = 0;
 
+  let autoplayRetries = 0;
+
   let scheduler: ClipScheduler | null = null;
   const slotPlans: (ClipPlan | null)[] = [null, null];
   let slotReady = $state<[boolean, boolean]>([false, false]);
+
+  /**
+   * Every pending timer is tracked so a restart can cancel it (§40.3). A bare
+   * setTimeout survives the restart $effect and lands on an engine that has
+   * already been torn down and rebuilt — retrying a preload into a stale
+   * scheduler, or completing a crossfade that no longer exists.
+   */
+  type Timer = ReturnType<typeof setTimeout>;
+  const stallTimers: (Timer | null)[] = [null, null];
+  const retryTimers: (Timer | null)[] = [null, null];
+  let settleTimer: Timer | null = null;
+  let autoplayTimer: Timer | null = null;
+
+  /**
+   * A clip that is playing and then goes quiet is broken quickly; a clip that
+   * is still loading gets far more rope, because a cold read of a 1080p loop
+   * off an external volume legitimately takes seconds.
+   */
+  const PLAYBACK_STALL_MS = 2500;
+  const LOAD_STALL_MS = 12000;
+
+  function clearSlotTimers(slot: number): void {
+    if (stallTimers[slot] !== null) clearTimeout(stallTimers[slot]!);
+    if (retryTimers[slot] !== null) clearTimeout(retryTimers[slot]!);
+    stallTimers[slot] = null;
+    retryTimers[slot] = null;
+  }
+
+  function clearAllTimers(): void {
+    clearSlotTimers(0);
+    clearSlotTimers(1);
+    if (settleTimer !== null) clearTimeout(settleTimer);
+    if (autoplayTimer !== null) clearTimeout(autoplayTimer);
+    settleTimer = null;
+    autoplayTimer = null;
+  }
 
   function urlFor(clipId: string): string | null {
     return selection.clipUrls.find((c) => c.id === clipId)?.url ?? null;
@@ -60,7 +109,15 @@
     maybeStart();
     return {
       destroy() {
+        clearSlotTimers(slot);
+        // Release the decoder and the underlying resource, not just playback.
+        // Over a 90-minute session these two elements take several hundred src
+        // reassignments; leaving the last one attached pins its buffer. This is
+        // the ONE place load() is correct — after clearing src it is a release,
+        // not a reload (see the deliberate absence of load() in loadSlot).
         el.pause();
+        el.removeAttribute('src');
+        el.load();
         videoEls[slot] = undefined;
       },
     };
@@ -70,12 +127,15 @@
   $effect(() => {
     void selection.packId;
     void selection.clipUrls;
+    clearAllTimers();
     started = false;
     posterMode = false;
     errorCount = 0;
+    autoplayRetries = 0;
     transitioning = false;
     scheduler = null;
     maybeStart();
+    return clearAllTimers;
   });
 
   function maybeStart() {
@@ -107,36 +167,117 @@
       degradeToPoster('source_unavailable', plan.clipId);
       return;
     }
+    clearSlotTimers(slot);
     slotPlans[slot] = plan;
     slotReady[slot] = false;
     slotReady = [...slotReady] as [boolean, boolean];
+    // Assigning `src` starts the load on its own. We deliberately do NOT call
+    // el.load() afterwards: the redundant reload aborts the in-flight fetch and
+    // can strand the <video> on its first frame. On the back buffer that abort
+    // means `canplay` never fires, slotReady stays false, the crossfade never
+    // arms, and the current clip hard-loops forever — a visible cut every ~7s
+    // with no error anywhere. (Inherited the hard way from the Electron build.)
     el.src = url;
-    el.load();
+    armStallWatchdog(slot, LOAD_STALL_MS);
+  }
+
+  /**
+   * A slot that goes quiet — `stalled`/`waiting` with no progress — is a real
+   * failure mode on external volumes and network-backed media, and with no
+   * watchdog it presents as a frozen frame and no health report at all (§40.5).
+   */
+  function armStallWatchdog(slot: number, budgetMs: number) {
+    if (stallTimers[slot] !== null) clearTimeout(stallTimers[slot]!);
+    stallTimers[slot] = setTimeout(() => {
+      stallTimers[slot] = null;
+      if (posterMode || frozen || hidden) return;
+      handleSlotError(slot);
+    }, budgetMs);
+  }
+
+  function clearStallWatchdog(slot: number) {
+    if (stallTimers[slot] !== null) clearTimeout(stallTimers[slot]!);
+    stallTimers[slot] = null;
+  }
+
+  function onStalled(slot: number) {
+    // Paused-on-purpose elements are expected to go quiet.
+    if (posterMode || frozen || hidden) return;
+    // Mid-playback the active clip must recover fast; a slot that has not
+    // reached `canplay` yet is still legitimately loading.
+    armStallWatchdog(slot, slot === active && slotReady[slot] ? PLAYBACK_STALL_MS : LOAD_STALL_MS);
   }
 
   function playActive() {
     const el = videoEls[active];
     if (!el || posterMode || frozen || hidden) return;
-    void el.play().catch(() => {
-      // Autoplay is muted; a rejection here means decode/source trouble.
-      handleSlotError(active);
+    const slot = active;
+    void el.play().catch((reason: unknown) => {
+      switch (classifyPlayRejection(reason)) {
+        case 'ignored':
+          // Interrupted by a pause / new src / crossfade. Routine.
+          return;
+        case 'autoplay_blocked':
+          handleAutoplayBlocked(slot);
+          return;
+        default:
+          handleSlotError(slot);
+      }
     });
   }
 
+  /**
+   * The autoplay policy refused a muted clip. Nothing is wrong with the media,
+   * so this must NOT be reported as a decode failure — retry a few times, and
+   * fall back to the poster with no error code if the policy keeps refusing.
+   */
+  function handleAutoplayBlocked(slot: number) {
+    if (slot !== active || posterMode) return;
+    autoplayRetries++;
+    if (autoplayRetries > 3) {
+      if (!posterMode) {
+        posterMode = true;
+        for (const el of videoEls) el?.pause();
+        onhealth?.('poster_fallback', undefined, slotPlans[slot]?.clipId);
+      }
+      return;
+    }
+    if (autoplayTimer !== null) clearTimeout(autoplayTimer);
+    autoplayTimer = setTimeout(() => {
+      autoplayTimer = null;
+      playActive();
+    }, 400 * autoplayRetries);
+  }
+
+  function onLoadedMetadata(slot: number) {
+    const el = videoEls[slot];
+    const plan = slotPlans[slot];
+    if (!el || !plan) return;
+    // Prefer the element's own duration over the manifest's declared value: an
+    // over-long declared duration puts transitionAtMs past the real end, the
+    // element's `loop` restarts first, and the crossfade never fires (§40.3).
+    slotPlans[slot] = withMeasuredDuration(plan, el.duration * 1000);
+  }
+
   function onCanPlay(slot: number) {
+    clearStallWatchdog(slot);
     slotReady[slot] = true;
     slotReady = [...slotReady] as [boolean, boolean];
     if (slot === active && started && !frozen && !hidden) playActive();
   }
 
   function onPlaying(slot: number) {
+    clearStallWatchdog(slot);
     if (slot === active && !posterMode) {
       errorCount = 0;
+      autoplayRetries = 0;
       onhealth?.('ok', undefined, slotPlans[slot]?.clipId);
     }
   }
 
   function onTimeUpdate(slot: number) {
+    // Progress is proof of life for either slot, active or not.
+    clearStallWatchdog(slot);
     if (slot !== active || transitioning || frozen || hidden || posterMode) return;
     const el = videoEls[slot];
     const plan = slotPlans[slot];
@@ -158,12 +299,18 @@
     } catch {
       /* not seekable yet — play from wherever it is */
     }
-    void nextEl.play().catch(() => handleSlotError(to));
+    void nextEl.play().catch((reason: unknown) => {
+      if (classifyPlayRejection(reason) === 'ignored') return;
+      handleSlotError(to);
+    });
     active = to;
     const settleMs = (slotPlans[to]?.crossfadeMs ?? crossfadeMs) + 80;
-    setTimeout(() => {
+    if (settleTimer !== null) clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      settleTimer = null;
       const oldEl = videoEls[from];
       oldEl?.pause();
+      clearStallWatchdog(from);
       const upcoming = scheduler?.next() ?? null;
       if (upcoming) loadSlot(from, upcoming);
       transitioning = false;
@@ -172,13 +319,16 @@
 
   function handleSlotError(slot: number) {
     errorCount++;
+    clearStallWatchdog(slot);
     const clipId = slotPlans[slot]?.clipId;
     if (slot === active || errorCount > 2) {
       degradeToPoster('decode_failure', clipId);
       return;
     }
     // Back buffer failed: retry its preload once, later (§40.3).
-    setTimeout(() => {
+    if (retryTimers[slot] !== null) clearTimeout(retryTimers[slot]!);
+    retryTimers[slot] = setTimeout(() => {
+      retryTimers[slot] = null;
       if (posterMode) return;
       const retry = scheduler?.next() ?? null;
       if (retry) loadSlot(slot, retry);
@@ -191,6 +341,7 @@
   ) {
     if (posterMode) return;
     posterMode = true;
+    clearAllTimers();
     for (const el of videoEls) el?.pause();
     onhealth?.('poster_fallback', code, clipId);
   }
@@ -234,31 +385,34 @@
       style:scale={placement === 'background' ? null : geometry.scale}
       style:filter="saturate({geometry.saturation}) blur({geometry.blurPx}px)"
     >
-      <div class="flip" class:flipped={geometry.mirrorVideo}>
-        <div
-          class="crop"
-          style:transform="scale({geometry.cropZoom}) translate({geometry.cropX}%, {geometry.cropY}%)"
-        >
-          {#each [0, 1] as slot (slot)}
-            <video
-              class="clip"
-              class:front={active === slot && !posterMode}
-              style:transition-duration="{crossfadeMs}ms"
-              muted
-              playsinline
-              loop
-              preload="auto"
-              use:bindVideo={slot}
-              oncanplay={() => onCanPlay(slot)}
-              onplaying={() => onPlaying(slot)}
-              ontimeupdate={() => onTimeUpdate(slot)}
-              onerror={() => handleSlotError(slot)}
-            ></video>
-          {/each}
-          {#if posterMode && posterUrl}
-            <img class="poster" src={posterUrl} alt="" draggable="false" />
-          {/if}
-        </div>
+      <!--
+        One transform for zoom + offset + mirror. The mirror used to live on an
+        OUTER wrapper, where its scaleX(-1) negated the offsets and "move right"
+        moved her left; composing it innermost here fixes that (see geometry.ts).
+      -->
+      <div class="crop" style:transform={listenerCropTransform(geometry)}>
+        {#each [0, 1] as slot (slot)}
+          <video
+            class="clip"
+            class:front={active === slot && !posterMode}
+            style:transition-duration="{crossfadeMs}ms"
+            muted
+            playsinline
+            loop
+            preload="auto"
+            use:bindVideo={slot}
+            onloadedmetadata={() => onLoadedMetadata(slot)}
+            oncanplay={() => onCanPlay(slot)}
+            onplaying={() => onPlaying(slot)}
+            ontimeupdate={() => onTimeUpdate(slot)}
+            onstalled={() => onStalled(slot)}
+            onwaiting={() => onStalled(slot)}
+            onerror={() => handleSlotError(slot)}
+          ></video>
+        {/each}
+        {#if posterMode && posterUrl}
+          <img class="poster" src={posterUrl} alt="" draggable="false" />
+        {/if}
       </div>
       <div class="vignette" aria-hidden="true"></div>
     </div>
@@ -311,15 +465,9 @@
     border-radius: 16px;
   }
 
-  .flip,
   .crop {
     position: absolute;
     inset: 0;
-  }
-  .flip.flipped {
-    transform: scaleX(-1);
-  }
-  .crop {
     transform-origin: 50% 50%;
     will-change: transform;
   }

@@ -10,8 +10,12 @@ use crate::coordinator::AppCoordinator;
 use crate::errors::{AppError, ErrorCategory};
 use crate::util::{new_uuid, now_iso};
 
+pub mod sleep;
+
 pub const STAGE_LABEL: &str = "stage";
 pub const CONTROL_LABEL: &str = "control";
+/// Label prefix for the transient "which display is this?" overlays (§52.4).
+pub const IDENTIFY_LABEL_PREFIX: &str = "identify-";
 
 // Event names (spec §46.9). Mirrored verbatim by the TypeScript constants in
 // src/shared/contracts/stage.ts (STAGE_EVENT / CONTROL_EVENT); the
@@ -39,6 +43,10 @@ pub mod events {
 
     // Control → stage (emitted directly from the control webview, §43.5).
     pub const STAGE_HEARTBEAT: &str = "stage://heartbeat";
+    // Semantic motion frames, 15–30 Hz (companion §26.1). Like the heartbeat
+    // these are emitted straight from the control webview: a high-rate motion
+    // signal, gated by the stage's own frame receiver rather than by Rust.
+    pub const STAGE_SEMANTIC_FRAME: &str = "stage://semantic-frame";
 
     // Stage → Rust (listened in app setup).
     pub const STAGE_HYDRATED: &str = "stage://hydrated";
@@ -46,6 +54,8 @@ pub mod events {
     pub const STAGE_HEARTBEAT_ACK: &str = "stage://heartbeat-ack";
     pub const STAGE_MEDIA_ERROR: &str = "stage://media-error";
     pub const STAGE_ESCAPE_REQUESTED: &str = "stage://escape-requested";
+    // Periodic stage motion report, relayed to control (companion §54).
+    pub const STAGE_MOTION_ACK: &str = "stage://motion-ack";
 
     // Stage → control (listened directly by the control webview).
     pub const STAGE_INTENT: &str = "stage://intent";
@@ -88,13 +98,68 @@ pub struct DisplayDescriptor {
     pub scale_factor: f64,
     pub logical_size: LogicalDimensions,
     pub primary: bool,
+    /// Stable identity: survives rearranging displays (see `display_identity`).
     pub fingerprint: String,
+    /// Soft arrangement hash: changes when the user moves/rescales displays.
+    /// Only ever used to hint "your arrangement changed" — never to resolve a
+    /// saved profile.
+    pub topology_hash: String,
 }
 
-/// Stable display fingerprint from available facts (spec §52.3): name,
-/// physical/logical dimensions, scale, and relative topology. A hint, not a
-/// guaranteed hardware identifier.
+/// Stable display identity (spec §52.3) from the facts that describe the
+/// PANEL rather than its placement: name plus physical size.
+///
+/// Position and scale factor are deliberately excluded. They used to be folded
+/// in, which meant dragging a monitor in System Settings ▸ Displays ▸ Arrange —
+/// or docking a laptop, or changing the resolution scaling — silently
+/// invalidated every saved display profile and turned a configured stage
+/// display into `StageDisplayMissing`. Arrangement is not identity.
+pub fn display_identity(name: Option<&str>, physical_width: u32, physical_height: u32) -> String {
+    let material = format!(
+        "{}|{}x{}",
+        name.unwrap_or("unknown"),
+        physical_width,
+        physical_height
+    );
+    let digest = crate::util::sha256_hex(material.as_bytes());
+    format!("dsp-{}", &digest[..16])
+}
+
+/// Full fingerprint: the stable identity, plus a disambiguating ordinal when
+/// several connected panels are genuinely indistinguishable (two identical
+/// monitors). Ordinal 0 — the overwhelmingly common case — yields the bare
+/// identity, so a unique panel's fingerprint never changes at all.
 pub fn display_fingerprint(
+    name: Option<&str>,
+    physical_width: u32,
+    physical_height: u32,
+    ordinal: u32,
+) -> String {
+    let identity = display_identity(name, physical_width, physical_height);
+    if ordinal == 0 {
+        identity
+    } else {
+        format!("{identity}-{ordinal}")
+    }
+}
+
+/// The identity portion of a fingerprint — used for the softer fallback match
+/// when the exact fingerprint (identity + ordinal) is no longer present.
+pub fn fingerprint_identity(fingerprint: &str) -> &str {
+    match fingerprint.rfind('-') {
+        // Only a trailing "-<digits>" is an ordinal; "dsp-<hex>" is not.
+        Some(index)
+            if index > 3 && fingerprint[index + 1..].chars().all(|c| c.is_ascii_digit()) =>
+        {
+            &fingerprint[..index]
+        }
+        _ => fingerprint,
+    }
+}
+
+/// Soft hash of where a display currently sits and how it is scaled. Changing
+/// it means "the arrangement moved", never "this is a different display".
+pub fn display_topology_hash(
     name: Option<&str>,
     physical_width: u32,
     physical_height: u32,
@@ -112,13 +177,13 @@ pub fn display_fingerprint(
         position_y
     );
     let digest = crate::util::sha256_hex(material.as_bytes());
-    format!("dsp-{}", &digest[..16])
+    format!("top-{}", &digest[..16])
 }
 
-fn monitor_fingerprint(monitor: &Monitor) -> String {
+fn monitor_topology_hash(monitor: &Monitor) -> String {
     let size = monitor.size();
     let position = monitor.position();
-    display_fingerprint(
+    display_topology_hash(
         monitor.name().map(|n| n.as_str()),
         size.width,
         size.height,
@@ -128,7 +193,41 @@ fn monitor_fingerprint(monitor: &Monitor) -> String {
     )
 }
 
-fn monitor_descriptor(monitor: &Monitor, primary: bool, index: usize) -> DisplayDescriptor {
+/// Fingerprints for a whole monitor list. The ordinal can only be assigned
+/// with the full list in hand, so fingerprints are always derived in a batch.
+fn monitor_fingerprints(monitors: &[Monitor]) -> Vec<String> {
+    let mut seen: std::collections::HashMap<(String, u32, u32), u32> =
+        std::collections::HashMap::new();
+    monitors
+        .iter()
+        .map(|monitor| {
+            let size = monitor.size();
+            let name = monitor.name().cloned().unwrap_or_default();
+            let counter = seen.entry((name, size.width, size.height)).or_insert(0);
+            let fingerprint = display_fingerprint(
+                monitor.name().map(|n| n.as_str()),
+                size.width,
+                size.height,
+                *counter,
+            );
+            *counter += 1;
+            fingerprint
+        })
+        .collect()
+}
+
+/// Same physical panel? Compared by the facts tao gives us rather than by
+/// fingerprint, because the fingerprint needs whole-list context for ordinals.
+fn same_monitor(a: &Monitor, b: &Monitor) -> bool {
+    a.name() == b.name() && a.size() == b.size() && a.position() == b.position()
+}
+
+fn monitor_descriptor(
+    monitor: &Monitor,
+    primary: bool,
+    index: usize,
+    fingerprint: String,
+) -> DisplayDescriptor {
     let size = monitor.size();
     let position = monitor.position();
     let scale = monitor.scale_factor();
@@ -149,25 +248,35 @@ fn monitor_descriptor(monitor: &Monitor, primary: bool, index: usize) -> Display
             height: size.height as f64 / scale,
         },
         primary,
-        fingerprint: monitor_fingerprint(monitor),
+        fingerprint,
+        topology_hash: monitor_topology_hash(monitor),
     }
 }
 
 pub fn list_displays(app: &AppHandle) -> Result<Vec<DisplayDescriptor>, AppError> {
-    let primary_fp = app.primary_monitor()?.map(|m| monitor_fingerprint(&m));
+    let primary = app.primary_monitor()?;
     let monitors = app.available_monitors()?;
+    let fingerprints = monitor_fingerprints(&monitors);
     Ok(monitors
         .iter()
         .enumerate()
         .map(|(index, monitor)| {
-            let descriptor = monitor_descriptor(monitor, false, index);
-            let is_primary = primary_fp.as_deref() == Some(descriptor.fingerprint.as_str());
-            DisplayDescriptor {
-                primary: is_primary,
-                ..descriptor
-            }
+            let is_primary = primary.as_ref().is_some_and(|p| same_monitor(p, monitor));
+            monitor_descriptor(monitor, is_primary, index, fingerprints[index].clone())
         })
         .collect())
+}
+
+/// One hash covering the whole desktop arrangement. Used only to notice that
+/// the topology changed so control can revalidate (spec §52.5).
+pub fn topology_signature(descriptors: &[DisplayDescriptor]) -> String {
+    let mut parts: Vec<String> = descriptors
+        .iter()
+        .map(|d| format!("{}:{}", d.fingerprint, d.topology_hash))
+        .collect();
+    parts.sort();
+    let digest = crate::util::sha256_hex(parts.join("|").as_bytes());
+    digest[..16].to_string()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -189,14 +298,25 @@ pub struct IdentifiedDisplay {
     pub primary: bool,
 }
 
-/// Number displays for identification (spec §52.4). The numbered overlays
-/// are rendered by the control UI layer from the emitted event; Rust
-/// supplies stable numbering and fingerprints.
+/// How long the numbered overlays stay up.
+const IDENTIFY_DURATION_MS: u32 = 2500;
+/// Overlay card size in logical points.
+const IDENTIFY_CARD_W: f64 = 320.0;
+const IDENTIFY_CARD_H: f64 = 220.0;
+
+/// Number displays for identification (spec §52.4).
+///
+/// The question this answers — "which physical panel is number 2?" — is only
+/// answerable by putting a number ON each panel. A toast in the control window
+/// listing display names cannot answer it, because the operator is looking at
+/// the panels, not at the list. So this puts a short-lived, always-on-top,
+/// click-through numbered card on every connected display, and ALSO emits the
+/// session to control so the picker can label its tiles to match.
 pub fn identify_displays(app: &AppHandle) -> Result<IdentificationSession, AppError> {
     let displays = list_displays(app)?;
     let session = IdentificationSession {
         session_id: new_uuid(),
-        duration_ms: 6000,
+        duration_ms: IDENTIFY_DURATION_MS,
         displays: displays
             .iter()
             .enumerate()
@@ -209,8 +329,97 @@ pub fn identify_displays(app: &AppHandle) -> Result<IdentificationSession, AppEr
             })
             .collect(),
     };
+
+    close_identify_overlays(app);
+    for display in &session.displays {
+        if let Some(descriptor) = displays.iter().find(|d| d.fingerprint == display.fingerprint) {
+            // A failed overlay must not fail the whole command — the emitted
+            // session is still useful.
+            if let Err(error) = spawn_identify_overlay(app, display.number, descriptor) {
+                tracing::warn!(%error, "could not show a display identification overlay");
+            }
+        }
+    }
+    schedule_identify_close(app, IDENTIFY_DURATION_MS);
+
     let _ = app.emit_to(CONTROL_LABEL, events::IDENTIFY_DISPLAYS, &session);
     Ok(session)
+}
+
+fn spawn_identify_overlay(
+    app: &AppHandle,
+    number: u32,
+    display: &DisplayDescriptor,
+) -> Result<(), AppError> {
+    let label = format!("{IDENTIFY_LABEL_PREFIX}{number}");
+    let url = format!(
+        "identify.html?n={number}&primary={}",
+        u8::from(display.primary)
+    );
+
+    // Centre a small card on the panel rather than covering it: a full-display
+    // overlay would need a transparent window, which on macOS means opting the
+    // whole app into the private-API surface — too much for a 2.5 s hint.
+    let scale = display.scale_factor.max(0.1);
+    let card_w = (IDENTIFY_CARD_W * scale) as i32;
+    let card_h = (IDENTIFY_CARD_H * scale) as i32;
+    let x = display.physical_position.x + (display.physical_size.width as i32 - card_w) / 2;
+    let y = display.physical_position.y + (display.physical_size.height as i32 - card_h) / 2;
+
+    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+        .title("Display")
+        .decorations(false)
+        .resizable(false)
+        .minimizable(false)
+        .maximizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        // Never steal focus from the control window the operator is driving.
+        .focused(false)
+        .focusable(false)
+        .shadow(false)
+        .background_color(tauri::window::Color(13, 15, 18, 255))
+        .visible(false)
+        .position(x as f64 / scale, y as f64 / scale)
+        .inner_size(IDENTIFY_CARD_W, IDENTIFY_CARD_H)
+        .build()?;
+
+    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))?;
+    window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+        width: card_w as u32,
+        height: card_h as u32,
+    }))?;
+    let _ = window.set_ignore_cursor_events(true);
+    window.show()?;
+    Ok(())
+}
+
+/// Close every identification overlay. Idempotent and safe against windows
+/// that already went away (a quit mid-identify must not fire at a destroyed
+/// window — the failure the Electron build guarded with a `closed` handler).
+pub fn close_identify_overlays(app: &AppHandle) {
+    let labels: Vec<String> = app
+        .webview_windows()
+        .keys()
+        .filter(|label| label.starts_with(IDENTIFY_LABEL_PREFIX))
+        .cloned()
+        .collect();
+    for label in labels {
+        if let Some(window) = app.get_webview_window(&label) {
+            let _ = window.destroy();
+        }
+    }
+}
+
+fn schedule_identify_close(app: &AppHandle, delay_ms: u32) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(u64::from(delay_ms)));
+        let handle = app.clone();
+        // Window teardown must happen on the main thread; if the dispatch
+        // fails the app is already shutting down and the windows go with it.
+        let _ = app.run_on_main_thread(move || close_identify_overlays(&handle));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +445,13 @@ pub struct StageOpenResult {
 pub struct StageWindowState {
     pub exists: bool,
     pub visible: bool,
+    /// Presenting full-screen on its display — true for borderless too.
     pub fullscreen: bool,
+    /// The OS native-fullscreen flag specifically (macOS Space / Win exclusive).
+    pub native_fullscreen: bool,
+    /// The display the stage ACTUALLY landed on, verified after show.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_fingerprint: Option<String>,
     pub stage_generation: u64,
 }
 
@@ -274,9 +489,16 @@ pub struct StageAck {
 /// `set_stage_fullscreen` to show without an intermediate flash.
 pub fn open_stage(app: &AppHandle, request: OpenStageRequest) -> Result<StageOpenResult, AppError> {
     let monitor = resolve_monitor(app, request.display_fingerprint.as_deref())?;
-    let fingerprint = monitor_fingerprint(&monitor);
+    let monitors = app.available_monitors()?;
+    let fingerprints = monitor_fingerprints(&monitors);
+    let fingerprint = monitors
+        .iter()
+        .position(|m| same_monitor(m, &monitor))
+        .and_then(|index| fingerprints.get(index).cloned())
+        .ok_or(AppError::StageDisplayMissing)?;
     let size = *monitor.size();
     let position = *monitor.position();
+    let scale = monitor.scale_factor();
 
     let coordinator = app.state::<AppCoordinator>();
     let generation = coordinator.next_stage_generation();
@@ -285,14 +507,34 @@ pub fn open_stage(app: &AppHandle, request: OpenStageRequest) -> Result<StageOpe
         existing.destroy()?;
     }
 
+    // Position and size go into the BUILDER, not a post-build set_position:
+    // creating a window at the origin and then moving it makes the OS assign it
+    // to the wrong screen first, which on mixed-DPI setups bakes in the wrong
+    // scale factor before the move (a long-standing tao rough edge). The
+    // builder takes logical units, so convert through the target monitor's own
+    // scale factor; the physical values are re-asserted below, where they are
+    // unambiguous.
     let window = WebviewWindowBuilder::new(app, STAGE_LABEL, WebviewUrl::App("stage.html".into()))
         .title("CandidCue Stage")
         .decorations(false)
         .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
         .visible(false)
         .skip_taskbar(true)
+        // The stage must sit above every other window — including other apps'
+        // full-screen windows — for the whole take (spec §52.7). This is what
+        // makes the borderless presentation mode viable as the default.
+        .always_on_top(true)
+        // Paint the window black before the webview's first frame, so the
+        // OS window-show cannot flash white on the way to a black stage.
+        .background_color(tauri::window::Color(0, 0, 0, 255))
+        .position(position.x as f64 / scale, position.y as f64 / scale)
+        .inner_size(size.width as f64 / scale, size.height as f64 / scale)
         .build()?;
 
+    // Re-assert in physical units: exact, and immune to the logical rounding
+    // above.
     window.set_position(tauri::Position::Physical(position))?;
     window.set_size(tauri::Size::Physical(size))?;
 
@@ -305,6 +547,10 @@ pub fn open_stage(app: &AppHandle, request: OpenStageRequest) -> Result<StageOpe
         if matches!(event, tauri::WindowEvent::Destroyed) {
             let coordinator = app_handle.state::<AppCoordinator>();
             coordinator.stage_closed(generation);
+            // The display-sleep assertion is created when the stage presents;
+            // release it here so a crash or an unexpected close can never leak
+            // it (spec §52.7).
+            crate::windows::sleep::release(&app_handle);
             let _ = app_handle.emit_to(
                 CONTROL_LABEL,
                 events::STAGE_CLOSED,
@@ -319,19 +565,48 @@ pub fn open_stage(app: &AppHandle, request: OpenStageRequest) -> Result<StageOpe
     })
 }
 
+/// Which monitor in `fingerprints` a saved fingerprint refers to.
+///
+/// Exact match first; then the softer identity match, which lets a display
+/// keep resolving after its twin was unplugged (ordinal shifted) — anything
+/// that would otherwise be a spurious `StageDisplayMissing`. Pure so the
+/// matching policy is testable without a window system.
+pub fn match_display_index(fingerprints: &[String], wanted: &str) -> Option<usize> {
+    if let Some(index) = fingerprints.iter().position(|f| f == wanted) {
+        return Some(index);
+    }
+    let wanted_identity = fingerprint_identity(wanted);
+    fingerprints
+        .iter()
+        .position(|f| fingerprint_identity(f) == wanted_identity)
+}
+
 fn resolve_monitor(app: &AppHandle, fingerprint: Option<&str>) -> Result<Monitor, AppError> {
     let monitors = app.available_monitors()?;
     if let Some(fp) = fingerprint {
-        for monitor in &monitors {
-            if monitor_fingerprint(monitor) == fp {
-                return Ok(monitor.clone());
-            }
-        }
-        return Err(AppError::StageDisplayMissing);
+        let fingerprints = monitor_fingerprints(&monitors);
+        return match_display_index(&fingerprints, fp)
+            .and_then(|index| monitors.get(index).cloned())
+            .ok_or(AppError::StageDisplayMissing);
     }
     app.primary_monitor()?
         .or_else(|| monitors.into_iter().next())
         .ok_or(AppError::StageDisplayMissing)
+}
+
+/// The fingerprint of the monitor a live window actually landed on, if it can
+/// be determined. Used to verify the stage opened where it was asked to.
+fn window_monitor_fingerprint(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+) -> Option<String> {
+    let current = window.current_monitor().ok().flatten()?;
+    let monitors = app.available_monitors().ok()?;
+    let fingerprints = monitor_fingerprints(&monitors);
+    monitors
+        .iter()
+        .position(|m| same_monitor(m, &current))
+        .and_then(|index| fingerprints.get(index).cloned())
 }
 
 fn require_active_session(app: &AppHandle, session_id: &str) -> Result<u64, AppError> {
@@ -367,37 +642,133 @@ pub fn close_stage(app: &AppHandle, session_id: &str) -> Result<(), AppError> {
         window.destroy()?;
     }
     coordinator.stage_closed(snapshot.stage.generation);
+    sleep::release(app);
     Ok(())
 }
 
+/// Present or un-present the stage (spec §43.3, §52.7).
+///
+/// The default presentation is BORDERLESS: the frameless window is sized to the
+/// target monitor's exact bounds and pinned always-on-top. Native fullscreen is
+/// an explicit opt-in (`native`), because on macOS `set_fullscreen(true)`
+/// allocates a new Space, animates into it, and steals focus away from the
+/// control window the operator is driving — none of which a teleprompter wants.
+/// The Electron predecessor set `fullscreenable: false` and never called
+/// setFullScreen once, on purpose.
 pub fn set_stage_fullscreen(
     app: &AppHandle,
     session_id: &str,
     enabled: bool,
+    native: bool,
 ) -> Result<StageWindowState, AppError> {
     let generation = require_active_session(app, session_id)?;
     let window = app
         .get_webview_window(STAGE_LABEL)
         .ok_or(AppError::StageDisplayMissing)?;
+    let coordinator = app.state::<AppCoordinator>();
+    let requested_fingerprint = coordinator.snapshot().stage.display_fingerprint.clone();
+
     if enabled {
+        // Re-assert the monitor bounds: the display may have been rearranged
+        // between open_stage and here.
+        if let Some(fp) = requested_fingerprint.as_deref() {
+            if let Ok(monitor) = resolve_monitor(app, Some(fp)) {
+                let _ = window.set_position(tauri::Position::Physical(*monitor.position()));
+                let _ = window.set_size(tauri::Size::Physical(*monitor.size()));
+            }
+        }
+        window.set_always_on_top(true)?;
         window.show()?;
-        window.set_fullscreen(true)?;
+        if native {
+            window.set_fullscreen(true)?;
+        }
         window.set_focus().ok();
+        // Block display sleep for the take: the operator deliberately stops
+        // touching the keyboard for 20+ minutes, and macOS sleeps the display
+        // at 10–20 (spec §52.7).
+        sleep::acquire(app);
     } else {
         // Windowed stage (preview/test): still make it visible (§43.3).
-        window.show()?;
         window.set_fullscreen(false)?;
+        window.show()?;
+        sleep::release(app);
     }
+
     let visible = window.is_visible().unwrap_or(false);
-    let fullscreen = window.is_fullscreen().unwrap_or(false);
-    let coordinator = app.state::<AppCoordinator>();
+    let native_fullscreen = window.is_fullscreen().unwrap_or(false);
+    // "fullscreen" to the rest of the app means "presenting full-screen on its
+    // display", which borderless satisfies without the native flag being set.
+    let fullscreen = native_fullscreen || (enabled && visible);
+
+    // A display is not validated until the stage reports it opened on the
+    // requested monitor (spec §52.7). Verify rather than assume.
+    let actual_fingerprint = window_monitor_fingerprint(app, &window);
+    if enabled {
+        if let (Some(wanted), Some(actual)) = (&requested_fingerprint, &actual_fingerprint) {
+            if wanted != actual {
+                let _ = app.emit_to(
+                    CONTROL_LABEL,
+                    events::STAGE_ERROR,
+                    serde_json::json!({
+                        "stageGeneration": generation,
+                        "code": "STAGE_DISPLAY_MISMATCH",
+                        "message": "The stage opened on a different display than the one selected.",
+                        "requestedFingerprint": wanted,
+                        "actualFingerprint": actual,
+                    }),
+                );
+            }
+        }
+    }
+
     coordinator.set_stage_visible(visible, fullscreen);
     Ok(StageWindowState {
         exists: true,
         visible,
         fullscreen,
+        native_fullscreen,
+        display_fingerprint: actual_fingerprint.or(requested_fingerprint),
         stage_generation: generation,
     })
+}
+
+/// Poll the monitor topology and tell control when it changes (spec §52.5).
+/// Tauri 2 has no cross-platform display-topology event, so this is a cheap
+/// 2 s poll executed on the main thread — enumerating monitors off the main
+/// thread is not safe on macOS.
+pub fn spawn_display_watcher(app: &AppHandle) {
+    use std::sync::{Arc, Mutex};
+
+    let app = app.clone();
+    let last: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let handle = app.clone();
+        let last = last.clone();
+        let dispatched = handle.clone().run_on_main_thread(move || {
+            let Ok(displays) = list_displays(&handle) else {
+                return;
+            };
+            let signature = topology_signature(&displays);
+            let mut guard = match last.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let changed = guard.as_deref().is_some_and(|prev| prev != signature);
+            *guard = Some(signature);
+            if changed {
+                let _ = handle.emit_to(
+                    CONTROL_LABEL,
+                    events::DEVICE_OR_DISPLAY_CHANGE,
+                    serde_json::json!({ "kind": "display", "displays": displays }),
+                );
+            }
+        });
+        if dispatched.is_err() {
+            // The app is shutting down.
+            return;
+        }
+    });
 }
 
 pub fn stage_status(app: &AppHandle) -> StageStatus {
@@ -527,6 +898,8 @@ const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[
     "listener",
     "calibration",
     "diagnostics",
+    // Companion Part VIII: a single validated coach tip for the stage strip.
+    "coach",
 ];
 
 /// Validate a `StageStatePayload` ({ stageGeneration, directive }) against
@@ -708,11 +1081,13 @@ mod tests {
             events::STAGE_LISTENER_STATE,
             events::STAGE_CLOSE_SESSION,
             events::STAGE_HEARTBEAT,
+            events::STAGE_SEMANTIC_FRAME,
             events::STAGE_HYDRATED,
             events::STAGE_LAYOUT_READY,
             events::STAGE_HEARTBEAT_ACK,
             events::STAGE_MEDIA_ERROR,
             events::STAGE_ESCAPE_REQUESTED,
+            events::STAGE_MOTION_ACK,
             events::STAGE_INTENT,
         ];
         for name in rust_names {
@@ -761,23 +1136,101 @@ mod tests {
 
     #[test]
     fn fingerprint_is_stable_and_distinct() {
-        let a1 = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 2.0, 0, 0);
-        let a2 = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 2.0, 0, 0);
+        let a1 = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 0);
+        let a2 = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 0);
         assert_eq!(a1, a2);
         assert!(a1.starts_with("dsp-"));
         assert_eq!(a1.len(), 4 + 16);
 
-        // Same panel at a different position → different topology → new fp.
-        let moved = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 2.0, 3840, 0);
-        assert_ne!(a1, moved);
+        // A different panel is a different fingerprint.
+        let other = display_fingerprint(Some("LG ULTRAFINE"), 3840, 2160, 0);
+        assert_ne!(a1, other);
 
-        // Different scale factor → different fingerprint.
-        let scaled = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 1.0, 0, 0);
-        assert_ne!(a1, scaled);
+        // Resolution change is a genuine identity change (the media geometry
+        // the stage was configured against no longer holds).
+        let resized = display_fingerprint(Some("DELL U2720Q"), 2560, 1440, 0);
+        assert_ne!(a1, resized);
 
         // Unnamed generic display still yields a usable fingerprint.
-        let generic = display_fingerprint(None, 1024, 600, 1.0, -1024, 0);
+        let generic = display_fingerprint(None, 1024, 600, 0);
         assert!(generic.starts_with("dsp-"));
         assert_ne!(generic, a1);
+    }
+
+    /// The regression this pins: position and scale factor USED to be folded
+    /// into the fingerprint, so dragging a monitor in System Settings ▸
+    /// Displays ▸ Arrange — or docking a laptop, or changing the scaling —
+    /// silently invalidated every saved display profile and turned a
+    /// configured stage display into StageDisplayMissing.
+    #[test]
+    fn fingerprint_survives_rearranging_and_rescaling_displays() {
+        let home = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 0);
+
+        // Dragged to the right of the primary in Arrange: same panel.
+        let rearranged = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 0);
+        assert_eq!(home, rearranged);
+
+        // Only the SOFT topology hash notices the move and the rescale.
+        let before = display_topology_hash(Some("DELL U2720Q"), 3840, 2160, 2.0, 0, 0);
+        let moved = display_topology_hash(Some("DELL U2720Q"), 3840, 2160, 2.0, 3840, 0);
+        let rescaled = display_topology_hash(Some("DELL U2720Q"), 3840, 2160, 1.0, 0, 0);
+        assert_ne!(before, moved);
+        assert_ne!(before, rescaled);
+        // ...and it is never mistaken for an identity.
+        assert!(before.starts_with("top-"));
+    }
+
+    #[test]
+    fn identical_twin_panels_stay_distinguishable() {
+        let first = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 0);
+        let second = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 1);
+        assert_ne!(first, second);
+        // Both still resolve back to one shared identity.
+        assert_eq!(fingerprint_identity(&first), fingerprint_identity(&second));
+        // The unique case carries no ordinal suffix at all.
+        assert_eq!(fingerprint_identity(&first), first);
+    }
+
+    #[test]
+    fn saved_profiles_resolve_through_the_soft_identity_fallback() {
+        let twin_a = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 0);
+        let twin_b = display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 1);
+        let laptop = display_fingerprint(Some("Built-in Retina Display"), 3456, 2234, 0);
+
+        let both = vec![laptop.clone(), twin_a.clone(), twin_b.clone()];
+        assert_eq!(match_display_index(&both, &twin_b), Some(2));
+        assert_eq!(match_display_index(&both, &laptop), Some(0));
+
+        // One twin unplugged: the profile saved against the SECOND one still
+        // resolves to the surviving identical panel instead of blowing up
+        // with StageDisplayMissing.
+        let one_twin = vec![laptop.clone(), twin_a.clone()];
+        assert_eq!(match_display_index(&one_twin, &twin_b), Some(1));
+
+        // A display that is genuinely gone still reports missing.
+        assert_eq!(match_display_index(&one_twin, "dsp-0123456789abcdef"), None);
+    }
+
+    #[test]
+    fn topology_signature_tracks_arrangement_not_just_membership() {
+        let make = |x: i32| DisplayDescriptor {
+            id: "display-0".into(),
+            name: Some("DELL U2720Q".into()),
+            physical_position: PhysicalPoint { x, y: 0 },
+            physical_size: PhysicalDimensions {
+                width: 3840,
+                height: 2160,
+            },
+            scale_factor: 2.0,
+            logical_size: LogicalDimensions {
+                width: 1920.0,
+                height: 1080.0,
+            },
+            primary: true,
+            fingerprint: display_fingerprint(Some("DELL U2720Q"), 3840, 2160, 0),
+            topology_hash: display_topology_hash(Some("DELL U2720Q"), 3840, 2160, 2.0, x, 0),
+        };
+        assert_eq!(topology_signature(&[make(0)]), topology_signature(&[make(0)]));
+        assert_ne!(topology_signature(&[make(0)]), topology_signature(&[make(3840)]));
     }
 }

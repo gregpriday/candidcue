@@ -5,6 +5,7 @@ import {
   mulberry32,
   DEFAULT_CROSSFADE_MS,
   TRANSITION_LEAD_MS,
+  withMeasuredDuration,
 } from './scheduler';
 
 const MIRA_CLIPS = [
@@ -92,5 +93,48 @@ describe('clip scheduler (spec §40.2–40.3)', () => {
       expect(v).toBeGreaterThanOrEqual(0);
       expect(v).toBeLessThan(1);
     }
+  });
+});
+
+describe('withMeasuredDuration (B7: trust the element, not the manifest)', () => {
+  const plan = {
+    clipId: 'listening-7s',
+    durationMs: 7042,
+    transitionAtMs: planTransitionAtMs(7042),
+    crossfadeMs: DEFAULT_CROSSFADE_MS,
+  };
+
+  it('re-derives the crossfade point when the media is shorter than declared', () => {
+    // The manifest claims 7042 ms; the file is really 6900 ms. With the
+    // declared value the crossfade would arm at 6602 ms — after the element's
+    // own `loop` has already restarted, so it never fires and the clip
+    // hard-cuts on every loop.
+    const measured = withMeasuredDuration(plan, 6900);
+    expect(measured.durationMs).toBe(6900);
+    expect(measured.transitionAtMs).toBe(planTransitionAtMs(6900));
+    expect(measured.transitionAtMs).toBeLessThan(6900);
+    expect(plan.transitionAtMs).toBeGreaterThan(measured.transitionAtMs);
+  });
+
+  it('keeps the crossfade window inside the real media on every clip', () => {
+    for (const declared of [7042, 10042]) {
+      const measuredMs = declared - 200;
+      const next = withMeasuredDuration(
+        { clipId: 'x', durationMs: declared, transitionAtMs: planTransitionAtMs(declared), crossfadeMs: DEFAULT_CROSSFADE_MS },
+        measuredMs,
+      );
+      expect(next.transitionAtMs + next.crossfadeMs + TRANSITION_LEAD_MS).toBeLessThanOrEqual(measuredMs);
+    }
+  });
+
+  it('ignores unusable measurements rather than corrupting the plan', () => {
+    expect(withMeasuredDuration(plan, Number.NaN)).toBe(plan);
+    expect(withMeasuredDuration(plan, Number.POSITIVE_INFINITY)).toBe(plan);
+    expect(withMeasuredDuration(plan, 0)).toBe(plan);
+    expect(withMeasuredDuration(plan, -5)).toBe(plan);
+  });
+
+  it('is a no-op when the manifest was right', () => {
+    expect(withMeasuredDuration(plan, 7042)).toBe(plan);
   });
 });

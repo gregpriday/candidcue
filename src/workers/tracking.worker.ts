@@ -26,6 +26,15 @@ function flush(output: EngineOutput, nowMs: number, force = false): void {
   if (output.stateChanged !== undefined) {
     post({ type: 'state_change', state: output.stateChanged });
   }
+  // Companion §26.1: semantic frames are the stage's motion input and are
+  // already rate-limited (and change-gated) by the engine's frame emitter, so
+  // they are never subject to the v1 snapshot cadence cap.
+  if (output.frame) {
+    post({ type: 'semantic_frame', frame: output.frame });
+  }
+  if (output.decision) {
+    post({ type: 'movement_decision', record: output.decision });
+  }
   if (output.snapshot) {
     // Cap emission rate (§31.16); state changes and committed movement are
     // always forwarded so the stage never misses a transition.
@@ -52,7 +61,12 @@ self.onmessage = (event: MessageEvent<TrackingWorkerInbound>) => {
   }
 
   if (message.type === 'initialize') {
-    engine = new AlignmentEngine(message.document, message.session, message.profile);
+    engine = new AlignmentEngine(
+      message.document,
+      message.session,
+      message.profile,
+      message.smoothProfile,
+    );
     minSnapshotIntervalMs = 1000 / Math.max(1, engine.profile.maxSnapshotsPerSecond);
     lastSnapshotSentAtMs = -Infinity;
     post({ type: 'ready', sessionGeneration: message.session.sessionGeneration });
@@ -94,6 +108,19 @@ self.onmessage = (event: MessageEvent<TrackingWorkerInbound>) => {
       break;
     case 'reset':
       flush(engine.reset(message.nowMs), message.nowMs, true);
+      break;
+    case 'tick':
+      // Between transcript events the continuous estimate keeps moving
+      // (companion §3.1); a tick emits a frame only when one is due.
+      flush(engine.tick(message.nowMs), message.nowMs);
+      break;
+    case 'semantic_assist':
+      // Bounded advisory evidence only (companion §3.6, §40). The beam
+      // validates epoch, expiry, source items, and candidate membership.
+      engine.applySemanticAssist(message.evidence);
+      break;
+    case 'set_layout_generation':
+      flush(engine.setLayoutGeneration(message.generation, message.nowMs), message.nowMs, true);
       break;
   }
 };

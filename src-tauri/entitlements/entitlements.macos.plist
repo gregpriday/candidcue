@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS hardened-runtime entitlements (spec §52.9).
+
+  Tauri 2 sets `bundle.macOS.hardenedRuntime` to TRUE by default, so any build
+  that is actually signed runs under the hardened runtime. Under the hardened
+  runtime the microphone is gated by an entitlement, NOT just by the
+  NSMicrophoneUsageDescription string in Info.plist — with the usage string but
+  no entitlement the prompt never appears and the mic is silently dead. That is
+  the "works in dev, mic dead in the signed DMG" failure this file prevents:
+  `tauri dev` runs unsigned and unrestricted, so the gap only shows up in the
+  shipped artifact.
+
+  Referenced from tauri.conf.json as `bundle.macOS.entitlements`. That IS the
+  supported field in Tauri 2 — unlike @electron/osx-sign, where a top-level
+  `entitlements` option is silently ignored and must go through
+  optionsForFile. Signing itself stays opt-in: `signingIdentity` is left unset
+  so it is driven by the APPLE_SIGNING_IDENTITY environment variable, and an
+  unsigned local build simply never consults this file.
+
+  Deliberately NOT included: `com.apple.security.cs.allow-jit` and
+  `allow-unsigned-executable-memory`. Electron needs those for V8; CandidCue
+  renders in WKWebView, whose JIT lives in a separate system process, so
+  granting them here would only weaken the runtime for nothing.
+-->
+<plist version="1.0">
+<dict>
+  <!-- Voice tracking and the microphone test (spec §12, §14.2 D). -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+
+  <!-- Outbound HTTPS to api.openai.com for transcription and command
+       interpretation. Strictly this is an App Sandbox key and is inert under
+       the hardened runtime alone; it is declared so that enabling the sandbox
+       later does not silently kill the network. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>

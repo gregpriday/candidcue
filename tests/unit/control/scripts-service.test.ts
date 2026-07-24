@@ -19,10 +19,10 @@ describe('scripts service — invoke wiring', () => {
     await scripts.saveScript('id-1', 3, '# Hello', { title: 'Hello' });
     await scripts.renameScript('id-1', 'New name', 3);
     await scripts.duplicateScript('id-1');
-    await scripts.trashScript('id-1');
-    await scripts.restoreScript('id-1');
+    await scripts.trashScript('id-1', 3);
+    await scripts.restoreScript('id-1', 4);
     await scripts.permanentlyDeleteScript('id-1');
-    await scripts.exportScript('id-1', { format: 'markdown' });
+    await scripts.exportScript('id-1', { destination: '/tmp/out.md', format: 'markdown' });
     await scripts.revealScriptFolder('id-1');
 
     expect(calls.map((c) => c.command)).toEqual([
@@ -74,13 +74,13 @@ describe('scripts service — mock fallback (no backend)', () => {
     const conflict = await scripts.saveScript(created.id, loaded.scriptRevision, 'other');
     expect(conflict.status).toBe('conflict');
 
-    await scripts.trashScript(created.id);
+    await scripts.trashScript(created.id, loaded.scriptRevision + 1);
     const trash = await scripts.listScripts({ view: 'trash' });
     expect(trash.items.some((s) => s.id === created.id)).toBe(true);
     const all = await scripts.listScripts({ view: 'all' });
     expect(all.items.some((s) => s.id === created.id)).toBe(false);
 
-    await scripts.restoreScript(created.id);
+    await scripts.restoreScript(created.id, loaded.scriptRevision + 2);
     const restored = await scripts.listScripts({ view: 'all' });
     expect(restored.items.some((s) => s.id === created.id)).toBe(true);
 

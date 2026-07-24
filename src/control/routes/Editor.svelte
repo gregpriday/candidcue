@@ -15,6 +15,7 @@
   import RenderBlocks from '../components/RenderBlocks.svelte';
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import StatusPill from '../components/StatusPill.svelte';
+  import { exportScriptToFile } from '../lib/app-actions';
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
   import * as inserts from '../lib/markdown-insert';
   import { onShortcut } from '../lib/shortcuts';
@@ -220,7 +221,10 @@
 
   const overflowItems = $derived([
     { label: 'Duplicate', onselect: () => void scriptsService.duplicateScript(scriptId).then(loadLibrary) },
-    { label: 'Export Markdown', onselect: () => void scriptsService.exportScript(scriptId) },
+    {
+      label: 'Export Markdown',
+      onselect: () => void exportScriptToFile(scriptId, $editor.title, 'markdown'),
+    },
     { label: 'Reveal data folder', onselect: () => void revealFolder() },
     { label: 'Move to Trash', danger: true, onselect: () => void trashFromEditor() },
   ]);

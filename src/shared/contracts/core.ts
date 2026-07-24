@@ -16,6 +16,12 @@ export interface Revisioned<T> {
 export interface ScriptSummary {
   id: Uuid;
   title: string;
+  /**
+   * Optimistic-concurrency revision (spec §48.4). Present on every summary so
+   * the library can rename/trash/restore with a compare-and-swap instead of
+   * guessing; the Rust commands require it.
+   */
+  scriptRevision: number;
   status: 'draft' | 'ready' | 'archived' | 'trash';
   language: string;
   spokenWordCount: number;
@@ -29,7 +35,6 @@ export interface ScriptSummary {
 export interface ScriptDocument extends ScriptSummary {
   source: string;
   sourceHash: string;
-  scriptRevision: number;
   settings: ScriptSettings;
   selectedDisplayProfileId?: Uuid;
   selectedTrackingProfileId?: Uuid;

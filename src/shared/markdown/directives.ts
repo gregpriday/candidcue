@@ -24,8 +24,43 @@ export interface ContainerRegion {
   contentStart: number;
   contentEnd: number;
   closed: boolean;
+  /** Enclosing region, when this container is nested inside another (§23.6). */
+  parent?: ContainerRegion;
   /** Parsed fields for kind === 'spoken'. */
   spoken?: { visual: string; say: string; visualRange: [number, number]; sayRange: [number, number] };
+  /**
+   * A closed :::spoken block whose visual:/say: lines could not be parsed.
+   * The body is still masked out of the Markdown stream (it is not Markdown),
+   * so the compiler emits a warning card carrying the raw source instead of
+   * letting the content vanish (§23.8).
+   */
+  spokenMalformed?: boolean;
+}
+
+/**
+ * Composed semantics of a region and everything enclosing it (§23.5-§23.7).
+ * Suppression from ANY ancestor wins, so `:::silent` around a
+ * `:::literal-command` still silences it; an explicit `:::spoken` block is
+ * the one marker that stays spoken inside a `:::stage` or `:::silent`
+ * ancestor, because §23.6 defines stage content as non-spoken *unless nested
+ * text is explicitly marked as spoken*.
+ */
+export interface ContainerSemantics {
+  silent: boolean;
+  stage: boolean;
+  literalCommand: boolean;
+}
+
+export function resolveContainerSemantics(
+  region: ContainerRegion | undefined,
+): ContainerSemantics {
+  const semantics: ContainerSemantics = { silent: false, stage: false, literalCommand: false };
+  for (let node = region; node; node = node.parent) {
+    if (node.kind === 'silent') semantics.silent = true;
+    else if (node.kind === 'stage') semantics.stage = true;
+    else if (node.kind === 'literal-command') semantics.literalCommand = true;
+  }
+  return semantics;
 }
 
 export interface ContainerScanResult {
@@ -72,7 +107,21 @@ function splitLines(source: string): SourceLine[] {
   return lines;
 }
 
-/** Scan for ::: containers; returns masked source + regions + diagnostics. */
+interface OpenFrame {
+  /** undefined for an unknown directive name, which is kept as source. */
+  kind: ContainerKind | undefined;
+  name: string;
+  line: SourceLine;
+}
+
+/**
+ * Scan for ::: containers; returns masked source + regions + diagnostics.
+ *
+ * Containers nest (§23.6 explicitly nests `:::spoken` inside `:::stage`), so
+ * this keeps a stack: a bare `:::` closes the innermost open container, and a
+ * new opening fence never terminates its parent. Anything still open at EOF
+ * is reported unclosed and its content compiles as ordinary Markdown.
+ */
 export function scanContainers(source: string): ContainerScanResult {
   const lines = splitLines(source);
   const regions: ContainerRegion[] = [];
@@ -80,151 +129,205 @@ export function scanContainers(source: string): ContainerScanResult {
   // split('') keeps UTF-16 code-unit indexing (spread would split by code
   // point and shift every offset after an astral character).
   const chars = source.split('');
+  const stack: OpenFrame[] = [];
+  /** Open fenced code block, if any: nothing inside it is a directive. */
+  let fence: { marker: string; length: number } | null = null;
 
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i]!;
+  const unclosed = (frame: OpenFrame) => {
+    const blocking = frame.kind === 'spoken' || frame.kind === 'silent';
+    diagnostics.push({
+      code: 'directive_unclosed',
+      severity: blocking ? 'error' : 'warning',
+      message: `":::${frame.name}" is never closed; its content compiles as normal text.`,
+      blocking,
+      source: {
+        utf16Start: frame.line.start,
+        utf16End: frame.line.end,
+        line: frame.line.lineNumber,
+      },
+      suggestedAction: 'fix_directive',
+    });
+    // Known directives lose their fence line so the marker is not read aloud;
+    // unknown ones stay visible as readable source (§22.7).
+    if (frame.kind) blankRange(chars, frame.line.start, frame.line.end);
+  };
+
+  for (const line of lines) {
+    // Fenced code is literal: a ::: line inside ``` or ~~~ is example text,
+    // not a directive. Without this the scanner blanked the fence body (so a
+    // fenced example of the directive syntax vanished from the code card) and
+    // emitted a phantom :::spoken block into the alignment stream.
+    if (fence) {
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line.text);
+      if (close && close[1]!.charAt(0) === fence.marker && close[1]!.length >= fence.length) {
+        fence = null;
+      }
+      continue;
+    }
+    const fenceOpen = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line.text);
+    if (fenceOpen && !(fenceOpen[1]!.charAt(0) === '`' && fenceOpen[2]!.includes('`'))) {
+      fence = { marker: fenceOpen[1]!.charAt(0), length: fenceOpen[1]!.length };
+      continue;
+    }
+
     const open = /^:::\s*([A-Za-z][A-Za-z-]*)\s*$/.exec(line.text);
-    if (!open) {
-      // A stray closing fence outside any container.
-      if (/^:::\s*$/.test(line.text)) {
+    if (open) {
+      const name = open[1]!.toLowerCase();
+      const known = KNOWN_CONTAINERS.has(name);
+      if (!known) {
+        // Unknown directive: keep the whole container (including its fences)
+        // visible as readable source (spec §22.7).
         diagnostics.push({
-          code: 'directive_stray_fence',
+          code: 'directive_unknown',
           severity: 'warning',
-          message: 'Closing ::: fence without a matching opening directive.',
+          message: `Unknown directive ":::${name}" renders as plain text.`,
           blocking: false,
           source: { utf16Start: line.start, utf16End: line.end, line: line.lineNumber },
           suggestedAction: 'fix_directive',
         });
-        blankRange(chars, line.start, line.end);
       }
-      i++;
+      stack.push({ kind: known ? (name as ContainerKind) : undefined, name, line });
       continue;
     }
 
-    const name = open[1]!.toLowerCase();
-    if (!KNOWN_CONTAINERS.has(name)) {
-      // Unknown directive: keep the whole container (including its closing
-      // fence) visible as readable source (spec §22.7).
+    if (!/^:::\s*$/.test(line.text)) continue;
+
+    const frame = stack.pop();
+    if (!frame) {
       diagnostics.push({
-        code: 'directive_unknown',
+        code: 'directive_stray_fence',
         severity: 'warning',
-        message: `Unknown directive ":::${name}" renders as plain text.`,
+        message: 'Closing ::: fence without a matching opening directive.',
         blocking: false,
         source: { utf16Start: line.start, utf16End: line.end, line: line.lineNumber },
         suggestedAction: 'fix_directive',
       });
-      let skipTo = i + 1;
-      for (let j = i + 1; j < lines.length; j++) {
-        if (/^:::\s*$/.test(lines[j]!.text)) {
-          skipTo = j + 1;
-          break;
-        }
-        if (/^:::\s*[A-Za-z]/.test(lines[j]!.text)) break;
-      }
-      i = skipTo;
-      continue;
-    }
-
-    // Find the closing fence.
-    let closeIndex = -1;
-    for (let j = i + 1; j < lines.length; j++) {
-      if (/^:::\s*$/.test(lines[j]!.text)) {
-        closeIndex = j;
-        break;
-      }
-      // A new opening fence before a close means the previous is unclosed.
-      if (/^:::\s*[A-Za-z]/.test(lines[j]!.text)) break;
-    }
-
-    const kind = name as ContainerKind;
-    if (closeIndex === -1) {
-      // Unclosed containers alter the spoken stream ambiguously -> blocking
-      // for spoken/silent, warning otherwise (spec §23.8). Content compiles
-      // as ordinary Markdown so nothing disappears silently.
-      diagnostics.push({
-        code: 'directive_unclosed',
-        severity: kind === 'spoken' || kind === 'silent' ? 'error' : 'warning',
-        message: `":::${name}" is never closed; its content compiles as normal text.`,
-        blocking: kind === 'spoken' || kind === 'silent',
-        source: { utf16Start: line.start, utf16End: line.end, line: line.lineNumber },
-        suggestedAction: 'fix_directive',
-      });
       blankRange(chars, line.start, line.end);
-      i++;
       continue;
     }
 
-    const closeLine = lines[closeIndex]!;
-    const contentStart = line.end + 1 <= source.length ? line.end + 1 : line.end;
-    const contentEnd = closeLine.start;
+    if (!frame.kind) continue; // unknown container: both fences stay visible
+
+    const contentStart = frame.line.end + 1 <= source.length ? frame.line.end + 1 : frame.line.end;
     const region: ContainerRegion = {
-      kind,
-      start: line.start,
-      end: Math.min(closeLine.end + 1, source.length),
+      kind: frame.kind,
+      start: frame.line.start,
+      end: Math.min(line.end + 1, source.length),
       contentStart,
-      contentEnd,
+      contentEnd: line.start,
       closed: true,
     };
 
+    blankRange(chars, frame.line.start, frame.line.end);
     blankRange(chars, line.start, line.end);
-    blankRange(chars, closeLine.start, closeLine.end);
-
-    if (kind === 'spoken') {
-      // Body is visual:/say: plain text, not Markdown — blank it entirely.
-      blankRange(chars, contentStart, contentEnd);
-      const body = source.slice(contentStart, contentEnd);
-      const visualMatch = /(^|\n)[ \t]*visual:[ \t]*(.*)/i.exec(body);
-      const sayMatch = /(^|\n)[ \t]*say:[ \t]*(.*)/i.exec(body);
-      if (!visualMatch || !sayMatch || !sayMatch[2]!.trim()) {
-        diagnostics.push({
-          code: 'directive_spoken_malformed',
-          severity: 'error',
-          message:
-            'A :::spoken block needs both "visual:" and "say:" lines with text.',
-          blocking: true,
-          source: { utf16Start: line.start, utf16End: region.end, line: line.lineNumber },
-          suggestedAction: 'fix_directive',
-        });
-      } else {
-        const visualText = visualMatch[2]!.trim();
-        const sayText = sayMatch[2]!.trim();
-        const visualOffset =
-          contentStart + visualMatch.index + visualMatch[0]!.indexOf(visualMatch[2]!);
-        const sayOffset = contentStart + sayMatch.index + sayMatch[0]!.indexOf(sayMatch[2]!);
-        region.spoken = {
-          visual: visualText,
-          say: sayText,
-          visualRange: [visualOffset, visualOffset + visualMatch[2]!.length],
-          sayRange: [sayOffset, sayOffset + sayMatch[2]!.length],
-        };
-        if (!visualText) {
-          diagnostics.push({
-            code: 'directive_spoken_malformed',
-            severity: 'error',
-            message: 'The "visual:" line of a :::spoken block is empty.',
-            blocking: true,
-            source: { utf16Start: line.start, utf16End: region.end, line: line.lineNumber },
-            suggestedAction: 'fix_directive',
-          });
-          region.spoken = undefined;
-        }
-      }
+    if (frame.kind === 'spoken') {
+      parseSpokenBody(source, chars, region, diagnostics, frame.line.lineNumber);
     }
-
     regions.push(region);
-    i = closeIndex + 1;
   }
 
+  // Report unclosed containers in document order, not stack-pop order.
+  for (const frame of stack) unclosed(frame);
+  stack.length = 0;
+
+  // Document order, outermost first when two regions share a start offset.
+  regions.sort((a, b) => a.start - b.start || b.end - a.end);
   return { maskedSource: chars.join(''), regions, diagnostics };
 }
 
-/** Locate the container region (if any) that contains offset. */
-export function containerAt(regions: ContainerRegion[], offset: number): ContainerRegion | undefined {
-  for (const region of regions) {
-    if (offset >= region.start && offset < region.end) return region;
+function parseSpokenBody(
+  source: string,
+  chars: string[],
+  region: ContainerRegion,
+  diagnostics: CompileDiagnostic[],
+  line: number,
+): void {
+  // Body is visual:/say: plain text, not Markdown — blank it entirely.
+  blankRange(chars, region.contentStart, region.contentEnd);
+  const body = source.slice(region.contentStart, region.contentEnd);
+  const visualMatch = /(^|\n)[ \t]*visual:[ \t]*(.*)/i.exec(body);
+  const sayMatch = /(^|\n)[ \t]*say:[ \t]*(.*)/i.exec(body);
+  const malformed = (message: string) => {
+    diagnostics.push({
+      code: 'directive_spoken_malformed',
+      severity: 'error',
+      message,
+      blocking: true,
+      source: { utf16Start: region.start, utf16End: region.end, line },
+      suggestedAction: 'fix_directive',
+    });
+    region.spoken = undefined;
+    region.spokenMalformed = true;
+  };
+
+  if (!visualMatch || !sayMatch || !sayMatch[2]!.trim()) {
+    malformed('A :::spoken block needs both "visual:" and "say:" lines with text.');
+    return;
   }
-  return undefined;
+  const visualText = visualMatch[2]!.trim();
+  const sayText = sayMatch[2]!.trim();
+  const visualOffset =
+    region.contentStart + visualMatch.index + visualMatch[0]!.indexOf(visualMatch[2]!);
+  const sayOffset = region.contentStart + sayMatch.index + sayMatch[0]!.indexOf(sayMatch[2]!);
+  region.spoken = {
+    visual: visualText,
+    say: sayText,
+    visualRange: [visualOffset, visualOffset + visualMatch[2]!.length],
+    sayRange: [sayOffset, sayOffset + sayMatch[2]!.length],
+  };
+  if (!visualText) malformed('The "visual:" line of a :::spoken block is empty.');
+}
+
+/**
+ * Sorted-region cursor for document-order block lookup. Blocks arrive in
+ * ascending source order, so a monotonic cursor plus a short containment walk
+ * replaces the previous linear scan per block (O(blocks + containers) instead
+ * of O(blocks x containers), spec §25.8).
+ */
+export class ContainerIndex {
+  private cursor = 0;
+  private open: ContainerRegion[] = [];
+
+  constructor(private readonly regions: readonly ContainerRegion[]) {
+    // Regions arrive sorted by start (outermost first on ties); stitch parent
+    // links by containment so nested semantics compose (§23.6).
+    const stack: ContainerRegion[] = [];
+    for (const region of regions) {
+      while (stack.length > 0 && stack[stack.length - 1]!.end <= region.start) stack.pop();
+      if (stack.length > 0) region.parent = stack[stack.length - 1]!;
+      stack.push(region);
+    }
+  }
+
+  /** Innermost region containing `offset`, advancing the document cursor. */
+  at(offset: number): ContainerRegion | undefined {
+    while (this.cursor < this.regions.length && this.regions[this.cursor]!.start <= offset) {
+      const region = this.regions[this.cursor]!;
+      this.cursor++;
+      // Retire siblings that closed before this one opened, so `open` stays a
+      // true nesting stack and the lookup below is O(1).
+      while (this.open.length > 0 && this.open[this.open.length - 1]!.end <= region.start) {
+        this.open.pop();
+      }
+      this.open.push(region);
+    }
+    while (this.open.length > 0 && this.open[this.open.length - 1]!.end <= offset) this.open.pop();
+    return this.open[this.open.length - 1];
+  }
+}
+
+/** Locate the container region (if any) that contains offset (innermost). */
+export function containerAt(
+  regions: readonly ContainerRegion[],
+  offset: number,
+): ContainerRegion | undefined {
+  let found: ContainerRegion | undefined;
+  for (const region of regions) {
+    if (offset >= region.start && offset < region.end) {
+      if (!found || region.start >= found.start) found = region;
+    }
+  }
+  return found;
 }
 
 /* ------------------------------------------------------------------ */

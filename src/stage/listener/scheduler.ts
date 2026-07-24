@@ -44,6 +44,31 @@ export function planTransitionAtMs(
   return Math.max(0, durationMs - crossfadeMs - leadMs);
 }
 
+/**
+ * Re-derive a plan's crossfade point from the element's OWN duration once
+ * `loadedmetadata` reports it (spec §40.3).
+ *
+ * The manifest's declared durations (7042 / 10042 ms) are advisory. If a
+ * declared duration is even slightly LONGER than the real media, the element's
+ * `loop` restarts before `transitionAtMs` is ever reached, the crossfade never
+ * arms, and the clip hard-cuts on every loop forever. Trusting the element
+ * removes that whole failure mode. A missing, infinite, or absurd measurement
+ * (streaming/seeking states report Infinity or 0) leaves the plan untouched.
+ */
+export function withMeasuredDuration(
+  plan: ClipPlan,
+  measuredDurationMs: number,
+  leadMs: number = TRANSITION_LEAD_MS,
+): ClipPlan {
+  if (!Number.isFinite(measuredDurationMs) || measuredDurationMs <= 0) return plan;
+  if (measuredDurationMs === plan.durationMs) return plan;
+  return {
+    ...plan,
+    durationMs: measuredDurationMs,
+    transitionAtMs: planTransitionAtMs(measuredDurationMs, plan.crossfadeMs, leadMs),
+  };
+}
+
 export interface ClipScheduler {
   /** Next clip to play. Returns null when the pack has no clips. */
   next(): ClipPlan | null;

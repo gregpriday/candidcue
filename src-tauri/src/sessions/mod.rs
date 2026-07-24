@@ -117,7 +117,8 @@ pub async fn start_session(
     if !matches!(input.mode.as_str(), "voice" | "manual" | "fixed") {
         return Err(AppError::invalid_input("Session mode must be voice, manual, or fixed."));
     }
-    if !crate::scripts::repo::script_exists(pool, &input.script_id).await? {
+    let script_id = crate::scripts::ScriptId::parse(&input.script_id)?;
+    if !crate::scripts::repo::script_exists(pool, &script_id).await? {
         return Err(AppError::not_found("script"));
     }
     let id = new_uuid();

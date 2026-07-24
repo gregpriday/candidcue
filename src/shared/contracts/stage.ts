@@ -16,15 +16,17 @@
  *   control → Rust command → stage : load-session, tracking-snapshot,
  *                                    apply-command, listener-state,
  *                                    close-session
- *   control → stage (direct emitTo): heartbeat (§43.5, ~1s cadence)
+ *   control → stage (direct emitTo): heartbeat (§43.5, ~1s cadence),
+ *                                    semantic-frame (companion §26.1, 15–30 Hz)
  *   stage → Rust bridge (+ control) : hydrated, layout-ready, heartbeat-ack,
- *                                    media-error, escape-requested
+ *                                    media-error, escape-requested, motion-ack
  *   stage → control (direct)        : intent
  *   Rust → control                  : ready, closed, error (CONTROL_EVENT)
  */
 import type { Uuid } from './core';
 import type { StageSessionEnvelope, StageSettings } from './display';
 import type { TrackingSnapshot } from './tracking';
+import type { SemanticMotionFrame, StageMotionAck } from './smooth-follow';
 import type { ListenerStageSelection } from './listener';
 
 /* ---------------------------------------------------------------------------
@@ -44,6 +46,13 @@ export const STAGE_EVENT = {
   closeSession: 'stage://close-session',
   /** control → stage: liveness heartbeat (spec §43.5, ~1 s cadence). */
   heartbeat: 'stage://heartbeat',
+  /**
+   * control → stage: `SemanticMotionFrame` at 15–30 Hz (companion §26.1).
+   * Emitted directly from the control webview like the heartbeat — it is a
+   * high-rate motion signal, not a validated document, and the stage's frame
+   * receiver is the gate that rejects stale/foreign frames.
+   */
+  semanticFrame: 'stage://semantic-frame',
 
   /** stage → Rust: envelope received and applied (handshake step 1). */
   hydrated: 'stage://hydrated',
@@ -55,6 +64,12 @@ export const STAGE_EVENT = {
   mediaError: 'stage://media-error',
   /** stage → Rust → control: Escape pressed on the stage (§16.9). */
   escapeRequested: 'stage://escape-requested',
+  /**
+   * stage → Rust → control: periodic `StageMotionAck` (companion §54).
+   * Diagnostics and recovery only — deliberately NOT a high-frequency feedback
+   * loop into the semantic aligner.
+   */
+  motionAck: 'stage://motion-ack',
   /** stage → control: other keyboard/pointer intents — control decides. */
   intent: 'stage://intent',
 } as const;
@@ -84,8 +99,31 @@ export type ControlEventName = (typeof CONTROL_EVENT)[keyof typeof CONTROL_EVENT
 /** `stage://load-session` — the whole render model in one validated envelope. */
 export type StageSnapshotPayload = StageSessionEnvelope;
 
-/** `stage://tracking-snapshot` — revisioned snapshots drive all text motion. */
+/**
+ * `stage://tracking-snapshot` — revisioned snapshots. Since the v2 motion
+ * controller (companion §32.1–32.5, which replaces primary §32) these drive the
+ * *degraded* motion path only: they are what the stage follows when no semantic
+ * frame is current.
+ */
 export type StageTrackingPayload = TrackingSnapshot;
+
+/** `stage://semantic-frame` — the v2 motion signal (companion §26.1). */
+export type StageSemanticFramePayload = SemanticMotionFrame;
+
+/**
+ * One coach tip (companion Part VIII). The stage renders at most one at a time
+ * and never generates copy: the text is a validated string chosen by the coach
+ * engine on the control side.
+ */
+export interface StageCoachTip {
+  id: string;
+  /** Structured tip code the coach engine validated; stage never invents one. */
+  code: string;
+  text: string;
+  severity: 'info' | 'attention';
+  /** How long the strip may stay visible (A.5: 1.5–2.5 s). */
+  durationMs?: number;
+}
 
 /**
  * `stage://apply-command` / `stage://listener-state` — small imperative
@@ -99,7 +137,9 @@ export type StageDirective =
   | { kind: 'settings'; settings: StageSettings }
   | { kind: 'listener'; listener: ListenerStageSelection | null }
   | { kind: 'calibration'; active: boolean; crosshairX?: number; crosshairY?: number }
-  | { kind: 'diagnostics'; visible: boolean };
+  | { kind: 'diagnostics'; visible: boolean }
+  /** Companion Part VIII: show one tip, or `null` to clear the strip. */
+  | { kind: 'coach'; tip: StageCoachTip | null };
 
 export interface StageStatePayload {
   stageGeneration: number;
@@ -155,6 +195,13 @@ export interface StageHeartbeatAckPayload {
   mediaHealthy: boolean;
   respondedAtMs: number;
 }
+
+/**
+ * `stage://motion-ack` — periodic motion report (companion §54). Carries the
+ * stage's current layout generation, which is how control learns that the stage
+ * rebuilt its line map and that older frames are being rejected (§33).
+ */
+export type StageMotionAckPayload = StageMotionAck & { stageGeneration: number };
 
 /** `stage://escape-requested` — Escape pressed once or twice within 1.5 s. */
 export interface StageEscapePayload {

@@ -24,3 +24,9 @@ const answer = 42;
 ```
 
 Inline `code span` stays visual by default.
+
+A reference image resolves through its definition: ![Reference chart][refimg]
+
+An unsafe image reference must not become an asset: ![Danger](javascript:alert(1))
+
+[refimg]: assets/reference.png

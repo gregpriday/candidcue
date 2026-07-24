@@ -2,6 +2,15 @@
  * Validated application-settings view consumed by the Settings screen
  * (spec §18) and defaults used until `get_settings` lands in Rust.
  */
+import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
+
+export type {
+  CoachingDisplay,
+  FidelityMode,
+  FollowFeel,
+  FollowingSettings,
+  VoiceLead,
+} from '../lib/follow-profiles';
 
 export type LaunchBehavior = 'library' | 'recent';
 export type SessionMode = 'voice' | 'manual' | 'fixed';
@@ -46,6 +55,12 @@ export interface AppSettings {
     stageEndBehavior: 'close' | 'blank';
     hidePointer: boolean;
   };
+  /**
+   * Smooth-following controls (companion §47). Values are understandable
+   * choices; they resolve to a versioned `SmoothFollowProfile` through
+   * `lib/follow-profiles.ts` rather than exposing control-system parameters.
+   */
+  following: FollowingSettings;
   commands: {
     enabled: boolean;
     wakePhrase: string;
@@ -112,6 +127,7 @@ export function defaultAppSettings(): AppSettings {
       stageEndBehavior: 'close',
       hidePointer: true,
     },
+    following: defaultFollowingSettings(),
     commands: {
       enabled: true,
       wakePhrase: 'CandidCue',

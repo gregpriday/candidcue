@@ -16,6 +16,11 @@
 import { ipcInvoke, isTauriRuntime, BackendUnavailableError } from './ipc';
 import { mockSettings } from './mock-backend';
 import {
+  followingFromRust,
+  followingToRustPatch,
+  type RustFollowingSettings,
+} from './settings-following';
+import {
   defaultAppSettings,
   type AppSettings,
   type ClearResult,
@@ -62,6 +67,8 @@ interface RustSettings {
     lunaFallback: boolean;
     commandModel: string;
   };
+  /** Companion §47 — absent in documents written before the section existed. */
+  following?: Partial<RustFollowingSettings>;
   listener: Record<string, unknown>;
 }
 
@@ -128,6 +135,9 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       fixedSpeedWpm: rust.stageBehavior.fixedSpeedWpm,
       hidePointer: rust.stageBehavior.pointerHideDelaySeconds > 0,
     },
+    // Following settings are Rust-owned end to end (§47) — no overlay merge,
+    // so a stale local overlay can never resurrect an old assist mode.
+    following: followingFromRust(rust.following),
     commands: {
       ...defaults.commands,
       wakePhrase: rust.commands.wakePhrase,
@@ -177,6 +187,10 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
       put('stageBehavior', 'pointerHideDelaySeconds', patch.teleprompter.hidePointer ? 1.5 : 0);
     }
   }
+  if (patch.following) {
+    const following = followingToRustPatch(patch.following);
+    for (const [key, value] of Object.entries(following)) put('following', key, value);
+  }
   if (patch.commands) {
     put('commands', 'wakePhrase', patch.commands.wakePhrase);
     if (patch.commands.strictWake !== undefined) {
@@ -186,11 +200,14 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
   return rust;
 }
 
-/** Everything in the patch persists in the overlay so the UI view sticks. */
+/**
+ * Everything in the patch persists in the overlay so the UI view sticks —
+ * except `following`, which is Rust-owned in both directions (§47).
+ */
 function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
   for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
-    if (key === 'revision' || key === 'schemaVersion') continue;
+    if (key === 'revision' || key === 'schemaVersion' || key === 'following') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
     (overlay as Record<string, object>)[key] = {

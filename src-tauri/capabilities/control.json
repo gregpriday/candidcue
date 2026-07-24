@@ -5,6 +5,7 @@
   "windows": ["control"],
   "permissions": [
     "core:default",
+    "allow-control-commands",
     "dialog:allow-open",
     "dialog:allow-save",
     "opener:default"

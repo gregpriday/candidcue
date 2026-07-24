@@ -110,6 +110,11 @@ function handleResponse(data: CompilerWorkerResponse): void {
     });
   } else if (data.type === 'compile_superseded') {
     entry.resolve(supersededOutput(data.requestId, entry.scriptId));
+  } else if (data.requestId !== latestRequestId) {
+    // Errors get the same staleness gate as results: a failure from a
+    // snapshot the user has already typed past must not surface as the
+    // editor's current state.
+    entry.resolve(supersededOutput(data.requestId, entry.scriptId));
   } else {
     entry.reject(new Error(data.message));
   }

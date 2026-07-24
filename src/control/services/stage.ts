@@ -47,12 +47,24 @@ export async function closeStage(sessionId: string): Promise<void> {
   return invokeOrMock<void>('close_stage', { sessionId }, () => undefined);
 }
 
+/**
+ * Present (or un-present) the stage.
+ *
+ * `native` opts into OS fullscreen and defaults to false. The default is
+ * BORDERLESS: a frameless window sized to the monitor's exact bounds and
+ * pinned always-on-top. On macOS `setFullscreen(true)` allocates a new Space,
+ * animates into it, and steals focus from the control window the operator is
+ * driving — none of which a teleprompter wants (spec §52.7).
+ */
 export async function setStageFullscreen(
   sessionId: string,
   enabled: boolean,
+  native = false,
 ): Promise<StageWindowState> {
-  return invokeOrMock<StageWindowState>('set_stage_fullscreen', { sessionId, enabled }, () =>
-    mockStage.setFullscreen(enabled),
+  return invokeOrMock<StageWindowState>(
+    'set_stage_fullscreen',
+    { sessionId, enabled, native },
+    () => mockStage.setFullscreen(enabled),
   );
 }
 

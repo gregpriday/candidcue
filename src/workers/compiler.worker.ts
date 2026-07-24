@@ -23,6 +23,7 @@ const post = (message: CompilerWorkerResponse) => {
 let pending: CompileRequestMessage | null = null;
 let scheduled = false;
 let latestRevision = Number.NEGATIVE_INFINITY;
+let latestRequestId = Number.NEGATIVE_INFINITY;
 
 function supersede(request: CompileRequestMessage, supersededBy?: number): void {
   post({
@@ -38,6 +39,13 @@ function runPending(): void {
   const request = pending;
   pending = null;
   if (!request) return;
+  // Belt and braces: a request that lost its place while queued is answered
+  // as superseded rather than compiled, so a stale snapshot can never produce
+  // a result *or* an error that a caller might act on.
+  if (request.editorRevision < latestRevision || request.requestId !== latestRequestId) {
+    supersede(request, latestRequestId);
+    return;
+  }
   const startedAt = performance.now();
   try {
     // Incremental compiles fall back to a full compile in v1; the result is
@@ -80,6 +88,7 @@ self.onmessage = (event: MessageEvent<CompilerWorkerRequest>) => {
     return;
   }
   latestRevision = message.editorRevision;
+  latestRequestId = message.requestId;
 
   // Latest wins: displace any not-yet-started request.
   if (pending) supersede(pending, message.requestId);
@@ -87,9 +96,13 @@ self.onmessage = (event: MessageEvent<CompilerWorkerRequest>) => {
 
   if (!scheduled) {
     scheduled = true;
-    // Defer one microtask so a burst of queued messages collapses into a
-    // single compile of the newest source snapshot.
-    queueMicrotask(runPending);
+    // Must be a macrotask, not a microtask: microtasks run at the end of the
+    // *current* task, i.e. before the next `message` event is ever dispatched,
+    // so `queueMicrotask` compiled every keystroke instead of coalescing them
+    // and a `cancel` always arrived after the compile had already posted.
+    // A timer task lets the already-queued message events drain first, which
+    // is what makes latest-wins actually win.
+    setTimeout(runPending, 0);
   }
 };
 

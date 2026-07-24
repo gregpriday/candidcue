@@ -48,6 +48,7 @@ describe('shared contracts', () => {
     const summary: ScriptSummary = {
       id: '00000000-0000-0000-0000-000000000000',
       title: 'Scaffold',
+      scriptRevision: 1,
       status: 'draft',
       language: 'en',
       spokenWordCount: 0,

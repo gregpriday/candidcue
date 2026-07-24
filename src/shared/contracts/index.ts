@@ -7,6 +7,7 @@ export * from './compiler';
 export * from './display';
 export * from './audio';
 export * from './tracking';
+export * from './smooth-follow';
 export * from './commands';
 export * from './listener';
 export * from './stage';

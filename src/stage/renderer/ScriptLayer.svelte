@@ -1,16 +1,26 @@
 <!--
-  Compiled-document renderer (spec §16.2–16.5, §32, §51.3).
+  Compiled-document renderer and the stage's single rAF loop
+  (companion §26.2, §31, §32, §33; spec §16.2–16.5).
 
-  - Scroll plane translated by -scrollY; reading-band dead zone decides when
-    motion starts; a near-critically damped spring follows; explicit jumps
-    glide or fade per the movement class.
-  - Windowed rendering kicks in only for extremely long scripts.
-  - Past/current/future treatment per block, per token inside the current
-    block, plus the current-phrase underlay.
+  Motion is NOT a per-event animation. One persistent `StageMotionEngine` owns
+  position, velocity, acceleration and authority for the life of the session;
+  this component only:
+
+    1. measures the rendered layout into an immutable RenderedLineMap,
+    2. pumps the engine once per animation frame,
+    3. applies the resulting scroll offset to one transformed layer,
+    4. refreshes active/passed styling at a separately capped rate.
+
+  `TrackingSnapshot` is still honoured, but only as the degraded path used when
+  no semantic frame is current — it supplies a pixel target to the same
+  jerk-limited controller instead of driving its own spring (companion §32.1–5,
+  which replaces primary §32).
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
   import type {
+    SemanticMotionFrame,
+    StageMotionAck,
     StageRenderDocument,
     StageSettings,
     TrackingSnapshot,
@@ -24,15 +34,7 @@
     imageMaxHeightVh,
     clamp,
   } from './geometry';
-  import {
-    createScrollSpring,
-    classifyTransition,
-    glidePosition,
-    PROVISIONAL_MAX_CORRECTION_PX,
-    LARGE_JUMP_FADE_OUT_MS,
-    LARGE_JUMP_FADE_IN_MS,
-    SMOOTH_JUMP_DURATION_MS,
-  } from './motion';
+  import { classifyTransition, PROVISIONAL_MAX_CORRECTION_PX } from './motion';
   import {
     shouldVirtualize,
     computeOffsets,
@@ -42,6 +44,17 @@
   } from './virtualization';
   import { stageFontStack } from './text';
   import BlockView from './BlockView.svelte';
+  import {
+    awaitLayoutStable,
+    buildLayoutFingerprint,
+    buildRenderedLineMap,
+    createStageMotionEngine,
+    emptyRenderedLineMap,
+    measureStageLayout,
+    sameLayout,
+    type FallbackTarget,
+    type StageRenderedLineMap,
+  } from '../motion';
 
   let {
     doc,
@@ -50,7 +63,13 @@
     frozen = false,
     reducedMotion = false,
     compact = false,
+    sessionId = '',
+    sessionGeneration = 0,
+    stageGeneration = 0,
+    scriptCompileHash = '',
     onlayoutready = undefined,
+    onmotionack = undefined,
+    onlayoutgeneration = undefined,
   }: {
     doc: StageRenderDocument;
     settings: StageSettings;
@@ -58,7 +77,13 @@
     frozen?: boolean;
     reducedMotion?: boolean;
     compact?: boolean;
+    sessionId?: string;
+    sessionGeneration?: number;
+    stageGeneration?: number;
+    scriptCompileHash?: string;
     onlayoutready?: () => void;
+    onmotionack?: (ack: StageMotionAck) => void;
+    onlayoutgeneration?: (generation: number) => void;
   } = $props();
 
   /* ---- viewport + derived layout ---- */
@@ -73,20 +98,26 @@
   const columnWidthPx = $derived((vw * settings.columnWidthPercent) / 100);
   const fadeVh = $derived(fadeDepthVh(compact));
   const imageMaxH = $derived(imageMaxHeightVh(compact));
+  const linePx = $derived(settings.fontSizePx * settings.lineHeight);
 
-  /* ---- scroll state + motion ---- */
+  /* ---- scroll state ---- */
   let scrollY = $state(0);
-  const spring = createScrollSpring();
-  type AnimMode = 'idle' | 'spring' | 'glide' | 'fade_out' | 'fade_in';
-  let animMode: AnimMode = 'idle';
-  let planeOpacity = $state(1);
-  let glide = { from: 0, to: 0, startedAt: 0, durationMs: SMOOTH_JUMP_DURATION_MS };
-  let fadeTarget = 0;
-  let fadeStartedAt = 0;
-  let rafId = 0;
-  let lastFrameAt = 0;
   let manualUntilMs = 0;
   const MANUAL_GRACE_MS = 2500;
+
+  /* ---- the persistent motion controller (companion §26.2) ---- */
+  const engine = createStageMotionEngine();
+  let rafId = 0;
+  let loopRunning = false;
+  let layoutGeneration = 0;
+  let lineMap: StageRenderedLineMap | null = null;
+  let lineMapPending = false;
+  let lastMapBuildAtMs = 0;
+  const MAP_REBUILD_THROTTLE_MS = 250;
+
+  /* ---- capped-rate styling (§26.2 step 7) ---- */
+  let activeTokenIndex = $state<number | null>(null);
+  let underlay = $state<{ top: number; left: number; width: number; height: number } | null>(null);
 
   /* ---- measurement + virtualization ---- */
   const virtual = $derived(shouldVirtualize(doc.blocks.length));
@@ -123,13 +154,15 @@
   });
 
   const blockIndexById = $derived(new Map(doc.blocks.map((b, i) => [b.id, i])));
-  const sentencesById = $derived(
-    new Map((doc.sentences ?? []).map((s) => [s.id, s])),
-  );
+  const sentencesById = $derived(new Map((doc.sentences ?? []).map((s) => [s.id, s])));
   const currentBlockIndex = $derived(
-    tracking ? (blockIndexById.get(tracking.blockId) ?? -1) : -1,
+    activeTokenIndex !== null
+      ? (blockIndexById.get(findTokenEntry(activeTokenIndex)?.blockId ?? '') ?? -1)
+      : tracking
+        ? (blockIndexById.get(tracking.blockId) ?? -1)
+        : -1,
   );
-  const cursorTokenIndex = $derived(tracking ? tracking.tokenIndex : null);
+  const cursorTokenIndex = $derived(activeTokenIndex ?? tracking?.tokenIndex ?? null);
 
   function zoneFor(index: number): 'past' | 'current' | 'future' {
     if (currentBlockIndex < 0) return 'future';
@@ -138,10 +171,7 @@
     return 'future';
   }
 
-  /* ---- phrase underlay (spec §16.2) ---- */
-  let underlay = $state<{ top: number; left: number; width: number; height: number } | null>(null);
-
-  /* ---- measurement pass ---- */
+  /* ---- block measurement pass ---- */
   $effect(() => {
     // Re-measure when the document, typography, viewport, or window changes.
     void doc;
@@ -184,7 +214,175 @@
     }
   }
 
-  /* ---- token position resolution ---- */
+  /* ---- rendered line map (companion §7, §33) ---- */
+  $effect(() => {
+    // Every layout-affecting input. A change here invalidates the map, bumps
+    // the layout generation, and requests a bounded layout_recovery re-anchor.
+    void doc;
+    void settings.fontSizePx;
+    void settings.lineHeight;
+    void settings.letterSpacingEm;
+    void settings.columnWidthPercent;
+    void settings.fontFamilyId;
+    void settings.showCues;
+    void settings.mirrorX;
+    void settings.mirrorY;
+    void settings.readingBandCenterPercent;
+    void vw;
+    void vh;
+    void measureVersion;
+    void renderWindow;
+    if (!planeEl || vh === 0 || vw === 0) return;
+    scheduleLineMapBuild();
+  });
+
+  function scheduleLineMapBuild() {
+    if (lineMapPending) return;
+    lineMapPending = true;
+    void (async () => {
+      try {
+        // §7.1: measure only once fonts and layout-affecting assets are final.
+        if (planeEl) await awaitLayoutStable(planeEl);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        rebuildLineMap();
+      } finally {
+        lineMapPending = false;
+      }
+    })();
+  }
+
+  function rebuildLineMap() {
+    if (!planeEl || vh === 0) return;
+    const now = performance.now();
+
+    const base = {
+      scriptCompileHash,
+      stageGeneration,
+      settings,
+      viewportWidthPx: vw,
+      viewportHeightPx: vh,
+      displayScaleFactor: typeof window === 'undefined' ? 1 : window.devicePixelRatio,
+    };
+    // A real layout change always rebuilds and bumps the generation; a
+    // coverage-only rebuild (windowed rendering scrolled) reuses it and is
+    // throttled, because it is the same layout with more of it measured.
+    const layoutChanged = !sameLayout(lineMap?.fingerprint ?? null, {
+      ...buildLayoutFingerprint({ ...base, layoutGeneration }),
+    });
+    if (!layoutChanged && lineMap && now - lastMapBuildAtMs < MAP_REBUILD_THROTTLE_MS) return;
+    lastMapBuildAtMs = now;
+    if (layoutChanged) layoutGeneration += 1;
+
+    const band = computeReadingBand(vh, {
+      centerPercent: settings.readingBandCenterPercent,
+      halfHeightPercent: settings.readingBandHalfHeightPercent,
+    });
+    const measurement = measureStageLayout({
+      plane: planeEl,
+      blocks: doc.blocks,
+      fallbackLineHeightPx: linePx,
+    });
+    const fingerprint = buildLayoutFingerprint({ ...base, layoutGeneration });
+
+    const next =
+      measurement.tokens.length > 0
+        ? buildRenderedLineMap({
+            fingerprint,
+            tokens: measurement.tokens,
+            blocks: measurement.blocks,
+            readingLineStartY: band.centerPx,
+            lineHeightPx: measurement.lineHeightPx,
+            viewportHeightPx: vh,
+            maxScrollPx: maxScroll,
+            // A paragraph, media, or section gap may not produce an unbounded
+            // spline slope (§8.5, §8.6).
+            maxSlopePxPerUnit: Math.max(1, measurement.lineHeightPx) * 8,
+            boundarySlopeClampPxPerUnit: Math.max(1, measurement.lineHeightPx) * 3,
+          })
+        : emptyRenderedLineMap(fingerprint);
+
+    const hadValidMap = lineMap !== null && lineMap.valid;
+    lineMap = next;
+    engine.setBounds(0, maxScroll);
+
+    if (layoutChanged && hadValidMap && next.valid) {
+      // Live relayout: preserve semantic position, not raw scrollTop (§33).
+      // `layoutRecovery` also advances the receiver gate to the new generation.
+      engine.layoutRecovery({ map: next, nowMs: now });
+    } else {
+      engine.setLineMap(next);
+      engine.receiver.setGate({ layoutGeneration }, now);
+    }
+    if (layoutChanged) onlayoutgeneration?.(layoutGeneration);
+  }
+
+  /* ---- session gate (companion §26.1) ---- */
+  $effect(() => {
+    engine.configureSession(
+      {
+        sessionId,
+        sessionGeneration,
+        scriptCompileHash,
+        layoutGeneration,
+      },
+      performance.now(),
+    );
+  });
+
+  $effect(() => {
+    engine.setReducedMotion(reducedMotion);
+  });
+
+  $effect(() => {
+    engine.setBounds(0, maxScroll);
+  });
+
+  /* ---- degraded path: TrackingSnapshot → pixel target (§32 fallback) ---- */
+  $effect(() => {
+    const snap = tracking;
+    if (!snap || vh === 0) return;
+    const raf = requestAnimationFrame(() => applyTrackingFallback(snap));
+    return () => cancelAnimationFrame(raf);
+  });
+
+  function applyTrackingFallback(snap: TrackingSnapshot) {
+    if (performance.now() < manualUntilMs) return;
+    const pos = tokenRect(snap.tokenIndex);
+    if (!pos) return;
+    const band = computeReadingBand(vh, {
+      centerPercent: settings.readingBandCenterPercent,
+      halfHeightPercent: settings.readingBandHalfHeightPercent,
+    });
+    const current = scrollY;
+    // Inside the dead zone there is no correction to make: hold position.
+    let target = bandCorrection(pos.topDoc, pos.height, current, band) ?? current;
+    target = clamp(target, 0, maxScroll);
+
+    let disposition: FallbackTarget['disposition'] = 'follow';
+    if (snap.provisional) {
+      // Provisional matches never trigger large movement (spec §16.4).
+      target = clampProvisionalTarget(current, target, PROVISIONAL_MAX_CORRECTION_PX);
+    } else {
+      const cls = classifyTransition({
+        movement: snap.movement,
+        distancePx: Math.abs(target - current),
+        viewportHeightPx: vh,
+        reducedMotion,
+      });
+      disposition =
+        cls === 'smooth_jump'
+          ? 'catch_up'
+          : cls === 'fade_jump'
+            ? 'reanchor'
+            : cls === 'instant'
+              ? 'instant'
+              : 'follow';
+    }
+
+    engine.setFallbackTarget({ scrollPx: target, disposition, atMs: performance.now() });
+  }
+
+  /* ---- token position resolution (degraded path only) ---- */
   function tokenRect(tokenIndex: number): { topDoc: number; height: number } | null {
     if (!planeEl) return null;
     const planeTop = planeEl.getBoundingClientRect().top;
@@ -201,10 +399,10 @@
     const blockEl = planeEl.querySelector<HTMLElement>(`[data-block-id="${entry.blockId}"]`);
     if (blockEl) {
       const r = blockEl.getBoundingClientRect();
-      return { topDoc: r.top - planeTop + r.height / 2, height: settings.fontSizePx * settings.lineHeight };
+      return { topDoc: r.top - planeTop + r.height / 2, height: linePx };
     }
     const top = offsets[idx] ?? 0;
-    const h = heights[idx] ?? settings.fontSizePx * settings.lineHeight;
+    const h = heights[idx] ?? linePx;
     const block = doc.blocks[idx];
     let fraction = 0.5;
     if (
@@ -219,7 +417,7 @@
         1,
       );
     }
-    return { topDoc: top + h * fraction, height: settings.fontSizePx * settings.lineHeight };
+    return { topDoc: top + h * fraction, height: linePx };
   }
 
   function findTokenEntry(tokenIndex: number): { blockId: string; nodeKey: string } | null {
@@ -241,58 +439,88 @@
     return best ?? (arr.length > 0 ? (arr[0] ?? null) : null);
   }
 
-  /* ---- tracking → motion (spec §16.3–16.5, §32.3) ---- */
+  /* ---- the frame loop (companion §26.2, B.5) ---- */
   $effect(() => {
-    const snap = tracking;
-    if (!snap || frozen || vh === 0) return;
-    const raf = requestAnimationFrame(() => applyTracking(snap));
-    return () => cancelAnimationFrame(raf);
+    const active = !frozen && vh > 0;
+    if (active) startLoop();
+    else stopLoop();
+    return () => stopLoop();
   });
 
-  function applyTracking(snap: TrackingSnapshot) {
-    if (performance.now() < manualUntilMs) return;
-    const pos = tokenRect(snap.tokenIndex);
-    if (!pos) return;
-    const band = computeReadingBand(vh, {
-      centerPercent: settings.readingBandCenterPercent,
-      halfHeightPercent: settings.readingBandHalfHeightPercent,
-    });
-    const current = scrollY;
-    let target = bandCorrection(pos.topDoc, pos.height, current, band);
-    updateUnderlay(snap);
-    if (target === null) return;
-    target = clamp(target, 0, maxScroll);
+  $effect(() => {
+    if (typeof document === 'undefined') return;
+    const onVisibility = () => {
+      // §32.4: stop work while hidden; on restore re-anchor to what is on
+      // screen rather than replaying all missed motion.
+      if (document.hidden) {
+        stopLoop();
+      } else {
+        engine.visibilityRestored(scrollY, performance.now());
+        if (!frozen && vh > 0) startLoop();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  });
 
-    if (snap.provisional) {
-      // Provisional matches never trigger large jumps (spec §16.4).
-      target = clampProvisionalTarget(current, target, PROVISIONAL_MAX_CORRECTION_PX);
-      startSpring(target);
-      return;
-    }
-
-    const cls = classifyTransition({
-      movement: snap.movement,
-      distancePx: Math.abs(target - current),
-      viewportHeightPx: vh,
-      reducedMotion,
-    });
-    if (cls === 'spring') startSpring(target);
-    else if (cls === 'smooth_jump') startGlide(target);
-    else if (cls === 'fade_jump') startFadeJump(target);
-    else snapTo(target);
+  function startLoop() {
+    if (loopRunning) return;
+    loopRunning = true;
+    engine.visibilityRestored(scrollY, performance.now());
+    rafId = requestAnimationFrame(frame);
   }
 
-  function updateUnderlay(snap: TrackingSnapshot) {
-    if (!planeEl) return;
+  function stopLoop() {
+    loopRunning = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+
+  function frame(now: number) {
+    if (!loopRunning) return;
+    const result = engine.frame(now);
+    setScroll(result.scrollPx);
+
+    if (result.styleTick) {
+      if (result.activeTokenIndex !== null && result.source === 'semantic') {
+        activeTokenIndex = result.activeTokenIndex;
+      } else if (result.source !== 'semantic') {
+        activeTokenIndex = tracking?.tokenIndex ?? null;
+      }
+      // Layout reads for the underlay happen on the capped styling tick, never
+      // on every frame (§63).
+      updateUnderlay();
+    }
+
+    if (result.ack) onmotionack?.(result.ack);
+    rafId = requestAnimationFrame(frame);
+  }
+
+  function setScroll(y: number) {
+    scrollY = y;
+    const bucket = Math.floor(y / 400);
+    if (bucket !== scrollBucket) scrollBucket = bucket;
+  }
+
+  function updateUnderlay() {
+    if (!planeEl || settings.currentUnderlayOpacity <= 0) {
+      underlay = null;
+      return;
+    }
+    const token = cursorTokenIndex;
+    if (token === null) {
+      underlay = null;
+      return;
+    }
     const planeRect = planeEl.getBoundingClientRect();
-    const sentence = sentencesById.get(snap.sentenceId);
+    const sentence = tracking ? sentencesById.get(tracking.sentenceId) : undefined;
     const startEl = sentence
       ? planeEl.querySelector<HTMLElement>(`[data-t="${sentence.startTokenIndex}"]`)
       : null;
     const endEl = sentence
       ? planeEl.querySelector<HTMLElement>(`[data-t="${sentence.endTokenIndex}"]`)
       : null;
-    const curEl = planeEl.querySelector<HTMLElement>(`[data-t="${snap.tokenIndex}"]`);
+    const curEl = planeEl.querySelector<HTMLElement>(`[data-t="${token}"]`);
     const rects = [startEl, endEl, curEl]
       .filter((el): el is HTMLElement => el !== null)
       .map((el) => el.getBoundingClientRect());
@@ -320,113 +548,42 @@
     };
   }
 
-  /* ---- animation driving ---- */
-  function ensureLoop() {
-    if (rafId) return;
-    lastFrameAt = performance.now();
-    rafId = requestAnimationFrame(frame);
-  }
+  /* ---- public surface ---- */
 
-  function frame(now: number) {
-    rafId = 0;
-    const dt = Math.min(64, now - lastFrameAt);
-    lastFrameAt = now;
-
-    if (animMode === 'spring') {
-      const r = spring.step(dt);
-      setScroll(r.position);
-      if (r.settled) animMode = 'idle';
-    } else if (animMode === 'glide') {
-      const elapsed = now - glide.startedAt;
-      setScroll(glidePosition(glide.from, glide.to, elapsed, glide.durationMs));
-      if (elapsed >= glide.durationMs) {
-        setScroll(glide.to);
-        spring.reset(glide.to);
-        animMode = 'idle';
-      }
-    } else if (animMode === 'fade_out') {
-      const elapsed = now - fadeStartedAt;
-      planeOpacity = Math.max(0, 1 - elapsed / LARGE_JUMP_FADE_OUT_MS);
-      if (elapsed >= LARGE_JUMP_FADE_OUT_MS) {
-        setScroll(fadeTarget);
-        spring.reset(fadeTarget);
-        fadeStartedAt = now;
-        animMode = 'fade_in';
-      }
-    } else if (animMode === 'fade_in') {
-      const elapsed = now - fadeStartedAt;
-      planeOpacity = Math.min(1, elapsed / LARGE_JUMP_FADE_IN_MS);
-      if (elapsed >= LARGE_JUMP_FADE_IN_MS) {
-        planeOpacity = 1;
-        animMode = 'idle';
-      }
-    }
-
-    if (animMode !== 'idle') rafId = requestAnimationFrame(frame);
-  }
-
-  function setScroll(y: number) {
-    scrollY = y;
-    const bucket = Math.floor(y / 400);
-    if (bucket !== scrollBucket) scrollBucket = bucket;
-  }
-
-  function startSpring(target: number) {
-    if (animMode === 'fade_out' || animMode === 'fade_in') return;
-    spring.reset(scrollY);
-    spring.setTarget(target);
-    animMode = 'spring';
-    ensureLoop();
-  }
-
-  function startGlide(target: number) {
-    glide = {
-      from: scrollY,
-      to: target,
-      startedAt: performance.now(),
-      durationMs: SMOOTH_JUMP_DURATION_MS,
-    };
-    animMode = 'glide';
-    ensureLoop();
-  }
-
-  function startFadeJump(target: number) {
-    fadeTarget = target;
-    fadeStartedAt = performance.now();
-    animMode = 'fade_out';
-    ensureLoop();
-  }
-
-  function snapTo(target: number) {
-    animMode = 'idle';
-    spring.reset(target);
-    setScroll(target);
+  /** Feed one accepted-or-rejected semantic frame to the receiver (§26.1). */
+  export function pushSemanticFrame(frame: SemanticMotionFrame): boolean {
+    return engine.receiveFrame(frame, performance.now());
   }
 
   /**
-   * Manual navigation (spec §16.5): applied locally for immediacy; automatic
-   * movement is suspended for the grace period while control re-acquires.
+   * Manual navigation (spec §16.5, companion §30.6): immediate authority,
+   * automatic correction suspended for a short grace interval.
    */
   export function manualScrollBy(deltaPx: number) {
     const y = clamp(scrollY + deltaPx, 0, maxScroll);
-    animMode = 'idle';
-    spring.reset(y);
+    const now = performance.now();
+    engine.manualOverride(y, now);
+    manualUntilMs = now + MANUAL_GRACE_MS;
     setScroll(y);
-    manualUntilMs = performance.now() + MANUAL_GRACE_MS;
   }
 
   /** One text line in logical pixels, for arrow-key steps. */
   export function lineHeightPx(): number {
-    return settings.fontSizePx * settings.lineHeight;
+    return linePx;
   }
 
-  $effect(() => {
-    // Cancel any animation frame on teardown.
-    return () => {
-      if (rafId) cancelAnimationFrame(rafId);
-      rafId = 0;
+  /** Operator diagnostics (§64) — never rendered on the presenter's glass. */
+  export function motionDiagnostics() {
+    return {
+      layoutGeneration,
+      lineCount: lineMap?.lines.length ?? 0,
+      mapValid: lineMap?.valid ?? false,
+      mapIssues: lineMap?.issues.map((i) => i.code) ?? [],
+      frames: engine.diagnostics.metrics,
+      rejections: engine.receiver.stats,
+      degraded: engine.diagnostics.degraded,
     };
-  });
+  }
 
   const visibleBlocks = $derived(
     doc.blocks.slice(renderWindow.startIndex, renderWindow.endIndex),
@@ -441,11 +598,12 @@
   style:--stage-future-opacity={settings.futureOpacity}
   style:--stage-image-max-h="{imageMaxH}vh"
 >
+  <!-- §31.1: one immutable document layer moved by the controller. Nothing
+       else in the stage moves for ordinary scroll. -->
   <div
     class="scroll-plane"
     bind:this={planeEl}
     style:transform="translate3d(0, {-scrollY}px, 0)"
-    style:opacity={planeOpacity}
     style:padding-top="{padTopPx}px"
     style:padding-bottom="{padBottomPx}px"
   >
@@ -503,6 +661,9 @@
     position: relative;
     min-height: 100%;
     will-change: transform;
+    /* §31.2: the controller owns motion — no CSS smooth scrolling, no
+       per-update transitions on the moving layer. */
+    scroll-behavior: auto;
   }
 
   .column {

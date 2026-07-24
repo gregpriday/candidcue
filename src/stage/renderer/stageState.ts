@@ -14,6 +14,7 @@ import type {
   TrackingSnapshot,
   StageDirective,
   StageHeartbeatPayload,
+  StageCoachTip,
 } from '../../shared/contracts';
 
 export type StagePhase = 'handshake' | 'ready' | 'live' | 'frozen' | 'blank';
@@ -46,6 +47,8 @@ export interface StageAppState {
   blanked: boolean;
   keepListenerWhenBlanked: boolean;
   ack: StageAckState | null;
+  /** At most one coach tip is ever held (companion A.5). */
+  coachTip: StageCoachTip | null;
   calibration: StageCalibrationState;
   diagnostics: boolean;
   lastHeartbeat: { revision: number; receivedAtMs: number } | null;
@@ -72,6 +75,7 @@ export function initialStageState(): StageAppState {
     blanked: false,
     keepListenerWhenBlanked: false,
     ack: null,
+    coachTip: null,
     calibration: { active: false, crosshairX: 0.5, crosshairY: 0.38 },
     diagnostics: false,
     lastHeartbeat: null,
@@ -107,6 +111,7 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
         lastTrackingRevision: newGeneration ? null : state.lastTrackingRevision,
         frozen: newGeneration ? false : state.frozen,
         frozenReason: newGeneration ? null : state.frozenReason,
+        coachTip: newGeneration ? null : state.coachTip,
       };
     }
 
@@ -142,6 +147,7 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
             ...state,
             blanked: d.blanked,
             keepListenerWhenBlanked: d.keepListener ?? state.keepListenerWhenBlanked,
+            coachTip: d.blanked ? null : state.coachTip,
           };
         case 'freeze':
           return {
@@ -173,6 +179,10 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
           };
         case 'diagnostics':
           return { ...state, diagnostics: d.visible };
+        case 'coach':
+          // Blanked stage never shows coaching; the strip is a presenter aid,
+          // not a status light (§3.7).
+          return { ...state, coachTip: state.blanked ? null : d.tip };
         default:
           return state;
       }

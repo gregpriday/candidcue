@@ -6,7 +6,7 @@ use std::fs;
 use candidcue_lib::listeners::{self, ListenerLibrary};
 use candidcue_lib::scripts::{
     import_export::{self, ExportOptions, ImportOptions},
-    repo, CreateScriptInput, DataPaths, PageRequest, ScriptFilter, ScriptLocks,
+    repo, CreateScriptInput, DataPaths, PageRequest, ScriptFilter, ScriptId, ScriptLocks,
     ScriptMetadataPatch, ScriptStatus,
 };
 use candidcue_lib::settings;
@@ -32,6 +32,10 @@ async fn harness() -> Harness {
     }
 }
 
+fn sid(raw: &str) -> ScriptId {
+    ScriptId::parse(raw).expect("summary ids are always canonical UUIDs")
+}
+
 fn create_input(title: &str, source: &str) -> CreateScriptInput {
     serde_json::from_value(serde_json::json!({ "title": title, "source": source }))
         .expect("create input")
@@ -55,7 +59,8 @@ async fn create_save_revision_trash_lifecycle() {
     .expect("create");
     assert_eq!(summary.title, "Launch video");
     assert_eq!(summary.spoken_word_count, 5);
-    let canonical = h.paths.canonical_file(&summary.id);
+    let script_id = sid(&summary.id);
+    let canonical = h.paths.canonical_file(&script_id);
     assert!(canonical.exists());
 
     // First save at revision 1 → revision 2, snapshot created (first ever).
@@ -63,7 +68,7 @@ async fn create_save_revision_trash_lifecycle() {
         &h.pool,
         &h.paths,
         &h.locks,
-        &summary.id,
+        &script_id,
         1,
         "Hello world from CandidCue today. Now longer.".into(),
         ScriptMetadataPatch::default(),
@@ -83,7 +88,7 @@ async fn create_save_revision_trash_lifecycle() {
         &h.pool,
         &h.paths,
         &h.locks,
-        &summary.id,
+        &script_id,
         1,
         "conflicting".into(),
         ScriptMetadataPatch::default(),
@@ -97,7 +102,7 @@ async fn create_save_revision_trash_lifecycle() {
         &h.pool,
         &h.paths,
         &h.locks,
-        &summary.id,
+        &script_id,
         2,
         "Hello world, third body.".into(),
         ScriptMetadataPatch::default(),
@@ -112,7 +117,7 @@ async fn create_save_revision_trash_lifecycle() {
         &h.pool,
         &h.paths,
         &h.locks,
-        &summary.id,
+        &script_id,
         3,
         "Hello world, fourth body.".into(),
         serde_json::from_value::<ScriptMetadataPatch>(
@@ -124,21 +129,23 @@ async fn create_save_revision_trash_lifecycle() {
     .expect("save 3");
     assert!(save3.revision_created);
 
-    let revisions = repo::list_revisions(&h.pool, &summary.id).await.expect("list revisions");
+    let revisions = repo::list_revisions(&h.pool, &script_id).await.expect("list revisions");
     assert_eq!(revisions.len(), 2);
 
-    // Revision content roundtrip + restore-as-current.
+    // Revision content roundtrip + restore-as-current. A revision holds the
+    // text the save DESTROYED (its preimage), never the replacement (H2), so
+    // the first revision is the body the script was created with.
     let first_revision = revisions.last().unwrap();
-    let doc = repo::get_revision(&h.pool, &h.paths, &summary.id, &first_revision.id)
+    let doc = repo::get_revision(&h.pool, &h.paths, &script_id, &first_revision.id)
         .await
         .expect("get revision");
-    assert_eq!(doc.source, "Hello world from CandidCue today. Now longer.");
+    assert_eq!(doc.source, "Hello world from CandidCue today.");
 
     let restored = repo::restore_revision(
         &h.pool,
         &h.paths,
         &h.locks,
-        &summary.id,
+        &script_id,
         &first_revision.id,
         save3.script_revision,
     )
@@ -146,12 +153,23 @@ async fn create_save_revision_trash_lifecycle() {
     .expect("restore revision");
     assert_eq!(
         fs::read_to_string(&canonical).unwrap(),
-        "Hello world from CandidCue today. Now longer."
+        "Hello world from CandidCue today."
     );
     assert!(restored.script_revision > save3.script_revision);
+    // The restore itself is a destructive edit, so the body it replaced is
+    // now recoverable too.
+    let after_restore = repo::list_revisions(&h.pool, &script_id).await.unwrap();
+    let newest = after_restore.first().unwrap();
+    assert_eq!(newest.reason, "before_restore");
+    let preserved = repo::get_revision(&h.pool, &h.paths, &script_id, &newest.id)
+        .await
+        .unwrap();
+    assert_eq!(preserved.source, "Hello world, fourth body.");
 
     // Trash → hidden from default listing; restore → back.
-    repo::trash_script(&h.pool, &summary.id).await.expect("trash");
+    let trashed_state = repo::trash_script(&h.pool, &h.locks, &script_id, restored.script_revision)
+        .await
+        .expect("trash");
     let listed = repo::list_scripts(&h.pool, ScriptFilter::default(), None, PageRequest::default())
         .await
         .expect("list");
@@ -168,22 +186,38 @@ async fn create_save_revision_trash_lifecycle() {
     .await
     .expect("list trash");
     assert_eq!(trashed.total, 1);
-    repo::restore_script(&h.pool, &summary.id).await.expect("restore");
+    let restored_state = repo::restore_script(
+        &h.pool,
+        &h.locks,
+        &script_id,
+        trashed_state.script_revision,
+    )
+    .await
+    .expect("restore");
 
     // Duplicate copies source under a new id.
-    let copy = repo::duplicate_script(&h.pool, &h.paths, &h.locks, &summary.id)
+    let copy = repo::duplicate_script(&h.pool, &h.paths, &h.locks, &script_id)
         .await
         .expect("duplicate");
     assert_ne!(copy.id, summary.id);
     assert!(copy.title.ends_with("copy"));
-    assert!(h.paths.canonical_file(&copy.id).exists());
+    assert!(h.paths.canonical_file(&sid(&copy.id)).exists());
 
-    // Permanent deletion removes rows and the directory.
-    repo::permanently_delete_script(&h.pool, &h.paths, &h.locks, &summary.id)
+    // Permanent deletion is only reachable from the trash (spec §21.5).
+    let live = repo::permanently_delete_script(&h.pool, &h.paths, &h.locks, &script_id).await;
+    assert!(live.is_err(), "a live script must never be deleted permanently");
+    assert!(h.paths.script_dir(&script_id).exists());
+
+    let trashed_again =
+        repo::trash_script(&h.pool, &h.locks, &script_id, restored_state.script_revision)
+            .await
+            .expect("trash again");
+    assert_eq!(trashed_again.status, ScriptStatus::Trash);
+    repo::permanently_delete_script(&h.pool, &h.paths, &h.locks, &script_id)
         .await
         .expect("purge");
-    assert!(!h.paths.script_dir(&summary.id).exists());
-    assert!(repo::get_summary(&h.pool, &summary.id).await.is_err());
+    assert!(!h.paths.script_dir(&script_id).exists());
+    assert!(repo::get_summary(&h.pool, &script_id).await.is_err());
 }
 
 #[tokio::test]
@@ -192,7 +226,8 @@ async fn external_change_is_adopted_on_read_and_blocks_blind_save() {
     let summary = repo::create_script(&h.pool, &h.paths, create_input("Ext", "Original body text."))
         .await
         .expect("create");
-    let canonical = h.paths.canonical_file(&summary.id);
+    let script_id = sid(&summary.id);
+    let canonical = h.paths.canonical_file(&script_id);
 
     // Simulate an external editor.
     fs::write(&canonical, "Edited outside CandidCue.").unwrap();
@@ -202,7 +237,7 @@ async fn external_change_is_adopted_on_read_and_blocks_blind_save() {
         &h.pool,
         &h.paths,
         &h.locks,
-        &summary.id,
+        &script_id,
         1,
         "In-app buffer".into(),
         ScriptMetadataPatch::default(),
@@ -212,26 +247,26 @@ async fn external_change_is_adopted_on_read_and_blocks_blind_save() {
     assert_eq!(err.code(), "SCRIPT_CONFLICT");
 
     // Reading adopts the file (authority) and flags the change.
-    let doc = repo::get_script(&h.pool, &h.paths, &h.locks, &summary.id)
+    let doc = repo::get_script(&h.pool, &h.paths, &h.locks, &script_id)
         .await
         .expect("get");
     assert!(doc.externally_changed);
     assert_eq!(doc.source, "Edited outside CandidCue.");
-    assert!(doc.script_revision > 1);
+    assert!(doc.summary.script_revision > 1);
 
     // After adoption, saving with the new revision works again.
     let save = repo::save_script(
         &h.pool,
         &h.paths,
         &h.locks,
-        &summary.id,
-        doc.script_revision,
+        &script_id,
+        doc.summary.script_revision,
         "Post-adoption save.".into(),
         ScriptMetadataPatch::default(),
     )
     .await
     .expect("save after adoption");
-    assert_eq!(save.script_revision, doc.script_revision + 1);
+    assert_eq!(save.script_revision, doc.summary.script_revision + 1);
 }
 
 #[tokio::test]
@@ -515,7 +550,7 @@ async fn import_markdown_and_bundle_roundtrip() {
     .await
     .expect("md import");
     assert_eq!(imported.script.title, "My Talk");
-    let revisions = repo::list_revisions(&h.pool, &imported.script.id).await.unwrap();
+    let revisions = repo::list_revisions(&h.pool, &sid(&imported.script.id)).await.unwrap();
     assert_eq!(revisions.len(), 1);
     assert_eq!(revisions[0].reason, "import");
 
@@ -525,7 +560,7 @@ async fn import_markdown_and_bundle_roundtrip() {
         &h.pool,
         &h.paths,
         &h.locks,
-        &imported.script.id,
+        &sid(&imported.script.id),
         ExportOptions {
             destination: bundle_path.to_string_lossy().to_string(),
             format: "bundle".into(),
@@ -548,7 +583,7 @@ async fn import_markdown_and_bundle_roundtrip() {
     .await
     .expect("bundle import");
     assert_eq!(reimported.script.title, "My Talk");
-    let source = fs::read_to_string(h.paths.canonical_file(&reimported.script.id)).unwrap();
+    let source = fs::read_to_string(h.paths.canonical_file(&sid(&reimported.script.id))).unwrap();
     assert_eq!(source, "# Talk\n\nSpoken body here.\n");
 
     // Unknown extension refused.
@@ -573,7 +608,7 @@ async fn import_markdown_and_bundle_roundtrip() {
         &h.pool,
         &h.paths,
         &h.locks,
-        &imported.script.id,
+        &sid(&imported.script.id),
         ExportOptions {
             destination: md_out.to_string_lossy().to_string(),
             format: "markdown".into(),
@@ -657,8 +692,9 @@ async fn reconciliation_recovers_orphans_and_missing_files() {
 
     // Orphan: canonical file on disk with no DB row.
     let orphan_id = "0a651b8e-3a54-4a7e-bb6d-000000000001";
-    fs::create_dir_all(h.paths.script_dir(orphan_id)).unwrap();
-    fs::write(h.paths.canonical_file(orphan_id), "Orphan body.").unwrap();
+    let orphan = sid(orphan_id);
+    fs::create_dir_all(h.paths.script_dir(&orphan)).unwrap();
+    fs::write(h.paths.canonical_file(&orphan), "Orphan body.").unwrap();
 
     // Missing file: DB row whose canonical file vanished, with a revision.
     let victim = repo::create_script(&h.pool, &h.paths, create_input("Victim", "Original."))
@@ -668,14 +704,14 @@ async fn reconciliation_recovers_orphans_and_missing_files() {
         &h.pool,
         &h.paths,
         &h.locks,
-        &victim.id,
+        &sid(&victim.id),
         1,
         "Recoverable content.".into(),
         ScriptMetadataPatch::default(),
     )
     .await
     .unwrap();
-    fs::remove_file(h.paths.canonical_file(&victim.id)).unwrap();
+    fs::remove_file(h.paths.canonical_file(&sid(&victim.id))).unwrap();
 
     let report = reconcile::run_startup_reconciliation(&h.pool, &h.paths, &h.locks)
         .await
@@ -683,8 +719,10 @@ async fn reconciliation_recovers_orphans_and_missing_files() {
     assert!(report.integrity_ok);
     assert!(report.orphan_files_recovered.contains(&orphan_id.to_string()));
     assert!(report.missing_files_restored.contains(&victim.id));
+    // Revisions hold preimages (H2), so the newest recoverable text after the
+    // canonical file is destroyed is the body the last save replaced.
     assert_eq!(
-        fs::read_to_string(h.paths.canonical_file(&victim.id)).unwrap(),
-        "Recoverable content."
+        fs::read_to_string(h.paths.canonical_file(&sid(&victim.id))).unwrap(),
+        "Original."
     );
 }

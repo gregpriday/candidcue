@@ -43,12 +43,17 @@ pub fn close_stage(app: AppHandle, session_id: String) -> Result<(), AppError> {
 }
 
 #[tauri::command]
+/// `native` opts into OS fullscreen. It defaults to false: the stage presents
+/// borderless at the monitor's exact bounds and always-on-top, which avoids
+/// macOS allocating a new Space, animating into it, and pulling focus off the
+/// control window mid-take (spec §52.7).
 pub fn set_stage_fullscreen(
     app: AppHandle,
     session_id: String,
     enabled: bool,
+    native: Option<bool>,
 ) -> Result<StageWindowState, AppError> {
-    windows::set_stage_fullscreen(&app, &session_id, enabled)
+    windows::set_stage_fullscreen(&app, &session_id, enabled, native.unwrap_or(false))
 }
 
 #[tauri::command]

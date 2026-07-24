@@ -1,7 +1,15 @@
 /**
  * Fast deterministic non-cryptographic hashing for stable IDs and cache keys.
- * FNV-1a in two 32-bit lanes (different offset bases) -> 16 hex chars.
  * Pure TS, no dependencies, identical output in workers and windows.
+ *
+ * `hashString` runs textbook FNV-1a **32-bit** twice over the same input with
+ * two different offset bases and concatenates the lanes into 16 hex chars.
+ * That is NOT the same thing as FNV-1a-64: the lanes share the 32-bit prime
+ * and differ only in initial state, so the effective collision resistance is
+ * meaningfully better than a single 32-bit lane but well short of a true
+ * 64-bit hash. It is used for IDs and cache keys only — never for integrity,
+ * deduplication of user data, or anything security-bearing (asset dedup uses
+ * SHA-256 in the Rust core).
  */
 
 function fnv1a32(input: string, seed: number): number {
@@ -14,7 +22,7 @@ function fnv1a32(input: string, seed: number): number {
   return hash >>> 0;
 }
 
-/** 64 bits of FNV-1a as a fixed-width 16-char lowercase hex string. */
+/** Two 32-bit FNV-1a lanes as a fixed-width 16-char lowercase hex string. */
 export function hashString(input: string): string {
   const a = fnv1a32(input, 0x811c9dc5);
   const b = fnv1a32(input, 0xcbf29ce4);

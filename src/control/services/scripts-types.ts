@@ -25,12 +25,33 @@ export interface SaveResult {
   savedAt: string;
 }
 
+/** Twin of Rust `ImportOptions` (scripts/import_export.rs). */
+export interface ImportOptions {
+  /** Absolute path from the native open dialog. Required by Rust. */
+  path: string;
+  title?: string;
+}
+
 export interface ImportResult {
   script: ScriptSummary;
   warnings: string[];
 }
 
+/**
+ * Twin of Rust `ExportOptions`. `format` must be one of the three strings the
+ * Rust matcher accepts — `candidcue` is the file EXTENSION, not a format name.
+ */
+export type ExportFormat = 'markdown' | 'text' | 'bundle';
+
+export interface ExportOptions {
+  /** Absolute path from the native save dialog. Required by Rust. */
+  destination: string;
+  format: ExportFormat;
+  includeAssets?: boolean;
+}
+
 export interface ExportResult {
-  path?: string;
-  cancelled: boolean;
+  path: string;
+  format: string;
+  warnings: string[];
 }

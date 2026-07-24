@@ -6,8 +6,10 @@
   audio integrations land).
 -->
 <script lang="ts">
+  import { untrack } from 'svelte';
   import Button from '../components/Button.svelte';
   import Disclosure from '../components/Disclosure.svelte';
+  import FollowSettingsFields from '../components/FollowSettingsFields.svelte';
   import Icon from '../components/Icon.svelte';
   import MicMeter from '../components/MicMeter.svelte';
   import PageHeader from '../components/PageHeader.svelte';
@@ -25,7 +27,13 @@
   import * as secretsService from '../services/secrets';
   import * as stageService from '../services/stage';
   import { buildStageEnvelope, buildStageSettings, resolveDocumentAssets } from '../services/stage-envelope';
-  import { buildListenerSelection, listInstalledListeners, type InstalledListener } from '../services/listeners';
+  import {
+    buildListenerSelection,
+    listInstalledListeners,
+    resolveListenerMedia,
+    type InstalledListener,
+  } from '../services/listeners';
+  import { offsetSliderBound } from '../../shared/listener/geometry';
   import { newSessionId } from '../services/session';
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
@@ -44,7 +52,7 @@
   } from '../stores/preflight';
   import { saveNow } from '../stores/editor';
   import { navigate } from '../stores/router';
-  import { settings, loadSettings } from '../stores/settings';
+  import { settings, loadSettings, patchSettings } from '../stores/settings';
   import { startLiveSession } from '../stores/session';
   import { showToast } from '../stores/toasts';
   import type { AudioDeviceInfo, AudioLevelSnapshot } from '../../shared/contracts';
@@ -189,6 +197,40 @@
     installedListeners.find((l) => l.packId === 'mira' && l.state === 'installed') ?? null,
   );
 
+  /*
+   * Listener framing range (see src/shared/listener/geometry.ts). The position
+   * sliders are percent of the visible frame, and the amount of travel that
+   * exists at all is bought by the zoom: clips are object-fit: cover, so at
+   * zoom z there is only (z-1)/2 of the frame to spend on each side before the
+   * media edge shows as a black bar. The range therefore GROWS WITH ZOOM and is
+   * recomputed whenever the zoom slider moves, clamping the current position.
+   */
+  let listenerDefaultZoom = $state(1.15);
+  $effect(() => {
+    if (listenerPack !== 'mira') return;
+    const version = installedMira?.version ?? '1.0.0';
+    let cancelled = false;
+    void resolveListenerMedia('mira', version)
+      .then((media) => {
+        if (!cancelled && media.defaultZoom > 0) listenerDefaultZoom = media.defaultZoom;
+      })
+      .catch(() => {
+        /* keep the fallback zoom; Start resolves the real media anyway */
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+  const listenerCropZoom = $derived(listenerDefaultZoom * (listenerScale / 100));
+  const listenerOffsetBound = $derived(offsetSliderBound(listenerCropZoom));
+  $effect(() => {
+    const bound = listenerOffsetBound;
+    untrack(() => {
+      if (Math.abs(listenerX) > bound) listenerX = Math.sign(listenerX) * bound;
+      if (Math.abs(listenerY) > bound) listenerY = Math.sign(listenerY) * bound;
+    });
+  });
+
   /* Keep the derived mode/listener requirement in the store. */
   $effect(() => {
     const listenerStatus = !listenerEnabled
@@ -249,15 +291,18 @@
 
   async function identifyDisplays(): Promise<void> {
     try {
+      // Rust puts the actual numbered card on each physical panel; the toast
+      // only tells the operator where to look. Listing display NAMES here
+      // cannot answer "which panel is number 2?" — that is the whole question.
       const identification = await stageService.identifyDisplays();
-      if (identification && identification.displays.length > 0) {
-        const lines = identification.displays
-          .map((d) => `${d.number} — ${d.name ?? 'Display'}${d.primary ? ' (primary)' : ''}`)
-          .join(' · ');
-        showToast(lines, 'info', { durationMs: 6000 });
-      } else {
-        showToast('Look for the number shown on each display', 'info');
-      }
+      const count = identification?.displays.length ?? 0;
+      showToast(
+        count > 0
+          ? `Look for the number shown on each display (${count} connected)`
+          : 'No displays were detected',
+        count > 0 ? 'info' : 'danger',
+        { durationMs: 3000 },
+      );
     } catch (err) {
       showToast(describeError(err), 'danger');
     }
@@ -495,6 +540,7 @@
           commandModel: $settings.openai.commandModel,
         },
         commandsEnabled: commandListening && $settings.commands.enabled,
+        following: $settings.following,
         micDeviceId: micDeviceId,
       });
       await navigate({ name: 'live', sessionId, scriptId });
@@ -765,6 +811,18 @@
           description={`Wake phrase: “${$settings.commands.wakePhrase}”`}
         />
       </div>
+      {#if mode === 'voice'}
+        <!-- Companion §47 subset that matters before a session; the rest lives
+             in Settings → Following. Changes save immediately and apply to
+             this session. -->
+        <Disclosure label="Following feel and intelligent assist">
+          <FollowSettingsFields
+            compact
+            following={$settings.following}
+            onchange={(patch) => void patchSettings('following', patch)}
+          />
+        </Disclosure>
+      {/if}
     </Section>
 
     <!-- E. Appearance -->
@@ -822,10 +880,31 @@
       {#if listenerEnabled}
         <div class="appearance-grid">
           <!-- Bound to ListenerGeometry: cropZoom = defaultZoom × zoom%, and
-               cropX/cropY offsets, flowing into the session envelope. -->
+               cropX/cropY offsets (percent of the frame), flowing into the
+               session envelope. The position range is the zoom-derived safe
+               window — zoom in to gain more room to move her. -->
           <Slider label="Mira zoom" bind:value={listenerScale} min={60} max={160} format={(v) => `${v}%`} />
-          <Slider label="Mira horizontal position" bind:value={listenerX} min={-50} max={50} format={(v) => `${v}%`} />
-          <Slider label="Mira vertical position" bind:value={listenerY} min={-50} max={50} format={(v) => `${v}%`} />
+          <Slider
+            label="Mira horizontal position"
+            bind:value={listenerX}
+            min={-listenerOffsetBound}
+            max={listenerOffsetBound}
+            step={0.1}
+            disabled={listenerOffsetBound === 0}
+            format={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`}
+          />
+          <Slider
+            label="Mira vertical position"
+            bind:value={listenerY}
+            min={-listenerOffsetBound}
+            max={listenerOffsetBound}
+            step={0.1}
+            disabled={listenerOffsetBound === 0}
+            format={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`}
+          />
+          {#if listenerOffsetBound === 0}
+            <p class="field-note">Zoom past 100% to gain room to move Mira around the frame.</p>
+          {/if}
         </div>
       {/if}
     </Section>
@@ -1110,6 +1189,13 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-4) var(--space-6);
+  }
+  .field-note {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: var(--text-label);
+    line-height: var(--lh-label);
+    color: var(--text-secondary);
   }
 
   /* --- listener --- */

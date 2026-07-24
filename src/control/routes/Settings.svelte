@@ -5,6 +5,7 @@
 -->
 <script lang="ts">
   import Button from '../components/Button.svelte';
+  import FollowSettingsFields from '../components/FollowSettingsFields.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import Section from '../components/Section.svelte';
   import Select from '../components/Select.svelte';
@@ -32,6 +33,7 @@
     { id: 'openai', label: 'OpenAI' },
     { id: 'audio', label: 'Audio' },
     { id: 'teleprompter', label: 'Teleprompter' },
+    { id: 'following', label: 'Following' },
     { id: 'commands', label: 'Commands' },
     { id: 'listeners', label: 'Listeners' },
     { id: 'privacy', label: 'Data, privacy & updates' },
@@ -354,6 +356,16 @@
             checked={$settings.teleprompter.hidePointer}
             label="Hide the pointer on the stage"
             onchange={(value) => void patchSettings('teleprompter', { hidePointer: value })}
+          />
+        </Section>
+      {:else if section === 'following'}
+        <Section
+          title="Following"
+          description="How the stage follows your voice. These are feel choices — CandidCue keeps its own safety rules for section jumps and retakes whatever you pick."
+        >
+          <FollowSettingsFields
+            following={$settings.following}
+            onchange={(patch) => void patchSettings('following', patch)}
           />
         </Section>
       {:else if section === 'commands'}

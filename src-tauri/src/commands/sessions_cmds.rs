@@ -6,6 +6,7 @@ use tauri::State;
 use crate::coordinator::AppCoordinator;
 use crate::database::Database;
 use crate::errors::AppError;
+use crate::scripts::{repo, DataPaths, ScriptId, ScriptLocks};
 use crate::sessions::{
     self, EndSessionSummary, SessionRecord, StartSessionInput, TranscriptItemInput,
 };
@@ -13,13 +14,22 @@ use crate::sessions::{
 #[tauri::command]
 pub async fn start_session(
     db: State<'_, Database>,
+    paths: State<'_, DataPaths>,
+    locks: State<'_, ScriptLocks>,
     coordinator: State<'_, AppCoordinator>,
     input: StartSessionInput,
 ) -> Result<SessionRecord, AppError> {
+    let script_id = ScriptId::parse(&input.script_id)?;
+
     // Transcript retention is gated by settings (spec §36.2) and fixed at
     // session start — never silently enabled mid-session.
     let settings = crate::settings::get_settings(db.pool()).await?;
     let retention_enabled = settings.value.general.save_transcript != "off";
+
+    // Spec §21.4: capture the script as it is about to be performed BEFORE
+    // the session exists, so the performed text stays recoverable. Owned by
+    // Rust so it cannot be skipped by a frontend that forgets to ask.
+    repo::snapshot_pre_session(db.pool(), &paths, &locks, &script_id).await?;
 
     let mut record = sessions::start_session(db.pool(), &input, retention_enabled).await?;
     let generation = coordinator.begin_session(

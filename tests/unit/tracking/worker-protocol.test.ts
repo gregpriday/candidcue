@@ -80,6 +80,75 @@ describe('tracking worker protocol (§45.4)', () => {
     }
   });
 
+  it('emits semantic frames and movement decisions (companion §26.1, §65)', () => {
+    outbox.length = 0;
+    dispatch({
+      type: 'initialize',
+      document: demoDocument(),
+      session: { sessionId: 's2', sessionGeneration: 2, stageGeneration: 1, layoutGeneration: 3 },
+      smoothProfile: { alignment: { beamWidth: 6 } },
+      nowMs: 0,
+    });
+    const scripter = new TranscriptScripter(10_000, 2);
+    for (const event of scripter.speak({ text: 'Hello everyone and welcome to the channel.' })) {
+      dispatch({ type: 'transcript_event', event });
+    }
+    const frames = outbox.filter((m) => m.type === 'semantic_frame');
+    expect(frames.length).toBeGreaterThan(0);
+    expect(outbox.some((m) => m.type === 'movement_decision')).toBe(true);
+
+    let previous = 0;
+    for (const message of frames) {
+      if (message.type !== 'semantic_frame') continue;
+      expect(message.frame.revision).toBeGreaterThan(previous);
+      previous = message.frame.revision;
+      expect(message.frame.layoutGeneration).toBe(3);
+      expect(message.frame.sessionGeneration).toBe(2);
+      expect(Number.isFinite(message.frame.estimatedUnit)).toBe(true);
+    }
+  });
+
+  it('ticks advance the continuous estimate between transcript events (§3.1)', () => {
+    outbox.length = 0;
+    for (let t = 1; t <= 40; t++) dispatch({ type: 'tick', nowMs: 20_000 + t * 33 });
+    expect(outbox.filter((m) => m.type === 'semantic_frame').length).toBeGreaterThan(0);
+  });
+
+  it('accepts bounded semantic assist without moving the cursor (§40)', () => {
+    outbox.length = 0;
+    dispatch({ type: 'move_to_token', tokenIndex: 30, movement: 'manual', nowMs: 30_000 });
+    outbox.length = 0;
+    dispatch({
+      type: 'semantic_assist',
+      evidence: {
+        assistId: 'a1',
+        // The engine's epoch advanced with the manual move, so this stale
+        // payload must be discarded rather than scored.
+        epoch: 0,
+        requestRevision: 1,
+        sourceItemIds: [],
+        receivedAtMs: 30_100,
+        opinions: [{ candidateId: 'continuity:120', relation: 'near_exact', confidence: 1 }],
+      },
+    });
+    expect(outbox.filter((m) => m.type === 'error')).toEqual([]);
+    dispatch({ type: 'tick', nowMs: 30_200 });
+    const message = outbox.filter((m) => m.type === 'semantic_frame').at(-1);
+    if (message?.type === 'semantic_frame') expect(message.frame.tokenIndex).toBeLessThan(120);
+  });
+
+  it('acknowledges a rebuilt line map (§7.2)', () => {
+    outbox.length = 0;
+    dispatch({ type: 'set_layout_generation', generation: 9, nowMs: 31_000 });
+    const message = outbox.find((m) => m.type === 'semantic_frame');
+    if (message?.type === 'semantic_frame') {
+      expect(message.frame.layoutGeneration).toBe(9);
+      expect(message.frame.transition?.reason).toBe('layout_recovery');
+    } else {
+      throw new Error('expected a frame after a layout generation change');
+    }
+  });
+
   it('reports malformed messages instead of crashing', () => {
     outbox.length = 0;
     dispatch(null as unknown as TrackingWorkerInbound);

@@ -21,7 +21,10 @@
     type StageIntent,
     type StageIntentPayload,
     type StageListenerHealthPayload,
+    type StageMotionAck,
+    type StageMotionAckPayload,
     type StageReadyPayload,
+    type StageSemanticFramePayload,
     type StageSnapshotPayload,
     type StageStatePayload,
     type StageTrackingPayload,
@@ -36,6 +39,7 @@
   import { isCompactViewport } from './renderer/geometry';
   import ScriptLayer from './renderer/ScriptLayer.svelte';
   import AckChip from './renderer/AckChip.svelte';
+  import CoachStrip from './renderer/CoachStrip.svelte';
   import ListenerLayer from './listener/ListenerLayer.svelte';
   import { startPreviewDriver, type PreviewDriver } from './preview';
 
@@ -66,6 +70,8 @@
   let mediaHealthy = $state(true);
   let lastInboundAt = 0;
   let heartbeatSeen = false;
+  /** Layout generation the stage is currently measured at (companion §7.2). */
+  let layoutGeneration = $state(0);
 
   function dispatch(action: StageAction) {
     app = stageReducer(app, action);
@@ -99,6 +105,13 @@
         subscribeStageEvent<StageTrackingPayload>(STAGE_EVENT.trackingSnapshot, (snapshot) => {
           lastInboundAt = performance.now();
           dispatch({ type: 'tracking', snapshot });
+        }),
+        // Companion §26.1: high-rate motion frames. They never touch the stage
+        // reducer — the frame receiver inside the motion engine is the gate,
+        // and an unaccepted frame is silently discarded.
+        subscribeStageEvent<StageSemanticFramePayload>(STAGE_EVENT.semanticFrame, (frame) => {
+          lastInboundAt = performance.now();
+          scriptLayer?.pushSemanticFrame(frame);
         }),
         subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
         subscribeStageEvent<StageStatePayload>(STAGE_EVENT.listenerState, onDirective),
@@ -156,6 +169,16 @@
       viewportWidth: vw,
       viewportHeight: vh,
       devicePixelRatio: window.devicePixelRatio,
+    });
+  }
+
+  /* ---- motion diagnostics (companion §54) ---- */
+  function handleMotionAck(ack: StageMotionAck) {
+    // A periodic report for diagnostics and recovery — explicitly not a
+    // high-frequency feedback loop into the aligner.
+    emitStageEvent<StageMotionAckPayload>(STAGE_EVENT.motionAck, {
+      ...ack,
+      stageGeneration: app.envelope?.stageGeneration ?? 0,
     });
   }
 
@@ -346,9 +369,21 @@
             frozen={motionFrozen}
             {reducedMotion}
             {compact}
+            sessionId={app.envelope?.sessionId ?? ''}
+            sessionGeneration={app.envelope?.sessionGeneration ?? 0}
+            stageGeneration={app.envelope?.stageGeneration ?? 0}
+            scriptCompileHash={app.envelope?.sourceHash ?? ''}
             onlayoutready={handleLayoutReady}
+            onmotionack={handleMotionAck}
+            onlayoutgeneration={(generation) => (layoutGeneration = generation)}
           />
         </div>
+      {/if}
+
+      <!-- Optional coach strip (companion Part VIII): one concise tip in a
+           reserved safe area, never during a blank. -->
+      {#if !app.blanked}
+        <CoachStrip tip={app.coachTip} {reducedMotion} />
       {/if}
 
       <!-- Layer 7: transient command acknowledgement (§33.10). -->
@@ -385,6 +420,7 @@
       <div>tracking rev: {app.lastTrackingRevision ?? '—'}</div>
       <div>token: {app.tracking?.tokenIndex ?? '—'} ({app.tracking?.state ?? 'n/a'})</div>
       <div>viewport: {vw}×{vh}{compact ? ' compact' : ''}</div>
+      <div>layout gen: {layoutGeneration}</div>
       <div>media: {mediaHealthy ? 'healthy' : 'degraded'}</div>
     </div>
   {/if}

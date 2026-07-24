@@ -67,6 +67,11 @@ export interface LunaCommandRequest {
   schema: typeof CONTROL_CANDIDCUE_FUNCTION;
   /** Explicit instruction: return `unknown` rather than inventing (§33.7). */
   instruction: string;
+  /**
+   * Hard timeout handed to the Rust transport (§33.11). The router still
+   * expires the candidate locally, so this only stops the request earlier.
+   */
+  timeoutMs?: number;
 }
 
 /** Raw structured output returned by Luna against the strict schema. */
@@ -99,6 +104,8 @@ export interface LunaRequestInput {
   bounds: CommandBounds;
   /** Max nearby targets to include (keeps context bounded, §33.7). */
   maxNearbyTargets?: number;
+  /** Hard timeout for the network call (§33.11). */
+  timeoutMs?: number;
 }
 
 /** Build a bounded Luna request (spec §33.7) — pure, no I/O. */
@@ -125,6 +132,7 @@ export function buildLunaRequest(input: LunaRequestInput): LunaCommandRequest {
     schema: CONTROL_CANDIDCUE_FUNCTION,
     instruction:
       'Interpret the command against the provided context only. If the request is not one of the allowed actions or references content that does not exist, return action "unknown" rather than inventing a result.',
+    ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
   };
 }
 

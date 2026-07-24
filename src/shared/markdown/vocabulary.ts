@@ -113,7 +113,11 @@ export function extractVocabularyCandidates(compiled: CompiledScript): Vocabular
     const surface = token.surface;
     const bare = surface.replace(/\./g, '');
 
-    if ((token.flags & TOKEN_FLAGS.DIRECTIVE_ALIAS) !== 0) record(token, 'spoken_override');
+    if ((token.flags & TOKEN_FLAGS.DIRECTIVE_ALIAS) !== 0) {
+      // A multi-word `say` value expands into several tokens; the candidate
+      // is the authored visual term, not each spoken word of the override.
+      record(token, 'spoken_override', token.overrideVisual);
+    }
     if (ACRONYM.test(bare)) record(token, 'acronym');
     else if (MIXED_CASE.test(bare) && HAS_LOWER.test(bare)) record(token, 'camel_case');
     if (/\d/.test(token.normalized) && !/^[\d.,%$]+$/.test(token.normalized)) {

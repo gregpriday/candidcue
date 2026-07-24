@@ -14,6 +14,83 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as AsyncMutex;
 
+use crate::errors::AppError;
+
+/// A script identifier that has been proven to be a canonical lowercase
+/// hyphenated UUID (spec §47.1: script directories are named by UUID).
+///
+/// This type is the ONLY way to build a managed script path, so an
+/// attacker-supplied string can never reach the filesystem or the SQL layer:
+/// `PathBuf::join` replaces the base when its argument is absolute, and
+/// `%`/`_` are LIKE wildcards. Both classes of abuse are impossible for a
+/// value of this type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct ScriptId(String);
+
+impl ScriptId {
+    /// Parse and validate. Only the canonical lowercase hyphenated UUID form
+    /// is accepted — braced, URN, uppercase, and simple (unhyphenated) forms
+    /// are rejected so the validated string is byte-for-byte the string used
+    /// downstream.
+    pub fn parse(raw: &str) -> Result<Self, AppError> {
+        if raw.len() != 36 {
+            return Err(invalid_script_id());
+        }
+        if !raw
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b'-')
+        {
+            return Err(invalid_script_id());
+        }
+        let parsed = uuid::Uuid::parse_str(raw).map_err(|_| invalid_script_id())?;
+        if parsed.as_hyphenated().to_string() != raw {
+            return Err(invalid_script_id());
+        }
+        Ok(Self(raw.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ScriptId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for ScriptId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ScriptId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        ScriptId::parse(&raw).map_err(|_| {
+            serde::de::Error::invalid_value(
+                serde::de::Unexpected::Str(&raw),
+                &"a canonical lowercase hyphenated UUID",
+            )
+        })
+    }
+}
+
+fn invalid_script_id() -> AppError {
+    AppError::structured(
+        "INVALID_SCRIPT_ID",
+        crate::errors::ErrorCategory::Validation,
+        "That script identifier is not valid.",
+        false,
+    )
+}
+
 /// Managed-state map of data directory locations (spec §47.1).
 #[derive(Debug, Clone)]
 pub struct DataPaths {
@@ -33,20 +110,37 @@ impl DataPaths {
         self.root.join("scripts")
     }
 
-    pub fn script_dir(&self, script_id: &str) -> PathBuf {
-        self.scripts_dir().join(script_id)
+    /// `<root>/scripts/<uuid>`. Only reachable with a validated [`ScriptId`],
+    /// and additionally asserted to be a direct child of the scripts root
+    /// (defence in depth against a future change to [`ScriptId`]).
+    pub fn script_dir(&self, script_id: &ScriptId) -> PathBuf {
+        let scripts_root = self.scripts_dir();
+        let dir = scripts_root.join(script_id.as_str());
+        debug_assert_eq!(dir.parent(), Some(scripts_root.as_path()));
+        debug_assert_eq!(
+            dir.file_name().map(|n| n.to_string_lossy().to_string()),
+            Some(script_id.as_str().to_string())
+        );
+        dir
     }
 
-    pub fn canonical_file(&self, script_id: &str) -> PathBuf {
+    pub fn canonical_file(&self, script_id: &ScriptId) -> PathBuf {
         self.script_dir(script_id).join("script.md")
     }
 
-    pub fn assets_dir(&self, script_id: &str) -> PathBuf {
+    pub fn assets_dir(&self, script_id: &ScriptId) -> PathBuf {
         self.script_dir(script_id).join("assets")
     }
 
-    pub fn revisions_dir(&self, script_id: &str) -> PathBuf {
+    pub fn revisions_dir(&self, script_id: &ScriptId) -> PathBuf {
         self.script_dir(script_id).join("revisions")
+    }
+
+    /// Quarantine root for content that is about to be destroyed but must
+    /// stay recoverable if the destroying operation is interrupted
+    /// (spec §47.6: preserve evidence rather than delete uncertain data).
+    pub fn quarantine_dir(&self) -> PathBuf {
+        self.root.join("quarantine")
     }
 
     pub fn listeners_dir(&self) -> PathBuf {
@@ -86,9 +180,9 @@ pub struct ScriptLocks {
 }
 
 impl ScriptLocks {
-    pub fn lock_for(&self, script_id: &str) -> Arc<AsyncMutex<()>> {
+    pub fn lock_for(&self, script_id: &ScriptId) -> Arc<AsyncMutex<()>> {
         let mut map = self.locks.lock().expect("script locks poisoned");
-        map.entry(script_id.to_string())
+        map.entry(script_id.as_str().to_string())
             .or_insert_with(|| Arc::new(AsyncMutex::new(())))
             .clone()
     }
@@ -103,6 +197,10 @@ impl ScriptLocks {
 pub struct ScriptSummary {
     pub id: String,
     pub title: String,
+    /// Optimistic-concurrency revision. Carried on every summary so the
+    /// library can perform compare-and-swap transitions (rename, trash,
+    /// restore) without first re-reading the document (M4, spec §48.4).
+    pub script_revision: i64,
     pub status: ScriptStatus,
     pub language: String,
     pub spoken_word_count: u32,
@@ -190,7 +288,6 @@ pub struct ScriptDocument {
     pub summary: ScriptSummary,
     pub source: String,
     pub source_hash: String,
-    pub script_revision: i64,
     pub settings: ScriptSettings,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_display_profile_id: Option<String>,
@@ -307,4 +404,75 @@ pub struct RevisionDocument {
     #[serde(flatten)]
     pub summary: RevisionSummary,
     pub source: String,
+}
+
+#[cfg(test)]
+mod script_id_tests {
+    use super::*;
+
+    const VALID: &str = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+    #[test]
+    fn accepts_canonical_uuid_only() {
+        assert_eq!(ScriptId::parse(VALID).unwrap().as_str(), VALID);
+        // Uppercase, braced, URN and simple forms are all rejected so the
+        // validated bytes are exactly the bytes used for paths and SQL.
+        assert!(ScriptId::parse(&VALID.to_uppercase()).is_err());
+        assert!(ScriptId::parse(&format!("{{{VALID}}}")).is_err());
+        assert!(ScriptId::parse(&format!("urn:uuid:{VALID}")).is_err());
+        assert!(ScriptId::parse(&VALID.replace('-', "")).is_err());
+    }
+
+    #[test]
+    fn rejects_path_traversal_and_sql_wildcards() {
+        // C1: these are the exact payloads that deleted arbitrary directories
+        // and matched unrelated asset rows.
+        for evil in [
+            "/Users/alice/Documents",
+            "/",
+            "..",
+            "../..",
+            "../../../etc",
+            "C:\\Windows",
+            "%",
+            "_",
+            "3f2504e0-4f89-41d3-9a0c-0305e82c33%1",
+            "3f2504e0-4f89-41d3-9a0c-0305e82c33_1",
+            "3f2504e0-4f89-41d3-9a0c-0305e82c3301/../../..",
+            "",
+            "   ",
+            "script.md",
+        ] {
+            assert!(
+                ScriptId::parse(evil).is_err(),
+                "must reject script id {evil:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn deserialize_rejects_invalid_ids() {
+        assert!(serde_json::from_str::<ScriptId>(&format!("\"{VALID}\"")).is_ok());
+        assert!(serde_json::from_str::<ScriptId>("\"/etc/passwd\"").is_err());
+        assert!(serde_json::from_str::<ScriptId>("\"../../..\"").is_err());
+    }
+
+    #[test]
+    fn managed_paths_stay_directly_under_the_scripts_root() {
+        let paths = DataPaths::new(std::path::PathBuf::from("/data/root"));
+        let id = ScriptId::parse(VALID).unwrap();
+        let dir = paths.script_dir(&id);
+        assert_eq!(dir, std::path::Path::new("/data/root/scripts").join(VALID));
+        assert!(dir.starts_with(paths.scripts_dir()));
+        assert_eq!(dir.parent(), Some(paths.scripts_dir().as_path()));
+        assert!(paths.canonical_file(&id).starts_with(&dir));
+        assert!(paths.assets_dir(&id).starts_with(&dir));
+        assert!(paths.revisions_dir(&id).starts_with(&dir));
+    }
+
+    #[test]
+    fn new_uuid_round_trips_through_validation() {
+        let generated = crate::util::new_uuid();
+        assert_eq!(ScriptId::parse(&generated).unwrap().as_str(), generated);
+    }
 }

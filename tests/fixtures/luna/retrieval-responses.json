@@ -1,0 +1,110 @@
+{
+  "_doc": "Landmark-retrieval responses (companion §39.2, Appendix C.3.2). Offered IDs are lm_p1, lm_p2, lm_p3.",
+  "_request": {
+    "requestId": "recover_12",
+    "semanticEpoch": 7,
+    "transcriptRevision": 993,
+    "landmarkSetHash": "a91b0c2d",
+    "offeredLandmarkIds": ["lm_p1", "lm_p2", "lm_p3"]
+  },
+  "cases": [
+    {
+      "name": "likely_current_passage",
+      "expect": "ok",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "recover_12",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "landmarkSetHash": "a91b0c2d",
+        "relation": "likely_current_passage",
+        "candidateLandmarkIds": ["lm_p2"],
+        "confidence": 0.77
+      }
+    },
+    {
+      "name": "empty_on_adlib",
+      "expect": "ok",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "recover_12",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "landmarkSetHash": "a91b0c2d",
+        "relation": "adlib",
+        "candidateLandmarkIds": [],
+        "confidence": 0.64
+      }
+    },
+    {
+      "name": "adversarial_invented_landmark",
+      "expect": "nonexistent_landmark",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "recover_12",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "landmarkSetHash": "a91b0c2d",
+        "relation": "likely_forward_within_section",
+        "candidateLandmarkIds": ["lm_from_another_chapter"],
+        "confidence": 0.95
+      }
+    },
+    {
+      "name": "adversarial_too_many_landmarks",
+      "expect": "too_many_landmarks",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "recover_12",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "landmarkSetHash": "a91b0c2d",
+        "relation": "likely_current_passage",
+        "candidateLandmarkIds": ["lm_p1", "lm_p2", "lm_p3", "lm_p1"],
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "adversarial_duplicate_landmark",
+      "expect": "duplicate_landmark_id",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "recover_12",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "landmarkSetHash": "a91b0c2d",
+        "relation": "likely_current_passage",
+        "candidateLandmarkIds": ["lm_p1", "lm_p1"],
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "adversarial_landmarks_on_unresolved",
+      "expect": "landmarks_from_non_advancing_relation",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "recover_12",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "landmarkSetHash": "a91b0c2d",
+        "relation": "unresolved",
+        "candidateLandmarkIds": ["lm_p1"],
+        "confidence": 0.4
+      }
+    },
+    {
+      "name": "adversarial_stale_landmark_set",
+      "expect": "landmark_set_hash_mismatch",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "recover_12",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "landmarkSetHash": "00000000",
+        "relation": "likely_retake",
+        "candidateLandmarkIds": ["lm_p1"],
+        "confidence": 0.8
+      }
+    }
+  ]
+}

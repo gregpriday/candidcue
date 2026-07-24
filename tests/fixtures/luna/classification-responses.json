@@ -1,0 +1,357 @@
+{
+  "_doc": "Realistic and adversarial gpt-5.6-luna candidate-classification responses (companion §39, Appendix C.3.1/C.4). `expect` is the reason validateSemanticAssist must return, or 'ok'.",
+  "_request": {
+    "requestId": "assist_184",
+    "semanticEpoch": 7,
+    "transcriptRevision": 993,
+    "candidateSetHash": "7c32a1f0"
+  },
+  "cases": [
+    {
+      "name": "near_exact_continuity",
+      "expect": "ok",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "near_exact",
+        "selectedCandidateId": "cand_a",
+        "selectedCandidateConfidence": 0.94,
+        "transcriptCoverage": 0.91,
+        "candidateCoverage": 0.88,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.92
+      }
+    },
+    {
+      "name": "paraphrase_of_current_sentence",
+      "expect": "ok",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "paraphrase",
+        "selectedCandidateId": "cand_a",
+        "selectedCandidateConfidence": 0.71,
+        "transcriptCoverage": 0.62,
+        "candidateCoverage": 0.55,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.68
+      }
+    },
+    {
+      "name": "adlib_no_advance",
+      "expect": "ok",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "adlib",
+        "selectedCandidateId": null,
+        "selectedCandidateConfidence": 0,
+        "transcriptCoverage": 0.05,
+        "candidateCoverage": 0,
+        "shouldInfluenceTracking": false,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.81
+      }
+    },
+    {
+      "name": "restart_on_retake_candidate",
+      "expect": "ok",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "restart",
+        "selectedCandidateId": "cand_b",
+        "selectedCandidateConfidence": 0.83,
+        "transcriptCoverage": 0.74,
+        "candidateCoverage": 0.4,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "restart_detected",
+        "confidence": 0.86
+      }
+    },
+    {
+      "name": "number_changed_tip",
+      "expect": "ok",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "near_exact",
+        "selectedCandidateId": "cand_a",
+        "selectedCandidateConfidence": 0.9,
+        "transcriptCoverage": 0.88,
+        "candidateCoverage": 0.86,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "number",
+        "coachTipCode": "number_changed",
+        "confidence": 0.91
+      }
+    },
+    {
+      "name": "adversarial_invented_candidate",
+      "expect": "nonexistent_candidate",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "near_exact",
+        "selectedCandidateId": "cand_zzz_invented",
+        "selectedCandidateConfidence": 0.99,
+        "transcriptCoverage": 1,
+        "candidateCoverage": 1,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.99
+      }
+    },
+    {
+      "name": "adversarial_prohibited_section",
+      "expect": "prohibited_section_transition",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "forward_skip",
+        "selectedCandidateId": "cand_distant",
+        "selectedCandidateConfidence": 0.97,
+        "transcriptCoverage": 0.9,
+        "candidateCoverage": 0.9,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.97
+      }
+    },
+    {
+      "name": "adversarial_retake_candidate_for_forward_relation",
+      "expect": "relation_direction_incompatible",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "forward_skip",
+        "selectedCandidateId": "cand_b",
+        "selectedCandidateConfidence": 0.9,
+        "transcriptCoverage": 0.8,
+        "candidateCoverage": 0.8,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "adversarial_influence_from_unresolved",
+      "expect": "influence_from_non_advancing_relation",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "unresolved",
+        "selectedCandidateId": "cand_a",
+        "selectedCandidateConfidence": 0.6,
+        "transcriptCoverage": 0.3,
+        "candidateCoverage": 0.3,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "uncertain",
+        "coachTipCode": "none",
+        "confidence": 0.5
+      }
+    },
+    {
+      "name": "adversarial_influence_without_candidate",
+      "expect": "influence_without_candidate",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "near_exact",
+        "selectedCandidateId": null,
+        "selectedCandidateConfidence": 0.9,
+        "transcriptCoverage": 0.9,
+        "candidateCoverage": 0.9,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "adversarial_confidence_out_of_range",
+      "expect": "confidence_out_of_range",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "near_exact",
+        "selectedCandidateId": "cand_a",
+        "selectedCandidateConfidence": 0.9,
+        "transcriptCoverage": 0.9,
+        "candidateCoverage": 0.9,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 1.4
+      }
+    },
+    {
+      "name": "adversarial_extra_property_scroll_to_token",
+      "expect": "additional_property:scrollToToken",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "near_exact",
+        "selectedCandidateId": "cand_a",
+        "selectedCandidateConfidence": 0.9,
+        "transcriptCoverage": 0.9,
+        "candidateCoverage": 0.9,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.9,
+        "scrollToToken": 4211
+      }
+    },
+    {
+      "name": "adversarial_unknown_relation",
+      "expect": "relation_out_of_schema",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "teleport_to_conclusion",
+        "selectedCandidateId": "cand_a",
+        "selectedCandidateConfidence": 0.9,
+        "transcriptCoverage": 0.9,
+        "candidateCoverage": 0.9,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "adversarial_tip_without_mismatch",
+      "expect": "tip_code_incompatible_with_mismatch",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "near_exact",
+        "selectedCandidateId": "cand_a",
+        "selectedCandidateConfidence": 0.9,
+        "transcriptCoverage": 0.9,
+        "candidateCoverage": 0.9,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "number_changed",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "adversarial_stale_epoch",
+      "expect": "semantic_epoch_mismatch",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 6,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "near_exact",
+        "selectedCandidateId": "cand_a",
+        "selectedCandidateConfidence": 0.9,
+        "transcriptCoverage": 0.9,
+        "candidateCoverage": 0.9,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "adversarial_wrong_candidate_set_hash",
+      "expect": "candidate_set_hash_mismatch",
+      "response": {
+        "schemaVersion": 1,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "deadbeef",
+        "relation": "near_exact",
+        "selectedCandidateId": "cand_a",
+        "selectedCandidateConfidence": 0.9,
+        "transcriptCoverage": 0.9,
+        "candidateCoverage": 0.9,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "adversarial_wrong_schema_version",
+      "expect": "schema_version",
+      "response": {
+        "schemaVersion": 2,
+        "requestId": "assist_184",
+        "semanticEpoch": 7,
+        "transcriptRevision": 993,
+        "candidateSetHash": "7c32a1f0",
+        "relation": "near_exact",
+        "selectedCandidateId": "cand_a",
+        "selectedCandidateConfidence": 0.9,
+        "transcriptCoverage": 0.9,
+        "candidateCoverage": 0.9,
+        "shouldInfluenceTracking": true,
+        "criticalMismatch": "none",
+        "coachTipCode": "none",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "adversarial_not_an_object",
+      "expect": "not_an_object",
+      "response": "I think the presenter is in the pricing section now."
+    }
+  ]
+}

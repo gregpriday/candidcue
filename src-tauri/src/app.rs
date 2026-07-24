@@ -51,6 +51,11 @@ pub fn run() {
             commands::get_model_capabilities,
             commands::interpret_command,
             commands::analyze_vocabulary,
+            // Luna semantic sidecar (companion §50.2)
+            commands::prepare_semantic_landmarks,
+            commands::retrieve_semantic_landmarks,
+            commands::classify_semantic_tracking_window,
+            commands::cancel_semantic_request,
             // Stage / windows (spec §46.6)
             commands::list_displays,
             commands::identify_displays,
@@ -135,51 +140,70 @@ pub fn run() {
 
             register_stage_event_bridge(&handle);
 
-            // Startup reconciliation + retention enforcement, off the main
-            // thread (spec §47.6, §36.2).
-            let recon_handle = handle.clone();
-            let recon_paths = paths.clone();
-            let recon_pool = pool.clone();
-            tauri::async_runtime::spawn(async move {
-                let locks = ScriptLocks::default();
-                match crate::scripts::reconcile::run_startup_reconciliation(
-                    &recon_pool,
-                    &recon_paths,
-                    &locks,
-                )
-                .await
-                {
-                    Ok(report) => {
-                        if report.has_findings() {
-                            tracing::warn!(?report, "startup reconciliation had findings");
-                            let _ = recon_handle.emit_to(
-                                CONTROL_LABEL,
-                                events::DIAGNOSTIC_WARNING,
-                                serde_json::json!({
-                                    "kind": "startup_reconciliation",
-                                    "report": report,
-                                }),
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        tracing::error!(error = %err, "startup reconciliation failed");
-                    }
-                }
-                if let Ok(settings) = crate::settings::get_settings(&recon_pool).await {
-                    let _ = crate::sessions::enforce_transcript_retention(
-                        &recon_pool,
-                        &settings.value.general.save_transcript,
+            // Notice monitors being plugged, unplugged, or rearranged so
+            // Preflight can revalidate its display selection (spec §52.5).
+            crate::windows::spawn_display_watcher(&handle);
+
+            // Startup reconciliation + retention enforcement (spec §47.6,
+            // §36.2). This runs to completion HERE, synchronously, before
+            // `setup` returns and therefore before the event loop dispatches
+            // the first IPC message — reconciliation repairs and a user
+            // command must never interleave (H3). It also uses the MANAGED
+            // lock set: a private `ScriptLocks::default()` locks nothing that
+            // a command would respect, which is exactly how a repair could
+            // race a save.
+            let reconciliation = {
+                let locks = handle.state::<ScriptLocks>();
+                tauri::async_runtime::block_on(async {
+                    let report = crate::scripts::reconcile::run_startup_reconciliation(
+                        &pool, &paths, &locks,
                     )
                     .await;
+                    if let Ok(settings) = crate::settings::get_settings(&pool).await {
+                        let _ = crate::sessions::enforce_transcript_retention(
+                            &pool,
+                            &settings.value.general.save_transcript,
+                        )
+                        .await;
+                    }
+                    report
+                })
+            };
+            match reconciliation {
+                Ok(report) => {
+                    if report.has_findings() {
+                        tracing::warn!(?report, "startup reconciliation had findings");
+                        // Best effort: the control webview may not have
+                        // installed its listener yet, so the recovery report is
+                        // also written to the diagnostics directory.
+                        let _ = handle.emit_to(
+                            CONTROL_LABEL,
+                            events::DIAGNOSTIC_WARNING,
+                            serde_json::json!({
+                                "kind": "startup_reconciliation",
+                                "report": report,
+                            }),
+                        );
+                    }
                 }
-            });
+                Err(err) => {
+                    tracing::error!(error = %err, "startup reconciliation failed");
+                }
+            }
 
             tracing::info!("CandidCue started; database ready at {:?}", data_dir);
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running CandidCue");
+        .build(tauri::generate_context!())
+        .expect("error while running CandidCue")
+        .run(|handle, event| {
+            // Never let the display-sleep assertion outlive the app, and take
+            // any lingering identification overlay down with us (§52.4, §52.7).
+            if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+                crate::windows::sleep::release(handle);
+                crate::windows::close_identify_overlays(handle);
+            }
+        });
 }
 
 /// Bundled listener packs directory: `<repo>/assets/listeners` in dev,
@@ -267,6 +291,15 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
             if coordinator.stage_event(gen, |stage| stage.media_healthy = false) {
                 let _ = handle.emit_to(CONTROL_LABEL, events::STAGE_ERROR, value);
             }
+        }
+    });
+
+    // Periodic stage motion report (companion §54): diagnostics and recovery
+    // for control, never a feedback loop into the aligner. Relayed verbatim.
+    let handle = app.clone();
+    app.listen_any(events::STAGE_MOTION_ACK, move |event| {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(event.payload()) {
+            let _ = handle.emit_to(CONTROL_LABEL, events::STAGE_MOTION_ACK, value);
         }
     });
 

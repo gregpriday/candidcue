@@ -1,19 +1,65 @@
 /**
- * Deterministic script alignment engine (spec §31, Appendix G.1–G.5).
+ * Deterministic script alignment engine (spec §31, Appendix G.1–G.5) plus the
+ * companion specification's alignment v2 layer (§10–§26, §50–§56).
  *
  * Owns the transcript ledger projection, candidate scoring, the alignment
  * state machine, retake/skip logic, manual correction, and snapshot
  * emission. Pure and deterministic: all time comes from event timestamps or
  * explicit `nowMs` arguments — never from wall-clock reads.
+ *
+ * ## How v1 and v2 relate
+ *
+ * v1's committing decision layer (`decideTransition`, the retake heuristic,
+ * the provisional policy, the thresholds in `TrackingProfile`) is *retained*:
+ * it still decides what `committedTokenIndex` becomes, and it still emits the
+ * `TrackingSnapshot` the control Live screen renders. v2 wraps it:
+ *
+ *   - `HypothesisBeam` performs the one scoring pass and hands back both the
+ *     v1-shaped candidate list and a multi-hypothesis measurement (§10–§16);
+ *   - `SectionGraph` removes ineligible candidates *before* the decision layer
+ *     sees them, so the prohibited-jump invariant holds for the real cursor
+ *     and not merely for a parallel estimate (§13, §69.7);
+ *   - `SemanticFilter` + `PaceEstimatorV2` turn the discrete decision into the
+ *     continuous spoken-unit trajectory the stage follows (§24–§25);
+ *   - `SemanticFrameEmitter` + `TransitionDirectiveManager` publish that
+ *     trajectory as `SemanticMotionFrame`s and bounded discontinuities (§26.1,
+ *     §53);
+ *   - `MovementDecisionLog` records why each movement happened (§65).
  */
+import type {
+  SemanticMotionFrame,
+  SmoothFollowProfile,
+  StageTransitionDirective,
+  TrackingBehavior,
+  TrackingStateV2,
+} from '../contracts/smooth-follow';
 import type { TrackingSnapshot, TrackingState } from '../contracts/tracking';
+import {
+  HypothesisBeam,
+  type AlignmentMeasurement,
+  type CorrectionClass,
+} from './alignment-v2';
+import { isReturnToScript, projectBehavior } from './behavior';
 import { generateCandidates } from './candidates';
-import { confidenceModel } from './confidence';
+import { MovementDecisionLog, type MovementDecisionRecord } from './decision-log';
 import { DocumentIndex } from './document-index';
 import { TranscriptLedger, type AlignableTail } from './ledger';
-import { resolveTrackingProfile, type TrackingProfile } from './profile';
-import { continuityPrior } from './prior';
-import { alignSequences } from './sequence';
+import {
+  directiveTypeFor,
+  SemanticFrameEmitter,
+  TransitionDirectiveManager,
+} from './motion-frame';
+import { PaceEstimatorV2, type PaceSampleRejection } from './pace-estimator';
+import {
+  resolveSmoothFollowProfile,
+  resolveTrackingProfile,
+  type PartialSmoothFollowProfile,
+  type TrackingProfile,
+} from './profile';
+import { SectionGraph, type SectionTransitionContext, type TransitionAuthority } from './section-graph';
+import type { SemanticAssistEvidence } from './semantic-assist';
+import { SemanticFilter } from './semantic-filter';
+import { SpeechUnitScale } from './speech-units';
 import type {
   AlignmentCheckpoint,
   AlignmentDecision,
@@ -28,12 +74,18 @@ export interface EngineSession {
   sessionId: string;
   sessionGeneration: number;
   stageGeneration: number;
+  /** Layout generation the stage last reported (companion §7.2). */
+  layoutGeneration?: number;
 }
 
 export interface EngineOutput {
   snapshot?: TrackingSnapshot;
   diagnostic?: AlignmentDiagnostic;
   stateChanged?: TrackingState;
+  /** Companion §26.1 — emitted alongside every snapshot and on `tick`. */
+  frame?: SemanticMotionFrame;
+  /** Companion §65 — present only for nontrivial movement transitions. */
+  decision?: MovementDecisionRecord;
 }
 
 /** Explicit retake lead-in phrases (G.5 `transcriptContainsRetakeLeadIn`). */
@@ -53,10 +105,21 @@ const RETAKE_POSITION_TOLERANCE = 6;
 
 export class AlignmentEngine {
   readonly profile: TrackingProfile;
+  readonly smoothProfile: SmoothFollowProfile;
   readonly ledger: TranscriptLedger;
   readonly index: DocumentIndex;
+  /* --- alignment v2 collaborators (companion §50.1) ------------------- */
+  readonly units: SpeechUnitScale;
+  readonly sectionGraph: SectionGraph;
+  readonly beam: HypothesisBeam;
+  readonly filter: SemanticFilter;
+  readonly paceEstimator: PaceEstimatorV2;
+  readonly decisions: MovementDecisionLog;
+  private readonly frames: SemanticFrameEmitter;
+  private readonly directives: TransitionDirectiveManager;
   private readonly session: EngineSession;
   private readonly scriptId: string;
+  private readonly scriptCompileHash: string;
 
   private state: TrackingState = 'following';
   private stateBeforePause: TrackingState = 'following';
@@ -80,17 +143,64 @@ export class AlignmentEngine {
   private maskedItemIds = new Set<string>();
   private commandPending = false;
 
+  /* --- v2 state ------------------------------------------------------- */
+  /** False until the first committed lock — acquisition is not a jump (§17.1). */
+  private acquired = false;
+  /** True for the single decision that performed the first lock (§17.1). */
+  private justAcquired = false;
+  /** Semantic epoch; incremented by command/manual navigation and retakes. */
+  private epoch = 0;
+  private layoutGeneration: number;
+  private stateV2: TrackingStateV2 = 'acquiring';
+  private behavior: TrackingBehavior = 'acquire';
+  private lastMeasurement: AlignmentMeasurement | undefined;
+  private lastCorrection: CorrectionClass = 'none';
+  /** Session time of the most recent section-boundary crossing (§13). */
+  private boundaryCrossedAtMs = -Infinity;
+  /** Items whose delayed completions must not undo a retake (§21.4). */
+  private staleAfterRetake = new Set<string>();
+  private preRetakeHighWaterMark = 0;
+  private lastEventAtMs = 0;
+  /** Audio span of the last final item, for pace samples (§24.3). */
+  private lastPaceSpan: { tokenIndex: number; atMs: number } | undefined;
+  private offScript = false;
+  private lastFrameTransitionId: string | undefined;
+  /** Authority of the emission in flight; only `moveTo` raises this (§56.1). */
+  private emitAuthority: TransitionAuthority = 'ordinary';
+  /** Committed position before the decision currently being emitted (§65). */
+  private movedFromTokenIndex = 0;
+
   constructor(
     document: TrackingDocument,
     session: EngineSession,
     profile?: Partial<TrackingProfile>,
+    smoothProfile?: PartialSmoothFollowProfile,
   ) {
     this.profile = resolveTrackingProfile(profile);
+    this.smoothProfile = resolveSmoothFollowProfile(smoothProfile);
     this.index = new DocumentIndex(document, { rareWeight: this.profile.rareWeight });
     this.ledger = new TranscriptLedger();
     this.ledger.setSessionGeneration(session.sessionGeneration);
     this.session = session;
     this.scriptId = document.scriptId;
+    this.scriptCompileHash = document.scriptCompileHash ?? document.scriptId;
+    this.layoutGeneration = session.layoutGeneration ?? 0;
+
+    this.units = new SpeechUnitScale(document, this.profile);
+    this.sectionGraph = new SectionGraph(this.index, this.profile);
+    this.beam = new HypothesisBeam(
+      this.index,
+      this.sectionGraph,
+      this.units,
+      this.profile,
+      this.smoothProfile,
+    );
+    this.filter = new SemanticFilter(this.profile, this.smoothProfile);
+    this.paceEstimator = new PaceEstimatorV2(this.profile);
+    this.decisions = new MovementDecisionLog(this.profile.decisionLogCapacity);
+    this.frames = new SemanticFrameEmitter(this.profile, this.smoothProfile);
+    this.directives = new TransitionDirectiveManager(this.profile);
+    this.applySectionBounds();
   }
 
   get trackingState(): TrackingState {
@@ -161,6 +271,7 @@ export class AlignmentEngine {
    */
   moveTo(tokenIndex: number, movement: 'manual' | 'command', nowMs: number): EngineOutput {
     const target = this.index.clampTokenIndex(tokenIndex);
+    const previousCommitted = this.committedTokenIndex;
     this.committedTokenIndex = target;
     this.provisionalTokenIndex = target;
     this.provisional = false;
@@ -171,6 +282,24 @@ export class AlignmentEngine {
     this.manualGraceUntilMs = nowMs + this.profile.manualCorrectionGraceMs;
     this.state = this.state === 'paused' ? 'paused' : 'following';
     this.pushCheckpoint(target, nowMs, movement === 'manual' ? 'manual' : 'command');
+    this.emitAuthority = movement === 'manual' ? 'manual' : 'command';
+    this.movedFromTokenIndex = previousCommitted;
+
+    // Companion §56.1: authority increments the semantic epoch, clears the
+    // ordinary hypotheses, resets section eligibility to the target, resets
+    // the filter around it, and masks the command speech from pace.
+    this.epoch++;
+    this.acquired = true;
+    this.justAcquired = false;
+    this.offScript = false;
+    this.staleAfterRetake.clear();
+    this.beam.seedAuthoritative(target, movement === 'command' ? 'command' : 'manual', nowMs);
+    this.applySectionBounds();
+    this.paceEstimator.reset();
+    this.lastPaceSpan = { tokenIndex: target, atMs: nowMs };
+    this.lastCorrection = 'none';
+    this.filter.resetTo(this.units.unitAt(target), nowMs, this.epoch, 'following');
+    this.boundaryCrossedAtMs = -Infinity;
     return this.emit(movement, nowMs, `${movement}_move`);
   }
 
@@ -187,6 +316,37 @@ export class AlignmentEngine {
     this.maskedItemIds.clear();
     this.contentTokensSinceConfident = 0;
     this.lastConfidentAtMs = nowMs;
+
+    // v2: a session reset is an authorized discontinuity of its own (§53).
+    this.epoch++;
+    this.acquired = false;
+    this.justAcquired = false;
+    this.offScript = false;
+    this.staleAfterRetake.clear();
+    this.preRetakeHighWaterMark = 0;
+    this.boundaryCrossedAtMs = -Infinity;
+    this.lastMeasurement = undefined;
+    this.lastCorrection = 'none';
+    this.lastPaceSpan = undefined;
+    this.beam.clear();
+    this.paceEstimator.reset();
+    this.decisions.clear();
+    this.directives.clear();
+    this.frames.reset();
+    this.filter.resetTo(0, nowMs, this.epoch, 'acquiring');
+    this.applySectionBounds();
+    this.emitAuthority = 'manual';
+    this.movedFromTokenIndex = 0;
+    this.directives.issue({
+      type: 'reset',
+      authority: 'manual',
+      reason: 'session_reset',
+      fromUnit: 0,
+      toUnit: 0,
+      destinationTokenIndex: 0,
+      issuedAtMs: nowMs,
+      semanticEpoch: this.epoch,
+    });
     return this.emit('manual', nowMs, 'reset');
   }
 
@@ -234,60 +394,30 @@ export class AlignmentEngine {
       profile,
     );
 
-    const scored: ScoredCandidate[] = [];
-    for (const window of windows) {
-      const slice = this.index.document.spokenTokens.slice(
-        window.startTokenIndex,
-        window.endTokenIndex + 1,
-      );
-      const sequence = alignSequences(tail.tokens, slice, profile);
-      if (sequence.matchedPairs.length === 0) continue;
-      // Rarity is a document property (frequency index), not only the
-      // compiler-assigned token weight (§31.14 rare-token indexes).
-      let indexedRare = 0;
-      for (const pair of sequence.matchedPairs) {
-        const scriptToken = slice[pair.scriptTokenIndex];
-        if (
-          scriptToken !== undefined &&
-          pair.kind !== 'weak' &&
-          this.index.rareTokenPositions.has(scriptToken.normalized)
-        ) {
-          indexedRare++;
-        }
-      }
-      sequence.rareAnchorMatches = Math.max(sequence.rareAnchorMatches, indexedRare);
-      const absolutePosition = this.index.clampTokenIndex(
-        window.startTokenIndex + sequence.scriptEndOffset,
-      );
-      const prior = continuityPrior(
-        this.index,
-        {
-          from: this.committedTokenIndex,
-          to: absolutePosition,
-          scope: window.scope,
-          state: this.state,
-          final,
-          msSinceConfident: nowMs - this.lastConfidentAtMs,
-          repeatedOpening: this.matchesPreviouslyReadOpening(absolutePosition, tail),
-          rareAnchorMatches: sequence.rareAnchorMatches,
-        },
-        profile,
-      );
-      const confidence = confidenceModel(
-        { sequence, prior, transcriptConfidence: tail.confidence, final },
-        profile,
-      );
-      scored.push({ window, sequence, absolutePosition, prior, confidence });
-    }
+    // One scoring pass for both layers. The beam scores every window, applies
+    // the hard section gate (§13 — ineligible candidates receive *zero*
+    // probability and never reach the decision layer), folds in bounded
+    // semantic evidence, and returns the v1-shaped candidate list plus the
+    // multi-hypothesis measurement.
+    const measurement = this.beam.advance({
+      tail,
+      windows,
+      committedTokenIndex: this.committedTokenIndex,
+      cursorTokenIndex: this.provisionalTokenIndex,
+      eligibility: this.eligibilityContext(nowMs),
+      finalEvidence: final,
+      sessionTimeMs: nowMs,
+      paceUnitsPerSecond: this.paceEstimator.estimate(nowMs).blendedUnitsPerSecond,
+      predictedUnit: this.filter.predict(nowMs).positionUnits,
+      epoch: this.epoch,
+      state: this.state,
+      msSinceConfident: nowMs - this.lastConfidentAtMs,
+      repeatedOpening: (position) => this.matchesPreviouslyReadOpening(position, tail),
+    });
+    this.lastMeasurement = measurement;
+    this.lastCorrection = measurement.transitionProposal.kind;
 
-    scored.sort(
-      (a, b) =>
-        b.confidence - a.confidence ||
-        Math.abs(a.absolutePosition - this.committedTokenIndex) -
-          Math.abs(b.absolutePosition - this.committedTokenIndex) ||
-        a.absolutePosition - b.absolutePosition,
-    );
-
+    const scored = measurement.candidates;
     const best = scored[0];
     if (best === undefined) return this.holdDecision('no_candidate', scored, 0);
 
@@ -306,6 +436,53 @@ export class AlignmentEngine {
     return this.decideTransition(best, margin, scored, tail, final, nowMs);
   }
 
+  /* -------------------------------------------------------------------------
+   * Section eligibility (companion §13, B.2) — the hard invariant.
+   * ----------------------------------------------------------------------- */
+
+  /**
+   * The context the section graph gates every candidate with. Ordinary
+   * authority is the default; command/manual authority is applied by
+   * `moveTo`, which re-seeds the beam and resets eligibility around the
+   * destination (§12.6, §56.1) rather than leaving a standing exemption.
+   */
+  private eligibilityContext(nowMs: number): SectionTransitionContext {
+    return {
+      authority: 'ordinary',
+      acquired: this.acquired,
+      recentlyCrossedBoundary: nowMs - this.boundaryCrossedAtMs <= this.profile.recentBoundaryCrossingMs,
+      // §21.2: a backward boundary edge needs retake-grade evidence, which the
+      // engine only has once a retake candidate has begun accumulating.
+      retakeEvidenceStrong:
+        this.state === 'retake_candidate' || (this.pendingRetake?.supports ?? 0) > 0,
+    };
+  }
+
+  /** Keep the filter's prediction inside the current section (§24.2.1). */
+  private applySectionBounds(): void {
+    const section = this.sectionGraph.sectionAt(this.committedTokenIndex);
+    if (section === undefined) {
+      this.filter.setSectionBounds(Number.NEGATIVE_INFINITY, Number.POSITIVE_INFINITY);
+      return;
+    }
+    this.filter.setSectionBounds(
+      this.units.unitAt(section.startTokenIndex),
+      this.units.unitAt(Math.min(section.endTokenIndex + 1, this.index.tokenCount)),
+    );
+  }
+
+  /**
+   * §21.4 / §25.7: a delayed completion belonging entirely to the utterance
+   * that preceded a committed retake must not pull the cursor back forward
+   * past the pre-retake high-water mark.
+   */
+  private isStalePostRetakeEvidence(target: number, tail: AlignableTail): boolean {
+    if (this.staleAfterRetake.size === 0) return false;
+    if (target <= this.preRetakeHighWaterMark) return false;
+    if (tail.itemIds.length === 0) return false;
+    return tail.itemIds.every((id) => this.staleAfterRetake.has(id));
+  }
+
   /** G.4 transition decision. */
   private decideTransition(
     best: ScoredCandidate,
@@ -319,6 +496,11 @@ export class AlignmentEngine {
     const distance = best.absolutePosition - this.committedTokenIndex;
     const isBackward = distance < 0;
     const isLargeForward = distance > profile.largeForwardDistance;
+
+    // §21.4 retake lock: reject stale evidence from the superseded take.
+    if (distance > 0 && this.isStalePostRetakeEvidence(best.absolutePosition, tail)) {
+      return this.holdDecision('stale_pre_retake_evidence', all, margin);
+    }
 
     if (!final) {
       if (best.confidence < profile.softThreshold) {
@@ -482,6 +664,7 @@ export class AlignmentEngine {
   ): EngineOutput {
     const profile = this.profile;
     const previousState = this.state;
+    this.movedFromTokenIndex = this.committedTokenIndex;
 
     // Track content volume since the last confident lock (only count each
     // final item once so repeats don't inflate the counter).
@@ -509,6 +692,11 @@ export class AlignmentEngine {
       this.lastConfidence = decision.confidence;
       this.lastMovement = 'advance';
       this.lastSourceItemIds = tail.itemIds;
+      // §4.9/§15.3: provisional text is a *noisy measurement* for the filter,
+      // never a commitment; the high provisional R keeps the trajectory from
+      // visibly oscillating when the completion corrects it.
+      this.updateOffScript(decision, nowMs);
+      this.observeCommittedPosition(decision, decision.tokenIndex, nowMs);
       const provisionalOutput = this.emit('advance', nowMs, decision.reason, decision);
       if (this.state !== previousState) provisionalOutput.stateChanged = this.state;
       return provisionalOutput;
@@ -529,9 +717,31 @@ export class AlignmentEngine {
         if (decision.movement === 'retake') {
           // Retain a take-history marker for diagnostics (§31.12).
           this.pushCheckpoint(decision.tokenIndex, nowMs, 'take');
+          // §21.4 retake lock: a new epoch, a high-water mark the old take
+          // may not drag us back over, and the item ids whose late
+          // completions must now be ignored.
+          this.epoch++;
+          this.preRetakeHighWaterMark = previousCommitted;
+          this.staleAfterRetake = new Set(tail.itemIds);
+          this.beam.clear();
         } else {
           this.recordPassedBlocks(previousCommitted, this.committedTokenIndex, nowMs);
+          // New speech supersedes the retake lock (§21.4 "unless new speech
+          // strongly supports it").
+          if (this.staleAfterRetake.size > 0) {
+            const fresh = tail.itemIds.some((id) => !this.staleAfterRetake.has(id));
+            if (fresh) this.staleAfterRetake.clear();
+          }
         }
+        this.justAcquired = !this.acquired;
+        this.acquired = true;
+        if (!this.index.sameSection(previousCommitted, this.committedTokenIndex)) {
+          this.boundaryCrossedAtMs = nowMs;
+        }
+        this.applySectionBounds();
+        this.updateOffScript(decision, nowMs);
+        this.observeCommittedPosition(decision, decision.committedTokenIndex, nowMs);
+        this.beam.markCommitted(this.lastMeasurement?.best?.lineageId ?? null);
         break;
       }
       case 'command':
@@ -563,6 +773,14 @@ export class AlignmentEngine {
     this.lastConfidence = decision.confidence;
     this.lastMovement = decision.movement;
     this.lastSourceItemIds = tail.itemIds;
+    this.updateOffScript(decision, nowMs);
+    if (decision.movement === 'hold') {
+      // §19.2/§25.6: a hold contributes no position measurement. The filter
+      // keeps predicting under the ad-lib schedule, which is what produces
+      // bounded drift followed by a settle instead of v1's abrupt freeze.
+      this.filter.setState(this.projectStateV2(decision, nowMs));
+      this.filter.predict(nowMs);
+    }
 
     const output = this.emit(decision.movement, nowMs, decision.reason, decision);
     if (this.state !== previousState) output.stateChanged = this.state;
@@ -759,6 +977,381 @@ export class AlignmentEngine {
         : [],
       generatedAtMs: nowMs,
     };
-    return { snapshot, diagnostic };
+
+    const output: EngineOutput = { snapshot, diagnostic };
+    const stateBefore = this.stateV2;
+    const projection = this.projectV2(movement, nowMs, decision);
+    this.stateV2 = projection.state;
+    this.behavior = projection.behavior;
+    this.filter.setState(this.stateV2);
+
+    const directive = this.maybeIssueDirective(movement, nowMs, decision);
+    const frame = this.buildFrame(nowMs, true, directive);
+    if (frame !== undefined) output.frame = frame;
+
+    const record = this.recordDecision(
+      movement,
+      reason,
+      nowMs,
+      stateBefore,
+      decision,
+      directive,
+    );
+    if (record !== undefined) output.decision = record;
+    this.justAcquired = false;
+    this.emitAuthority = 'ordinary';
+    this.movedFromTokenIndex = this.committedTokenIndex;
+    return output;
   }
+
+  /* -------------------------------------------------------------------------
+   * Alignment v2 surface (companion §24–§26, §53, §65).
+   * ----------------------------------------------------------------------- */
+
+  get semanticEpoch(): number {
+    return this.epoch;
+  }
+
+  get stateV2Current(): TrackingStateV2 {
+    return this.stateV2;
+  }
+
+  get behaviorCurrent(): TrackingBehavior {
+    return this.behavior;
+  }
+
+  /** The most recent beam measurement (companion §16.6), for diagnostics. */
+  get measurement(): AlignmentMeasurement | undefined {
+    return this.lastMeasurement;
+  }
+
+  /** Companion §7.2: a new layout generation invalidates stage geometry. */
+  setLayoutGeneration(generation: number, nowMs: number): EngineOutput {
+    if (generation === this.layoutGeneration) return {};
+    this.layoutGeneration = generation;
+    const directive = this.directives.issue({
+      type: 'settle',
+      authority: 'ordinary',
+      reason: 'layout_recovery',
+      fromUnit: this.filter.estimate().positionUnits,
+      toUnit: this.units.unitAt(this.committedTokenIndex),
+      destinationTokenIndex: this.committedTokenIndex,
+      issuedAtMs: nowMs,
+      semanticEpoch: this.epoch,
+    });
+    const frame = this.buildFrame(nowMs, true, directive);
+    return frame !== undefined ? { frame } : {};
+  }
+
+  /**
+   * Companion §40: accept one bounded sidecar classification. The beam
+   * validates epoch, expiry, source items, and candidate membership; nothing
+   * here can move the cursor on its own.
+   */
+  applySemanticAssist(evidence: SemanticAssistEvidence): void {
+    if (evidence.epoch !== this.epoch) return; // §25.7 stale epoch
+    this.beam.setSemanticAssist(evidence);
+  }
+
+  /**
+   * Advance the continuous estimate to `nowMs` without new transcript
+   * evidence and emit a frame if one is due (companion §26.1). This is what
+   * keeps motion alive *between* transcript events — the whole point of §3.1
+   * — and what runs the ad-lib coast→decelerate→hold schedule to its settle.
+   */
+  tick(nowMs: number): EngineOutput {
+    if (nowMs < this.lastEventAtMs) return {};
+    this.lastEventAtMs = nowMs;
+    const previousState = this.stateV2;
+    this.filter.setState(this.stateV2);
+    this.filter.predict(nowMs);
+    // Coasting decays into uncertainty/ad-lib hold as the horizon lapses.
+    this.stateV2 = this.projectStateV2(undefined, nowMs);
+    if (this.stateV2 !== previousState) this.filter.setState(this.stateV2);
+    if (isReturnToScript(previousState, this.stateV2)) this.behavior = 'return';
+    const frame = this.buildFrame(nowMs, false, this.directives.active(nowMs));
+    return frame !== undefined ? { frame } : {};
+  }
+
+  /** Companion §65 — bounded "why did it move?" ring buffer. */
+  decisionRecords(): readonly MovementDecisionRecord[] {
+    return this.decisions.all();
+  }
+
+  /* ----------------------------------------------------------------------- */
+
+  /** Feed the semantic filter and the pace estimator (companion §24.3–§24.4). */
+  private observeCommittedPosition(
+    decision: AlignmentDecision,
+    targetTokenIndex: number,
+    nowMs: number,
+  ): void {
+    const profile = this.profile;
+    const unit = this.units.unitAt(targetTokenIndex);
+
+    const previous = this.lastPaceSpan;
+    if (previous !== undefined && !decision.provisional) {
+      // §24.4: exclude contaminated spans rather than letting them distort
+      // the rate. A rejected sample still advances the span anchor so the
+      // *next* clean span is measured from the right place.
+      const contamination: PaceSampleRejection[] = [];
+      if (decision.movement === 'skip') contamination.push('skip');
+      if (decision.movement === 'retake') contamination.push('retake');
+      if (this.offScript) contamination.push('adlib');
+      this.paceEstimator.observe(
+        {
+          units: unit - this.units.unitAt(previous.tokenIndex),
+          durationMs: nowMs - previous.atMs,
+          atMs: nowMs,
+          quality: Math.max(profile.paceMinQuality, decision.confidence),
+        },
+        contamination,
+      );
+    }
+    if (!decision.provisional) this.lastPaceSpan = { tokenIndex: targetTokenIndex, atMs: nowMs };
+
+    this.filter.setState(this.projectStateV2(decision, nowMs));
+    this.filter.observe({
+      positionUnits: unit,
+      confidence: decision.confidence,
+      margin: decision.margin,
+      beamVariance: this.lastMeasurement?.positionVariance ?? 0,
+      finalEvidence: !decision.provisional,
+      atMs: nowMs,
+    });
+
+    const pace = this.paceEstimator.estimate(nowMs);
+    if (pace.blendedUnitsPerSecond > 0 && !decision.provisional) {
+      this.filter.observeVelocity({
+        unitsPerSecond: pace.blendedUnitsPerSecond,
+        weight: profile.paceVelocityBlendWeight,
+        atMs: nowMs,
+      });
+    }
+  }
+
+  /**
+   * Companion §19.1 ad-lib entry conditions: speech is present, local
+   * alignment stays weak past the grace period, and the best position remains
+   * *near the previous cursor* rather than forming a credible skip.
+   *
+   * The weakness test reads the beam measurement rather than the decision,
+   * because a hold decision reports the last confident value by design — that
+   * is what the snapshot shows the operator — so it would never look weak.
+   */
+  private updateOffScript(decision: AlignmentDecision, nowMs: number): void {
+    if (decision.movement !== 'hold') {
+      this.offScript = false;
+      return;
+    }
+    const measurement = this.lastMeasurement;
+    const weak = (measurement?.confidence ?? 0) < this.profile.softThreshold;
+    const nearCursor =
+      measurement === undefined ||
+      Math.abs(measurement.bestTokenPosition - this.committedTokenIndex) <=
+        this.profile.largeForwardDistance;
+    const pastGrace = nowMs - this.lastConfidentAtMs > this.profile.adLibGraceMs;
+    this.offScript = weak && nearCursor && pastGrace;
+  }
+
+  private behaviorContext(movement: MovementKind, nowMs: number, decision?: AlignmentDecision) {
+    const confident = this.lastConfidence >= this.profile.lockedThreshold;
+    return {
+      state: this.state,
+      movement,
+      // The decision that performs the first lock *is* the acquisition, so it
+      // reports ACQUIRING/acquire rather than looking like a jump (§17.1).
+      acquired: this.acquired && !this.justAcquired,
+      provisional: this.provisional,
+      correction: this.lastCorrection,
+      activeTransition: this.directives.activeType(nowMs),
+      authority: this.emitAuthority,
+      msSinceConfident: nowMs - this.lastConfidentAtMs,
+      horizonMs: confident
+        ? this.smoothProfile.prediction.normalHorizonMs
+        : this.smoothProfile.prediction.uncertainHorizonMs,
+      offScript: this.offScript,
+      retakeCommitted: movement === 'retake',
+      confidence: decision?.confidence ?? this.lastConfidence,
+      lockedThreshold: this.profile.lockedThreshold,
+      softThreshold: this.profile.softThreshold,
+    };
+  }
+
+  private projectV2(movement: MovementKind, nowMs: number, decision?: AlignmentDecision) {
+    return projectBehavior(this.behaviorContext(movement, nowMs, decision));
+  }
+
+  private projectStateV2(decision: AlignmentDecision | undefined, nowMs: number): TrackingStateV2 {
+    return projectBehavior(this.behaviorContext(decision?.movement ?? this.lastMovement, nowMs, decision))
+      .state;
+  }
+
+  /**
+   * Companion §53. Directives are minted only for the four situations the
+   * spec authorizes a visual discontinuity: a large forward skip, a retake
+   * the stage cannot comfortably reverse through, command/manual navigation,
+   * and a session reset. Everything else is ordinary trajectory following.
+   */
+  private maybeIssueDirective(
+    movement: MovementKind,
+    nowMs: number,
+    decision?: AlignmentDecision,
+  ): StageTransitionDirective | undefined {
+    // A session reset is the strongest discontinuity there is; nothing may
+    // supersede it inside its own epoch (§53).
+    const live = this.directives.active(nowMs);
+    if (live?.type === 'reset' && live.semanticEpoch === this.epoch) return live;
+
+    const fromUnit = this.filter.estimate().positionUnits;
+    const destination = this.index.clampTokenIndex(
+      decision?.committedTokenIndex ?? this.committedTokenIndex,
+    );
+    const toUnit = this.units.unitAt(destination);
+    const base = {
+      fromUnit,
+      toUnit,
+      destinationTokenIndex: destination,
+      issuedAtMs: nowMs,
+      semanticEpoch: this.epoch,
+    };
+
+    if (this.emitAuthority !== 'ordinary') {
+      return this.directives.issue({
+        ...base,
+        type: 'reanchor',
+        authority: this.emitAuthority,
+        reason:
+          this.emitAuthority === 'command' ? 'command_navigation' : 'manual_navigation',
+      });
+    }
+    if (movement === 'skip') {
+      const type = directiveTypeFor(this.lastCorrection);
+      if (type === 'none') return this.directives.active(nowMs);
+      return this.directives.issue({
+        ...base,
+        type,
+        authority: 'ordinary',
+        reason: 'large_forward_skip',
+      });
+    }
+    if (movement === 'retake') {
+      // §22.1 nearby retakes rewind under the reverse cap; §22.2 distant ones
+      // re-anchor. Both are retake-class transitions, hence the shared reason.
+      const type = this.lastCorrection === 'backward_distant' ? 'reanchor' : 'rewind';
+      return this.directives.issue({
+        ...base,
+        type,
+        authority: 'ordinary',
+        reason: 'distant_retake',
+      });
+    }
+    return this.directives.active(nowMs);
+  }
+
+  /** Companion §26.1 — build and rate-limit a semantic motion frame. */
+  private buildFrame(
+    nowMs: number,
+    force: boolean,
+    directive: StageTransitionDirective | undefined,
+  ): SemanticMotionFrame | undefined {
+    const estimate = this.filter.predict(nowMs);
+    const displayUnit = estimate.positionUnits + this.filter.leadUnits(this.lastConfidence);
+    const tokenIndex = this.index.clampTokenIndex(this.units.tokenIndexAt(displayUnit));
+    const token = this.index.tokenAt(tokenIndex);
+    // A directive rides every frame until it expires; the stage keys on `id`
+    // and must not re-run the motion for a repeat (§53 idempotency).
+    const active = directive ?? this.directives.active(nowMs);
+    const input = {
+      sessionId: this.session.sessionId,
+      sessionGeneration: this.session.sessionGeneration,
+      scriptCompileHash: this.scriptCompileHash,
+      layoutGeneration: this.layoutGeneration,
+      epoch: this.epoch,
+      sessionTimeMs: nowMs,
+      estimatedUnit: displayUnit,
+      committedUnit: this.units.unitAt(this.committedTokenIndex),
+      velocityUnitsPerSecond: estimate.velocityUnitsPerSecond,
+      accelerationUnitsPerSecond2: estimate.accelerationUnitsPerSecond2,
+      positionVariance: Math.max(estimate.positionVariance, this.lastMeasurement?.positionVariance ?? 0),
+      confidence: this.lastConfidence,
+      sectionId: this.sectionGraph.sectionIdAt(this.committedTokenIndex),
+      tokenIndex,
+      sentenceId: token?.sentenceId ?? '',
+      blockId: token?.blockId ?? '',
+      state: this.stateV2,
+      behavior: this.behavior,
+      finalEvidence: !this.provisional,
+      ...(active !== undefined ? { transition: active } : {}),
+      motionProfileId: this.smoothProfile.id,
+    };
+    const newDirective = active !== undefined && active.id !== this.lastFrameTransitionId;
+    if (!this.frames.shouldEmit(input, force || newDirective)) return undefined;
+    this.lastFrameTransitionId = active?.id;
+    return this.frames.emit(input);
+  }
+
+  /** Companion §65 — record why a nontrivial movement happened. */
+  private recordDecision(
+    movement: MovementKind,
+    reason: string,
+    nowMs: number,
+    stateBefore: TrackingStateV2,
+    decision: AlignmentDecision | undefined,
+    directive: StageTransitionDirective | undefined,
+  ): MovementDecisionRecord | undefined {
+    const measurement = this.lastMeasurement;
+    // A plain hold that changed nothing is not a movement transition.
+    if (movement === 'hold' && stateBefore === this.stateV2 && measurement?.blockedCount === 0) {
+      return undefined;
+    }
+    const fromToken = this.movedFromTokenIndex;
+    const authority: TransitionAuthority = this.emitAuthority;
+    const best = measurement?.best;
+    return this.decisions.push({
+      revision: this.revision,
+      sessionTimeMs: nowMs,
+      fromUnit: this.units.unitAt(fromToken),
+      toUnit: this.units.unitAt(this.committedTokenIndex),
+      behavior: this.behavior,
+      stateBefore,
+      stateAfter: this.stateV2,
+      localConfidence: decision?.confidence ?? this.lastConfidence,
+      secondBestMargin: decision?.margin ?? measurement?.secondBestMargin ?? 0,
+      sectionGate: (measurement?.blockedCount ?? 0) > 0 ? 'blocked' : 'allowed',
+      ...(best?.semanticRelation !== undefined
+        ? { semanticAssistRelation: best.semanticRelation }
+        : {}),
+      ...(best !== undefined ? { semanticAssistInfluence: best.semanticScore } : {}),
+      authority,
+      visualDisposition: visualDispositionFor(movement, this.lastCorrection, authority),
+      reason,
+      fromTokenIndex: fromToken,
+      toTokenIndex: this.committedTokenIndex,
+      fromSectionId: this.sectionGraph.sectionIdAt(fromToken),
+      toSectionId: this.sectionGraph.sectionIdAt(this.committedTokenIndex),
+      ...(best !== undefined ? { hypothesisId: best.id, lineageId: best.lineageId } : {}),
+      continuityPrior: decision?.best?.prior ?? best?.continuityPrior ?? 1,
+      blockedCandidateCount: measurement?.blockedCount ?? 0,
+      ...(measurement?.blocked !== undefined ? { blockedReason: measurement.blocked.reason } : {}),
+      beamSize: measurement?.hypotheses.length ?? 0,
+      positionVariance: measurement?.positionVariance ?? 0,
+      finalEvidence: !this.provisional,
+      ...(directive !== undefined ? { transitionId: directive.id } : {}),
+    });
+  }
+}
+
+/** Companion §65 `visualDisposition`. */
+function visualDispositionFor(
+  movement: MovementKind,
+  correction: CorrectionClass,
+  authority: TransitionAuthority,
+): MovementDecisionRecord['visualDisposition'] {
+  if (authority !== 'ordinary') return 'reanchor';
+  if (movement === 'hold') return 'hold';
+  if (movement === 'retake') return correction === 'backward_distant' ? 'reanchor' : 'rewind';
+  if (correction === 'reanchor') return 'reanchor';
+  if (correction === 'catch_up') return 'catch_up';
+  return 'absorbed';
 }

@@ -1,0 +1,86 @@
+# CandidCue application-command ACL (spec §49, §50.2).
+#
+# The mere existence of an app-level permission file is what switches Tauri's
+# ACL gate ON for application commands. Without it,
+# `RuntimeAuthority::has_app_manifest()` is false and tauri/src/webview/mod.rs
+# skips the check entirely for any LOCAL webview — which means the stage
+# window could invoke every command in `generate_handler!`, including secret
+# storage and permanent deletion (C2).
+#
+# This permission is granted to the `control` capability ONLY. The stage
+# window (spec §43.2, §50.2) is minimally privileged and must have no custom
+# commands at all; it communicates exclusively over the event channels listed
+# in capabilities/stage.json.
+#
+# Adding a command to `generate_handler!` without adding it here fails closed:
+# control gets "not allowed by ACL" rather than the stage silently gaining
+# access. `app_commands_permission_matches_generate_handler` in
+# tests/acl_tests.rs asserts the two lists stay in sync.
+
+[[permission]]
+identifier = "allow-control-commands"
+description = "Every CandidCue application command. Granted to the control window only."
+commands.allow = [
+  "app_version",
+  "list_scripts",
+  "create_script",
+  "get_script",
+  "save_script",
+  "rename_script",
+  "duplicate_script",
+  "trash_script",
+  "restore_script",
+  "permanently_delete_script",
+  "list_revisions",
+  "get_revision",
+  "restore_revision",
+  "import_script",
+  "export_script",
+  "reveal_script_folder",
+  "import_image",
+  "import_remote_image",
+  "resolve_asset_urls",
+  "remove_asset_reference",
+  "validate_openai_key",
+  "save_openai_key",
+  "get_openai_key_status",
+  "delete_openai_key",
+  "create_realtime_transcription_credential",
+  "get_model_capabilities",
+  "interpret_command",
+  "analyze_vocabulary",
+  "prepare_semantic_landmarks",
+  "retrieve_semantic_landmarks",
+  "classify_semantic_tracking_window",
+  "cancel_semantic_request",
+  "list_displays",
+  "identify_displays",
+  "open_stage",
+  "close_stage",
+  "set_stage_fullscreen",
+  "publish_stage_document",
+  "publish_stage_snapshot",
+  "publish_stage_command",
+  "publish_listener_state",
+  "get_stage_status",
+  "save_display_profile",
+  "list_display_profiles",
+  "get_listener_catalogue",
+  "list_installed_listeners",
+  "download_listener",
+  "cancel_listener_download",
+  "remove_listener",
+  "resolve_listener_media",
+  "get_settings",
+  "update_settings",
+  "export_all_data",
+  "clear_cache",
+  "get_system_diagnostics",
+  "export_support_bundle",
+  "check_for_update",
+  "install_update",
+  "start_session",
+  "end_session",
+  "append_session_transcript",
+  "list_sessions",
+]

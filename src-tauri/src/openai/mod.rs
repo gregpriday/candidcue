@@ -10,10 +10,19 @@ use serde::{Deserialize, Serialize};
 use crate::errors::{AppError, ErrorCategory, RecoveryAction};
 use crate::secrets::SecretString;
 
+pub mod luna_ops;
+pub mod responses;
+pub mod semantic;
+
+pub use responses::{LunaUsage, PromptCacheMetadata};
+
 /// Default live transcription model (non-negotiable decision 5).
 pub const DEFAULT_TRANSCRIPTION_MODEL: &str = "gpt-realtime-whisper";
 /// Command interpretation model for ambiguous natural-language commands.
 pub const DEFAULT_COMMAND_MODEL: &str = "gpt-5.6-luna";
+/// Semantic sidecar model (companion §38). Same family as the command model
+/// but registered separately so either can move independently.
+pub const DEFAULT_SEMANTIC_MODEL: &str = "gpt-5.6-luna";
 
 pub const API_BASE_URL: &str = "https://api.openai.com/v1";
 
@@ -35,6 +44,23 @@ pub struct ModelCapabilities {
     pub supported_delay_levels: Vec<String>,
     pub supports_client_secret_for_transcription: bool,
     pub command_structured_outputs: bool,
+    // ---- Luna semantic sidecar (companion §38, §41, §42.2) ----
+    pub semantic_model: String,
+    pub semantic_structured_outputs: bool,
+    /// Reasoning efforts permitted for continuous classification (§38.1).
+    pub semantic_reasoning_efforts: Vec<String>,
+    pub semantic_default_reasoning_effort: String,
+    pub semantic_supports_prompt_cache_key: bool,
+    /// Automatic prompt caching threshold in tokens; prefixes shorter than
+    /// this are never cache-eligible, so do not pad to reach it (§41).
+    pub prompt_cache_min_tokens: u32,
+    pub semantic_default_max_output_tokens: u32,
+    pub semantic_default_timeout_ms: u64,
+    /// USD per million tokens. `None` until a verified price is configured —
+    /// §42.2 forbids hard-coding a permanent currency estimate.
+    pub semantic_input_price_per_mtok: Option<f64>,
+    pub semantic_cached_input_price_per_mtok: Option<f64>,
+    pub semantic_output_price_per_mtok: Option<f64>,
     pub registry_version: u32,
 }
 
@@ -53,7 +79,18 @@ impl Default for ModelCapabilities {
             ],
             supports_client_secret_for_transcription: true,
             command_structured_outputs: true,
-            registry_version: 1,
+            semantic_model: DEFAULT_SEMANTIC_MODEL.into(),
+            semantic_structured_outputs: true,
+            semantic_reasoning_efforts: vec!["none".into(), "minimal".into(), "low".into()],
+            semantic_default_reasoning_effort: "low".into(),
+            semantic_supports_prompt_cache_key: true,
+            prompt_cache_min_tokens: 1024,
+            semantic_default_max_output_tokens: 320,
+            semantic_default_timeout_ms: responses::DEFAULT_SEMANTIC_TIMEOUT_MS,
+            semantic_input_price_per_mtok: None,
+            semantic_cached_input_price_per_mtok: None,
+            semantic_output_price_per_mtok: None,
+            registry_version: 2,
         }
     }
 }
@@ -188,6 +225,12 @@ pub struct OpenAiClient {
     base_url: String,
     capabilities: ModelCapabilities,
     credential_generation: std::sync::atomic::AtomicU64,
+    /// In-flight semantic request registry, keyed by caller request id
+    /// (companion §36.5). Cancellation is best-effort; stale checks in the
+    /// scheduler remain mandatory.
+    inflight: std::sync::Mutex<
+        std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>,
+    >,
 }
 
 impl OpenAiClient {
@@ -207,7 +250,24 @@ impl OpenAiClient {
             base_url,
             capabilities: ModelCapabilities::default(),
             credential_generation: std::sync::atomic::AtomicU64::new(0),
+            inflight: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// Model capability gate for the semantic sidecar (companion §50.2).
+    /// Returns an error the caller can degrade on rather than panicking.
+    pub fn require_semantic_model(&self) -> Result<&str, AppError> {
+        if !self.capabilities.semantic_structured_outputs {
+            return Err(AppError::structured(
+                "AUTH_MODEL_UNAVAILABLE",
+                ErrorCategory::Auth,
+                "Semantic assist is unavailable for the configured model.",
+                true,
+            )
+            .with_action(RecoveryAction::UseManualMode)
+            .with_detail("semanticFailure", "model_unavailable"));
+        }
+        Ok(self.capabilities.semantic_model.as_str())
     }
 
     pub fn http(&self) -> &reqwest::Client {

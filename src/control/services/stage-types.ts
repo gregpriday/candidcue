@@ -27,7 +27,18 @@ export interface DisplayDescriptor {
   scaleFactor: number;
   logicalSize: LogicalDimensions;
   primary: boolean;
+  /**
+   * Stable panel identity (name + physical size, plus an ordinal only when two
+   * connected panels are genuinely identical). Deliberately NOT affected by
+   * where the display sits or how it is scaled, so rearranging displays does
+   * not invalidate saved profiles.
+   */
   fingerprint: string;
+  /**
+   * Soft arrangement hash — changes when displays are moved or rescaled. Only
+   * ever a "your arrangement changed" hint; never used to resolve a profile.
+   */
+  topologyHash: string;
 }
 
 /** Twin of Rust `IdentificationSession` (spec §52.4). */
@@ -59,7 +70,12 @@ export interface StageOpenResult {
 export interface StageWindowState {
   exists: boolean;
   visible: boolean;
+  /** Presenting full-screen on its display — true for borderless too. */
   fullscreen: boolean;
+  /** The OS native-fullscreen flag specifically (macOS Space / Win exclusive). */
+  nativeFullscreen: boolean;
+  /** The display the stage ACTUALLY landed on, verified after show. */
+  displayFingerprint?: string;
   stageGeneration: number;
 }
 

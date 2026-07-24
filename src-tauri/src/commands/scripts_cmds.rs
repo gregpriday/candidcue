@@ -8,8 +8,8 @@ use crate::errors::AppError;
 use crate::scripts::import_export::{ExportOptions, ExportResult, ImportOptions, ImportResult};
 use crate::scripts::{
     repo, CreateScriptInput, DataPaths, PageRequest, RevisionDocument, RevisionSummary,
-    SaveResult, ScriptDocument, ScriptFilter, ScriptLocks, ScriptMetadataPatch, ScriptPage,
-    ScriptSummary,
+    SaveResult, ScriptDocument, ScriptFilter, ScriptId, ScriptLocks, ScriptMetadataPatch,
+    ScriptPage, ScriptSummary,
 };
 use crate::windows::{events, CONTROL_LABEL};
 
@@ -46,14 +46,15 @@ pub async fn get_script(
     locks: State<'_, ScriptLocks>,
     script_id: String,
 ) -> Result<ScriptDocument, AppError> {
+    let script_id = ScriptId::parse(&script_id)?;
     let document = repo::get_script(db.pool(), &paths, &locks, &script_id).await?;
     if document.externally_changed {
         let _ = app.emit_to(
             CONTROL_LABEL,
             events::SCRIPT_EXTERNAL_CHANGE,
             serde_json::json!({
-                "scriptId": script_id,
-                "scriptRevision": document.script_revision,
+                "scriptId": script_id.as_str(),
+                "scriptRevision": document.summary.script_revision,
                 "sourceHash": document.source_hash,
             }),
         );
@@ -71,6 +72,7 @@ pub async fn save_script(
     source: String,
     metadata_patch: Option<ScriptMetadataPatch>,
 ) -> Result<SaveResult, AppError> {
+    let script_id = ScriptId::parse(&script_id)?;
     repo::save_script(
         db.pool(),
         &paths,
@@ -86,11 +88,13 @@ pub async fn save_script(
 #[tauri::command]
 pub async fn rename_script(
     db: State<'_, Database>,
+    locks: State<'_, ScriptLocks>,
     script_id: String,
     title: String,
     expected_revision: i64,
 ) -> Result<ScriptSummary, AppError> {
-    repo::rename_script(db.pool(), &script_id, &title, expected_revision).await
+    let script_id = ScriptId::parse(&script_id)?;
+    repo::rename_script(db.pool(), &locks, &script_id, &title, expected_revision).await
 }
 
 #[tauri::command]
@@ -100,20 +104,30 @@ pub async fn duplicate_script(
     locks: State<'_, ScriptLocks>,
     script_id: String,
 ) -> Result<ScriptSummary, AppError> {
+    let script_id = ScriptId::parse(&script_id)?;
     repo::duplicate_script(db.pool(), &paths, &locks, &script_id).await
 }
 
 #[tauri::command]
-pub async fn trash_script(db: State<'_, Database>, script_id: String) -> Result<(), AppError> {
-    repo::trash_script(db.pool(), &script_id).await
+pub async fn trash_script(
+    db: State<'_, Database>,
+    locks: State<'_, ScriptLocks>,
+    script_id: String,
+    expected_revision: i64,
+) -> Result<ScriptSummary, AppError> {
+    let script_id = ScriptId::parse(&script_id)?;
+    repo::trash_script(db.pool(), &locks, &script_id, expected_revision).await
 }
 
 #[tauri::command]
 pub async fn restore_script(
     db: State<'_, Database>,
+    locks: State<'_, ScriptLocks>,
     script_id: String,
+    expected_revision: i64,
 ) -> Result<ScriptSummary, AppError> {
-    repo::restore_script(db.pool(), &script_id).await
+    let script_id = ScriptId::parse(&script_id)?;
+    repo::restore_script(db.pool(), &locks, &script_id, expected_revision).await
 }
 
 #[tauri::command]
@@ -123,6 +137,7 @@ pub async fn permanently_delete_script(
     locks: State<'_, ScriptLocks>,
     script_id: String,
 ) -> Result<(), AppError> {
+    let script_id = ScriptId::parse(&script_id)?;
     repo::permanently_delete_script(db.pool(), &paths, &locks, &script_id).await
 }
 
@@ -131,6 +146,7 @@ pub async fn list_revisions(
     db: State<'_, Database>,
     script_id: String,
 ) -> Result<Vec<RevisionSummary>, AppError> {
+    let script_id = ScriptId::parse(&script_id)?;
     repo::list_revisions(db.pool(), &script_id).await
 }
 
@@ -141,6 +157,7 @@ pub async fn get_revision(
     script_id: String,
     revision_id: String,
 ) -> Result<RevisionDocument, AppError> {
+    let script_id = ScriptId::parse(&script_id)?;
     repo::get_revision(db.pool(), &paths, &script_id, &revision_id).await
 }
 
@@ -153,6 +170,7 @@ pub async fn restore_revision(
     revision_id: String,
     expected_revision: i64,
 ) -> Result<SaveResult, AppError> {
+    let script_id = ScriptId::parse(&script_id)?;
     repo::restore_revision(
         db.pool(),
         &paths,
@@ -182,6 +200,7 @@ pub async fn export_script(
     script_id: String,
     options: ExportOptions,
 ) -> Result<ExportResult, AppError> {
+    let script_id = ScriptId::parse(&script_id)?;
     crate::scripts::import_export::export_script(db.pool(), &paths, &locks, &script_id, options)
         .await
 }
@@ -192,6 +211,7 @@ pub async fn reveal_script_folder(
     paths: State<'_, DataPaths>,
     script_id: String,
 ) -> Result<(), AppError> {
+    let script_id = ScriptId::parse(&script_id)?;
     let canonical = repo::canonical_path_checked(db.pool(), &paths, &script_id).await?;
     tauri_plugin_opener::reveal_item_in_dir(&canonical)
         .map_err(|e| AppError::Internal(format!("reveal failed: {e}")))
