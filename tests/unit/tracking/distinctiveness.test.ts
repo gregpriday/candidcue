@@ -200,6 +200,92 @@ describe('S1: the distinctiveness measure (§14.3, §23.1)', () => {
   });
 });
 
+/* ---------------------------------------------------------------------------
+ * `anchorOccurrences` — the same measure, asked of an alignment's own evidence.
+ *
+ * The retrieval gate above asks "may this anchor nominate a span over there?".
+ * The commit gate asks the mirror question: "the aligner matched *these script
+ * tokens* — how many other places in the script would have matched as well?".
+ * They must answer with the same currency, because they enforce the same
+ * sentence of §23.2 at the two ends of one decision.
+ *
+ * `UNIQUE_RUN` is the whole reason the phrase arm exists. Every one of its
+ * words is common — none of them is rare enough to be indexed as an anchor —
+ * and it is still, as a sequence, the only one of its kind in the script. That
+ * is the ordinary shape of a section opening the presenter genuinely skipped
+ * ahead to: unremarkable words, its own phrasing. A gate that read
+ * distinctiveness off the words would refuse to follow them.
+ * ------------------------------------------------------------------------- */
+describe('S1: the distinctiveness of an alignment’s own evidence (§23.1, §23.2)', () => {
+  const span = (start: number, length: number): number[] =>
+    Array.from({ length }, (_, i) => start + i);
+
+  it('a matched refrain answers with the refrain’s own repeat count', () => {
+    const { document, index } = refrainDocument();
+    const [near] = occurrencesOf(document, REFRAIN.split(' '));
+    expect(near).toBeDefined();
+    if (near === undefined) return;
+    expect(index.anchorOccurrences(span(near, REFRAIN.split(' ').length))).toBe(3);
+  });
+
+  it('a run of common words that occurs once answers 1', () => {
+    const { document, index } = refrainDocument();
+    const words = UNIQUE_RUN.split(' ');
+    const [unique] = occurrencesOf(document, words);
+    expect(unique).toBeDefined();
+    if (unique === undefined) return;
+
+    // The load-bearing precondition: not one word of it is distinctive on its
+    // own, so only the phrase arm can reach the answer.
+    for (const word of words) {
+      expect(index.tokenFrequency.get(word) ?? 0, word).toBeGreaterThan(1);
+    }
+    expect(index.anchorOccurrences(span(unique, words.length))).toBe(1);
+  });
+
+  it('a gap in the matched tokens breaks the phrase rather than inventing one', () => {
+    const { document, index } = refrainDocument();
+    const words = UNIQUE_RUN.split(' ');
+    const [unique] = occurrencesOf(document, words);
+    if (unique === undefined) throw new Error('fixture changed');
+
+    // "harbour _ candle": adjacent in the script but not both matched, so there
+    // is no evidence for the phrase and none is credited. What is left is the
+    // two words, each of them common.
+    const answer = index.anchorOccurrences([unique, unique + 2]);
+    expect(answer).toBeGreaterThan(1);
+    expect(answer).toBe(
+      Math.min(index.tokenFrequency.get('harbour') ?? 0, index.tokenFrequency.get('candle') ?? 0),
+    );
+  });
+
+  it('an isolated unique word is still evidence', () => {
+    const { document, index } = refrainDocument();
+    const [crimson] = occurrencesOf(document, ['crimson']);
+    if (crimson === undefined) throw new Error('fixture changed');
+    // Deliberate: refusing to see a lone distinctive word is how a
+    // distinctiveness rule becomes a freeze. `crimson` is in the refrain, so
+    // this also shows the measure reporting a repeated word honestly.
+    expect(index.anchorOccurrences([crimson])).toBe(3);
+
+    const source = ['# Title', '', 'the market letter mentions phosphorescence today.'].join('\n');
+    const short = compileFixtureScript(source);
+    const shortIndex = new DocumentIndex(short, {
+      rareWeight: DEFAULT_TRACKING_PROFILE.rareWeight,
+    });
+    const [rare] = occurrencesOf(short, ['phosphorescence']);
+    if (rare === undefined) throw new Error('fixture changed');
+    expect(shortIndex.anchorOccurrences([rare])).toBe(1);
+  });
+
+  it('a span with no content at all reports no distinctiveness', () => {
+    const { index } = refrainDocument();
+    expect(index.anchorOccurrences([])).toBe(Number.POSITIVE_INFINITY);
+    // Out-of-range positions are dropped rather than clamped onto real tokens.
+    expect(index.anchorOccurrences([-4, index.tokenCount + 10])).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
 describe('S1: the repeat allowance scales with the script (§23.2)', () => {
   it('a short clip demands a unique phrase; a long keynote may allow more', () => {
     const profile = DEFAULT_TRACKING_PROFILE;

@@ -588,6 +588,165 @@ export function scenarioRefrainCallBack(): PlaybackScenario {
   };
 }
 
+/* ---------------------------------------------------------------------------
+ * L.10 / L.11 — the same rule as L.9, on the *commit* path.
+ *
+ * L.9 reaches §23.2 through the ambiguity policy: the aside flattens the
+ * continuity prior, the two copies of the refrain then score identically, and
+ * `resolveAmbiguity` is what refuses the move. That is only one of the two ways
+ * a refrain can move the cursor, and it is not the dangerous one.
+ *
+ * Take the aside away and the engine is *confident*. The far copy of the
+ * refrain then does not tie the near cursor — it beats it outright, because it
+ * explains the whole tail verbatim and the cursor's own neighbourhood explains
+ * none of it. The margin is 0.15–0.34, several times `ambiguityMargin`, so the
+ * ambiguity policy is never consulted at all and the move goes straight down
+ * the ordinary forward-commit path. Measured on this fixture before the gate
+ * existed: committed cursor 146 → 312, behaviour `large_skip`, reason
+ * `commit_skip`, confidence 0.897. §23.2's last clause, violated with a healthy
+ * margin.
+ *
+ * The pair below is written to fail in opposite directions, on one document,
+ * with one difference between them — *what the presenter quotes*:
+ *
+ *   - L.10 quotes the refrain, whose every phrase appears twice. Nothing may
+ *     move.
+ *   - L.11 quotes a passage that appears once, from further down the same
+ *     section. The cursor must go there.
+ *
+ * An engine that chases duplicates fails L.10. An engine that answers the
+ * problem by refusing large forward moves — the fourth freeze this suite has
+ * been asked not to acquire — fails L.11.
+ * ------------------------------------------------------------------------- */
+
+/** Body sentences read straight through, with `quote` inserted after `after`. */
+function refrainInterjection(
+  id: string,
+  description: string,
+  after: number,
+  quote: (sentences: readonly string[]) => string[],
+  extra: Partial<PlaybackScenario>,
+): PlaybackScenario {
+  const document = refrainDocument();
+  const sentences = bodySentenceTexts(document);
+
+  const turns: TurnSpec[] = [];
+  let interjection = -1;
+  sentences.forEach((text, index) => {
+    turns.push({ text });
+    if (index === after - 1) {
+      for (const line of quote(sentences)) turns.push({ text: line, gapMs: 700 });
+      interjection = turns.length - 1;
+    }
+  });
+  const { actions, endOfTurn } = build(turns);
+
+  return {
+    id,
+    description,
+    document,
+    actions,
+    labels: [
+      {
+        afterAction: endOfTurn[interjection] ?? 0,
+        // Where the presenter actually is: the end of the last line they read.
+        // `sentences[0]` is the heading, so body sentence `after - 1` is
+        // `document.sentences[after]`.
+        intendedTokenIndex: document.sentences[after]?.endTokenIndex ?? 0,
+        toleranceTokens: 20,
+        sectionId: 'h0',
+      },
+    ],
+    ...extra,
+  };
+}
+
+/**
+ * L.10 — the refrain quoted out of order while the engine is confident.
+ *
+ * Twelve body sentences read straight through (the refrain, a whole verse, and
+ * two lines of the next), so the cursor is locked and the prior is at full
+ * strength, and then the opening line of the refrain as an aside — the shape of
+ * every "as I said at the start…". The far copy of that line is 166 tokens
+ * ahead, which is a large forward move on this script and comfortably inside
+ * the continuity window, so nothing upstream of the decision layer stops it.
+ */
+export function scenarioRefrainQuotedWhileConfident(): PlaybackScenario {
+  return refrainInterjection(
+    'L.10',
+    'A refrain quoted out of order while confident: still not a jump trigger.',
+    4 + 6 + 2,
+    (sentences) => [sentences[0] ?? ''],
+    { forbidBehaviors: ['large_skip', 'retake'] },
+  );
+}
+
+/**
+ * L.11 — the same interruption, made of material that occurs once.
+ *
+ * The presenter genuinely jumps: after the same twelve sentences they drop the
+ * rest of the second verse and pick up at the third, which is exactly the
+ * distance L.10 forbids and the same section. Its opening line is not
+ * remarkable — "Deployment frequency doubled within a quarter and the rollback
+ * rate fell sharply" is ordinary prose, and words like "quarter", "frequency"
+ * and "rate" recur elsewhere in the talk — but the *phrases* are its own, and
+ * that is what the gate reads.
+ *
+ * Three sentences, not one: a real skip is followed by more reading, and the
+ * scenario should fail if the cursor arrives and then loses its place.
+ */
+export function scenarioDistinctForwardSkip(): PlaybackScenario {
+  const document = refrainDocument();
+  const sentences = bodySentenceTexts(document);
+  const readFirst = 4 + 6 + 2;
+  const resumeAt = 4 + 6 + 6; // first line of the third verse
+
+  const turns: TurnSpec[] = [];
+  for (const text of sentences.slice(0, readFirst)) turns.push({ text });
+  const beforeJump = turns.length - 1;
+  for (const text of sentences.slice(resumeAt, resumeAt + 3)) turns.push({ text });
+  const afterJump = turns.length - 1;
+  const { actions, endOfTurn } = build(turns);
+
+  return {
+    id: 'L.11',
+    description: 'A genuine forward skip onto a passage that occurs once: it must be followed.',
+    document,
+    actions,
+    labels: [
+      {
+        afterAction: endOfTurn[beforeJump] ?? 0,
+        intendedTokenIndex: document.sentences[readFirst]?.endTokenIndex ?? 0,
+        toleranceTokens: 12,
+        sectionId: 'h0',
+      },
+      {
+        afterAction: endOfTurn[afterJump] ?? 0,
+        intendedTokenIndex: document.sentences[resumeAt + 3]?.endTokenIndex ?? 0,
+        toleranceTokens: 20,
+        sectionId: 'h0',
+      },
+    ],
+    // Where the presenter resumed, so a test can name the destination without
+    // recounting sentences.
+    skipIsExpected: true,
+    forbidBehaviors: ['retake'],
+  };
+}
+
+/** The token span L.11's presenter resumes at, derived the same way. */
+export function distinctForwardSkipTarget(document: TrackingDocument): {
+  startTokenIndex: number;
+  endTokenIndex: number;
+} {
+  const resumeAt = 4 + 6 + 6;
+  const sentence = document.sentences[resumeAt + 1];
+  return {
+    startTokenIndex: sentence?.startTokenIndex ?? 0,
+    endTokenIndex: sentence?.endTokenIndex ?? 0,
+  };
+}
+
 /** Every liveness scenario, for the shared assertion loop. */
 export function allLivenessScenarios(): PlaybackScenario[] {
   return [
@@ -599,6 +758,11 @@ export function allLivenessScenarios(): PlaybackScenario[] {
     scenarioDemoReadThrough(),
     scenarioRefrainReadThrough(),
     scenarioRefrainAfterAside(),
+    // L.9, L.10 and L.11 are deliberately *not* here. Each is two-sided on its
+    // own — its own test asserts the safety half and the liveness half in one
+    // run — and the refrain document is the slowest fixture in the suite, so
+    // running it through the shared loop as well only buys a second copy of
+    // assertions that are already being made.
   ];
 }
 

@@ -15,6 +15,16 @@ export interface RawToken {
 // A token starts with a letter/digit/$/# and continues through characters
 // that can appear inside words: letters, digits, dots (acronyms, decimals),
 // commas (thousands), apostrophes, hyphens, %, &. Standalone '&' is a token.
+//
+// NOTE: every alternative ends on `[\p{L}\p{N}%]`, `[\p{L}\p{N}]` or `&`, so a
+// surface produced here can never end in a dot — "Dr." arrives downstream as
+// "Dr", "U.S.A." as "U.S.A". `normalize.ts`'s abbreviation dictionary depends
+// on the surface carrying the dot, so it only ever fires for interior-dot
+// forms like "e.g."; the honorifics it was mostly written for are unreachable.
+// Closing that gap means keeping the trailing dot when the dot-stripped form
+// is a known abbreviation, which widens `SpokenToken.surface` and its source
+// range by one character wherever tokens are rendered — deliberately not done
+// here as a side effect of a comment.
 const TOKEN_PATTERN =
   /[\p{L}\p{N}$#][\p{L}\p{N}.,''’\-%&]*[\p{L}\p{N}%]|[\p{L}\p{N}]|&/gu;
 

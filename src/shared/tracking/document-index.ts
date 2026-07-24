@@ -47,6 +47,15 @@ export class DocumentIndex {
   readonly aliasTokenPositions = new Map<string, number[]>();
   /** Document frequency of each normalized token. */
   readonly tokenFrequency = new Map<string, number>();
+  /**
+   * The content-token stream `ngramPositions` is keyed on, and the inverse map
+   * from a script token index to its position in that stream (`-1` for
+   * punctuation and stopwords). Together they let a caller holding *matched
+   * script positions* — the aligner's own evidence — reconstruct exactly the
+   * n-gram keys this index stores, without re-deriving the stopword rule.
+   */
+  private contentNormalized: string[] = [];
+  private contentOrdinal: Int32Array;
 
   constructor(document: TrackingDocument, options?: { rareWeight?: number }) {
     this.document = document;
@@ -119,6 +128,13 @@ export class DocumentIndex {
         (t.flags & TOKEN_FLAG.stopword) === 0 &&
         !STOPWORDS.has(t.normalized),
     );
+    this.contentOrdinal = new Int32Array(this.tokenCount).fill(-1);
+    this.contentNormalized = contentTokens.map((t) => t.normalized);
+    contentTokens.forEach((token, ordinal) => {
+      if (token.index >= 0 && token.index < this.tokenCount) {
+        this.contentOrdinal[token.index] = ordinal;
+      }
+    });
     for (const token of contentTokens) {
       const frequency = this.tokenFrequency.get(token.normalized) ?? 1;
       const rare = token.weight >= rareWeight || (frequency <= 2 && token.normalized.length >= 4);
@@ -128,11 +144,19 @@ export class DocumentIndex {
         this.rareTokenPositions.set(token.normalized, list);
       }
     }
-    // Alias anchors (§14.4). Gated exactly like the compile-time index in
-    // `markdown/indexes.ts`: an alias only nominates when it carries a
+    // Alias anchors (§14.4). An alias only nominates when it carries a
     // non-stopword word of real length and is not itself an ordinary frequent
     // word of this script — otherwise "and" (from `&`) or "number" (from `no`)
     // would open windows across the whole document (§23.2).
+    //
+    // `markdown/indexes.ts` states the same rule for the compile-time index it
+    // ships, and the two are *near*-identical rather than identical: that one
+    // reads the compile-side stopword list (`markdown/stopwords.ts`, ~130
+    // entries, tuned for token weighting) and this one the transcript-side
+    // list in `./normalize` (~70). Sharing the code would mean choosing one
+    // list for both, which is a larger decision than either index. Nothing
+    // consumes the compile-time copy; see the note in
+    // `tests/unit/markdown/indexes.test.ts`.
     for (const token of tokens) {
       if ((token.flags & TOKEN_FLAG.punctuation) !== 0) continue;
       if ((token.flags & TOKEN_FLAG.stopword) !== 0) continue;
@@ -203,6 +227,57 @@ export class DocumentIndex {
    */
   static distinctivenessOf(occurrences: number): number {
     return 1 / Math.max(1, occurrences);
+  }
+
+  /**
+   * How many places in the script the *most distinctive anchor inside a matched
+   * span* also appears (§23.1, §23.2).
+   *
+   * `scriptPositions` are the absolute script token indexes an alignment
+   * actually matched — the evidence, not the destination. The anchors are the
+   * 3-grams and 2-grams formed from *consecutive* matched content tokens, plus
+   * the matched content tokens themselves; the answer is the smallest
+   * occurrence count among them. So a span carrying one phrase unique to the
+   * script answers 1 however ordinary the rest of its words are, and a span
+   * every phrase of which appears in a refrain answers 2 however long and
+   * however confidently matched it is.
+   *
+   * Phrases can only ever be at least as distinctive as their own words
+   * (`occurrences("a b") <= min(freq(a), freq(b))`), so including single tokens
+   * changes the answer in exactly one case: an isolated matched content word
+   * with no matched neighbour. That is deliberate — a unique word is real
+   * evidence, and refusing to see it is how a distinctiveness rule turns into a
+   * freeze.
+   *
+   * `Number.POSITIVE_INFINITY` when the span matched no content at all: there
+   * is no anchor, so there is no distinctiveness to report.
+   */
+  anchorOccurrences(scriptPositions: readonly number[]): number {
+    const ordinals: number[] = [];
+    for (const position of scriptPositions) {
+      if (position < 0 || position >= this.tokenCount) continue;
+      const ordinal = this.contentOrdinal[position] ?? -1;
+      if (ordinal >= 0) ordinals.push(ordinal);
+    }
+    if (ordinals.length === 0) return Number.POSITIVE_INFINITY;
+    ordinals.sort((a, b) => a - b);
+    const unique = ordinals.filter((value, i) => value !== ordinals[i - 1]);
+
+    let fewest = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < unique.length; i++) {
+      const start = unique[i];
+      if (start === undefined) continue;
+      const word = this.contentNormalized[start];
+      if (word !== undefined) {
+        fewest = Math.min(fewest, this.tokenFrequency.get(word) ?? 1);
+      }
+      for (let size = 2; size <= 3 && i + size - 1 < unique.length; size++) {
+        if (unique[i + size - 1] !== start + size - 1) break;
+        const key = this.contentNormalized.slice(start, start + size).join(' ');
+        fewest = Math.min(fewest, this.phraseOccurrences(key));
+      }
+    }
+    return fewest;
   }
 
   /**

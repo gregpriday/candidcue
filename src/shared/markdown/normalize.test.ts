@@ -74,13 +74,41 @@ describe('aliasesForToken', () => {
     expect(aliases).toContain('real time');
   });
 
-  it('expands dotted honorifics through the bounded dictionary', () => {
-    expect(aliasesForToken('Mr.', 'mr')).toContain('mister');
-    expect(aliasesForToken('Dr.', 'dr')).toContain('doctor');
+  /**
+   * The abbreviation dictionary, tested against surfaces the tokenizer can
+   * actually produce.
+   *
+   * This block used to read `aliasesForToken('Dr.', 'dr')` and assert
+   * `'doctor'`, which passed — and meant nothing. `tokenizeText` never emits a
+   * surface ending in a dot, so the compiler's only call site passes `'Dr'`,
+   * and the branch under test could not run in production. Every assertion
+   * here now starts from real tokenizer output.
+   */
+  const firstSurface = (text: string): string => tokenizeText(text)[0]?.surface ?? '';
+
+  it('expands an interior-dot abbreviation, which is what survives tokenization', () => {
+    expect(firstSurface('e.g. the appendix')).toBe('e.g');
+    expect(aliasesForToken('e.g', normalizeToken('e.g.'))).toContain('for example');
+    expect(firstSurface('i.e. the point')).toBe('i.e');
+    expect(aliasesForToken('i.e', normalizeToken('i.e.'))).toContain('that is');
+  });
+
+  it('cannot reach an honorific, because the tokenizer took its dot', () => {
+    // Pinned as the documented gap it is, not as desirable behaviour: closing
+    // it means widening `SpokenToken.surface` (see tokenize.ts).
+    expect(firstSurface('Dr. Halvorsen arrived')).toBe('Dr');
+    expect(aliasesForToken('Dr', 'dr')).toEqual([]);
+    expect(firstSurface('Mr. Halvorsen arrived')).toBe('Mr');
+    expect(aliasesForToken('Mr', 'mr')).toEqual([]);
   });
 
   it('does not expand bare common words as abbreviations', () => {
+    // The dot is the entire disambiguator between "no" and "No.", and between
+    // "min" and "min." — so a dotless surface must expand to nothing even
+    // though the dictionary has the key.
     expect(aliasesForToken('no', 'no')).not.toContain('number');
+    expect(aliasesForToken('min', 'min')).toEqual([]);
+    expect(aliasesForToken('sun', 'sun')).toEqual([]);
   });
 });
 
@@ -124,6 +152,20 @@ describe('tokenizeText', () => {
 
   it('never emits pure punctuation', () => {
     expect(tokenizeText('... --- !!!')).toEqual([]);
+  });
+
+  /**
+   * The invariant `normalize.ts` relies on. Asserted here so that if the
+   * pattern ever gains a dot-final alternative, the abbreviation dictionary's
+   * dead entries come back to life with a test to notice.
+   */
+  it('never emits a surface ending in a dot', () => {
+    const text = 'Dr. Mr. U.S.A. e.g. approx. 3.14 42% ends here. No. 5 or 1,250 lb.';
+    const surfaces = tokenizeText(text).map((t) => t.surface);
+    expect(surfaces.length).toBeGreaterThan(8);
+    for (const surface of surfaces) {
+      expect(surface.endsWith('.'), surface).toBe(false);
+    }
   });
 });
 

@@ -40,7 +40,7 @@ import {
   type CorrectionClass,
 } from './alignment-v2';
 import { isReturnToScript, projectBehavior } from './behavior';
-import { generateCandidates } from './candidates';
+import { generateCandidates, globalAnchorRepeatAllowance } from './candidates';
 import { MovementDecisionLog, type MovementDecisionRecord } from './decision-log';
 import { DocumentIndex } from './document-index';
 import { TranscriptLedger, type AlignableTail } from './ledger';
@@ -972,6 +972,10 @@ export class AlignmentEngine {
         : Math.min(profile.minimumLockContentMatches, 2));
 
     if (best.confidence >= threshold && margin >= neededMargin && contentOk) {
+      // §23.2, last clause. See `evidenceCanTriggerJump`.
+      if (isLargeForward && !this.evidenceCanTriggerJump(best)) {
+        return this.holdDecision('repeated_phrase_not_a_jump_trigger', all, margin);
+      }
       if (this.state === 'searching' || isLargeForward) {
         // §31.7/§31.14: global/large moves need distinctive anchors or a
         // longer ordered run.
@@ -991,6 +995,43 @@ export class AlignmentEngine {
       return this.holdDecision('soft_evidence', all, margin);
     }
     return this.holdDecision('insufficient_confidence', all, margin);
+  }
+
+  /**
+   * §23.2, last clause: **never use one common repeated phrase as a large-jump
+   * trigger** — enforced on the *commit* path, where it was missing.
+   *
+   * `generateCandidates` already refuses to let a repeated anchor *nominate* a
+   * distant span, but that gate has a hole the size of the continuity window:
+   * `admits` keeps every occurrence inside the continuity band, and with
+   * `continuityWindowMaxFraction: 1.0` that band runs 260 tokens ahead of the
+   * cursor. A talk whose closing beat repeats its opening refrain fits inside
+   * it comfortably. Quote the refrain out of order while the engine is
+   * confident and the far copy simply wins: it explains the whole tail
+   * verbatim, the near cursor explains none of it, and the margin is 0.15–0.34
+   * — nowhere near `ambiguityMargin`, so `resolveAmbiguity` is never consulted
+   * and a 166-token `large_skip` commits. Measured on the refrain fixture:
+   * cursor 146 → 312, `commit_skip`, confidence 0.897.
+   *
+   * The test is on the **evidence**, not on the destination. A presenter who
+   * genuinely skips ahead to a passage whose opening happens to be unremarkable
+   * must still be followed, and they are: `anchorOccurrences` answers 1 as soon
+   * as the matched span carries a single phrase or word unique to the script,
+   * which ordinary prose does almost everywhere. What it does not answer 1 for
+   * is a span every anchor of which also appears somewhere else — which is
+   * precisely, and only, the repeated passage §23.2 is about.
+   *
+   * The allowance is `globalAnchorRepeatAllowance`, the same script-relative
+   * threshold the retrieval gate uses (§23.1). One question, one threshold: a
+   * repetition that may not open a distant window may not close one either.
+   */
+  private evidenceCanTriggerJump(best: ScoredCandidate): boolean {
+    const base = best.window.startTokenIndex;
+    const positions = best.sequence.matchedPairs.map((pair) => base + pair.scriptTokenIndex);
+    return (
+      this.index.anchorOccurrences(positions) <=
+      globalAnchorRepeatAllowance(this.index.tokenCount, this.profile)
+    );
   }
 
   private localThreshold(distance: number, best: ScoredCandidate): number {

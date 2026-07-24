@@ -43,9 +43,12 @@ import {
 } from '../../../src/shared/tracking/playback-harness';
 import {
   allLivenessScenarios,
+  distinctForwardSkipTarget,
+  scenarioDistinctForwardSkip,
   scenarioNestedPartsReadThrough,
   scenarioNestedPartsStraddle,
   scenarioRefrainCallBack,
+  scenarioRefrainQuotedWhileConfident,
   scenarioShortSectionsReadThrough,
   scenarioShortSectionsStraddle,
 } from '../../fixtures/alignment/playback-scenarios';
@@ -348,6 +351,104 @@ describe('SAFETY: an exact duplicate is never a reason to move (§23.2)', () => 
     expect(committed[committed.length - 1], context).toBeGreaterThanOrEqual(
       scenario.document.spokenTokens.length - 1 - END_TOLERANCE_TOKENS,
     );
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * The refrain, on the commit path (§23.1, §23.2)
+ *
+ * L.9 above reaches §23.2 through the ambiguity policy, and that is the easy
+ * half. The engine has to be *unsure* for the ambiguity policy to run at all:
+ * L.9's aside flattens the continuity prior, and only then do the two copies of
+ * the refrain score closely enough to be a tie.
+ *
+ * With no aside the engine is confident, and the far copy does not tie the
+ * cursor — it beats it. It explains the whole rolling tail verbatim; the
+ * cursor's own neighbourhood explains none of it. The margin measured 0.15–0.34
+ * against `ambiguityMargin: 0.08`, so `resolveAmbiguity` was never consulted,
+ * and the move went down the ordinary forward-commit path: committed cursor
+ * 146 → 312, `large_skip`, reason `commit_skip`, confidence 0.897. That is
+ * §23.2's last clause — "never use one common repeated phrase as a large-jump
+ * trigger" — broken on the path §23.2 is actually about, and it survived the
+ * ambiguity fix because it never touched it.
+ *
+ * The two tests below are one rule seen from both sides, on one document, with
+ * exactly one difference between them: what the presenter quotes. L.10 quotes
+ * the refrain, whose every phrase occurs twice, and nothing may move. L.11
+ * quotes a passage that occurs once, the same distance away in the same
+ * section, and the cursor must go there.
+ *
+ * L.11 is the one that matters. A gate on large forward moves is trivially easy
+ * to write in a way that passes every safety test in this repository and every
+ * §69.7 assertion in it, because a cursor that never jumps never jumps
+ * illegally. Three liveness bugs of exactly that shape have come out of this
+ * suite. L.11 is here so a fourth cannot.
+ * ------------------------------------------------------------------------- */
+describe('SAFETY: a confident engine will not chase a duplicate either (§23.2)', () => {
+  it('L.10 — a refrain quoted out of order moves nothing, margin or no margin', { timeout: 40_000 }, () => {
+    const scenario = scenarioRefrainQuotedWhileConfident();
+    const result = runPlayback(scenario);
+
+    const opening = scenario.document.sentences[1]; // s0 is the heading
+    const closing = [...scenario.document.sentences]
+      .reverse()
+      .find((sentence) => sentence.normalizedText === opening?.normalizedText);
+    expect(closing, 'fixture no longer contains two verbatim copies').toBeDefined();
+    expect(closing?.startTokenIndex).not.toBe(opening?.startTokenIndex);
+    if (closing === undefined) return;
+
+    const committed = result.committedAfterAction;
+    const settled = committed[scenario.labels?.[0]?.afterAction ?? 0] ?? -1;
+    const context =
+      `after the quote the cursor was at ${settled}; the far copy starts at ` +
+      `${closing.startTokenIndex}; behaviors ${result.metrics.behaviorsSeen.join(',')}`;
+
+    // SAFETY: the quote did not carry the cursor to the far copy. The recorded
+    // failure landed at 312, thirteen tokens into it.
+    expect(settled, context).toBeLessThan(closing.startTokenIndex);
+    expect(closing.startTokenIndex - settled, context).toBeGreaterThan(
+      DEFAULT_TRACKING_PROFILE.largeForwardDistance,
+    );
+    expect(result.metrics.prohibitedSectionJumpCount, context).toBe(0);
+    expect(checkGoldenExpectations(scenario, result), context).toEqual([]);
+
+    // LIVENESS, in the same run: the rest of the script is still read to the
+    // end. A gate that answered the quote by freezing fails here.
+    expect(committed[committed.length - 1], context).toBeGreaterThanOrEqual(
+      scenario.document.spokenTokens.length - 1 - END_TOLERANCE_TOKENS,
+    );
+  });
+
+  it('L.11 — but a genuine skip onto a passage that occurs once still commits', { timeout: 40_000 }, () => {
+    const scenario = scenarioDistinctForwardSkip();
+    const result = runPlayback(scenario);
+    const target = distinctForwardSkipTarget(scenario.document);
+
+    const committed = result.committedAfterAction;
+    const before = committed[scenario.labels?.[0]?.afterAction ?? 0] ?? -1;
+    const after = committed[scenario.labels?.[1]?.afterAction ?? 0] ?? -1;
+    const context =
+      `cursor ${before} → ${after}; the presenter resumed at ${target.startTokenIndex}; ` +
+      `behaviors ${result.metrics.behaviorsSeen.join(',')}`;
+
+    // The move really is the kind L.10 forbids: forward, and further than the
+    // profile's own large-forward distance. Without this the test could pass on
+    // an engine that had merely crawled.
+    expect(target.startTokenIndex - before, context).toBeGreaterThan(
+      DEFAULT_TRACKING_PROFILE.largeForwardDistance,
+    );
+
+    // LIVENESS: the cursor followed the presenter to the new passage and kept
+    // reading it, rather than sitting where the skip left off.
+    expect(after, context).toBeGreaterThanOrEqual(target.endTokenIndex);
+    expect(
+      result.metrics.behaviorsSeen.some((b) => b === 'large_skip' || b === 'small_skip'),
+      `${context} — the cursor arrived without the engine ever calling it a skip`,
+    ).toBe(true);
+
+    // SAFETY, in the same run.
+    expect(result.metrics.prohibitedSectionJumpCount, context).toBe(0);
+    expect(checkGoldenExpectations(scenario, result), context).toEqual([]);
   });
 });
 
