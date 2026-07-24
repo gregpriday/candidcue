@@ -38,6 +38,12 @@ export interface ShimConfig {
   keyStatus?: Record<string, unknown>;
   /** When true, list_displays rejects (degraded enumeration path). */
   failListDisplays?: boolean;
+  /**
+   * Session mode Preflight opens on. Rust stores it as
+   * `stageBehavior.promptMode`; the settings service maps it to
+   * `general.defaultSessionMode` (§14.2 G).
+   */
+  promptMode?: 'voice' | 'manual' | 'fixed';
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -135,7 +141,7 @@ function shimBody(config: ShimConfig): void {
       },
       editor: {},
       stageBehavior: {
-        promptMode: 'voice',
+        promptMode: config.promptMode ?? 'voice',
         manualWheelMultiplier: 1,
         fixedSpeedWpm: 140,
         pointerHideDelaySeconds: 1.5,
@@ -197,10 +203,61 @@ function shimBody(config: ShimConfig): void {
     };
   }
 
+  /**
+   * Session rows, exactly as `sessions::start_session` mints them: RUST
+   * ASSIGNS the id and the session generation, control adopts. Getting this
+   * wrong is not academic — a control window that proposes its own generation
+   * has every stage payload rejected by `validate_stage_payload_header`.
+   */
+  interface SessionRow {
+    id: string;
+    sessionGeneration: number;
+    scriptId: string;
+    scriptSourceHash: string;
+    startedAt: string;
+    endedAt?: string;
+    mode: string;
+    startTokenIndex: number;
+    softPauseMs: number;
+    commandCount: number;
+    retakeCount: number;
+    reconnectCount: number;
+    manualCorrectionCount: number;
+    transcriptRetained: boolean;
+  }
+  const sessions = new Map<string, SessionRow>();
+
+  /**
+   * Event-plugin listener registry, keyed by event name. Tauri's `listen()`
+   * calls `plugin:event|listen` with a `handler` callback id minted by
+   * `transformCallback`, and Rust later evaluates `window['_<id>'](event)`.
+   * Reproducing that here is what makes Rust→control events (`stage://closed`,
+   * `stage://error`, …) drivable from a spec.
+   */
+  const listeners = new Map<string, Set<number>>();
+
   const control = {
     calls: [] as Array<{ command: string; args: unknown }>,
     fail: {} as Record<string, unknown>,
     stageGeneration: 0,
+    /**
+     * Deliberately NOT starting at 0, so the first session of a test gets
+     * generation 7 rather than 1. A control window that hard-codes 1 (as it
+     * once did) then fails visibly instead of coincidentally agreeing — which
+     * is the whole point of asserting on it.
+     */
+    sessionGeneration: 6,
+    /**
+     * The last row `start_session` minted. Specs compare the stage envelope
+     * against this to prove control ADOPTED Rust's id and generation instead
+     * of proposing its own (the C1 defect that made every stage payload fail
+     * `validate_stage_payload_header` in a packaged build).
+     */
+    lastSession: null as null | { id: string; sessionGeneration: number },
+    /** Stage window state, mutated by open/close/fullscreen like Rust's. */
+    stage: { exists: false, visible: false, fullscreen: false, nativeFullscreen: false },
+    /** Every StageDirective relayed through publish_stage_command, in order. */
+    directives: [] as Array<{ kind: string; payload: Record<string, unknown> }>,
     /** Test seam: force a command to reject with the given AppError (or clear). */
     setFail(command: string, error: unknown) {
       if (error === null || error === undefined) delete this.fail[command];
@@ -210,9 +267,32 @@ function shimBody(config: ShimConfig): void {
       for (let i = this.calls.length - 1; i >= 0; i--) if (this.calls[i]?.command === command) return this.calls[i];
       return null;
     },
+    /** Directives of one kind, oldest first (e.g. every 'position' move). */
+    directivesOfKind(kind: string) {
+      return this.directives.filter((d) => d.kind === kind);
+    },
+    /**
+     * Deliver a Rust → control event exactly the way Tauri does. Returns how
+     * many listeners received it, so a spec can prove it was not shouting into
+     * an empty room.
+     */
+    emit(event: string, payload: unknown): number {
+      const ids = listeners.get(event);
+      if (!ids || ids.size === 0) return 0;
+      let delivered = 0;
+      for (const id of [...ids]) {
+        const cb = (window as unknown as Record<string, unknown>)[`_${id}`];
+        if (typeof cb === 'function') {
+          (cb as (e: unknown) => void)({ event, id, payload });
+          delivered += 1;
+        }
+      }
+      return delivered;
+    },
     reset() {
       this.calls = [];
       this.fail = {};
+      this.directives = [];
     },
   };
   if (config.failListDisplays) {
@@ -221,9 +301,27 @@ function shimBody(config: ShimConfig): void {
   (window as unknown as { __E2E__: typeof control }).__E2E__ = control;
 
   function handle(command: string, args: Record<string, unknown> | undefined): unknown {
-    // Tauri event plugin (used by @tauri-apps/api/event) — no-op softly.
+    /*
+     * Tauri event plugin (used by @tauri-apps/api/event). `listen` returns the
+     * event id that `unlisten` is later called with; here the handler callback
+     * id doubles as that id, which is enough to unregister precisely.
+     */
     if (command.startsWith('plugin:event|')) {
-      if (command === 'plugin:event|listen') return Math.floor(Math.random() * 1e9);
+      if (command === 'plugin:event|listen') {
+        const event = String(args?.['event'] ?? '');
+        const handler = Number(args?.['handler'] ?? 0);
+        let set = listeners.get(event);
+        if (!set) {
+          set = new Set<number>();
+          listeners.set(event, set);
+        }
+        set.add(handler);
+        return handler;
+      }
+      if (command === 'plugin:event|unlisten') {
+        listeners.get(String(args?.['event'] ?? ''))?.delete(Number(args?.['eventId'] ?? 0));
+        return null;
+      }
       return null;
     }
 
@@ -347,24 +445,128 @@ function shimBody(config: ShimConfig): void {
       case 'list_display_profiles':
         return [];
 
+      case 'save_display_profile': {
+        const profile = (args?.['profile'] ?? {}) as Record<string, unknown>;
+        return { ...profile, id: (profile['id'] as string | undefined) ?? 'profile-e2e', updatedAt: nowIso() };
+      }
+
       case 'open_stage':
         control.stageGeneration += 1;
+        control.stage = { exists: true, visible: false, fullscreen: false, nativeFullscreen: false };
         return { stageGeneration: control.stageGeneration, displayFingerprint: (args?.['request'] as { displayFingerprint?: string } | undefined)?.displayFingerprint ?? 'dsp-e2e-prompter' };
 
       case 'close_stage':
+        control.stage = { exists: false, visible: false, fullscreen: false, nativeFullscreen: false };
+        return null;
+
+      /**
+       * §29.2 step 3. Rust answers with a StageAck; `accepted: false` is how a
+       * stale generation is refused, so the shape has to be real — the whole
+       * start sequence hangs on control noticing the difference.
+       */
+      case 'publish_stage_document': {
+        const envelope = (args?.['documentEnvelope'] ?? {}) as { stageGeneration?: number };
+        const generation = envelope.stageGeneration ?? control.stageGeneration;
+        return {
+          accepted: generation === control.stageGeneration,
+          stageGeneration: control.stageGeneration,
+          sessionId: (args?.['sessionId'] as string | undefined) ?? null,
+        };
+      }
+
+      case 'set_stage_fullscreen': {
+        const enabled = args?.['enabled'] === true;
+        control.stage = {
+          exists: true,
+          visible: true,
+          fullscreen: enabled,
+          nativeFullscreen: enabled && args?.['native'] === true,
+        };
+        return {
+          exists: true,
+          visible: true,
+          fullscreen: enabled,
+          nativeFullscreen: control.stage.nativeFullscreen,
+          displayFingerprint: 'dsp-e2e-prompter',
+          stageGeneration: control.stageGeneration,
+        };
+      }
+
+      case 'publish_stage_command': {
+        const action = (args?.['action'] ?? {}) as { directive?: Record<string, unknown> };
+        const directive = action.directive ?? {};
+        control.directives.push({ kind: String(directive['kind'] ?? 'unknown'), payload: directive });
+        return null;
+      }
+
+      case 'publish_listener_state':
+      case 'publish_stage_snapshot':
         return null;
 
       case 'get_stage_status':
         return {
-          exists: control.stageGeneration > 0,
-          visible: control.stageGeneration > 0,
-          fullscreen: false,
+          exists: control.stage.exists,
+          visible: control.stage.visible,
+          fullscreen: control.stage.fullscreen,
           displayFingerprint: 'dsp-e2e-prompter',
           stageGeneration: control.stageGeneration,
-          hydrated: control.stageGeneration > 0,
-          layoutReady: control.stageGeneration > 0,
+          // The stage window really does hydrate and lay out in Tauri; here it
+          // is the poll backstop in `waitForStageReady` that resolves the
+          // handshake, since no second webview exists to emit `stage://ready`.
+          hydrated: control.stage.exists,
+          layoutReady: control.stage.exists,
           mediaHealthy: true,
         };
+
+      /**
+       * `AppCoordinator::begin_session` is the ONLY writer of the session
+       * generation, and the row id is Rust's uuid — control adopts both.
+       */
+      case 'start_session': {
+        const input = (args?.['input'] ?? {}) as {
+          scriptId: string;
+          scriptSourceHash: string;
+          mode: string;
+          startTokenIndex?: number;
+        };
+        if (!store.has(input.scriptId)) throw { code: 'NOT_FOUND', userMessage: 'Script not found.' };
+        if (!['voice', 'manual', 'fixed'].includes(input.mode)) {
+          throw { code: 'INVALID_INPUT', userMessage: 'Session mode must be voice, manual, or fixed.' };
+        }
+        control.sessionGeneration += 1;
+        const id = (crypto as { randomUUID?: () => string }).randomUUID?.() ?? `sess-${Date.now()}`;
+        const row: SessionRow = {
+          id,
+          sessionGeneration: control.sessionGeneration,
+          scriptId: input.scriptId,
+          scriptSourceHash: input.scriptSourceHash,
+          startedAt: nowIso(),
+          mode: input.mode,
+          startTokenIndex: input.startTokenIndex ?? 0,
+          softPauseMs: 0,
+          commandCount: 0,
+          retakeCount: 0,
+          reconnectCount: 0,
+          manualCorrectionCount: 0,
+          // `general.saveTranscript` is 'off' in this settings document, and
+          // Rust fixes retention at session start — so this stays false.
+          transcriptRetained: false,
+        };
+        sessions.set(id, row);
+        control.lastSession = { id, sessionGeneration: row.sessionGeneration };
+        return row;
+      }
+
+      case 'end_session': {
+        const row = sessions.get(args?.['sessionId'] as string);
+        if (!row) throw { code: 'NOT_FOUND', userMessage: 'Session not found.' };
+        row.endedAt = nowIso();
+        return row;
+      }
+
+      case 'append_session_transcript':
+        // Rust REFUSES retention that was not enabled at session start.
+        throw { code: 'INVALID_INPUT', userMessage: 'This session does not retain transcripts.' };
 
       case 'list_revisions':
         return [];
@@ -402,6 +604,19 @@ function shimBody(config: ShimConfig): void {
     },
     convertFileSrc(path: string) {
       return path;
+    },
+  };
+
+  /*
+   * The event plugin injects its OWN global, separate from
+   * `__TAURI_INTERNALS__`, and `@tauri-apps/api/event`'s `_unlisten` reaches
+   * for it unconditionally. Without it every unlisten threw
+   * `Cannot read properties of undefined (reading 'unregisterListener')` —
+   * from a `.then()` nobody catches, so it surfaced as an uncaught page error.
+   */
+  (window as unknown as { __TAURI_EVENT_PLUGIN_INTERNALS__: unknown }).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+    unregisterListener(event: string, eventId: number) {
+      listeners.get(event)?.delete(eventId);
     },
   };
 }

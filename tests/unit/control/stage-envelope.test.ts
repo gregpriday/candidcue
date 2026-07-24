@@ -5,6 +5,12 @@ import {
   buildStageRenderDocument,
   buildStageSettings,
 } from '../../../src/control/services/stage-envelope';
+import {
+  defaultFollowingSettings,
+  resolveFollowProfile,
+} from '../../../src/control/lib/follow-profiles';
+import { DEFAULT_SMOOTH_FOLLOW_PROFILE } from '../../../src/shared/contracts';
+import { stageFollowProfile } from '../../../src/stage/motion';
 
 const SOURCE = `# Welcome back
 
@@ -81,5 +87,78 @@ describe('stage envelope construction (spec §29.2 / §43.3)', () => {
 
     // Envelope must stay within the Rust 8 MB cap for realistic scripts.
     expect(JSON.stringify(envelope).length).toBeLessThan(8 * 1024 * 1024);
+  });
+});
+
+/*
+ * B4 — the Follow feel (§47.1) was fully resolved on the control side and never
+ * left it: `resolveFollowProfile` produced a real profile that no field of any
+ * stage payload carried, so every feel produced identical motion.
+ *
+ * These assert the FIRST seam of that wire: the envelope — the validated
+ * document path, the same one the script travels — carries the resolved
+ * profile. They are written so that deleting the `followProfile` line from
+ * `buildStageEnvelope` fails them, not merely so that `resolveFollowProfile`
+ * returns something.
+ */
+describe('follow feel reaches the stage envelope (§47.1 → §55)', () => {
+  function envelopeFor(feel: 'calm' | 'balanced' | 'responsive') {
+    return buildStageEnvelope({
+      script: compiled(),
+      sessionId: 'session-1',
+      sessionGeneration: 1,
+      stageGeneration: 7,
+      stageSettings: buildStageSettings(),
+      following: { ...defaultFollowingSettings(), feel },
+    });
+  }
+
+  it('carries the resolved profile for a non-default feel', () => {
+    const responsive = envelopeFor('responsive');
+    expect(responsive.followProfile).toBeDefined();
+    expect(responsive.followProfile).toEqual(
+      resolveFollowProfile({ ...defaultFollowingSettings(), feel: 'responsive' }),
+    );
+  });
+
+  it('makes each feel a genuinely different profile on the wire', () => {
+    const calm = envelopeFor('calm').followProfile!;
+    const balanced = envelopeFor('balanced').followProfile!;
+    const responsive = envelopeFor('responsive').followProfile!;
+
+    // §47.1: calmer = lower natural frequency and catch-up; responsive = higher.
+    expect(calm.motion.naturalFrequency).toBeLessThan(balanced.motion.naturalFrequency);
+    expect(responsive.motion.naturalFrequency).toBeGreaterThan(
+      balanced.motion.naturalFrequency,
+    );
+    expect(calm.motion.catchUpMultiplier).toBeLessThan(responsive.motion.catchUpMultiplier);
+    // Balanced is the identity on the family profile.
+    expect(balanced).toEqual(DEFAULT_SMOOTH_FOLLOW_PROFILE);
+
+    // §47.1 safety: a feel may never weaken section safety or retake evidence.
+    for (const profile of [calm, responsive]) {
+      expect(profile.alignment).toEqual(DEFAULT_SMOOTH_FOLLOW_PROFILE.alignment);
+    }
+  });
+
+  it('sends a profile the stage will actually accept', () => {
+    // The two halves of the wire have to agree about the version, or the stage
+    // silently drops back to its default and the feel is inert again — one
+    // layer further along, and invisible.
+    const sent = envelopeFor('responsive').followProfile!;
+    expect(stageFollowProfile(sent)).toBe(sent);
+  });
+
+  it('omits the profile when no follow settings were supplied', () => {
+    const envelope = buildStageEnvelope({
+      script: compiled(),
+      sessionId: 'session-1',
+      sessionGeneration: 1,
+      stageGeneration: 7,
+      stageSettings: buildStageSettings(),
+    });
+    expect(envelope.followProfile).toBeUndefined();
+    // …and the stage answers that with its own default rather than nothing.
+    expect(stageFollowProfile(envelope.followProfile)).toBe(DEFAULT_SMOOTH_FOLLOW_PROFILE);
   });
 });

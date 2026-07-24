@@ -23,6 +23,7 @@ import {
   createStageTransitionController,
   emptyRenderedLineMap,
   identityUnitAxis,
+  REANCHOR_FADE_MS,
 } from '../../../src/stage/motion';
 import { fixtureFingerprint, syntheticLayout } from '../../fixtures/layout';
 
@@ -154,7 +155,18 @@ describe('a directive that cannot be resolved is parked, not spent', () => {
     expect(engine.deferredPlantOverwrites).toBe(2);
 
     engine.setLineMap(validMap);
-    const applied = engine.frame(148);
+    // The §62 park ends on the first frame after the map resolves: the licence
+    // now has a destination, so it stops being deferred and starts being
+    // *obscured* (§20.4). It is still parked — but for a different, bounded
+    // reason, and the counter no longer moves.
+    const resolved = engine.frame(148);
+    expect(resolved.controllerState).not.toContain('transition_deferred');
+    expect(resolved.controllerState).toContain('reanchor_fade');
+    expect(engine.deferredPlantOverwrites).toBe(2);
+    expect(Math.abs(resolved.scrollPx - 2100)).toBeLessThan(1);
+
+    let applied = resolved;
+    for (let t = 164; t <= 148 + REANCHOR_FADE_MS + 16; t += 16) applied = engine.frame(t);
     const wanted = validMap.sampleMotionPath(10)?.scrollPx ?? 0;
     // A re-anchor IS the discontinuity: it lands in one frame, it does not
     // become a two-second roll. (The controller then integrates that one
@@ -162,7 +174,6 @@ describe('a directive that cannot be resolved is parked, not spent', () => {
     // an equality.)
     expect(Math.abs(applied.scrollPx - wanted)).toBeLessThan(validMap.linePitchPx);
     expect(Math.abs(applied.scrollPx - 2100)).toBeGreaterThan(validMap.linePitchPx);
-    expect(applied.controllerState).not.toContain('transition_deferred');
     expect(engine.deferredPlantOverwrites).toBe(2);
   });
 
@@ -205,7 +216,8 @@ describe('a directive that cannot be resolved is parked, not spent', () => {
     });
     engine.receiveFrame(frame({ revision: 2, sessionTimeMs: 200, transition: newer }), 200);
     engine.setLineMap(validMap);
-    const applied = engine.frame(216);
+    let applied = engine.frame(216);
+    for (let t = 232; t <= 216 + REANCHOR_FADE_MS + 16; t += 16) applied = engine.frame(t);
     // The destination is the NEW directive's, not the parked one's.
     const newerPx = validMap.sampleMotionPath(150)?.scrollPx ?? -1;
     const parkedPx = validMap.sampleMotionPath(10)?.scrollPx ?? -1;

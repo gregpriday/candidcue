@@ -22,6 +22,13 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e/browser',
   testMatch: '**/*.spec.ts',
+  /*
+   * Vite discovers the compile worker's dependency chain lazily and then forces
+   * a full page reload ("optimized dependencies changed. reloading"), which
+   * wiped app state mid-test on any cold `node_modules/.vite`. The warm-up
+   * absorbs that reload before the first spec runs.
+   */
+  globalSetup: './tests/e2e/browser/fixtures/global-setup.ts',
   // Journeys mutate shared dev-server state (localStorage per context is
   // isolated, but keeping it serial makes screenshots and failures legible).
   fullyParallel: false,

@@ -77,8 +77,15 @@
 {/each}
 
 <style>
+  /* Per-word past dimming. The opacity below is how the presenter sees where
+     they are and never changes; the tween is a §61 nonessential effect and is
+     zeroed by `--stage-fx-ms` on the script layer while frames are being
+     missed — this is the biggest single win of the three, because it is one
+     interpolation per rendered WORD. */
   .w {
-    transition: opacity 240ms var(--ease-out, ease-out);
+    transition-property: opacity;
+    transition-duration: var(--stage-fx-ms, 240ms);
+    transition-timing-function: var(--ease-out, ease-out);
   }
   .w.past {
     opacity: var(--stage-past-opacity, 0.42);

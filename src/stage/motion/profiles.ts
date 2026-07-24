@@ -9,11 +9,38 @@
  * Every number traces back to `SmoothFollowProfile.motion`; nothing here is a
  * free-floating constant.
  */
-import type {
-  SmoothFollowProfile,
-  StageTransitionDirective,
-  TrackingStateV2,
+import {
+  DEFAULT_SMOOTH_FOLLOW_PROFILE,
+  isInterpretableSmoothFollowProfile,
+  type SmoothFollowProfile,
+  type StageTransitionDirective,
+  type TrackingStateV2,
 } from '../../shared/contracts';
+
+/**
+ * The profile the stage will actually run this session on (§47.1, §55).
+ *
+ * Control resolves the user's Follow feel into a versioned profile and sends it
+ * in the stage envelope. The stage decides whether it can be applied:
+ *
+ *   - a profile of the version this build interprets, whose numbers are all
+ *     present and finite, is used exactly as sent;
+ *   - anything else — a version from a newer or older build, a truncated
+ *     payload, nothing at all — falls back to `DEFAULT_SMOOTH_FOLLOW_PROFILE`.
+ *
+ * Falling back rather than merging is the whole point. A version bump means a
+ * field's MEANING changed, so a partial application would produce motion that
+ * is neither the profile control sent nor the one this stage was tuned and
+ * evaluated against — an unreproducible third thing, on the presenter's glass,
+ * with no way for either side to know. The default is always followable.
+ */
+export function stageFollowProfile(
+  candidate: SmoothFollowProfile | null | undefined,
+): SmoothFollowProfile {
+  return isInterpretableSmoothFollowProfile(candidate)
+    ? candidate
+    : DEFAULT_SMOOTH_FOLLOW_PROFILE;
+}
 
 export interface MotionLimits {
   /** Controller natural frequency (rad/s). */

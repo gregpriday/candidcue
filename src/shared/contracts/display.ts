@@ -5,6 +5,7 @@
 import type { Uuid, IsoDateTime } from './core';
 import type { CompiledBlock } from './compiler';
 import type { ListenerGeometry, ListenerStageSelection } from './listener';
+import type { SmoothFollowProfile } from './smooth-follow';
 
 export interface StageSettings {
   schemaVersion: 1;
@@ -51,6 +52,25 @@ export interface StageSessionEnvelope {
   renderDocument: StageRenderDocument;
   listener?: ListenerStageSelection;
   initialTokenIndex: number;
+  /**
+   * Companion §47.1/§55. The resolved, versioned motion profile this session
+   * runs on — the user's Follow feel and Voice lead, already applied to the
+   * chosen profile family by `resolveFollowProfile` on the control side.
+   *
+   * It travels in the envelope, not on a channel of its own, because it is
+   * MOTION configuration: it must arrive on the same validated document path
+   * the script does, under the same session/generation checks, and it must be
+   * in force before the first frame is followed. A late or out-of-band profile
+   * would mean the take's first seconds ran on different dynamics from the
+   * rest — the coaching rail can afford that (§5.2 makes it advisory), the
+   * controller cannot.
+   *
+   * Optional, and a stage that cannot interpret the version it receives falls
+   * back to `DEFAULT_SMOOTH_FOLLOW_PROFILE` (see
+   * `isInterpretableSmoothFollowProfile`), so an older stage and a newer
+   * control still produce motion — just not the chosen feel.
+   */
+  followProfile?: SmoothFollowProfile;
 }
 
 export interface StageRenderDocument {

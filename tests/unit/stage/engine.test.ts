@@ -15,6 +15,7 @@ import {
   identityUnitAxis,
   isCalibrationEvidence,
   limitsForState,
+  REANCHOR_FADE_MS,
   type StageMotionEngine,
   type StageRenderedLineMap,
 } from '../../../src/stage/motion';
@@ -321,10 +322,14 @@ describe('holding and degraded operation (§62, §32)', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
     engine.setFallbackTarget({ scrollPx: 1500, disposition: 'reanchor', atMs: 0 });
-    const first = engine.frame(0);
-    expect(first.scrollPx).toBeCloseTo(1500, 0);
+    // §20.4: the jump is spent under the fade, so it lands one fade-down later
+    // — but still as ONE step, not a roll. Nothing moves in between.
+    let last = engine.frame(0);
+    expect(last.scrollPx).toBeCloseTo(0, 0);
+    for (let t = 16.7; t <= REANCHOR_FADE_MS + 16.7; t += 16.7) last = engine.frame(t);
+    expect(last.scrollPx).toBeCloseTo(1500, 0);
     // The disposition is consumed: it does not re-fire every frame.
-    const second = engine.frame(16.7);
+    const second = engine.frame(REANCHOR_FADE_MS + 33.4);
     expect(Math.abs(second.scrollPx - 1500)).toBeLessThan(2);
   });
 

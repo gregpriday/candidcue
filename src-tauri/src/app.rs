@@ -337,6 +337,22 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
         }
     });
 
+    // §62 recoverable stage-layout failure. The stage holds motion rather than
+    // move on guessed line positions, so the operator has to be told — this is
+    // the only path by which control learns. Relayed under its own name for the
+    // S1 reason above, and generation-checked like every other stage-originated
+    // event: a held layout from a stage lifetime that is already gone is not a
+    // problem with the take running now.
+    let handle = app.clone();
+    app.listen_any(events::STAGE_LAYOUT_ERROR, move |event| {
+        if let Some((gen, value)) = generation(event.payload()) {
+            let coordinator = handle.state::<AppCoordinator>();
+            if coordinator.stage_event(gen, |_| {}) {
+                let _ = handle.emit_to(CONTROL_LABEL, events::STAGE_LAYOUT_FAILED, value);
+            }
+        }
+    });
+
     let handle = app.clone();
     app.listen_any(events::STAGE_ESCAPE_PRESSED, move |event| {
         // Relay to control, which owns session shutdown policy — but only for

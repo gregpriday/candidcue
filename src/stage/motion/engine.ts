@@ -89,6 +89,16 @@ export interface StageMotionFrameResult {
   ack: StageMotionAck | null;
   degraded: boolean;
   hitch: boolean;
+  /**
+   * §20.4. Opacity the document layer must be painted at this frame. `1` except
+   * during a re-anchor transition, where it ramps down, sits at `0` for the one
+   * frame that moves the transform, and ramps back up.
+   *
+   * This is not decoration: it is the other half of the re-anchor. The renderer
+   * MUST apply it to the same element it applies `scrollPx` to, in the same
+   * update, or the guarantee that the document moves while obscured is lost.
+   */
+  documentOpacity: number;
 }
 
 export interface StageMotionEngineOptions {
@@ -141,8 +151,28 @@ export interface StageMotionEngine {
    * line map) and was parked rather than spent (§62, §53).
    */
   readonly deferredPlantOverwrites: number;
+  /**
+   * Re-anchor transitions that were obscured by a §20.4 fade rather than cut
+   * bare — diagnostics only.
+   */
+  readonly reanchorFades: number;
 
   configureSession(gate: SemanticFrameGate, nowMs: number): void;
+  /**
+   * §47.1/§55. Adopt a resolved motion profile — the user's Follow feel, as
+   * control resolved it, arriving in the stage envelope.
+   *
+   * It is a setter rather than a constructor argument alone because the stage
+   * window outlives a session: a second take on the same window republishes an
+   * envelope into the SAME engine, and a profile that could only be read at
+   * construction would leave the new session running the previous one's feel.
+   *
+   * Nothing about plant state changes. The profile reshapes limits, the
+   * prediction horizon and the speech envelope; position, velocity and
+   * acceleration carry straight through, and the jerk limiter absorbs the new
+   * bounds over the following frames rather than stepping to them.
+   */
+  setProfile(next: SmoothFollowProfile): void;
   setLineMap(map: StageRenderedLineMap | null): void;
   setBounds(minPx: number, maxPx: number): void;
   setReducedMotion(reduced: boolean): void;
@@ -201,6 +231,67 @@ const DEFAULT_MANUAL_GRACE_MS = 2500;
  */
 const LATCH_REANCHOR_PERSISTENCE_MS = 400;
 
+/* ------------------------------------------------------------------ §20.4 --
+ * The re-anchor transition.
+ *
+ * A re-anchor is an authorized DISCONTINUITY: the document is somewhere the
+ * presenter is not, and the honest fix is to put it where they are in one step
+ * rather than fly there. Applied bare, though, that step is a teleport — the
+ * whole script snaps across the glass and the presenter loses their place
+ * exactly when they are already recovering from a skip or a retake.
+ *
+ * §20.4's answer is to hide the step rather than soften it: fade the document
+ * down, change the transform WHILE IT IS INVISIBLE, fade it back up. The
+ * presenter sees the text dim and return in the right place. They never see it
+ * move, because it never moves while it can be seen.
+ *
+ * The ordering is the whole design. A fade that merely overlaps the jump is
+ * worse than no fade at all — a half-transparent document sliding across the
+ * glass is a ghost, and a ghost is harder to ignore than a cut. So the plant
+ * write is gated on the fade-down being COMPLETE, and the frame that performs
+ * it reports `documentOpacity: 0`.
+ */
+
+/**
+ * Per leg. §20.4 specifies 90–130 ms for the fade-down and the fade-up; this is
+ * the midpoint, so the whole transition costs ~220 ms. Well inside the 1.5 s
+ * `transitionTtlMs` a directive is issued with, so an ordinary directive never
+ * expires underneath its own fade.
+ */
+export const REANCHOR_FADE_MS = 110;
+
+/**
+ * Reduced motion: an instant cut, no fade.
+ *
+ * §20.4 says "respect reduced motion with a near-instant opacity transition",
+ * and this deviates from that wording deliberately. A fade of the WHOLE
+ * document is a full-field luminance swing, which is the accommodation
+ * photosensitive users are asking to be spared; and shrinking it to "near
+ * instant" (two frames) does not obscure anything anyway — it is a flicker
+ * wrapped around a jump the presenter still sees. The rest of this codebase
+ * already reads reduced motion as "reposition without a spectacle" (§32.4:
+ * `classifyTransition` returns `instant`, and the motion limits drop the
+ * easing), so a bare cut is the consistent reading.
+ *
+ * The machinery is duration-driven, so restoring the literal spec behaviour is
+ * this constant: set it to ~40 and reduced motion gets a two-frame fade with
+ * the same move-while-obscured guarantee.
+ */
+const REDUCED_MOTION_FADE_MS = 0;
+
+/**
+ * Below this the re-anchor is not a teleport and there is nothing worth
+ * obscuring, so fading would be a gratuitous flash — a re-affirmed directive
+ * whose destination is where we already are, or a session reset issued while
+ * the document is already at the top. One rendered line is the natural unit:
+ * a correction the presenter could not distinguish from ordinary following.
+ */
+function fadeWorthwhile(distancePx: number, linePitchPx: number): boolean {
+  return distancePx > Math.max(1, linePitchPx);
+}
+
+type ReanchorFadePhase = 'idle' | 'down' | 'up';
+
 /**
  * Session clock (§9.1). Frames carry session-relative timestamps; the stage
  * only has `performance.now()`. Track the minimum observed offset — the sample
@@ -227,7 +318,10 @@ function createSessionClock() {
 export function createStageMotionEngine(
   options: StageMotionEngineOptions = {},
 ): StageMotionEngine {
-  const profile = options.profile ?? DEFAULT_SMOOTH_FOLLOW_PROFILE;
+  // §47.1: mutable, because a stage window outlives a session and the next
+  // session's envelope may carry a different feel. Read on every frame — never
+  // captured — so a swap takes effect on the next one.
+  let profile = options.profile ?? DEFAULT_SMOOTH_FOLLOW_PROFILE;
   const frameStaleMs = options.frameStaleMs ?? DEFAULT_FRAME_STALE_MS;
   const styleIntervalMs = options.styleIntervalMs ?? DEFAULT_STYLE_INTERVAL_MS;
   const manualGraceMs = options.manualGraceMs ?? DEFAULT_MANUAL_GRACE_MS;
@@ -286,6 +380,72 @@ export function createStageMotionEngine(
   let deferredPlantOverwrites = 0;
   /** Visual-block span the plant is currently held at (§8.6). */
   let heldVisualSpan: VisualBlockSpan | null = null;
+
+  /* ---- §20.4 re-anchor fade ---- */
+  let fadePhase: ReanchorFadePhase = 'idle';
+  let fadeStartedAtMs = 0;
+  /** Opacity the current leg ramps FROM, so an interrupted leg never snaps. */
+  let fadeFromOpacity = 1;
+  /** Re-anchor transitions obscured by a fade — diagnostics only. */
+  let reanchorFades = 0;
+
+  function fadeLegMs(): number {
+    return reducedMotion ? REDUCED_MOTION_FADE_MS : REANCHOR_FADE_MS;
+  }
+
+  function opacityAt(nowMs: number): number {
+    if (fadePhase === 'idle') return 1;
+    const leg = fadeLegMs();
+    const t = leg <= 0 ? 1 : Math.min(1, Math.max(0, (nowMs - fadeStartedAtMs) / leg));
+    return fadePhase === 'down'
+      ? fadeFromOpacity * (1 - t)
+      : fadeFromOpacity + (1 - fadeFromOpacity) * t;
+  }
+
+  function beginFade(phase: 'down' | 'up', nowMs: number) {
+    fadeFromOpacity = opacityAt(nowMs);
+    fadePhase = phase;
+    fadeStartedAtMs = nowMs;
+  }
+
+  /**
+   * May the plant be written for a re-anchor to `destinationPx` on this frame?
+   *
+   * True only when the document is genuinely obscured — or when obscuring it
+   * was never warranted (reduced motion, or a move too small to see). This is
+   * the gate that makes "the transform changes while invisible" a property of
+   * the code rather than a hope about timing.
+   */
+  function fadeAdmitsReanchor(nowMs: number, destinationPx: number): boolean {
+    if (fadeLegMs() <= 0) return true;
+    // A fade already at zero is the point of the exercise: move now.
+    if (fadePhase === 'down') return nowMs - fadeStartedAtMs >= fadeLegMs();
+    return !fadeWorthwhile(
+      Math.abs(destinationPx - controller.state.q),
+      map?.linePitchPx ?? 0,
+    );
+  }
+
+  /**
+   * Nothing is pending behind the fade any more — the directive expired, its
+   * licence was revoked, or its destination stopped resolving. Come back up.
+   * Text left dim is not a degraded transition, it is a permanently unreadable
+   * stage, so every exit path from `down` runs through here or through the
+   * apply itself.
+   */
+  function abortFadeIfOrphaned(nowMs: number, pending: boolean) {
+    if (fadePhase === 'down' && !pending) beginFade('up', nowMs);
+    if (fadePhase === 'up' && nowMs - fadeStartedAtMs >= fadeLegMs()) {
+      fadePhase = 'idle';
+      fadeFromOpacity = 1;
+    }
+  }
+
+  function resetFade() {
+    fadePhase = 'idle';
+    fadeStartedAtMs = 0;
+    fadeFromOpacity = 1;
+  }
 
   /** Every authorized plant write goes through here so the latch stays honest. */
   function reanchorTo(positionPx: number, velocityPxS?: number) {
@@ -372,8 +532,12 @@ export function createStageMotionEngine(
     controller,
     transitions,
     diagnostics,
-    profile,
     unitAxis,
+    // A getter, not a captured value: `setProfile` must be observable through
+    // the same property everything else reads.
+    get profile() {
+      return profile;
+    },
     get map() {
       return map;
     },
@@ -388,6 +552,9 @@ export function createStageMotionEngine(
     },
     get deferredPlantOverwrites() {
       return deferredPlantOverwrites;
+    },
+    get reanchorFades() {
+      return reanchorFades;
     },
 
     configureSession(gate, nowMs) {
@@ -404,6 +571,22 @@ export function createStageMotionEngine(
       targetRegressions = 0;
       latchReanchors = 0;
       deferredPlantOverwrites = 0;
+      // A new session cannot inherit a half-finished fade from the old one.
+      resetFade();
+      reanchorFades = 0;
+    },
+
+    setProfile(next) {
+      // Identity check first: the mount site re-asserts the profile whenever
+      // anything about the envelope changes, and rebuilding the planner on
+      // every one of those would throw away the line-handoff state for nothing.
+      if (next === profile) return;
+      profile = next;
+      // Both of these were built FROM the profile: the receiver's plausible
+      // speech envelope (§55 `prediction.maxUnitsPerSecond`) and the planner's
+      // feed-forward ceiling. Everything else reads `profile` per frame.
+      receiver.setProfile(next);
+      rebuildPlanner();
     },
 
     setLineMap(next) {
@@ -459,14 +642,41 @@ export function createStageMotionEngine(
       // §26.3: the only authorized overwrite of plant state during following.
       const overwrite = transitions.consumePlantOverwrite();
       let deferredOverwrite = false;
+      /**
+       * §20.4. A re-anchor is waiting behind an in-flight fade-down. The plant
+       * is frozen while this is true — the document must not creep under a
+       * half-transparent layer, or the transition becomes the moving ghost the
+       * fade exists to prevent.
+       */
+      let fadeHold = false;
+      /** True on the one frame that spends a re-anchor while obscured. */
+      let reanchorApplied = false;
       if (overwrite) {
         const destination = destinationScrollPx(overwrite.destinationTokenIndex, overwrite.toUnit);
-        if (destination !== null) {
+        if (destination !== null && fadeAdmitsReanchor(nowMs, destination)) {
           reanchorTo(destination);
+          reanchorApplied = true;
           // A re-anchor *is* the discontinuity: once applied it is finished, so
           // its backward-capable profile cannot linger and let ordinary
           // following reverse afterwards.
           transitions.complete(overwrite.id);
+          // The glass is dark and the document has moved: bring it back.
+          if (fadePhase === 'down') beginFade('up', nowMs);
+        } else if (destination !== null) {
+          /* §20.4: the destination is known, but the document is still visible.
+           *
+           * Park the licence rather than spend it. Parking is the ONLY safe way
+           * to wait: it keeps the directive revocable, so an expiry, a
+           * supersession by a newer directive, or a session reset during the
+           * ~110 ms fade takes the pending write with it instead of landing a
+           * stale destination on the far side of the fade.
+           */
+          transitions.deferPlantOverwrite(overwrite);
+          if (fadePhase !== 'down') {
+            beginFade('down', nowMs);
+            reanchorFades++;
+          }
+          fadeHold = true;
         } else {
           /* §62: there is no line map, so there is no destination — yet.
            *
@@ -544,12 +754,41 @@ export function createStageMotionEngine(
         targetPx = fallback.scrollPx;
         feedForward = 0;
         state = 'following';
-        if (fallback.disposition === 'reanchor' || fallback.disposition === 'instant') {
-          // Explicit command/manual navigation: an authorized reposition.
+        if (fallback.disposition === 'instant') {
+          // §32.4 reduced motion: reposition with no spectacle at all.
           reanchorTo(fallback.scrollPx);
           fallback = { ...fallback, disposition: 'follow' };
+          reanchorApplied = true;
+        } else if (fallback.disposition === 'reanchor') {
+          // The degraded path's `fade_jump` (§20.4) — an explicit jump beyond
+          // the comfortable traversal distance. Same rule as a directive: move
+          // only once the fade-down has finished.
+          if (fadeAdmitsReanchor(nowMs, fallback.scrollPx)) {
+            reanchorTo(fallback.scrollPx);
+            fallback = { ...fallback, disposition: 'follow' };
+            reanchorApplied = true;
+            if (fadePhase === 'down') beginFade('up', nowMs);
+          } else {
+            if (fadePhase !== 'down') {
+              beginFade('down', nowMs);
+              reanchorFades++;
+            }
+            fadeHold = true;
+          }
         }
       }
+
+      /*
+       * §20.4 exit guarantee. `fadeHold` is true only while a write is actually
+       * pending behind the fade; if it is not, whatever the fade was hiding is
+       * gone — expired, superseded, revoked, or made unresolvable by a relayout
+       * — and the fade must unwind immediately. There is no path out of `down`
+       * that does not go through here or through the apply above, because a
+       * fade that stalls leaves the presenter reading a dimmed script with no
+       * way to recover it.
+       */
+      abortFadeIfOrphaned(nowMs, fadeHold);
+      const documentOpacity = opacityAt(nowMs);
 
       if (paused) state = 'paused';
 
@@ -570,7 +809,11 @@ export function createStageMotionEngine(
       // regression and releases the latch.
       let regressed = false;
       let latchReanchored = false;
-      if (!holding && !visualSpanHold) {
+      // §20.4: while the fade-down runs the plant is going to be repositioned
+      // anyway, so latching to a target it is about to abandon only leaves
+      // stale bookkeeping for the frame after the re-anchor. `reanchorTo`
+      // clears the latch on the way through.
+      if (!holding && !visualSpanHold && !fadeHold) {
         if (limits.allowBackward || manualGrace) {
           // A backward-capable profile is an explicit classification of the
           // regression; manual authority suspends automatic correction outright
@@ -620,10 +863,19 @@ export function createStageMotionEngine(
         }
       }
 
+      /*
+       * §20.3 step 4 + §20.4. Behind the fade the plant aims at where it
+       * already is, so the controller decelerates to rest under its own jerk
+       * limits instead of creeping toward the destination under a
+       * half-transparent layer. That is both the spec's "decelerate briefly"
+       * and the reason the re-anchor stays a single invisible step: nothing
+       * visible moves between the fade starting and the transform changing.
+       */
+      const frozen = holding || fadeHold;
       const step = controller.step({
         dtMs,
-        targetPx: holding ? controller.state.q : targetPx,
-        feedForwardVelocityPxS: holding ? 0 : feedForward,
+        targetPx: frozen ? controller.state.q : targetPx,
+        feedForwardVelocityPxS: frozen ? 0 : feedForward,
         limits,
         allowRest: true,
       });
@@ -642,6 +894,7 @@ export function createStageMotionEngine(
         regressed ? 'target_regression' : null,
         latchReanchored ? 'latch_reanchor' : null,
         deferredOverwrite ? 'transition_deferred' : null,
+        fadeHold ? 'reanchor_fade' : null,
         step.fused ? 'fused' : null,
       ]
         .filter(Boolean)
@@ -653,7 +906,7 @@ export function createStageMotionEngine(
         nowMs,
         dtMs,
         hitch,
-        targetPx: holding ? controller.state.q : targetPx,
+        targetPx: frozen ? controller.state.q : targetPx,
         positionPx: step.q,
         velocityPxS: step.v,
         accelerationPxS2: step.a,
@@ -669,7 +922,16 @@ export function createStageMotionEngine(
       const styleInterval = diagnostics.degraded
         ? DEGRADED_STYLE_INTERVAL_MS
         : styleIntervalMs;
-      const styleTick = nowMs - lastStyleAtMs >= styleInterval;
+      /*
+       * §20.4 + §22.4. The frame that re-anchors forces a styling refresh even
+       * off the capped cadence. Active/passed styling is epoch state, and after
+       * a re-anchor the old take's passed run is wrong by up to 100 ms of
+       * cadence — which is most of the fade-up. Refreshing on the obscured
+       * frame means the reading band, the past/future ramps and the current
+       * phrase are already correct at the instant the text becomes visible
+       * again, instead of visibly correcting themselves afterwards.
+       */
+      const styleTick = reanchorApplied || nowMs - lastStyleAtMs >= styleInterval;
       if (styleTick) lastStyleAtMs = nowMs;
 
       /*
@@ -693,7 +955,7 @@ export function createStageMotionEngine(
               revision: frameForAck ? frameForAck.revision : -1,
               epoch: frameForAck ? frameForAck.epoch : -1,
               layoutGeneration: receiver.gate.layoutGeneration,
-              targetPx: holding ? controller.state.q : targetPx,
+              targetPx: frozen ? controller.state.q : targetPx,
               positionPx: step.q,
               velocityPxS: step.v,
               activeLineId: lineId,
@@ -706,7 +968,7 @@ export function createStageMotionEngine(
         scrollPx: step.q,
         velocityPxS: step.v,
         accelerationPxS2: step.a,
-        targetPx: holding ? controller.state.q : targetPx,
+        targetPx: frozen ? controller.state.q : targetPx,
         activeLineId: lineId,
         lineProgress,
         activeTokenIndex,
@@ -717,6 +979,7 @@ export function createStageMotionEngine(
         ack,
         degraded: diagnostics.degraded,
         hitch,
+        documentOpacity,
       };
     },
 
@@ -726,6 +989,10 @@ export function createStageMotionEngine(
       reanchorTo(positionPx);
       manualUntilMs = nowMs + manualGraceMs;
       fallback = null;
+      // Direct manipulation is never obscured: the presenter is looking at the
+      // text they are dragging. If a directive was mid-fade it re-fades from
+      // full opacity on the next frame rather than landing behind a dim layer.
+      resetFade();
     },
 
     layoutRecovery(request) {
@@ -757,6 +1024,10 @@ export function createStageMotionEngine(
       // §32.4: re-anchor to what is on screen; never replay missed motion.
       reanchorTo(positionPx);
       lastFrameAtMs = nowMs;
+      // Nor replay a missed fade. The window may have been hidden for minutes;
+      // coming back to a document stuck at 30% opacity is the worst outcome of
+      // all, and no frames ran to unwind it.
+      resetFade();
     },
 
     reset(positionPx) {
@@ -774,6 +1045,8 @@ export function createStageMotionEngine(
       latchReanchors = 0;
       latchExcessSinceMs = null;
       deferredPlantOverwrites = 0;
+      resetFade();
+      reanchorFades = 0;
     },
   };
 }

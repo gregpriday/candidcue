@@ -292,12 +292,23 @@ export interface SmoothFollowProfile {
 }
 
 /**
+ * The one `SmoothFollowProfile.version` this build knows how to interpret.
+ *
+ * The version is bumped whenever a FIELD'S MEANING changes, so an older profile
+ * is not a subset of a newer one — its numbers say something different. That
+ * makes exact equality the only honest test: a consumer handed any other
+ * version cannot interpret it, in either direction, and must fall back to its
+ * own default rather than apply numbers it is guessing about (§55).
+ */
+export const SMOOTH_FOLLOW_PROFILE_VERSION = 1;
+
+/**
  * Companion Appendix A. Midpoints of the published starting ranges; every value is
  * a calibration hypothesis to be tuned against the speech and motion corpus, not
  * product truth. Bump `version` whenever a field's meaning changes.
  */
 export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
-  version: 1,
+  version: SMOOTH_FOLLOW_PROFILE_VERSION,
   id: 'default-v1',
 
   prediction: {
@@ -351,6 +362,54 @@ export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
     minimumConfidence: 0.8,
   },
 };
+
+/**
+ * Every numeric leaf of `reference` must exist on `candidate` as a finite
+ * number. Walking the DEFAULT profile rather than a hand-written field list is
+ * deliberate: a field added to `SmoothFollowProfile` is validated the moment it
+ * gets a default, with no second list to forget.
+ */
+function everyNumberIsFinite(reference: Record<string, unknown>, candidate: unknown): boolean {
+  if (typeof candidate !== 'object' || candidate === null) return false;
+  const value = candidate as Record<string, unknown>;
+  for (const [key, ref] of Object.entries(reference)) {
+    const got = value[key];
+    if (typeof ref === 'number') {
+      if (typeof got !== 'number' || !Number.isFinite(got)) return false;
+    } else if (typeof ref === 'object' && ref !== null) {
+      if (!everyNumberIsFinite(ref as Record<string, unknown>, got)) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Is this profile safe to APPLY, as opposed to merely well-typed?
+ *
+ * A profile crosses a process boundary (control → validated stage envelope), so
+ * by the time it arrives it is untrusted data, and every number in it ends up
+ * multiplying pixels on the presenter's glass. Two ways it can be wrong:
+ *
+ *   - a version this build does not interpret (see the constant above);
+ *   - a truncated or corrupted payload, where a missing field becomes
+ *     `undefined` and the first arithmetic on it produces NaN limits — motion
+ *     that is neither the chosen feel nor the default, and unrecoverable
+ *     because NaN propagates through the whole controller.
+ *
+ * Both answer "no", and the caller's answer to "no" is its own default.
+ */
+export function isInterpretableSmoothFollowProfile(
+  value: unknown,
+): value is SmoothFollowProfile {
+  if (typeof value !== 'object' || value === null) return false;
+  const profile = value as Partial<SmoothFollowProfile>;
+  if (profile.version !== SMOOTH_FOLLOW_PROFILE_VERSION) return false;
+  if (typeof profile.id !== 'string' || profile.id.length === 0) return false;
+  return everyNumberIsFinite(
+    DEFAULT_SMOOTH_FOLLOW_PROFILE as unknown as Record<string, unknown>,
+    value,
+  );
+}
 
 /** Companion §35. How much semantic (Luna) assistance the session may use. */
 export type IntelligenceMode = 'local_only' | 'balanced' | 'enhanced';

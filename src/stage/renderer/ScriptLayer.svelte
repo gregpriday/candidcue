@@ -20,6 +20,7 @@
   import { untrack } from 'svelte';
   import type {
     SemanticMotionFrame,
+    SmoothFollowProfile,
     StageMotionAck,
     StageRenderDocument,
     StageSettings,
@@ -68,11 +69,13 @@
     sessionGeneration = 0,
     stageGeneration = 0,
     scriptCompileHash = '',
+    followProfile = undefined,
     bottomInsetPx = 0,
     onlayoutready = undefined,
     onmotionack = undefined,
     onlayoutgeneration = undefined,
     onlayouterror = undefined,
+    ondegraded = undefined,
   }: {
     doc: StageRenderDocument;
     settings: StageSettings;
@@ -85,6 +88,13 @@
     stageGeneration?: number;
     scriptCompileHash?: string;
     /**
+     * §47.1/§55. The versioned motion profile this session runs on — the user's
+     * Follow feel and Voice lead, resolved by control and validated by the
+     * mount site (`stageFollowProfile`). Given to the engine at construction
+     * AND on every change, because the stage window outlives a session.
+     */
+    followProfile?: SmoothFollowProfile;
+    /**
      * §7.1. Extra bottom inset the script must give up for the Coaching Rail's
      * reserved band. Applied by the mount site before the take begins and held
      * for the whole take; the reading band and every measurement fold it into
@@ -94,8 +104,18 @@
     onlayoutready?: () => void;
     onmotionack?: (ack: StageMotionAck) => void;
     onlayoutgeneration?: (generation: number) => void;
-    /** §62: the measurement is unusable after a bounded retry; the stage holds. */
+    /**
+     * §62: the measurement is unusable after a bounded retry; the stage holds.
+     * Called again with an EMPTY list once a later rebuild succeeds, so the
+     * operator's recoverable-error notice can clear itself.
+     */
     onlayouterror?: (issues: string[]) => void;
+    /**
+     * §61: the frame budget is being missed (or is being met again). The mount
+     * site relays this to the layers that can cheapen themselves; the styling
+     * cadence and the motion limits already back off inside the engine.
+     */
+    ondegraded?: (degraded: boolean) => void;
   } = $props();
 
   /* ---- viewport + derived layout ---- */
@@ -117,11 +137,42 @@
 
   /* ---- scroll state ---- */
   let scrollY = $state(0);
+  /**
+   * §20.4. Opacity of the document layer, owned by the engine's re-anchor
+   * transition. `1` for the whole of an ordinary read; it dips to `0` around
+   * the single frame on which a large skip, a distant retake or a command jump
+   * rewrites the transform, so the presenter sees the text dim and return in
+   * place rather than fly across the glass.
+   *
+   * It is applied to the SAME element as `scrollY`, deliberately: Svelte
+   * flushes both style writes in one update, so the browser can never paint a
+   * frame with the new transform and the old opacity.
+   */
+  let documentOpacity = $state(1);
   let manualUntilMs = 0;
   const MANUAL_GRACE_MS = 2500;
 
   /* ---- the persistent motion controller (companion §26.2) ---- */
-  const engine = createStageMotionEngine();
+  /*
+   * §47.1. The engine is constructed with whatever profile is already known —
+   * `untrack` because this read is deliberately the initial value, and Svelte is
+   * right to warn about any other one — and then KEPT IN SYNC by the effect
+   * below.
+   *
+   * Both halves are load-bearing, for different orderings. The constructor read
+   * covers the normal case, where the envelope arrives before this component
+   * mounts (the mount site gates on `doc`, which comes from the envelope), so
+   * the very first frame already runs the chosen feel. The effect covers the
+   * stage window outliving a session: a second take republishes an envelope into
+   * this same component instance, and a construction-only read would silently
+   * run take two on take one's feel.
+   */
+  const engine = createStageMotionEngine(
+    untrack(() => (followProfile ? { profile: followProfile } : {})),
+  );
+  $effect(() => {
+    if (followProfile) engine.setProfile(followProfile);
+  });
   let rafId = 0;
   let loopRunning = false;
   let layoutGeneration = 0;
@@ -140,6 +191,22 @@
    * anything the presenter could see is not.
    */
   const GEOMETRY_DRIFT_TOLERANCE_PX = 1;
+
+  /**
+   * §61 step 1. The stage is missing its frame budget, so nonessential visual
+   * effects come off.
+   *
+   * What that means here is narrow on purpose. The reading band, the past /
+   * future dimming and the current-phrase underlay are how the presenter finds
+   * their place on the glass — they are the product, not an effect, and they
+   * stay exactly as they are. What goes is the ANIMATION of them: the per-word
+   * and per-block opacity tweens and the underlay's geometry tween, each of
+   * which asks the compositor to interpolate a property on many elements at the
+   * same moment the frame budget is already being missed. Removing them changes
+   * nothing about what is shown, only that it arrives at once instead of over
+   * 240 ms.
+   */
+  let degraded = $state(false);
 
   /* ---- capped-rate styling (§26.2 step 7) ---- */
   let activeTokenIndex = $state<number | null>(null);
@@ -478,7 +545,14 @@
       }
     } else {
       mapRetries = 0;
-      layoutErrorReported = false;
+      if (layoutErrorReported) {
+        // The map came back. A §62 stage-layout error is *recoverable*, and the
+        // operator was told about it, so they have to be told it is over too —
+        // otherwise the control window keeps offering "Rebuild stage layout"
+        // for a stage that rebuilt itself. An empty issue list is the recovery.
+        layoutErrorReported = false;
+        onlayouterror?.([]);
+      }
     }
   }
 
@@ -626,8 +700,17 @@
   /* ---- the frame loop (companion §26.2, B.5) ---- */
   $effect(() => {
     const active = !frozen && vh > 0;
-    if (active) startLoop();
-    else stopLoop();
+    if (active) {
+      startLoop();
+    } else {
+      stopLoop();
+      /* §20.4 safety net. Nothing advances the fade once the loop is gone, so
+       * a freeze landing inside a re-anchor would otherwise leave the script
+       * parked at partial opacity for as long as the stage is stopped. The
+       * engine clears its own fade on the way back in (`visibilityRestored`,
+       * called from `startLoop`), so the two agree at 1 when frames resume. */
+      documentOpacity = 1;
+    }
     return () => stopLoop();
   });
 
@@ -664,6 +747,11 @@
     if (!loopRunning) return;
     const result = engine.frame(now);
     setScroll(result.scrollPx);
+    // §20.4: never a CSS transition. The obscuration has to be on the engine's
+    // clock, because the guarantee being made is about the ordering of two
+    // writes to this element — hand the browser its own easing curve and the
+    // transform can land while the layer is still visible.
+    if (result.documentOpacity !== documentOpacity) documentOpacity = result.documentOpacity;
 
     if (result.styleTick) {
       if (result.activeTokenIndex !== null && result.source === 'semantic') {
@@ -674,6 +762,13 @@
       // Layout reads for the underlay happen on the capped styling tick, never
       // on every frame (§63).
       updateUnderlay();
+    }
+
+    if (result.degraded !== degraded) {
+      degraded = result.degraded;
+      // §61 step 3 lives outside this component (the Listener), so the flag has
+      // to leave the engine rather than stop at the styling cadence.
+      ondegraded?.(degraded);
     }
 
     if (result.ack) onmotionack?.(result.ack);
@@ -763,6 +858,10 @@
   /** Operator diagnostics (§64) — never rendered on the presenter's glass. */
   export function motionDiagnostics() {
     return {
+      // Which §55 profile the engine is ACTUALLY running: the resolved feel, or
+      // `default-v1` if the envelope carried nothing this build could interpret.
+      profileId: engine.profile.id,
+      profileVersion: engine.profile.version,
       layoutGeneration,
       lineCount: lineMap?.lines.length ?? 0,
       mapValid: lineMap?.valid ?? false,
@@ -780,6 +879,7 @@
 
 <div
   class="script-layer"
+  data-degraded={degraded ? 'true' : 'false'}
   bind:clientWidth={vw}
   bind:clientHeight={vh}
   style:--stage-past-opacity={settings.pastOpacity}
@@ -791,7 +891,9 @@
   <div
     class="scroll-plane"
     bind:this={planeEl}
+    data-reanchoring={documentOpacity < 1 ? 'true' : 'false'}
     style:transform="translate3d(0, {-scrollY}px, 0)"
+    style:opacity={documentOpacity}
     style:padding-top="{padTopPx}px"
     style:padding-bottom="{padBottomPx}px"
   >
@@ -845,13 +947,27 @@
     color: var(--stage-text);
   }
 
+  /* §61 step 1: nonessential visual effects off under frame pressure.
+     One inherited custom property drives every zoning/underlay tween in this
+     subtree — including the child components' scoped rules, which read the same
+     variable. Nothing about WHAT is drawn changes: the reading band, the
+     past/future opacities and the phrase underlay are all still exactly where
+     and what they were; they simply stop being interpolated. */
+  .script-layer[data-degraded='true'] {
+    --stage-fx-ms: 0ms;
+  }
+
   .scroll-plane {
     position: relative;
     min-height: 100%;
-    will-change: transform;
+    will-change: transform, opacity;
     /* §31.2: the controller owns motion — no CSS smooth scrolling, no
-       per-update transitions on the moving layer. */
+       per-update transitions on the moving layer. §20.4 extends that to
+       opacity: the re-anchor fade is driven frame by frame from the engine, so
+       a CSS transition here would race it and let the transform change while
+       the document is still visible. */
     scroll-behavior: auto;
+    transition: none;
   }
 
   .column {
@@ -871,11 +987,11 @@
     border-radius: 0.35em;
     background: var(--stage-accent);
     pointer-events: none;
-    transition:
-      top 200ms var(--ease-out, ease-out),
-      height 200ms var(--ease-out, ease-out),
-      left 200ms var(--ease-out, ease-out),
-      width 200ms var(--ease-out, ease-out);
+    /* The underlay itself is a reading aid and is never disabled; only its
+       glide between phrases is (§61 step 1). */
+    transition-property: top, height, left, width;
+    transition-duration: var(--stage-fx-ms, 200ms);
+    transition-timing-function: var(--ease-out, ease-out);
   }
 
   .fade {

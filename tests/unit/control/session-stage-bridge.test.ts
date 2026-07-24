@@ -157,8 +157,8 @@ function find(event: string): Registration[] {
   return tauri.registered.filter((r) => r.event === event);
 }
 
-/** The bridge registers four listeners; wait until it has asked for them. */
-const BRIDGE_LISTENER_COUNT = 4;
+/** The bridge registers five listeners; wait until it has asked for them. */
+const BRIDGE_LISTENER_COUNT = 5;
 
 async function awaitBridgeRequest(): Promise<void> {
   for (let i = 0; i < 40; i += 1) {
@@ -383,15 +383,16 @@ describe('listener media failures (§40.5)', () => {
     expect(get(smoothFollow).lineMap.valid).toBe(true);
   });
 
-  it('still routes layout failures to the line-map path', async () => {
+  /*
+   * S6: layout failures no longer travel this channel at all — they have their
+   * own event (below). This asserts the split holds from the other side: a
+   * media payload is a media payload, whatever words happen to be in it.
+   */
+  it('does not route a media failure into the line-map path', async () => {
     await startWithListener();
-    dispatchStageError({
-      stageGeneration: 7,
-      code: 'STAGE_LAYOUT_INVALID',
-      message: 'line map lost',
-    });
-    expect(get(smoothFollow).lineMap.valid).toBe(false);
-    expect(get(session).listenerFault).toBeNull();
+    mediaError({ code: 'source_unavailable' });
+    expect(get(smoothFollow).lineMap.valid).toBe(true);
+    expect(get(session).listenerFault).not.toBeNull();
   });
 
   it('ignores a media failure from a different stage generation', async () => {
@@ -505,5 +506,90 @@ describe('listener media failures (§40.5)', () => {
     expect(get(session).listenerFault).toBeNull();
     expect(toggleListenerVisible()).toBe(false); // it starts visible; this turns it off
     expect(toggleListenerVisible()).toBe(true); // ...and this turns it back on
+  });
+});
+
+/*
+ * S6 — §62 recoverable stage layout error.
+ *
+ * The stage held its motion when line measurement stayed unusable after the
+ * bounded rebuild, and told nobody but its own on-glass diagnostics overlay:
+ * there was no layout-error member in STAGE_EVENT at all, and control could
+ * only learn about it by finding the substring `map_unresolved` inside a motion
+ * ack's `controllerState`. The operator — who is at THIS window — had no way to
+ * see it and no way to act on it.
+ *
+ * These drive the real store handler with the payload Rust relays.
+ */
+describe('stage layout failures (§62)', () => {
+  async function startWithLiveBridge(): Promise<void> {
+    start(7);
+    await completeBridge();
+  }
+
+  function layoutEvent(payload: Record<string, unknown>): number {
+    const handlers = find(STAGE_EVENT.layoutFailed);
+    for (const handler of handlers) handler.handler({ payload });
+    return handlers.length;
+  }
+
+  it('reaches control on its own event, not by sniffing another one', async () => {
+    await startWithLiveBridge();
+    expect(get(smoothFollow).lineMap.valid).toBe(true);
+
+    layoutEvent({
+      stageGeneration: 7,
+      issues: ['map_unresolved', 'non_monotonic_baselines'],
+      layoutGeneration: 4,
+      atMs: 1000,
+    });
+
+    const state = get(smoothFollow);
+    expect(state.lineMap.valid).toBe(false);
+    expect(state.lineMap.detail).toContain('map_unresolved');
+    // §62 wants a RECOVERABLE error: the operator is offered the rebuild.
+    const notice = state.notices.find((n) => n.id === 'invalid_line_map');
+    expect(notice?.action?.id).toBe('rebuild_layout');
+  });
+
+  it('arrives exactly once', async () => {
+    await startWithLiveBridge();
+    // The stage emits under `stage://layout-error` and Rust relays under
+    // `stage://layout-failed`, because a webview emit is a broadcast that would
+    // otherwise reach control twice — once ungated. Control registers exactly
+    // one handler, for the relayed name only.
+    expect(find(STAGE_EVENT.layoutError)).toHaveLength(0);
+    expect(layoutEvent({ stageGeneration: 7, issues: ['x'], layoutGeneration: 1 })).toBe(1);
+
+    const timeline = get(smoothFollow).timeline.filter((e) =>
+      e.summary.toLowerCase().includes('line map invalid'),
+    );
+    expect(timeline).toHaveLength(1);
+  });
+
+  it('ignores a failure from a stage generation that is already gone', async () => {
+    await startWithLiveBridge();
+    layoutEvent({ stageGeneration: 3, issues: ['x'], layoutGeneration: 1 });
+    expect(get(smoothFollow).lineMap.valid).toBe(true);
+  });
+
+  it('clears when the stage rebuilds itself', async () => {
+    await startWithLiveBridge();
+    layoutEvent({ stageGeneration: 7, issues: ['map_unresolved'], layoutGeneration: 4 });
+    expect(get(smoothFollow).lineMap.valid).toBe(false);
+
+    // An empty issue list is the recovery. Without it the most serious notice
+    // the Live screen can show would stay up for a problem that is over.
+    layoutEvent({ stageGeneration: 7, issues: [], layoutGeneration: 5 });
+    const state = get(smoothFollow);
+    expect(state.lineMap.valid).toBe(true);
+    expect(state.lineMap.generation).toBe(5);
+    expect(state.notices.find((n) => n.id === 'invalid_line_map')).toBeUndefined();
+  });
+
+  it('does not touch the Listener state', async () => {
+    await startWithLiveBridge();
+    layoutEvent({ stageGeneration: 7, issues: ['map_unresolved'], layoutGeneration: 4 });
+    expect(get(session).listenerFault).toBeNull();
   });
 });

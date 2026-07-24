@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "stage-capability",
-  "description": "The minimally privileged stage window: it listens to events pushed from Rust/control and emits the spec §46.9 stage→Rust handshake/heartbeat events (hydrated, layout-ready, heartbeat-ack, media-error, escape-pressed, motion-report). Its emissions are broadcasts, so they deliberately do NOT reuse the names control listens for — Rust relays those after a generation check (S1). No other capabilities (spec Appendix D.3).",
+  "description": "The minimally privileged stage window: it listens to events pushed from Rust/control and emits the spec §46.9 stage→Rust handshake/heartbeat events (hydrated, layout-ready, heartbeat-ack, media-error, escape-pressed, motion-report, layout-error). Its emissions are broadcasts, so they deliberately do NOT reuse the names control listens for — Rust relays those after a generation check (S1). No other capabilities (spec Appendix D.3).",
   "windows": ["stage"],
   "permissions": [
     "core:event:allow-listen",

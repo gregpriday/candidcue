@@ -104,10 +104,14 @@ describe('stage → control event relay (S1)', () => {
     // A guard on the guard: if these go empty the assertions below are vacuous.
     expect(keysEmittedByStage()).toContain('escapePressed');
     expect(keysEmittedByStage()).toContain('motionReport');
+    // S6: the §62 stage-layout error is the third pair to follow this rule.
+    expect(keysEmittedByStage()).toContain('layoutError');
     expect(keysListenedByControl()).toContain('escapeRequested');
     expect(keysListenedByControl()).toContain('motionAck');
+    expect(keysListenedByControl()).toContain('layoutFailed');
     expect(namesRelayedToControl()).toContain(STAGE_EVENT.escapeRequested);
     expect(namesRelayedToControl()).toContain(STAGE_EVENT.motionAck);
+    expect(namesRelayedToControl()).toContain(STAGE_EVENT.layoutFailed);
   });
 
   it('nothing Rust relays to control is also broadcast by the stage', () => {
@@ -132,14 +136,17 @@ describe('stage → control event relay (S1)', () => {
     const listened = new Set<string>(keysListenedByControl().map((k) => STAGE_EVENT[k] as string));
     expect(listened.has(STAGE_EVENT.escapePressed)).toBe(false);
     expect(listened.has(STAGE_EVENT.motionReport)).toBe(false);
+    expect(listened.has(STAGE_EVENT.layoutError)).toBe(false);
   });
 
   it('the relayed names are distinct from the names the stage emits', () => {
     expect(STAGE_EVENT.escapePressed).not.toBe(STAGE_EVENT.escapeRequested);
     expect(STAGE_EVENT.motionReport).not.toBe(STAGE_EVENT.motionAck);
+    expect(STAGE_EVENT.layoutError).not.toBe(STAGE_EVENT.layoutFailed);
     // Only src-tauri/src/app.rs may produce the control-facing names.
     const appRs = readFileSync(join(ROOT, 'src-tauri/src/app.rs'), 'utf8');
     expect(appRs).toContain('events::STAGE_ESCAPE_REQUESTED');
     expect(appRs).toContain('events::STAGE_MOTION_ACK');
+    expect(appRs).toContain('events::STAGE_LAYOUT_FAILED');
   });
 });

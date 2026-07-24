@@ -10,6 +10,7 @@ import type {
   StageSessionEnvelope,
   StageSettings,
 } from '../../shared/contracts';
+import { resolveFollowProfile, type FollowingSettings } from '../lib/follow-profiles';
 import { invokeOrMock } from './ipc';
 
 /* ---------------------------------------------------------------------------
@@ -144,6 +145,12 @@ export interface EnvelopeInput {
   listener?: ListenerStageSelection;
   initialTokenIndex?: number;
   assets?: StageRenderDocument['assets'];
+  /**
+   * §47 follow settings. Resolved here into the §55 motion profile the stage's
+   * engine runs on, so the Follow feel the user chose is in force from the
+   * first frame. Omitted settings mean the stage keeps its own default profile.
+   */
+  following?: FollowingSettings;
 }
 
 export function buildStageEnvelope(input: EnvelopeInput): StageSessionEnvelope {
@@ -159,5 +166,6 @@ export function buildStageEnvelope(input: EnvelopeInput): StageSessionEnvelope {
     renderDocument: buildStageRenderDocument(input.script, input.assets ?? {}),
     ...(input.listener ? { listener: input.listener } : {}),
     initialTokenIndex: input.initialTokenIndex ?? 0,
+    ...(input.following ? { followProfile: resolveFollowProfile(input.following) } : {}),
   };
 }

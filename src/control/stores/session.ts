@@ -14,6 +14,7 @@ import type {
   StageDirective,
   StageEscapePayload,
   StageIntentPayload,
+  StageLayoutErrorPayload,
   StageListenerHealthPayload,
   StageSettings,
   TrackingSnapshot,
@@ -1241,10 +1242,25 @@ function startStageBridge(sessionId: string): void {
         // re-acquires around it (§16.9).
       }),
       /*
-       * `stage://error` carries two unrelated kinds of failure, because Rust
-       * relays the stage's `media-error` onto the same channel the window
-       * layer uses for its own errors (app.rs → `emit_to(CONTROL, STAGE_ERROR,
-       * value)`, verbatim payload).
+       * §62. A stage-layout failure has its own event, so this is the whole
+       * handler: the stage held its motion, and the operator — who is at this
+       * window, not at the stage — has to see it and be offered the rebuild.
+       *
+       * An EMPTY `issues` list is the recovery: a later rebuild succeeded. It
+       * matters that this exists. The notice it clears is the most serious one
+       * the Live screen can show (motion is held), so a stage that recovered
+       * silently would leave the operator staring at a red banner for a
+       * problem that is over, and eventually ignoring the banner.
+       */
+      listen<StageLayoutErrorPayload>(STAGE_EVENT.layoutFailed, (event) => {
+        if (event.payload.stageGeneration !== generation) return;
+        const issues = event.payload.issues ?? [];
+        if (issues.length === 0) smoothFollow.reportLineMapRebuilt(event.payload.layoutGeneration);
+        else smoothFollow.reportLineMapInvalid(issues.join(', '));
+      }),
+      /*
+       * `stage://error` carries Listener media faults (Rust relays the stage's
+       * `media-error` onto it verbatim) and the window layer's own errors.
        *
        * B2: this handler used to test every payload against
        * /layout|line[-_ ]?map/ and RETURN on anything that did not match — so
@@ -1252,23 +1268,19 @@ function startStageBridge(sessionId: string): void {
        * Rust, and thrown away on arrival. The operator's only signal was a
        * frozen human face on camera behind their script.
        *
-       * The two kinds are now split at the door: a Listener health payload
-       * (identified by its `status`, which the layout errors do not carry) is
-       * a §40.5 media fault with its own recovery choices, and everything else
-       * keeps the §62 line-map path exactly as it was.
+       * That substring sniff is gone rather than merely demoted: layout
+       * failures now arrive above, typed, generation-checked, and with a
+       * recovery signal, so nothing on this channel is a §62 report any more.
+       * A Listener health payload is identified by its `status` and handled;
+       * a window-layer error (e.g. STAGE_DISPLAY_MISMATCH) is not this
+       * handler's business and is left alone, as it always was.
        */
       listen<{ stageGeneration: number; code?: string; message?: string; status?: string }>(
         CONTROL_EVENT.stageError,
         (event) => {
           if (event.payload.stageGeneration !== generation) return;
           const health = asListenerHealth(event.payload);
-          if (health !== null) {
-            handleListenerHealth(health);
-            return;
-          }
-          const code = event.payload.code ?? '';
-          if (!/layout|line[-_ ]?map/i.test(`${code} ${event.payload.message ?? ''}`)) return;
-          smoothFollow.reportLineMapInvalid(event.payload.message ?? code);
+          if (health !== null) handleListenerHealth(health);
         },
       ),
       listen<{ stageGeneration: number }>(CONTROL_EVENT.stageClosed, (event) => {

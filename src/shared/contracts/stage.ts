@@ -19,10 +19,12 @@
  *   control → stage (direct emitTo): heartbeat (§43.5, ~1s cadence),
  *                                    semantic-frame (companion §26.1, 15–30 Hz)
  *   stage → Rust bridge             : hydrated, layout-ready, heartbeat-ack,
- *                                    media-error, escape-pressed, motion-report
+ *                                    media-error, escape-pressed,
+ *                                    motion-report, layout-error
  *   stage → control (direct)        : intent
  *   Rust → control                  : ready, closed, error (CONTROL_EVENT),
- *                                    escape-requested, motion-ack
+ *                                    escape-requested, motion-ack,
+ *                                    layout-failed
  */
 import type { Uuid } from './core';
 import type { StageSessionEnvelope, StageSettings } from './display';
@@ -102,6 +104,22 @@ export const STAGE_EVENT = {
   escapeRequested: 'stage://escape-requested',
   /** stage → Rust: periodic `StageMotionAck` (companion §54). Relayed as below. */
   motionReport: 'stage://motion-report',
+  /**
+   * stage → Rust: a §62 stage-layout failure (line measurement unusable after
+   * the bounded rebuild), or its recovery. Relayed as below.
+   */
+  layoutError: 'stage://layout-error',
+  /**
+   * Rust → control: a generation-checked §62 stage-layout failure/recovery.
+   *
+   * This has its own event rather than riding `stage://error`, which carries
+   * Listener media faults and window-layer errors: those are two unrelated
+   * failures with different recovery, and control was left sniffing payload
+   * substrings to tell them apart. A layout failure means motion is HELD — the
+   * operator has to see it and can act on it (§62 "expose a recoverable
+   * stage-layout error in control").
+   */
+  layoutFailed: 'stage://layout-failed',
   /**
    * Rust → control: a generation-checked periodic `StageMotionAck`
    * (companion §54). Diagnostics and recovery only — deliberately NOT a
@@ -281,6 +299,27 @@ export type StageIntent =
 export interface StageIntentPayload {
   stageGeneration: number;
   intent: StageIntent;
+  atMs: number;
+}
+
+/**
+ * `stage://layout-error` (stage → Rust), relayed to control as
+ * `stage://layout-failed` — §62.
+ *
+ * The stage measures its rendered layout into a line map, validates monotonic
+ * token/baseline ordering, and rebuilds once if that fails. If the rebuild is
+ * unusable too, motion is HELD (the stage will not move on guessed line
+ * positions) and this is the only way the operator finds out.
+ *
+ * `issues` is the list of fatal line-map issue codes. An EMPTY list is the
+ * recovery signal: a later rebuild succeeded and the held state is over.
+ */
+export interface StageLayoutErrorPayload {
+  stageGeneration: number;
+  /** Fatal `RenderedLineMap` issue codes; empty means "recovered". */
+  issues: string[];
+  /** Layout generation the stage was measuring at when it gave up. */
+  layoutGeneration: number;
   atMs: number;
 }
 

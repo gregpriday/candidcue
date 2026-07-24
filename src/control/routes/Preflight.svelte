@@ -868,6 +868,9 @@
         stageSettings,
         ...(listener ? { listener } : {}),
         assets,
+        // §47.1: the chosen Follow feel resolves to a versioned motion profile
+        // and rides the validated document path into the stage's engine.
+        following: $settings.following,
       });
       const ready = stageService.waitForStageReady(opened.stageGeneration);
       await stageService.publishStageDocument(sessionId, envelope);

@@ -69,11 +69,19 @@ pub mod events {
     // `stage://ready` and `media-error` → `stage://error`.
     pub const STAGE_ESCAPE_PRESSED: &str = "stage://escape-pressed";
     pub const STAGE_MOTION_REPORT: &str = "stage://motion-report";
+    // §62 recoverable stage-layout failure (and its recovery). Same name
+    // separation as the two above, for the same reason.
+    pub const STAGE_LAYOUT_ERROR: &str = "stage://layout-error";
 
     // Rust → control, after the coordinator's generation check.
     pub const STAGE_ESCAPE_REQUESTED: &str = "stage://escape-requested";
     // Periodic stage motion report, relayed to control (companion §54).
     pub const STAGE_MOTION_ACK: &str = "stage://motion-ack";
+    // §62 stage-layout failure, relayed to control. Deliberately NOT
+    // `stage://error`: that channel already carries Listener media faults and
+    // window-layer errors, and a held stage is a different emergency with a
+    // different recovery.
+    pub const STAGE_LAYOUT_FAILED: &str = "stage://layout-failed";
 
     // Stage → control (listened directly by the control webview).
     pub const STAGE_INTENT: &str = "stage://intent";
@@ -1265,8 +1273,10 @@ mod tests {
             events::STAGE_MEDIA_ERROR,
             events::STAGE_ESCAPE_PRESSED,
             events::STAGE_MOTION_REPORT,
+            events::STAGE_LAYOUT_ERROR,
             events::STAGE_ESCAPE_REQUESTED,
             events::STAGE_MOTION_ACK,
+            events::STAGE_LAYOUT_FAILED,
             events::STAGE_INTENT,
         ];
         for name in rust_names {
@@ -1308,12 +1318,14 @@ mod tests {
             events::STAGE_MEDIA_ERROR,
             events::STAGE_ESCAPE_PRESSED,
             events::STAGE_MOTION_REPORT,
+            events::STAGE_LAYOUT_ERROR,
         ];
         let relayed_to_control = [
             events::STAGE_READY,
             events::STAGE_ERROR,
             events::STAGE_ESCAPE_REQUESTED,
             events::STAGE_MOTION_ACK,
+            events::STAGE_LAYOUT_FAILED,
         ];
         for relayed in relayed_to_control {
             assert!(
@@ -1327,13 +1339,21 @@ mod tests {
         // ones — listening for a relayed name would make the relay re-trigger
         // itself.
         let app_rs = include_str!("../app.rs");
-        for name in ["STAGE_ESCAPE_PRESSED", "STAGE_MOTION_REPORT"] {
+        for name in [
+            "STAGE_ESCAPE_PRESSED",
+            "STAGE_MOTION_REPORT",
+            "STAGE_LAYOUT_ERROR",
+        ] {
             assert!(
                 app_rs.contains(&format!("listen_any(events::{name}")),
                 "the stage event bridge must listen for events::{name}"
             );
         }
-        for name in ["STAGE_ESCAPE_REQUESTED", "STAGE_MOTION_ACK"] {
+        for name in [
+            "STAGE_ESCAPE_REQUESTED",
+            "STAGE_MOTION_ACK",
+            "STAGE_LAYOUT_FAILED",
+        ] {
             assert!(
                 !app_rs.contains(&format!("listen_any(events::{name}")),
                 "events::{name} is a control-facing name; listening for it here \

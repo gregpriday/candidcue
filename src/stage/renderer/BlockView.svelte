@@ -146,8 +146,13 @@
   .zone-future {
     opacity: var(--stage-future-opacity, 0.92);
   }
+  /* The zoning opacities above are a reading aid and always apply; the fade
+     between them is an effect, and §61 turns it off under frame pressure by
+     zeroing `--stage-fx-ms` on the script layer. */
   .block {
-    transition: opacity 300ms var(--ease-out, ease-out);
+    transition-property: opacity;
+    transition-duration: var(--stage-fx-ms, 300ms);
+    transition-timing-function: var(--ease-out, ease-out);
   }
 
   /* Silent / stage-only material reads as quiet stage direction. */

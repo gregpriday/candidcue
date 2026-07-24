@@ -124,6 +124,12 @@ export interface SemanticFrameReceiver {
   accept(frame: SemanticMotionFrame, nowMs: number): FrameAcceptance;
   /** Update the gate; a layout-generation change restarts the grace window. */
   setGate(patch: Partial<SemanticFrameGate>, nowMs: number): void;
+  /**
+   * Swap the §55 profile the speech envelope is derived from (§47.1). Frames
+   * already accepted keep the clamp they arrived under — re-clamping history
+   * would rewrite evidence — but everything after this uses the new envelope.
+   */
+  setProfile(next: SmoothFollowProfile): void;
   /** Drop the cached frame (session reset / new document). */
   reset(): void;
 }
@@ -400,7 +406,7 @@ export function createSemanticFrameReceiver(
   options: SemanticFrameReceiverOptions,
 ): SemanticFrameReceiver {
   const graceMs = options.layoutGraceMs ?? DEFAULT_LAYOUT_GRACE_MS;
-  const profile = options.profile ?? DEFAULT_SMOOTH_FOLLOW_PROFILE;
+  let profile = options.profile ?? DEFAULT_SMOOTH_FOLLOW_PROFILE;
   let gate: SemanticFrameGate = { ...options.gate };
   let layoutChangedAtMs = Number.NEGATIVE_INFINITY;
   /** When we first saw a frame claiming a newer generation than our own. */
@@ -506,6 +512,10 @@ export function createSemanticFrameReceiver(
         futureLayoutSinceMs = null;
       }
       gate = { ...gate, ...patch };
+    },
+
+    setProfile(next) {
+      profile = next;
     },
 
     reset() {

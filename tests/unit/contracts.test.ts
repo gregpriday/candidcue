@@ -41,6 +41,9 @@ describe('shared contracts', () => {
     expect(STAGE_EVENT.escapeRequested).toBe('stage://escape-requested');
     expect(STAGE_EVENT.motionReport).toBe('stage://motion-report');
     expect(STAGE_EVENT.motionAck).toBe('stage://motion-ack');
+    // S6: the §62 layout report follows the same stage-name / relayed-name pair.
+    expect(STAGE_EVENT.layoutError).toBe('stage://layout-error');
+    expect(STAGE_EVENT.layoutFailed).toBe('stage://layout-failed');
     expect(STAGE_EVENT.intent).toBe('stage://intent');
     expect(CONTROL_EVENT.stageReady).toBe('stage://ready');
     expect(CONTROL_EVENT.stageClosed).toBe('stage://closed');

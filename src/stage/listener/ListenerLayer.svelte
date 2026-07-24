@@ -31,6 +31,7 @@
     frozen = false,
     hidden = false,
     reducedMotion = false,
+    degraded = false,
     onhealth = undefined,
   }: {
     selection: ListenerStageSelection;
@@ -39,6 +40,14 @@
     /** Blanked without keep-listener: invisible AND paused, state preserved. */
     hidden?: boolean;
     reducedMotion?: boolean;
+    /**
+     * §61 step 3: the stage is missing its frame budget. Simplify the crossfade
+     * — it is the one Listener effect that composites two decoding videos at
+     * once, which is the most expensive thing this layer ever does, and it is
+     * also the least load-bearing: a clip boundary the presenter is not looking
+     * at. The clips keep playing and keep looping; only the blend shortens.
+     */
+    degraded?: boolean;
     onhealth?: (
       status: 'ok' | 'poster_fallback' | 'failed',
       code?: 'decode_failure' | 'unsupported_codec' | 'source_unavailable',
@@ -48,7 +57,12 @@
 
   const geometry = $derived(selection.geometry);
   const placement = $derived(selection.placement ?? 'background');
-  const crossfadeMs = $derived(reducedMotion ? 60 : 180);
+  /**
+   * §38.3 crossfade length. Reduced motion and §61 frame-performance
+   * degradation both want the same thing here — the shortest blend that is
+   * still a blend rather than a cut — so they resolve to one value.
+   */
+  const crossfadeMs = $derived(reducedMotion || degraded ? 60 : 180);
   const posterUrl = $derived(selection.clipUrls[0]?.posterUrl ?? '');
 
   let videoEls: (HTMLVideoElement | undefined)[] = [undefined, undefined];

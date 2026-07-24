@@ -20,6 +20,7 @@
     type StageHydratedPayload,
     type StageIntent,
     type StageIntentPayload,
+    type StageLayoutErrorPayload,
     type StageListenerHealthPayload,
     type StageMotionAck,
     type StageMotionAckPayload,
@@ -38,6 +39,7 @@
     type StageAction,
   } from './renderer/stageState';
   import { isCompactViewport } from './renderer/geometry';
+  import { stageFollowProfile } from './motion';
   import ScriptLayer from './renderer/ScriptLayer.svelte';
   import AckChip from './renderer/AckChip.svelte';
   import CoachStrip from './renderer/CoachStrip.svelte';
@@ -82,6 +84,20 @@
   let layoutGeneration = $state(0);
   /** §62: fatal line-map issues after the bounded rebuild retry. */
   let layoutIssues = $state<string[]>([]);
+  /**
+   * §61: the stage is missing its frame budget. The engine already backs its
+   * own styling cadence and motion limits off; this is the flag the LAYERS need
+   * — nonessential effects in the script layer (which owns its own) and the
+   * Listener's crossfade, which is the one §61 names explicitly (step 3).
+   */
+  let motionDegraded = $state(false);
+  /**
+   * §47.1/§55. The session's motion profile, as the stage is willing to run it:
+   * the envelope's resolved profile when this build can interpret its version,
+   * and the Appendix A default otherwise. Resolved HERE, at the mount site, so
+   * the script layer is always constructed with a followable profile.
+   */
+  const followProfile = $derived(stageFollowProfile(app.envelope?.followProfile));
   /** Never block the script on a font that may never resolve. */
   const FONT_READY_TIMEOUT_MS = 1500;
 
@@ -221,6 +237,21 @@
     emitStageEvent<StageMotionAckPayload>(STAGE_EVENT.motionReport, {
       ...ack,
       stageGeneration: app.envelope?.stageGeneration ?? 0,
+    });
+  }
+
+  /* ---- recoverable stage-layout failure (§62) ---- */
+  function handleLayoutError(issues: string[]) {
+    layoutIssues = issues;
+    // The local diagnostics overlay only helps someone standing at the stage.
+    // §62 wants the error where the operator is, so it travels the same
+    // Rust-relayed, generation-checked path as the motion report — under the
+    // stage's OWN name, never the one control listens for (see S1 above).
+    emitStageEvent<StageLayoutErrorPayload>(STAGE_EVENT.layoutError, {
+      stageGeneration: app.envelope?.stageGeneration ?? 0,
+      issues,
+      layoutGeneration,
+      atMs: Date.now(),
     });
   }
 
@@ -397,6 +428,7 @@
           frozen={motionFrozen}
           hidden={listenerHidden}
           {reducedMotion}
+          degraded={motionDegraded}
           onhealth={onListenerHealth}
         />
       {/if}
@@ -416,11 +448,13 @@
             sessionGeneration={app.envelope?.sessionGeneration ?? 0}
             stageGeneration={app.envelope?.stageGeneration ?? 0}
             scriptCompileHash={app.envelope?.sourceHash ?? ''}
+            {followProfile}
             bottomInsetPx={coachInsetPx}
             onlayoutready={handleLayoutReady}
             onmotionack={handleMotionAck}
             onlayoutgeneration={(generation) => (layoutGeneration = generation)}
-            onlayouterror={(issues) => (layoutIssues = issues)}
+            onlayouterror={handleLayoutError}
+            ondegraded={(degraded) => (motionDegraded = degraded)}
           />
         </div>
       {/if}
@@ -486,6 +520,8 @@
       {#if layoutIssues.length > 0}
         <div>layout: HELD ({layoutIssues.join(', ')})</div>
       {/if}
+      <div>profile: {followProfile.id} (v{followProfile.version})</div>
+      <div>frames: {motionDegraded ? 'degraded' : 'ok'}</div>
       <div>media: {mediaHealthy ? 'healthy' : 'degraded'}</div>
     </div>
   {/if}
