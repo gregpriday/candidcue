@@ -357,32 +357,55 @@ impl Default for CoachingModules {
     }
 }
 
+/// Listener defaults (spec §37, §46.7) — the values every new session starts
+/// from, before the display profile for the chosen monitor is applied.
+///
+/// This struct used to be one of two settings structures for one feature. It
+/// declared `scale`, `crossfadeMs`, `softPause`, `hardPause` and `hideOnBlank`,
+/// none of which had a mapping on the TypeScript side (`listener` was typed as
+/// an opaque `Record<string, unknown>`), while the UI kept a separate
+/// `listeners` section in a localStorage overlay. The two have been reconciled
+/// into this one, Rust-owned, and the adapter is
+/// `src/control/services/settings-listener.ts`.
+///
+/// What was deleted, and why — each of these had no reader and duplicated a
+/// decision another mechanism already owns:
+///   - `scale`: the Listener's size is per-display framing, and lives in the
+///     display profile's `ListenerGeometry` (which persists it already).
+///   - `crossfadeMs`: not a user choice. The stage varies its blend for reduced
+///     motion and for §61 frame pressure, and a persisted number would fight
+///     both; it stays a constant in `ListenerLayer.svelte`.
+///   - `softPause` / `hardPause`: whether the loop freezes is carried per
+///     directive on the stage `freeze` command, decided by the session.
+///   - `hideOnBlank`: carried per directive as `keepListener` on the stage
+///     `blank` command, for the same reason.
+///
+/// The units are the units the UI shows — dim as a percentage, not an opacity.
+/// The one Listener bug this area has shipped was an inverted conversion on a
+/// persisted value, so the conversions that remain are the ones that earn it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ListenerSettings {
-    pub opacity_after_dim: f64,
-    pub saturation: f64,
+    /// Pack preselected in Preflight, when `autoplay` is on. `None` = ask.
+    pub default_pack_id: Option<String>,
+    /// Preselect `default_pack_id` and enable the Listener for a new session.
+    pub autoplay: bool,
+    /// 0-80, percent. The stage renders `opacity: 1 - dimPercent/100`.
+    pub dim_percent: f64,
+    /// 0-24, CSS pixels.
     pub blur_px: f64,
-    pub scale: f64,
-    pub crossfade_ms: u32,
-    /// 'continue' | 'freeze'.
-    pub soft_pause: String,
-    /// 'continue' | 'freeze'.
-    pub hard_pause: String,
-    pub hide_on_blank: bool,
+    /// 0-1, the CSS `saturate()` factor. 0.85 is the look the stage shipped.
+    pub saturation: f64,
 }
 
 impl Default for ListenerSettings {
     fn default() -> Self {
         Self {
-            opacity_after_dim: 0.22,
-            saturation: 0.55,
-            blur_px: 1.5,
-            scale: 1.0,
-            crossfade_ms: 160,
-            soft_pause: "continue".into(),
-            hard_pause: "freeze".into(),
-            hide_on_blank: true,
+            default_pack_id: None,
+            autoplay: true,
+            dim_percent: 40.0,
+            blur_px: 0.0,
+            saturation: 0.85,
         }
     }
 }
@@ -425,15 +448,14 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
             "stageBehavior.fixedSpeedWpm",
             (30..=300).contains(&settings.stage_behavior.fixed_speed_wpm),
         ),
-        (
-            "listener.opacityAfterDim",
-            in_range_f(settings.listener.opacity_after_dim, 0.0, 0.75),
-        ),
-        ("listener.blurPx", in_range_f(settings.listener.blur_px, 0.0, 12.0)),
-        (
-            "listener.crossfadeMs",
-            (80..=400).contains(&settings.listener.crossfade_ms),
-        ),
+        // The ranges are the ranges the Preflight sliders offer. They used to
+        // disagree with them in both directions — `opacityAfterDim <= 0.75`
+        // rejected a dim of 0, and `blurPx <= 12` rejected the top half of a
+        // slider that goes to 24 — so a value the UI could produce was a value
+        // Rust would refuse to store.
+        ("listener.dimPercent", in_range_f(settings.listener.dim_percent, 0.0, 80.0)),
+        ("listener.blurPx", in_range_f(settings.listener.blur_px, 0.0, 24.0)),
+        ("listener.saturation", in_range_f(settings.listener.saturation, 0.0, 1.0)),
     ];
     for (field, ok) in checks {
         if !ok {

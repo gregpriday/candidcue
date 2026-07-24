@@ -3,8 +3,13 @@
  * resolution into the ListenerStageSelection the stage consumes. URLs are
  * asset-protocol URLs minted by Rust (§47.8).
  */
-import type { ListenerGeometry, ListenerStageSelection } from '../../shared/contracts';
+import type {
+  ListenerGeometry,
+  ListenerPlacementMode,
+  ListenerStageSelection,
+} from '../../shared/contracts';
 import { clampOffsetPercent } from '../../shared/listener/geometry';
+import { defaultPlacementGeometry } from '../../shared/listener/placement';
 import { invokeOrMock } from './ipc';
 
 /** Twin of Rust `InstalledListener`. */
@@ -71,6 +76,16 @@ export async function resolveListenerMedia(
 }
 
 export interface ListenerGeometryOverrides {
+  /**
+   * Where the media box sits on the stage (§37.4). Decides the default anchors
+   * and the box size; see src/shared/listener/placement.ts.
+   */
+  placement?: ListenerPlacementMode;
+  /**
+   * Multiplier on the placement's default box size, as a PERCENT (100 = the
+   * placement's own size). Ignored by 'background', which is the whole stage.
+   */
+  sizePercent?: number;
   /** 100 = the pack's manifest defaultZoom; percent scale on top of it. */
   zoomPercent?: number;
   /**
@@ -85,8 +100,41 @@ export interface ListenerGeometryOverrides {
   /** 0..80 dim percent → opacity. */
   dimPercent?: number;
   blurPx?: number;
-  /** Horizontal mirror; applied inside the crop, so it never flips offsets. */
+  /** 0..100 colour percent → the CSS `saturate()` factor the stage applies. */
+  saturationPercent?: number;
+  /**
+   * Horizontal mirror of the VIDEO, which is independent of the script mirror:
+   * a glass rig flips the script optically and the Listener with it, so the
+   * media has to be pre-flipped to come back the right way round. Applied
+   * inside the crop, so it never flips the offsets.
+   */
   mirrorVideo?: boolean;
+}
+
+/**
+ * The inverse of the `sizePercent` conversion, for the same reason
+ * `listenerScalePercentFromCropZoom` exists: a display profile stores the
+ * resolved `scale`, and restoring the slider has to undo the /100.
+ *
+ * Trivial today — but the last geometry field restored "by eye" compounded
+ * across sessions, so both directions live here, next to each other, and are
+ * covered by the same round-trip test.
+ */
+export function listenerSizePercentFromScale(scale: number): number {
+  const value = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  return Math.round(value * 100);
+}
+
+/** The inverse of the dim → opacity conversion. */
+export function listenerDimPercentFromOpacity(opacity: number): number {
+  const value = Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 1;
+  return Math.round((1 - value) * 100);
+}
+
+/** The inverse of the colour → saturation conversion. */
+export function listenerSaturationPercentFromFactor(saturation: number): number {
+  const value = Number.isFinite(saturation) && saturation >= 0 ? saturation : 1;
+  return Math.round(value * 100);
 }
 
 /**
@@ -115,10 +163,16 @@ export function buildListenerGeometry(
 ): ListenerGeometry {
   const zoomFactor = (overrides.zoomPercent ?? 100) / 100;
   const cropZoom = defaultZoom * zoomFactor;
+  const placement = overrides.placement ?? 'background';
+  // Anchors come from the placement, not from a constant here: they used to be
+  // a hard-coded (0.5, 0.45) that only 'background' — which ignores them — ever
+  // saw, so a lens-side Listener would have been centred behind the text.
+  const anchors = defaultPlacementGeometry(placement);
   return {
-    anchorX: 0.5,
-    anchorY: 0.45,
-    scale: 1,
+    placement,
+    anchorX: anchors.anchorX,
+    anchorY: anchors.anchorY,
+    scale: (overrides.sizePercent ?? 100) / 100,
     // Percent of the frame, NOT a 0..1 fraction — the stage feeds these
     // straight into `translate(cropX%, cropY%)`.
     cropX: clampOffsetPercent(overrides.offsetXPercent ?? 0, cropZoom),
@@ -126,7 +180,9 @@ export function buildListenerGeometry(
     cropZoom,
     opacity: Math.max(0.05, 1 - (overrides.dimPercent ?? 40) / 100),
     blurPx: overrides.blurPx ?? 0,
-    saturation: 0.85,
+    // The stage used to hard-code 0.85 here while Rust declared a `saturation`
+    // setting nothing could reach. One value, one home: the setting.
+    saturation: Math.max(0, (overrides.saturationPercent ?? 85) / 100),
     mirrorVideo: overrides.mirrorVideo ?? false,
   };
 }
@@ -138,12 +194,16 @@ export async function buildListenerSelection(
   overrides: ListenerGeometryOverrides = {},
 ): Promise<ListenerStageSelection> {
   const media = await resolveListenerMedia(packId, version);
+  const geometry = buildListenerGeometry(media.defaultZoom, overrides);
   return {
     packId: media.packId,
     version: media.version,
     variant: 'default',
-    placement: 'background',
-    geometry: buildListenerGeometry(media.defaultZoom, overrides),
+    // Lifted from the geometry rather than taken from a second argument: the
+    // geometry is what a display profile persists, so it is the one writer of
+    // the placement and this is the one place it reaches the stage contract.
+    placement: geometry.placement ?? 'background',
+    geometry,
     clipUrls: media.clips.map((clip) => ({
       id: clip.id,
       url: clip.url,

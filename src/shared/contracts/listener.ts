@@ -22,8 +22,10 @@ export interface ListenerSelection {
 }
 
 export interface ListenerGeometry {
+  /** Centre of the media box, as a fraction of the stage (see placement.ts). */
   anchorX: number;
   anchorY: number;
+  /** Multiplier on the placement's default box size. Ignored by 'background'. */
   scale: number;
   cropX: number;
   cropY: number;
@@ -32,6 +34,18 @@ export interface ListenerGeometry {
   blurPx: number;
   saturation: number;
   mirrorVideo: boolean;
+  /**
+   * Where the box sits (§37.4). This is the PERSISTED home for the choice: a
+   * display profile stores a `ListenerGeometry`, and which mode a rig uses is a
+   * property of that rig, so it is remembered per display alongside the framing.
+   * `buildListenerSelection` lifts it onto `ListenerStageSelection.placement`,
+   * which is what the stage reads — one writer, one reader.
+   *
+   * Optional because profiles written before placement was selectable have no
+   * value for it; absent means 'background', the mode those profiles were saved
+   * under.
+   */
+  placement?: ListenerPlacementMode;
 }
 
 /** Placement modes for the Listener layer on the stage (spec §37.4). */

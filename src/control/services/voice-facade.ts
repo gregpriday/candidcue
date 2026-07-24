@@ -37,7 +37,17 @@ export interface VoiceFacade {
    */
   watchMicrophonePermission(cb: (state: MicPermissionState) => void): Unsubscribe;
   /** Local level meter; responds before any OpenAI call (spec §14.2 C). */
-  observeLevels(deviceId: string | undefined, cb: (s: AudioLevelSnapshot) => void): Unsubscribe;
+  /**
+   * §28.4. `vadSensitivity` is the user's 0–1 slider; omitted means the A.6
+   * defaults. It is on this seam so the Preflight meter shows the same
+   * speech/silence decision the take will make — a sensitivity control the user
+   * cannot see the effect of is a control they cannot set.
+   */
+  observeLevels(
+    deviceId: string | undefined,
+    cb: (s: AudioLevelSnapshot) => void,
+    vadSensitivity?: number,
+  ): Unsubscribe;
   /** Temporary realtime transcription test session (spec §14.2 C). */
   startTranscriptionTest(deviceId: string | undefined, events: TranscriptTestEvents): Promise<Unsubscribe>;
   /** Realtime transport state for Live/Preflight status pills. */

@@ -124,9 +124,17 @@ export function listenerCropTransform(geometry: ListenerCropGeometry): string {
 }
 
 /**
- * Where the clip's visible centre lands, in frame coordinates (0.5, 0.5 = the
- * middle of the frame). Used by lens-target calibration and by tests as an
- * order-independent statement of what the transform is supposed to do.
+ * Where the clip's visible centre lands, in FRAME coordinates (0.5, 0.5 = the
+ * middle of the media box, not of the stage).
+ *
+ * The consumer is `listenerLensTarget` in ./placement.ts, which composes this
+ * with the placement's media box to get the point on the stage the presenter
+ * should look at — the marker the Preflight placement picker draws. It is also
+ * an order-independent statement of what the crop transform is supposed to do,
+ * which is what the tests use it for.
+ *
+ * (This comment used to claim "lens-target calibration" as the consumer. There
+ * was no such consumer: the function was called only from its own test.)
  */
 export function listenerFocusPoint(geometry: ListenerCropGeometry): { x: number; y: number } {
   const zoom = effectiveCropZoom(geometry.cropZoom);

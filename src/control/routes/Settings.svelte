@@ -90,6 +90,18 @@
   let packsError = $state<string | null>(null);
   let packsLoading = $state(false);
 
+  /**
+   * The remembered pack, named. `defaultPackId` is written by Preflight when a
+   * Listener is chosen and read by Preflight when the next session opens, so
+   * naming it here is the only place the user can see what "automatically"
+   * means — and the only way an unexpected Listener has a visible cause.
+   */
+  const rememberedPackLabel = $derived.by(() => {
+    const packId = $settings.listeners.defaultPackId;
+    if (packId === null) return null;
+    return packs.find((p) => p.packId === packId)?.displayName ?? packId;
+  });
+
   /** Diagnostics are only fetched for the screen that shows them (§47.10). */
   $effect(() => {
     if (section === 'privacy') void loadDiagnostics();
@@ -641,9 +653,20 @@
           {#if !DOWNLOADS_SUPPORTED}
             <p class="hint-line">{DOWNLOADS_UNAVAILABLE_NOTE}</p>
           {/if}
+          <!--
+            These are the values a new session STARTS from — Preflight can
+            change any of them for the take, and the display profile remembers
+            what each monitor was last used with. They were previously written
+            here and read by nothing: `autoplay` and `defaultPackId` had no
+            reader anywhere in the app, and `dimPercent` lost to a hard-coded 40
+            in Preflight that happened to be the same number.
+          -->
           <Toggle
             checked={$settings.listeners.autoplay}
-            label="Autoplay Listener when a session starts"
+            label="Turn the Listener on automatically"
+            description={rememberedPackLabel
+              ? `New sessions open with ${rememberedPackLabel} already selected.`
+              : 'New sessions open with the Listener you used last already selected.'}
             onchange={(value) => void patchSettings('listeners', { autoplay: value })}
           />
           <Slider
@@ -653,6 +676,22 @@
             max={80}
             format={(v) => `${v}%`}
             onchange={(value) => void patchSettings('listeners', { dimPercent: value })}
+          />
+          <Slider
+            label="Default blur"
+            value={$settings.listeners.blurPx}
+            min={0}
+            max={24}
+            format={(v) => `${v} px`}
+            onchange={(value) => void patchSettings('listeners', { blurPx: value })}
+          />
+          <Slider
+            label="Default colour"
+            value={Math.round($settings.listeners.saturation * 100)}
+            min={0}
+            max={100}
+            format={(v) => (v === 0 ? 'Black and white' : `${v}%`)}
+            onchange={(value) => void patchSettings('listeners', { saturation: value / 100 })}
           />
         </Section>
       {:else}

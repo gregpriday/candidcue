@@ -6,18 +6,28 @@
   tail the layer crossfades (§38.3, §40.1). Failures are nonfatal — the layer
   degrades to the poster frame and reports health upward (§40.5).
 
-  Positioning model (owner direction): clips are framed loosely, so the crop
-  wrapper applies `translate(cropX%, cropY%) scale(cropZoom) scaleX(mirror)` —
-  zoom, horizontal/vertical offsets, and mirror in ONE transform — which also
-  powers lens-target calibration. cropX/cropY are PERCENT of the media box
-  (positive = right/down), never a 0..1 fraction, and the mirror lives inside
-  the translate so it cannot invert the offsets. The unit contract, transform
-  order, and the zoom-derived safe range all live in
-  src/shared/listener/geometry.ts — do not re-derive them here.
+  Positioning is two nested things, and keeping them apart is the whole design:
+
+    - WHERE HER FRAME IS on the stage (§37.4 placement) — the media box's
+      left/top/width/height, computed in src/shared/listener/placement.ts and
+      applied here as inline styles. It used to be per-placement CSS, which
+      meant nothing outside this stylesheet could describe or preview a mode,
+      and four of the five modes were unreachable anyway.
+    - WHERE SHE IS INSIDE THAT FRAME — the crop wrapper's
+      `translate(cropX%, cropY%) scale(cropZoom) scaleX(mirror)`: zoom,
+      horizontal/vertical offsets, and mirror in ONE transform. cropX/cropY are
+      PERCENT of the media box (positive = right/down), never a 0..1 fraction,
+      and the mirror lives inside the translate so it cannot invert the offsets.
+
+  Neither file may re-derive the other's arithmetic: the unit contract,
+  transform order and zoom-derived safe range live in
+  src/shared/listener/geometry.ts, and the boxes in ./placement.ts. The media
+  box itself must never carry a transform — it would compose with the crop's.
 -->
 <script lang="ts">
   import type { ListenerStageSelection } from '../../shared/contracts';
   import { listenerCropTransform } from '../../shared/listener/geometry';
+  import { listenerBoxStyle } from '../../shared/listener/placement';
   import { classifyPlayRejection } from './play-error';
   import {
     createClipScheduler,
@@ -57,6 +67,13 @@
 
   const geometry = $derived(selection.geometry);
   const placement = $derived(selection.placement ?? 'background');
+  /**
+   * The media box, in stage percentages. Derived from the shared placement
+   * table rather than from per-placement CSS rules: the picker in Preflight and
+   * this layer have to agree about where each mode puts her, and a stylesheet
+   * is not something the picker can read.
+   */
+  const box = $derived(listenerBoxStyle(placement, geometry));
   /**
    * §38.3 crossfade length. Reduced motion and §61 frame-performance
    * degradation both want the same thing here — the shortest blend that is
@@ -449,13 +466,10 @@
   >
     <div
       class="media-box"
-      style:left={placement === 'background' || placement === 'top_strip'
-        ? null
-        : `${geometry.anchorX * 100}%`}
-      style:top={placement === 'background' || placement === 'top_strip'
-        ? null
-        : `${geometry.anchorY * 100}%`}
-      style:scale={placement === 'background' ? null : geometry.scale}
+      style:left={box.left}
+      style:top={box.top}
+      style:width={box.width}
+      style:height={box.height}
       style:filter="saturate({geometry.saturation}) blur({geometry.blurPx}px)"
     >
       <!--
@@ -508,33 +522,21 @@
     visibility: hidden;
   }
 
+  /*
+   * Size and position come from `listenerBoxStyle` as inline left/top/width/
+   * height — see src/shared/listener/placement.ts. They are deliberately NOT
+   * per-placement CSS rules any more: the box has to be describable to the
+   * Preflight picker and assertable in a test, and neither can read a
+   * stylesheet. Nothing here may set a transform either — the crop layer inside
+   * owns one, and a second one on the box would compose with it invisibly.
+   */
   .media-box {
     position: absolute;
     overflow: hidden;
     background: transparent;
   }
-  /* Full background, centered behind text (§37.4 default). */
-  [data-placement='background'] .media-box {
-    inset: 0;
-  }
-  [data-placement='lens_left'] .media-box,
-  [data-placement='lens_right'] .media-box {
-    width: 30%;
-    height: 62%;
-    transform: translate(-50%, -50%);
-    border-radius: 0;
-  }
-  [data-placement='top_strip'] .media-box {
-    left: 0;
-    right: 0;
-    top: 0;
-    height: 36%;
-  }
   /* PiP is the one mode allowed a hard-edged card (§37.5). */
   [data-placement='pip'] .media-box {
-    width: 22%;
-    aspect-ratio: 3 / 4;
-    transform: translate(-50%, -50%);
     border-radius: 16px;
   }
 

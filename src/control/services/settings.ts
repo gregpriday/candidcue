@@ -32,6 +32,11 @@ import {
   type RustFollowingSettings,
 } from './settings-following';
 import {
+  listenerFromRust,
+  listenerToRustPatch,
+  type RustListenerSettings,
+} from './settings-listener';
+import {
   defaultAppSettings,
   type AppSettings,
   type ClearResult,
@@ -83,7 +88,13 @@ interface RustSettings {
   following?: Partial<RustFollowingSettings>;
   /** Companion §30 — likewise absent in older documents. */
   coaching?: Partial<RustCoachingSettings>;
-  listener: Record<string, unknown>;
+  /**
+   * §37 Listener defaults. This used to be `Record<string, unknown>` — an
+   * opaque bag on the TypeScript side while Rust declared five typed fields —
+   * which is how the feature ended up with two settings structures and no
+   * mapping between them.
+   */
+  listener?: Partial<RustListenerSettings>;
 }
 
 interface RustRevisioned {
@@ -156,6 +167,11 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     // two of these are §32.2 retention consents — a stale overlay must never be
     // able to claim the user consented to keeping audio.
     coaching: coachingFromRust(rust.coaching),
+    // §37. Rust-owned end to end for the same reason: these are the values the
+    // stage renders from, and a localStorage copy that outlived the document
+    // would put the UI and the glass in disagreement about what the Listener
+    // looks like.
+    listeners: listenerFromRust(rust.listener),
     commands: {
       ...defaults.commands,
       wakePhrase: rust.commands.wakePhrase,
@@ -174,7 +190,6 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     audio: mergeSection(mapped.audio, overlay.audio),
     teleprompter: mergeSection(mapped.teleprompter, overlay.teleprompter),
     commands: mergeSection(mapped.commands, overlay.commands),
-    listeners: mergeSection(mapped.listeners, overlay.listeners),
     // `saveTranscript` is Rust-owned (§36.2): a stale local overlay must never
     // be able to claim retention is on when the persisted document says off.
     privacy: {
@@ -231,6 +246,11 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     // duration or a goal threshold has to send (see settings-coaching.ts).
     for (const [key, value] of Object.entries(coaching)) put('coaching', key, value);
   }
+  if (patch.listeners) {
+    const listener = listenerToRustPatch(patch.listeners);
+    // `put` keeps `null`, which is what clearing `defaultPackId` has to send.
+    for (const [key, value] of Object.entries(listener)) put('listener', key, value);
+  }
   if (patch.commands) {
     put('commands', 'wakePhrase', patch.commands.wakePhrase);
     if (patch.commands.strictWake !== undefined) {
@@ -247,15 +267,15 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
 
 /**
  * Everything in the patch persists in the overlay so the UI view sticks —
- * except `following` (§47) and `coaching` (§30), which are Rust-owned in both
- * directions. A cached copy of a retention consent is exactly the thing that
- * must not exist.
+ * except `following` (§47), `coaching` (§30) and `listeners` (§37), which are
+ * Rust-owned in both directions. A cached copy of a retention consent is
+ * exactly the thing that must not exist.
  */
 function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
   for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
     if (key === 'revision' || key === 'schemaVersion') continue;
-    if (key === 'following' || key === 'coaching') continue;
+    if (key === 'following' || key === 'coaching' || key === 'listeners') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
     // Rust-owned fields never enter the overlay (§36.2, §47) — a cached copy

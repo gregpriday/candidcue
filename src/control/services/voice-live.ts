@@ -21,6 +21,7 @@ import {
   queryMicrophonePermission,
   releaseStream,
   requestMicrophoneAccess as requestMicAccess,
+  vadConfigForSensitivity,
   type MediaDevicesLike,
   type MediaStreamLike,
   type PermissionsLike,
@@ -107,7 +108,7 @@ export function createRealVoiceFacade(): VoiceFacade {
       };
     },
 
-    observeLevels(deviceId, cb): Unsubscribe {
+    observeLevels(deviceId, cb, vadSensitivity): Unsubscribe {
       let cancelled = false;
       let monitor: MicrophoneMonitor | null = null;
       let stream: MediaStreamLike | null = null;
@@ -122,7 +123,12 @@ export function createRealVoiceFacade(): VoiceFacade {
           return;
         }
         stream = result.stream;
-        monitor = new MicrophoneMonitor({ createGraph: createAnalyserGraph });
+        monitor = new MicrophoneMonitor({
+          createGraph: createAnalyserGraph,
+          ...(vadSensitivity === undefined
+            ? {}
+            : { vadConfig: vadConfigForSensitivity(vadSensitivity) }),
+        });
         offLevel = monitor.onLevel((snapshot: AudioLevelSnapshot) => cb(snapshot));
         await monitor.start(stream);
         if (cancelled) {

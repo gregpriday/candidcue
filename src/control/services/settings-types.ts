@@ -4,6 +4,7 @@
  */
 import { defaultCoachingSettings } from '../lib/coaching-profiles';
 import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
+import { defaultListenerSettings } from './settings-listener';
 import type { CoachingSettings } from '../../shared/contracts';
 
 export type { CoachingSettings };
@@ -79,11 +80,13 @@ export interface AppSettings {
     wakeAliases: string[];
     strictWake: boolean;
   };
-  listeners: {
-    defaultPackId?: string;
-    autoplay: boolean;
-    dimPercent: number;
-  };
+  /**
+   * Listener defaults (§37, §46.7). Rust-owned in both directions, and an exact
+   * twin of `settings::ListenerSettings` — this section and the Rust struct
+   * used to be two structures for one feature, one of which nothing could set.
+   * See services/settings-listener.ts.
+   */
+  listeners: ListenerSettings;
   privacy: {
     diagnosticLogging: boolean;
     updateChannel: UpdateChannel;
@@ -99,6 +102,23 @@ export interface AppSettings {
 
 /** §36.2 retention windows, exactly the values Rust validates. */
 export type TranscriptRetention = 'off' | '1d' | '7d' | '30d' | 'forever';
+
+/**
+ * Listener defaults. Declared here rather than in settings-listener.ts so the
+ * adapter can import the shape it maps to without a cycle; the adapter owns the
+ * defaults, the clamps, and both directions of the mapping.
+ */
+export interface ListenerSettings {
+  /** Pack preselected when `autoplay` is on. `null` = ask every time. */
+  defaultPackId: string | null;
+  autoplay: boolean;
+  /** 0-80. `opacity = 1 - dimPercent/100` on the stage. */
+  dimPercent: number;
+  /** 0-24 CSS pixels. */
+  blurPx: number;
+  /** 0-1, the CSS `saturate()` factor the stage applies. */
+  saturation: number;
+}
 
 export interface ClearResult {
   kind: string;
@@ -168,10 +188,7 @@ export function defaultAppSettings(): AppSettings {
       wakeAliases: ['candy cue', 'candid q'],
       strictWake: true,
     },
-    listeners: {
-      autoplay: true,
-      dimPercent: 40,
-    },
+    listeners: defaultListenerSettings(),
     privacy: {
       diagnosticLogging: false,
       updateChannel: 'stable',

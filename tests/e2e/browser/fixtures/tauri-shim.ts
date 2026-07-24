@@ -44,6 +44,15 @@ export interface ShimConfig {
    * `general.defaultSessionMode` (§14.2 G).
    */
   promptMode?: 'voice' | 'manual' | 'fixed';
+  /**
+   * §37 Listener defaults, as the Rust document stores them
+   * (`settings.listener`). Configurable so a spec can prove the settings really
+   * reach the controls: these fields had no reader at all before, and a default
+   * that coincidentally matched a hard-coded literal is exactly what hid it.
+   */
+  listenerSettings?: Record<string, unknown>;
+  /** Installed Listener packs returned by `list_installed_listeners`. */
+  installedListeners?: Array<Record<string, unknown>>;
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -158,7 +167,7 @@ function shimBody(config: ShimConfig): void {
         softPauseAutoDisconnectMinutes: 5,
       },
       commands: { wakePhrase: 'hey cue', wakeMode: 'double_gate', lunaFallback: true, commandModel: 'gpt-4o-mini' },
-      listener: {},
+      listener: config.listenerSettings ?? {},
     },
   };
 
@@ -575,7 +584,7 @@ function shimBody(config: ShimConfig): void {
         return [];
 
       case 'list_installed_listeners':
-        return [];
+        return config.installedListeners ?? [];
 
       default:
         return null;

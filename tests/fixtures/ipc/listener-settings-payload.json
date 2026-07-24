@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "Canonical §37 Listener settings, read by BOTH sides:",
+    "  - tests/unit/control/listener-settings-ipc-contract.test.ts drives the real",
+    "    adapter in src/control/services/settings-listener.ts;",
+    "  - src-tauri/tests/ipc_contract_tests.rs drives the real Rust struct in",
+    "    src-tauri/src/settings/mod.rs.",
+    "",
+    "This feature previously had TWO settings structures. Rust declared",
+    "opacityAfterDim / saturation / blurPx / scale / crossfadeMs / softPause /",
+    "hardPause / hideOnBlank; the TypeScript side typed the whole section as",
+    "Record<string, unknown> and mapped none of it, keeping its own",
+    "defaultPackId / autoplay / dimPercent in a localStorage overlay that nothing",
+    "read. Neither structure could be observed from the other side, which is",
+    "exactly what a fixture shared by both halves makes impossible.",
+    "",
+    "Every value is deliberately NON-DEFAULT (defaults: null / true / 40 / 0 /",
+    "0.85). A field one side maps and the other does not comes back as its",
+    "default and the assertion fails naming it.",
+    "",
+    "`settings` is simultaneously the UI view, the patch the UI emits for a",
+    "full-section write, and the document Rust stores — one shape on purpose."
+  ],
+  "settings": {
+    "defaultPackId": "mira",
+    "autoplay": false,
+    "dimPercent": 62.0,
+    "blurPx": 6.5,
+    "saturation": 0.3
+  },
+  "clearPatch": {
+    "_comment": [
+      "Forgetting the remembered pack. `null` must be SENT, not omitted: Rust's",
+      "merge_json removes a key whose patch value is null and the container's",
+      "serde(default) refills it with None. Dropping the key would leave the old",
+      "pack id in the document, and the next session would open a Listener the",
+      "user had just turned off."
+    ],
+    "input": { "defaultPackId": null },
+    "expected": { "defaultPackId": null }
+  },
+  "outOfRange": {
+    "_comment": [
+      "The ranges Rust validates, which are the ranges the Preflight sliders",
+      "offer. They used to disagree in both directions: opacityAfterDim <= 0.75",
+      "rejected a dim of 0, and blurPx <= 12 rejected the top half of a slider",
+      "that goes to 24 — so a value the UI could produce was a value Rust would",
+      "refuse to store. The adapter clamps rather than throwing."
+    ],
+    "input": { "dimPercent": 140, "blurPx": -3, "saturation": 9 },
+    "expected": { "dimPercent": 80, "blurPx": 0, "saturation": 1 }
+  }
+}

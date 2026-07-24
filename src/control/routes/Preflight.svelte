@@ -38,12 +38,22 @@
   } from '../services/display-profiles';
   import {
     buildListenerSelection,
+    listenerDimPercentFromOpacity,
+    listenerSaturationPercentFromFactor,
     listenerScalePercentFromCropZoom,
+    listenerSizePercentFromScale,
     listInstalledListeners,
     resolveListenerMedia,
     type InstalledListener,
   } from '../services/listeners';
   import { offsetSliderBound } from '../../shared/listener/geometry';
+  import {
+    LISTENER_PLACEMENTS,
+    listenerLensTarget,
+    listenerOverlapsScriptColumn,
+    listenerPlacementBox,
+    listenerPlacementDescriptor,
+  } from '../../shared/listener/placement';
   import { endSessionRecord, startSessionRecord } from '../services/session-records';
   import { runCheck } from './preflight-load';
   import {
@@ -57,7 +67,7 @@
   import { takeRetentionPurgeFailure } from '../services/settings';
   import type { CoachingSettings } from '../../shared/contracts';
   import type { SessionMode } from '../services/settings-types';
-  import type { ListenerStageSelection } from '../../shared/contracts';
+  import type { ListenerPlacementMode, ListenerStageSelection } from '../../shared/contracts';
   import { compiled, requestCompile } from '../stores/compiled';
   import {
     computeReadiness,
@@ -182,8 +192,20 @@
   /* ------------------------------------------------------------ listener */
   let listenerEnabled = $state(false);
   let listenerPack = $state<'none' | 'mira'>('none');
+  /*
+   * These four start from `$settings.listeners` in `loadPreflight`, not from
+   * the literals here: the literals are only what the component holds before
+   * settings resolve. `listenerDim` in particular used to be a hard-coded 40
+   * that shadowed the setting of the same name — the setting was written by the
+   * Settings screen and read by nothing, and the two agreeing was a coincidence.
+   */
   let listenerDim = $state(40);
   let listenerBlur = $state(0);
+  let listenerColour = $state(85);
+  let listenerMirror = $state(false);
+  let listenerPlacement = $state<ListenerPlacementMode>('background');
+  /** Multiplier on the placement's own box size; 'background' ignores it. */
+  let listenerSize = $state(100);
   let listenerScale = $state(100);
   let listenerX = $state(0);
   let listenerY = $state(0);
@@ -255,6 +277,33 @@
     lineHeight = $settings.teleprompter.lineHeight;
     readingBandCenterPercent = $settings.teleprompter.readingBandCenterPercent;
     followSystemDefault = $settings.audio.followSystemDefault;
+
+    /*
+     * §37 Listener defaults. Seeded BEFORE `loadDisplays`, because
+     * `restoreDisplayProfile` runs inside it and a remembered display must win
+     * over the app-wide default — the same precedence the type settings above
+     * already have.
+     */
+    listenerDim = $settings.listeners.dimPercent;
+    listenerBlur = $settings.listeners.blurPx;
+    listenerColour = listenerSaturationPercentFromFactor($settings.listeners.saturation);
+    /*
+     * "Turn the Listener on automatically". Only a pack that is genuinely
+     * installed is preselected: opening Preflight with a Listener selected that
+     * cannot be resolved would present a blocked readiness row the user never
+     * asked for.
+     */
+    const remembered = $settings.listeners.defaultPackId;
+    if ($settings.listeners.autoplay && remembered === 'mira') {
+      const packs = await listInstalledListeners().catch(() => [] as InstalledListener[]);
+      if (stale()) return;
+      installedListeners = packs;
+      listenersLoaded = true;
+      if (packs.some((p) => p.packId === 'mira' && p.state === 'installed')) {
+        listenerPack = 'mira';
+        listenerEnabled = true;
+      }
+    }
 
     await loadScript(id, generation);
     if (stale()) return;
@@ -404,6 +453,46 @@
     });
   });
 
+  /*
+   * The placement diagram. The stage layer and this preview both derive their
+   * boxes from src/shared/listener/placement.ts, so what the operator sees here
+   * is the same arithmetic the glass runs — not a drawing of it.
+   *
+   * `listenerLensTarget` composes the box with the crop's focus point to say
+   * where the presenter's eyes should go, which is the whole question a
+   * placement picker is answering.
+   */
+  const listenerPlacementInfo = $derived(listenerPlacementDescriptor(listenerPlacement));
+  const listenerPreviewGeometry = $derived({
+    anchorX: listenerPlacementInfo.anchorX,
+    anchorY: listenerPlacementInfo.anchorY,
+    scale: listenerSize / 100,
+    cropX: listenerX,
+    cropY: listenerY,
+    cropZoom: listenerCropZoom,
+    mirrorVideo: listenerMirror,
+  });
+  const listenerPreviewBox = $derived(
+    listenerPlacementBox(listenerPlacement, listenerPreviewGeometry),
+  );
+  const listenerPreviewTarget = $derived(
+    listenerLensTarget(listenerPlacement, listenerPreviewGeometry),
+  );
+  const listenerColumnOverlap = $derived(
+    listenerOverlapsScriptColumn(listenerPlacement, columnWidthPercent, listenerPreviewGeometry),
+  );
+
+  /**
+   * Remember (or forget) the chosen pack, so "turn the Listener on
+   * automatically" has something to turn on. Fire-and-forget: failing to
+   * remember a preference must never interrupt getting to a take, and the
+   * choice for THIS session is already made in local state.
+   */
+  function rememberListenerPack(packId: string | null): void {
+    if ($settings.listeners.defaultPackId === packId) return;
+    void patchSettings('listeners', { defaultPackId: packId }).catch(() => {});
+  }
+
   /* Keep the derived mode/listener requirement in the store. */
   $effect(() => {
     const listenerStatus = !listenerEnabled
@@ -472,9 +561,15 @@
   /* Mic level meter while permission is granted (local, pre-OpenAI). */
   $effect(() => {
     if (micPermission !== 'granted') return undefined;
-    const unsub = getVoiceFacade().observeLevels(micDeviceId, (snapshot) => {
-      micLevel = snapshot;
-    });
+    // §28.4: the meter reads the same sensitivity the take will use, so moving
+    // the slider in Settings is visible here rather than only felt mid-session.
+    const unsub = getVoiceFacade().observeLevels(
+      micDeviceId,
+      (snapshot) => {
+        micLevel = snapshot;
+      },
+      $settings.audio.vadSensitivity,
+    );
     return unsub;
   });
 
@@ -542,14 +637,23 @@
         // back as 115%, saved as 1.3225, came back as 132%, and Mira grew by
         // 15% of herself every session while the offset sliders' range silently
         // widened underneath her.
+        // Every inverse used here lives beside its forward conversion in
+        // services/listeners.ts, and every field restored here is covered by the
+        // compounding round-trip test. Both rules exist because of the same bug.
         listenerScale = listenerScalePercentFromCropZoom(
           profile.listener.cropZoom,
           listenerDefaultZoom,
         );
         listenerX = profile.listener.cropX;
         listenerY = profile.listener.cropY;
-        listenerDim = Math.round((1 - profile.listener.opacity) * 100);
+        listenerDim = listenerDimPercentFromOpacity(profile.listener.opacity);
         listenerBlur = profile.listener.blurPx;
+        listenerColour = listenerSaturationPercentFromFactor(profile.listener.saturation);
+        listenerMirror = profile.listener.mirrorVideo;
+        listenerSize = listenerSizePercentFromScale(profile.listener.scale);
+        // Absent on profiles saved before placement was selectable, which were
+        // all saved under 'background'.
+        listenerPlacement = profile.listener.placement ?? 'background';
       }
     } catch {
       rememberedProfileId = null;
@@ -822,11 +926,15 @@
       if (listenerEnabled && listenerPack === 'mira') {
         const version = installedMira?.version ?? '1.0.0';
         listener = await buildListenerSelection('mira', version, {
+          placement: listenerPlacement,
+          sizePercent: listenerSize,
           zoomPercent: listenerScale,
           offsetXPercent: listenerX,
           offsetYPercent: listenerY,
           dimPercent: listenerDim,
           blurPx: listenerBlur,
+          saturationPercent: listenerColour,
+          mirrorVideo: listenerMirror,
         });
       }
 
@@ -1458,6 +1566,7 @@
           onclick={() => {
             listenerPack = 'none';
             listenerEnabled = false;
+            rememberListenerPack(null);
           }}
         >
           <span class="listener-thumb none"><Icon name="eye-off" size={20} /></span>
@@ -1470,6 +1579,7 @@
           onclick={() => {
             listenerPack = 'mira';
             listenerEnabled = true;
+            rememberListenerPack('mira');
           }}
         >
           <span class="listener-thumb"><Icon name="user" size={20} /></span>
@@ -1481,16 +1591,99 @@
         </Button>
       </div>
       {#if listenerEnabled}
+        <!--
+          Placement (§37.4). Four of these five modes existed only as CSS: the
+          producer hard-coded 'background', so nothing could reach them. The
+          copy is written around EYELINE rather than layout, because that is the
+          decision — a teleprompter Listener is a place to look, and the lens
+          modes exist so the presenter can look at a face beside the lens
+          instead of through the text.
+        -->
+        <div class="placement">
+          <div class="placement-choices" role="radiogroup" aria-label="Listener placement">
+            {#each LISTENER_PLACEMENTS as option (option.id)}
+              <button
+                type="button"
+                role="radio"
+                aria-checked={listenerPlacement === option.id}
+                class="placement-option"
+                class:selected={listenerPlacement === option.id}
+                onclick={() => (listenerPlacement = option.id)}
+              >
+                <span class="placement-label">{option.label}</span>
+                <span class="placement-summary">{option.summary}</span>
+              </button>
+            {/each}
+          </div>
+          <!--
+            The diagram is drawn from the same `listenerPlacementBox` the stage
+            layer positions itself with, and the marker from
+            `listenerLensTarget`, so it cannot describe a layout the stage does
+            not produce.
+          -->
+          <div class="placement-preview">
+            <div class="stage-mini" aria-hidden="true">
+              <div
+                class="mini-box"
+                class:pip={listenerPlacement === 'pip'}
+                style:left="{listenerPreviewBox.left * 100}%"
+                style:top="{listenerPreviewBox.top * 100}%"
+                style:width="{listenerPreviewBox.width * 100}%"
+                style:height="{listenerPreviewBox.height * 100}%"
+                style:opacity={Math.max(0.15, 1 - listenerDim / 100)}
+              ></div>
+              <!-- Drawn at the column width actually configured above, so the
+                   overlap the note describes is the overlap shown. -->
+              <div
+                class="mini-script"
+                style:left="{(100 - columnWidthPercent) / 2}%"
+                style:right="{(100 - columnWidthPercent) / 2}%"
+              ></div>
+              <div
+                class="mini-target"
+                style:left="{listenerPreviewTarget.x * 100}%"
+                style:top="{listenerPreviewTarget.y * 100}%"
+              ></div>
+            </div>
+            <p class="placement-eyeline">{listenerPlacementInfo.eyeline}</p>
+            {#if listenerColumnOverlap}
+              <!-- Said out loud rather than claimed away: at the default column
+                   width the script really does run across a lens panel. -->
+              <p class="placement-eyeline">
+                The script column is {columnWidthPercent}% wide, so the text runs across this
+                panel. Narrow it under Appearance to keep her clear of the script.
+              </p>
+            {/if}
+          </div>
+        </div>
         <!-- Every Listener control lives here (spec §14.2 F): dim, blur,
-             scale, and horizontal/vertical position. Scale is bound to
-             ListenerGeometry (cropZoom = defaultZoom × scale%) and the
-             position sliders are cropX/cropY offsets as a percent of the
-             visible frame; their range is the scale-derived safe window, so
-             scaling up is what buys room to move her. -->
+             colour, size, zoom, mirror, and horizontal/vertical position. Zoom
+             is bound to ListenerGeometry (cropZoom = defaultZoom × zoom%) and
+             the position sliders are cropX/cropY offsets as a percent of the
+             visible frame; their range is the zoom-derived safe window, so
+             zooming in is what buys room to move her. -->
         <div class="appearance-grid">
           <Slider label="Dim" bind:value={listenerDim} min={0} max={80} format={(v) => `${v}%`} />
           <Slider label="Blur" bind:value={listenerBlur} min={0} max={24} format={(v) => `${v} px`} />
-          <Slider label="Scale" bind:value={listenerScale} min={60} max={160} format={(v) => `${v}%`} />
+          <Slider
+            label="Colour"
+            bind:value={listenerColour}
+            min={0}
+            max={100}
+            format={(v) => (v === 0 ? 'Black and white' : `${v}%`)}
+          />
+          {#if listenerPlacement !== 'background'}
+            <!-- Only meaningful when she has a box of her own: 'background' is
+                 the whole stage, so there is nothing for a size to change. -->
+            <Slider
+              label="Size on stage"
+              bind:value={listenerSize}
+              min={50}
+              max={200}
+              format={(v) => `${v}%`}
+            />
+          {/if}
+          <Slider label="Zoom" bind:value={listenerScale} min={60} max={160} format={(v) => `${v}%`} />
           <Slider
             label="Horizontal position"
             bind:value={listenerX}
@@ -1510,9 +1703,21 @@
             format={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`}
           />
           {#if listenerOffsetBound === 0}
-            <p class="field-note">Scale past 100% to gain room to move Mira around the frame.</p>
+            <p class="field-note">Zoom past 100% to gain room to move Mira around the frame.</p>
           {/if}
         </div>
+        <!--
+          Mirroring the VIDEO is independent of mirroring the script. A glass rig
+          flips everything on the panel optically, so a Listener that reads
+          correctly on the desk reads backwards through the glass; this flips the
+          media back. It lives inside the crop transform, so it never inverts the
+          position sliders (src/shared/listener/geometry.ts).
+        -->
+        <Toggle
+          bind:checked={listenerMirror}
+          label="Mirror the Listener"
+          description="Flips the video only. Use it on a glass rig, where the script is already mirrored."
+        />
         <Toggle checked={true} disabled label="Random playback" description="Always on in this release" />
       {/if}
     </Section>
@@ -1866,6 +2071,122 @@
   .listener-meta {
     font-size: var(--text-2xs);
     color: var(--text-muted);
+  }
+
+  /* --- listener placement --- */
+  .placement {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
+    gap: var(--space-5);
+    align-items: start;
+  }
+  .placement-choices {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .placement-option {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    text-align: left;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-panel);
+    transition:
+      border-color var(--dur-fast) var(--ease-out),
+      background var(--dur-fast) var(--ease-out);
+  }
+  .placement-option:hover {
+    border-color: var(--border-strong);
+    background: var(--bg-hover-surface);
+  }
+  .placement-option.selected,
+  .placement-option.selected:hover {
+    border-color: var(--border-strong);
+    background: var(--accent-wash);
+  }
+  /* Inset bar, never a one-sided border on a rounded box. */
+  .placement-option.selected::before {
+    content: '';
+    position: absolute;
+    left: 6px;
+    top: 10px;
+    bottom: 10px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--accent);
+  }
+  .placement-label {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .placement-summary {
+    font-size: var(--text-2xs);
+    line-height: var(--lh-label);
+    color: var(--text-secondary);
+  }
+  .placement-preview {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .stage-mini {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: #0b0b0c;
+    overflow: hidden;
+  }
+  .mini-box {
+    position: absolute;
+    background: var(--accent);
+    transition:
+      left var(--dur-fast) var(--ease-out),
+      top var(--dur-fast) var(--ease-out),
+      width var(--dur-fast) var(--ease-out),
+      height var(--dur-fast) var(--ease-out);
+  }
+  .mini-box.pip {
+    border-radius: 4px;
+  }
+  /* Where the script column sits, so the trade-off with the text is visible. */
+  .mini-script {
+    position: absolute;
+    top: 30%;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow:
+      0 10px 0 rgba(255, 255, 255, 0.4),
+      0 20px 0 rgba(255, 255, 255, 0.28);
+  }
+  .mini-target {
+    position: absolute;
+    width: 12px;
+    height: 12px;
+    margin: -6px 0 0 -6px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.55);
+    transition:
+      left var(--dur-fast) var(--ease-out),
+      top var(--dur-fast) var(--ease-out);
+  }
+  .placement-eyeline {
+    margin: 0;
+    font-size: var(--text-2xs);
+    line-height: var(--lh-label);
+    color: var(--text-secondary);
+  }
+  @media (max-width: 760px) {
+    .placement {
+      grid-template-columns: minmax(0, 1fr);
+    }
   }
 
   /* --- readiness --- */
