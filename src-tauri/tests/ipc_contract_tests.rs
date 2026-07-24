@@ -201,3 +201,79 @@ fn the_typescript_error_contract_matches_the_rust_codes() {
         "the listener module must not raise a code that claims a signature check"
     );
 }
+
+// ---------------------------------------------------------------------------
+// C1 regression: credential expiry unit across the IPC boundary
+// ---------------------------------------------------------------------------
+
+use candidcue_lib::openai::{normalize_expiry_to_epoch_ms, EphemeralCredential};
+
+fn credential_fixture() -> serde_json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("ipc")
+        .join("realtime-credential.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
+    serde_json::from_str(&raw).expect("fixture parses")
+}
+
+/// The provider's `expires_at` is epoch SECONDS; the webview compares expiry
+/// against `Date.now()`, which is epoch MILLISECONDS. Forwarding the raw value
+/// made every freshly minted credential compare as already-expired, so the app
+/// rejected its own secret before SDP negotiation and never transcribed —
+/// while the UI still reported a healthy session.
+#[test]
+fn credential_expiry_is_normalized_to_epoch_millis() {
+    let f = credential_fixture();
+    let provider_seconds = f["providerClientSecretResponse"]["expires_at"]
+        .as_i64()
+        .expect("fixture provider timestamp");
+
+    // Deliberately a realistic 10-digit provider value: a millisecond-shaped
+    // fixture is exactly what hid this defect on both sides.
+    assert_eq!(provider_seconds.to_string().len(), 10);
+
+    let normalized = normalize_expiry_to_epoch_ms(provider_seconds);
+    assert_eq!(
+        normalized,
+        f["notes"]["expectedExpiresAtEpochMs"].as_i64().unwrap()
+    );
+    assert_eq!(normalized, provider_seconds * 1000);
+    assert_eq!(normalized.to_string().len(), 13);
+}
+
+/// Already-millisecond input must not be scaled a second time — that would
+/// hand the webview a credential that never appears to expire, which is the
+/// mirror-image failure (a dead session the health monitor never renews).
+#[test]
+fn credential_expiry_normalization_is_idempotent_for_millis() {
+    let millis = 1_785_110_400_000_i64;
+    assert_eq!(normalize_expiry_to_epoch_ms(millis), millis);
+}
+
+/// The serialized field name carries its unit, and matches the fixture the
+/// TypeScript contract test reads.
+#[test]
+fn credential_serializes_to_the_frontend_shape() {
+    let f = credential_fixture();
+    let credential = EphemeralCredential {
+        value: "ek_live_c1regression".into(),
+        expires_at_epoch_ms: normalize_expiry_to_epoch_ms(
+            f["providerClientSecretResponse"]["expires_at"]
+                .as_i64()
+                .unwrap(),
+        ),
+        session_type: "transcription".into(),
+        credential_generation: 1,
+    };
+    let encoded = serde_json::to_value(&credential).expect("serializes");
+    assert_eq!(encoded, f["expectedCredential"]);
+    assert!(encoded.get("expiresAtEpochMs").is_some());
+    assert!(
+        encoded.get("expiresAt").is_none(),
+        "the unitless field name is what caused C1; it must not come back"
+    );
+}

@@ -7,7 +7,7 @@
 import type { CommandCandidate, ValidatedCommand } from '../contracts/commands';
 import type { TranscriptLedger } from '../tracking/ledger';
 import type { LedgerToken, SpokenToken, TokenRange } from '../tracking/types';
-import { scoreScriptCollision } from './collision';
+import { matchLiteralCommandRange, scoreScriptCollision } from './collision';
 import { parseCommand, type CommandParseContext } from './grammar';
 import { buildLunaRequest, validateLunaResult, type LunaCommandRequest } from './luna';
 import { validateCommandAction } from './schema';
@@ -15,7 +15,13 @@ import { resolveCommandSettings, type CommandSettings, type CommandBounds } from
 import { collectCommandPhrase, findWake } from './wake';
 
 export type CommandObservation =
-  | { kind: 'none' }
+  /**
+   * Nothing to do. `releaseItemIds` is non-empty when this observation
+   * *undoes* an earlier `pending`: the phrase turned out to be authored script
+   * (§33.4 tail), so the items previously masked out of alignment must be
+   * handed back rather than excluded for the rest of the session.
+   */
+  | { kind: 'none'; releaseItemIds?: string[] }
   | { kind: 'pending'; itemIds: string[] }
   | { kind: 'command'; command: ValidatedCommand; candidate: CommandCandidate; itemIds: string[] }
   | { kind: 'needs_luna'; candidate: CommandCandidate; request: LunaCommandRequest; itemIds: string[] }
@@ -57,6 +63,8 @@ export class CommandRouter {
   readonly settings: CommandSettings;
   private readonly deps: CommandRouterDeps;
   private consumed = new Set<string>();
+  /** Items masked out of alignment by a `pending` observation (§33.4.4). */
+  private maskedByPending = new Set<string>();
   private pendingLuna: PendingLuna | undefined;
   private log: CommandLogEntry[] = [];
   private stageAck: StageAcknowledgement | undefined;
@@ -99,8 +107,19 @@ export class CommandRouter {
     }
     if (reason === 'generation_changed') {
       this.consumed.clear();
+      this.maskedByPending.clear();
       this.commandWindowUntilMs = -Infinity;
     }
+  }
+
+  /**
+   * Drive time-based expiry (§33.11). Must be called on a timer, not only when
+   * transcript arrives: the failure this exists for — a Luna handoff that never
+   * returns — is precisely the case where no further transcript is processed,
+   * because the aligner is frozen in COMMAND_PENDING waiting for it.
+   */
+  tick(nowMs: number): CommandObservation {
+    return this.expireLuna(nowMs);
   }
 
   /* -------------------------------------------------------------------------
@@ -112,6 +131,10 @@ export class CommandRouter {
       this.cancelPending('generation_changed', nowMs);
       this.sessionGeneration = sessionGeneration;
     }
+    // A Luna handoff past its hard timeout must not keep the aligner frozen
+    // while new speech is arriving (§33.11).
+    const expired = this.expireLuna(nowMs);
+    if (expired.kind !== 'none') return expired;
 
     const tail = this.deps.ledger
       .recentTokens(48)
@@ -149,13 +172,6 @@ export class CommandRouter {
       const wake = findWake(tail, this.settings);
       if (wake === undefined) return { kind: 'none' };
 
-      // §33.5/G.7: literal-command region near the cursor → never a command.
-      const cursor = this.deps.getCursorTokenIndex();
-      for (const range of this.deps.literalCommandRanges ?? []) {
-        if (cursor >= range.startTokenIndex - 4 && cursor <= range.endTokenIndex + 4) {
-          return { kind: 'none' };
-        }
-      }
       // §33.5: low wake confidence with no clear pause boundary → reject.
       if (wake.confidence < this.settings.minimumWakeConfidence) return { kind: 'none' };
       if (!wake.atBoundary && wake.confidence < 0.9) return { kind: 'none' };
@@ -170,16 +186,43 @@ export class CommandRouter {
       collisionTokens = tail.slice(wake.startIndex);
     }
 
+    // §33.5/G.7 literal-command blocks, tested two ways, both before the
+    // pending branch so reading one aloud never freezes the aligner at all.
+    //
+    // (a) The cursor is standing inside an authored block: everything said
+    //     here is demonstration, whatever the words are.
+    const cursor = this.deps.getCursorTokenIndex();
+    for (const range of this.deps.literalCommandRanges ?? []) {
+      if (cursor >= range.startTokenIndex - 4 && cursor <= range.endTokenIndex + 4) {
+        return this.releaseObservation(itemIds);
+      }
+    }
+    // (b) The phrase itself reads as a block, wherever it lives in the
+    //     document. (a) alone is not enough and never was: it keys off where
+    //     the tracker *thinks* the presenter is, and after a twenty-second
+    //     ad-lib the cursor can be a hundred tokens behind their mouth — at
+    //     which point reading "to blank the stage you say CandidCue blank the
+    //     screen" out of the script blanks the stage mid-take.
+    const literal = matchLiteralCommandRange(
+      collisionTokens,
+      this.deps.scriptTokens,
+      this.deps.literalCommandRanges,
+      undefined,
+      this.settings.literalCommandThreshold,
+    );
+    if (literal.matched) return this.releaseObservation(itemIds);
+
     // Not yet final and not a recognizable complete grammar → pending
     // (aligner enters COMMAND_PENDING and masks these items, §33.4.4).
     const provisionalParse = parseCommand(
       phraseTokens.map((t) => t.normalized),
       this.deps.parseContext,
     );
-    if (!phraseFinal && !phraseClosed && provisionalParse.kind !== 'command') {
-      return { kind: 'pending', itemIds };
-    }
-    if (!phraseFinal && provisionalParse.kind !== 'command') {
+    if (
+      (!phraseFinal && !phraseClosed && provisionalParse.kind !== 'command') ||
+      (!phraseFinal && provisionalParse.kind !== 'command')
+    ) {
+      for (const id of itemIds) this.maskedByPending.add(id);
       return { kind: 'pending', itemIds };
     }
 
@@ -190,10 +233,10 @@ export class CommandRouter {
       cursorTokenIndex: this.deps.getCursorTokenIndex(),
       literalCommandRanges: this.deps.literalCommandRanges,
     });
-    if (collision.inLiteralRegion) return { kind: 'none' };
+    if (collision.inLiteralRegion) return this.releaseObservation(itemIds);
     if (collision.score >= this.settings.scriptCollisionThreshold) {
       // Release the text back to ordinary alignment (§33.4).
-      return { kind: 'none' };
+      return this.releaseObservation(itemIds);
     }
 
     const candidate = this.makeCandidate(
@@ -331,6 +374,21 @@ export class CommandRouter {
 
   /* ----------------------------------------------------------------------- */
 
+  /**
+   * Spec §33.4 tail: the phrase was authored script after all, so anything a
+   * previous `pending` masked has to go back to the aligner. Without this the
+   * sentence the presenter was reading when a spurious wake fired stays
+   * excluded from alignment for the rest of the session, and the engine's
+   * masked-item set only ever grows.
+   */
+  private releaseObservation(itemIds: readonly string[]): CommandObservation {
+    const release = new Set<string>(itemIds);
+    for (const id of this.maskedByPending) release.add(id);
+    this.maskedByPending.clear();
+    const releaseItemIds = [...release].filter((id) => !this.consumed.has(id));
+    return releaseItemIds.length > 0 ? { kind: 'none', releaseItemIds } : { kind: 'none' };
+  }
+
   private unknownObservation(
     candidate: CommandCandidate,
     itemIds: string[],
@@ -366,7 +424,10 @@ export class CommandRouter {
   }
 
   private consume(itemIds: readonly string[]): void {
-    for (const id of itemIds) this.consumed.add(id);
+    for (const id of itemIds) {
+      this.consumed.add(id);
+      this.maskedByPending.delete(id);
+    }
     this.deps.ledger.setCommandDisposition(itemIds, 'command');
   }
 

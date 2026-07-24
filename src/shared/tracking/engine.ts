@@ -56,6 +56,7 @@ import {
   type PartialSmoothFollowProfile,
   type TrackingProfile,
 } from './profile';
+import { scaleToSection } from './scales';
 import { SectionGraph, type SectionTransitionContext, type TransitionAuthority } from './section-graph';
 import type { SemanticAssistEvidence } from './semantic-assist';
 import { SemanticFilter } from './semantic-filter';
@@ -102,6 +103,8 @@ const RETAKE_LEAD_INS = [
 const MAX_CHECKPOINTS = 12;
 const RETAKE_SUPPORT_REQUIRED = 2;
 const RETAKE_POSITION_TOLERANCE = 6;
+/** Prune `maskedItemIds` against the ledger once it grows past this (§30.3). */
+const MASK_PRUNE_THRESHOLD = 32;
 
 export class AlignmentEngine {
   readonly profile: TrackingProfile;
@@ -142,6 +145,8 @@ export class AlignmentEngine {
   private pendingRetake: { position: number; supports: number } | undefined;
   private maskedItemIds = new Set<string>();
   private commandPending = false;
+  /** Session time the current COMMAND_PENDING freeze began (§33.4.4). */
+  private commandPendingSinceMs = 0;
 
   /* --- v2 state ------------------------------------------------------- */
   /** False until the first committed lock — acquisition is not a jump (§17.1). */
@@ -163,6 +168,10 @@ export class AlignmentEngine {
   private lastEventAtMs = 0;
   /** Audio span of the last final item, for pace samples (§24.3). */
   private lastPaceSpan: { tokenIndex: number; atMs: number } | undefined;
+  /** The next pace span begins immediately after command speech (§24.4). */
+  private paceSpanAfterCommand = false;
+  /** Why the last pace span was discarded, for diagnostics (§64). */
+  private lastPaceRejection: PaceSampleRejection | undefined;
   private offScript = false;
   private lastFrameTransitionId: string | undefined;
   /** Authority of the emission in flight; only `moveTo` raises this (§56.1). */
@@ -222,27 +231,88 @@ export class AlignmentEngine {
   maskItems(itemIds: readonly string[]): void {
     for (const id of itemIds) this.maskedItemIds.add(id);
     this.ledger.setCommandDisposition(itemIds, 'command');
+    // The set is consulted on every alignment pass and was otherwise monotonic
+    // for the life of the session, long after the ledger's 180 s horizon had
+    // dropped the items themselves.
+    if (this.maskedItemIds.size > MASK_PRUNE_THRESHOLD) this.pruneMaskedItems();
+    // §24.4: the masked audio is command speech, not reading. The span that
+    // straddles it must not become a pace sample — it would measure "script
+    // units covered" against a duration that includes the command utterance
+    // and halve the estimated pace, which then drives `observeVelocity` and
+    // the beam's predict-forward.
+    this.invalidatePaceSpan();
   }
 
   /** Release items whose command detection failed (spec §33.4 tail). */
   releaseItems(itemIds: readonly string[]): void {
     for (const id of itemIds) this.maskedItemIds.delete(id);
     this.ledger.setCommandDisposition(itemIds, 'script');
+    this.pruneMaskedItems();
+  }
+
+  /**
+   * Drop masked ids the ledger has already aged out past its rolling horizon
+   * (§30.3). The set is consulted on every alignment pass and is otherwise
+   * monotonic for the life of the session.
+   */
+  private pruneMaskedItems(): void {
+    if (this.maskedItemIds.size === 0) return;
+    for (const id of [...this.maskedItemIds]) {
+      if (this.ledger.getItem(id) === undefined) this.maskedItemIds.delete(id);
+    }
+  }
+
+  /**
+   * §24.4: flag the span currently open as command-contaminated. The anchor is
+   * deliberately *not* cleared — `observeCommittedPosition` advances it even
+   * for a rejected sample, so the next clean span is still measured from the
+   * right place, which is the policy the estimator documents.
+   */
+  private invalidatePaceSpan(): void {
+    this.paceSpanAfterCommand = true;
   }
 
   setCommandPending(pending: boolean, nowMs: number): EngineOutput {
+    const wasPending = this.commandPending;
     this.commandPending = pending;
     if (pending) {
+      if (!wasPending) this.commandPendingSinceMs = nowMs;
       if (this.state !== 'command_pending') {
         this.stateBeforePause = this.state;
         this.state = 'command_pending';
         return this.emit('command', nowMs, 'command_pending');
       }
-    } else if (this.state === 'command_pending') {
-      this.state = this.stateBeforePause === 'command_pending' ? 'following' : this.stateBeforePause;
-      return this.emit('hold', nowMs, 'command_resolved');
+    } else {
+      // §24.4: whatever was spoken during the freeze was command speech, so
+      // the span crossing it is not a reading-rate sample.
+      if (wasPending) this.invalidatePaceSpan();
+      if (this.state === 'command_pending') {
+        this.state =
+          this.stateBeforePause === 'command_pending' ? 'following' : this.stateBeforePause;
+        return this.emit('hold', nowMs, 'command_resolved');
+      }
     }
     return {};
+  }
+
+  /**
+   * §33.4.4 / §33.11: COMMAND_PENDING is a *freeze*. `handleTranscriptEvent`
+   * returns nothing while it is set and `command_pending` is an identity state
+   * for the filter, so nothing integrates and the teleprompter simply stops.
+   * Whoever set it is supposed to clear it — but a Luna handoff that never
+   * returns, or an IPC call with no timeout, means nobody ever does, and the
+   * take is over.
+   *
+   * The freeze is therefore bounded here, by construction, rather than trusted
+   * to the caller: past `commandPendingTimeoutMs` the engine releases itself.
+   * A late `setCommandPending(false)` is then a harmless no-op.
+   */
+  private expireCommandPending(nowMs: number): EngineOutput | undefined {
+    if (!this.commandPending) return undefined;
+    if (nowMs - this.commandPendingSinceMs <= this.profile.commandPendingTimeoutMs) {
+      return undefined;
+    }
+    return this.setCommandPending(false, nowMs);
   }
 
   pause(nowMs: number): EngineOutput {
@@ -359,7 +429,16 @@ export class AlignmentEngine {
     if (this.state === 'paused' || this.state === 'reconnecting') return {};
     if (update === undefined) return {};
     if (update.sessionGeneration !== this.session.sessionGeneration) return {};
-    if (this.commandPending) return {};
+    // §26.1: `sessionTimeMs` must never go backwards. `tick` guards against
+    // earlier ticks, but transcript events also advance session time, so
+    // without this a tick timestamped before the last transcript event emits a
+    // frame whose clock has run backwards.
+    this.lastEventAtMs = Math.max(this.lastEventAtMs, update.receivedAtMs);
+    if (this.commandPending) {
+      const released = this.expireCommandPending(update.receivedAtMs);
+      if (released === undefined) return {};
+      return released;
+    }
 
     const nowMs = update.receivedAtMs;
     const tail = this.ledger.getAlignableTail({
@@ -412,6 +491,7 @@ export class AlignmentEngine {
       epoch: this.epoch,
       state: this.state,
       msSinceConfident: nowMs - this.lastConfidentAtMs,
+      largeForwardDistance: this.largeForwardDistance(),
       repeatedOpening: (position) => this.matchesPreviouslyReadOpening(position, tail),
     });
     this.lastMeasurement = measurement;
@@ -458,6 +538,44 @@ export class AlignmentEngine {
     };
   }
 
+  /**
+   * `largeForwardDistance`, clamped to a fraction of the enclosing section
+   * (`scales.ts`). The absolute 40 is two thirds of a 62-token chapter, which
+   * makes `updateOffScript`'s `nearCursor` test true for essentially the whole
+   * section — so `offScript`, and with it `adlib_hold` vs `lost_local` and
+   * pace-contamination flagging, ends up decided by confidence alone.
+   */
+  private largeForwardDistance(tokenIndex = this.committedTokenIndex): number {
+    return scaleToSection(
+      this.index,
+      tokenIndex,
+      this.profile.largeForwardDistance,
+      this.profile.largeForwardMaxFraction,
+    );
+  }
+
+  /**
+   * §31.8 bounded provisional advance, clamped to a fraction of the enclosing
+   * section. The absolute 18 exceeds the whole 14-token boundary corridor, so
+   * provisional evidence could advance further than the corridor it is
+   * forbidden to cross.
+   *
+   * Scaling this to the *sentence* was tried and reverted: sentences here run
+   * ~10 tokens, so any useful fraction collapses the provisional advance to
+   * 2–3 tokens, the cursor stops leading the reader between completions, and
+   * D.1's "the estimate never moves backward" invariant breaks as the display
+   * lead repeatedly builds and decays. Section-relative is the right structure
+   * for this one.
+   */
+  private maxProvisionalAdvance(): number {
+    return scaleToSection(
+      this.index,
+      this.committedTokenIndex,
+      this.profile.maxProvisionalAdvanceTokens,
+      this.profile.provisionalAdvanceMaxFraction,
+    );
+  }
+
   /** Keep the filter's prediction inside the current section (§24.2.1). */
   private applySectionBounds(): void {
     const section = this.sectionGraph.sectionAt(this.committedTokenIndex);
@@ -495,7 +613,7 @@ export class AlignmentEngine {
     const profile = this.profile;
     const distance = best.absolutePosition - this.committedTokenIndex;
     const isBackward = distance < 0;
-    const isLargeForward = distance > profile.largeForwardDistance;
+    const isLargeForward = distance > this.largeForwardDistance();
 
     // §21.4 retake lock: reject stale evidence from the superseded take.
     if (distance > 0 && this.isStalePostRetakeEvidence(best.absolutePosition, tail)) {
@@ -820,8 +938,17 @@ export class AlignmentEngine {
     // boundary without exceptional confidence.
     let target = Math.min(
       best.absolutePosition,
-      this.committedTokenIndex + profile.maxProvisionalAdvanceTokens,
+      this.committedTokenIndex + this.maxProvisionalAdvance(),
     );
+    // §13 vs §31.8: provisional evidence may never leave the current section.
+    // `TrackingSnapshot.tokenIndex` is read straight off `provisionalTokenIndex`
+    // by the control Live screen while `SemanticMotionFrame.sectionId` is
+    // derived from `committedTokenIndex` — without this clamp the two
+    // consumers report positions in different chapters at the same instant.
+    const currentSection = this.index.sectionAt(this.committedTokenIndex);
+    if (currentSection !== undefined) {
+      target = Math.min(target, currentSection.endTokenIndex);
+    }
     const exceptional = best.confidence >= profile.lockedThreshold + 0.1;
     if (!exceptional) {
       const currentBlock = this.index.tokenAt(this.committedTokenIndex)?.blockId;
@@ -1027,8 +1154,13 @@ export class AlignmentEngine {
 
   /** Companion §7.2: a new layout generation invalidates stage geometry. */
   setLayoutGeneration(generation: number, nowMs: number): EngineOutput {
-    if (generation === this.layoutGeneration) return {};
-    this.layoutGeneration = generation;
+    // A non-finite generation would defeat the `===` latch below forever (NaN
+    // never equals itself) and, once stamped on frames, would silently disable
+    // the stage's stale-frame discard.
+    if (!Number.isFinite(generation)) return {};
+    const next = Math.floor(generation);
+    if (next === this.layoutGeneration) return {};
+    this.layoutGeneration = next;
     const directive = this.directives.issue({
       type: 'settle',
       authority: 'ordinary',
@@ -1062,6 +1194,8 @@ export class AlignmentEngine {
   tick(nowMs: number): EngineOutput {
     if (nowMs < this.lastEventAtMs) return {};
     this.lastEventAtMs = nowMs;
+    const released = this.expireCommandPending(nowMs);
+    if (released !== undefined) return released;
     const previousState = this.stateV2;
     this.filter.setState(this.stateV2);
     this.filter.predict(nowMs);
@@ -1071,6 +1205,16 @@ export class AlignmentEngine {
     if (isReturnToScript(previousState, this.stateV2)) this.behavior = 'return';
     const frame = this.buildFrame(nowMs, false, this.directives.active(nowMs));
     return frame !== undefined ? { frame } : {};
+  }
+
+  /** Items currently withheld from alignment (§33.4 step 5). */
+  get maskedItemCount(): number {
+    return this.maskedItemIds.size;
+  }
+
+  /** Companion §64 — why the most recent pace span was discarded, if it was. */
+  get paceRejection(): PaceSampleRejection | undefined {
+    return this.lastPaceRejection;
   }
 
   /** Companion §65 — bounded "why did it move?" ring buffer. */
@@ -1095,10 +1239,18 @@ export class AlignmentEngine {
       // the rate. A rejected sample still advances the span anchor so the
       // *next* clean span is measured from the right place.
       const contamination: PaceSampleRejection[] = [];
+      // §24.4 lists command speech among the contaminating spans. Nothing in
+      // src/ ever emitted it: the first span after a command was measured
+      // across the command utterance itself, which is script units covered
+      // divided by a duration that includes speech that covered none of them.
+      // The resulting rate clears the 0.4 floor, so it was accepted, and it
+      // halves blended pace — which then drives `filter.observeVelocity` and
+      // the beam's predict-forward.
+      if (this.paceSpanAfterCommand) contamination.push('command_speech');
       if (decision.movement === 'skip') contamination.push('skip');
       if (decision.movement === 'retake') contamination.push('retake');
       if (this.offScript) contamination.push('adlib');
-      this.paceEstimator.observe(
+      this.lastPaceRejection = this.paceEstimator.observe(
         {
           units: unit - this.units.unitAt(previous.tokenIndex),
           durationMs: nowMs - previous.atMs,
@@ -1108,7 +1260,10 @@ export class AlignmentEngine {
         contamination,
       );
     }
-    if (!decision.provisional) this.lastPaceSpan = { tokenIndex: targetTokenIndex, atMs: nowMs };
+    if (!decision.provisional) {
+      this.lastPaceSpan = { tokenIndex: targetTokenIndex, atMs: nowMs };
+      this.paceSpanAfterCommand = false;
+    }
 
     this.filter.setState(this.projectStateV2(decision, nowMs));
     this.filter.observe({
@@ -1117,6 +1272,12 @@ export class AlignmentEngine {
       margin: decision.margin,
       beamVariance: this.lastMeasurement?.positionVariance ?? 0,
       finalEvidence: !decision.provisional,
+      // §25.1: only the committed retake/skip *is* the authorized
+      // discontinuity. Everything else that happens to arrive while a
+      // directive is still live is an ordinary measurement and stays clamped.
+      authorizedDiscontinuity:
+        !decision.provisional &&
+        (decision.movement === 'retake' || decision.movement === 'skip'),
       atMs: nowMs,
     });
 
@@ -1149,7 +1310,7 @@ export class AlignmentEngine {
     const nearCursor =
       measurement === undefined ||
       Math.abs(measurement.bestTokenPosition - this.committedTokenIndex) <=
-        this.profile.largeForwardDistance;
+        this.largeForwardDistance();
     const pastGrace = nowMs - this.lastConfidentAtMs > this.profile.adLibGraceMs;
     this.offScript = weak && nearCursor && pastGrace;
   }

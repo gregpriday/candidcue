@@ -156,16 +156,83 @@ describe('prohibited jumps never reach the cursor (property, §69.7)', () => {
     expect(engine.measurement?.blocked?.reason).toBe('prohibited_non_contiguous');
   });
 
-  it('fuzz: no random speech ever produces an uncommanded non-contiguous jump', { timeout: 30_000 }, () => {
+  /**
+   * The previous fuzz checked section *adjacency* only, so a mid-section →
+   * mid-section move into the neighbouring chapter passed — which is exactly
+   * the defect class the boundary-corridor clamp was added for, and exactly
+   * what the C1 mutation produces. It also generated only contiguous verbatim
+   * runs of real script tokens, and only final evidence, so it never explored
+   * paraphrases, interleavings, out-of-order completions, or the provisional
+   * path at all.
+   *
+   * Section spans and the corridor are computed here from the outline, not
+   * from `SectionGraph`, for the same reason the harness metric is: a check
+   * that calls the gate's own helpers cannot catch a defect in them.
+   */
+  it('fuzz: no random speech ever produces an uncommanded non-contiguous jump', { timeout: 60_000 }, () => {
     const document = demoDocument();
-    // A deterministic LCG keeps the fuzz reproducible (no wall clock, no
-    // Math.random) while still covering many phrase combinations.
+    const spans = document.outline
+      .map((node) => ({
+        id: node.id,
+        start: node.startTokenIndex,
+        end: node.endTokenIndex,
+      }))
+      .sort((a, b) => a.start - b.start);
+    const ownerOf = (tokenIndex: number): number =>
+      spans.findIndex((span) => tokenIndex >= span.start && tokenIndex <= span.end);
+    // Generous relative corridor: strictly looser than any sane engine value,
+    // so only a corridor that has swallowed the section body trips it.
+    const corridorOf = (index: number): number => {
+      const span = spans[index];
+      if (span === undefined) return 0;
+      return Math.max(1, (span.end - span.start + 1) * 0.35);
+    };
+
     let seed = 0x2f6e2b1;
     const random = (): number => {
       seed = (seed * 1664525 + 1013904223) >>> 0;
       return seed / 0x1_0000_0000;
     };
     const words = document.spokenTokens.map((token) => token.normalized);
+    const FILLERS = ['um', 'so', 'okay', 'basically', 'right', 'you', 'know'];
+
+    /** Build one utterance: verbatim, paraphrased, interleaved, or shuffled. */
+    const utterance = (): string => {
+      const start = Math.floor(random() * Math.max(1, words.length - 12));
+      const length = 4 + Math.floor(random() * 9);
+      const run = words.slice(start, start + length);
+      switch (Math.floor(random() * 4)) {
+        case 0:
+          return run.join(' '); // verbatim
+        case 1: {
+          // Paraphrase: drop and substitute words, keep order.
+          const kept = run.filter(() => random() > 0.3);
+          const noisy = kept.flatMap((word) =>
+            random() > 0.75 ? [FILLERS[Math.floor(random() * FILLERS.length)] ?? 'um', word] : [word],
+          );
+          return noisy.join(' ');
+        }
+        case 2: {
+          // Interleaving: a second run from somewhere else spliced in.
+          const other = Math.floor(random() * Math.max(1, words.length - 8));
+          return [...run.slice(0, 4), ...words.slice(other, other + 5)].join(' ');
+        }
+        default: {
+          // Out-of-order: the words the presenter said, jumbled.
+          const shuffled = [...run];
+          for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(random() * (i + 1));
+            const a = shuffled[i];
+            const b = shuffled[j];
+            if (a !== undefined && b !== undefined) {
+              shuffled[i] = b;
+              shuffled[j] = a;
+            }
+          }
+          return shuffled.join(' ');
+        }
+      }
+    };
 
     for (let trial = 0; trial < 24; trial++) {
       const engine = new AlignmentEngine(document, {
@@ -174,41 +241,70 @@ describe('prohibited jumps never reach the cursor (property, §69.7)', () => {
         stageGeneration: 1,
       });
       const scripter = new TranscriptScripter(10_000, 1);
-      let previousSection = engine.sectionGraph.sectionIdAt(0);
+      let previousToken = 0;
       let acquired = false;
+      // Half the trials stream deltas, so the provisional path is fuzzed too.
+      const withDeltas = trial % 2 === 0;
+      /** Completions held back and replayed late, out of commit order (§30.7). */
+      const delayed: ReturnType<TranscriptScripter['speak']> = [];
 
       for (let turn = 0; turn < 6; turn++) {
-        // Splice a random run of real script words from a random location —
-        // exactly the kind of input that tempts a matcher across a boundary.
-        const start = Math.floor(random() * Math.max(1, words.length - 12));
-        const length = 4 + Math.floor(random() * 9);
-        const text = words.slice(start, start + length).join(' ');
+        const text = utterance();
         if (text.trim().length === 0) continue;
 
-        // Final-only turns: provisional evidence can never cross a boundary
-        // by construction (§15.3), and this keeps the fuzz fast enough for CI.
-        for (const event of scripter.speak({ text, withDeltas: false })) {
-          engine.handleTranscriptEvent(event);
-          const section = engine.sectionGraph.sectionIdAt(engine.cursor.committedTokenIndex);
-          if (!acquired) {
-            // Acquisition may land anywhere (§17.1); start policing afterwards.
-            if (engine.cursor.committedTokenIndex > 0) {
-              acquired = true;
-              previousSection = section;
-            }
+        const events = scripter.speak({ text, withDeltas });
+        for (const event of events) {
+          // Occasionally hold a completion back and deliver it several turns
+          // later, after newer speech has already been aligned.
+          if (event.type === 'completed' && random() > 0.8) {
+            delayed.push(event);
             continue;
           }
-          if (section !== previousSection) {
-            const from = engine.sectionGraph.previousSectionId(section);
-            const to = engine.sectionGraph.nextSectionId(previousSection);
-            const contiguous = to === section || from === previousSection;
-            expect(
-              contiguous,
-              `trial ${trial}: jumped ${previousSection} → ${section} without authority`,
-            ).toBe(true);
-            previousSection = section;
+          engine.handleTranscriptEvent(event);
+          check();
+        }
+        if (delayed.length > 0 && random() > 0.6) {
+          const late = delayed.shift();
+          if (late !== undefined) {
+            engine.handleTranscriptEvent({ ...late, receivedAtMs: scripter.clockMs });
+            check();
           }
         }
+      }
+
+      function check(): void {
+        const token = engine.cursor.committedTokenIndex;
+        if (!acquired) {
+          // Acquisition may land anywhere (§17.1); start policing afterwards.
+          if (token > 0) {
+            acquired = true;
+            previousToken = token;
+          }
+          return;
+        }
+        const from = ownerOf(previousToken);
+        const to = ownerOf(token);
+        const fromToken = previousToken;
+        previousToken = token;
+        if (from === to || from < 0 || to < 0) return;
+
+        const label = `trial ${trial}: ${fromToken}(${spans[from]?.id}) → ${token}(${spans[to]?.id})`;
+        // 1. Adjacency.
+        expect(Math.abs(to - from), `${label}: non-contiguous section jump`).toBe(1);
+        // 2. Corridor — the part the old fuzz never checked, and the part the
+        //    corridor clamp exists for.
+        const forward = to > from;
+        const origin = spans[from];
+        const destination = spans[to];
+        if (origin === undefined || destination === undefined) return;
+        const leftNearBoundary = forward
+          ? origin.end - fromToken <= corridorOf(from)
+          : fromToken - origin.start <= corridorOf(from);
+        expect(leftNearBoundary, `${label}: left the section from its body`).toBe(true);
+        const enteredNearBoundary = forward
+          ? token - destination.start <= corridorOf(to)
+          : destination.end - token <= corridorOf(to);
+        expect(enteredNearBoundary, `${label}: entered the section at its body`).toBe(true);
       }
     }
   });

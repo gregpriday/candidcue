@@ -117,19 +117,36 @@ describe('CommandRouter (§33.4, G.7)', () => {
     expect(router.observe(1, 1000).kind).toBe('none');
   });
 
-  it('suppresses commands inside literal-command regions (§33.5)', () => {
-    const h = harness();
+  /**
+   * §33.5 literal-command blocks. The guard must key off where the *phrase*
+   * aligns, not off the cursor: an earlier version tested the cursor against
+   * the range, which meant a lagging cursor turned the author's demonstration
+   * text into a live instruction. `literalHarness` therefore puts the cursor
+   * far from the block on purpose.
+   */
+  function literalHarness(cursorLagTokens: number) {
+    const literalDoc = compileFixtureScript(
+      `# Voice control\n\n` +
+        `${'Filler sentence about unrelated gardening topics and afternoon weather. '.repeat(12)}\n\n` +
+        `To blank the stage you say candid cue pause and it will stop.\n\n` +
+        `${'More filler content covering lighting rigs and microphone placement. '.repeat(12)}`,
+    );
+    const start = literalDoc.spokenTokens.findIndex(
+      (t, i) =>
+        t.normalized === 'candid' && literalDoc.spokenTokens[i + 1]?.normalized === 'cue',
+    );
+    const cursor = Math.max(0, start - cursorLagTokens);
     const ledger = new TranscriptLedger();
     ledger.setSessionGeneration(1);
     const router = new CommandRouter({
       ledger,
-      parseContext: { navigationTargets: document.navigationTargets },
-      scriptTokens: document.spokenTokens,
-      literalCommandRanges: [{ startTokenIndex: 0, endTokenIndex: 20 }],
-      getCursorTokenIndex: () => 5,
+      parseContext: { navigationTargets: literalDoc.navigationTargets },
+      scriptTokens: literalDoc.spokenTokens,
+      literalCommandRanges: [{ startTokenIndex: start - 6, endTokenIndex: start + 6 }],
+      getCursorTokenIndex: () => cursor,
       getContextRevision: () => 1,
       getScrollMode: () => 'voice',
-      getPosition: () => ({ blockId: 'b0', sentenceId: 's0', tokenIndex: 5 }),
+      getPosition: () => ({ blockId: 'b0', sentenceId: 's0', tokenIndex: cursor }),
       outline: [],
       bounds: DEFAULT_COMMAND_BOUNDS,
     });
@@ -137,8 +154,59 @@ describe('CommandRouter (§33.4, G.7)', () => {
       type: 'completed', sessionGeneration: 1, itemId: 'x',
       text: 'candid cue pause', receivedAtMs: 1000,
     });
+    return { router, literalStart: start };
+  }
+
+  it('suppresses commands inside literal-command regions (§33.5)', () => {
+    const { router, literalStart } = literalHarness(0);
+    expect(literalStart).toBeGreaterThan(0);
     expect(router.observe(1, 1000).kind).toBe('none');
-    expect(h.router).toBeDefined();
+  });
+
+  it('a phrase that does NOT read as the literal block is still a command', () => {
+    // Guards the other direction: the document-wide suppression must be a real
+    // alignment test, not "a literal range exists anywhere in the document".
+    // Every literal block contains the wake alias by construction, so a naive
+    // containment test would mute the command channel for the whole script.
+    const literalDoc = compileFixtureScript(
+      `# Guide\n\n${'Filler prose about lighting rigs and microphone placement for the afternoon. '.repeat(
+        10,
+      )}\n\nTo blank the stage you say candid cue blank the screen and it will stop.`,
+    );
+    const start = literalDoc.spokenTokens.findIndex(
+      (t, i) => t.normalized === 'candid' && literalDoc.spokenTokens[i + 1]?.normalized === 'cue',
+    );
+    const cursor = 4; // far from the block, in ordinary prose
+    const ledger = new TranscriptLedger();
+    ledger.setSessionGeneration(1);
+    const router = new CommandRouter({
+      ledger,
+      parseContext: { navigationTargets: literalDoc.navigationTargets },
+      scriptTokens: literalDoc.spokenTokens,
+      literalCommandRanges: [{ startTokenIndex: start - 6, endTokenIndex: start + 6 }],
+      getCursorTokenIndex: () => cursor,
+      getContextRevision: () => 1,
+      getScrollMode: () => 'voice',
+      getPosition: () => ({ blockId: 'b0', sentenceId: 's0', tokenIndex: cursor }),
+      outline: [],
+      bounds: DEFAULT_COMMAND_BOUNDS,
+    });
+    ledger.apply({
+      type: 'completed', sessionGeneration: 1, itemId: 'y',
+      text: 'candid cue go to the end', receivedAtMs: 1000,
+    });
+    expect(router.observe(1, 1000).kind).toBe('command');
+  });
+
+  it('suppresses a literal-command block even when the cursor lags far behind it', () => {
+    // The presenter ad-libbed for ~20 s, the cursor stalled 130 tokens back,
+    // and then they read the demonstration line aloud. The stage must not blank.
+    // Lags ≥ 90 fall outside the collision window entirely, which is exactly
+    // where a cursor-anchored guard stops working.
+    for (const lag of [45, 60, 90, 130, 200]) {
+      const { router } = literalHarness(lag);
+      expect(router.observe(1, 1000).kind, `cursor lag ${lag} tokens`).toBe('none');
+    }
   });
 
   it('routes unresolved but command-like phrases to Luna (§33.7)', () => {

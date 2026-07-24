@@ -13,6 +13,7 @@ import type { SmoothFollowProfile } from '../contracts/smooth-follow';
 import type { SemanticAssistEvidence as TrackingAssistEvidence } from '../tracking/semantic-assist';
 import { buildClassificationRequest, buildRetrievalRequest } from './context';
 import { fuseSemanticAssist, toTrackingAssistEvidence } from './fusion';
+import { candidateSetHash } from './hash';
 import type { SemanticLandmarkIndex } from './landmark-index';
 import type {
   AssistLane,
@@ -298,6 +299,28 @@ interface ActiveRequest {
   landmarkIds: string[];
   urgency: number;
   startedAtMs: number;
+  /**
+   * H7: cancellation generation this request was issued under. `cancelAll`
+   * (mode switch, epoch change, retake, session end) bumps it, so a response
+   * that arrives after cancellation can be recognised even when the transport
+   * ignored `invoker.cancel` — which the interface documents as best-effort.
+   */
+  cancelGeneration: number;
+  /**
+   * H7: the EXACT candidate-set hash the request was computed over. The old
+   * staleness check took this as a parameter and used it only as a boolean
+   * flag, so a candidate whose span, section or text moved under a stable id
+   * passed as "still fresh" and its stale classification was applied.
+   */
+  candidateSetHash: string | null;
+  /** H7: section the request was built for. */
+  sectionId: string | null;
+  /** H7: whether the request was computed over FINAL speech only. */
+  finalEvidence: boolean;
+  /** H7: transcript items the request's evidence actually covers. */
+  sourceItemIds: string[];
+  /** H7: set when this record is superseded within its lane. */
+  cancelled: boolean;
 }
 
 export class SemanticAssistScheduler {
@@ -317,6 +340,9 @@ export class SemanticAssistScheduler {
   private availability: SemanticAvailability;
   private readonly requestTimestampsMs: number[] = [];
   private settling: Array<Promise<void>> = [];
+  /** H7: bumped by `cancelAll`; see `ActiveRequest.cancelGeneration`. */
+  private cancelGeneration = 0;
+
 
   private readonly diagnostics: SemanticDiagnostics;
 
@@ -388,6 +414,12 @@ export class SemanticAssistScheduler {
 
   /** §36.5: epoch change, retake commit, or session end invalidates everything. */
   cancelAll(): void {
+    // H7: `invoker.cancel` is documented as best-effort and its failures are
+    // ignored, so cancellation cannot rely on the transport actually aborting.
+    // Bumping the generation makes it enforceable at APPLY time: a response
+    // that still arrives is recognised as belonging to a cancelled request and
+    // is discarded rather than emitted into a mode/epoch it does not belong to.
+    this.cancelGeneration += 1;
     for (const request of this.active.values()) {
       this.deps.invoker.cancel(request.requestId);
     }
@@ -451,6 +483,12 @@ export class SemanticAssistScheduler {
       // §36.1: coalesce. A strictly more urgent trigger supersedes.
       if (trigger.urgency <= existing.urgency) return;
       this.deps.invoker.cancel(existing.requestId);
+      // H7: mark the superseded record itself as dead. Supersession is
+      // triggered by urgency alone and needs no revision bump, so without this
+      // a late response from `existing` looked perfectly fresh and was applied
+      // on top of its own replacement. The flag lives on the record so there
+      // is no bookkeeping to clean up and no read-after-delete ordering trap.
+      existing.cancelled = true;
       this.active.delete('candidate_classification');
     }
     if (!this.cadenceAllows(trigger, now)) return;
@@ -472,6 +510,13 @@ export class SemanticAssistScheduler {
       landmarkIds: [],
       urgency: trigger.urgency,
       startedAtMs: now,
+      cancelGeneration: this.cancelGeneration,
+      // H7: snapshot the exact authority this request was computed over.
+      candidateSetHash: build.request.candidateSetHash,
+      sectionId: context.currentSectionId,
+      finalEvidence: context.provisionalTail.length === 0,
+      sourceItemIds: [...(context.sourceItemIds ?? [])],
+      cancelled: false,
     };
     this.active.set('candidate_classification', record);
 
@@ -528,6 +573,12 @@ export class SemanticAssistScheduler {
       landmarkIds: set.landmarks.map((l) => l.spanId),
       urgency: 1,
       startedAtMs: now,
+      cancelGeneration: this.cancelGeneration,
+      candidateSetHash: null, // recovery is not candidate-scoped
+      sectionId: context.currentSectionId,
+      finalEvidence: context.provisionalTail.length === 0,
+      sourceItemIds: [...(context.sourceItemIds ?? [])],
+      cancelled: false,
     };
     this.active.set('landmark_recovery', record);
 
@@ -548,9 +599,9 @@ export class SemanticAssistScheduler {
     request: SemanticClassificationRequest,
     response: SemanticOperationResponse<unknown>,
   ): void {
-    this.active.delete(record.lane);
+    this.settleLane(record);
     this.noteUsage(response);
-    if (this.isStale(record, request.candidateSetHash)) {
+    if (this.isStale(record)) {
       this.diagnostics.staleDiscarded += 1;
       return;
     }
@@ -605,9 +656,9 @@ export class SemanticAssistScheduler {
     request: SemanticRetrievalRequest,
     response: SemanticOperationResponse<unknown>,
   ): void {
-    this.active.delete(record.lane);
+    this.settleLane(record);
     this.noteUsage(response);
-    if (this.isStale(record, null)) {
+    if (this.isStale(record)) {
       this.diagnostics.staleDiscarded += 1;
       return;
     }
@@ -658,18 +709,69 @@ export class SemanticAssistScheduler {
   // Staleness, cadence, budget, failure
   // -------------------------------------------------------------------------
 
-  /** §36.4: discard when any relevant authority or context has changed. */
-  private isStale(record: ActiveRequest, candidateSetHash: string | null): boolean {
+  /**
+   * H7: settle a lane only when the record that finished is STILL the record
+   * the lane holds.
+   *
+   * `active` is keyed by lane and the key is reused across supersession, so an
+   * unconditional `active.delete(lane)` from a late request A wiped the
+   * bookkeeping of its own replacement B. That silently slackened the
+   * in-flight gate (a third request could start while B was live) and made
+   * `cancelAll` unable to cancel B at all, because B was no longer in the map.
+   */
+  private settleLane(record: ActiveRequest): void {
+    if (this.active.get(record.lane) === record) this.active.delete(record.lane);
+  }
+
+  /**
+   * §36.4: discard unless EVERY authority the request was computed over still
+   * holds.
+   *
+   * H7 hardened this substantially. It previously compared only epoch, compile
+   * hash and revision, plus an id-SUBSET test on candidates — and it took the
+   * candidate-set hash as a parameter that it used purely as a boolean flag,
+   * never comparing the value. So a candidate whose span, section or text had
+   * moved under a stable id passed as fresh, added candidates were invisible,
+   * cancellation was not consulted at all, and finality/source items were read
+   * off the CURRENT context rather than the request's own.
+   */
+  private isStale(record: ActiveRequest): boolean {
+    // Cancelled or superseded: never apply, regardless of how fresh it looks.
+    if (record.cancelGeneration !== this.cancelGeneration) return true;
+    if (record.cancelled) return true;
+    // §35: local-only makes zero live use of the model. A response still in
+    // flight when the user switched must not emit evidence.
+    if (this.mode === 'local_only') return true;
+
     const context = this.latestContext;
     if (context === null) return true;
     if (context.semanticEpoch !== record.semanticEpoch) return true;
     if (context.scriptCompileHash !== record.scriptCompileHash) return true;
     if (context.transcriptRevision !== record.transcriptRevision) return true;
-    if (candidateSetHash !== null) {
-      const stillEligible = record.candidates.every((candidate) =>
-        context.candidates.some((current) => current.id === candidate.id),
-      );
-      if (!stillEligible) return true;
+    if (record.sectionId !== null && context.currentSectionId !== record.sectionId) return true;
+
+    // Finality must match: evidence computed over a provisional tail cannot be
+    // presented as final, and vice versa.
+    if (record.finalEvidence !== (context.provisionalTail.length === 0)) return true;
+
+    // The tracking worker rejects assist evidence by source item set, so the
+    // items the request actually covered must still be the ones in play.
+    const currentItems = context.sourceItemIds ?? [];
+    if (!sameStringSet(record.sourceItemIds, currentItems)) return true;
+
+    if (record.candidateSetHash !== null) {
+      // Re-derive the hash from the CURRENT state of exactly the candidates
+      // this request was built over. An id-subset test (the old check) passes
+      // whenever the ids survive, even if the span, section or text behind
+      // them moved — which is precisely when applying the old classification
+      // sends the follower somewhere wrong.
+      const current: LocalCandidate[] = [];
+      for (const candidate of record.candidates) {
+        const live = context.candidates.find((c) => c.id === candidate.id);
+        if (live === undefined) return true; // candidate no longer eligible
+        current.push(live);
+      }
+      if (candidateSetHash(current) !== record.candidateSetHash) return true;
     }
     return false;
   }
@@ -727,7 +829,7 @@ export class SemanticAssistScheduler {
 
   /** §58: silent, graceful degradation. Local tracking is never blocked. */
   private handleFailure(record: ActiveRequest, error: unknown): void {
-    this.active.delete(record.lane);
+    this.settleLane(record);
     if (isLocalCancellation(error)) return;
     this.diagnostics.failures += 1;
     const availability = availabilityForError(error);
@@ -763,4 +865,14 @@ export class SemanticAssistScheduler {
   private track(promise: Promise<void>): void {
     this.settling.push(promise);
   }
+}
+
+/** H7: order-insensitive set equality for source item ids. */
+function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  for (const value of b) {
+    if (!set.has(value)) return false;
+  }
+  return true;
 }

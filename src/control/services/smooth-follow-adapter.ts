@@ -35,6 +35,7 @@ import type { AlignmentDiagnostic } from '../../shared/tracking/types';
 import type { MovementDecisionRecord } from '../lib/follow-language';
 import type { AssistStatus, BudgetBreach, CoachTipView } from '../stores/smooth-follow';
 import { isTauriRuntime } from './ipc';
+import type { SemanticSidecar } from './semantic-sidecar';
 
 /** The stage's periodic motion report (companion §54), owned by contracts. */
 export const STAGE_MOTION_ACK_EVENT = STAGE_EVENT.motionAck;
@@ -258,19 +259,81 @@ export interface FollowSidecarHandlers {
 }
 
 /**
+ * The live semantic sidecar for the current take, or null when none is
+ * running. Set by the session store through `setActiveSemanticSidecar` so the
+ * sidecar feed can report real scheduler state instead of nothing.
+ */
+let activeSidecar: SemanticSidecar | null = null;
+const sidecarListeners = new Set<FollowSidecarHandlers>();
+
+/**
+ * Register (or clear) the session-owned sidecar. Called on take start/stop.
+ *
+ * H6: the scheduler is created and cancelled with the take, never module
+ * state that outlives it — a scheduler surviving a take would keep emitting
+ * evidence against a session generation that no longer exists.
+ */
+export function setActiveSemanticSidecar(sidecar: SemanticSidecar | null): void {
+  activeSidecar = sidecar;
+  const patch = assistStatusPatch(sidecar);
+  for (const handlers of sidecarListeners) {
+    handlers.onAssistStatus(patch);
+  }
+}
+
+/** The sidecar owning the current take, for callers that need to drive it. */
+export function getActiveSemanticSidecar(): SemanticSidecar | null {
+  return activeSidecar;
+}
+
+/**
  * Semantic-sidecar + runtime-budget feed.
  *
- * Returns an unsubscribe function and reports nothing until the producers
- * exist, so an un-instrumented build simply shows no assist activity rather
- * than inventing one.
+ * Returns an unsubscribe function. Assist status now reflects the real
+ * scheduler when a take is running; it reports `disabled` when no sidecar is
+ * registered, rather than inventing activity.
  *
- * TODO(integration, Agent C): subscribe to the scheduler's status stream and
- * the coach engine in `src/shared/semantic/**`, and forward Rust-side usage
- * from `src-tauri/src/openai/**`.
+ * REMAINING GAP (H6, deliberately not faked): the scheduler still has no
+ * candidate feed. `AssistSchedulingContext.candidates` must be
+ * `LocalCandidate[]` from the alignment engine, and the tracking worker does
+ * not emit candidates — `TrackingWorkerOutbound` has no such message. Adding
+ * it is a change to `src/shared/tracking/**` + `worker-protocol.ts`, outside
+ * this pass's ownership. Until `SemanticSidecar.attachContextSource` is given
+ * a real source, the scheduler stays inert and this feed reports it honestly.
+ *
  * TODO(integration, Agents A + B): report §63 budget overruns — worker
  * alignment-update time and stage per-frame controller time — through
  * `onBudgetBreach`.
  */
-export function subscribeFollowSidecar(_handlers: FollowSidecarHandlers): () => void {
-  return () => {};
+export function subscribeFollowSidecar(handlers: FollowSidecarHandlers): () => void {
+  sidecarListeners.add(handlers);
+  handlers.onAssistStatus(assistStatusPatch(activeSidecar));
+  return () => {
+    sidecarListeners.delete(handlers);
+  };
+}
+
+/** Map real scheduler availability onto the §47.4 assist-status view. */
+function assistStatusPatch(sidecar: SemanticSidecar | null): Partial<AssistStatus> {
+  if (sidecar === null) return { state: 'off', reason: null };
+  const diagnostics = sidecar.scheduler.getDiagnostics();
+  switch (sidecar.scheduler.getAvailability()) {
+    case 'ready':
+      return { state: 'ready', reason: null, requestCount: totalRequests(diagnostics) };
+    case 'disabled':
+      return { state: 'off', reason: null };
+    case 'budget_exhausted':
+      return { state: 'limit_reached', requestCount: totalRequests(diagnostics) };
+    case 'degraded_timeout':
+    case 'degraded_rate_limited':
+      return { state: 'backing_off', requestCount: totalRequests(diagnostics) };
+    case 'degraded_quota':
+    case 'degraded_unavailable':
+    default:
+      return { state: 'unavailable', requestCount: totalRequests(diagnostics) };
+  }
+}
+
+function totalRequests(diagnostics: { requestsByLane: Record<string, number> }): number {
+  return Object.values(diagnostics.requestsByLane).reduce((sum, n) => sum + n, 0);
 }

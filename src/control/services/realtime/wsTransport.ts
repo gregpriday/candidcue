@@ -43,12 +43,12 @@ export class RustWebSocketTranscriptionTransport implements RealtimeTranscriptio
     throw new NotImplementedError('RustWebSocketTranscriptionTransport.setMicrophone');
   }
 
-  commit(_reason: CommitReason): void {
+  commit(_reason: CommitReason): boolean {
     // TODO(ws-fallback): forward `input_audio_buffer.commit` over IPC.
     throw new NotImplementedError('RustWebSocketTranscriptionTransport.commit');
   }
 
-  clearBufferedAudio(): void {
+  clearBufferedAudio(): boolean {
     // TODO(ws-fallback): forward `input_audio_buffer.clear` over IPC.
     throw new NotImplementedError('RustWebSocketTranscriptionTransport.clearBufferedAudio');
   }

@@ -12,8 +12,6 @@ import type { CommitLedger } from './commitLedger';
 import { mapProviderErrorEvent } from './errors';
 
 const MAX_DIAGNOSTIC_EVENTS = 50;
-/** Fields never retained in diagnostics (spec §30.1: no auth/audio payloads). */
-const REDACTED_FIELDS = new Set(['audio', 'delta_audio', 'client_secret', 'authorization']);
 
 interface RawRealtimeEvent {
   type?: unknown;
@@ -51,9 +49,16 @@ export interface AdapterDeps {
   now?: () => number;
 }
 
+/** Cap on in-flight delta accumulators and remembered completions (H4). */
+const MAX_TRACKED_ITEMS = 64;
+
 export class TranscriptEventAdapter {
   private readonly now: () => number;
   private readonly diagnostics: Array<Record<string, unknown>> = [];
+  /** H4: per-item cumulative transcript assembled from incremental deltas. */
+  private readonly partials = new Map<string, string>();
+  /** Items whose authoritative completion already shipped (§30.7). */
+  private readonly completedItems = new Set<string>();
 
   constructor(private readonly deps: AdapterDeps) {
     this.now = deps.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
@@ -95,14 +100,35 @@ export class TranscriptEventAdapter {
 
       case 'conversation.item.input_audio_transcription.delta': {
         const itemId = asString(event.item_id);
-        const text = asString(event.delta);
-        if (!itemId || text === null) return null;
-        return { type: 'delta', itemId, text, receivedAtMs: this.now() };
+        const chunk = asString(event.delta);
+        if (!itemId || chunk === null) return null;
+        // A delta arriving after the item completed is stale; the completion
+        // is authoritative, so never re-open the item with a fragment.
+        if (this.completedItems.has(itemId)) {
+          this.remember(event);
+          return null;
+        }
+        // H4: the provider sends INCREMENTAL chunks ("CandidCue ",
+        // "is following ", "my voice."). Consumers — the ledger above all —
+        // treat `delta.text` as the cumulative transcript so far, so the
+        // accumulation must happen here at the boundary. Forwarding chunks
+        // verbatim fed the follower the last fragment instead of the
+        // utterance, mis-aligning the teleprompter for the whole turn until
+        // the final completion repaired it.
+        const accumulated = (this.partials.get(itemId) ?? '') + chunk;
+        this.rememberPartial(itemId, accumulated);
+        return { type: 'delta', itemId, text: accumulated, receivedAtMs: this.now() };
       }
 
       case 'conversation.item.input_audio_transcription.completed': {
         const itemId = asString(event.item_id);
         if (!itemId) return null;
+        // The completion is authoritative and supersedes every delta; drop the
+        // accumulator so a late delta for this item cannot resurrect a stale
+        // prefix (§30.7).
+        this.partials.delete(itemId);
+        this.completedItems.add(itemId);
+        this.trimCompleted();
         const completed: TranscriptEvent = {
           type: 'completed',
           itemId,
@@ -143,16 +169,81 @@ export class TranscriptEventAdapter {
     return this.diagnostics;
   }
 
-  private remember(event: RawRealtimeEvent): void {
-    const redacted: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(event)) {
-      redacted[key] = REDACTED_FIELDS.has(key.toLowerCase()) ? '[redacted]' : value;
+  /**
+   * Drop all per-item state. Call on a fresh session generation: item ids are
+   * only unique within a connection, so carrying accumulators across a
+   * reconnect could splice two different utterances together.
+   */
+  reset(): void {
+    this.partials.clear();
+    this.completedItems.clear();
+  }
+
+  private rememberPartial(itemId: string, text: string): void {
+    this.partials.set(itemId, text);
+    while (this.partials.size > MAX_TRACKED_ITEMS) {
+      const oldest = this.partials.keys().next();
+      if (oldest.done) break;
+      this.partials.delete(oldest.value);
     }
-    this.diagnostics.push(redacted);
+  }
+
+  private trimCompleted(): void {
+    while (this.completedItems.size > MAX_TRACKED_ITEMS) {
+      const oldest = this.completedItems.values().next();
+      if (oldest.done) break;
+      this.completedItems.delete(oldest.value);
+    }
+  }
+
+  /**
+   * M2: store an ALLOWLISTED summary, never the provider object.
+   *
+   * The previous implementation redacted only top-level denylisted keys, so a
+   * nested `session.client_secret`, a nested transcript, or a provider error
+   * body carrying user speech all survived into the in-memory diagnostic
+   * snapshot. Denylisting an open-ended provider payload cannot be made safe —
+   * every new provider field defaults to "retained". So nothing is copied out
+   * of the event except the small set of non-sensitive identifiers below;
+   * everything else is reduced to a byte count.
+   */
+  private remember(event: RawRealtimeEvent): void {
+    const summary: Record<string, unknown> = {
+      type: asString(event.type) ?? '(untyped)',
+      atMs: this.now(),
+      approxBytes: approximateByteLength(event),
+    };
+    const itemId = asString(event.item_id);
+    if (itemId) summary.itemId = itemId;
+    const previousItemId = asString(event.previous_item_id);
+    if (previousItemId) summary.previousItemId = previousItemId;
+    const eventId = asString((event as { event_id?: unknown }).event_id);
+    if (eventId) summary.eventId = eventId;
+    // Error CODES are classification input and contain no user content; error
+    // messages and bodies are provider prose that can quote speech, so they
+    // are counted, never kept.
+    const error = event.error;
+    if (typeof error === 'object' && error !== null) {
+      const code = asString((error as { code?: unknown }).code);
+      const errType = asString((error as { type?: unknown }).type);
+      if (code) summary.errorCode = code;
+      if (errType) summary.errorType = errType;
+      summary.errorBodyBytes = approximateByteLength(error);
+    }
+    this.diagnostics.push(summary);
     if (this.diagnostics.length > MAX_DIAGNOSTIC_EVENTS) this.diagnostics.shift();
   }
 }
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+/** Size only — the payload itself is never retained (M2). */
+function approximateByteLength(value: unknown): number {
+  try {
+    return JSON.stringify(value)?.length ?? 0;
+  } catch {
+    return 0; // cyclic or non-serializable; the count is a nicety
+  }
 }

@@ -178,16 +178,26 @@ describe('beam maintenance (companion §16 steps 7–9)', () => {
 });
 
 describe('provisional-only evidence is inert for risky moves (§31.8 tightened, §15.3)', () => {
+  /**
+   * The previous version of this test inspected `committedTokenIndex` only.
+   * The provisional branch never writes that field, so the assertion could not
+   * fail whatever the provisional path did — it proved the branch was not
+   * taken, not that the branch was safe. The interesting cursor is
+   * `cursor.tokenIndex` (the provisional one), which is what
+   * `TrackingSnapshot.tokenIndex` reports to the control Live screen.
+   */
   it('never commits a retake, a large skip, or a section crossing', () => {
     const e = engine('provisional');
     const s = new TranscriptScripter(10_000, 1);
     speak(e, s, 'Hello everyone and welcome to the channel.');
     speak(e, s, 'Today we are talking about building a teleprompter that actually listens.');
     const committed = e.cursor.committedTokenIndex;
+    const provisionalBefore = e.cursor.tokenIndex;
     const sectionBefore = e.sectionGraph.sectionIdAt(committed);
+    const largeSkip = DEFAULT_TRACKING_PROFILE.largeForwardDistance;
 
     // A long provisional stream matching an earlier passage (a retake shape)
-    // and a distant one (a jump shape) — neither may commit anything.
+    // and a distant one (a jump shape) — neither may move anything.
     for (const text of [
       'Hello everyone and welcome to the channel today we are',
       'Now watch the kaleidoscope demo carefully because the colors shift',
@@ -198,6 +208,22 @@ describe('provisional-only evidence is inert for risky moves (§31.8 tightened, 
         e.handleTranscriptEvent(event);
         expect(e.cursor.committedTokenIndex).toBe(committed);
         expect(e.sectionGraph.sectionIdAt(e.cursor.committedTokenIndex)).toBe(sectionBefore);
+
+        // The provisional cursor is the one the provisional path actually
+        // writes, so this is where a retake, a large skip or a section
+        // crossing would show up.
+        const provisional = e.cursor.tokenIndex;
+        expect(provisional, 'provisional evidence must never move backward').toBeGreaterThanOrEqual(
+          Math.min(committed, provisionalBefore),
+        );
+        expect(
+          provisional - committed,
+          'provisional evidence must never perform a large forward skip',
+        ).toBeLessThanOrEqual(largeSkip);
+        expect(
+          e.sectionGraph.sectionIdAt(provisional),
+          'provisional evidence must never cross a section boundary',
+        ).toBe(sectionBefore);
       }
     }
     expect(e.decisionRecords().every((r) => r.behavior !== 'retake')).toBe(true);

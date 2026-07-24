@@ -107,6 +107,70 @@ export function scenarioBriefAdlib(): PlaybackScenario {
   };
 }
 
+/**
+ * D.3 — paraphrase resolved with sidecar help.
+ *
+ * There was no playback scenario for D.3 at all, so the whole
+ * `applySemanticAssist → setSemanticAssist → semanticAdjustment` path was
+ * never exercised end to end: the bounded-influence contract was unit-tested,
+ * but nothing checked that advisory evidence reaches the beam through a real
+ * engine, or — more importantly — that it stays advisory when it does.
+ *
+ * The presenter paraphrases a sentence rather than reading it, and the sidecar
+ * returns a `paraphrase` opinion on a candidate the engine itself minted. The
+ * assist may help the cursor settle; it may not move it on its own.
+ */
+export function scenarioParaphraseWithAssist(): PlaybackScenario {
+  const scripter = new TranscriptScripter(10_000, 1);
+  const actions: PlaybackAction[] = [];
+  for (const text of [
+    'Hello everyone and welcome to the channel.',
+    'Today we are talking about building a teleprompter that actually listens.',
+  ]) {
+    for (const event of scripter.speak({ text })) actions.push({ kind: 'transcript', event });
+  }
+  const afterRead = actions.length - 1;
+
+  // The sidecar answers about `continuity:26` — a candidate the local engine
+  // minted for the sentence beginning "Let's get started…". Timestamped inside
+  // the §40.4 lifetime and stamped with the current epoch and source items, so
+  // it is genuinely accepted rather than silently discarded as stale.
+  actions.push({
+    kind: 'semantic_assist',
+    evidence: {
+      assistId: 'assist-d3',
+      epoch: 0,
+      requestRevision: 1,
+      sourceItemIds: ['item-1-1', 'item-1-2'],
+      receivedAtMs: scripter.clockMs,
+      opinions: [{ candidateId: 'continuity:26', relation: 'paraphrase', confidence: 0.85 }],
+    },
+  });
+
+  // A paraphrase rather than a reading of the authored sentence.
+  for (const event of scripter.speak({ text: 'let us begin with the basics right away' })) {
+    actions.push({ kind: 'transcript', event });
+  }
+  for (let t = 33; t <= 400; t += 33) {
+    actions.push({ kind: 'tick', nowMs: scripter.clockMs + t });
+  }
+  scripter.advance(400);
+  const afterParaphrase = actions.length - 1;
+
+  return {
+    id: 'D.3',
+    description: 'Paraphrase with sidecar assist: advisory evidence, never authority.',
+    document: demoDocument(),
+    actions,
+    labels: [
+      { afterAction: afterRead, intendedTokenIndex: 18, toleranceTokens: 3, sectionId: 'h0' },
+      // The assist may help it settle; it may not carry the cursor anywhere.
+      { afterAction: afterParaphrase, intendedTokenIndex: 26, toleranceTokens: 6, sectionId: 'h0' },
+    ],
+    forbidBehaviors: ['large_skip', 'retake'],
+  };
+}
+
 /** D.4 — distant phrase collision: zero remote section jump. */
 export function scenarioDistantCollision(): PlaybackScenario {
   const { actions, endOfTurn } = build([
@@ -127,8 +191,12 @@ export function scenarioDistantCollision(): PlaybackScenario {
     document: demoDocument(),
     actions,
     labels: [
-      // Must remain in Welcome, near where it was.
-      { afterAction: endOfTurn[2] ?? 0, intendedTokenIndex: 18, toleranceTokens: 45, sectionId: 'h0' },
+      // Must remain in Welcome, near where it was. The tolerance has to be
+      // narrower than the section: Welcome is tokens 0–61, so ±45 accepted
+      // positions already inside the *next* chapter and made
+      // `correctPositionRate` meaningless for the flagship prohibited-jump
+      // scenario.
+      { afterAction: endOfTurn[2] ?? 0, intendedTokenIndex: 18, toleranceTokens: 12, sectionId: 'h0' },
     ],
     forbidBehaviors: ['large_skip'],
   };
@@ -180,7 +248,9 @@ export function scenarioLargeWithinSectionSkip(): PlaybackScenario {
     actions,
     labels: [
       { afterAction: endOfTurn[0] ?? 0, intendedTokenIndex: 7, toleranceTokens: 3, sectionId: 'h0' },
-      { afterAction: endOfTurn[1] ?? 0, intendedTokenIndex: 61, toleranceTokens: 4, sectionId: 'h0' },
+      // Welcome ends at 61: a tolerance of 4 already reaches into the next
+      // chapter, so the section label is doing all the work. Keep it inside.
+      { afterAction: endOfTurn[1] ?? 0, intendedTokenIndex: 61, toleranceTokens: 2, sectionId: 'h0' },
     ],
     skipIsExpected: true,
     forbidBehaviors: ['retake'],
@@ -224,6 +294,11 @@ export function scenarioCommandToOtherChapter(): PlaybackScenario {
       { afterAction: afterCommand, intendedTokenIndex: 121, toleranceTokens: 1, sectionId: 'h2' },
       { afterAction: afterResume, intendedTokenIndex: 133, toleranceTokens: 5, sectionId: 'h2' },
     ],
+    // The command lands mid-sentence and the presenter then reads the *next*
+    // sentence, so the remainder of the first one is genuinely skipped. That
+    // is intended here, and Closing Thoughts is only 30 tokens long, so the
+    // section-scaled skip threshold correctly calls it a skip.
+    skipIsExpected: true,
     expectBehaviors: ['command_navigation'],
   };
 }
@@ -232,6 +307,7 @@ export function allPlaybackScenarios(): PlaybackScenario[] {
   return [
     scenarioSmoothRead(),
     scenarioBriefAdlib(),
+    scenarioParaphraseWithAssist(),
     scenarioDistantCollision(),
     scenarioPreviousSentenceRetake(),
     scenarioLargeWithinSectionSkip(),

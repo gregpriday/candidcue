@@ -15,12 +15,24 @@ import type { VadEvent } from '../audio/vad';
 import { CommitLedger } from './commitLedger';
 
 export interface CommitDriverDeps {
-  /** Send the commit client event (transport.commit). */
-  sendCommit: (reason: CommitReason) => void;
+  /**
+   * Send the commit client event (transport.commit). Must report whether the
+   * event was actually enqueued — see `commit()` below (M1).
+   */
+  sendCommit: (reason: CommitReason) => boolean | void;
   /** Clear the provider-side audio buffer without transcribing it. */
-  clearBufferedAudio: () => void;
+  clearBufferedAudio: () => boolean | void;
   ledger: CommitLedger;
   now?: () => number;
+  /**
+   * M1: the transport's current connection generation, or null when there is
+   * no open connection. VAD keeps firing across a reconnect, so without this
+   * gate a speech turn that ended mid-reconnect is committed against a
+   * connection that no longer exists.
+   */
+  getConnectedGeneration?: () => number | null;
+  /** M1: called when a commit could not be sent, for surfacing/telemetry. */
+  onCommitDropped?: (reason: CommitReason) => void;
   /** Current alignment anchor, recorded with each commit (spec §29.3). */
   getAlignmentAnchor?: () => number | undefined;
   /** Heuristic flag: is the segment likely a command? (spec §29.3). */
@@ -97,14 +109,35 @@ export class ManualCommitDriver {
     this.speechStartMs = 0;
   }
 
+  /**
+   * M1: record the pending commit, attempt the send, and ROLL BACK when the
+   * send did not happen.
+   *
+   * The previous order — record, then fire-and-forget — meant a commit that
+   * never left the client (closing data channel, mid-reconnect) still occupied
+   * a slot in the FIFO the provider acknowledges in order. Every subsequent
+   * item was then handed the previous commit's metadata: wrong alignment
+   * anchor, wrong audio window, wrong command heuristic, for the rest of the
+   * session and with nothing visible to show for it.
+   */
   private commit(reason: CommitReason, speechStartMs: number, speechEndMs: number): void {
-    this.deps.ledger.recordPending({
+    // Gate on the live connection generation: committing into a connection
+    // that has already gone away can only produce a phantom entry.
+    if (this.deps.getConnectedGeneration && this.deps.getConnectedGeneration() === null) {
+      this.deps.onCommitDropped?.(reason);
+      return;
+    }
+    const meta = this.deps.ledger.recordPending({
       reason,
       speechStartMs,
       speechEndMs,
       alignmentAnchor: this.deps.getAlignmentAnchor?.(),
       likelyCommand: this.deps.isLikelyCommand?.(),
     });
-    this.deps.sendCommit(reason);
+    const sent = this.deps.sendCommit(reason);
+    if (sent === false) {
+      this.deps.ledger.rollbackPending(meta);
+      this.deps.onCommitDropped?.(reason);
+    }
   }
 }

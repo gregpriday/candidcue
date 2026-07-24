@@ -222,21 +222,40 @@ describe('intelligence modes (§35)', () => {
     expect(enhanced.reason).toBe('stable_window');
   });
 
+  /**
+   * H7. This test used to resolve with `assistResponse('assist_1', 'x')` — a
+   * WRONG candidate-set hash. The response was rejected by schema validation,
+   * not by cancellation, so it proved nothing at all about mode switching. It
+   * now resolves with a FULLY VALID response and asserts the cancellation
+   * diagnostic, which is the only thing that can distinguish the two.
+   */
   it('switching to local_only cancels everything in flight', async () => {
     let resolve: ((value: SemanticOperationResponse<unknown>) => void) | undefined;
+    let sentHash = '';
     const h = harness({
-      classifyImpl: () =>
-        new Promise<SemanticOperationResponse<unknown>>((r) => {
+      classifyImpl: (request) => {
+        sentHash = (request as { candidateSetHash: string }).candidateSetHash;
+        return new Promise<SemanticOperationResponse<unknown>>((r) => {
           resolve = r;
-        }),
+        });
+      },
     });
     h.scheduler.observe(context());
     expect(h.classify).toHaveBeenCalledTimes(1);
     h.scheduler.setMode('local_only');
     expect(h.cancel).toHaveBeenCalledTimes(1);
-    resolve?.(assistResponse('assist_1', 'x'));
+
+    // A response the transport failed to abort — `invoker.cancel` is
+    // documented as best-effort, so this WILL happen in practice.
+    resolve?.(assistResponse('assist_1', sentHash));
     await h.scheduler.settle();
+
     expect(h.assists).toHaveLength(0);
+    const diagnostics = h.scheduler.getDiagnostics();
+    // Discarded as stale/cancelled — NOT as a malformed payload.
+    expect(diagnostics.staleDiscarded).toBe(1);
+    expect(diagnostics.rejectedInvalid).toBe(0);
+    expect(diagnostics.acceptedResults).toBe(0);
   });
 });
 
@@ -337,6 +356,191 @@ describe('minimum useful input and cadence (§36.2, §36.3)', () => {
     );
     expect(h.cancel).toHaveBeenCalledTimes(1);
     expect(h.classify).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * H7. The supersession test above never resolved the CANCELLED request after
+   * its replacement started, so neither of the two defects it should have
+   * caught was exercised:
+   *   1. A's late settle did `active.delete(lane)` unconditionally, wiping B's
+   *      bookkeeping — slackening the in-flight gate and making `cancelAll`
+   *      unable to cancel B at all.
+   *   2. Supersession is driven by urgency alone and needs no revision bump,
+   *      so a late A looked perfectly fresh and was APPLIED over its own
+   *      replacement.
+   */
+  describe('H7: a superseded request settling late', () => {
+    interface Deferred {
+      resolve(value: SemanticOperationResponse<unknown>): void;
+      reject(error: unknown): void;
+      hash: string;
+    }
+
+    function supersessionHarness(): { h: Harness; calls: Deferred[] } {
+      const calls: Deferred[] = [];
+      const h = harness({
+        classifyImpl: (request) => {
+          const hash = (request as { candidateSetHash: string }).candidateSetHash;
+          return new Promise<SemanticOperationResponse<unknown>>((resolve, reject) => {
+            calls.push({ resolve, reject, hash });
+          });
+        },
+      });
+      h.setNow(400_000);
+      h.scheduler.observe(context()); // A: close_candidates (urgency 3)
+      h.setNow(410_000);
+      h.scheduler.observe(
+        context({
+          criticalChecks: [
+            { kind: 'number', scriptFragment: '15%', transcriptFragment: '50%', spanId: 'sp1' },
+          ],
+        }),
+      ); // B: critical_token (urgency 5) — strictly more urgent, supersedes A
+      expect(h.classify).toHaveBeenCalledTimes(2);
+      return { h, calls };
+    }
+
+    /** B never settles in these tests, so `settle()` would hang. */
+    async function flush(): Promise<void> {
+      for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    }
+
+    it('does not apply the cancelled request even when nothing else changed', async () => {
+      const { h, calls } = supersessionHarness();
+      // A resolves with a completely valid response for its OWN request:
+      // correct request id, correct candidate-set hash, unchanged revision.
+      calls[0]?.resolve(assistResponse('assist_1', calls[0].hash));
+      await flush();
+
+      expect(h.assists).toHaveLength(0);
+      expect(h.scheduler.getDiagnostics().acceptedResults).toBe(0);
+      expect(h.scheduler.getDiagnostics().staleDiscarded).toBe(1);
+      // Discarded for cancellation, not for a malformed payload.
+      expect(h.scheduler.getDiagnostics().rejectedInvalid).toBe(0);
+    });
+
+    it('does not destroy the replacement request bookkeeping', async () => {
+      const { h, calls } = supersessionHarness();
+      calls[0]?.resolve(assistResponse('assist_1', calls[0].hash));
+      await flush();
+
+      // B is still genuinely in flight, so `cancelAll` must still reach it.
+      h.cancel.mockClear();
+      h.scheduler.cancelAll();
+      expect(h.cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it('a late FAILURE from the cancelled request also leaves the replacement intact', async () => {
+      const { h, calls } = supersessionHarness();
+      calls[0]?.reject(new Error('A failed after being superseded'));
+      await flush();
+
+      h.cancel.mockClear();
+      h.scheduler.cancelAll();
+      expect(h.cancel).toHaveBeenCalledTimes(1); // B still tracked
+    });
+
+    it('applies the replacement normally once IT settles', async () => {
+      const { h, calls } = supersessionHarness();
+      calls[0]?.resolve(assistResponse('assist_1', calls[0].hash));
+      await flush();
+      calls[1]?.resolve(assistResponse('assist_2', calls[1].hash));
+      await flush();
+
+      expect(h.scheduler.getDiagnostics().acceptedResults).toBe(1);
+    });
+  });
+
+  /**
+   * H7: reused candidate ids with changed spans. The old check was an id
+   * SUBSET test, so a candidate whose span/section/text had moved under a
+   * stable id passed as "still fresh" and its stale classification was applied
+   * — pointing the follower at the wrong place in the script.
+   */
+  it('H7: rejects a response when a candidate id was reused with a changed span', async () => {
+    let resolve: ((value: SemanticOperationResponse<unknown>) => void) | undefined;
+    let sentHash = '';
+    const h = harness({
+      classifyImpl: (request) => {
+        sentHash = (request as { candidateSetHash: string }).candidateSetHash;
+        return new Promise<SemanticOperationResponse<unknown>>((r) => {
+          resolve = r;
+        });
+      },
+    });
+    h.setNow(500_000);
+    const before = context();
+    h.scheduler.observe(before);
+    expect(h.classify).toHaveBeenCalledTimes(1);
+
+    // Same ids, same revision/epoch/compile hash — but the spans moved.
+    h.scheduler.observe(
+      context({
+        candidates: before.candidates.map((candidate) => ({
+          ...candidate,
+          startTokenIndex: candidate.startTokenIndex + 40,
+          endTokenIndex: candidate.endTokenIndex + 40,
+        })),
+      }),
+    );
+
+    resolve?.(assistResponse('assist_1', sentHash));
+    await h.scheduler.settle();
+
+    expect(h.assists).toHaveLength(0);
+    expect(h.scheduler.getDiagnostics().staleDiscarded).toBeGreaterThan(0);
+    expect(h.scheduler.getDiagnostics().acceptedResults).toBe(0);
+  });
+
+  /**
+   * H7: finality must match. Evidence computed over a provisional tail cannot
+   * be presented as final — `finalEvidence` was read off the CURRENT context
+   * rather than the one the request was built over.
+   */
+  it('H7: rejects a response whose finality no longer matches the request', async () => {
+    let resolve: ((value: SemanticOperationResponse<unknown>) => void) | undefined;
+    let sentHash = '';
+    const h = harness({
+      classifyImpl: (request) => {
+        sentHash = (request as { candidateSetHash: string }).candidateSetHash;
+        return new Promise<SemanticOperationResponse<unknown>>((r) => {
+          resolve = r;
+        });
+      },
+    });
+    h.setNow(600_000);
+    h.scheduler.observe(context({ provisionalTail: '' })); // final evidence
+    h.scheduler.observe(context({ provisionalTail: 'and then we' })); // now provisional
+
+    resolve?.(assistResponse('assist_1', sentHash));
+    await h.scheduler.settle();
+    expect(h.assists).toHaveLength(0);
+    expect(h.scheduler.getDiagnostics().acceptedResults).toBe(0);
+  });
+
+  /**
+   * H7: the tracking worker rejects assist evidence by source item set, so
+   * evidence must not be labelled with items it was never computed over.
+   */
+  it('H7: rejects a response whose source items have moved on', async () => {
+    let resolve: ((value: SemanticOperationResponse<unknown>) => void) | undefined;
+    let sentHash = '';
+    const h = harness({
+      classifyImpl: (request) => {
+        sentHash = (request as { candidateSetHash: string }).candidateSetHash;
+        return new Promise<SemanticOperationResponse<unknown>>((r) => {
+          resolve = r;
+        });
+      },
+    });
+    h.setNow(700_000);
+    h.scheduler.observe(context({ sourceItemIds: ['item_1', 'item_2'] }));
+    h.scheduler.observe(context({ sourceItemIds: ['item_3', 'item_4'] }));
+
+    resolve?.(assistResponse('assist_1', sentHash));
+    await h.scheduler.settle();
+    expect(h.assists).toHaveLength(0);
+    expect(h.scheduler.getDiagnostics().acceptedResults).toBe(0);
   });
 });
 

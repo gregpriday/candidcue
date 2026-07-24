@@ -60,7 +60,8 @@ export interface TransportDiagnostics {
   lastServerEventAtMs?: number;
   lastCompletedItemAtMs?: number;
   lastCommitAtMs?: number;
-  credentialExpiresAt?: number;
+  /** Unix epoch **milliseconds** (C1: unit is in the name). */
+  credentialExpiresAtEpochMs?: number;
   credentialGeneration?: number;
   sessionGeneration: number;
   reconnectAttempts: number;
@@ -76,7 +77,14 @@ export type TranscriptEvent =
   | { type: 'delta'; itemId: string; text: string; receivedAtMs: number }
   | { type: 'completed'; itemId: string; text: string; logprobs?: TokenLogprob[] }
   | { type: 'failed'; itemId?: string; code: string; recoverable: boolean }
-  | { type: 'transport_state'; state: TransportState };
+  | { type: 'transport_state'; state: TransportState }
+  /**
+   * H5: the local audio input recovered (track unmuted / device restored).
+   * Paired with a session-level `failed` carrying MIC_DEVICE_LOST or
+   * MIC_NO_SIGNAL, this lets the controller release a following hold without
+   * a full reconnect when the input simply came back.
+   */
+  | { type: 'input_restored' };
 
 /** Alias used by the §27.4 transport interface signature. */
 export type TranscriptionEvent = TranscriptEvent;
@@ -85,8 +93,14 @@ export type TranscriptionEvent = TranscriptEvent;
 export interface RealtimeTranscriptionTransport {
   connect(config: TranscriptionConfig): Promise<void>;
   setMicrophone(deviceId: string): Promise<void>;
-  commit(reason: CommitReason): void;
-  clearBufferedAudio(): void;
+  /**
+   * M1: returns whether the commit was actually enqueued on the data channel.
+   * A silent no-op on a closing channel left a phantom entry in the commit
+   * FIFO, permanently mis-associating later provider items with the wrong
+   * commit metadata.
+   */
+  commit(reason: CommitReason): boolean;
+  clearBufferedAudio(): boolean;
   disconnect(reason: DisconnectReason): Promise<void>;
   onEvent(handler: (event: TranscriptionEvent) => void): Unsubscribe;
   getDiagnostics(): TransportDiagnostics;
@@ -153,7 +167,15 @@ export interface TranscriptionConfig {
  */
 export interface EphemeralCredential {
   value: string;
-  expiresAt: number;
+  /**
+   * Unix epoch **milliseconds**, directly comparable with `Date.now()`.
+   *
+   * C1: the provider reports epoch seconds. Rust normalizes at the IPC
+   * boundary (`openai::normalize_expiry_to_epoch_ms`) and the unit lives in
+   * the field name, because the seconds/milliseconds mix-up silently rejected
+   * every freshly minted credential and killed transcription entirely.
+   */
+  expiresAtEpochMs: number;
   sessionType: 'transcription';
   credentialGeneration: number;
 }

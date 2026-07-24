@@ -113,14 +113,39 @@ pub struct KeyValidationResult {
 }
 
 /// Twin of `EphemeralCredential` (src/shared/contracts/audio.ts).
+///
+/// C1: the expiry crosses the IPC boundary as epoch **milliseconds** and the
+/// unit is in the field name. The provider reports epoch seconds; the webview
+/// compares against `Date.now()`, which is milliseconds. Forwarding the raw
+/// provider value made every real credential compare as already-expired, so
+/// the app rejected its own freshly minted secret and never transcribed.
+/// Normalization happens here, at the trust boundary, exactly once.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EphemeralCredential {
     pub value: String,
-    /// Unix epoch seconds.
-    pub expires_at: i64,
+    /// Unix epoch **milliseconds** (normalized from the provider's seconds).
+    pub expires_at_epoch_ms: i64,
     pub session_type: String,
     pub credential_generation: u64,
+}
+
+/// Smallest plausible epoch-millisecond value (2001-09-09). Any provider
+/// timestamp below this is a seconds-shaped value that must be scaled up.
+const MIN_PLAUSIBLE_EPOCH_MS: i64 = 1_000_000_000_000;
+
+/// Normalize a provider expiry timestamp to epoch milliseconds.
+///
+/// OpenAI documents `expires_at` as Unix epoch **seconds**, so the common path
+/// is a plain `* 1000`. The magnitude check is a deliberate belt-and-braces: if
+/// the provider ever starts emitting milliseconds, we must not multiply again
+/// and hand the webview a credential that never appears to expire.
+pub fn normalize_expiry_to_epoch_ms(provider_expires_at: i64) -> i64 {
+    if provider_expires_at >= MIN_PLAUSIBLE_EPOCH_MS {
+        provider_expires_at
+    } else {
+        provider_expires_at.saturating_mul(1000)
+    }
 }
 
 /// Request config for minting a transcription credential (spec E.1).
@@ -349,7 +374,8 @@ impl OpenAiClient {
     }
 
     /// Mint a short-lived Realtime transcription client secret (Appendix
-    /// E.1). Returns only `value`, `expires_at`, and a local generation.
+    /// E.1). Returns only `value`, `expires_at_epoch_ms`, and a local
+    /// generation.
     pub async fn create_transcription_credential(
         &self,
         key: &SecretString,
@@ -408,7 +434,8 @@ impl OpenAiClient {
             + 1;
         Ok(EphemeralCredential {
             value: parsed.value,
-            expires_at: parsed.expires_at,
+            // C1: provider seconds → epoch milliseconds at the boundary.
+            expires_at_epoch_ms: normalize_expiry_to_epoch_ms(parsed.expires_at),
             session_type: "transcription".into(),
             credential_generation: generation,
         })

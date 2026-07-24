@@ -69,6 +69,32 @@ export class CommitLedger {
     return meta;
   }
 
+  /**
+   * M1: undo the most recent `recordPending` when the commit could not be
+   * sent (data channel closed/closing).
+   *
+   * The FIFO is an ordered promise that the server WILL acknowledge these
+   * commits in this order. A commit that never left the client breaks that
+   * promise permanently: every later item is then matched to the wrong
+   * commit metadata — wrong alignment anchor, wrong command heuristic, wrong
+   * audio timestamps — for the rest of the session, silently.
+   */
+  rollbackPending(meta: CommitMeta): boolean {
+    const tail = this.unassociated.at(-1);
+    if (!tail || tail.commitSequence !== meta.commitSequence) return false;
+    this.unassociated.pop();
+    const index = this.commits.lastIndexOf(meta);
+    if (index >= 0) this.commits.splice(index, 1);
+    // Reuse the sequence number: it was never observable to the provider.
+    if (this.nextSequence === meta.commitSequence + 1) this.nextSequence -= 1;
+    return true;
+  }
+
+  /** Commits sent but not yet acknowledged by the provider (M1 diagnostics). */
+  get pendingCount(): number {
+    return this.unassociated.length;
+  }
+
   getByItemId(itemId: string): CommitMeta | null {
     return this.byItemId.get(itemId) ?? null;
   }

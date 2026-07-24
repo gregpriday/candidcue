@@ -278,6 +278,26 @@ export function startLiveSession(input: StartSessionInput): string {
       onMaskItems: (itemIds) => driver?.maskItems(itemIds),
       onCommandPending: (pending) => driver?.setCommandPending(pending),
       executeCommand: (command) => executeValidatedCommand(command),
+      // H8: real execution context for the §33.9 confirmation policy.
+      getExecutionState: () => {
+        const s = get(state);
+        return {
+          hardPaused: s.paused === 'hard',
+          takeInProgress: s.active && s.prompting,
+          // §33.9 default. There is no user setting for this yet; confirming
+          // is the safe side — an unconfirmed voice "stop" mid-take destroys
+          // the one thing the presenter cannot redo cheaply.
+          confirmStopDuringTake: true,
+        };
+      },
+      onCommandRejected: (command, reason) => {
+        showToast(
+          reason === 'stop_during_take'
+            ? `Say it again to confirm: ${command.humanLabel}`
+            : `Not sure what you meant by "${command.humanLabel}" — say it again.`,
+          'info',
+        );
+      },
       onUnknownCommand: (message) => showToast(message, 'info'),
       onTranscriptLine: (line) => pushTranscriptLine(line),
       onConnectionState: (connection) => {
@@ -304,6 +324,45 @@ export function startLiveSession(input: StartSessionInput): string {
                 ? 'disconnected'
                 : s.micState,
         }));
+      },
+      // H5: transcription is untrustworthy — stop following visibly rather
+      // than letting the stage drift on stale or absent speech.
+      onFollowingHold: (held, reason) => {
+        smoothFollow.setFollowingPaused(held);
+        if (held) {
+          showToast(describeHold(reason), 'danger');
+        }
+      },
+      // H5: a dead input is not a provider problem; the user must act.
+      onInputDeviceLost: (code) => {
+        state.update((s) => ({ ...s, micState: 'disconnected' }));
+        showToast(
+          code === 'MIC_NO_SIGNAL'
+            ? 'No sound is reaching the microphone. Following is on hold.'
+            : 'The microphone disconnected. Choose an input to continue following.',
+          'danger',
+        );
+      },
+      // H1: a session-level provider failure must never leave a green UI.
+      onSessionFailure: (code, fatal) => {
+        state.update((s) => ({
+          ...s,
+          connection: fatal ? 'offline' : 'reconnecting',
+          micState: fatal ? 'disconnected' : s.micState,
+        }));
+        showToast(
+          fatal
+            ? `Voice following stopped: ${describeError(code)}`
+            : `Voice following interrupted: ${describeError(code)}`,
+          'danger',
+        );
+      },
+      // M3: a soft pause keeps the mic and the billing meter live.
+      onPauseWarning: (msRemaining) => {
+        showToast(
+          `Still paused — voice will disconnect in ${Math.round(msRemaining / 60_000)} min.`,
+          'info',
+        );
       },
     });
     void pipeline.start().catch((err) => {
@@ -525,15 +584,63 @@ export function pauseListening(): void {
 
 /** Hard pause — the realtime connection closes; voice cannot resume (§15.3). */
 export function hardPause(): void {
+  // 'muted' is the deliberate-pause label; 'disconnected' means something
+  // broke. A hard pause is a choice, so it must not read as a failure.
   state.update((s) => ({ ...s, paused: 'hard', micState: 'muted' }));
   driver?.pause();
-  void pipeline?.hardPause().catch(() => {});
+  void pipeline?.hardPause().catch((err) => {
+    showToast(`Could not pause cleanly: ${describeError(err)}`, 'danger');
+  });
 }
 
+/**
+ * H3: resume must NOT optimistically claim the microphone is live.
+ *
+ * The old version flipped `micState` to 'live' and cleared the pause before
+ * awaiting anything, then swallowed the rejection — so a resume that failed
+ * (and after a hard pause it always did, on an invalid `idle -> resume`
+ * transition) left the UI showing a live microphone over a dead session, which
+ * is the single worst outcome this product has. The UI now follows the
+ * session, never leads it.
+ */
 export function resumeSession(): void {
-  state.update((s) => ({ ...s, paused: 'none', micState: 'live' }));
+  const s0 = get(state);
+  if (!s0.active) return;
+  state.update((s) => ({ ...s, connection: 'reconnecting' }));
   driver?.resume();
-  void pipeline?.resume().catch(() => {});
+  if (!pipeline) {
+    // Manual/mock mode: there is no session to negotiate.
+    state.update((s) => ({ ...s, paused: 'none', micState: 'live', connection: 'connected' }));
+    return;
+  }
+  void pipeline
+    .resume()
+    .then(() => {
+      state.update((s) => ({ ...s, paused: 'none', micState: 'live', connection: 'connected' }));
+    })
+    .catch((err) => {
+      // Stay paused and say so. Silence here is what made the failure invisible.
+      state.update((s) => ({
+        ...s,
+        paused: s.paused === 'none' ? 'listening' : s.paused,
+        micState: 'disconnected',
+        connection: 'offline',
+      }));
+      showToast(`Could not resume voice following: ${describeError(err)}`, 'danger');
+    });
+}
+
+function describeHold(reason: string | null): string {
+  switch (reason) {
+    case 'input_lost':
+      return 'Microphone input stopped. Following is on hold.';
+    case 'input_silent':
+      return 'No sound is reaching the microphone. Following is on hold.';
+    case 'no_transcripts':
+      return 'No transcription is coming back. Following is on hold while we reconnect.';
+    default:
+      return 'Reconnecting — your position is held.';
+  }
 }
 
 export function togglePlayPause(): void {

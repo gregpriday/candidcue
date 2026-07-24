@@ -204,19 +204,24 @@ export class SemanticFrameEmitter {
   /**
    * Produce the next frame. `revision` is strictly monotonic across the whole
    * session so the stage can discard stale frames by comparison alone (§26.1).
-   * Every numeric field is sanitized to a finite value — a NaN reaching the
-   * stage motion controller would poison the integrator permanently.
+   *
+   * *Every* numeric field is sanitized to a finite value — including the
+   * identity/generation fields and the transition payload, which an earlier
+   * version passed through raw. That mattered: a NaN `layoutGeneration`
+   * silently disables the stage's stale-frame discard logic (every comparison
+   * against NaN is false), and a NaN in the transition's `fromUnit`/`toUnit`
+   * poisons the motion controller's integrator permanently.
    */
   emit(input: FrameInput): SemanticMotionFrame {
     this.revision++;
     this.lastEmittedAtMs = input.sessionTimeMs;
     const frame: SemanticMotionFrame = {
       sessionId: input.sessionId,
-      sessionGeneration: input.sessionGeneration,
+      sessionGeneration: integer(input.sessionGeneration, 0),
       scriptCompileHash: input.scriptCompileHash,
-      layoutGeneration: input.layoutGeneration,
+      layoutGeneration: integer(input.layoutGeneration, 0),
       revision: this.revision,
-      epoch: input.epoch,
+      epoch: integer(input.epoch, 0),
       sessionTimeMs: finite(input.sessionTimeMs, 0),
 
       estimatedUnit: finite(input.estimatedUnit, 0),
@@ -234,7 +239,9 @@ export class SemanticFrameEmitter {
       behavior: input.behavior,
       finalEvidence: input.finalEvidence,
 
-      ...(input.transition !== undefined ? { transition: input.transition } : {}),
+      ...(input.transition !== undefined
+        ? { transition: sanitizeDirective(input.transition) }
+        : {}),
       motionProfileId: input.motionProfileId,
     };
     this.last = frame;
@@ -252,6 +259,23 @@ export class SemanticFrameEmitter {
 
 function finite(value: number, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
+}
+
+function integer(value: number, fallback: number): number {
+  return Number.isFinite(value) ? Math.floor(value) : fallback;
+}
+
+/** §53: a directive rides every frame, so its numbers need the same care. */
+function sanitizeDirective(directive: StageTransitionDirective): StageTransitionDirective {
+  return {
+    ...directive,
+    fromUnit: finite(directive.fromUnit, 0),
+    toUnit: finite(directive.toUnit, 0),
+    destinationTokenIndex: Math.max(0, integer(directive.destinationTokenIndex, 0)),
+    issuedAtMs: finite(directive.issuedAtMs, 0),
+    expiresAtMs: finite(directive.expiresAtMs, 0),
+    semanticEpoch: integer(directive.semanticEpoch, 0),
+  };
 }
 
 function clamp01(value: number): number {

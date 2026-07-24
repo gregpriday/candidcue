@@ -181,6 +181,12 @@ export interface BeamAdvanceInput {
   epoch: number;
   state: TrackingState;
   msSinceConfident: number;
+  /**
+   * `profile.largeForwardDistance` already clamped to the enclosing section
+   * (see `scales.ts`). The absolute constant is two thirds of a short section,
+   * which would make "large forward skip" indistinguishable from reading.
+   */
+  largeForwardDistance: number;
   /** v1 heuristic: does the tail repeat an already-read opening? (§31.6). */
   repeatedOpening: (tokenPosition: number) => boolean;
 }
@@ -381,7 +387,7 @@ export class HypothesisBeam {
         {
           candidateId: candidateIdFor(candidate.window.scope, candidate.tokenPosition),
           distanceTokens,
-          largeForward: distanceTokens > profile.largeForwardDistance,
+          largeForward: distanceTokens > input.largeForwardDistance,
           localScore,
           finalEvidence: input.finalEvidence,
           epoch: input.epoch,
@@ -394,7 +400,7 @@ export class HypothesisBeam {
 
       const unitPosition = this.units.unitAt(candidate.tokenPosition);
       const inherited = this.nearestPredicted(predicted, candidate.tokenPosition);
-      const mode = classifyMode(distanceTokens, profile);
+      const mode = classifyMode(distanceTokens, input.largeForwardDistance);
       const hypothesis: AlignmentHypothesis = {
         id: `hyp-${this.nextId++}`,
         lineageId: inherited?.lineageId ?? `lin-${this.nextId++}`,
@@ -482,12 +488,37 @@ export class HypothesisBeam {
     const primaryTail = input.tail.tokens;
     if (primaryTail.length === 0) return [];
 
+    // §63: one DP per (window, tail length). The cache matters because the
+    // leading windows are re-scored against several shorter tails and the
+    // shorter tails frequently coincide in length after the meaningful-token
+    // walk in `buildTails`.
+    const cache = new Map<string, ScoredWindow | undefined>();
+    const score = (window: CandidateWindow, tail: readonly LedgerToken[]): ScoredWindow | undefined => {
+      const key = `${window.scope}:${window.startTokenIndex}:${window.endTokenIndex}:${tail.length}`;
+      const hit = cache.get(key);
+      if (hit !== undefined || cache.has(key)) return hit;
+      const value = this.scoreOne(window, tail, input);
+      cache.set(key, value);
+      return value;
+    };
+
     const scored: ScoredWindow[] = [];
     for (const window of input.windows) {
-      const entry = this.scoreOne(window, primaryTail, input);
-      if (entry !== undefined) scored.push(entry);
+      const entry = score(window, primaryTail);
+      if (entry !== undefined) scored.push({ ...entry });
     }
     scored.sort((a, b) => b.confidence - a.confidence);
+
+    // §63: when the primary tail is already decisive there is nothing a short
+    // tail can add — it can only agree — so skip the extra DP passes entirely.
+    const leader = scored[0];
+    const runnerUp = scored[1];
+    const decisive =
+      leader !== undefined &&
+      leader.confidence >= profile.lockedThreshold &&
+      (runnerUp === undefined ||
+        leader.confidence - runnerUp.confidence >= profile.ambiguityMargin);
+    if (decisive) return scored;
 
     const deepLimit = Math.max(1, this.smooth.alignment.beamWidth);
     for (let i = 0; i < scored.length && i < deepLimit; i++) {
@@ -495,7 +526,7 @@ export class HypothesisBeam {
       if (entry === undefined) continue;
       for (const tail of tails) {
         if (tail.length === 0 || tail.length >= primaryTail.length) continue;
-        const shorter = this.scoreOne(entry.window, tail, input);
+        const shorter = score(entry.window, tail);
         if (shorter === undefined) continue;
         if (Math.abs(shorter.tokenPosition - entry.tokenPosition) <= profile.beamMergeTokens) {
           entry.tailsAgreeing++;
@@ -775,9 +806,9 @@ export function buildTails(
   return tails;
 }
 
-function classifyMode(distanceTokens: number, profile: TrackingProfile): HypothesisMode {
+function classifyMode(distanceTokens: number, largeForwardDistance: number): HypothesisMode {
   if (distanceTokens < 0) return 'retake';
-  if (distanceTokens > profile.largeForwardDistance) return 'skip';
+  if (distanceTokens > largeForwardDistance) return 'skip';
   return 'following';
 }
 

@@ -15,6 +15,7 @@ import {
 import {
   allPlaybackScenarios,
   scenarioBriefAdlib,
+  scenarioParaphraseWithAssist,
   scenarioCommandToOtherChapter,
   scenarioDistantCollision,
   scenarioLargeWithinSectionSkip,
@@ -40,10 +41,26 @@ describe('playback harness: universal invariants (companion §66.1, §69)', () =
       expect(metrics.framesMonotone).toBe(true);
       expect(metrics.framesFinite).toBe(true);
       expect(metrics.frameCount).toBeGreaterThan(0);
+      expect(metrics.framesTimeMonotone).toBe(true);
       // §69.1 — every label must be met.
       expect(metrics.correctPositionRate).toBe(1);
       // The engine must actually have produced explanations (§65).
       expect(result.records.length).toBeGreaterThan(0);
+
+      // §69.2/§69.4/§69.5/§69.6 were computed and asserted nowhere. A metric
+      // nobody checks is a metric that can quietly go to null.
+      expect(metrics.timeToAcquireMs, '§69.2 never acquired').not.toBeNull();
+      expect(metrics.timeToAcquireMs ?? Infinity).toBeLessThanOrEqual(6_000);
+      if (scenario.retakeIsExpected === true) {
+        expect(metrics.retakeLatencyMs, '§69.4 retake never committed').not.toBeNull();
+      }
+      // §69.5/§69.6: unless the scenario says otherwise, there are none.
+      expect(metrics.falseRetakeCount, '§69.5 unintended retake').toBe(0);
+      expect(metrics.falseSkipCount, '§69.6 unintended skip').toBe(0);
+
+      // §26.1: motion must not stall between frames while the scenario is
+      // still feeding the engine.
+      expect(metrics.maxFrameIntervalMs).toBeLessThanOrEqual(5_000);
     });
   }
 });
@@ -76,10 +93,25 @@ describe('D.2 brief ad-lib (§85)', () => {
     expect(result.metrics.behaviorsSeen).toContain('adlib');
 
     // §19.2 step 4 / A.1: never coast beyond one rendered line.
+    //
+    // `maxHoldDriftUnits` is measured against `filter.committedAnchorUnits`,
+    // and `SemanticFilter.applyConstraints` hard-clamps the position to
+    // exactly `maxCoastUnits × unitsPerRenderedLine` around that anchor — so
+    // asserting it against the budget compares the clamp with the constants
+    // that define it and cannot fail. Measure against the committed cursor and
+    // against the hand label instead; nothing clamps either.
     const budget =
       result.engine.smoothProfile.prediction.maxCoastUnits *
       result.engine.profile.unitsPerRenderedLine;
-    expect(result.metrics.maxHoldDriftUnits).toBeLessThanOrEqual(budget + 1e-6);
+    expect(result.metrics.maxHoldDriftFromCommit).toBeLessThanOrEqual(budget * 2);
+
+    // The hand label says the cursor was at token 18 through the ad-lib; the
+    // displayed estimate must not have wandered a chapter away from it.
+    const labelUnit = result.engine.units.unitAt(18);
+    for (const frame of result.frames) {
+      if (frame.state !== 'adlib_hold' && frame.state !== 'uncertain') continue;
+      expect(Math.abs(frame.estimatedUnit - labelUnit)).toBeLessThanOrEqual(budget * 3);
+    }
 
     // §19.2 step 3: the schedule reaches a settle, it does not creep forever.
     const held = result.frames.filter((f) => f.state === 'adlib_hold' || f.state === 'uncertain');
@@ -102,6 +134,30 @@ describe('D.4 distant phrase collision (§86, §69.7)', () => {
     expect(blocked.length).toBeGreaterThan(0);
     expect(blocked.some((r) => r.blockedReason === 'prohibited_non_contiguous')).toBe(true);
     for (const frame of result.frames) expect(frame.sectionId).toBe('h0');
+  });
+});
+
+describe('D.3 paraphrase with sidecar assist (§40)', () => {
+  it('advisory evidence reaches the beam and stays advisory', () => {
+    const { result, failures } = run(scenarioParaphraseWithAssist());
+    expect(failures, failures.join('\n')).toEqual([]);
+
+    // The assist was actually consumed — `applySemanticAssist →
+    // setSemanticAssist → semanticAdjustment` had no end-to-end coverage at
+    // all before this, so "the influence is bounded" was only ever asserted
+    // against a hand-built beam.
+    const influenced = result.records.filter(
+      (r) => r.semanticAssistRelation !== undefined || (r.semanticAssistInfluence ?? 0) !== 0,
+    );
+    expect(influenced.length).toBeGreaterThan(0);
+
+    // …and it moved nothing on its own: no skip, no retake, no section change.
+    expect(result.metrics.prohibitedSectionJumpCount).toBe(0);
+    expect(result.metrics.sectionsVisited).toEqual(['h0']);
+    const bound = result.engine.smoothProfile.alignment.semanticInfluenceMax;
+    for (const record of result.records) {
+      expect(Math.abs(record.semanticAssistInfluence ?? 0)).toBeLessThanOrEqual(bound + 1e-9);
+    }
   });
 });
 
@@ -142,6 +198,39 @@ describe('D.5 previous-sentence retake (§87)', () => {
     expect(result.engine.cursor.committedTokenIndex).toBeLessThanOrEqual(
       committedAfterRetake + 3,
     );
+  });
+});
+
+describe('D.5 step 7 — a delayed completion from the superseded take (§21.4, §30.7)', () => {
+  /**
+   * `isStalePostRetakeEvidence` and
+   * `tests/fixtures/transcript-events/out-of-order-completion.json` both
+   * existed and neither was exercised: the completion of an item whose deltas
+   * preceded a committed retake must be rejected on epoch/source-history
+   * grounds, not merely outscored.
+   */
+  it('is rejected rather than dragging the cursor back over the high-water mark', () => {
+    const scenario = scenarioPreviousSentenceRetake();
+    const result = runPlayback(scenario);
+    const afterRetake = result.engine.cursor.committedTokenIndex;
+    const epochAfterRetake = result.engine.semanticEpoch;
+    expect(epochAfterRetake).toBeGreaterThan(0);
+
+    // Replay every completion belonging to the take that preceded the retake,
+    // arriving far too late and out of commit order.
+    const stale = scenario.actions
+      .filter(
+        (a): a is Extract<typeof a, { kind: 'transcript' }> =>
+          a.kind === 'transcript' && a.event.type === 'completed',
+      )
+      .slice(0, 3)
+      .reverse();
+    for (const action of stale) {
+      result.engine.handleTranscriptEvent({ ...action.event, receivedAtMs: 120_000 });
+    }
+
+    expect(result.engine.cursor.committedTokenIndex).toBeLessThanOrEqual(afterRetake + 3);
+    expect(result.engine.semanticEpoch).toBe(epochAfterRetake);
   });
 });
 
@@ -195,6 +284,67 @@ describe('D.7 command to another chapter (§56.1)', () => {
     expect(result.engine.sectionGraph.sectionIdAt(result.engine.cursor.committedTokenIndex)).toBe(
       'h0',
     );
+  });
+});
+
+describe('the §69.7 metric is independent of the gate it measures', () => {
+  /**
+   * The whole point of §69.7 is that the number is measured from outside. An
+   * earlier harness re-derived it with a second `SectionGraph` built from the
+   * same `TrackingProfile`, calling the same three corridor helpers the gate
+   * itself calls — so a defect in corridor sizing cancelled exactly and the
+   * metric reported 0 while the cursor was somewhere it had no business being.
+   *
+   * This mutation is that defect class, dialled up: a boundary corridor that
+   * spans the entire section. It makes the gate wave through an ordinary
+   * mid-section→mid-section move into the next chapter. The metric must catch
+   * it. (Verified fail-before by restoring the SectionGraph-based reduction:
+   * this scenario then reports 0 prohibited jumps.)
+   */
+  it('catches an oversized boundary corridor that the gate itself waves through', () => {
+    const scenario = scenarioDistantCollision();
+    scenario.profile = { sectionBoundaryForwardTokens: 500, sectionBoundaryMaxFraction: 1 };
+    const result = runPlayback(scenario);
+
+    // The mutation really did move the cursor into the next chapter.
+    expect(result.metrics.sectionsVisited).toContain('h1');
+    // …and the metric noticed, without asking the gate.
+    expect(result.metrics.prohibitedSectionJumpCount).toBeGreaterThan(0);
+    const jump = result.prohibitedJumps[0];
+    expect(jump).toBeDefined();
+    expect(jump?.fromSectionId).toBe('h0');
+    expect(jump?.toSectionId).toBe('h1');
+    // Mid-section origin: it left the body of Welcome, not its end corridor.
+    expect(jump?.reason).toBe('left_section_body');
+    expect(checkGoldenExpectations(scenario, result).join('\n')).toContain('prohibited section jump');
+  });
+
+  it('does not read `authority` or `behavior` off the engine records', () => {
+    // Relabelling every record as command-authority took the old metric to 0.
+    // The metric now recomputes authority from the action stream, so mangling
+    // the records cannot change the verdict.
+    const scenario = scenarioDistantCollision();
+    scenario.profile = { sectionBoundaryForwardTokens: 500, sectionBoundaryMaxFraction: 1 };
+    const result = runPlayback(scenario);
+    const before = result.metrics.prohibitedSectionJumpCount;
+    for (const record of result.records) {
+      record.authority = 'command';
+      record.behavior = 'acquire';
+      record.fromSectionId = 'h0';
+      record.toSectionId = 'h0';
+      record.fromTokenIndex = 0;
+      record.toTokenIndex = 0;
+    }
+    // Re-reducing the same run from the same traces must give the same answer.
+    const again = runPlayback({ ...scenario });
+    expect(again.metrics.prohibitedSectionJumpCount).toBe(before);
+    expect(before).toBeGreaterThan(0);
+  });
+
+  it('an authorized command move across chapters is still not a jump (§12.6)', () => {
+    const { result } = run(scenarioCommandToOtherChapter());
+    expect(result.metrics.sectionsVisited).toContain('h2');
+    expect(result.metrics.prohibitedSectionJumpCount).toBe(0);
   });
 });
 

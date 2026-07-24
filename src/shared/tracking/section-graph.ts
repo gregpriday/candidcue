@@ -79,7 +79,9 @@ export class SectionGraph {
     // `index.sections` is already sorted by start token; deeper subsections
     // are flattened into the same linear reading order, which is exactly the
     // order sequential progression walks.
-    this.order = index.sections;
+    // Copy: `index.sections` is a public mutable array on DocumentIndex, and
+    // the gate's ordering is the invariant everything else is checked against.
+    this.order = [...index.sections];
     this.order.forEach((section, position) => {
       if (!this.positionById.has(section.id)) this.positionById.set(section.id, position);
     });

@@ -71,6 +71,21 @@ export interface TrackingProfile {
   /* Provisional-vs-final policy (spec §31.8). */
   maxProvisionalAdvanceTokens: number;
   largeForwardDistance: number;
+  /**
+   * Structure-relative clamps for the distances above (see `scales.ts`). Each
+   * absolute count is the ceiling; on a section (or sentence) shorter than the
+   * constant assumed, the fraction takes over. Without these, a script made of
+   * short beats has a `largeForwardDistance` covering most of a section and a
+   * provisional advance longer than the boundary corridor.
+   */
+  largeForwardMaxFraction: number;
+  provisionalAdvanceMaxFraction: number;
+  /** Continuity/section candidate windows, as a fraction of the section. */
+  continuityWindowMaxFraction: number;
+  /** Hard ceiling on any single candidate window, in tokens (§63). */
+  maxCandidateWindowTokens: number;
+  /** Anchor positions considered per transcript word, nearest first (§63). */
+  maxAnchorPositionsPerWord: number;
 
   /* Retake behavior (spec §31.12). */
   retakeBoundaryToleranceTokens: number;
@@ -79,6 +94,13 @@ export interface TrackingProfile {
 
   /* Manual correction (spec §31.15). */
   manualCorrectionGraceMs: number;
+  /**
+   * Hard ceiling on a COMMAND_PENDING freeze (spec §33.4.4, §33.11). The
+   * aligner integrates nothing while pending, so an unresolved command — a
+   * Luna handoff that never returns, an IPC call without a timeout — otherwise
+   * stops the teleprompter for the rest of the take with no recovery path.
+   */
+  commandPendingTimeoutMs: number;
 
   /* Snapshot cadence (spec §31.16). */
   maxSnapshotsPerSecond: number;
@@ -238,12 +260,22 @@ export const DEFAULT_TRACKING_PROFILE: TrackingProfile = {
 
   maxProvisionalAdvanceTokens: 18, // §31.8 bounded provisional advance
   largeForwardDistance: 40, // §31.6/§31.11 moderate-vs-large forward boundary
+  // A "large" forward move must stay large *relative to the section*: a third
+  // of a chapter, never two thirds of a short one.
+  largeForwardMaxFraction: 0.34,
+  // Provisional evidence may never advance further than the boundary corridor
+  // it is not allowed to cross (§13 vs §31.8).
+  provisionalAdvanceMaxFraction: 0.2,
+  continuityWindowMaxFraction: 1.0, // windows may span their own section
+  maxCandidateWindowTokens: 600, // §63 per-event cost must not track script length
+  maxAnchorPositionsPerWord: 6, // §63 nearest anchors only
 
   retakeBoundaryToleranceTokens: 3, // G.5 isSentenceOrParagraphStart(pos, 3)
   shortRetakeMaxDistance: 25, // §31.12 restart inside the current paragraph
   shortRetakeThreshold: 0.8, // §31.12 lower threshold for short restarts
 
   manualCorrectionGraceMs: 2500, // §31.15 suppression grace period
+  commandPendingTimeoutMs: 4_000, // §33.11 lunaHardTimeoutMs (3 s) plus slack
 
   maxSnapshotsPerSecond: 30, // §31.16
 

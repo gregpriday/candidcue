@@ -19,6 +19,14 @@ export type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) =
 /** Refuse to use a credential this close to its expiry (ms). */
 export const CREDENTIAL_EXPIRY_MARGIN_MS = 5_000;
 
+/**
+ * Smallest plausible epoch-millisecond expiry (2001-09-09). A provider
+ * timestamp in epoch SECONDS is ~1e9 and falls far below this, so the check
+ * catches a seconds/milliseconds regression at the boundary (C1) instead of
+ * letting it masquerade as "already expired".
+ */
+export const MIN_PLAUSIBLE_EPOCH_MS = 1_000_000_000_000;
+
 export async function mintTranscriptionCredential(
   invoke: TauriInvoke,
   config: TranscriptionConfig,
@@ -40,7 +48,23 @@ export async function mintTranscriptionCredential(
       true,
     );
   }
-  if (credential.expiresAt <= now() + CREDENTIAL_EXPIRY_MARGIN_MS) {
+  // C1: `expiresAtEpochMs` is epoch MILLISECONDS, normalized in Rust, so it is
+  // directly comparable with `Date.now()`. Reject an implausibly small value
+  // rather than silently treating a seconds-shaped timestamp as expired —
+  // that failure mode killed transcription in production while the UI looked
+  // healthy, so it must surface loudly instead.
+  if (
+    typeof credential.expiresAtEpochMs !== 'number' ||
+    !Number.isFinite(credential.expiresAtEpochMs) ||
+    credential.expiresAtEpochMs < MIN_PLAUSIBLE_EPOCH_MS
+  ) {
+    throw new RealtimeTransportError(
+      'PROVIDER_UNAVAILABLE',
+      'Credential expiry is not epoch milliseconds (unit mismatch at the IPC boundary)',
+      false,
+    );
+  }
+  if (credential.expiresAtEpochMs <= now() + CREDENTIAL_EXPIRY_MARGIN_MS) {
     // Expired client secret: mint fresh, never reuse (E.7).
     throw new RealtimeTransportError(
       'REALTIME_NEGOTIATION_FAILED',

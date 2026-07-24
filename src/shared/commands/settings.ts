@@ -22,6 +22,14 @@ export interface CommandSettings {
   /** Normalized script-alignment score above which a candidate is treated
    *  as authored script, not a command (§33.5, G.7). */
   scriptCollisionThreshold: number;
+  /**
+   * Normalized alignment score against an authored `:::literal-command` block
+   * above which the phrase is demonstration text, never an instruction
+   * (§33.5). Lower than `scriptCollisionThreshold`: the author has explicitly
+   * declared this text non-executable, so the bar to honour that is lower than
+   * the bar for inferring an accidental collision with ordinary prose.
+   */
+  literalCommandThreshold: number;
   /** Max tokens collected after the wake phrase (§33.4 step 3). */
   maxCommandTokens: number;
   /** Silence gap (ms) that terminates command collection (§33.4). */
@@ -42,6 +50,7 @@ export const DEFAULT_COMMAND_SETTINGS: CommandSettings = {
   commandHistorySize: 50, // A.8 (10–200)
   minimumWakeConfidence: 0.5,
   scriptCollisionThreshold: 0.62,
+  literalCommandThreshold: 0.5, // §33.5 authored literal-command blocks
   maxCommandTokens: 14,
   commandSilenceMs: 900,
   wakeBoundaryPauseMs: 250,

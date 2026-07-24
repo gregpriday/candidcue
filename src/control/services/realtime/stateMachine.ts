@@ -88,6 +88,11 @@ const TABLE: TransitionTable = {
     // user is prompted to repeat the last phrase and resumes explicitly
     // (spec §29.6).
     reconnected: 'soft_paused',
+    // H3: the machine can sleep mid-reconnect. Without this edge, suspend
+    // cancelled the retry loop but left the state stuck in `reconnecting`
+    // forever — a UI reading "Reconnecting…" over a session where nothing is
+    // reconnecting and nothing ever will.
+    suspend: 'soft_paused',
     stop: 'stopping',
   },
   stopping: {

@@ -47,6 +47,12 @@ export interface FilterObservation {
   finalEvidence: boolean;
   /** True when the observation came only from a semantic (Luna) relation. */
   semanticOnly?: boolean;
+  /**
+   * This observation *is* the destination an authorized discontinuity moved
+   * to (companion §25.1) — a committed retake or a committed large skip. Only
+   * such an observation may fuse without an innovation clamp.
+   */
+  authorizedDiscontinuity?: boolean;
   atMs: number;
 }
 
@@ -152,7 +158,7 @@ export class SemanticFilter {
   observe(observation: FilterObservation): void {
     this.predict(observation.atMs);
     const variance = this.measurementVariance(observation);
-    const clamp = this.innovationClamp();
+    const clamp = this.innovationClamp(observation);
     const rawInnovation = finite(observation.positionUnits, this.position) - this.position;
     const innovation = Math.max(-clamp, Math.min(clamp, rawInnovation));
 
@@ -186,6 +192,16 @@ export class SemanticFilter {
     if (observation.finalEvidence && observation.confidence >= this.profile.lockedThreshold) {
       this.lastStrongMeasurementAtMs = observation.atMs;
     }
+    // `applyConstraints` restores a non-finite position *from* `anchorUnits`,
+    // so the anchor must never be assigned a value that has not been checked:
+    // `anchorUnits = NaN` makes the fallback the very value it exists to
+    // replace, and the filter is dead for the rest of the session.
+    //
+    // The order is otherwise deliberate and must stay this way. The coast
+    // budget in `applyConstraints` bounds how far a *stale prediction* may run
+    // past the last accepted measurement (§24.6); re-anchoring first is what
+    // stops it from clamping the measurement itself.
+    if (!Number.isFinite(this.position)) this.position = this.anchorUnits;
     this.anchorUnits = this.position;
     this.applyConstraints();
   }
@@ -317,14 +333,32 @@ export class SemanticFilter {
     );
   }
 
-  /** Companion B.3 `innovationClampFor(behavior)`. */
-  private innovationClamp(): number {
+  /**
+   * Companion B.3 `innovationClampFor(behavior)`.
+   *
+   * REANCHORING/REWINDING lift the clamp entirely, on the grounds that "the
+   * transition already authorized the discontinuity". But `projectState`
+   * derives those states from `directives.activeType(now)`, and a directive
+   * lives for `transitionTtlMs` (1.5 s). Gating on the state alone therefore
+   * fused *every* measurement — ordinary ones, and provisional ones — without
+   * a clamp for a second and a half after every command, every manual move and
+   * every ordinary retake, which is exactly the window in which the tightened
+   * provisional policy is supposed to matter most.
+   *
+   * The clamp is lifted only for the single observation that *is* the
+   * authorized destination, and only when it carries final evidence.
+   */
+  private innovationClamp(observation?: FilterObservation): number {
     const base = this.profile.filterInnovationClampUnits;
+    const authorized =
+      observation !== undefined &&
+      observation.finalEvidence &&
+      observation.authorizedDiscontinuity === true;
     switch (this.state) {
       case 'reanchoring':
       case 'rewinding':
-        // The transition already authorized the discontinuity.
-        return Number.POSITIVE_INFINITY;
+        if (authorized) return Number.POSITIVE_INFINITY;
+        return base;
       case 'catching_up':
         return base * this.smooth.motion.catchUpMultiplier;
       case 'uncertain':

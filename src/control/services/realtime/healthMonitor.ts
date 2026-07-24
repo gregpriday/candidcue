@@ -55,8 +55,9 @@ export class SessionHealthMonitor {
     this.lastCompletedItemAtMs = atMs;
   }
 
-  setCredentialExpiry(expiresAt: number | null): void {
-    this.credentialExpiresAt = expiresAt;
+  /** Epoch MILLISECONDS, same clock as `now()` (C1). */
+  setCredentialExpiry(expiresAtEpochMs: number | null): void {
+    this.credentialExpiresAt = expiresAtEpochMs;
   }
 
   /** Reset markers for a fresh connection. */

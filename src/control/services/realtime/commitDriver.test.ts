@@ -51,7 +51,10 @@ describe('ManualCommitDriver (spec §29.3, E.3)', () => {
     sent = [];
     cleared = 0;
     driver = new ManualCommitDriver({
-      sendCommit: (reason) => sent.push(reason),
+      sendCommit: (reason) => {
+        sent.push(reason);
+        return true;
+      },
       clearBufferedAudio: () => {
         cleared += 1;
       },
@@ -112,5 +115,96 @@ describe('ManualCommitDriver (spec §29.3, E.3)', () => {
     driver.reset();
     driver.handleVadEvent({ type: 'speech_ended', atMs: 500, speechStartMs: 0, durationMs: 400 });
     expect(sent).toEqual([]);
+  });
+});
+
+describe('M1: a commit that was never sent must not occupy the FIFO', () => {
+  /**
+   * The FIFO is an ordered promise that the provider WILL acknowledge these
+   * commits in this order. A phantom entry breaks that promise permanently:
+   * every later item is handed the previous commit's metadata — wrong
+   * alignment anchor, wrong audio window, wrong command heuristic — for the
+   * rest of the session, with nothing visible to show for it.
+   */
+  function harness(sendResult: () => boolean) {
+    const ledger = new CommitLedger();
+    ledger.beginSessionGeneration();
+    const dropped: CommitReason[] = [];
+    const driver = new ManualCommitDriver({
+      sendCommit: () => sendResult(),
+      clearBufferedAudio: () => true,
+      ledger,
+      now: () => 1000,
+      getAlignmentAnchor: () => 42,
+      onCommitDropped: (reason) => dropped.push(reason),
+    });
+    return { ledger, driver, dropped };
+  }
+
+  function speak(driver: ManualCommitDriver, startMs: number): void {
+    driver.handleVadEvent({ type: 'speech_started', atMs: startMs });
+    driver.handleVadEvent({
+      type: 'speech_ended',
+      atMs: startMs + 900,
+      speechStartMs: startMs,
+      durationMs: 900,
+    });
+  }
+
+  it('rolls back the pending entry when the data channel refuses the send', () => {
+    let open = true;
+    const { ledger, driver, dropped } = harness(() => open);
+
+    speak(driver, 0);
+    expect(ledger.pendingCount).toBe(1);
+
+    open = false; // channel closing mid-take
+    speak(driver, 2000);
+    expect(ledger.pendingCount).toBe(1); // NOT 2 — the phantom was rolled back
+    expect(dropped).toEqual(['vad_silence']);
+
+    // The next real item must still map to the FIRST commit, not the phantom.
+    open = true;
+    const meta = ledger.associateItem('item_001');
+    expect(meta?.commitSequence).toBe(1);
+    expect(meta?.speechStartMs).toBe(0);
+  });
+
+  it('keeps item association correct after a dropped send', () => {
+    let open = true;
+    const { ledger, driver } = harness(() => open);
+
+    speak(driver, 0); // commit 1, sent
+    open = false;
+    speak(driver, 2000); // dropped
+    open = true;
+    speak(driver, 4000); // commit 2, sent
+
+    expect(ledger.associateItem('item_a')?.speechStartMs).toBe(0);
+    // Pre-fix this returned the phantom's metadata (speechStartMs 2000).
+    expect(ledger.associateItem('item_b')?.speechStartMs).toBe(4000);
+  });
+
+  it('does not commit at all when there is no live connection generation', () => {
+    const ledger = new CommitLedger();
+    ledger.beginSessionGeneration();
+    const sent: CommitReason[] = [];
+    const dropped: CommitReason[] = [];
+    const driver = new ManualCommitDriver({
+      sendCommit: (reason) => {
+        sent.push(reason);
+        return true;
+      },
+      clearBufferedAudio: () => true,
+      ledger,
+      now: () => 1000,
+      getConnectedGeneration: () => null, // mid-reconnect
+      onCommitDropped: (reason) => dropped.push(reason),
+    });
+
+    speak(driver, 0);
+    expect(sent).toEqual([]);
+    expect(ledger.pendingCount).toBe(0);
+    expect(dropped).toEqual(['vad_silence']);
   });
 });

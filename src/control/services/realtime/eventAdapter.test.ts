@@ -36,8 +36,16 @@ describe('TranscriptEventAdapter (spec E.4/§30.1)', () => {
       'completed',
     ]);
     expect(events[0]).toEqual({ type: 'item_started', itemId: 'item_001', commitSequence: 1 });
+    // H4: each emitted delta is the CUMULATIVE transcript so far, because
+    // that is what every consumer (the ledger above all) assumes. The old
+    // assertion joined the chunks itself, which is exactly why the adapter
+    // forwarding raw fragments went unnoticed.
     const deltas = events.filter((e) => e.type === 'delta') as Extract<TranscriptEvent, { type: 'delta' }>[];
-    expect(deltas.map((d) => d.text).join('')).toBe('CandidCue is following my voice.');
+    expect(deltas.map((d) => d.text)).toEqual([
+      'CandidCue ',
+      'CandidCue is following ',
+      'CandidCue is following my voice.',
+    ]);
     expect(deltas[0]?.receivedAtMs).toBe(12345);
     const completed = events.at(-1) as Extract<TranscriptEvent, { type: 'completed' }>;
     expect(completed.text).toBe('CandidCue is following my voice.');
@@ -100,15 +108,50 @@ describe('TranscriptEventAdapter (spec E.4/§30.1)', () => {
     expect(failed[4]).toMatchObject({ code: 'QUOTA_EXHAUSTED', recoverable: false });
   });
 
-  it('returns null for unknown/bookkeeping events but remembers them redacted', () => {
+  it('returns null for unknown/bookkeeping events and keeps only an allowlisted summary', () => {
     const { adapter } = makeAdapter();
     for (const raw of unknownEvents.events as unknown[]) {
       expect(adapter.adapt(raw)).toBeNull();
     }
     const diagnostics = adapter.getDiagnosticEvents();
     expect(diagnostics.length).toBe(unknownEvents.events.length);
+
+    // M2: the previous assertion only checked a TOP-LEVEL `audio` field, while
+    // the very same fixture carries `session.client_secret` one level down —
+    // which survived redaction and sat in memory. Assert over the whole
+    // serialized snapshot instead of one field.
+    const serialized = JSON.stringify(diagnostics);
+    expect(serialized).not.toContain('ek_test_should_never_be_logged');
+    expect(serialized).not.toContain('client_secret');
+    expect(serialized).not.toContain('BASE64AUDIODATA');
+
+    // What IS kept: type, ids, and sizes — enough to debug, no user content.
     const future = diagnostics.find((d) => d.type === 'some.future.event_type');
-    expect(future?.audio).toBe('[redacted]');
+    expect(future).toMatchObject({ eventId: 'event_4005' });
+    expect(future?.approxBytes).toBeGreaterThan(0);
+    expect(future?.payload).toBeUndefined();
+    expect(future?.audio).toBeUndefined();
+
+    const created = diagnostics.find((d) => d.type === 'transcription_session.created');
+    expect(created?.session).toBeUndefined();
+  });
+
+  it('never retains a nested transcript or provider error prose (M2)', () => {
+    const { adapter } = makeAdapter();
+    adapter.adapt({
+      type: 'response.unknown_thing',
+      event_id: 'event_9001',
+      error: {
+        code: 'server_error',
+        type: 'server_error',
+        message: 'failed while transcribing "my bank password is hunter2"',
+      },
+      nested: { transcript: 'my bank password is hunter2' },
+    });
+    const serialized = JSON.stringify(adapter.getDiagnosticEvents());
+    expect(serialized).not.toContain('hunter2');
+    // The classification-relevant code is non-sensitive and is kept.
+    expect(serialized).toContain('server_error');
   });
 
   it('ignores a committed event with no matching local commit', () => {

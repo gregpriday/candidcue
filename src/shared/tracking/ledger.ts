@@ -33,6 +33,12 @@ export interface LedgerAnomaly {
 }
 
 const DEFAULT_HORIZON_MS = 180_000; // §30.3: detailed evidence for 90–180 s.
+/**
+ * Anomalies are diagnostics, not evidence. Every other buffer in the tracking
+ * worker is bounded; this one was not, so a flapping connection replaying
+ * stale-generation completions grew the worker heap for the whole session.
+ */
+const DEFAULT_MAX_ANOMALIES = 200;
 
 export class TranscriptLedger {
   private items = new Map<string, LedgerItem>();
@@ -42,10 +48,20 @@ export class TranscriptLedger {
   private generation = 0;
   private anomalies: LedgerAnomaly[] = [];
   private horizonMs: number;
+  private maxAnomalies: number;
   private nextSyntheticSequence = 0;
 
-  constructor(options?: { horizonMs?: number }) {
+  constructor(options?: { horizonMs?: number; maxAnomalies?: number }) {
     this.horizonMs = options?.horizonMs ?? DEFAULT_HORIZON_MS;
+    this.maxAnomalies = Math.max(1, options?.maxAnomalies ?? DEFAULT_MAX_ANOMALIES);
+  }
+
+  /** Newest-last, bounded ring of §30.7 reconciliation anomalies. */
+  private recordAnomaly(anomaly: LedgerAnomaly): void {
+    this.anomalies.push(anomaly);
+    if (this.anomalies.length > this.maxAnomalies) {
+      this.anomalies.splice(0, this.anomalies.length - this.maxAnomalies);
+    }
   }
 
   get sessionGeneration(): number {
@@ -75,7 +91,7 @@ export class TranscriptLedger {
     if (event.sessionGeneration !== this.generation) {
       // Ignore events from a previous connection generation (§30.7).
       if (event.sessionGeneration < this.generation) {
-        this.anomalies.push({
+        this.recordAnomaly({
           itemId: 'itemId' in event && event.itemId !== undefined ? event.itemId : '',
           code: 'stale_generation',
           atMs: event.receivedAtMs,
@@ -136,7 +152,7 @@ export class TranscriptLedger {
         const item = this.ensureItem(event.itemId, event.receivedAtMs);
         if (item.status === 'complete') {
           if (item.finalText === event.text) return undefined; // harmless repeat (§30.7)
-          this.anomalies.push({
+          this.recordAnomaly({
             itemId: item.itemId,
             code: 'conflicting_completion',
             atMs: event.receivedAtMs,
