@@ -1,7 +1,7 @@
 //! Script commands (spec §46.2). Invoke argument names are the camelCase
 //! forms of the Rust parameters (Tauri convention), e.g. `expectedRevision`.
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Runtime, State};
 
 use crate::database::Database;
 use crate::errors::AppError;
@@ -42,8 +42,8 @@ pub async fn create_script(
 }
 
 #[tauri::command]
-pub async fn get_script(
-    app: AppHandle,
+pub async fn get_script<R: Runtime>(
+    app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
@@ -194,8 +194,8 @@ pub async fn restore_revision(
 /// Markdown or text file on the machine and get it back out through
 /// `get_script`. `Ok(None)` means the operator cancelled.
 #[tauri::command]
-pub async fn import_script(
-    app: AppHandle,
+pub async fn import_script<R: Runtime>(
+    app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
@@ -221,8 +221,8 @@ pub async fn import_script(
 /// whatever was there — naming `~/.ssh/config` destroyed that file.
 /// `Ok(None)` means the operator cancelled.
 #[tauri::command]
-pub async fn export_script(
-    app: AppHandle,
+pub async fn export_script<R: Runtime>(
+    app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,

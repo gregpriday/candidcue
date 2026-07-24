@@ -16,7 +16,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 /// What the platform layer should do, given the current state and the wish.
 /// Pure, so the create/release pairing is testable without a display server.
@@ -44,7 +44,7 @@ fn state() -> &'static Mutex<Option<PlatformAssertion>> {
 }
 
 /// Hold the display awake. Safe to call repeatedly.
-pub fn acquire(_app: &AppHandle) {
+pub fn acquire<R: Runtime>(_app: &AppHandle<R>) {
     let mut guard = match state().lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -63,7 +63,7 @@ pub fn acquire(_app: &AppHandle) {
 
 /// Let the display sleep again. Safe to call repeatedly, and safe to call when
 /// no assertion was ever taken.
-pub fn release(_app: &AppHandle) {
+pub fn release<R: Runtime>(_app: &AppHandle<R>) {
     let mut guard = match state().lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),

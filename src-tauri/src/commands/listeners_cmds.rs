@@ -1,6 +1,6 @@
 //! Listener commands (spec §46.7).
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::database::Database;
 use crate::errors::AppError;
@@ -9,8 +9,8 @@ use crate::listeners::{
 };
 
 #[tauri::command]
-pub async fn get_listener_catalogue(
-    app: AppHandle,
+pub async fn get_listener_catalogue<R: Runtime>(
+    app: AppHandle<R>,
     db: State<'_, Database>,
     library: State<'_, ListenerLibrary>,
     force_refresh: Option<bool>,
@@ -57,8 +57,8 @@ pub async fn remove_listener(
 }
 
 #[tauri::command]
-pub fn resolve_listener_media(
-    app: AppHandle,
+pub fn resolve_listener_media<R: Runtime>(
+    app: AppHandle<R>,
     library: State<'_, ListenerLibrary>,
     pack_id: String,
     version: String,

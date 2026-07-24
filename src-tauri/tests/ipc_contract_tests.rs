@@ -611,8 +611,11 @@ fn destination_taking_export_commands_run_their_own_picker() {
         ("export_support_bundle", "Option<SupportBundleResult>"),
         ("export_all_data", "Option<DataExportResult>"),
     ] {
+        // No `(` in the needle: these commands are now generic over the Tauri
+        // runtime (`pub async fn export_all_data<R: Runtime>(…)`) so that they
+        // can be bound on the MockRuntime at all.
         let signature = source
-            .split(&format!("pub async fn {command}("))
+            .split(&format!("pub async fn {command}"))
             .nth(1)
             .unwrap_or_else(|| panic!("{command} must exist"))
             .split('{')
@@ -629,7 +632,7 @@ fn destination_taking_export_commands_run_their_own_picker() {
              not an error"
         );
         let body = source
-            .split(&format!("pub async fn {command}("))
+            .split(&format!("pub async fn {command}"))
             .nth(1)
             .expect("body")
             .split("\n#[tauri::command]")

@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
-use tauri::{AppHandle, Emitter, Manager, Monitor, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, Monitor, Runtime, WebviewUrl, WebviewWindowBuilder};
 
 use crate::coordinator::AppCoordinator;
 use crate::errors::{AppError, ErrorCategory};
@@ -279,7 +279,7 @@ fn monitor_descriptor(
     }
 }
 
-pub fn list_displays(app: &AppHandle) -> Result<Vec<DisplayDescriptor>, AppError> {
+pub fn list_displays<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<DisplayDescriptor>, AppError> {
     let primary = app.primary_monitor()?;
     let monitors = app.available_monitors()?;
     let fingerprints = monitor_fingerprints(&monitors);
@@ -338,7 +338,9 @@ const IDENTIFY_CARD_H: f64 = 220.0;
 /// the panels, not at the list. So this puts a short-lived, always-on-top,
 /// click-through numbered card on every connected display, and ALSO emits the
 /// session to control so the picker can label its tiles to match.
-pub fn identify_displays(app: &AppHandle) -> Result<IdentificationSession, AppError> {
+pub fn identify_displays<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<IdentificationSession, AppError> {
     let displays = list_displays(app)?;
     let session = IdentificationSession {
         session_id: new_uuid(),
@@ -372,8 +374,8 @@ pub fn identify_displays(app: &AppHandle) -> Result<IdentificationSession, AppEr
     Ok(session)
 }
 
-fn spawn_identify_overlay(
-    app: &AppHandle,
+fn spawn_identify_overlay<R: Runtime>(
+    app: &AppHandle<R>,
     number: u32,
     display: &DisplayDescriptor,
 ) -> Result<(), AppError> {
@@ -423,7 +425,7 @@ fn spawn_identify_overlay(
 /// Close every identification overlay. Idempotent and safe against windows
 /// that already went away (a quit mid-identify must not fire at a destroyed
 /// window — the failure the Electron build guarded with a `closed` handler).
-pub fn close_identify_overlays(app: &AppHandle) {
+pub fn close_identify_overlays<R: Runtime>(app: &AppHandle<R>) {
     let labels: Vec<String> = app
         .webview_windows()
         .keys()
@@ -437,7 +439,7 @@ pub fn close_identify_overlays(app: &AppHandle) {
     }
 }
 
-fn schedule_identify_close(app: &AppHandle, delay_ms: u32) {
+fn schedule_identify_close<R: Runtime>(app: &AppHandle<R>, delay_ms: u32) {
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(u64::from(delay_ms)));
@@ -518,7 +520,10 @@ pub struct StageAck {
 /// positioned to the target display; the control window then publishes the
 /// session document, waits for hydration/layout events, and finally calls
 /// `set_stage_fullscreen` to show without an intermediate flash.
-pub fn open_stage(app: &AppHandle, request: OpenStageRequest) -> Result<StageOpenResult, AppError> {
+pub fn open_stage<R: Runtime>(
+    app: &AppHandle<R>,
+    request: OpenStageRequest,
+) -> Result<StageOpenResult, AppError> {
     let monitor = resolve_monitor(app, request.display_fingerprint.as_deref())?;
     let monitors = app.available_monitors()?;
     let fingerprints = monitor_fingerprints(&monitors);
@@ -612,7 +617,10 @@ pub fn match_display_index(fingerprints: &[String], wanted: &str) -> Option<usiz
         .position(|f| fingerprint_identity(f) == wanted_identity)
 }
 
-fn resolve_monitor(app: &AppHandle, fingerprint: Option<&str>) -> Result<Monitor, AppError> {
+fn resolve_monitor<R: Runtime>(
+    app: &AppHandle<R>,
+    fingerprint: Option<&str>,
+) -> Result<Monitor, AppError> {
     let monitors = app.available_monitors()?;
     if let Some(fp) = fingerprint {
         let fingerprints = monitor_fingerprints(&monitors);
@@ -627,9 +635,9 @@ fn resolve_monitor(app: &AppHandle, fingerprint: Option<&str>) -> Result<Monitor
 
 /// The fingerprint of the monitor a live window actually landed on, if it can
 /// be determined. Used to verify the stage opened where it was asked to.
-fn window_monitor_fingerprint(
-    app: &AppHandle,
-    window: &tauri::WebviewWindow,
+fn window_monitor_fingerprint<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &tauri::WebviewWindow<R>,
 ) -> Option<String> {
     let current = window.current_monitor().ok().flatten()?;
     let monitors = app.available_monitors().ok()?;
@@ -659,7 +667,7 @@ pub struct ActiveStage {
 /// is the one that asserts an emission actually HAPPENS — the suite previously
 /// only ever asserted that stale payloads are dropped, which is how a stage
 /// that never received a single snapshot in a packaged build stayed green.
-fn require_active_stage<R: tauri::Runtime>(
+fn require_active_stage<R: Runtime>(
     app: &AppHandle<R>,
     session_id: &str,
 ) -> Result<ActiveStage, AppError> {
@@ -714,7 +722,7 @@ pub fn close_decision(stage: &crate::coordinator::StageState, session_id: &str) 
     }
 }
 
-pub fn close_stage(app: &AppHandle, session_id: &str) -> Result<(), AppError> {
+pub fn close_stage<R: Runtime>(app: &AppHandle<R>, session_id: &str) -> Result<(), AppError> {
     let coordinator = app.state::<AppCoordinator>();
     let snapshot = coordinator.snapshot();
     let decision = close_decision(&snapshot.stage, session_id);
@@ -753,8 +761,8 @@ pub fn close_stage(app: &AppHandle, session_id: &str) -> Result<(), AppError> {
 /// control window the operator is driving — none of which a teleprompter wants.
 /// The Electron predecessor set `fullscreenable: false` and never called
 /// setFullScreen once, on purpose.
-pub fn set_stage_fullscreen(
-    app: &AppHandle,
+pub fn set_stage_fullscreen<R: Runtime>(
+    app: &AppHandle<R>,
     session_id: &str,
     enabled: bool,
     native: bool,
@@ -873,7 +881,7 @@ pub fn spawn_display_watcher(app: &AppHandle) {
     });
 }
 
-pub fn stage_status(app: &AppHandle) -> StageStatus {
+pub fn stage_status<R: Runtime>(app: &AppHandle<R>) -> StageStatus {
     let coordinator = app.state::<AppCoordinator>();
     let snapshot = coordinator.snapshot();
     let window_exists = app.get_webview_window(STAGE_LABEL).is_some();
@@ -900,6 +908,120 @@ pub fn stage_status(app: &AppHandle) -> StageStatus {
 const MAX_STAGE_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 /// Payload cap for a tracking snapshot.
 const MAX_SNAPSHOT_BYTES: usize = 32 * 1024;
+
+/* ---------------------------------------------------------------------------
+ * Typed control → stage payloads (§46.6)
+ *
+ * These two commands used to take a bare `serde_json::Value`, which meant the
+ * one path that carries the script and the reading cursor had NO argument shape
+ * at all: a renamed or dropped field on the control side was invisible to
+ * everything on this side, and the only guard was the four-field header check
+ * below. That is exactly the surface that shipped broken.
+ *
+ * How the split works, and why it is not "just make every field required":
+ *
+ *  - The HEADER fields (`schemaVersion`, `sessionId`, `stageGeneration`,
+ *    `sessionGeneration`) and the three non-negative snapshot integers stay
+ *    `Option`, deserialized leniently, and are validated exactly where they
+ *    always were. Their absence is load-bearing behaviour — a missing
+ *    `stageGeneration` is `AppError::invalid_input("The stage payload needs a
+ *    stageGeneration.")`, and a missing `schemaVersion` is "unsupported
+ *    schema" — and making serde reject them would silently convert those
+ *    documented errors into Tauri's generic `invalid args`, changing what
+ *    control sees for the one class of failure that has already cost this
+ *    project a shipped bug.
+ *
+ *  - The BODY fields are required and typed. Nothing validated them before, so
+ *    there is no behaviour to preserve, and they are what a contract test can
+ *    finally catch drifting.
+ *
+ *  - `rest` keeps every field neither side names (`listener`, `followProfile`,
+ *    anything added later) so the payload that reaches the stage is the payload
+ *    control sent. A struct that dropped unknown fields here would be a much
+ *    worse bug than the one being fixed.
+ * ------------------------------------------------------------------------- */
+
+/// `StageSessionEnvelope` (src/shared/contracts/display.ts) — the full
+/// hydration document, as `publish_stage_document` receives it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageDocumentEnvelope {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_generation: Option<u64>,
+    pub script_id: String,
+    pub source_hash: String,
+    pub compile_revision: i64,
+    /// `StageSettings`. Structure belongs to the stage; presence belongs here.
+    pub stage_settings: serde_json::Value,
+    /// `StageRenderDocument` — the script itself. Without it the stage has
+    /// nothing to show, which is the whole point of the envelope.
+    pub render_document: serde_json::Value,
+    pub initial_token_index: i64,
+    /// `listener`, `followProfile`, and anything added after this struct.
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+/// `TrackingSnapshot` (src/shared/contracts/tracking.ts) — the revisioned
+/// reading position, as `publish_stage_snapshot` receives it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageTrackingSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_generation: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_generation: Option<u64>,
+    /// Bounds-checked in `publish_stage_snapshot`, with its own error text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_index: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub committed_token_index: Option<i64>,
+    pub script_id: String,
+    pub block_id: String,
+    pub sentence_id: String,
+    pub confidence: f64,
+    /// `TrackingState`. A string rather than an enum on purpose: a state the
+    /// TypeScript union grew and Rust has not is a reason for a test to fail,
+    /// not a reason for every snapshot in a live take to stop being published.
+    /// `tracking_contract_unions_match_the_ts_contract` is where that is caught.
+    pub state: String,
+    pub provisional: bool,
+    pub movement: String,
+    pub source_item_ids: Vec<String>,
+    pub generated_at_ms: i64,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The bytes that reach the stage — every field, in or out of the struct.
+fn to_payload_value<T: Serialize>(payload: &T, what: &str) -> Result<serde_json::Value, AppError> {
+    serde_json::to_value(payload)
+        .map_err(|e| AppError::Internal(format!("{what} serialize: {e}")))
+}
+
+impl StageDocumentEnvelope {
+    pub fn into_value(self) -> Result<serde_json::Value, AppError> {
+        to_payload_value(&self, "envelope")
+    }
+}
+
+impl StageTrackingSnapshot {
+    pub fn into_value(self) -> Result<serde_json::Value, AppError> {
+        to_payload_value(&self, "snapshot")
+    }
+}
 
 /// The header every control→stage payload MUST carry (M1).
 ///
@@ -1001,7 +1123,7 @@ pub fn plan_stage_document_publish(
     }
 }
 
-pub fn publish_stage_document<R: tauri::Runtime>(
+pub fn publish_stage_document<R: Runtime>(
     app: &AppHandle<R>,
     session_id: &str,
     document_envelope: serde_json::Value,
@@ -1032,7 +1154,7 @@ pub fn publish_stage_document<R: tauri::Runtime>(
 
 /// Validate numeric bounds, identifiers, session generation, and payload
 /// size before emitting to the stage (spec §46.6).
-pub fn publish_stage_snapshot<R: tauri::Runtime>(
+pub fn publish_stage_snapshot<R: Runtime>(
     app: &AppHandle<R>,
     session_id: &str,
     snapshot: serde_json::Value,
@@ -1112,8 +1234,8 @@ fn validate_stage_directive(
     }
 }
 
-pub fn publish_stage_command(
-    app: &AppHandle,
+pub fn publish_stage_command<R: Runtime>(
+    app: &AppHandle<R>,
     session_id: &str,
     action: serde_json::Value,
 ) -> Result<(), AppError> {
@@ -1125,8 +1247,8 @@ pub fn publish_stage_command(
     Ok(())
 }
 
-pub fn publish_listener_state(
-    app: &AppHandle,
+pub fn publish_listener_state<R: Runtime>(
+    app: &AppHandle<R>,
     session_id: &str,
     state: serde_json::Value,
 ) -> Result<(), AppError> {

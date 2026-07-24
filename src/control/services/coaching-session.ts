@@ -131,6 +131,17 @@ export interface CoachingSessionDeps {
   sessionId: string;
   settings: CoachingSettings;
   compiled: CompiledScript | null;
+  /**
+   * §22. The script this take is reading, and the stored revision it was
+   * compiled from — both fields of the outbound `LunaCoachRequest`.
+   *
+   * The compiled document is the authority for the id and is preferred when it
+   * is present; this is the fallback for the browser-dev path where nothing
+   * compiled. There is no fallback for the revision: a `CompiledScript` does
+   * not carry one, so it is handed down or it is unknown (0).
+   */
+  scriptId?: string;
+  scriptRevision?: number;
   /** The capture stream the pipeline already owns (§5.3). Never acquired here. */
   stream: MediaStreamLike;
   /** The take pass id at session start. */
@@ -222,8 +233,21 @@ export class CoachingSessionController {
     this.directives = resolveScriptDirectives(deps.compiled?.coaching, this.settings);
 
     const audioClock: AudioClock = { nowMs: () => this.analyzerNowMs };
+    /*
+     * B3. `initialHostState`'s first parameter is `scriptId`, and this used to
+     * hand it `deps.sessionId` — so `CoachingHostState.scriptId` was the
+     * SESSION id, and it went out that way in every `LunaCoachRequest`
+     * alongside a `scriptRevision` that never moved off its initial 0.
+     *
+     * Nothing on this side reads either field, which is why it survived: the
+     * local lanes key off `sessionId` and `trackingEpoch`. They are read on the
+     * wire, where a request that names the session as its script cannot be
+     * correlated with the script it is actually about.
+     */
+    const scriptId = deps.compiled?.scriptId ?? deps.scriptId ?? '';
     const host: CoachingHostState = {
-      ...initialHostState(deps.sessionId, deps.takePassId),
+      ...initialHostState(scriptId, deps.takePassId),
+      scriptRevision: deps.scriptRevision ?? 0,
       // §19.4: the disabled set is a property of the script, not of the cursor,
       // so it is pushed once and never recomputed per frame.
       coachingDisabledSpanIds: this.directives.coachingDisabledSpanIds,

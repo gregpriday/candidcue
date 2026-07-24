@@ -84,6 +84,7 @@ await import('@tauri-apps/api/event');
 const {
   chooseAnotherListenerClip,
   clearSession,
+  dismissStageWindowFault,
   retryListenerMedia,
   session,
   startLiveSession,
@@ -591,5 +592,142 @@ describe('stage layout failures (§62)', () => {
     await startWithLiveBridge();
     layoutEvent({ stageGeneration: 7, issues: ['map_unresolved'], layoutGeneration: 4 });
     expect(get(session).listenerFault).toBeNull();
+  });
+});
+
+/*
+ * §52.7 window-layer failures on `stage://error`.
+ *
+ * S7. `stage://error` has exactly two producers: Rust relaying the stage's
+ * `stage://media-error` verbatim (`app.rs`), and `windows/mod.rs` reporting on
+ * the stage WINDOW. The only window-layer code emitted today is
+ * `STAGE_DISPLAY_MISMATCH` — the stage opened on a monitor other than the one
+ * that was picked — and control discarded it, because the handler routed on
+ * `status` and returned on anything without one.
+ *
+ * The consequence is the worst kind: nothing looks broken. The script prompts
+ * perfectly, at the wrong wall, and the operator finds out by looking at the
+ * wrong wall.
+ *
+ * These drive the REAL store handler with the REAL payload `windows/mod.rs`
+ * builds (`serde_json::json!({ stageGeneration, code, message,
+ * requestedFingerprint, actualFingerprint })`).
+ */
+describe('stage window failures (§52.7)', () => {
+  async function startWithLiveBridge(): Promise<void> {
+    start(7);
+    await completeBridge();
+  }
+
+  function dispatchStageError(payload: Record<string, unknown>): number {
+    const handlers = find(CONTROL_EVENT.stageError);
+    for (const handler of handlers) handler.handler({ payload });
+    return handlers.length;
+  }
+
+  /** Verbatim shape of the `windows/mod.rs` display-mismatch payload. */
+  function displayMismatch(overrides: Record<string, unknown> = {}): number {
+    return dispatchStageError({
+      stageGeneration: 7,
+      code: 'STAGE_DISPLAY_MISMATCH',
+      message: 'The stage opened on a different display than the one selected.',
+      requestedFingerprint: 'dsp-prompter|3840x2160',
+      actualFingerprint: 'dsp-builtin|3024x1964',
+      ...overrides,
+    });
+  }
+
+  it('surfaces a display mismatch instead of discarding it', async () => {
+    await startWithLiveBridge();
+    expect(get(session).stageWindowFault).toBeNull();
+
+    expect(displayMismatch()).toBeGreaterThan(0);
+
+    const fault = get(session).stageWindowFault;
+    expect(
+      fault,
+      'the stage is prompting on the wrong physical display and control was told; ' +
+        'dropping it leaves the operator with no signal at all',
+    ).not.toBeNull();
+    expect(fault?.code).toBe('STAGE_DISPLAY_MISMATCH');
+    expect(fault?.message).toContain('different display');
+    expect(fault?.requestedFingerprint).toBe('dsp-prompter|3840x2160');
+    expect(fault?.actualFingerprint).toBe('dsp-builtin|3024x1964');
+  });
+
+  it('does not mistake a window error for a Listener health report', async () => {
+    await startWithLiveBridge();
+    displayMismatch();
+    // §40.5 offers Retry / Use poster / Choose another / Turn off, none of
+    // which mean anything for a window on the wrong monitor.
+    expect(get(session).listenerFault).toBeNull();
+    // …and it is not a §62 tracking emergency either: motion is fine.
+    expect(get(smoothFollow).lineMap.valid).toBe(true);
+  });
+
+  it('ignores a window error from a stage generation that is already gone', async () => {
+    await startWithLiveBridge();
+    displayMismatch({ stageGeneration: 3 });
+    expect(get(session).stageWindowFault).toBeNull();
+  });
+
+  /*
+   * The reason this handler has now been wrong twice is that it decided what it
+   * did NOT handle and returned. A code this build has never heard of must
+   * still reach the operator.
+   */
+  it('surfaces a window-layer code it has never seen', async () => {
+    await startWithLiveBridge();
+    dispatchStageError({
+      stageGeneration: 7,
+      code: 'STAGE_SOMETHING_NEW',
+      message: 'A future window-layer failure.',
+    });
+    const fault = get(session).stageWindowFault;
+    expect(fault?.code).toBe('STAGE_SOMETHING_NEW');
+    expect(fault?.message).toBe('A future window-layer failure.');
+    expect(fault?.requestedFingerprint).toBeNull();
+  });
+
+  it('still surfaces a window error that carries no code at all', async () => {
+    await startWithLiveBridge();
+    dispatchStageError({ stageGeneration: 7, message: 'Something went wrong on the stage.' });
+    expect(get(session).stageWindowFault?.code).toBe('STAGE_WINDOW_ERROR');
+    expect(get(session).stageWindowFault?.message).toBe('Something went wrong on the stage.');
+  });
+
+  it('is dismissable — it is a notice, not a modal', async () => {
+    await startWithLiveBridge();
+    displayMismatch();
+    expect(get(session).stageWindowFault).not.toBeNull();
+    dismissStageWindowFault();
+    expect(get(session).stageWindowFault).toBeNull();
+  });
+
+  it('does not leak into the next session', async () => {
+    await startWithLiveBridge();
+    displayMismatch();
+    expect(get(session).stageWindowFault).not.toBeNull();
+    stopSession();
+    start(9);
+    expect(get(session).stageWindowFault).toBeNull();
+  });
+
+  /*
+   * The other half of the split: a Listener health payload must still be
+   * handled as one. Without this the assertions above could be satisfied by a
+   * handler that routes EVERYTHING to the window-fault path.
+   */
+  it('still routes a Listener health payload to the Listener path', async () => {
+    start(7, listenerSelection());
+    await completeBridge();
+    dispatchStageError({
+      stageGeneration: 7,
+      status: 'failed',
+      code: 'decode_failure',
+      clipId: 'clip_a',
+    });
+    expect(get(session).listenerFault?.status).toBe('failed');
+    expect(get(session).stageWindowFault).toBeNull();
   });
 });

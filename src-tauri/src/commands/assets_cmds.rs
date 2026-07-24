@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::assets::{self, AssetRequest, AssetUrlEntry, ImportedAsset};
 use crate::database::Database;
@@ -19,7 +19,7 @@ use crate::scripts::{DataPaths, ScriptId};
 /// paths the glob might not reach (a relocated data dir in a dev build), and it
 /// can no longer reach the canonical file or the revision history because the
 /// config's `deny` list takes precedence over every runtime grant.
-fn allow_script_assets(app: &AppHandle, paths: &DataPaths, script_id: &ScriptId) {
+fn allow_script_assets<R: Runtime>(app: &AppHandle<R>, paths: &DataPaths, script_id: &ScriptId) {
     let dir = paths.assets_dir(script_id);
     if dir.exists() {
         let _ = app.asset_protocol_scope().allow_directory(&dir, false);
@@ -33,8 +33,8 @@ fn allow_script_assets(app: &AppHandle, paths: &DataPaths, script_id: &ScriptId)
 /// on the machine could be copied into a script and then read back through the
 /// asset protocol. `Ok(None)` means the operator cancelled.
 #[tauri::command]
-pub async fn import_image(
-    app: AppHandle,
+pub async fn import_image<R: Runtime>(
+    app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     script_id: String,
@@ -50,8 +50,8 @@ pub async fn import_image(
 }
 
 #[tauri::command]
-pub async fn import_remote_image(
-    app: AppHandle,
+pub async fn import_remote_image<R: Runtime>(
+    app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     script_id: String,
@@ -68,8 +68,8 @@ pub async fn import_remote_image(
 }
 
 #[tauri::command]
-pub async fn resolve_asset_urls(
-    app: AppHandle,
+pub async fn resolve_asset_urls<R: Runtime>(
+    app: AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     script_id: String,

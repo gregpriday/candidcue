@@ -25,8 +25,10 @@
     chooseAnotherListenerClip,
     clearSession,
     connectionPill,
+    dismissStageWindowFault,
     goToToken,
     hardPause,
+    identifyStageDisplays,
     liveStatusLabel,
     moveSentences,
     pauseListening,
@@ -531,6 +533,29 @@
 
       <p class="region-label">Stage</p>
       <!--
+        §52.7. The window layer verified which monitor the stage actually opened
+        on and it was not the one that was picked. Nothing is broken — the
+        script is prompting correctly, at the wrong wall — so this is a notice
+        with the one affordance that answers "which panel is which": numbered
+        cards on every display (identify.html, §52.4). The picker itself lives
+        in Preflight and labels its tiles with the same numbers.
+      -->
+      {#if $session.stageWindowFault}
+        {@const fault = $session.stageWindowFault}
+        <div class="stage-window-fault" role="alert">
+          <p class="lf-title">
+            {fault.code === 'STAGE_DISPLAY_MISMATCH'
+              ? 'The stage is on the wrong display'
+              : 'The stage window reported a problem'}
+          </p>
+          <p class="lf-note">{fault.message}</p>
+          <div class="lf-actions">
+            <Button size="sm" onclick={() => void identifyStageDisplays()}>Number the displays</Button>
+            <Button size="sm" onclick={() => dismissStageWindowFault()}>Dismiss</Button>
+          </div>
+        </div>
+      {/if}
+      <!--
         §40.5 Listener failure containment. The stage reports a nonfatal media
         failure; this is where the operator gets the four recoveries. None of
         them touches the script, the scroll, or the tracking cursor — a video
@@ -926,6 +951,26 @@
     flex-wrap: wrap;
     gap: var(--space-1);
     margin-top: var(--space-2);
+  }
+
+  /* --- §52.7 stage on the wrong display --- */
+  .stage-window-fault {
+    position: relative;
+    margin-bottom: var(--space-3);
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+  }
+  .stage-window-fault::before {
+    content: '';
+    position: absolute;
+    left: 5px;
+    top: var(--space-3);
+    bottom: var(--space-3);
+    width: 3px;
+    border-radius: var(--radius-pill);
+    background: var(--danger);
   }
 
   /* --- main regions --- */

@@ -44,8 +44,8 @@ pub struct DataExportResult {
 /// runs here, in the same trusted operation as the copy (spec §50.7).
 /// `Ok(None)` means the operator cancelled.
 #[tauri::command]
-pub async fn export_all_data(
-    app: tauri::AppHandle,
+pub async fn export_all_data<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
 ) -> Result<Option<DataExportResult>, AppError> {
@@ -219,8 +219,8 @@ pub struct SystemDiagnostics {
 }
 
 #[tauri::command]
-pub async fn get_system_diagnostics(
-    app: tauri::AppHandle,
+pub async fn get_system_diagnostics<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
 ) -> Result<SystemDiagnostics, AppError> {
@@ -262,8 +262,8 @@ pub struct SupportBundleResult {
 /// here, in the same trusted operation as the write (spec §50.7).
 /// `Ok(None)` means the operator cancelled.
 #[tauri::command]
-pub async fn export_support_bundle(
-    app: tauri::AppHandle,
+pub async fn export_support_bundle<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
 ) -> Result<Option<SupportBundleResult>, AppError> {

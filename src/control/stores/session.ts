@@ -85,6 +85,29 @@ export interface ListenerFault {
 }
 
 /**
+ * A window-layer failure reported on `stage://error` (§52.7).
+ *
+ * The one that actually happens is `STAGE_DISPLAY_MISMATCH`: the stage was
+ * asked for a monitor and opened on a different one. Nothing is broken — the
+ * script is prompting perfectly — it is just prompting at the wrong wall, which
+ * is the single most expensive thing to discover after the take has started.
+ *
+ * `code` is kept as an open string on purpose. This channel has now silently
+ * dropped two different classes of payload; the store must be able to surface a
+ * code it has never heard of rather than discard it, so an unrecognised code
+ * still becomes a notice with whatever message the window layer sent.
+ */
+export interface StageWindowFault {
+  code: string;
+  message: string;
+  /** The display the operator picked, when the payload names one. */
+  requestedFingerprint: string | null;
+  /** The display the stage actually landed on, when the payload names one. */
+  actualFingerprint: string | null;
+  atMs: number;
+}
+
+/**
  * Luna sidecar spend for this take (§42.1).
  *
  * Separate from `SessionState.estimatedCostUsd` on purpose. That number is
@@ -190,6 +213,13 @@ export interface SessionState {
   semanticSpend: SemanticSpend;
   /** §40.5 Listener media failure awaiting (or after) a recovery choice. */
   listenerFault: ListenerFault | null;
+  /**
+   * §52.7 window-layer failure — the stage on the wrong display, or any other
+   * code the window layer reports. Null until something goes wrong, and
+   * dismissable: unlike the Listener fault there is no in-session repair, only
+   * "now you know, and here is how to see which panel is which".
+   */
+  stageWindowFault: StageWindowFault | null;
   snapshot: TrackingSnapshot | null;
   transcriptTail: string[];
   outline: OutlineNode[];
@@ -221,6 +251,7 @@ const initial: SessionState = {
   estimatedCostUsd: 0,
   semanticSpend: { ...NO_SEMANTIC_SPEND },
   listenerFault: null,
+  stageWindowFault: null,
   snapshot: null,
   transcriptTail: [],
   outline: [],
@@ -375,6 +406,16 @@ export interface StartSessionInput {
   /** Integration inputs — optional so the store degrades in browser dev. */
   sessionId?: string;
   compiled?: CompiledScript | null;
+  /**
+   * §22. The stored revision the compiled document was produced from.
+   *
+   * A `CompiledScript` carries `scriptId` and `sourceHash` but no revision
+   * number, and the outbound `LunaCoachRequest` has a `scriptRevision` field
+   * that the review lane compares against the script's own to decide whether an
+   * annotation still points at the text it was written about
+   * (`shared/coaching/review/script-annotations.ts`). It has to be handed down.
+   */
+  scriptRevision?: number;
   /** From `start_session` — the Rust coordinator assigns it, control adopts. */
   sessionGeneration?: number;
   stageGeneration?: number;
@@ -836,6 +877,11 @@ function startCoaching(input: StartSessionInput, stream: MediaStreamLike): void 
     sessionId,
     settings: coachingSettings,
     compiled: input.compiled ?? null,
+    // B3: the coach request identifies the SCRIPT, not the session. Both of
+    // these used to be absent, so every outbound request named the session id
+    // as its script and claimed revision 0.
+    scriptId: input.scriptId,
+    scriptRevision: input.scriptRevision ?? 0,
     stream,
     takePassId: `${sessionId}:1`,
     publish: (snapshot) => publishCoachRail(snapshot),
@@ -1271,18 +1317,19 @@ function startStageBridge(sessionId: string): void {
        * That substring sniff is gone rather than merely demoted: layout
        * failures now arrive above, typed, generation-checked, and with a
        * recovery signal, so nothing on this channel is a §62 report any more.
-       * A Listener health payload is identified by its `status` and handled;
-       * a window-layer error (e.g. STAGE_DISPLAY_MISMATCH) is not this
-       * handler's business and is left alone, as it always was.
+       *
+       * S7: "not this handler's business" is how the channel came to be wrong
+       * twice. A Listener health payload is identified by its `status` and
+       * handled; EVERYTHING ELSE on this channel is a window-layer error and is
+       * now surfaced, whatever its code. There is no `return` that discards a
+       * payload, because both defects here were a `return` that discarded one.
        */
-      listen<{ stageGeneration: number; code?: string; message?: string; status?: string }>(
-        CONTROL_EVENT.stageError,
-        (event) => {
-          if (event.payload.stageGeneration !== generation) return;
-          const health = asListenerHealth(event.payload);
-          if (health !== null) handleListenerHealth(health);
-        },
-      ),
+      listen<StageErrorPayload>(CONTROL_EVENT.stageError, (event) => {
+        if (event.payload.stageGeneration !== generation) return;
+        const health = asListenerHealth(event.payload);
+        if (health !== null) handleListenerHealth(health);
+        else handleStageWindowError(event.payload);
+      }),
       listen<{ stageGeneration: number }>(CONTROL_EVENT.stageClosed, (event) => {
         if (event.payload.stageGeneration !== generation) return;
         handleStageClosed();
@@ -1311,6 +1358,110 @@ function handleStageClosed(): void {
   state.update((prev) => ({ ...prev, stageAlive: false }));
   if (s.active) {
     showToast('The stage window closed. Stop and restart the session to reopen it.', 'danger');
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Window-layer failures on `stage://error` (§52.7)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Everything that arrives on `stage://error`, both producers together.
+ *
+ * The Listener half (`status`, `clipId`) is Rust relaying the stage's
+ * `stage://media-error` verbatim; the window half (`code`, `message`, the two
+ * fingerprints) is `windows/mod.rs` reporting on the stage window itself. They
+ * are told apart by `status`, never by `code` — see `asListenerHealth`.
+ */
+interface StageErrorPayload {
+  stageGeneration: number;
+  code?: string;
+  message?: string;
+  status?: string;
+  requestedFingerprint?: string;
+  actualFingerprint?: string;
+}
+
+const STAGE_DISPLAY_MISMATCH = 'STAGE_DISPLAY_MISMATCH';
+
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/**
+ * Surface a window-layer failure rather than dropping it.
+ *
+ * The failure this exists for is the stage opening on the wrong physical
+ * display. Rust verifies the monitor after the window is shown (§52.7) and says
+ * so; until now control received that and threw it away, so the operator's only
+ * signal that their script was prompting at the wrong wall was looking at the
+ * wrong wall.
+ *
+ * A code with no local knowledge still becomes a notice — a channel that
+ * discards what it does not recognise is how this handler was wrong twice.
+ */
+function handleStageWindowError(payload: StageErrorPayload): void {
+  const code = optionalString(payload.code) ?? 'STAGE_WINDOW_ERROR';
+  const message =
+    optionalString(payload.message) ??
+    (code === STAGE_DISPLAY_MISMATCH
+      ? 'The stage opened on a different display than the one selected.'
+      : 'The stage window reported a problem.');
+  reportStageWindowFault({
+    code,
+    message,
+    requestedFingerprint: optionalString(payload.requestedFingerprint),
+    actualFingerprint: optionalString(payload.actualFingerprint),
+  });
+}
+
+/**
+ * Raise the §52.7 notice.
+ *
+ * Exported because the mismatch is also detectable from the value
+ * `set_stage_fullscreen` RETURNS, and that path matters more than the event
+ * does: `windows::set_stage_fullscreen` emits during Preflight's start
+ * sequence, one step before `startLiveSession` installs the stage bridge, so
+ * control is not listening yet and the event is lost. The handler above keeps
+ * the channel honest for every later re-assert; Preflight uses this directly.
+ */
+export function reportStageWindowFault(fault: {
+  code: string;
+  message: string;
+  requestedFingerprint?: string | null;
+  actualFingerprint?: string | null;
+}): void {
+  state.update((s) => ({
+    ...s,
+    stageWindowFault: {
+      code: fault.code,
+      message: fault.message,
+      requestedFingerprint: fault.requestedFingerprint ?? null,
+      actualFingerprint: fault.actualFingerprint ?? null,
+      atMs: Date.now(),
+    },
+  }));
+  showToast(fault.message, 'danger');
+}
+
+/** The operator has seen it; the notice is not a modal and does not nag. */
+export function dismissStageWindowFault(): void {
+  state.update((s) => (s.stageWindowFault === null ? s : { ...s, stageWindowFault: null }));
+}
+
+/**
+ * "Which panel is display 2?" — answered on the panels themselves.
+ *
+ * This is the affordance the notice needs: a numbered, always-on-top,
+ * click-through card on every connected display (`identify.html`, spec §52.4).
+ * The picker in Preflight labels its tiles with the same numbers, so the
+ * operator can go back and choose the right one for the next take.
+ */
+export async function identifyStageDisplays(): Promise<void> {
+  try {
+    await stageService.identifyDisplays();
+  } catch (err) {
+    showToast(`Could not number the displays: ${describeError(err)}`, 'danger');
   }
 }
 

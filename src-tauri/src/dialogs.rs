@@ -22,13 +22,13 @@
 
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
 use crate::errors::AppError;
 use crate::windows::CONTROL_LABEL;
 
-fn builder(app: &AppHandle) -> tauri_plugin_dialog::FileDialogBuilder<tauri::Wry> {
+fn builder<R: Runtime>(app: &AppHandle<R>) -> tauri_plugin_dialog::FileDialogBuilder<R> {
     let dialog = app.dialog().file();
     match app.get_webview_window(CONTROL_LABEL) {
         // Sheet the dialog to the control window: a detached picker on macOS can
@@ -57,7 +57,9 @@ async fn resolve(
 }
 
 /// Ask the operator for a script file to import. `Ok(None)` means cancelled.
-pub async fn pick_script_to_import(app: &AppHandle) -> Result<Option<PathBuf>, AppError> {
+pub async fn pick_script_to_import<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<PathBuf>, AppError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     builder(app)
         .set_title("Import a script")
@@ -69,7 +71,9 @@ pub async fn pick_script_to_import(app: &AppHandle) -> Result<Option<PathBuf>, A
 }
 
 /// Ask the operator for an image to import into a script.
-pub async fn pick_image_to_import(app: &AppHandle) -> Result<Option<PathBuf>, AppError> {
+pub async fn pick_image_to_import<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<PathBuf>, AppError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     builder(app)
         .set_title("Add an image")
@@ -87,8 +91,8 @@ pub async fn pick_image_to_import(app: &AppHandle) -> Result<Option<PathBuf>, Ap
 /// so there was no way to obtain one — the command was uninvokable and the
 /// "Export all scripts" button did nothing at all. The picker belongs on this
 /// side for the same reason every other one does (spec §50.7).
-pub async fn pick_destination_folder(
-    app: &AppHandle,
+pub async fn pick_destination_folder<R: Runtime>(
+    app: &AppHandle<R>,
     title: &str,
 ) -> Result<Option<PathBuf>, AppError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -101,8 +105,8 @@ pub async fn pick_destination_folder(
 }
 
 /// Ask the operator where to write an export. `Ok(None)` means cancelled.
-pub async fn pick_export_destination(
-    app: &AppHandle,
+pub async fn pick_export_destination<R: Runtime>(
+    app: &AppHandle<R>,
     suggested_name: &str,
     filter_label: &str,
     extension: &str,

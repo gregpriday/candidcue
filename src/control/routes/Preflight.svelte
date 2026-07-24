@@ -65,7 +65,12 @@
   import { saveNow } from '../stores/editor';
   import { navigate } from '../stores/router';
   import { settings, loadSettings, patchSettings } from '../stores/settings';
-  import { clearSession, startLiveSession, stopSession } from '../stores/session';
+  import {
+    clearSession,
+    reportStageWindowFault,
+    startLiveSession,
+    stopSession,
+  } from '../stores/session';
   import { showToast } from '../stores/toasts';
   import type { AudioDeviceInfo, AudioLevelSnapshot } from '../../shared/contracts';
 
@@ -77,6 +82,12 @@
   /* ------------------------------------------------------------- script */
   let scriptTitle = $state('');
   let scriptSource = $state('');
+  /**
+   * §22. The stored revision this take reads. A `CompiledScript` carries no
+   * revision number, so this is the only place it can be picked up for the
+   * coaching lane's outbound `LunaCoachRequest`.
+   */
+  let scriptRevision = $state(0);
 
   /* -------------------------------------------------------------- stage */
   let displays = $state<DisplayDescriptor[]>([]);
@@ -249,6 +260,7 @@
       onSuccess: (doc) => {
         scriptTitle = doc.title;
         scriptSource = doc.source;
+        scriptRevision = doc.scriptRevision;
         compiledWithHeadings = readHeadings;
         void requestCompile(doc.id, doc.source, 0, { readHeadings });
       },
@@ -877,7 +889,21 @@
       await ready;
 
       // 3. Show it (full screen unless the user opted out).
-      await stageService.setStageFullscreen(sessionId, fullscreen);
+      const shown = await stageService.setStageFullscreen(sessionId, fullscreen);
+      /*
+       * §52.7. Rust verifies the monitor the stage actually landed on and emits
+       * `STAGE_DISPLAY_MISMATCH` on `stage://error` — but it emits it HERE, one
+       * step before `startLiveSession` installs the stage bridge, so control is
+       * not listening yet and the event is lost. The same fact is in the value
+       * this command returns (`displayFingerprint` is the ACTUAL monitor), so
+       * the check is repeated on this side and raised after the session exists
+       * to carry it. The event handler in the store covers every later
+       * re-assert; this covers the one that actually happens.
+       */
+      const landedElsewhere =
+        selectedFingerprint !== null &&
+        typeof shown.displayFingerprint === 'string' &&
+        shown.displayFingerprint !== selectedFingerprint;
 
       // 4. Bind the tracking worker + realtime pipeline and go live.
       startLiveSession({
@@ -890,6 +916,7 @@
         totalTokens: Math.max(wordCount, 1),
         sessionId,
         compiled: compiledScript,
+        scriptRevision,
         sessionGeneration,
         stageGeneration: opened.stageGeneration,
         transcriptRetained: record.transcriptRetained,
@@ -922,6 +949,14 @@
           autoGainControl: $settings.audio.autoGainControl,
         },
       });
+      if (landedElsewhere) {
+        reportStageWindowFault({
+          code: 'STAGE_DISPLAY_MISMATCH',
+          message: 'The stage opened on a different display than the one selected.',
+          requestedFingerprint: selectedFingerprint,
+          actualFingerprint: shown.displayFingerprint ?? null,
+        });
+      }
       const arrived = await navigate({ name: 'live', sessionId, scriptId });
       if (!arrived) {
         // A guard vetoed the move. The session is already live behind this

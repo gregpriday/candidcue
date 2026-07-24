@@ -22,6 +22,6 @@ pub use stage_cmds::*;
 
 /// Application version string, e.g. "0.1.0".
 #[tauri::command]
-pub fn app_version(app: tauri::AppHandle) -> String {
+pub fn app_version<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> String {
     app.package_info().version.to_string()
 }

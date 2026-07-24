@@ -28,14 +28,20 @@
 //!
 //! What is deliberately NOT replayed
 //! ---------------------------------------------------------------------------
-//!  - `import_script` / `export_script` / `export_all_data` / `import_image`:
-//!    these open a native picker through `crate::dialogs`, which is written
-//!    against `tauri::Wry` and cannot be registered on the `MockRuntime`. Their
-//!    argument shapes are covered by `ipc_contract_tests.rs` instead.
-//!  - the stage commands: they take `serde_json::Value` and so have no argument
-//!    shape to drift. See `stage_payloads_have_no_typed_boundary_to_guard`.
+//!  - `import_script` / `export_script` / `export_all_data` / `import_image` /
+//!    `import_remote_image`: these open a native picker or reach the network.
+//!    The commands themselves are now runtime-generic and CAN be registered on
+//!    the MockRuntime; what cannot be driven headlessly is a modal file dialog.
+//!    Their argument shapes are covered by `ipc_contract_tests.rs` instead.
+//!
+//! The stage commands, on the other hand, ARE replayed now — see section 5. They
+//! used to be excluded twice over: `AppHandle<Wry>` made them unbindable on the
+//! MockRuntime, and `serde_json::Value` arguments left nothing for a contract to
+//! catch. Both are fixed, so the hop that broke the product is finally covered
+//! end to end.
 
 use std::collections::BTreeSet;
+use std::sync::mpsc;
 
 use candidcue_lib::commands;
 use candidcue_lib::coordinator::AppCoordinator;
@@ -45,7 +51,7 @@ use serde_json::{json, Value};
 use tauri::ipc::{CallbackFn, InvokeBody};
 use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
 use tauri::webview::InvokeRequest;
-use tauri::{Manager, WebviewWindow, WebviewWindowBuilder};
+use tauri::{Listener, Manager, WebviewWindow, WebviewWindowBuilder};
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -161,12 +167,22 @@ const REPLAYED: &[&str] = &[
     "get_settings",
     "update_settings",
     "clear_cache",
+    // Unlocked by making the commands generic over the Tauri runtime. Every one
+    // of these was previously `AppHandle` (i.e. `AppHandle<Wry>`), which cannot
+    // be bound on the MockRuntime, so no headless test could reach them at all.
+    "app_version",
+    "get_script",
+    "get_stage_status",
 ];
 
 struct Harness {
     _dir: tempfile::TempDir,
     _app: tauri::App<MockRuntime>,
     webview: WebviewWindow<MockRuntime>,
+    /// A webview labelled `stage`, so `emit_to(STAGE_LABEL, …)` has somewhere
+    /// to land. Without it a stage publish "succeeds" with nobody listening,
+    /// which is indistinguishable from the drop this whole file exists for.
+    stage: WebviewWindow<MockRuntime>,
 }
 
 fn harness() -> Harness {
@@ -198,6 +214,15 @@ fn harness() -> Harness {
             commands::get_settings,
             commands::update_settings,
             commands::clear_cache,
+            commands::app_version,
+            commands::get_script,
+            // The stage surface (§46.6) — the hop that broke the product.
+            commands::get_stage_status,
+            commands::close_stage,
+            commands::publish_stage_document,
+            commands::publish_stage_snapshot,
+            commands::publish_stage_command,
+            commands::publish_listener_state,
         ])
         .build(mock_context(noop_assets()))
         .expect("mock app builds");
@@ -210,11 +235,19 @@ fn harness() -> Harness {
     let webview = WebviewWindowBuilder::new(&app, "control", tauri::WebviewUrl::App("control.html".into()))
         .build()
         .expect("mock control webview");
+    let stage = WebviewWindowBuilder::new(
+        &app,
+        candidcue_lib::windows::STAGE_LABEL,
+        tauri::WebviewUrl::App("stage.html".into()),
+    )
+    .build()
+    .expect("mock stage webview");
 
     Harness {
         _dir: dir,
         _app: app,
         webview,
+        stage,
     }
 }
 
@@ -929,33 +962,108 @@ fn the_capture_fixture_covers_the_replayed_commands() {
     }
 }
 
-/// Honest note, asserted rather than left in a comment: the stage commands take
-/// `serde_json::Value`, so there is no typed boundary between control and Rust
-/// for the payloads that carry the tracking snapshot — the very path whose
-/// breakage started this work. Nothing here can catch drift in those shapes;
-/// only `windows::validate_stage_payload_header` and the TypeScript contract
-/// tests can. If a stage command ever grows a typed argument, this test fails
-/// and the payload should be added to the replay set above.
+/// The other half of finding #55: the stage payloads have a typed boundary now.
+///
+/// These four commands used to take a bare `serde_json::Value`, so the path
+/// that carries the script and the reading cursor had no argument shape at all
+/// — a control side that renamed `renderDocument` or dropped `sourceItemIds`
+/// would have produced a stage that hydrated with nothing, or a snapshot that
+/// meant nothing, with no error anywhere in either language.
+///
+/// The two payload-carrying commands are typed. The two DIRECTIVE commands are
+/// deliberately not: `validate_stage_directive` is an allow-list that answers
+/// an unknown `kind` with `AppError::invalid_input("Unknown stage directive
+/// kind: …")`, and a `#[serde(tag = "kind")]` enum would convert that
+/// documented, actionable error into Tauri's generic `invalid args`. The union
+/// is pinned against the TypeScript contract by
+/// `stage_directive_kinds_match_the_ts_contract` instead, which catches drift
+/// at test time without turning a new directive into a silent production
+/// rejection.
 #[test]
-fn stage_payloads_have_no_typed_boundary_to_guard() {
+fn the_stage_payload_commands_have_typed_arguments() {
     let stage_cmds = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands/stage_cmds.rs"),
     )
     .expect("stage_cmds.rs");
 
     for (command, argument) in [
-        ("publish_stage_document", "document_envelope: serde_json::Value"),
-        ("publish_stage_snapshot", "snapshot: serde_json::Value"),
+        ("publish_stage_document", "document_envelope: StageDocumentEnvelope"),
+        ("publish_stage_snapshot", "snapshot: StageTrackingSnapshot"),
+    ] {
+        assert!(
+            stage_cmds.contains(argument),
+            "`{command}` went back to an untyped payload. It needs `{argument}`, \
+             or nothing at this boundary can catch a renamed field."
+        );
+    }
+    for (command, argument) in [
         ("publish_stage_command", "action: serde_json::Value"),
         ("publish_listener_state", "state: serde_json::Value"),
     ] {
         assert!(
             stage_cmds.contains(argument),
-            "`{command}` no longer takes an untyped payload ({argument}). That is an \
-             improvement — add its captured payload to the replay set so the new \
-             typed boundary is actually guarded."
+            "`{command}` gained a typed `{argument}` replacement. Read the note \
+             above first: typing the directive union moves `Unknown stage \
+             directive kind` from an AppError to an argument rejection."
         );
     }
+}
+
+/// The Rust allow-list and the TypeScript `StageDirective` union are the same
+/// eight kinds. This is the drift guard that lets the directive commands stay
+/// untyped without the allow-list quietly falling behind the contract.
+#[test]
+fn stage_directive_kinds_match_the_ts_contract() {
+    let windows = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/windows/mod.rs"),
+    )
+    .expect("windows/mod.rs");
+    let allowed = windows
+        .split("const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[")
+        .nth(1)
+        .expect("the allow-list exists")
+        .split("];")
+        .next()
+        .expect("the allow-list is closed");
+    let rust_kinds: BTreeSet<String> = allowed
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .map(|k| k.to_string())
+        .collect();
+
+    let ts = std::fs::read_to_string(repo_root().join("src/shared/contracts/stage.ts"))
+        .expect("stage.ts");
+    // NOT `split(';')`: every arm carries its own semicolons
+    // (`{ kind: 'listener'; listener: … }`), so the first one is inside arm two.
+    // The union runs to the next top-level `export`.
+    let union = ts
+        .split("export type StageDirective =")
+        .nth(1)
+        .expect("the union exists")
+        .split("\nexport ")
+        .next()
+        .expect("the union is terminated");
+    let ts_kinds: BTreeSet<String> = union
+        .match_indices("kind: '")
+        .filter_map(|(index, _)| {
+            let rest = &union[index + "kind: '".len()..];
+            rest.find('\'').map(|end| rest[..end].to_string())
+        })
+        .collect();
+
+    assert!(
+        ts_kinds.len() >= 8,
+        "only {} directive kinds were parsed out of the TypeScript union; the \
+         parser has stopped matching",
+        ts_kinds.len()
+    );
+    assert_eq!(
+        rust_kinds, ts_kinds,
+        "ALLOWED_STAGE_DIRECTIVES and the TypeScript StageDirective union have \
+         drifted. A kind TypeScript can send and Rust does not allow is an \
+         outright error at the boundary; the reverse is a hole in the allow-list."
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1069,52 +1177,30 @@ fn the_captured_stage_snapshots_pass_rusts_header_gate() {
     );
 }
 
-/// Coverage ceiling, made visible.
+/// Coverage ceiling, made visible — and now at zero.
 ///
 /// A command declared `app: AppHandle` is `AppHandle<Wry>`, which cannot be
-/// bound on the `MockRuntime` — so it can never be reached through
-/// `generate_handler!` in a headless test, no matter how good the fixture is.
-/// That is why every stage command, every asset command and `get_script` are
-/// absent from the replay set above.
+/// bound on the `MockRuntime`, so it could never be reached through
+/// `generate_handler!` in a headless test no matter how good the fixture was.
+/// Twenty-two commands were in that state: the whole stage surface, every asset
+/// command, `get_script`, `export_all_data` and the diagnostics pair. The
+/// ceiling that list described was the reason the control → stage hop — the one
+/// that shipped broken — had no integration coverage at all.
 ///
-/// Making them generic (`fn f<R: Runtime>(app: AppHandle<R>, …)`) would unlock
-/// them. This test records the current ceiling so it can only move in one
-/// direction: shrink the list and the assertion tells you to extend `REPLAYED`.
+/// Every one of them is now `fn f<R: Runtime>(app: AppHandle<R>, …)`, so
+/// `PINNED` is empty and this test's only remaining job is to stop the ceiling
+/// coming back. A new command that takes a concrete `AppHandle` fails here with
+/// its own name in the message.
 #[test]
 fn commands_pinned_to_the_wry_runtime_are_the_known_set() {
-    const PINNED: &[&str] = &[
-        // commands/mod.rs
-        "app_version",
-        // scripts_cmds.rs
-        "get_script",
-        "import_script",
-        "export_script",
-        // assets_cmds.rs
-        "import_image",
-        "import_remote_image",
-        "resolve_asset_urls",
-        // listeners_cmds.rs
-        "get_listener_catalogue",
-        "resolve_listener_media",
-        // settings_cmds.rs
-        "export_all_data",
-        "get_system_diagnostics",
-        "export_support_bundle",
-        // stage_cmds.rs — the whole window surface
-        "list_displays",
-        "identify_displays",
-        "open_stage",
-        "close_stage",
-        "set_stage_fullscreen",
-        "publish_stage_document",
-        "publish_stage_snapshot",
-        "publish_stage_command",
-        "publish_listener_state",
-        "get_stage_status",
-    ];
+    /// Empty on purpose. A command belongs here only if it genuinely cannot be
+    /// written against a generic runtime — and none is, today.
+    const PINNED: &[&str] = &[];
 
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/commands");
     let mut found: BTreeSet<String> = BTreeSet::new();
+    let mut scanned = 0usize;
+    let mut generic = 0usize;
     for entry in std::fs::read_dir(&dir).expect("commands dir").flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("rs") {
@@ -1158,20 +1244,34 @@ fn commands_pinned_to_the_wry_runtime_are_the_known_set() {
             }
             let Some(close) = close else { continue };
             let params = &after_fn[open + 1..close];
+            scanned += 1;
             // `AppHandle<R>` is the generic, runtime-agnostic form and is fine.
-            if params.contains("AppHandle") && !params.contains("AppHandle<") {
+            if params.contains("AppHandle<") {
+                generic += 1;
+            } else if params.contains("AppHandle") {
                 found.insert(name);
             }
         }
     }
 
-    // Guard on the guard: the scan must find something, or the comparison below
-    // is a comparison of two empty sets.
+    /*
+     * Guard on the guard. `found` is now legitimately empty, so "the scan found
+     * nothing" no longer proves the parser works — it is the expected answer.
+     * The guard therefore moved onto the two things that ARE still countable:
+     * the number of `#[tauri::command]` items the walk saw at all, and the
+     * number of them that take a runtime-generic `AppHandle<R>`. A parser that
+     * stopped matching signatures drops both to zero and fails here instead of
+     * passing silently.
+     */
     assert!(
-        found.len() > 10,
-        "the scan found only {} Wry-pinned commands; the parser has stopped \
-         matching real signatures",
-        found.len()
+        scanned > 40,
+        "the scan walked only {scanned} #[tauri::command] items; the parser has \
+         stopped matching real signatures"
+    );
+    assert!(
+        generic > 15,
+        "the scan found only {generic} runtime-generic AppHandle commands; the \
+         parser has stopped matching real signatures"
     );
 
     let expected: BTreeSet<String> = PINNED.iter().map(|s| (*s).to_string()).collect();
@@ -1188,4 +1288,555 @@ fn commands_pinned_to_the_wry_runtime_are_the_known_set() {
         "{unpinned:?} are no longer pinned to Wry — add them to REPLAYED so the \
          round-trip actually covers them, and drop them from PINNED."
     );
+}
+
+// ---------------------------------------------------------------------------
+// 5. The stage command surface, driven through the real IPC dispatcher
+//
+// This section is the reason the runtime-generic change was worth making. Every
+// command below was `AppHandle<Wry>` and therefore unreachable from any
+// headless test; the two publish commands additionally took `serde_json::Value`
+// and so had no argument shape for a contract to hold on to. Between those two
+// facts, the hop that hydrates and moves the stage — the hop that shipped
+// broken, dropping every payload silently — had zero integration coverage.
+//
+// What is real here: the real command registrations, the real Tauri argument
+// dispatch, the real typed payload structs, the real coordinator, the real
+// header gate, and a real webview labelled `stage` that either receives the
+// emission or does not. Nothing is asserted about a policy function's return
+// value; the assertions are about what arrived at the stage.
+// ---------------------------------------------------------------------------
+
+/// The uuid the stage-publish capture fixture was recorded under.
+const CAPTURED_SESSION: &str = "3d1c9f2a-8b64-4a17-9d0e-5c2f7a1b3e40";
+
+fn stage_capture() -> Value {
+    let path = repo_root().join("tests/fixtures/ipc/stage-publish-capture.json");
+    let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "{} must exist — regenerate with `UPDATE_STAGE_CAPTURE=1 \
+             ./node_modules/.bin/vitest run tests/e2e/stage-publish-contract.test.ts`: {e}",
+            path.display()
+        )
+    });
+    serde_json::from_str(&raw).expect("the stage capture parses")
+}
+
+impl Harness {
+    fn coordinator(&self) -> tauri::State<'_, AppCoordinator> {
+        self._app.state::<AppCoordinator>()
+    }
+
+    /// Put the coordinator into the state a live take produces, and answer with
+    /// the two generations control would have been handed.
+    fn live_stage(&self, session_id: &str) -> (u64, u64) {
+        let coordinator = self.coordinator();
+        let stage_generation = coordinator.next_stage_generation();
+        coordinator.register_stage(stage_generation, Some(session_id.to_string()), None);
+        let session_generation =
+            coordinator.begin_session(session_id.to_string(), "script".into(), None);
+        (stage_generation, session_generation)
+    }
+
+    /// Watch one stage event. Returns a receiver that yields each payload.
+    fn watch_stage(&self, event: &str) -> mpsc::Receiver<Value> {
+        let (tx, rx) = mpsc::channel();
+        self.stage.listen(event.to_string(), move |event| {
+            let payload: Value = serde_json::from_str(event.payload()).expect("payload is json");
+            let _ = tx.send(payload);
+        });
+        rx
+    }
+}
+
+fn received(rx: &mpsc::Receiver<Value>) -> Option<Value> {
+    rx.recv_timeout(std::time::Duration::from_secs(2)).ok()
+}
+
+fn nothing_received(rx: &mpsc::Receiver<Value>) -> bool {
+    rx.recv_timeout(std::time::Duration::from_millis(300)).is_err()
+}
+
+/// A full `StageSessionEnvelope`, as `stage-envelope.ts` builds it.
+fn envelope(session_id: &str, stage_generation: u64, session_generation: u64) -> Value {
+    json!({
+        "schemaVersion": 1,
+        "sessionId": session_id,
+        "sessionGeneration": session_generation,
+        "stageGeneration": stage_generation,
+        "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+        "sourceHash": "sha256:envelope",
+        "compileRevision": 3,
+        "stageSettings": { "schemaVersion": 1, "fontSizePx": 72 },
+        "renderDocument": { "schemaVersion": 1, "title": "Keynote", "blocks": [] },
+        "initialTokenIndex": 0,
+    })
+}
+
+/// THE test this whole change exists for.
+///
+/// The exact bytes the real control-side session store published (captured by
+/// `tests/e2e/stage-publish-contract.test.ts`) go through the real
+/// `publish_stage_snapshot` command: Tauri's argument dispatch binds them onto
+/// `StageTrackingSnapshot`, the header gate reads them, and a webview labelled
+/// `stage` receives them — or the take never moves.
+///
+/// Until now the two halves of this were tested separately and the seam was
+/// tested by nobody: the TypeScript side asserted against a mocked service, and
+/// the Rust side fed the validator a hand-written fixture that was correct by
+/// construction.
+#[test]
+fn the_captured_snapshot_binds_to_the_command_and_reaches_the_stage() {
+    let capture = stage_capture();
+    let h = harness();
+    let rx = h.watch_stage(candidcue_lib::windows::events::STAGE_TRACKING_SNAPSHOT);
+    let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
+
+    let mut snapshot = capture["snapshot"].clone();
+    snapshot["stageGeneration"] = json!(stage_generation);
+    snapshot["sessionGeneration"] = json!(session_generation);
+
+    let response = h.invoke(
+        "publish_stage_snapshot",
+        json!({ "sessionId": CAPTURED_SESSION, "snapshot": snapshot }),
+    );
+    if let Err(error) = &response {
+        assert!(
+            !is_argument_rejection(error),
+            "the payload control really publishes no longer binds to \
+             `publish_stage_snapshot`. This is the shape of every silent-stage \
+             defect this project has had.\n  error: {error}"
+        );
+        panic!("publishing a live snapshot must succeed, got: {error}");
+    }
+
+    let arrived = received(&rx).expect(
+        "the stage must actually receive the snapshot; nothing arriving here is the \
+         shipped bug — the script hydrates and then never moves",
+    );
+    assert_eq!(arrived["sessionId"], json!(CAPTURED_SESSION));
+    assert_eq!(arrived["sessionGeneration"], json!(session_generation));
+    // The body survived the typed struct + `flatten` round trip intact.
+    assert_eq!(arrived["blockId"], capture["snapshot"]["blockId"]);
+    assert_eq!(arrived["sentenceId"], capture["snapshot"]["sentenceId"]);
+    assert_eq!(arrived["state"], capture["snapshot"]["state"]);
+    assert_eq!(arrived["movement"], capture["snapshot"]["movement"]);
+    assert_eq!(arrived["sourceItemIds"], capture["snapshot"]["sourceItemIds"]);
+}
+
+/// The typed boundary, doing the thing it was added for.
+///
+/// With `serde_json::Value` arguments a control side that renamed a snapshot
+/// field published happily, the stage rendered nothing useful, and no test in
+/// either language could see it. Now it is a rejection at the boundary.
+#[test]
+fn a_snapshot_missing_a_body_field_is_rejected_at_the_boundary() {
+    let capture = stage_capture();
+    let h = harness();
+    let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
+
+    for dropped in ["blockId", "sentenceId", "sourceItemIds", "scriptId", "movement"] {
+        let mut snapshot = capture["snapshot"].clone();
+        snapshot["stageGeneration"] = json!(stage_generation);
+        snapshot["sessionGeneration"] = json!(session_generation);
+        snapshot
+            .as_object_mut()
+            .expect("snapshot is an object")
+            .remove(dropped);
+
+        let error = h
+            .invoke(
+                "publish_stage_snapshot",
+                json!({ "sessionId": CAPTURED_SESSION, "snapshot": snapshot }),
+            )
+            .expect_err(&format!(
+                "a snapshot with no `{dropped}` was ACCEPTED. That is what the \
+                 untyped `serde_json::Value` argument did for every field: the \
+                 payload bound, the header gate passed it, and the stage \
+                 rendered whatever it could make of it."
+            ));
+        assert!(
+            is_argument_rejection(&error),
+            "`{dropped}` must be refused where the argument is bound, got: {error}"
+        );
+    }
+}
+
+/// Same, asserted as the rejection it is rather than as "did not succeed".
+#[test]
+fn a_renamed_snapshot_field_is_an_argument_rejection() {
+    let capture = stage_capture();
+    let h = harness();
+    let rx = h.watch_stage(candidcue_lib::windows::events::STAGE_TRACKING_SNAPSHOT);
+    let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
+
+    let mut snapshot = capture["snapshot"].clone();
+    snapshot["stageGeneration"] = json!(stage_generation);
+    snapshot["sessionGeneration"] = json!(session_generation);
+    let object = snapshot.as_object_mut().expect("snapshot is an object");
+    let block = object.remove("blockId").expect("blockId is captured");
+    object.insert("block".into(), block);
+
+    let error = h
+        .invoke(
+            "publish_stage_snapshot",
+            json!({ "sessionId": CAPTURED_SESSION, "snapshot": snapshot }),
+        )
+        .expect_err("a renamed field must not reach the stage");
+    assert!(
+        is_argument_rejection(&error),
+        "a renamed snapshot field must be refused where the argument is bound, \
+         got: {error}"
+    );
+    assert!(
+        nothing_received(&rx),
+        "a payload the boundary rejected must never be emitted"
+    );
+}
+
+/// The header errors are load-bearing and they are NOT argument rejections.
+///
+/// This is the reason the header fields stay `Option` inside the typed structs.
+/// `validate_stage_payload_header` answers a missing `stageGeneration` with
+/// `AppError::invalid_input("The stage payload needs a stageGeneration.")` and a
+/// wrong `schemaVersion` with "unsupported schema" — documented, structured,
+/// actionable errors that control can tell apart. Making serde reject them
+/// would have collapsed all of it into Tauri's generic `invalid args`.
+#[test]
+fn the_header_gate_still_answers_in_its_own_words() {
+    let capture = stage_capture();
+    let h = harness();
+    let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
+
+    let base = || {
+        let mut snapshot = capture["snapshot"].clone();
+        snapshot["stageGeneration"] = json!(stage_generation);
+        snapshot["sessionGeneration"] = json!(session_generation);
+        snapshot
+    };
+
+    // No stage generation: the staleness check has nothing to check against,
+    // which is exactly what a caller reaching for a stage it no longer owns
+    // would send.
+    let mut no_generation = base();
+    no_generation
+        .as_object_mut()
+        .expect("object")
+        .remove("stageGeneration");
+    let error = h
+        .invoke(
+            "publish_stage_snapshot",
+            json!({ "sessionId": CAPTURED_SESSION, "snapshot": no_generation }),
+        )
+        .expect_err("a header without a stage generation is refused");
+    assert!(
+        !is_argument_rejection(&error),
+        "the missing-generation error must stay a structured AppError, not \
+         collapse into Tauri's `invalid args`: {error}"
+    );
+    assert_eq!(error["code"], json!("VALIDATION_FAILED"));
+    assert!(
+        error["userMessage"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("stageGeneration"),
+        "got: {error}"
+    );
+
+    // Wrong schema version: its own message, likewise.
+    let mut wrong_schema = base();
+    wrong_schema["schemaVersion"] = json!(2);
+    let error = h
+        .invoke(
+            "publish_stage_snapshot",
+            json!({ "sessionId": CAPTURED_SESSION, "snapshot": wrong_schema }),
+        )
+        .expect_err("an unsupported schema is refused");
+    assert!(
+        error["userMessage"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("schema"),
+        "got: {error}"
+    );
+
+    // A payload aimed at another session is an error, not a drop.
+    let mut other = base();
+    other["sessionId"] = json!("00000000-0000-4000-8000-00000000dead");
+    let error = h
+        .invoke(
+            "publish_stage_snapshot",
+            json!({ "sessionId": CAPTURED_SESSION, "snapshot": other }),
+        )
+        .expect_err("a foreign session id is an error");
+    assert_eq!(error["code"], json!("VALIDATION_FAILED"));
+}
+
+/// §43.5: a stale generation is dropped SILENTLY. Not an error, not an
+/// emission. Both halves matter — an error here would fail a take that is
+/// merely racing a stage restart, and an emission would move the wrong stage.
+#[test]
+fn a_stale_generation_is_dropped_silently_through_the_command() {
+    let capture = stage_capture();
+    let h = harness();
+    let rx = h.watch_stage(candidcue_lib::windows::events::STAGE_TRACKING_SNAPSHOT);
+    let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
+    // A restart: same session on the stage, a newer session generation.
+    let newer = h
+        .coordinator()
+        .begin_session(CAPTURED_SESSION.to_string(), "script".into(), None);
+    assert!(newer > session_generation);
+
+    let mut stale = capture["snapshot"].clone();
+    stale["stageGeneration"] = json!(stage_generation);
+    stale["sessionGeneration"] = json!(session_generation);
+    h.expect_ok(
+        "publish_stage_snapshot",
+        json!({ "sessionId": CAPTURED_SESSION, "snapshot": stale }),
+    );
+    assert!(
+        nothing_received(&rx),
+        "a snapshot from a session generation that is over must never reach the stage"
+    );
+
+    // …and the current one still gets through, so the gate is a filter and not
+    // a wall.
+    let mut current = capture["snapshot"].clone();
+    current["stageGeneration"] = json!(stage_generation);
+    current["sessionGeneration"] = json!(newer);
+    h.expect_ok(
+        "publish_stage_snapshot",
+        json!({ "sessionId": CAPTURED_SESSION, "snapshot": current }),
+    );
+    assert!(received(&rx).is_some());
+}
+
+/// C4/C1: the hydration envelope. A dropped envelope is not an error — it is an
+/// ack that says `accepted: false`, so control can see its document did not
+/// land instead of sitting out `waitForStageReady`'s full 12 s timeout.
+#[test]
+fn the_hydration_envelope_binds_reaches_the_stage_and_acks_honestly() {
+    let h = harness();
+    let rx = h.watch_stage(candidcue_lib::windows::events::STAGE_LOAD_SESSION);
+    let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
+
+    let ack = h.expect_ok(
+        "publish_stage_document",
+        json!({
+            "sessionId": CAPTURED_SESSION,
+            "documentEnvelope": envelope(CAPTURED_SESSION, stage_generation, session_generation),
+        }),
+    );
+    assert_eq!(ack["accepted"], json!(true));
+    assert_eq!(ack["stageGeneration"], json!(stage_generation));
+    let arrived = received(&rx).expect("the stage must receive stage://load-session");
+    assert_eq!(arrived["renderDocument"]["title"], json!("Keynote"));
+    assert_eq!(arrived["stageSettings"]["fontSizePx"], json!(72));
+
+    // A stale session generation: acked as not accepted, and not emitted.
+    let newer = h
+        .coordinator()
+        .begin_session(CAPTURED_SESSION.to_string(), "script".into(), None);
+    assert!(newer > session_generation);
+    let ack = h.expect_ok(
+        "publish_stage_document",
+        json!({
+            "sessionId": CAPTURED_SESSION,
+            "documentEnvelope": envelope(CAPTURED_SESSION, stage_generation, session_generation),
+        }),
+    );
+    assert_eq!(
+        ack["accepted"],
+        json!(false),
+        "a dropped envelope must be visible to control as `accepted: false`"
+    );
+    assert!(nothing_received(&rx));
+}
+
+/// The envelope has a typed body too: `renderDocument` is the script itself,
+/// and a stage that hydrates without one shows a blank wall.
+#[test]
+fn an_envelope_without_a_render_document_is_rejected_at_the_boundary() {
+    let h = harness();
+    let rx = h.watch_stage(candidcue_lib::windows::events::STAGE_LOAD_SESSION);
+    let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
+
+    let mut broken = envelope(CAPTURED_SESSION, stage_generation, session_generation);
+    broken
+        .as_object_mut()
+        .expect("object")
+        .remove("renderDocument");
+    let error = h
+        .invoke(
+            "publish_stage_document",
+            json!({ "sessionId": CAPTURED_SESSION, "documentEnvelope": broken }),
+        )
+        .expect_err("an envelope with no script must not be accepted");
+    assert!(is_argument_rejection(&error), "got: {error}");
+    assert!(nothing_received(&rx));
+}
+
+/// Optional envelope fields the struct does not name — `listener`,
+/// `followProfile`, anything added later — must reach the stage untouched.
+/// A struct that quietly dropped them would be a worse bug than the one it
+/// replaced: the take would run with the wrong motion dynamics and nothing
+/// would say so.
+#[test]
+fn envelope_fields_the_struct_does_not_name_still_reach_the_stage() {
+    let h = harness();
+    let rx = h.watch_stage(candidcue_lib::windows::events::STAGE_LOAD_SESSION);
+    let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
+
+    let mut with_extras = envelope(CAPTURED_SESSION, stage_generation, session_generation);
+    with_extras["followProfile"] = json!({ "id": "natural", "version": 2 });
+    with_extras["listener"] = json!({ "packId": "mira", "clipUrls": [] });
+    with_extras["somethingAddedLater"] = json!("keep me");
+
+    h.expect_ok(
+        "publish_stage_document",
+        json!({ "sessionId": CAPTURED_SESSION, "documentEnvelope": with_extras }),
+    );
+    let arrived = received(&rx).expect("the envelope reaches the stage");
+    assert_eq!(arrived["followProfile"]["id"], json!("natural"));
+    assert_eq!(arrived["listener"]["packId"], json!("mira"));
+    assert_eq!(arrived["somethingAddedLater"], json!("keep me"));
+}
+
+/// The directive commands, which stay untyped on purpose (see
+/// `the_stage_payload_commands_have_typed_arguments`). What they must do is
+/// bind their arguments, honour the allow-list in Rust's own words, and emit.
+#[test]
+fn the_directive_commands_bind_validate_and_emit() {
+    let h = harness();
+    let commands = h.watch_stage(candidcue_lib::windows::events::STAGE_APPLY_COMMAND);
+    let listener = h.watch_stage(candidcue_lib::windows::events::STAGE_LISTENER_STATE);
+    let (stage_generation, _) = h.live_stage(CAPTURED_SESSION);
+
+    h.expect_ok(
+        "publish_stage_command",
+        json!({
+            "sessionId": CAPTURED_SESSION,
+            "action": {
+                "stageGeneration": stage_generation,
+                "directive": { "kind": "blank", "blanked": true },
+            },
+        }),
+    );
+    let arrived = received(&commands).expect("the blank directive reaches the stage");
+    assert_eq!(arrived["directive"]["blanked"], json!(true));
+
+    h.expect_ok(
+        "publish_listener_state",
+        json!({
+            "sessionId": CAPTURED_SESSION,
+            "state": {
+                "stageGeneration": stage_generation,
+                "directive": { "kind": "listener", "listener": Value::Null },
+            },
+        }),
+    );
+    assert!(received(&listener).is_some());
+
+    // A kind Rust does not allow is a structured error naming the kind, NOT an
+    // argument rejection — that distinction is why these two stay untyped.
+    let error = h
+        .invoke(
+            "publish_stage_command",
+            json!({
+                "sessionId": CAPTURED_SESSION,
+                "action": {
+                    "stageGeneration": stage_generation,
+                    "directive": { "kind": "definitely_not_a_directive" },
+                },
+            }),
+        )
+        .expect_err("an unknown directive kind is refused");
+    assert!(!is_argument_rejection(&error), "got: {error}");
+    assert!(
+        error["userMessage"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("definitely_not_a_directive"),
+        "the error must name the kind it refused: {error}"
+    );
+
+    // And the listener channel refuses to carry anything but a listener
+    // directive, so a caller cannot smuggle a blank through it.
+    let error = h
+        .invoke(
+            "publish_listener_state",
+            json!({
+                "sessionId": CAPTURED_SESSION,
+                "state": {
+                    "stageGeneration": stage_generation,
+                    "directive": { "kind": "blank", "blanked": true },
+                },
+            }),
+        )
+        .expect_err("publish_listener_state only carries listener directives");
+    assert!(!is_argument_rejection(&error), "got: {error}");
+    assert!(nothing_received(&listener));
+}
+
+/// Every stage command refuses a session that does not own the stage (M1).
+/// Before this change none of this could be exercised through the real dispatch
+/// path at all.
+#[test]
+fn a_session_that_does_not_own_the_stage_is_refused_by_every_publish() {
+    let h = harness();
+    let (stage_generation, session_generation) = h.live_stage(CAPTURED_SESSION);
+    let intruder = "00000000-0000-4000-8000-0000000000ff";
+
+    for (command, arg, payload) in [
+        (
+            "publish_stage_document",
+            "documentEnvelope",
+            envelope(intruder, stage_generation, session_generation),
+        ),
+        (
+            "publish_stage_command",
+            "action",
+            json!({
+                "stageGeneration": stage_generation,
+                "directive": { "kind": "blank", "blanked": true },
+            }),
+        ),
+    ] {
+        let error = h
+            .invoke(command, json!({ "sessionId": intruder, arg: payload }))
+            .unwrap_or_else(|e| e);
+        assert!(
+            !is_argument_rejection(&error),
+            "`{command}` must reject the intruder in the command body, not at \
+             argument binding: {error}"
+        );
+        assert_eq!(
+            error["code"],
+            json!("VALIDATION_FAILED"),
+            "`{command}` must refuse a session that does not own the stage"
+        );
+    }
+}
+
+/// `get_stage_status` was in the pinned set too, and it is what control asks
+/// before it decides the stage is usable. Both argument shapes it is invoked
+/// with must bind.
+#[test]
+fn get_stage_status_binds_with_and_without_a_session_id() {
+    let h = harness();
+    let (stage_generation, _) = h.live_stage(CAPTURED_SESSION);
+
+    for args in [
+        json!({}),
+        json!({ "sessionId": CAPTURED_SESSION }),
+        json!({ "sessionId": Value::Null }),
+    ] {
+        let status = h.expect_ok("get_stage_status", args.clone());
+        assert_eq!(
+            status["stageGeneration"],
+            json!(stage_generation),
+            "for args {args}"
+        );
+        assert_eq!(status["sessionId"], json!(CAPTURED_SESSION));
+    }
 }
