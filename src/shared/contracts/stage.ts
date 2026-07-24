@@ -29,6 +29,7 @@ import type { StageSessionEnvelope, StageSettings } from './display';
 import type { TrackingSnapshot } from './tracking';
 import type { SemanticMotionFrame, StageMotionAck } from './smooth-follow';
 import type { ListenerStageSelection } from './listener';
+import type { CoachRailState } from './coaching';
 
 /* ---------------------------------------------------------------------------
  * Event names
@@ -54,6 +55,18 @@ export const STAGE_EVENT = {
    * receiver is the gate that rejects stale/foreign frames.
    */
   semanticFrame: 'stage://semantic-frame',
+  /**
+   * control → stage: one {@link CoachRailState} per publication (companion
+   * Part II §27). Emitted directly control → stage like the heartbeat and the
+   * semantic frame, deliberately NOT through a Rust command: coaching is
+   * advisory and failure-isolated (§5.2), so it must never share the validated
+   * document path that moves the script, and a dead coaching producer must be
+   * unable to touch anything the stage renders for motion. The stage validates
+   * every arrival (current session, strictly increasing `stageRevision`) before
+   * applying it — out-of-order delivery is normal and a lower revision is
+   * stale, not a correction.
+   */
+  coachRail: 'stage://coach-rail',
 
   /** stage → Rust: envelope received and applied (handshake step 1). */
   hydrated: 'stage://hydrated',
@@ -134,6 +147,17 @@ export type StageTrackingPayload = TrackingSnapshot;
 
 /** `stage://semantic-frame` — the v2 motion signal (companion §26.1). */
 export type StageSemanticFramePayload = SemanticMotionFrame;
+
+/**
+ * `stage://coach-rail` — one full rail snapshot (companion Part II §27).
+ *
+ * This is the *only* coaching payload that crosses into the stage window, and
+ * it carries no scroll offset, cursor index, section id, or navigation
+ * directive: coaching cannot move the script (§2.1). The snapshot carries its
+ * own `sessionId` and monotonically increasing `stageRevision`, which are the
+ * two fields the stage validates on arrival.
+ */
+export type StageCoachRailPayload = CoachRailState;
 
 /**
  * One coach tip (companion Part VIII). The stage renders at most one at a time

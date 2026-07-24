@@ -5,7 +5,54 @@ import {
   displayPhase,
   type StageAppState,
 } from './stageState';
-import type { StageSessionEnvelope, TrackingSnapshot } from '../../shared/contracts';
+import type {
+  CoachRailState,
+  StageSessionEnvelope,
+  TrackingSnapshot,
+} from '../../shared/contracts';
+import {
+  initialPaceState,
+  initialVarietyState,
+  initialFillerState,
+  initialMicrophoneState,
+} from '../../shared/coaching/coach/coach-state';
+
+function makeCoachRail(
+  stageRevision: number,
+  overrides: Partial<CoachRailState> = {},
+): CoachRailState {
+  return {
+    schemaVersion: 1,
+    stageRevision,
+    sessionId: '00000000-0000-0000-0000-000000000001',
+    takePassId: 'take-1',
+    mode: 'coach',
+    modules: {
+      paceNumber: true,
+      paceStatus: true,
+      paceSparkline: false,
+      targetDurationStatus: false,
+      varietyScore: true,
+      varietyLabel: true,
+      fillerCount: true,
+      fillerRibbon: true,
+      gutterMarks: false,
+      liveTips: true,
+    },
+    audioTimeMs: 1000,
+    visible: true,
+    mirrored: false,
+    reducedMotion: false,
+    pace: initialPaceState(130, 170),
+    variety: initialVarietyState(0.4, 0.7),
+    fillers: initialFillerState(),
+    microphone: initialMicrophoneState(),
+    activeTip: null,
+    ribbonEvents: [],
+    gutterMarks: [],
+    ...overrides,
+  };
+}
 
 function makeEnvelope(stageGeneration = 1, sessionGeneration = 1): StageSessionEnvelope {
   return {
@@ -218,6 +265,79 @@ describe('stage state machine (spec §45.6, §43.5)', () => {
       receivedAtMs: 100,
     });
     expect(s.frozen).toBe(true);
+  });
+
+  describe('coaching rail (§27) — validate on arrival', () => {
+    it('accepts the first snapshot and latches the reserved band', () => {
+      let s = hydrated();
+      expect(s.coachRail).toBeNull();
+      expect(s.coachRailReserved).toBe(false);
+      s = stageReducer(s, { type: 'coach_rail', snapshot: makeCoachRail(1) });
+      expect(s.coachRail?.stageRevision).toBe(1);
+      expect(s.lastCoachRailRevision).toBe(1);
+      // §7.1: the band is reserved for the rest of the take.
+      expect(s.coachRailReserved).toBe(true);
+    });
+
+    it('applies a newer revision and rejects a stale (lower/equal) one', () => {
+      let s = hydrated();
+      s = stageReducer(s, { type: 'coach_rail', snapshot: makeCoachRail(5) });
+      // A lower revision is stale, not a correction (out-of-order delivery).
+      s = stageReducer(s, {
+        type: 'coach_rail',
+        snapshot: makeCoachRail(3, { audioTimeMs: 9999 }),
+      });
+      expect(s.coachRail?.stageRevision).toBe(5);
+      expect(s.coachRail?.audioTimeMs).toBe(1000);
+      // Equal revision is also stale.
+      s = stageReducer(s, {
+        type: 'coach_rail',
+        snapshot: makeCoachRail(5, { audioTimeMs: 8888 }),
+      });
+      expect(s.coachRail?.audioTimeMs).toBe(1000);
+      // A strictly greater revision is applied.
+      s = stageReducer(s, {
+        type: 'coach_rail',
+        snapshot: makeCoachRail(6, { audioTimeMs: 7777 }),
+      });
+      expect(s.coachRail?.stageRevision).toBe(6);
+      expect(s.coachRail?.audioTimeMs).toBe(7777);
+    });
+
+    it('rejects a snapshot for a different session', () => {
+      let s = hydrated();
+      s = stageReducer(s, {
+        type: 'coach_rail',
+        snapshot: makeCoachRail(1, { sessionId: '00000000-0000-0000-0000-0000000000ff' }),
+      });
+      expect(s.coachRail).toBeNull();
+      expect(s.coachRailReserved).toBe(false);
+    });
+
+    it('ignores a snapshot before any envelope exists', () => {
+      const s0 = initialStageState();
+      const s1 = stageReducer(s0, { type: 'coach_rail', snapshot: makeCoachRail(1) });
+      expect(s1).toBe(s0);
+    });
+
+    it('keeps the reserved band and revision through a same-generation re-send', () => {
+      let s = hydrated();
+      s = stageReducer(s, { type: 'coach_rail', snapshot: makeCoachRail(4) });
+      // Same stageGeneration re-send of the document refreshes in place.
+      s = stageReducer(s, { type: 'snapshot', envelope: makeEnvelope(1, 1) });
+      expect(s.coachRailReserved).toBe(true);
+      expect(s.lastCoachRailRevision).toBe(4);
+    });
+
+    it('clears the rail, its watermark, and the band latch on a new generation', () => {
+      let s = hydrated();
+      s = stageReducer(s, { type: 'coach_rail', snapshot: makeCoachRail(4) });
+      // A new stage generation is a new lifetime.
+      s = stageReducer(s, { type: 'snapshot', envelope: makeEnvelope(2, 1) });
+      expect(s.coachRail).toBeNull();
+      expect(s.lastCoachRailRevision).toBeNull();
+      expect(s.coachRailReserved).toBe(false);
+    });
   });
 
   it('updates settings and listener via directives', () => {

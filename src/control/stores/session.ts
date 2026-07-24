@@ -40,6 +40,10 @@ import {
   subscribeStageMotionAcks,
 } from '../services/smooth-follow-adapter';
 import { SemanticSidecar } from '../services/semantic-sidecar';
+import { CoachingSessionController } from '../services/coaching-session';
+import { createCoachingObserverTransport } from '../services/coaching-luna';
+import type { MediaStreamLike } from '../services/audio';
+import type { CoachRailState } from '../../shared/contracts';
 import { appendSessionTranscript, endSessionRecord } from '../services/session-records';
 import type { AssistSchedulingContext, SemanticAvailability } from '../../shared/semantic';
 import { DEFAULT_SEMANTIC_BUDGET } from '../../shared/semantic';
@@ -158,6 +162,15 @@ export interface SessionState {
   prompting: boolean;
   paused: PauseKind;
   stageBlanked: boolean;
+  /**
+   * §27. Whether the Coaching Rail's contents are shown. Toggled by the control
+   * UI or the "show me my stats" voice command. Hiding never reflows the script
+   * (§7.1): the band stays reserved, only the contents fade. `false` when
+   * coaching mode is `off`, because there is no rail to show.
+   */
+  coachRailVisible: boolean;
+  /** §6. Whether coaching is running at all this take (mode !== 'off'). */
+  coachingActive: boolean;
   voiceFollow: boolean;
   connection: 'connected' | 'reconnecting' | 'offline';
   micState: 'live' | 'muted' | 'disconnected';
@@ -198,6 +211,8 @@ const initial: SessionState = {
   prompting: false,
   paused: 'none',
   stageBlanked: false,
+  coachRailVisible: false,
+  coachingActive: false,
   voiceFollow: true,
   connection: 'connected',
   micState: 'live',
@@ -305,6 +320,19 @@ let semanticSidecar: SemanticSidecar | null = null;
 let pushSemanticContext: ((context: AssistSchedulingContext) => void) | null = null;
 /** True once the worker has sent a real v2 frame — the bridge then stands down. */
 let usingWorkerFrames = false;
+
+/**
+ * The take's coaching subsystem (companion Part II). Session-owned and disposed
+ * with the take, exactly like the semantic sidecar. Null in manual/fixed modes,
+ * outside Tauri, when there is no compiled script, and when coaching mode is
+ * `off` — in every one of those cases there is nothing to drive.
+ *
+ * It is fed the same `MediaStreamTrack` the voice pipeline already captured
+ * (§5.3), transcript from the same finalized items, and tracking facts from the
+ * same snapshots. Its only output is a `CoachRailState` relayed to the stage,
+ * and nothing it does can reach motion (§2.1/§5.2).
+ */
+let coaching: CoachingSessionController | null = null;
 
 /* Session record (§36.1) + transcript retention (§36.2). */
 interface PendingTranscriptItem {
@@ -516,10 +544,23 @@ export function startLiveSession(input: StartSessionInput): string {
         labelTranscriptItems(itemIds, 'script');
         driver?.releaseItems(itemIds);
       },
+      // §5.3: the single-capture fan-out. The pipeline is the one caller of
+      // getUserMedia; the coaching analyzer is a third consumer of the very
+      // same stream, never a second capture.
+      onCaptureStream: (stream) => startCoaching(input, stream),
       // §36.2: finalized text only, never audio. Buffered here and written
       // through `append_session_transcript`, which Rust refuses outright when
       // the session was opened with retention off.
-      onTranscriptItem: (item) => bufferTranscriptItem(item),
+      // The same finalized item also feeds coaching (fillers + pace); coaching
+      // reads text only and never audio, exactly like retention.
+      onTranscriptItem: (item) => {
+        bufferTranscriptItem(item);
+        coaching?.noteFinalTranscript({
+          itemId: item.itemId,
+          commitSequence: item.commitSequence,
+          transcript: item.transcript,
+        });
+      },
       onCommandPending: (pending) => driver?.setCommandPending(pending),
       executeCommand: (command) => executeValidatedCommand(command),
       // H8: real execution context for the §33.9 confirmation policy.
@@ -579,6 +620,8 @@ export function startLiveSession(input: StartSessionInput): string {
       },
       // H5: a dead input is not a provider problem; the user must act.
       onInputDeviceLost: (code) => {
+        // §12.7: device loss outranks every acoustic reading on the mic tile.
+        coaching?.setMicrophoneDisconnected(true);
         state.update((s) => ({ ...s, micState: 'disconnected' }));
         showToast(
           code === 'MIC_NO_SIGNAL'
@@ -765,6 +808,93 @@ function invalidateSemantics(): void {
 }
 
 /* ---------------------------------------------------------------------------
+ * Coaching subsystem (companion Part II)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Stand up the take's coaching subsystem on the SAME capture the pipeline just
+ * opened (§5.3). Constructed once per capture; a device change re-invokes this,
+ * and the guard keeps a single controller for the take.
+ *
+ * `off` and `review_only` do nothing live (§6.1/§6.5), but the subsystem is
+ * still constructed for `review_only` because it keeps analysing while
+ * publishing nothing. `off` is the one mode that is not constructed at all —
+ * there is genuinely nothing to drive.
+ */
+function startCoaching(input: StartSessionInput, stream: MediaStreamLike): void {
+  if (coaching !== null) return;
+  const coachingSettings = getSettingsSnapshot().coaching;
+  if (coachingSettings.mode === 'off') return;
+  const sessionId = get(state).sessionId;
+  if (!sessionId) return;
+
+  const wantsLuna =
+    semanticSidecar !== null && coachingSettings.modules.liveTips && coachingSettings.mode !== 'review_only';
+
+  const controller = new CoachingSessionController({
+    sessionId,
+    settings: coachingSettings,
+    compiled: input.compiled ?? null,
+    stream,
+    takePassId: `${sessionId}:1`,
+    publish: (snapshot) => publishCoachRail(snapshot),
+    ...(wantsLuna
+      ? {
+          lunaTransport: createCoachingObserverTransport(),
+          lunaMode: coachingSettings.mode === 'studio' ? 'enhanced' : 'standard',
+          // §20.3: the coach observer shares the session's semantic budget
+          // rather than opening a second, unmetered path to the API.
+          isBudgetExhausted: () => isSemanticBudgetExhausted(),
+        }
+      : {}),
+    onLaneFailure: () => {
+      // §5.2: a lane failure is contained inside the subsystem. It is not a
+      // session failure and must never reach the scroll; recording it for
+      // diagnostics is enough.
+    },
+  });
+
+  coaching = controller;
+  // §7.1/§27. Push the initial display state so the first published snapshot
+  // carries the right visibility and mirror, and the rail reserves its band
+  // pre-take. `visible` follows the stage settings' reduced-motion and the
+  // control's own toggle, which starts shown whenever coaching is active.
+  controller.setDisplayState({
+    visible: true,
+    mirrored: stageSettings?.mirrorX === true || stageSettings?.mirrorY === true,
+    reducedMotion: stageSettings?.reducedMotion === true,
+  });
+  state.update((s) => ({ ...s, coachingActive: true, coachRailVisible: true }));
+
+  void controller.start().catch(() => {
+    // Attaching the analyzer failed; transcript-driven filler and pace coaching
+    // still run. Never a session failure (§5.2).
+  });
+}
+
+/** §20.3. Whether the session's shared semantic budget is spent. */
+function isSemanticBudgetExhausted(): boolean {
+  const sidecar = semanticSidecar;
+  if (sidecar === null) return false;
+  const diagnostics = sidecar.scheduler.getDiagnostics();
+  const used = Object.values(diagnostics.requestsByLane).reduce((sum, n) => sum + n, 0);
+  return used >= sidecar.scheduler.getBudget().maxRequestsPerSession;
+}
+
+/** §5.4. Push the live tracking facts the orchestrator cannot compute. */
+function feedCoachingTracking(snapshot: TrackingSnapshot): void {
+  coaching?.setTrackingState({
+    tokenIndex: snapshot.tokenIndex,
+    alignmentConfidence: snapshot.confidence,
+    reacquiring: snapshot.state === 'searching' || snapshot.state === 'reconnecting',
+    commandActive: snapshot.state === 'command_pending',
+    // §26.5: the authored SPAN the presenter is on, never a token id. The
+    // aligner reports the sentence; that is the coarsest honest span we have.
+    activeScriptSpanId: snapshot.sentenceId || null,
+  });
+}
+
+/* ---------------------------------------------------------------------------
  * Stage bridge: snapshot relay, heartbeat (§43.5), stage-originated events.
  * ------------------------------------------------------------------------- */
 
@@ -776,6 +906,10 @@ function handleSnapshot(snapshot: TrackingSnapshot): void {
       ? s.blocksSeen
       : [...s.blocksSeen, snapshot.blockId],
   }));
+  // §5.4/§14.10: the coaching subsystem reads the alignment cursor and the
+  // active span from the same snapshot. It is advisory — nothing it does here
+  // reaches back into motion (§2.1).
+  feedCoachingTracking(snapshot);
   // Feed the smooth-following store. The worker's own SemanticMotionFrames
   // take precedence; this bridge only covers drivers that emit none.
   if (usingWorkerFrames) return relaySnapshot(snapshot);
@@ -842,6 +976,27 @@ function publishSemanticFrame(frame: SemanticMotionFrame): void {
   }
   void resolveEmitTo()
     .then((emitTo) => emitTo('stage', STAGE_EVENT.semanticFrame, frame))
+    .catch(() => {});
+}
+
+/**
+ * §27. Relay one Coaching Rail snapshot straight to the stage, the same direct
+ * `emitTo` path the heartbeat and semantic frame use. Coaching is advisory and
+ * failure-isolated (§5.2), so it never travels the validated Rust document
+ * channel that can move the script. The snapshot carries its own `sessionId`
+ * and monotonic `stageRevision`, which the stage validates on arrival.
+ */
+function publishCoachRail(snapshot: CoachRailState): void {
+  if (stageGeneration === 0) return;
+  if (!cachedEmitTo && !isTauriRuntime()) return;
+  const s = get(state);
+  if (!s.sessionId || !s.stageAlive) return;
+  if (cachedEmitTo) {
+    void cachedEmitTo('stage', STAGE_EVENT.coachRail, snapshot).catch(() => {});
+    return;
+  }
+  void resolveEmitTo()
+    .then((emitTo) => emitTo('stage', STAGE_EVENT.coachRail, snapshot))
     .catch(() => {});
 }
 
@@ -1479,6 +1634,30 @@ export function toggleStageMirror(axis: 'x' | 'y' = 'x'): void {
       ? { ...stageSettings, mirrorX: !stageSettings.mirrorX }
       : { ...stageSettings, mirrorY: !stageSettings.mirrorY };
   pushSettings();
+  // §7.5: the rail inherits the same mirror boundary as the script, so it must
+  // learn the new mirror state too — it flips through its own snapshot, not the
+  // stage transform, because it is inside the mirror plane but the boundary is
+  // decided on the control side.
+  coaching?.setDisplayState({
+    mirrored: stageSettings.mirrorX === true || stageSettings.mirrorY === true,
+  });
+}
+
+/**
+ * §27. Show or hide the Coaching Rail's contents. Toggled by the Live-screen
+ * button and by the "show me my stats" voice command (`set_coaching_rail`).
+ *
+ * Hiding NEVER reflows the script: the reserved band stays and only the
+ * contents fade (§7.1). When coaching is `off` there is no rail to toggle, so
+ * this is a no-op. Pass a boolean to force a state, or omit to flip.
+ */
+export function setCoachingRailVisible(visible?: boolean): boolean {
+  const s = get(state);
+  if (!s.coachingActive || coaching === null) return false;
+  const next = visible ?? !s.coachRailVisible;
+  coaching.setDisplayState({ visible: next });
+  state.update((prev) => ({ ...prev, coachRailVisible: next }));
+  return next;
 }
 
 export function toggleListenerVisible(): boolean {
@@ -1634,6 +1813,14 @@ function applyCommandAction(action: CommandAction): boolean {
     case 'set_scroll_mode':
       state.update((prev) => ({ ...prev, voiceFollow: action.mode === 'voice' }));
       return true;
+    case 'set_coaching_rail': {
+      // §27: "show me my stats". Toggle when the command omits an explicit
+      // target, otherwise honour it. A no-op when coaching is off; report that
+      // as not-executed so the caller does not acknowledge a phantom action.
+      if (!s.coachingActive) return false;
+      setCoachingRailVisible(action.visible);
+      return true;
+    }
     default:
       return false;
   }
@@ -1796,6 +1983,20 @@ function stopInternals(): void {
   semanticSidecar = null;
   pushSemanticContext = null;
   setActiveSemanticSidecar(null);
+  // The coaching subsystem is take-scoped like the sidecar: end the take so the
+  // last seconds are measured and the glass is cleared, then dispose the graph
+  // (which drops the retained PCM with the capture, §12.6). Fire-and-forget —
+  // teardown must not block the session stop.
+  if (coaching) {
+    const c = coaching;
+    coaching = null;
+    try {
+      c.endTake('take_end');
+    } catch {
+      /* §5.2 */
+    }
+    void c.dispose().catch(() => {});
+  }
   driver?.dispose();
   driver = null;
   if (pipeline) {

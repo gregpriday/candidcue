@@ -52,6 +52,7 @@ commands.allow = [
   "prepare_semantic_landmarks",
   "retrieve_semantic_landmarks",
   "classify_semantic_tracking_window",
+  "classify_coaching_window",
   "cancel_semantic_request",
   "list_displays",
   "identify_displays",

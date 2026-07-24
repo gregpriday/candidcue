@@ -51,6 +51,58 @@ and how exactly the span should be delivered. Annotate only the supplied span ID
 Never invent an ID, never rewrite the script, and never return token positions. \
 Return only the required structured result.";
 
+pub const COACH_INSTRUCTION: &str = "You are a delivery coach for a presenter reading a teleprompter. You are given \
+their recent speech, the authored script spans nearby, live delivery metrics, and a \
+small set of locally-detected candidate issues, each with an evidence ID. Decide \
+whether ONE actionable coaching tip is warranted right now. You may only choose a \
+tip code the local candidates already support, and you must cite the evidence IDs \
+you relied on. Prefer decision \"none\" with an honest reason code over a marginal \
+tip: an unnecessary interruption is worse than a missed one. Never invent an \
+evidence ID, never quote authored text back, and never suggest moving the script. \
+Return only the required structured result.";
+
+/// §23. The coaching-decision schema, mirroring `LunaCoachDecision` in
+/// `src/shared/contracts/coaching.ts`. Kept in the model's snake_case wire shape;
+/// the TypeScript observer re-parses and re-validates every field locally
+/// (§23.1), so this is the outer strictness gate, not the only one.
+pub fn coaching_decision_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "decision": { "type": "string", "enum": ["none", "candidate"] },
+            "tip_code": { "type": "string", "enum": [
+                "NONE", "PACE_EASE_BACK", "PACE_LIFT_SLIGHTLY", "TERMINAL_RUSH",
+                "USE_SILENT_PAUSE", "REPEATED_FILLER", "LET_BOUNDARY_BREATHE",
+                "KEEP_SENTENCE_FLOWING", "LIFT_KEY_WORDS", "SETTLE_DELIVERY",
+                "REPETITIVE_OPENER", "TAKE_SENTENCE_FROM_TOP", "CRITICAL_NUMBER",
+                "CRITICAL_NAME", "CRITICAL_UNIT", "CRITICAL_NEGATION",
+                "MATERIAL_MEANING_CHANGE"
+            ]},
+            "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+            "evidence_ids": {
+                "type": "array", "minItems": 0, "maxItems": 6,
+                "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+            },
+            "scope": { "type": "string", "enum": [
+                "none", "current_phrase", "next_boundary", "session_pattern"
+            ]},
+            "reason_code": { "type": "string", "enum": [
+                "NO_ACTIONABLE_ISSUE", "INSUFFICIENT_EVIDENCE", "ISSUE_SELF_CORRECTED",
+                "ISSUE_STALE", "COACHING_SUPPRESSED", "HIGH_VALUE_LOCAL_PATTERN",
+                "CONTEXTUAL_FILLER_CONFIRMED", "CONTEXTUAL_FILLER_REJECTED",
+                "PARAPHRASE_PRESERVES_MEANING", "MATERIAL_DIFFERENCE_CONFIRMED",
+                "BEST_OF_MULTIPLE_CANDIDATES"
+            ]},
+            "valid_for_ms": { "type": "integer", "minimum": 0, "maximum": 60000 }
+        },
+        "required": [
+            "decision", "tip_code", "confidence", "evidence_ids",
+            "scope", "reason_code", "valid_for_ms"
+        ]
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Strict schemas (companion C.3, verbatim)
 // ---------------------------------------------------------------------------

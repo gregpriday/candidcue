@@ -68,6 +68,7 @@
     sessionGeneration = 0,
     stageGeneration = 0,
     scriptCompileHash = '',
+    bottomInsetPx = 0,
     onlayoutready = undefined,
     onmotionack = undefined,
     onlayoutgeneration = undefined,
@@ -83,6 +84,13 @@
     sessionGeneration?: number;
     stageGeneration?: number;
     scriptCompileHash?: string;
+    /**
+     * §7.1. Extra bottom inset the script must give up for the Coaching Rail's
+     * reserved band. Applied by the mount site before the take begins and held
+     * for the whole take; the reading band and every measurement fold it into
+     * the bottom padding, so the script never scrolls under the rail.
+     */
+    bottomInsetPx?: number;
     onlayoutready?: () => void;
     onmotionack?: (ack: StageMotionAck) => void;
     onlayoutgeneration?: (generation: number) => void;
@@ -97,7 +105,10 @@
 
   const padding = $derived(stagePadding(compact));
   const padTopPx = $derived((vh * padding.topVh) / 100);
-  const padBottomPx = $derived((vh * padding.bottomVh) / 100);
+  // §7.1: the rail's reserved band is folded into the bottom padding, so the
+  // reading band, the total document height, and the fallback target all keep
+  // the script clear of the rail with no separate bookkeeping.
+  const padBottomPx = $derived((vh * padding.bottomVh) / 100 + bottomInsetPx);
   const gapPx = $derived((settings.paragraphSpacingEm ?? 0.7) * settings.fontSizePx);
   const columnWidthPx = $derived((vw * settings.columnWidthPercent) / 100);
   const fadeVh = $derived(fadeDepthVh(compact));

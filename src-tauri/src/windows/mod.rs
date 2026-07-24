@@ -47,6 +47,12 @@ pub mod events {
     // these are emitted straight from the control webview: a high-rate motion
     // signal, gated by the stage's own frame receiver rather than by Rust.
     pub const STAGE_SEMANTIC_FRAME: &str = "stage://semantic-frame";
+    // Coaching Rail snapshots (companion §27), emitted straight from the control
+    // webview like the heartbeat. Coaching is advisory and failure-isolated
+    // (§5.2), so it deliberately does NOT travel the validated Rust document
+    // path that can move the script; the stage validates each snapshot (current
+    // session, strictly increasing revision) on arrival.
+    pub const STAGE_COACH_RAIL: &str = "stage://coach-rail";
 
     // Stage → Rust (listened in app setup).
     pub const STAGE_HYDRATED: &str = "stage://hydrated";
@@ -1252,6 +1258,7 @@ mod tests {
             events::STAGE_CLOSE_SESSION,
             events::STAGE_HEARTBEAT,
             events::STAGE_SEMANTIC_FRAME,
+            events::STAGE_COACH_RAIL,
             events::STAGE_HYDRATED,
             events::STAGE_LAYOUT_READY,
             events::STAGE_HEARTBEAT_ACK,

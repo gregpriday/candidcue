@@ -55,6 +55,7 @@ pub fn run() {
             commands::prepare_semantic_landmarks,
             commands::retrieve_semantic_landmarks,
             commands::classify_semantic_tracking_window,
+            commands::classify_coaching_window,
             commands::cancel_semantic_request,
             // Stage / windows (spec §46.6)
             commands::list_displays,

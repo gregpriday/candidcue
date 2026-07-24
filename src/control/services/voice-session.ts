@@ -117,6 +117,14 @@ export interface VoicePipelineDeps {
   confirmCommand?(command: ValidatedCommand, reason: string): Promise<boolean>;
   /** H8: a command was refused by the execution policy. */
   onCommandRejected?(command: ValidatedCommand, reason: string): void;
+  /**
+   * §5.3 single-capture fan-out. The one place in the app that opens the
+   * microphone hands the resulting stream to any additional consumer — today
+   * the coaching analyzer — so no second `getUserMedia` is ever issued. Invoked
+   * each time a capture is (re)acquired; the same live `MediaStreamTrack` the
+   * WebRTC peer connection and the level meter received is passed through.
+   */
+  onCaptureStream?(stream: MediaStreamLike): void;
   /** Final transcript lines for the Live transcript tail. */
   onTranscriptLine(line: string): void;
   /**
@@ -419,6 +427,11 @@ export class VoiceSessionPipeline {
       if (code) this.deps.onInputDeviceLost?.(code);
     });
     await this.monitor.start(result.stream);
+    // §5.3: fan the SAME capture out to any extra consumer (the coaching
+    // analyzer). This is deliberately after the monitor starts and before the
+    // stream is returned to the transport, so all three consumers — peer
+    // connection, level meter, analyzer — share one track and one clock.
+    this.deps.onCaptureStream?.(result.stream);
     return result.stream;
   }
 

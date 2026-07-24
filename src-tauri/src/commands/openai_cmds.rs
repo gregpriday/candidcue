@@ -274,6 +274,66 @@ pub async fn classify_semantic_tracking_window(
     ))
 }
 
+/// One coaching-validation request (companion Part II §23), on the
+/// `coaching_validation` assist lane. The bounded `LunaCoachRequest` the
+/// observer built is forwarded as the payload; the strict coaching-decision
+/// schema gates the model output, and the TypeScript observer re-validates and
+/// re-parses every field locally (§23.1) before anything reaches the rail.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoachingClassificationRequest {
+    pub request_id: String,
+    /// The `LunaCoachRequest`, forwarded verbatim as the dynamic payload.
+    pub payload: serde_json::Value,
+    #[serde(flatten)]
+    pub options: semantic::SemanticRequestOptions,
+}
+
+/// §20.3/§23. Ask Luna to adjudicate a locally-detected coaching candidate.
+///
+/// This is the single budgeted path the coach observer uses; it reuses the
+/// same structured-output machinery as the semantic sidecar rather than opening
+/// a second, unmetered path to the API. A failure here produces no tip and
+/// leaves every local lane untouched (§23.2) — the caller degrades silently.
+#[tauri::command]
+pub async fn classify_coaching_window(
+    openai: State<'_, OpenAiClient>,
+    secrets: State<'_, Secrets>,
+    request: CoachingClassificationRequest,
+) -> Result<SemanticOperationResponse<serde_json::Value>, AppError> {
+    let key = secrets.0.get_openai_key().await?.ok_or_else(key_missing)?;
+    let model = openai.require_semantic_model()?.to_string();
+    let spec = semantic::structured_spec(
+        &model,
+        semantic::COACH_INSTRUCTION,
+        "coach_decision",
+        semantic::coaching_decision_schema(),
+        request.payload.clone(),
+        &request.options,
+        256,
+    );
+    let (envelope, latency_ms) = openai
+        .execute_responses(
+            &key,
+            "classify_coaching_window",
+            &request.request_id,
+            build_structured_body(&spec),
+            semantic::timeout_for(&request.options),
+        )
+        .await?;
+    // Parse as an opaque object: the schema is the strictness gate here, and
+    // the observer re-parses into `LunaCoachDecision` and re-checks staleness,
+    // evidence membership, and per-code confidence floors on the TS side.
+    let result: serde_json::Value = semantic::parse_structured(&envelope)?;
+    Ok(semantic::operation_response(
+        result,
+        &envelope,
+        latency_ms,
+        &model,
+        spec.prompt_cache_key.clone(),
+    ))
+}
+
 /// Best-effort cancellation of an in-flight semantic request (companion
 /// §36.5). Returns whether a matching request was registered. Pass no id to
 /// cancel every in-flight request (session end / script change).

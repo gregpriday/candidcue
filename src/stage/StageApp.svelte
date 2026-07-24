@@ -25,6 +25,7 @@
     type StageMotionAckPayload,
     type StageReadyPayload,
     type StageSemanticFramePayload,
+    type StageCoachRailPayload,
     type StageSnapshotPayload,
     type StageStatePayload,
     type StageTrackingPayload,
@@ -40,6 +41,8 @@
   import ScriptLayer from './renderer/ScriptLayer.svelte';
   import AckChip from './renderer/AckChip.svelte';
   import CoachStrip from './renderer/CoachStrip.svelte';
+  import CoachRail from './renderer/coach/CoachRail.svelte';
+  import { coachRailScriptInsetPx } from './renderer/coach';
   import ListenerLayer from './listener/ListenerLayer.svelte';
   import { startPreviewDriver, type PreviewDriver } from './preview';
 
@@ -66,6 +69,11 @@
   );
   const motionFrozen = $derived(app.frozen);
   const scriptHidden = $derived(app.blanked);
+  // §7.1: the script gives up the rail's band before the take and never gets it
+  // back mid-take. The latch (`coachRailReserved`) is set pre-take on the first
+  // snapshot; `off` mode never publishes, so it stays zero — the only
+  // zero-inset case, decided pre-take.
+  const coachInsetPx = $derived(app.coachRailReserved ? coachRailScriptInsetPx(vh) : 0);
   const listenerHidden = $derived(app.blanked && !app.keepListenerWhenBlanked);
   let mediaHealthy = $state(true);
   let lastInboundAt = 0;
@@ -116,6 +124,15 @@
         subscribeStageEvent<StageSemanticFramePayload>(STAGE_EVENT.semanticFrame, (frame) => {
           lastInboundAt = performance.now();
           scriptLayer?.pushSemanticFrame(frame);
+        }),
+        // §27: the Coaching Rail snapshot. Validated in the reducer (current
+        // session, strictly increasing revision) and rendered by CoachRail; it
+        // has no path into motion, so a coaching failure never touches the
+        // scroll (§5.2). It does NOT count as control liveness — coaching may
+        // die while the session is perfectly healthy — so `lastInboundAt` is
+        // deliberately not touched here.
+        subscribeStageEvent<StageCoachRailPayload>(STAGE_EVENT.coachRail, (snapshot) => {
+          dispatch({ type: 'coach_rail', snapshot });
         }),
         subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
         subscribeStageEvent<StageStatePayload>(STAGE_EVENT.listenerState, onDirective),
@@ -399,6 +416,7 @@
             sessionGeneration={app.envelope?.sessionGeneration ?? 0}
             stageGeneration={app.envelope?.stageGeneration ?? 0}
             scriptCompileHash={app.envelope?.sourceHash ?? ''}
+            bottomInsetPx={coachInsetPx}
             onlayoutready={handleLayoutReady}
             onmotionack={handleMotionAck}
             onlayoutgeneration={(generation) => (layoutGeneration = generation)}
@@ -407,10 +425,27 @@
         </div>
       {/if}
 
-      <!-- Optional coach strip (companion Part VIII): one concise tip in a
-           reserved safe area, never during a blank. -->
+      <!-- Optional coach strip (companion Part VIII): superseded by the
+           Coaching Rail below and renders nothing, kept only so the legacy
+           `coach` directive path stays compiled. -->
       {#if !app.blanked}
         <CoachStrip tip={app.coachTip} {reducedMotion} />
+      {/if}
+
+      <!-- The Coaching Rail (§6–§11): a permanently reserved band at the bottom
+           of the safe viewport, inside the mirror plane so it flips with the
+           script and carries no transform of its own (§7.5). The band's
+           geometry is reserved via the script's `bottomInsetPx` above and stays
+           reserved for the whole take; hiding it fades the contents only. It
+           takes one `CoachRailState` and emits nothing — there is no path from
+           here into motion (§5.2). Hidden during a blank like every other
+           presenter aid. -->
+      {#if app.coachRailReserved && !app.blanked}
+        <CoachRail
+          snapshot={app.coachRail}
+          viewportHeightPx={vh}
+          columnWidthPercent={settings?.columnWidthPercent ?? null}
+        />
       {/if}
 
       <!-- Layer 7: transient command acknowledgement (§33.10). -->
