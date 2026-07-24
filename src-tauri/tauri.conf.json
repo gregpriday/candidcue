@@ -28,11 +28,34 @@
       "csp": "default-src 'self' asset: customprotocol:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: blob: data:; media-src 'self' asset: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://api.openai.com; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$APPDATA/scripts/**",
-          "$APPDATA/listeners/**",
-          "$RESOURCE/listeners/**"
-        ]
+        "scope": {
+          "_comment": [
+            "M2. The scope used to be `$APPDATA/scripts/**`, which exposed",
+            "EVERY file under every script directory to the asset protocol —",
+            "the canonical script.md and the whole revision history included,",
+            "not just the media the stage has to render. Only the per-script",
+            "assets directory is allowed now.",
+            "`deny` takes precedence over `allow` AND over any runtime",
+            "`allow_directory` call (tauri::scope::fs::Scope::is_allowed checks",
+            "forbidden patterns first), so it is a floor that a future dynamic",
+            "widening cannot lift."
+          ],
+          "allow": [
+            "$APPDATA/scripts/*/assets/*",
+            "$APPDATA/listeners/**",
+            "$RESOURCE/listeners/**"
+          ],
+          "deny": [
+            "$APPDATA/scripts/*/script.md",
+            "$APPDATA/scripts/**/*.md",
+            "$APPDATA/scripts/*/revisions/**",
+            "$APPDATA/candidcue.sqlite3*",
+            "$APPDATA/backups/**",
+            "$APPDATA/logs/**",
+            "$APPDATA/diagnostics/**",
+            "$APPDATA/quarantine/**"
+          ]
+        }
       }
     }
   },

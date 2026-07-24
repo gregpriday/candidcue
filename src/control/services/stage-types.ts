@@ -54,10 +54,16 @@ export interface IdentificationSession {
   }>;
 }
 
-/** Twin of Rust `OpenStageRequest`. */
+/**
+ * Twin of Rust `OpenStageRequest`.
+ *
+ * `sessionId` is mandatory (M1). It used to be optional, so the stage could be
+ * registered with no owning session — and then `close_stage` accepted any id,
+ * and every downstream generation check had nothing to compare against.
+ */
 export interface StageOpenRequest {
   displayFingerprint?: string | null;
-  sessionId?: string | null;
+  sessionId: string;
 }
 
 /** Twin of Rust `StageOpenResult`. */

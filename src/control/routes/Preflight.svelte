@@ -71,6 +71,14 @@
   let selectedFingerprint = $state<string | null>(null);
   let stageValidated = $state(false);
   let stageTesting = $state(false);
+  /*
+   * Inline, persistent failure text beside the control that failed. A toast
+   * that clears itself takes the reason away with it, and the reason is the
+   * only thing that tells the operator what to do next.
+   */
+  let stageError = $state<string | null>(null);
+  let micError = $state<string | null>(null);
+  let startError = $state<string | null>(null);
   let fullscreen = $state(true);
   let alwaysOnTop = $state(false);
   let mirrorX = $state(false);
@@ -86,6 +94,8 @@
 
   /* ---------------------------------------------------------------- mic */
   let micPermission = $state<'unknown' | 'granted' | 'denied'>('unknown');
+  /** Guards the one-shot adoption of an already-granted permission. */
+  let micAdopted = false;
   let micDevices = $state<AudioDeviceInfo[]>([]);
   let micDeviceId = $state<string | undefined>(undefined);
   let followSystemDefault = $state(true);
@@ -176,7 +186,11 @@
       displays = await stageService.listDisplays();
       const preferred = displays.find((d) => !d.primary) ?? displays[0];
       selectedFingerprint = preferred?.fingerprint ?? null;
-      updatePreflight({ stage: selectedFingerprint ? 'idle' : 'blocked' });
+      if (selectedFingerprint === null) {
+        updatePreflight({ stage: 'blocked' });
+        stageError = 'No displays were detected. Connect the teleprompter display and try again.';
+      }
+      // else: the auto-readiness effect below validates it.
 
       updatePreflight({ openai: 'checking' });
       keyStatus = await secretsService.getOpenAiKeyStatus();
@@ -260,6 +274,42 @@
       });
   });
 
+  /*
+   * §28.1: never prompt on mount, but DO notice a permission that is already
+   * granted — otherwise a returning user is asked to re-click "Allow" before
+   * every session. The subscription also catches a grant made in System
+   * Settings while this screen is open. Platforms that cannot report the
+   * state ('unsupported') simply leave the explicit button in place.
+   */
+  $effect(() => {
+    return getVoiceFacade().watchMicrophonePermission((state) => {
+      if (state === 'granted') {
+        void adoptGrantedMicrophone();
+      } else if (state === 'denied') {
+        micAdopted = false;
+        micPermission = 'denied';
+        updatePreflight({ microphone: 'blocked' });
+      }
+      // 'prompt' / 'unsupported' → keep the explicit request action visible.
+    });
+  });
+
+  /*
+   * Stage readiness runs itself once a display is known — there is no
+   * separate "prepare" step the user has to discover, and stage 'idle' blocks
+   * Start. The probe opens the stage window HIDDEN and closes it again, so
+   * nothing flashes on the panel; the visible "Show test on this display"
+   * action remains for confirming which physical monitor it lands on.
+   */
+  let stageCheckedFingerprint: string | null = null;
+  $effect(() => {
+    const fingerprint = selectedFingerprint;
+    if (fingerprint === null || stageTesting) return;
+    if (stageCheckedFingerprint === fingerprint) return;
+    stageCheckedFingerprint = fingerprint;
+    void validateStageDisplay(fingerprint);
+  });
+
   /* Mic level meter while permission is granted (local, pre-OpenAI). */
   $effect(() => {
     if (micPermission !== 'granted') return undefined;
@@ -286,7 +336,34 @@
   function selectDisplay(fingerprint: string): void {
     selectedFingerprint = fingerprint;
     stageValidated = false;
+    stageError = null;
     updatePreflight({ stage: 'idle' });
+  }
+
+  /**
+   * Headless readiness probe: open the stage on the selected display (hidden)
+   * and close it. §14.2 A — "a display is not considered validated until the
+   * stage window reports that it opened on the requested monitor" — so the
+   * window really has to open; it just never has to be shown.
+   */
+  async function validateStageDisplay(fingerprint: string): Promise<void> {
+    stageError = null;
+    stageTesting = true;
+    updatePreflight({ stage: 'checking' });
+    const probeSessionId = `stage-check-${Date.now().toString(36)}`;
+    try {
+      await stageService.openStage({ displayFingerprint: fingerprint, sessionId: probeSessionId });
+      stageValidated = true;
+      updatePreflight({ stage: 'ready' });
+    } catch (err) {
+      stageValidated = false;
+      updatePreflight({ stage: 'blocked' });
+      // F.15 "Stage did not open".
+      stageError = `CandidCue could not create the prompt window on this display. ${describeError(err)}`;
+    } finally {
+      stageTesting = false;
+      await stageService.closeStage(probeSessionId).catch(() => {});
+    }
   }
 
   async function identifyDisplays(): Promise<void> {
@@ -296,15 +373,16 @@
       // cannot answer "which panel is number 2?" — that is the whole question.
       const identification = await stageService.identifyDisplays();
       const count = identification?.displays.length ?? 0;
-      showToast(
-        count > 0
-          ? `Look for the number shown on each display (${count} connected)`
-          : 'No displays were detected',
-        count > 0 ? 'info' : 'danger',
-        { durationMs: 3000 },
-      );
+      if (count > 0) {
+        stageError = null;
+        showToast(`Look for the number shown on each display (${count} connected)`, 'info', {
+          durationMs: 3000,
+        });
+      } else {
+        stageError = 'No displays were detected. Connect the teleprompter display and try again.';
+      }
     } catch (err) {
-      showToast(describeError(err), 'danger');
+      stageError = describeError(err);
     }
   }
 
@@ -315,6 +393,7 @@
   async function runDisplayTest(windowedPreview: boolean): Promise<void> {
     if (!selectedFingerprint) return;
     stageTesting = true;
+    stageError = null;
     updatePreflight({ stage: 'checking' });
     const testSessionId = `display-test-${Date.now().toString(36)}`;
     try {
@@ -331,7 +410,8 @@
     } catch (err) {
       stageValidated = false;
       updatePreflight({ stage: 'blocked' });
-      showToast(`Stage did not open: ${describeError(err)}`, 'danger');
+      // F.15 "Stage did not open" — stated inline, next to the action.
+      stageError = `CandidCue could not create the prompt window on this display. ${describeError(err)}`;
     } finally {
       stageTesting = false;
     }
@@ -399,15 +479,37 @@
   }
 
   /* -------------------------------------------------------- mic actions */
-  async function allowMicrophone(): Promise<void> {
+
+  /** Enumerate inputs for an already-granted permission — never prompts. */
+  async function adoptGrantedMicrophone(): Promise<void> {
+    if (micAdopted) return;
+    micAdopted = true;
     updatePreflight({ microphone: 'checking' });
-    const granted = await getVoiceFacade().requestMicrophoneAccess();
-    micPermission = granted;
-    if (granted === 'granted') {
+    try {
       micDevices = await getVoiceFacade().listMicrophones();
       micDeviceId = micDevices.find((d) => d.isDefault)?.deviceId ?? micDevices[0]?.deviceId;
-      updatePreflight({ microphone: 'ready' });
+      micPermission = 'granted';
+      micError = null;
+      updatePreflight({ microphone: micDevices.length > 0 ? 'ready' : 'blocked' });
+      if (micDevices.length === 0) {
+        micError = 'No microphone was found. Connect an input device and try again.';
+      }
+    } catch (err) {
+      micAdopted = false;
+      updatePreflight({ microphone: 'blocked' });
+      micError = describeError(err);
+    }
+  }
+
+  async function allowMicrophone(): Promise<void> {
+    micError = null;
+    updatePreflight({ microphone: 'checking' });
+    const granted = await getVoiceFacade().requestMicrophoneAccess();
+    if (granted === 'granted') {
+      micAdopted = false;
+      await adoptGrantedMicrophone();
     } else {
+      micPermission = 'denied';
       updatePreflight({ microphone: 'blocked' });
     }
   }
@@ -417,6 +519,7 @@
     micTest = 'listening';
     micPartial = '';
     micFinal = '';
+    micError = null;
     stopMicTest = await getVoiceFacade().startTranscriptionTest(micDeviceId, {
       onPartial(text) {
         micTest = 'waiting';
@@ -428,7 +531,7 @@
       },
       onError(message) {
         micTest = 'idle';
-        showToast(message, 'danger');
+        micError = message;
       },
     });
   }
@@ -451,10 +554,11 @@
     if (!readiness.canStart || starting) return;
     const compiledScript = result?.script ?? null;
     if (!compiledScript) {
-      showToast('The script has not finished compiling yet.', 'danger');
+      startError = 'The script has not finished compiling yet.';
       return;
     }
     starting = true;
+    startError = null;
     const display = displays.find((d) => d.fingerprint === selectedFingerprint);
     const sessionId = newSessionId();
     try {
@@ -545,7 +649,7 @@
       });
       await navigate({ name: 'live', sessionId, scriptId });
     } catch (err) {
-      showToast(`Could not start the session: ${describeError(err)}`, 'danger');
+      startError = `Could not start the session: ${describeError(err)}`;
       void stageService.closeStage(sessionId).catch(() => {});
     } finally {
       starting = false;
@@ -630,7 +734,7 @@
       <div class="row-actions">
         <Button onclick={() => identifyDisplays()}>Identify displays</Button>
         <Button disabled={!selectedFingerprint || stageTesting} onclick={() => runDisplayTest(false)}>
-          {stageTesting ? 'Opening…' : 'Show display test'}
+          {stageTesting ? 'Opening…' : 'Show test on this display'}
         </Button>
         <Button variant="ghost" disabled={!selectedFingerprint} onclick={() => runDisplayTest(true)}>
           Open stage preview
@@ -639,6 +743,9 @@
           <span class="validated"><Icon name="check" size={14} /> Stage opened on the selected display</span>
         {/if}
       </div>
+      {#if stageError}
+        <p class="inline-alert" role="alert">{stageError}</p>
+      {/if}
       <div class="toggle-grid">
         <Toggle bind:checked={fullscreen} label="Full screen" />
         <Toggle bind:checked={alwaysOnTop} label="Always on top" description="Windowed stage only" />
@@ -718,12 +825,16 @@
           <Button variant="ghost" onclick={() => (mode = mode === 'voice' ? 'manual' : mode)}>Not now</Button>
         </div>
       {:else if micPermission === 'denied'}
-        <p class="denied">
+        <p class="denied" role="alert">
           Microphone access is blocked. Allow CandidCue in your system privacy settings, then try
           again.
         </p>
         <div class="row-actions">
-          <Button onclick={() => allowMicrophone()}>Try again</Button>
+          <!-- Names the remedy rather than repeating the failed attempt. -->
+          <Button onclick={() => allowMicrophone()}>Fix microphone access</Button>
+          <Button variant="ghost" onclick={() => (mode = mode === 'voice' ? 'manual' : mode)}>
+            Use manual mode for now
+          </Button>
         </div>
       {:else}
         <div class="mic-grid">
@@ -754,6 +865,9 @@
         </div>
         {#if micPartial || micFinal}
           <p class="transcript" class:final={Boolean(micFinal)}>{micFinal || micPartial}</p>
+        {/if}
+        {#if micError}
+          <p class="inline-alert" role="alert">{micError}</p>
         {/if}
         <Disclosure label="Advanced audio processing">
           <div class="toggle-grid">
@@ -826,7 +940,10 @@
     </Section>
 
     <!-- E. Appearance -->
-    <Section title="Appearance" description="Changes update the stage preview immediately.">
+    <Section
+      title="Appearance"
+      description="These apply to the stage when the session starts. Use Open stage preview above to see them on the display."
+    >
       <div class="appearance-grid">
         <Select
           label="Font family"
@@ -875,38 +992,7 @@
         <Toggle bind:checked={phraseHighlight} label="Current phrase highlight" />
         <Toggle bind:checked={pastDimming} label="Past-text dimming" />
         <Toggle bind:checked={focusFade} label="Top/bottom focus fade" />
-        <Toggle bind:checked={listenerEnabled} label="Listener" description="A silent looping person behind the script" />
       </div>
-      {#if listenerEnabled}
-        <div class="appearance-grid">
-          <!-- Bound to ListenerGeometry: cropZoom = defaultZoom × zoom%, and
-               cropX/cropY offsets (percent of the frame), flowing into the
-               session envelope. The position range is the zoom-derived safe
-               window — zoom in to gain more room to move her. -->
-          <Slider label="Mira zoom" bind:value={listenerScale} min={60} max={160} format={(v) => `${v}%`} />
-          <Slider
-            label="Mira horizontal position"
-            bind:value={listenerX}
-            min={-listenerOffsetBound}
-            max={listenerOffsetBound}
-            step={0.1}
-            disabled={listenerOffsetBound === 0}
-            format={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`}
-          />
-          <Slider
-            label="Mira vertical position"
-            bind:value={listenerY}
-            min={-listenerOffsetBound}
-            max={listenerOffsetBound}
-            step={0.1}
-            disabled={listenerOffsetBound === 0}
-            format={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`}
-          />
-          {#if listenerOffsetBound === 0}
-            <p class="field-note">Zoom past 100% to gain room to move Mira around the frame.</p>
-          {/if}
-        </div>
-      {/if}
     </Section>
 
     <!-- F. Listener -->
@@ -953,10 +1039,37 @@
         </Button>
       </div>
       {#if listenerEnabled}
+        <!-- Every Listener control lives here (spec §14.2 F): dim, blur,
+             scale, and horizontal/vertical position. Scale is bound to
+             ListenerGeometry (cropZoom = defaultZoom × scale%) and the
+             position sliders are cropX/cropY offsets as a percent of the
+             visible frame; their range is the scale-derived safe window, so
+             scaling up is what buys room to move her. -->
         <div class="appearance-grid">
           <Slider label="Dim" bind:value={listenerDim} min={0} max={80} format={(v) => `${v}%`} />
           <Slider label="Blur" bind:value={listenerBlur} min={0} max={24} format={(v) => `${v} px`} />
           <Slider label="Scale" bind:value={listenerScale} min={60} max={160} format={(v) => `${v}%`} />
+          <Slider
+            label="Horizontal position"
+            bind:value={listenerX}
+            min={-listenerOffsetBound}
+            max={listenerOffsetBound}
+            step={0.1}
+            disabled={listenerOffsetBound === 0}
+            format={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`}
+          />
+          <Slider
+            label="Vertical position"
+            bind:value={listenerY}
+            min={-listenerOffsetBound}
+            max={listenerOffsetBound}
+            step={0.1}
+            disabled={listenerOffsetBound === 0}
+            format={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`}
+          />
+          {#if listenerOffsetBound === 0}
+            <p class="field-note">Scale past 100% to gain room to move Mira around the frame.</p>
+          {/if}
         </div>
         <Toggle checked={true} disabled label="Random playback" description="Always on in this release" />
       {/if}
@@ -991,7 +1104,11 @@
 
   <!-- Sticky footer (spec §14.3) -->
   <footer class="footer">
-    <span class="summary">{$preflightReadiness.summary}</span>
+    {#if startError}
+      <span class="inline-alert" role="alert">{startError}</span>
+    {:else}
+      <span class="summary">{$preflightReadiness.summary}</span>
+    {/if}
     <div class="footer-actions">
       {#if !$preflightReadiness.canStart && $preflightReadiness.blockedReason}
         <span class="blocked-reason">{$preflightReadiness.blockedReason}</span>
@@ -1033,6 +1150,17 @@
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
+  }
+
+  /* Persistent inline failure text. Sits beside the control that failed and
+     stays until the user acts on it — no timer, no accent ring, no border. */
+  .inline-alert {
+    margin: 0;
+    min-width: 0;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    font-weight: 600;
+    color: var(--danger);
   }
 
   .validated {

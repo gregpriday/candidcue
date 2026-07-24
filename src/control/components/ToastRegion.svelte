@@ -5,23 +5,46 @@
 <script lang="ts">
   import { toasts, dismissToast } from '../stores/toasts';
   import Icon from './Icon.svelte';
+
+  /* Failures are announced assertively and stay until dismissed; everything
+     else is polite and self-clearing (spec §20). */
+  const failures = $derived($toasts.filter((t) => t.tone === 'danger'));
+  const notices = $derived($toasts.filter((t) => t.tone !== 'danger'));
 </script>
 
-<div class="region" role="status" aria-live="polite">
-  {#each $toasts as toast (toast.id)}
-    <div class="toast {toast.tone}">
-      <span class="dot" aria-hidden="true"></span>
-      <span class="message">{toast.message}</span>
-      <button
-        type="button"
-        class="dismiss"
-        aria-label="Dismiss notification"
-        onclick={() => dismissToast(toast.id)}
-      >
-        <Icon name="x" size={14} />
-      </button>
-    </div>
-  {/each}
+<div class="region">
+  <div class="stack" role="status" aria-live="polite">
+    {#each notices as toast (toast.id)}
+      <div class="toast {toast.tone}">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="message">{toast.message}</span>
+        <button
+          type="button"
+          class="dismiss"
+          aria-label="Dismiss notification"
+          onclick={() => dismissToast(toast.id)}
+        >
+          <Icon name="x" size={14} />
+        </button>
+      </div>
+    {/each}
+  </div>
+  <div class="stack" role="alert">
+    {#each failures as toast (toast.id)}
+      <div class="toast danger">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="message">{toast.message}</span>
+        <button
+          type="button"
+          class="dismiss"
+          aria-label="Dismiss notification"
+          onclick={() => dismissToast(toast.id)}
+        >
+          <Icon name="x" size={14} />
+        </button>
+      </div>
+    {/each}
+  </div>
 </div>
 
 <style>
@@ -36,6 +59,13 @@
     gap: var(--space-2);
     align-items: center;
     pointer-events: none;
+  }
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    align-items: center;
   }
 
   .toast {

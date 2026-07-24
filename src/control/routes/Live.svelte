@@ -208,7 +208,11 @@
   }
 
   async function closeStageAndFinish(): Promise<void> {
-    await stageService.closeStage(sessionId);
+    // Rust refuses a close whose session is not the one currently on the stage
+    // (M1: a late close used to destroy a stage that a different session had
+    // opened). That refusal must not strand the operator here — this window's
+    // own session is finished either way.
+    await stageService.closeStage(sessionId).catch(() => {});
     clearSession();
     await navigate({ name: 'library', view: 'all' });
   }

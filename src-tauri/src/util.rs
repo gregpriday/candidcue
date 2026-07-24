@@ -24,9 +24,23 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Hash a file WITHOUT reading it into memory.
+///
+/// This used to be `sha256_hex(&fs::read(path)?)`, so verifying a Listener pack
+/// allocated every clip in full — hundreds of megabytes for a pack with several
+/// loops, all at once, just to compute a digest (M3).
 pub fn sha256_file(path: &Path) -> Result<String, AppError> {
-    let bytes = fs::read(path)?;
-    Ok(sha256_hex(&bytes))
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = std::io::Read::read(&mut file, &mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// Cheap external-change fingerprint: byte size + mtime nanos (spec §47.5).
@@ -52,6 +66,24 @@ pub fn file_fingerprint(path: &Path) -> Result<String, AppError> {
 /// new directory entry survive power loss; without it the rename itself is not
 /// durable even though the file contents are.
 pub fn atomic_write(dest: &Path, contents: &[u8]) -> Result<(), AppError> {
+    atomic_write_with(dest, |file| {
+        file.write_all(contents)?;
+        Ok(())
+    })
+}
+
+/// Same durability contract as [`atomic_write`], but the caller streams the
+/// contents into the temporary file instead of materialising them first.
+///
+/// This is what makes a bundle export an atomic REPLACE. `File::create` on the
+/// operator's chosen destination truncates it the instant the zip writer opens,
+/// so a failure part-way through — or simply choosing a destination that turned
+/// out to be an existing file — destroyed whatever was there. It also follows a
+/// symlink, whereas the rename below replaces the link itself.
+pub fn atomic_write_with<F>(dest: &Path, write: F) -> Result<(), AppError>
+where
+    F: FnOnce(&mut fs::File) -> Result<(), AppError>,
+{
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -99,15 +131,11 @@ pub fn atomic_write(dest: &Path, contents: &[u8]) -> Result<(), AppError> {
 
     // From here on any failure must clean up the temp file rather than leave
     // a partial write behind.
-    let write_result = (|| -> std::io::Result<()> {
-        file.write_all(contents)?;
-        file.sync_all()?;
-        Ok(())
-    })();
+    let write_result = write(&mut file).and_then(|()| file.sync_all().map_err(Into::into));
     drop(file);
     if let Err(err) = write_result {
         let _ = fs::remove_file(&tmp_path);
-        return Err(err.into());
+        return Err(err);
     }
     if let Err(err) = fs::rename(&tmp_path, dest) {
         let _ = fs::remove_file(&tmp_path);

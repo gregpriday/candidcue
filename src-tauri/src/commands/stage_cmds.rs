@@ -1,10 +1,9 @@
 //! Stage/window commands (spec §46.6).
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, State};
 
 use crate::database::Database;
 use crate::errors::AppError;
-use crate::scripts::DataPaths;
 use crate::windows::{
     self, DisplayDescriptor, DisplayProfile, IdentificationSession, OpenStageRequest, StageAck,
     StageOpenResult, StageStatus, StageWindowState,
@@ -21,19 +20,16 @@ pub fn identify_displays(app: AppHandle) -> Result<IdentificationSession, AppErr
 }
 
 #[tauri::command]
-pub fn open_stage(
-    app: AppHandle,
-    paths: State<'_, DataPaths>,
-    request: OpenStageRequest,
-) -> Result<StageOpenResult, AppError> {
-    // The stage renders script assets and listener media through the asset
-    // protocol; make sure the managed roots are in scope (spec §47.8).
-    let _ = app
-        .asset_protocol_scope()
-        .allow_directory(paths.scripts_dir(), true);
-    let _ = app
-        .asset_protocol_scope()
-        .allow_directory(paths.listeners_dir(), true);
+pub fn open_stage(app: AppHandle, request: OpenStageRequest) -> Result<StageOpenResult, AppError> {
+    // M2: opening the stage used to add BOTH managed roots to the asset scope
+    // recursively, every time, and nothing ever took them back out. That put
+    // every script's canonical Markdown and revision history behind an
+    // `asset://` url the stage could fetch — the one window that is supposed to
+    // see nothing but the media for its own session (spec §50.10, §43.2).
+    //
+    // The scope is now static (tauri.conf.json: `$APPDATA/scripts/*/assets/*`
+    // plus an explicit deny list), so there is nothing to widen here and
+    // nothing to revoke.
     windows::open_stage(&app, request)
 }
 

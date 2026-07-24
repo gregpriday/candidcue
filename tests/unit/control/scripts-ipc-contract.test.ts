@@ -4,11 +4,9 @@
  * compare what they emit against the shared fixture that
  * `src-tauri/tests/ipc_contract_tests.rs` deserializes into the Rust DTOs.
  *
- * Before the fix `importScript` sent `options.sourcePath` while Rust required
- * `options.path`, and `exportScript` made options optional and sent the format
- * `'candidcue'` while Rust required `destination`/`format` and accepts
- * `'bundle'` — so import and normal editor export both failed with a Serde
- * missing-field error before any work happened.
+ * H5: neither payload carries a filesystem path any more. Rust runs the native
+ * dialog and does the I/O in the same trusted operation, so the control webview
+ * cannot name a file to read or a file to truncate (spec §50.7).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fixture from '../../fixtures/ipc/script-command-payloads.json';
@@ -38,37 +36,59 @@ describe('script command IPC payloads match the Rust DTOs', () => {
     calls.length = 0;
   });
 
-  it('import_script sends options.path, the field Rust requires', async () => {
-    await scripts.importScript({ path: fixture.import_script.options.path, title: 'Keynote' });
+  it('import_script sends only a title — never a path', async () => {
+    await scripts.importScript({ title: 'Keynote' });
     expect(payloadFor('import_script')).toEqual(fixture.import_script);
   });
 
-  it('export_script sends destination, format and includeAssets', async () => {
+  it('export_script sends format, includeAssets and a suggested name', async () => {
     await scripts.exportScript(scriptId, {
-      destination: fixture.export_script_markdown.options.destination,
       format: 'markdown',
       includeAssets: true,
+      suggestedName: 'Keynote',
     });
     expect(payloadFor('export_script')).toEqual(fixture.export_script_markdown);
   });
 
   it('export_script uses the Rust format name "bundle", not "candidcue"', async () => {
     await scripts.exportScript(scriptId, {
-      destination: fixture.export_script_bundle.options.destination,
       format: 'bundle',
       includeAssets: true,
+      suggestedName: 'Keynote',
     });
-    const payload = payloadFor('export_script') as { options: { format: string } };
-    expect(payload.options.format).toBe('bundle');
+    const payload = payloadFor('export_script') as { request: { format: string } };
+    expect(payload.request.format).toBe('bundle');
     expect(payload).toEqual(fixture.export_script_bundle);
   });
 
   it('export_script defaults includeAssets rather than omitting it', async () => {
     await scripts.exportScript(scriptId, {
-      destination: fixture.export_script_text.options.destination,
       format: 'text',
+      suggestedName: 'Keynote',
     });
     expect(payloadFor('export_script')).toEqual(fixture.export_script_text);
+  });
+
+  /**
+   * H5. The whole point of the new shape: there is no field a caller could put
+   * a path in, so a compromised control webview cannot make Rust read or
+   * truncate a file of its choosing.
+   */
+  it('no script command payload contains a filesystem path', async () => {
+    await scripts.importScript({ title: 'Keynote' });
+    await scripts.exportScript(scriptId, { format: 'markdown', suggestedName: 'Keynote' });
+    for (const command of ['import_script', 'export_script']) {
+      const payload = payloadFor(command) as Record<string, unknown>;
+      const request = payload.request as Record<string, unknown>;
+      expect(Object.keys(request)).not.toContain('path');
+      expect(Object.keys(request)).not.toContain('destination');
+      for (const value of Object.values(request)) {
+        if (typeof value === 'string') {
+          expect(value.startsWith('/')).toBe(false);
+          expect(value).not.toContain(':\\');
+        }
+      }
+    }
   });
 
   it('save_script sends the optimistic revision and metadata patch', async () => {

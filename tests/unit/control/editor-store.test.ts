@@ -7,6 +7,7 @@ import {
 import * as scripts from '../../../src/control/services/scripts';
 import {
   AUTOSAVE_DEBOUNCE_MS,
+  COMPILE_DEBOUNCE_MS,
   closeScript,
   editor,
   editorHasUnsavedWork,
@@ -17,9 +18,17 @@ import {
 
 /** Auto-answering fake worker so compile requests resolve immediately. */
 class AutoWorker implements WorkerLike {
+  /** Every compile request that crossed the worker boundary. */
+  static requests: Array<{ source: string }> = [];
   private listener: ((event: MessageEvent) => void) | null = null;
   postMessage(message: unknown): void {
-    const request = message as { requestId: number; editorRevision: number; scriptId: string };
+    const request = message as {
+      requestId: number;
+      editorRevision: number;
+      scriptId: string;
+      source: string;
+    };
+    AutoWorker.requests.push({ source: request.source });
     queueMicrotask(() => {
       this.listener?.({
         data: {
@@ -141,5 +150,57 @@ describe('editor autosave', () => {
     setSource('# Start\n\nA.\n');
     setSource('# Start\n\nA. B.\n');
     expect(get(editor).editorRevision).toBe(before + 2);
+  });
+});
+
+describe('compile debounce (spec §45.3)', () => {
+  beforeEach(() => {
+    AutoWorker.requests = [];
+  });
+
+  it('coalesces a burst of keystrokes into a single compile request', async () => {
+    vi.useFakeTimers();
+    // Four keystrokes inside one debounce window.
+    setSource('# Start\n\nT');
+    await vi.advanceTimersByTimeAsync(20);
+    setSource('# Start\n\nTy');
+    await vi.advanceTimersByTimeAsync(20);
+    setSource('# Start\n\nTyp');
+    await vi.advanceTimersByTimeAsync(20);
+    setSource('# Start\n\nType');
+    expect(AutoWorker.requests).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(COMPILE_DEBOUNCE_MS + 10);
+    expect(AutoWorker.requests).toHaveLength(1);
+    // The one request that ran carries the newest text, not a stale prefix.
+    expect(AutoWorker.requests[0]?.source).toBe('# Start\n\nType');
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+  });
+
+  it('still compiles once typing stops', async () => {
+    vi.useFakeTimers();
+    setSource('# Start\n\nSettled.\n');
+    await vi.advanceTimersByTimeAsync(COMPILE_DEBOUNCE_MS + 10);
+    expect(AutoWorker.requests).toHaveLength(1);
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+  });
+
+  it('stays well under the latency at which a preview feels laggy', () => {
+    expect(COMPILE_DEBOUNCE_MS).toBeGreaterThan(0);
+    expect(COMPILE_DEBOUNCE_MS).toBeLessThanOrEqual(120);
+  });
+
+  it('flushes a pending compile when saveNow runs (Preflight handoff)', async () => {
+    vi.useFakeTimers();
+    setSource('# Start\n\nFlush me.\n');
+    expect(AutoWorker.requests).toHaveLength(0);
+    const saving = saveNow();
+    // The compile went out immediately, without waiting for the debounce.
+    expect(AutoWorker.requests).toHaveLength(1);
+    await vi.runAllTimersAsync();
+    await saving;
+    vi.useRealTimers();
   });
 });

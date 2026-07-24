@@ -25,10 +25,16 @@ export interface SaveResult {
   savedAt: string;
 }
 
-/** Twin of Rust `ImportOptions` (scripts/import_export.rs). */
+/**
+ * Twin of Rust `ImportRequest` (scripts/import_export.rs).
+ *
+ * There is deliberately no path here. Rust runs the native open dialog itself
+ * and imports what the operator chose in the same trusted operation, so the
+ * webview cannot name a file (spec §50.7). It used to send an absolute path,
+ * which meant anything running in the control window could read any Markdown
+ * or text file on the machine.
+ */
 export interface ImportOptions {
-  /** Absolute path from the native open dialog. Required by Rust. */
-  path: string;
   title?: string;
 }
 
@@ -38,16 +44,20 @@ export interface ImportResult {
 }
 
 /**
- * Twin of Rust `ExportOptions`. `format` must be one of the three strings the
+ * Twin of Rust `ExportRequest`. `format` must be one of the three strings the
  * Rust matcher accepts — `candidcue` is the file EXTENSION, not a format name.
+ *
+ * As with imports there is no destination: Rust runs the save dialog and writes
+ * the file in one operation. The old shape let the webview name any absolute
+ * destination, which `File::create` then truncated (spec §50.7).
  */
 export type ExportFormat = 'markdown' | 'text' | 'bundle';
 
 export interface ExportOptions {
-  /** Absolute path from the native save dialog. Required by Rust. */
-  destination: string;
   format: ExportFormat;
   includeAssets?: boolean;
+  /** Seeds the save dialog's default file name only. */
+  suggestedName?: string;
 }
 
 export interface ExportResult {

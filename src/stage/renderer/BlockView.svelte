@@ -63,8 +63,15 @@
     {:else if block.kind === 'image'}
       <div class="figure">
         {#each block.renderNodes as node}
-          {#if node.type === 'image' && assets[node.assetId]}
-            <img src={assets[node.assetId]?.url} alt={node.alt} draggable="false" />
+          {#if node.type === 'image'}
+            {#if assets[node.assetId]}
+              <img src={assets[node.assetId]?.url} alt={node.alt} draggable="false" />
+            {:else}
+              <!-- An unresolved asset must never vanish silently: the operator
+                   needs to know something was meant to be here, and the alt
+                   text is the only description we have. -->
+              <p class="image-fallback">{node.alt || 'Image unavailable'}</p>
+            {/if}
           {/if}
         {/each}
       </div>
@@ -79,7 +86,44 @@
         <span class="bullet" aria-hidden="true"></span>
         <span class="list-body"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} /></span>
       </div>
-    {:else if block.kind === 'table' || block.kind === 'diagram'}
+    {:else if block.kind === 'table'}
+      <!-- Tables are structured reference cards on stage (§24.6): real rows,
+           never a flattened inline fallback that renders as an empty box. -->
+      <div class="table-card">
+        {#each block.renderNodes as node}
+          {#if node.type === 'table'}
+            <table class="stage-table">
+              {#each node.rows as row, rowIndex}
+                {#if rowIndex === 0 && node.headerRow}
+                  <thead>
+                    <tr>
+                      {#each row as cell, colIndex}
+                        <th style:text-align={node.align[colIndex] ?? 'left'}>
+                          <InlineNodes nodes={cell} {assets} {showCues} />
+                        </th>
+                      {/each}
+                    </tr>
+                  </thead>
+                {/if}
+              {/each}
+              <tbody>
+                {#each node.rows as row, rowIndex}
+                  {#if !(rowIndex === 0 && node.headerRow)}
+                    <tr>
+                      {#each row as cell, colIndex}
+                        <td style:text-align={node.align[colIndex] ?? 'left'}>
+                          <InlineNodes nodes={cell} {assets} {showCues} />
+                        </td>
+                      {/each}
+                    </tr>
+                  {/if}
+                {/each}
+              </tbody>
+            </table>
+          {/if}
+        {/each}
+      </div>
+    {:else if block.kind === 'diagram'}
       <div class="visual-fallback">
         <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} />
       </div>
@@ -215,6 +259,43 @@
     background: color-mix(in srgb, var(--stage-text) 6%, transparent);
     font-size: 0.7em;
     line-height: 1.4;
+  }
+
+  .image-fallback {
+    margin: 0;
+    padding: 0.5em 0.8em;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--stage-text) 6%, transparent);
+    color: color-mix(in srgb, var(--stage-text) 70%, transparent);
+    font-size: 0.6em;
+    line-height: 1.4;
+    text-align: center;
+  }
+
+  .table-card {
+    padding: 0.5em 0.8em;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--stage-text) 6%, transparent);
+    font-size: 0.6em;
+    line-height: 1.4;
+    overflow-x: auto;
+  }
+  .stage-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .stage-table th,
+  .stage-table td {
+    padding: 0.35em 0.6em;
+    vertical-align: baseline;
+  }
+  .stage-table th {
+    font-weight: 650;
+    letter-spacing: 0.02em;
+  }
+  /* Row separation without a border-inside-border: a background band. */
+  .stage-table tbody tr:nth-child(odd) {
+    background: color-mix(in srgb, var(--stage-text) 5%, transparent);
   }
 
   p.para {

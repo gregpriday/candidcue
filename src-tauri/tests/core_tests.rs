@@ -373,28 +373,76 @@ async fn settings_defaults_patch_and_conflict() {
 // Listener manifest verification
 // ---------------------------------------------------------------------------
 
-fn write_pack(dir: &std::path::Path, clip_bytes: &[u8], sha: Option<&str>) {
+use candidcue_lib::listeners::PackSource;
+
+/// Minimal bytes that a container sniffer accepts. Real magic, no payload —
+/// enough to prove the checks look at the file rather than the manifest.
+fn fake_mp4(tag: u8) -> Vec<u8> {
+    let mut out = vec![0x00, 0x00, 0x00, 0x18];
+    out.extend_from_slice(b"ftypmp42");
+    out.extend_from_slice(&[tag; 20]);
+    out
+}
+
+fn fake_webp() -> Vec<u8> {
+    let mut out = b"RIFF".to_vec();
+    out.extend_from_slice(&[0x10, 0, 0, 0]);
+    out.extend_from_slice(b"WEBPVP8 ");
+    out
+}
+
+fn sha_of(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
+struct PackSpec<'a> {
+    id: &'a str,
+    version: &'a str,
+    clip: Vec<u8>,
+    clip_mime: &'a str,
+    sha: Option<String>,
+    poster: Vec<u8>,
+}
+
+impl Default for PackSpec<'_> {
+    fn default() -> Self {
+        Self {
+            id: "testpack",
+            version: "1.0.0",
+            clip: fake_mp4(0xAA),
+            clip_mime: "video/mp4",
+            sha: None,
+            poster: fake_webp(),
+        }
+    }
+}
+
+fn write_pack_spec(dir: &std::path::Path, spec: &PackSpec<'_>) {
     fs::create_dir_all(dir.join("listening")).unwrap();
-    fs::write(dir.join("listening/loop.mp4"), clip_bytes).unwrap();
-    fs::write(dir.join("poster.webp"), b"poster").unwrap();
+    fs::write(dir.join("listening/loop.mp4"), &spec.clip).unwrap();
+    fs::write(dir.join("poster.webp"), &spec.poster).unwrap();
+    let mut clip = serde_json::json!({
+        "id": "loop",
+        "role": "neutral",
+        "path": "listening/loop.mp4",
+        "mime": spec.clip_mime,
+        "durationMs": 7000,
+        "sizeBytes": spec.clip.len(),
+    });
+    if let Some(sha) = &spec.sha {
+        clip["sha256"] = serde_json::Value::String(sha.clone());
+    }
     let manifest = serde_json::json!({
         "schemaVersion": 1,
-        "id": "testpack",
-        "version": "1.0.0",
+        "id": spec.id,
+        "version": spec.version,
         "displayName": "Test pack",
         "description": "test",
         "poster": "poster.webp",
         "defaultZoom": 1.0,
         "fit": "cover",
-        "clips": [{
-            "id": "loop",
-            "role": "neutral",
-            "path": "listening/loop.mp4",
-            "mime": "video/mp4",
-            "durationMs": 7000,
-            "sizeBytes": clip_bytes.len(),
-            "sha256": sha,
-        }]
+        "clips": [clip],
     });
     fs::write(
         dir.join("manifest.json"),
@@ -407,31 +455,165 @@ fn write_pack(dir: &std::path::Path, clip_bytes: &[u8], sha: Option<&str>) {
 fn manifest_verification_accepts_valid_and_rejects_tampered() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("testpack");
-    let clip = b"fake video bytes";
-    let sha = {
-        use sha2::Digest;
-        hex::encode(sha2::Sha256::digest(clip))
-    };
+    let clip = fake_mp4(0xAA);
+    let sha = sha_of(&clip);
 
-    // Valid pack with checksum.
-    write_pack(&pack, clip, Some(&sha));
-    let manifest = listeners::load_verified_manifest(&pack).expect("valid pack verifies");
+    // Valid bundled pack with a checksum.
+    write_pack_spec(
+        &pack,
+        &PackSpec {
+            clip: clip.clone(),
+            sha: Some(sha.clone()),
+            ..Default::default()
+        },
+    );
+    let manifest = listeners::load_verified_manifest(&pack, PackSource::Bundled)
+        .expect("valid pack verifies");
     assert_eq!(manifest.id, "testpack");
     assert_eq!(manifest.clips.len(), 1);
 
     // Tampered media with a different length → size mismatch.
     fs::write(pack.join("listening/loop.mp4"), b"tampered").unwrap();
-    let err = listeners::load_verified_manifest(&pack).expect_err("tampered pack rejected");
+    let err = listeners::load_verified_manifest(&pack, PackSource::Bundled)
+        .expect_err("tampered pack rejected");
     assert_eq!(err.code(), "LISTENER_MANIFEST_INVALID"); // size mismatch first
 
-    // Size right, content wrong → signature/checksum error.
-    fs::write(pack.join("listening/loop.mp4"), b"fake video byteZ").unwrap();
-    let err = listeners::load_verified_manifest(&pack).expect_err("checksum mismatch rejected");
-    assert_eq!(err.code(), "LISTENER_SIGNATURE_INVALID");
+    // Size right, content wrong → checksum error. NOT "signature": there is no
+    // signature scheme, and the code used to claim otherwise (M3).
+    fs::write(pack.join("listening/loop.mp4"), fake_mp4(0xBB)).unwrap();
+    let err = listeners::load_verified_manifest(&pack, PackSource::Bundled)
+        .expect_err("checksum mismatch rejected");
+    assert_eq!(err.code(), "LISTENER_CHECKSUM_INVALID");
 
     // Declared file missing → invalid.
     fs::remove_file(pack.join("listening/loop.mp4")).unwrap();
-    let err = listeners::load_verified_manifest(&pack).expect_err("missing file rejected");
+    let err = listeners::load_verified_manifest(&pack, PackSource::Bundled)
+        .expect_err("missing file rejected");
+    assert_eq!(err.code(), "LISTENER_MANIFEST_INVALID");
+}
+
+/// M3. The headline dishonesty: a pack that did not ship with the application
+/// was verified with the same optional-checksum path as a bundled one, and the
+/// comments called that "signature verification". Nothing signs a pack, so a
+/// non-bundled pack now fails closed — after every integrity check that CAN be
+/// made has been made.
+#[test]
+fn a_non_bundled_pack_is_refused_because_nothing_can_vouch_for_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let pack = dir.path().join("installed").join("testpack").join("1.0.0");
+    let clip = fake_mp4(0xAA);
+
+    // No checksums at all: refused for that reason first, because integrity is
+    // the part that CAN be checked.
+    write_pack_spec(
+        &pack,
+        &PackSpec {
+            clip: clip.clone(),
+            sha: None,
+            ..Default::default()
+        },
+    );
+    let err = listeners::load_verified_manifest(&pack, PackSource::Installed)
+        .expect_err("a non-bundled pack must declare checksums");
+    assert_eq!(err.code(), "LISTENER_CHECKSUM_INVALID");
+
+    // Fully checksummed and internally consistent — and still refused, because
+    // a hash the pack wrote about itself proves nothing about who wrote it.
+    write_pack_spec(
+        &pack,
+        &PackSpec {
+            clip: clip.clone(),
+            sha: Some(sha_of(&clip)),
+            ..Default::default()
+        },
+    );
+    let err = listeners::load_verified_manifest(&pack, PackSource::Installed)
+        .expect_err("integrity is not authenticity");
+    assert_eq!(err.code(), "LISTENER_UNVERIFIED");
+    assert!(!err.recoverable(), "there is no user action that fixes this");
+
+    // The very same directory verifies as bundled: the difference is the trust
+    // anchor, not the contents.
+    let bundled = dir.path().join("bundled").join("testpack");
+    write_pack_spec(
+        &bundled,
+        &PackSpec {
+            clip: clip.clone(),
+            sha: Some(sha_of(&clip)),
+            ..Default::default()
+        },
+    );
+    assert!(listeners::load_verified_manifest(&bundled, PackSource::Bundled).is_ok());
+}
+
+/// M3. The declared mime was accepted on the strength of `starts_with("video/")`
+/// and the poster was only checked for existence, so a pack could hand the
+/// stage's media element and image tag whatever bytes it liked.
+#[test]
+fn declared_media_types_must_match_the_bytes_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let wrong_container = dir.path().join("testpack");
+    write_pack_spec(
+        &wrong_container,
+        &PackSpec {
+            clip: b"this is not a video at all, not even close".to_vec(),
+            ..Default::default()
+        },
+    );
+    let err = listeners::load_verified_manifest(&wrong_container, PackSource::Bundled)
+        .expect_err("a clip that is not a video container must be refused");
+    assert_eq!(err.code(), "LISTENER_MANIFEST_INVALID");
+
+    let unknown_mime = dir.path().join("unknownmime");
+    write_pack_spec(
+        &unknown_mime,
+        &PackSpec {
+            id: "unknownmime",
+            clip_mime: "video/x-anything",
+            ..Default::default()
+        },
+    );
+    let err = listeners::load_verified_manifest(&unknown_mime, PackSource::Bundled)
+        .expect_err("an unrecognised video mime must be refused");
+    assert_eq!(err.code(), "LISTENER_MANIFEST_INVALID");
+
+    let bad_poster = dir.path().join("badposter");
+    write_pack_spec(
+        &bad_poster,
+        &PackSpec {
+            id: "badposter",
+            poster: b"not an image, just some text bytes".to_vec(),
+            ..Default::default()
+        },
+    );
+    let err = listeners::load_verified_manifest(&bad_poster, PackSource::Bundled)
+        .expect_err("a poster that is not an image must be refused");
+    assert_eq!(err.code(), "LISTENER_MANIFEST_INVALID");
+}
+
+/// M3. The manifest's id and version are now bound to the directory the pack
+/// was loaded from, and undeclared files are refused: a pack directory is
+/// exposed to the asset protocol, so anything in it that nothing has inspected
+/// is a file the stage can fetch.
+#[test]
+fn a_pack_is_bound_to_its_directory_and_declares_everything_it_contains() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Directory says `impostor`, manifest claims to be `mira`.
+    let impostor = dir.path().join("impostor");
+    write_pack_spec(&impostor, &PackSpec { id: "mira", ..Default::default() });
+    let err = listeners::load_verified_manifest(&impostor, PackSource::Bundled)
+        .expect_err("a pack may not claim another pack's identity");
+    assert_eq!(err.code(), "LISTENER_MANIFEST_INVALID");
+
+    // An extra file nobody declared.
+    let smuggler = dir.path().join("smuggler");
+    write_pack_spec(&smuggler, &PackSpec { id: "smuggler", ..Default::default() });
+    assert!(listeners::load_verified_manifest(&smuggler, PackSource::Bundled).is_ok());
+    fs::write(smuggler.join("listening/notes.html"), b"<script>x</script>").unwrap();
+    let err = listeners::load_verified_manifest(&smuggler, PackSource::Bundled)
+        .expect_err("an undeclared file must be refused");
     assert_eq!(err.code(), "LISTENER_MANIFEST_INVALID");
 }
 
@@ -440,7 +622,7 @@ fn manifest_verification_rejects_unsafe_paths() {
     let dir = tempfile::tempdir().unwrap();
     let pack = dir.path().join("evil");
     fs::create_dir_all(&pack).unwrap();
-    fs::write(pack.join("poster.webp"), b"poster").unwrap();
+    fs::write(pack.join("poster.webp"), fake_webp()).unwrap();
     let manifest = serde_json::json!({
         "schemaVersion": 1,
         "id": "evil",
@@ -460,7 +642,8 @@ fn manifest_verification_rejects_unsafe_paths() {
         }]
     });
     fs::write(pack.join("manifest.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let err = listeners::load_verified_manifest(&pack).expect_err("traversal rejected");
+    let err = listeners::load_verified_manifest(&pack, PackSource::Bundled)
+        .expect_err("traversal rejected");
     assert_eq!(err.code(), "LISTENER_MANIFEST_INVALID");
 }
 
@@ -472,7 +655,8 @@ fn bundled_mira_pack_verifies() {
         .join("assets")
         .join("listeners")
         .join("mira");
-    let manifest = listeners::load_verified_manifest(&mira).expect("mira verifies");
+    let manifest = listeners::load_verified_manifest(&mira, PackSource::Bundled)
+        .expect("mira verifies");
     assert_eq!(manifest.id, "mira");
     assert_eq!(manifest.clips.len(), 2);
 }
@@ -481,10 +665,7 @@ fn bundled_mira_pack_verifies() {
 fn checksum_helper_detects_corruption() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("a.mp4"), b"content-a").unwrap();
-    let sha = {
-        use sha2::Digest;
-        hex::encode(sha2::Sha256::digest(b"content-a"))
-    };
+    let sha = sha_of(b"content-a");
     listeners::verify_pack_checksums(dir.path(), &[("a.mp4".into(), sha.clone())])
         .expect("matching checksum passes");
     let err = listeners::verify_pack_checksums(
@@ -492,7 +673,7 @@ fn checksum_helper_detects_corruption() {
         &[("a.mp4".into(), "deadbeef".repeat(8))],
     )
     .expect_err("mismatch fails");
-    assert_eq!(err.code(), "LISTENER_SIGNATURE_INVALID");
+    assert_eq!(err.code(), "LISTENER_CHECKSUM_INVALID");
     let err = listeners::verify_pack_checksums(dir.path(), &[("../a.mp4".into(), sha)])
         .expect_err("unsafe path fails");
     assert_eq!(err.code(), "IMPORT_UNSAFE_PATH");

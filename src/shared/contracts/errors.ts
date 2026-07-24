@@ -64,14 +64,26 @@ export const APP_ERROR_CODES = [
   'IMPORT_UNSAFE_PATH',
   'ASSET_UNSUPPORTED',
   'ASSET_TOO_LARGE',
+  // Remote image import (spec §24.2, §50.7). The URL codes are distinct so the
+  // UI can say WHY a link was refused: not https, versus not publicly routable.
+  'ASSET_URL_INSECURE',
+  'ASSET_URL_BLOCKED',
+  'ASSET_DOWNLOAD_FAILED',
   'DATABASE_MIGRATION_FAILED',
   'DATABASE_INTEGRITY_FAILED',
   'STAGE_DISPLAY_MISSING',
   'STAGE_OPEN_FAILED',
+  // A close/publish naming a session that is no longer the one on stage (M1).
+  'STAGE_SESSION_MISMATCH',
   'STAGE_LAYOUT_FAILED',
   'LISTENER_NOT_INSTALLED',
   'LISTENER_MANIFEST_INVALID',
-  'LISTENER_SIGNATURE_INVALID',
+  // NOT "signature": CandidCue has no pack-signing scheme, and calling a
+  // self-declared SHA-256 comparison a signature check was the M3 defect.
+  'LISTENER_CHECKSUM_INVALID',
+  // A pack that did not ship with the application. Fails closed — integrity
+  // can be checked, authenticity cannot.
+  'LISTENER_UNVERIFIED',
   'LISTENER_DECODE_FAILED',
   'UPDATE_SIGNATURE_INVALID',
   'UPDATE_INSTALL_FAILED',

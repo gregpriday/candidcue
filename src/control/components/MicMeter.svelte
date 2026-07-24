@@ -4,6 +4,15 @@
 -->
 <script lang="ts">
   import type { AudioLevelSnapshot } from '../../shared/contracts';
+  import {
+    INITIAL_MIC_ADVICE_STATE,
+    MIC_ADVICE,
+    MIC_STATUS_LABEL,
+    micCondition,
+    micZone,
+    reduceMicLevel,
+    type MicAdviceState,
+  } from './mic-advice';
 
   interface Props {
     level: AudioLevelSnapshot | null;
@@ -11,38 +20,64 @@
 
   let { level }: Props = $props();
 
+  /* Peak hold + clip latch, so a momentary problem stays readable and the
+     remedy does not flicker between words (see mic-advice.ts). Every time
+     value comes from `generatedAtMs`, which rides the monitor's own clock —
+     frames arrive continuously (~90 ms), so the latch expires on its own. */
+  /* Seeded synchronously so the first paint already reflects the frame the
+     component was handed, instead of one frame of "No signal yet". */
+  function seed(): MicAdviceState {
+    const first = level;
+    if (!first) return INITIAL_MIC_ADVICE_STATE;
+    return reduceMicLevel(INITIAL_MIC_ADVICE_STATE, first, first.generatedAtMs);
+  }
+  let held = $state<MicAdviceState>(seed());
+  $effect(() => {
+    if (!level) return;
+    held = reduceMicLevel(held, level, level.generatedAtMs);
+  });
+
   const percent = $derived(Math.round(Math.min(1, level?.rms ?? 0) * 100));
-  const zone = $derived(
-    level?.clipped ? 'high' : (level?.rms ?? 0) > 0.65 ? 'high' : (level?.rms ?? 0) > 0.35 ? 'mid' : 'low',
-  );
-  const statusText = $derived(
-    !level
-      ? 'No signal yet'
-      : level.clipped
-        ? 'Clipping'
-        : level.speaking
-          ? 'Hearing you'
-          : level.signalPresent
-            ? 'Quiet'
-            : 'No signal',
-  );
+  const condition = $derived(micCondition(level, held, level?.generatedAtMs ?? 0));
+  const zone = $derived(micZone(level, condition));
+  const statusText = $derived(MIC_STATUS_LABEL[condition]);
+  const advice = $derived(MIC_ADVICE[condition]);
 </script>
 
-<div class="meter-row">
-  <div
-    class="meter"
-    role="meter"
-    aria-label="Microphone input level"
-    aria-valuemin={0}
-    aria-valuemax={100}
-    aria-valuenow={percent}
-  >
-    <div class="fill {zone}" style="width: {percent}%"></div>
+<div class="meter-block">
+  <div class="meter-row">
+    <div
+      class="meter"
+      role="meter"
+      aria-label="Microphone input level"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent}
+    >
+      <div class="fill {zone}" style="width: {percent}%"></div>
+    </div>
+    <span class="status">{statusText}</span>
   </div>
-  <span class="status">{statusText}</span>
+  {#if advice}
+    <p class="advice" role="status">{advice}</p>
+  {/if}
 </div>
 
 <style>
+  .meter-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .advice {
+    margin: 0;
+    font-size: var(--text-label);
+    line-height: var(--lh-label);
+    color: var(--text-secondary);
+  }
+
   .meter-row {
     display: flex;
     align-items: center;

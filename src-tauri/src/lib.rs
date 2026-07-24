@@ -9,6 +9,7 @@ pub mod assets;
 pub mod commands;
 pub mod coordinator;
 pub mod database;
+pub mod dialogs;
 pub mod diagnostics;
 pub mod errors;
 pub mod listeners;

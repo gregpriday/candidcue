@@ -49,7 +49,26 @@
   {:else if node.type === 'image'}
     {#if assets[node.assetId]}
       <img class="inline-img" src={assets[node.assetId]?.url} alt={node.alt} draggable="false" />
+    {:else}
+      <!-- Unresolved asset: readable alt text rather than a silent hole. -->
+      <span class="img-fallback">{node.alt || 'Image unavailable'}</span>
     {/if}
+  {:else if node.type === 'table'}
+    <!-- A table nested in inline flow (a stage-only or quoted block that wraps
+         one) still renders as rows, not as nothing. -->
+    <table class="inline-table">
+      <tbody>
+        {#each node.rows as row}
+          <tr>
+            {#each row as cell, colIndex}
+              <td style:text-align={node.align[colIndex] ?? 'left'}>
+                <Self nodes={cell} {assets} {showCues} />
+              </td>
+            {/each}
+          </tr>
+        {/each}
+      </tbody>
+    </table>
   {:else if node.type === 'cue'}
     {#if showCues}
       <span class="cue" data-cue-type={node.cueType}>{node.label}</span>
@@ -88,6 +107,18 @@
     border-radius: 12px;
     display: block;
     margin: 0.4em auto;
+  }
+  .img-fallback {
+    color: color-mix(in srgb, currentColor 70%, transparent);
+    font-style: italic;
+  }
+  .inline-table {
+    border-collapse: collapse;
+    font-size: 0.85em;
+  }
+  .inline-table td {
+    padding: 0.2em 0.5em;
+    vertical-align: baseline;
   }
   .cue {
     color: var(--stage-cue);

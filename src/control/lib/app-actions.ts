@@ -28,30 +28,17 @@ export async function createAndOpenScript(kind: 'new' | 'sample' = 'new'): Promi
   await navigate({ name: 'editor', scriptId: doc.id });
 }
 
-/** Import a Markdown file; the file name becomes the initial title (§13.1). */
+/**
+ * Import a Markdown file; the file name becomes the initial title (§13.1).
+ *
+ * The picker no longer runs here. Rust shows it and imports the chosen file in
+ * one operation, so no path ever crosses IPC — the control webview cannot name
+ * a file to read (spec §50.7). A `null` result means the operator cancelled.
+ */
 export async function importMarkdown(): Promise<void> {
-  let sourcePath: string | undefined;
-  if (isTauriRuntime()) {
-    try {
-      const { open } = await import('@tauri-apps/plugin-dialog');
-      const picked = await open({
-        multiple: false,
-        filters: [{ name: 'Markdown', extensions: ['md', 'markdown', 'candidcue'] }],
-      });
-      if (picked === null) return; // user cancelled
-      sourcePath = Array.isArray(picked) ? picked[0] : picked;
-    } catch {
-      // Dialog plugin unavailable — fall through to the service default.
-    }
-  }
-  if (sourcePath === undefined) {
-    // Rust needs an absolute path from the picker; there is nothing to import
-    // without one, and sending an empty payload only produces a Serde error.
-    if (isTauriRuntime()) return;
-    sourcePath = 'Imported script.md';
-  }
   try {
-    const result = await scriptsService.importScript({ path: sourcePath });
+    const result = await scriptsService.importScript();
+    if (result === null) return; // cancelled
     markWelcomed();
     await loadLibrary();
     for (const warning of result.warnings) showToast(warning, 'info');
@@ -76,41 +63,26 @@ export async function openExternal(url: string): Promise<void> {
 }
 
 /**
- * Export a script (spec §21.6). Rust requires an absolute destination and one
- * of its three format names, so the save dialog and the command have to be
- * driven together — an export with no destination cannot succeed.
+ * Export a script (spec §21.6).
+ *
+ * Rust shows the save dialog and writes the file in the same operation, so no
+ * destination crosses IPC. The old flow picked the destination here and passed
+ * it back, which meant an arbitrary absolute path reached `File::create` and
+ * truncated whatever was there (spec §50.7). `title` now only seeds the
+ * dialog's default file name.
  */
 export async function exportScriptToFile(
   scriptId: string,
   title: string,
   format: ExportFormat = 'markdown',
 ): Promise<void> {
-  const extension = format === 'bundle' ? 'candidcue' : format === 'text' ? 'txt' : 'md';
-  const safeTitle = title.trim().replace(/[/\\:*?"<>|]/g, '-') || 'script';
-  let destination: string | undefined;
-
-  if (isTauriRuntime()) {
-    try {
-      const { save } = await import('@tauri-apps/plugin-dialog');
-      const picked = await save({
-        defaultPath: `${safeTitle}.${extension}`,
-        filters: [{ name: extension.toUpperCase(), extensions: [extension] }],
-      });
-      if (picked === null) return; // user cancelled
-      destination = picked;
-    } catch (err) {
-      showToast(`Export failed: ${String(err)}`, 'danger');
-      return;
-    }
-  }
-  if (destination === undefined) destination = `${safeTitle}.${extension}`;
-
   try {
     const result = await scriptsService.exportScript(scriptId, {
-      destination,
       format,
       includeAssets: format !== 'text',
+      suggestedName: title,
     });
+    if (result === null) return; // cancelled
     for (const warning of result.warnings) showToast(warning, 'info');
     showToast('Script exported', 'success');
   } catch (err) {

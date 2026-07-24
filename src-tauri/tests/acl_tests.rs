@@ -228,3 +228,26 @@ fn stage_capability_declares_no_application_permissions() {
         );
     }
 }
+
+/// H5. No window may invoke the dialog plugin from JavaScript.
+///
+/// The file pickers now run in Rust (`src/dialogs.rs`) and hand their result
+/// straight to the importer/exporter, so a webview never sees — and never
+/// supplies — a filesystem path. Re-granting `dialog:allow-open`/`allow-save`
+/// would not by itself reopen the hole (no command accepts a path any more),
+/// but it would put the picker back on the JavaScript side, which is where the
+/// next path-shaped argument would come from.
+#[test]
+fn no_window_can_open_a_file_dialog_from_javascript() {
+    for capability in capabilities().values() {
+        for permission in &capability.permissions {
+            let identifier = permission.identifier().get();
+            assert!(
+                !identifier.starts_with("dialog:"),
+                "capability `{}` grants `{identifier}`; file pickers belong in \
+                 Rust so no path is chosen by JavaScript (H5, spec §50.7)",
+                capability.identifier
+            );
+        }
+    }
+}

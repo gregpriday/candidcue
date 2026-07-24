@@ -125,13 +125,19 @@ pub fn run() {
             };
             handle.manage(library.clone());
 
-            // Asset protocol scope for the managed roots (spec §47.8).
-            let _ = handle
-                .asset_protocol_scope()
-                .allow_directory(paths.scripts_dir(), true);
-            let _ = handle
-                .asset_protocol_scope()
-                .allow_directory(paths.listeners_dir(), true);
+            // Asset protocol scope (spec §47.8, M2).
+            //
+            // The scripts and listeners roots used to be granted RECURSIVELY
+            // here, which put every script's canonical `script.md` and its
+            // whole revision history in reach of the asset protocol — and
+            // therefore of the stage webview, which is only supposed to be able
+            // to see media. Both roots are now described statically in
+            // tauri.conf.json (`$APPDATA/scripts/*/assets/*`), with an explicit
+            // `deny` list that takes precedence over any runtime widening.
+            //
+            // The bundled listener directory is the one genuine exception: in a
+            // dev build it lives in the repo, outside `$RESOURCE`, so it cannot
+            // be expressed as a static pattern.
             if library.bundled_dir.exists() {
                 let _ = handle
                     .asset_protocol_scope()
@@ -295,19 +301,32 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
     });
 
     // Periodic stage motion report (companion §54): diagnostics and recovery
-    // for control, never a feedback loop into the aligner. Relayed verbatim.
+    // for control, never a feedback loop into the aligner.
+    //
+    // M1: these two used to be relayed VERBATIM, with no generation check at
+    // all — the only stage-originated events that were not gated. A motion
+    // report or an escape press from a stage generation that is already gone
+    // therefore reached control and was acted on, which for escape means
+    // tearing down the take that is running now.
     let handle = app.clone();
     app.listen_any(events::STAGE_MOTION_ACK, move |event| {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(event.payload()) {
-            let _ = handle.emit_to(CONTROL_LABEL, events::STAGE_MOTION_ACK, value);
+        if let Some((gen, value)) = generation(event.payload()) {
+            let coordinator = handle.state::<AppCoordinator>();
+            if coordinator.stage_event(gen, |_| {}) {
+                let _ = handle.emit_to(CONTROL_LABEL, events::STAGE_MOTION_ACK, value);
+            }
         }
     });
 
     let handle = app.clone();
     app.listen_any(events::STAGE_ESCAPE_REQUESTED, move |event| {
-        // Relay to control, which owns session shutdown policy.
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(event.payload()) {
-            let _ = handle.emit_to(CONTROL_LABEL, events::STAGE_ESCAPE_REQUESTED, value);
+        // Relay to control, which owns session shutdown policy — but only for
+        // the stage that is actually live.
+        if let Some((gen, value)) = generation(event.payload()) {
+            let coordinator = handle.state::<AppCoordinator>();
+            if coordinator.stage_event(gen, |_| {}) {
+                let _ = handle.emit_to(CONTROL_LABEL, events::STAGE_ESCAPE_REQUESTED, value);
+            }
         }
     });
 }

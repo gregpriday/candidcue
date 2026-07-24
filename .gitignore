@@ -41,3 +41,5 @@ src-tauri/gen/schemas/
 # Scratch
 .tmp/
 *.tmp
+# Throwaway probe tests written during code review to demonstrate a bug.
+tests/unit/probe/

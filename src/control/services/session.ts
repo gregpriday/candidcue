@@ -137,7 +137,10 @@ export function createWorkerTrackingDriver(options: TrackingDriverOptions): Trac
 
   post({
     type: 'initialize',
-    document: buildTrackingDocument(compiled),
+    // §33.5: the aligner must know which token ranges came from
+    // `:::literal-command` blocks so reading a wake phrase aloud from inside
+    // one is never treated as an address to the app.
+    document: buildTrackingDocument(compiled, compiled.literalCommandRanges),
     profile: options.profile ?? {},
     session: {
       sessionId: options.sessionId,

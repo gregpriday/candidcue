@@ -1,8 +1,31 @@
 //! Listener packs (spec §39, §44.8): bundled-pack resolution, manifest
 //! verification, installed-pack catalogue, scoped media URLs, and the
-//! download trait with checksum verification. Remote catalogue/download is
-//! declared but returns NOT_IMPLEMENTED until a CandidCue-controlled host
-//! exists (v1 ships with the bundled pack only).
+//! download trait. Remote catalogue/download returns NOT_IMPLEMENTED until a
+//! CandidCue-controlled host exists (v1 ships with the bundled pack only).
+//!
+//! # There is no signature verification. Read this before trusting a pack.
+//!
+//! M3. This module used to describe itself as verifying a pack's "signature",
+//! and raised an error code called `LISTENER_SIGNATURE_INVALID`, for what was
+//! in fact a plain SHA-256 comparison against a hash written in the pack's own
+//! manifest. That is an INTEGRITY check and nothing more: it detects a truncated
+//! download or a corrupt disk. It says nothing about authenticity, because
+//! anyone who can write the media files can write the manifest that describes
+//! them, and CandidCue has no publisher key to check the manifest against.
+//!
+//! Dishonest comments are their own hazard — the next person to touch this file
+//! would have believed there was a trust anchor here and built on it. So:
+//!
+//!   * the error code is `LISTENER_CHECKSUM_INVALID`, which is what it means;
+//!   * `PackSource` makes the trust distinction explicit;
+//!   * a pack that did NOT ship inside the application bundle is verified as
+//!     far as it can be (mandatory checksums on every declared file, media type
+//!     and size limits, symlink refusal, id+version bound to the directory it
+//!     was loaded from) and is then REFUSED, because integrity is not
+//!     authenticity (`LISTENER_UNVERIFIED`).
+//!
+//! That is a hard fail-closed, not a warning. When pack signing exists, the
+//! refusal in [`load_verified_manifest`] is the single place to replace.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,6 +40,44 @@ use crate::util::{is_safe_relative_path, now_iso, sha256_file};
 
 /// Spec Appendix A.10: Listener manifest limit.
 pub const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+/// Per-file limits (M3). A pack directory is not a place to stage a 4 GB blob.
+pub const MAX_CLIP_BYTES: u64 = 256 * 1024 * 1024;
+pub const MAX_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+pub const MAX_PACK_BYTES: u64 = 1024 * 1024 * 1024;
+pub const MAX_CLIPS_PER_PACK: usize = 64;
+
+/// Where a pack came from, and therefore how far it can be trusted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackSource {
+    /// Shipped inside the application bundle. Its integrity is the
+    /// application's own integrity — on macOS, the code signature covers it.
+    Bundled,
+    /// Written into the user's data directory. Nothing vouches for it: there is
+    /// no pack-signing scheme, so this is refused (see the module docs).
+    Installed,
+}
+
+/// Container magic bytes for the video types a pack may declare (M3). The
+/// declared `mime` used to be taken at face value, so a pack could label any
+/// bytes at all `video/mp4` and hand them to the stage's media element.
+fn video_mime_matches_bytes(mime: &str, head: &[u8]) -> bool {
+    match mime {
+        // ISO base media: `....ftyp` at offset 4.
+        "video/mp4" | "video/quicktime" => head.len() >= 12 && &head[4..8] == b"ftyp",
+        // Matroska/WebM EBML header.
+        "video/webm" | "video/x-matroska" => head.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]),
+        _ => false,
+    }
+}
+
+fn read_head(path: &Path, len: usize) -> Result<Vec<u8>, AppError> {
+    use std::io::Read;
+    let mut file = fs::File::open(path)?;
+    let mut buf = vec![0u8; len];
+    let read = file.read(&mut buf)?;
+    buf.truncate(read);
+    Ok(buf)
+}
 
 // ---------------------------------------------------------------------------
 // Bundled pack manifest (src/shared/contracts/listener.ts, camelCase)
@@ -158,14 +219,67 @@ fn manifest_invalid(reason: impl Into<String>) -> AppError {
     .with_log(reason.into())
 }
 
-/// Load and verify a pack manifest from a directory (spec §39.1): schema
-/// version, safe relative paths, files present, declared sizes matched, and
-/// checksums verified when declared.
-pub fn load_verified_manifest(pack_dir: &Path) -> Result<ListenerPackManifest, AppError> {
+fn checksum_invalid(reason: impl Into<String>) -> AppError {
+    AppError::structured(
+        // NOT "signature": this is a hash comparison against the pack's own
+        // manifest, which proves the bytes are intact and nothing about who
+        // produced them (M3).
+        "LISTENER_CHECKSUM_INVALID",
+        ErrorCategory::Media,
+        "This Listener pack failed its integrity check.",
+        true,
+    )
+    .with_log(reason.into())
+}
+
+fn unverified_pack(reason: impl Into<String>) -> AppError {
+    AppError::structured(
+        "LISTENER_UNVERIFIED",
+        ErrorCategory::Media,
+        "This Listener pack did not ship with CandidCue and cannot be verified.",
+        false,
+    )
+    .with_log(reason.into())
+}
+
+/// Load and verify a pack manifest from a directory (spec §39.1).
+///
+/// What is actually checked: schema version, id/version shape, id+version bound
+/// to the directory the pack was loaded from, safe relative paths, no symlinks,
+/// every declared file present and inside the pack root, declared sizes matched,
+/// per-file size limits, media types confirmed against container magic bytes,
+/// and SHA-256 checksums — MANDATORY for a non-bundled pack, optional for a
+/// bundled one (whose integrity is the application bundle's own).
+///
+/// What is NOT checked, and cannot be: authenticity. See the module docs. A
+/// non-bundled pack is refused at the end of this function, after verification,
+/// so the code path that a signing scheme will need already exists and is
+/// exercised.
+pub fn load_verified_manifest(
+    pack_dir: &Path,
+    source: PackSource,
+) -> Result<ListenerPackManifest, AppError> {
+    let manifest = verify_pack_contents(pack_dir, source)?;
+    if source == PackSource::Installed {
+        return Err(unverified_pack(format!(
+            "pack {} {} is not bundled and CandidCue has no pack-signing scheme",
+            manifest.id, manifest.version
+        )));
+    }
+    Ok(manifest)
+}
+
+fn verify_pack_contents(
+    pack_dir: &Path,
+    source: PackSource,
+) -> Result<ListenerPackManifest, AppError> {
     let manifest_path = pack_dir.join("manifest.json");
-    let meta = fs::metadata(&manifest_path)
+    let manifest_meta = fs::symlink_metadata(&manifest_path)
         .map_err(|_| manifest_invalid(format!("manifest missing at {manifest_path:?}")))?;
-    if meta.len() > MAX_MANIFEST_BYTES {
+    if manifest_meta.file_type().is_symlink() {
+        return Err(manifest_invalid("manifest.json is a symlink"));
+    }
+    if manifest_meta.len() > MAX_MANIFEST_BYTES {
         return Err(manifest_invalid("manifest exceeds 1 MB limit"));
     }
     let raw = fs::read(&manifest_path)?;
@@ -178,24 +292,39 @@ pub fn load_verified_manifest(pack_dir: &Path) -> Result<ListenerPackManifest, A
             manifest.schema_version
         )));
     }
-    if manifest.id.is_empty()
-        || !manifest
-            .id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
+    if !is_safe_identifier(&manifest.id) {
         return Err(manifest_invalid("pack id must be alphanumeric/dash"));
+    }
+    if !is_safe_identifier(&manifest.version) || manifest.version.is_empty() {
+        return Err(manifest_invalid("pack version must be alphanumeric/dash/dot"));
     }
     if manifest.clips.is_empty() {
         return Err(manifest_invalid("pack declares no clips"));
     }
+    if manifest.clips.len() > MAX_CLIPS_PER_PACK {
+        return Err(manifest_invalid("pack declares too many clips"));
+    }
+    let mut clip_ids: Vec<&str> = manifest.clips.iter().map(|c| c.id.as_str()).collect();
+    clip_ids.sort_unstable();
+    let before = clip_ids.len();
+    clip_ids.dedup();
+    if clip_ids.len() != before {
+        return Err(manifest_invalid("pack declares the same clip id twice"));
+    }
 
+    // M3: bind the manifest to the directory it was loaded from. The pack
+    // directory is named after the id (and, when installed, the version), so a
+    // pack that claims a different identity is either mislaid or trying to
+    // impersonate one that is already trusted.
+    bind_identity_to_root(pack_dir, &manifest, source)?;
+
+    // Every declared file: safe path, no symlink, inside the root.
     let mut media_paths: Vec<&str> = manifest.clips.iter().map(|c| c.path.as_str()).collect();
     media_paths.push(manifest.poster.as_str());
     if let Some(profile) = &manifest.profile_image {
         media_paths.push(profile.as_str());
     }
-    for rel in media_paths {
+    for rel in &media_paths {
         if !is_safe_relative_path(rel) {
             return Err(manifest_invalid(format!("unsafe media path {rel:?}")));
         }
@@ -205,8 +334,41 @@ pub fn load_verified_manifest(pack_dir: &Path) -> Result<ListenerPackManifest, A
         if meta.file_type().is_symlink() {
             return Err(manifest_invalid(format!("symlink not allowed: {rel}")));
         }
+        if !meta.is_file() {
+            return Err(manifest_invalid(format!("not a regular file: {rel}")));
+        }
         if !crate::util::is_within_root(&absolute, pack_dir) {
             return Err(manifest_invalid(format!("path escapes pack dir: {rel}")));
+        }
+    }
+
+    // A pack directory must contain ONLY what its manifest declares. An
+    // undeclared file in a scoped media directory is a file the asset protocol
+    // will happily serve and nothing has looked at.
+    reject_undeclared_files(pack_dir, &media_paths)?;
+
+    let mut total_bytes: u64 = 0;
+
+    // Poster and profile: real images, within the image size limit.
+    let mut images = vec![("poster", manifest.poster.clone())];
+    if let Some(profile) = &manifest.profile_image {
+        images.push(("profileImage", profile.clone()));
+    }
+    for (label, rel) in &images {
+        let absolute = pack_dir.join(rel);
+        let size = fs::metadata(&absolute)?.len();
+        if size > MAX_IMAGE_BYTES {
+            return Err(manifest_invalid(format!("{label} {rel} exceeds the size limit")));
+        }
+        total_bytes = total_bytes.saturating_add(size);
+        let head = read_head(&absolute, 64)?;
+        // M3: the poster and profile used only to be checked for existence.
+        // They are rendered by the stage, so they get the same treatment as an
+        // imported image: sniffed, never trusted by extension.
+        if crate::assets::sniff_mime(&head).is_none() {
+            return Err(manifest_invalid(format!(
+                "{label} {rel} is not a supported image"
+            )));
         }
     }
 
@@ -219,27 +381,130 @@ pub fn load_verified_manifest(pack_dir: &Path) -> Result<ListenerPackManifest, A
                 clip.path, clip.size_bytes, actual_size
             )));
         }
-        if !clip.mime.starts_with("video/") {
+        if actual_size > MAX_CLIP_BYTES {
             return Err(manifest_invalid(format!(
-                "clip {} has non-video mime {}",
+                "clip {} exceeds the per-clip size limit",
+                clip.id
+            )));
+        }
+        total_bytes = total_bytes.saturating_add(actual_size);
+        if total_bytes > MAX_PACK_BYTES {
+            return Err(manifest_invalid("pack exceeds the total size limit"));
+        }
+        // M3: the declared mime used to be accepted on the strength of a
+        // `starts_with("video/")` test, so any bytes at all could be handed to
+        // the stage's media element as `video/mp4`.
+        let head = read_head(&absolute, 32)?;
+        if !video_mime_matches_bytes(&clip.mime, &head) {
+            return Err(manifest_invalid(format!(
+                "clip {} declares {} but its container does not match",
                 clip.id, clip.mime
             )));
         }
-        if let Some(expected) = &clip.sha256 {
-            let actual = sha256_file(&absolute)?;
-            if !actual.eq_ignore_ascii_case(expected) {
-                return Err(AppError::structured(
-                    "LISTENER_SIGNATURE_INVALID",
-                    ErrorCategory::Media,
-                    "This Listener pack failed integrity verification.",
-                    true,
-                )
-                .with_log(format!("sha256 mismatch for {}", clip.path)));
+
+        match (&clip.sha256, source) {
+            (Some(expected), _) => {
+                if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(manifest_invalid(format!(
+                        "clip {} has a malformed sha256",
+                        clip.id
+                    )));
+                }
+                // Streamed, not buffered: a pack can be hundreds of megabytes.
+                let actual = sha256_file(&absolute)?;
+                if !actual.eq_ignore_ascii_case(expected) {
+                    return Err(checksum_invalid(format!("sha256 mismatch for {}", clip.path)));
+                }
             }
+            (None, PackSource::Installed) => {
+                // M3: checksums used to be optional everywhere, so a pack that
+                // simply omitted them skipped verification entirely.
+                return Err(checksum_invalid(format!(
+                    "clip {} has no sha256 and the pack is not bundled",
+                    clip.id
+                )));
+            }
+            (None, PackSource::Bundled) => {}
         }
     }
 
     Ok(manifest)
+}
+
+/// Pack ids and versions become directory names, so they get the same
+/// treatment as any other caller-supplied path component.
+fn is_safe_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        && !value.contains("..")
+}
+
+/// The pack's declared identity must match the directory it was loaded from:
+/// `<bundled>/<id>` or `<installed>/<id>/<version>`.
+fn bind_identity_to_root(
+    pack_dir: &Path,
+    manifest: &ListenerPackManifest,
+    source: PackSource,
+) -> Result<(), AppError> {
+    let name = |path: Option<&Path>| {
+        path.and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+    };
+    match source {
+        PackSource::Bundled => {
+            if name(Some(pack_dir)).as_deref() != Some(manifest.id.as_str()) {
+                return Err(manifest_invalid(format!(
+                    "bundled pack directory {pack_dir:?} does not match declared id {}",
+                    manifest.id
+                )));
+            }
+        }
+        PackSource::Installed => {
+            if name(Some(pack_dir)).as_deref() != Some(manifest.version.as_str())
+                || name(pack_dir.parent()).as_deref() != Some(manifest.id.as_str())
+            {
+                return Err(manifest_invalid(format!(
+                    "installed pack directory {pack_dir:?} does not match declared id/version {} {}",
+                    manifest.id, manifest.version
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a pack that contains files its manifest does not declare.
+fn reject_undeclared_files(pack_dir: &Path, declared: &[&str]) -> Result<(), AppError> {
+    fn walk(dir: &Path, root: &Path, found: &mut Vec<String>) -> Result<(), AppError> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let meta = entry.metadata()?;
+            let path = entry.path();
+            if meta.is_dir() {
+                walk(&path, root, found)?;
+            } else if let Ok(rel) = path.strip_prefix(root) {
+                found.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+            if found.len() > 4096 {
+                return Err(manifest_invalid("pack contains too many files"));
+            }
+        }
+        Ok(())
+    }
+    let mut found = Vec::new();
+    walk(pack_dir, pack_dir, &mut found)?;
+    for rel in &found {
+        if rel == "manifest.json" || declared.iter().any(|d| d == rel) {
+            continue;
+        }
+        return Err(manifest_invalid(format!(
+            "pack contains an undeclared file: {rel}"
+        )));
+    }
+    Ok(())
 }
 
 fn pack_total_bytes(manifest: &ListenerPackManifest) -> u64 {
@@ -257,7 +522,7 @@ pub fn bundled_packs(library: &ListenerLibrary) -> Vec<(ListenerPackManifest, Pa
         if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
             continue;
         }
-        match load_verified_manifest(&entry.path()) {
+        match load_verified_manifest(&entry.path(), PackSource::Bundled) {
             Ok(manifest) => packs.push((manifest, entry.path())),
             Err(err) => {
                 tracing::warn!(dir = ?entry.path(), error = %err, "skipping invalid bundled listener pack");
@@ -345,13 +610,20 @@ pub fn resolve_media(
     pack_id: &str,
     version: &str,
 ) -> Result<(ListenerMediaUrls, PathBuf), AppError> {
-    // Prefer bundled; fall back to installed directory.
+    // A pack id or version that is not a safe identifier must never become a
+    // path component.
+    if !is_safe_identifier(pack_id) || !is_safe_identifier(version) {
+        return Err(AppError::unsafe_path("That Listener pack name is not valid."));
+    }
+
+    // Prefer bundled; a non-bundled directory is loaded only so it can be
+    // refused with an honest reason rather than silently ignored.
     let bundled_dir = library.pack_dir(pack_id, version, true);
     let installed_dir = library.pack_dir(pack_id, version, false);
-    let pack_dir = if bundled_dir.join("manifest.json").exists() {
-        bundled_dir
+    let (pack_dir, source) = if bundled_dir.join("manifest.json").exists() {
+        (bundled_dir, PackSource::Bundled)
     } else if installed_dir.join("manifest.json").exists() {
-        installed_dir
+        (installed_dir, PackSource::Installed)
     } else {
         return Err(AppError::structured(
             "LISTENER_NOT_INSTALLED",
@@ -362,9 +634,15 @@ pub fn resolve_media(
         .with_detail("packId", pack_id));
     };
 
-    let manifest = load_verified_manifest(&pack_dir)?;
-    if manifest.id != pack_id {
-        return Err(manifest_invalid("manifest id does not match requested pack"));
+    let manifest = load_verified_manifest(&pack_dir, source)?;
+    // M3: only the id was checked here, so a directory named after one version
+    // could serve a manifest declaring another — and the caller would scope the
+    // asset protocol to it under the version it thought it asked for.
+    if manifest.id != pack_id || manifest.version != version {
+        return Err(manifest_invalid(format!(
+            "manifest declares {} {} but {pack_id} {version} was requested",
+            manifest.id, manifest.version
+        )));
     }
 
     let clips = manifest
@@ -440,8 +718,16 @@ pub struct DownloadJob {
 #[async_trait]
 pub trait ListenerDownloader: Send + Sync {
     /// Fetch and validate catalogue + manifest, download to a temporary
-    /// version directory, verify (size, MIME, SHA-256, signature), then
-    /// atomically rename into the installed-pack directory.
+    /// version directory, verify (size, MIME, SHA-256), then atomically rename
+    /// into the installed-pack directory.
+    ///
+    /// M3: this doc comment used to promise a "signature" check. There is no
+    /// signature scheme, and until there is, a downloaded pack cannot be
+    /// trusted no matter how carefully it is hashed — see the module docs.
+    /// `load_verified_manifest` refuses non-bundled packs for exactly that
+    /// reason, so an implementation of this trait would install something the
+    /// rest of the module then declines to use. The refusal is deliberate: it
+    /// is the honest state of affairs, not an oversight to work around.
     async fn download_pack(
         &self,
         pack_id: &str,
@@ -471,8 +757,12 @@ impl ListenerDownloader for RemoteListenerDownloader {
     }
 }
 
-/// Verify every downloaded file against its declared SHA-256 before an
-/// install is finalized (spec §39.4 step 6).
+/// Verify every downloaded file against its declared SHA-256 before an install
+/// is finalized (spec §39.4 step 6).
+///
+/// This is an INTEGRITY check against hashes the pack itself supplied. It
+/// catches a truncated or corrupted download. It is not, and was never, a proof
+/// of origin — see the module docs (M3).
 pub fn verify_pack_checksums(
     pack_dir: &Path,
     expected: &[(String, String)], // (relative path, sha256)
@@ -482,15 +772,15 @@ pub fn verify_pack_checksums(
             return Err(AppError::unsafe_path("Pack file path is unsafe."));
         }
         let absolute = pack_dir.join(rel);
+        if fs::symlink_metadata(&absolute)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(true)
+        {
+            return Err(AppError::unsafe_path("Pack file path is unsafe."));
+        }
         let actual = sha256_file(&absolute)?;
         if !actual.eq_ignore_ascii_case(sha) {
-            return Err(AppError::structured(
-                "LISTENER_SIGNATURE_INVALID",
-                ErrorCategory::Media,
-                "A Listener pack file failed integrity verification.",
-                true,
-            )
-            .with_log(format!("checksum mismatch: {rel}")));
+            return Err(checksum_invalid(format!("checksum mismatch: {rel}")));
         }
     }
     Ok(())

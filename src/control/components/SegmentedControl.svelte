@@ -3,6 +3,8 @@
   No accent underline; the seated pill alone marks the selection.
 -->
 <script lang="ts">
+  import { nextSegmentIndex, segmentTabIndex, selectedIndex } from './segmented';
+
   export interface SegmentOption {
     value: string;
     label: string;
@@ -19,23 +21,42 @@
 
   let { options, value = $bindable(), label, size = 'md', onchange }: Props = $props();
 
+  /* Roving tabindex (spec §20): the group is one tab stop and the arrow keys
+     move focus and selection together, per the ARIA radiogroup pattern. */
+  let buttons: HTMLButtonElement[] = $state([]);
+
   function select(option: SegmentOption): void {
     if (option.disabled || option.value === value) return;
     value = option.value;
     onchange?.(option.value);
   }
+
+  function handleKeydown(event: KeyboardEvent): void {
+    const target = nextSegmentIndex(options, selectedIndex(options, value), event.key);
+    if (target === null) return;
+    event.preventDefault();
+    const option = options[target];
+    if (!option) return;
+    select(option);
+    buttons[target]?.focus();
+  }
 </script>
 
 <div class="track {size}" role="radiogroup" aria-label={label}>
-  {#each options as option (option.value)}
+  {#each options as option, index (option.value)}
+    <!-- The handler lives on the radios, not the group: in a roving-tabindex
+         radiogroup the container is never itself focusable. -->
     <button
+      bind:this={buttons[index]}
       type="button"
       class="segment"
       class:selected={option.value === value}
       role="radio"
       aria-checked={option.value === value}
+      tabindex={segmentTabIndex(options, value, index)}
       disabled={option.disabled}
       onclick={() => select(option)}
+      onkeydown={handleKeydown}
     >
       {option.label}
     </button>

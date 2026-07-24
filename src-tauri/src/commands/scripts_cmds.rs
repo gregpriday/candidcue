@@ -5,7 +5,10 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::database::Database;
 use crate::errors::AppError;
-use crate::scripts::import_export::{ExportOptions, ExportResult, ImportOptions, ImportResult};
+use crate::scripts::import_export::{
+    export_format_extension, ExportOptions, ExportRequest, ExportResult, ImportOptions,
+    ImportRequest, ImportResult,
+};
 use crate::scripts::{
     repo, CreateScriptInput, DataPaths, PageRequest, RevisionDocument, RevisionSummary,
     SaveResult, ScriptDocument, ScriptFilter, ScriptId, ScriptLocks, ScriptMetadataPatch,
@@ -182,27 +185,102 @@ pub async fn restore_revision(
     .await
 }
 
+/// Import a script (spec §21.6, §50.7).
+///
+/// The picker runs HERE, in Rust, and its result goes straight into the
+/// importer. There is deliberately no path argument: this command used to take
+/// an absolute path from JavaScript with a comment asserting it came from the
+/// dialog, which meant anything running in the control webview could read any
+/// Markdown or text file on the machine and get it back out through
+/// `get_script`. `Ok(None)` means the operator cancelled.
 #[tauri::command]
 pub async fn import_script(
+    app: AppHandle,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
-    options: ImportOptions,
-) -> Result<ImportResult, AppError> {
-    crate::scripts::import_export::import_script(db.pool(), &paths, &locks, options).await
+    request: Option<ImportRequest>,
+) -> Result<Option<ImportResult>, AppError> {
+    let Some(path) = crate::dialogs::pick_script_to_import(&app).await? else {
+        return Ok(None);
+    };
+    let options = ImportOptions {
+        path: path.to_string_lossy().to_string(),
+        title: request.and_then(|r| r.title),
+    };
+    crate::scripts::import_export::import_script(db.pool(), &paths, &locks, options)
+        .await
+        .map(Some)
 }
 
+/// Export a script (spec §21.6, §50.7).
+///
+/// Same shape as `import_script`: the save dialog runs in Rust and the chosen
+/// destination never round-trips through JavaScript. The previous command took
+/// an arbitrary absolute destination and `File::create`d it, truncating
+/// whatever was there — naming `~/.ssh/config` destroyed that file.
+/// `Ok(None)` means the operator cancelled.
 #[tauri::command]
 pub async fn export_script(
+    app: AppHandle,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
     locks: State<'_, ScriptLocks>,
     script_id: String,
-    options: ExportOptions,
-) -> Result<ExportResult, AppError> {
+    request: ExportRequest,
+) -> Result<Option<ExportResult>, AppError> {
     let script_id = ScriptId::parse(&script_id)?;
+    // Validate the format before showing a dialog the operator cannot satisfy.
+    let (extension, label) = export_format_extension(&request.format)?;
+    let summary = repo::get_summary(db.pool(), &script_id).await?;
+    let suggested = sanitize_file_stem(
+        request
+            .suggested_name
+            .as_deref()
+            .unwrap_or(summary.title.as_str()),
+    );
+
+    let Some(destination) = crate::dialogs::pick_export_destination(
+        &app,
+        &format!("{suggested}.{extension}"),
+        label,
+        extension,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+
+    let options = ExportOptions {
+        destination: destination.to_string_lossy().to_string(),
+        format: request.format,
+        include_assets: request.include_assets,
+    };
     crate::scripts::import_export::export_script(db.pool(), &paths, &locks, &script_id, options)
         .await
+        .map(Some)
+}
+
+/// A file-name stem that cannot introduce a path component. Only ever seeds the
+/// save dialog's default name — the operator can change it, and the resulting
+/// path is validated again by the exporter.
+fn sanitize_file_stem(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.').trim();
+    if trimmed.is_empty() {
+        "script".to_string()
+    } else {
+        trimmed.chars().take(120).collect()
+    }
 }
 
 #[tauri::command]

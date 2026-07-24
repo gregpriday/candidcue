@@ -17,6 +17,17 @@ export const toasts: Readable<Toast[]> = { subscribe: store.subscribe };
 let nextId = 1;
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
 
+/**
+ * Default lifetime by severity. A failure that scrolls away on a timer is a
+ * failure the operator cannot act on, so `danger` sticks until it is
+ * dismissed; informational notices still clear themselves.
+ */
+export const DEFAULT_TOAST_DURATION_MS: Record<ToastTone, number> = {
+  info: 4000,
+  success: 4000,
+  danger: 0,
+};
+
 export function showToast(
   message: string,
   tone: ToastTone = 'info',
@@ -25,7 +36,7 @@ export function showToast(
   const id = nextId;
   nextId += 1;
   store.update((list) => [...list, { id, tone, message }]);
-  const duration = options?.durationMs ?? 4000;
+  const duration = options?.durationMs ?? DEFAULT_TOAST_DURATION_MS[tone];
   if (duration > 0) {
     timers.set(
       id,

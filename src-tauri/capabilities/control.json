@@ -1,13 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "control-capability",
-  "description": "The privileged control window: dialogs and approved-link opening on top of core defaults. Updater/window-state/global-shortcut permissions are added when those plugins ship (spec Appendix D.2).",
+  "description": "The privileged control window: application commands and approved-link opening on top of core defaults. The dialog plugin is deliberately NOT granted — file pickers run in Rust (src/dialogs.rs) so no filesystem path is ever chosen by, or passed through, JavaScript (H5, spec §50.7). Updater/window-state/global-shortcut permissions are added when those plugins ship (spec Appendix D.2).",
   "windows": ["control"],
   "permissions": [
     "core:default",
     "allow-control-commands",
-    "dialog:allow-open",
-    "dialog:allow-save",
     "opener:default"
   ]
 }

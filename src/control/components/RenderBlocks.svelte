@@ -57,6 +57,11 @@
         <pre class="code"><RenderNodes nodes={nodesOf(block)} /></pre>
       {:else if block.kind === 'blockquote'}
         <blockquote class="quote"><RenderNodes nodes={nodesOf(block)} /></blockquote>
+      {:else if block.kind === 'table'}
+        <!-- Not wrapped in <p>: a table inside a paragraph is invalid HTML and
+             the browser breaks it out of the element, so the card must be its
+             own scroll container. -->
+        <div class="table-card"><RenderNodes nodes={nodesOf(block)} /></div>
       {:else}
         <p class="para"><RenderNodes nodes={nodesOf(block)} /></p>
       {/if}
@@ -161,6 +166,12 @@
     font-family: var(--font-mono);
     font-size: var(--text-sm);
     overflow-x: auto;
+  }
+
+  .table-card {
+    overflow-x: auto;
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
   }
 
   .divider {

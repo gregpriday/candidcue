@@ -7,40 +7,39 @@
     "    these payloads;",
     "  - src-tauri/tests/ipc_contract_tests.rs asserts the Rust command",
     "    argument types deserialize exactly these payloads.",
-    "Before the fix, import_script was sent `options.sourcePath` (Rust requires",
-    "`path`) and export_script was sent an optional options object with format",
-    "'candidcue' (Rust requires destination/format and accepts 'bundle'), so",
-    "both commands failed with a Serde missing-field error before running."
+    "import_script and export_script carry NO filesystem path (spec §50.7).",
+    "Rust runs the native dialog and does the I/O in one trusted operation, so",
+    "the control webview cannot name a file to read or a file to truncate.",
+    "`suggestedName` only seeds the save dialog's default file name."
   ],
   "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
   "import_script": {
-    "options": {
-      "path": "/Users/example/Documents/keynote.md",
+    "request": {
       "title": "Keynote"
     }
   },
   "export_script_markdown": {
     "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
-    "options": {
-      "destination": "/Users/example/Desktop/keynote.md",
+    "request": {
       "format": "markdown",
-      "includeAssets": true
+      "includeAssets": true,
+      "suggestedName": "Keynote"
     }
   },
   "export_script_bundle": {
     "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
-    "options": {
-      "destination": "/Users/example/Desktop/keynote.candidcue",
+    "request": {
       "format": "bundle",
-      "includeAssets": true
+      "includeAssets": true,
+      "suggestedName": "Keynote"
     }
   },
   "export_script_text": {
     "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
-    "options": {
-      "destination": "/Users/example/Desktop/keynote.txt",
+    "request": {
       "format": "text",
-      "includeAssets": false
+      "includeAssets": false,
+      "suggestedName": "Keynote"
     }
   },
   "save_script": {

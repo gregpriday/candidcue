@@ -25,11 +25,23 @@ const MAX_BUNDLE_ASSET_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_BUNDLE_TOTAL_BYTES: u64 = 600 * 1024 * 1024;
 const MAX_BUNDLE_FILE_COUNT: usize = 256;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Already-authorized import parameters.
+///
+/// `path` is NOT an IPC field any more. It is filled in by
+/// `commands::scripts_cmds::import_script`, which runs the native picker in
+/// Rust and passes what the operator actually chose (see `crate::dialogs`).
+/// JavaScript sends `ImportRequest`, which has no path at all.
+#[derive(Debug, Clone)]
 pub struct ImportOptions {
-    /// Absolute path returned by the native open dialog.
+    /// Absolute path the operator selected in the native open dialog.
     pub path: String,
+    pub title: Option<String>,
+}
+
+/// What the control webview may ask for: a title override, nothing else.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportRequest {
     #[serde(default)]
     pub title: Option<String>,
 }
@@ -41,15 +53,41 @@ pub struct ImportResult {
     pub warnings: Vec<String>,
 }
 
+/// Already-authorized export parameters. Like [`ImportOptions`], `destination`
+/// is supplied by the Rust-side save dialog, never by JavaScript.
+#[derive(Debug, Clone)]
+pub struct ExportOptions {
+    /// Absolute destination the operator selected in the native save dialog.
+    pub destination: String,
+    /// 'markdown' | 'text' | 'bundle'.
+    pub format: String,
+    pub include_assets: bool,
+}
+
+/// What the control webview may ask for: which format, and whether to copy
+/// images alongside a Markdown export.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ExportOptions {
-    /// Absolute destination path returned by the native save dialog.
-    pub destination: String,
+pub struct ExportRequest {
     /// 'markdown' | 'text' | 'bundle'.
     pub format: String,
     #[serde(default)]
     pub include_assets: bool,
+    /// Seeds the save dialog's file name only; never used as a path.
+    #[serde(default)]
+    pub suggested_name: Option<String>,
+}
+
+/// The three formats, their save-dialog extension, and their filter label.
+pub fn export_format_extension(format: &str) -> Result<(&'static str, &'static str), AppError> {
+    match format {
+        "markdown" => Ok(("md", "Markdown")),
+        "text" => Ok(("txt", "Plain text")),
+        "bundle" => Ok(("candidcue", "CandidCue bundle")),
+        other => Err(AppError::invalid_input(format!(
+            "Unknown export format: {other}. Use markdown, text, or bundle."
+        ))),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -133,8 +171,95 @@ fn validate_declared_assets(
                 "{name} is not the image type its name claims."
             )));
         }
+        // Magic bytes are a four-byte prefix. The payload must also survive a
+        // real decode under dimension limits, so a bundle cannot drop a
+        // decompression bomb — or arbitrary bytes behind a PNG header — into a
+        // managed asset directory.
+        crate::assets::validate_image_payload(bytes, sniffed)
+            .map_err(|e| AppError::validation(format!("{name} is not a usable image.")).with_log(format!("{e}")))?;
     }
     Ok(())
+}
+
+/// Defence in depth on a path the operator picked in the native dialog.
+///
+/// Even a dialog result gets checked: a picker can hand back a symlink, a
+/// device node, or a fifo, and reading a fifo blocks the command forever.
+fn checked_import_source(path: &Path) -> Result<PathBuf, AppError> {
+    if !path.is_absolute() {
+        return Err(AppError::unsafe_path("The selected file could not be read."));
+    }
+    let meta = fs::symlink_metadata(path)
+        .map_err(|_| AppError::unsafe_path("The selected file could not be read."))?;
+    if meta.file_type().is_symlink() {
+        return Err(AppError::unsafe_path("Symbolic links cannot be imported."));
+    }
+    if !meta.is_file() {
+        return Err(AppError::unsafe_path("Only files can be imported."));
+    }
+    // Canonicalize so a symlinked PARENT directory is resolved too; the result
+    // is what the rest of the importer works with.
+    let resolved = path
+        .canonicalize()
+        .map_err(|_| AppError::unsafe_path("The selected file could not be read."))?;
+    if !resolved.is_file() {
+        return Err(AppError::unsafe_path("Only files can be imported."));
+    }
+    Ok(resolved)
+}
+
+/// Where an export may land. The parent directory is canonicalized, so a
+/// symlinked folder cannot smuggle the write somewhere else, and CandidCue's
+/// own managed storage is refused outright — an export is for the operator's
+/// documents, and a stray write inside the library corrupts it.
+fn checked_export_destination(
+    paths: &DataPaths,
+    destination: &Path,
+) -> Result<PathBuf, AppError> {
+    if !destination.is_absolute() {
+        return Err(AppError::unsafe_path(
+            "Export destination must be an absolute path.",
+        ));
+    }
+    let file_name = destination
+        .file_name()
+        .ok_or_else(|| AppError::unsafe_path("Export destination has no file name."))?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| AppError::unsafe_path("Export destination has no parent directory."))?
+        .canonicalize()
+        .map_err(|_| AppError::unsafe_path("Export destination folder does not exist."))?;
+    if !parent.is_dir() {
+        return Err(AppError::unsafe_path(
+            "Export destination folder does not exist.",
+        ));
+    }
+    if let Ok(root) = paths.root().canonicalize() {
+        if parent.starts_with(&root) {
+            return Err(AppError::unsafe_path(
+                "Exports cannot be written inside CandidCue's own storage.",
+            ));
+        }
+    }
+
+    let resolved = parent.join(file_name);
+    // An existing destination must be a plain file. Writing through a symlink
+    // is how "save as notes.md" becomes "overwrite whatever notes.md points at";
+    // the atomic rename below would replace the link rather than follow it, but
+    // refusing outright tells the operator what happened.
+    if let Ok(meta) = fs::symlink_metadata(&resolved) {
+        if meta.file_type().is_symlink() {
+            return Err(AppError::unsafe_path(
+                "The export destination is a symbolic link.",
+            ));
+        }
+        if !meta.is_file() {
+            return Err(AppError::unsafe_path(
+                "The export destination is not a file.",
+            ));
+        }
+    }
+    Ok(resolved)
 }
 
 fn title_from_path(path: &Path) -> String {
@@ -164,14 +289,8 @@ pub async fn import_script(
     locks: &ScriptLocks,
     options: ImportOptions,
 ) -> Result<ImportResult, AppError> {
-    let source_path = PathBuf::from(&options.path);
-    if !source_path.is_absolute() || !source_path.exists() {
-        return Err(AppError::unsafe_path("The selected file could not be read."));
-    }
+    let source_path = checked_import_source(Path::new(&options.path))?;
     let meta = fs::symlink_metadata(&source_path)?;
-    if meta.file_type().is_symlink() {
-        return Err(AppError::unsafe_path("Symbolic links cannot be imported."));
-    }
 
     let extension = source_path
         .extension()
@@ -470,16 +589,16 @@ pub async fn export_script(
     let source = fs::read_to_string(&canonical)?;
     let summary = repo::get_summary(pool, script_id).await?;
 
-    let destination = PathBuf::from(&options.destination);
-    if !destination.is_absolute() {
-        return Err(AppError::unsafe_path("Export destination must be an absolute path."));
-    }
+    // Reject the format BEFORE touching the filesystem: an unknown format used
+    // to fall through to the match arm below, after the destination had already
+    // been validated and (for bundles) created.
+    export_format_extension(&options.format)?;
+
+    let destination = checked_export_destination(paths, Path::new(&options.destination))?;
     let parent = destination
         .parent()
-        .ok_or_else(|| AppError::unsafe_path("Export destination has no parent directory."))?;
-    if !parent.exists() {
-        return Err(AppError::unsafe_path("Export destination folder does not exist."));
-    }
+        .ok_or_else(|| AppError::unsafe_path("Export destination has no parent directory."))?
+        .to_path_buf();
 
     let mut warnings = Vec::new();
     let assets_dir = paths.assets_dir(script_id);
@@ -501,7 +620,10 @@ pub async fn export_script(
                 fs::create_dir_all(&export_assets)?;
                 for file in &asset_files {
                     if let Some(name) = file.file_name() {
-                        fs::copy(file, export_assets.join(name))?;
+                        // atomic_write, not fs::copy: the rename replaces a
+                        // symlink at the destination instead of writing through
+                        // it, and never leaves a half-copied image behind.
+                        atomic_write(&export_assets.join(name), &fs::read(file)?)?;
                     }
                 }
             } else if !asset_files.is_empty() {
@@ -545,38 +667,44 @@ pub async fn export_script(
     })
 }
 
+/// Write the bundle as an ATOMIC REPLACE.
+///
+/// `fs::File::create(destination)` truncated the operator's chosen file the
+/// moment the zip writer opened it, and followed a symlink while doing so. A
+/// failure half-way through then left a corrupt stub where a real file used to
+/// be. The zip is built in a temporary file beside the destination and renamed
+/// over it, so the destination either has the old contents or the new ones.
 fn write_bundle(
     destination: &Path,
     manifest: &BundleManifest,
     source: &str,
     asset_files: &[PathBuf],
 ) -> Result<(), AppError> {
-    let file = fs::File::create(destination)?;
-    let mut writer = zip::ZipWriter::new(file);
-    let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-
     let map_zip = |e: zip::result::ZipError| {
         AppError::save_failed("The bundle could not be written.").with_log(format!("zip: {e}"))
     };
+    let manifest_json = serde_json::to_string_pretty(manifest)
+        .map_err(|e| AppError::Internal(format!("manifest serialize: {e}")))?;
 
-    use std::io::Write;
-    writer.start_file("manifest.json", options).map_err(map_zip)?;
-    writer.write_all(
-        serde_json::to_string_pretty(manifest)
-            .map_err(|e| AppError::Internal(format!("manifest serialize: {e}")))?
-            .as_bytes(),
-    )?;
-    writer.start_file("script.md", options).map_err(map_zip)?;
-    writer.write_all(source.as_bytes())?;
-    for asset in asset_files {
-        if let Some(name) = asset.file_name() {
-            writer
-                .start_file(format!("assets/{}", name.to_string_lossy()), options)
-                .map_err(map_zip)?;
-            writer.write_all(&fs::read(asset)?)?;
+    crate::util::atomic_write_with(destination, |file| {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(file);
+        let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        writer.start_file("manifest.json", options).map_err(map_zip)?;
+        writer.write_all(manifest_json.as_bytes())?;
+        writer.start_file("script.md", options).map_err(map_zip)?;
+        writer.write_all(source.as_bytes())?;
+        for asset in asset_files {
+            if let Some(name) = asset.file_name() {
+                writer
+                    .start_file(format!("assets/{}", name.to_string_lossy()), options)
+                    .map_err(map_zip)?;
+                writer.write_all(&fs::read(asset)?)?;
+            }
         }
-    }
-    writer.finish().map_err(map_zip)?;
-    Ok(())
+        writer.finish().map_err(map_zip)?;
+        Ok(())
+    })
 }

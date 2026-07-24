@@ -35,6 +35,31 @@
     <span class="link"><RenderNodes nodes={node.label} /></span>
   {:else if node.type === 'image'}
     <span class="image-ref" title={node.alt}>[Image: {node.alt || node.assetId}]</span>
+  {:else if node.type === 'table'}
+    <table class="table">
+      {#if node.headerRow && node.rows.length > 0}
+        <thead>
+          <tr>
+            {#each node.rows[0] ?? [] as cell, colIndex}
+              <th style:text-align={node.align[colIndex] ?? 'left'}>
+                <RenderNodes nodes={cell} />
+              </th>
+            {/each}
+          </tr>
+        </thead>
+      {/if}
+      <tbody>
+        {#each node.rows.slice(node.headerRow ? 1 : 0) as row}
+          <tr>
+            {#each row as cell, colIndex}
+              <td style:text-align={node.align[colIndex] ?? 'left'}>
+                <RenderNodes nodes={cell} />
+              </td>
+            {/each}
+          </tr>
+        {/each}
+      </tbody>
+    </table>
   {:else if node.type === 'cue'}
     <span class="cue-inline">{node.label}</span>
   {/if}
@@ -67,6 +92,27 @@
   .image-ref {
     color: var(--text-muted);
     font-size: var(--text-sm);
+  }
+  /* Table reference card (spec §24.6). Row separation is a background band,
+     never a nested border inside the block's own surface. */
+  .table {
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    min-width: 100%;
+  }
+  .table th,
+  .table td {
+    padding: var(--space-1) var(--space-3);
+    vertical-align: baseline;
+  }
+  .table th {
+    font-weight: 650;
+    color: var(--text-primary);
+    white-space: nowrap;
+  }
+  .table tbody tr:nth-child(odd) {
+    background: var(--bg-sunken);
   }
   .cue-inline {
     display: inline-flex;

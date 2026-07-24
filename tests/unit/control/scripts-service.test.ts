@@ -22,7 +22,7 @@ describe('scripts service — invoke wiring', () => {
     await scripts.trashScript('id-1', 3);
     await scripts.restoreScript('id-1', 4);
     await scripts.permanentlyDeleteScript('id-1');
-    await scripts.exportScript('id-1', { destination: '/tmp/out.md', format: 'markdown' });
+    await scripts.exportScript('id-1', { format: 'markdown', suggestedName: 'out' });
     await scripts.revealScriptFolder('id-1');
 
     expect(calls.map((c) => c.command)).toEqual([

@@ -18,10 +18,12 @@ import {
   createAnalyserGraph,
   MicrophoneDeviceManager,
   MicrophoneMonitor,
+  queryMicrophonePermission,
   releaseStream,
   requestMicrophoneAccess as requestMicAccess,
   type MediaDevicesLike,
   type MediaStreamLike,
+  type PermissionsLike,
 } from './audio';
 import { ManualCommitDriver, WebRtcTranscriptionTransport } from './realtime';
 import { ipcInvoke, isTauriRuntime } from './ipc';
@@ -32,6 +34,11 @@ import { bindVoiceFacade } from './voice-facade';
 function mediaDevices(): MediaDevicesLike | null {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices) return null;
   return navigator.mediaDevices as unknown as MediaDevicesLike;
+}
+
+function permissionsApi(): PermissionsLike | undefined {
+  if (typeof navigator === 'undefined') return undefined;
+  return (navigator as unknown as { permissions?: PermissionsLike }).permissions;
 }
 
 export function createRealVoiceFacade(): VoiceFacade {
@@ -64,6 +71,40 @@ export function createRealVoiceFacade(): VoiceFacade {
       // Permission was the goal; release the probe stream immediately (§28.7).
       releaseStream(result.stream);
       return 'granted';
+    },
+
+    /**
+     * Passive only (spec §28.1): the Permissions API, never getUserMedia. The
+     * `change` subscription is what makes a grant issued in System Settings
+     * while Preflight is open take effect without a reload. Some platforms
+     * cannot query 'microphone' at all — those report 'unsupported' and the
+     * UI falls back to the explicit button.
+     */
+    watchMicrophonePermission(cb): Unsubscribe {
+      const permissions = permissionsApi();
+      let cancelled = false;
+      let detach: (() => void) | null = null;
+
+      void (async () => {
+        const initial = await queryMicrophonePermission(permissions);
+        if (cancelled) return;
+        cb(initial);
+        if (initial === 'unsupported' || !permissions) return;
+        try {
+          const status = await permissions.query({ name: 'microphone' });
+          if (cancelled) return;
+          const onChange = (): void => cb(status.state);
+          status.addEventListener('change', onChange);
+          detach = () => status.removeEventListener('change', onChange);
+        } catch {
+          // Live updates are a nicety; the initial state already shipped.
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+        detach?.();
+      };
     },
 
     observeLevels(deviceId, cb): Unsubscribe {

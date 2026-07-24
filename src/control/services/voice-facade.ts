@@ -14,6 +14,9 @@ import type {
 
 export type Unsubscribe = () => void;
 
+/** Passive permission state; `unsupported` = the platform cannot tell us. */
+export type MicPermissionState = 'granted' | 'denied' | 'prompt' | 'unsupported';
+
 export interface TranscriptTestEvents {
   onPartial(text: string): void;
   onFinal(text: string): void;
@@ -26,6 +29,13 @@ export interface VoiceFacade {
   listMicrophones(): Promise<AudioDeviceInfo[]>;
   /** Explicit permission request (spec §9.1 — never at app launch). */
   requestMicrophoneAccess(): Promise<'granted' | 'denied'>;
+  /**
+   * Passively observe the microphone permission (spec §28.1). Reports the
+   * current state immediately and again whenever it changes, so a grant made
+   * in System Settings mid-flow is noticed. MUST never call getUserMedia and
+   * therefore never triggers the OS prompt.
+   */
+  watchMicrophonePermission(cb: (state: MicPermissionState) => void): Unsubscribe;
   /** Local level meter; responds before any OpenAI call (spec §14.2 C). */
   observeLevels(deviceId: string | undefined, cb: (s: AudioLevelSnapshot) => void): Unsubscribe;
   /** Temporary realtime transcription test session (spec §14.2 C). */
@@ -73,6 +83,13 @@ const mockVoiceFacade: VoiceFacade = {
   async requestMicrophoneAccess() {
     await wait(300);
     return 'granted';
+  },
+
+  watchMicrophonePermission(cb) {
+    // The mock has no real permission to report; behave like a first run so
+    // the explicit "Allow and choose microphone" action stays visible.
+    const timer = setTimeout(() => cb('prompt'), 0);
+    return () => clearTimeout(timer);
   },
 
   observeLevels(_deviceId, cb) {

@@ -16,10 +16,12 @@
   interface Props {
     value: string;
     placeholder?: string;
+    /** Accessible name for the editing surface (spec §20). */
+    ariaLabel?: string;
     onchange?: (value: string) => void;
   }
 
-  let { value, placeholder = '', onchange }: Props = $props();
+  let { value, placeholder = '', ariaLabel = 'Script Markdown', onchange }: Props = $props();
 
   let host: HTMLElement;
   let view: EditorView | null = null;
@@ -45,6 +47,9 @@
           markdown({ base: markdownLanguage }),
           EditorView.lineWrapping,
           cmPlaceholder(placeholder),
+          // CodeMirror's contenteditable is the editing surface; without this
+          // it is an unnamed textbox to a screen reader (spec §20).
+          EditorView.contentAttributes.of({ 'aria-label': ariaLabel }),
           editorTheme,
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {

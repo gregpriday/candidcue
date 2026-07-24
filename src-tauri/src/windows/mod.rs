@@ -429,8 +429,13 @@ fn schedule_identify_close(app: &AppHandle, delay_ms: u32) {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenStageRequest {
+    #[serde(default)]
     pub display_fingerprint: Option<String>,
-    pub session_id: Option<String>,
+    /// Mandatory (M1). It used to be optional, so a stage could be registered
+    /// with no owning session at all — and then every downstream check that
+    /// compares against the active session had nothing to compare with, and
+    /// `close_stage` would happily accept any id.
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -538,7 +543,7 @@ pub fn open_stage(app: &AppHandle, request: OpenStageRequest) -> Result<StageOpe
     window.set_position(tauri::Position::Physical(position))?;
     window.set_size(tauri::Size::Physical(size))?;
 
-    coordinator.register_stage(generation, request.session_id, Some(fingerprint.clone()));
+    coordinator.register_stage(generation, Some(request.session_id), Some(fingerprint.clone()));
 
     // Notify control of window destruction (crash or close) so it can offer
     // "Reopen stage" (spec §43.5).
@@ -609,7 +614,21 @@ fn window_monitor_fingerprint(
         .and_then(|index| fingerprints.get(index).cloned())
 }
 
-fn require_active_session(app: &AppHandle, session_id: &str) -> Result<u64, AppError> {
+/// Everything a stage command needs from the coordinator, read ONCE.
+///
+/// The previous code called `coordinator.snapshot()` twice per command — once
+/// to validate the session and again to read the generation or fingerprint.
+/// Between those two reads the stage can be destroyed and reopened, so a
+/// command could validate against generation N and then act on N+1. One read,
+/// one consistent view (M1).
+#[derive(Debug, Clone)]
+pub struct ActiveStage {
+    pub generation: u64,
+    pub session_generation: u64,
+    pub display_fingerprint: Option<String>,
+}
+
+fn require_active_stage(app: &AppHandle, session_id: &str) -> Result<ActiveStage, AppError> {
     let coordinator = app.state::<AppCoordinator>();
     let snapshot = coordinator.snapshot();
     if !snapshot.stage.exists {
@@ -621,7 +640,11 @@ fn require_active_session(app: &AppHandle, session_id: &str) -> Result<u64, AppE
         ));
     }
     match &snapshot.stage.session_id {
-        Some(active) if active == session_id => Ok(snapshot.stage.generation),
+        Some(active) if active == session_id => Ok(ActiveStage {
+            generation: snapshot.stage.generation,
+            session_generation: snapshot.session.session_generation,
+            display_fingerprint: snapshot.stage.display_fingerprint.clone(),
+        }),
         _ => Err(AppError::invalid_input(
             "The session is no longer active on the stage.",
         )
@@ -629,16 +652,57 @@ fn require_active_session(app: &AppHandle, session_id: &str) -> Result<u64, AppE
     }
 }
 
+/// What a `close_stage` request should do, given the coordinator's view of the
+/// stage. Pure, so the policy is testable without a window system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseDecision {
+    /// The caller owns the live stage: tell it to close, then destroy it.
+    Close,
+    /// No session owns the stage (it crashed, or was never registered): tear
+    /// down whatever window is left, but there is nothing to notify.
+    Cleanup,
+    /// Another session is on the stage now. Refuse.
+    Refuse,
+}
+
+/// `close_stage` used to destroy the window unconditionally and then clear the
+/// generation it had just read. A close that arrived late — a 4 s display-test
+/// timer, a teardown from an abandoned session — therefore killed the stage
+/// that a DIFFERENT session had opened in the meantime, mid-take (M1).
+pub fn close_decision(stage: &crate::coordinator::StageState, session_id: &str) -> CloseDecision {
+    if !stage.exists {
+        return CloseDecision::Cleanup;
+    }
+    match stage.session_id.as_deref() {
+        Some(active) if active == session_id => CloseDecision::Close,
+        Some(_) => CloseDecision::Refuse,
+        None => CloseDecision::Cleanup,
+    }
+}
+
 pub fn close_stage(app: &AppHandle, session_id: &str) -> Result<(), AppError> {
     let coordinator = app.state::<AppCoordinator>();
     let snapshot = coordinator.snapshot();
-    // Idempotent: closing an absent stage is fine.
+    let decision = close_decision(&snapshot.stage, session_id);
+
+    if decision == CloseDecision::Refuse {
+        return Err(AppError::structured(
+            "STAGE_SESSION_MISMATCH",
+            ErrorCategory::Window,
+            "The stage is showing a different session.",
+            true,
+        )
+        .with_detail("sessionId", session_id));
+    }
+
     if let Some(window) = app.get_webview_window(STAGE_LABEL) {
-        let _ = app.emit_to(
-            STAGE_LABEL,
-            events::STAGE_CLOSE_SESSION,
-            serde_json::json!({ "sessionId": session_id }),
-        );
+        if decision == CloseDecision::Close {
+            let _ = app.emit_to(
+                STAGE_LABEL,
+                events::STAGE_CLOSE_SESSION,
+                serde_json::json!({ "sessionId": session_id }),
+            );
+        }
         window.destroy()?;
     }
     coordinator.stage_closed(snapshot.stage.generation);
@@ -661,12 +725,16 @@ pub fn set_stage_fullscreen(
     enabled: bool,
     native: bool,
 ) -> Result<StageWindowState, AppError> {
-    let generation = require_active_session(app, session_id)?;
+    // ONE coordinator read: generation and requested display come from the
+    // same consistent view, so a stage that is destroyed and reopened between
+    // them cannot be validated as one generation and acted on as another (M1).
+    let active = require_active_stage(app, session_id)?;
+    let generation = active.generation;
+    let requested_fingerprint = active.display_fingerprint.clone();
     let window = app
         .get_webview_window(STAGE_LABEL)
         .ok_or(AppError::StageDisplayMissing)?;
     let coordinator = app.state::<AppCoordinator>();
-    let requested_fingerprint = coordinator.snapshot().stage.display_fingerprint.clone();
 
     if enabled {
         // Re-assert the monitor bounds: the display may have been rearranged
@@ -799,42 +867,89 @@ const MAX_STAGE_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 /// Payload cap for a tracking snapshot.
 const MAX_SNAPSHOT_BYTES: usize = 32 * 1024;
 
+/// The header every control→stage payload MUST carry (M1).
+///
+/// `schemaVersion`, `sessionId` and `stageGeneration` used to be read with
+/// `if let Some(...)`, so a payload that simply omitted `stageGeneration`
+/// skipped the staleness check entirely — the one thing a caller trying to
+/// reach a stage it no longer owns would do. A missing field is now a
+/// rejection, not a pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderVerdict {
+    Accept,
+    /// Stale generation: dropped silently, per spec §43.5.
+    Drop,
+}
+
+pub fn validate_stage_payload_header(
+    payload: &serde_json::Value,
+    session_id: &str,
+    stage_generation: u64,
+    session_generation: u64,
+    stale_is_error: bool,
+) -> Result<HeaderVerdict, AppError> {
+    if payload.get("schemaVersion").and_then(|v| v.as_u64()) != Some(1) {
+        return Err(AppError::invalid_input(
+            "The stage payload has an unsupported schema.",
+        ));
+    }
+    match payload.get("sessionId").and_then(|v| v.as_str()) {
+        Some(id) if id == session_id => {}
+        _ => {
+            return Err(AppError::invalid_input(
+                "The stage payload targets another session.",
+            ))
+        }
+    }
+    let payload_generation = payload
+        .get("stageGeneration")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| {
+            AppError::invalid_input("The stage payload needs a stageGeneration.")
+        })?;
+    if payload_generation != stage_generation {
+        return if stale_is_error {
+            Err(AppError::invalid_input(
+                "The stage payload targets a stale stage generation.",
+            ))
+        } else {
+            Ok(HeaderVerdict::Drop)
+        };
+    }
+    // A session generation, when carried, must also be current. Unlike the
+    // stage generation this one is genuinely optional in the contract.
+    if let Some(payload_session_generation) =
+        payload.get("sessionGeneration").and_then(|v| v.as_u64())
+    {
+        if payload_session_generation != session_generation {
+            return Ok(HeaderVerdict::Drop);
+        }
+    }
+    Ok(HeaderVerdict::Accept)
+}
+
 pub fn publish_stage_document(
     app: &AppHandle,
     session_id: &str,
     document_envelope: serde_json::Value,
 ) -> Result<StageAck, AppError> {
-    let generation = require_active_session(app, session_id)?;
+    let active = require_active_stage(app, session_id)?;
     let serialized = serde_json::to_vec(&document_envelope)
         .map_err(|e| AppError::Internal(format!("envelope serialize: {e}")))?;
     if serialized.len() > MAX_STAGE_DOCUMENT_BYTES {
         return Err(AppError::invalid_input("The stage document is too large."));
     }
-    if document_envelope.get("schemaVersion").and_then(|v| v.as_u64()) != Some(1) {
-        return Err(AppError::invalid_input(
-            "The stage document has an unsupported schema.",
-        ));
-    }
-    if document_envelope.get("sessionId").and_then(|v| v.as_str()) != Some(session_id) {
-        return Err(AppError::invalid_input(
-            "The stage document targets another session.",
-        ));
-    }
-    // The envelope must target the live stage generation (spec §43.5).
-    if let Some(envelope_generation) = document_envelope
-        .get("stageGeneration")
-        .and_then(|v| v.as_u64())
-    {
-        if envelope_generation != generation {
-            return Err(AppError::invalid_input(
-                "The stage document targets a stale stage generation.",
-            ));
-        }
-    }
+    validate_stage_payload_header(
+        &document_envelope,
+        session_id,
+        active.generation,
+        active.session_generation,
+        true,
+    )?;
     app.emit_to(STAGE_LABEL, events::STAGE_LOAD_SESSION, &document_envelope)?;
     Ok(StageAck {
         accepted: true,
-        stage_generation: generation,
+        stage_generation: active.generation,
         session_id: Some(session_id.to_string()),
     })
 }
@@ -846,31 +961,24 @@ pub fn publish_stage_snapshot(
     session_id: &str,
     snapshot: serde_json::Value,
 ) -> Result<(), AppError> {
-    let coordinator = app.state::<AppCoordinator>();
-    let state = coordinator.snapshot();
-    let generation = require_active_session(app, session_id)?;
+    let active = require_active_stage(app, session_id)?;
 
     let serialized = serde_json::to_vec(&snapshot)
         .map_err(|e| AppError::Internal(format!("snapshot serialize: {e}")))?;
     if serialized.len() > MAX_SNAPSHOT_BYTES {
         return Err(AppError::invalid_input("The tracking snapshot is too large."));
     }
-    if snapshot.get("schemaVersion").and_then(|v| v.as_u64()) != Some(1) {
-        return Err(AppError::invalid_input("The snapshot has an unsupported schema."));
-    }
-    if snapshot.get("sessionId").and_then(|v| v.as_str()) != Some(session_id) {
-        return Err(AppError::invalid_input("The snapshot targets another session."));
-    }
-    // Stale-generation snapshots are dropped silently (spec §43.5).
-    if let Some(stage_generation) = snapshot.get("stageGeneration").and_then(|v| v.as_u64()) {
-        if stage_generation != generation {
-            return Ok(());
-        }
-    }
-    if let Some(session_generation) = snapshot.get("sessionGeneration").and_then(|v| v.as_u64()) {
-        if session_generation != state.session.session_generation {
-            return Ok(());
-        }
+    // Stale-generation snapshots are dropped silently (spec §43.5), but a
+    // MISSING generation is an error: it used to be a free pass.
+    if validate_stage_payload_header(
+        &snapshot,
+        session_id,
+        active.generation,
+        active.session_generation,
+        false,
+    )? == HeaderVerdict::Drop
+    {
+        return Ok(());
     }
     for field in ["tokenIndex", "committedTokenIndex", "revision"] {
         match snapshot.get(field).and_then(|v| v.as_i64()) {
@@ -933,8 +1041,8 @@ pub fn publish_stage_command(
     session_id: &str,
     action: serde_json::Value,
 ) -> Result<(), AppError> {
-    let generation = require_active_session(app, session_id)?;
-    if !validate_stage_directive(generation, &action)? {
+    let active = require_active_stage(app, session_id)?;
+    if !validate_stage_directive(active.generation, &action)? {
         return Ok(());
     }
     app.emit_to(STAGE_LABEL, events::STAGE_APPLY_COMMAND, &action)?;
@@ -946,8 +1054,8 @@ pub fn publish_listener_state(
     session_id: &str,
     state: serde_json::Value,
 ) -> Result<(), AppError> {
-    let generation = require_active_session(app, session_id)?;
-    if !validate_stage_directive(generation, &state)? {
+    let active = require_active_stage(app, session_id)?;
+    if !validate_stage_directive(active.generation, &state)? {
         return Ok(());
     }
     if state
@@ -1132,6 +1240,255 @@ mod tests {
             "directive": { "kind": "freeze", "frozen": true }
         });
         assert!(validate_stage_directive(4, &missing_generation).is_err());
+    }
+
+    // -----------------------------------------------------------------
+    // M2: stage privilege — CSP and asset scope
+    // -----------------------------------------------------------------
+
+    /// The stage inherited the GLOBAL csp, which has to allow
+    /// `https://api.openai.com` for the control window. That handed the
+    /// minimally privileged window — the one that renders the operator's
+    /// script — a live route to a third party, contradicting §43.2/§50.10.
+    /// stage.html now carries its own policy; CSP composes restrictively, so
+    /// the stage gets the intersection.
+    #[test]
+    fn stage_csp_grants_no_network() {
+        let html = include_str!("../../../stage.html");
+        let start = html
+            .find("http-equiv=\"Content-Security-Policy\"")
+            .expect("stage.html must carry its own CSP (M2)");
+        let content_start = html[start..]
+            .find("content=\"")
+            .map(|i| start + i + "content=\"".len())
+            .expect("the CSP meta tag needs a content attribute");
+        let csp = &html[content_start..content_start
+            + html[content_start..]
+                .find('"')
+                .expect("unterminated CSP content")];
+
+        let connect = csp
+            .split(';')
+            .map(str::trim)
+            .find(|d| d.starts_with("connect-src"))
+            .expect("the stage CSP must pin connect-src explicitly");
+        assert!(
+            !connect.contains("api.openai.com"),
+            "the stage must have no route to the provider: {connect}"
+        );
+        assert!(
+            !connect.contains('*'),
+            "the stage's connect-src must not contain a wildcard: {connect}"
+        );
+        for host in ["https:", "http://localhost", "ws:", "wss:"] {
+            assert!(
+                !connect.contains(host),
+                "the stage's connect-src must not allow {host}: {connect}"
+            );
+        }
+        for directive in ["object-src 'none'", "frame-src 'none'", "base-uri 'none'"] {
+            assert!(csp.contains(directive), "the stage CSP must set {directive}");
+        }
+
+        // And the control window's policy is deliberately NOT this one: it
+        // still needs the provider, which is the whole reason the two differ.
+        let config = include_str!("../../tauri.conf.json");
+        assert!(
+            config.contains("https://api.openai.com"),
+            "the global CSP still carries the provider origin for control"
+        );
+    }
+
+    /// The asset-protocol scope used to be `$APPDATA/scripts/**`, so every
+    /// canonical `script.md` and every revision file was reachable over
+    /// `asset://` — by the stage, among others.
+    #[test]
+    fn the_asset_scope_exposes_media_only() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json")).expect("config parses");
+        let scope = &config["app"]["security"]["assetProtocol"]["scope"];
+
+        let allow: Vec<&str> = scope["allow"]
+            .as_array()
+            .expect("the scope must use the allow/deny form")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(
+            !allow.iter().any(|p| p.starts_with("$APPDATA/scripts")
+                && !p.contains("/assets/")),
+            "a script-root pattern that is not confined to assets exposes \
+             canonical Markdown and revisions: {allow:?}"
+        );
+        assert!(
+            allow.contains(&"$APPDATA/scripts/*/assets/*"),
+            "the per-script assets directory must still be reachable: {allow:?}"
+        );
+
+        let deny: Vec<&str> = scope["deny"]
+            .as_array()
+            .expect("the scope must declare a deny list")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        // `deny` beats `allow` AND beats any runtime `allow_directory`, so
+        // these are the floor a future widening cannot lift.
+        for required in [
+            "$APPDATA/scripts/*/script.md",
+            "$APPDATA/scripts/*/revisions/**",
+            "$APPDATA/candidcue.sqlite3*",
+        ] {
+            assert!(
+                deny.contains(&required),
+                "the asset scope must explicitly deny {required}: {deny:?}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // M1: stale-stage protection
+    // -----------------------------------------------------------------
+
+    /// The defect: `stageGeneration` was validated only when PRESENT
+    /// (`if let Some(...)`), so a payload that simply omitted it skipped the
+    /// staleness check entirely — the exact thing a caller aiming at a stage it
+    /// no longer owns would send.
+    #[test]
+    fn a_stage_payload_without_a_generation_is_refused() {
+        let no_generation = serde_json::json!({
+            "schemaVersion": 1,
+            "sessionId": "s-1",
+        });
+        let err = validate_stage_payload_header(&no_generation, "s-1", 7, 1, true)
+            .expect_err("a missing stageGeneration must be an error, not a pass");
+        assert_eq!(err.code(), "VALIDATION_FAILED");
+
+        // ...and for the silent-drop caller too: a missing generation is still
+        // an error there, because "drop silently" is only correct for a
+        // generation that is present and stale.
+        assert!(validate_stage_payload_header(&no_generation, "s-1", 7, 1, false).is_err());
+    }
+
+    #[test]
+    fn a_stage_payload_header_accepts_only_the_live_generation_and_session() {
+        let live = serde_json::json!({
+            "schemaVersion": 1,
+            "sessionId": "s-1",
+            "stageGeneration": 7,
+            "sessionGeneration": 3,
+        });
+        assert_eq!(
+            validate_stage_payload_header(&live, "s-1", 7, 3, true).unwrap(),
+            HeaderVerdict::Accept
+        );
+
+        // Stale stage generation: an error for documents, a silent drop for
+        // high-rate snapshots (spec §43.5).
+        let stale = serde_json::json!({
+            "schemaVersion": 1,
+            "sessionId": "s-1",
+            "stageGeneration": 6,
+        });
+        assert!(validate_stage_payload_header(&stale, "s-1", 7, 3, true).is_err());
+        assert_eq!(
+            validate_stage_payload_header(&stale, "s-1", 7, 3, false).unwrap(),
+            HeaderVerdict::Drop
+        );
+
+        // Stale session generation is always a silent drop.
+        let old_session = serde_json::json!({
+            "schemaVersion": 1,
+            "sessionId": "s-1",
+            "stageGeneration": 7,
+            "sessionGeneration": 2,
+        });
+        assert_eq!(
+            validate_stage_payload_header(&old_session, "s-1", 7, 3, true).unwrap(),
+            HeaderVerdict::Drop
+        );
+
+        // Another session's payload, and an unsupported schema, are refused.
+        assert!(validate_stage_payload_header(&live, "s-2", 7, 3, true).is_err());
+        let bad_schema = serde_json::json!({
+            "schemaVersion": 2,
+            "sessionId": "s-1",
+            "stageGeneration": 7,
+        });
+        assert!(validate_stage_payload_header(&bad_schema, "s-1", 7, 3, true).is_err());
+    }
+
+    /// The defect: `close_stage` destroyed the window unconditionally. A close
+    /// that arrived late — an abandoned display test's 4 s timer, a teardown
+    /// from a session that already ended — killed the stage that a DIFFERENT
+    /// session had opened in the meantime, mid-take.
+    #[test]
+    fn close_only_destroys_the_stage_its_own_session_owns() {
+        use crate::coordinator::StageState;
+
+        let live_for_a = StageState {
+            exists: true,
+            session_id: Some("session-a".into()),
+            generation: 4,
+            ..Default::default()
+        };
+        assert_eq!(close_decision(&live_for_a, "session-a"), CloseDecision::Close);
+        assert_eq!(
+            close_decision(&live_for_a, "session-b"),
+            CloseDecision::Refuse,
+            "a close from a session that no longer owns the stage must be refused"
+        );
+
+        // Nothing registered: whatever window is left is an orphan, so tearing
+        // it down is right regardless of who asks.
+        let closed = StageState {
+            exists: false,
+            session_id: Some("session-a".into()),
+            generation: 4,
+            ..Default::default()
+        };
+        assert_eq!(close_decision(&closed, "session-b"), CloseDecision::Cleanup);
+
+        let unowned = StageState {
+            exists: true,
+            session_id: None,
+            generation: 4,
+            ..Default::default()
+        };
+        assert_eq!(close_decision(&unowned, "anything"), CloseDecision::Cleanup);
+    }
+
+    /// A stage can no longer be opened with no owning session: the field is
+    /// mandatory, so `close_decision` and every generation check downstream
+    /// always have something to compare against.
+    #[test]
+    fn opening_a_stage_requires_a_session_id() {
+        let complete: OpenStageRequest = serde_json::from_value(serde_json::json!({
+            "displayFingerprint": "dsp-0123456789abcdef",
+            "sessionId": "session-a",
+        }))
+        .expect("a complete request parses");
+        assert_eq!(complete.session_id, "session-a");
+
+        assert!(
+            serde_json::from_value::<OpenStageRequest>(serde_json::json!({
+                "displayFingerprint": "dsp-0123456789abcdef"
+            }))
+            .is_err(),
+            "an open request with no sessionId must be refused at the boundary"
+        );
+        assert!(
+            serde_json::from_value::<OpenStageRequest>(serde_json::json!({
+                "sessionId": serde_json::Value::Null
+            }))
+            .is_err(),
+            "a null sessionId is not a session id"
+        );
+
+        // The display is genuinely optional: no fingerprint means "primary".
+        let primary: OpenStageRequest =
+            serde_json::from_value(serde_json::json!({ "sessionId": "session-a" }))
+                .expect("display is optional");
+        assert!(primary.display_fingerprint.is_none());
     }
 
     #[test]

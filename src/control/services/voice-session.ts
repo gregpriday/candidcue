@@ -83,6 +83,10 @@ export class VoiceSessionPipeline {
         ledger: this.ledger,
         parseContext: { navigationTargets: deps.compiled.navigationTargets },
         scriptTokens: deps.compiled.spokenTokens,
+        // §33.5: `:::literal-command` ranges are the authored, deterministic
+        // half of command suppression — without them the only protection is
+        // heuristic collision scoring.
+        literalCommandRanges: deps.compiled.literalCommandRanges,
         getCursorTokenIndex: deps.getCursorTokenIndex,
         getContextRevision: () => deps.getCursorTokenIndex(),
         getScrollMode: deps.getScrollMode,

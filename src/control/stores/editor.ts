@@ -42,8 +42,18 @@ export const editor = { subscribe: state.subscribe };
 
 export const AUTOSAVE_DEBOUNCE_MS = 500;
 
+/**
+ * Caller-side compile debounce (spec §45.3). The worker coalescer already
+ * supersedes stale requests, but firing one per keystroke still ships the
+ * whole document across the worker boundary on every character. 90 ms is
+ * below the ~100 ms threshold where a preview stops feeling live, so the
+ * preview keeps up with typing while a burst of keystrokes costs one compile.
+ */
+export const COMPILE_DEBOUNCE_MS = 90;
+
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let savedBadgeTimer: ReturnType<typeof setTimeout> | null = null;
+let compileTimer: ReturnType<typeof setTimeout> | null = null;
 
 export async function openScript(scriptId: string): Promise<ScriptDocument> {
   cancelTimers();
@@ -79,7 +89,12 @@ export function setSource(source: string): void {
   if (s.scriptId === null || source === s.source) return;
   const editorRevision = s.editorRevision + 1;
   state.update((prev) => ({ ...prev, source, editorRevision, dirty: true }));
-  void requestCompile(s.scriptId, source, editorRevision);
+  const scriptId = s.scriptId;
+  if (compileTimer) clearTimeout(compileTimer);
+  compileTimer = setTimeout(() => {
+    compileTimer = null;
+    void requestCompile(scriptId, source, editorRevision);
+  }, COMPILE_DEBOUNCE_MS);
   if (autosaveTimer) clearTimeout(autosaveTimer);
   autosaveTimer = setTimeout(() => {
     autosaveTimer = null;
@@ -104,6 +119,10 @@ export async function setTitle(title: string): Promise<void> {
 /** Immediate save (autosave flush and Cmd/Ctrl+S). */
 export async function saveNow(): Promise<void> {
   const s = get(state);
+  // Flush the pending compile first, even when there is nothing to save:
+  // Preflight awaits saveNow() and then issues its own compile at revision 0,
+  // and a debounced keystroke landing after that would supersede it.
+  flushPendingCompile();
   if (s.scriptId === null || !s.dirty) return;
   if (autosaveTimer) {
     clearTimeout(autosaveTimer);
@@ -138,9 +157,21 @@ export function editorHasUnsavedWork(): boolean {
   return s.dirty || s.saveState === 'saving' || s.saveState === 'error';
 }
 
+/** Run a debounced compile now (or do nothing when none is pending). */
+function flushPendingCompile(): void {
+  if (compileTimer === null) return;
+  clearTimeout(compileTimer);
+  compileTimer = null;
+  const s = get(state);
+  if (s.scriptId === null) return;
+  void requestCompile(s.scriptId, s.source, s.editorRevision);
+}
+
 function cancelTimers(): void {
   if (autosaveTimer) clearTimeout(autosaveTimer);
   if (savedBadgeTimer) clearTimeout(savedBadgeTimer);
+  if (compileTimer) clearTimeout(compileTimer);
   autosaveTimer = null;
   savedBadgeTimer = null;
+  compileTimer = null;
 }

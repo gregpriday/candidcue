@@ -96,19 +96,19 @@ export async function permanentlyDeleteScript(scriptId: string): Promise<void> {
 }
 
 /**
- * Import a file the user picked. Rust's `ImportOptions` requires an absolute
- * `path` — this wrapper used to send `sourcePath`, so every real import failed
- * with a Serde missing-field error before it ran.
+ * Import a script. Rust runs the native open dialog and imports what the
+ * operator chose in one trusted operation, so this wrapper sends no path
+ * (spec §50.7). `null` means the operator cancelled the dialog.
  */
-export async function importScript(options: ImportOptions): Promise<ImportResult> {
-  return invokeOrMock<ImportResult>(
+export async function importScript(options: ImportOptions = {}): Promise<ImportResult | null> {
+  return invokeOrMock<ImportResult | null>(
     'import_script',
-    { options: { path: options.path, title: options.title } },
+    { request: { title: options.title } },
     () => {
       // MOCK: no file access in the browser fallback — placeholder document.
-      const name = options.path.split('/').pop()?.replace(/\.[^.]+$/, '') ?? 'Imported script';
+      const name = options.title ?? 'Imported script';
       const doc = mockScripts.create({
-        title: options.title ?? name,
+        title: name,
         source: `# ${name}\n\nImported placeholder content.\n`,
       });
       return { script: doc, warnings: [] };
@@ -117,25 +117,25 @@ export async function importScript(options: ImportOptions): Promise<ImportResult
 }
 
 /**
- * Export to a destination the user picked. Rust's `ExportOptions` requires
- * `destination` and `format`, and its bundle format is `bundle` — the previous
- * wrapper made options optional and sent `candidcue`, so every export failed.
+ * Export a script. Rust runs the native save dialog and writes the file in the
+ * same operation; `suggestedName` only seeds the dialog's default file name.
+ * `null` means the operator cancelled the dialog.
  */
 export async function exportScript(
   scriptId: string,
   options: ExportOptions,
-): Promise<ExportResult> {
-  return invokeOrMock<ExportResult>(
+): Promise<ExportResult | null> {
+  return invokeOrMock<ExportResult | null>(
     'export_script',
     {
       scriptId,
-      options: {
-        destination: options.destination,
+      request: {
         format: options.format,
         includeAssets: options.includeAssets ?? false,
+        suggestedName: options.suggestedName,
       },
     },
-    () => ({ path: options.destination, format: options.format, warnings: [] }),
+    () => ({ path: options.suggestedName ?? 'script', format: options.format, warnings: [] }),
   );
 }
 

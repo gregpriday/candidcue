@@ -5,6 +5,7 @@
 
 use std::fs;
 
+use candidcue_lib::scripts::import_export::ExportOptions;
 use candidcue_lib::scripts::{
     reconcile, repo, CreateScriptInput, DataPaths, ScriptId, ScriptLocks, ScriptMetadataPatch,
     ScriptStatus,
@@ -640,12 +641,51 @@ mod zip_writer {
     }
 }
 
-/// A 1x1 PNG. Real magic bytes, so it passes MIME sniffing.
+/// A genuine, decodable 1×1 PNG.
+///
+/// This used to be a PNG signature followed by 32 zero bytes: correct magic
+/// bytes in front of garbage. That was enough for the old importer, which
+/// sniffed a four-byte prefix and stopped there. Bundle assets are now put
+/// through a real decode under dimension limits (H4), so a fixture has to be an
+/// actual image — which is the point.
 fn tiny_png() -> Vec<u8> {
-    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-    png.extend_from_slice(&[0, 0, 0, 13, b'I', b'H', b'D', b'R']);
-    png.extend_from_slice(&[0u8; 32]);
-    png
+    vec![
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xF7, 0x03, 0x41, 0x43, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ]
+}
+
+/// A PNG header claiming 30000×30000 (900 megapixels) with a trivial payload —
+/// about 100 bytes on the wire, 3.6 GB decoded.
+fn png_decompression_bomb() -> Vec<u8> {
+    fn crc(bytes: &[u8]) -> u32 {
+        let mut table = [0u32; 256];
+        for (i, entry) in table.iter_mut().enumerate() {
+            let mut c = i as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+            *entry = c;
+        }
+        let mut c = 0xFFFF_FFFFu32;
+        for b in bytes {
+            c = table[((c ^ u32::from(*b)) & 0xFF) as usize] ^ (c >> 8);
+        }
+        c ^ 0xFFFF_FFFF
+    }
+    let mut ihdr = b"IHDR".to_vec();
+    ihdr.extend_from_slice(&30_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&30_000u32.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    out.extend_from_slice(&13u32.to_be_bytes());
+    out.extend_from_slice(&ihdr);
+    out.extend_from_slice(&crc(&ihdr).to_be_bytes());
+    out.extend_from_slice(&[0u8; 64]);
+    out
 }
 
 fn png_name(bytes: &[u8]) -> String {
@@ -679,7 +719,14 @@ async fn import_bundle_bytes(h: &Harness, bytes: Vec<u8>) -> ImportOutcome {
         &h.pool,
         &h.paths,
         &h.locks,
-        serde_json::from_value(serde_json::json!({ "path": path.to_string_lossy() })).unwrap(),
+        // `ImportOptions` is the already-authorized internal shape: it is
+        // constructed here the same way the command constructs it, from a path
+        // the Rust-side dialog produced. It has no `Deserialize` impl any more,
+        // which is what stops a webview payload from ever becoming one (H5).
+        candidcue_lib::scripts::import_export::ImportOptions {
+            path: path.to_string_lossy().to_string(),
+            title: None,
+        },
     )
     .await
 }
@@ -909,4 +956,191 @@ async fn reconciliation_makes_no_changes_after_an_integrity_failure() {
         "a temp file was deleted after an integrity failure"
     );
     assert!(orphan.join("script.md").exists());
+}
+
+// ---------------------------------------------------------------------------
+// H5: caller-supplied paths (spec §50.7)
+// ---------------------------------------------------------------------------
+
+fn export_options(destination: &std::path::Path, format: &str) -> ExportOptions {
+    ExportOptions {
+        destination: destination.to_string_lossy().to_string(),
+        format: format.to_string(),
+        include_assets: false,
+    }
+}
+
+/// The defect: `write_bundle` called `fs::File::create(destination)`, which
+/// truncates the target the instant it opens. Aiming an export at an existing
+/// file destroyed it before a single byte of the bundle was written, and a
+/// failure part-way through left a corrupt stub behind. The export is now an
+/// atomic replace: the zip is built in a temporary file and renamed over the
+/// destination.
+#[tokio::test]
+async fn a_failed_bundle_export_does_not_destroy_the_destination() {
+    let h = harness().await;
+    let id = new_script(&h, "Talk", "# Talk\n\nBody.\n").await;
+    let external = tempfile::tempdir().unwrap();
+
+    let precious = external.path().join("precious.candidcue");
+    fs::write(&precious, b"IRREPLACEABLE\n").unwrap();
+
+    // A directory where the file should be makes the rename fail late, after
+    // the zip has been fully written — exactly the "half-way through" case.
+    let blocked = external.path().join("blocked.candidcue");
+    fs::create_dir_all(&blocked).unwrap();
+    let err = candidcue_lib::scripts::import_export::export_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        export_options(&blocked, "bundle"),
+    )
+    .await
+    .expect_err("a directory is not a usable export destination");
+    assert_eq!(err.code(), "IMPORT_UNSAFE_PATH", "{err:?}");
+
+    // And a successful export leaves no temp files lying around next to it.
+    candidcue_lib::scripts::import_export::export_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        export_options(&precious, "bundle"),
+    )
+    .await
+    .expect("bundle export");
+    let leftovers: Vec<_> = fs::read_dir(external.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+        .collect();
+    assert!(leftovers.is_empty(), "bundle export left a temp file behind");
+    assert_ne!(fs::read(&precious).unwrap(), b"IRREPLACEABLE\n");
+}
+
+/// An export must never be written through a symlink: "save as notes.md" would
+/// otherwise become "overwrite whatever notes.md points at".
+#[cfg(unix)]
+#[tokio::test]
+async fn an_export_refuses_to_write_through_a_symlink() {
+    let h = harness().await;
+    let id = new_script(&h, "Talk", "# Talk\n\nBody.\n").await;
+    let external = tempfile::tempdir().unwrap();
+
+    let secret = external.path().join("id_rsa");
+    fs::write(&secret, b"PRIVATE KEY\n").unwrap();
+    let link = external.path().join("innocent.md");
+    std::os::unix::fs::symlink(&secret, &link).unwrap();
+
+    for format in ["markdown", "text", "bundle"] {
+        let err = candidcue_lib::scripts::import_export::export_script(
+            &h.pool,
+            &h.paths,
+            &h.locks,
+            &id,
+            export_options(&link, format),
+        )
+        .await
+        .expect_err("a symlinked destination must be refused");
+        assert_eq!(err.code(), "IMPORT_UNSAFE_PATH", "{format}: {err:?}");
+    }
+    assert_eq!(fs::read(&secret).unwrap(), b"PRIVATE KEY\n");
+}
+
+/// CandidCue's own managed storage is not a valid export destination: writing
+/// there can overwrite a canonical script, a revision, or the database itself.
+#[tokio::test]
+async fn an_export_refuses_candidcues_own_storage() {
+    let h = harness().await;
+    let id = new_script(&h, "Talk", "# Talk\n\nBody.\n").await;
+
+    let canonical = h.paths.canonical_file(&id);
+    let err = candidcue_lib::scripts::import_export::export_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        &id,
+        export_options(&canonical, "markdown"),
+    )
+    .await
+    .expect_err("managed storage must be refused");
+    assert_eq!(err.code(), "IMPORT_UNSAFE_PATH", "{err:?}");
+    // The canonical file is untouched and still readable.
+    assert_eq!(
+        fs::read_to_string(&canonical).unwrap(),
+        "# Talk\n\nBody.\n"
+    );
+}
+
+/// Import must refuse anything that is not a plain file. A fifo in particular
+/// would block the command forever, and a symlink is how a picker result gets
+/// redirected at a file the operator never saw.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_import_refuses_symlinks_and_non_files() {
+    let h = harness().await;
+    let external = tempfile::tempdir().unwrap();
+
+    let real = external.path().join("real.md");
+    fs::write(&real, "# Real\n").unwrap();
+    let link = external.path().join("link.md");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+
+    let err = candidcue_lib::scripts::import_export::import_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        candidcue_lib::scripts::import_export::ImportOptions {
+            path: link.to_string_lossy().to_string(),
+            title: None,
+        },
+    )
+    .await
+    .expect_err("symlinks are refused");
+    assert_eq!(err.code(), "IMPORT_UNSAFE_PATH", "{err:?}");
+
+    let dir = external.path().join("adirectory.md");
+    fs::create_dir_all(&dir).unwrap();
+    let err = candidcue_lib::scripts::import_export::import_script(
+        &h.pool,
+        &h.paths,
+        &h.locks,
+        candidcue_lib::scripts::import_export::ImportOptions {
+            path: dir.to_string_lossy().to_string(),
+            title: None,
+        },
+    )
+    .await
+    .expect_err("a directory is not importable");
+    assert_eq!(err.code(), "IMPORT_UNSAFE_PATH", "{err:?}");
+}
+
+/// H4, bundle edge: the importer verified magic bytes only, so a PNG header in
+/// front of nothing — or one declaring 900 megapixels — was written straight
+/// into a script's asset directory and later handed to the stage webview's
+/// decoder. Bundle assets now have to survive a real decode under dimension
+/// limits, like every other import path.
+#[tokio::test]
+async fn a_bundle_asset_must_be_a_decodable_image() {
+    for (label, bytes) in [
+        ("a PNG header in front of garbage", {
+            let mut fake = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+            fake.extend_from_slice(&[0u8; 64]);
+            fake
+        }),
+        ("a 30000x30000 decompression bomb", png_decompression_bomb()),
+    ] {
+        let h = harness().await;
+        let name = png_name(&bytes);
+        let bundle = zip_writer::write(&[
+            ("manifest.json", manifest_json(&[name.as_str()])),
+            ("script.md", b"# Bundled\n\nBody.\n".to_vec()),
+            (&format!("assets/{name}"), bytes.clone()),
+        ]);
+        let err = import_bundle_bytes(&h, bundle)
+            .await
+            .expect_err(label);
+        assert_eq!(err.code(), "IMPORT_INVALID_FORMAT", "{label}: {err:?}");
+    }
 }

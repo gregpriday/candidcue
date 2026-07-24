@@ -13,8 +13,20 @@ use crate::errors::{AppError, ErrorCategory};
 use crate::scripts::{DataPaths, ScriptId};
 use crate::util::{new_uuid, now_iso, sha256_hex};
 
+pub mod remote;
+
+pub use remote::{fetch_remote_image, is_publicly_routable, FetchPolicy};
+
 /// Hard limit for an imported image (spec Appendix A.10).
 pub const MAX_IMPORTED_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Decompression-bomb guards (spec §50.7). A 30000×30000 PNG is ~100 bytes on
+/// the wire and 3.6 GB decoded, so the header dimensions are checked BEFORE any
+/// decoder is allowed to allocate.
+pub const MAX_IMAGE_DIMENSION: u32 = 16_384;
+pub const MAX_IMAGE_PIXELS: u64 = 64_000_000;
+/// Ceiling on what a decoder may allocate while proving the payload decodes.
+pub const MAX_IMAGE_DECODE_ALLOC_BYTES: u64 = 384 * 1024 * 1024;
 
 /// Twin of the `ImportedAsset` shape used by the editor.
 #[derive(Debug, Clone, Serialize)]
@@ -42,6 +54,13 @@ pub struct AssetUrlEntry {
 
 /// Magic-byte MIME sniffing for the supported image formats. Never trusts
 /// the file extension alone.
+///
+/// SVG is deliberately NOT sniffable. It used to be recognised here and stored
+/// verbatim, which meant `<svg><script>…</script></svg>` could be written into a
+/// script's asset directory and then rendered by the stage webview — an active
+/// content format inside the one window that is supposed to have no script
+/// surface of its own (spec §50.10). The bundle importer already refused it;
+/// now every import path does.
 pub fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() < 12 {
         return None;
@@ -58,12 +77,6 @@ pub fn sniff_mime(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
         return Some("image/webp");
     }
-    // SVG (text): allowed only as a static image; sniff for the root tag.
-    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]);
-    let head_trim = head.trim_start();
-    if head_trim.starts_with("<svg") || (head_trim.starts_with("<?xml") && head.contains("<svg")) {
-        return Some("image/svg+xml");
-    }
     None
 }
 
@@ -73,16 +86,79 @@ pub fn extension_for_mime(mime: &str) -> &'static str {
         "image/jpeg" => "jpg",
         "image/gif" => "gif",
         "image/webp" => "webp",
-        "image/svg+xml" => "svg",
         _ => "bin",
     }
+}
+
+/// The `image` format that corresponds to a sniffed MIME type.
+fn decoder_format_for_mime(mime: &str) -> Option<image::ImageFormat> {
+    match mime {
+        "image/png" => Some(image::ImageFormat::Png),
+        "image/jpeg" => Some(image::ImageFormat::Jpeg),
+        "image/gif" => Some(image::ImageFormat::Gif),
+        "image/webp" => Some(image::ImageFormat::WebP),
+        _ => None,
+    }
+}
+
+/// Prove a payload really is the image its magic bytes claim: the header must
+/// parse, its dimensions must be sane, and a real decode must succeed under
+/// explicit width/height/allocation limits.
+///
+/// Magic-byte sniffing alone is a four-byte prefix check — it says nothing
+/// about what a decoder will do with the remaining 25 MB. The dimension check
+/// runs first and reads only the header, so a decompression bomb is refused
+/// without ever allocating its pixel buffer.
+pub fn validate_image_payload(bytes: &[u8], sniffed_mime: &str) -> Result<(u32, u32), AppError> {
+    let expected = decoder_format_for_mime(sniffed_mime).ok_or_else(unsupported_asset)?;
+
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_IMAGE_DIMENSION);
+    limits.max_image_height = Some(MAX_IMAGE_DIMENSION);
+    limits.max_alloc = Some(MAX_IMAGE_DECODE_ALLOC_BYTES);
+
+    let make_reader = || {
+        let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), expected);
+        reader.limits(limits.clone());
+        reader
+    };
+
+    // Header only: cheap, and the sole check that runs before any allocation.
+    let (width, height) = make_reader()
+        .into_dimensions()
+        .map_err(|e| unsupported_asset().with_log(format!("image header unreadable: {e}")))?;
+    if width == 0 || height == 0 {
+        return Err(unsupported_asset().with_log("image reports a zero dimension"));
+    }
+    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+        return Err(image_too_large().with_log(format!("{width}x{height} exceeds the edge limit")));
+    }
+    if u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS {
+        return Err(image_too_large().with_log(format!("{width}x{height} exceeds the pixel limit")));
+    }
+
+    // And it must actually decode: a valid header in front of garbage is not an
+    // image, it is a file that happens to start with the right four bytes.
+    make_reader()
+        .decode()
+        .map_err(|e| unsupported_asset().with_log(format!("image failed to decode: {e}")))?;
+    Ok((width, height))
 }
 
 fn unsupported_asset() -> AppError {
     AppError::structured(
         "ASSET_UNSUPPORTED",
         ErrorCategory::Media,
-        "Only PNG, JPEG, GIF, WebP, and SVG images can be imported.",
+        "Only PNG, JPEG, GIF, and WebP images can be imported.",
+        true,
+    )
+}
+
+fn image_too_large() -> AppError {
+    AppError::structured(
+        "ASSET_UNSUPPORTED",
+        ErrorCategory::Media,
+        "That image is too large to import.",
         true,
     )
 }
@@ -157,6 +233,8 @@ fn store_bytes(
     bytes: &[u8],
 ) -> Result<(String, String, String, PathBuf), AppError> {
     let mime = sniff_mime(bytes).ok_or_else(unsupported_asset)?;
+    // Nothing reaches a managed asset directory without decoding first.
+    validate_image_payload(bytes, mime)?;
     let sha = sha256_hex(bytes);
     let extension = extension_for_mime(mime);
     let file_name = format!("{sha}.{extension}");
@@ -219,48 +297,25 @@ pub async fn import_image(
     })
 }
 
-/// Download a remote image over HTTPS with a size cap, then store it like a
-/// local import (spec §46.3 `import_remote_image`).
+/// Download a remote image and store it like a local import
+/// (spec §24.2, §46.3 `import_remote_image`).
+///
+/// All of the transport hardening lives in [`remote::fetch_remote_image`]:
+/// https on every hop, publicly-routable resolved addresses, pinned DNS,
+/// manual redirect revalidation, a streamed body with a hard cap, an allowed
+/// `Content-Type` that must agree with the magic bytes, and a real decode under
+/// dimension limits. This function only persists what came back.
 pub async fn import_remote_image(
     pool: &SqlitePool,
     paths: &DataPaths,
-    http: &reqwest::Client,
     script_id: &ScriptId,
     url: &str,
 ) -> Result<ImportedAsset, AppError> {
     if !crate::scripts::repo::script_exists(pool, script_id).await? {
         return Err(AppError::not_found("script"));
     }
-    let parsed = reqwest::Url::parse(url)
-        .map_err(|_| AppError::invalid_input("The image URL is not valid."))?;
-    if parsed.scheme() != "https" {
-        return Err(AppError::invalid_input("Only https image URLs are allowed."));
-    }
-
-    let response = http
-        .get(parsed.clone())
-        .timeout(std::time::Duration::from_secs(30))
-        .send()
-        .await?
-        .error_for_status()
-        .map_err(|e| {
-            AppError::structured(
-                "ASSET_UNSUPPORTED",
-                ErrorCategory::Network,
-                "The image could not be downloaded.",
-                true,
-            )
-            .with_log(format!("remote image status: {e}"))
-        })?;
-    if let Some(len) = response.content_length() {
-        if len > MAX_IMPORTED_IMAGE_BYTES {
-            return Err(asset_too_large());
-        }
-    }
-    let bytes = response.bytes().await?;
-    if bytes.len() as u64 > MAX_IMPORTED_IMAGE_BYTES {
-        return Err(asset_too_large());
-    }
+    let fetched = remote::fetch_remote_image(url, &remote::FetchPolicy::strict()).await?;
+    let bytes = fetched.bytes;
 
     let (mime, sha, file_name, dest) = store_bytes(paths, script_id, &bytes)?;
     let rel_path = format!("scripts/{}/assets/{file_name}", script_id.as_str());
@@ -273,7 +328,9 @@ pub async fn import_remote_image(
         bytes.len() as u64,
         &rel_path,
         None,
-        Some(parsed.as_str()),
+        // The url that was actually fetched, after redirects — recording the
+        // requested one would misattribute where the bytes came from.
+        Some(fetched.final_url.as_str()),
     )
     .await?;
     Ok(ImportedAsset {
@@ -435,8 +492,41 @@ mod tests {
         webp.extend_from_slice(&[0, 0, 0, 0]);
         webp.extend_from_slice(b"WEBPVP8 ");
         assert_eq!(sniff_mime(&webp), Some("image/webp"));
-        assert_eq!(sniff_mime(b"<svg xmlns='x'></svg>" as &[u8]), Some("image/svg+xml"));
         assert_eq!(sniff_mime(&[0u8; 32]), None);
+    }
+
+    /// SVG is an active-content format. It used to sniff as `image/svg+xml`
+    /// and be stored verbatim in a script's asset directory, where the stage
+    /// webview would render it (spec §50.10).
+    #[test]
+    fn svg_is_not_a_recognised_image() {
+        assert_eq!(sniff_mime(b"<svg xmlns='x'></svg>" as &[u8]), None);
+        assert_eq!(
+            sniff_mime(b"<?xml version='1.0'?><svg><script>x</script></svg>" as &[u8]),
+            None
+        );
+        assert_eq!(extension_for_mime("image/svg+xml"), "bin");
+    }
+
+    /// A valid four-byte prefix in front of garbage is not an image, and a
+    /// header that declares 900 megapixels must never reach a decoder.
+    #[test]
+    fn payload_validation_needs_a_real_decodable_image() {
+        assert!(validate_image_payload(remote::tests_support::TINY_PNG, "image/png").is_ok());
+
+        let mut fake = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        fake.extend_from_slice(&[0u8; 64]);
+        assert_eq!(sniff_mime(&fake), Some("image/png"));
+        assert!(
+            validate_image_payload(&fake, "image/png").is_err(),
+            "magic bytes alone must not be enough to enter an asset directory"
+        );
+
+        let bomb = remote::tests_support::huge_png_header();
+        assert_eq!(sniff_mime(&bomb), Some("image/png"));
+        let err = validate_image_payload(&bomb, "image/png")
+            .expect_err("a 30000x30000 header must be refused");
+        assert_eq!(err.code(), "ASSET_UNSUPPORTED");
     }
 
     #[test]
