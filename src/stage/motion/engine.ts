@@ -299,9 +299,41 @@ type ReanchorFadePhase = 'idle' | 'down' | 'up';
 
 /**
  * Session clock (§9.1). Frames carry session-relative timestamps; the stage
- * only has `performance.now()`. Track the minimum observed offset — the sample
- * with the least transport delay — and let it relax slowly so clock drift does
- * not accumulate into an inflated evidence age.
+ * only has `performance.now()`. The bridge between the two domains is one
+ * number — the offset — and the estimator is the MINIMUM observed sample: the
+ * arrival that spent the least time crossing the window boundary.
+ *
+ * A minimum is the right estimator because of a property the worker guarantees
+ * rather than by luck. `SemanticMotionFrame.sessionTimeMs` is an affine
+ * re-basing of the producer's clock (`SessionClock`, §9.1): it starts at 0 and
+ * is monotone, and when the producer's clock contradicts itself the map is
+ * RE-BASED rather than clamped. Every sample is therefore
+ * `trueOffset + transportDelay` with `transportDelay >= 0` — the samples have a
+ * hard floor, and the minimum converges onto it and stays there.
+ *
+ * The re-basing map is not a no-op, and its two discontinuities both point in
+ * directions a minimum handles:
+ *
+ *   - The producer's clock steps FORWARD — an NTP correction, or a laptop
+ *     waking with wall time advanced while the stage's monotonic clock slept.
+ *     Session time steps forward with it, so every sample steps DOWN by the
+ *     same amount and the minimum adopts the new floor on the first frame after
+ *     the step, with nothing left to unwind. This is the scenario the
+ *     compensation exists for.
+ *
+ *   - The producer's clock steps BACKWARD. The worker re-bases, so session time
+ *     stays monotone and loses only the interval since its previous stamp — one
+ *     worker tick. The offset would have to RISE by that much and a minimum
+ *     will not rise, so the residual is a few ms of overstated evidence age
+ *     against a 750 ms horizon and a 3 s staleness gate.
+ *
+ * This used to carry a `0.005` relaxation term letting the offset drift back up
+ * toward the samples. It was earned when the worker stamped frames with
+ * `Date.now()` and the offset genuinely wandered in both directions. Against a
+ * monotone domain it has nothing to relax and it is not free: relaxing toward
+ * the samples pulls the offset ABOVE the transport floor, which understates
+ * evidence age and eventually makes an ordinary arrival look like it came from
+ * the future.
  */
 function createSessionClock() {
   let offset: number | null = null;
@@ -309,7 +341,6 @@ function createSessionClock() {
     observe(nowMs: number, sessionTimeMs: number) {
       const sample = nowMs - sessionTimeMs;
       if (offset === null || sample < offset) offset = sample;
-      else offset += (sample - offset) * 0.005;
     },
     sessionTime(nowMs: number): number | null {
       return offset === null ? null : nowMs - offset;
