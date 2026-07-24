@@ -37,6 +37,19 @@ export type CommandAction =
    * ----------------------------------------------------------------------- */
   | { action: 'adjust_margins'; deltaPercent: number }
   | { action: 'set_cue_visibility'; visible: boolean }
+  /**
+   * Show/hide the Coaching Rail ("CandidCue, show me my stats"). Omit `visible`
+   * to toggle.
+   *
+   * This is a **display** action and nothing more. Coaching is advisory
+   * (coaching spec §2.1), so this may never move the script, and hiding the
+   * rail must not reflow it either: §7.1 keeps the rail's geometry reserved so
+   * the reading band cannot shift under the presenter mid-take. It runs through
+   * the same wake gate, collision scorer, literal-command ranges and strict
+   * schema validation as every other command — a phrase that happens to appear
+   * in the script must not trigger it.
+   */
+  | { action: 'set_coaching_rail'; visible?: boolean }
   | { action: 'adjust_listener_opacity'; deltaPercent: number }
   | { action: 'set_scroll_speed'; wordsPerMinute: number }
   | { action: 'adjust_scroll_speed'; deltaPercent: number }

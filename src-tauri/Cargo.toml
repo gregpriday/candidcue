@@ -56,6 +56,11 @@ image = { version = "0.25", default-features = false, features = [
 
 [dev-dependencies]
 tempfile = "3"
+# `tauri/test` gives the MockRuntime, which is what makes it possible to assert
+# that a stage command actually EMITS rather than only that its pure policy
+# helper returned `Emit`. Dev-only: with resolver v2 this feature is not unified
+# into a normal `cargo build`, so the shipped binary is unaffected.
+tauri = { version = "2", features = ["test"] }
 
 [profile.release]
 panic = "abort"

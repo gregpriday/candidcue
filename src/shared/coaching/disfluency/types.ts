@@ -257,6 +257,17 @@ export interface FillerDetection {
   /** Canonical lexicon form (`um`, `you know`), for grouping and cooldowns. */
   canonicalForm: string;
   /**
+   * The authored **span** this detection sits inside, or `null`.
+   *
+   * `FillerEvent` carries only a token-level anchor, and a token id is not a
+   * span id: putting one where the other is expected is what made the
+   * `<!-- cc:coach off -->` opt-out never match and made every filler tip
+   * cancel itself as out-of-scope on the next tick. The span travels
+   * alongside the event so `CoachCandidate.scriptSpanId` can be populated with
+   * a real span and `CoachCandidate.scriptAnchorTokenId` with a real token.
+   */
+  scriptSpanId: string | null;
+  /**
    * §16.5 conjunct 1. True when this detection rests on a **final** transcript
    * — Realtime or precision. A detection derived from a provisional tail may
    * never be confirmed, however good the other evidence looks, because a

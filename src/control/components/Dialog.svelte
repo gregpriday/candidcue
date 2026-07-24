@@ -10,12 +10,14 @@
   interface Props {
     open: boolean;
     title: string;
+    /** `lg` widens the panel for two-column content (revision browser). */
+    size?: 'md' | 'lg';
     onclose?: () => void;
     children?: Snippet;
     footer?: Snippet;
   }
 
-  let { open, title, onclose, children, footer }: Props = $props();
+  let { open, title, size = 'md', onclose, children, footer }: Props = $props();
 
   const uid = $props.id();
   let panel: HTMLElement | null = $state(null);
@@ -78,7 +80,7 @@
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <div class="scrim" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose?.()}>
     <div
-      class="panel"
+      class="panel {size}"
       role="dialog"
       tabindex="-1"
       aria-modal="true"
@@ -128,6 +130,17 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-pop);
+  }
+  /* Two-column content (the revision browser) needs room; the panel then
+     owns the scroll boundary itself rather than scrolling as one column. */
+  .panel.lg {
+    width: min(860px, 100%);
+    max-height: min(86vh, 760px);
+    overflow: hidden;
+  }
+  .panel.lg .body {
+    min-height: 0;
+    overflow: hidden;
   }
 
   .title {

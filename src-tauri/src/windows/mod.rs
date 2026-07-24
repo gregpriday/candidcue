@@ -640,7 +640,15 @@ pub struct ActiveStage {
     pub display_fingerprint: Option<String>,
 }
 
-fn require_active_stage(app: &AppHandle, session_id: &str) -> Result<ActiveStage, AppError> {
+/// Generic over the runtime so `publish_stage_snapshot` can be exercised
+/// against tauri's MockRuntime in `tests/session_lifecycle_tests.rs`. That test
+/// is the one that asserts an emission actually HAPPENS — the suite previously
+/// only ever asserted that stale payloads are dropped, which is how a stage
+/// that never received a single snapshot in a packaged build stayed green.
+fn require_active_stage<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    session_id: &str,
+) -> Result<ActiveStage, AppError> {
     let coordinator = app.state::<AppCoordinator>();
     let snapshot = coordinator.snapshot();
     if !snapshot.stage.exists {
@@ -979,8 +987,8 @@ pub fn plan_stage_document_publish(
     }
 }
 
-pub fn publish_stage_document(
-    app: &AppHandle,
+pub fn publish_stage_document<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     session_id: &str,
     document_envelope: serde_json::Value,
 ) -> Result<StageAck, AppError> {
@@ -1010,8 +1018,8 @@ pub fn publish_stage_document(
 
 /// Validate numeric bounds, identifiers, session generation, and payload
 /// size before emitting to the stage (spec §46.6).
-pub fn publish_stage_snapshot(
-    app: &AppHandle,
+pub fn publish_stage_snapshot<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     session_id: &str,
     snapshot: serde_json::Value,
 ) -> Result<(), AppError> {

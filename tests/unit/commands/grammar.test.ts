@@ -200,3 +200,54 @@ describe('deterministic grammar — §34 catalogue', () => {
     }
   });
 });
+
+describe('coaching rail visibility — "CandidCue, show me my stats"', () => {
+  it('recognises the natural phrasings for showing the rail', () => {
+    for (const phrase of [
+      'show me my stats',
+      'show my stats',
+      'show stats',
+      'show the stats',
+      'show me my statistics',
+      'show coaching',
+      'show the coaching rail',
+      'show me my metrics',
+      'show pace stats',
+    ]) {
+      expectAction(phrase, { action: 'set_coaching_rail', visible: true });
+    }
+  });
+
+  it('recognises the phrasings for hiding it', () => {
+    for (const phrase of ['hide my stats', 'hide stats', 'hide the coaching rail', 'hide coaching']) {
+      expectAction(phrase, { action: 'set_coaching_rail', visible: false });
+    }
+  });
+
+  it('does not shadow the display commands that share the show/hide verbs', () => {
+    // The rail branch runs first, so these prove it is selective rather than
+    // greedy. Without that, "show cues" would have started toggling the rail.
+    expectAction('show the script', { action: 'unblank_stage' });
+    expectAction('show cues', { action: 'set_cue_visibility', visible: true });
+    expectAction('show listener', { action: 'set_listener', enabled: true });
+    expectAction('hide cues', { action: 'set_cue_visibility', visible: false });
+    expectAction('hide listener', { action: 'set_listener', enabled: false });
+    expectAction('hide the script', { action: 'blank_stage' });
+  });
+
+  it('refuses to guess on a bare "show pace", which is ambiguous with scroll speed', () => {
+    // `set_scroll_speed` is also "pace". A wrong guess here silently changes
+    // what the presenter sees mid-take, so no answer is the correct answer.
+    expect(parse('show pace').kind).toBe('unknown');
+  });
+
+  it('carries no positional field — coaching may never move the script', () => {
+    const result = parse('show me my stats');
+    expect(result.kind).toBe('command');
+    if (result.kind !== 'command') return;
+    // The advisory-only rule (coaching spec §2.1) is enforced by the action
+    // having nowhere to put a position. If someone adds one, this fails.
+    expect(Object.keys(result.action).sort()).toEqual(['action', 'visible']);
+    expect(result.requiresConfirmation).toBe(false);
+  });
+});

@@ -327,6 +327,7 @@ export function reconcilePrecisionResult(input: ReconcileInput): ReconciliationO
     outcome.created.push({
       event,
       canonicalForm,
+      scriptSpanId: input.authored.spanId,
       neighbourKey,
       finalEvidence: true,
       requiresHesitationEvidence: false,

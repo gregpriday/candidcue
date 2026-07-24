@@ -1,0 +1,35 @@
+{
+  "_comment": [
+    "Canonical shapes for the diagnostics / support commands (spec §44.11,",
+    "§46.8, §47.10). Read by BOTH sides:",
+    "  - tests/unit/control/diagnostics-ipc-contract.test.ts asserts the real",
+    "    TypeScript wrappers in src/control/services/diagnostics.ts emit and",
+    "    read exactly these shapes;",
+    "  - src-tauri/tests/ipc_contract_tests.rs asserts the Rust command",
+    "    signatures and DTOs produce them.",
+    "Neither command takes an argument. export_support_bundle used to declare",
+    "`destination: String`, which the webview had no way to supply — the dialog",
+    "plugin is deliberately not granted to JavaScript — so the call would have",
+    "failed to deserialize before running a line (the C5 shape). Rust runs the",
+    "folder picker itself and returns null when the operator cancels."
+  ],
+  "get_system_diagnostics": {},
+  "export_support_bundle": {},
+  "expectedSystemDiagnostics": {
+    "appVersion": "0.1.0",
+    "os": "macos",
+    "arch": "aarch64",
+    "databaseIntegrityOk": true,
+    "scriptCount": 12,
+    "sessionCount": 0,
+    "dataDir": "/Users/example/Library/Application Support/com.candidcue.app"
+  },
+  "expectedSupportBundleResult": {
+    "path": "/Users/example/Desktop/CandidCue-support-20260724-091500"
+  },
+  "_session_count_comment": [
+    "sessionCount is deliberately 0 in this fixture. Nothing wrote the sessions",
+    "table until start_session was wired, so a zero on an existing install",
+    "means 'not recorded', not 'never presented'. The UI must qualify it."
+  ]
+}

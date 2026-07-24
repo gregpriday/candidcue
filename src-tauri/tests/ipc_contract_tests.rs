@@ -6,7 +6,8 @@
 
 use candidcue_lib::scripts::import_export::{ExportRequest, ImportRequest};
 use candidcue_lib::scripts::{
-    CreateScriptInput, PageRequest, ScriptFilter, ScriptId, ScriptMetadataPatch, ScriptStatus,
+    CreateScriptInput, PageRequest, RevisionDocument, RevisionSummary, SaveResult, ScriptFilter,
+    ScriptId, ScriptMetadataPatch, ScriptStatus,
 };
 
 fn fixture() -> serde_json::Value {
@@ -247,6 +248,243 @@ fn transition_payloads_all_carry_an_expected_revision() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// §21.4 revision browser: the three commands that had no TypeScript caller
+// ---------------------------------------------------------------------------
+
+fn scripts_cmds_source() -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("commands")
+            .join("scripts_cmds.rs"),
+    )
+    .expect("scripts_cmds.rs")
+}
+
+/// The revision commands take bare parameters rather than a DTO, so the thing
+/// that can drift is the PARAMETER NAME: Tauri matches the camelCase form of
+/// each Rust parameter, and a mismatch is a deserialization failure at call
+/// time, not a compile error. The fixture is the frontend's payload; every key
+/// in it must correspond to a declared parameter, and every declared parameter
+/// must appear in the fixture.
+#[test]
+fn revision_command_arguments_match_the_frontend_payload_keys() {
+    let f = fixture();
+    let source = scripts_cmds_source();
+
+    fn camel(snake: &str) -> String {
+        let mut out = String::new();
+        let mut upper = false;
+        for ch in snake.chars() {
+            if ch == '_' {
+                upper = true;
+            } else if upper {
+                out.extend(ch.to_uppercase());
+                upper = false;
+            } else {
+                out.push(ch);
+            }
+        }
+        out
+    }
+
+    for (command, params) in [
+        ("list_revisions", vec!["script_id"]),
+        ("get_revision", vec!["script_id", "revision_id"]),
+        (
+            "restore_revision",
+            vec!["script_id", "revision_id", "expected_revision"],
+        ),
+    ] {
+        let body = source
+            .split(&format!("pub async fn {command}("))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{command} must exist in scripts_cmds.rs"))
+            .split(')')
+            .next()
+            .expect("parameter list");
+
+        let payload = f[command]
+            .as_object()
+            .unwrap_or_else(|| panic!("fixture must carry a {command} payload"));
+
+        for param in &params {
+            assert!(
+                body.contains(&format!("{param}:")),
+                "{command} no longer declares `{param}`; the frontend still sends \
+                 `{}`",
+                camel(param)
+            );
+            assert!(
+                payload.contains_key(&camel(param)),
+                "{command} declares `{param}` but the frontend payload has no \
+                 `{}` key — Tauri would pass a missing argument",
+                camel(param)
+            );
+        }
+        assert_eq!(
+            payload.len(),
+            params.len(),
+            "{command}'s payload has keys Rust does not declare: {:?}",
+            payload.keys().collect::<Vec<_>>()
+        );
+    }
+
+    // The compare-and-swap argument must be a number, and the script id must
+    // survive the boundary parser.
+    assert!(f["restore_revision"]["expectedRevision"].is_i64());
+    assert!(ScriptId::parse(f["restore_revision"]["scriptId"].as_str().unwrap()).is_ok());
+}
+
+/// The response shapes the revision panel reads. `RevisionDocument` flattens
+/// its summary, so the payload is a summary WITH a `source` — a TypeScript
+/// twin shaped `{ summary, source }` would read `undefined` everywhere.
+#[test]
+fn revision_payloads_serialize_to_the_frontend_shape() {
+    let f = fixture();
+    let summary = RevisionSummary {
+        id: f["expectedRevisionSummary"]["id"].as_str().unwrap().into(),
+        revision_number: 3,
+        source_hash: "9f2c1b0ae4d5".into(),
+        reason: "autosave_interval".into(),
+        word_count: Some(412),
+        created_at: "2026-07-24T09:15:00Z".into(),
+    };
+    let encoded = serde_json::to_value(&summary).expect("serializes");
+    assert_eq!(encoded, f["expectedRevisionSummary"]);
+
+    let document = RevisionDocument {
+        summary,
+        source: "# Keynote\n".into(),
+    };
+    let encoded = serde_json::to_value(&document).expect("serializes");
+    assert_eq!(
+        encoded["revisionNumber"], 3,
+        "RevisionDocument must FLATTEN its summary; a nested `summary` object \
+         would leave every field of the frontend twin undefined"
+    );
+    assert!(encoded.get("summary").is_none());
+    assert_eq!(encoded["source"], "# Keynote\n");
+}
+
+/// `restore_revision` returns `SaveResult`, which has no `status` field: a
+/// stale revision or an external change is an `Err`, not a value. The older
+/// `SaveResult` twin in scripts-types.ts declares
+/// `status: 'saved' | 'conflict'`, so anything branching on it is dead code —
+/// this pins the real shape so the new twin in services/revisions.ts cannot
+/// drift back.
+#[test]
+fn restore_result_has_no_status_field() {
+    let f = fixture();
+    let result = SaveResult {
+        script_revision: 8,
+        source_hash: "9f2c1b0ae4d5".into(),
+        saved_at: "2026-07-24T09:20:00Z".into(),
+        revision_created: true,
+        revision_id: Some(f["revisionId"].as_str().unwrap().into()),
+    };
+    let encoded = serde_json::to_value(&result).expect("serializes");
+    assert_eq!(encoded, f["expectedRestoreResult"]);
+    assert!(
+        encoded.get("status").is_none(),
+        "Rust has never sent a `status`; a conflict is an Err"
+    );
+}
+
+/// Restoring must itself be undoable. The mechanism is a single line in
+/// `repo::restore_revision` — it routes through `save_script` with
+/// `revision_reason: "before_restore"`, so the text the restore destroys is
+/// snapshotted under the same per-script lock that writes the replacement.
+/// Deleting that reason would silently turn restore into a destructive
+/// operation with no visible symptom, so it is asserted here.
+#[test]
+fn restore_snapshots_the_current_text_before_overwriting_it() {
+    let repo = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("scripts")
+            .join("repo.rs"),
+    )
+    .expect("repo.rs");
+    let body = repo
+        .split("pub async fn restore_revision(")
+        .nth(1)
+        .expect("restore_revision exists")
+        .split("\npub ")
+        .next()
+        .expect("function body");
+    assert!(
+        body.contains("save_script("),
+        "restore_revision must go through save_script, which snapshots the \
+         preimage under the per-script lock"
+    );
+    assert!(
+        body.contains("\"before_restore\""),
+        "restore_revision must force a revision of the current text before \
+         replacing it, otherwise a restore is unrecoverable"
+    );
+}
+
+/// Every reason string Rust can write must be one the UI knows how to name.
+/// A new reason that only the panel's fallback handles would surface as raw
+/// snake_case; a reason the panel lists but Rust never writes is a decoy.
+#[test]
+fn revision_reasons_are_exactly_the_ones_the_ui_labels() {
+    let f = fixture();
+    let listed: Vec<String> = f["revisionReasons"]
+        .as_array()
+        .expect("fixture reason list")
+        .iter()
+        .map(|v| v.as_str().expect("reason string").to_string())
+        .collect();
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let sources: String = [
+        root.join("src").join("scripts").join("repo.rs"),
+        root.join("src").join("scripts").join("import_export.rs"),
+        root.join("src").join("commands").join("sessions_cmds.rs"),
+    ]
+    .iter()
+    .map(|p| std::fs::read_to_string(p).expect("source file"))
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    // Direction 1 — nothing the UI lists may be a decoy.
+    for reason in &listed {
+        assert!(
+            sources.contains(&format!("\"{reason}\"")),
+            "the UI labels `{reason}`, but no Rust source writes that snapshot \
+             reason; a label for a reason that cannot occur is a decoy"
+        );
+    }
+
+    // Direction 2 — nothing Rust writes may be missing from the UI's list.
+    // Every literal reason reaches the column through one of these two call
+    // shapes, and both put the string on the same line as the marker.
+    for line in sources.lines() {
+        let marker = if line.contains("create_revision_snapshot(") {
+            "create_revision_snapshot("
+        } else if line.contains("revision_reason: Some(") {
+            "revision_reason: Some("
+        } else {
+            continue;
+        };
+        let tail = line.split(marker).nth(1).unwrap_or_default();
+        let Some(literal) = tail.split('"').nth(1) else {
+            continue; // the reason is a variable on this call (e.g. `&reason`)
+        };
+        if literal.is_empty() || !literal.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+            continue;
+        }
+        assert!(
+            listed.iter().any(|l| l == literal),
+            "Rust writes the snapshot reason `{literal}` but the revision panel \
+             has no label for it; it would surface as raw snake_case"
+        );
+    }
+}
+
 /// The error codes this pass introduced must exist on the TypeScript side, and
 /// the one it retired must be gone.
 ///
@@ -301,6 +539,321 @@ fn the_typescript_error_contract_matches_the_rust_codes() {
     assert!(
         !rust.contains("\"LISTENER_SIGNATURE_INVALID\""),
         "the listener module must not raise a code that claims a signature check"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// §44.11 / §47.10 diagnostics and support bundle
+// ---------------------------------------------------------------------------
+
+use candidcue_lib::commands::settings_cmds::{SupportBundleResult, SystemDiagnostics};
+
+fn settings_fixture() -> serde_json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("ipc")
+        .join("settings-command-payloads.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
+    serde_json::from_str(&raw).expect("fixture parses")
+}
+
+/// The diagnostics payload the Settings panel reads, field for field. A rename
+/// on either side turns a number into `undefined`, which a panel that exists to
+/// be believed must not do quietly.
+#[test]
+fn system_diagnostics_serializes_to_the_frontend_shape() {
+    let f = settings_fixture();
+    let diagnostics = SystemDiagnostics {
+        app_version: "0.1.0".into(),
+        os: "macos".into(),
+        arch: "aarch64".into(),
+        database_integrity_ok: true,
+        script_count: 12,
+        session_count: 0,
+        data_dir: "/Users/example/Library/Application Support/com.candidcue.app".into(),
+    };
+    let encoded = serde_json::to_value(&diagnostics).expect("serializes");
+    assert_eq!(encoded, f["expectedSystemDiagnostics"]);
+
+    let bundle = SupportBundleResult {
+        path: "/Users/example/Desktop/CandidCue-support-20260724-091500".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&bundle).expect("serializes"),
+        f["expectedSupportBundleResult"]
+    );
+}
+
+/// C5, the second instance. `export_support_bundle` had the identical
+/// unusable-destination shape `export_all_data` was fixed for: a
+/// `destination: String` parameter the control webview could never fill,
+/// because the dialog plugin is not granted to JavaScript. Any caller would
+/// have sent `{ destination: undefined }`, JSON would have dropped the key,
+/// and the command would have failed to deserialize before running a line.
+///
+/// Both commands must now take the folder from a Rust-side picker and return
+/// `Option<…>`, where `None` is a cancelled dialog rather than a failure.
+#[test]
+fn destination_taking_export_commands_run_their_own_picker() {
+    let f = settings_fixture();
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("commands")
+            .join("settings_cmds.rs"),
+    )
+    .expect("settings_cmds.rs");
+
+    for (command, result_type) in [
+        ("export_support_bundle", "Option<SupportBundleResult>"),
+        ("export_all_data", "Option<DataExportResult>"),
+    ] {
+        let signature = source
+            .split(&format!("pub async fn {command}("))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{command} must exist"))
+            .split('{')
+            .next()
+            .expect("signature");
+        assert!(
+            !signature.contains("destination:"),
+            "{command} takes a `destination` argument again; the webview cannot \
+             supply one (C5) — run the picker in Rust instead"
+        );
+        assert!(
+            signature.contains(result_type),
+            "{command} must return {result_type} so a cancelled picker is None, \
+             not an error"
+        );
+        let body = source
+            .split(&format!("pub async fn {command}("))
+            .nth(1)
+            .expect("body")
+            .split("\n#[tauri::command]")
+            .next()
+            .expect("body");
+        assert!(
+            body.contains("pick_destination_folder"),
+            "{command} must obtain its folder from the Rust-side picker"
+        );
+    }
+
+    // And the payload both sides agree on is empty: there is no argument a
+    // caller could smuggle a path into.
+    for command in ["get_system_diagnostics", "export_support_bundle"] {
+        assert!(
+            f[command]
+                .as_object()
+                .unwrap_or_else(|| panic!("fixture carries a {command} payload"))
+                .is_empty(),
+            "{command} must take no arguments from the webview"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// §52 / §46.6 display profiles
+// ---------------------------------------------------------------------------
+
+use candidcue_lib::windows::DisplayProfile;
+
+fn stage_fixture() -> serde_json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("ipc")
+        .join("stage-command-payloads.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
+    serde_json::from_str(&raw).expect("fixture parses")
+}
+
+/// The profile payload the (still to be built) Preflight UI sends. `id` is
+/// absent on create and `updatedAt` is Rust's to assign, so both must be
+/// optional on the way in — a required `id` would make every first save fail.
+#[test]
+fn display_profile_accepts_the_frontend_payload() {
+    let f = stage_fixture();
+    let profile: DisplayProfile =
+        serde_json::from_value(f["save_display_profile"]["profile"].clone())
+            .expect("the frontend's profile payload must deserialize");
+    assert!(profile.id.is_none(), "a create carries no id");
+    assert_eq!(profile.name, "Teleprompter Display");
+    assert_eq!(profile.display_fingerprint.as_deref(), Some("dsp-mock-prompter"));
+    assert_eq!(profile.stage["schemaVersion"], 1);
+    assert_eq!(profile.stage["fontSizePx"], 72);
+    assert!(profile.updated_at.is_none());
+
+    // And the row that comes back out matches the TypeScript record twin.
+    let saved: DisplayProfile = serde_json::from_value(f["expectedSavedProfile"].clone())
+        .expect("a saved profile round-trips");
+    assert_eq!(
+        serde_json::to_value(&saved).expect("serializes"),
+        f["expectedSavedProfile"]
+    );
+}
+
+/// The three rejections the service mirrors client-side. If Rust ever relaxes
+/// one, the duplicated check in services/display-profiles.ts becomes a UI-only
+/// restriction — which is why the rules are asserted here rather than only
+/// there.
+#[test]
+fn display_profile_validation_rules_are_the_ones_the_service_mirrors() {
+    let f = stage_fixture();
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("windows")
+            .join("mod.rs"),
+    )
+    .expect("windows/mod.rs");
+    let body = source
+        .split("pub async fn save_display_profile(")
+        .nth(1)
+        .expect("save_display_profile exists")
+        .split("\npub ")
+        .next()
+        .expect("body");
+
+    assert!(body.contains("A display profile needs a name."));
+    assert!(body.contains("Stage settings must be an object."));
+    assert!(body.contains("Stage settings have an unsupported schema version."));
+    assert!(
+        body.contains("schemaVersion"),
+        "the schema gate must read the camelCase key the frontend sends"
+    );
+
+    // The fixture's rejected shapes still parse as DisplayProfile — they are
+    // refused by the validation above, not by serde. That distinction matters:
+    // a serde failure would surface as an opaque deserialization error.
+    for key in ["emptyName", "wrongSchemaVersion", "stageNotAnObject"] {
+        assert!(
+            serde_json::from_value::<DisplayProfile>(f["rejectedProfiles"][key].clone()).is_ok(),
+            "{key} must reach the validation, not fail to deserialize"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// §14.2 F / §46.7 listener catalogue
+// ---------------------------------------------------------------------------
+
+use candidcue_lib::listeners::{ListenerCatalogue, ListenerCatalogueEntry};
+
+fn listener_fixture() -> serde_json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("ipc")
+        .join("listener-command-payloads.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
+    serde_json::from_str(&raw).expect("fixture parses")
+}
+
+#[test]
+fn listener_catalogue_serializes_to_the_frontend_shape() {
+    let f = listener_fixture();
+    let entry = ListenerCatalogueEntry {
+        pack_id: "mira".into(),
+        latest_version: "1.0.0".into(),
+        display_name: "Mira".into(),
+        description: "A calm listener who holds eye contact.".into(),
+        thumbnail_url: "asset://localhost/listeners/mira/poster.webp".into(),
+        approximate_bytes: 18_874_368,
+        variants: vec!["720p".into()],
+        minimum_app_version: "0.1.0".into(),
+        installed_version: Some("1.0.0".into()),
+    };
+    assert_eq!(
+        serde_json::to_value(&entry).expect("serializes"),
+        f["expectedCatalogueEntry"]
+    );
+
+    let catalogue = ListenerCatalogue {
+        entries: Vec::new(),
+        fetched_at: "2026-07-24T09:15:00Z".into(),
+        source: "bundled_only".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&catalogue).expect("serializes"),
+        f["expectedCatalogue"]
+    );
+
+    // `installedVersion` is skipped when absent, so the TypeScript twin
+    // declares it optional. A pack that is merely listed must not read as
+    // installed.
+    let uninstalled = ListenerCatalogueEntry {
+        installed_version: None,
+        ..entry
+    };
+    let encoded = serde_json::to_value(&uninstalled).expect("serializes");
+    assert!(encoded.get("installedVersion").is_none());
+}
+
+/// The listener UI shows NO download affordance, and this is the assertion
+/// that keeps that honest in both directions.
+///
+/// `download_listener` and `cancel_listener_download` are deliberate
+/// NOT_IMPLEMENTED stubs — there is no CandidCue-controlled pack host — so a
+/// download button could only ever throw. If someone implements the pipeline,
+/// this test fails, which is the prompt to flip `DOWNLOADS_SUPPORTED` in
+/// src/control/services/listeners-catalogue.ts and build the affordance.
+///
+/// The reverse mistake is also covered: `remove_listener` is REAL, so it must
+/// not be allowed to decay into a stub while the UI offers a Remove button.
+#[test]
+fn listener_download_commands_are_still_honest_stubs() {
+    let f = listener_fixture();
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("commands")
+            .join("listeners_cmds.rs"),
+    )
+    .expect("listeners_cmds.rs");
+
+    for command in f["notImplementedCommands"]
+        .as_array()
+        .expect("fixture command list")
+    {
+        let name = command.as_str().expect("command name");
+        let body = source
+            .split(&format!("pub async fn {name}("))
+            .nth(1)
+            .unwrap_or_else(|| panic!("{name} must exist in listeners_cmds.rs"))
+            .split("\n#[tauri::command]")
+            .next()
+            .expect("body");
+        assert!(
+            body.contains("not_implemented"),
+            "{name} is implemented now; the control UI hides every download \
+             affordance on the assumption that it is not (DOWNLOADS_SUPPORTED \
+             in services/listeners-catalogue.ts)"
+        );
+    }
+
+    let remove_body = source
+        .split("pub async fn remove_listener(")
+        .nth(1)
+        .expect("remove_listener exists")
+        .split("\n#[tauri::command]")
+        .next()
+        .expect("body");
+    assert!(
+        !remove_body.contains("not_implemented"),
+        "remove_listener must stay implemented; Settings offers a Remove \
+         button for downloaded packs"
+    );
+    assert!(
+        remove_body.contains("remove_pack"),
+        "remove_listener must delegate to listeners::remove_pack, which is \
+         what refuses bundled packs"
     );
 }
 

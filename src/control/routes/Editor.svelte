@@ -13,6 +13,7 @@
   import OverflowMenu from '../components/OverflowMenu.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import RenderBlocks from '../components/RenderBlocks.svelte';
+  import RevisionHistory from '../components/RevisionHistory.svelte';
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import StatusPill from '../components/StatusPill.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
@@ -47,6 +48,7 @@
   let panelTab = $state<'outline' | 'vocabulary'>('outline');
   let saveIssueOpen = $state(false);
   let conflictOpen = $state(false);
+  let revisionsOpen = $state(false);
   let splitRatio = $state(readSplitRatio());
   let previewScroller: HTMLElement | null = $state(null);
 
@@ -242,8 +244,26 @@
     await navigate({ name: 'library', view: 'all' });
   }
 
+  /**
+   * Open the revision browser (spec §21.4). The pending autosave is flushed
+   * first for two reasons: the compare-and-swap needs the revision the editor
+   * actually holds, and the text about to be replaced should be on disk (and
+   * therefore snapshottable) before a restore replaces it.
+   */
+  async function openRevisions(): Promise<void> {
+    await saveNow();
+    revisionsOpen = true;
+  }
+
+  async function afterRestore(): Promise<void> {
+    revisionsOpen = false;
+    await openScript(scriptId);
+    showToast('Revision restored. Your previous text was saved as a revision.', 'success');
+  }
+
   const overflowItems = $derived([
     { label: 'Duplicate', onselect: () => void scriptsService.duplicateScript(scriptId).then(loadLibrary) },
+    { label: 'Revision history…', onselect: () => void openRevisions() },
     {
       label: 'Export Markdown',
       onselect: () => void exportScriptToFile(scriptId, $editor.title, 'markdown'),
@@ -472,6 +492,16 @@
     {/if}
   </div>
 </div>
+
+<!-- §21.4 revision browser -->
+<RevisionHistory
+  open={revisionsOpen}
+  {scriptId}
+  expectedRevision={$editor.scriptRevision}
+  currentWordCount={wordCount}
+  onclose={() => (revisionsOpen = false)}
+  onrestored={() => void afterRestore()}
+/>
 
 <!-- F.8 save-failure sheet -->
 <Dialog open={saveIssueOpen} title="Save failed" onclose={() => (saveIssueOpen = false)}>

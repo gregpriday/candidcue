@@ -14,7 +14,9 @@
  * ("Bounded by the producer; the stage does not trim").
  */
 import type {
+  CoachGutterMark,
   CoachRailMode,
+  CoachRailModules,
   CoachRailState,
   CoachRailTip,
   CoachRibbonEvent,
@@ -44,8 +46,83 @@ export interface CoachRailInputs {
   /** §9.1: at most one. `null` is the ordinary case (§2.6). */
   activeTip: CoachRailTip | null;
   ribbonEvents: readonly CoachRibbonEvent[];
-  /** Audio clock, used only to window the ribbon. */
+  /** Audio clock. Windows the ribbon and is published so the stage need not estimate it. */
   audioTimeMs: number;
+  /** §11 marks for already-read lines. Ignored unless the mode enables them. */
+  gutterMarks?: readonly CoachGutterMark[];
+  /**
+   * §6.6 custom-mode module toggles. Required when `mode` is `'custom'`;
+   * ignored otherwise, because the named modes define their own flags.
+   */
+  customModules?: Partial<CoachRailModules>;
+}
+
+const ALL_OFF: CoachRailModules = {
+  paceNumber: false,
+  paceStatus: false,
+  paceSparkline: false,
+  targetDurationStatus: false,
+  varietyScore: false,
+  varietyLabel: false,
+  fillerCount: false,
+  fillerRibbon: false,
+  gutterMarks: false,
+  liveTips: false,
+};
+
+/**
+ * §6.1–§6.6. The single authoritative reading of each mode.
+ *
+ * This lives on the producer so there is one interpretation rather than one
+ * per consumer. The stage receives the resolved flags and renders them; it
+ * never decides what a mode means, which is what previously made `custom`
+ * indistinguishable from `coach` on the glass.
+ */
+export function resolveRailModules(
+  mode: CoachRailMode,
+  custom?: Partial<CoachRailModules>,
+): CoachRailModules {
+  switch (mode) {
+    // §6.1 / §6.5: no live rail. Critical microphone and transcription faults
+    // still reach the user through the app's system-notice mechanism, which is
+    // not the rail — so nothing is enabled here.
+    case 'off':
+    case 'review_only':
+      return { ...ALL_OFF };
+    // §6.2: pace and critical alerts only — no fillers, no variety, no tips.
+    case 'minimal':
+      return { ...ALL_OFF, paceNumber: true, paceStatus: true, targetDurationStatus: true };
+    // §6.3: the default.
+    case 'coach':
+      return {
+        ...ALL_OFF,
+        paceNumber: true,
+        paceStatus: true,
+        targetDurationStatus: true,
+        varietyLabel: true,
+        fillerCount: true,
+        fillerRibbon: true,
+        liveTips: true,
+      };
+    // §6.4: everything in Coach plus the numeric score, sparkline and marks.
+    case 'studio':
+      return {
+        paceNumber: true,
+        paceStatus: true,
+        paceSparkline: true,
+        targetDurationStatus: true,
+        varietyScore: true,
+        varietyLabel: true,
+        fillerCount: true,
+        fillerRibbon: true,
+        gutterMarks: true,
+        liveTips: true,
+      };
+    // §6.6: start from nothing and enable exactly what the user chose. Starting
+    // from Coach would silently re-enable a module the user had turned off.
+    case 'custom':
+      return { ...ALL_OFF, ...custom };
+  }
 }
 
 /**
@@ -88,12 +165,15 @@ export class CoachRailStateBuilder {
     }
     this.revision += 1;
     const activeTip = inputs.activeTip;
+    const modules = resolveRailModules(inputs.mode, inputs.customModules);
     return {
       schemaVersion: 1,
       stageRevision: this.revision,
       sessionId: inputs.sessionId,
       takePassId: inputs.takePassId,
       mode: inputs.mode,
+      modules,
+      audioTimeMs: inputs.audioTimeMs,
       visible: inputs.visible,
       mirrored: inputs.mirrored,
       reducedMotion: inputs.reducedMotion,
@@ -108,6 +188,12 @@ export class CoachRailStateBuilder {
           ? { ...activeTip, interpolations: { ...activeTip.interpolations } }
           : null,
       ribbonEvents: boundRibbon(inputs.ribbonEvents, inputs.audioTimeMs, inputs.takePassId),
+      // §11.3: marks from an earlier pass over the same line must not be
+      // conflated with this one, and the feature stays empty when disabled
+      // rather than shipping data the stage is not allowed to draw.
+      gutterMarks: modules.gutterMarks
+        ? (inputs.gutterMarks ?? []).filter((mark) => mark.takePassId === inputs.takePassId)
+        : [],
     };
   }
 }

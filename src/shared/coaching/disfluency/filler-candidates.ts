@@ -232,6 +232,10 @@ function openerCandidates(input: FillerCandidateInput): CoachCandidate[] {
           takePassId: input.take.takePassId,
         },
         scriptSpanId: null,
+        scriptAnchorTokenId: null,
+        // A session pattern across many sentences; there is no single
+        // underlying `FillerEvent` to revise away.
+        contributingEventIds: [],
         detailCode: form,
         spokenFragment: `${occurrences.length} of the last ${window.length} sentences opened with "${form}"`,
         authoredFragment: '',
@@ -265,6 +269,9 @@ function positiveCandidates(input: FillerCandidateInput): CoachCandidate[] {
         takePassId: input.take.takePassId,
       },
       scriptSpanId: null,
+      scriptAnchorTokenId: null,
+      // Derived from the *absence* of events over a window.
+      contributingEventIds: [],
       detailCode: `streak_${Math.floor(streakMs / 1000)}s`,
       spokenFragment: '',
       authoredFragment: '',
@@ -304,7 +311,15 @@ function buildCandidate(input: {
       trackingEpoch: input.input.take.trackingEpoch,
       takePassId: input.input.take.takePassId,
     },
-    scriptSpanId: last.event.scriptAnchorTokenId,
+    // A span id and a token id are different namespaces. This used to put the
+    // event's *token* anchor in the *span* field, which defeated both the
+    // §19.4 opt-out (a token id is never in the disabled-span set) and §26.5
+    // scope cancellation (a token id never equals the active span id, so every
+    // filler tip cancelled itself on the following tick).
+    scriptSpanId: last.scriptSpanId,
+    scriptAnchorTokenId: last.event.scriptAnchorTokenId,
+    // §26.5: the path from a demoted `FillerEvent` back to this candidate.
+    contributingEventIds: events.map((event) => event.eventId),
     detailCode: input.detailCode,
     spokenFragment: last.spokenFragment,
     authoredFragment: last.authoredFragment,

@@ -18,6 +18,7 @@ export const ALLOWED_ACTIONS: ReadonlySet<CommandActionName> = new Set<CommandAc
   'set_listener', 'adjust_reading_band', 'set_scroll_mode',
   'adjust_margins', 'set_cue_visibility', 'adjust_listener_opacity',
   'set_scroll_speed', 'adjust_scroll_speed', 'retake', 'mark_checkpoint',
+  'set_coaching_rail',
   'unknown',
 ]);
 
@@ -138,6 +139,9 @@ const IMMEDIATE_ACTIONS: ReadonlySet<CommandActionName> = new Set<CommandActionN
   'set_listener', 'adjust_listener_opacity', 'blank_stage', 'unblank_stage',
   'set_cue_visibility', 'set_scroll_mode', 'set_scroll_speed',
   'adjust_scroll_speed', 'retake', 'mark_checkpoint',
+  // Display-only, reversible, and touches nothing positional — safe to apply
+  // without confirmation, like the other stage-appearance commands.
+  'set_coaching_rail',
 ]);
 
 export function decideExecution(

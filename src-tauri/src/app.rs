@@ -172,6 +172,17 @@ pub fn run() {
                         )
                         .await;
                     }
+                    // §36.1: no session can be live at startup, so any row
+                    // still open belongs to a take that crashed or was force
+                    // quit. Closing it here is the only path that covers the
+                    // abnormal exits the frontend cannot observe.
+                    match crate::sessions::close_orphaned_sessions(&pool).await {
+                        Ok(0) => {}
+                        Ok(n) => tracing::warn!(count = n, "closed abandoned session records"),
+                        Err(err) => {
+                            tracing::error!(error = %err, "closing abandoned sessions failed")
+                        }
+                    }
                     report
                 })
             };

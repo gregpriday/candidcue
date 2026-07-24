@@ -34,7 +34,7 @@
     type InstalledListener,
   } from '../services/listeners';
   import { offsetSliderBound } from '../../shared/listener/geometry';
-  import { newSessionId } from '../services/session';
+  import { endSessionRecord, startSessionRecord } from '../services/session-records';
   import { acquireCancellable, runCheck } from './preflight-load';
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
@@ -704,8 +704,34 @@
     starting = true;
     startError = null;
     const display = displays.find((d) => d.fingerprint === selectedFingerprint);
-    const sessionId = newSessionId();
+    /*
+     * C1: open the session record FIRST.
+     *
+     * `start_session` is the only path to `AppCoordinator::begin_session`, which
+     * is the only writer of the Rust-side session generation. Skipping it left
+     * the coordinator at generation 0 while control stamped every stage payload
+     * with a hard-coded 1, so `validate_stage_payload_header` rejected the whole
+     * stage stream: the hydration envelope was dropped (an ack saying
+     * `accepted: false`, which nothing checked), `waitForStageReady` then sat out
+     * its full 12 s timeout, and the start sequence failed. No session could be
+     * started at all in a packaged build.
+     *
+     * Rust assigns, control adopts — both the generation and the session id,
+     * so there is exactly one writer of each. It also takes the §21.4
+     * pre-session revision snapshot before anything can change underneath it.
+     */
+    let sessionId = '';
     try {
+      const record = await startSessionRecord({
+        scriptId,
+        scriptSourceHash: compiledScript.sourceHash,
+        mode,
+        startTokenIndex: 0,
+        compileHash: compiledScript.sourceHash,
+      });
+      sessionId = record.id;
+      const sessionGeneration = record.sessionGeneration;
+
       // Listener selection (§14.2 F): resolve real pack media through Rust.
       let listener: ListenerStageSelection | undefined;
       if (listenerEnabled && listenerPack === 'mira') {
@@ -743,7 +769,7 @@
       const envelope = buildStageEnvelope({
         script: compiledScript,
         sessionId,
-        sessionGeneration: 1,
+        sessionGeneration,
         stageGeneration: opened.stageGeneration,
         stageSettings,
         ...(listener ? { listener } : {}),
@@ -767,8 +793,9 @@
         totalTokens: Math.max(wordCount, 1),
         sessionId,
         compiled: compiledScript,
-        sessionGeneration: 1,
+        sessionGeneration,
         stageGeneration: opened.stageGeneration,
+        transcriptRetained: record.transcriptRetained,
         stageSettings,
         listener: listener ?? null,
         transcription: {
@@ -822,7 +849,11 @@
   async function abandonSession(sessionId: string): Promise<void> {
     stopSession();
     clearSession();
-    await stageService.closeStage(sessionId).catch(() => {});
+    // The record may have been opened before the failure. Closing it twice is
+    // harmless (it rewrites `ended_at`); leaving it open is not — an unfinished
+    // row is indistinguishable from a crash and would be closed at next launch.
+    if (sessionId) await endSessionRecord(sessionId).catch(() => {});
+    if (sessionId) await stageService.closeStage(sessionId).catch(() => {});
   }
 
   function sectionTone(status: CheckStatus): PillTone {

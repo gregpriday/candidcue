@@ -72,6 +72,47 @@ function dropArticles(words: readonly string[]): string[] {
   return words.filter((w) => !ARTICLES.has(w));
 }
 
+/**
+ * Words that carry no meaning between "show/hide" and the thing being shown,
+ * so "show me my stats" and "show stats" reach the same branch.
+ */
+const RAIL_FILLER_WORDS: ReadonlySet<string> = new Set(['me', 'my', 'the', 'us', 'our']);
+
+/** Nouns the presenter might use for the Coaching Rail. */
+const RAIL_NOUNS: ReadonlySet<string> = new Set([
+  'stats',
+  'statistics',
+  'coaching',
+  'coach',
+  'rail',
+  'metrics',
+  'pace',
+]);
+
+/**
+ * Does this phrase name the Coaching Rail? Deliberately conservative.
+ *
+ * "pace" alone is ambiguous — `set_scroll_speed` also concerns pace — so it
+ * only counts when paired with an explicit rail noun ("pace stats"). A bare
+ * "show pace" falls through to `unrecognized` rather than guessing, because a
+ * wrong guess here silently changes what the presenter sees mid-take.
+ *
+ * Trailing words are ignored so "show me my stats please" still matches, but
+ * an empty remainder does not: "show" alone is not a rail command.
+ */
+function isCoachingRailTarget(cleaned: readonly string[]): boolean {
+  const words = cleaned.filter((w) => !RAIL_FILLER_WORDS.has(w));
+  const head = words[0];
+  if (head === undefined) return false;
+  if (head === 'pace') return words[1] !== undefined && RAIL_NOUNS.has(words[1]);
+  if (head === 'coaching' || head === 'coach') {
+    // "show coaching" and "show coaching rail" both mean the rail; "show
+    // coaching tips" does too. Any continuation is still the rail.
+    return true;
+  }
+  return RAIL_NOUNS.has(head);
+}
+
 function amountOf(words: readonly string[], at: number): { value: number; length: number } {
   const word = words[at];
   if (word === 'a' || word === 'an' || word === 'one') return { value: 1, length: 1 };
@@ -287,7 +328,11 @@ export function parseCommand(rawTokens: readonly string[], context: CommandParse
     case 'unblank':
       return command({ action: 'unblank_stage' }, 'Show the script');
     case 'show': {
-      const what = dropArticles(rest)[0];
+      const cleaned = dropArticles(rest);
+      if (isCoachingRailTarget(cleaned)) {
+        return command({ action: 'set_coaching_rail', visible: true }, 'Show coaching rail');
+      }
+      const what = cleaned[0];
       if (what === 'script' || what === 'text' || what === 'screen') {
         return command({ action: 'unblank_stage' }, 'Show the script');
       }
@@ -296,7 +341,11 @@ export function parseCommand(rawTokens: readonly string[], context: CommandParse
       return unknown('unrecognized');
     }
     case 'hide': {
-      const what = dropArticles(rest)[0];
+      const cleaned = dropArticles(rest);
+      if (isCoachingRailTarget(cleaned)) {
+        return command({ action: 'set_coaching_rail', visible: false }, 'Hide coaching rail');
+      }
+      const what = cleaned[0];
       if (what === 'cues') return command({ action: 'set_cue_visibility', visible: false }, 'Hide cues');
       if (what === 'listener') return command({ action: 'set_listener', enabled: false }, 'Hide Listener');
       if (what === 'script' || what === 'text' || what === 'screen') {

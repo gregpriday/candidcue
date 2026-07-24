@@ -484,6 +484,7 @@ export class RealtimeFillerDetector {
     return {
       event,
       canonicalForm: input.canonicalForm,
+      scriptSpanId: input.authored.spanId,
       // Only `observeFinal` reaches this builder; `observeProvisional` returns
       // hints, which have no path to an event at all (§16.1).
       finalEvidence: true,

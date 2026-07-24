@@ -75,8 +75,18 @@ export interface AppSettings {
   privacy: {
     diagnosticLogging: boolean;
     updateChannel: UpdateChannel;
+    /**
+     * §36.2 transcript retention. Rust-owned in both directions and 'off' by
+     * default — it had no mapping in `settings.ts` at all, so the one setting
+     * that decides whether spoken words are written to disk was unreachable
+     * from the UI in either direction.
+     */
+    saveTranscript: TranscriptRetention;
   };
 }
+
+/** §36.2 retention windows, exactly the values Rust validates. */
+export type TranscriptRetention = 'off' | '1d' | '7d' | '30d' | 'forever';
 
 export interface ClearResult {
   kind: string;
@@ -152,6 +162,7 @@ export function defaultAppSettings(): AppSettings {
     privacy: {
       diagnosticLogging: false,
       updateChannel: 'stable',
+      saveTranscript: 'off',
     },
   };
 }

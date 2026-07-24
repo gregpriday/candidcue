@@ -24,6 +24,32 @@
  * the answer is no; the requirement belongs in the tracking specifications.
  *
  * ---------------------------------------------------------------------------
+ * RULE 1a — EVERY TYPE HERE NAMES ITS PRODUCER.
+ * ---------------------------------------------------------------------------
+ * This subsystem was built by parallel authors, and the characteristic failure
+ * was not a type mismatch — the compiler catches those — but an *orphan*: a
+ * surface each author assumed the other filled. The microphone lane built the
+ * health tile, the coach lane built the alert catalog and its priority band,
+ * and nobody built the candidate that connects them, so four hardware alerts
+ * were unreachable. That is the same shape as a coaching trigger whose only
+ * input was hard-coded to an empty array, which sat undetected for months.
+ *
+ * So: a type added here MUST name the module that constructs it. If you cannot
+ * name one, the type does not belong here yet.
+ *
+ *   AudioFrameFeatures, SpeechInterval, PitchReliability  → coaching/audio
+ *   MicrophoneCoachState                                  → coaching/audio
+ *   PaceDisplayState                                      → coaching/pace
+ *   VarietyDisplayState                                   → coaching/prosody
+ *   FillerEvent, FillerDisplayState                       → coaching/disfluency
+ *   ScriptProgress                                        → tracking engine
+ *   CoachCandidate  → coaching/{pace,prosody,disfluency,fidelity,audio}
+ *   CoachRibbonEvent, CoachGutterMark                     → coaching/coach
+ *   CoachRailTip, CoachRailState, CoachRailModules        → coaching/coach
+ *   LunaCoachRequest/Decision                             → coaching/coach
+ *   CoachDiagnostics                                      → coaching/coach
+ *
+ * ---------------------------------------------------------------------------
  * RULE 2 — UNITS ARE IN THE NAME, ALWAYS.
  * ---------------------------------------------------------------------------
  * The single worst defect found in this project was a Unix timestamp returned
@@ -564,6 +590,56 @@ export interface CoachRibbonEvent {
   takePassId: string;
 }
 
+/**
+ * §11. One marker beside an already-read script line.
+ *
+ * Separate from {@link CoachRibbonEvent} because the two are indexed
+ * differently and cannot substitute for one another: the ribbon is *time*-based
+ * ("where recently did that happen?") while a gutter mark is *script*-based
+ * ("which line contained the filler?"). A `FillerEvent` carries
+ * `scriptAnchorTokenId`, but the full event never crosses to the stage, so
+ * without this type §11 is not implementable from the rail payload at all.
+ *
+ * §11.2: marks appear only behind the active reading rail, never in unread
+ * text, and the script text itself is never recoloured. A line with several
+ * events collapses to one marker with a `count`. §11.3: every mark carries its
+ * `takePassId` so a reread line does not conflate passes.
+ */
+export interface CoachGutterMark {
+  markId: string;
+  /** Authored token the mark anchors to; a filler between tokens anchors to the preceding one. */
+  scriptAnchorTokenId: string;
+  type: CoachRibbonEventType;
+  /** Events collapsed into this marker. Always >= 1. */
+  count: number;
+  takePassId: string;
+}
+
+/**
+ * §6.6. The rail's resolved feature flags.
+ *
+ * `CoachRailMode` alone is not sufficient for the stage to render correctly:
+ * mode `custom` is defined entirely by individual module toggles that live in
+ * {@link CoachingSettings}, which does not cross to the stage. Without this the
+ * stage has to guess, and guessing means `custom` silently renders as `coach`
+ * — the user turns a module off and it stays on.
+ *
+ * Resolved on the control side so there is one interpretation of a mode rather
+ * than one per consumer.
+ */
+export interface CoachRailModules {
+  paceNumber: boolean;
+  paceStatus: boolean;
+  paceSparkline: boolean;
+  targetDurationStatus: boolean;
+  varietyScore: boolean;
+  varietyLabel: boolean;
+  fillerCount: boolean;
+  fillerRibbon: boolean;
+  gutterMarks: boolean;
+  liveTips: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // The control → stage payload (§27)
 // ---------------------------------------------------------------------------
@@ -591,6 +667,23 @@ export interface CoachRailState {
   takePassId: string;
   mode: CoachRailMode;
   /**
+   * §6.6. The mode's resolved feature flags, so the stage never has to
+   * interpret `custom` — or any other mode — for itself.
+   */
+  modules: CoachRailModules;
+  /**
+   * The audio-clock time this snapshot describes.
+   *
+   * Required because the rail is full of *time-relative* rendering: the
+   * ribbon's right edge is "now", a late event must fade in at its historical
+   * position rather than jumping to now (§10.4), and a tip expires against
+   * `expiresAudioTimeMs`. Without an authoritative clock in the payload the
+   * stage has to estimate one by free-running from the newest timestamp it can
+   * find, which drifts and needs resync heuristics. Sending the number the
+   * producer already has removes that entire class of error.
+   */
+  audioTimeMs: number;
+  /**
    * Whether the rail is currently shown. Toggled by the control UI or by the
    * "show me my stats" voice command.
    *
@@ -611,6 +704,11 @@ export interface CoachRailState {
   activeTip: CoachRailTip | null;
   /** Oldest first. Bounded by the producer; the stage does not trim. */
   ribbonEvents: CoachRibbonEvent[];
+  /**
+   * §11. Marks for already-read lines. Empty unless `modules.gutterMarks` is
+   * on — the feature is optional and off by default.
+   */
+  gutterMarks: CoachGutterMark[];
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +730,39 @@ export interface CoachCandidate {
   /** 0–1 local confidence before any semantic validation. */
   localConfidence: number;
   stamp: CoachEvidenceStamp;
+  /**
+   * The authored **span** (sentence/clause) this candidate belongs to, or
+   * `null`.
+   *
+   * This is a *span* id and nothing else. It was previously the only anchor
+   * field, so producers with only a token-level anchor put a **token** id here,
+   * and the scheduler — which compares this against the active span id every
+   * tick — then cancelled the tip as out-of-scope on the very first tick. A
+   * priority-90 "you misread that number" alert survived roughly one frame.
+   * The same collision defeated the `<!-- cc:coach off -->` opt-out, because
+   * admission compared a token id against a set of span ids and never matched.
+   *
+   * If you have a token, populate {@link scriptAnchorTokenId} instead and
+   * leave this `null`; never cross-assign the two.
+   */
   scriptSpanId: string | null;
+  /**
+   * The authored **token** this candidate points at, or `null`. Used for gutter
+   * marks and for quoting authored text — never for scope comparison.
+   */
+  scriptAnchorTokenId: string | null;
+  /**
+   * Ids of the underlying evidence records (e.g. `FillerEvent.eventId`) this
+   * candidate aggregates.
+   *
+   * Required for §26.5: a tip must be cancelled when its evidence is revised
+   * away. Without this there is no path from a demoted event back to the
+   * candidate that aggregated it, so the filler count could correct downward
+   * while the tip built on that very "um" stayed on the presenter's glass.
+   * Empty is legitimate for candidates derived from continuous measurement
+   * (pace, variety) rather than from discrete events.
+   */
+  contributingEventIds: string[];
   /** Analyzer-specific sub-classification, e.g. the filler's normalized form. */
   detailCode: string;
   spokenFragment: string;

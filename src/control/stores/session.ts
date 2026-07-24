@@ -38,6 +38,7 @@ import {
   subscribeStageMotionAcks,
 } from '../services/smooth-follow-adapter';
 import { SemanticSidecar } from '../services/semantic-sidecar';
+import { appendSessionTranscript, endSessionRecord } from '../services/session-records';
 import type { AssistSchedulingContext } from '../../shared/semantic';
 import { resolveSmoothFollowProfile } from '../../shared/tracking/profile';
 import { defaultFollowingSettings } from '../lib/follow-profiles';
@@ -64,7 +65,12 @@ export interface SessionSummary {
   /** Estimated realtime transcription cost — clearly an estimate (F.17). */
   estimatedCostUsd: number;
   endingLocation: string;
-  transcriptSaved: false;
+  /**
+   * §36.2. Was hard-coded `false` because nothing ever opened a session record,
+   * so no transcript could be saved under any setting. It now reports what Rust
+   * decided at session start.
+   */
+  transcriptSaved: boolean;
 }
 
 export interface SessionState {
@@ -136,7 +142,17 @@ let clock: ReturnType<typeof setInterval> | null = null;
 let pipeline: VoiceSessionPipeline | null = null;
 let compiledScript: CompiledScript | null = null;
 let stageGeneration = 0;
-let sessionGeneration = 1;
+/**
+ * The Rust coordinator's session generation for this take.
+ *
+ * C1: this used to default to a hard-coded 1 while nothing ever invoked
+ * `start_session`, so the coordinator stayed at its `Default` of 0 and
+ * `validate_stage_payload_header` dropped every snapshot control published.
+ * Rust assigns it now (`AppCoordinator::begin_session`) and control adopts
+ * whatever it is handed — 0 means "no session record", which is only ever true
+ * in browser dev.
+ */
+let sessionGeneration = 0;
 let stageSettings: StageSettings | null = null;
 let listenerSelection: ListenerStageSelection | null = null;
 let listenerVisible = false;
@@ -176,6 +192,32 @@ let pushSemanticContext: ((context: AssistSchedulingContext) => void) | null = n
 /** True once the worker has sent a real v2 frame — the bridge then stands down. */
 let usingWorkerFrames = false;
 
+/* Session record (§36.1) + transcript retention (§36.2). */
+interface PendingTranscriptItem {
+  /** The realtime item id, so the command channel can re-label it. */
+  itemId: string;
+  receivedAtMs: number;
+  commitSequence: number;
+  providerItemId?: string;
+  audioStartMs?: number;
+  audioEndMs?: number;
+  transcript: string;
+  disposition: 'script' | 'command' | 'discarded';
+}
+/** Fixed at session start by Rust; false means "never persist a word". */
+let transcriptRetained = false;
+let transcriptBuffer: PendingTranscriptItem[] = [];
+let transcriptFlushTimer: ReturnType<typeof setInterval> | null = null;
+/**
+ * How long an item waits before it is flushed. The command router decides
+ * whether a finalized item was script or a command phrase a beat after the item
+ * arrives, and `INSERT OR IGNORE` on `UNIQUE(session_id, commit_sequence)`
+ * means the first write of a commit is the one that sticks — so writing before
+ * the disposition settles would permanently mislabel command phrases as script.
+ */
+const TRANSCRIPT_SETTLE_MS = 4000;
+const TRANSCRIPT_FLUSH_INTERVAL_MS = 15000;
+
 /** Stage relay throttle (§46.6): the worker caps at 30/s; the stage gets ~15/s. */
 const STAGE_RELAY_MIN_INTERVAL_MS = 66;
 
@@ -190,8 +232,16 @@ export interface StartSessionInput {
   /** Integration inputs — optional so the store degrades in browser dev. */
   sessionId?: string;
   compiled?: CompiledScript | null;
+  /** From `start_session` — the Rust coordinator assigns it, control adopts. */
   sessionGeneration?: number;
   stageGeneration?: number;
+  /**
+   * §36.2: whether the session row was opened with transcript retention on.
+   * Fixed at session start in Rust and never re-derived here — a session
+   * started with retention off must not start keeping text mid-take because
+   * the user flipped a setting.
+   */
+  transcriptRetained?: boolean;
   stageSettings?: StageSettings | null;
   listener?: ListenerStageSelection | null;
   transcription?: TranscriptionConfig;
@@ -213,7 +263,9 @@ export function startLiveSession(input: StartSessionInput): string {
   const sessionId = input.sessionId ?? newSessionId();
   compiledScript = input.compiled ?? null;
   stageGeneration = input.stageGeneration ?? 0;
-  sessionGeneration = input.sessionGeneration ?? 1;
+  sessionGeneration = input.sessionGeneration ?? 0;
+  transcriptRetained = input.transcriptRetained === true;
+  transcriptBuffer = [];
   stageSettings = input.stageSettings ?? null;
   listenerSelection = input.listener ?? null;
   listenerVisible = listenerSelection !== null;
@@ -272,6 +324,9 @@ export function startLiveSession(input: StartSessionInput): string {
       usingWorkerFrames = true;
       lastMotionFrame = frame;
       smoothFollow.ingestMotionFrame(frame);
+      // C2: the stage's v2 motion input. Real worker frames and the bridged
+      // ones both go out on the same event, so the stage never sees a gap.
+      publishSemanticFrame(frame);
     },
     onMovementRecord(record) {
       usingWorkerFrames = true;
@@ -331,10 +386,22 @@ export function startLiveSession(input: StartSessionInput): string {
       },
       getScrollMode: () => (get(state).voiceFollow ? 'voice' : 'manual'),
       onTrackingEvent: (event) => driver?.feedTranscript(event),
-      onMaskItems: (itemIds) => driver?.maskItems(itemIds),
+      onMaskItems: (itemIds) => {
+        // §36.2: an item the command channel consumed is a command phrase, not
+        // performed script, and the retained transcript must say so.
+        labelTranscriptItems(itemIds, 'command');
+        driver?.maskItems(itemIds);
+      },
       // §33.4 tail: the router decided the phrase was authored script after
       // all, so alignment gets those items back.
-      onReleaseItems: (itemIds) => driver?.releaseItems(itemIds),
+      onReleaseItems: (itemIds) => {
+        labelTranscriptItems(itemIds, 'script');
+        driver?.releaseItems(itemIds);
+      },
+      // §36.2: finalized text only, never audio. Buffered here and written
+      // through `append_session_transcript`, which Rust refuses outright when
+      // the session was opened with retention off.
+      onTranscriptItem: (item) => bufferTranscriptItem(item),
       onCommandPending: (pending) => driver?.setCommandPending(pending),
       executeCommand: (command) => executeValidatedCommand(command),
       // H8: real execution context for the §33.9 confirmation policy.
@@ -438,6 +505,14 @@ export function startLiveSession(input: StartSessionInput): string {
     });
   }, 1000);
 
+  // §36.2: incremental retention, so a crash mid-take costs at most one
+  // interval rather than the whole transcript.
+  if (transcriptRetained) {
+    transcriptFlushTimer = setInterval(() => {
+      flushTranscript(sessionId, false);
+    }, TRANSCRIPT_FLUSH_INTERVAL_MS);
+  }
+
   startStageBridge(sessionId);
   return sessionId;
 }
@@ -515,7 +590,59 @@ function handleSnapshot(snapshot: TrackingSnapshot): void {
   });
   lastMotionFrame = frame;
   smoothFollow.ingestMotionFrame(frame);
+  publishSemanticFrame(frame);
   relaySnapshot(snapshot);
+}
+
+/* ---------------------------------------------------------------------------
+ * `stage://semantic-frame` producer (companion §26.1)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * C2: this event had no producer outside `src/stage/preview.ts`, the in-browser
+ * preview driver — so in a packaged build the stage's whole v2 motion engine
+ * received nothing and the stage fell back to the degraded tracking-snapshot
+ * path for the entire session.
+ *
+ * Like the heartbeat, this is a direct control → stage `emitTo`, not a Rust
+ * command: it is a high-rate motion signal, not a validated document, and the
+ * stage's frame receiver is the gate that rejects stale or foreign frames
+ * (`StageApp.svelte` feeds it straight to `scriptLayer.pushSemanticFrame`).
+ *
+ * The `emitTo` binding is resolved once and cached — at 15–30 Hz an `import()`
+ * per frame is pure overhead.
+ */
+type EmitToFn = (target: string, event: string, payload?: unknown) => Promise<void>;
+let cachedEmitTo: EmitToFn | null = null;
+let emitToPending: Promise<EmitToFn> | null = null;
+
+async function resolveEmitTo(): Promise<EmitToFn> {
+  if (cachedEmitTo) return cachedEmitTo;
+  emitToPending ??= import('@tauri-apps/api/event').then((mod) => {
+    cachedEmitTo = mod.emitTo as unknown as EmitToFn;
+    return cachedEmitTo;
+  });
+  return emitToPending;
+}
+
+/** Testing seam: inject the emitter so the producer is observable in node. */
+export function setStageEmitterForTesting(fn: EmitToFn | null): void {
+  cachedEmitTo = fn;
+  emitToPending = fn ? Promise.resolve(fn) : null;
+}
+
+function publishSemanticFrame(frame: SemanticMotionFrame): void {
+  if (stageGeneration === 0) return;
+  if (!cachedEmitTo && !isTauriRuntime()) return;
+  const s = get(state);
+  if (!s.sessionId || !s.stageAlive) return;
+  if (cachedEmitTo) {
+    void cachedEmitTo('stage', STAGE_EVENT.semanticFrame, frame).catch(() => {});
+    return;
+  }
+  void resolveEmitTo()
+    .then((emitTo) => emitTo('stage', STAGE_EVENT.semanticFrame, frame))
+    .catch(() => {});
 }
 
 /** Throttled control → stage snapshot relay (§46.6). */
@@ -535,6 +662,76 @@ function pushTranscriptLine(line: string): void {
     ...s,
     transcriptTail: [...s.transcriptTail, line].slice(-4),
   }));
+}
+
+/* ---------------------------------------------------------------------------
+ * Transcript retention (§36.2)
+ *
+ * Off by default and decided ONCE, in Rust, at session start: `start_session`
+ * reads `general.saveTranscript` and stamps `transcript_retained` on the row,
+ * and `append_session_transcript` refuses items for a row that says false. This
+ * side must therefore never buffer text it was not told to keep — the point is
+ * that a user who turned retention off has no transcript in memory either.
+ * ------------------------------------------------------------------------- */
+
+function bufferTranscriptItem(item: {
+  itemId: string;
+  commitSequence: number;
+  audioStartMs?: number;
+  audioEndMs?: number;
+  transcript: string;
+}): void {
+  if (!transcriptRetained) return;
+  const text = item.transcript.trim();
+  if (text.length === 0) return;
+  transcriptBuffer.push({
+    itemId: item.itemId,
+    receivedAtMs: Date.now(),
+    commitSequence: item.commitSequence,
+    providerItemId: item.itemId,
+    audioStartMs: item.audioStartMs,
+    audioEndMs: item.audioEndMs,
+    transcript: text,
+    disposition: 'script',
+  });
+}
+
+function labelTranscriptItems(
+  itemIds: readonly string[],
+  disposition: 'script' | 'command' | 'discarded',
+): void {
+  if (!transcriptRetained || itemIds.length === 0) return;
+  const wanted = new Set(itemIds);
+  for (const item of transcriptBuffer) {
+    if (wanted.has(item.itemId)) item.disposition = disposition;
+  }
+}
+
+/**
+ * Write out every item whose disposition has settled. `force` (session end)
+ * writes the tail too — there is no later chance to relabel it.
+ */
+function flushTranscript(sessionId: string, force: boolean): void {
+  if (!transcriptRetained || transcriptBuffer.length === 0) return;
+  const cutoff = Date.now() - TRANSCRIPT_SETTLE_MS;
+  const ready = force
+    ? transcriptBuffer
+    : transcriptBuffer.filter((item) => item.receivedAtMs <= cutoff);
+  if (ready.length === 0) return;
+  transcriptBuffer = force ? [] : transcriptBuffer.filter((item) => item.receivedAtMs > cutoff);
+  void appendSessionTranscript(
+    sessionId,
+    ready.map((item) => ({
+      commitSequence: item.commitSequence,
+      providerItemId: item.providerItemId,
+      audioStartMs: item.audioStartMs,
+      audioEndMs: item.audioEndMs,
+      transcript: item.transcript,
+      disposition: item.disposition,
+    })),
+  ).catch(() => {
+    // Retention is best-effort: a failed write must never interrupt a take.
+  });
 }
 
 /* ---------------------------------------------------------------------------
@@ -1087,8 +1284,31 @@ export function stopSession(): SessionSummary {
     reconnects: s.counts.reconnects,
     estimatedCostUsd,
     endingLocation: locateEnding(s),
-    transcriptSaved: false,
+    transcriptSaved: transcriptRetained,
   };
+  // §36.2 + §36.1: write the retained tail and close the record BEFORE the
+  // teardown resets `transcriptRetained`. `stopInternals` is what runs on every
+  // abnormal path too, so the ordering here is the only thing that guarantees
+  // the last few seconds of a take are not silently dropped.
+  if (s.sessionId) {
+    flushTranscript(s.sessionId, true);
+    void endSessionRecord(s.sessionId, {
+      endTokenIndex: s.snapshot?.tokenIndex,
+      commandCount: s.counts.commands,
+      retakeCount: s.counts.retakes,
+      reconnectCount: s.counts.reconnects,
+      manualCorrectionCount: s.counts.jumps,
+      estimatedCostUsd,
+      metrics: {
+        sectionsReached: s.blocksSeen.length,
+        durationSeconds: s.elapsedSeconds,
+        endingLocation: summary.endingLocation,
+      },
+    }).catch(() => {
+      // A session that cannot be closed is closed at next launch instead
+      // (`sessions::close_orphaned_sessions`); never block the stop path.
+    });
+  }
   stopInternals();
   smoothFollow.endSession();
   if (s.sessionId) void stageService.closeStage(s.sessionId).catch(() => {});
@@ -1097,6 +1317,11 @@ export function stopSession(): SessionSummary {
 }
 
 export function clearSession(): void {
+  // §36.1: clearing a session that is still running would drop its record on
+  // the floor — the row would stay open until the next launch closed it as if
+  // the app had crashed. Every caller today stops first; this makes that
+  // ordering a property of the store rather than a convention.
+  if (get(state).active) stopSession();
   stopInternals();
   smoothFollow.reset();
   state.set({ ...initial });
@@ -1150,6 +1375,10 @@ function stopInternals(): void {
   }
   if (clock) clearInterval(clock);
   clock = null;
+  if (transcriptFlushTimer) clearInterval(transcriptFlushTimer);
+  transcriptFlushTimer = null;
+  transcriptRetained = false;
+  transcriptBuffer = [];
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   heartbeatTimer = null;
   stopMotionAcks?.();

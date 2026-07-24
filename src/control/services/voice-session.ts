@@ -55,6 +55,16 @@ import { ipcInvoke } from './ipc';
  */
 export const COMMAND_TICK_INTERVAL_MS = 250;
 
+/** One finalized transcript item, ready for §36.2 retention. */
+export interface FinalizedTranscriptItem {
+  itemId: string;
+  /** The ledger's local commit ordering — the row's uniqueness key in SQLite. */
+  commitSequence: number;
+  audioStartMs?: number;
+  audioEndMs?: number;
+  transcript: string;
+}
+
 export interface VoicePipelineDeps {
   sessionId: string;
   sessionGeneration: number;
@@ -106,6 +116,15 @@ export interface VoicePipelineDeps {
   onCommandRejected?(command: ValidatedCommand, reason: string): void;
   /** Final transcript lines for the Live transcript tail. */
   onTranscriptLine(line: string): void;
+  /**
+   * §36.2 retention feed: one finalized item, with the ledger's commit
+   * ordering and audio window attached. Text only — never audio.
+   *
+   * Separate from `onTranscriptLine` on purpose: the tail is a four-line UI
+   * affordance, this is the durable record, and the record needs the commit
+   * sequence that makes `UNIQUE(session_id, commit_sequence)` meaningful.
+   */
+  onTranscriptItem?(item: FinalizedTranscriptItem): void;
   onConnectionState(state: 'connected' | 'reconnecting' | 'offline'): void;
   onRealtimeState?(state: RealtimeState): void;
   /**
@@ -397,7 +416,23 @@ export class VoiceSessionPipeline {
 
     this.ledger.apply(tracked);
     if (tracked.type === 'completed' && tracked.text.trim().length > 0) {
-      this.deps.onTranscriptLine(tracked.text.trim());
+      const text = tracked.text.trim();
+      this.deps.onTranscriptLine(text);
+      // §36.2: the ledger owns commit ordering and the audio window, so the
+      // retained record is built from it rather than re-derived here. An item
+      // the ledger never saw is not persisted — a synthesized commit sequence
+      // would collide on `UNIQUE(session_id, commit_sequence)` and silently
+      // drop every later line.
+      const item = this.ledger.getItem(tracked.itemId);
+      if (item) {
+        this.deps.onTranscriptItem?.({
+          itemId: tracked.itemId,
+          commitSequence: item.commitSequence,
+          audioStartMs: item.audioStartMs,
+          audioEndMs: item.audioEndMs,
+          transcript: text,
+        });
+      }
     }
 
     // Command router runs between the ledger and the aligner (§33.4).

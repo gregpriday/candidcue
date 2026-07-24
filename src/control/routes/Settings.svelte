@@ -14,7 +14,26 @@
   import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
   import { openExternal } from '../lib/app-actions';
+  import {
+    SUPPORT_BUNDLE_CONTENTS,
+    SUPPORT_BUNDLE_EXCLUSIONS,
+    diagnosticRows,
+    diagnosticsClipboardText,
+    type SystemDiagnostics,
+  } from '../lib/diagnostics-format';
+  import * as diagnosticsService from '../services/diagnostics';
   import { describeError } from '../services/errors';
+  import { BackendUnavailableError } from '../services/ipc';
+  import {
+    DOWNLOADS_SUPPORTED,
+    DOWNLOADS_UNAVAILABLE_NOTE,
+    formatPackSize,
+    getListenerCatalogue,
+    mergeCatalogue,
+    removeListener,
+    type ListenerPackRow,
+  } from '../services/listeners-catalogue';
+  import { listInstalledListeners } from '../services/listeners';
   import * as secretsService from '../services/secrets';
   import * as settingsService from '../services/settings';
   import type { OpenAiKeyStatus } from '../services/secrets-types';
@@ -45,11 +64,95 @@
   let keyBusy = $state(false);
   let keyNote = $state('');
   let updateNote = $state('');
+  let diagnostics = $state<SystemDiagnostics | null>(null);
+  let diagnosticsError = $state<string | null>(null);
+  let diagnosticsLoading = $state(false);
 
   $effect(() => {
     void loadSettings();
     void secretsService.getOpenAiKeyStatus().then((status) => (keyStatus = status));
   });
+
+  let packs = $state<ListenerPackRow[]>([]);
+  let packsError = $state<string | null>(null);
+  let packsLoading = $state(false);
+
+  /** Diagnostics are only fetched for the screen that shows them (§47.10). */
+  $effect(() => {
+    if (section === 'privacy') void loadDiagnostics();
+  });
+
+  $effect(() => {
+    if (section === 'listeners') void loadPacks();
+  });
+
+  async function loadPacks(): Promise<void> {
+    packsLoading = true;
+    packsError = null;
+    try {
+      // The installed list is the authority on what is on disk; the catalogue
+      // supplies the description, poster and size.
+      const [catalogue, installed] = await Promise.all([
+        getListenerCatalogue(),
+        listInstalledListeners(),
+      ]);
+      packs = mergeCatalogue(catalogue, installed);
+    } catch (err) {
+      packs = [];
+      packsError = describeError(err);
+    } finally {
+      packsLoading = false;
+    }
+  }
+
+  async function removePack(pack: ListenerPackRow): Promise<void> {
+    const accepted = await requestConfirm({
+      title: `Remove ${pack.displayName}?`,
+      body: 'The downloaded media is deleted from this device. Scripts are unaffected.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (!accepted) return;
+    await runMaintenance(
+      () => removeListener(pack.packId, pack.version),
+      () => `${pack.displayName} removed`,
+    );
+    await loadPacks();
+  }
+
+  async function loadDiagnostics(): Promise<void> {
+    diagnosticsLoading = true;
+    diagnosticsError = null;
+    try {
+      diagnostics = await diagnosticsService.getSystemDiagnostics();
+    } catch (err) {
+      diagnostics = null;
+      diagnosticsError =
+        err instanceof BackendUnavailableError
+          ? 'Diagnostics need the CandidCue desktop app.'
+          : describeError(err);
+    } finally {
+      diagnosticsLoading = false;
+    }
+  }
+
+  async function copyDiagnostics(): Promise<void> {
+    if (!diagnostics) return;
+    try {
+      await navigator.clipboard.writeText(diagnosticsClipboardText(diagnostics));
+      showToast('Diagnostics copied', 'success');
+    } catch {
+      showToast('Could not copy to the clipboard', 'danger');
+    }
+  }
+
+  async function runSupportBundle(): Promise<void> {
+    await runMaintenance(
+      () => diagnosticsService.exportSupportBundle(),
+      // Rust runs the folder picker; cancelling is not a failure.
+      (result) => (result.cancelled ? null : 'Support bundle ready'),
+    );
+  }
 
   async function submitKey(): Promise<void> {
     const candidate = keyField.trim();
@@ -453,12 +556,49 @@
           title="Listeners"
           description="A Listener is a silent looping person behind the script. Installed packs are stored on this device."
         >
-          <div class="key-row">
-            <span class="hint-line">Installed: Mira (bundled)</span>
-            <Button size="sm" disabled title="Pack management arrives with the catalogue service">
-              Browse packs
+          {#snippet actions()}
+            <Button size="sm" disabled={packsLoading} onclick={() => void loadPacks()}>
+              {packsLoading ? 'Loading…' : 'Refresh'}
             </Button>
-          </div>
+          {/snippet}
+
+          {#if packsError}
+            <p class="hint-line">{packsError}</p>
+          {:else if packsLoading && packs.length === 0}
+            <p class="hint-line">Loading Listener packs…</p>
+          {:else if packs.length === 0}
+            <p class="hint-line">No Listener packs are available on this device.</p>
+          {:else}
+            <ul class="packs">
+              {#each packs as pack (pack.packId + pack.version)}
+                <li class="pack">
+                  <div class="pack-text">
+                    <span class="pack-name">{pack.displayName}</span>
+                    <span class="pack-desc">{pack.description}</span>
+                    <span class="pack-meta">
+                      {pack.statusLabel} · v{pack.version}
+                      {#if formatPackSize(pack.approximateBytes)}
+                        · {formatPackSize(pack.approximateBytes)}
+                      {/if}
+                    </span>
+                  </div>
+                  <!--
+                    No download button: `download_listener` is an honest
+                    NOT_IMPLEMENTED stub in this build, and a control that
+                    silently does nothing is worse than an absent one.
+                  -->
+                  {#if pack.removable}
+                    <Button variant="danger" size="sm" onclick={() => void removePack(pack)}>
+                      Remove
+                    </Button>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          {#if !DOWNLOADS_SUPPORTED}
+            <p class="hint-line">{DOWNLOADS_UNAVAILABLE_NOTE}</p>
+          {/if}
           <Toggle
             checked={$settings.listeners.autoplay}
             label="Autoplay Listener when a session starts"
@@ -558,6 +698,51 @@
             <Button size="sm" onclick={() => runUpdateCheck()}>Check for updates</Button>
             {#if updateNote}<span class="hint-line">{updateNote}</span>{/if}
           </div>
+        </Section>
+
+        <!-- §44.11 / §47.10 diagnostics: the facts a support request needs. -->
+        <Section
+          title="Diagnostics"
+          description="What CandidCue knows about this installation. Useful when something is not working and you need to report it."
+        >
+          {#snippet actions()}
+            <Button size="sm" disabled={diagnosticsLoading} onclick={() => void loadDiagnostics()}>
+              {diagnosticsLoading ? 'Checking…' : 'Refresh'}
+            </Button>
+          {/snippet}
+
+          {#if diagnosticsError}
+            <p class="hint-line">{diagnosticsError}</p>
+          {:else if !diagnostics}
+            <p class="hint-line">{diagnosticsLoading ? 'Checking…' : 'No diagnostics yet.'}</p>
+          {:else}
+            <dl class="diag">
+              {#each diagnosticRows(diagnostics) as row (row.label)}
+                <div class="diag-row">
+                  <dt class="diag-label">{row.label}</dt>
+                  <dd class="diag-value">
+                    <span class="diag-figure {row.tone}">{row.value}</span>
+                    {#if row.note}<span class="diag-note">{row.note}</span>{/if}
+                  </dd>
+                </div>
+              {/each}
+            </dl>
+          {/if}
+
+          <div class="row-actions">
+            <Button size="sm" disabled={!diagnostics} onclick={() => void copyDiagnostics()}>
+              Copy diagnostics
+            </Button>
+            <Button size="sm" variant="ghost" onclick={() => void runSupportBundle()}>
+              Export support bundle
+            </Button>
+          </div>
+          <ul class="bundle-contents">
+            {#each SUPPORT_BUNDLE_CONTENTS as line (line)}
+              <li>{line}</li>
+            {/each}
+          </ul>
+          <p class="hint-line">{SUPPORT_BUNDLE_EXCLUSIONS}</p>
           <p class="hint-line">CandidCue {$appStatus.version}</p>
         </Section>
       {/if}
@@ -656,6 +841,98 @@
 
   .hint-line {
     margin: 0;
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
+  }
+
+  .packs {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .pack {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-panel);
+  }
+  .pack-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .pack-name {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .pack-desc {
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-secondary);
+  }
+  .pack-meta {
+    font-size: var(--text-2xs);
+    color: var(--text-muted);
+  }
+
+  .diag {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .diag-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+  }
+  .diag-label {
+    flex: 0 0 148px;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  .diag-value {
+    margin: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .diag-figure {
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    word-break: break-word;
+  }
+  .diag-figure.good {
+    color: var(--success);
+    font-weight: 600;
+  }
+  .diag-figure.bad {
+    color: var(--danger);
+    font-weight: 600;
+  }
+  .diag-note {
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-faint);
+  }
+
+  .bundle-contents {
+    margin: 0;
+    padding-left: var(--space-5);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
     font-size: var(--text-meta);
     line-height: var(--lh-meta);
     color: var(--text-muted);

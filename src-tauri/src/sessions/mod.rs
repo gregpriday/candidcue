@@ -282,6 +282,28 @@ pub async fn list_sessions(
         .map_err(Into::into)
 }
 
+/// Close session rows that were never ended (spec §36.1).
+///
+/// The frontend ends a session on every path it controls, but it cannot end one
+/// on the paths it does not: a crash, a force quit, a power loss. Those leave a
+/// row with `ended_at IS NULL` forever, which makes "the session that is running
+/// right now" indistinguishable from "a session that died in 2024" for anything
+/// that reads the table. Called at startup, when by definition no session is
+/// live, so every open row is by definition abandoned.
+///
+/// `duration_ms` is deliberately left NULL rather than computed from `started_at`
+/// — nobody knows when an abandoned take actually stopped, and inventing a
+/// duration would put a fabricated number in the one place §36.1 metrics are
+/// read from.
+pub async fn close_orphaned_sessions(pool: &SqlitePool) -> Result<u64, AppError> {
+    let now = now_iso();
+    let result = sqlx::query("UPDATE sessions SET ended_at = ? WHERE ended_at IS NULL")
+        .bind(&now)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected())
+}
+
 /// Delete transcripts past their retention window (spec §36.2 automatic
 /// retention choices). Called at startup.
 pub async fn enforce_transcript_retention(

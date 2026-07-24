@@ -253,14 +253,26 @@ pub struct SupportBundleResult {
 
 /// Support bundle (spec §44.11): system facts + recovery reports. No API
 /// key, audio, script, or transcript content.
+///
+/// Same C5 shape as `export_all_data`: this used to take `destination: String`
+/// from the webview, which had no way to obtain one — the dialog plugin is
+/// deliberately not granted to JavaScript — so any caller would have sent
+/// `undefined`, the key would have been dropped from the JSON, and the command
+/// would have failed to deserialize before running a line. The picker runs
+/// here, in the same trusted operation as the write (spec §50.7).
+/// `Ok(None)` means the operator cancelled.
 #[tauri::command]
 pub async fn export_support_bundle(
     app: tauri::AppHandle,
     db: State<'_, Database>,
     paths: State<'_, DataPaths>,
-    destination: String,
-) -> Result<SupportBundleResult, AppError> {
-    let dest_root = PathBuf::from(&destination);
+) -> Result<Option<SupportBundleResult>, AppError> {
+    let Some(dest_root) =
+        crate::dialogs::pick_destination_folder(&app, "Choose a folder for the support bundle")
+            .await?
+    else {
+        return Ok(None);
+    };
     if !dest_root.is_absolute() || !dest_root.exists() || !dest_root.is_dir() {
         return Err(AppError::unsafe_path(
             "Choose an existing folder for the support bundle.",
@@ -287,9 +299,9 @@ pub async fn export_support_bundle(
         }
     }
 
-    Ok(SupportBundleResult {
+    Ok(Some(SupportBundleResult {
         path: bundle_dir.to_string_lossy().to_string(),
-    })
+    }))
 }
 
 /// Updater is not wired in v1 (spec §44.10 planned; plugin absent).

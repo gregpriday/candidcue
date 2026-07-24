@@ -26,6 +26,7 @@ import {
   type AppSettings,
   type ClearResult,
   type SessionMode,
+  type TranscriptRetention,
   type UpdateCheckResult,
 } from './settings-types';
 
@@ -144,6 +145,10 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       wakePhrase: rust.commands.wakePhrase,
       strictWake: rust.commands.wakeMode === 'strict',
     },
+    privacy: {
+      ...defaults.privacy,
+      saveTranscript: toTranscriptRetention(rust.general.saveTranscript),
+    },
   };
 
   return {
@@ -154,13 +159,25 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     teleprompter: mergeSection(mapped.teleprompter, overlay.teleprompter),
     commands: mergeSection(mapped.commands, overlay.commands),
     listeners: mergeSection(mapped.listeners, overlay.listeners),
-    privacy: mergeSection(mapped.privacy, overlay.privacy),
+    // `saveTranscript` is Rust-owned (§36.2): a stale local overlay must never
+    // be able to claim retention is on when the persisted document says off.
+    privacy: {
+      ...mergeSection(mapped.privacy, overlay.privacy),
+      saveTranscript: mapped.privacy.saveTranscript,
+    },
     revision: revisioned.revision,
   };
 }
 
 function toSessionMode(promptMode: string): SessionMode {
   return promptMode === 'manual' || promptMode === 'fixed' ? promptMode : 'voice';
+}
+
+/** Unknown values read as 'off' — the safe side of a privacy setting. */
+function toTranscriptRetention(value: string): TranscriptRetention {
+  return value === '1d' || value === '7d' || value === '30d' || value === 'forever'
+    ? value
+    : 'off';
 }
 
 /** UI patch → the subset that has a Rust home (recursive-merge patch shape). */
@@ -198,6 +215,11 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
       put('commands', 'wakeMode', patch.commands.strictWake ? 'strict' : 'double_gate');
     }
   }
+  if (patch.privacy) {
+    // §36.2 — the missing half of the mapping. Without it the setting that
+    // decides whether spoken words reach disk could not be changed at all.
+    put('general', 'saveTranscript', patch.privacy.saveTranscript);
+  }
   return rust;
 }
 
@@ -211,9 +233,13 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
     if (key === 'revision' || key === 'schemaVersion' || key === 'following') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
+    // Rust-owned fields never enter the overlay (§36.2, §47) — a cached copy
+    // would outlive the document and could contradict it.
+    const overlayable = { ...(section as Record<string, unknown>) };
+    delete overlayable.saveTranscript;
     (overlay as Record<string, object>)[key] = {
       ...((overlay as Record<string, object | undefined>)[key] ?? {}),
-      ...(section as object),
+      ...overlayable,
     };
   }
   saveOverlay(overlay);

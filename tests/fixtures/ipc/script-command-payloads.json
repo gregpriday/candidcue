@@ -83,5 +83,57 @@
   },
   "create_script": {
     "input": { "title": "Keynote", "source": "# Keynote\n" }
-  }
+  },
+  "_revision_comment": [
+    "Spec §21.4 revision browser. These three commands were implemented and",
+    "tested in Rust with no TypeScript caller at all, so every snapshot the",
+    "app took was write-only. Argument names are the camelCase forms of the",
+    "Rust parameters (scriptId / revisionId / expectedRevision).",
+    "restore_revision is a compare-and-swap like any other save: it carries",
+    "the revision the editor believes it holds, and Rust snapshots the",
+    "preimage with reason `before_restore` before overwriting it."
+  ],
+  "revisionId": "0d0f1f6e-9a3b-4b5b-9a12-1f9d0b2c3d4e",
+  "list_revisions": {
+    "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+  },
+  "get_revision": {
+    "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    "revisionId": "0d0f1f6e-9a3b-4b5b-9a12-1f9d0b2c3d4e"
+  },
+  "restore_revision": {
+    "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    "revisionId": "0d0f1f6e-9a3b-4b5b-9a12-1f9d0b2c3d4e",
+    "expectedRevision": 7
+  },
+  "expectedRevisionSummary": {
+    "id": "0d0f1f6e-9a3b-4b5b-9a12-1f9d0b2c3d4e",
+    "revisionNumber": 3,
+    "sourceHash": "9f2c1b0ae4d5",
+    "reason": "autosave_interval",
+    "wordCount": 412,
+    "createdAt": "2026-07-24T09:15:00Z"
+  },
+  "expectedRestoreResult": {
+    "scriptRevision": 8,
+    "sourceHash": "9f2c1b0ae4d5",
+    "savedAt": "2026-07-24T09:20:00Z",
+    "revisionCreated": true,
+    "revisionId": "0d0f1f6e-9a3b-4b5b-9a12-1f9d0b2c3d4e"
+  },
+  "_revision_reasons_comment": [
+    "Every reason string Rust can write into script_revisions.reason. The UI",
+    "maps each to a label; the Rust test asserts repo.rs/import_export.rs",
+    "write no reason outside this list, so a new one cannot reach the panel",
+    "as raw snake_case."
+  ],
+  "revisionReasons": [
+    "initial",
+    "autosave_interval",
+    "external_change",
+    "external_change_preserved",
+    "before_restore",
+    "pre_session",
+    "import"
+  ]
 }

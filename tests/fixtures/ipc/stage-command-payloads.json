@@ -1,0 +1,73 @@
+{
+  "_comment": [
+    "Display profile commands (spec §52, §46.6). Read by BOTH sides:",
+    "  - tests/unit/control/display-profiles.test.ts asserts the real wrappers",
+    "    in src/control/services/display-profiles.ts emit this payload;",
+    "  - src-tauri/tests/ipc_contract_tests.rs asserts Rust's DisplayProfile",
+    "    deserializes it and serializes back to the same shape.",
+    "`id` is absent on create — Rust mints one — and `updatedAt` is assigned by",
+    "Rust, never sent. `stage` must be an object carrying schemaVersion 1, which",
+    "is a hard rejection in windows::save_display_profile."
+  ],
+  "save_display_profile": {
+    "profile": {
+      "name": "Teleprompter Display",
+      "displayFingerprint": "dsp-mock-prompter",
+      "stage": {
+        "schemaVersion": 1,
+        "themeId": "stage-dark",
+        "background": "#050505",
+        "foreground": "#f5f3ef",
+        "fontFamilyId": "humanist-sans",
+        "fontSizePx": 72,
+        "lineHeight": 1.3,
+        "letterSpacingEm": 0,
+        "columnWidthPercent": 64,
+        "readingBandCenterPercent": 42,
+        "readingBandHalfHeightPercent": 4,
+        "pastOpacity": 0.42,
+        "futureOpacity": 0.92,
+        "currentUnderlayOpacity": 0.1,
+        "mirrorX": true,
+        "mirrorY": false,
+        "showCues": true,
+        "stageAcknowledgements": true,
+        "reducedMotion": false,
+        "paragraphSpacingEm": 0.7
+      }
+    }
+  },
+  "expectedSavedProfile": {
+    "id": "6f1b6b6e-2f5a-4a2f-9c4e-8a1d2b3c4d5e",
+    "name": "Teleprompter Display",
+    "displayFingerprint": "dsp-mock-prompter",
+    "stage": {
+      "schemaVersion": 1,
+      "themeId": "stage-dark",
+      "background": "#050505",
+      "foreground": "#f5f3ef",
+      "fontFamilyId": "humanist-sans",
+      "fontSizePx": 72,
+      "lineHeight": 1.3,
+      "letterSpacingEm": 0,
+      "columnWidthPercent": 64,
+      "readingBandCenterPercent": 42,
+      "readingBandHalfHeightPercent": 4,
+      "pastOpacity": 0.42,
+      "futureOpacity": 0.92,
+      "currentUnderlayOpacity": 0.1,
+      "mirrorX": true,
+      "mirrorY": false,
+      "showCues": true,
+      "stageAcknowledgements": true,
+      "reducedMotion": false,
+      "paragraphSpacingEm": 0.7
+    },
+    "updatedAt": "2026-07-24T09:15:00Z"
+  },
+  "rejectedProfiles": {
+    "emptyName": { "name": "   ", "stage": { "schemaVersion": 1 } },
+    "wrongSchemaVersion": { "name": "Stage", "stage": { "schemaVersion": 2 } },
+    "stageNotAnObject": { "name": "Stage", "stage": 1 }
+  }
+}

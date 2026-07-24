@@ -1,0 +1,103 @@
+{
+  "_comment": [
+    "Canonical invoke payloads for the session-record commands (spec §36) and",
+    "for the stage snapshot they make possible (§43.5, §46.6). Read by BOTH",
+    "sides so the DTOs cannot drift apart:",
+    "  - tests/unit/control/session-records-ipc-contract.test.ts asserts the",
+    "    TypeScript wrappers in src/control/services/session-records.ts emit",
+    "    exactly these payloads;",
+    "  - src-tauri/tests/session_lifecycle_tests.rs asserts the Rust argument",
+    "    types deserialize exactly these payloads, and publishes the snapshot",
+    "    below through the real command.",
+    "",
+    "C1 — the shape that mattered. `start_session` has NO sessionGeneration",
+    "field: the generation is an OUTPUT of AppCoordinator::begin_session,",
+    "returned on the record, and control adopts it. When control invented its",
+    "own (a hard-coded 1) while nothing ever called this command, the",
+    "coordinator stayed at 0 and every snapshot below was silently dropped."
+  ],
+  "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+  "sessionId": "1f0e5a8e-6c2b-4a3d-9f11-0a1b2c3d4e5f",
+
+  "start_session": {
+    "input": {
+      "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+      "scriptSourceHash": "b3a1c0de5f6a7b8c9d0e1f2a3b4c5d6e",
+      "mode": "voice",
+      "startTokenIndex": 0,
+      "compileHash": "b3a1c0de5f6a7b8c9d0e1f2a3b4c5d6e"
+    }
+  },
+
+  "end_session": {
+    "sessionId": "1f0e5a8e-6c2b-4a3d-9f11-0a1b2c3d4e5f",
+    "summary": {
+      "endTokenIndex": 412,
+      "commandCount": 3,
+      "retakeCount": 1,
+      "reconnectCount": 0,
+      "manualCorrectionCount": 2,
+      "estimatedCostUsd": 0.42,
+      "metrics": {
+        "sectionsReached": 4,
+        "durationSeconds": 300,
+        "endingLocation": "Closing"
+      }
+    }
+  },
+
+  "append_session_transcript": {
+    "sessionId": "1f0e5a8e-6c2b-4a3d-9f11-0a1b2c3d4e5f",
+    "items": [
+      {
+        "commitSequence": 1,
+        "providerItemId": "item_a1",
+        "audioStartMs": 0,
+        "audioEndMs": 2400,
+        "transcript": "Good morning, everyone.",
+        "disposition": "script"
+      },
+      {
+        "commitSequence": 2,
+        "providerItemId": "item_a2",
+        "audioStartMs": 2400,
+        "audioEndMs": 4100,
+        "transcript": "CandidCue, next section.",
+        "disposition": "command"
+      }
+    ]
+  },
+
+  "list_sessions": {
+    "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+    "limit": 100
+  },
+
+  "_publish_stage_snapshot_comment": [
+    "The envelope control relays ~15 times a second. `sessionGeneration` and",
+    "`stageGeneration` are placeholders here: both tests overwrite them with",
+    "the live coordinator values, because the whole point is that the numbers",
+    "must come from the coordinator rather than from a constant."
+  ],
+  "publish_stage_snapshot": {
+    "sessionId": "1f0e5a8e-6c2b-4a3d-9f11-0a1b2c3d4e5f",
+    "snapshot": {
+      "schemaVersion": 1,
+      "revision": 87,
+      "sessionId": "1f0e5a8e-6c2b-4a3d-9f11-0a1b2c3d4e5f",
+      "sessionGeneration": 1,
+      "stageGeneration": 1,
+      "scriptId": "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+      "tokenIndex": 412,
+      "committedTokenIndex": 408,
+      "blockId": "b-12",
+      "sentenceId": "s-31",
+      "confidence": 0.91,
+      "state": "following",
+      "provisional": false,
+      "movement": "advance",
+      "sourceItemIds": ["item_a1"],
+      "generatedAtMs": 1720000000000
+    }
+  }
+}
