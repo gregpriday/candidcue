@@ -22,6 +22,12 @@ import {
   runRetentionRevocation,
 } from './settings-retention';
 import {
+  audioToRustPatch,
+  vadSensitivityFromRust,
+  RUST_OWNED_AUDIO_KEYS,
+  type RustAudioSettings,
+} from './settings-audio';
+import {
   coachingFromRust,
   coachingToRustPatch,
   type RustCoachingSettings,
@@ -72,12 +78,11 @@ interface RustSettings {
     keepScreenAwake: boolean;
     blankColor: string;
   };
-  audio: {
-    transcriptionModel: string;
-    language: string;
-    delayProfile: string;
-    softPauseAutoDisconnectMinutes: number;
-  };
+  /**
+   * §28.3/§28.4. `vadSensitivity` is the only field here the UI owns a control
+   * for; the others are read for the model name. See settings-audio.ts.
+   */
+  audio: Partial<RustAudioSettings> & { transcriptionModel: string };
   commands: {
     wakePhrase: string;
     wakeMode: string;
@@ -154,6 +159,13 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       commandModel: rust.commands.commandModel,
       commandFallback: rust.commands.lunaFallback,
     },
+    // §28.4. Rust-owned like `following`: it decides how often the local VAD
+    // commits audio to the Realtime API on the user's key, so a stale overlay
+    // must not be able to contradict the persisted document.
+    audio: {
+      ...defaults.audio,
+      vadSensitivity: vadSensitivityFromRust(rust.audio),
+    },
     teleprompter: {
       ...defaults.teleprompter,
       mirrorX: rust.stageBehavior.horizontalMirror,
@@ -187,7 +199,12 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     ...mapped,
     general: mergeSection(mapped.general, overlay.general),
     openai: mergeSection(mapped.openai, overlay.openai),
-    audio: mergeSection(mapped.audio, overlay.audio),
+    // The device id and the three processing toggles are per-machine capture
+    // state and overlay; `vadSensitivity` is Rust-owned and wins (§28.4).
+    audio: {
+      ...mergeSection(mapped.audio, overlay.audio),
+      vadSensitivity: mapped.audio.vadSensitivity,
+    },
     teleprompter: mergeSection(mapped.teleprompter, overlay.teleprompter),
     commands: mergeSection(mapped.commands, overlay.commands),
     // `saveTranscript` is Rust-owned (§36.2): a stale local overlay must never
@@ -223,6 +240,15 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
       put('general', 'openTo', patch.general.launchBehavior === 'recent' ? 'last_script' : 'library');
     }
     put('stageBehavior', 'promptMode', patch.general.defaultSessionMode);
+  }
+  if (patch.audio) {
+    // §28.4 — the missing half of the mapping. The slider persisted in the
+    // localStorage overlay only, so the sensitivity a presenter tuned for their
+    // room could not survive a cleared store and the backend that bills the key
+    // could not see what commit cadence it was paying for.
+    for (const [key, value] of Object.entries(audioToRustPatch(patch.audio))) {
+      put('audio', key, value);
+    }
   }
   if (patch.openai) {
     put('audio', 'transcriptionModel', patch.openai.realtimeModel);
@@ -268,7 +294,9 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
 /**
  * Everything in the patch persists in the overlay so the UI view sticks —
  * except `following` (§47), `coaching` (§30) and `listeners` (§37), which are
- * Rust-owned in both directions. A cached copy of a retention consent is
+ * Rust-owned in both directions, and the individual Rust-owned fields inside
+ * otherwise-overlaid sections (`privacy.saveTranscript` §36.2,
+ * `audio.vadSensitivity` §28.4). A cached copy of a retention consent is
  * exactly the thing that must not exist.
  */
 function applyOverlayPatch(patch: Partial<AppSettings>): void {
@@ -278,10 +306,13 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
     if (key === 'following' || key === 'coaching' || key === 'listeners') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
-    // Rust-owned fields never enter the overlay (§36.2, §47) — a cached copy
-    // would outlive the document and could contradict it.
+    // Rust-owned fields never enter the overlay (§28.4, §36.2, §47) — a cached
+    // copy would outlive the document and could contradict it.
     const overlayable = { ...(section as Record<string, unknown>) };
     delete overlayable.saveTranscript;
+    if (key === 'audio') {
+      for (const owned of RUST_OWNED_AUDIO_KEYS) delete overlayable[owned];
+    }
     (overlay as Record<string, object>)[key] = {
       ...((overlay as Record<string, object | undefined>)[key] ?? {}),
       ...overlayable,

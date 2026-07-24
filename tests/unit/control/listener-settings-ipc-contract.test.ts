@@ -66,6 +66,7 @@ describe('§37 listener settings adapter', () => {
       'dimPercent',
       'blurPx',
       'saturation',
+      'keepWhenBlanked',
     ];
     expect(Object.keys(patch).sort()).toEqual([...expectedKeys].sort());
     for (const key of expectedKeys) {

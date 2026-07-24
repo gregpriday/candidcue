@@ -65,6 +65,7 @@
   import type { DisplayDescriptor } from '../services/stage-types';
   import type { OpenAiKeyStatus } from '../services/secrets-types';
   import { takeRetentionPurgeFailure } from '../services/settings';
+  import { VAD_SENSITIVITY_COPY } from '../services/settings-audio';
   import type { CoachingSettings } from '../../shared/contracts';
   import type { SessionMode } from '../services/settings-types';
   import type { ListenerPlacementMode, ListenerStageSelection } from '../../shared/contracts';
@@ -1374,10 +1375,29 @@
             coaching={$settings.coaching}
           />
         </Disclosure>
-        <!-- §28.3 capture processing. These are the saved audio settings and
-             they are applied to the session's getUserMedia constraints at
-             Start; they were previously hardcoded switches nothing read. -->
-        <Disclosure label="Advanced audio processing">
+        <!-- §28.3 capture processing and §28.4 detection. Both are saved audio
+             settings — the toggles become the session's getUserMedia
+             constraints at Start, the slider becomes the local VAD's speech
+             threshold — and the disclosure is named for what it holds rather
+             than for one half of it. -->
+        <Disclosure label="Advanced microphone settings">
+          <!--
+            §28.4. The SAME value the Settings → Audio slider writes — one
+            setting, two places, never two controls. It is first, and it is
+            here, because the meter above is where a mic problem is discovered,
+            and the meter observes levels at this sensitivity, so a change shows
+            immediately instead of being felt mid-take. Settings is still its
+            home: it describes a room and a microphone, not this session.
+          -->
+          <Slider
+            label={VAD_SENSITIVITY_COPY.label}
+            description={VAD_SENSITIVITY_COPY.description}
+            value={Math.round($settings.audio.vadSensitivity * 100)}
+            min={0}
+            max={100}
+            format={VAD_SENSITIVITY_COPY.format}
+            onchange={(value) => void patchSettings('audio', { vadSensitivity: value / 100 })}
+          />
           <div class="toggle-grid">
             <Toggle
               checked={$settings.audio.noiseSuppression}

@@ -15,8 +15,13 @@
     "exactly what a fixture shared by both halves makes impossible.",
     "",
     "Every value is deliberately NON-DEFAULT (defaults: null / true / 40 / 0 /",
-    "0.85). A field one side maps and the other does not comes back as its",
-    "default and the assertion fails naming it.",
+    "0.85 / false). A field one side maps and the other does not comes back as",
+    "its default and the assertion fails naming it.",
+    "",
+    "keepWhenBlanked is the §37.4 default for `keepListener` on the stage",
+    "`blank` directive, which the session hard-coded false. It is not the",
+    "deleted `hideOnBlank` under a new name: that field had no reader anywhere,",
+    "and this one is read by toggleBlankStage every time the stage is blanked.",
     "",
     "`settings` is simultaneously the UI view, the patch the UI emits for a",
     "full-section write, and the document Rust stores — one shape on purpose."
@@ -26,7 +31,8 @@
     "autoplay": false,
     "dimPercent": 62.0,
     "blurPx": 6.5,
-    "saturation": 0.3
+    "saturation": 0.3,
+    "keepWhenBlanked": true
   },
   "clearPatch": {
     "_comment": [

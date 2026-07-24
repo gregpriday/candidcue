@@ -215,7 +215,59 @@ export function motionProfileFamily(id: string): MotionProfileFamily {
  * Resolution: settings → SmoothFollowProfile
  * ------------------------------------------------------------------------- */
 
-/** Documented ratios of the base profile. `balanced` is the identity. */
+/**
+ * Documented ratios of the base profile. `balanced` is the identity.
+ *
+ * THE THREE §30.3 CATCH-UP BOUNDS.
+ *
+ * `catchUpMaxDurationMs`, `catchUpReleaseMs` and `catchUpDecayCorridors` are
+ * spread through by `applyFeel`, so leaving them out of this table is a
+ * decision, not an omission. Two of them must move with the feel and one must
+ * not, and the arithmetic says which is which. Every number below is
+ * `DEFAULT_SMOOTH_FOLLOW_PROFILE` at 1080p with its default 4% reading band:
+ * corridor half-height 43.2 px, base forward velocity 900 px/s.
+ *
+ * A catch-up runs at `catchUpMultiplier` × the profile's velocity AND
+ * acceleration limits (`stateMultipliers` in stage/motion/profiles.ts), and the
+ * feel already scales `catchUpMultiplier`, `maxAccelerationPxS2` and
+ * `maxJerkPxS3` together. So the boosted plant differs per feel:
+ *
+ *            multiplier   v_boost   a_boost   jerk     full-authority stop
+ *   calm        1.36      1224      3006      10200          430 px
+ *   balanced    1.60      1440      4160      12000          499 px
+ *   responsive  1.84      1656      5502      13800          579 px
+ *
+ * (stop ≈ v²/2a + v·a/2j — the same estimate the appendix quotes as ~565 px for
+ * balanced. The v²/2a half is identical at every feel, because the feel scales
+ * the multiplier and the acceleration by the same ratio; the jerk half is not,
+ * because acceleration is scaled twice over — once by the feel and once by the
+ * boost — while jerk is scaled once.)
+ *
+ *  - `catchUpDecayCorridors` IS scaled, by the feel ratio. The appendix sizes
+ *    14 corridors (~605 px) so the decay LEADS the plant's own braking rather
+ *    than being masked by it, and notes the decay is decoration below about 13.
+ *    That threshold is a property of the plant, and the plant just moved: at
+ *    responsive, 14 corridors is 605 px against a 579 px stop — inside the
+ *    margin the appendix calls decoration. Scaling by the feel ratio (calm 12,
+ *    responsive 16) holds decay ÷ stopping distance at 1.21 / 1.21 / 1.19, so
+ *    every feel gets the same shaped approach into the corridor.
+ *  - `catchUpReleaseMs` IS scaled, by the same ratio and for the same reason.
+ *    The release exists so a limit never moves faster than a jerk-limited plant
+ *    can follow it, and the time to swing acceleration across its own range is
+ *    2·a_boost/jerk: 0.59 s calm, 0.69 s balanced, 0.80 s responsive. Responsive
+ *    therefore needs a LONGER ramp-out, not a shorter one, even though every
+ *    other responsive number is quicker. This one is physics, not taste.
+ *  - `catchUpMaxDurationMs` is shortened at calm and left alone at responsive.
+ *    Calm closes 900 × (1.36 − 1) = 324 px/s of extra ground against balanced's
+ *    540, so a full 2.5 s at calm buys 810 px of catch-up in exchange for two
+ *    and a half seconds of visibly abnormal motion — long AND ineffective,
+ *    which is the worst pair for a feel chosen to be unobtrusive. 2 s is the
+ *    trade calm would make. Responsive is NOT extended: the cap is a ceiling on
+ *    how long an exception may run, and §47.1 lets a feel tighten a bound but
+ *    never relax one — the same rule that copies `alignment` through untouched.
+ *    Nothing is stranded either way, because the residual gap closes at the base
+ *    900 px/s, which no feel changes.
+ */
 const FEEL_RATIOS: Record<FollowFeel, { prediction: Record<string, number>; motion: Record<string, number> }> = {
   calm: {
     prediction: { normalHorizonMs: 1, uncertainHorizonMs: 1.3, maxCoastUnits: 1 },
@@ -225,6 +277,9 @@ const FEEL_RATIOS: Record<FollowFeel, { prediction: Record<string, number>; moti
       maxAccelerationPxS2: 0.85,
       maxJerkPxS3: 0.85,
       restDeadbandPx: 1.5,
+      catchUpMaxDurationMs: 0.8, // 2500 → 2000 ms
+      catchUpReleaseMs: 0.85, // 250 → 213 ms
+      catchUpDecayCorridors: 0.85, // 14 → 12
     },
   },
   balanced: { prediction: {}, motion: {} },
@@ -236,6 +291,9 @@ const FEEL_RATIOS: Record<FollowFeel, { prediction: Record<string, number>; moti
       maxAccelerationPxS2: 1.15,
       maxJerkPxS3: 1.15,
       restDeadbandPx: 0.75,
+      // No `catchUpMaxDurationMs`: a feel may lower the ceiling, never raise it.
+      catchUpReleaseMs: 1.15, // 250 → 288 ms
+      catchUpDecayCorridors: 1.15, // 14 → 16
     },
   },
 };
@@ -272,6 +330,18 @@ export function applyFeel(base: SmoothFollowProfile, feel: FollowFeel): SmoothFo
       maxAccelerationPxS2: scale(base.motion.maxAccelerationPxS2, ratios.motion.maxAccelerationPxS2),
       maxJerkPxS3: scale(base.motion.maxJerkPxS3, ratios.motion.maxJerkPxS3),
       restDeadbandPx: scale(base.motion.restDeadbandPx, ratios.motion.restDeadbandPx, 2),
+      // §30.3. The catch-up bounds move with the plant the feel just retuned —
+      // see the arithmetic on FEEL_RATIOS for why two of the three are scaled
+      // and why the duration cap only ever comes down.
+      catchUpMaxDurationMs: scale(
+        base.motion.catchUpMaxDurationMs,
+        ratios.motion.catchUpMaxDurationMs,
+      ),
+      catchUpReleaseMs: scale(base.motion.catchUpReleaseMs, ratios.motion.catchUpReleaseMs),
+      catchUpDecayCorridors: scale(
+        base.motion.catchUpDecayCorridors,
+        ratios.motion.catchUpDecayCorridors,
+      ),
     },
     coaching: { ...base.coaching },
   };

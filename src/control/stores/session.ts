@@ -2269,13 +2269,51 @@ export function addTakeMarker(): void {
   state.update((s) => ({ ...s, counts: { ...s.counts, commands: s.counts.commands + 1 } }));
 }
 
+/**
+ * "Blank the screen" (§16.6) — from the Live transport or the voice command.
+ *
+ * WHAT THE USER DECIDES, AND WHAT THEY DO NOT.
+ *
+ * Blanking always hides the SCRIPT; that is what the word means and it is not
+ * configurable. Whether it also hides the Listener is `keepListener` on the
+ * directive, and it was hard-coded `false` here, which made one of the two
+ * ordinary reasons to blank work and the other not: clearing a script off a
+ * screen someone else can see wants the face gone with it, while blanking
+ * between takes on a rig where the Listener is what the presenter looks at
+ * wants the face to stay. So it is read from the §37 Listener defaults. The
+ * directive is still the only carrier of the decision — the setting is where
+ * its default comes from, not a second mechanism.
+ *
+ * The Listener is NOT frozen on a pause, and there is no setting for that. A
+ * pause is a sip of water, and a listening loop that keeps breathing through
+ * one is the whole point of the feature; a face that stops dead mid-blink is
+ * uncanny in a way an idle loop never is, and the presenter is the only person
+ * who would see it. The stage still freezes the loop where freezing is the
+ * honest report — a `freeze` directive and the §43.5 control-loss watchdog —
+ * and neither of those is a preference. This is why `softPause` / `hardPause`
+ * were deleted from `settings::ListenerSettings` rather than wired up.
+ */
 export function toggleBlankStage(): void {
   const s = get(state);
   // Nothing to blank once the stage window is gone (§62).
   if (!s.stageAlive) return;
   const blanked = !s.stageBlanked;
-  sendDirective({ kind: 'blank', blanked, keepListener: false });
+  sendDirective({ kind: 'blank', blanked, keepListener: currentKeepListenerWhenBlanked() });
   state.update((prev) => ({ ...prev, stageBlanked: blanked }));
+}
+
+/**
+ * §37.4. The saved "keep the Listener when the stage is blanked" default, or
+ * `false` when settings are unavailable (browser dev, tests) — the behaviour
+ * that shipped, and the safer of the two: an unreadable setting must not leave
+ * a face on a screen the operator believes they just cleared.
+ */
+function currentKeepListenerWhenBlanked(): boolean {
+  try {
+    return getSettingsSnapshot().listeners?.keepWhenBlanked === true;
+  } catch {
+    return false;
+  }
 }
 
 /**

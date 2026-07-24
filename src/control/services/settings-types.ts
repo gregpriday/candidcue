@@ -45,6 +45,13 @@ export interface AppSettings {
     noiseSuppression: boolean;
     echoCancellation: boolean;
     autoGainControl: boolean;
+    /**
+     * §28.4, 0-1, 0.5 = the A.6 defaults. The one Rust-owned field in this
+     * section: it decides how often the local VAD commits audio to the Realtime
+     * API on the user's key, so it may not live in an overlay a cleared browser
+     * store resets. Everything else here is per-machine capture state.
+     * See services/settings-audio.ts.
+     */
     vadSensitivity: number;
   };
   teleprompter: {
@@ -118,6 +125,12 @@ export interface ListenerSettings {
   blurPx: number;
   /** 0-1, the CSS `saturate()` factor the stage applies. */
   saturation: number;
+  /**
+   * §37.4. Keep the Listener on screen when the stage is blanked. Read by the
+   * session when it builds the `blank` directive, where it becomes
+   * `keepListener` — the directive stays the single carrier of the decision.
+   */
+  keepWhenBlanked: boolean;
 }
 
 export interface ClearResult {

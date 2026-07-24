@@ -31,6 +31,8 @@ export interface RustListenerSettings {
   dimPercent: number;
   blurPx: number;
   saturation: number;
+  /** §37.4 — the default for `keepListener` on the stage `blank` directive. */
+  keepWhenBlanked: boolean;
 }
 
 export const LISTENER_SETTING_RANGES = {
@@ -49,6 +51,10 @@ export function defaultListenerSettings(): ListenerSettings {
     // The look the stage shipped as a hard-coded constant. Kept as the default
     // so reconciling the two structures changed nothing anyone could see.
     saturation: 0.85,
+    // Also what shipped: `keepListener: false` was hard-coded on the directive,
+    // so blanking took the Listener with it. That stays the default; what
+    // changes is that it is now a decision rather than a constant.
+    keepWhenBlanked: false,
   };
 }
 
@@ -89,6 +95,8 @@ export function clampListenerSettings(patch: Partial<ListenerSettings> | undefin
       LISTENER_SETTING_RANGES.saturation.max,
       defaults.saturation,
     ),
+    keepWhenBlanked:
+      typeof patch.keepWhenBlanked === 'boolean' ? patch.keepWhenBlanked : defaults.keepWhenBlanked,
   };
 }
 
@@ -106,6 +114,7 @@ export function listenerFromRust(
     dimPercent: rust.dimPercent,
     blurPx: rust.blurPx,
     saturation: rust.saturation,
+    keepWhenBlanked: rust.keepWhenBlanked,
   });
 }
 
@@ -131,5 +140,6 @@ export function listenerToRustPatch(
   if (patch.dimPercent !== undefined) out.dimPercent = clamped.dimPercent;
   if (patch.blurPx !== undefined) out.blurPx = clamped.blurPx;
   if (patch.saturation !== undefined) out.saturation = clamped.saturation;
+  if (patch.keepWhenBlanked !== undefined) out.keepWhenBlanked = clamped.keepWhenBlanked;
   return out;
 }

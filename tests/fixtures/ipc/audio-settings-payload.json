@@ -1,0 +1,65 @@
+{
+  "_comment": [
+    "Canonical §28.4 audio settings, read by BOTH sides:",
+    "  - tests/unit/control/audio-settings-ipc-contract.test.ts drives the real",
+    "    adapter in src/control/services/settings-audio.ts and the real",
+    "    getSettings/updateSettings in src/control/services/settings.ts;",
+    "  - src-tauri/tests/ipc_contract_tests.rs drives the real Rust struct in",
+    "    src-tauri/src/settings/mod.rs.",
+    "",
+    "vadSensitivity is the field this fixture exists for. The slider shipped",
+    "wired to the VAD and to the Preflight meter but persisted ONLY in the",
+    "localStorage overlay: Rust's AudioSettings had no such field, toRustPatch",
+    "had no `audio` arm, so the mic tuning a presenter set for their room could",
+    "not survive a cleared browser store, and the backend billing the key could",
+    "not see the commit cadence it was paying for. Mapped in one direction only",
+    "is the defect this project has shipped twice; a fixture both halves read is",
+    "what makes it impossible.",
+    "",
+    "0.5 is the A.6 neutral, so the value here is deliberately NOT 0.5: a field",
+    "one side maps and the other does not comes back as its default, and 0.5",
+    "would hide exactly that.",
+    "",
+    "The other four fields are the rest of Rust's audio section. They are here",
+    "so the round trip is asserted on the WHOLE document rather than on one key",
+    "— a patch that silently dropped `language` would otherwise pass."
+  ],
+  "settings": {
+    "transcriptionModel": "gpt-realtime-whisper",
+    "language": "en",
+    "delayProfile": "balanced",
+    "softPauseAutoDisconnectMinutes": 15,
+    "vadSensitivity": 0.72
+  },
+  "patch": {
+    "_comment": [
+      "The patch the UI emits for a sensitivity change, and nothing else. The",
+      "device id and the three getUserMedia processing toggles are per-machine",
+      "capture state and stay in the overlay — a preferred device id that names",
+      "hardware another machine does not have is not a document value."
+    ],
+    "input": {
+      "preferredDeviceId": "usb-condenser-01",
+      "followSystemDefault": false,
+      "noiseSuppression": false,
+      "echoCancellation": true,
+      "autoGainControl": true,
+      "vadSensitivity": 0.72
+    },
+    "expected": { "vadSensitivity": 0.72 }
+  },
+  "outOfRange": {
+    "_comment": [
+      "The range Rust validates, which is the range both sliders offer (0-100%",
+      "of 0-1). A value outside it is a slider that moved and clamps; a value",
+      "that is not a number at all is a document that is wrong, and falls back",
+      "to the NEUTRAL midpoint rather than to the nearest end — a corrupt",
+      "setting must not silently become the most aggressive VAD on offer."
+    ],
+    "clamped": [
+      { "input": 1.4, "expected": 1 },
+      { "input": -0.2, "expected": 0 }
+    ],
+    "neutral": [null, "loud"]
+  }
+}

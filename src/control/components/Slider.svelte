@@ -9,6 +9,8 @@
     max: number;
     step?: number;
     label: string;
+    /** Optional one-line explanation, rendered under the track like Toggle's. */
+    description?: string;
     format?: (value: number) => string;
     disabled?: boolean;
     onchange?: (value: number) => void;
@@ -20,6 +22,7 @@
     max,
     step = 1,
     label,
+    description,
     format = (v: number) => String(v),
     disabled = false,
     onchange,
@@ -39,6 +42,7 @@
     <span class="value">{format(value)}</span>
   </div>
   <input id={uid} type="range" {min} {max} {step} {value} {disabled} oninput={handleInput} />
+  {#if description}<p class="description">{description}</p>{/if}
 </div>
 
 <style>
@@ -67,5 +71,11 @@
     font-size: var(--text-meta);
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+  }
+  .description {
+    margin: 2px 0 0;
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
   }
 </style>

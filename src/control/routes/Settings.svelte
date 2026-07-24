@@ -39,6 +39,7 @@
     type ListenerPackRow,
   } from '../services/listeners-catalogue';
   import { listInstalledListeners } from '../services/listeners';
+  import { VAD_SENSITIVITY_COPY } from '../services/settings-audio';
   import * as secretsService from '../services/secrets';
   import * as settingsService from '../services/settings';
   import type { OpenAiKeyStatus } from '../services/secrets-types';
@@ -462,17 +463,26 @@
             label="Automatic gain control"
             onchange={(value) => void patchSettings('audio', { autoGainControl: value })}
           />
+          <!--
+            §28.4. The home of the setting: it is a property of a room and a
+            microphone, not of a take. Preflight offers the same control beside
+            the level meter, reading and writing this same value — see
+            services/settings-audio.ts for the shared copy and for why the
+            bound this slider does NOT move is the reason it is safe to offer.
+          -->
           <Slider
-            label="Local voice-detection sensitivity"
+            label={VAD_SENSITIVITY_COPY.label}
+            description={VAD_SENSITIVITY_COPY.description}
             value={Math.round($settings.audio.vadSensitivity * 100)}
             min={0}
             max={100}
-            format={(v) => `${v}%`}
+            format={VAD_SENSITIVITY_COPY.format}
             onchange={(value) => void patchSettings('audio', { vadSensitivity: value / 100 })}
           />
           <p class="hint-line">
             Device selection, the live level meter, and the spoken transcription test live in
-            Preflight, next to the session they configure.
+            Preflight, next to the session they configure. Sensitivity is there too — the meter
+            shows what it is doing.
           </p>
         </Section>
       {:else if section === 'teleprompter'}
@@ -692,6 +702,20 @@
             max={100}
             format={(v) => (v === 0 ? 'Black and white' : `${v}%`)}
             onchange={(value) => void patchSettings('listeners', { saturation: value / 100 })}
+          />
+          <!--
+            §37.4. `keepListener` on the stage `blank` directive was hard-coded
+            false, so blanking always took the person with it. The two reasons
+            to blank want opposite things — clearing a shared screen wants the
+            face gone, blanking between takes on a lens rig wants it to stay —
+            which is what makes this a preference rather than a constant.
+            The session reads it when it builds the directive.
+          -->
+          <Toggle
+            checked={$settings.listeners.keepWhenBlanked}
+            label="Keep the Listener when the stage is blanked"
+            description="Blanking always hides the script. With this on, the person stays on screen."
+            onchange={(value) => void patchSettings('listeners', { keepWhenBlanked: value })}
           />
         </Section>
       {:else}

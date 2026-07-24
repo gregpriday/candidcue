@@ -403,15 +403,47 @@ function buildCriticalChecks(input: SchedulingContextInput): CriticalCheck[] {
     spoken: spokenObservations(input.transcriptTail, input.itemTiming),
     alignment,
     // The tracking engine keeps one epoch, which it also reports as
-    // `semanticEpoch`; there is no separate take-pass identity below the
-    // coaching session, so one is derived from the session identity that does
-    // exist. Both fields only ever reach `CoachEvidenceStamp`, which
-    // `toCriticalChecks` drops — they are recorded for the comparator's own
-    // `evidenceId`, not sent to Luna.
+    // `semanticEpoch`. It has no take pass — see `trackingFidelityPassId`.
     trackingEpoch: input.semanticEpoch,
-    takePassId: `${input.sessionId}:${input.sessionGeneration}:${input.semanticEpoch}`,
+    takePassId: trackingFidelityPassId(input),
   });
   return toCriticalChecks(comparison.candidates);
+}
+
+/**
+ * Marks a fidelity comparison run inside the **tracking worker**, which has no
+ * take-pass identity at all.
+ *
+ * This used to be minted as `` `${sessionId}:${sessionGeneration}:${semanticEpoch}` ``
+ * and handed to `FidelitySpanObservation.takePassId`, which made it look like a
+ * third competing spelling of the coaching lane's take pass. It is not the same
+ * concept and it is deliberately not unified with `takePassIdFor`:
+ *
+ * - **Different granularity, in both directions.** A take pass spans the whole
+ *   performance of a retake; this string changes on every semantic epoch, i.e.
+ *   on every command jump and re-anchor *within* one pass. Unifying them would
+ *   undo the §5.4 separation commit `faed40e` established — an epoch bump is a
+ *   position jump, not a new take, and must not reset cumulative counts.
+ * - **The value is never compared.** The only consumer is the comparator's
+ *   `CoachEvidenceStamp`, and `toCriticalChecks` drops the stamp before the
+ *   result leaves this module. No `isEvidenceCurrent` call ever sees it, so
+ *   "agreeing" with the coaching lane would buy nothing and cost the false
+ *   impression that tracking evidence is take-scoped.
+ * - **Fail-closed if it ever did escape.** The `tracking-fidelity:` prefix
+ *   makes the string unparseable by `parseTakePassId` and unequal to every
+ *   minted take-pass id, so a future path that leaked this stamp into a
+ *   freshness check would treat it as stale rather than silently matching
+ *   whichever pass happened to be open.
+ */
+export function trackingFidelityPassId(input: {
+  sessionId: string;
+  sessionGeneration: number;
+  semanticEpoch: number;
+}): string {
+  // The trailing segment is deliberately not a bare number: `parseTakePassId`
+  // reads the last colon-separated field as an ordinal, so `…:9` would parse
+  // as "pass 9 of some session" and the fail-closed property would be lost.
+  return `tracking-fidelity:${input.sessionId}:gen${input.sessionGeneration}:epoch${input.semanticEpoch}`;
 }
 
 /**

@@ -1226,6 +1226,7 @@ fn listener_settings_survive_the_round_trip_unchanged() {
     assert_eq!(listener.dim_percent, 62.0);
     assert_eq!(listener.blur_px, 6.5);
     assert_eq!(listener.saturation, 0.3);
+    assert!(listener.keep_when_blanked);
 
     // And the whole document validates, so the round trip is not passing values
     // the backend would reject on the next write.
@@ -1241,6 +1242,14 @@ fn listener_settings_survive_the_round_trip_unchanged() {
 /// `softPause`/`hardPause` → the stage `freeze` directive; `hideOnBlank` → the
 /// `keepListener` flag on the stage `blank` directive; `crossfadeMs` → a stage
 /// constant that reduced-motion and §61 degradation both vary).
+///
+/// `keepWhenBlanked` is NOT `hideOnBlank` under a new name, and the difference
+/// is the one that mattered about the old field rather than its spelling: this
+/// one has a reader. `toggleBlankStage` in src/control/stores/session.ts reads
+/// it every time the stage is blanked and puts it on the directive, which is
+/// still the single carrier of the decision. It is also stated in the direction
+/// the directive states it, so nothing has to invert a persisted boolean —
+/// inverting a persisted value is the one bug this feature has shipped.
 #[test]
 fn the_unreachable_listener_fields_are_gone_not_renamed() {
     let json = serde_json::to_value(RustListenerSettings::default()).expect("serializes");
@@ -1262,7 +1271,14 @@ fn the_unreachable_listener_fields_are_gone_not_renamed() {
     keys.sort_unstable();
     assert_eq!(
         keys,
-        ["autoplay", "blurPx", "defaultPackId", "dimPercent", "saturation"]
+        [
+            "autoplay",
+            "blurPx",
+            "defaultPackId",
+            "dimPercent",
+            "keepWhenBlanked",
+            "saturation"
+        ]
     );
 }
 
@@ -1317,4 +1333,108 @@ fn a_listener_section_from_an_older_document_still_loads() {
     }))
     .expect("a pre-reconciliation section must load");
     assert_eq!(legacy, RustListenerSettings::default());
+}
+
+// ---------------------------------------------------------------------------
+// §28.4 Local voice-detection sensitivity — the round trip, not one half of it
+// ---------------------------------------------------------------------------
+
+use candidcue_lib::settings::AudioSettings as RustAudioSettings;
+
+fn audio_settings_fixture() -> serde_json::Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("ipc")
+        .join("audio-settings-payload.json");
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
+    serde_json::from_str(&raw).expect("fixture parses")
+}
+
+/// The round trip, closed on the Rust side: the patch the TypeScript adapter
+/// emits deserializes into the struct, and the struct serializes back to the
+/// identical document the adapter reads.
+///
+/// `vadSensitivity` is the field this test exists for. The slider was wired to
+/// the VAD and to the Preflight meter and persisted in the frontend's
+/// localStorage overlay ONLY — Rust declared no such field, so a mapping in one
+/// direction was not even possible. The whole audio section is round-tripped
+/// rather than the one key, so a patch that quietly dropped `language` or the
+/// disconnect timeout fails here too.
+#[test]
+fn audio_settings_survive_the_round_trip_unchanged() {
+    let f = audio_settings_fixture();
+    let sent = f["settings"].clone();
+
+    let audio: RustAudioSettings =
+        serde_json::from_value(sent.clone()).expect("the frontend's audio patch must deserialize");
+    let stored = serde_json::to_value(&audio).expect("serializes");
+
+    assert_eq!(
+        stored, sent,
+        "an audio setting changed shape between the UI and the stored document"
+    );
+
+    // The value is the one that was sent, not a default that happens to
+    // serialize to the same JSON — 0.5 is the A.6 neutral, so the fixture is
+    // deliberately not 0.5.
+    assert_eq!(audio.vad_sensitivity, 0.72);
+    assert_ne!(audio.vad_sensitivity, RustAudioSettings::default().vad_sensitivity);
+    assert_eq!(audio.delay_profile, "balanced");
+    assert_eq!(audio.soft_pause_auto_disconnect_minutes, 15);
+
+    // And the whole document validates, so the round trip is not passing a
+    // value the backend would reject on the next write.
+    let settings = RustAppSettings {
+        audio,
+        ..RustAppSettings::default()
+    };
+    validate_settings(&settings).expect("the fixture must be a legal document");
+}
+
+/// The range Rust enforces is the range both sliders offer. The §37 Listener
+/// ranges got this wrong in both directions once — a value the UI could produce
+/// was a value Rust would refuse to store — so it is asserted at the ends.
+#[test]
+fn vad_sensitivity_range_accepts_the_whole_slider_and_nothing_beyond() {
+    for (sensitivity, legal) in [
+        (0.0, true),
+        (0.5, true),
+        (1.0, true),
+        (1.0001, false),
+        (-0.0001, false),
+        (2.0, false),
+    ] {
+        let settings = RustAppSettings {
+            audio: RustAudioSettings {
+                vad_sensitivity: sensitivity,
+                ..RustAudioSettings::default()
+            },
+            ..RustAppSettings::default()
+        };
+        assert_eq!(
+            validate_settings(&settings).is_ok(),
+            legal,
+            "vadSensitivity={sensitivity}"
+        );
+    }
+}
+
+/// A document written before the field existed still loads, and lands on the
+/// A.6 neutral rather than on an extreme — the same rule the frontend adapter
+/// follows, because a missing setting must not become the most aggressive VAD
+/// on offer.
+#[test]
+fn an_audio_section_without_a_sensitivity_loads_at_the_neutral_midpoint() {
+    let audio: RustAudioSettings = serde_json::from_value(serde_json::json!({
+        "transcriptionModel": "gpt-realtime-whisper",
+        "language": "en",
+        "delayProfile": "low",
+        "softPauseAutoDisconnectMinutes": 10,
+    }))
+    .expect("a pre-§28.4 section must load");
+    assert_eq!(audio.vad_sensitivity, 0.5);
+    assert_eq!(audio, RustAudioSettings::default());
 }

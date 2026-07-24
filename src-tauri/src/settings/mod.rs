@@ -141,6 +141,18 @@ pub struct AudioSettings {
     /// 'minimal' | 'low' | 'balanced' | 'accurate' (Appendix A.6).
     pub delay_profile: String,
     pub soft_pause_auto_disconnect_minutes: u32,
+    /// Local voice-detection sensitivity, 0-1, 0.5 = the Appendix A.6 defaults
+    /// (spec §28.4). Resolved into a `VadConfig` override by
+    /// `vadConfigForSensitivity` in src/control/services/audio/defaults.ts.
+    ///
+    /// It lives here rather than in the frontend's localStorage overlay for the
+    /// same reason `following` does: it changes how a session behaves and what
+    /// it costs. This VAD's `speech_ended` is the Realtime commit cue (§29.3),
+    /// so where the speech threshold sits decides how often audio is committed
+    /// and transcribed on the user's key — and a room's mic tuning that a
+    /// cleared browser store silently returns to neutral is a tuning the
+    /// presenter would rediscover mid-take.
+    pub vad_sensitivity: f64,
 }
 
 impl Default for AudioSettings {
@@ -150,6 +162,9 @@ impl Default for AudioSettings {
             language: "en".into(),
             delay_profile: "low".into(),
             soft_pause_auto_disconnect_minutes: 10,
+            // A.6 neutral. Never an extreme: an unreadable or absent value must
+            // not silently become the most aggressive VAD on offer.
+            vad_sensitivity: 0.5,
         }
     }
 }
@@ -376,9 +391,13 @@ impl Default for CoachingModules {
 ///     motion and for §61 frame pressure, and a persisted number would fight
 ///     both; it stays a constant in `ListenerLayer.svelte`.
 ///   - `softPause` / `hardPause`: whether the loop freezes is carried per
-///     directive on the stage `freeze` command, decided by the session.
+///     directive on the stage `freeze` command, decided by the session. The
+///     session does not freeze the Listener on a pause and there is no setting
+///     for it — see `toggleBlankStage` in src/control/stores/session.ts.
 ///   - `hideOnBlank`: carried per directive as `keepListener` on the stage
-///     `blank` command, for the same reason.
+///     `blank` command, for the same reason. It stays deleted; what replaced it
+///     is `keep_when_blanked` below, which differs in the way that matters —
+///     the session reads it when it builds the directive.
 ///
 /// The units are the units the UI shows — dim as a percentage, not an opacity.
 /// The one Listener bug this area has shipped was an inverted conversion on a
@@ -396,6 +415,18 @@ pub struct ListenerSettings {
     pub blur_px: f64,
     /// 0-1, the CSS `saturate()` factor. 0.85 is the look the stage shipped.
     pub saturation: f64,
+    /// Keep the Listener on screen when the stage is blanked (§37.4, §16.6).
+    ///
+    /// Blanking hides the script; whether it also hides the person is a real
+    /// preference, because the two common reasons to blank pull opposite ways.
+    /// Blanking to take the script off a shared screen wants the face gone with
+    /// it; blanking between takes on a rig where the Listener is what the
+    /// presenter looks at wants the face to stay. Off by default — what shipped.
+    ///
+    /// The session reads this and puts it on the `blank` directive as
+    /// `keepListener`, so the directive stays the single carrier of the decision
+    /// and this is only where the default comes from.
+    pub keep_when_blanked: bool,
 }
 
 impl Default for ListenerSettings {
@@ -406,6 +437,7 @@ impl Default for ListenerSettings {
             dim_percent: 40.0,
             blur_px: 0.0,
             saturation: 0.85,
+            keep_when_blanked: false,
         }
     }
 }
@@ -425,7 +457,7 @@ fn in_range_f(value: f64, min: f64, max: f64) -> bool {
 /// Validate against the Appendix A ranges we enforce in Rust. Returns a
 /// recoverable validation error naming the offending field.
 pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
-    let checks: [(&str, bool); 10] = [
+    let checks: [(&str, bool); 11] = [
         (
             "general.autosaveDebounceMs",
             (250..=2000).contains(&settings.general.autosave_debounce_ms),
@@ -447,6 +479,12 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
         (
             "stageBehavior.fixedSpeedWpm",
             (30..=300).contains(&settings.stage_behavior.fixed_speed_wpm),
+        ),
+        // §28.4. The slider is 0-100% in both screens that show it; 0.5 is the
+        // A.6 neutral. The range is the range the sliders offer, exactly.
+        (
+            "audio.vadSensitivity",
+            in_range_f(settings.audio.vad_sensitivity, 0.0, 1.0),
         ),
         // The ranges are the ranges the Preflight sliders offer. They used to
         // disagree with them in both directions — `opacityAfterDim <= 0.75`
