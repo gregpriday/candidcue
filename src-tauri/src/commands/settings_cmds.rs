@@ -315,23 +315,56 @@ pub async fn install_update() -> Result<(), AppError> {
     Err(AppError::not_implemented("Update installation"))
 }
 
-/// Frontend diagnostic line → the process log (spec §30.1 triage).
+/// Frontend diagnostic line → the process log AND a file (spec §30.1 triage).
 ///
 /// The realtime transport lives in the control WEBVIEW, and a `console.log`
 /// there does not reach the terminal running `tauri dev` — so the one failure
 /// that has resisted every other kind of investigation, a realtime connection
-/// that will not open, has been invisible from the outside. Attaching Safari's
-/// Web Inspector works but is not something to ask for in a bug report.
+/// that will not open, has been invisible from the outside.
+///
+/// It writes to a FILE as well as to `tracing`, and that is the important part.
+/// `tracing_subscriber::fmt()` writes to stdout, so a trace only survives if
+/// whoever ran the app happened to pipe it somewhere — and the first attempt to
+/// collect one was lost exactly that way. A diagnostic that depends on
+/// remembering a shell pipe is a diagnostic that does not get captured.
 ///
 /// Deliberately blunt: it takes a string the frontend has already composed and
-/// prints it. It is not a general logging API, it carries no user content by
-/// construction (callers pass step names, states and timings), and it is
-/// bounded so a runaway loop cannot fill a disk.
+/// writes it. It is not a general logging API, it carries no user content by
+/// construction (callers pass step names, states and timings), and both the
+/// line and the file are bounded so a runaway loop cannot fill a disk.
 #[tauri::command]
-pub async fn log_client_diagnostic(scope: String, line: String) -> Result<(), AppError> {
+pub async fn log_client_diagnostic(
+    paths: State<'_, DataPaths>,
+    scope: String,
+    line: String,
+) -> Result<(), AppError> {
     const MAX_LINE: usize = 2000;
-    let scope: String = scope.chars().filter(|c| c.is_ascii_graphic()).take(32).collect();
+    /// Truncate at 4 MB. Long enough for many sessions, small enough that a
+    /// runaway caller cannot become a support problem of its own.
+    const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
+    let scope: String = scope
+        .chars()
+        .filter(|c| c.is_ascii_graphic())
+        .take(32)
+        .collect();
     let line: String = line.chars().take(MAX_LINE).collect();
     tracing::warn!(target: "candidcue::client", scope = %scope, "{line}");
+
+    let path = paths.logs_dir().join("client-trace.log");
+    let _ = std::fs::create_dir_all(paths.logs_dir());
+    if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
+        let _ = std::fs::remove_file(&path);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::io::Write;
+        // Failing to write a diagnostic must never fail the caller: the whole
+        // point is to observe a broken path, not to add a way to break it.
+        let _ = writeln!(file, "{} [{scope}] {line}", crate::util::now_iso());
+    }
     Ok(())
 }

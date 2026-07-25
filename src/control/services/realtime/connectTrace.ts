@@ -30,15 +30,24 @@ let sequence = 0;
 /**
  * Turn tracing on for this window.
  *
- * Read from `localStorage` rather than an env var so it can be switched on in
- * a build that is already running, on the machine where the failure happens,
- * without a rebuild.
+ * On by default in a DEV build, because the first attempt to collect a trace
+ * was lost to a step that should not have existed: the operator had to open the
+ * Web Inspector and set a localStorage key before the run that reproduced the
+ * fault, and a diagnostic you must remember to arm before the thing you cannot
+ * predict is a diagnostic that does not get collected. `pnpm tauri dev` is
+ * already the debugging build; it can afford a few dozen lines per take.
+ *
+ * The localStorage key still works, so a PACKAGED build can be asked for a
+ * trace without a rebuild — which is the case where arming it deliberately is
+ * the right trade.
  */
 export function initConnectTrace(): void {
   try {
-    enabled = localStorage.getItem('candidcue.trace.realtime') === '1';
+    enabled =
+      localStorage.getItem('candidcue.trace.realtime') === '1' ||
+      Boolean(import.meta.env?.DEV);
   } catch {
-    enabled = false;
+    enabled = Boolean(import.meta.env?.DEV);
   }
 }
 
