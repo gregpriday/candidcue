@@ -42,6 +42,10 @@ import {
 } from '../services/smooth-follow-adapter';
 import { SemanticSidecar } from '../services/semantic-sidecar';
 import { CoachingSessionController } from '../services/coaching-session';
+import {
+  FIRST_TAKE_PASS_ORDINAL,
+  takePassIdFor,
+} from '../../shared/coaching/take-pass';
 import { createCoachingObserverTransport } from '../services/coaching-luna';
 import type { MediaStreamLike } from '../services/audio';
 import type { CoachRailState } from '../../shared/contracts';
@@ -1164,7 +1168,12 @@ function startCoaching(input: StartSessionInput, stream: MediaStreamLike): void 
     scriptId: input.scriptId,
     scriptRevision: input.scriptRevision ?? 0,
     stream,
-    takePassId: `${sessionId}:1`,
+    // §36.3: the ordinal, not an id. The controller mints through
+    // `takePassIdFor`, so this lane cannot name a pass differently from the
+    // take row. Capture can open *after* a retake — a mid-take device switch
+    // re-acquires the stream — so the open take's ordinal is the right one and
+    // a hard-coded 1 would silently fold a later pass into the first.
+    initialPassOrdinal: activeTake?.passOrdinal ?? FIRST_TAKE_PASS_ORDINAL,
     publish: (snapshot) => publishCoachRail(snapshot),
     ...(wantsLuna
       ? {
@@ -1400,7 +1409,7 @@ function beginTake(sessionId: string, passOrdinal: number, startTokenIndex: numb
     passOrdinal,
     // The same scheme the coaching subsystem stamps on its own take passes, so
     // a review report and a take row for the same pass carry one identifier.
-    takePassId: `${sessionId}:${passOrdinal}`,
+    takePassId: takePassIdFor(sessionId, passOrdinal),
     startedAtIso: new Date().toISOString(),
     startedAtMs: monotonicNowMs(),
     startTokenIndex,
@@ -2254,7 +2263,13 @@ export function restartParagraph(): void {
   noteCheckpoint('paragraph_start');
   finishTake(before.sessionId, before.snapshot?.tokenIndex);
   if (before.sessionId !== null) {
-    beginTake(before.sessionId, before.counts.retakes + 2, before.snapshot?.tokenIndex ?? 0);
+    const passOrdinal = before.counts.retakes + 2;
+    beginTake(before.sessionId, passOrdinal, before.snapshot?.tokenIndex ?? 0);
+    // §11.3. The coaching lane's pass advances with the take history's, from
+    // the one ordinal — otherwise the rail keeps counting the take the
+    // presenter just discarded, and the filler tile shows a number belonging
+    // to two takes at once.
+    coaching?.beginTakePass(passOrdinal);
   }
   state.update((s) => ({ ...s, counts: { ...s.counts, retakes: s.counts.retakes + 1 } }));
 }
