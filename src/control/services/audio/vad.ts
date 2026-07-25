@@ -33,11 +33,34 @@ export function computeFrameStats(samples: Float32Array): FrameStats {
   return { rms, peak };
 }
 
+/**
+ * The ambient floor of a calibration window.
+ *
+ * A low percentile rather than a mean, and then a hard ceiling. Speech is
+ * sparse enough that even continuous reading leaves gaps between words, so the
+ * percentile finds the room underneath it; the ceiling covers the case it
+ * cannot — someone who never pauses — where the honest answer is that this
+ * window contains no measurement of the room at all and a conservative floor
+ * beats a confident wrong one.
+ */
+export function estimateNoiseFloor(
+  samples: readonly number[],
+  config: Pick<VadConfig, 'calibrationPercentile' | 'maxNoiseFloor'>,
+): number {
+  if (samples.length === 0) return 0;
+  const sorted = [...samples].sort((a, b) => a - b);
+  const index = Math.min(
+    sorted.length - 1,
+    Math.max(0, Math.floor((sorted.length - 1) * config.calibrationPercentile)),
+  );
+  return Math.min(config.maxNoiseFloor, sorted[index] ?? 0);
+}
+
 interface VadState {
   phase: 'calibrating' | 'silence' | 'opening' | 'speaking';
   calibrationStartMs: number | null;
-  calibrationSum: number;
-  calibrationFrames: number;
+  /** Every RMS in the window, so a percentile can be taken rather than a mean. */
+  calibrationSamples: number[];
   noiseFloor: number;
   smoothedRms: number;
   aboveSinceMs: number | null;
@@ -71,8 +94,7 @@ export class LocalVad {
     return {
       phase: 'calibrating',
       calibrationStartMs: null,
-      calibrationSum: 0,
-      calibrationFrames: 0,
+      calibrationSamples: [],
       noiseFloor: this.config.minSpeechRms / this.config.noiseFloorMargin,
       smoothedRms: 0,
       aboveSinceMs: null,
@@ -114,10 +136,9 @@ export class LocalVad {
 
     if (s.phase === 'calibrating') {
       if (s.calibrationStartMs === null) s.calibrationStartMs = atMs;
-      s.calibrationSum += stats.rms;
-      s.calibrationFrames += 1;
+      s.calibrationSamples.push(stats.rms);
       if (atMs - s.calibrationStartMs >= c.calibrationMs) {
-        s.noiseFloor = s.calibrationFrames > 0 ? s.calibrationSum / s.calibrationFrames : 0;
+        s.noiseFloor = estimateNoiseFloor(s.calibrationSamples, c);
         s.phase = 'silence';
         events.push({ type: 'calibrated', noiseFloor: s.noiseFloor, atMs });
       }
@@ -141,8 +162,22 @@ export class LocalVad {
       } else {
         s.aboveSinceMs = null;
         s.phase = 'silence';
-        // Adaptive floor: slow EMA of ambient level during confirmed silence.
-        s.noiseFloor = 0.05 * stats.rms + 0.95 * s.noiseFloor;
+        /*
+         * Adaptive floor, asymmetric on purpose: quick to come DOWN, slow to
+         * go up.
+         *
+         * A symmetric EMA is the reason a bad calibration used to be close to
+         * permanent — speech below the inflated gate counts as silence, so the
+         * floor it feeds is speech, and the estimate sits there. Falling fast
+         * lets a poisoned floor recover in a second or two instead of a take;
+         * rising slowly keeps a door slam or a cough from deafening the
+         * detector, which is the standard fast-fall/slow-rise shape.
+         */
+        const rate = stats.rms < s.noiseFloor ? 0.3 : 0.02;
+        s.noiseFloor = Math.min(
+          c.maxNoiseFloor,
+          rate * stats.rms + (1 - rate) * s.noiseFloor,
+        );
       }
     } else if (s.phase === 'speaking') {
       if (above) {

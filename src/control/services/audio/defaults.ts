@@ -23,6 +23,32 @@ export interface VadConfig {
   signalPresentRms: number;
   /** EMA factor for the smoothed level exposed to meters (0..1). */
   levelSmoothing: number;
+  /**
+   * Percentile of the calibration frames taken as the noise floor (0..1).
+   *
+   * NOT the mean, which is the documented way to get this wrong: speech during
+   * the calibration window drags an average up, and the gate is a multiple of
+   * the result, so a presenter who starts reading immediately sets a threshold
+   * above their own voice and is never heard again. Measured in the wild at a
+   * floor of 0.1008 and a gate of 0.2520 against speech of 0.03–0.12.
+   *
+   * Speech is sparse — even continuous reading has gaps between words — so a
+   * low percentile finds the room underneath it. The 10th–25th percentile is
+   * the standard range; 0.2 sits in it with a little tolerance for a genuinely
+   * noisy room.
+   */
+  calibrationPercentile: number;
+  /**
+   * Hard ceiling on the measured noise floor.
+   *
+   * The backstop for the case a percentile cannot save: someone talking
+   * continuously through the entire window, with no gaps to find. Ambient room
+   * tone measures 0.0003–0.003 RMS and normal speech 0.01–0.1, so anything at
+   * or above this is not a room — and a floor that is really a voice must not
+   * be allowed to set a gate that voice cannot clear. Production noise
+   * estimators cap for exactly this reason.
+   */
+  maxNoiseFloor: number;
 }
 
 export const DEFAULT_VAD_CONFIG: VadConfig = {
@@ -30,11 +56,37 @@ export const DEFAULT_VAD_CONFIG: VadConfig = {
   endOfTurnSilenceMs: 420,
   maxUtteranceMs: 5000,
   calibrationMs: 2000,
-  noiseFloorMargin: 2.5,
-  minSpeechRms: 0.01,
+  /*
+   * Tuned for FAR-FIELD speech, deliberately.
+   *
+   * A teleprompter is not a headset: the presenter is at camera distance, off
+   * axis, sometimes across a room, and the thing that matters is that quiet
+   * distant speech is still heard. Reference levels — quiet ambient
+   * 0.0003-0.003, noisy office ambient up to ~0.01, close speech 0.01-0.1 —
+   * put ordinary far speech near the bottom of that speech band, which the
+   * previous 0.01 absolute floor and 2.5x margin sat on top of.
+   *
+   * The margin is the low end of the range the sensitivity slider already
+   * offers (1.6-4.0), so this is a shift of the DEFAULT into territory the
+   * control was built to reach, not a new regime.
+   *
+   * What it costs, stated plainly: at this sensitivity room tone can open a
+   * turn, and every turn is a commit and a billable transcription round trip.
+   * That is bounded rather than open-ended — `maxUtteranceMs` still forces a
+   * commit every 5 s at any setting, so the worst case is a steady trickle of
+   * short empty transcripts, not a runaway. Missing a presenter entirely is
+   * the worse failure, and it is the one that happened.
+   */
+  noiseFloorMargin: 1.8,
+  minSpeechRms: 0.004,
   clipPeak: 0.985,
   signalPresentRms: 0.0015,
   levelSmoothing: 0.25,
+  calibrationPercentile: 0.2,
+  // ≈ -40 dBFS: at the top of noisy-office ambient and below far speech, so
+  // the worst gate it can produce (×1.8 = 0.018) stays inside the range quiet
+  // distant speech reaches.
+  maxNoiseFloor: 0.01,
 };
 
 /**
