@@ -409,6 +409,140 @@ export function scenarioVerbatimReadThrough(
   };
 }
 
+/* ---------------------------------------------------------------------------
+ * Misspeaking — the tolerance the product is actually sold on
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Words a presenter says that are not the words on the page.
+ *
+ * Deliberately ordinary English rather than nonsense: a stumble produces real
+ * words, and real words are what the fuzzy and phonetic tiers have to decline
+ * to match. Nonsense would be easier for the aligner than the truth is.
+ */
+const WRONG_WORDS = [
+  'basically',
+  'obviously',
+  'whatever',
+  'something',
+  'anyway',
+  'honestly',
+  'actually',
+  'certainly',
+  'possibly',
+  'apparently',
+];
+
+/** Words too small or too common to be worth scoring. */
+const MISSPEAK_SKIP = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'but',
+  'by',
+  'for',
+  'if',
+  'in',
+  'is',
+  'it',
+  'of',
+  'on',
+  'or',
+  'so',
+  'the',
+  'to',
+  'we',
+  'you',
+]);
+
+/**
+ * Replace a FRACTION of a sentence's content words with unrelated ones.
+ *
+ * A fraction rather than a count, because the fixtures' sentences are seven to
+ * nine words long: asking for "six wrong words" in an eight-word sentence
+ * silently produced two, and a test that believes it is exercising heavy
+ * divergence while feeding mild divergence is worse than no test. The count it
+ * actually applied is returned so a caller can assert on it.
+ *
+ * Stopwords are left alone. Swapping `the` for `a` is not what anyone means by
+ * misspeaking, and the weak-match tier already treats it as nearly free — the
+ * substitutions have to land on the words the score is built from.
+ */
+function misspeak(sentence: string, fraction: number, seed = 0): { text: string; changed: number } {
+  const words = sentence.split(' ');
+  const contentPositions = words
+    .map((word, index) => ({ bare: word.replace(/[^A-Za-z']/g, '').toLowerCase(), index }))
+    .filter((entry) => entry.bare.length >= 4 && !MISSPEAK_SKIP.has(entry.bare))
+    .map((entry) => entry.index);
+  const target = Math.min(contentPositions.length, Math.round(contentPositions.length * fraction));
+  let changed = 0;
+  for (let i = 0; i < target; i++) {
+    // Spread the substitutions rather than clustering them: scattered errors
+    // are both more realistic and strictly harder for the aligner, because a
+    // contiguous run of nonsense leaves the surrounding ordered run intact.
+    const position = contentPositions[Math.floor((i * contentPositions.length) / target)];
+    if (position === undefined) continue;
+    words[position] = WRONG_WORDS[(seed + i) % WRONG_WORDS.length] ?? 'whatever';
+    changed++;
+  }
+  return { text: words.join(' '), changed };
+}
+
+export interface MisspeakOptions extends ReadThroughOptions {
+  /**
+   * Utterance indexes to garble, and what FRACTION of each one's content words
+   * to replace (0–1). Every other utterance is spoken verbatim.
+   */
+  garble: ReadonlyMap<number, number>;
+}
+
+/**
+ * A read-through in which some utterances come out wrong.
+ *
+ * This is the shape the corpus was missing. Every other "messy" fixture here
+ * generates its spoken text from `document.spokenTokens[].surface`, so the
+ * words are correct by construction and divergence is impossible — the suite
+ * could vary document topology and utterance grouping thoroughly while never
+ * once asking what happens when a presenter says the wrong word.
+ */
+export function scenarioMisspokenReadThrough(
+  id: string,
+  description: string,
+  document: TrackingDocument,
+  options: MisspeakOptions,
+): PlaybackScenario & { endOfTurn: number[]; wordsChanged: number[] } {
+  const perTurn = Math.max(1, options.sentencesPerTurn ?? 1);
+  const sentences = bodySentenceTexts(document);
+  const turns: TurnSpec[] = [];
+  const wordsChanged: number[] = [];
+  for (let i = 0, utterance = 0; i < sentences.length; i += perTurn, utterance++) {
+    const verbatim = sentences.slice(i, i + perTurn).join(' ');
+    const fraction = options.garble.get(utterance) ?? 0;
+    const spoken = fraction > 0 ? misspeak(verbatim, fraction, utterance) : { text: verbatim, changed: 0 };
+    wordsChanged.push(spoken.changed);
+    turns.push({
+      text: spoken.text,
+      ...(options.gapMs !== undefined ? { gapMs: options.gapMs } : {}),
+    });
+  }
+  const { actions, endOfTurn } = build(turns);
+  // `endOfTurn` is exposed because the assertions are about the cursor's
+  // TRAJECTORY, one reading per utterance. Inferring the boundaries from the
+  // committed trace instead cannot work: a stall produces no change, so any
+  // attempt to recover utterances by watching the value move erases exactly
+  // the thing being measured.
+  return { id, description, document, actions, forbidBehaviors: ['retake'], endOfTurn, wordsChanged };
+}
+
+/** Utterance count for a document at a given grouping — for the assertions. */
+export function utteranceCount(document: TrackingDocument, sentencesPerTurn = 1): number {
+  return Math.ceil(bodySentenceTexts(document).length / Math.max(1, sentencesPerTurn));
+}
+
 export function scenarioNestedPartsReadThrough(): PlaybackScenario {
   return scenarioVerbatimReadThrough(
     'L.1',

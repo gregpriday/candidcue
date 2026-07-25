@@ -607,19 +607,53 @@ export class HypothesisBeam {
     if (decisive) return scored;
 
     const deepLimit = Math.max(1, this.smooth.alignment.beamWidth);
+    let confidenceChanged = false;
     for (let i = 0; i < scored.length && i < deepLimit; i++) {
       const entry = scored[i];
       if (entry === undefined) continue;
+      /*
+       * §15.2's stated purpose, connected to the decision it was written for.
+       *
+       * The agreement between tails became a `beamBonus`, and `beamBonus` is
+       * folded into `logScore` — beam weights and diagnostics. `confidence`,
+       * the only number the committing decision layer reads, stayed the
+       * primary tail's alone. So the "faster-responding" short tails could
+       * never make the cursor move, which is the one thing they exist for.
+       *
+       * What that cost: `alignSequences` normalises against the ideal score of
+       * every transcript token from the alignment's start to the end of the
+       * tail, so one badly misspoken utterance stays in the denominator until
+       * it scrolls out of a 30-token window. A presenter who fluffs a sentence
+       * and then reads the next four perfectly gets no movement at all through
+       * those four — measured, on a fluent two-sentence-per-breath read, as a
+       * cursor that never moved again for the rest of the script.
+       *
+       * A short tail that lands in the SAME PLACE as the long one is the
+       * evidence that the recent words agree with the accumulated ones. Where
+       * that holds, it is the fairer measure of how well the presenter is
+       * currently matching, so it raises confidence rather than merely nudging
+       * a weight. Where it does not hold, nothing changes — a short tail that
+       * disagrees on position is exactly the case for distrusting it.
+       */
+      let agreeing = entry.confidence;
       for (const tail of tails) {
         if (tail.length === 0 || tail.length >= primaryTail.length) continue;
         const shorter = score(entry.window, tail);
         if (shorter === undefined) continue;
         if (Math.abs(shorter.tokenPosition - entry.tokenPosition) <= profile.beamMergeTokens) {
           entry.tailsAgreeing++;
+          agreeing = Math.max(agreeing, shorter.confidence);
         }
       }
       entry.beamBonus = profile.tailAgreementBonus * (entry.tailsAgreeing - 1);
+      if (agreeing > entry.confidence) {
+        entry.confidence = agreeing;
+        confidenceChanged = true;
+      }
     }
+    // Re-rank: the sort above ran on the primary-tail confidences, and a
+    // window whose recent evidence is stronger may now outrank the leader.
+    if (confidenceChanged) scored.sort((a, b) => b.confidence - a.confidence);
     return scored;
   }
 
