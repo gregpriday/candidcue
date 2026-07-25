@@ -1002,7 +1002,13 @@
        * stale generation, which means a second stage window raced this one, so
        * say that instead of waiting to find out.
        */
-      const ack = await stageService.publishStageDocument(sessionId, envelope);
+      // The wait is armed before the publish, so every path out of the publish
+      // owes it a handler — including the one where the publish itself throws.
+      // Left bare, its timeout rejects into nothing minutes later.
+      const ack = await stageService.publishStageDocument(sessionId, envelope).catch((err) => {
+        void ready.catch(() => {});
+        throw err;
+      });
       if (!ack.accepted) {
         void ready.catch(() => {});
         throw new Error('The stage was replaced while the script was being sent to it.');

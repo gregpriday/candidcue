@@ -215,6 +215,10 @@ export async function waitForStageReady(
     };
 
     const deadline = (ms: number) => {
+      // A status request in flight when the wait ends resolves after it, and
+      // arming a fresh timer there would leave a live timeout holding this
+      // closure for its full duration after everyone stopped caring.
+      if (done) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(
         () => finish(new Error(stageStalledMessage(lastStatus, stageGeneration))),
@@ -226,23 +230,42 @@ export async function waitForStageReady(
 
     void listen<{ stageGeneration: number }>('stage://ready', (event) => {
       if (event.payload.stageGeneration === stageGeneration) finish();
-    }).then((fn) => {
-      unlisten = fn;
-      if (done) fn();
-    });
+    })
+      .then((fn) => {
+        unlisten = fn;
+        if (done) fn();
+      })
+      .catch(() => {
+        // Registration failed, so the fast path is gone — but the poll below
+        // is a complete backstop on its own, and it is the one the browser
+        // shim relies on. Losing the listener must not become an unhandled
+        // rejection on top of a wait that can still succeed.
+      });
 
     poll = setInterval(() => {
-      void getStageStatus().then((status) => {
-        lastStatus = status;
-        if (status.stageGeneration !== stageGeneration) return;
-        // The stage is alive: hand the rest of the wait to the handshake
-        // budget, which is what the remaining steps are actually bounded by.
-        if (status.listening && !booted) {
-          booted = true;
-          deadline(timeoutMs);
-        }
-        if (status.hydrated && status.layoutReady) finish();
-      });
+      void getStageStatus()
+        .then((status) => {
+          if (done) return;
+          lastStatus = status;
+          if (status.stageGeneration !== stageGeneration) return;
+          // The stage is alive: hand the rest of the wait to the handshake
+          // budget, which is what the remaining steps are actually bounded by.
+          if (status.listening && !booted) {
+            booted = true;
+            deadline(timeoutMs);
+          }
+          if (status.hydrated && status.layoutReady) finish();
+        })
+        .catch(() => {
+          /*
+           * The backstop must not become the failure. A rejected status read
+           * (the command is unavailable for an instant during teardown, say)
+           * is not evidence about the handshake, so it is dropped rather than
+           * left to surface as an unhandled rejection — and `lastStatus`
+           * deliberately keeps whatever the last successful read said, because
+           * that is the honest answer to "how far did it get".
+           */
+        });
     }, 400);
   });
 }

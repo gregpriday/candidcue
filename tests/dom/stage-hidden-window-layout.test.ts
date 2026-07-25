@@ -105,6 +105,27 @@ describe('the stage lays out in a window that has never been rendered', () => {
     ).toBeGreaterThan(0);
   });
 
+  it('reports layout-ready for a document with nothing in it', async () => {
+    /*
+     * A separate deadlock on the same path, and a nastier one because the
+     * script is not broken. Empty source compiles to a VALID script with zero
+     * blocks and preflight lets it start, so the stage hydrated, mounted this
+     * layer, and then waited on `els.length > 0` for an element that was never
+     * coming. The take died on the same timeout, on a script the app had just
+     * told the user was ready.
+     */
+    const onlayoutready = vi.fn();
+    const empty: StageRenderDocument = { ...doc(), blocks: [], tokenToNode: [] };
+    render(ScriptLayer, {
+      props: { doc: empty, settings: buildStageSettings(), onlayoutready },
+    });
+
+    await vi.waitFor(() => expect(onlayoutready).toHaveBeenCalled(), {
+      timeout: 2000,
+      interval: 25,
+    });
+  });
+
   it('measures the same width the window reports', async () => {
     // Not merely nonzero: the fallback has to be the real viewport, or the
     // line map is built at a size the presenter never sees and the reading

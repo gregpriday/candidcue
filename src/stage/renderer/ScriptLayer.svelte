@@ -362,7 +362,19 @@
       }
     });
     if (changed) measureVersion++;
-    if (!layoutReadySent && els.length > 0) {
+    /*
+     * A document with nothing to measure IS measured.
+     *
+     * `els.length > 0` was standing in for "the blocks have rendered", which
+     * it is — right up until there are no blocks. An empty source compiles to
+     * a valid script with zero blocks and preflight lets it start, so the
+     * stage hydrated, mounted this layer, and then waited for an element that
+     * was never coming: the handshake could not complete and the take died on
+     * `waitForStageReady`'s timeout. Asking the document how many blocks it
+     * has separates "not rendered yet" from "nothing to render".
+     */
+    const rendered = els.length > 0 || doc.blocks.length === 0;
+    if (!layoutReadySent && rendered) {
       layoutReadySent = true;
       onlayoutready?.();
     }

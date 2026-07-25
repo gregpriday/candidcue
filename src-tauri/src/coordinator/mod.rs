@@ -68,6 +68,13 @@ pub struct AppCoordinator {
     /// Deliberately NOT part of `CoordinatorSnapshot`: the snapshot is cloned
     /// on every `get_stage_status` poll, and this is the largest payload in
     /// the app.
+    ///
+    /// LOCK ORDER: `state` before `pending_document`, always. Both are needed
+    /// together because "which stage is open" and "whose document is held"
+    /// have to change as one fact — deciding under `state`, releasing it, and
+    /// then touching `pending_document` leaves a window in which a close for
+    /// an old generation discards a new generation's envelope. Nothing may
+    /// take `pending_document` first and then reach for `state`.
     pending_document: Mutex<Option<(u64, serde_json::Value)>>,
     stage_generation: AtomicU64,
     session_generation: AtomicU64,
@@ -91,10 +98,12 @@ impl AppCoordinator {
         session_id: Option<String>,
         display_fingerprint: Option<String>,
     ) {
-        // A new stage window starts with no document of its own; the previous
-        // generation's envelope must not be replayable to it.
-        self.clear_stage_document();
         let mut state = self.state.lock().expect("coordinator poisoned");
+        // A new stage window starts with no document of its own; the previous
+        // generation's envelope must not be replayable to it. Cleared while
+        // holding `state`, so the two facts change together — see the lock
+        // ordering note on `pending_document`.
+        self.clear_stage_document();
         state.stage = StageState {
             exists: true,
             visible: false,
@@ -113,9 +122,20 @@ impl AppCoordinator {
 
     /// Remember the envelope published under `generation`, so it can be
     /// replayed to a stage that was not yet listening when it was sent.
-    pub fn store_stage_document(&self, generation: u64, envelope: serde_json::Value) {
+    ///
+    /// Returns false if that stage is no longer the open one. The caller
+    /// validated the generation against a snapshot it has since released, and
+    /// a window can be destroyed in the gap; storing anyway would leave up to
+    /// `MAX_STAGE_DOCUMENT_BYTES` tied to a window that no close will ever come
+    /// for, because its close already ran.
+    pub fn store_stage_document(&self, generation: u64, envelope: serde_json::Value) -> bool {
+        let state = self.state.lock().expect("coordinator poisoned");
+        if !state.stage.exists || state.stage.generation != generation {
+            return false;
+        }
         *self.pending_document.lock().expect("coordinator poisoned") =
             Some((generation, envelope));
+        true
     }
 
     /// The envelope to replay for the CURRENT stage, if there is one.
@@ -124,13 +144,11 @@ impl AppCoordinator {
     /// from a previous stage window is never replayed to a new one, so a
     /// reloading stage can only ever be handed the document it was opened for.
     pub fn stage_document_for_replay(&self) -> Option<(u64, serde_json::Value)> {
-        let current = {
-            let state = self.state.lock().expect("coordinator poisoned");
-            if !state.stage.exists {
-                return None;
-            }
-            state.stage.generation
-        };
+        let state = self.state.lock().expect("coordinator poisoned");
+        if !state.stage.exists {
+            return None;
+        }
+        let current = state.stage.generation;
         let pending = self.pending_document.lock().expect("coordinator poisoned");
         match pending.as_ref() {
             Some((generation, envelope)) if *generation == current => {
@@ -158,24 +176,32 @@ impl AppCoordinator {
     }
 
     pub fn stage_closed(&self, generation: u64) {
-        let closed = {
-            let mut state = self.state.lock().expect("coordinator poisoned");
-            if state.stage.generation == generation {
-                state.stage.exists = false;
-                state.stage.listening = false;
-                state.stage.hydrated = false;
-                state.stage.layout_ready = false;
-                state.stage.visible = false;
-                true
-            } else {
-                false
-            }
-        };
-        // Nothing can be replayed to a window that is gone, and holding the
-        // envelope would keep a whole compiled script alive for the life of
-        // the process.
-        if closed {
-            self.clear_stage_document();
+        let mut state = self.state.lock().expect("coordinator poisoned");
+        if state.stage.generation == generation {
+            state.stage.exists = false;
+            state.stage.listening = false;
+            state.stage.hydrated = false;
+            state.stage.layout_ready = false;
+            state.stage.visible = false;
+        }
+        /*
+         * Nothing can be replayed to a window that is gone, and holding the
+         * envelope would keep a whole compiled script alive for the life of
+         * the process. Qualified by generation and done under `state`, both
+         * deliberately.
+         *
+         * A window's `Destroyed` callback runs on another thread, so a close
+         * for generation G can still be in flight while `open_stage` registers
+         * G+1 and control publishes for it — this is the ordinary retake path,
+         * where `open_stage` destroys the previous window itself. Deciding
+         * under `state`, releasing, and then clearing unconditionally left a
+         * window in which the late close wiped the NEW stage's envelope, whose
+         * only symptom would have been the exact start-up timeout this whole
+         * mechanism exists to prevent.
+         */
+        let mut pending = self.pending_document.lock().expect("coordinator poisoned");
+        if matches!(pending.as_ref(), Some((held, _)) if *held == generation) {
+            *pending = None;
         }
     }
 

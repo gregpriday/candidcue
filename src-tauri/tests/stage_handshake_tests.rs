@@ -289,26 +289,86 @@ fn closing_the_stage_releases_the_envelope() {
 /// A stale `stage_closed` (a previous window's destroy event arriving late)
 /// must not release the CURRENT window's envelope — that would silently
 /// disarm the recovery for the stage that actually needs it.
+///
+/// This is a real ordering, not a hypothetical: `open_stage` destroys the
+/// previous window itself, and a window's `Destroyed` callback runs on another
+/// thread, so the close for the take the presenter just abandoned is routinely
+/// still in flight while the next take registers and publishes.
 #[test]
 fn a_stale_close_does_not_release_the_current_envelope() {
     let app = mock_app();
     app.manage(AppCoordinator::default());
     let _stage = LateStage::build(&app);
-    let (stage_generation, session_generation) = open_stage_for_session(&app);
+    let coordinator = app.state::<AppCoordinator>();
+
+    // A full generation-1 → generation-2 lifecycle, so the stale close carries
+    // a generation that genuinely existed rather than a synthetic zero.
+    let first = coordinator.next_stage_generation();
+    coordinator.register_stage(first, Some(SESSION_ID.to_string()), None);
+    let (second, session_generation) = open_stage_for_session(&app);
+    assert_eq!(second, first + 1, "the second window is the next generation");
 
     windows::publish_stage_document(
         app.handle(),
         SESSION_ID,
-        envelope(SESSION_ID, session_generation, stage_generation),
+        envelope(SESSION_ID, session_generation, second),
     )
     .expect("publish");
 
-    let coordinator = app.state::<AppCoordinator>();
-    coordinator.stage_closed(stage_generation - 1);
+    coordinator.stage_closed(first);
     assert!(
         coordinator.stage_document_for_replay().is_some(),
-        "that close was for an older stage generation"
+        "the late close belonged to the window that was replaced; clearing on \
+         it would strand the CURRENT stage with nothing to replay — the exact \
+         start-up timeout this mechanism exists to prevent"
     );
+}
+
+/*
+ * A note on what is NOT tested here, and why.
+ *
+ * The dangerous interleaving is a close for generation G that DECIDES while G
+ * is still current and CLEARS after G+1 has registered and published — it
+ * discards the new stage's envelope and reproduces the start-up timeout
+ * exactly. It was reachable when `stage_closed` decided under the state lock,
+ * released it, and then took the document lock separately, and `open_stage`
+ * destroys the previous window itself, so the ordering is the ordinary retake
+ * path rather than a curiosity.
+ *
+ * There is no honest deterministic test for it. Splitting the two halves needs
+ * a barrier INSIDE `stage_closed`, and a barrier around the whole call only
+ * schedules orderings the single-threaded tests already cover — such a test
+ * would pass against the broken code too, which is worse than no test.
+ *
+ * So the race is closed by construction instead, and it is the construction
+ * that is asserted below: the document is stored only for the stage that is
+ * currently open, and released only by a close that names the generation
+ * holding it. With both ends qualified there is no interleaving left in which
+ * one generation's close can touch another's document — the state that would
+ * express the bug is now unreachable through the API, which is why it cannot
+ * be set up in a test.
+ */
+
+/// An envelope stored for a window that has already gone is never stored at
+/// all. `require_active_stage` validates against a snapshot it then releases,
+/// so a close can land in the gap — and nothing would ever clear the value,
+/// because the close that would have cleared it already ran.
+#[test]
+fn a_publish_for_a_window_that_just_closed_is_refused_rather_than_retained() {
+    let app = mock_app();
+    app.manage(AppCoordinator::default());
+    let coordinator = app.state::<AppCoordinator>();
+
+    let generation = coordinator.next_stage_generation();
+    coordinator.register_stage(generation, Some(SESSION_ID.to_string()), None);
+    coordinator.stage_closed(generation);
+
+    assert!(
+        !coordinator.store_stage_document(generation, serde_json::json!({"big": "payload"})),
+        "the window is gone; storing would pin the document for the life of \
+         the process with no close left to release it"
+    );
+    assert!(coordinator.stage_document_for_replay().is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +399,19 @@ fn the_event_bridge_actually_calls_the_replay() {
     assert!(
         code.contains("replay_stage_document"),
         "…and answer it by replaying the held envelope"
+    );
+    assert!(
+        code.contains("stage_listening()"),
+        "…and record that the stage is reachable, which is what lets control \
+         stop charging boot time against the layout budget"
+    );
+    // The bridge is a function. Asserting on its BODY says nothing about
+    // whether setup ever runs it — deleting the single call site would leave
+    // every other assertion in this file green and the app unable to start.
+    assert!(
+        code.contains("register_stage_event_bridge(")
+            && code.matches("register_stage_event_bridge").count() >= 2,
+        "the bridge must be called from setup, not merely defined"
     );
     // Guard on the guard: if the constant is renamed, the assertions above
     // would pass vacuously against a bridge that wires nothing.

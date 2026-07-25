@@ -1161,8 +1161,21 @@ pub fn publish_stage_document<R: Runtime>(
     // Remember it BEFORE emitting: the stage may not be listening yet, and
     // this is the only copy Rust will ever have. See the field comment on
     // `AppCoordinator::pending_document`.
-    app.state::<AppCoordinator>()
-        .store_stage_document(active.generation, document_envelope.clone());
+    //
+    // A refusal means the window was destroyed between `require_active_stage`
+    // reading its snapshot and this line. Emitting anyway would hand the
+    // document to whatever now answers to the label, so this reports the same
+    // `accepted: false` a stale generation does.
+    if !app
+        .state::<AppCoordinator>()
+        .store_stage_document(active.generation, document_envelope.clone())
+    {
+        return Ok(StageAck {
+            accepted: false,
+            stage_generation: active.generation,
+            session_id: Some(session_id.to_string()),
+        });
+    }
     app.emit_to(STAGE_LABEL, events::STAGE_LOAD_SESSION, &document_envelope)?;
     Ok(StageAck {
         accepted: true,
