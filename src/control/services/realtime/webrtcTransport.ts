@@ -607,9 +607,16 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
    */
   commit(_reason: CommitReason): boolean {
     const dc = this.connection?.dc;
-    if (!dc || dc.readyState !== 'open') return false;
+    if (!dc || dc.readyState !== 'open') {
+      // A commit that cannot be sent is the difference between a take that
+      // transcribes and one that returns nothing at all (§29.3), so it is
+      // worth a line rather than a silent false.
+      trace('commit-dropped', `data channel ${dc?.readyState ?? 'absent'}`);
+      return false;
+    }
     try {
       dc.send(JSON.stringify({ type: 'input_audio_buffer.commit' }));
+      trace('commit', 'input_audio_buffer.commit sent');
     } catch {
       // The channel can transition to closing between the readyState check
       // and the send; treat it as not sent rather than assuming success.

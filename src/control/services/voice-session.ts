@@ -27,6 +27,7 @@ import {
 import { decideExecution, type ExecutionState } from '../../shared/commands/schema';
 import { TranscriptLedger } from '../../shared/tracking/ledger';
 import type { TranscriptEvent as TrackingEvent } from '../../shared/tracking/types';
+import { trace } from './realtime/connectTrace';
 import {
   createAnalyserGraph,
   MicrophoneDeviceManager,
@@ -610,7 +611,15 @@ export class VoiceSessionPipeline {
         ? {}
         : { vadConfig: vadConfigForSensitivity(this.deps.vadSensitivity) }),
     });
-    this.monitor.onVadEvent((event) => this.commitDriver.handleVadEvent(event));
+    this.monitor.onVadEvent((event) => {
+      // The commit chain, traced. With `turn_detection: null` the server does
+      // no endpointing, so a take transcribes NOTHING unless the local VAD
+      // reaches `speech_ended` and the driver turns it into a commit — a
+      // healthy connection returning total silence looks identical to a broken
+      // one, and this is the only place the difference is visible.
+      trace('vad', event.type);
+      this.commitDriver.handleVadEvent(event);
+    });
     // H5: real captured audio is the precondition for the
     // `no_transcripts_despite_audio` health branch. Without a production
     // caller for `markAudioActivity` that check could never fire, which is why

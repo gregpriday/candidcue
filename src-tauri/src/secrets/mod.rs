@@ -1,5 +1,14 @@
 //! Secret handling (spec §44.6). The OpenAI key enters Rust once through a
 //! one-shot masked field and never returns to JavaScript.
+//!
+//! A packaged build has exactly one source for that key: the OS credential
+//! store. A *debug* build has a second one — the `OPENAI_API_KEY` environment
+//! variable — which exists solely to keep macOS from re-prompting for the login
+//! password on every `tauri dev` rebuild; see [`dev_env_key`] for the reason and
+//! for how it is kept out of release binaries. Everything else in this module is
+//! written so that whichever source wins is reported truthfully upward, because
+//! the one thing worse than two possible keys is not knowing which one is
+//! billing the account.
 
 use async_trait::async_trait;
 
@@ -7,6 +16,11 @@ use crate::errors::AppError;
 
 const SERVICE_NAME: &str = "com.candidcue.app";
 const OPENAI_KEY_ENTRY: &str = "openai-api-key";
+
+/// The variable a *debug* build consults ahead of the OS credential store.
+/// Named for the ecosystem convention so a shell that already exports a key for
+/// the OpenAI CLI/SDKs needs no second variable.
+pub const DEV_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 
 /// A secret that redacts `Debug`/`Display` output.
 pub struct SecretString(String);
@@ -34,12 +48,97 @@ impl std::fmt::Display for SecretString {
     }
 }
 
+/// Where the key CandidCue would actually use right now comes from.
+///
+/// Two stores can hold a key at once in a development build, and only one of
+/// them wins. Reporting the winner is the difference between settings that
+/// describe reality and settings that describe an intention — it is never the
+/// key itself, only which drawer it came out of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeySource {
+    /// The debug-only `OPENAI_API_KEY` override; impossible in a release build.
+    Environment,
+    /// The OS credential store — the only source a packaged build has.
+    Keychain,
+    /// No key anywhere.
+    #[serde(rename = "none")]
+    Absent,
+}
+
 /// Non-secret facts about a stored key, safe to show in settings.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RedactedSecretMetadata {
     /// e.g. "sk-…abcd"
     pub hint: String,
+    /// Which store this key came out of. Never the key.
+    pub source: KeySource,
+}
+
+/// Interpret a raw override value. Whitespace-only counts as unset: an
+/// exported-but-empty variable is a shell accident, not an instruction to run
+/// CandidCue without a key, and treating it as a key would shadow the keychain
+/// with nothing.
+fn override_from_raw(raw: Option<String>) -> Option<SecretString> {
+    let value = raw?.trim().to_string();
+    if value.is_empty() {
+        None
+    } else {
+        Some(SecretString::new(value))
+    }
+}
+
+/// Development-only escape hatch from the macOS Keychain.
+///
+/// macOS binds a Keychain item's ACL to the *code signature* of the process
+/// that asked for it. `tauri dev` relinks the binary on every change and signs
+/// it ad-hoc, so every run presents a different identity to the Keychain, the
+/// saved ACL never matches, and "Always Allow" can never stick — the login
+/// password prompt comes back on each launch, several times a day. Reading the
+/// key from the environment first sidesteps the ACL entirely.
+///
+/// The `cfg(not(debug_assertions))` twin below exists so that a release build
+/// contains no environment read at all: a packaged CandidCue cannot be made to
+/// pick up a key from whatever was exported into its environment, no matter how
+/// it was launched. Do NOT collapse the pair into a runtime `if cfg!(…)` — that
+/// compiles the environment read into the shipped binary and only hides it
+/// behind a branch.
+#[cfg(debug_assertions)]
+fn dev_env_key() -> Option<SecretString> {
+    override_from_raw(std::env::var(DEV_KEY_ENV_VAR).ok())
+}
+
+/// Release twin of [`dev_env_key`]. See that function for why this is a
+/// separate compilation, not a branch. It is handed `None` rather than simply
+/// returning `None` so that the two twins differ in exactly one thing — whether
+/// the environment is consulted at all — and so this one still fails to compile
+/// if the override's shape ever changes underneath it.
+#[cfg(not(debug_assertions))]
+fn dev_env_key() -> Option<SecretString> {
+    override_from_raw(None)
+}
+
+/// Whether the debug-only environment override is supplying the key right now.
+/// Always `false` in a release build. Callers use this to refuse writes the
+/// override would immediately shadow.
+pub fn dev_env_key_active() -> bool {
+    dev_env_key().is_some()
+}
+
+/// The redacted tail shown in settings. Takes the last four characters so the
+/// operator can tell two of their own keys apart, and nothing more.
+fn hint_for(key: &SecretString) -> String {
+    let value = key.expose();
+    let tail: String = value
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("sk-…{tail}")
 }
 
 #[async_trait]
@@ -58,6 +157,26 @@ impl OsSecretStore {
     fn entry() -> Result<keyring::Entry, AppError> {
         Ok(keyring::Entry::new(SERVICE_NAME, OPENAI_KEY_ENTRY)?)
     }
+
+    /// The credential-store read on its own, with the environment override out
+    /// of the picture — the one place that actually touches the Keychain.
+    fn keychain_key() -> Result<Option<SecretString>, AppError> {
+        match Self::entry()?.get_password() {
+            Ok(value) => Ok(Some(SecretString::new(value))),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// The winning key and the store it came from, in one pass, so a caller
+    /// never reads the Keychain twice (each read is a potential ACL prompt).
+    fn resolve(&self) -> Result<(Option<SecretString>, KeySource), AppError> {
+        // Debug builds only; `dev_env_key` explains why the environment wins.
+        if let Some(key) = dev_env_key() {
+            return Ok((Some(key), KeySource::Environment));
+        }
+        Ok((Self::keychain_key()?, KeySource::Keychain))
+    }
 }
 
 #[async_trait]
@@ -68,13 +187,14 @@ impl SecretStore for OsSecretStore {
     }
 
     async fn get_openai_key(&self) -> Result<Option<SecretString>, AppError> {
-        match Self::entry()?.get_password() {
-            Ok(value) => Ok(Some(SecretString::new(value))),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(err) => Err(err.into()),
-        }
+        Ok(self.resolve()?.0)
     }
 
+    /// Deletes the credential-store entry only. The environment override is not
+    /// this process's to remove, so a delete performed while it is set does
+    /// exactly what it says and no more; `describe_openai_key` then keeps
+    /// reporting `Environment`, which is the honest answer rather than a
+    /// pretend-empty one.
     async fn delete_openai_key(&self) -> Result<(), AppError> {
         match Self::entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
@@ -83,12 +203,10 @@ impl SecretStore for OsSecretStore {
     }
 
     async fn describe_openai_key(&self) -> Result<Option<RedactedSecretMetadata>, AppError> {
-        Ok(self.get_openai_key().await?.map(|key| {
-            let value = key.expose();
-            let tail: String = value.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
-            RedactedSecretMetadata {
-                hint: format!("sk-…{tail}"),
-            }
+        let (key, source) = self.resolve()?;
+        Ok(key.map(|key| RedactedSecretMetadata {
+            hint: hint_for(&key),
+            source,
         }))
     }
 }

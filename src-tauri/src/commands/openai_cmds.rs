@@ -21,7 +21,10 @@ use crate::openai::{
     EphemeralCredential, KeyValidationResult, ModelCapabilities, OpenAiClient,
     TranscriptionCredentialConfig,
 };
-use crate::secrets::{RedactedSecretMetadata, SecretStore, SecretString};
+use crate::secrets::{
+    dev_env_key_active, KeySource, RedactedSecretMetadata, SecretStore, SecretString,
+    DEV_KEY_ENV_VAR,
+};
 
 /// Managed state wrapper for the secret store implementation.
 pub struct Secrets(pub std::sync::Arc<dyn SecretStore>);
@@ -32,6 +35,9 @@ pub struct OpenAiKeyStatus {
     pub present: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Which store the key came out of, so Settings can say which one is in
+    /// play. A release build can only ever report `keychain` or `none`.
+    pub source: KeySource,
 }
 
 fn key_missing() -> AppError {
@@ -66,6 +72,21 @@ pub async fn save_openai_key(
     secrets: State<'_, Secrets>,
     candidate_key: String,
 ) -> Result<RedactedSecretMetadata, AppError> {
+    // Refused before the key is even looked at, because in a debug build the
+    // `OPENAI_API_KEY` override is read ahead of the credential store: a key
+    // saved now would be written successfully and then shadowed on every
+    // subsequent read. Settings would report "Connected" and show the tail of
+    // the key just typed while a different key billed the account — a lie that
+    // survives restarts. Refusing is the only outcome that cannot mislead, and
+    // it is trivially undone by unsetting the variable. Release builds never
+    // reach this branch; `dev_env_key_active` is compiled to `false` there.
+    if dev_env_key_active() {
+        return Err(AppError::invalid_input(format!(
+            "{DEV_KEY_ENV_VAR} is set for this development build and takes precedence over the \
+             stored key, so saving one here would have no effect. Unset it and restart CandidCue \
+             to store a key in the credential store."
+        )));
+    }
     let key = SecretString::new(candidate_key.trim().to_string());
     if key.expose().is_empty() {
         return Err(AppError::invalid_input("Paste an API key first."));
@@ -101,17 +122,32 @@ pub async fn save_openai_key(
         .ok_or_else(|| AppError::Internal("key vanished immediately after save".into()))
 }
 
+/// Redacted facts about the key currently in play, including which store it
+/// came from. The value is never part of this — only its last four characters
+/// and its provenance.
 #[tauri::command]
 pub async fn get_openai_key_status(
     secrets: State<'_, Secrets>,
 ) -> Result<OpenAiKeyStatus, AppError> {
-    let described = secrets.0.describe_openai_key().await?;
-    Ok(OpenAiKeyStatus {
-        present: described.is_some(),
-        hint: described.map(|d| d.hint),
+    Ok(match secrets.0.describe_openai_key().await? {
+        Some(described) => OpenAiKeyStatus {
+            present: true,
+            hint: Some(described.hint),
+            source: described.source,
+        },
+        None => OpenAiKeyStatus {
+            present: false,
+            hint: None,
+            source: KeySource::Absent,
+        },
     })
 }
 
+/// Remove the stored key. Deliberately *not* refused while the debug-only
+/// environment override is set: unlike a save, a delete has a real and complete
+/// effect on the only store this app owns, and the key that remains afterwards
+/// is reported as `source: "environment"` rather than being passed off as
+/// stored. The caller re-reads the status and tells the operator what is left.
 #[tauri::command]
 pub async fn delete_openai_key(secrets: State<'_, Secrets>) -> Result<(), AppError> {
     secrets.0.delete_openai_key().await

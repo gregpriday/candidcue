@@ -10,9 +10,17 @@ export interface KeyValidationResult {
   models?: { realtime: boolean; command: boolean };
 }
 
+/**
+ * Which store the key in play came from. A packaged build only ever reports
+ * `keychain` or `none`; `environment` means a debug build picked up
+ * `OPENAI_API_KEY`, which takes precedence over anything stored.
+ */
+export type OpenAiKeySource = 'environment' | 'keychain' | 'none';
+
 export interface OpenAiKeyStatus {
   present: boolean;
   lastFour?: string;
   state: 'connected' | 'invalid' | 'rate_limited' | 'network_unavailable' | 'unknown';
+  source: OpenAiKeySource;
   lastValidatedAt?: string;
 }
