@@ -21,6 +21,35 @@ afterEach(() => {
 });
 
 /**
+ * jsdom performs no layout, and `Range` is where that shows up as a crash
+ * rather than a zero: `Range.prototype.getClientRects` is simply absent, so the
+ * stage's line-map rebuild — which measures each token's rects to build the
+ * unit→pixel path — throws "range.getClientRects is not a function" instead of
+ * measuring nothing.
+ *
+ * That was invisible until the stage stopped needing a painted window to
+ * measure: with the viewport falling back to `window.innerHeight`, the rebuild
+ * now actually runs here, where before it returned at the `vh === 0` guard.
+ *
+ * The shim returns an EMPTY list, which is the truthful answer for an
+ * environment with no layout — not a fabricated rectangle. Tests in this
+ * project therefore must not assert on measured geometry; they assert that the
+ * measurement path runs and terminates. Anything needing real rects belongs in
+ * the browser E2E layer, which has a real engine.
+ */
+const emptyRects = (): DOMRectList => {
+  const list = [] as unknown as DOMRectList;
+  (list as unknown as { item: (i: number) => DOMRect | null }).item = () => null;
+  return list;
+};
+if (typeof Range.prototype.getClientRects !== 'function') {
+  Range.prototype.getClientRects = emptyRects;
+}
+if (typeof Range.prototype.getBoundingClientRect !== 'function') {
+  Range.prototype.getBoundingClientRect = () => new DOMRect(0, 0, 0, 0);
+}
+
+/**
  * Guard on the environment itself. If jsdom is ever swapped for `node` (or a
  * DOM shim that does not implement focus), these component tests would not
  * fail — `document.activeElement` would simply be undefined and every
