@@ -170,8 +170,22 @@ export function createWorkerTrackingDriver(options: TrackingDriverOptions): Trac
   let lastSnapshot: TrackingSnapshot | null = null;
   let disposed = false;
 
+  /*
+   * Every command the worker is given, except the per-event firehose.
+   *
+   * The blind spot this closes cost a second take. The log could show that the
+   * engine was `paused` at +70 ms and could not show WHO paused it, so the
+   * search for the caller was a static read of every path that reaches
+   * `driver.pause()` — and the obvious suspect turned out to be innocent.
+   * `transcript_event` and `tick` are excluded because they arrive by the
+   * hundred and would bury exactly the lines that matter.
+   */
   const post = (message: TrackingWorkerInbound) => {
-    if (!disposed) worker.postMessage(message);
+    if (disposed) return;
+    if (message.type !== 'transcript_event' && message.type !== 'tick') {
+      trace('worker-cmd', message.type);
+    }
+    worker.postMessage(message);
   };
 
   worker.addEventListener('message', (event: MessageEvent) => {

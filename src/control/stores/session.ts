@@ -671,6 +671,7 @@ export function startLiveSession(input: StartSessionInput): string {
       // H5: transcription is untrustworthy — stop following visibly rather
       // than letting the stage drift on stale or absent speech.
       onFollowingHold: (held, reason) => {
+        trace('hold', `${held ? 'held' : 'released'} — ${reason ?? 'none'}`);
         smoothFollow.setFollowingPaused(held);
         if (held) {
           showToast(describeHold(reason), 'danger');
@@ -1249,6 +1250,7 @@ const followActions = {
    * stops.
    */
   setFollowingPaused(paused: boolean): void {
+    trace('follow-pause', paused ? 'paused by the follow store' : 'resumed by the follow store');
     if (paused) driver?.pause();
     else driver?.resume();
     state.update((s) => ({ ...s, voiceFollow: !paused }));
@@ -1708,12 +1710,14 @@ function sendDirective(directive: StageDirective): void {
 export function startPrompting(): void {
   const s = get(state);
   if (!s.active || s.prompting) return;
+  trace('prompting', 'start');
   state.update((prev) => ({ ...prev, prompting: true, paused: 'none' }));
   driver?.start();
 }
 
 /** Listening pause — transcription stays connected (§15.3). */
 export function pauseListening(): void {
+  trace('pause', 'listening pause (user)');
   state.update((s) => ({ ...s, paused: 'listening' }));
   driver?.pause();
   pipeline?.softPause();
@@ -1723,6 +1727,7 @@ export function pauseListening(): void {
 export function hardPause(): void {
   // 'muted' is the deliberate-pause label; 'disconnected' means something
   // broke. A hard pause is a choice, so it must not read as a failure.
+  trace('pause', 'hard pause (user)');
   state.update((s) => ({ ...s, paused: 'hard', micState: 'muted' }));
   driver?.pause();
   void pipeline?.hardPause().catch((err) => {
