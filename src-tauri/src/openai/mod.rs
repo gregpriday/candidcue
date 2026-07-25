@@ -143,7 +143,13 @@ impl Default for ModelCapabilities {
             command_structured_outputs: true,
             semantic_model: DEFAULT_SEMANTIC_MODEL.into(),
             semantic_structured_outputs: true,
-            semantic_reasoning_efforts: vec!["none".into(), "minimal".into(), "low".into()],
+            // Mirrors `ALLOWED_SEMANTIC_REASONING_EFFORTS`. Advertising an
+            // effort the model rejects would let the control window offer a
+            // setting that 400s every semantic call.
+            semantic_reasoning_efforts: responses::ALLOWED_SEMANTIC_REASONING_EFFORTS
+                .iter()
+                .map(|effort| (*effort).to_string())
+                .collect(),
             semantic_default_reasoning_effort: "low".into(),
             semantic_supports_prompt_cache_key: true,
             prompt_cache_min_tokens: 1024,
@@ -152,7 +158,7 @@ impl Default for ModelCapabilities {
             semantic_input_price_per_mtok: None,
             semantic_cached_input_price_per_mtok: None,
             semantic_output_price_per_mtok: None,
-            registry_version: 2,
+            registry_version: 3,
         }
     }
 }

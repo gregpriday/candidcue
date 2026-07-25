@@ -38,7 +38,18 @@ pub const MAX_SEMANTIC_TIMEOUT_MS: u64 = 30_000;
 /// Reasoning efforts the semantic sidecar is allowed to request (companion
 /// §38.1: start at `low`, evaluate lower settings; never medium/high for
 /// continuous tracking classification).
-pub const ALLOWED_SEMANTIC_REASONING_EFFORTS: [&str; 3] = ["none", "minimal", "low"];
+///
+/// `minimal` is deliberately absent even though §38.1 contemplates "lower than
+/// low". The configured semantic model does not accept it: `reasoning.effort`
+/// on `gpt-5.6-luna` is one of `none | low | medium | high | xhigh`, and
+/// sending `minimal` is a hard `400 unsupported_value` — not a degraded answer,
+/// a rejected request. Because `normalize_reasoning_effort` passes anything in
+/// this list through verbatim, listing an effort the model rejects turns a
+/// caller's preference into a total failure of the semantic sidecar. The two
+/// values here are the intersection of "supported by the model" and "permitted
+/// for continuous classification". Verified against the live API in
+/// `tests/live_openai_responses.rs`.
+pub const ALLOWED_SEMANTIC_REASONING_EFFORTS: [&str; 2] = ["none", "low"];
 
 // ---------------------------------------------------------------------------
 // Usage / cache metadata
@@ -575,10 +586,17 @@ mod tests {
 
     #[test]
     fn reasoning_effort_and_timeout_are_clamped() {
-        assert_eq!(normalize_reasoning_effort(Some("minimal")), "minimal");
+        assert_eq!(normalize_reasoning_effort(Some("low")), "low");
         assert_eq!(normalize_reasoning_effort(Some("none")), "none");
         // Medium/high are prohibited for continuous classification (§38.1).
         assert_eq!(normalize_reasoning_effort(Some("high")), "low");
+        // `minimal` is not accepted by the configured model at all — it must be
+        // clamped away rather than forwarded into a 400 (see the constant).
+        assert_eq!(normalize_reasoning_effort(Some("minimal")), "low");
+        // Nothing outside the model's supported vocabulary may escape.
+        for effort in ALLOWED_SEMANTIC_REASONING_EFFORTS {
+            assert!(matches!(effort, "none" | "low"));
+        }
         assert_eq!(normalize_reasoning_effort(None), "low");
         assert_eq!(normalize_timeout_ms(None), DEFAULT_SEMANTIC_TIMEOUT_MS);
         assert_eq!(normalize_timeout_ms(Some(1)), 250);

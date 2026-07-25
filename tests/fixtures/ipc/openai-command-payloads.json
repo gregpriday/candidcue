@@ -57,7 +57,7 @@
     "commandStructuredOutputs": true,
     "semanticModel": "gpt-5.6-luna",
     "semanticStructuredOutputs": true,
-    "semanticReasoningEfforts": ["none", "minimal", "low"],
+    "semanticReasoningEfforts": ["none", "low"],
     "semanticDefaultReasoningEffort": "low",
     "semanticSupportsPromptCacheKey": true,
     "promptCacheMinTokens": 1024,
@@ -66,6 +66,6 @@
     "semanticInputPricePerMtok": null,
     "semanticCachedInputPricePerMtok": null,
     "semanticOutputPricePerMtok": null,
-    "registryVersion": 2
+    "registryVersion": 3
   }
 }

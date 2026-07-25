@@ -768,6 +768,32 @@ fn capability_registry_matches_the_frontend_twin_and_section_26_1() {
         capabilities.semantic_structured_outputs,
         "vocabulary analysis is gated on this in the control window"
     );
+    // The registry is what the control window offers as selectable settings, so
+    // it may only ever advertise reasoning efforts the model actually accepts.
+    // `minimal` is a hard 400 on `gpt-5.6-luna`; advertising it would let the UI
+    // present a choice that kills every semantic call. Verified live in
+    // `tests/live_openai_responses.rs::rejects_unsupported_reasoning_effort`.
+    assert_eq!(
+        capabilities.semantic_reasoning_efforts,
+        candidcue_lib::openai::responses::ALLOWED_SEMANTIC_REASONING_EFFORTS
+            .iter()
+            .map(|e| (*e).to_string())
+            .collect::<Vec<_>>(),
+        "the advertised efforts must be exactly the efforts the transport will send"
+    );
+    assert!(
+        capabilities
+            .semantic_reasoning_efforts
+            .iter()
+            .all(|effort| effort != "minimal"),
+        "`minimal` is not implemented by the configured semantic model"
+    );
+    assert!(
+        capabilities
+            .semantic_reasoning_efforts
+            .contains(&capabilities.semantic_default_reasoning_effort),
+        "the default effort must itself be one of the advertised efforts"
+    );
 }
 
 // ---------------------------------------------------------------------------

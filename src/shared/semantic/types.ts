@@ -276,7 +276,12 @@ export interface AssistSchedulingContext {
 
 export interface SemanticRequestOptions {
   timeoutMs?: number;
-  reasoningEffort?: 'none' | 'minimal' | 'low';
+  /**
+   * Mirrors `ALLOWED_SEMANTIC_REASONING_EFFORTS` in Rust. `minimal` is NOT
+   * offered: the configured semantic model rejects it with a 400, so allowing
+   * it here would let a caller type-check its way into failing every request.
+   */
+  reasoningEffort?: 'none' | 'low';
   maxOutputTokens?: number;
   promptCacheKey?: string;
   stableContext?: string;

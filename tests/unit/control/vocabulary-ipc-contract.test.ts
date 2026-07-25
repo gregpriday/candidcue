@@ -87,7 +87,10 @@ describe('vocabulary + capability IPC payloads', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.command).toBe('get_model_capabilities');
     expect(calls[0]!.payload).toBeUndefined();
-    expect(first.registryVersion).toBe(2);
+    // Pinned to the fixture, not to a literal: this test is about the call
+    // shape and the memoisation, and hard-coding the version made every
+    // registry bump fail here for a reason that has nothing to do with either.
+    expect(first.registryVersion).toBe(capabilities.registryVersion);
     expect(second).toBe(first);
   });
 });

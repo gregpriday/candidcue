@@ -24,12 +24,19 @@
 //!   3. One structured `/v1/responses` call round-tripped through the real
 //!      `parse_structured`.
 //!
-//! The app's configured models (`gpt-realtime-whisper`, `gpt-5.6-luna`) are the
-//! spec's intended future models and may not resolve on the live API yet. Their
-//! presence is REPORTED, never asserted — a missing future model is expected and
-//! must not turn the build red. The plumbing is instead proven against a
-//! currently-available model discovered from the live `/v1/models` list, so a
-//! missing future model cannot mask a real code-path bug.
+//! The app's configured models (`gpt-realtime-whisper`, `gpt-5.6-luna`) were
+//! once treated as unreleased: their presence was reported, never asserted, so
+//! that a missing future model could not turn the build red. Both now resolve
+//! on the live `/v1/models` list, so that hedge has become a way for the suite
+//! to pass while the app is unusable — if the configured transcription model
+//! disappeared, every session would fail to start and this file would still be
+//! green. Their presence is therefore ASSERTED now, and the credential mint runs
+//! against the CONFIGURED model rather than a discovered stand-in, so what the
+//! test proves is what the app actually does.
+//!
+//! `POST /v1/responses` is covered in depth by the sibling
+//! `live_openai_responses.rs`; the single structured call kept here is a
+//! smoke check that the three endpoints work together in one run.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -43,30 +50,6 @@ use candidcue_lib::openai::semantic::{
 };
 use candidcue_lib::secrets::SecretString;
 use serde_json::json;
-
-/// Preferred realtime *transcription* models for the credential mint, best
-/// first. Intersected with the live `/v1/models` list at runtime; the app's
-/// configured model is the final fallback so we can report its 404 explicitly.
-const REALTIME_MODEL_PREFS: [&str; 5] = [
-    "gpt-4o-mini-transcribe",
-    "gpt-4o-transcribe",
-    "gpt-realtime-mini",
-    "whisper-1",
-    DEFAULT_TRANSCRIPTION_MODEL,
-];
-
-/// Preferred reasoning-capable models for the `/v1/responses` structured call.
-/// `build_structured_body` always sends `reasoning.effort`, which non-reasoning
-/// models reject, so every candidate here is a reasoning model. Configured model
-/// last as an explicit fallback.
-const RESPONSES_MODEL_PREFS: [&str; 6] = [
-    "gpt-5-nano",
-    "gpt-5-mini",
-    "o4-mini",
-    "o3-mini",
-    "gpt-5",
-    DEFAULT_SEMANTIC_MODEL,
-];
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -114,17 +97,6 @@ async fn list_model_ids(http: &reqwest::Client, key: &SecretString) -> Vec<Strin
         .unwrap_or_default()
 }
 
-/// First preference that is actually available; falls back to the last entry
-/// (the configured model) so the caller can attempt it and report the outcome.
-fn pick_model<'a>(prefs: &'a [&'a str], available: &[String]) -> (&'a str, bool) {
-    for candidate in prefs {
-        if available.iter().any(|id| id == candidate) {
-            return (candidate, true);
-        }
-    }
-    (prefs[prefs.len() - 1], false)
-}
-
 #[tokio::test]
 async fn live_openai_smoke() {
     let Some(key_raw) = gate() else {
@@ -152,7 +124,7 @@ async fn live_openai_smoke() {
         println!("    message: {message}");
     }
 
-    // Configured-model resolution (REPORT ONLY — never asserted).
+    // Configured-model resolution.
     let available = list_model_ids(client.http(), &key).await;
     println!("    live /v1/models returned {} model ids", available.len());
     let resolves = |id: &str| available.iter().any(|m| m == id);
@@ -166,16 +138,15 @@ async fn live_openai_smoke() {
             "      {:<44} {:<22} -> {}",
             label,
             id,
-            if resolves(id) { "PRESENT" } else { "absent (expected for a future model)" }
+            if resolves(id) { "PRESENT" } else { "ABSENT" }
         );
     }
 
     // --- Phase 2: ephemeral credential mint (release-blocker path) --------
-    let (mint_model, mint_available) = pick_model(&REALTIME_MODEL_PREFS, &available);
-    println!(
-        "[2] mint credential      using realtime model `{mint_model}` ({})",
-        if mint_available { "available in live list" } else { "NOT in live list — configured fallback, may 404" }
-    );
+    // Against the CONFIGURED model: a stand-in would prove the plumbing while
+    // leaving the model the app actually ships entirely unexercised.
+    let mint_model = DEFAULT_TRANSCRIPTION_MODEL;
+    println!("[2] mint credential      using configured realtime model `{mint_model}`");
 
     let before_ms = now_ms();
     let mint = client
@@ -212,25 +183,16 @@ async fn live_openai_smoke() {
             Some(cred)
         }
         Err(err) => {
-            println!(
-                "    mint FAILED code={} — {}",
-                err.code(),
-                if mint_available {
-                    "against an available model, so this is a real plumbing/access finding"
-                } else {
-                    "the configured model is not live yet (expected until the future model ships)"
-                }
-            );
+            println!("    mint FAILED code={} against the configured model", err.code());
             None
         }
     };
 
     // --- Phase 3: one structured /v1/responses call -----------------------
-    let (responses_model, responses_available) = pick_model(&RESPONSES_MODEL_PREFS, &available);
-    println!(
-        "[3] structured /responses using model `{responses_model}` ({})",
-        if responses_available { "available in live list" } else { "NOT in live list — configured fallback, may 404" }
-    );
+    // Also the configured model. Every other structured operation is covered in
+    // `live_openai_responses.rs`.
+    let responses_model = DEFAULT_SEMANTIC_MODEL;
+    println!("[3] structured /responses using configured semantic model `{responses_model}`");
 
     // Tiny, bounded classification payload; the strict schema forces the model
     // to emit every field, and the real `parse_structured` must accept it.
@@ -289,15 +251,7 @@ async fn live_openai_smoke() {
             }
         }
         Err(err) => {
-            println!(
-                "    /responses FAILED code={} — {}",
-                err.code(),
-                if responses_available {
-                    "against an available model, so this is a real plumbing/access finding"
-                } else {
-                    "the configured model is not live yet (expected)"
-                }
-            );
+            println!("    /responses FAILED code={} against the configured model", err.code());
             false
         }
     };
@@ -325,13 +279,35 @@ async fn live_openai_smoke() {
     println!("=================================================================\n");
 
     // --- Assertions -------------------------------------------------------
-    // Phase 1: the key itself must be accepted. (A missing *future model* does
-    // not make the key invalid — validate_key still reports a `valid*` status.)
+    // Phase 1: the key itself must be accepted.
     assert!(
         key_accepted,
         "OPENAI_API_KEY was not accepted (status={}); expected a `valid*` status",
         validation.status
     );
+
+    // Every configured model must actually exist. `validate_key` folds this
+    // into its status string, so without an explicit check a retired model
+    // would leave this test green while no session could start.
+    for (label, id) in [
+        ("DEFAULT_TRANSCRIPTION_MODEL", DEFAULT_TRANSCRIPTION_MODEL),
+        ("DEFAULT_COMMAND_MODEL", DEFAULT_COMMAND_MODEL),
+        ("DEFAULT_SEMANTIC_MODEL", DEFAULT_SEMANTIC_MODEL),
+    ] {
+        assert!(
+            resolves(id),
+            "{label} is `{id}`, which the live /v1/models list does not contain — the app is \
+             configured against a model this account cannot use"
+        );
+    }
+
+    // …and `validate_key` must agree, since that verdict is what gates the
+    // Settings screen.
+    assert_eq!(
+        validation.status, "valid_ready",
+        "with every configured model present, validate_key must report `valid_ready`"
+    );
+    assert!(validation.realtime_model_available && validation.command_model_available);
 
     // Phase 2: THE highest-value assertion — the release-blocker invariant.
     let cred = credential.expect("credential mint must succeed for the smoke test to be meaningful");
