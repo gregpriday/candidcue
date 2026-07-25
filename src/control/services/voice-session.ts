@@ -200,6 +200,17 @@ export interface VoicePipelineDeps {
   /** H5: the input device is gone; the user must pick another (§28.6). */
   onInputDeviceLost?(code: string): void;
   /**
+   * §28.4. The local VAD has measured the room and the speech gate is set.
+   *
+   * Until this fires, every sound in the room — including the presenter — is
+   * being averaged INTO the noise floor, so a take that begins with someone
+   * already reading sets its own threshold above their voice. The presenter
+   * needs to know when the window has closed, and nothing told them.
+   */
+  onVadCalibrated?(): void;
+  /** §28.4. The noise-floor window has opened; the room must be quiet. */
+  onVadCalibrating?(): void;
+  /**
    * §28.6: audio is flowing from the input again — the track unmuted, or the
    * device was plugged back in. The counterpart to `onInputDeviceLost`, so the
    * UI can stop saying the microphone is gone without the user doing anything.
@@ -654,6 +665,12 @@ export class VoiceSessionPipeline {
             })`
           : event.type,
       );
+      // §28.4. The presenter has to be told when the room has been measured.
+      // Calibration averages the first two seconds of audio, so anyone who
+      // starts reading immediately is measured as the noise floor — and the
+      // only cue that the window had closed was a log line nobody on stage can
+      // see. `onVadCalibrated` puts it where they are looking.
+      if (event.type === 'calibrated') this.deps.onVadCalibrated?.();
       this.commitDriver.handleVadEvent(event);
     });
     // H5: real captured audio is the precondition for the
@@ -689,7 +706,14 @@ export class VoiceSessionPipeline {
      * VAD immediately or the session would come back with no commit boundaries
      * at all.
      */
-    if (this.vadRequested) await this.monitor.start(result.stream);
+    if (this.vadRequested) {
+      // Paired with `onVadCalibrated`: the presenter is asked to hold for the
+      // two seconds the noise floor is being measured, and told when it is
+      // done. Announcing only the end would leave the first cue arriving out
+      // of nowhere, after the moment it was meant to cover.
+      this.deps.onVadCalibrating?.();
+      await this.monitor.start(result.stream);
+    }
     // §5.3: fan the SAME capture out to any extra consumer (the coaching
     // analyzer). This is deliberately after the monitor starts and before the
     // stream is returned to the transport, so all three consumers — peer

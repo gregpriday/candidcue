@@ -107,6 +107,18 @@ pub fn run() {
             std::fs::create_dir_all(paths.cache_dir())?;
             std::fs::create_dir_all(paths.logs_dir())?;
 
+            /*
+             * Start each run with an empty client trace.
+             *
+             * It is a debugging artefact for the session in front of you, not
+             * a history: appending across runs means whoever reads it has to
+             * work out where one launch ended and the next began, and reading
+             * the tail of the wrong run is how you diagnose a bug that was
+             * already fixed. The Rust log keeps accumulating; this one is
+             * deliberately per-launch.
+             */
+            let _ = std::fs::remove_file(paths.logs_dir().join("client-trace.log"));
+
             // Database: connect + run migrations before any command can run.
             let pool = tauri::async_runtime::block_on(database::init(&data_dir))?;
             handle.manage(Database::new(pool.clone()));

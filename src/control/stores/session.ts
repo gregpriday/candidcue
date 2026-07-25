@@ -842,6 +842,28 @@ export function startLiveSession(input: StartSessionInput): string {
           showToast(describeHold(reason), 'danger');
         }
       },
+      /*
+       * §28.4. Tell the presenter the room has been measured.
+       *
+       * Calibration averages the first two seconds of audio into the noise
+       * floor, and the speech gate is a multiple of that floor — so a take
+       * that begins with someone already reading measures their voice and
+       * sets the threshold above it. Nothing on the stage said when the window
+       * had closed, so "wait, then speak" was advice nobody could follow.
+       *
+       * On the acknowledgement channel because it already exists, is already
+       * validated by Rust, and is already the transient-notice surface. It
+       * inherits that channel's setting, which is the one wart: an operator
+       * who has turned stage acknowledgements off does not get this either.
+       */
+      onVadCalibrating: () => {
+        // Slightly longer than the 2 s window, so it is still on screen when
+        // "Ready" replaces it rather than leaving a gap of nothing.
+        sendDirective({ kind: 'ack', label: 'Listening to the room…', durationMs: 2400 });
+      },
+      onVadCalibrated: () => {
+        sendDirective({ kind: 'ack', label: 'Ready — start speaking', durationMs: 1600 });
+      },
       // H5: a dead input is not a provider problem; the user must act.
       onInputDeviceLost: (code) => {
         // §12.7: device loss outranks every acoustic reading on the mic tile.

@@ -356,6 +356,19 @@ pub async fn log_client_diagnostic(
     if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
         let _ = std::fs::remove_file(&path);
     }
+    /*
+     * One lock, one pre-formatted line, one write.
+     *
+     * Every trace step is an independent async command, so several can be in
+     * the file at once — and a `writeln!` that formats as it goes can emit
+     * more than one write. The result was visible in a captured log: a doubled
+     * timestamp on one line and none on the next, two steps spliced together.
+     * A trace whose lines interleave is a trace you cannot read an ordering
+     * out of, which is the only thing it is for.
+     */
+    static TRACE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = TRACE_LOCK.lock();
+    let entry = format!("{} [{scope}] {line}\n", crate::util::now_iso());
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -364,7 +377,7 @@ pub async fn log_client_diagnostic(
         use std::io::Write;
         // Failing to write a diagnostic must never fail the caller: the whole
         // point is to observe a broken path, not to add a way to break it.
-        let _ = writeln!(file, "{} [{scope}] {line}", crate::util::now_iso());
+        let _ = file.write_all(entry.as_bytes());
     }
     Ok(())
 }
