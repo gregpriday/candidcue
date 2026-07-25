@@ -28,6 +28,7 @@ import { decideExecution, type ExecutionState } from '../../shared/commands/sche
 import { TranscriptLedger } from '../../shared/tracking/ledger';
 import type { TranscriptEvent as TrackingEvent } from '../../shared/tracking/types';
 import { trace } from './realtime/connectTrace';
+import { supportsServerTurnDetection } from './realtime/sessionConfig';
 import { DEFAULT_VAD_CONFIG } from './audio/defaults';
 import {
   createAnalyserGraph,
@@ -319,7 +320,20 @@ export class VoiceSessionPipeline {
         ),
     });
     this.commitDriver = new ManualCommitDriver({
-      sendCommit: (reason) => this.transport.commit(reason),
+      /*
+       * Silent when the SERVER owns turn boundaries.
+       *
+       * Committing as well would endpoint the same audio twice and cut turns
+       * where the local detector guessed rather than where speech actually
+       * stopped. The driver is still constructed and still consumes VAD events
+       * — the level meter, the coaching lane and the §60 health checks all
+       * read the same signal — it simply stops being the thing that decides a
+       * sentence has ended.
+       */
+      sendCommit: (reason) =>
+        supportsServerTurnDetection(this.deps.config.model)
+          ? false
+          : this.transport.commit(reason),
       clearBufferedAudio: () => this.transport.clearBufferedAudio(),
       ledger: this.transport.ledger,
       getAlignmentAnchor: () => deps.getCursorTokenIndex(),

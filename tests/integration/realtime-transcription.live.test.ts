@@ -151,7 +151,16 @@ async function transcribeFixture(options: { commit: boolean }): Promise<Transcri
 }
 
 describe.skipIf(!ENABLED)('real speech produces real transcripts', () => {
-  it('transcribes committed audio into the words that were spoken', async () => {
+  it.skip('MANUAL COMMIT (retired strategy) — transcribes committed audio', async () => {
+    /*
+     * Kept, skipped, for the record. This was the shipping path: stream audio
+     * with `turn_detection: null` and decide turn boundaries locally. It
+     * worked here and never worked in the app, because deciding them meant a
+     * browser audio graph, a two-second noise-floor calibration and a speech
+     * gate — and any of those failing produced a healthy connection that
+     * transcribed nothing. Under server-side endpointing an explicit commit is
+     * no longer ours to send, so this no longer describes the product.
+     */
     const run = await transcribeFixture({ commit: true });
 
     expect(
@@ -171,7 +180,39 @@ describe.skipIf(!ENABLED)('real speech produces real transcripts', () => {
     ).toBeGreaterThan(0.7);
   }, 60_000);
 
-  it('returns NOTHING when the audio is never committed, which is the failure seen', async () => {
+  it('transcribes with NO client commit at all, because the server endpoints', async () => {
+    /*
+     * The fix for a full day of "connected, heard nothing".
+     *
+     * The app used to run `turn_detection: null` and decide turn boundaries
+     * itself, from a browser audio graph, a two-second noise-floor calibration
+     * and a speech gate. Every one of those was a way to transcribe nothing on
+     * a healthy connection. `gpt-4o-transcribe` will do the endpointing, so
+     * this asserts the shipped default config produces transcripts from
+     * streamed audio with no `input_audio_buffer.commit` ever sent.
+     */
+    const run = await transcribeFixture({ commit: false });
+    expect(
+      run.transcripts.length,
+      `no transcript without a client commit. errors: ${JSON.stringify(run.errors)}`,
+    ).toBeGreaterThan(0);
+    const heard = run.transcripts.join(' ').toLowerCase();
+    expect(heard).toContain('morning');
+  }, 60_000);
+
+  it('a model without turn detection gets none, rather than a silent downgrade', async () => {
+    // `gpt-realtime-whisper` answers any `turn_detection` with a hard error,
+    // which is exactly why the manual path existed. Pinned so nobody "tidies"
+    // the capability check away and reintroduces the silent-take failure.
+    const event = buildSessionUpdateEvent(
+      { ...DEFAULT_TRANSCRIPTION_CONFIG, model: 'gpt-realtime-whisper' },
+      {},
+    );
+    const session = event.session as { audio: { input: { turn_detection: unknown } } };
+    expect(session.audio.input.turn_detection).toBeNull();
+  });
+
+  it.skip('RETIRED — returned nothing when audio was never committed', async () => {
     /*
      * The negative that gives the positive its meaning.
      *
