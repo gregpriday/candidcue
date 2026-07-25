@@ -304,7 +304,49 @@
     });
   }
 
+  /**
+   * §16.9. Escape ends the take on the SECOND press, and the first press has
+   * to say so — on the stage.
+   *
+   * Control answers a single press with a toast reading "Press Escape again on
+   * the stage to end the session", and the presenter cannot see it: the stage
+   * is frameless, sized to the monitor and always-on-top (§52.7), so the
+   * control window is behind it. The first press therefore produced no visible
+   * result at all, and Escape read as broken or laggy — press, nothing, press
+   * again, gone.
+   *
+   * This is answered locally rather than by asking control to send an ack
+   * back: the round trip is stage → Rust → control → Rust → stage, and the
+   * whole complaint is about responsiveness. The stage already knows it sent a
+   * single press, so it can say so in the same frame. Control's toast still
+   * fires for the operator at the control window, who is a different person
+   * looking at a different screen.
+   *
+   * It gets its own state rather than riding the acknowledgement chip, which
+   * is gated on the `stageAcknowledgements` setting (§33.10) — turning command
+   * acks off would otherwise silence the one prompt that tells a presenter how
+   * to stop. This is a confirmation prompt, not an acknowledgement.
+   */
+  let escapeHintVisible = $state(false);
+  let escapeHintTimer = 0;
+
+  function showEscapeHint() {
+    escapeHintVisible = true;
+    clearTimeout(escapeHintTimer);
+    // Tied to the double-press window: the hint is true exactly while a second
+    // press would still end the take, and stops claiming so the moment it
+    // would not.
+    escapeHintTimer = window.setTimeout(() => {
+      escapeHintVisible = false;
+    }, ESCAPE_DOUBLE_MS);
+  }
+
   function sendEscape(presses: 1 | 2) {
+    if (presses === 1) showEscapeHint();
+    else {
+      escapeHintVisible = false;
+      clearTimeout(escapeHintTimer);
+    }
     // Escape travels on its own event so the Rust bridge can relay it (§46.9),
     // under a name control does NOT listen for — see S1 on motionReport above.
     emitStageEvent<StageEscapePayload>(STAGE_EVENT.escapePressed, {
@@ -548,6 +590,14 @@
     <div class="waiting" aria-hidden="true">CandidCue</div>
   {/if}
 
+  <!-- Escape confirmation (§16.9). Outside the mirror plane on purpose: it is
+       an instruction to the presenter, not part of the script, so it must stay
+       readable through a horizontal mirror. Shown during a blank too — a blank
+       is exactly when someone reaches for Escape. -->
+  {#if escapeHintVisible}
+    <div class="escape-hint" role="status">Press Escape again to end</div>
+  {/if}
+
   <!-- Layer 8: hidden diagnostics, operator-facing, never mirrored. -->
   {#if app.diagnostics}
     <div class="diagnostics">
@@ -620,6 +670,26 @@
     font-size: var(--text-lg);
     letter-spacing: var(--ls-caps);
     text-transform: uppercase;
+    pointer-events: none;
+  }
+
+  /*
+   * Escape confirmation. Top centre, clear of the reading band and of the
+   * coaching rail's reserved strip at the bottom — a prompt about stopping must
+   * not sit on top of the words the presenter is still speaking.
+   */
+  .escape-hint {
+    position: absolute;
+    top: 4vh;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.5em 1.1em;
+    border-radius: 999px;
+    background: var(--stage-overlay);
+    color: var(--stage-text);
+    font-size: clamp(15px, 1.6vw, 22px);
+    font-weight: 550;
+    white-space: nowrap;
     pointer-events: none;
   }
 
