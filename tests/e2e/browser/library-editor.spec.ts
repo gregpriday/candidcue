@@ -31,7 +31,7 @@ test('opens a seeded script, edits it, and autosaves to a real save_script call'
   await expect(list.locator('.title', { hasText: 'Launch keynote' })).toBeVisible();
 
   // Open it — the editor shows the title and the body text.
-  await list.getByRole('button', { name: /Launch keynote/ }).dblclick();
+  await list.getByRole('button', { name: /Launch keynote/ }).click();
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
   await expect(page.locator('.cm-content')).toContainText('Welcome everyone to the show');
@@ -58,7 +58,7 @@ test('opens a seeded script, edits it, and autosaves to a real save_script call'
 test('a SCRIPT_CONFLICT rejection drives the F.8 external-change resolution sheet', async ({ page }) => {
   await page.goto('/control.html');
   const list = page.getByRole('list', { name: 'Scripts' });
-  await list.getByRole('button', { name: /Launch keynote/ }).dblclick();
+  await list.getByRole('button', { name: /Launch keynote/ }).click();
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
 

@@ -60,7 +60,7 @@ test('every control-window route renders and raises nothing', async ({ page }, t
   await page
     .getByRole('list', { name: 'Scripts' })
     .getByRole('button', { name: /Sweep script/ })
-    .dblclick();
+    .click();
   await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
   await expect(page.locator('.cm-content')).toContainText('A sentence for the compiler');
 

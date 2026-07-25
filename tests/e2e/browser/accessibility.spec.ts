@@ -32,7 +32,7 @@ test('the conflict dialog traps focus and returns it to the opener on Escape', a
   await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
   await page.goto('/control.html');
 
-  await page.getByRole('list', { name: 'Scripts' }).getByRole('button', { name: /Panel talk/ }).dblclick();
+  await page.getByRole('list', { name: 'Scripts' }).getByRole('button', { name: /Panel talk/ }).click();
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
 
