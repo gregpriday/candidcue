@@ -608,11 +608,23 @@ export class VoiceSessionPipeline {
     }
     this.activeStream = result.stream;
     // Local VAD drives manual commit boundaries (§28.4/§29.3).
-    this.monitor = new MicrophoneMonitor({
-      createGraph: createAnalyserGraph,
+    /*
+     * The config the monitor is ACTUALLY running on, not the defaults.
+     *
+     * The first version of this trace computed the gate from
+     * `DEFAULT_VAD_CONFIG`, so it reported a number the VAD was not using at
+     * any sensitivity other than the midpoint — a diagnostic that lies is
+     * worse than none, because it is believed.
+     */
+    const resolvedVad = {
+      ...DEFAULT_VAD_CONFIG,
       ...(this.deps.vadSensitivity === undefined
         ? {}
-        : { vadConfig: vadConfigForSensitivity(this.deps.vadSensitivity) }),
+        : vadConfigForSensitivity(this.deps.vadSensitivity)),
+    };
+    this.monitor = new MicrophoneMonitor({
+      createGraph: createAnalyserGraph,
+      ...(this.deps.vadSensitivity === undefined ? {} : { vadConfig: resolvedVad }),
     });
     this.monitor.onVadEvent((event) => {
       // The commit chain, traced. With `turn_detection: null` the server does
@@ -635,9 +647,11 @@ export class VoiceSessionPipeline {
         'vad',
         event.type === 'calibrated'
           ? `calibrated — noiseFloor ${event.noiseFloor.toFixed(4)}, gate ${Math.max(
-              DEFAULT_VAD_CONFIG.minSpeechRms,
-              event.noiseFloor * DEFAULT_VAD_CONFIG.noiseFloorMargin,
-            ).toFixed(4)}`
+              resolvedVad.minSpeechRms,
+              event.noiseFloor * resolvedVad.noiseFloorMargin,
+            ).toFixed(4)} (minSpeechRms ${resolvedVad.minSpeechRms}, margin ${
+              resolvedVad.noiseFloorMargin
+            })`
           : event.type,
       );
       this.commitDriver.handleVadEvent(event);

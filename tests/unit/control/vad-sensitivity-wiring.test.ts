@@ -144,6 +144,18 @@ describe('§28.4 the pipeline hands it to the monitor', () => {
     );
     const constructions = source.match(/new MicrophoneMonitor\(\{[\s\S]*?\n {4}\}\)/g) ?? [];
     expect(constructions.length).toBe(1);
-    expect(constructions[0]).toContain('vadConfigForSensitivity(this.deps.vadSensitivity)');
+
+    /*
+     * The derivation moved one line up — the resolved config is now computed
+     * before the monitor is built, so the connect trace can report the gate
+     * the VAD is ACTUALLY running on rather than the defaults. The property
+     * this test exists for is unchanged and is still asserted in two halves:
+     * the sensitivity must be turned into a config, and THAT config must be
+     * what the monitor receives. Asserting only the first would pass with the
+     * result thrown away.
+     */
+    expect(source).toContain('vadConfigForSensitivity(this.deps.vadSensitivity)');
+    expect(source).toMatch(/const resolvedVad = \{[\s\S]*?vadConfigForSensitivity/);
+    expect(constructions[0]).toContain('vadConfig: resolvedVad');
   });
 });

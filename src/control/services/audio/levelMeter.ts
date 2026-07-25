@@ -28,8 +28,23 @@ export interface MicrophoneMonitorDeps {
 }
 
 /**
- * Default analysis graph for the real WebView. Analysis only — the source is
- * never routed to `AudioContext.destination`.
+ * Default analysis graph for the real WebView.
+ *
+ * Two things here are about WKWebView specifically, and both were absent.
+ *
+ * A graph with no path to `destination` is not guaranteed to be PULLED. The
+ * spec only requires a node to render if it reaches the destination, and some
+ * engines take that literally — an `AnalyserNode` hanging off the end of a
+ * source with nowhere to go can return zeros forever while every state looks
+ * healthy. This repository already documents that exact hazard for the
+ * coaching graph (`coaching-analyzer.ts`), and this one was left dangling. The
+ * silent path is `analyser → GainNode(0) → destination`: it makes the graph
+ * render without emitting a sample of the presenter's own voice back into the
+ * room, which is what the original "no feedback" note was protecting against.
+ *
+ * And an `AudioContext` can be constructed `suspended`. Nothing resumed it, so
+ * every frame the VAD measured could have been silence regardless of what the
+ * microphone was doing — which looks identical to a presenter who never spoke.
  */
 export const createAnalyserGraph: AnalysisGraphFactory = (stream) => {
   const context = new AudioContext();
@@ -37,12 +52,23 @@ export const createAnalyserGraph: AnalysisGraphFactory = (stream) => {
   const analyser = context.createAnalyser();
   analyser.fftSize = 2048;
   source.connect(analyser);
-  // Intentionally NOT connected to context.destination (no feedback).
+  // Zero gain: renders the graph without playing the microphone back.
+  const mute = context.createGain();
+  mute.gain.value = 0;
+  analyser.connect(mute);
+  mute.connect(context.destination);
+  if (context.state === 'suspended') {
+    void context.resume().catch(() => {
+      // A context that will not resume is reported by the levels being zero;
+      // failing the take here would be worse than measuring nothing.
+    });
+  }
   return {
     analyser,
     close: async () => {
       try {
         source.disconnect();
+        mute.disconnect();
       } catch {
         // already disconnected
       }
