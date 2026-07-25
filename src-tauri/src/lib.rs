@@ -13,7 +13,7 @@ pub mod dialogs;
 pub mod diagnostics;
 pub mod errors;
 pub mod listeners;
-pub mod openai;
+pub mod inworld;
 pub mod scripts;
 pub mod secrets;
 pub mod sessions;

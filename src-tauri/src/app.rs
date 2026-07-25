@@ -4,11 +4,11 @@ use std::sync::Arc;
 
 use tauri::{Emitter, Listener, Manager};
 
-use crate::commands::{self, openai_cmds::Secrets};
+use crate::commands::{self, inworld_cmds::Secrets};
 use crate::coordinator::AppCoordinator;
 use crate::database::{self, Database};
 use crate::listeners::ListenerLibrary;
-use crate::openai::OpenAiClient;
+use crate::inworld::InworldClient;
 use crate::scripts::{DataPaths, ScriptLocks};
 use crate::secrets::OsSecretStore;
 use crate::windows::{events, CONTROL_LABEL};
@@ -42,21 +42,15 @@ pub fn run() {
             commands::import_remote_image,
             commands::resolve_asset_urls,
             commands::remove_asset_reference,
-            // Secrets / OpenAI (spec §46.4)
-            commands::validate_openai_key,
-            commands::save_openai_key,
-            commands::get_openai_key_status,
-            commands::delete_openai_key,
-            commands::create_realtime_transcription_credential,
-            commands::get_model_capabilities,
-            commands::interpret_command,
-            commands::analyze_vocabulary,
-            // Luna semantic sidecar (companion §50.2)
-            commands::prepare_semantic_landmarks,
-            commands::retrieve_semantic_landmarks,
-            commands::classify_semantic_tracking_window,
-            commands::classify_coaching_window,
-            commands::cancel_semantic_request,
+            // Secrets / Inworld speech-to-text (spec §46.4)
+            commands::validate_inworld_key,
+            commands::save_inworld_key,
+            commands::get_inworld_key_status,
+            commands::delete_inworld_key,
+            commands::test_inworld_key,
+            commands::start_transcription,
+            commands::push_transcription_audio,
+            commands::stop_transcription,
             // Stage / windows (spec §46.6)
             commands::list_displays,
             commands::identify_displays,
@@ -132,7 +126,7 @@ pub fn run() {
             handle.manage(Secrets(Arc::new(OsSecretStore)));
 
             // Rust-owned OpenAI client (spec §27.6).
-            handle.manage(OpenAiClient::new());
+            handle.manage(InworldClient::new());
 
             // Listener library: bundled packs from the repo assets dir in
             // dev, from Tauri resources in production builds.

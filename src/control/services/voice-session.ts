@@ -1,35 +1,32 @@
 /**
- * Voice session pipeline — binds the audio package (mic + local VAD), the
- * realtime transcription transport (WebRTC → OpenAI), the transcript ledger,
- * and the command router into the live tracking flow (spec §29, §30, §33).
+ * Voice session pipeline — microphone in, transcript events out.
  *
- *   mic → WebRtcTranscriptionTransport → TranscriptEvent
- *        → TranscriptLedger (+ tracking worker via onTrackingEvent)
- *        → CommandRouter (wake gate → mask → validate → execute)
+ *   mic → PcmCapture (24 kHz PCM16) → Rust Inworld session
+ *       → stt://event → TranscriptEvent → TranscriptLedger + tracking worker
  *
- * Luna fallback: `interpret_command` is invoked when the router requests it;
- * a NOT_IMPLEMENTED rejection degrades gracefully to deterministic-only
- * parsing (the candidate resolves as unknown).
+ * This replaced a pipeline roughly four times its size, and almost everything
+ * that went was machinery for deciding when a sentence had ended: a local
+ * voice-activity detector, a noise-floor calibration, a speech gate, a commit
+ * driver, and a manual `input_audio_buffer.commit`. Inworld endpoints
+ * server-side, so a take now streams unconditionally and the provider says
+ * where the utterances are.
+ *
+ * That is not a simplification for its own sake. Every one of those mechanisms
+ * was a way to hold a completely healthy connection open and transcribe
+ * nothing — a calibration that measured the presenter's own voice set the gate
+ * above every word they subsequently said, and the session reported "words
+ * heard: 0" over a socket in perfect health. None of them can fail that way now
+ * because none of them exist.
+ *
+ * The local level meter survives, but only as a meter: it drives the "is it
+ * hearing me" readout and the §28.6 dead-input detector. Nothing it decides can
+ * stop audio reaching the recogniser.
  */
-import type {
-  RealtimeState,
-  TranscriptEvent as TransportEvent,
-  TranscriptionConfig,
-  CompiledScript,
-  ValidatedCommand,
-} from '../../shared/contracts';
-import {
-  CommandRouter,
-  DEFAULT_COMMAND_BOUNDS,
-  type CommandObservation,
-  type CommandSettings,
-} from '../../shared/commands';
-import { decideExecution, type ExecutionState } from '../../shared/commands/schema';
+import type { CompiledScript } from '../../shared/contracts';
 import { TranscriptLedger } from '../../shared/tracking/ledger';
 import type { TranscriptEvent as TrackingEvent } from '../../shared/tracking/types';
-import { trace } from './realtime/connectTrace';
-import { supportsServerTurnDetection } from './realtime/sessionConfig';
-import { DEFAULT_VAD_CONFIG } from './audio/defaults';
+import { DEFAULT_SOFT_PAUSE_AUTO_DISCONNECT_MS } from './audio/defaults';
+import { isTauriRuntime } from './ipc';
 import {
   createAnalyserGraph,
   MicrophoneDeviceManager,
@@ -41,44 +38,32 @@ import {
   vadConfigForSensitivity,
   type MediaStreamLike,
 } from './audio';
+import { PcmCapture } from './audio/capture';
 import {
-  ManualCommitDriver,
-  RealtimeSessionController,
-  WebRtcTranscriptionTransport,
-  type TransportTimers,
-} from './realtime';
-import { ipcInvoke } from './ipc';
-import { getModelCapabilities, UNKNOWN_CAPABILITIES } from './capabilities';
-import { vocabularyPromptFor } from './vocabulary';
-import type { ModelCapabilities } from './capabilities';
+  encodePcm16,
+  pushTranscriptionAudio,
+  startTranscription,
+  stopTranscription,
+  STT_EVENT,
+  toTrackingEvent,
+  type SttFrame,
+} from './stt/inworld';
 
-/**
- * §33.11: how often `CommandRouter.tick` is driven. The router's time-based
- * expiry (`expireLuna`) otherwise only runs when new transcript arrives, which
- * is precisely what does NOT happen while the aligner is frozen in
- * COMMAND_PENDING waiting for a Luna handoff that never returns.
- *
- * 250 ms is well inside the 3 s hard timeout and costs nothing measurable — the
- * tick is a single comparison unless something is actually pending.
- */
-export const COMMAND_TICK_INTERVAL_MS = 250;
+/** Timer seam so tests drive a virtual clock instead of waiting. */
+export interface PipelineTimers {
+  setTimeout(callback: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
 
 /**
  * §29.2 steps 1–3, as the *caller's* half of the start sequence.
  *
- * `RealtimeSessionController` has always had hooks for these three and the only
- * production caller supplied none of them. The steps did happen — in
- * `Preflight.svelte`, before `startLiveSession` — so the behaviour was right by
- * accident, and an accident is exactly the problem: a controller cannot enforce
- * an ordering it does not own, so a retake, a resumed session or a second entry
- * point would get none of it. The controller also re-runs `start()` on every
- * resume-after-sleep and hard-pause recovery, where Preflight is long gone.
- *
- * Each of these is therefore a PRECONDITION CHECK, not a second performance of
- * the step. Flushing an already-flushed save is a no-op; asking whether the
- * compile is current and the stage has acked is cheap and idempotent; and any
- * of them rejecting aborts the start before the transport is touched, so nothing
- * billable begins on a session that was not ready.
+ * Each is a PRECONDITION CHECK rather than a second performance of the step:
+ * flushing an already-flushed save is a no-op, and asking whether the compile
+ * is current and the stage has acked is cheap and idempotent. Any of them
+ * rejecting aborts the start before the microphone is opened or a session is
+ * billed, and it lives here rather than in the screen that happens to precede
+ * a take so a retake or a resume gets the same ordering.
  */
 export interface StartSequenceGate {
   /** §29.2 step 1 — the script's pending save must be on disk. */
@@ -99,19 +84,20 @@ export interface FinalizedTranscriptItem {
   transcript: string;
 }
 
+export type ConnectionState = 'connected' | 'reconnecting' | 'offline';
+
 export interface VoicePipelineDeps {
   sessionId: string;
   sessionGeneration: number;
   compiled: CompiledScript;
-  config: TranscriptionConfig;
-  commandSettings?: Partial<CommandSettings>;
-  /** Voice-command listening toggle (§14.2 D); alignment still runs. */
-  commandsEnabled?: boolean;
+  /** BCP-47 locale for the recogniser, e.g. `en-US`. */
+  language?: string;
+  /** Inworld model id; omitted uses the backend default. */
+  modelId?: string;
   deviceId?: string;
   /**
-   * §28.3 capture processing. These are the user's Settings → Audio toggles;
-   * without them here the settings were persisted and then ignored by every
-   * `getUserMedia` call in the app.
+   * §28.3 capture processing — the user's Settings → Audio toggles, applied to
+   * the one `getUserMedia` call the app makes.
    */
   audioProcessing?: {
     echoCancellation?: boolean;
@@ -119,158 +105,122 @@ export interface VoicePipelineDeps {
     autoGainControl?: boolean;
   };
   /**
-   * §28.4 Settings → Audio "Local voice-detection sensitivity", 0–1 with 0.5 =
-   * the A.6 defaults. Persisted since the setting shipped and read by nothing:
-   * every session ran on the constants regardless of what the slider said.
+   * §28.4 "Local voice-detection sensitivity", 0–1 with 0.5 = the A.6 defaults.
    *
-   * It moves the speech THRESHOLD only. See `vadConfigForSensitivity` for why
-   * the commit cadence is deliberately not on the slider — this VAD's turn
-   * boundaries are the Realtime commit cue, so they are latency and money, not
-   * just detection.
+   * Meter-only now. It moves the threshold at which the UI says the microphone
+   * can hear you and at which the dead-input detector gives up; it does not
+   * gate a single byte of audio, because the recogniser does its own
+   * endpointing and gating on top of that only loses words.
    */
   vadSensitivity?: number;
-  /**
-   * §29.2 steps 1–3. Supplied by the session store for every real take; the
-   * type stays optional only so a unit test can stand up a bare pipeline
-   * without a script store, a compiler and a stage window behind it.
-   */
+  /** Auto-disconnect after this long soft-paused (A.6). */
+  softPauseAutoDisconnectMs?: number;
+  /** §29.2 steps 1–3; optional only so a unit test can stand up a bare pipeline. */
   startSequence?: StartSequenceGate;
-  /**
-   * §29.2 step 9 — the controller is clearing transcript state, so the alignment
-   * cursor and any transcript the session store is holding go with it. The
-   * pipeline resets what it owns (router, commit driver, silence detector)
-   * unconditionally; this is the part that lives above it.
-   */
+  /** §29.2 step 9 — transcript state above this layer goes too. */
   onResetTranscriptState?(): void;
-  getCursorTokenIndex(): number;
-  getPosition(): { blockId: string; sentenceId: string; tokenIndex: number };
-  getScrollMode(): 'voice' | 'manual' | 'fixed';
   /** Reconciled transcript events destined for the tracking worker. */
   onTrackingEvent(event: TrackingEvent): void;
-  /** Command-consumed items to exclude from alignment (§33.4). */
-  onMaskItems(itemIds: string[]): void;
-  /**
-   * §33.4 tail: the phrase turned out to be authored script, so items an
-   * earlier `pending` masked must go BACK to the aligner. Without this binding
-   * a spurious wake permanently excludes the sentence the presenter was
-   * reading and the engine's masked-item set only ever grows.
-   */
-  onReleaseItems(itemIds: string[]): void;
-  onCommandPending(pending: boolean): void;
-  executeCommand(command: ValidatedCommand): void;
-  onUnknownCommand(message: string): void;
-  /**
-   * H8: live execution context for the §33.9 confirmation policy. Without it
-   * `decideExecution` cannot tell a safe jump from a stop mid-take.
-   */
-  getExecutionState?(): ExecutionState;
-  /**
-   * H8: present a confirmation and resolve true when the user confirms.
-   * When omitted, a command requiring confirmation is NOT executed — refusing
-   * is always safer than acting on an ambiguous target mid-take.
-   */
-  confirmCommand?(command: ValidatedCommand, reason: string): Promise<boolean>;
-  /** H8: a command was refused by the execution policy. */
-  onCommandRejected?(command: ValidatedCommand, reason: string): void;
-  /**
-   * §5.3 single-capture fan-out. The one place in the app that opens the
-   * microphone hands the resulting stream to any additional consumer — today
-   * the coaching analyzer — so no second `getUserMedia` is ever issued. Invoked
-   * each time a capture is (re)acquired; the same live `MediaStreamTrack` the
-   * WebRTC peer connection and the level meter received is passed through.
-   */
-  onCaptureStream?(stream: MediaStreamLike): void;
   /** Final transcript lines for the Live transcript tail. */
   onTranscriptLine(line: string): void;
   /**
-   * §36.2 retention feed: one finalized item, with the ledger's commit
-   * ordering and audio window attached. Text only — never audio.
-   *
-   * Separate from `onTranscriptLine` on purpose: the tail is a four-line UI
-   * affordance, this is the durable record, and the record needs the commit
-   * sequence that makes `UNIQUE(session_id, commit_sequence)` meaningful.
+   * §36.2 retention feed: one finalized item with its commit ordering and audio
+   * window. Text only — never audio. Separate from `onTranscriptLine` because
+   * the tail is a four-line affordance and this is the durable record.
    */
   onTranscriptItem?(item: FinalizedTranscriptItem): void;
-  onConnectionState(state: 'connected' | 'reconnecting' | 'offline'): void;
-  onRealtimeState?(state: RealtimeState): void;
+  onConnectionState(state: ConnectionState): void;
   /**
-   * H5: following must visibly stop while transcription is untrustworthy —
-   * dead input, no transcripts despite audio, or a reconnect in progress.
+   * Following must visibly stop while transcription is untrustworthy — a
+   * reconnect in progress, or dead input.
    */
   onFollowingHold?(held: boolean, reason: string | null): void;
-  /** H5: the input device is gone; the user must pick another (§28.6). */
+  /** §28.6: the input device is gone; the user must pick another. */
   onInputDeviceLost?(code: string): void;
-  /**
-   * §28.4. The local VAD has measured the room and the speech gate is set.
-   *
-   * Until this fires, every sound in the room — including the presenter — is
-   * being averaged INTO the noise floor, so a take that begins with someone
-   * already reading sets its own threshold above their voice. The presenter
-   * needs to know when the window has closed, and nothing told them.
-   */
-  onVadCalibrated?(): void;
-  /** §28.4. The noise-floor window has opened; the room must be quiet. */
-  onVadCalibrating?(): void;
-  /**
-   * §28.6: audio is flowing from the input again — the track unmuted, or the
-   * device was plugged back in. The counterpart to `onInputDeviceLost`, so the
-   * UI can stop saying the microphone is gone without the user doing anything.
-   * Without it a recovered input left the Live screen reading "Mic lost" for
-   * the rest of the take.
-   */
+  /** §28.6: audio is flowing again — the counterpart to `onInputDeviceLost`. */
   onInputRestored?(): void;
-  /** H1: a session-level provider failure ended or interrupted the session. */
+  /** A session-level provider failure ended or interrupted the session. */
   onSessionFailure?(code: string, fatal: boolean): void;
   /** M3: soft pause will auto-disconnect in `msRemaining` (A.6). */
   onPauseWarning?(msRemaining: number): void;
   /**
-   * Timer seam. Every deadline this pipeline owns — the Luna hard timeout and
-   * the §33.11 router tick — goes through it, so tests drive a virtual clock
-   * instead of waiting in real time. Defaults to the host timers.
+   * Audio was captured but could not be forwarded — a reconnect in flight, or
+   * a wedged socket. Surfaced rather than swallowed: silently dropped frames
+   * are the difference between "the presenter said nothing" and "we threw away
+   * what they said", and those look identical downstream.
    */
-  timers?: TransportTimers;
-  /** Clock seam, paired with `timers`. Defaults to `Date.now`. */
+  onAudioDropped?(frames: number): void;
+  /**
+   * §5.3 single-capture fan-out. The one place in the app that opens the
+   * microphone hands the resulting stream to any additional consumer, so no
+   * second `getUserMedia` is ever issued.
+   */
+  onCaptureStream?(stream: MediaStreamLike): void;
+  timers?: PipelineTimers;
   now?: () => number;
 }
 
 export class VoiceSessionPipeline {
   readonly ledger = new TranscriptLedger();
-  readonly router: CommandRouter;
-  readonly controller: RealtimeSessionController;
-  private readonly transport: WebRtcTranscriptionTransport;
-  private readonly commitDriver: ManualCommitDriver;
+
   private monitor: MicrophoneMonitor | null = null;
+  private capture: PcmCapture | null = null;
   private activeStream: MediaStreamLike | null = null;
   /**
-   * §29.2 step 8: true between the controller's `startVad` and its `stopVad`.
-   * A re-acquisition inside that window restarts the VAD itself; one outside it
-   * (the very first connect) waits for the controller, which is what makes the
-   * step the controller's rather than the transport's.
+   * Generation of the RUST session; `null` when none is open.
+   *
+   * Deliberately not the session generation. Rust mints its own per socket and
+   * the two diverge the moment anything else opens a stream first — the
+   * Preflight microphone test does exactly that. This one filters late frames
+   * at the IPC edge; `deps.sessionGeneration` is what the ledger and the
+   * aligner are keyed on.
    */
-  private vadRequested = false;
-  /** Rate-limit for the level trace. */
-  private lastLevelTraceMs = 0;
-  private commandPending = false;
+  private transportGeneration: number | null = null;
+  /**
+   * Control-window time at which the current capture began, so Rust's
+   * zero-based audio clock can be expressed on the same clock as
+   * `receivedAtMs`. See `toTrackingEvent`.
+   */
+  private audioOriginMs = 0;
+  /**
+   * Bumped by every teardown. Any `await` inside `start()` re-checks it, so a
+   * stop that lands mid-start cannot be overtaken by the start it interrupted
+   * and leave a microphone open on a session nobody asked for.
+   */
+  private lifecycle = 0;
+  private unlistenStt: (() => void) | null = null;
   private stopped = false;
-  /** H5: sustained no-signal detection on the captured stream (§28.6). */
-  private readonly silentInput = new SilentInputDetector();
-  /** H5: `devicechange` watcher for unplug / default-device changes. */
-  private deviceManager: MicrophoneDeviceManager | null = null;
-  /** §28.2: the device chosen mid-session, which outranks `deps.deviceId`. */
-  private deviceOverride: string | undefined;
-  private stopDeviceWatch: (() => void) | null = null;
-  private readonly timers: TransportTimers;
-  private readonly now: () => number;
-  /** §33.11 router tick handle; non-null exactly while the ticker is armed. */
-  private commandTickTimer: unknown | null = null;
-  /** True once `start()` ran, so the ticker survives an idle stretch. */
   private running = false;
   /**
-   * §27.8 model capability registry, resolved at `start()`. Defaults to
-   * everything-off so an unreached registry can never be mistaken for
-   * "supported" — an unknown capability must fail closed.
+   * True while soft-paused: audio is captured and deliberately not sent.
+   *
+   * A hard pause sets this too. It used not to, so `resume()` returned at its
+   * first line and the caller went on to report a live microphone over a
+   * session that had been torn down — the Live screen's "resume by click"
+   * promise, silently unkept.
    */
-  private capabilities: ModelCapabilities = UNKNOWN_CAPABILITIES;
+  private paused = false;
+  private pauseTimer: unknown | null = null;
+  private lastConnectionState: ConnectionState | null = null;
+  private following = true;
+
+  /** §28.6 sustained no-signal detection on the captured stream. */
+  private readonly silentInput = new SilentInputDetector();
+  private deviceManager: MicrophoneDeviceManager | null = null;
+  /** §28.2: a device chosen mid-session outranks `deps.deviceId`. */
+  private deviceOverride: string | undefined;
+  private stopDeviceWatch: (() => void) | null = null;
+  private readonly timers: PipelineTimers;
+  private readonly now: () => number;
+  /**
+   * Serializes `stt_audio` calls.
+   *
+   * Tauri dispatches invocations concurrently, so frames fired without awaiting
+   * the previous one can reach Rust out of order — and audio delivered out of
+   * order is not "slightly wrong", it is a transcript of a sentence with its
+   * syllables shuffled. Chaining costs nothing at ten frames a second.
+   */
+  private sendChain: Promise<void> = Promise.resolve();
 
   constructor(private readonly deps: VoicePipelineDeps) {
     this.timers = deps.timers ?? {
@@ -279,197 +229,366 @@ export class VoiceSessionPipeline {
     };
     this.now = deps.now ?? (() => Date.now());
     this.ledger.setSessionGeneration(deps.sessionGeneration);
-    this.router = new CommandRouter(
-      {
-        ledger: this.ledger,
-        parseContext: { navigationTargets: deps.compiled.navigationTargets },
-        scriptTokens: deps.compiled.spokenTokens,
-        // §33.5: `:::literal-command` ranges are the authored, deterministic
-        // half of command suppression — without them the only protection is
-        // heuristic collision scoring.
-        literalCommandRanges: deps.compiled.literalCommandRanges,
-        getCursorTokenIndex: deps.getCursorTokenIndex,
-        getContextRevision: () => deps.getCursorTokenIndex(),
-        getScrollMode: deps.getScrollMode,
-        getPosition: deps.getPosition,
-        outline: flattenOutline(deps.compiled),
-        bounds: DEFAULT_COMMAND_BOUNDS,
-      },
-      deps.commandSettings,
-    );
-
-    this.transport = new WebRtcTranscriptionTransport({
-      invoke: ipcInvoke,
-      acquireMicrophone: (deviceId) => this.acquireMicrophone(deviceId ?? this.preferredDeviceId),
-      // §26.5 vocabulary boost. The transport has always had this injection
-      // point and nothing ever filled it, so every unusual name in every
-      // script was transcribed unassisted.
-      //
-      // The dep must be synchronous, so this reads the capability registry
-      // fetched during `start()` rather than awaiting one here. Until that
-      // resolves — and today in every case, because §26.1 says the realtime
-      // model does not accept prompt steering — it returns `undefined`. The
-      // point of wiring it is that a capability flag now decides, rather than
-      // an absent call site.
-      getVocabularyPrompt: () =>
-        vocabularyPromptFor(
-          deps.compiled.scriptId,
-          deps.compiled.sourceHash,
-          this.capabilities,
-          deps.config.model,
-        ),
-    });
-    this.commitDriver = new ManualCommitDriver({
-      /*
-       * Silent when the SERVER owns turn boundaries.
-       *
-       * Committing as well would endpoint the same audio twice and cut turns
-       * where the local detector guessed rather than where speech actually
-       * stopped. The driver is still constructed and still consumes VAD events
-       * — the level meter, the coaching lane and the §60 health checks all
-       * read the same signal — it simply stops being the thing that decides a
-       * sentence has ended.
-       */
-      sendCommit: (reason) =>
-        supportsServerTurnDetection(this.deps.config.model)
-          ? false
-          : this.transport.commit(reason),
-      clearBufferedAudio: () => this.transport.clearBufferedAudio(),
-      ledger: this.transport.ledger,
-      getAlignmentAnchor: () => deps.getCursorTokenIndex(),
-      // M1: VAD keeps firing across a reconnect; without this gate a turn that
-      // ended mid-reconnect is committed against a connection that is gone.
-      getConnectedGeneration: () => this.transport.connectedGeneration,
-    });
-    this.controller = new RealtimeSessionController({
-      transport: this.transport,
-      commitDriver: this.commitDriver,
-      ...(deps.timers ? { timers: deps.timers } : {}),
-      ...(deps.now ? { now: deps.now } : {}),
-      hooks: {
-        /*
-         * §29.2 steps 1–3. Supplied here rather than performed in the screen
-         * that happens to precede the session, so the ORDER is owned by the
-         * thing that specifies it. A rejection aborts `start()` before the
-         * transport is subscribed or connected — nothing billable begins on a
-         * session whose script, compile or stage was not ready.
-         */
-        ...(deps.startSequence
-          ? {
-              flushScriptSave: () => deps.startSequence!.flushScriptSave(),
-              ensureCompiled: () => deps.startSequence!.ensureCompiled(),
-              awaitStageAck: () => deps.startSequence!.awaitStageAck(),
-            }
-          : {}),
-        /*
-         * §28.1 explicit permission step. Strictly passive — `getUserMedia` is
-         * the only thing that may prompt, it happens later inside
-         * `acquireMicrophone`, and it may only follow an explicit user action.
-         * All this does is refuse to walk the rest of the sequence when the OS
-         * has already said no, which is the difference between "the microphone
-         * failed to open" and "you have denied CandidCue the microphone".
-         */
-        requestPermission: () => this.checkMicrophonePermission(),
-        /*
-         * §29.2 step 8. The VAD used to start as a side effect of the transport
-         * acquiring the microphone, which is both earlier than the spec says and
-         * — worse — never stopped: a `start()` that threw took the
-         * `failFromError` path, which called an unsupplied `stopVad`, and left a
-         * polling AudioContext running on a session that never existed.
-         */
-        startVad: () => this.startVad(),
-        stopVad: () => this.stopVad(),
-        /** §29.2 step 9. */
-        resetTranscriptState: () => this.resetTranscriptState(),
-        onTranscriptEvent: (event) => this.handleTransportEvent(event),
-        onStateChange: (state) => deps.onRealtimeState?.(state),
-        onRecoverableIssue: (issue) => {
-          // H5/H1: 'input_restored' is good news; everything else means the
-          // session is not currently transcribing and must not read as live.
-          if (issue === 'input_restored') {
-            deps.onInputRestored?.();
-            return;
-          }
-          deps.onConnectionState('reconnecting');
-        },
-        // H1: the UI must never stay green through a session-level failure.
-        onSessionFailure: (code, fatal) => {
-          deps.onConnectionState(fatal ? 'offline' : 'reconnecting');
-          deps.onSessionFailure?.(code, fatal);
-        },
-        onFollowingHold: (held, reason) => deps.onFollowingHold?.(held, reason),
-        onInputDeviceLost: (code) => deps.onInputDeviceLost?.(code),
-        onPauseWarning: (ms) => deps.onPauseWarning?.(ms),
-      },
-    });
   }
 
-  /** §29.2 start sequence; ends in `ready`. Billable streaming begins here. */
+  /** §29.2 start sequence. Billable streaming begins here. */
   async start(): Promise<void> {
+    if (this.stopped) throw new Error('SESSION_STOPPED');
+    // Steps 1–3 first: nothing billable begins on a session whose script,
+    // compile or stage was not ready.
+    if (this.deps.startSequence) {
+      await this.deps.startSequence.flushScriptSave();
+      await this.deps.startSequence.ensureCompiled();
+      await this.deps.startSequence.awaitStageAck();
+    }
+    // Step 4, passive: only an explicit `denied` stops the sequence. Plenty of
+    // WebViews do not answer the query at all, and `getUserMedia` resolves
+    // permission implicitly there.
+    if (!(await this.checkMicrophonePermission())) {
+      throw new Error('MIC_PERMISSION_DENIED');
+    }
+
+    const epoch = this.lifecycle;
     this.running = true;
-    this.scheduleCommandTick();
-    // Resolve capabilities before connecting, so the vocabulary supplier above
-    // has an answer by the time the transport asks. A failure here is not a
-    // session failure: `getModelCapabilities` already falls back to
-    // UNKNOWN_CAPABILITIES, which is everything-off, so the session proceeds
-    // without prompt steering rather than not at all.
-    this.capabilities = await getModelCapabilities();
+    this.paused = false;
+    this.setConnectionState('reconnecting');
+    // Before the microphone and before the session: a Tauri event is delivered
+    // by evaluating JS in the target webview and is never queued, so a frame
+    // emitted before this returns is lost outright.
+    await this.subscribeToStt();
+
     try {
-      await this.controller.start(this.deps.config);
+      // Every continuation re-checks the epoch. Without it a `stop()` that
+      // lands between two awaits is overtaken by the start it interrupted, and
+      // the take ends holding an open microphone and a billing socket.
+      if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
+      const stream = await this.acquireMicrophone(this.preferredDeviceId);
+
+      if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
+      this.audioOriginMs = this.now();
+      this.transportGeneration = await startTranscription({
+        ...(this.deps.language !== undefined ? { language: this.deps.language } : {}),
+        ...(this.deps.modelId !== undefined ? { modelId: this.deps.modelId } : {}),
+      });
+
+      if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
+      await this.startCapture(stream);
     } catch (err) {
-      // A start that never connected has no session to tick for. The 250 ms
-      // ticker reschedules itself off `running`, so leaving it armed kept a
-      // timer alive until the user happened to stop a session that had never
-      // begun.
       this.running = false;
-      this.stopCommandTick();
+      // A session opened and then abandoned bills for audio nobody is reading,
+      // so it is closed on every failure after it exists — including the one
+      // where capture is what failed.
+      await this.closeSession();
+      await this.teardownAudio();
+      this.unlistenStt?.();
+      this.unlistenStt = null;
       throw err;
     }
-    this.controller.startHealthChecks();
     this.watchDevices();
-    this.deps.onConnectionState('connected');
   }
 
   /**
-   * §33.11: drive `CommandRouter.tick` on a timer.
+   * §28.2 mid-session input change — the recovery for a microphone unplugged
+   * mid-take.
    *
-   * `expireLuna` used to run only from `observe`, i.e. only when new transcript
-   * arrived — and the whole failure it exists for is a Luna handoff that never
-   * returns, which freezes the aligner in COMMAND_PENDING so no further
-   * transcript is ever processed. The expiry could therefore never fire in the
-   * one situation it was written for.
-   *
-   * The ticker is armed while the session is running and also for the lifetime
-   * of any Luna handoff, so a pipeline that has not started a transport (and a
-   * unit test) still gets the expiry.
+   * The chosen id becomes this pipeline's device for everything after, not just
+   * this one swap: re-opening the device that just vanished would put the take
+   * straight back into the hold it was rescued from.
    */
-  private scheduleCommandTick(): void {
-    if (this.commandTickTimer !== null || this.stopped) return;
-    this.commandTickTimer = this.timers.setTimeout(() => {
-      this.commandTickTimer = null;
-      if (this.stopped) return;
-      const observation = this.router.tick(this.now());
-      // A bare `none` from `tick` means "nothing expired" — NOT "no command is
-      // pending". Running it through `applyObservation` would call
-      // `setPending(false)` and un-freeze the aligner on the very first tick,
-      // which is the opposite of what the freeze is for.
-      if (observation.kind !== 'none' || (observation.releaseItemIds?.length ?? 0) > 0) {
-        this.applyObservation(observation);
-      }
-      if (this.running || this.router.hasPendingLuna()) this.scheduleCommandTick();
-    }, COMMAND_TICK_INTERVAL_MS);
-  }
-
-  private stopCommandTick(): void {
-    if (this.commandTickTimer === null) return;
-    this.timers.clearTimeout(this.commandTickTimer);
-    this.commandTickTimer = null;
+  async switchMicrophone(deviceId: string): Promise<void> {
+    this.deviceOverride = deviceId;
+    if (!this.running) return;
+    const stream = await this.acquireMicrophone(deviceId);
+    await this.startCapture(stream);
+    try {
+      this.deviceManager?.select({ mode: 'specific', deviceId });
+    } catch {
+      // Enumeration is a nicety; the capture swap already succeeded.
+    }
   }
 
   /**
-   * H5: watch `devicechange` so an unplugged or replaced input is noticed even
-   * when the track itself does not end (macOS default-device switches in
-   * particular). Nothing subscribed to this in production before.
+   * Stop sending audio without closing the session.
+   *
+   * The socket stays open so resuming is instant, but the frames stop, which is
+   * both the cost saving and — because Inworld endpoints on silence — the thing
+   * that finalizes whatever sentence was in progress.
+   */
+  softPause(): void {
+    if (this.paused) return;
+    this.paused = true;
+    this.armPauseTimer();
+  }
+
+  /**
+   * Come back from either kind of pause.
+   *
+   * A soft pause only stopped the frames, so resuming is a flag. A hard pause
+   * (or the auto-disconnect firing while soft-paused) released the microphone
+   * and the socket, so resuming has to rebuild both — and must not resolve
+   * until it has, because the caller reports the session live the moment this
+   * returns.
+   */
+  async resume(): Promise<void> {
+    if (this.stopped || !this.paused) return;
+    this.clearPauseTimer();
+
+    const needsCapture = this.capture === null || this.activeStream === null;
+    if (needsCapture || this.transportGeneration === null) {
+      // `start()` owns the whole acquire → open → capture sequence, including
+      // its epoch checks; duplicating it here is how the two drift apart.
+      this.paused = false;
+      this.stopped = false;
+      await this.start();
+      return;
+    }
+    this.paused = false;
+  }
+
+  /**
+   * Release the microphone and the socket entirely, and stay resumable.
+   *
+   * `paused` is set here as well as in `softPause`, which is the difference
+   * between "resume works" and a screen that says the microphone is live over
+   * a session that no longer exists: `resume()` returns at its first line for
+   * anything it does not consider paused.
+   */
+  async hardPause(): Promise<void> {
+    this.clearPauseTimer();
+    this.paused = true;
+    this.lifecycle += 1;
+    await this.closeSession();
+    await this.teardownAudio();
+    this.running = false;
+    this.setConnectionState('offline');
+  }
+
+  async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
+    this.running = false;
+    this.lifecycle += 1;
+    this.clearPauseTimer();
+    this.stopDeviceWatch?.();
+    this.stopDeviceWatch = null;
+    try {
+      await this.closeSession();
+    } finally {
+      await this.teardownAudio();
+      this.unlistenStt?.();
+      this.unlistenStt = null;
+      this.setConnectionState('offline');
+    }
+  }
+
+  /* ---------------------------------------------------------------------- */
+
+  private async subscribeToStt(): Promise<void> {
+    if (this.unlistenStt) return;
+    if (!isTauriRuntime()) return; // plain-browser dev: nothing to subscribe to
+    /*
+     * NOT swallowed. Inside Tauri, a failed subscription means the session
+     * would open the microphone, stream audio, bill for it, and receive
+     * nothing — the precise failure this rewrite exists to eliminate, arrived
+     * at by a different route. Failing the start is the only honest outcome.
+     */
+    const { listen } = await import('@tauri-apps/api/event');
+    this.unlistenStt = await listen<SttFrame>(STT_EVENT, (event) => {
+      this.handleSttFrame(event.payload);
+    });
+  }
+
+  /**
+   * Turn one Rust frame into ledger + tracking + UI effects.
+   *
+   * Exposed for tests: this is where a protocol change would first show up, and
+   * driving it directly is the difference between a test that proves the
+   * mapping and one that proves a mock was called.
+   */
+  handleSttFrame(frame: SttFrame): void {
+    // A frame from a session that has ended is not an error — it is a late
+    // arrival from a take that is over, and applying it would put the previous
+    // take's words into this one's ledger.
+    if (this.transportGeneration !== null && frame.generation !== this.transportGeneration) {
+      return;
+    }
+
+    if (frame.kind === 'audioDropped') {
+      this.deps.onAudioDropped?.(frame.frames);
+      return;
+    }
+
+    const event = toTrackingEvent(
+      frame,
+      this.now(),
+      this.deps.sessionGeneration,
+      this.audioOriginMs,
+    );
+    if (event === null) return;
+
+    if (event.type === 'transport_state') {
+      this.setConnectionState(
+        event.state === 'connected'
+          ? 'connected'
+          : event.state === 'closed'
+            ? 'offline'
+            : 'reconnecting',
+      );
+      this.setFollowingHold(event.state !== 'connected', `transport_${event.state}`);
+      this.deps.onTrackingEvent(event);
+      return;
+    }
+
+    if (event.type === 'failed') {
+      // `recoverable: false` is a key problem, not a network problem: the
+      // supervisor has already given up, so the UI must say so instead of
+      // showing a reconnect that will never happen.
+      this.setConnectionState(frame.kind === 'failed' && !frame.recoverable ? 'offline' : 'reconnecting');
+      if (frame.kind === 'failed') {
+        this.deps.onSessionFailure?.(frame.code, !frame.recoverable);
+      }
+      this.deps.onTrackingEvent(event);
+      return;
+    }
+
+    const update = this.ledger.apply(event);
+    this.deps.onTrackingEvent(event);
+
+    /*
+     * Side effects follow the LEDGER's verdict, not the frame's arrival. The
+     * ledger is idempotent — an identical repeated completion reconciles to
+     * nothing — but the transcript tail, the retained record and the word
+     * count are not, so a duplicated final would show the line twice and
+     * inflate "words heard" past what was said.
+     */
+    if (event.type === 'completed' && update !== undefined) {
+      const text = event.text.trim();
+      if (text.length > 0) this.deps.onTranscriptLine(text);
+      const item = this.ledger.getItem(event.itemId);
+      if (item && text.length > 0) {
+        this.deps.onTranscriptItem?.({
+          itemId: event.itemId,
+          commitSequence: item.commitSequence,
+          audioStartMs: item.audioStartMs,
+          audioEndMs: item.audioEndMs,
+          transcript: text,
+        });
+      }
+    }
+  }
+
+  private setConnectionState(state: ConnectionState): void {
+    if (this.lastConnectionState === state) return;
+    this.lastConnectionState = state;
+    this.deps.onConnectionState(state);
+  }
+
+  private setFollowingHold(held: boolean, reason: string | null): void {
+    if (this.following === !held) return;
+    this.following = !held;
+    this.deps.onFollowingHold?.(held, held ? reason : null);
+  }
+
+  /**
+   * §28.1/§29.2 step 4 precondition. Passive only: `queryMicrophonePermission`
+   * uses the Permissions API and never calls `getUserMedia`, so this cannot
+   * raise the OS prompt.
+   */
+  private async checkMicrophonePermission(): Promise<boolean> {
+    const permissions = (globalThis as { navigator?: { permissions?: unknown } }).navigator
+      ?.permissions;
+    if (!permissions) return true;
+    const state = await queryMicrophonePermission(
+      permissions as Parameters<typeof queryMicrophonePermission>[0],
+    );
+    return state !== 'denied';
+  }
+
+  private get preferredDeviceId(): string | undefined {
+    return this.deviceOverride ?? this.deps.deviceId;
+  }
+
+  private async acquireMicrophone(deviceId?: string): Promise<MediaStreamLike> {
+    await this.teardownAudio();
+    const mediaDevices = navigator.mediaDevices as unknown as Parameters<
+      typeof requestMicrophoneAccess
+    >[0];
+    const result = await requestMicrophoneAccess(mediaDevices, {
+      ...(deviceId !== undefined ? { deviceId } : {}),
+      ...(this.deps.audioProcessing ?? {}),
+    });
+    if (!result.ok) throw new Error(result.code);
+    this.activeStream = result.stream;
+
+    this.monitor = new MicrophoneMonitor({
+      createGraph: createAnalyserGraph,
+      ...(this.deps.vadSensitivity === undefined
+        ? {}
+        : { vadConfig: vadConfigForSensitivity(this.deps.vadSensitivity) }),
+    });
+    this.silentInput.reset();
+    // §28.6. A dead input holds following; audio coming back releases it.
+    // Reported only on the TRANSITION, because `onLevel` fires several times a
+    // second and "the microphone is back" is not news forty times over.
+    let inputWasDead = false;
+    this.monitor.onLevel((snapshot) => {
+      if (snapshot.signalPresent) {
+        this.silentInput.reset();
+        if (inputWasDead) {
+          inputWasDead = false;
+          this.deps.onInputRestored?.();
+          // The hold has to come off here. Without it the toast says following
+          // has resumed while the follow store stays paused — the screen and
+          // the stage disagreeing about whether the take is live.
+          this.setFollowingHold(false, null);
+        }
+        return;
+      }
+      const code = this.silentInput.observe(snapshot);
+      if (code && !inputWasDead) {
+        inputWasDead = true;
+        this.deps.onInputDeviceLost?.(code);
+        this.setFollowingHold(true, code);
+      }
+    });
+    await this.monitor.start(result.stream);
+
+    // §5.3: fan the SAME capture out to any extra consumer, so every reader
+    // shares one track and one clock.
+    this.deps.onCaptureStream?.(result.stream);
+    return result.stream;
+  }
+
+  /** Open the PCM tap and start forwarding frames to the Rust session. */
+  private async startCapture(stream: MediaStreamLike): Promise<void> {
+    await this.capture?.stop();
+    this.capture = new PcmCapture({
+      onFrame: (samples) => this.forwardFrame(samples),
+    });
+    await this.capture.start(stream);
+  }
+
+  /**
+   * Forward one frame, in order, dropping nothing silently.
+   *
+   * Frames are chained rather than fired concurrently — see `sendChain`. A
+   * rejected push is swallowed here because the Rust session reports its own
+   * drops as `audioDropped`, which counts them; throwing out of an audio
+   * callback would only tear down the capture graph mid-take.
+   */
+  private forwardFrame(samples: Float32Array): void {
+    const generation = this.transportGeneration;
+    if (generation === null || this.paused || this.stopped) return;
+    const chunk = encodePcm16(samples);
+    this.sendChain = this.sendChain
+      .then(() => pushTranscriptionAudio(generation, chunk))
+      .catch(() => {});
+  }
+
+  /**
+   * §28.6: watch `devicechange` so an unplugged or replaced input is noticed
+   * even when the track itself does not end — macOS default-device switches in
+   * particular.
    */
   private watchDevices(): void {
     if (this.stopDeviceWatch) return;
@@ -483,9 +602,7 @@ export class VoiceSessionPipeline {
       // Seed the baseline so the first diff is meaningful, then watch.
       void this.deviceManager.listInputs().catch(() => {});
       const pinned = this.preferredDeviceId;
-      if (pinned) {
-        this.deviceManager.select({ mode: 'specific', deviceId: pinned });
-      }
+      if (pinned) this.deviceManager.select({ mode: 'specific', deviceId: pinned });
       this.stopDeviceWatch = this.deviceManager.onDeviceChange((report) => {
         if (report.selectedDeviceLost) this.deps.onInputDeviceLost?.('MIC_DEVICE_LOST');
       });
@@ -494,517 +611,47 @@ export class VoiceSessionPipeline {
     }
   }
 
-  startListening(): void {
-    this.controller.startListening();
+  private armPauseTimer(): void {
+    this.clearPauseTimer();
+    const after = this.deps.softPauseAutoDisconnectMs ?? DEFAULT_SOFT_PAUSE_AUTO_DISCONNECT_MS;
+    if (after <= 0) return;
+    this.pauseTimer = this.timers.setTimeout(() => {
+      this.pauseTimer = null;
+      if (!this.paused || this.stopped) return;
+      this.deps.onPauseWarning?.(0);
+      void this.closeSession();
+    }, after);
   }
 
-  /**
-   * §28.2 mid-session input change — the recovery for a microphone unplugged
-   * mid-take.
-   *
-   * The chosen id becomes this pipeline's device for everything that comes
-   * after, not just the one track swap: a later reconnect mints a fresh
-   * session and re-acquires, and re-opening the device that just vanished
-   * would put the take straight back into the hold it was rescued from. The
-   * `devicechange` watcher is re-pointed for the same reason.
-   */
-  async switchMicrophone(deviceId: string): Promise<void> {
-    this.deviceOverride = deviceId;
-    await this.controller.switchMicrophone(deviceId);
+  private clearPauseTimer(): void {
+    if (this.pauseTimer === null) return;
+    this.timers.clearTimeout(this.pauseTimer);
+    this.pauseTimer = null;
+  }
+
+  /** Close the Rust session, letting the last utterance finalize. */
+  private async closeSession(): Promise<void> {
+    const generation = this.transportGeneration;
+    this.transportGeneration = null;
+    if (generation === null) return;
     try {
-      this.deviceManager?.select({ mode: 'specific', deviceId });
+      await stopTranscription(generation);
     } catch {
-      // Enumeration is a nicety; the track swap already succeeded.
+      // The session is going away regardless; a failure to say so politely is
+      // not something the caller can act on.
     }
   }
 
-  /** The device this pipeline should open, honouring any mid-session switch. */
-  private get preferredDeviceId(): string | undefined {
-    return this.deviceOverride ?? this.deps.deviceId;
-  }
+  private async teardownAudio(): Promise<void> {
+    const capture = this.capture;
+    this.capture = null;
+    await capture?.stop();
 
-  softPause(): void {
-    this.controller.softPause();
-  }
-
-  async resume(): Promise<void> {
-    await this.controller.resume();
-  }
-
-  async hardPause(): Promise<void> {
-    await this.controller.hardPause();
-    await this.stopMonitor();
-  }
-
-  async stop(): Promise<void> {
-    if (this.stopped) return;
-    this.stopped = true;
-    this.running = false;
-    this.stopCommandTick();
-    this.stopDeviceWatch?.();
-    this.stopDeviceWatch = null;
-    this.router.cancelPending('session_stopped', this.now());
-    try {
-      await this.controller.stop();
-    } finally {
-      await this.stopMonitor();
-    }
-  }
-
-  /** Realtime cost estimate for the F.17 summary (clearly an estimate). */
-  estimatedCostUsd(): number {
-    return this.controller.usage.estimate(this.deps.config.model).usd;
-  }
-
-  /* ---------------------------------------------------------------------- */
-
-  /**
-   * §28.1/§29.2 step 4 precondition. Passive only: `queryMicrophonePermission`
-   * uses the Permissions API and never calls `getUserMedia`, so this cannot
-   * raise the OS prompt. `unsupported` and `prompt` both proceed — plenty of
-   * WebViews do not answer the query, and the microphone open resolves
-   * permission implicitly there, which is what the controller's hook contract
-   * already says. Only an explicit `denied` stops the sequence.
-   */
-  private async checkMicrophonePermission(): Promise<boolean> {
-    const permissions = (globalThis as { navigator?: { permissions?: unknown } }).navigator
-      ?.permissions;
-    if (!permissions) return true;
-    const state = await queryMicrophonePermission(
-      permissions as Parameters<typeof queryMicrophonePermission>[0],
-    );
-    return state !== 'denied';
-  }
-
-  /**
-   * §29.2 step 8. Idempotent, and safe to call before a stream exists: the
-   * transport acquires the microphone during `connect`, which is step 5–7, so
-   * by the time the controller reaches step 8 there is always a monitor waiting.
-   */
-  private async startVad(): Promise<void> {
-    this.vadRequested = true;
-    const monitor = this.monitor;
-    if (!monitor || monitor.running || !this.activeStream) return;
-    await monitor.start(this.activeStream);
-  }
-
-  /**
-   * §29.2 step 8's counterpart, reached from stop, hard pause, AND the failed
-   * start path. That last one is why this matters: nothing used to tear the
-   * monitor down when the start sequence threw.
-   */
-  private async stopVad(): Promise<void> {
-    this.vadRequested = false;
-    await this.stopMonitor();
-  }
-
-  /**
-   * §29.2 step 9 — clear old transcript state.
-   *
-   * The pipeline resets what it owns: any command handoff in flight, the commit
-   * driver's buffered-turn bookkeeping, and the silence detector's history. The
-   * alignment cursor and the session store's transcript tail live above this
-   * layer and are reset through `onResetTranscriptState`.
-   *
-   * The `TranscriptLedger` is deliberately not cleared here: it is keyed by
-   * session generation and clears itself when the generation moves, and forcing
-   * it empty under an unchanged generation would discard commit ordering that
-   * `UNIQUE(session_id, commit_sequence)` still depends on.
-   */
-  private resetTranscriptState(): void {
-    this.router.cancelPending('session_stopped', this.now());
-    this.commitDriver.reset();
-    this.silentInput.reset();
-    this.setPending(false);
-    this.deps.onResetTranscriptState?.();
-  }
-
-  private async acquireMicrophone(deviceId?: string): Promise<MediaStreamLike> {
-    await this.stopMonitor();
-    const mediaDevices = navigator.mediaDevices as unknown as Parameters<
-      typeof requestMicrophoneAccess
-    >[0];
-    const result = await requestMicrophoneAccess(mediaDevices, {
-      deviceId,
-      ...(this.deps.audioProcessing ?? {}),
-    });
-    if (!result.ok) {
-      throw new Error(result.code);
-    }
-    this.activeStream = result.stream;
-    // Local VAD drives manual commit boundaries (§28.4/§29.3).
-    /*
-     * The config the monitor is ACTUALLY running on, not the defaults.
-     *
-     * The first version of this trace computed the gate from
-     * `DEFAULT_VAD_CONFIG`, so it reported a number the VAD was not using at
-     * any sensitivity other than the midpoint — a diagnostic that lies is
-     * worse than none, because it is believed.
-     */
-    const resolvedVad = {
-      ...DEFAULT_VAD_CONFIG,
-      ...(this.deps.vadSensitivity === undefined
-        ? {}
-        : vadConfigForSensitivity(this.deps.vadSensitivity)),
-    };
-    this.monitor = new MicrophoneMonitor({
-      createGraph: createAnalyserGraph,
-      ...(this.deps.vadSensitivity === undefined ? {} : { vadConfig: resolvedVad }),
-    });
-    this.monitor.onVadEvent((event) => {
-      /*
-       * §29.2 step 8, applied to the COMMIT rather than to the listening.
-       *
-       * The detector now runs from acquisition so the room is measured while
-       * the network work happens — but a boundary found before the controller
-       * is ready must not become a commit on a connection still being
-       * negotiated. `calibrated` is allowed through because it is a
-       * measurement, not a turn, and it is what tells the presenter they may
-       * begin.
-       */
-      if (!this.vadRequested && event.type !== 'calibrated') return;
-      // The commit chain, traced. With `turn_detection: null` the server does
-      // no endpointing, so a take transcribes NOTHING unless the local VAD
-      // reaches `speech_ended` and the driver turns it into a commit — a
-      // healthy connection returning total silence looks identical to a broken
-      // one, and this is the only place the difference is visible.
-      /*
-       * The numbers, not just the event name.
-       *
-       * A take can connect perfectly and transcribe nothing, and the only
-       * difference between "the microphone is silent", "the speech gate is set
-       * too high" and "the noise floor was calibrated on the presenter's own
-       * voice" is three floats nobody could see. The gate is
-       * `max(minSpeechRms, noiseFloor * noiseFloorMargin)`, so a floor measured
-       * while someone was already speaking puts the threshold permanently
-       * above the voice it was measured from.
-       */
-      trace(
-        'vad',
-        event.type === 'calibrated'
-          ? `calibrated — noiseFloor ${event.noiseFloor.toFixed(4)}, gate ${Math.max(
-              resolvedVad.minSpeechRms,
-              event.noiseFloor * resolvedVad.noiseFloorMargin,
-            ).toFixed(4)} (minSpeechRms ${resolvedVad.minSpeechRms}, margin ${
-              resolvedVad.noiseFloorMargin
-            })`
-          : event.type,
-      );
-      // §28.4. The presenter has to be told when the room has been measured.
-      // Calibration averages the first two seconds of audio, so anyone who
-      // starts reading immediately is measured as the noise floor — and the
-      // only cue that the window had closed was a log line nobody on stage can
-      // see. `onVadCalibrated` puts it where they are looking.
-      if (event.type === 'calibrated') this.deps.onVadCalibrated?.();
-      this.commitDriver.handleVadEvent(event);
-    });
-    // H5: real captured audio is the precondition for the
-    // `no_transcripts_despite_audio` health branch. Without a production
-    // caller for `markAudioActivity` that check could never fire, which is why
-    // a mic that had gone dead mid-take was never detected.
-    this.silentInput.reset();
-    this.monitor.onLevel((snapshot) => {
-      // One line a second of what the microphone is actually delivering, so a
-      // silent take can be told apart from a gated one without guessing.
-      const nowMs = Date.now();
-      if (nowMs - this.lastLevelTraceMs > 1000) {
-        this.lastLevelTraceMs = nowMs;
-        trace(
-          'level',
-          `rms ${snapshot.rms.toFixed(4)} peak ${snapshot.peak.toFixed(4)} ` +
-            `signal ${snapshot.signalPresent} speaking ${snapshot.speaking}`,
-        );
-      }
-      if (snapshot.signalPresent) {
-        this.controller.noteAudioActivity();
-        this.silentInput.reset();
-        return;
-      }
-      const code = this.silentInput.observe(snapshot);
-      if (code) this.deps.onInputDeviceLost?.(code);
-    });
-    /*
-     * §29.2 step 8 belongs to the controller, so the FIRST start leaves the
-     * monitor built but idle and waits for `startVad`. Every later acquisition
-     * — a reconnect, a mid-take device switch — happens underneath a session
-     * that is already past step 8 and never re-enters it, so those restart the
-     * VAD immediately or the session would come back with no commit boundaries
-     * at all.
-     */
-    /*
-     * Start listening NOW, not when the transport finishes connecting.
-     *
-     * Step 8 is about when commits may be SENT, and it was read as when the
-     * microphone may be listened to — so the monitor sat idle until the
-     * controller reached it, which is after credential mint, SDP exchange and
-     * ICE. Measured on a real take: first level frame at +5.8 s, calibration
-     * finished at +7.8 s. The presenter had been looking at their script for
-     * eight seconds with nothing listening, spoke their opening line into that
-     * gap, and the take reported hearing nothing — which was true, and had
-     * nothing whatever to do with their microphone.
-     *
-     * Acquisition is the honest moment: the stream exists, so the room can be
-     * measured while the network work happens and the detector is armed before
-     * the stage ever says "live".
-     */
-    this.deps.onVadCalibrating?.();
-    await this.monitor.start(result.stream);
-    // §5.3: fan the SAME capture out to any extra consumer (the coaching
-    // analyzer). This is deliberately after the monitor starts and before the
-    // stream is returned to the transport, so all three consumers — peer
-    // connection, level meter, analyzer — share one track and one clock.
-    this.deps.onCaptureStream?.(result.stream);
-    return result.stream;
-  }
-
-  private async stopMonitor(): Promise<void> {
     const monitor = this.monitor;
     this.monitor = null;
     if (monitor) await monitor.stop();
+
     releaseStream(this.activeStream);
     this.activeStream = null;
   }
-
-  private handleTransportEvent(event: TransportEvent): void {
-    const tracked = this.toTrackingEvent(event);
-    if (tracked === null) return;
-
-    if (tracked.type === 'transport_state') {
-      this.deps.onConnectionState(
-        tracked.state === 'connected'
-          ? 'connected'
-          : tracked.state === 'closed'
-            ? 'offline'
-            : 'reconnecting',
-      );
-      this.deps.onTrackingEvent(tracked);
-      return;
-    }
-
-    this.ledger.apply(tracked);
-    if (tracked.type === 'completed' && tracked.text.trim().length > 0) {
-      const text = tracked.text.trim();
-      this.deps.onTranscriptLine(text);
-      // §36.2: the ledger owns commit ordering and the audio window, so the
-      // retained record is built from it rather than re-derived here. An item
-      // the ledger never saw is not persisted — a synthesized commit sequence
-      // would collide on `UNIQUE(session_id, commit_sequence)` and silently
-      // drop every later line.
-      const item = this.ledger.getItem(tracked.itemId);
-      if (item) {
-        this.deps.onTranscriptItem?.({
-          itemId: tracked.itemId,
-          commitSequence: item.commitSequence,
-          audioStartMs: item.audioStartMs,
-          audioEndMs: item.audioEndMs,
-          transcript: text,
-        });
-      }
-    }
-
-    // Command router runs between the ledger and the aligner (§33.4).
-    if (this.deps.commandsEnabled !== false) {
-      const observation = this.router.observe(this.deps.sessionGeneration, tracked.receivedAtMs);
-      this.applyObservation(observation);
-    }
-
-    // Items consumed by the command channel never reach alignment; the
-    // ledger inside the worker applies the same masking via mask_items.
-    this.deps.onTrackingEvent(tracked);
-  }
-
-  private applyObservation(observation: CommandObservation): void {
-    switch (observation.kind) {
-      case 'none':
-        this.setPending(false);
-        // §33.4 tail: a wake-like phrase the collision scorer ruled authored
-        // script hands its items BACK to alignment. Without this the sentence
-        // the presenter was reading when a spurious wake fired is excluded for
-        // the rest of the session.
-        if (observation.releaseItemIds !== undefined && observation.releaseItemIds.length > 0) {
-          this.deps.onReleaseItems(observation.releaseItemIds);
-        }
-        return;
-      case 'pending':
-        this.setPending(true);
-        this.deps.onMaskItems(observation.itemIds);
-        return;
-      case 'command':
-        this.setPending(false);
-        this.deps.onMaskItems(observation.itemIds);
-        // H8: every validated command goes through the §33.9 execution policy.
-        // Previously `requiresConfirmation` was carried faithfully all the way
-        // from Luna and then dropped on the floor here — an ambiguous "go to
-        // conclusion", or a stop mid-take, executed and acknowledged anyway.
-        void this.executeWithPolicy(observation.command);
-        return;
-      case 'needs_luna':
-        // The aligner is frozen for the whole handoff. Saying so explicitly
-        // (rather than relying on a preceding `pending` having done it) is what
-        // makes the un-freeze in `resolveLuna` unconditional and provable.
-        this.setPending(true);
-        this.deps.onMaskItems(observation.itemIds);
-        this.scheduleCommandTick();
-        void this.resolveLuna(observation.candidate.id, observation.request);
-        return;
-      case 'unknown':
-        this.setPending(false);
-        this.deps.onMaskItems(observation.itemIds);
-        this.deps.onUnknownCommand(observation.message);
-        return;
-    }
-  }
-
-  /**
-   * H8: apply the execution policy, then execute — and acknowledge ONLY after
-   * the action the user actually agreed to has been performed.
-   */
-  private async executeWithPolicy(command: ValidatedCommand): Promise<void> {
-    const state: ExecutionState = this.deps.getExecutionState?.() ?? {
-      hardPaused: false,
-      takeInProgress: false,
-      confirmStopDuringTake: true,
-    };
-    const decision = decideExecution(command.action, state, command.requiresConfirmation === true);
-
-    if (decision.decision === 'reject') {
-      this.router.acknowledgeRejected(command.humanLabel, this.now());
-      this.deps.onCommandRejected?.(command, decision.reason);
-      return;
-    }
-
-    if (decision.decision === 'confirm') {
-      this.router.acknowledgeConfirmRequired(command, this.now());
-      // No confirmation surface wired: refuse rather than act. Executing an
-      // ambiguous jump or a stop the user did not confirm is worse than
-      // doing nothing.
-      if (!this.deps.confirmCommand) {
-        this.deps.onCommandRejected?.(command, decision.reason);
-        return;
-      }
-      let confirmed = false;
-      try {
-        confirmed = await this.deps.confirmCommand(command, decision.reason);
-      } catch {
-        confirmed = false;
-      }
-      // The session may have ended while the prompt was open.
-      if (!confirmed || this.stopped) {
-        this.deps.onCommandRejected?.(command, decision.reason);
-        return;
-      }
-    }
-
-    this.deps.executeCommand(command);
-    this.router.acknowledgeExecuted(command, this.now(), true);
-  }
-
-  /**
-   * Luna handoff (§33.7): `interpret_command` is NOT_IMPLEMENTED in v1 Rust;
-   * failures resolve the candidate as unknown so parsing stays deterministic.
-   *
-   * §33.11: the invoke is raced against `lunaHardTimeoutMs` and the freeze is
-   * released in a `finally`, so a rejected, hung, or superseded handoff ALWAYS
-   * un-freezes the aligner. The engine's `commandPendingTimeoutMs` backstop
-   * still exists, but a four-second stall mid-take is a ruined take — the
-   * backstop is a safety net, not the fix.
-   */
-  private async resolveLuna(candidateId: string, request: unknown): Promise<void> {
-    let timeout: unknown = null;
-    try {
-      const raw = await Promise.race<unknown>([
-        // Luna unavailable → deterministic-only degradation, never a throw.
-        ipcInvoke('interpret_command', { request }).catch(() => null),
-        new Promise<null>((resolve) => {
-          timeout = this.timers.setTimeout(
-            () => resolve(null),
-            this.router.settings.lunaHardTimeoutMs,
-          );
-        }),
-      ]);
-      if (this.stopped) return;
-      this.applyObservation(this.router.resolveLuna(candidateId, raw, this.now()));
-    } catch {
-      // Nothing above is allowed to reject; a defect here must still un-freeze.
-    } finally {
-      if (timeout !== null) this.timers.clearTimeout(timeout);
-      this.setPending(false);
-    }
-  }
-
-  private setPending(pending: boolean): void {
-    if (pending === this.commandPending) return;
-    this.commandPending = pending;
-    this.deps.onCommandPending(pending);
-  }
-
-  private toTrackingEvent(event: TransportEvent): TrackingEvent | null {
-    const receivedAtMs = this.now();
-    const sessionGeneration = this.deps.sessionGeneration;
-    switch (event.type) {
-      case 'item_started':
-        return {
-          type: 'item_started',
-          sessionGeneration,
-          itemId: event.itemId,
-          commitSequence: event.commitSequence,
-          audioStartMs: receivedAtMs,
-          receivedAtMs,
-        };
-      case 'delta':
-        return {
-          type: 'delta',
-          sessionGeneration,
-          itemId: event.itemId,
-          text: event.text,
-          receivedAtMs,
-        };
-      case 'completed':
-        return {
-          type: 'completed',
-          sessionGeneration,
-          itemId: event.itemId,
-          text: event.text,
-          ...(event.logprobs ? { logprobs: event.logprobs } : {}),
-          receivedAtMs,
-        };
-      case 'failed':
-        return {
-          type: 'failed',
-          sessionGeneration,
-          ...(event.itemId !== undefined ? { itemId: event.itemId } : {}),
-          code: event.code,
-          recoverable: event.recoverable,
-          receivedAtMs,
-        };
-      case 'transport_state':
-        return {
-          type: 'transport_state',
-          sessionGeneration,
-          state:
-            event.state === 'connected'
-              ? 'connected'
-              : event.state === 'connecting'
-                ? 'connecting'
-                : event.state === 'reconnecting'
-                  ? 'degraded'
-                  : 'closed',
-          receivedAtMs,
-        };
-      default:
-        return null;
-    }
-  }
-}
-
-function flattenOutline(compiled: CompiledScript): Array<{ level: number; title: string }> {
-  const out: Array<{ level: number; title: string }> = [];
-  const walk = (nodes: CompiledScript['outline']): void => {
-    for (const node of nodes) {
-      out.push({ level: node.level, title: node.title });
-      walk(node.children);
-    }
-  };
-  walk(compiled.outline);
-  return out;
 }

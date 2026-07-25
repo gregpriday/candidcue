@@ -43,7 +43,6 @@ import {
   type PartialSmoothFollowProfile,
   type TrackingProfile,
 } from './profile';
-import type { SemanticAssistEvidence } from './semantic-assist';
 import type { OutlineNode } from '../contracts/compiler';
 import type { TrackingDocument, TranscriptEvent } from './types';
 
@@ -80,7 +79,6 @@ export type PlaybackAction =
   | { kind: 'pause'; nowMs: number }
   | { kind: 'resume'; nowMs: number }
   | { kind: 'reset'; nowMs: number }
-  | { kind: 'semantic_assist'; evidence: SemanticAssistEvidence }
   | { kind: 'layout'; generation: number; nowMs: number };
 
 /**
@@ -352,9 +350,6 @@ export function runPlayback(scenario: PlaybackScenario): PlaybackResult {
       case 'reset':
         atMs = action.nowMs;
         consume(engine.reset(action.nowMs), atMs);
-        break;
-      case 'semantic_assist':
-        engine.applySemanticAssist(action.evidence);
         break;
       case 'layout':
         atMs = action.nowMs;

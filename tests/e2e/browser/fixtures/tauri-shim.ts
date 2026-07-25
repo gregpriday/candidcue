@@ -34,7 +34,7 @@ export interface ShimConfig {
   /** Mark the welcome screen as already seen so boot lands on the Library. */
   welcomed?: boolean;
   seedScripts?: ShimScriptSeed[];
-  /** OpenAI key status returned by get_openai_key_status. */
+  /** Inworld key status returned by get_inworld_key_status. */
   keyStatus?: Record<string, unknown>;
   /** When true, list_displays rejects (degraded enumeration path). */
   failListDisplays?: boolean;
@@ -166,7 +166,6 @@ function shimBody(config: ShimConfig): void {
         delayProfile: 'balanced',
         softPauseAutoDisconnectMinutes: 5,
       },
-      commands: { wakePhrase: 'hey cue', wakeMode: 'double_gate', lunaFallback: true, commandModel: 'gpt-4o-mini' },
       listener: config.listenerSettings ?? {},
     },
   };
@@ -437,7 +436,7 @@ function shimBody(config: ShimConfig): void {
         store.delete(args?.['scriptId'] as string);
         return null;
 
-      case 'get_openai_key_status':
+      case 'get_inworld_key_status':
         // Rust's real shape: `{ present, hint?, source }` — `source` is what
         // tells Settings whether a debug build's OPENAI_API_KEY is in play.
         return config.keyStatus ?? { present: false, source: 'none' };

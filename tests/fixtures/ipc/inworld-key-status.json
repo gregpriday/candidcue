@@ -1,0 +1,54 @@
+{
+  "_comment": [
+    "Canonical `get_inworld_key_status` / `save_inworld_key` payloads (spec §46.4).",
+    "Read by BOTH sides:",
+    "  - src-tauri/tests/ipc_contract_tests.rs asserts the",
+    "    real wrappers in src/control/services/secrets.ts read these shapes;",
+    "  - src-tauri/tests/ipc_contract_tests.rs asserts OpenAiKeyStatus and",
+    "    RedactedSecretMetadata serialize to exactly them.",
+    "",
+    "`source` is the field that matters here. A debug build reads the key from",
+    "the OPENAI_API_KEY environment variable AHEAD of the OS credential store,",
+    "because macOS ties a Keychain item's ACL to the requesting binary's code",
+    "signature and `tauri dev` presents a new one on every rebuild. With two",
+    "possible sources, a status that only says `present: true` cannot tell the",
+    "operator which key is billing their account — so the source crosses the",
+    "boundary with the hint.",
+    "",
+    "What must NEVER appear in any object below is the key itself. `hint` is the",
+    "last four characters and nothing else; `source` names a drawer, not a value.",
+    "A release build can only ever emit `keychain` or `none`."
+  ],
+
+  "expectedKeychainStatus": {
+    "present": true,
+    "hint": "sk-…7f2a",
+    "source": "keychain"
+  },
+
+  "expectedEnvironmentStatus": {
+    "present": true,
+    "hint": "sk-…9c41",
+    "source": "environment"
+  },
+
+  "_absent_omits_hint_comment": [
+    "`hint` is skipped when there is no key (serde skip_serializing_if), so the",
+    "absent status is three keys short of the others — asserting on it pins the",
+    "omission as well as the `none` source."
+  ],
+  "expectedAbsentStatus": {
+    "present": false,
+    "source": "none"
+  },
+
+  "expectedSavedMetadata": {
+    "hint": "sk-…7f2a",
+    "source": "keychain"
+  },
+
+  "notes": {
+    "allSources": ["environment", "keychain", "none"],
+    "lastFourOfKeychainHint": "7f2a"
+  }
+}

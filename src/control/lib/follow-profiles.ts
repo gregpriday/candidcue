@@ -16,7 +16,6 @@
  */
 import {
   DEFAULT_SMOOTH_FOLLOW_PROFILE,
-  type IntelligenceMode,
   type SmoothFollowProfile,
 } from '../../shared/contracts';
 
@@ -31,15 +30,12 @@ export type VoiceLead = 'less' | 'balanced' | 'more';
 /** §45 fidelity modes — these change coaching thresholds, not navigation. */
 export type FidelityMode = 'conversational' | 'balanced' | 'exact';
 /** §47.6 coaching display. */
-export type CoachingDisplay = 'off' | 'control' | 'stage_and_control';
 
 /** The persisted §47 settings block. */
 export interface FollowingSettings {
   feel: FollowFeel;
   voiceLead: VoiceLead;
-  intelligenceMode: IntelligenceMode;
   fidelityMode: FidelityMode;
-  coachingDisplay: CoachingDisplay;
   /** Versioned motion-profile family id (§55); see `MOTION_PROFILE_FAMILIES`. */
   motionProfileId: string;
   /**
@@ -53,9 +49,7 @@ export interface FollowingSettings {
 
 export const FOLLOW_FEELS: FollowFeel[] = ['calm', 'balanced', 'responsive'];
 export const VOICE_LEADS: VoiceLead[] = ['less', 'balanced', 'more'];
-export const INTELLIGENCE_MODES: IntelligenceMode[] = ['local_only', 'balanced', 'enhanced'];
 export const FIDELITY_MODES: FidelityMode[] = ['conversational', 'balanced', 'exact'];
-export const COACHING_DISPLAYS: CoachingDisplay[] = ['off', 'control', 'stage_and_control'];
 
 /**
  * Defaults. Every value comes from the specification's stated default, and the
@@ -65,9 +59,7 @@ export function defaultFollowingSettings(): FollowingSettings {
   return {
     feel: 'balanced', // §47.1 "Balanced — default"
     voiceLead: 'balanced', // §47.3
-    intelligenceMode: 'balanced', // §35.2 "Balanced intelligence — default"
     fidelityMode: 'balanced', // §45.2 "Balanced — default"
-    coachingDisplay: 'control', // §47.6 conservative: stage coaching stays off
     motionProfileId: DEFAULT_SMOOTH_FOLLOW_PROFILE.id,
     semanticRequestLimit: null,
     developerDiagnostics: false, // primary §15.2: developer panel off by default
@@ -120,35 +112,6 @@ export const VOICE_LEAD_OPTIONS: Array<FollowOption<VoiceLead>> = [
   },
 ];
 
-export const INTELLIGENCE_MODE_OPTIONS: Array<FollowOption<IntelligenceMode>> = [
-  {
-    value: 'local_only',
-    label: 'Local only',
-    description:
-      'No assist requests during a session. Deterministic matching and motion stay fully functional, and nothing leaves this device for tracking.',
-  },
-  {
-    value: 'balanced',
-    label: 'Balanced',
-    description:
-      'Calls GPT-5.6 Luna only when it can resolve a real ambiguity — typically a few seconds apart at most. Adds a small amount of OpenAI usage on your key.',
-  },
-  {
-    value: 'enhanced',
-    label: 'Enhanced',
-    description:
-      'Also analyses stable finished speech on a short interval for coverage and coaching. Materially more requests, and materially more OpenAI usage than Balanced.',
-  },
-];
-
-/** §47.4 / §57.2 — the honest one-liner shown beside the assist control. */
-export const INTELLIGENCE_PRIVACY_NOTE =
-  'Balanced and Enhanced send recent transcript text and small nearby script excerpts to GPT-5.6 Luna with your OpenAI key. No audio, no Listener media, and no full script are sent. Assist never moves the stage on its own — it only adjusts confidence in places the local matcher already found.';
-
-/** §63 / §3.5 — what the user is promised when assist is unavailable. */
-export const INTELLIGENCE_FALLBACK_NOTE =
-  'If assist times out, errors, or reaches a limit, following continues on local matching alone.';
-
 export const FIDELITY_MODE_OPTIONS: Array<FollowOption<FidelityMode>> = [
   {
     value: 'conversational',
@@ -164,20 +127,6 @@ export const FIDELITY_MODE_OPTIONS: Array<FollowOption<FidelityMode>> = [
     value: 'exact',
     label: 'Exact',
     description: 'Stricter wording coverage and more omission tips. Tracking stays just as tolerant.',
-  },
-];
-
-export const COACHING_DISPLAY_OPTIONS: Array<FollowOption<CoachingDisplay>> = [
-  { value: 'off', label: 'Off', description: 'No tips anywhere.' },
-  {
-    value: 'control',
-    label: 'Control window only',
-    description: 'Tips appear here, never on the stage. The default.',
-  },
-  {
-    value: 'stage_and_control',
-    label: 'Stage and control',
-    description: 'One short, rate-limited tip may also appear in the stage’s reserved strip.',
   },
 ];
 
@@ -399,9 +348,7 @@ export function clampFollowing(value: Partial<FollowingSettings> | undefined | n
   return {
     feel: pick(value.feel, FOLLOW_FEELS, defaults.feel),
     voiceLead: pick(value.voiceLead, VOICE_LEADS, defaults.voiceLead),
-    intelligenceMode: pick(value.intelligenceMode, INTELLIGENCE_MODES, defaults.intelligenceMode),
     fidelityMode: pick(value.fidelityMode, FIDELITY_MODES, defaults.fidelityMode),
-    coachingDisplay: pick(value.coachingDisplay, COACHING_DISPLAYS, defaults.coachingDisplay),
     motionProfileId: motionProfileFamily(value.motionProfileId ?? defaults.motionProfileId).id,
     semanticRequestLimit:
       typeof limit === 'number' && Number.isFinite(limit) && limit >= 1
@@ -414,17 +361,3 @@ export function clampFollowing(value: Partial<FollowingSettings> | undefined | n
   };
 }
 
-/** Coaching is "on" whenever tips can appear anywhere (§47.6). */
-export function coachingEnabled(display: CoachingDisplay): boolean {
-  return display !== 'off';
-}
-
-/** Toggling coaching preserves the user's stage preference where possible. */
-export function toggleCoachingDisplay(
-  current: CoachingDisplay,
-  enabled: boolean,
-  preferred: CoachingDisplay = 'control',
-): CoachingDisplay {
-  if (!enabled) return 'off';
-  return current === 'off' ? (preferred === 'off' ? 'control' : preferred) : current;
-}

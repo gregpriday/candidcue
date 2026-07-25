@@ -6,11 +6,11 @@ import { dismissAllToasts } from './fixtures/toasts';
 /**
  * VOICE mode, at the honest edge of what a browser can prove.
  *
- * A voice take needs a real microphone, a WebRTC transport to api.openai.com
+ * A voice take needs a real microphone, a live Inworld transcription session
  * and the Realtime provider. This spec supplies NONE of them and fakes none of
  * them. What it does drive is the one voice-mode state that is fully reachable
  * without hardware, and that a user hits for real whenever their key is
- * rejected or OpenAI is down: the realtime credential cannot be minted, so
+ * rejected or Inworld is down: the streaming session cannot be opened, so
  * there is no transport and no transcription.
  *
  * That state matters precisely because it is the one where a teleprompter must

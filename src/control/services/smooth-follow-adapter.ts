@@ -33,9 +33,8 @@ import type {
 import { DEFAULT_SMOOTH_FOLLOW_PROFILE, STAGE_EVENT } from '../../shared/contracts';
 import type { AlignmentDiagnostic } from '../../shared/tracking/types';
 import type { MovementDecisionRecord } from '../lib/follow-language';
-import type { AssistStatus, BudgetBreach, CoachTipView } from '../stores/smooth-follow';
+import type { BudgetBreach } from '../stores/smooth-follow';
 import { isTauriRuntime } from './ipc';
-import type { SemanticSidecar } from './semantic-sidecar';
 
 /** The stage's periodic motion report (companion §54), owned by contracts. */
 export const STAGE_MOTION_ACK_EVENT = STAGE_EVENT.motionAck;
@@ -284,88 +283,32 @@ export function subscribeStageMotionAcks(
   };
 }
 
-/** Handlers the semantic sidecar and budget reporters push into. */
+/**
+ * Handlers the runtime-budget reporters push into.
+ *
+ * This used to carry semantic-assist status and coach tips as well. Both are
+ * gone with the provider that produced them: Inworld returns transcripts and
+ * nothing else, and there is no second model ranking candidates behind the
+ * aligner. What remains is the §63 budget feed, which measures this app's own
+ * work rather than anybody's API.
+ */
 export interface FollowSidecarHandlers {
-  /** Scheduler state, usage counters, and §58 outage reasons. */
-  onAssistStatus(patch: Partial<AssistStatus>): void;
-  /** Validated coach tips (§43, §46). */
-  onCoachTip(tip: CoachTipView): void;
   /** §63 runtime budgets, measured by whoever owns the budgeted work. */
   onBudgetBreach(breach: Omit<BudgetBreach, 'atMs'>): void;
 }
 
-/**
- * The live semantic sidecar for the current take, or null when none is
- * running. Set by the session store through `setActiveSemanticSidecar` so the
- * sidecar feed can report real scheduler state instead of nothing.
- */
-let activeSidecar: SemanticSidecar | null = null;
 const sidecarListeners = new Set<FollowSidecarHandlers>();
 
 /**
- * Register (or clear) the session-owned sidecar. Called on take start/stop.
+ * Runtime-budget feed. Returns an unsubscribe function.
  *
- * H6: the scheduler is created and cancelled with the take, never module
- * state that outlives it — a scheduler surviving a take would keep emitting
- * evidence against a session generation that no longer exists.
- */
-export function setActiveSemanticSidecar(sidecar: SemanticSidecar | null): void {
-  activeSidecar = sidecar;
-  const patch = assistStatusPatch(sidecar);
-  for (const handlers of sidecarListeners) {
-    handlers.onAssistStatus(patch);
-  }
-}
-
-/** The sidecar owning the current take, for callers that need to drive it. */
-export function getActiveSemanticSidecar(): SemanticSidecar | null {
-  return activeSidecar;
-}
-
-/**
- * Semantic-sidecar + runtime-budget feed.
- *
- * Returns an unsubscribe function. Assist status now reflects the real
- * scheduler when a take is running; it reports `disabled` when no sidecar is
- * registered, rather than inventing activity.
- *
- * The candidate feed is bound: the tracking worker emits `semantic_context`
- * (companion §37.1) and the session store attaches it to the sidecar, so a
- * running take with a worker-backed driver reports genuine scheduler activity.
- *
- * TODO(integration, Agents A + B): report §63 budget overruns — worker
- * alignment-update time and stage per-frame controller time — through
- * `onBudgetBreach`.
+ * TODO(integration): report §63 budget overruns — worker alignment-update time
+ * and stage per-frame controller time — through `onBudgetBreach`.
  */
 export function subscribeFollowSidecar(handlers: FollowSidecarHandlers): () => void {
   sidecarListeners.add(handlers);
-  handlers.onAssistStatus(assistStatusPatch(activeSidecar));
   return () => {
     sidecarListeners.delete(handlers);
   };
 }
 
-/** Map real scheduler availability onto the §47.4 assist-status view. */
-function assistStatusPatch(sidecar: SemanticSidecar | null): Partial<AssistStatus> {
-  if (sidecar === null) return { state: 'off', reason: null };
-  const diagnostics = sidecar.scheduler.getDiagnostics();
-  switch (sidecar.scheduler.getAvailability()) {
-    case 'ready':
-      return { state: 'ready', reason: null, requestCount: totalRequests(diagnostics) };
-    case 'disabled':
-      return { state: 'off', reason: null };
-    case 'budget_exhausted':
-      return { state: 'limit_reached', requestCount: totalRequests(diagnostics) };
-    case 'degraded_timeout':
-    case 'degraded_rate_limited':
-      return { state: 'backing_off', requestCount: totalRequests(diagnostics) };
-    case 'degraded_quota':
-    case 'degraded_unavailable':
-    default:
-      return { state: 'unavailable', requestCount: totalRequests(diagnostics) };
-  }
-}
-
-function totalRequests(diagnostics: { requestsByLane: Record<string, number> }): number {
-  return Object.values(diagnostics.requestsByLane).reduce((sum, n) => sum + n, 0);
-}

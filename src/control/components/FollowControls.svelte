@@ -3,26 +3,17 @@
   Appendix F.12 voice).
 
   Pausing *following* is deliberately separate from pausing the *session*
-  (§15.3): this stops automatic movement while transcription and voice
-  commands keep running. The transport in the footer still owns session pause.
+  (§15.3): this stops automatic movement while transcription keeps running.
+  The transport in the footer still owns session pause.
 -->
 <script lang="ts">
   import Button from './Button.svelte';
-  import SegmentedControl from './SegmentedControl.svelte';
-  import Toggle from './Toggle.svelte';
-  import { INTELLIGENCE_MODE_OPTIONS } from '../lib/follow-profiles';
   import { smoothFollow, type SmoothFollowState } from '../stores/smooth-follow';
-  import type { IntelligenceMode } from '../../shared/contracts';
 
   interface Props {
     follow: SmoothFollowState;
   }
   let { follow }: Props = $props();
-
-  const assistMode = $derived(follow.assist.configuredMode);
-  const activeAssistNote = $derived(
-    INTELLIGENCE_MODE_OPTIONS.find((option) => option.value === assistMode)?.description ?? '',
-  );
 </script>
 
 <div class="follow-controls">
@@ -69,42 +60,6 @@
     </div>
   {/if}
 
-  <div class="assist">
-    <span class="mini-label" id="assist-quick-switch">Intelligent assist</span>
-    <SegmentedControl
-      size="sm"
-      label="Intelligent assist"
-      value={assistMode}
-      options={INTELLIGENCE_MODE_OPTIONS.map((option) => ({
-        value: option.value,
-        label: option.label,
-      }))}
-      onchange={(value) => smoothFollow.chooseIntelligenceMode(value as IntelligenceMode)}
-    />
-    <p class="hint">{activeAssistNote}</p>
-    {#if follow.assist.requestCount > 0}
-      <p class="hint">
-        {follow.assist.requestCount} assist {follow.assist.requestCount === 1 ? 'request' : 'requests'}
-        this session{follow.assist.tokensIn + follow.assist.tokensOut > 0
-          ? ` · ${follow.assist.tokensIn + follow.assist.tokensOut} tokens reported`
-          : ''}.
-      </p>
-    {/if}
-  </div>
-
-  <Toggle
-    checked={follow.coaching.enabled}
-    label="Coaching tips"
-    description={follow.coaching.display === 'stage_and_control'
-      ? 'Shown here and on the stage strip'
-      : 'Shown in this window only'}
-    onchange={(value) => smoothFollow.setCoachingEnabled(value)}
-  />
-
-  {#if follow.coaching.lastTip}
-    {@const tip = follow.coaching.lastTip}
-    <p class="tip">{tip.text}</p>
-  {/if}
 </div>
 
 <style>
@@ -132,21 +87,7 @@
     flex: 0 0 auto;
   }
 
-  .mini-label {
-    display: block;
-    font-size: var(--text-2xs);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: var(--ls-caps);
-    color: var(--text-muted);
-    margin-bottom: var(--space-1);
-  }
 
-  .assist {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
 
   .candidates ul {
     list-style: none;
@@ -185,16 +126,6 @@
     color: var(--text-muted);
   }
 
-  .tip {
-    margin: 0;
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg-panel);
-    font-size: var(--text-xs);
-    line-height: 1.45;
-    color: var(--text-secondary);
-  }
 
   @media (prefers-reduced-motion: reduce) {
     .candidate {

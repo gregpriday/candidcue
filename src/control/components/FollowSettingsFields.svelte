@@ -11,21 +11,15 @@
   import Select from './Select.svelte';
   import Toggle from './Toggle.svelte';
   import {
-    COACHING_DISPLAY_OPTIONS,
     FIDELITY_MODE_OPTIONS,
     FOLLOW_FEEL_OPTIONS,
-    INTELLIGENCE_FALLBACK_NOTE,
-    INTELLIGENCE_MODE_OPTIONS,
-    INTELLIGENCE_PRIVACY_NOTE,
     MOTION_PROFILE_FAMILIES,
     VOICE_LEAD_OPTIONS,
-    type CoachingDisplay,
     type FidelityMode,
     type FollowFeel,
     type FollowingSettings,
     type VoiceLead,
   } from '../lib/follow-profiles';
-  import type { IntelligenceMode } from '../../shared/contracts';
 
   interface Props {
     following: FollowingSettings;
@@ -40,10 +34,6 @@
   );
   const leadNote = $derived(
     VOICE_LEAD_OPTIONS.find((option) => option.value === following.voiceLead)?.description ?? '',
-  );
-  const assistNote = $derived(
-    INTELLIGENCE_MODE_OPTIONS.find((option) => option.value === following.intelligenceMode)
-      ?.description ?? '',
   );
   const fidelityNote = $derived(
     FIDELITY_MODE_OPTIONS.find((option) => option.value === following.fidelityMode)?.description ??
@@ -72,34 +62,6 @@
       onchange={(value) => onchange({ voiceLead: value as VoiceLead })}
     />
     <p class="hint">{leadNote} It changes prediction only, never where your words are matched.</p>
-  </div>
-
-  <div class="field">
-    <span class="mini-label">Intelligent assist</span>
-    <SegmentedControl
-      label="Intelligent assist"
-      value={following.intelligenceMode}
-      options={INTELLIGENCE_MODE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-      onchange={(value) => onchange({ intelligenceMode: value as IntelligenceMode })}
-    />
-    <p class="hint">{assistNote}</p>
-    {#if following.intelligenceMode !== 'local_only'}
-      <p class="hint">{INTELLIGENCE_PRIVACY_NOTE}</p>
-      <p class="hint">{INTELLIGENCE_FALLBACK_NOTE}</p>
-    {/if}
-  </div>
-
-  <div class="field">
-    <Select
-      label="Coaching tips"
-      value={following.coachingDisplay}
-      options={COACHING_DISPLAY_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-      onchange={(value) => onchange({ coachingDisplay: value as CoachingDisplay })}
-    />
-    <p class="hint">
-      {COACHING_DISPLAY_OPTIONS.find((o) => o.value === following.coachingDisplay)?.description ??
-        ''}
-    </p>
   </div>
 
   {#if !compact}

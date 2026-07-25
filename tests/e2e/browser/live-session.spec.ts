@@ -15,7 +15,7 @@ import { dismissAllToasts } from './fixtures/toasts';
  * ----------------------------------------------------------------------------
  * WHAT A BROWSER CAN AND CANNOT PROVE HERE — read this before adding to it.
  *
- * A genuine TAKE needs a real microphone, a WebRTC transport to api.openai.com
+ * A genuine TAKE needs a real microphone, a live Inworld transcription session
  * and the Realtime provider. None of that exists in this harness, and nothing
  * below fakes a transcription pipeline. What IS driven is the session SHELL and
  * every state it can honestly reach without audio:
@@ -188,22 +188,6 @@ test('a manual take claims no connection, no microphone and no wake word', async
  * reserves no band at all, so here the button must report that honestly rather
  * than pretending to toggle something that was never reserved.
  */
-test('the transport carries a coaching-rail toggle that is honest when there is no rail', async ({
-  page,
-}) => {
-  const errors = watchPageErrors(page);
-  await startManualTake(page);
-
-  const toggle = page
-    .locator('footer.transport')
-    .getByRole('button', { name: /coaching rail/i });
-  await expect(toggle).toHaveCount(1);
-  await expect(toggle).toHaveAccessibleName('Coaching rail — coaching is off for this take');
-  await expect(toggle).toBeDisabled();
-
-  errors.expectClean();
-});
-
 test('the transport and the outline move the reading position and tell the stage', async ({
   page,
 }, testInfo) => {

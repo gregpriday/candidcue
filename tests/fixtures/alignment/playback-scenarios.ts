@@ -139,22 +139,6 @@ export function scenarioParaphraseWithAssist(): PlaybackScenario {
   }
   const afterRead = actions.length - 1;
 
-  // The sidecar answers about `continuity:26` — a candidate the local engine
-  // minted for the sentence beginning "Let's get started…". Timestamped inside
-  // the §40.4 lifetime and stamped with the current epoch and source items, so
-  // it is genuinely accepted rather than silently discarded as stale.
-  actions.push({
-    kind: 'semantic_assist',
-    evidence: {
-      assistId: 'assist-d3',
-      epoch: 0,
-      requestRevision: 1,
-      sourceItemIds: ['item-1-1', 'item-1-2'],
-      receivedAtMs: scripter.clockMs,
-      opinions: [{ candidateId: 'continuity:26', relation: 'paraphrase', confidence: 0.85 }],
-    },
-  });
-
   // A paraphrase rather than a reading of the authored sentence.
   for (const event of scripter.speak({ text: 'let us begin with the basics right away' })) {
     actions.push({ kind: 'transcript', event });

@@ -1,11 +1,11 @@
 <!--
-  Settings (spec §18): seven sections. The OpenAI key field is one-shot and
-  masked — it submits through the secrets service and the stored key is never
-  displayed (§18.2). Privacy copy is Appendix F.18 verbatim.
+  Settings (spec §18). The Inworld key field is one-shot and masked — it
+  submits through the secrets service, is stored in the OS credential store,
+  and is never displayed or returned to JavaScript (§18.2). Privacy copy is
+  Appendix F.18 verbatim.
 -->
 <script lang="ts">
   import Button from '../components/Button.svelte';
-  import CoachingSettingsFields from '../components/CoachingSettingsFields.svelte';
   import FollowSettingsFields from '../components/FollowSettingsFields.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import Section from '../components/Section.svelte';
@@ -42,8 +42,7 @@
   import { VAD_SENSITIVITY_COPY } from '../services/settings-audio';
   import * as secretsService from '../services/secrets';
   import * as settingsService from '../services/settings';
-  import type { OpenAiKeyStatus } from '../services/secrets-types';
-  import type { CoachingSettings } from '../../shared/contracts';
+  import type { InworldKeyStatus } from '../services/secrets-types';
   import { appStatus } from '../stores/app-status';
   import { requestConfirm } from '../stores/confirm';
   import { navigate, route, type SettingsSection } from '../stores/router';
@@ -57,17 +56,15 @@
 
   const sections: Array<{ id: SettingsSection; label: string }> = [
     { id: 'general', label: 'General' },
-    { id: 'openai', label: 'OpenAI' },
+    { id: 'inworld', label: 'Speech' },
     { id: 'audio', label: 'Audio' },
     { id: 'teleprompter', label: 'Teleprompter' },
     { id: 'following', label: 'Following' },
-    { id: 'coaching', label: 'Live coaching' },
-    { id: 'commands', label: 'Commands' },
     { id: 'listeners', label: 'Listeners' },
     { id: 'privacy', label: 'Data, privacy & updates' },
   ];
 
-  let keyStatus = $state<OpenAiKeyStatus | null>(null);
+  let keyStatus = $state<InworldKeyStatus | null>(null);
   let keyField = $state('');
   let keyBusy = $state(false);
   let keyNote = $state('');
@@ -84,7 +81,7 @@
 
   $effect(() => {
     void loadSettings();
-    void secretsService.getOpenAiKeyStatus().then((status) => (keyStatus = status));
+    void secretsService.getInworldKeyStatus().then((status) => (keyStatus = status));
   });
 
   let packs = $state<ListenerPackRow[]>([]);
@@ -192,22 +189,55 @@
     keyBusy = true;
     keyNote = '';
     try {
-      const validation = await secretsService.validateOpenAiKey(candidate);
-      if (validation.status === 'valid' || validation.status === 'partial') {
-        keyStatus = await secretsService.saveOpenAiKey(candidate);
-        keyNote = 'Key saved. Realtime transcription is available.';
+      const validation = await secretsService.validateInworldKey(candidate);
+      if (validation.status === 'valid') {
+        keyStatus = await secretsService.saveInworldKey(candidate);
+        keyNote = 'Key saved. Voice tracking is ready.';
       } else if (validation.status === 'quota') {
-        keyNote = 'The key is valid, but the OpenAI project has no available quota or billing access.';
+        keyNote = 'The key is valid, but the Inworld account has no available quota.';
+      } else if (validation.status === 'network') {
+        keyNote = 'CandidCue could not reach Inworld to check the key. Check your connection and try again.';
       } else {
-        keyNote = 'OpenAI rejected this key. Check that it is active and belongs to the project you intend to bill.';
+        keyNote = validation.message ?? 'Inworld rejected this key. Check that it is active.';
       }
     } catch (err) {
       // Rust refuses the save outright when a development build is running with
-      // OPENAI_API_KEY set, and its message says so; showing it beats an
+      // INWORLD_API_KEY set, and its message says so; showing it beats an
       // unhandled rejection and a field that silently clears.
       keyNote = describeError(err);
     } finally {
       keyField = ''; // one-shot: purge the plaintext after submission
+      keyBusy = false;
+    }
+  }
+
+  /**
+   * Ask Inworld whether the stored key still works.
+   *
+   * This used to re-read the local key STATUS, which can only say "a key is
+   * stored" — the one thing the screen was already showing. A key that has
+   * been revoked since it was saved looked identical to a working one, and the
+   * first the presenter heard of it was a take that transcribed nothing. There
+   * is no command that validates the stored key without exposing it, so this
+   * round-trips through Rust's own `validate` path using the key it holds.
+   */
+  async function testKey(): Promise<void> {
+    keyBusy = true;
+    keyNote = '';
+    try {
+      const result = await secretsService.testStoredInworldKey();
+      keyNote =
+        result.status === 'valid'
+          ? 'The key works. Inworld answered.'
+          : result.status === 'quota'
+            ? 'The key is valid, but the Inworld account has no available quota.'
+            : result.status === 'network'
+              ? 'Could not reach Inworld. Check your connection and try again.'
+              : (result.message ?? 'Inworld rejected the stored key.');
+      keyStatus = await secretsService.getInworldKeyStatus();
+    } catch (err) {
+      keyNote = describeError(err);
+    } finally {
       keyBusy = false;
     }
   }
@@ -218,16 +248,16 @@
     // one is in play.
     const fromEnvironment = keyStatus?.source === 'environment';
     const accepted = await requestConfirm({
-      title: 'Remove OpenAI key?',
+      title: 'Remove Inworld key?',
       body: fromEnvironment
-        ? 'This clears the key stored in your credential store. The OPENAI_API_KEY environment variable is outside CandidCue’s reach, so voice tracking will keep using it. Your scripts are unaffected.'
-        : 'Voice tracking and smart analysis will stop until a key is added again. Your scripts are unaffected.',
+        ? 'This clears the key stored in your credential store. The INWORLD_API_KEY environment variable is outside CandidCue’s reach, so voice tracking will keep using it. Your scripts are unaffected.'
+        : 'Voice tracking will stop until a key is added again. Your scripts are unaffected.',
       confirmLabel: 'Remove key',
       danger: true,
     });
     if (!accepted) return;
-    await secretsService.deleteOpenAiKey();
-    keyStatus = await secretsService.getOpenAiKeyStatus();
+    await secretsService.deleteInworldKey();
+    keyStatus = await secretsService.getInworldKeyStatus();
     keyNote = '';
   }
 
@@ -265,18 +295,6 @@
     } catch (err) {
       showToast(describeError(err), 'danger');
     }
-  }
-
-  /**
-   * §30 / §32.2. Save a coaching change, then say out loud if a retention
-   * purge failed. Turning a retention toggle off promises the user that what
-   * earlier takes stored is gone; if the deletion failed, telling them nothing
-   * would leave them believing a promise CandidCue did not keep.
-   */
-  async function saveCoaching(patch: Partial<CoachingSettings>): Promise<void> {
-    await patchSettings('coaching', patch);
-    const failure = settingsService.takeRetentionPurgeFailure();
-    if (failure) showToast(failure, 'danger');
   }
 
   async function runExportAllData(): Promise<void> {
@@ -369,10 +387,10 @@
             onchange={(value) => void patchSettings('general', { confirmEndSession: value })}
           />
         </Section>
-      {:else if section === 'openai'}
+      {:else if section === 'inworld'}
         <Section
-          title="OpenAI"
-          description="CandidCue is bring-your-own-key. Your key is stored in your operating system's secure credential store and is used directly from this app."
+          title="Speech"
+          description="CandidCue transcribes with Inworld and is bring-your-own-key. The key is stored in your operating system's secure credential store and is read only by CandidCue's backend — it never reaches the app's interface, and the transcription connection is made from there."
         >
           {#snippet actions()}
             {#if keyStatus?.present}
@@ -387,7 +405,7 @@
 
           {#if keyStatus?.source === 'environment'}
             <p class="hint-line">
-              This development build is using the key from the <code>OPENAI_API_KEY</code>
+              This development build is using the key from the <code>INWORLD_API_KEY</code>
               environment variable. It takes precedence over the credential store, so a key saved
               here would have no effect until you unset it.
             </p>
@@ -397,8 +415,8 @@
             <div class="key-row">
               <span class="key-mask">••••••••{keyStatus.lastFour ?? '····'}</span>
               <div class="row-actions">
-                <Button size="sm" onclick={() => void secretsService.getOpenAiKeyStatus().then((s) => (keyStatus = s))}>
-                  Test key
+                <Button size="sm" disabled={keyBusy} onclick={() => void testKey()}>
+                  {keyBusy ? 'Checking…' : 'Test key'}
                 </Button>
                 <Button variant="danger" size="sm" onclick={() => removeKey()}>Remove</Button>
               </div>
@@ -411,55 +429,45 @@
             <TextField
               bind:value={keyField}
               type="password"
-              label="OpenAI API key"
-              placeholder="sk-…"
-              hint="Voice tracking uses OpenAI Realtime transcription. Smart command interpretation and vocabulary analysis use GPT-5.6 Luna."
+              label="Inworld API key"
+              placeholder="Paste your Inworld key"
+              hint="Used for streaming speech-to-text while you present. Nothing else is sent."
               onsubmit={() => void submitKey()}
             />
             <div class="row-actions">
               <Button variant="primary" disabled={keyBusy || keyField.trim() === ''} onclick={() => submitKey()}>
                 {keyBusy ? 'Validating…' : 'Validate and save'}
               </Button>
-              <Button variant="ghost" onclick={() => openExternal('https://platform.openai.com/api-keys')}>
-                OpenAI API keys
+              <Button variant="ghost" onclick={() => openExternal('https://platform.inworld.ai/')}>
+                Inworld dashboard
               </Button>
             </div>
             {#if keyNote}<p class="hint-line">{keyNote}</p>{/if}
           </div>
 
           <Select
-            label="Realtime transcription model (advanced)"
-            value={$settings.openai.realtimeModel}
-            options={[{ value: 'gpt-realtime-whisper', label: 'gpt-realtime-whisper (default)' }]}
-            onchange={(value) => void patchSettings('openai', { realtimeModel: value })}
+            label="Transcription model"
+            value={$settings.inworld.transcriptionModel}
+            options={[{ value: 'inworld/inworld-stt-1', label: 'inworld-stt-1 (default)' }]}
+            onchange={(value) => void patchSettings('inworld', { transcriptionModel: value })}
           />
           <Select
-            label="Command model"
-            value={$settings.openai.commandModel}
-            options={[{ value: 'gpt-5.6-luna', label: 'gpt-5.6-luna (default)' }]}
-            onchange={(value) => void patchSettings('openai', { commandModel: value })}
-          />
-          <Toggle
-            checked={$settings.openai.scriptAnalysis}
-            label="Smart vocabulary analysis"
-            description="Send unusual terms and limited context to GPT-5.6 Luna when preparing a script"
-            onchange={(value) => void patchSettings('openai', { scriptAnalysis: value })}
-          />
-          <Toggle
-            checked={$settings.openai.commandFallback}
-            label="Natural-language command fallback"
-            description="Send ambiguous command phrases to GPT-5.6 Luna"
-            onchange={(value) => void patchSettings('openai', { commandFallback: value })}
-          />
-          <Toggle
-            checked={true}
-            disabled
-            label="Do not store API responses (store: false)"
-            description="Fixed on. CandidCue asks OpenAI not to retain Responses API requests."
+            label="Spoken language"
+            value={$settings.inworld.language}
+            options={[
+              { value: 'en-US', label: 'English (United States)' },
+              { value: 'en-GB', label: 'English (United Kingdom)' },
+              { value: 'en-AU', label: 'English (Australia)' },
+              { value: 'es-ES', label: 'Spanish (Spain)' },
+              { value: 'fr-FR', label: 'French (France)' },
+              { value: 'de-DE', label: 'German (Germany)' },
+              { value: 'pt-BR', label: 'Portuguese (Brazil)' },
+            ]}
+            onchange={(value) => void patchSettings('inworld', { language: value })}
           />
           <p class="hint-line">
-            Usage is billed by OpenAI at their published realtime and model rates. Rates can change
-            — check your OpenAI dashboard for current pricing.
+            Audio is streamed to Inworld only while a take is running, and only the words that come
+            back are used. Usage is billed by Inworld at their published rates.
           </p>
         </Section>
       {:else if section === 'audio'}
@@ -584,57 +592,6 @@
             following={$settings.following}
             onchange={(patch) => void patchSettings('following', patch)}
           />
-        </Section>
-      {:else if section === 'coaching'}
-        <Section
-          title="Live coaching"
-          description="What CandidCue tells you about your delivery while you read, and what it keeps afterwards. Coaching never moves the script — it only ever comments on it."
-        >
-          <CoachingSettingsFields
-            coaching={$settings.coaching}
-            transcriptRetention={$settings.privacy.saveTranscript}
-            onchange={(patch) => void saveCoaching(patch)}
-          />
-        </Section>
-      {:else if section === 'commands'}
-        <Section title="Commands">
-          <Toggle
-            checked={$settings.commands.enabled}
-            label="Voice commands"
-            onchange={(value) => void patchSettings('commands', { enabled: value })}
-          />
-          <TextField
-            value={$settings.commands.wakePhrase}
-            label="Wake phrase"
-            oninput={(value) => void patchSettings('commands', { wakePhrase: value })}
-          />
-          <TextField
-            value={$settings.commands.wakeAliases.join(', ')}
-            label="Accepted wake aliases"
-            hint="Comma-separated variants the transcriber may hear, e.g. “candy cue”."
-            oninput={(value) =>
-              void patchSettings('commands', {
-                wakeAliases: value
-                  .split(',')
-                  .map((s) => s.trim())
-                  .filter(Boolean),
-              })}
-          />
-          <Toggle
-            checked={$settings.commands.strictWake}
-            label="Strict mode"
-            description="Commands require the wake phrase"
-            onchange={(value) => void patchSettings('commands', { strictWake: value })}
-          />
-          <div class="command-examples">
-            <p class="hint-line">Examples:</p>
-            <ul class="examples">
-              <li>“CandidCue, start” · “CandidCue, pause” · “CandidCue, resume”</li>
-              <li>“CandidCue, go to chapter one” · “CandidCue, go to pricing”</li>
-              <li>“CandidCue, restart this paragraph” · “CandidCue, retake”</li>
-              <li>“CandidCue, bigger text” · “CandidCue, blank the screen”</li>
-            </ul>
-          </div>
         </Section>
       {:else if section === 'listeners'}
         <Section

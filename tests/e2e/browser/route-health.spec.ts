@@ -27,12 +27,10 @@ const SCRIPT = {
 
 const SETTINGS_SECTIONS = [
   'General',
-  'OpenAI',
+  'Speech',
   'Audio',
   'Teleprompter',
   'Following',
-  'Live coaching',
-  'Commands',
   'Listeners',
   'Data, privacy & updates',
 ] as const;

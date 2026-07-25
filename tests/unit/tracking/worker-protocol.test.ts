@@ -114,28 +114,6 @@ describe('tracking worker protocol (§45.4)', () => {
     expect(outbox.filter((m) => m.type === 'semantic_frame').length).toBeGreaterThan(0);
   });
 
-  it('accepts bounded semantic assist without moving the cursor (§40)', () => {
-    outbox.length = 0;
-    dispatch({ type: 'move_to_token', tokenIndex: 30, movement: 'manual', nowMs: 30_000 });
-    outbox.length = 0;
-    dispatch({
-      type: 'semantic_assist',
-      evidence: {
-        assistId: 'a1',
-        // The engine's epoch advanced with the manual move, so this stale
-        // payload must be discarded rather than scored.
-        epoch: 0,
-        requestRevision: 1,
-        sourceItemIds: [],
-        receivedAtMs: 30_100,
-        opinions: [{ candidateId: 'continuity:120', relation: 'near_exact', confidence: 1 }],
-      },
-    });
-    expect(outbox.filter((m) => m.type === 'error')).toEqual([]);
-    dispatch({ type: 'tick', nowMs: 30_200 });
-    const message = outbox.filter((m) => m.type === 'semantic_frame').at(-1);
-    if (message?.type === 'semantic_frame') expect(message.frame.tokenIndex).toBeLessThan(120);
-  });
 
   it('acknowledges a rebuilt line map (§7.2)', () => {
     outbox.length = 0;

@@ -147,18 +147,8 @@ describe('“why did it move?” records (§65)', () => {
     expect(explanation.detail).toContain('authorized by you');
     expect(explanation.detail).toContain('0.71');
     expect(explanation.detail).toContain('0.18');
-    expect(explanation.detail).toContain('no assist input');
   });
 
-  it('reports semantic assist only when the record carries it', () => {
-    const withAssist = describeMovement(
-      record({ semanticAssistRelation: 'paraphrase', semanticAssistInfluence: 0.12 }),
-    );
-    expect(withAssist.detail).toContain('paraphrase');
-    expect(withAssist.detail).toContain('influence 0.12');
-    expect(withAssist.facts.some((f) => f.label === 'Assist')).toBe(true);
-    expect(describeMovement(record()).facts.some((f) => f.label === 'Assist')).toBe(false);
-  });
 
   it('calls out a blocked section gate', () => {
     const blocked = describeMovement(record({ sectionGate: 'blocked' }));

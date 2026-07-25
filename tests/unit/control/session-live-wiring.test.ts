@@ -250,7 +250,6 @@ describe('C11 — transcript retention follows the setting Rust decided (§36.2)
         audioEndMs?: number;
         transcript: string;
       }) => void;
-      onMaskItems: (ids: string[]) => void;
     };
     deps.onTranscriptItem?.({
       itemId: 'item_a1',
@@ -266,8 +265,6 @@ describe('C11 — transcript retention follows the setting Rust decided (§36.2)
       audioEndMs: 4100,
       transcript: 'CandidCue, next section.',
     });
-    // The command channel consumed the second phrase (§33.4).
-    deps.onMaskItems(['item_a2']);
   }
 
   it('persists finalized items when the session was started with retention on', () => {
@@ -291,8 +288,10 @@ describe('C11 — transcript retention follows the setting Rust decided (§36.2)
       transcript: 'Good morning, everyone.',
       disposition: 'script',
     });
-    // A phrase the command channel consumed is a command, not performed script.
-    expect(items[1]).toMatchObject({ commitSequence: 2, disposition: 'command' });
+    // Everything the recogniser returns is performed script now: with no
+    // command channel there is nothing else it could be, and the column keeps
+    // its vocabulary so an older row still reads correctly.
+    expect(items[1]).toMatchObject({ commitSequence: 2, disposition: 'script' });
   });
 
   it('persists nothing at all when the user has retention off', () => {

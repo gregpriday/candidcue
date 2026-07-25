@@ -77,24 +77,6 @@
 
   const bandIndex = $derived(confidenceBandIndex(follow.band));
 
-  const assist = $derived.by((): { tone: PillTone; label: string } => {
-    const mode = follow.assist.effectiveMode;
-    switch (follow.assist.state) {
-      case 'off':
-        return { tone: 'neutral', label: 'Assist off' };
-      case 'waiting':
-        return { tone: 'accent', label: 'Assist working' };
-      case 'backing_off':
-        return { tone: 'warning', label: 'Assist backing off' };
-      case 'unavailable':
-        return { tone: 'warning', label: 'Assist unavailable' };
-      case 'limit_reached':
-        return { tone: 'warning', label: 'Assist limit reached' };
-      default:
-        return { tone: 'accent', label: mode === 'enhanced' ? 'Assist enhanced' : 'Assist balanced' };
-    }
-  });
-
   const stateTone = $derived(followStateTone(follow.state));
 </script>
 
@@ -103,7 +85,6 @@
     <p class="status {follow.followingPaused ? 'neutral' : stateTone}" role="status" aria-live="polite">
       {statusLine}
     </p>
-    <StatusPill tone={assist.tone} label={assist.label} />
   </div>
 
   {#if statusDetail}

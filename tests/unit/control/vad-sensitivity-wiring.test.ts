@@ -6,11 +6,16 @@
  *   settings → `startLiveSession` → `VoiceSessionPipeline`   (asserted live)
  *   `VoiceSessionPipeline` → `MicrophoneMonitor`             (asserted on source)
  *
- * The second is a source assertion on purpose: the monitor is constructed inside
- * the transport's `acquireMicrophone` callback, which cannot run in node without
- * a real `getUserMedia`, and the failure this guards against is precisely the
- * one the feature started in — a value carried faithfully to the last call site
- * and then not passed.
+ * The second is a source assertion on purpose: the monitor is constructed
+ * inside `acquireMicrophone`, which cannot run in node without a real
+ * `getUserMedia`, and the failure this guards against is precisely the one the
+ * feature started in — a value carried faithfully to the last call site and
+ * then not passed.
+ *
+ * What this no longer asserts: that the sensitivity gates what is SENT. It
+ * does not. Inworld endpoints server-side, so the local detector drives the
+ * meter and the dead-input check only — a threshold that could silence a word
+ * on its way to the recogniser is the thing this app removed.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -146,16 +151,12 @@ describe('§28.4 the pipeline hands it to the monitor', () => {
     expect(constructions.length).toBe(1);
 
     /*
-     * The derivation moved one line up — the resolved config is now computed
-     * before the monitor is built, so the connect trace can report the gate
-     * the VAD is ACTUALLY running on rather than the defaults. The property
-     * this test exists for is unchanged and is still asserted in two halves:
-     * the sensitivity must be turned into a config, and THAT config must be
-     * what the monitor receives. Asserting only the first would pass with the
-     * result thrown away.
+     * Asserted in two halves, because either alone passes with the feature
+     * broken: the sensitivity must be turned into a config, and THAT config
+     * must be the one the monitor receives. A derivation whose result is
+     * dropped is the exact shape of the original defect.
      */
-    expect(source).toContain('vadConfigForSensitivity(this.deps.vadSensitivity)');
-    expect(source).toMatch(/const resolvedVad = \{[\s\S]*?vadConfigForSensitivity/);
-    expect(constructions[0]).toContain('vadConfig: resolvedVad');
+    expect(constructions[0]).toContain('vadConfigForSensitivity(this.deps.vadSensitivity)');
+    expect(constructions[0]).toContain('vadConfig:');
   });
 });

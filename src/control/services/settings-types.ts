@@ -2,15 +2,10 @@
  * Validated application-settings view consumed by the Settings screen
  * (spec §18) and defaults used until `get_settings` lands in Rust.
  */
-import { defaultCoachingSettings } from '../lib/coaching-profiles';
 import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
 import { defaultListenerSettings } from './settings-listener';
-import type { CoachingSettings } from '../../shared/contracts';
-
-export type { CoachingSettings };
 
 export type {
-  CoachingDisplay,
   FidelityMode,
   FollowFeel,
   FollowingSettings,
@@ -31,13 +26,17 @@ export interface AppSettings {
     restoreWindows: boolean;
     confirmEndSession: boolean;
   };
-  openai: {
-    realtimeModel: string;
-    commandModel: string;
-    scriptAnalysis: boolean;
-    commandFallback: boolean;
-    /** `store: false` is fixed on for Responses requests (spec §18.2). */
-    storeResponses: false;
+  /**
+   * Inworld speech-to-text (spec §18.2). The API key is not here and never
+   * crosses into JavaScript: it lives in the OS credential store and is read
+   * only by Rust, which owns the socket. What the UI holds is the choice of
+   * model and locale.
+   */
+  inworld: {
+    /** Inworld model id, e.g. `inworld/inworld-stt-1`. */
+    transcriptionModel: string;
+    /** BCP-47 tag the recogniser is told to expect, e.g. `en-US`. */
+    language: string;
   };
   audio: {
     preferredDeviceId?: string;
@@ -47,10 +46,11 @@ export interface AppSettings {
     autoGainControl: boolean;
     /**
      * §28.4, 0-1, 0.5 = the A.6 defaults. The one Rust-owned field in this
-     * section: it decides how often the local VAD commits audio to the Realtime
-     * API on the user's key, so it may not live in an overlay a cleared browser
-     * store resets. Everything else here is per-machine capture state.
-     * See services/settings-audio.ts.
+     * section. It no longer gates what is sent — Inworld endpoints server-side
+     * — but it decides where the meter says the microphone can hear you and
+     * when the dead-input detector gives up, which is room tuning worth
+     * outliving a cleared browser store. Everything else here is per-machine
+     * capture state. See services/settings-audio.ts.
      */
     vadSensitivity: number;
     /**
@@ -89,20 +89,6 @@ export interface AppSettings {
    * `lib/follow-profiles.ts` rather than exposing control-system parameters.
    */
   following: FollowingSettings;
-  /**
-   * Live-coaching controls (companion §30). Rust-owned in both directions, like
-   * `following`: two of these are retention consents (§32.2) and one decides
-   * whether the precision-transcription queue spends the user's OpenAI key
-   * (§29.3), so none of them may live in a localStorage overlay that a profile
-   * reset can silently return to its default.
-   */
-  coaching: CoachingSettings;
-  commands: {
-    enabled: boolean;
-    wakePhrase: string;
-    wakeAliases: string[];
-    strictWake: boolean;
-  };
   /**
    * Listener defaults (§37, §46.7). Rust-owned in both directions, and an exact
    * twin of `settings::ListenerSettings` — this section and the Rust struct
@@ -182,12 +168,9 @@ export function defaultAppSettings(): AppSettings {
       restoreWindows: true,
       confirmEndSession: true,
     },
-    openai: {
-      realtimeModel: 'gpt-realtime-whisper',
-      commandModel: 'gpt-5.6-luna',
-      scriptAnalysis: true,
-      commandFallback: true,
-      storeResponses: false,
+    inworld: {
+      transcriptionModel: 'inworld/inworld-stt-1',
+      language: 'en-US',
     },
     audio: {
       followSystemDefault: true,
@@ -213,13 +196,6 @@ export function defaultAppSettings(): AppSettings {
       hidePointer: true,
     },
     following: defaultFollowingSettings(),
-    coaching: defaultCoachingSettings(),
-    commands: {
-      enabled: true,
-      wakePhrase: 'CandidCue',
-      wakeAliases: ['candy cue', 'candid q'],
-      strictWake: true,
-    },
     listeners: defaultListenerSettings(),
     privacy: {
       diagnosticLogging: false,

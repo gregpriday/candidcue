@@ -17,21 +17,11 @@ import { describeError, errorCode } from './errors';
 import { ipcInvoke, isTauriRuntime, BackendUnavailableError } from './ipc';
 import { mockSettings } from './mock-backend';
 import {
-  RETENTION_PURGE_FAILURE,
-  revokedRetentions,
-  runRetentionRevocation,
-} from './settings-retention';
-import {
   audioToRustPatch,
   vadSensitivityFromRust,
   RUST_OWNED_AUDIO_KEYS,
   type RustAudioSettings,
 } from './settings-audio';
-import {
-  coachingFromRust,
-  coachingToRustPatch,
-  type RustCoachingSettings,
-} from './settings-coaching';
 import {
   followingFromRust,
   followingToRustPatch,
@@ -79,20 +69,13 @@ interface RustSettings {
     blankColor: string;
   };
   /**
-   * §28.3/§28.4. `vadSensitivity` is the only field here the UI owns a control
-   * for; the others are read for the model name. See settings-audio.ts.
+   * §28.3/§28.4. `vadSensitivity` is the only field here the UI owns a slider
+   * for; the model and locale are what the Rust session's config frame is
+   * built from. See settings-audio.ts.
    */
-  audio: Partial<RustAudioSettings> & { transcriptionModel: string };
-  commands: {
-    wakePhrase: string;
-    wakeMode: string;
-    lunaFallback: boolean;
-    commandModel: string;
-  };
+  audio: Partial<RustAudioSettings> & { transcriptionModel: string; language: string };
   /** Companion §47 — absent in documents written before the section existed. */
   following?: Partial<RustFollowingSettings>;
-  /** Companion §30 — likewise absent in older documents. */
-  coaching?: Partial<RustCoachingSettings>;
   /**
    * §37 Listener defaults. This used to be `Record<string, unknown>` — an
    * opaque bag on the TypeScript side while Rust declared five typed fields —
@@ -153,15 +136,13 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       launchBehavior: rust.general.openTo === 'last_script' ? 'recent' : 'library',
       defaultSessionMode: toSessionMode(rust.stageBehavior.promptMode),
     },
-    openai: {
-      ...defaults.openai,
-      realtimeModel: rust.audio.transcriptionModel,
-      commandModel: rust.commands.commandModel,
-      commandFallback: rust.commands.lunaFallback,
+    inworld: {
+      transcriptionModel: rust.audio.transcriptionModel,
+      language: rust.audio.language,
     },
-    // §28.4. Rust-owned like `following`: it decides how often the local VAD
-    // commits audio to the Realtime API on the user's key, so a stale overlay
-    // must not be able to contradict the persisted document.
+    // §28.4. Rust-owned like `following`: it is room tuning that must outlive
+    // a cleared browser store, so a stale overlay must not be able to
+    // contradict the persisted document.
     audio: {
       ...defaults.audio,
       vadSensitivity: vadSensitivityFromRust(rust.audio),
@@ -175,20 +156,11 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     // Following settings are Rust-owned end to end (§47) — no overlay merge,
     // so a stale local overlay can never resurrect an old assist mode.
     following: followingFromRust(rust.following),
-    // §30. Rust-owned end to end for the same reason, with the addition that
-    // two of these are §32.2 retention consents — a stale overlay must never be
-    // able to claim the user consented to keeping audio.
-    coaching: coachingFromRust(rust.coaching),
     // §37. Rust-owned end to end for the same reason: these are the values the
     // stage renders from, and a localStorage copy that outlived the document
     // would put the UI and the glass in disagreement about what the Listener
     // looks like.
     listeners: listenerFromRust(rust.listener),
-    commands: {
-      ...defaults.commands,
-      wakePhrase: rust.commands.wakePhrase,
-      strictWake: rust.commands.wakeMode === 'strict',
-    },
     privacy: {
       ...defaults.privacy,
       saveTranscript: toTranscriptRetention(rust.general.saveTranscript),
@@ -198,7 +170,10 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
   return {
     ...mapped,
     general: mergeSection(mapped.general, overlay.general),
-    openai: mergeSection(mapped.openai, overlay.openai),
+    // Inworld model and locale are Rust-owned: they are what the config frame
+    // is built from, and an overlay disagreeing with the document would mean
+    // the session declares one language and the settings screen shows another.
+    inworld: mapped.inworld,
     // The device id and the three processing toggles are per-machine capture
     // state and overlay; `vadSensitivity` is Rust-owned and wins (§28.4).
     audio: {
@@ -206,7 +181,6 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       vadSensitivity: mapped.audio.vadSensitivity,
     },
     teleprompter: mergeSection(mapped.teleprompter, overlay.teleprompter),
-    commands: mergeSection(mapped.commands, overlay.commands),
     // `saveTranscript` is Rust-owned (§36.2): a stale local overlay must never
     // be able to claim retention is on when the persisted document says off.
     privacy: {
@@ -244,16 +218,14 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
   if (patch.audio) {
     // §28.4 — the missing half of the mapping. The slider persisted in the
     // localStorage overlay only, so the sensitivity a presenter tuned for their
-    // room could not survive a cleared store and the backend that bills the key
-    // could not see what commit cadence it was paying for.
+    // room could not survive a cleared store.
     for (const [key, value] of Object.entries(audioToRustPatch(patch.audio))) {
       put('audio', key, value);
     }
   }
-  if (patch.openai) {
-    put('audio', 'transcriptionModel', patch.openai.realtimeModel);
-    put('commands', 'commandModel', patch.openai.commandModel);
-    put('commands', 'lunaFallback', patch.openai.commandFallback);
+  if (patch.inworld) {
+    put('audio', 'transcriptionModel', patch.inworld.transcriptionModel);
+    put('audio', 'language', patch.inworld.language);
   }
   if (patch.teleprompter) {
     put('stageBehavior', 'horizontalMirror', patch.teleprompter.mirrorX);
@@ -266,22 +238,10 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     const following = followingToRustPatch(patch.following);
     for (const [key, value] of Object.entries(following)) put('following', key, value);
   }
-  if (patch.coaching) {
-    const coaching = coachingToRustPatch(patch.coaching);
-    // `put` drops `undefined` but keeps `null`, which is what clearing a target
-    // duration or a goal threshold has to send (see settings-coaching.ts).
-    for (const [key, value] of Object.entries(coaching)) put('coaching', key, value);
-  }
   if (patch.listeners) {
     const listener = listenerToRustPatch(patch.listeners);
     // `put` keeps `null`, which is what clearing `defaultPackId` has to send.
     for (const [key, value] of Object.entries(listener)) put('listener', key, value);
-  }
-  if (patch.commands) {
-    put('commands', 'wakePhrase', patch.commands.wakePhrase);
-    if (patch.commands.strictWake !== undefined) {
-      put('commands', 'wakeMode', patch.commands.strictWake ? 'strict' : 'double_gate');
-    }
   }
   if (patch.privacy) {
     // §36.2 — the missing half of the mapping. Without it the setting that
@@ -293,7 +253,7 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
 
 /**
  * Everything in the patch persists in the overlay so the UI view sticks —
- * except `following` (§47), `coaching` (§30) and `listeners` (§37), which are
+ * except `following` (§47), `inworld` (§18.2) and `listeners` (§37), which are
  * Rust-owned in both directions, and the individual Rust-owned fields inside
  * otherwise-overlaid sections (`privacy.saveTranscript` §36.2,
  * `audio.vadSensitivity` §28.4). A cached copy of a retention consent is
@@ -303,7 +263,7 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
   for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
     if (key === 'revision' || key === 'schemaVersion') continue;
-    if (key === 'following' || key === 'coaching' || key === 'listeners') continue;
+    if (key === 'following' || key === 'inworld' || key === 'listeners') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
     // Rust-owned fields never enter the overlay (§28.4, §36.2, §47) — a cached
@@ -353,37 +313,7 @@ export async function updateSettings(
     patch: rustPatch,
   });
 
-  /*
-   * §32.2. A retention toggle that is off must remove what earlier takes left,
-   * not merely stop future writes — the rule `ReportStore` applies per session,
-   * applied here across all of them. Run after the write succeeds, so a failed
-   * save never deletes anything, and report a failed purge rather than letting
-   * the user believe the data is gone (see settings-retention.ts).
-   */
-  const revocation = await runRetentionRevocation(patch);
-  const firstFailure = revocation.failed[0];
-  if (firstFailure) {
-    lastRetentionPurgeFailure = RETENTION_PURGE_FAILURE[firstFailure.kind];
-  } else if (revokedRetentions(patch).length > 0) {
-    lastRetentionPurgeFailure = null;
-  }
-
   return fromRust(revisioned);
-}
-
-/**
- * The message for the most recent failed retention purge, or `null`.
- *
- * Read by the settings screen after a save. It is not thrown, because the
- * settings write itself succeeded and reverting the UI would be a lie in the
- * other direction; but it is not swallowed either.
- */
-let lastRetentionPurgeFailure: string | null = null;
-
-export function takeRetentionPurgeFailure(): string | null {
-  const message = lastRetentionPurgeFailure;
-  lastRetentionPurgeFailure = null;
-  return message;
 }
 
 /**

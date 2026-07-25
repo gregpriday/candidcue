@@ -14,8 +14,6 @@ import type {
   TrackingSnapshot,
   StageDirective,
   StageHeartbeatPayload,
-  StageCoachTip,
-  CoachRailState,
 } from '../../shared/contracts';
 
 export type StagePhase = 'handshake' | 'ready' | 'live' | 'frozen' | 'blank';
@@ -48,24 +46,6 @@ export interface StageAppState {
   blanked: boolean;
   keepListenerWhenBlanked: boolean;
   ack: StageAckState | null;
-  /** At most one coach tip is ever held (companion A.5). */
-  coachTip: StageCoachTip | null;
-  /**
-   * §27. The latest Coaching Rail snapshot, or `null` before the first one.
-   * The rail renders this directly and can never influence motion (§5.2).
-   */
-  coachRail: CoachRailState | null;
-  /** Highest `stageRevision` applied; a lower one is stale, not a correction. */
-  lastCoachRailRevision: number | null;
-  /**
-   * §7.1. Whether the script must reserve the rail's band. Latched true the
-   * first time a snapshot arrives — which happens at session start, before the
-   * take — and never cleared within a generation, because reclaiming the band
-   * mid-take would move the reading line under the presenter. `off` mode never
-   * publishes, so it never latches: `off` is the only zero-inset case, decided
-   * pre-take exactly as §7.1 requires.
-   */
-  coachRailReserved: boolean;
   calibration: StageCalibrationState;
   diagnostics: boolean;
   lastHeartbeat: { revision: number; receivedAtMs: number } | null;
@@ -77,7 +57,6 @@ export type StageAction =
   | { type: 'tracking'; snapshot: TrackingSnapshot }
   | { type: 'directive'; stageGeneration: number; directive: StageDirective }
   | { type: 'heartbeat'; payload: StageHeartbeatPayload; receivedAtMs: number }
-  | { type: 'coach_rail'; snapshot: CoachRailState }
   | { type: 'control_lost' };
 
 export function initialStageState(): StageAppState {
@@ -93,10 +72,6 @@ export function initialStageState(): StageAppState {
     blanked: false,
     keepListenerWhenBlanked: false,
     ack: null,
-    coachTip: null,
-    coachRail: null,
-    lastCoachRailRevision: null,
-    coachRailReserved: false,
     calibration: { active: false, crosshairX: 0.5, crosshairY: 0.38 },
     diagnostics: false,
     lastHeartbeat: null,
@@ -132,14 +107,6 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
         lastTrackingRevision: newGeneration ? null : state.lastTrackingRevision,
         frozen: newGeneration ? false : state.frozen,
         frozenReason: newGeneration ? null : state.frozenReason,
-        coachTip: newGeneration ? null : state.coachTip,
-        // A new generation is a new stage lifetime: the rail, its revision
-        // watermark, and the reserved-band latch all start fresh. A
-        // same-generation re-send keeps them, so a document refresh never
-        // reflows the reserved band mid-take.
-        coachRail: newGeneration ? null : state.coachRail,
-        lastCoachRailRevision: newGeneration ? null : state.lastCoachRailRevision,
-        coachRailReserved: newGeneration ? false : state.coachRailReserved,
       };
     }
 
@@ -175,7 +142,6 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
             ...state,
             blanked: d.blanked,
             keepListenerWhenBlanked: d.keepListener ?? state.keepListenerWhenBlanked,
-            coachTip: d.blanked ? null : state.coachTip,
           };
         case 'freeze':
           return {
@@ -207,35 +173,9 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
           };
         case 'diagnostics':
           return { ...state, diagnostics: d.visible };
-        case 'coach':
-          // Blanked stage never shows coaching; the strip is a presenter aid,
-          // not a status light (§3.7).
-          return { ...state, coachTip: state.blanked ? null : d.tip };
         default:
           return state;
       }
-    }
-
-    case 'coach_rail': {
-      const snap = action.snapshot;
-      // Validate on arrival rather than trusting the sender (§27):
-      //   1. no session yet, or a snapshot for a different session, is ignored;
-      //   2. a revision not strictly greater than the last applied is stale —
-      //      out-of-order delivery is normal, and a lower revision is not a
-      //      correction.
-      if (!state.envelope || snap.sessionId !== state.envelope.sessionId) return state;
-      if (state.lastCoachRailRevision !== null && snap.stageRevision <= state.lastCoachRailRevision) {
-        return state;
-      }
-      return {
-        ...state,
-        coachRail: snap,
-        lastCoachRailRevision: snap.stageRevision,
-        // §7.1: reserve the band on the first accepted snapshot and never give
-        // it back within this generation. `visible: false` fades the contents;
-        // it does not reclaim the space.
-        coachRailReserved: true,
-      };
     }
 
     case 'heartbeat': {

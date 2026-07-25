@@ -36,7 +36,7 @@ export interface VoiceFacade {
    * therefore never triggers the OS prompt.
    */
   watchMicrophonePermission(cb: (state: MicPermissionState) => void): Unsubscribe;
-  /** Local level meter; responds before any OpenAI call (spec §14.2 C). */
+  /** Local level meter; responds before anything is streamed (spec §14.2 C). */
   /**
    * §28.4. `vadSensitivity` is the user's 0–1 slider; omitted means the A.6
    * defaults. It is on this seam so the Preflight meter shows the same

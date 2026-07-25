@@ -8,8 +8,6 @@
 <script lang="ts">
   import { tick, untrack } from 'svelte';
   import Button from '../components/Button.svelte';
-  import CalibrationPreview from '../components/CalibrationPreview.svelte';
-  import CoachingSettingsFields from '../components/CoachingSettingsFields.svelte';
   import Disclosure from '../components/Disclosure.svelte';
   import FollowSettingsFields from '../components/FollowSettingsFields.svelte';
   import Icon from '../components/Icon.svelte';
@@ -64,10 +62,8 @@
   } from './preflight-mic-test';
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
-  import type { OpenAiKeyStatus } from '../services/secrets-types';
-  import { takeRetentionPurgeFailure } from '../services/settings';
+  import type { InworldKeyStatus } from '../services/secrets-types';
   import { VAD_SENSITIVITY_COPY } from '../services/settings-audio';
-  import type { CoachingSettings } from '../../shared/contracts';
   import type { SessionMode } from '../services/settings-types';
   import type { ListenerPlacementMode, ListenerStageSelection } from '../../shared/contracts';
   import { compiled, requestCompile } from '../stores/compiled';
@@ -122,15 +118,15 @@
   let stageError = $state<string | null>(null);
   let micError = $state<string | null>(null);
   let scriptError = $state<string | null>(null);
-  let openAiError = $state<string | null>(null);
+  let speechKeyError = $state<string | null>(null);
   let startError = $state<string | null>(null);
   let fullscreen = $state(true);
   let mirrorX = $state(false);
   let mirrorY = $state(false);
   let starting = $state(false);
 
-  /* ------------------------------------------------------------- openai */
-  let keyStatus = $state<OpenAiKeyStatus | null>(null);
+  /* ------------------------------------------------------------- speech */
+  let keyStatus = $state<InworldKeyStatus | null>(null);
   let keyField = $state('');
   let keyBusy = $state(false);
   let keyMessage = $state<{ tone: PillTone; text: string } | null>(null);
@@ -382,18 +378,18 @@
     await runCheck({
       isStale: () => generation !== loadGeneration,
       onStart: () => {
-        openAiError = null;
-        updatePreflight({ openai: 'checking' });
+        speechKeyError = null;
+        updatePreflight({ speech: 'checking' });
       },
-      run: () => secretsService.getOpenAiKeyStatus(),
+      run: () => secretsService.getInworldKeyStatus(),
       onSuccess: (status) => {
         keyStatus = status;
-        updatePreflight({ openai: openAiStatusToCheck(status) });
+        updatePreflight({ speech: speechKeyStatusToCheck(status) });
       },
       onFailure: (err) => {
         keyStatus = null;
-        updatePreflight({ openai: 'blocked' });
-        openAiError = `CandidCue could not check the OpenAI connection. ${describeError(err)}`;
+        updatePreflight({ speech: 'blocked' });
+        speechKeyError = `CandidCue could not check the Inworld connection. ${describeError(err)}`;
       },
     });
   }
@@ -628,7 +624,7 @@
     return unsub;
   });
 
-  function openAiStatusToCheck(status: OpenAiKeyStatus | null): CheckStatus {
+  function speechKeyStatusToCheck(status: InworldKeyStatus | null): CheckStatus {
     if (!status || !status.present) return 'blocked';
     switch (status.state) {
       case 'connected':
@@ -798,37 +794,31 @@
     if (!candidate) return;
     keyBusy = true;
     keyMessage = null;
-    updatePreflight({ openai: 'checking' });
+    updatePreflight({ speech: 'checking' });
     try {
-      const validation = await secretsService.validateOpenAiKey(candidate);
+      const validation = await secretsService.validateInworldKey(candidate);
       if (validation.status === 'valid') {
-        keyStatus = await secretsService.saveOpenAiKey(candidate);
-        keyMessage = { tone: 'success', text: 'Key saved. Realtime transcription is available.' };
+        keyStatus = await secretsService.saveInworldKey(candidate);
+        keyMessage = { tone: 'success', text: 'Key saved. Voice tracking is ready.' };
         replacingKey = false;
-      } else if (validation.status === 'partial') {
-        keyStatus = await secretsService.saveOpenAiKey(candidate);
-        keyMessage = {
-          tone: 'warning',
-          text: `The key is valid, but CandidCue could not access ${validation.missing ?? 'a required model'}. Manual and fixed-speed modes are still available.`,
-        };
       } else if (validation.status === 'quota') {
         keyMessage = {
           tone: 'warning',
-          text: 'The key is valid, but the OpenAI project has no available quota or billing access.',
+          text: 'The key is valid, but the Inworld account has no available quota.',
         };
       } else if (validation.status === 'network') {
         keyMessage = {
           tone: 'warning',
-          text: 'CandidCue could not reach OpenAI to verify the key. Check your connection and try again.',
+          text: 'CandidCue could not reach Inworld to verify the key. Check your connection and try again.',
         };
       } else {
         keyMessage = {
           tone: 'danger',
-          text: 'OpenAI rejected this key. Check that it is active and belongs to the project you intend to bill.',
+          text: validation.message ?? 'Inworld rejected this key. Check that it is active.',
         };
       }
     } catch (err) {
-      // `save_openai_key` is refused outright when a development build is
+      // `save_inworld_key` is refused outright when a development build is
       // running with OPENAI_API_KEY set; without this the rejection would
       // escape unhandled and the pane would simply go quiet.
       keyMessage = { tone: 'danger', text: describeError(err) };
@@ -836,14 +826,14 @@
       // One-shot field: always purge the plaintext after submission.
       keyField = '';
       keyBusy = false;
-      updatePreflight({ openai: openAiStatusToCheck(keyStatus) });
+      updatePreflight({ speech: speechKeyStatusToCheck(keyStatus) });
     }
   }
 
   async function removeKey(): Promise<void> {
     keyMessage = null;
     try {
-      await secretsService.deleteOpenAiKey();
+      await secretsService.deleteInworldKey();
     } catch (err) {
       keyMessage = { tone: 'danger', text: `Could not remove the key. ${describeError(err)}` };
       return;
@@ -891,17 +881,6 @@
       updatePreflight({ microphone: 'blocked' });
       micError = describeError(err);
     }
-  }
-
-  /**
-   * §30 / §32.2. Same handler as Settings → Live coaching: save, then report a
-   * failed retention purge instead of silently leaving the user believing that
-   * turning a toggle off deleted what earlier takes stored.
-   */
-  async function saveCoaching(patch: Partial<CoachingSettings>): Promise<void> {
-    await patchSettings('coaching', patch);
-    const failure = takeRetentionPurgeFailure();
-    if (failure) showToast(failure, 'danger');
   }
 
   async function allowMicrophone(): Promise<void> {
@@ -1129,22 +1108,9 @@
         stageSettings,
         listener: listener ?? null,
         transcription: {
-          model: $settings.openai.realtimeModel,
+          model: $settings.inworld.transcriptionModel,
           language,
-          delay: delayForLatency(),
-          requestLogprobs: true,
         },
-        commandSettings: {
-          wakePhrase: $settings.commands.wakePhrase,
-          wakeAliases: [
-            $settings.commands.wakePhrase.toLowerCase(),
-            ...$settings.commands.wakeAliases.map((a) => a.toLowerCase()),
-          ],
-          wakeMode: $settings.commands.strictWake ? 'strict' : 'double_gate',
-          lunaFallback: $settings.openai.commandFallback,
-          commandModel: $settings.openai.commandModel,
-        },
-        commandsEnabled: commandListening && $settings.commands.enabled,
         following: $settings.following,
         // "Follow system default" means exactly that: no pinned device id, so
         // the pipeline opens (and keeps following) the system input.
@@ -1214,10 +1180,10 @@
   }
 
   /* F.10 status labels per check row. */
-  function sectionLabel(row: 'script' | 'openai' | 'mic' | 'stage' | 'listener', status: CheckStatus): string {
+  function sectionLabel(row: 'script' | 'speech' | 'mic' | 'stage' | 'listener', status: CheckStatus): string {
     const table = {
       script: { checking: 'Compiling…', ready: 'Script ready', problem: 'Script needs attention' },
-      openai: { checking: 'Connecting…', ready: 'OpenAI ready', problem: 'OpenAI unavailable' },
+      speech: { checking: 'Connecting…', ready: 'Speech ready', problem: 'Speech unavailable' },
       mic: { checking: 'Testing…', ready: 'Microphone ready', problem: 'Microphone unavailable' },
       stage: { checking: 'Opening…', ready: 'Stage ready', problem: 'Stage display unavailable' },
       listener: { checking: 'Loading…', ready: 'Listener ready', problem: 'Listener unavailable' },
@@ -1316,8 +1282,8 @@
     >
       {#snippet actions()}
         <StatusPill
-          tone={sectionTone($preflightChecks.openai)}
-          label={sectionLabel('openai', $preflightChecks.openai)}
+          tone={sectionTone($preflightChecks.speech)}
+          label={sectionLabel('speech', $preflightChecks.speech)}
         />
       {/snippet}
       {#if !keyStatus?.present || replacingKey}
@@ -1341,7 +1307,7 @@
             {/if}
             <Button
               variant="ghost"
-              onclick={() => openExternal('https://platform.openai.com/api-keys')}
+              onclick={() => openExternal('https://platform.inworld.ai/')}
             >
               <Icon name="external" size={14} />
               OpenAI API keys
@@ -1361,8 +1327,8 @@
       {#if keyMessage}
         <p class="key-message {keyMessage.tone}">{keyMessage.text}</p>
       {/if}
-      {#if openAiError}
-        <p class="inline-alert" role="alert">{openAiError}</p>
+      {#if speechKeyError}
+        <p class="inline-alert" role="alert">{speechKeyError}</p>
         <div class="row-actions">
           <Button disabled={keyBusy} onclick={() => refreshKeyStatus()}>Try again</Button>
         </div>
@@ -1463,18 +1429,6 @@
         <!-- §30.3. Optional, and deliberately not wired into the readiness
              store: live adaptation remains authoritative, so a preview that
              has not seen enough audio must never be able to block Start. -->
-        <Disclosure label="Calibration preview">
-          <p class="calibration-intro">
-            Read the first paragraph of your script, or any neutral sentence, while the microphone
-            test is running. This is optional — CandidCue adapts to your voice during the take
-            whether you do this or not.
-          </p>
-          <CalibrationPreview
-            level={micLevel}
-            transcript={micFinal || micPartial}
-            coaching={$settings.coaching}
-          />
-        </Disclosure>
         <!-- §28.3 capture processing and §28.4 detection. Both are saved audio
              settings — the toggles become the session's getUserMedia
              constraints at Start, the slider becomes the local VAD's speech
@@ -1564,17 +1518,12 @@
       </div>
       <div class="toggle-grid">
         <Toggle bind:checked={readHeadings} label="Read headings aloud" description="Track heading text as spoken words" />
-        <Toggle
-          bind:checked={commandListening}
-          label="Voice commands"
-          description={`Wake phrase: “${$settings.commands.wakePhrase}”`}
-        />
       </div>
       {#if mode === 'voice'}
         <!-- Companion §47 subset that matters before a session; the rest lives
              in Settings → Following. Changes save immediately and apply to
              this session. -->
-        <Disclosure label="Following feel and intelligent assist">
+        <Disclosure label="Following feel">
           <FollowSettingsFields
             compact
             following={$settings.following}
@@ -1582,19 +1531,6 @@
           />
         </Disclosure>
       {/if}
-    </Section>
-
-    <!-- D2. Live coaching (companion §30.1) -->
-    <Section
-      title="Live coaching"
-      description="What CandidCue tells you about your delivery during this take. Coaching never moves the script."
-    >
-      <CoachingSettingsFields
-        compact
-        coaching={$settings.coaching}
-        transcriptRetention={$settings.privacy.saveTranscript}
-        onchange={(patch) => void saveCoaching(patch)}
-      />
     </Section>
 
     <!-- E. Appearance -->

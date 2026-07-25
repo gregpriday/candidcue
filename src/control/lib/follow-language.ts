@@ -306,8 +306,6 @@ export type MovementDecisionRecord = Pick<
   | 'localConfidence'
   | 'secondBestMargin'
   | 'sectionGate'
-  | 'semanticAssistRelation'
-  | 'semanticAssistInfluence'
   | 'authority'
   | 'visualDisposition'
 > & {
@@ -350,14 +348,7 @@ export function describeMovement(record: MovementDecisionRecord): MovementExplan
 
   const headline = `${moved} — ${FOLLOW_BEHAVIOR_LABELS[record.behavior].toLowerCase()}, ${DISPOSITION_PHRASES[record.visualDisposition]}`;
 
-  const evidence =
-    record.semanticAssistRelation !== undefined
-      ? `Local match ${formatScore(record.localConfidence)} with a ${formatScore(record.secondBestMargin)} margin over the runner-up; Luna classified it as ${record.semanticAssistRelation}${
-          record.semanticAssistInfluence !== undefined
-            ? ` (influence ${formatScore(record.semanticAssistInfluence)})`
-            : ''
-        }.`
-      : `Local match ${formatScore(record.localConfidence)} with a ${formatScore(record.secondBestMargin)} margin over the runner-up; no assist input.`;
+  const evidence = `Local match ${formatScore(record.localConfidence)} with a ${formatScore(record.secondBestMargin)} margin over the runner-up.`;
 
   const gate =
     record.sectionGate === 'blocked'
@@ -379,9 +370,6 @@ export function describeMovement(record: MovementDecisionRecord): MovementExplan
       { label: 'Section gate', value: record.sectionGate },
       { label: 'Authority', value: record.authority },
       { label: 'Motion', value: record.visualDisposition },
-      ...(record.semanticAssistRelation !== undefined
-        ? [{ label: 'Assist', value: record.semanticAssistRelation }]
-        : []),
       ...(record.reason ? [{ label: 'Reason', value: record.reason }] : []),
     ],
   };

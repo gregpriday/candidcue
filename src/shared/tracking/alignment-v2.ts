@@ -36,12 +36,6 @@ import type {
   SectionTransitionContext,
   TransitionAuthority,
 } from './section-graph';
-import {
-  isSemanticEvidenceCurrent,
-  semanticAdjustment,
-  type SemanticAssistEvidence,
-  type SemanticAssistRelation,
-} from './semantic-assist';
 import { alignSequences } from './sequence';
 import type { SpeechUnitScale } from './speech-units';
 import type {
@@ -103,7 +97,6 @@ export interface AlignmentHypothesis {
   lexicalScore: number;
   phoneticScore: number;
   sequenceScore: number;
-  semanticScore: number;
   continuityPrior: number;
   authority: TransitionAuthority;
   evidenceItemIds: string[];
@@ -112,7 +105,6 @@ export interface AlignmentHypothesis {
   rareAnchorMatches: number;
   longestOrderedRun: number;
   finalEvidence: boolean;
-  semanticRelation?: SemanticAssistRelation;
   lastStrongAnchorAtMs: number;
   createdAtMs: number;
   updatedAtMs: number;
@@ -130,7 +122,6 @@ export interface AlignmentHypothesisSummary {
   weight: number;
   logScore: number;
   continuityPrior: number;
-  semanticScore: number;
   contentMatches: number;
   rareAnchorMatches: number;
 }
@@ -200,7 +191,6 @@ export interface AlignmentMeasurement {
   /** Highest-scoring candidate the section gate rejected, for diagnostics. */
   blocked?: { tokenPosition: number; sectionId: string; reason: SectionEligibility };
   blockedCount: number;
-  semanticAssistId?: string;
   transitionProposal: TransitionProposal;
   /**
    * §16.5 hysteresis. How long the *leading* lineage has led, in meaningful
@@ -290,7 +280,6 @@ export class HypothesisBeam {
   /** Lineage the §16.2 hold branch is currently carrying, if any. */
   private holdLineageId: string | null = null;
   private lastUpdateAtMs = 0;
-  private assist: SemanticAssistEvidence | undefined;
 
   constructor(
     index: DocumentIndex,
@@ -310,15 +299,6 @@ export class HypothesisBeam {
     return this.beam;
   }
 
-  /**
-   * Inject bounded sidecar evidence (companion §40). This is the *only*
-   * injection point; the beam validates epoch, expiry, source items, and
-   * candidate membership before any of it becomes score.
-   */
-  setSemanticAssist(evidence: SemanticAssistEvidence | undefined): void {
-    this.assist = evidence;
-  }
-
   /** Drop every hypothesis — command/manual authority, reset, or new epoch. */
   clear(): void {
     this.beam = [];
@@ -328,7 +308,6 @@ export class HypothesisBeam {
     this.challengerFinalTokens = 0;
     this.challengerCountedItemIds = new Set();
     this.holdLineageId = null;
-    this.assist = undefined;
   }
 
   /**
@@ -355,7 +334,6 @@ export class HypothesisBeam {
         lexicalScore: 0,
         phoneticScore: 0,
         sequenceScore: 0,
-        semanticScore: 0,
         continuityPrior: 1,
         authority,
         evidenceItemIds: [],
@@ -438,39 +416,9 @@ export class HypothesisBeam {
       }
     }
 
-    // 4–5. Create/update branches, folding in bounded semantic evidence.
-    const activeItemIds = new Set(input.tail.itemIds);
-    const assist = isSemanticEvidenceCurrent(
-      this.assist,
-      input.epoch,
-      input.sessionTimeMs,
-      profile.semanticAssistTtlMs,
-      activeItemIds,
-    )
-      ? this.assist
-      : undefined;
-
+    // 4–5. Create/update branches from local evidence alone.
     const produced: AlignmentHypothesis[] = [];
-    let semanticAssistId: string | undefined;
     for (const candidate of eligible) {
-      const distanceTokens = candidate.tokenPosition - input.committedTokenIndex;
-      const localScore = Math.min(1, candidate.confidence + candidate.beamBonus);
-      const adjustment = semanticAdjustment(
-        assist,
-        {
-          candidateId: candidateIdFor(candidate.window.scope, candidate.tokenPosition),
-          distanceTokens,
-          largeForward: distanceTokens > input.largeForwardDistance,
-          localScore,
-          finalEvidence: input.finalEvidence,
-          epoch: input.epoch,
-          nowMs: input.sessionTimeMs,
-          activeItemIds,
-        },
-        this.smooth,
-      );
-      if (adjustment.assistId !== undefined) semanticAssistId = adjustment.assistId;
-
       const unitPosition = this.units.unitAt(candidate.tokenPosition);
       const inherited = this.nearestPredicted(predicted, candidate.tokenPosition);
       const hypothesis: AlignmentHypothesis = {
@@ -488,14 +436,12 @@ export class HypothesisBeam {
         // Continuity bonus for a branch that survived from the previous
         // update — the transition model, not a fresh guess (§16.1).
         logScore:
-          localScore +
-          adjustment.delta +
+          Math.min(1, candidate.confidence + candidate.beamBonus) +
           (inherited ? inherited.logScore * profile.hypothesisInheritanceFactor : 0),
         weight: 0,
         lexicalScore: candidate.sequence.normalizedScore,
         phoneticScore: phoneticShare(candidate.sequence),
         sequenceScore: candidate.sequence.score,
-        semanticScore: adjustment.delta,
         continuityPrior: candidate.prior,
         authority: input.eligibility.authority,
         evidenceItemIds: candidate.itemIds,
@@ -506,7 +452,6 @@ export class HypothesisBeam {
         rareAnchorMatches: candidate.sequence.rareAnchorMatches,
         longestOrderedRun: candidate.sequence.longestOrderedRun,
         finalEvidence: input.finalEvidence,
-        ...(adjustment.relation !== undefined ? { semanticRelation: adjustment.relation } : {}),
         lastStrongAnchorAtMs:
           candidate.sequence.rareAnchorMatches > 0
             ? input.sessionTimeMs
@@ -552,7 +497,7 @@ export class HypothesisBeam {
     this.beam = beam.filter((h) => h.weight >= profile.minHypothesisWeight);
     if (this.beam.length === 0 && beam.length > 0) this.beam = beam.slice(0, 1);
 
-    return this.buildMeasurement(input, eligible, blocked, blockedCount, semanticAssistId);
+    return this.buildMeasurement(input, eligible, blocked, blockedCount);
   }
 
   /* ----------------------------------------------------------------------- */
@@ -750,7 +695,6 @@ export class HypothesisBeam {
       lexicalScore: 0,
       phoneticScore: 0,
       sequenceScore: 0,
-      semanticScore: 0,
       continuityPrior: 1,
       authority: input.eligibility.authority,
       evidenceItemIds: [],
@@ -786,7 +730,6 @@ export class HypothesisBeam {
     eligible: readonly ScoredWindow[],
     blocked: AlignmentMeasurement['blocked'],
     blockedCount: number,
-    semanticAssistId: string | undefined,
   ): AlignmentMeasurement {
     const profile = this.profile;
     const best = this.beam[0];
@@ -872,7 +815,6 @@ export class HypothesisBeam {
       ...(best !== undefined ? { best } : {}),
       ...(blocked !== undefined ? { blocked } : {}),
       blockedCount,
-      ...(semanticAssistId !== undefined ? { semanticAssistId } : {}),
       transitionProposal: proposal,
       challengerPersistence: {
         finalTokens: this.challengerFinalTokens,
@@ -1075,7 +1017,6 @@ function summarize(hypothesis: AlignmentHypothesis): AlignmentHypothesisSummary 
     weight: hypothesis.weight,
     logScore: hypothesis.logScore,
     continuityPrior: hypothesis.continuityPrior,
-    semanticScore: hypothesis.semanticScore,
     contentMatches: hypothesis.contentMatches,
     rareAnchorMatches: hypothesis.rareAnchorMatches,
   };

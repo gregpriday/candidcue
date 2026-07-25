@@ -47,12 +47,6 @@ pub mod events {
     // these are emitted straight from the control webview: a high-rate motion
     // signal, gated by the stage's own frame receiver rather than by Rust.
     pub const STAGE_SEMANTIC_FRAME: &str = "stage://semantic-frame";
-    // Coaching Rail snapshots (companion §27), emitted straight from the control
-    // webview like the heartbeat. Coaching is advisory and failure-isolated
-    // (§5.2), so it deliberately does NOT travel the validated Rust document
-    // path that can move the script; the stage validates each snapshot (current
-    // session, strictly increasing revision) on arrival.
-    pub const STAGE_COACH_RAIL: &str = "stage://coach-rail";
 
     // Stage → Rust (listened in app setup).
     /// The stage's event subscriptions are registered and it can now receive
@@ -1251,8 +1245,6 @@ const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[
     "listener",
     "calibration",
     "diagnostics",
-    // Companion Part VIII: a single validated coach tip for the stage strip.
-    "coach",
 ];
 
 /// Validate a `StageStatePayload` ({ stageGeneration, directive }) against
@@ -1435,7 +1427,6 @@ mod tests {
             events::STAGE_CLOSE_SESSION,
             events::STAGE_HEARTBEAT,
             events::STAGE_SEMANTIC_FRAME,
-            events::STAGE_COACH_RAIL,
             events::STAGE_LISTENING,
             events::STAGE_HYDRATED,
             events::STAGE_LAYOUT_READY,
@@ -1560,12 +1551,18 @@ mod tests {
     // M2: stage privilege — CSP and asset scope
     // -----------------------------------------------------------------
 
-    /// The stage inherited the GLOBAL csp, which has to allow
-    /// `https://api.openai.com` for the control window. That handed the
-    /// minimally privileged window — the one that renders the operator's
-    /// script — a live route to a third party, contradicting §43.2/§50.10.
-    /// stage.html now carries its own policy; CSP composes restrictively, so
-    /// the stage gets the intersection.
+    /// The stage inherited the GLOBAL csp, which used to allow the speech
+    /// provider's origin for the control window. That handed the minimally
+    /// privileged window — the one that renders the operator's script — a live
+    /// route to a third party, contradicting §43.2/§50.10. stage.html carries
+    /// its own policy; CSP composes restrictively, so the stage gets the
+    /// intersection.
+    ///
+    /// Neither window needs an external origin now: the Inworld socket is held
+    /// in Rust (it needs an `Authorization` header the browser cannot send), so
+    /// the global policy dropped the provider host too. This test asserts both
+    /// halves, because the interesting failure is a future change re-opening
+    /// the control window's network and quietly widening the stage with it.
     #[test]
     fn stage_csp_grants_no_network() {
         let html = include_str!("../../../stage.html");
@@ -1587,7 +1584,7 @@ mod tests {
             .find(|d| d.starts_with("connect-src"))
             .expect("the stage CSP must pin connect-src explicitly");
         assert!(
-            !connect.contains("api.openai.com"),
+            !connect.contains("api.inworld.ai"),
             "the stage must have no route to the provider: {connect}"
         );
         assert!(
@@ -1604,13 +1601,29 @@ mod tests {
             assert!(csp.contains(directive), "the stage CSP must set {directive}");
         }
 
-        // And the control window's policy is deliberately NOT this one: it
-        // still needs the provider, which is the whole reason the two differ.
+        // And no window reaches the provider from JavaScript at all: the
+        // session is Rust's. A `connect-src` naming any remote host in the
+        // global policy means somebody moved the socket back into the webview,
+        // which cannot work — the key travels in a header the browser will not
+        // send — and would put the key in the renderer on the way to finding
+        // that out.
         let config = include_str!("../../tauri.conf.json");
-        assert!(
-            config.contains("https://api.openai.com"),
-            "the global CSP still carries the provider origin for control"
-        );
+        let global_csp = config
+            .split("\"csp\": \"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("the global CSP must be present");
+        let global_connect = global_csp
+            .split(';')
+            .map(str::trim)
+            .find(|d| d.starts_with("connect-src"))
+            .expect("the global CSP must pin connect-src explicitly");
+        for host in ["api.inworld.ai", "api.openai.com", "https:", "wss:"] {
+            assert!(
+                !global_connect.contains(host),
+                "no window may reach {host} from JavaScript: {global_connect}"
+            );
+        }
     }
 
     /// The asset-protocol scope used to be `$APPDATA/scripts/**`, so every

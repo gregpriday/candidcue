@@ -15,7 +15,6 @@ import {
 import {
   allPlaybackScenarios,
   scenarioBriefAdlib,
-  scenarioParaphraseWithAssist,
   scenarioCommandToOtherChapter,
   scenarioDistantCollision,
   scenarioLargeWithinSectionSkip,
@@ -134,30 +133,6 @@ describe('D.4 distant phrase collision (§86, §69.7)', () => {
     expect(blocked.length).toBeGreaterThan(0);
     expect(blocked.some((r) => r.blockedReason === 'prohibited_non_contiguous')).toBe(true);
     for (const frame of result.frames) expect(frame.sectionId).toBe('h0');
-  });
-});
-
-describe('D.3 paraphrase with sidecar assist (§40)', () => {
-  it('advisory evidence reaches the beam and stays advisory', () => {
-    const { result, failures } = run(scenarioParaphraseWithAssist());
-    expect(failures, failures.join('\n')).toEqual([]);
-
-    // The assist was actually consumed — `applySemanticAssist →
-    // setSemanticAssist → semanticAdjustment` had no end-to-end coverage at
-    // all before this, so "the influence is bounded" was only ever asserted
-    // against a hand-built beam.
-    const influenced = result.records.filter(
-      (r) => r.semanticAssistRelation !== undefined || (r.semanticAssistInfluence ?? 0) !== 0,
-    );
-    expect(influenced.length).toBeGreaterThan(0);
-
-    // …and it moved nothing on its own: no skip, no retake, no section change.
-    expect(result.metrics.prohibitedSectionJumpCount).toBe(0);
-    expect(result.metrics.sectionsVisited).toEqual(['h0']);
-    const bound = result.engine.smoothProfile.alignment.semanticInfluenceMax;
-    for (const record of result.records) {
-      expect(Math.abs(record.semanticAssistInfluence ?? 0)).toBeLessThanOrEqual(bound + 1e-9);
-    }
   });
 });
 

@@ -13,11 +13,6 @@ import {
 import { projectBehavior } from '../../../src/shared/tracking/behavior';
 import { AlignmentEngine } from '../../../src/shared/tracking/engine';
 import { DEFAULT_TRACKING_PROFILE } from '../../../src/shared/tracking/profile';
-import {
-  semanticAdjustment,
-  isSemanticEvidenceCurrent,
-  type SemanticAssistEvidence,
-} from '../../../src/shared/tracking/semantic-assist';
 import type { LedgerToken } from '../../../src/shared/tracking/types';
 import { demoDocument } from '../../fixtures/alignment/fixture-script';
 import { TranscriptScripter } from '../../fixtures/transcript-events/builder';
@@ -65,7 +60,6 @@ function hypothesis(overrides: Partial<AlignmentHypothesis>): AlignmentHypothesi
     lexicalScore: 0.5,
     phoneticScore: 0,
     sequenceScore: 1,
-    semanticScore: 0,
     continuityPrior: 1,
     authority: 'ordinary',
     evidenceItemIds: [],
@@ -243,102 +237,6 @@ describe('repeated passages freeze rather than guess (companion §23, §31.13)',
     const behaviors = e.decisionRecords().slice(recordsBefore).map((r) => r.behavior);
     expect(behaviors).not.toContain('retake');
     expect(behaviors).not.toContain('large_skip');
-  });
-});
-
-describe('semantic assist is bounded advisory evidence (companion §3.6, §40)', () => {
-  const evidence = (
-    overrides?: Partial<SemanticAssistEvidence>,
-  ): SemanticAssistEvidence => ({
-    assistId: 'assist-1',
-    epoch: 0,
-    requestRevision: 1,
-    sourceItemIds: ['item-1-0'],
-    receivedAtMs: 1000,
-    opinions: [{ candidateId: 'continuity:40', relation: 'paraphrase', confidence: 1 }],
-    ...overrides,
-  });
-
-  const input = (overrides?: Partial<Parameters<typeof semanticAdjustment>[1]>) => ({
-    candidateId: 'continuity:40',
-    distanceTokens: 10,
-    largeForward: false,
-    localScore: 0.6,
-    finalEvidence: true,
-    epoch: 0,
-    nowMs: 1000,
-    activeItemIds: new Set(['item-1-0']),
-    ...overrides,
-  });
-
-  it('is clamped to a modest fraction of the local score (A.2, §40.1)', () => {
-    const { delta } = semanticAdjustment(evidence(), input(), smooth);
-    expect(delta).toBeGreaterThan(0);
-    expect(delta).toBeLessThanOrEqual(smooth.alignment.semanticInfluenceMax * 0.6 + 1e-9);
-  });
-
-  it('cannot rescue a candidate with no local support (§18.4, §40.1)', () => {
-    const { delta } = semanticAdjustment(evidence(), input({ localScore: 0 }), smooth);
-    expect(delta).toBe(0);
-  });
-
-  it('only touches candidates the local engine supplied (§40.2)', () => {
-    const { delta } = semanticAdjustment(evidence(), input({ candidateId: 'ngram:900' }), smooth);
-    expect(delta).toBe(0);
-  });
-
-  it('a restart opinion cannot boost a forward candidate (§40.3)', () => {
-    const restart = evidence({
-      opinions: [{ candidateId: 'continuity:40', relation: 'restart', confidence: 1 }],
-    });
-    expect(semanticAdjustment(restart, input({ distanceTokens: 10 }), smooth).delta).toBe(0);
-    expect(semanticAdjustment(restart, input({ distanceTokens: -10 }), smooth).delta).not.toBe(0);
-  });
-
-  it('never supports a retake or a large skip from provisional context (§15.3)', () => {
-    const restart = evidence({
-      opinions: [{ candidateId: 'continuity:40', relation: 'restart', confidence: 1 }],
-    });
-    expect(
-      semanticAdjustment(restart, input({ distanceTokens: -10, finalEvidence: false }), smooth)
-        .delta,
-    ).toBe(0);
-    const skip = evidence({
-      opinions: [{ candidateId: 'continuity:40', relation: 'forward_skip', confidence: 1 }],
-    });
-    expect(
-      semanticAdjustment(skip, input({ largeForward: true, finalEvidence: false }), smooth).delta,
-    ).toBe(0);
-  });
-
-  it('`adlib` and `unresolved` supply no positive movement evidence (§40.3)', () => {
-    const unresolved = evidence({
-      opinions: [{ candidateId: 'continuity:40', relation: 'unresolved', confidence: 1 }],
-    });
-    expect(semanticAdjustment(unresolved, input(), smooth).delta).toBe(0);
-    const adlib = evidence({
-      opinions: [{ candidateId: 'continuity:40', relation: 'adlib', confidence: 1 }],
-    });
-    expect(semanticAdjustment(adlib, input(), smooth).delta).toBeLessThan(0);
-  });
-
-  it('expires, and is rejected on a stale epoch or superseded items (§25.7, §40.4)', () => {
-    const active = new Set(['item-1-0']);
-    expect(isSemanticEvidenceCurrent(evidence(), 0, 1000, 4000, active)).toBe(true);
-    expect(isSemanticEvidenceCurrent(evidence(), 1, 1000, 4000, active)).toBe(false);
-    expect(isSemanticEvidenceCurrent(evidence(), 0, 99_000, 4000, active)).toBe(false);
-    expect(isSemanticEvidenceCurrent(evidence(), 0, 1000, 4000, new Set(['other']))).toBe(false);
-    expect(isSemanticEvidenceCurrent(undefined, 0, 1000, 4000, active)).toBe(false);
-  });
-
-  it('the engine drops assist carrying the wrong epoch', () => {
-    const e = engine('assist-epoch');
-    e.moveTo(40, 'command', 1000); // epoch → 1
-    e.applySemanticAssist(evidence({ epoch: 0 }));
-    // Nothing to assert beyond "did not throw and did not move"; the guard is
-    // that a stale-epoch payload can never become score.
-    expect(e.cursor.committedTokenIndex).toBe(40);
-    expect(e.semanticEpoch).toBe(1);
   });
 });
 

@@ -32,12 +32,10 @@
  * must not assume the value it sent is the value the worker used.
  */
 import type { NavigationTarget } from '../contracts/compiler';
-import type { AssistSchedulingContext } from '../semantic/types';
 import type { SemanticMotionFrame } from '../contracts/smooth-follow';
 import type { TrackingSnapshot, TrackingState } from '../contracts/tracking';
 import type { MovementDecisionRecord } from './decision-log';
 import type { PartialSmoothFollowProfile, TrackingProfile } from './profile';
-import type { SemanticAssistEvidence } from './semantic-assist';
 import type { AlignmentDiagnostic, TrackingDocument, TranscriptEvent } from './types';
 
 export interface TrackingSessionInit {
@@ -74,13 +72,6 @@ export type TrackingWorkerInbound =
    * worker never reads a clock of its own.
    */
   | { type: 'tick'; nowMs: number }
-  /**
-   * Companion §40: bounded semantic evidence from the Luna sidecar. The
-   * sidecar owns scheduling and the network call; this message only delivers
-   * relations over candidate ids the local aligner already supplied, and the
-   * beam clamps their influence to `alignment.semanticInfluenceMax`.
-   */
-  | { type: 'semantic_assist'; evidence: SemanticAssistEvidence }
   /** Companion §7.2: the stage rebuilt its line map. */
   | { type: 'set_layout_generation'; generation: number; nowMs: number };
 
@@ -89,19 +80,6 @@ export type TrackingWorkerOutbound =
   | { type: 'snapshot'; snapshot: TrackingSnapshot }
   | { type: 'state_change'; state: TrackingState }
   | { type: 'diagnostic'; diagnostic: AlignmentDiagnostic }
-  /**
-   * Companion §37.1 — the local aligner's post-section-gate candidate set and
-   * the state the Luna sidecar schedules against.
-   *
-   * This is the *inverse* of `semantic_assist`: the worker offers candidates,
-   * the sidecar ranks them, and the ranking comes back bounded. Without it the
-   * sidecar has no input at all and no semantic assist can ever happen.
-   *
-   * Rate-limited inside the engine by `profile.semanticContextIntervalMs`
-   * (2 Hz) and emitted only on finalized evidence — it is NOT a per-event
-   * message and must never become one (§63).
-   */
-  | { type: 'semantic_context'; revision: number; context: AssistSchedulingContext }
   /** Companion §26.1 — the stage's motion input. */
   | { type: 'semantic_frame'; frame: SemanticMotionFrame }
   /** Companion §65 — developer diagnostics, text-free. */

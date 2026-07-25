@@ -6,7 +6,6 @@
  */
 import { derived, get, writable } from 'svelte/store';
 import type {
-  CommandAction,
   CompiledScript,
   ListenerStageSelection,
   OutlineNode,
@@ -19,15 +18,12 @@ import type {
   StageSettings,
   TrackingSnapshot,
   TranscriptionConfig,
-  ValidatedCommand,
 } from '../../shared/contracts';
 import { STAGE_EVENT, CONTROL_EVENT } from '../../shared/contracts';
 import type { SemanticMotionFrame } from '../../shared/contracts';
-import type { CommandSettings } from '../../shared/commands';
 import type { FollowingSettings, SessionMode } from '../services/settings-types';
 import { createTrackingDriver, newSessionId, type TrackingDriver } from '../services/session';
 import { VoiceSessionPipeline } from '../services/voice-session';
-import { estimateTranscriptionCostUsd } from '../services/realtime/costEstimator';
 import { isTauriRuntime } from '../services/ipc';
 import { describeError } from '../services/errors';
 import * as stageService from '../services/stage';
@@ -36,28 +32,17 @@ import {
   monotonicNowMs,
   motionFrameFromSnapshot,
   movementRecordFromDiagnostic,
-  setActiveSemanticSidecar,
   subscribeFollowSidecar,
   subscribeStageMotionAcks,
 } from '../services/smooth-follow-adapter';
-import { SemanticSidecar } from '../services/semantic-sidecar';
-import { CoachingSessionController } from '../services/coaching-session';
-import {
-  FIRST_TAKE_PASS_ORDINAL,
-  takePassIdFor,
-} from '../../shared/coaching/take-pass';
-import { createCoachingObserverTransport } from '../services/coaching-luna';
+import { FIRST_TAKE_PASS_ORDINAL, takePassIdFor } from '../../shared/take-pass';
 import type { MediaStreamLike } from '../services/audio';
-import type { CoachRailState } from '../../shared/contracts';
 import {
   appendSessionTranscript,
   endSessionRecord,
   recordSessionTake,
   type TakeCheckpointInput,
 } from '../services/session-records';
-import type { AssistSchedulingContext, SemanticAvailability } from '../../shared/semantic';
-import { DEFAULT_SEMANTIC_BUDGET } from '../../shared/semantic';
-import { getModelCapabilities } from '../services/capabilities';
 import { resolveSmoothFollowProfile } from '../../shared/tracking/profile';
 import { defaultFollowingSettings } from '../lib/follow-profiles';
 import {
@@ -122,44 +107,9 @@ export interface StageWindowFault {
   atMs: number;
 }
 
-/**
- * Luna sidecar spend for this take (§42.1).
- *
- * Separate from `SessionState.estimatedCostUsd` on purpose. That number is
- * realtime *transcription*, billed per connected audio minute by a different
- * subsystem; this one is semantic-assist tokens billed per million. Adding them
- * together would produce a figure that is neither, and hiding either one leaves
- * a bring-your-own-key user unable to see what their session actually costs.
- */
-export interface SemanticSpend {
-  /** Requests actually issued, across every lane. */
-  requests: number;
-  /** The cap in force this session — the user's, or the §42 default. */
-  requestLimit: number;
-  inputTokens: number;
-  cachedInputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  /** `null` = no verified rate configured. NOT zero. See §42.2. */
-  estimatedCostUsd: number | null;
-  availability: SemanticAvailability;
-}
-
-const NO_SEMANTIC_SPEND: SemanticSpend = {
-  requests: 0,
-  requestLimit: DEFAULT_SEMANTIC_BUDGET.maxRequestsPerSession,
-  inputTokens: 0,
-  cachedInputTokens: 0,
-  outputTokens: 0,
-  totalTokens: 0,
-  estimatedCostUsd: null,
-  availability: 'disabled',
-};
-
 export interface SessionCounts {
   jumps: number;
   retakes: number;
-  commands: number;
   reconnects: number;
 }
 
@@ -168,17 +118,7 @@ export interface SessionSummary {
   mode: SessionMode;
   sectionsReached: number;
   retakes: number;
-  commands: number;
   reconnects: number;
-  /** Estimated realtime TRANSCRIPTION cost — clearly an estimate (F.17). */
-  estimatedCostUsd: number;
-  /**
-   * Estimated Luna sidecar cost (§42.1), reported on its own line. `null`
-   * means no verified rate is configured — it does not mean "free".
-   */
-  semanticCostUsd: number | null;
-  /** Luna requests issued this take, which is meaningful even without a rate. */
-  semanticRequests: number;
   endingLocation: string;
   /**
    * §36.2. Was hard-coded `false` because nothing ever opened a session record,
@@ -234,13 +174,6 @@ export interface SessionState {
    * that write into the void.
    */
   stageAlive: boolean;
-  /**
-   * Running realtime TRANSCRIPTION cost estimate — the same number the F.17
-   * summary uses. Luna sidecar spend is `semanticSpend`, never folded in here.
-   */
-  estimatedCostUsd: number;
-  /** §42.1 Luna spend, shown next to (never added to) `estimatedCostUsd`. */
-  semanticSpend: SemanticSpend;
   /** §40.5 Listener media failure awaiting (or after) a recovery choice. */
   listenerFault: ListenerFault | null;
   /**
@@ -279,15 +212,13 @@ const initial: SessionState = {
   micState: 'live',
   inputDeviceLost: false,
   stageAlive: true,
-  estimatedCostUsd: 0,
-  semanticSpend: { ...NO_SEMANTIC_SPEND },
   listenerFault: null,
   stageWindowFault: null,
   snapshot: null,
   transcriptTail: [],
   outline: [],
   sentences: [],
-  counts: { jumps: 0, retakes: 0, commands: 0, reconnects: 0 },
+  counts: { jumps: 0, retakes: 0, reconnects: 0 },
   summary: null,
   blocksSeen: [],
   stageFontSizePx: 64,
@@ -372,15 +303,6 @@ let followProfileId = defaultFollowingSettings().motionProfileId;
 let scriptCompileHash = '';
 let stopMotionAcks: (() => void) | null = null;
 let stopSidecarFeed: (() => void) | null = null;
-/**
- * The take's semantic sidecar (companion §36, H6). One per take, disposed with
- * it. Null in manual/fixed modes, outside Tauri, and whenever the worker-backed
- * driver is not in use — there is no candidate feed in those cases, so a
- * scheduler would have nothing to schedule.
- */
-let semanticSidecar: SemanticSidecar | null = null;
-/** The sidecar's attached candidate sink, or null while nothing is attached. */
-let pushSemanticContext: ((context: AssistSchedulingContext) => void) | null = null;
 /** True once the worker has sent a real v2 frame — the bridge then stands down. */
 let usingWorkerFrames = false;
 
@@ -399,19 +321,6 @@ let usingWorkerFrames = false;
  * are.
  */
 let transcriptConfidence = new TranscriptConfidenceWatch();
-
-/**
- * The take's coaching subsystem (companion Part II). Session-owned and disposed
- * with the take, exactly like the semantic sidecar. Null in manual/fixed modes,
- * outside Tauri, when there is no compiled script, and when coaching mode is
- * `off` — in every one of those cases there is nothing to drive.
- *
- * It is fed the same `MediaStreamTrack` the voice pipeline already captured
- * (§5.3), transcript from the same finalized items, and tracking facts from the
- * same snapshots. Its only output is a `CoachRailState` relayed to the stage,
- * and nothing it does can reach motion (§2.1/§5.2).
- */
-let coaching: CoachingSessionController | null = null;
 
 /* ---------------------------------------------------------------------------
  * §36.3 take history
@@ -511,13 +420,15 @@ function countSpokenWords(text: string): number {
 }
 let transcriptFlushTimer: ReturnType<typeof setInterval> | null = null;
 /**
- * How long an item waits before it is flushed. The command router decides
- * whether a finalized item was script or a command phrase a beat after the item
- * arrives, and `INSERT OR IGNORE` on `UNIQUE(session_id, commit_sequence)`
- * means the first write of a commit is the one that sticks — so writing before
- * the disposition settles would permanently mislabel command phrases as script.
+ * How often the buffered transcript is written.
+ *
+ * Purely batching now. There used to be a four-second settle delay as well,
+ * because the command router decided a beat later whether a finalized item was
+ * script or a command phrase, and `INSERT OR IGNORE` on
+ * `UNIQUE(session_id, commit_sequence)` means the first write of a commit is
+ * the one that sticks. With no command channel every item is script the moment
+ * it arrives, so there is nothing left to wait for.
  */
-const TRANSCRIPT_SETTLE_MS = 4000;
 const TRANSCRIPT_FLUSH_INTERVAL_MS = 15000;
 
 /** Stage relay throttle (§46.6): the worker caps at 30/s; the stage gets ~15/s. */
@@ -557,8 +468,6 @@ export interface StartSessionInput {
   stageSettings?: StageSettings | null;
   listener?: ListenerStageSelection | null;
   transcription?: TranscriptionConfig;
-  commandSettings?: Partial<CommandSettings>;
-  commandsEnabled?: boolean;
   micDeviceId?: string;
   /** §28.3 capture processing (Settings → Audio / Preflight → Advanced). */
   audioProcessing?: {
@@ -615,8 +524,6 @@ export function startLiveSession(input: StartSessionInput): string {
   configureFollowActions(followActions);
   smoothFollow.reportTranscriptStatus(input.mode === 'voice' ? 'live' : 'idle');
   stopSidecarFeed = subscribeFollowSidecar({
-    onAssistStatus: (patch) => smoothFollow.ingestAssistStatus(patch),
-    onCoachTip: (tip) => smoothFollow.ingestCoachTip(tip),
     onBudgetBreach: (breach) => smoothFollow.reportBudgetBreach(breach),
   });
 
@@ -670,12 +577,6 @@ export function startLiveSession(input: StartSessionInput): string {
       usingWorkerFrames = true;
       smoothFollow.ingestMovementRecord(record);
     },
-    // Companion §37.1: the aligner's post-section-gate candidate set. This is
-    // the sidecar's ONLY input — without it the scheduler is inert and no
-    // semantic assist can ever occur.
-    onSemanticContext(context) {
-      pushSemanticContext?.(context);
-    },
     // Fallback for drivers without a v2 output (the mock driver used in
     // browser dev, manual/fixed modes, and node tests).
     onDiagnostic(diagnostic) {
@@ -689,28 +590,16 @@ export function startLiveSession(input: StartSessionInput): string {
     },
   });
 
-  // Semantic sidecar (companion §36, H6): session-owned, take-scoped, and fed
-  // by the worker's candidate emissions. `local_only` is handled inside the
-  // scheduler (it simply never issues a request), so the wiring is unconditional
-  // once a real worker-backed driver exists.
-  if (useRealDriver) {
-    startSemanticSidecar(sessionId, following);
-  }
-
   // Voice pipeline: realtime transcription + command routing (§29, §33).
   if (input.mode === 'voice' && input.compiled && isTauriRuntime()) {
     pipeline = new VoiceSessionPipeline({
       sessionId,
       sessionGeneration,
       compiled: input.compiled,
-      config: input.transcription ?? {
-        model: 'gpt-realtime-whisper',
-        language: 'en',
-        delay: 'low',
-        requestLogprobs: true,
-      },
-      commandSettings: input.commandSettings,
-      commandsEnabled: input.commandsEnabled,
+      ...(input.transcription?.language !== undefined
+        ? { language: input.transcription.language }
+        : {}),
+      ...(input.transcription?.model !== undefined ? { modelId: input.transcription.model } : {}),
       deviceId: input.micDeviceId,
       audioProcessing: input.audioProcessing,
       // §28.4: the slider had no reader at all. The saved value is the default
@@ -724,16 +613,6 @@ export function startLiveSession(input: StartSessionInput): string {
         state.update((s) => ({ ...s, transcriptTail: [] }));
         transcriptConfidence.reset();
       },
-      getCursorTokenIndex: () => get(state).snapshot?.tokenIndex ?? 0,
-      getPosition: () => {
-        const snap = get(state).snapshot;
-        return {
-          blockId: snap?.blockId ?? '',
-          sentenceId: snap?.sentenceId ?? '',
-          tokenIndex: snap?.tokenIndex ?? 0,
-        };
-      },
-      getScrollMode: () => (get(state).voiceFollow ? 'voice' : 'manual'),
       onTrackingEvent: (event) => {
         // §60: the same `completed` event that feeds the aligner carries the
         // provider's log probabilities, so the confidence evidence is read here
@@ -753,61 +632,23 @@ export function startLiveSession(input: StartSessionInput): string {
         }
         driver?.feedTranscript(event);
       },
-      onMaskItems: (itemIds) => {
-        // §36.2: an item the command channel consumed is a command phrase, not
-        // performed script, and the retained transcript must say so.
-        labelTranscriptItems(itemIds, 'command');
-        // §60: nor is a wake phrase evidence about how well the recogniser is
-        // hearing the script — retract it from the confidence window.
-        transcriptConfidence.forget(itemIds);
-        driver?.maskItems(itemIds);
+      /*
+       * Audio that never reached the recogniser. Surfaced rather than counted
+       * silently: dropped frames and a presenter who said nothing are
+       * indistinguishable downstream, and "words heard: 0" with no explanation
+       * is the exact failure this app has shipped twice.
+       */
+      onAudioDropped: (frames) => {
+        showToast(
+          `The connection stalled and ${frames} ${frames === 1 ? 'moment' : 'moments'} of audio ` +
+            'did not reach the transcriber. Anything said in that gap will not be followed.',
+          'danger',
+        );
       },
-      // §33.4 tail: the router decided the phrase was authored script after
-      // all, so alignment gets those items back.
-      onReleaseItems: (itemIds) => {
-        labelTranscriptItems(itemIds, 'script');
-        driver?.releaseItems(itemIds);
-      },
-      // §5.3: the single-capture fan-out. The pipeline is the one caller of
-      // getUserMedia; the coaching analyzer is a third consumer of the very
-      // same stream, never a second capture.
-      onCaptureStream: (stream) => startCoaching(input, stream),
       // §36.2: finalized text only, never audio. Buffered here and written
       // through `append_session_transcript`, which Rust refuses outright when
       // the session was opened with retention off.
-      // The same finalized item also feeds coaching (fillers + pace); coaching
-      // reads text only and never audio, exactly like retention.
-      onTranscriptItem: (item) => {
-        bufferTranscriptItem(item);
-        coaching?.noteFinalTranscript({
-          itemId: item.itemId,
-          commitSequence: item.commitSequence,
-          transcript: item.transcript,
-        });
-      },
-      onCommandPending: (pending) => driver?.setCommandPending(pending),
-      executeCommand: (command) => executeValidatedCommand(command),
-      // H8: real execution context for the §33.9 confirmation policy.
-      getExecutionState: () => {
-        const s = get(state);
-        return {
-          hardPaused: s.paused === 'hard',
-          takeInProgress: s.active && s.prompting,
-          // §33.9 default. There is no user setting for this yet; confirming
-          // is the safe side — an unconfirmed voice "stop" mid-take destroys
-          // the one thing the presenter cannot redo cheaply.
-          confirmStopDuringTake: true,
-        };
-      },
-      onCommandRejected: (command, reason) => {
-        showToast(
-          reason === 'stop_during_take'
-            ? `Say it again to confirm: ${command.humanLabel}`
-            : `Not sure what you meant by "${command.humanLabel}" — say it again.`,
-          'info',
-        );
-      },
-      onUnknownCommand: (message) => showToast(message, 'info'),
+      onTranscriptItem: (item) => bufferTranscriptItem(item),
       onTranscriptLine: (line) => pushTranscriptLine(line),
       onConnectionState: (connection) => {
         state.update((s) => {
@@ -820,19 +661,8 @@ export function startLiveSession(input: StartSessionInput): string {
         // §59: an interrupted transcript is a first-class degraded state.
         smoothFollow.reportTranscriptStatus(
           connection === 'connected' ? 'live' : 'interrupted',
-          connection === 'offline' ? 'The realtime connection is offline.' : null,
+          connection === 'offline' ? 'The transcription connection is offline.' : null,
         );
-      },
-      onRealtimeState: (realtimeState) => {
-        state.update((s) => ({
-          ...s,
-          micState:
-            realtimeState === 'listening' || realtimeState === 'ready'
-              ? 'live'
-              : realtimeState === 'fatal_error' || realtimeState === 'recoverable_error'
-                ? 'disconnected'
-                : s.micState,
-        }));
       },
       // H5: transcription is untrustworthy — stop following visibly rather
       // than letting the stage drift on stale or absent speech.
@@ -842,32 +672,9 @@ export function startLiveSession(input: StartSessionInput): string {
           showToast(describeHold(reason), 'danger');
         }
       },
-      /*
-       * §28.4. Tell the presenter the room has been measured.
-       *
-       * Calibration averages the first two seconds of audio into the noise
-       * floor, and the speech gate is a multiple of that floor — so a take
-       * that begins with someone already reading measures their voice and
-       * sets the threshold above it. Nothing on the stage said when the window
-       * had closed, so "wait, then speak" was advice nobody could follow.
-       *
-       * On the acknowledgement channel because it already exists, is already
-       * validated by Rust, and is already the transient-notice surface. It
-       * inherits that channel's setting, which is the one wart: an operator
-       * who has turned stage acknowledgements off does not get this either.
-       */
-      onVadCalibrating: () => {
-        // Slightly longer than the 2 s window, so it is still on screen when
-        // "Ready" replaces it rather than leaving a gap of nothing.
-        sendDirective({ kind: 'ack', label: 'Listening to the room…', durationMs: 2400 });
-      },
-      onVadCalibrated: () => {
-        sendDirective({ kind: 'ack', label: 'Ready — start speaking', durationMs: 1600 });
-      },
       // H5: a dead input is not a provider problem; the user must act.
       onInputDeviceLost: (code) => {
         // §12.7: device loss outranks every acoustic reading on the mic tile.
-        coaching?.setMicrophoneDisconnected(true);
         state.update((s) => ({ ...s, micState: 'disconnected', inputDeviceLost: true }));
         // §28.2/§28.6: the remedy named here is one the Live screen can
         // actually perform — `switchMicrophone` below drives the transport's
@@ -888,7 +695,6 @@ export function startLiveSession(input: StartSessionInput): string {
       onInputRestored: () => {
         const before = get(state);
         if (!before.inputDeviceLost) return;
-        coaching?.setMicrophoneDisconnected(false);
         state.update((s) => ({
           ...s,
           inputDeviceLost: false,
@@ -931,12 +737,8 @@ export function startLiveSession(input: StartSessionInput): string {
     state.update((s) => {
       if (!s.active) return s;
       const elapsedSeconds = Math.floor((Date.now() - s.startedAtMs) / 1000);
-      return { ...s, elapsedSeconds, estimatedCostUsd: currentCostUsd(s.mode, elapsedSeconds) };
+      return { ...s, elapsedSeconds };
     });
-    // §42.1: the sidecar's counters are pulled on the same beat as the
-    // transcription clock, and land in their own field — the two costs are
-    // never summed and never displayed as one number.
-    publishSemanticSpend();
   }, 1000);
 
   // §36.2: incremental retention, so a crash mid-take costs at most one
@@ -1078,221 +880,6 @@ function buildStartSequenceGate(input: StartSessionInput): {
  * ever varies an `alignment` field, this must take the same resolved profile
  * the driver does rather than the default.
  */
-function startSemanticSidecar(sessionId: string, following: FollowingSettings): void {
-  const sidecar = new SemanticSidecar({
-    sessionId,
-    sessionGeneration,
-    profile: resolveSmoothFollowProfile(),
-    mode: following.intelligenceMode,
-    // §42.1: the request cap is the user's setting, not a module constant.
-    // `null` means "no cap of my own", which leaves the §42 default in force
-    // rather than removing the bound entirely.
-    ...(following.semanticRequestLimit !== null
-      ? { budget: { maxRequestsPerSession: following.semanticRequestLimit } }
-      : {}),
-    // Only fused + validated evidence gets here; the scheduler owns that work
-    // and the beam re-checks epoch, TTL, source items and candidate membership.
-    postAssistEvidence: (evidence) => driver?.applySemanticAssist(evidence),
-    // §47.4: publish real scheduler availability as it changes.
-    onAvailabilityChange: () => setActiveSemanticSidecar(semanticSidecar),
-  });
-  sidecar.attachContextSource((emit) => {
-    pushSemanticContext = emit;
-    return () => {
-      if (pushSemanticContext === emit) pushSemanticContext = null;
-    };
-  });
-  semanticSidecar = sidecar;
-  setActiveSemanticSidecar(sidecar);
-  publishSemanticSpend();
-
-  /*
-   * §42.2 prices. Rust is the only holder of the verified rates (they are
-   * configured, never shipped as constants), so they are fetched once and
-   * handed to the scheduler. Until they arrive — and forever, if none is
-   * configured — the cost reads as unknown rather than as zero. A failed fetch
-   * must never interrupt a take, so it simply leaves the rate unknown.
-   */
-  void getModelCapabilities()
-    .then((capabilities) => {
-      if (semanticSidecar !== sidecar) return;
-      sidecar.setPrices({
-        inputPerMTokUsd: capabilities.semanticInputPricePerMtok ?? null,
-        cachedInputPerMTokUsd: capabilities.semanticCachedInputPricePerMtok ?? null,
-        outputPerMTokUsd: capabilities.semanticOutputPricePerMtok ?? null,
-      });
-      publishSemanticSpend();
-    })
-    .catch(() => {});
-}
-
-/**
- * §42.1: change the per-session Luna request cap while the take is running.
- *
- * The operator watching the request count climb is the person who wants to cap
- * it, and the only alternative — stop the take, open Settings — costs more
- * than the requests do. The new value is persisted as the default for the next
- * session too.
- */
-export function setSemanticRequestLimit(limit: number | null): void {
-  const normalized =
-    limit === null || !Number.isFinite(limit) || limit < 1 ? null : Math.floor(limit);
-  semanticSidecar?.setRequestLimit(
-    normalized ?? DEFAULT_SEMANTIC_BUDGET.maxRequestsPerSession,
-  );
-  // Patch first: the settings store applies it optimistically and
-  // `publishSemanticSpend` reads it back for the no-sidecar case.
-  void patchSettings('following', { semanticRequestLimit: normalized }).catch(() => {});
-  publishSemanticSpend();
-}
-
-/** Copy the scheduler's own counters into the store (§42.1 visibility). */
-function publishSemanticSpend(): void {
-  const sidecar = semanticSidecar;
-  if (sidecar === null) {
-    // No sidecar (manual/fixed mode, browser dev): no requests and no tokens,
-    // but still report the cap the user has chosen — "0 of 400" when they set
-    // 50 would misdescribe their own setting.
-    const configured = currentFollowingSettings().semanticRequestLimit;
-    state.update((s) => ({
-      ...s,
-      semanticSpend: {
-        ...NO_SEMANTIC_SPEND,
-        requestLimit: configured ?? DEFAULT_SEMANTIC_BUDGET.maxRequestsPerSession,
-      },
-    }));
-    return;
-  }
-  const diagnostics = sidecar.scheduler.getDiagnostics();
-  const requests = Object.values(diagnostics.requestsByLane).reduce((sum, n) => sum + n, 0);
-  const spend: SemanticSpend = {
-    requests,
-    requestLimit: sidecar.scheduler.getBudget().maxRequestsPerSession,
-    inputTokens: diagnostics.usage.inputTokens,
-    cachedInputTokens: diagnostics.usage.cachedInputTokens,
-    outputTokens: diagnostics.usage.outputTokens,
-    totalTokens: diagnostics.usage.totalTokens,
-    estimatedCostUsd: diagnostics.estimatedCostUsd,
-    availability: diagnostics.availability,
-  };
-  state.update((s) => ({ ...s, semanticSpend: spend }));
-}
-
-/**
- * §36.5: any authorized discontinuity invalidates everything in flight. The
- * engine also bumps its semantic epoch on `moveTo`, so a late response would be
- * rejected anyway — cancelling is the cheaper half of the same guarantee.
- */
-function invalidateSemantics(): void {
-  semanticSidecar?.cancelInFlight();
-}
-
-/* ---------------------------------------------------------------------------
- * Coaching subsystem (companion Part II)
- * ------------------------------------------------------------------------- */
-
-/**
- * Stand up the take's coaching subsystem on the SAME capture the pipeline just
- * opened (§5.3). Constructed once per capture; a device change re-invokes this,
- * and the guard keeps a single controller for the take.
- *
- * `off` and `review_only` do nothing live (§6.1/§6.5), but the subsystem is
- * still constructed for `review_only` because it keeps analysing while
- * publishing nothing. `off` is the one mode that is not constructed at all —
- * there is genuinely nothing to drive.
- */
-function startCoaching(input: StartSessionInput, stream: MediaStreamLike): void {
-  if (coaching !== null) return;
-  const coachingSettings = getSettingsSnapshot().coaching;
-  if (coachingSettings.mode === 'off') return;
-  const sessionId = get(state).sessionId;
-  if (!sessionId) return;
-
-  const wantsLuna =
-    semanticSidecar !== null && coachingSettings.modules.liveTips && coachingSettings.mode !== 'review_only';
-
-  const controller = new CoachingSessionController({
-    sessionId,
-    settings: coachingSettings,
-    compiled: input.compiled ?? null,
-    // B3: the coach request identifies the SCRIPT, not the session. Both of
-    // these used to be absent, so every outbound request named the session id
-    // as its script and claimed revision 0.
-    scriptId: input.scriptId,
-    scriptRevision: input.scriptRevision ?? 0,
-    stream,
-    // §36.3: the ordinal, not an id. The controller mints through
-    // `takePassIdFor`, so this lane cannot name a pass differently from the
-    // take row. Capture can open *after* a retake — a mid-take device switch
-    // re-acquires the stream — so the open take's ordinal is the right one and
-    // a hard-coded 1 would silently fold a later pass into the first.
-    initialPassOrdinal: activeTake?.passOrdinal ?? FIRST_TAKE_PASS_ORDINAL,
-    publish: (snapshot) => publishCoachRail(snapshot),
-    ...(wantsLuna
-      ? {
-          lunaTransport: createCoachingObserverTransport(),
-          lunaMode: coachingSettings.mode === 'studio' ? 'enhanced' : 'standard',
-          // §20.3: the coach observer shares the session's semantic budget
-          // rather than opening a second, unmetered path to the API.
-          isBudgetExhausted: () => isSemanticBudgetExhausted(),
-        }
-      : {}),
-    onLaneFailure: () => {
-      // §5.2: a lane failure is contained inside the subsystem. It is not a
-      // session failure and must never reach the scroll; recording it for
-      // diagnostics is enough.
-    },
-  });
-
-  coaching = controller;
-  // §7.1/§27. Push the initial display state so the first published snapshot
-  // carries the right visibility and mirror, and the rail reserves its band
-  // pre-take. `visible` follows the stage settings' reduced-motion and the
-  // control's own toggle, which starts shown whenever coaching is active.
-  controller.setDisplayState({
-    visible: true,
-    mirrored: stageSettings?.mirrorX === true || stageSettings?.mirrorY === true,
-    reducedMotion: stageSettings?.reducedMotion === true,
-  });
-  state.update((s) => ({ ...s, coachingActive: true, coachRailVisible: true }));
-
-  void controller.start().catch(() => {
-    // Attaching the analyzer failed; transcript-driven filler and pace coaching
-    // still run. Never a session failure (§5.2).
-  });
-}
-
-/** §20.3. Whether the session's shared semantic budget is spent. */
-function isSemanticBudgetExhausted(): boolean {
-  const sidecar = semanticSidecar;
-  if (sidecar === null) return false;
-  const diagnostics = sidecar.scheduler.getDiagnostics();
-  const used = Object.values(diagnostics.requestsByLane).reduce((sum, n) => sum + n, 0);
-  return used >= sidecar.scheduler.getBudget().maxRequestsPerSession;
-}
-
-/** §5.4. Push the live tracking facts the orchestrator cannot compute. */
-function feedCoachingTracking(snapshot: TrackingSnapshot): void {
-  coaching?.setTrackingState({
-    tokenIndex: snapshot.tokenIndex,
-    alignmentConfidence: snapshot.confidence,
-    reacquiring: snapshot.state === 'searching' || snapshot.state === 'reconnecting',
-    commandActive: snapshot.state === 'command_pending',
-    // §26.5: the authored SPAN the presenter is on, never a token id. The
-    // aligner reports the sentence; that is the coarsest honest span we have.
-    activeScriptSpanId: snapshot.sentenceId || null,
-    // §5.4: the engine's semantic epoch, which only reaches the control layer
-    // on the v2 motion frame. It bumps on a command jump, a retake and a
-    // re-anchor, and it is what lets the coaching subsystem disown evidence
-    // taken against a position the engine has since abandoned.
-    trackingEpoch: lastMotionFrame?.epoch ?? 0,
-  });
-}
-
-/* ---------------------------------------------------------------------------
- * Stage bridge: snapshot relay, heartbeat (§43.5), stage-originated events.
- * ------------------------------------------------------------------------- */
-
 function handleSnapshot(snapshot: TrackingSnapshot): void {
   // §36.3: sections traversed, per take. `blocksSeen` below is the same fact
   // for the whole session and has only ever been read as a count; this is the
@@ -1324,7 +911,6 @@ function handleSnapshot(snapshot: TrackingSnapshot): void {
     // §5.4/§14.10: the coaching subsystem reads the alignment cursor and the
     // active span from the same snapshot. It is advisory — nothing it does here
     // reaches back into motion (§2.1).
-    feedCoachingTracking(snapshot);
     return relaySnapshot(snapshot);
   }
   const frame = motionFrameFromSnapshot(snapshot, {
@@ -1339,7 +925,6 @@ function handleSnapshot(snapshot: TrackingSnapshot): void {
   lastMotionFrame = frame;
   // Fed *after* the bridged frame so the coaching lane reads this snapshot's
   // epoch rather than the previous one.
-  feedCoachingTracking(snapshot);
   smoothFollow.ingestMotionFrame(frame);
   publishSemanticFrame(frame);
   relaySnapshot(snapshot);
@@ -1403,21 +988,6 @@ function publishSemanticFrame(frame: SemanticMotionFrame): void {
  * channel that can move the script. The snapshot carries its own `sessionId`
  * and monotonic `stageRevision`, which the stage validates on arrival.
  */
-function publishCoachRail(snapshot: CoachRailState): void {
-  if (stageGeneration === 0) return;
-  if (!cachedEmitTo && !isTauriRuntime()) return;
-  const s = get(state);
-  if (!s.sessionId || !s.stageAlive) return;
-  if (cachedEmitTo) {
-    void cachedEmitTo('stage', STAGE_EVENT.coachRail, snapshot).catch(() => {});
-    return;
-  }
-  void resolveEmitTo()
-    .then((emitTo) => emitTo('stage', STAGE_EVENT.coachRail, snapshot))
-    .catch(() => {});
-}
-
-/** Throttled control → stage snapshot relay (§46.6). */
 function relaySnapshot(snapshot: TrackingSnapshot): void {
   const current = get(state);
   if (!current.sessionId || stageGeneration === 0) return;
@@ -1598,29 +1168,16 @@ function bufferTranscriptItem(item: {
   });
 }
 
-function labelTranscriptItems(
-  itemIds: readonly string[],
-  disposition: 'script' | 'command' | 'discarded',
-): void {
-  if (!transcriptRetained || itemIds.length === 0) return;
-  const wanted = new Set(itemIds);
-  for (const item of transcriptBuffer) {
-    if (wanted.has(item.itemId)) item.disposition = disposition;
-  }
-}
-
 /**
- * Write out every item whose disposition has settled. `force` (session end)
- * writes the tail too — there is no later chance to relabel it.
+ * Write out everything buffered so far. `force` is retained on the signature
+ * because the call sites read better for it, but every item is now ready the
+ * moment it arrives — see {@link TRANSCRIPT_FLUSH_INTERVAL_MS}.
  */
 function flushTranscript(sessionId: string, force: boolean): void {
+  void force;
   if (!transcriptRetained || transcriptBuffer.length === 0) return;
-  const cutoff = Date.now() - TRANSCRIPT_SETTLE_MS;
-  const ready = force
-    ? transcriptBuffer
-    : transcriptBuffer.filter((item) => item.receivedAtMs <= cutoff);
-  if (ready.length === 0) return;
-  transcriptBuffer = force ? [] : transcriptBuffer.filter((item) => item.receivedAtMs > cutoff);
+  const ready = transcriptBuffer;
+  transcriptBuffer = [];
   void appendSessionTranscript(
     sessionId,
     ready.map((item) => ({
@@ -1676,12 +1233,10 @@ const followActions = {
   reAnchor(): void {
     const token = get(state).snapshot?.tokenIndex;
     if (token === undefined) return;
-    invalidateSemantics();
     driver?.moveToToken(token, 'manual');
     showToast('Re-finding your place', 'info', { durationMs: 1600 });
   },
   acceptCandidate(candidate: { tokenIndex: number }): void {
-    invalidateSemantics();
     driver?.moveToToken(candidate.tokenIndex, 'manual');
   },
   /**
@@ -1693,16 +1248,6 @@ const followActions = {
     if (paused) driver?.pause();
     else driver?.resume();
     state.update((s) => ({ ...s, voiceFollow: !paused }));
-  },
-  setIntelligenceMode(mode: FollowingSettings['intelligenceMode']): void {
-    // §35: the live scheduler must follow the switch immediately — flipping to
-    // local_only cancels everything in flight rather than waiting for a restart.
-    semanticSidecar?.setMode(mode);
-    setActiveSemanticSidecar(semanticSidecar);
-    void patchSettings('following', { intelligenceMode: mode }).catch(() => {});
-  },
-  setCoachingDisplay(display: FollowingSettings['coachingDisplay']): void {
-    void patchSettings('following', { coachingDisplay: display }).catch(() => {});
   },
   /**
    * §62 recovery. Re-publishing the current stage settings forces the stage to
@@ -1976,7 +1521,7 @@ export async function identifyStageDisplays(): Promise<void> {
  * position. A Listener is a video of a person behind the words; when it breaks,
  * the take is still perfectly good, and the recovery must not touch the
  * tracking cursor, the scroll, the semantic epoch, or the driver at all. That
- * is why nothing here calls `driver`, `invalidateSemantics`, `moveSentences`,
+ * is why nothing here calls `driver`, `moveSentences`,
  * or `relaySnapshot` — a cosmetic failure may not cost the presenter their
  * place.
  * ------------------------------------------------------------------------- */
@@ -2161,7 +1706,6 @@ export function startPrompting(): void {
   if (!s.active || s.prompting) return;
   state.update((prev) => ({ ...prev, prompting: true, paused: 'none' }));
   driver?.start();
-  pipeline?.startListening();
 }
 
 /** Listening pause — transcription stays connected (§15.3). */
@@ -2250,7 +1794,6 @@ export async function switchMicrophone(deviceId: string): Promise<boolean> {
     showToast(`Could not switch to that microphone. ${describeError(err)}`, 'danger');
     return false;
   }
-  coaching?.setMicrophoneDisconnected(false);
   state.update((s) => ({ ...s, micState: 'live', inputDeviceLost: false }));
   // §28.1: remember the choice, so the next take opens the input that worked
   // rather than the one that just vanished.
@@ -2283,7 +1826,6 @@ export function togglePlayPause(): void {
 }
 
 export function moveSentences(delta: number): void {
-  invalidateSemantics();
   driver?.moveSentences(delta);
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
@@ -2295,7 +1837,6 @@ export function moveSentences(delta: number): void {
  */
 export function goToToken(tokenIndex: number): void {
   if (!get(state).active) return;
-  invalidateSemantics();
   driver?.moveToToken(Math.max(0, tokenIndex), 'manual');
   // §36.3: an outline jump is a position the operator deliberately went to, and
   // "where did I skip to" is half of what a take history is for.
@@ -2310,7 +1851,6 @@ export function goToToken(tokenIndex: number): void {
  * than being merged into whatever follows.
  */
 export function restartParagraph(): void {
-  invalidateSemantics();
   driver?.restartParagraph();
   const before = get(state);
   noteCheckpoint('paragraph_start');
@@ -2318,23 +1858,13 @@ export function restartParagraph(): void {
   if (before.sessionId !== null) {
     const passOrdinal = before.counts.retakes + 2;
     beginTake(before.sessionId, passOrdinal, before.snapshot?.tokenIndex ?? 0);
-    // §11.3. The coaching lane's pass advances with the take history's, from
-    // the one ordinal — otherwise the rail keeps counting the take the
-    // presenter just discarded, and the filler tile shows a number belonging
-    // to two takes at once.
-    coaching?.beginTakePass(passOrdinal);
   }
   state.update((s) => ({ ...s, counts: { ...s.counts, retakes: s.counts.retakes + 1 } }));
 }
 
-/**
- * The "mark this" voice command (§36.3). It used to increment the command
- * counter and store no marker whatsoever, which made it the one voice command
- * whose entire effect was invisible.
- */
+/** "Mark this" (§36.3) — drop a checkpoint at the current position. */
 export function addTakeMarker(): void {
   noteCheckpoint('take');
-  state.update((s) => ({ ...s, counts: { ...s.counts, commands: s.counts.commands + 1 } }));
 }
 
 /**
@@ -2422,26 +1952,6 @@ export function toggleStageMirror(axis: 'x' | 'y' = 'x'): void {
   // learn the new mirror state too — it flips through its own snapshot, not the
   // stage transform, because it is inside the mirror plane but the boundary is
   // decided on the control side.
-  coaching?.setDisplayState({
-    mirrored: stageSettings.mirrorX === true || stageSettings.mirrorY === true,
-  });
-}
-
-/**
- * §27. Show or hide the Coaching Rail's contents. Toggled by the Live-screen
- * button and by the "show me my stats" voice command (`set_coaching_rail`).
- *
- * Hiding NEVER reflows the script: the reserved band stays and only the
- * contents fade (§7.1). When coaching is `off` there is no rail to toggle, so
- * this is a no-op. Pass a boolean to force a state, or omit to flip.
- */
-export function setCoachingRailVisible(visible?: boolean): boolean {
-  const s = get(state);
-  if (!s.coachingActive || coaching === null) return false;
-  const next = visible ?? !s.coachRailVisible;
-  coaching.setDisplayState({ visible: next });
-  state.update((prev) => ({ ...prev, coachRailVisible: next }));
-  return next;
 }
 
 export function toggleListenerVisible(): boolean {
@@ -2451,163 +1961,6 @@ export function toggleListenerVisible(): boolean {
   listenerVisible = !listenerVisible && listenerSelection !== null;
   sendDirective({ kind: 'listener', listener: listenerVisible ? listenerSelection : null });
   return listenerVisible;
-}
-
-/* ---------------------------------------------------------------------------
- * Validated voice-command execution (§33.9, §34)
- * ------------------------------------------------------------------------- */
-
-function executeValidatedCommand(command: ValidatedCommand): void {
-  const executed = applyCommandAction(command.action);
-  if (!executed) {
-    showToast('That command is not available during prompting.', 'info');
-    return;
-  }
-  state.update((s) => ({ ...s, counts: { ...s.counts, commands: s.counts.commands + 1 } }));
-  sendDirective({ kind: 'ack', label: command.humanLabel, durationMs: 900 });
-  showToast(command.humanLabel, 'info', { durationMs: 1600 });
-}
-
-function applyCommandAction(action: CommandAction): boolean {
-  const s = get(state);
-  switch (action.action) {
-    case 'start':
-      startPrompting();
-      return true;
-    case 'pause':
-      pauseListening();
-      return true;
-    case 'resume':
-      resumeSession();
-      return true;
-    case 'hard_pause':
-      hardPause();
-      return true;
-    case 'stop':
-      stopSession();
-      return true;
-    case 'blank_stage':
-      if (!s.stageBlanked) toggleBlankStage();
-      return true;
-    case 'unblank_stage':
-      if (s.stageBlanked) toggleBlankStage();
-      return true;
-    case 'toggle_mirror':
-      toggleStageMirror(action.axis);
-      return true;
-    case 'set_font_size':
-      adjustStageFontSize(action.valuePx - (stageSettings?.fontSizePx ?? s.stageFontSizePx));
-      return true;
-    case 'adjust_font_size':
-      adjustStageFontSize(action.deltaSteps * 4);
-      return true;
-    case 'set_margins':
-      if (stageSettings) {
-        stageSettings = {
-          ...stageSettings,
-          columnWidthPercent: Math.min(100, Math.max(40, 100 - 2 * action.valuePercent)),
-        };
-        pushSettings();
-      }
-      return true;
-    case 'adjust_margins':
-      if (stageSettings) {
-        stageSettings = {
-          ...stageSettings,
-          columnWidthPercent: Math.min(
-            100,
-            Math.max(40, stageSettings.columnWidthPercent - 2 * action.deltaPercent),
-          ),
-        };
-        pushSettings();
-      }
-      return true;
-    case 'adjust_reading_band':
-      if (stageSettings) {
-        stageSettings = {
-          ...stageSettings,
-          readingBandCenterPercent: Math.min(
-            70,
-            Math.max(20, stageSettings.readingBandCenterPercent + action.deltaPercent),
-          ),
-        };
-        pushSettings();
-      }
-      return true;
-    case 'set_cue_visibility':
-      if (stageSettings) {
-        stageSettings = { ...stageSettings, showCues: action.visible };
-        pushSettings();
-      }
-      return true;
-    case 'set_listener':
-      if (action.enabled !== listenerVisible) toggleListenerVisible();
-      return true;
-    case 'adjust_listener_opacity':
-      if (listenerSelection) {
-        listenerSelection = {
-          ...listenerSelection,
-          geometry: {
-            ...listenerSelection.geometry,
-            opacity: Math.min(
-              1,
-              Math.max(0.05, listenerSelection.geometry.opacity + action.deltaPercent / 100),
-            ),
-          },
-        };
-        if (listenerVisible) sendDirective({ kind: 'listener', listener: listenerSelection });
-      }
-      return true;
-    case 'next_section':
-      return jumpSection(1);
-    case 'previous_section':
-      return jumpSection(-1);
-    case 'go_to_target': {
-      const target = compiledScript?.navigationTargets.find((t) => t.id === action.targetId);
-      if (!target) return false;
-      invalidateSemantics();
-      driver?.moveToToken(target.tokenIndex, 'command');
-      state.update((prev) => ({ ...prev, counts: { ...prev.counts, jumps: prev.counts.jumps + 1 } }));
-      return true;
-    }
-    case 'move_relative': {
-      const sign = action.direction === 'forward' ? 1 : -1;
-      if (action.unit === 'sentence') {
-        driver?.moveSentences(sign * action.amount);
-        return true;
-      }
-      if (action.unit === 'section') return jumpSection(sign * action.amount);
-      // paragraph: approximate as three sentences per paragraph move.
-      driver?.moveSentences(sign * action.amount * 3);
-      return true;
-    }
-    case 'restart_unit':
-      if (action.unit === 'sentence') {
-        driver?.moveSentences(0);
-        return true;
-      }
-      restartParagraph();
-      return true;
-    case 'retake':
-      restartParagraph();
-      return true;
-    case 'mark_checkpoint':
-      addTakeMarker();
-      return true;
-    case 'set_scroll_mode':
-      state.update((prev) => ({ ...prev, voiceFollow: action.mode === 'voice' }));
-      return true;
-    case 'set_coaching_rail': {
-      // §27: "show me my stats". Toggle when the command omits an explicit
-      // target, otherwise honour it. A no-op when coaching is off; report that
-      // as not-executed so the caller does not acknowledge a phantom action.
-      if (!s.coachingActive) return false;
-      setCoachingRailVisible(action.visible);
-      return true;
-    }
-    default:
-      return false;
-  }
 }
 
 function jumpSection(delta: number): boolean {
@@ -2628,7 +1981,6 @@ function jumpSection(delta: number): boolean {
   });
   const target = flat[Math.max(0, Math.min(flat.length - 1, currentIndex + delta))];
   if (!target) return false;
-  invalidateSemantics();
   driver?.moveToToken(target.startTokenIndex, 'command');
   state.update((prev) => ({ ...prev, counts: { ...prev.counts, jumps: prev.counts.jumps + 1 } }));
   return true;
@@ -2643,18 +1995,6 @@ function jumpSection(delta: number): boolean {
  * popover and the F.17 summary: they used to compute it differently and
  * disagreed by an order of magnitude for the same take.
  *
- * The live pipeline meters real connected time, which is the correct number
- * whenever there is one. Without a pipeline there is no billable stream at all
- * in manual and fixed modes; voice mode without a pipeline (browser dev, no
- * compiled script) falls back to elapsed minutes at the published rate so the
- * figure is still of the right order.
- */
-function currentCostUsd(mode: SessionMode, elapsedSeconds: number): number {
-  if (pipeline) return pipeline.estimatedCostUsd();
-  if (mode !== 'voice') return 0;
-  return estimateTranscriptionCostUsd(elapsedSeconds, costModel).usd;
-}
-
 /** Stop the session and produce the F.17 summary. */
 export function stopSession(): SessionSummary {
   const s = get(state);
@@ -2664,24 +2004,12 @@ export function stopSession(): SessionSummary {
     stopInternals();
     return s.summary ?? emptySummary(s);
   }
-  const estimatedCostUsd = Math.round(currentCostUsd(s.mode, s.elapsedSeconds) * 100) / 100;
-  // §42.1: read the sidecar's final counters BEFORE `stopInternals` disposes
-  // it — this is the last moment the take's Luna spend can be observed at all.
-  const semanticDiagnostics = semanticSidecar?.scheduler.getDiagnostics() ?? null;
   const summary: SessionSummary = {
     durationSeconds: s.elapsedSeconds,
     mode: s.mode,
     sectionsReached: s.blocksSeen.length,
     retakes: s.counts.retakes,
-    commands: s.counts.commands,
     reconnects: s.counts.reconnects,
-    estimatedCostUsd,
-    // Reported to full precision: Luna spend is routinely sub-cent, and
-    // rounding it to two places here is how a real cost becomes "$0.00".
-    semanticCostUsd: semanticDiagnostics?.estimatedCostUsd ?? null,
-    semanticRequests: semanticDiagnostics
-      ? Object.values(semanticDiagnostics.requestsByLane).reduce((sum, n) => sum + n, 0)
-      : 0,
     endingLocation: locateEnding(s),
     transcriptSaved: transcriptRetained,
     wordsHeard,
@@ -2700,11 +2028,11 @@ export function stopSession(): SessionSummary {
     finishTake(s.sessionId, s.snapshot?.tokenIndex);
     void endSessionRecord(s.sessionId, {
       endTokenIndex: s.snapshot?.tokenIndex,
-      commandCount: s.counts.commands,
+      commandCount: 0,
       retakeCount: s.counts.retakes,
       reconnectCount: s.counts.reconnects,
       manualCorrectionCount: s.counts.jumps,
-      estimatedCostUsd,
+      estimatedCostUsd: 0,
       metrics: {
         sectionsReached: s.blocksSeen.length,
         durationSeconds: s.elapsedSeconds,
@@ -2740,11 +2068,7 @@ function emptySummary(s: SessionState): SessionSummary {
     mode: s.mode,
     sectionsReached: 0,
     retakes: 0,
-    commands: 0,
     reconnects: 0,
-    estimatedCostUsd: 0,
-    semanticCostUsd: null,
-    semanticRequests: 0,
     endingLocation: 'Beginning',
     transcriptSaved: false,
     wordsHeard: 0,
@@ -2771,26 +2095,6 @@ function locateEnding(s: SessionState): string {
 }
 
 function stopInternals(): void {
-  // H6: the scheduler is created and cancelled with the take. Dispose it before
-  // the driver so nothing in flight can post evidence at a dead worker.
-  semanticSidecar?.dispose();
-  semanticSidecar = null;
-  pushSemanticContext = null;
-  setActiveSemanticSidecar(null);
-  // The coaching subsystem is take-scoped like the sidecar: end the take so the
-  // last seconds are measured and the glass is cleared, then dispose the graph
-  // (which drops the retained PCM with the capture, §12.6). Fire-and-forget —
-  // teardown must not block the session stop.
-  if (coaching) {
-    const c = coaching;
-    coaching = null;
-    try {
-      c.endTake('take_end');
-    } catch {
-      /* §5.2 */
-    }
-    void c.dispose().catch(() => {});
-  }
   driver?.dispose();
   driver = null;
   if (pipeline) {

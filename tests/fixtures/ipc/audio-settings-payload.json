@@ -12,7 +12,7 @@
     "localStorage overlay: Rust's AudioSettings had no such field, toRustPatch",
     "had no `audio` arm, so the mic tuning a presenter set for their room could",
     "not survive a cleared browser store, and the backend billing the key could",
-    "not see the commit cadence it was paying for. Mapped in one direction only",
+    "not see the room tuning it was set to. Mapped in one direction only",
     "is the defect this project has shipped twice; a fixture both halves read is",
     "what makes it impossible.",
     "",
@@ -20,14 +20,13 @@
     "one side maps and the other does not comes back as its default, and 0.5",
     "would hide exactly that.",
     "",
-    "The other four fields are the rest of Rust's audio section. They are here",
+    "The other three fields are the rest of Rust's audio section. They are here",
     "so the round trip is asserted on the WHOLE document rather than on one key",
     "— a patch that silently dropped `language` would otherwise pass."
   ],
   "settings": {
-    "transcriptionModel": "gpt-realtime-whisper",
-    "language": "en",
-    "delayProfile": "balanced",
+    "transcriptionModel": "inworld/inworld-stt-1",
+    "language": "en-GB",
     "softPauseAutoDisconnectMinutes": 15,
     "vadSensitivity": 0.72
   },

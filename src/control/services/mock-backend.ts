@@ -26,7 +26,7 @@ import type {
 import { defaultAppSettings } from './settings-types';
 import type {
   KeyValidationResult,
-  OpenAiKeyStatus,
+  InworldKeyStatus,
 } from './secrets-types';
 import type {
   DisplayDescriptor,
@@ -68,7 +68,7 @@ class MockState {
   scripts = new Map<string, MockScriptRecord>();
   settings: AppSettings = defaultAppSettings();
   /** Only redacted metadata is retained — never the key itself. */
-  keyStatus: OpenAiKeyStatus = { present: false, state: 'unknown', source: 'none' };
+  keyStatus: InworldKeyStatus = { present: false, state: 'unknown', source: 'none' };
   loaded = false;
 
   load(): void {
@@ -280,12 +280,15 @@ export const mockSettings = {
 export const mockSecrets = {
   async validate(candidateKey: string): Promise<KeyValidationResult> {
     await delay(500);
-    if (!/^sk-/.test(candidateKey.trim())) {
-      return { status: 'invalid' };
+    // The browser mock has no service to ask, so it accepts anything that
+    // could plausibly be a key and rejects the empty field — which is the only
+    // distinction it can honestly make.
+    if (candidateKey.trim().length < 8) {
+      return { status: 'invalid', message: 'That does not look like an Inworld key.' };
     }
-    return { status: 'valid', models: { realtime: true, command: true } };
+    return { status: 'valid' };
   },
-  save(candidateKey: string): OpenAiKeyStatus {
+  save(candidateKey: string): InworldKeyStatus {
     // Only the redacted tail is retained, mirroring the Rust contract.
     state.keyStatus = {
       present: true,
@@ -298,7 +301,7 @@ export const mockSecrets = {
     };
     return { ...state.keyStatus };
   },
-  status(): OpenAiKeyStatus {
+  status(): InworldKeyStatus {
     return { ...state.keyStatus };
   },
   remove(): void {

@@ -9,7 +9,7 @@ import { test, expect } from '@playwright/test';
  * between two browser pages, and the Rust IPC relay that carries them is not
  * reachable here. The rail CONTENT is real (the preview publishes `coach_rail`
  * snapshots at the producer's §12.2 rate) but it is the preview's own, not a
- * coaching session's.
+ * live session's.
  *
  * Real behaviour asserted:
  *   - the compiled script renders on the glass (heading + narration);

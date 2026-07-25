@@ -11,7 +11,7 @@ function checks(partial: Partial<PreflightChecks>): PreflightChecks {
     mode: 'voice',
     script: 'ready',
     stage: 'ready',
-    openai: 'ready',
+    speech: 'ready',
     microphone: 'ready',
     listenerEnabled: false,
     listener: 'idle',
@@ -26,7 +26,7 @@ describe('computeReadiness', () => {
     expect(r.overall).toBe('ready');
     expect(r.canStart).toBe(true);
     expect(r.startLabel).toBe('Start session');
-    expect(r.summary).toBe('Script ready · Stage ready · OpenAI ready · Mic ready');
+    expect(r.summary).toBe('Script ready · Stage ready · Speech ready · Mic ready');
   });
 
   it('blocks on a missing stage regardless of mode', () => {
@@ -36,14 +36,14 @@ describe('computeReadiness', () => {
   });
 
   it('voice mode requires OpenAI and the microphone', () => {
-    const r = computeReadiness(checks({ openai: 'blocked' }));
+    const r = computeReadiness(checks({ speech: 'blocked' }));
     expect(r.canStart).toBe(false);
     // Only voice prerequisites failed → the alternative label appears (F.10).
     expect(r.startLabel).toBe('Start in manual mode');
   });
 
   it('manual mode ignores OpenAI/microphone problems', () => {
-    const r = computeReadiness(checks({ mode: 'manual', openai: 'blocked', microphone: 'blocked' }));
+    const r = computeReadiness(checks({ mode: 'manual', speech: 'blocked', microphone: 'blocked' }));
     expect(r.canStart).toBe(true);
   });
 

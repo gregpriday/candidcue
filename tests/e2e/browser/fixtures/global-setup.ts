@@ -63,7 +63,7 @@ async function compileOnce(browser: Browser): Promise<void> {
       .click();
     /*
      * Wait on the COMPILER's own result line, not on Start: Start is gated by
-     * the OpenAI/microphone/stage checks too, and a warm-up that waits on those
+     * the speech/microphone/stage checks too, and a warm-up that waits on those
      * is waiting for the wrong thing.
      */
     await expect(page.getByText('Script compiled and ready to present.')).toBeVisible({

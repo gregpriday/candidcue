@@ -39,8 +39,6 @@
     resumeSession,
     retryListenerMedia,
     session,
-    setCoachingRailVisible,
-    setSemanticRequestLimit,
     startPrompting,
     stopSession,
     switchMicrophone,
@@ -181,55 +179,6 @@
     }));
   });
 
-  /*
-   * Two costs, never one number (§35.1 + §42.1).
-   *
-   * `estimatedCostUsd` is realtime TRANSCRIPTION: per connected audio minute,
-   * metered by the voice pipeline. `semanticSpend` is the Luna sidecar: per
-   * million tokens, metered by the scheduler. They come from different
-   * subsystems with different units and different rates, and a user paying
-   * with their own key needs to see which one is spending their money. Summing
-   * them would produce a figure that describes neither.
-   */
-  // Same source as the F.17 summary — the two used to disagree by an order of
-  // magnitude for the same take.
-  const estimatedCost = $derived($session.estimatedCostUsd.toFixed(2));
-  const spend = $derived($session.semanticSpend);
-  const lunaTokens = $derived(spend.inputTokens + spend.outputTokens);
-
-  /** Draft value for the §42.1 request cap; blank means "use the default". */
-  let requestLimitDraft = $state('');
-  let requestLimitTouched = $state(false);
-  $effect(() => {
-    const saved = $settings.following.semanticRequestLimit;
-    if (!requestLimitTouched) requestLimitDraft = saved === null ? '' : String(saved);
-  });
-
-  function commitRequestLimit(): void {
-    const raw = requestLimitDraft.trim();
-    if (raw === '') {
-      setSemanticRequestLimit(null);
-      requestLimitTouched = false;
-      return;
-    }
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed) || parsed < 1) return;
-    setSemanticRequestLimit(Math.floor(parsed));
-    requestLimitTouched = false;
-  }
-
-  /**
-   * A cost with no configured rate is reported as unknown, never as `$0.00`.
-   * Sub-cent amounts keep four places for the same reason: this sidecar is
-   * usually cheap, and rounding "cheap" to "free" is the lie that makes a
-   * spend readout worthless.
-   */
-  function formatLunaCost(usd: number | null): string {
-    if (usd === null) return 'Not priced';
-    if (usd > 0 && usd < 0.01) return `$${usd.toFixed(4)}`;
-    return `$${usd.toFixed(2)}`;
-  }
-
   /* --- §40.5 Listener media failure ------------------------------------- */
 
   function listenerFaultTitle(fault: ListenerFault): string {
@@ -333,18 +282,6 @@
   function toggleListener(): void {
     const visible = toggleListenerVisible();
     showToast(visible ? 'Listener on' : 'Listener off', 'info', { durationMs: 1600 });
-  }
-
-  /**
-   * §27. Show/hide the Coaching Rail's contents. `setCoachingRailVisible` is
-   * the single mechanism (`CoachRailState.visible`) — hiding fades the contents
-   * and leaves the band reserved, so the reading line cannot shift under a
-   * presenter mid-take (§7.1).
-   */
-  function toggleCoachingRail(): void {
-    if (!$session.coachingActive) return;
-    const visible = setCoachingRailVisible();
-    showToast(visible ? 'Coaching rail on' : 'Coaching rail off', 'info', { durationMs: 1600 });
   }
 
   $effect(() =>
@@ -481,56 +418,6 @@
         <StatusPill tone="neutral" label="No microphone" />
       {/if}
       <span class="display-name">{$session.displayLabel}</span>
-      <div class="cost">
-        <IconButton icon="info" label="Estimated session cost" active={costOpen} onclick={() => (costOpen = !costOpen)} />
-        {#if costOpen}
-          <div class="cost-pop">
-            <div class="cost-group">
-              <p class="cost-line">Realtime transcription</p>
-              <p class="cost-value">≈ ${estimatedCost}</p>
-              <p class="cost-note">
-                Estimated from connected realtime minutes. Rates can change.
-              </p>
-            </div>
-
-            <div class="cost-group">
-              <p class="cost-line">Luna assist</p>
-              <p class="cost-value" class:unpriced={spend.estimatedCostUsd === null}>
-                {formatLunaCost(spend.estimatedCostUsd)}
-              </p>
-              <p class="cost-note">
-                {spend.requests} of {spend.requestLimit} requests · {lunaTokens.toLocaleString()} tokens
-                {#if spend.cachedInputTokens > 0}
-                  ({spend.cachedInputTokens.toLocaleString()} cached){/if}
-              </p>
-              {#if spend.estimatedCostUsd === null}
-                <p class="cost-note">
-                  No verified token price is configured, so CandidCue will not put a figure on
-                  this. The request and token counts above are real.
-                </p>
-              {/if}
-              {#if spend.availability === 'budget_exhausted'}
-                <p class="cost-note">Assist has stopped for this session: the limit was reached.</p>
-              {/if}
-              <label class="cost-budget">
-                <span>Request limit this session</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="1"
-                  inputmode="numeric"
-                  placeholder="400"
-                  bind:value={requestLimitDraft}
-                  oninput={() => (requestLimitTouched = true)}
-                  onchange={() => commitRequestLimit()}
-                  onblur={() => commitRequestLimit()}
-                />
-              </label>
-              <p class="cost-note">Leave blank to use the default cap.</p>
-            </div>
-          </div>
-        {/if}
-      </div>
     </div>
   </header>
 
@@ -782,29 +669,6 @@
         disabled={!stageAlive}
         onclick={() => toggleBlankStage()}
       />
-      <!--
-        §27 Coaching Rail visibility — the button half of the "CandidCue, show
-        me my stats" command. The voice command needs a working realtime
-        transport, so without this there is no way to hide or show the rail in a
-        manual take or when voice is down.
-
-        This is a DISPLAY action and nothing else: it drives `CoachRailState
-        .visible`, which fades the rail's contents while the stage keeps the
-        band's geometry reserved (§7.1). It never touches scroll, cursor or
-        navigation. Coaching mode `off` reserves nothing at all, so there is
-        genuinely nothing to toggle — the button says so rather than pretending.
-      -->
-      <IconButton
-        icon="gauge"
-        label={!$session.coachingActive
-          ? 'Coaching rail — coaching is off for this take'
-          : $session.coachRailVisible
-            ? 'Hide coaching rail'
-            : 'Show coaching rail'}
-        active={$session.coachingActive && $session.coachRailVisible}
-        disabled={!$session.coachingActive}
-        onclick={() => toggleCoachingRail()}
-      />
     </div>
 
     <div class="transport-right">
@@ -855,20 +719,10 @@
       <dd>{summary.sectionsReached}</dd>
       <dt>Retakes</dt>
       <dd>{summary.retakes}</dd>
-      <dt>Commands</dt>
-      <dd>{summary.commands}</dd>
       <dt>Reconnects</dt>
       <dd>{summary.reconnects}</dd>
       <dt>Ending location</dt>
       <dd>{summary.endingLocation}</dd>
-      <dt>Transcription cost</dt>
-      <dd>≈ ${summary.estimatedCostUsd.toFixed(2)} (estimate)</dd>
-      <!-- Its own line: a different subsystem, a different rate (§42.1). -->
-      <dt>Luna assist</dt>
-      <dd>
-        {summary.semanticRequests} requests · {formatLunaCost(summary.semanticCostUsd)}
-        {#if summary.semanticCostUsd === null}(no rate configured){/if}
-      </dd>
       <dt>Transcript</dt>
       <dd>Not saved</dd>
     </dl>

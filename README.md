@@ -1,10 +1,10 @@
 # CandidCue
 
 A voice-following teleprompter. You write a script in Markdown; it displays on a
-second screen behind your camera, usually through teleprompter glass; OpenAI
-Realtime transcribes you as you speak; and a local alignment engine scrolls the
-script to keep your place. A coaching rail along the bottom reports pace, vocal
-variety and filler words while you present.
+second screen behind your camera, usually through teleprompter glass; Inworld
+transcribes you as you speak; and a local alignment engine scrolls the script to
+keep your place. That is the whole product: it follows you, shows you where you
+are, and lets you jump forward and back.
 
 Nothing about the display is generated at runtime — the model never writes what
 you see. It transcribes, and a deterministic local engine decides where you are.
@@ -21,10 +21,14 @@ and the **stage** window, which goes on your second display. On first run, take
 the **"Open the sample script"** button — the sample is written to be read out
 loud and tells you what to watch for while you read it.
 
-You will need an OpenAI API key to do anything with voice. Add it in Settings;
-it is stored in the OS keychain and never reaches the frontend. The permanent
-key stays in Rust — the browser side only ever sees short-lived ephemeral
-credentials minted per session.
+You will need an Inworld API key to do anything with voice. Add it in Settings
+→ Speech; it is stored in the OS keychain and never reaches the frontend.
+
+The key never leaves Rust, and neither does the transcription socket. That is
+not only a precaution: Inworld authenticates a stream with an `Authorization`
+header, and a browser `WebSocket` cannot send one. The renderer captures audio
+and pushes PCM frames over IPC; Rust holds the connection and emits transcript
+events back. Neither window's CSP allows a request to any remote host.
 
 ## Testing
 
@@ -36,16 +40,19 @@ pnpm check       # typecheck (svelte-check) — authoritative
 cd src-tauri && cargo test
 ```
 
-There is also a live smoke test that talks to the real OpenAI API. It is opt-in
-and skips cleanly without both variables, so the normal suite never touches the
-network or spends money:
+There is also a live smoke test that streams real audio to the real Inworld API
+and asserts on the words that come back. It is opt-in and skips cleanly without
+both the flag and a key, so the normal suite never touches the network or spends
+money:
 
 ```bash
-CANDIDCUE_LIVE_OPENAI=1 cargo test --test live_openai -- --nocapture
+CANDIDCUE_LIVE_INWORLD=1 pnpm vitest run tests/integration/inworld-transcription.live.test.ts
 ```
 
-It validates the key, mints a real ephemeral credential, and makes one
-structured-output call — roughly a few cents.
+It is the only test that can tell a healthy socket apart from one that
+transcribes nothing, which is the failure this app has shipped twice. It also
+pins the two protocol facts the docs get wrong: auth is a header, not a query
+parameter, and inbound frames are `result`-wrapped except errors.
 
 ## What is verified, and what is not
 
@@ -54,9 +61,9 @@ here has repeatedly coexisted with a broken product.
 
 **Verified by tests and by running it:** the Markdown compiler and directive
 syntax; the alignment engine including section-boundary liveness; the stage
-motion controller's realized velocity, acceleration and jerk limits; the whole
-coaching analysis stack; the Rust core, its security model and the IPC
-boundary; and the OpenAI credential path against the live API.
+motion controller's realized velocity, acceleration and jerk limits; the Rust
+core, its security model and the IPC boundary; and real speech through the live
+Inworld API into real transcript events.
 
 **Verified only in a browser, not on a real device:** every frontend journey in
 `pnpm test:e2e` runs against the Vite dev server with an injected Tauri shim, so
@@ -80,18 +87,19 @@ mode as a result.
 ## Layout
 
 ```
-src/shared/     compiler, alignment, coaching, contracts — no I/O, testable in node
+src/shared/     compiler, alignment, contracts — no I/O, testable in node
 src/control/    the control window (routes, stores, services)
 src/stage/      the stage window (renderer, motion)
 src/workers/    compiler and tracking Web Workers
-src-tauri/      Rust core: database, scripts, assets, secrets, OpenAI, IPC
+src-tauri/      Rust core: database, scripts, assets, secrets, Inworld STT, IPC
 docs/           the three specifications this is built from
 ```
 
-The three specs in `docs/` are the source of truth, and they override each
-other in a defined order: the coaching-rail spec wins for the rail and delivery
-analytics, the smooth-following spec wins for tracking and motion, and the
-product spec covers everything else.
+The specs in `docs/` describe an earlier design that included live coaching and
+an OpenAI semantic sidecar. Both have been removed; the smooth-following spec
+still governs tracking and motion, and the product spec covers everything else.
+Where they describe coaching, a second model, or OpenAI, the code is the
+authority — see `src-tauri/src/inworld/` for what actually happens now.
 
 ## Conventions
 

@@ -22,9 +22,7 @@ import {
 export interface RustFollowingSettings {
   feel: string;
   voiceLead: string;
-  intelligenceMode: string;
   fidelityMode: string;
-  coachingDisplay: string;
   motionProfileId: string;
   /** `null` (Rust `None`) means "no cap" — see §42.1. */
   semanticRequestLimit: number | null;
@@ -42,9 +40,7 @@ export function followingFromRust(
   return clampFollowing({
     feel: rust.feel,
     voiceLead: rust.voiceLead,
-    intelligenceMode: rust.intelligenceMode,
     fidelityMode: rust.fidelityMode,
-    coachingDisplay: rust.coachingDisplay,
     motionProfileId: rust.motionProfileId,
     semanticRequestLimit: rust.semanticRequestLimit ?? null,
     developerDiagnostics: rust.developerDiagnostics,
@@ -65,9 +61,7 @@ export function followingToRustPatch(
   const out: Record<string, unknown> = {};
   if (patch.feel !== undefined) out.feel = clamped.feel;
   if (patch.voiceLead !== undefined) out.voiceLead = clamped.voiceLead;
-  if (patch.intelligenceMode !== undefined) out.intelligenceMode = clamped.intelligenceMode;
   if (patch.fidelityMode !== undefined) out.fidelityMode = clamped.fidelityMode;
-  if (patch.coachingDisplay !== undefined) out.coachingDisplay = clamped.coachingDisplay;
   if (patch.motionProfileId !== undefined) out.motionProfileId = clamped.motionProfileId;
   if (patch.semanticRequestLimit !== undefined) {
     out.semanticRequestLimit = clamped.semanticRequestLimit;

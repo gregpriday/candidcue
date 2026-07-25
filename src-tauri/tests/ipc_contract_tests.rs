@@ -658,145 +658,6 @@ fn destination_taking_export_commands_run_their_own_picker() {
 }
 
 // ---------------------------------------------------------------------------
-// §26.5 vocabulary analysis + §27.8 model capability registry
-// ---------------------------------------------------------------------------
-
-use candidcue_lib::openai::luna_ops::{VocabularyRequest, VocabularyTerm};
-use candidcue_lib::openai::ModelCapabilities;
-
-fn openai_fixture() -> serde_json::Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("tests")
-        .join("fixtures")
-        .join("ipc")
-        .join("openai-command-payloads.json");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
-    serde_json::from_str(&raw).expect("fixture parses")
-}
-
-/// `SemanticRequestOptions` is `#[serde(flatten)]`ed into `VocabularyRequest`,
-/// so the options live at the TOP level of `request`. A TypeScript wrapper that
-/// nests them under `options` would deserialize fine — serde ignores unknown
-/// fields here — and silently apply none of them, which is the same shape as
-/// the `view` filter Rust discarded.
-#[test]
-fn vocabulary_request_accepts_the_frontend_payload() {
-    let f = openai_fixture();
-    let request: VocabularyRequest =
-        serde_json::from_value(f["analyze_vocabulary"]["request"].clone())
-            .expect("the frontend's vocabulary payload must deserialize");
-    assert_eq!(request.language, "en");
-    assert_eq!(request.candidates.len(), 2);
-    assert_eq!(request.candidates[0].surface, "CandidCue");
-    assert!(!request.candidates[0].contexts.is_empty());
-    assert!(request.existing_dictionary.is_empty());
-
-    let with_options: VocabularyRequest =
-        serde_json::from_value(f["analyze_vocabulary_with_options"]["request"].clone())
-            .expect("options ride at the top level of the request");
-    assert_eq!(with_options.options.timeout_ms, Some(45_000));
-    assert_eq!(with_options.options.reasoning_effort.as_deref(), Some("low"));
-    assert_eq!(with_options.options.max_output_tokens, Some(2_048));
-
-    // The nesting mistake, made explicit: it parses, and every option is lost.
-    let nested: VocabularyRequest = serde_json::from_value(serde_json::json!({
-        "language": "en",
-        "candidates": [],
-        "options": { "timeoutMs": 45000 },
-    }))
-    .expect("unknown fields are ignored");
-    assert_eq!(
-        nested.options.timeout_ms, None,
-        "nesting the options under `options` must not appear to work"
-    );
-
-    // The command takes one argument named `request`.
-    assert!(f["analyze_vocabulary"].get("request").is_some());
-    assert_eq!(
-        f["analyze_vocabulary"].as_object().unwrap().len(),
-        1,
-        "analyze_vocabulary takes exactly one argument"
-    );
-}
-
-/// `VocabularyTerm` is the one payload in this file that is NOT camelCase: it
-/// is the strict response schema of Appendix E.6 and the struct carries no
-/// rename attribute. A TypeScript twin written in camelCase out of habit would
-/// read `undefined` for every field.
-#[test]
-fn vocabulary_term_stays_snake_case() {
-    let f = openai_fixture();
-    let term = VocabularyTerm {
-        surface: "CandidCue".into(),
-        canonical_spoken: "Candid Cue".into(),
-        aliases: vec!["candy cue".into(), "candid q".into()],
-        category: "brand".into(),
-        importance: 0.96,
-        case_sensitive: true,
-        notes: "Application name".into(),
-    };
-    let encoded = serde_json::to_value(&term).expect("serializes");
-    assert_eq!(encoded, f["expectedVocabularyTerm"]);
-    assert!(encoded.get("canonicalSpoken").is_none());
-    assert!(encoded.get("canonical_spoken").is_some());
-}
-
-/// §27.8 registry, and the assumption §26.1 requires it to isolate.
-///
-/// The registry used to claim `realtimePromptSteering: true` for
-/// `gpt-realtime-whisper` while NOTHING read it — a free claim. §26.1 says the
-/// opposite in as many words ("this model does not provide prompt steering"),
-/// and the control window now gates the transcription-session `prompt` on this
-/// flag, so a `true` here would start putting an unsupported field in every
-/// `session.update`.
-#[test]
-fn capability_registry_matches_the_frontend_twin_and_section_26_1() {
-    let f = openai_fixture();
-    let capabilities = ModelCapabilities::default();
-    assert_eq!(
-        serde_json::to_value(&capabilities).expect("serializes"),
-        f["expectedModelCapabilities"]
-    );
-    assert!(
-        !capabilities.realtime_prompt_steering,
-        "§26.1: the primary realtime transcription model does not accept a \
-         vocabulary prompt. Flip this only alongside a verified model that does."
-    );
-    assert!(
-        capabilities.semantic_structured_outputs,
-        "vocabulary analysis is gated on this in the control window"
-    );
-    // The registry is what the control window offers as selectable settings, so
-    // it may only ever advertise reasoning efforts the model actually accepts.
-    // `minimal` is a hard 400 on `gpt-5.6-luna`; advertising it would let the UI
-    // present a choice that kills every semantic call. Verified live in
-    // `tests/live_openai_responses.rs::rejects_unsupported_reasoning_effort`.
-    assert_eq!(
-        capabilities.semantic_reasoning_efforts,
-        candidcue_lib::openai::responses::ALLOWED_SEMANTIC_REASONING_EFFORTS
-            .iter()
-            .map(|e| (*e).to_string())
-            .collect::<Vec<_>>(),
-        "the advertised efforts must be exactly the efforts the transport will send"
-    );
-    assert!(
-        capabilities
-            .semantic_reasoning_efforts
-            .iter()
-            .all(|effort| effort != "minimal"),
-        "`minimal` is not implemented by the configured semantic model"
-    );
-    assert!(
-        capabilities
-            .semantic_reasoning_efforts
-            .contains(&capabilities.semantic_default_reasoning_effort),
-        "the default effort must itself be one of the advertised efforts"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // §52 / §46.6 display profiles
 // ---------------------------------------------------------------------------
 
@@ -1000,216 +861,13 @@ fn listener_download_commands_are_still_honest_stubs() {
 }
 
 // ---------------------------------------------------------------------------
-// C1 regression: credential expiry unit across the IPC boundary
-// ---------------------------------------------------------------------------
-
-use candidcue_lib::openai::{normalize_expiry_to_epoch_ms, EphemeralCredential};
-
-fn credential_fixture() -> serde_json::Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("tests")
-        .join("fixtures")
-        .join("ipc")
-        .join("realtime-credential.json");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
-    serde_json::from_str(&raw).expect("fixture parses")
-}
-
-/// The provider's `expires_at` is epoch SECONDS; the webview compares expiry
-/// against `Date.now()`, which is epoch MILLISECONDS. Forwarding the raw value
-/// made every freshly minted credential compare as already-expired, so the app
-/// rejected its own secret before SDP negotiation and never transcribed —
-/// while the UI still reported a healthy session.
-#[test]
-fn credential_expiry_is_normalized_to_epoch_millis() {
-    let f = credential_fixture();
-    let provider_seconds = f["providerClientSecretResponse"]["expires_at"]
-        .as_i64()
-        .expect("fixture provider timestamp");
-
-    // Deliberately a realistic 10-digit provider value: a millisecond-shaped
-    // fixture is exactly what hid this defect on both sides.
-    assert_eq!(provider_seconds.to_string().len(), 10);
-
-    let normalized = normalize_expiry_to_epoch_ms(provider_seconds);
-    assert_eq!(
-        normalized,
-        f["notes"]["expectedExpiresAtEpochMs"].as_i64().unwrap()
-    );
-    assert_eq!(normalized, provider_seconds * 1000);
-    assert_eq!(normalized.to_string().len(), 13);
-}
-
-/// Already-millisecond input must not be scaled a second time — that would
-/// hand the webview a credential that never appears to expire, which is the
-/// mirror-image failure (a dead session the health monitor never renews).
-#[test]
-fn credential_expiry_normalization_is_idempotent_for_millis() {
-    let millis = 1_785_110_400_000_i64;
-    assert_eq!(normalize_expiry_to_epoch_ms(millis), millis);
-}
-
-/// The serialized field name carries its unit, and matches the fixture the
-/// TypeScript contract test reads.
-#[test]
-fn credential_serializes_to_the_frontend_shape() {
-    let f = credential_fixture();
-    let credential = EphemeralCredential {
-        value: "ek_live_c1regression".into(),
-        expires_at_epoch_ms: normalize_expiry_to_epoch_ms(
-            f["providerClientSecretResponse"]["expires_at"]
-                .as_i64()
-                .unwrap(),
-        ),
-        session_type: "transcription".into(),
-        credential_generation: 1,
-    };
-    let encoded = serde_json::to_value(&credential).expect("serializes");
-    assert_eq!(encoded, f["expectedCredential"]);
-    assert!(encoded.get("expiresAtEpochMs").is_some());
-    assert!(
-        encoded.get("expiresAt").is_none(),
-        "the unitless field name is what caused C1; it must not come back"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// §30 Live Coaching settings — the round trip, not one direction of it
+// §37 Listener settings — one structure, not two
 // ---------------------------------------------------------------------------
 
 use candidcue_lib::settings::{
     validate as validate_settings, AppSettings as RustAppSettings,
-    CoachingSettings as RustCoachingSettings,
+    ListenerSettings as RustListenerSettings,
 };
-
-fn coaching_fixture() -> serde_json::Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("tests")
-        .join("fixtures")
-        .join("ipc")
-        .join("coaching-settings-payload.json");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
-    serde_json::from_str(&raw).expect("fixture parses")
-}
-
-/// The round trip, closed on the Rust side: the patch the TypeScript adapter
-/// emits deserializes into the struct, and the struct serializes back to the
-/// identical document the adapter reads.
-///
-/// This is the assertion that a one-directional mapping cannot survive. A field
-/// Rust does not declare is dropped by serde on the way in and simply absent on
-/// the way out, so the comparison fails naming it; a field whose name differs by
-/// a single character comes back as its default, which — every value in the
-/// fixture being non-default — also fails.
-#[test]
-fn coaching_settings_survive_the_round_trip_unchanged() {
-    let f = coaching_fixture();
-    let sent = f["settings"].clone();
-
-    let coaching: RustCoachingSettings =
-        serde_json::from_value(sent.clone()).expect("the frontend's coaching patch must deserialize");
-    let stored = serde_json::to_value(&coaching).expect("serializes");
-
-    assert_eq!(
-        stored, sent,
-        "a coaching setting changed shape between the UI and the stored document"
-    );
-
-    // And the values are the ones that were sent, not defaults that happen to
-    // serialize to the same JSON.
-    assert_eq!(coaching.mode, "studio");
-    assert_eq!(coaching.precision_transcription_mode, "on_candidates");
-    assert_eq!(coaching.filler_detection_scope, "broad");
-    assert_eq!(coaching.target_duration_seconds, Some(330));
-    assert!(coaching.retain_audio_recording_enabled);
-    assert_eq!(coaching.goals.max_fillers_per_minute, Some(3.0));
-    assert_eq!(coaching.custom_filler_words.len(), 3);
-    assert_eq!(
-        coaching.personal_calibration_reset_at_epoch_ms,
-        Some(1_782_000_000_000)
-    );
-
-    // The whole document validates, so the round trip is not passing values the
-    // backend would reject on the next write.
-    let settings = RustAppSettings {
-        coaching,
-        ..RustAppSettings::default()
-    };
-    validate_settings(&settings).expect("the fixture must be a legal document");
-}
-
-/// §29.3. The four cost modes are all reachable. This replaced a boolean, and
-/// a boolean could express exactly two of them — a user who wanted the cheap
-/// "only when something is ambiguous" pass and one who wanted every eligible
-/// chunk sent were the same `true`.
-#[test]
-fn all_four_precision_cost_modes_are_accepted_and_nothing_else_is() {
-    for mode in ["off", "on_candidates", "full", "review_only"] {
-        let settings = RustAppSettings {
-            coaching: RustCoachingSettings {
-                precision_transcription_mode: mode.into(),
-                ..RustCoachingSettings::default()
-            },
-            ..RustAppSettings::default()
-        };
-        validate_settings(&settings).unwrap_or_else(|e| panic!("{mode} must be legal: {e}"));
-    }
-
-    let settings = RustAppSettings {
-        coaching: RustCoachingSettings {
-            precision_transcription_mode: "true".into(),
-            ..RustCoachingSettings::default()
-        },
-        ..RustAppSettings::default()
-    };
-    assert!(
-        validate_settings(&settings).is_err(),
-        "the old boolean's stringified value must not be silently accepted"
-    );
-}
-
-/// §14.6. The band travels with the preset. Both sides read the same expected
-/// patch, so a UI that stops sending the band, or a Rust struct that stops
-/// accepting it, fails here.
-#[test]
-fn a_pace_preset_patch_carries_the_band_the_preset_means() {
-    let f = coaching_fixture();
-    let expected = &f["presetPatch"]["expected"];
-
-    let mut document = serde_json::to_value(RustCoachingSettings::default()).expect("serializes");
-    let object = document.as_object_mut().expect("object");
-    for (key, value) in expected.as_object().expect("expected patch is an object") {
-        object.insert(key.clone(), value.clone());
-    }
-
-    let coaching: RustCoachingSettings =
-        serde_json::from_value(document).expect("the preset patch must deserialize");
-    assert_eq!(coaching.pace_preset, "calm_explainer");
-    assert_eq!(coaching.target_wpm_low, 110);
-    assert_eq!(coaching.target_wpm_high, 145);
-}
-
-/// §32.1/§32.2. The consents that decide whether bytes reach the disk, and the
-/// mode that decides whether the user's API key is spent, all default to the
-/// quiet side — asserted here as well as in the unit tests, because this is the
-/// file that a reviewer of the IPC surface reads.
-#[test]
-fn coaching_defaults_never_retain_or_spend_without_being_asked() {
-    let coaching = RustCoachingSettings::default();
-    assert!(!coaching.retain_audio_recording_enabled);
-    assert!(!coaching.post_take_report_enabled);
-    assert_eq!(coaching.precision_transcription_mode, "off");
-}
-
-// ---------------------------------------------------------------------------
-// §37 Listener settings — one structure, not two
-// ---------------------------------------------------------------------------
-
-use candidcue_lib::settings::ListenerSettings as RustListenerSettings;
 
 fn listener_settings_fixture() -> serde_json::Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1408,7 +1066,6 @@ fn audio_settings_survive_the_round_trip_unchanged() {
     // deliberately not 0.5.
     assert_eq!(audio.vad_sensitivity, 0.72);
     assert_ne!(audio.vad_sensitivity, RustAudioSettings::default().vad_sensitivity);
-    assert_eq!(audio.delay_profile, "balanced");
     assert_eq!(audio.soft_pause_auto_disconnect_minutes, 15);
 
     // And the whole document validates, so the round trip is not passing a
@@ -1455,9 +1112,8 @@ fn vad_sensitivity_range_accepts_the_whole_slider_and_nothing_beyond() {
 #[test]
 fn an_audio_section_without_a_sensitivity_loads_at_the_neutral_midpoint() {
     let audio: RustAudioSettings = serde_json::from_value(serde_json::json!({
-        "transcriptionModel": "gpt-realtime-whisper",
-        "language": "en",
-        "delayProfile": "low",
+        "transcriptionModel": "inworld/inworld-stt-1",
+        "language": "en-US",
         "softPauseAutoDisconnectMinutes": 10,
     }))
     .expect("a pre-§28.4 section must load");
@@ -1469,7 +1125,7 @@ fn an_audio_section_without_a_sensitivity_loads_at_the_neutral_midpoint() {
 // §46.4 — which key is in play, and the release build's inability to be told
 // ---------------------------------------------------------------------------
 
-use candidcue_lib::commands::openai_cmds::OpenAiKeyStatus;
+use candidcue_lib::commands::inworld_cmds::InworldKeyStatus;
 use candidcue_lib::secrets::{dev_env_key_active, KeySource, RedactedSecretMetadata,
     DEV_KEY_ENV_VAR};
 
@@ -1479,7 +1135,7 @@ fn key_status_fixture() -> serde_json::Value {
         .join("tests")
         .join("fixtures")
         .join("ipc")
-        .join("openai-key-status.json");
+        .join("inworld-key-status.json");
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
     serde_json::from_str(&raw).expect("fixture parses")
@@ -1493,7 +1149,7 @@ fn key_status_fixture() -> serde_json::Value {
 fn key_status_serializes_the_source_to_the_frontend_shape() {
     let f = key_status_fixture();
 
-    let keychain = OpenAiKeyStatus {
+    let keychain = InworldKeyStatus {
         present: true,
         hint: Some("sk-…7f2a".into()),
         source: KeySource::Keychain,
@@ -1503,7 +1159,7 @@ fn key_status_serializes_the_source_to_the_frontend_shape() {
         f["expectedKeychainStatus"]
     );
 
-    let environment = OpenAiKeyStatus {
+    let environment = InworldKeyStatus {
         present: true,
         hint: Some("sk-…9c41".into()),
         source: KeySource::Environment,
@@ -1513,7 +1169,7 @@ fn key_status_serializes_the_source_to_the_frontend_shape() {
         f["expectedEnvironmentStatus"]
     );
 
-    let absent = OpenAiKeyStatus {
+    let absent = InworldKeyStatus {
         present: false,
         hint: None,
         source: KeySource::Absent,
@@ -1655,15 +1311,15 @@ fn save_refuses_under_the_override_before_it_validates_anything() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join("commands")
-            .join("openai_cmds.rs"),
+            .join("inworld_cmds.rs"),
     )
-    .expect("openai_cmds.rs");
+    .expect("inworld_cmds.rs");
     let body = source
-        .split_once("pub async fn save_openai_key(")
-        .expect("save_openai_key")
+        .split_once("pub async fn save_inworld_key(")
+        .expect("save_inworld_key")
         .1;
     let guard = body.find("dev_env_key_active()").expect(
-        "save_openai_key must refuse while the debug environment override is set, \
+        "save_inworld_key must refuse while the debug environment override is set, \
          or the save silently vanishes behind it",
     );
     let validate = body.find("validate_key").expect("save_openai_key validates");
@@ -1676,13 +1332,13 @@ fn save_refuses_under_the_override_before_it_validates_anything() {
     // owns, which is a real and complete effect, and the environment key that
     // survives is reported honestly as `source: \"environment\"`.
     let delete = source
-        .split_once("pub async fn delete_openai_key(")
-        .expect("delete_openai_key")
+        .split_once("pub async fn delete_inworld_key(")
+        .expect("delete_inworld_key")
         .1;
     let delete_body = delete.split_once("\n}").expect("delete body").0;
     assert!(
         !delete_body.contains("dev_env_key_active"),
-        "delete_openai_key must still remove the stored key; refusing it would \
+        "delete_inworld_key must still remove the stored key; refusing it would \
          leave the operator no way to clear the credential store at all"
     );
 }

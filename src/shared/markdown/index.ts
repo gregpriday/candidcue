@@ -29,11 +29,6 @@ export {
 export { phoneticKey } from './phonetic';
 export { STOPWORDS, isStopword } from './stopwords';
 export { computeTokenWeight } from './weights';
-export {
-  extractVocabularyCandidates,
-  type VocabularyCandidate,
-  type VocabularyCandidateKind,
-} from './vocabulary';
 export type {
   CompilerWorkerRequest,
   CompilerWorkerResponse,

@@ -19,8 +19,6 @@ import type {
   TrackingState,
 } from '../../shared/contracts';
 import type { MovementDecisionRecord } from '../../shared/tracking/decision-log';
-import type { SemanticAssistEvidence } from '../../shared/tracking/semantic-assist';
-import type { AssistSchedulingContext } from '../../shared/semantic';
 import {
   buildTrackingDocument,
   type AlignmentDiagnostic,
@@ -79,11 +77,6 @@ export interface TrackingDriverOptions {
   onMotionFrame?(frame: SemanticMotionFrame): void;
   /** Companion §65 records straight from the engine's decision log. */
   onMovementRecord?(record: MovementDecisionRecord): void;
-  /**
-   * Companion §37.1 — the post-section-gate candidate set the Luna sidecar
-   * schedules against. Emitted at ~2 Hz on finalized evidence only.
-   */
-  onSemanticContext?(context: AssistSchedulingContext): void;
 }
 
 export interface TrackingDriver {
@@ -100,12 +93,6 @@ export interface TrackingDriver {
   releaseItems(itemIds: string[]): void;
   setCommandPending(pending: boolean): void;
   moveToToken(tokenIndex: number, movement: 'manual' | 'command'): void;
-  /**
-   * Companion §40 — bounded, already fused + validated sidecar evidence. The
-   * beam re-clamps it and re-checks epoch, TTL, source items and candidate
-   * membership, so this can never be the sole authority for a move.
-   */
-  applySemanticAssist(evidence: SemanticAssistEvidence): void;
   /**
    * Companion §7.2 — close the layout-generation loop.
    *
@@ -196,8 +183,6 @@ export function createWorkerTrackingDriver(options: TrackingDriverOptions): Trac
       options.onMotionFrame?.(data.frame);
     } else if (data.type === 'movement_decision') {
       options.onMovementRecord?.(data.record);
-    } else if (data.type === 'semantic_context') {
-      options.onSemanticContext?.(data.context);
     } else if (data.type === 'diagnostic') {
       options.onDiagnostic?.(data.diagnostic);
     } else if (data.type === 'error') {
@@ -280,9 +265,6 @@ export function createWorkerTrackingDriver(options: TrackingDriverOptions): Trac
     },
     moveToToken(tokenIndex: number, movement: 'manual' | 'command') {
       post({ type: 'move_to_token', tokenIndex, movement, nowMs: Date.now() });
-    },
-    applySemanticAssist(evidence: SemanticAssistEvidence) {
-      post({ type: 'semantic_assist', evidence });
     },
     setLayoutGeneration(generation: number) {
       if (!Number.isInteger(generation) || generation < 0) return;
@@ -415,7 +397,6 @@ export function createMockTrackingDriver(options: TrackingDriverOptions): Tracki
     maskItems() {},
     releaseItems() {},
     setCommandPending() {},
-    applySemanticAssist() {},
     // The mock emits no semantic frames of its own; the store's v1 bridge is
     // what carries the generation on this path.
     setLayoutGeneration() {},

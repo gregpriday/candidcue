@@ -11,7 +11,7 @@
  *     of a caller. A quoted command name can also be a stale constant, a type
  *     literal, or a name in an error message — none of which invoke anything.
  *     This file requires a real call site: `ipcInvoke('x')`, `invokeOrMock('x')`
- *     or an aliased `invoke(SEMANTIC_COMMANDS.classify)`.
+ *     or an aliased `invoke(COMMANDS.something)`.
  *
  *  2. The REVERSE direction — TypeScript invoking a command Rust never
  *     registered. Tauri answers "Command not found", `invokeOrMock` treats that
@@ -21,10 +21,17 @@
  *
  * Both scans are source scans, so both carry the vacuity risk. `the scan finds
  * the call sites it is meant to guard` is the guard on the guard, and it
- * deliberately exercises the aliased branch as well as the literal one — the
- * aliased branch broke silently once already while this file was being written
- * (a `<[^>]*>` generic matcher stops at the inner `>` of
- * `invoke<Outer<Inner>>(…)`, and every semantic command then looked uncalled).
+ * exercises the aliased branch as well as the literal one — the aliased branch
+ * broke silently once already while this file was being written (a `<[^>]*>`
+ * generic matcher stops at the inner `>` of `invoke<Outer<Inner>>(…)`, and
+ * every aliased command then looked uncalled).
+ *
+ * The aliased branch is exercised against a SYNTHETIC module rather than
+ * against whichever production file happens to alias a command name today.
+ * When the semantic sidecar was removed, nothing aliased any more and the
+ * self-check began failing on its own emptiness — which said nothing about
+ * whether the matcher still worked. A fixture keeps the matcher under test
+ * whether or not the app currently uses the pattern.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -150,12 +157,32 @@ describe('IPC call-site integrity', () => {
     expect(scan.invoked.get('list_scripts')).toContain('src/control/services/scripts.ts');
     expect(scan.invoked.has('start_session')).toBe(true);
 
-    // Aliased branch — the semantic commands are reachable ONLY as
-    // `SEMANTIC_COMMANDS.*`, so an empty result here means alias resolution is
-    // broken and every aliased command silently looks uncalled.
-    expect(ALIASES.size).toBeGreaterThan(0);
-    expect(scan.invoked.has('classify_semantic_tracking_window')).toBe(true);
-    expect(scan.invoked.has('retrieve_semantic_landmarks')).toBe(true);
+    // Aliased branch, against a synthetic module: both the alias table and the
+    // call matcher have to work, including through a nested generic — that is
+    // the exact shape that broke silently once.
+    const command = COMMANDS[0] as string;
+    const fixture = `
+      const KEY = '${command}';
+      const GROUP = { pick: '${command}' } as const;
+      await invoke<Outer<Inner>>(KEY);
+      await ipcInvoke(GROUP.pick);
+    `;
+    const aliases = new Map<string, string>();
+    for (const match of fixture.matchAll(
+      /(?:const\s+)?([A-Za-z_$][\w$]*)\s*[:=]\s*['"]([a-z][a-z0-9_]*)['"]/g,
+    )) {
+      const [, alias, value] = match;
+      if (alias && value && COMMAND_SET.has(value)) aliases.set(alias, value);
+    }
+    expect(aliases.get('KEY')).toBe(command);
+    expect(aliases.get('pick')).toBe(command);
+
+    const resolved = [...fixture.matchAll(ALIASED_CALL)].map((match) => {
+      const token = match[1] as string;
+      const key = token.includes('.') ? (token.split('.').pop() as string) : token;
+      return aliases.get(key) ?? aliases.get(token);
+    });
+    expect(resolved).toEqual([command, command]);
 
     // Mention branch.
     expect(scan.mentioned.size).toBeGreaterThanOrEqual(scan.invoked.size);

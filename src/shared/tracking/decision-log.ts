@@ -12,7 +12,6 @@
  */
 import type { TrackingBehavior, TrackingStateV2 } from '../contracts/smooth-follow';
 import type { SectionEligibility, TransitionAuthority } from './section-graph';
-import type { SemanticAssistRelation } from './semantic-assist';
 
 /** Companion §65. */
 export interface MovementDecisionRecord {
@@ -26,8 +25,6 @@ export interface MovementDecisionRecord {
   localConfidence: number;
   secondBestMargin: number;
   sectionGate: 'allowed' | 'blocked';
-  semanticAssistRelation?: SemanticAssistRelation;
-  semanticAssistInfluence?: number;
   authority: TransitionAuthority;
   visualDisposition: 'absorbed' | 'catch_up' | 'rewind' | 'reanchor' | 'hold';
 

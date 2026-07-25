@@ -1053,7 +1053,7 @@ fn stage_directive_kinds_match_the_ts_contract() {
         .collect();
 
     assert!(
-        ts_kinds.len() >= 8,
+        ts_kinds.len() >= 7,
         "only {} directive kinds were parsed out of the TypeScript union; the \
          parser has stopped matching",
         ts_kinds.len()

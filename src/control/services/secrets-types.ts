@@ -1,26 +1,26 @@
 /**
- * OpenAI key command payloads (spec §46.4). The permanent key never returns
- * to JavaScript — only redacted status metadata crosses the boundary.
+ * Inworld key command payloads (spec §46.4). The key never returns to
+ * JavaScript — only redacted status metadata crosses the boundary, and the
+ * transcription socket that uses it is held entirely in Rust.
  */
 
 export interface KeyValidationResult {
-  status: 'valid' | 'partial' | 'invalid' | 'quota' | 'network';
-  /** When partial: which capability failed, for F.2 copy interpolation. */
-  missing?: string;
-  models?: { realtime: boolean; command: boolean };
+  status: 'valid' | 'invalid' | 'quota' | 'network';
+  /** The provider's own explanation, when it gave one. Never contains a key. */
+  message?: string;
 }
 
 /**
  * Which store the key in play came from. A packaged build only ever reports
  * `keychain` or `none`; `environment` means a debug build picked up
- * `OPENAI_API_KEY`, which takes precedence over anything stored.
+ * `INWORLD_API_KEY`, which takes precedence over anything stored.
  */
-export type OpenAiKeySource = 'environment' | 'keychain' | 'none';
+export type InworldKeySource = 'environment' | 'keychain' | 'none';
 
-export interface OpenAiKeyStatus {
+export interface InworldKeyStatus {
   present: boolean;
   lastFour?: string;
   state: 'connected' | 'invalid' | 'rate_limited' | 'network_unavailable' | 'unknown';
-  source: OpenAiKeySource;
+  source: InworldKeySource;
   lastValidatedAt?: string;
 }

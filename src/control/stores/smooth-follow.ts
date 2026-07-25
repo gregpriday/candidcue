@@ -24,7 +24,6 @@
  */
 import { derived, get, writable, type Readable } from 'svelte/store';
 import type {
-  IntelligenceMode,
   SemanticMotionFrame,
   StageMotionAck,
   TrackingBehavior,
@@ -36,53 +35,17 @@ import {
   describeMovement,
   FOLLOW_NOTICE_COPY,
   FOLLOW_STATE_LABELS,
-  lunaUnavailableCopy,
   type ConfidenceBand,
   type FollowNoticeId,
   type FollowNoticeTone,
-  type LunaOutageReason,
   type MovementDecisionRecord,
   type RuntimeBudgetId,
 } from '../lib/follow-language';
-import {
-  coachingEnabled as coachingIsEnabled,
-  defaultFollowingSettings,
-  type CoachingDisplay,
-  type FollowingSettings,
-} from '../lib/follow-profiles';
+import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
 
 /* ---------------------------------------------------------------------------
  * State
  * ------------------------------------------------------------------------- */
-
-/** How the semantic sidecar is doing right now (§42.1 visibility, §58). */
-export interface AssistStatus {
-  /** What the user chose (§47.4). */
-  configuredMode: IntelligenceMode;
-  /** What is actually happening — may be downgraded by §58/§42.4. */
-  effectiveMode: IntelligenceMode;
-  state: 'off' | 'ready' | 'waiting' | 'backing_off' | 'unavailable' | 'limit_reached';
-  /** Why assist stopped, when it has (§58). */
-  reason: LunaOutageReason | null;
-  /** Requests issued this session — an observed count, never a cap. */
-  requestCount: number;
-  /** Tokens reported by the API, where the response includes usage (§42.1). */
-  tokensIn: number;
-  tokensOut: number;
-  /** When a backoff expects to retry, if the scheduler told us. */
-  retryAtMs: number | null;
-}
-
-/** A coach tip surfaced in the control window (§43, §46). */
-export interface CoachTipView {
-  id: string;
-  code: string;
-  text: string;
-  priority: number;
-  receivedAtMs: number;
-  /** Stage-eligible tips are also allowed on the stage strip (§46). */
-  stageEligible: boolean;
-}
 
 /** A local candidate the user may accept when the tracker is lost (§48). */
 export interface FollowCandidate {
@@ -109,7 +72,7 @@ export interface FollowNotice {
   title: string;
   detail: string;
   /** Present when the user can do something concrete about it. */
-  action?: { id: 'rebuild_layout' | 'open_assist_settings'; label: string };
+  action?: { id: 'rebuild_layout'; label: string };
 }
 
 export type TranscriptFeedStatus = 'idle' | 'live' | 'interrupted' | 'low_confidence';
@@ -119,8 +82,6 @@ export type FollowTimelineKind =
   | 'state'
   | 'movement'
   | 'motion'
-  | 'assist'
-  | 'coach'
   | 'budget'
   | 'notice'
   | 'action';
@@ -165,8 +126,6 @@ export interface SmoothFollowState {
   /** §48 — following can be paused without pausing the session. */
   followingPaused: boolean;
 
-  assist: AssistStatus;
-  coaching: { display: CoachingDisplay; enabled: boolean; lastTip: CoachTipView | null };
   motion: {
     controllerState: string;
     droppedFrameCountWindow: number;
@@ -218,10 +177,6 @@ export interface FollowActions {
   acceptCandidate(candidate: FollowCandidate): void;
   /** Pause/resume automatic following without touching the session (§48). */
   setFollowingPaused(paused: boolean): void;
-  /** Persist an assist-mode quick switch (§47.4). */
-  setIntelligenceMode(mode: IntelligenceMode): void;
-  /** Persist a coaching display change (§47.6). */
-  setCoachingDisplay(display: CoachingDisplay): void;
   /** Ask the stage to rebuild its line map after §62. */
   rebuildStageLayout(): void;
 }
@@ -231,23 +186,8 @@ const NO_ACTIONS: FollowActions = {
   reAnchor: () => {},
   acceptCandidate: () => {},
   setFollowingPaused: () => {},
-  setIntelligenceMode: () => {},
-  setCoachingDisplay: () => {},
   rebuildStageLayout: () => {},
 };
-
-function initialAssist(mode: IntelligenceMode): AssistStatus {
-  return {
-    configuredMode: mode,
-    effectiveMode: mode,
-    state: mode === 'local_only' ? 'off' : 'ready',
-    reason: null,
-    requestCount: 0,
-    tokensIn: 0,
-    tokensOut: 0,
-    retryAtMs: null,
-  };
-}
 
 function initialState(following: FollowingSettings): SmoothFollowState {
   return {
@@ -271,12 +211,6 @@ function initialState(following: FollowingSettings): SmoothFollowState {
     layoutGeneration: 0,
     motionProfileId: following.motionProfileId,
     followingPaused: false,
-    assist: initialAssist(following.intelligenceMode),
-    coaching: {
-      display: following.coachingDisplay,
-      enabled: coachingIsEnabled(following.coachingDisplay),
-      lastTip: null,
-    },
     motion: {
       controllerState: 'idle',
       droppedFrameCountWindow: 0,
@@ -353,23 +287,6 @@ export function deriveNotices(state: SmoothFollowState): FollowNotice[] {
     });
   }
 
-  // §58 / §42.4 Luna unavailable, backing off, or capped.
-  if (
-    state.assist.reason !== null &&
-    (state.assist.state === 'unavailable' ||
-      state.assist.state === 'backing_off' ||
-      state.assist.state === 'limit_reached')
-  ) {
-    const copy = lunaUnavailableCopy(state.assist.reason);
-    notices.push({
-      id: 'luna_unavailable',
-      tone: copy.tone,
-      title: copy.title,
-      detail: copy.detail,
-      action: { id: 'open_assist_settings', label: 'Assist settings' },
-    });
-  }
-
   // §63 runtime budgets — quiet, informational.
   if (state.budgets.length > 0) {
     const copy = budgetNoticeCopy(state.budgets);
@@ -418,8 +335,6 @@ export interface SmoothFollowStore extends Readable<SmoothFollowState> {
   ingestMotionFrame(frame: SemanticMotionFrame): void;
   ingestMovementRecord(record: MovementDecisionRecord): void;
   ingestStageAck(ack: StageMotionAck): void;
-  ingestAssistStatus(patch: Partial<AssistStatus>): void;
-  ingestCoachTip(tip: CoachTipView): void;
   setCandidates(candidates: FollowCandidate[]): void;
   reportTranscriptStatus(status: TranscriptFeedStatus, detail?: string | null): void;
   reportLineMapInvalid(detail: string): void;
@@ -433,9 +348,6 @@ export interface SmoothFollowStore extends Readable<SmoothFollowState> {
   acceptCandidate(candidateId: string): void;
   toggleFollowingPaused(): void;
   setFollowingPaused(paused: boolean): void;
-  chooseIntelligenceMode(mode: IntelligenceMode): void;
-  setCoachingDisplay(display: CoachingDisplay): void;
-  setCoachingEnabled(enabled: boolean): void;
   /** §62 recovery: ask the stage to rebuild its line map. */
   requestLayoutRebuild(): void;
 
@@ -455,7 +367,6 @@ export interface FollowDiagnosticsExport {
   state: TrackingStateV2;
   behavior: TrackingBehavior;
   confidenceBand: ConfidenceBand;
-  assist: AssistStatus;
   motion: SmoothFollowState['motion'];
   transcript: SmoothFollowState['transcript'];
   lineMap: SmoothFollowState['lineMap'];
@@ -521,19 +432,6 @@ export function createSmoothFollowStore(
     }));
   }
 
-  function setCoachingDisplay(display: CoachingDisplay): void {
-    actions.setCoachingDisplay(display);
-    update((s) => ({
-      ...s,
-      coaching: {
-        display,
-        enabled: coachingIsEnabled(display),
-        lastTip: coachingIsEnabled(display) ? s.coaching.lastTip : null,
-      },
-      timeline: push(s, 'coach', `Coaching display: ${display}`),
-    }));
-  }
-
   return {
     subscribe: store.subscribe,
 
@@ -567,29 +465,7 @@ export function createSmoothFollowStore(
 
     applyFollowingSettings(next) {
       following = next;
-      update((s) => {
-        const modeChanged = s.assist.configuredMode !== next.intelligenceMode;
-        return {
-          ...s,
-          motionProfileId: next.motionProfileId,
-          coaching: {
-            display: next.coachingDisplay,
-            enabled: coachingIsEnabled(next.coachingDisplay),
-            lastTip: coachingIsEnabled(next.coachingDisplay) ? s.coaching.lastTip : null,
-          },
-          assist: modeChanged
-            ? {
-                ...initialAssist(next.intelligenceMode),
-                requestCount: s.assist.requestCount,
-                tokensIn: s.assist.tokensIn,
-                tokensOut: s.assist.tokensOut,
-              }
-            : s.assist,
-          timeline: modeChanged
-            ? push(s, 'assist', `Intelligent assist set to ${next.intelligenceMode}`)
-            : s.timeline,
-        };
-      });
+      update((s) => ({ ...s, motionProfileId: next.motionProfileId }));
     },
 
     setActions(next) {
@@ -698,36 +574,6 @@ export function createSmoothFollowStore(
       });
     },
 
-    ingestAssistStatus(patch) {
-      update((s) => {
-        const assist: AssistStatus = { ...s.assist, ...patch };
-        const changed = assist.state !== s.assist.state || assist.reason !== s.assist.reason;
-        return {
-          ...s,
-          assist,
-          timeline: changed
-            ? push(
-                s,
-                'assist',
-                `Assist ${assist.state.replace('_', ' ')}`,
-                assist.reason ? `reason: ${assist.reason}` : undefined,
-              )
-            : s.timeline,
-        };
-      });
-    },
-
-    ingestCoachTip(tip) {
-      update((s) => {
-        if (!s.coaching.enabled) return s;
-        return {
-          ...s,
-          coaching: { ...s.coaching, lastTip: tip },
-          timeline: push(s, 'coach', `Tip: ${tip.code}`, tip.text),
-        };
-      });
-    },
-
     setCandidates(candidates) {
       update((s) => ({ ...s, candidates }));
     },
@@ -829,27 +675,6 @@ export function createSmoothFollowStore(
 
     setFollowingPaused,
 
-    chooseIntelligenceMode(mode) {
-      actions.setIntelligenceMode(mode);
-      update((s) => ({
-        ...s,
-        assist: {
-          ...initialAssist(mode),
-          requestCount: s.assist.requestCount,
-          tokensIn: s.assist.tokensIn,
-          tokensOut: s.assist.tokensOut,
-        },
-        timeline: push(s, 'assist', `Intelligent assist set to ${mode}`),
-      }));
-    },
-
-    setCoachingDisplay,
-
-    setCoachingEnabled(enabled) {
-      const current = get(store).coaching.display;
-      setCoachingDisplay(enabled ? (current === 'off' ? 'control' : current) : 'off');
-    },
-
     requestLayoutRebuild() {
       actions.rebuildStageLayout();
       update((s) => ({ ...s, timeline: push(s, 'action', 'Requested a stage layout rebuild') }));
@@ -867,7 +692,6 @@ export function createSmoothFollowStore(
         state: s.state,
         behavior: s.behavior,
         confidenceBand: s.band,
-        assist: s.assist,
         motion: s.motion,
         transcript: s.transcript,
         lineMap: s.lineMap,

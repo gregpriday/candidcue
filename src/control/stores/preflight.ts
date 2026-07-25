@@ -2,7 +2,7 @@
  * PreflightStore (spec §45.2, §14) — readiness checks per section plus the
  * pure readiness derivation used by the sticky footer. Blockers vs warnings
  * follow §14.2 G / §57.4: missing compile, invalid stage, invalid mic (voice
- * mode), or invalid OpenAI connection block Start; collisions and stale
+ * mode), or invalid speech-provider connection block Start; collisions and stale
  * analysis only warn.
  */
 import { derived, get, writable } from 'svelte/store';
@@ -15,7 +15,7 @@ export interface PreflightChecks {
   mode: SessionMode;
   script: CheckStatus;
   stage: CheckStatus;
-  openai: CheckStatus;
+  speech: CheckStatus;
   microphone: CheckStatus;
   listenerEnabled: boolean;
   listener: CheckStatus;
@@ -27,7 +27,7 @@ export interface Readiness {
   canStart: boolean;
   /** Concise reason shown beside the disabled Start button (spec §14.3). */
   blockedReason: string | null;
-  /** "Stage ready · Mic ready · OpenAI ready" footer summary. */
+  /** "Stage ready · Mic ready · Speech ready" footer summary. */
   summary: string;
   /** F.10 — primary label swaps when only voice is unavailable. */
   startLabel: 'Start session' | 'Start in manual mode' | 'Start with warning';
@@ -37,7 +37,7 @@ const initialChecks: PreflightChecks = {
   mode: 'voice',
   script: 'idle',
   stage: 'idle',
-  openai: 'idle',
+  speech: 'idle',
   microphone: 'idle',
   listenerEnabled: false,
   listener: 'idle',
@@ -65,7 +65,7 @@ export function computeReadiness(checks: PreflightChecks): Readiness {
   const relevant: Array<[string, CheckStatus, boolean]> = [
     ['Script', checks.script, true],
     ['Stage', checks.stage, true],
-    ['OpenAI', checks.openai, voiceRequired],
+    ['Speech', checks.speech, voiceRequired],
     ['Mic', checks.microphone, voiceRequired],
     ['Listener', checks.listener, checks.listenerEnabled],
   ];
@@ -91,7 +91,7 @@ export function computeReadiness(checks: PreflightChecks): Readiness {
     const labels = blocked.map(([label]) => label);
     const voiceOnlyBlocked =
       voiceRequired &&
-      labels.every((l) => l === 'OpenAI' || l === 'Mic') &&
+      labels.every((l) => l === 'Speech' || l === 'Mic') &&
       checks.script !== 'blocked' &&
       checks.stage !== 'blocked';
     return {

@@ -75,16 +75,6 @@ function flush(output: EngineOutput, nowMs: number, force = false): void {
   if (output.diagnostic) {
     post({ type: 'diagnostic', diagnostic: output.diagnostic });
   }
-  // Companion §37.1: the sidecar's only input. Already rate-limited (2 Hz,
-  // finalized evidence only) by the engine, so it is never subject to the
-  // snapshot cadence cap and never lands on the per-event path.
-  if (output.semanticContext) {
-    post({
-      type: 'semantic_context',
-      revision: output.semanticContext.transcriptRevision,
-      context: output.semanticContext,
-    });
-  }
 }
 
 self.onmessage = (event: MessageEvent<TrackingWorkerInbound>) => {
@@ -171,19 +161,6 @@ self.onmessage = (event: MessageEvent<TrackingWorkerInbound>) => {
       flush(engine.tick(nowMs), nowMs);
       break;
     }
-    case 'semantic_assist':
-      // Bounded advisory evidence only (companion §3.6, §40). The beam
-      // validates epoch, expiry, source items, and candidate membership.
-      //
-      // `receivedAtMs` is stamped by the sidecar on the control window's clock
-      // and is compared against session time by the §25.7 staleness check, so
-      // it is mapped rather than trusted. Advisory evidence must not *move* the
-      // session clock, hence `map` and not `advance`.
-      engine.applySemanticAssist({
-        ...message.evidence,
-        receivedAtMs: clock.map(message.evidence.receivedAtMs),
-      });
-      break;
     case 'set_layout_generation': {
       const nowMs = clock.advance(message.nowMs);
       flush(engine.setLayoutGeneration(message.generation, nowMs), nowMs, true);

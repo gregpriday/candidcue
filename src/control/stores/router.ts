@@ -7,14 +7,11 @@ import { get, writable, type Readable } from 'svelte/store';
 
 export type SettingsSection =
   | 'general'
-  | 'openai'
+  | 'inworld'
   | 'audio'
   | 'teleprompter'
   /** Companion §47 follow settings. */
   | 'following'
-  /** Companion §30 live-coaching settings. */
-  | 'coaching'
-  | 'commands'
   | 'listeners'
   | 'privacy';
 

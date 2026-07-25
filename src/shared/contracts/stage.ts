@@ -31,7 +31,6 @@ import type { StageSessionEnvelope, StageSettings } from './display';
 import type { TrackingSnapshot } from './tracking';
 import type { SemanticMotionFrame, StageMotionAck } from './smooth-follow';
 import type { ListenerStageSelection } from './listener';
-import type { CoachRailState } from './coaching';
 
 /* ---------------------------------------------------------------------------
  * Event names
@@ -57,18 +56,6 @@ export const STAGE_EVENT = {
    * receiver is the gate that rejects stale/foreign frames.
    */
   semanticFrame: 'stage://semantic-frame',
-  /**
-   * control → stage: one {@link CoachRailState} per publication (companion
-   * Part II §27). Emitted directly control → stage like the heartbeat and the
-   * semantic frame, deliberately NOT through a Rust command: coaching is
-   * advisory and failure-isolated (§5.2), so it must never share the validated
-   * document path that moves the script, and a dead coaching producer must be
-   * unable to touch anything the stage renders for motion. The stage validates
-   * every arrival (current session, strictly increasing `stageRevision`) before
-   * applying it — out-of-order delivery is normal and a lower revision is
-   * stale, not a correction.
-   */
-  coachRail: 'stage://coach-rail',
 
   /**
    * stage → Rust: the stage's subscriptions are registered (handshake step 0).
@@ -180,32 +167,6 @@ export type StageTrackingPayload = TrackingSnapshot;
 export type StageSemanticFramePayload = SemanticMotionFrame;
 
 /**
- * `stage://coach-rail` — one full rail snapshot (companion Part II §27).
- *
- * This is the *only* coaching payload that crosses into the stage window, and
- * it carries no scroll offset, cursor index, section id, or navigation
- * directive: coaching cannot move the script (§2.1). The snapshot carries its
- * own `sessionId` and monotonically increasing `stageRevision`, which are the
- * two fields the stage validates on arrival.
- */
-export type StageCoachRailPayload = CoachRailState;
-
-/**
- * One coach tip (companion Part VIII). The stage renders at most one at a time
- * and never generates copy: the text is a validated string chosen by the coach
- * engine on the control side.
- */
-export interface StageCoachTip {
-  id: string;
-  /** Structured tip code the coach engine validated; stage never invents one. */
-  code: string;
-  text: string;
-  severity: 'info' | 'attention';
-  /** How long the strip may stay visible (A.5: 1.5–2.5 s). */
-  durationMs?: number;
-}
-
-/**
  * `stage://apply-command` / `stage://listener-state` — small imperative
  * directives. Each carries the stage generation so directives from a
  * previous stage lifetime are ignored.
@@ -217,9 +178,7 @@ export type StageDirective =
   | { kind: 'settings'; settings: StageSettings }
   | { kind: 'listener'; listener: ListenerStageSelection | null }
   | { kind: 'calibration'; active: boolean; crosshairX?: number; crosshairY?: number }
-  | { kind: 'diagnostics'; visible: boolean }
-  /** Companion Part VIII: show one tip, or `null` to clear the strip. */
-  | { kind: 'coach'; tip: StageCoachTip | null };
+  | { kind: 'diagnostics'; visible: boolean };
 
 export interface StageStatePayload {
   stageGeneration: number;

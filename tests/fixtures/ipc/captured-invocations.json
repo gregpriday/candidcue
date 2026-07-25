@@ -271,13 +271,12 @@
       "args": {
         "expectedRevision": 3,
         "patch": {
+          "audio": {
+            "language": "en-GB"
+          },
           "stageBehavior": {
             "horizontalMirror": true,
             "fixedSpeedWpm": 155
-          },
-          "commands": {
-            "wakePhrase": "hey cue",
-            "wakeMode": "strict"
           },
           "general": {
             "saveTranscript": "7d"

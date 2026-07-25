@@ -1,5 +1,5 @@
 <!--
-  Local input level meter (spec §14.2 C) — responds before any OpenAI call.
+  Local input level meter (spec §14.2 C) — responds before anything is streamed.
   Zones use the dedicated meter tokens; state is also written as text (§20).
 -->
 <script lang="ts">

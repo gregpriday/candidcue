@@ -1,12 +1,11 @@
 /**
  * Real VoiceFacade implementation — binds the audio package (permissions,
- * device enumeration, level meter/VAD) and the realtime package (WebRTC
- * transcription transport) to the seam the Preflight/Live screens consume
- * (spec §14.2 C, §28, §29).
+ * device enumeration, level meter) and the Inworld speech-to-text session to
+ * the seam the Preflight/Live screens consume (spec §14.2 C, §28, §29).
  *
- * Bound once at control startup via `bindVoiceFacade` when the WebView
- * exposes mediaDevices. The realtime transcription test needs the Tauri
- * runtime (credential minting); in a plain browser it degrades to the same
+ * Bound once at control startup via `bindVoiceFacade` when the WebView exposes
+ * mediaDevices. The transcription test needs the Tauri runtime — the socket
+ * and the API key live in Rust — so in a plain browser it degrades to the same
  * scripted walkthrough the mock uses.
  */
 import type {
@@ -26,8 +25,16 @@ import {
   type MediaStreamLike,
   type PermissionsLike,
 } from './audio';
-import { ManualCommitDriver, WebRtcTranscriptionTransport } from './realtime';
-import { ipcInvoke, isTauriRuntime } from './ipc';
+import { PcmCapture } from './audio/capture';
+import {
+  encodePcm16,
+  pushTranscriptionAudio,
+  startTranscription,
+  stopTranscription,
+  STT_EVENT,
+  type SttFrame,
+} from './stt/inworld';
+import { isTauriRuntime } from './ipc';
 import { describeError } from './errors';
 import type { TranscriptTestEvents, Unsubscribe, VoiceFacade } from './voice-facade';
 import { bindVoiceFacade } from './voice-facade';
@@ -145,6 +152,16 @@ export function createRealVoiceFacade(): VoiceFacade {
       };
     },
 
+    /**
+     * §14.2 C — "say something and watch the words appear".
+     *
+     * The cheapest end-to-end proof that the key works, the microphone works,
+     * and the two are connected. It is deliberately the same path a take uses:
+     * one `getUserMedia`, a PCM tap at the pinned rate, and the Rust session.
+     * A test that exercised a different path would be able to pass while a take
+     * heard nothing, which is exactly the situation this screen exists to rule
+     * out.
+     */
     async startTranscriptionTest(
       deviceId: string | undefined,
       events: TranscriptTestEvents,
@@ -153,47 +170,24 @@ export function createRealVoiceFacade(): VoiceFacade {
 
       let monitor: MicrophoneMonitor | null = null;
       let activeStream: MediaStreamLike | null = null;
-      let commitDriver: ManualCommitDriver | null = null;
-
-      const transport = new WebRtcTranscriptionTransport({
-        invoke: ipcInvoke,
-        acquireMicrophone: async (preferred) => {
-          const devices = mediaDevices();
-          if (!devices) throw new Error('MIC_DEVICE_MISSING');
-          const wanted = preferred ?? deviceId;
-          const result = await requestMicAccess(devices, wanted ? { deviceId: wanted } : {});
-          if (!result.ok) throw new Error(result.code);
-          activeStream = result.stream;
-          // Local VAD drives the manual commit boundaries (§28.4/§29.3).
-          monitor = new MicrophoneMonitor({ createGraph: createAnalyserGraph });
-          monitor.onVadEvent((event) => commitDriver?.handleVadEvent(event));
-          await monitor.start(result.stream);
-          return result.stream;
-        },
-        onConnectProgress: (phase) => setRealtimeState(phase),
-      });
-      commitDriver = new ManualCommitDriver({
-        sendCommit: (reason) => transport.commit(reason),
-        clearBufferedAudio: () => transport.clearBufferedAudio(),
-        ledger: transport.ledger,
-      });
-
-      const offEvents = transport.onEvent((event) => {
-        if (event.type === 'delta') {
-          events.onPartial(event.text);
-        } else if (event.type === 'completed') {
-          setRealtimeState('ready');
-          events.onFinal(event.text);
-        } else if (event.type === 'failed' && !event.recoverable) {
-          setRealtimeState('recoverable_error');
-          events.onError(describeError(event.code));
-        }
-      });
+      let capture: PcmCapture | null = null;
+      let generation: number | null = null;
+      let unlisten: (() => void) | null = null;
+      let sendChain: Promise<void> = Promise.resolve();
+      let stopped = false;
 
       const stop: Unsubscribe = () => {
-        offEvents();
-        void transport.disconnect('stop').catch(() => {});
+        if (stopped) return;
+        stopped = true;
+        unlisten?.();
+        unlisten = null;
+        const closing = generation;
+        generation = null;
+        if (closing !== null) void stopTranscription(closing).catch(() => {});
+        void capture?.stop();
+        capture = null;
         if (monitor) void monitor.stop();
+        monitor = null;
         releaseStream(activeStream);
         activeStream = null;
         setRealtimeState('idle');
@@ -201,12 +195,43 @@ export function createRealVoiceFacade(): VoiceFacade {
 
       try {
         setRealtimeState('minting_credential');
-        await transport.connect({
-          model: 'gpt-realtime-whisper',
-          language: 'en',
-          delay: 'low',
-          requestLogprobs: false,
+        const devices = mediaDevices();
+        if (!devices) throw new Error('MIC_DEVICE_MISSING');
+        const result = await requestMicAccess(devices, deviceId ? { deviceId } : {});
+        if (!result.ok) throw new Error(result.code);
+        activeStream = result.stream;
+
+        monitor = new MicrophoneMonitor({ createGraph: createAnalyserGraph });
+        await monitor.start(result.stream);
+
+        const { listen } = await import('@tauri-apps/api/event');
+        unlisten = await listen<SttFrame>(STT_EVENT, (event) => {
+          const frame = event.payload;
+          if (generation !== null && frame.generation !== generation) return;
+          if (frame.kind === 'partial') {
+            events.onPartial(frame.text);
+          } else if (frame.kind === 'final') {
+            setRealtimeState('ready');
+            events.onFinal(frame.text);
+          } else if (frame.kind === 'failed') {
+            setRealtimeState('recoverable_error');
+            events.onError(describeError(frame.code));
+            if (!frame.recoverable) stop();
+          }
         });
+
+        generation = await startTranscription();
+        capture = new PcmCapture({
+          onFrame: (samples) => {
+            const current = generation;
+            if (current === null || stopped) return;
+            const chunk = encodePcm16(samples);
+            sendChain = sendChain
+              .then(() => pushTranscriptionAudio(current, chunk))
+              .catch(() => {});
+          },
+        });
+        await capture.start(result.stream);
         setRealtimeState('listening');
       } catch (err) {
         stop();

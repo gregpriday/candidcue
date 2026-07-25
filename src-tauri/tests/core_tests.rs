@@ -490,7 +490,7 @@ async fn settings_defaults_patch_and_conflict() {
     assert_eq!(initial.revision, 1);
     assert_eq!(initial.value.general.words_per_minute_estimate, 130);
     assert_eq!(initial.value.general.save_transcript, "off");
-    assert_eq!(initial.value.commands.wake_phrase, "CandidCue");
+    assert_eq!(initial.value.audio.transcription_model, "inworld/inworld-stt-1");
 
     // Patch a nested field; others survive.
     let updated = settings::update_settings(
@@ -1087,7 +1087,7 @@ use candidcue_lib::secrets::{
 #[tokio::test]
 async fn a_debug_build_reads_the_key_from_the_environment_and_names_that_source() {
     let restore = std::env::var(DEV_KEY_ENV_VAR).ok();
-    std::env::set_var(DEV_KEY_ENV_VAR, "sk-core-test-override-4d7e");
+    std::env::set_var(DEV_KEY_ENV_VAR, "core-test-override-4d7e");
     assert!(
         dev_env_key_active(),
         "the override must be live before the store is touched, or this test \
@@ -1095,13 +1095,13 @@ async fn a_debug_build_reads_the_key_from_the_environment_and_names_that_source(
     );
 
     let described = OsSecretStore
-        .describe_openai_key()
+        .describe_inworld_key()
         .await
         .expect("the environment path cannot fail")
         .expect("a key is set");
     assert_eq!(described.source, KeySource::Environment);
     // The redacted tail, and nothing more: the value itself never leaves Rust.
-    assert_eq!(described.hint, "sk-…4d7e");
+    assert_eq!(described.hint, "…4d7e");
     assert!(!described.hint.contains("override"));
 
     match restore {

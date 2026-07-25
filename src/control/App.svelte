@@ -17,7 +17,7 @@
   import Welcome from './routes/Welcome.svelte';
   import { createAndOpenScript } from './lib/app-actions';
   import { installShortcuts, onShortcut } from './lib/shortcuts';
-  import { initConnectTrace } from './services/realtime/connectTrace';
+  import { initAudioTrace } from './services/audio-trace';
   import { initAppStatus } from './stores/app-status';
   import { requestConfirm } from './stores/confirm';
   import { saveNow } from './stores/editor';
@@ -54,8 +54,8 @@
 
   onMount(() => {
     // §30.1 triage. Off unless the operator switched it on for this window;
-    // see connectTrace.ts for why the realtime path needs it at all.
-    initConnectTrace();
+    // see audio-trace.ts for why the audio path needs it at all.
+    initAudioTrace();
     const teardownShortcuts = installShortcuts();
     const teardownHelp = onShortcut((action) => {
       if (action === 'command-help') shortcutsOpen = true;
