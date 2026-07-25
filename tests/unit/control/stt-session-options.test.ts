@@ -41,8 +41,24 @@ const RUST = source('../../../src-tauri/src/inworld/mod.rs');
 
 describe('one builder, both callers', () => {
   it('the take builds its options through sttSessionOptions', () => {
-    expect(/sttSessionOptions\(/.test(PIPELINE)).toBe(true);
-    expect(/startTranscription\(this\.sessionOptions\(\)\)/.test(PIPELINE)).toBe(true);
+    /*
+     * Asserted as two properties rather than one exact expression: the take
+     * must derive its options from the shared builder, and it must hand THOSE
+     * options to the provider. Pinning the literal call shape made this fail
+     * the moment the value was hoisted into a local to be traced — a test that
+     * breaks on a rename is a test people delete.
+     */
+    expect(/sttSessionOptions\(/.test(PIPELINE), 'no shared builder in the take').toBe(true);
+    expect(
+      /const options = this\.sessionOptions\(\)/.test(PIPELINE) ||
+        /startTranscription\(this\.sessionOptions\(\)\)/.test(PIPELINE),
+      'the take must derive its options from sessionOptions()',
+    ).toBe(true);
+    expect(
+      /startTranscription\(\s*options\s*\)/.test(PIPELINE) ||
+        /startTranscription\(this\.sessionOptions\(\)\)/.test(PIPELINE),
+      'the options built must be the options sent',
+    ).toBe(true);
   });
 
   it('the microphone test builds its options through sttSessionOptions', () => {

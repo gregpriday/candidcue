@@ -188,6 +188,15 @@ export function createWorkerTrackingDriver(options: TrackingDriverOptions): Trac
           `token ${data.snapshot.committedTokenIndex} state ${data.snapshot.state} ` +
             `confidence ${data.snapshot.confidence.toFixed(2)}`,
         );
+      } else if (previous?.state !== data.snapshot.state) {
+        /*
+         * State changes without cursor movement, which the first version of
+         * this trace could not see — and that blind spot cost a whole take.
+         * `paused` discards every transcript event before matching, so
+         * "did it resume?" is the difference between a broken aligner and a
+         * broken lifecycle, and the log could not answer it.
+         */
+        trace('state', `${previous?.state ?? 'none'} → ${data.snapshot.state}`);
       }
       options.onSnapshot(data.snapshot);
     } else if (data.type === 'semantic_frame') {

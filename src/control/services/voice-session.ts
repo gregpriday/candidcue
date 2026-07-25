@@ -210,6 +210,8 @@ export class VoiceSessionPipeline {
   private readonly silentInput = new SilentInputDetector();
   /** Frames handed to Rust this session; traced, not merely counted. */
   private framesSent = 0;
+  /** True once this session has reached `connected` at least once. */
+  private hasConnected = false;
   private deviceManager: MicrophoneDeviceManager | null = null;
   /** §28.2: a device chosen mid-session outranks `deps.deviceId`. */
   private deviceOverride: string | undefined;
@@ -476,7 +478,26 @@ export class VoiceSessionPipeline {
             ? 'offline'
             : 'reconnecting',
       );
-      this.setFollowingHold(event.state !== 'connected', `transport_${event.state}`);
+      /*
+       * `connecting` is not a degradation on the way in.
+       *
+       * It is the FIRST frame every healthy session emits, before a byte of
+       * audio has been sent — and treating it as a hold paused the aligner at
+       * +68 ms on every single take. A paused engine returns from
+       * `handleTranscriptEvent` before it looks at a token, so the words
+       * arrived, the ledger filled, and the cursor never moved: "words heard
+       * 28, script followed 0 of 26".
+       *
+       * After a session HAS connected, `connecting` means a reconnect, and
+       * holding is then exactly right — following on a dead transport is the
+       * stage drifting on a stale pace estimate while the presenter talks.
+       */
+      const opening = event.state === 'connecting' && !this.hasConnected;
+      if (event.state === 'connected') this.hasConnected = true;
+      this.setFollowingHold(
+        !opening && event.state !== 'connected',
+        `transport_${event.state}`,
+      );
       this.deps.onTrackingEvent(event);
       return;
     }
