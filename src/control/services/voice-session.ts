@@ -27,6 +27,7 @@ import { TranscriptLedger } from '../../shared/tracking/ledger';
 import type { TranscriptEvent as TrackingEvent } from '../../shared/tracking/types';
 import { DEFAULT_SOFT_PAUSE_AUTO_DISCONNECT_MS } from './audio/defaults';
 import { isTauriRuntime } from './ipc';
+import { trace, traceBegin } from './audio-trace';
 import {
   createAnalyserGraph,
   MicrophoneDeviceManager,
@@ -207,6 +208,8 @@ export class VoiceSessionPipeline {
 
   /** §28.6 sustained no-signal detection on the captured stream. */
   private readonly silentInput = new SilentInputDetector();
+  /** Frames handed to Rust this session; traced, not merely counted. */
+  private framesSent = 0;
   private deviceManager: MicrophoneDeviceManager | null = null;
   /** §28.2: a device chosen mid-session outranks `deps.deviceId`. */
   private deviceOverride: string | undefined;
@@ -250,6 +253,8 @@ export class VoiceSessionPipeline {
     }
 
     const epoch = this.lifecycle;
+    traceBegin();
+    trace('start', `sessionGeneration ${this.deps.sessionGeneration}`);
     this.running = true;
     this.paused = false;
     this.setConnectionState('reconnecting');
@@ -264,14 +269,23 @@ export class VoiceSessionPipeline {
       // the take ends holding an open microphone and a billing socket.
       if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
       const stream = await this.acquireMicrophone(this.preferredDeviceId);
+      trace('microphone', 'stream acquired');
 
       if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
       this.audioOriginMs = this.now();
-      this.transportGeneration = await startTranscription(this.sessionOptions());
+      const options = this.sessionOptions();
+      this.transportGeneration = await startTranscription(options);
+      trace(
+        'session',
+        `transport ${this.transportGeneration} model ${options.modelId ?? 'default'} ` +
+          `lang ${options.language ?? 'default'}`,
+      );
 
       if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
       await this.startCapture(stream);
+      trace('capture', `started at ${this.capture?.contextSampleRate ?? 0} Hz`);
     } catch (err) {
+      trace('start-failed', err instanceof Error ? err.message : 'unknown');
       this.running = false;
       // A session opened and then abandoned bills for audio nobody is reading,
       // so it is closed on every failure after it exists — including the one
@@ -383,6 +397,13 @@ export class VoiceSessionPipeline {
    * The session options for this take — the same builder the Preflight
    * microphone test uses, which is what stops the two drifting.
    */
+  /** Why `forwardFrame` declined to send, in words. */
+  private frameSkipReason(): string {
+    if (this.transportGeneration === null) return 'no session open';
+    if (this.paused) return 'paused';
+    return 'stopped';
+  }
+
   private sessionOptions(): ReturnType<typeof sttSessionOptions> {
     return sttSessionOptions({
       ...(this.deps.modelId !== undefined ? { transcriptionModel: this.deps.modelId } : {}),
@@ -415,10 +436,22 @@ export class VoiceSessionPipeline {
    * mapping and one that proves a mock was called.
    */
   handleSttFrame(frame: SttFrame): void {
+    trace(
+      `rx:${frame.kind}`,
+      frame.kind === 'transport'
+        ? frame.state
+        : frame.kind === 'failed'
+          ? `${frame.code} recoverable=${frame.recoverable}`
+          : frame.kind === 'audioDropped'
+            ? `${frame.frames} frames`
+            : `gen ${frame.generation} item ${'itemId' in frame ? frame.itemId : '?'}` +
+              ('text' in frame ? ` words ${frame.text.trim().split(/\s+/).length}` : ''),
+    );
     // A frame from a session that has ended is not an error — it is a late
     // arrival from a take that is over, and applying it would put the previous
     // take's words into this one's ledger.
     if (this.transportGeneration !== null && frame.generation !== this.transportGeneration) {
+      trace('rx-dropped', `generation ${frame.generation} != ${this.transportGeneration}`);
       return;
     }
 
@@ -461,6 +494,10 @@ export class VoiceSessionPipeline {
     }
 
     const update = this.ledger.apply(event);
+    if (update === undefined && event.type === 'completed') {
+      // The ledger refused a final. That is a silent, total loss of evidence.
+      trace('ledger-rejected', `item ${event.itemId} gen ${event.sessionGeneration}`);
+    }
     this.deps.onTrackingEvent(event);
 
     /*
@@ -587,7 +624,16 @@ export class VoiceSessionPipeline {
    */
   private forwardFrame(samples: Float32Array): void {
     const generation = this.transportGeneration;
-    if (generation === null || this.paused || this.stopped) return;
+    if (generation === null || this.paused || this.stopped) {
+      // Silence with a cause is the thing worth naming: an unforwarded frame
+      // is indistinguishable downstream from a presenter who said nothing.
+      if (this.framesSent === 0 && !this.stopped) trace('frame-skipped', this.frameSkipReason());
+      return;
+    }
+    this.framesSent += 1;
+    if (this.framesSent === 1 || this.framesSent % 50 === 0) {
+      trace('audio', `${this.framesSent} frames sent (${this.framesSent / 10}s)`);
+    }
     const chunk = encodePcm16(samples);
     this.sendChain = this.sendChain
       .then(() => pushTranscriptionAudio(generation, chunk))

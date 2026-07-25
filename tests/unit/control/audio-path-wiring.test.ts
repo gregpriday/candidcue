@@ -28,6 +28,7 @@ function source(relative: string): string {
 const PIPELINE = source('../../../src/control/services/voice-session.ts');
 const CAPTURE = source('../../../src/control/services/audio/capture.ts');
 const STORE = source('../../../src/control/stores/session.ts');
+const DRIVER = source('../../../src/control/services/session.ts');
 
 /** Strip comments, so a mention in prose can never satisfy a call-site check. */
 function code(text: string): string {
@@ -116,5 +117,45 @@ describe('provider frames reach the aligner', () => {
     expect(subscribe).toBeGreaterThan(-1);
     expect(acquire).toBeGreaterThan(-1);
     expect(subscribe).toBeLessThan(acquire);
+  });
+});
+
+describe('the trace has call sites, not just a module', () => {
+  /*
+   * This is the guard I needed and did not have.
+   *
+   * The tracing was written to end exactly this kind of investigation, and
+   * then every call site was deleted along with the transport that contained
+   * them. The module still initialised, the log file was still created, and
+   * `logs/` stayed empty through take after take — so the one tool for
+   * answering "where did the words go" answered nothing, silently, at the
+   * moment it was most needed.
+   *
+   * A diagnostic with no callers is worse than no diagnostic: you believe you
+   * have evidence and you are actually still guessing.
+   */
+  const traced = [
+    ['the session start sequence', PIPELINE, /traceBegin\(\)/],
+    ['microphone acquisition', PIPELINE, /trace\('microphone'/],
+    ['the provider session', PIPELINE, /trace\(\s*'session'/],
+    ['capture start', PIPELINE, /trace\('capture'/],
+    ['audio frames leaving', PIPELINE, /trace\('audio'/],
+    ['frames NOT leaving', PIPELINE, /trace\('frame-skipped'/],
+    ['every inbound provider frame', PIPELINE, /trace\(\s*`rx:\$\{frame\.kind\}`/],
+    ['a frame dropped by generation', PIPELINE, /trace\('rx-dropped'/],
+    ['a final the ledger refused', PIPELINE, /trace\('ledger-rejected'/],
+    ['transcripts with no worker to take them', STORE, /trace\('no-driver'/],
+    ['the committed cursor advancing', DRIVER, /trace\(\s*'committed'/],
+  ] as const;
+
+  for (const [what, body, pattern] of traced) {
+    it(`traces ${what}`, () => {
+      expect(pattern.test(code(body)), `no trace call for ${what}`).toBe(true);
+    });
+  }
+
+  it('the trace module is initialised at startup', () => {
+    const app = code(source('../../../src/control/App.svelte'));
+    expect(/initAudioTrace\(\)/.test(app)).toBe(true);
   });
 });

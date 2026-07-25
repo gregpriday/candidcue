@@ -26,6 +26,7 @@ import { createTrackingDriver, newSessionId, type TrackingDriver } from '../serv
 import { VoiceSessionPipeline } from '../services/voice-session';
 import { isTauriRuntime } from '../services/ipc';
 import { describeError } from '../services/errors';
+import { trace } from '../services/audio-trace';
 import * as stageService from '../services/stage';
 import {
   isNontrivialMovement,
@@ -626,6 +627,12 @@ export function startLiveSession(input: StartSessionInput): string {
             ...(event.logprobs ? { logprobs: event.logprobs } : {}),
             receivedAtMs: event.receivedAtMs,
           });
+        }
+        if (driver === null) {
+          // The one link a "words heard, nothing followed" take can break
+          // without any other symptom: transcripts arriving with no worker to
+          // give them to.
+          trace('no-driver', `dropping ${event.type}`);
         }
         driver?.feedTranscript(event);
       },

@@ -35,6 +35,7 @@ import {
   type FollowingSettings,
 } from '../lib/follow-profiles';
 import { getSettingsSnapshot } from '../stores/settings';
+import { trace } from './audio-trace';
 
 export interface TrackingDriverOptions {
   sessionId: string;
@@ -177,7 +178,17 @@ export function createWorkerTrackingDriver(options: TrackingDriverOptions): Trac
     const data = event.data as TrackingWorkerOutbound | null;
     if (!data || typeof data !== 'object' || !('type' in data)) return;
     if (data.type === 'snapshot') {
+      const previous = lastSnapshot;
       lastSnapshot = data.snapshot;
+      // Every committed advance, once. This is the line that distinguishes
+      // "the aligner is following" from "the stage is coasting on pace".
+      if (previous?.committedTokenIndex !== data.snapshot.committedTokenIndex) {
+        trace(
+          'committed',
+          `token ${data.snapshot.committedTokenIndex} state ${data.snapshot.state} ` +
+            `confidence ${data.snapshot.confidence.toFixed(2)}`,
+        );
+      }
       options.onSnapshot(data.snapshot);
     } else if (data.type === 'semantic_frame') {
       options.onMotionFrame?.(data.frame);
