@@ -186,6 +186,12 @@ export interface SessionSummary {
    * decided at session start.
    */
   transcriptSaved: boolean;
+  /** Words the recogniser returned this take. Zero means nothing was heard. */
+  wordsHeard: number;
+  /** How far the cursor actually got, in script words. */
+  wordsFollowed: number;
+  /** Script length, so `wordsFollowed` has something to be a fraction of. */
+  scriptWords: number;
 }
 
 export interface SessionState {
@@ -485,6 +491,24 @@ interface PendingTranscriptItem {
 /** Fixed at session start by Rust; false means "never persist a word". */
 let transcriptRetained = false;
 let transcriptBuffer: PendingTranscriptItem[] = [];
+/**
+ * Words the recogniser returned this take (§36 summary).
+ *
+ * The end-of-take summary reported duration, sections, retakes and cost —
+ * every one of which reads the same whether the microphone was working or the
+ * take was nine seconds of silence. There was nothing in it that answered "did
+ * it hear me", which is the first thing anyone wants to know and the only one
+ * that distinguishes a working session from a broken one.
+ */
+let wordsHeard = 0;
+/** Script length in spoken words, so progress has a denominator. */
+let scriptWordCount = 0;
+
+/** Whitespace-separated words, which is what "words" means to a presenter. */
+function countSpokenWords(text: string): number {
+  const trimmed = text.trim();
+  return trimmed.length === 0 ? 0 : trimmed.split(/\s+/).length;
+}
 let transcriptFlushTimer: ReturnType<typeof setInterval> | null = null;
 /**
  * How long an item waits before it is flushed. The command router decides
@@ -562,6 +586,8 @@ export function startLiveSession(input: StartSessionInput): string {
   stageLayoutGeneration = 0;
   transcriptRetained = input.transcriptRetained === true;
   transcriptBuffer = [];
+  wordsHeard = 0;
+  scriptWordCount = input.totalTokens;
   stageSettings = input.stageSettings ?? null;
   listenerSelection = input.listener ?? null;
   listenerVisible = listenerSelection !== null;
@@ -713,6 +739,11 @@ export function startLiveSession(input: StartSessionInput): string {
         // provider's log probabilities, so the confidence evidence is read here
         // one step before the worker sees it — no new worker protocol needed.
         if (event.type === 'completed') {
+          // §36 "did it hear me". Counted here rather than from the retained
+          // transcript, because retention is a SETTING and the question this
+          // answers — was anything transcribed at all — has to be answerable
+          // with retention off, which is the default.
+          wordsHeard += countSpokenWords(event.text);
           noteTranscriptConfidence({
             itemId: event.itemId,
             text: event.text,
@@ -2631,6 +2662,9 @@ export function stopSession(): SessionSummary {
       : 0,
     endingLocation: locateEnding(s),
     transcriptSaved: transcriptRetained,
+    wordsHeard,
+    wordsFollowed: s.snapshot?.committedTokenIndex ?? s.snapshot?.tokenIndex ?? 0,
+    scriptWords: scriptWordCount,
   };
   // §36.2 + §36.1: write the retained tail and close the record BEFORE the
   // teardown resets `transcriptRetained`. `stopInternals` is what runs on every
@@ -2691,6 +2725,9 @@ function emptySummary(s: SessionState): SessionSummary {
     semanticRequests: 0,
     endingLocation: 'Beginning',
     transcriptSaved: false,
+    wordsHeard: 0,
+    wordsFollowed: 0,
+    scriptWords: scriptWordCount,
   };
 }
 

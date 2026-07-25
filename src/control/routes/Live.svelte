@@ -833,6 +833,24 @@
       <dd>{formatClock(summary.durationSeconds)}</dd>
       <dt>Mode</dt>
       <dd>{summary.mode === 'voice' ? 'Voice follow' : summary.mode === 'manual' ? 'Manual' : 'Fixed speed'}</dd>
+      <!-- The two rows that answer "did it actually work". Everything else
+           here reads the same whether the microphone was live or the take was
+           nine seconds of silence, which is why a take could look complete and
+           have heard nothing at all. -->
+      <dt>Words heard</dt>
+      <dd>
+        {summary.wordsHeard}
+        {#if summary.mode === 'voice' && summary.wordsHeard === 0}
+          <span class="summary-warn">— nothing was transcribed</span>
+        {/if}
+      </dd>
+      <dt>Script followed</dt>
+      <dd>
+        {summary.wordsFollowed} of {summary.scriptWords} words
+        {#if summary.scriptWords > 0}
+          ({Math.round((summary.wordsFollowed / summary.scriptWords) * 100)}%)
+        {/if}
+      </dd>
       <dt>Sections reached</dt>
       <dd>{summary.sectionsReached}</dd>
       <dt>Retakes</dt>
@@ -1319,6 +1337,13 @@
     font-weight: 600;
     color: var(--text-secondary);
     cursor: pointer;
+  }
+
+  /* "Nothing was transcribed" is the one line here that is a problem rather
+     than a statistic, so it reads as one. */
+  .summary-warn {
+    color: var(--text-danger, var(--accent-strong));
+    font-weight: 550;
   }
 
   .summary-grid {

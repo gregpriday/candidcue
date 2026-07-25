@@ -36,6 +36,7 @@
         <span
           class="w {markClasses(node.marks)}"
           class:past={cursor !== null && seg.tokenIndex < cursor}
+          class:current={cursor !== null && seg.tokenIndex === cursor}
           data-t={seg.tokenIndex}>{seg.text}</span>
       {:else}
         <span class="w {markClasses(node.marks)}">{seg.text}</span>
@@ -90,6 +91,31 @@
   .w.past {
     opacity: var(--stage-past-opacity, 0.42);
   }
+  /*
+   * The word the prompter believes is being spoken right now.
+   *
+   * Past words already dim, but dimming answers "where have I been", not
+   * "is this thing following me" — a presenter reading a short script could
+   * not tell a working take from a dead one, because the only moving part was
+   * a fade they were not looking at.
+   *
+   * An underline rather than a highlight or a colour: it sits below the
+   * baseline, so it never alters the glyphs, never changes their spacing, and
+   * cannot reflow the line under the reader mid-sentence. Drawn with
+   * `text-decoration` for exactly that reason — a border or a background box
+   * would participate in layout.
+   */
+  .w.current {
+    text-decoration: underline;
+    text-decoration-color: var(--stage-cursor, currentColor);
+    text-decoration-thickness: 0.06em;
+    text-underline-offset: 0.18em;
+    /* The cursor moves word to word at speaking rate; a transition here would
+       smear it across the words in between rather than land on one. */
+    transition: none;
+  }
+  /* §16.4 reduced motion changes nothing here: this is a static mark, not an
+     animation, and it is the one cue that says the take is alive. */
   .m-strong {
     font-weight: 700;
   }
