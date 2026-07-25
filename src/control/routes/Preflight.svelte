@@ -59,6 +59,7 @@
   import {
     MicTestSession,
     micTestStopNotice,
+  shouldAdoptRememberedMicrophone,
     type MicTestSnapshot,
   } from './preflight-mic-test';
   import { getVoiceFacade } from '../services/voice-facade';
@@ -538,28 +539,48 @@
         micAdopted = false;
         micPermission = 'denied';
         updatePreflight({ microphone: 'blocked' });
-      } else if (state === 'unsupported' && $settings.audio.microphoneGranted && !micAdopted) {
-        /*
-         * The case the paragraph above excluded, which is the only case that
-         * actually happens here.
-         *
-         * WKWebView does not implement `permissions.query({name:'microphone'})`
-         * — Safari never has — so on the one platform this app ships in, the
-         * state is 'unsupported' every time and "notice a permission that is
-         * already granted" never ran. The user re-clicked Allow before every
-         * take, which is precisely what that path exists to prevent.
-         *
-         * Falling back to the remembered grant is safe because macOS grants the
-         * microphone to the APPLICATION: if this machine has said yes before,
-         * opening the mic again raises no prompt, so §28.1's rule — never
-         * surprise anyone with an OS dialog — still holds. If access was
-         * revoked in System Settings since, this fails and puts the explicit
-         * button back, which is the correct outcome and the honest one.
-         */
-        void allowMicrophone();
       }
-      // 'prompt' → the user has never answered; keep the explicit action.
+      // 'prompt' / 'unsupported' → nothing to adopt from the platform. The
+      // remembered grant is handled by the effect below, which is NOT hung off
+      // this callback for the reason documented there.
     });
+  });
+
+  /**
+   * §28.1. Adopt a microphone this machine has already granted.
+   *
+   * WKWebView does not implement `permissions.query({ name: 'microphone' })` —
+   * Safari never has — so on the only platform this app ships in the permission
+   * state is 'unsupported' every time and the "notice a permission that is
+   * already granted" path above can never fire. The user was asked to click
+   * Allow before every single take.
+   *
+   * This deliberately does NOT live in that watcher's callback, which was the
+   * first attempt and did not work. `watchMicrophonePermission` returns early
+   * on 'unsupported' (voice-live.ts), so it emits exactly once, immediately, at
+   * mount — routinely BEFORE the settings store has finished loading. The
+   * remembered flag was still false at that instant, and since no second
+   * callback ever comes there was no later chance to notice. Reacting to the
+   * settings value instead removes the race entirely: whenever the flag becomes
+   * true, this runs.
+   *
+   * Safe because macOS grants the microphone to the APPLICATION rather than to
+   * a page: if this machine has said yes before, opening it again raises no
+   * dialog, so §28.1's rule — never surprise anyone with an OS prompt — holds.
+   * Attempted once per visit, so a revoked permission puts the explicit button
+   * back instead of retrying forever.
+   */
+  let micAutoAttempted = false;
+  $effect(() => {
+    const adopt = shouldAdoptRememberedMicrophone({
+      remembered: $settings.audio.microphoneGranted,
+      attempted: micAutoAttempted,
+      adopted: micAdopted,
+      permission: micPermission,
+    });
+    if (!adopt) return;
+    micAutoAttempted = true;
+    void allowMicrophone();
   });
 
   /*

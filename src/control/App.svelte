@@ -28,7 +28,20 @@
   let ready = $state(false);
   let shortcutsOpen = $state(false);
 
-  const theme = $derived($route.name === 'live' ? 'studio' : 'workspace');
+  /*
+   * The dark studio theme belongs to a RUNNING take, not to the Live route.
+   *
+   * Deriving it from the route alone meant the app stayed dark after the take
+   * ended: Escape stops the session without navigating, the F.17 summary opens
+   * on the still-current live route, and the workspace theme only returned once
+   * the operator dismissed the summary and something navigated away. It read as
+   * the app being slow to come back, when in fact it had not been asked to.
+   *
+   * The theme exists to keep the screen out of a presenter's eyes while they
+   * are presenting. The moment the take is over that reason is gone, so the
+   * summary is read on the workspace theme, like every other thing anyone reads.
+   */
+  const theme = $derived($route.name === 'live' && $session.active ? 'studio' : 'workspace');
   const showSidebar = $derived(
     $route.name === 'library' || $route.name === 'editor' || $route.name === 'settings',
   );

@@ -250,3 +250,32 @@ export function micTestStopNotice(reason: MicTestStopReason | null): string | nu
       return null;
   }
 }
+
+/**
+ * §28.1. Should Preflight open a microphone this machine has already granted,
+ * without making the user click Allow again?
+ *
+ * Pure, because the condition it encodes is easy to get subtly wrong and was:
+ * the first attempt read the remembered flag inside the permission watcher's
+ * callback, and that callback fires once, at mount, often before the settings
+ * store has loaded. The flag was still false at that instant and no second
+ * callback ever comes, so the auto-adopt silently never happened and the user
+ * kept clicking the button. Nothing about that failure was visible in the UI —
+ * it looked exactly like the fix not existing.
+ */
+export function shouldAdoptRememberedMicrophone(input: {
+  /** The machine has granted microphone access before (`audio.microphoneGranted`). */
+  remembered: boolean;
+  /** This visit has already tried; a revoked permission must not loop. */
+  attempted: boolean;
+  /** Devices have already been enumerated for a live grant. */
+  adopted: boolean;
+  /** What Preflight currently believes about the permission. */
+  permission: 'unknown' | 'granted' | 'denied';
+}): boolean {
+  if (!input.remembered) return false;
+  if (input.attempted || input.adopted) return false;
+  // 'granted' needs nothing; 'denied' is the user's answer and is not ours to
+  // overrule by reopening the device.
+  return input.permission === 'unknown';
+}

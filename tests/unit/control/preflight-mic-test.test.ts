@@ -18,6 +18,7 @@ import {
   MIC_TEST_MAX_DURATION_MS,
   MicTestSession,
   micTestStopNotice,
+  shouldAdoptRememberedMicrophone,
   type MicTestSnapshot,
 } from '../../../src/control/routes/preflight-mic-test';
 import type { TranscriptTestEvents } from '../../../src/control/services/voice-facade';
@@ -214,5 +215,37 @@ describe('the chosen deadlines', () => {
     expect(MIC_TEST_IDLE_TIMEOUT_MS).toBe(30_000);
     expect(MIC_TEST_MAX_DURATION_MS).toBe(120_000);
     expect(MIC_TEST_IDLE_TIMEOUT_MS).toBeLessThan(MIC_TEST_MAX_DURATION_MS);
+  });
+});
+
+describe('a microphone this machine already granted is adopted without a click', () => {
+  const base = {
+    remembered: true,
+    attempted: false,
+    adopted: false,
+    permission: 'unknown' as const,
+  };
+
+  it('adopts when the grant is remembered and nothing is known yet', () => {
+    expect(shouldAdoptRememberedMicrophone(base)).toBe(true);
+  });
+
+  it('does not adopt on a machine that has never granted access', () => {
+    // The first take still asks, which is the one time asking is right.
+    expect(shouldAdoptRememberedMicrophone({ ...base, remembered: false })).toBe(false);
+  });
+
+  it('tries once per visit, so a revoked permission cannot loop', () => {
+    // `allowMicrophone` leaves `micPermission` at 'unknown' when the request
+    // itself throws, so without this the effect would re-fire on every
+    // settings change and reopen the device forever.
+    expect(shouldAdoptRememberedMicrophone({ ...base, attempted: true })).toBe(false);
+  });
+
+  it('leaves a live grant and an explicit refusal alone', () => {
+    expect(shouldAdoptRememberedMicrophone({ ...base, adopted: true })).toBe(false);
+    expect(shouldAdoptRememberedMicrophone({ ...base, permission: 'granted' })).toBe(false);
+    // 'denied' is the user's answer; reopening the device is not ours to do.
+    expect(shouldAdoptRememberedMicrophone({ ...base, permission: 'denied' })).toBe(false);
   });
 });
