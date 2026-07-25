@@ -124,14 +124,71 @@ export async function getStageStatus(): Promise<StageStatus> {
 }
 
 /**
+ * Which step of the handshake a stalled stage got stuck on (§43.3).
+ *
+ * The timeout used to say only "the stage did not finish preparing in time",
+ * which names no step and suggests nothing to try. The coordinator already
+ * knows how far the handshake got — whether the window is even open, whether
+ * the envelope was ever received, whether the layout ever settled — and those
+ * are three unrelated failures with three different causes. Pure, so the
+ * wording is testable without a stage.
+ */
+export function stageStalledMessage(
+  status: StageStatus | null,
+  expectedGeneration: number,
+): string {
+  if (!status || !status.exists) {
+    return 'The stage window closed before it was ready.';
+  }
+  if (status.stageGeneration !== expectedGeneration) {
+    return 'Another stage window replaced this one while it was preparing.';
+  }
+  if (!status.listening) {
+    return 'The stage window opened but never finished loading.';
+  }
+  if (!status.hydrated) {
+    return 'The stage window opened but never received the script.';
+  }
+  if (!status.layoutReady) {
+    return 'The stage received the script but never finished laying it out.';
+  }
+  return 'The stage did not finish preparing in time.';
+}
+
+/**
+ * How long the stage webview gets to load its bundle and start listening.
+ *
+ * Deliberately much longer than the handshake budget below, because the two
+ * measure different things. Booting the webview is I/O the app does not
+ * control — and under `tauri dev` it means Vite compiling the stage's whole
+ * module graph on demand, which on a cold start is comfortably more than ten
+ * seconds. Spending the handshake budget on that produced a start failure on a
+ * perfectly healthy machine.
+ */
+const STAGE_BOOT_TIMEOUT_MS = 30000;
+
+/**
+ * How long the handshake itself gets, measured from the moment the stage says
+ * it is listening. This part is CPU the app does own: receive the envelope,
+ * settle the fonts, measure the layout.
+ */
+const STAGE_HANDSHAKE_TIMEOUT_MS = 12000;
+
+/**
  * §29.2/§43.3: after publish_stage_document, wait for the stage handshake
  * (hydrated + layout ready + fonts) before going full screen. Listens for the
  * Rust-relayed `stage://ready` event and polls get_stage_status as a backstop.
  * Resolves immediately outside the Tauri runtime (browser dev).
+ *
+ * The deadline is in two parts (see the constants above): the clock restarts
+ * once the stage proves it is alive, so a slow boot cannot eat the budget the
+ * layout needs, and a stage that never loads at all still fails in bounded
+ * time with a message that says so.
  */
 export async function waitForStageReady(
   stageGeneration: number,
-  timeoutMs = 12000,
+  timeoutMs = STAGE_HANDSHAKE_TIMEOUT_MS,
+  bootTimeoutMs = STAGE_BOOT_TIMEOUT_MS,
 ): Promise<void> {
   const { isTauriRuntime } = await import('./ipc');
   if (!isTauriRuntime()) return;
@@ -142,6 +199,10 @@ export async function waitForStageReady(
     let unlisten: (() => void) | null = null;
     let poll: ReturnType<typeof setInterval> | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    /** The last status the poll saw, so the timeout can say what stalled. */
+    let lastStatus: StageStatus | null = null;
+    /** The boot budget is spent once; a flapping flag must not extend it. */
+    let booted = false;
 
     const finish = (err?: Error) => {
       if (done) return;
@@ -153,10 +214,15 @@ export async function waitForStageReady(
       else resolve();
     };
 
-    timer = setTimeout(
-      () => finish(new Error('The stage did not finish preparing in time.')),
-      timeoutMs,
-    );
+    const deadline = (ms: number) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(
+        () => finish(new Error(stageStalledMessage(lastStatus, stageGeneration))),
+        ms,
+      );
+    };
+
+    deadline(bootTimeoutMs);
 
     void listen<{ stageGeneration: number }>('stage://ready', (event) => {
       if (event.payload.stageGeneration === stageGeneration) finish();
@@ -167,13 +233,15 @@ export async function waitForStageReady(
 
     poll = setInterval(() => {
       void getStageStatus().then((status) => {
-        if (
-          status.stageGeneration === stageGeneration &&
-          status.hydrated &&
-          status.layoutReady
-        ) {
-          finish();
+        lastStatus = status;
+        if (status.stageGeneration !== stageGeneration) return;
+        // The stage is alive: hand the rest of the wait to the handshake
+        // budget, which is what the remaining steps are actually bounded by.
+        if (status.listening && !booted) {
+          booted = true;
+          deadline(timeoutMs);
         }
+        if (status.hydrated && status.layoutReady) finish();
       });
     }, 400);
   });

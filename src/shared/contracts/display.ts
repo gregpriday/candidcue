@@ -98,6 +98,13 @@ export interface StageStatus {
   displayFingerprint?: string;
   stageGeneration: number;
   sessionId?: Uuid;
+  /**
+   * Handshake step 0: the stage webview's bundle has run and its subscriptions
+   * are live. Separates a window that never finished loading from one that
+   * loaded and never received its document — and gives the start sequence a
+   * point at which to stop charging boot time against the layout budget.
+   */
+  listening: boolean;
   hydrated: boolean;
   layoutReady: boolean;
   lastTrackingRevision?: number;

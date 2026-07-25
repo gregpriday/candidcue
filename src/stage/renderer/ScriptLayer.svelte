@@ -120,8 +120,25 @@
 
   /* ---- viewport + derived layout ---- */
   let planeEl: HTMLDivElement | undefined = $state();
-  let vw = $state(0);
-  let vh = $state(0);
+  /*
+   * The same measured-with-a-fallback viewport as the mount site, for the same
+   * reason: `bind:clientWidth/clientHeight` is a ResizeObserver, and its
+   * callback runs during a rendering update that a never-shown window may never
+   * perform. The stage completes its whole handshake hidden, and every guard
+   * below is `vh === 0` — including the one in front of the measurement pass
+   * that sends `layout-ready`, so a zero here deadlocked the start sequence.
+   *
+   * The layer is full-bleed inside the mirror plane, so the window's inner size
+   * is the right stand-in, and the observed value replaces it as soon as there
+   * is one. A disagreement between the two is just a layout-input change, which
+   * is already the trigger for a map rebuild (§33 re-anchor).
+   */
+  let measuredVw = $state(0);
+  let measuredVh = $state(0);
+  let windowVw = $state(0);
+  let windowVh = $state(0);
+  const vw = $derived(measuredVw || windowVw);
+  const vh = $derived(measuredVh || windowVh);
 
   const padding = $derived(stagePadding(compact));
   const padTopPx = $derived((vh * padding.topVh) / 100);
@@ -881,11 +898,15 @@
   );
 </script>
 
+<!-- Initialised synchronously from `window.innerWidth/innerHeight`, which is
+     what makes the viewport nonzero before anything has been painted. -->
+<svelte:window bind:innerWidth={windowVw} bind:innerHeight={windowVh} />
+
 <div
   class="script-layer"
   data-degraded={degraded ? 'true' : 'false'}
-  bind:clientWidth={vw}
-  bind:clientHeight={vh}
+  bind:clientWidth={measuredVw}
+  bind:clientHeight={measuredVh}
   style:--stage-past-opacity={settings.pastOpacity}
   style:--stage-future-opacity={settings.futureOpacity}
   style:--stage-image-max-h="{imageMaxH}vh"

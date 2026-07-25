@@ -377,6 +377,7 @@ export const mockStage = {
       fullscreen: false,
       displayFingerprint: 'dsp-mock-prompter',
       stageGeneration: mockStageGeneration,
+      listening: mockStageGeneration > 0,
       hydrated: mockStageGeneration > 0,
       layoutReady: mockStageGeneration > 0,
       mediaHealthy: true,

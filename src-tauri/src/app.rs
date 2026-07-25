@@ -256,6 +256,17 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
         Some((generation, value))
     }
 
+    // Handshake step 0 (§43.3): the stage can now receive events. Anything
+    // published to it before this point was evaluated against a page with no
+    // listeners and is gone, so the held envelope is re-sent here. Carries no
+    // generation — the stage does not know one until it has the document —
+    // and the replay is generation-checked on the coordinator side instead.
+    let handle = app.clone();
+    app.listen_any(events::STAGE_LISTENING, move |_event| {
+        handle.state::<AppCoordinator>().stage_listening();
+        crate::windows::replay_stage_document(&handle);
+    });
+
     let handle = app.clone();
     app.listen_any(events::STAGE_HYDRATED, move |event| {
         if let Some((gen, _)) = generation(event.payload()) {

@@ -21,6 +21,7 @@
     type StageIntent,
     type StageIntentPayload,
     type StageLayoutErrorPayload,
+    type StageListeningPayload,
     type StageListenerHealthPayload,
     type StageMotionAck,
     type StageMotionAckPayload,
@@ -55,8 +56,28 @@
   let app = $state.raw(initialStageState());
   let fontsReady = $state(false);
   let pointerHidden = $state(false);
-  let vw = $state(0);
-  let vh = $state(0);
+  /*
+   * Viewport size, measured with a fallback rather than measured alone.
+   *
+   * `bind:clientWidth/clientHeight` is a ResizeObserver, and an observation is
+   * delivered during the rendering update — which a window that has never been
+   * shown may never run. The stage is created hidden and only goes full screen
+   * AFTER the handshake completes (§29.2 step 3), so for the whole of that
+   * handshake these were the numbers of an unrendered window: zero. Everything
+   * downstream is guarded on a nonzero viewport, so the measurement pass bailed
+   * and `layout-ready` was never sent.
+   *
+   * `window.innerWidth/innerHeight` is available synchronously whether or not
+   * anything has been painted, and Svelte initialises these bindings from it at
+   * mount instead of from an observer. The observed value wins the moment it
+   * exists, so a visible window behaves exactly as before.
+   */
+  let measuredVw = $state(0);
+  let measuredVh = $state(0);
+  let windowVw = $state(0);
+  let windowVh = $state(0);
+  const vw = $derived(measuredVw || windowVw);
+  const vh = $derived(measuredVh || windowVh);
   let scriptLayer: ScriptLayer | undefined = $state();
   let previewDriver: PreviewDriver | null = null;
 
@@ -165,8 +186,27 @@
           });
         }),
       ]);
-      if (disposed) subs.forEach((u) => u());
-      else unsubs.push(...subs);
+      if (disposed) {
+        subs.forEach((u) => u());
+        return;
+      }
+      unsubs.push(...subs);
+      /*
+       * Handshake step 0 (§43.3): tell Rust the stage is reachable.
+       *
+       * This has to be the line after the subscriptions resolve, and it is the
+       * whole point of the event. `open_stage` returns as soon as the window
+       * is built — long before this bundle has run — and control publishes the
+       * envelope a few milliseconds later. A Tauri event is delivered by
+       * evaluating JS in the target webview and is never queued, so that
+       * envelope landed on a page with no listeners and vanished: the stage
+       * never hydrated, and the start sequence failed with "the stage did not
+       * finish preparing in time" every time the stage lost the race, which
+       * under `tauri dev` is every time.
+       *
+       * Rust holds the envelope and replays it when this arrives.
+       */
+      emitStageEvent<StageListeningPayload>(STAGE_EVENT.listening, { atMs: Date.now() });
     })();
 
     // §7.1 wants the map built once fonts are final — but `document.fonts.ready`
@@ -400,7 +440,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeyDown} />
+<svelte:window onkeydown={onKeyDown} bind:innerWidth={windowVw} bind:innerHeight={windowVh} />
 
 <!-- The stage is a non-interactive display surface: keyboard input is handled
      at the window level (§16.9), and the click handler only reports focus. -->
@@ -409,8 +449,8 @@
   class="stage-root"
   data-phase={phase}
   data-pointer-hidden={pointerHidden}
-  bind:clientWidth={vw}
-  bind:clientHeight={vh}
+  bind:clientWidth={measuredVw}
+  bind:clientHeight={measuredVh}
   onpointermove={onPointerMove}
   onclick={onClick}
   onwheel={onWheel}

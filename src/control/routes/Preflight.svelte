@@ -995,7 +995,18 @@
         following: $settings.following,
       });
       const ready = stageService.waitForStageReady(opened.stageGeneration);
-      await stageService.publishStageDocument(sessionId, envelope);
+      /*
+       * A refused envelope is an ack, not an error (§43.5) — and nothing read
+       * it, so a refusal was indistinguishable from a slow stage: the wait ran
+       * its full 12 s and then blamed the timing. Rust only ever refuses for a
+       * stale generation, which means a second stage window raced this one, so
+       * say that instead of waiting to find out.
+       */
+      const ack = await stageService.publishStageDocument(sessionId, envelope);
+      if (!ack.accepted) {
+        void ready.catch(() => {});
+        throw new Error('The stage was replaced while the script was being sent to it.');
+      }
       await ready;
 
       // 3. Show it (full screen unless the user opted out).

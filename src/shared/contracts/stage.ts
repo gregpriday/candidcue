@@ -70,6 +70,19 @@ export const STAGE_EVENT = {
    */
   coachRail: 'stage://coach-rail',
 
+  /**
+   * stage → Rust: the stage's subscriptions are registered (handshake step 0).
+   *
+   * A Tauri event is delivered by evaluating JS in the target webview and is
+   * never queued, so an envelope published between `open_stage` returning and
+   * the stage bundle executing lands on a page with no listeners and is lost
+   * outright — the stage then never hydrates and the start sequence times out
+   * with nothing to show for it. This is the stage saying it is reachable;
+   * Rust answers by replaying the envelope it holds for this generation, if
+   * any. Emitted again after a reload, which is how the stage recovers under
+   * `tauri dev`.
+   */
+  listening: 'stage://listening',
   /** stage → Rust: envelope received and applied (handshake step 1). */
   hydrated: 'stage://hydrated',
   /** stage → Rust: fonts + first stable layout done (handshake step 2). */
@@ -234,6 +247,18 @@ export const STAGE_HEARTBEAT_GRACE_MS = 5000;
 /* ---------------------------------------------------------------------------
  * Outbound payloads (stage → Rust/control; requires emit permission)
  * ------------------------------------------------------------------------- */
+
+/**
+ * `stage://listening` — the stage's subscriptions are registered.
+ *
+ * Deliberately carries no `stageGeneration`: the stage learns its generation
+ * from the envelope, and this is emitted before any envelope has arrived. The
+ * replay it triggers is generation-checked in the coordinator instead, against
+ * the stage window Rust currently has open.
+ */
+export interface StageListeningPayload {
+  atMs: number;
+}
 
 /** `stage://hydrated` — the envelope was received and applied. */
 export interface StageHydratedPayload {

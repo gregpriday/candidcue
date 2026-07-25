@@ -55,6 +55,14 @@ pub mod events {
     pub const STAGE_COACH_RAIL: &str = "stage://coach-rail";
 
     // Stage → Rust (listened in app setup).
+    /// The stage's event subscriptions are registered and it can now receive
+    /// a document (spec §43.3 step 0).
+    ///
+    /// A webview event is delivered by evaluating JS in the target webview and
+    /// is not queued, so anything emitted to the stage before its bundle runs
+    /// is lost outright. This is the stage saying it is reachable; Rust
+    /// answers by replaying the envelope it is holding, if any.
+    pub const STAGE_LISTENING: &str = "stage://listening";
     pub const STAGE_HYDRATED: &str = "stage://hydrated";
     pub const STAGE_LAYOUT_READY: &str = "stage://layout-ready";
     pub const STAGE_HEARTBEAT_ACK: &str = "stage://heartbeat-ack";
@@ -500,6 +508,11 @@ pub struct StageStatus {
     pub stage_generation: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// The stage webview's bundle has run and its subscriptions are live
+    /// (handshake step 0). Distinguishes a window that never finished loading
+    /// from one that loaded and then never received its document — two
+    /// unrelated failures that used to report identically.
+    pub listening: bool,
     pub hydrated: bool,
     pub layout_ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -892,6 +905,7 @@ pub fn stage_status<R: Runtime>(app: &AppHandle<R>) -> StageStatus {
         display_fingerprint: snapshot.stage.display_fingerprint.clone(),
         stage_generation: snapshot.stage.generation,
         session_id: snapshot.stage.session_id.clone(),
+        listening: snapshot.stage.listening,
         hydrated: snapshot.stage.hydrated,
         layout_ready: snapshot.stage.layout_ready,
         last_tracking_revision: snapshot.stage.last_tracking_revision,
@@ -1144,12 +1158,32 @@ pub fn publish_stage_document<R: Runtime>(
             session_id: Some(session_id.to_string()),
         });
     }
+    // Remember it BEFORE emitting: the stage may not be listening yet, and
+    // this is the only copy Rust will ever have. See the field comment on
+    // `AppCoordinator::pending_document`.
+    app.state::<AppCoordinator>()
+        .store_stage_document(active.generation, document_envelope.clone());
     app.emit_to(STAGE_LABEL, events::STAGE_LOAD_SESSION, &document_envelope)?;
     Ok(StageAck {
         accepted: true,
         stage_generation: active.generation,
         session_id: Some(session_id.to_string()),
     })
+}
+
+/// Re-send the current stage's envelope, if one is being held.
+///
+/// Called when the stage announces its subscriptions are live. Both orderings
+/// are normal and both are covered: the stage may come up before control
+/// publishes (nothing is held, and the ordinary emit lands on a listening
+/// window), or after (the emit was lost, and this is what recovers it).
+pub fn replay_stage_document<R: Runtime>(app: &AppHandle<R>) -> bool {
+    let Some((_generation, envelope)) = app.state::<AppCoordinator>().stage_document_for_replay()
+    else {
+        return false;
+    };
+    app.emit_to(STAGE_LABEL, events::STAGE_LOAD_SESSION, &envelope)
+        .is_ok()
 }
 
 /// Validate numeric bounds, identifiers, session generation, and payload
@@ -1389,6 +1423,7 @@ mod tests {
             events::STAGE_HEARTBEAT,
             events::STAGE_SEMANTIC_FRAME,
             events::STAGE_COACH_RAIL,
+            events::STAGE_LISTENING,
             events::STAGE_HYDRATED,
             events::STAGE_LAYOUT_READY,
             events::STAGE_HEARTBEAT_ACK,
@@ -1434,6 +1469,7 @@ mod tests {
     #[test]
     fn no_relayed_control_event_reuses_a_name_the_stage_emits() {
         let emitted_by_stage = [
+            events::STAGE_LISTENING,
             events::STAGE_HYDRATED,
             events::STAGE_LAYOUT_READY,
             events::STAGE_HEARTBEAT_ACK,

@@ -15,6 +15,12 @@ pub struct StageState {
     pub generation: u64,
     pub session_id: Option<String>,
     pub display_fingerprint: Option<String>,
+    /// Handshake step 0: the stage webview's bundle has run and it can now
+    /// receive events. Separate from `hydrated` because the gap between the
+    /// two is where the lost first envelope lived, and because a stage that
+    /// never gets this far has a different problem (its bundle failed to load)
+    /// than one that gets this far and no further (its document never came).
+    pub listening: bool,
     /// Stage handshake progress (spec §43.3 steps 5–7).
     pub hydrated: bool,
     pub layout_ready: bool,
@@ -42,6 +48,27 @@ pub struct CoordinatorSnapshot {
 #[derive(Default)]
 pub struct AppCoordinator {
     state: Mutex<CoordinatorSnapshot>,
+    /// The last document envelope published to the stage, and the stage
+    /// generation it was published under (spec §43.3).
+    ///
+    /// A Tauri webview `emit` is delivered by evaluating JS in the target
+    /// webview. The stage window is created and returned from `open_stage`
+    /// long before its bundle has executed, so the envelope that control
+    /// publishes moments later can arrive at a page that has not yet
+    /// registered a single listener — and a Tauri event has no queue, so it is
+    /// simply gone. Nothing retried it, the stage therefore never hydrated,
+    /// and `waitForStageReady` sat out its full timeout: no session could be
+    /// started at all, which is exactly what "the stage did not finish
+    /// preparing in time" was.
+    ///
+    /// So the envelope is kept here and replayed when the stage announces that
+    /// its subscriptions are live (`stage://listening`). That also covers the
+    /// stage window reloading mid-session, which is routine under `tauri dev`.
+    ///
+    /// Deliberately NOT part of `CoordinatorSnapshot`: the snapshot is cloned
+    /// on every `get_stage_status` poll, and this is the largest payload in
+    /// the app.
+    pending_document: Mutex<Option<(u64, serde_json::Value)>>,
     stage_generation: AtomicU64,
     session_generation: AtomicU64,
     quitting: AtomicBool,
@@ -64,6 +91,9 @@ impl AppCoordinator {
         session_id: Option<String>,
         display_fingerprint: Option<String>,
     ) {
+        // A new stage window starts with no document of its own; the previous
+        // generation's envelope must not be replayable to it.
+        self.clear_stage_document();
         let mut state = self.state.lock().expect("coordinator poisoned");
         state.stage = StageState {
             exists: true,
@@ -72,6 +102,7 @@ impl AppCoordinator {
             generation,
             session_id,
             display_fingerprint,
+            listening: false,
             hydrated: false,
             layout_ready: false,
             last_heartbeat_ms: None,
@@ -80,13 +111,71 @@ impl AppCoordinator {
         };
     }
 
-    pub fn stage_closed(&self, generation: u64) {
+    /// Remember the envelope published under `generation`, so it can be
+    /// replayed to a stage that was not yet listening when it was sent.
+    pub fn store_stage_document(&self, generation: u64, envelope: serde_json::Value) {
+        *self.pending_document.lock().expect("coordinator poisoned") =
+            Some((generation, envelope));
+    }
+
+    /// The envelope to replay for the CURRENT stage, if there is one.
+    ///
+    /// Generation-checked like every other stage path: an envelope left over
+    /// from a previous stage window is never replayed to a new one, so a
+    /// reloading stage can only ever be handed the document it was opened for.
+    pub fn stage_document_for_replay(&self) -> Option<(u64, serde_json::Value)> {
+        let current = {
+            let state = self.state.lock().expect("coordinator poisoned");
+            if !state.stage.exists {
+                return None;
+            }
+            state.stage.generation
+        };
+        let pending = self.pending_document.lock().expect("coordinator poisoned");
+        match pending.as_ref() {
+            Some((generation, envelope)) if *generation == current => {
+                Some((current, envelope.clone()))
+            }
+            _ => None,
+        }
+    }
+
+    /// The current stage announced that its subscriptions are live.
+    ///
+    /// Ungenerationed on purpose: the stage does not learn its generation
+    /// until the envelope arrives, so this is the one stage-originated fact
+    /// that cannot carry one. It is applied to whichever window is currently
+    /// open, which is the only one that could have emitted it.
+    pub fn stage_listening(&self) {
         let mut state = self.state.lock().expect("coordinator poisoned");
-        if state.stage.generation == generation {
-            state.stage.exists = false;
-            state.stage.hydrated = false;
-            state.stage.layout_ready = false;
-            state.stage.visible = false;
+        if state.stage.exists {
+            state.stage.listening = true;
+        }
+    }
+
+    pub fn clear_stage_document(&self) {
+        *self.pending_document.lock().expect("coordinator poisoned") = None;
+    }
+
+    pub fn stage_closed(&self, generation: u64) {
+        let closed = {
+            let mut state = self.state.lock().expect("coordinator poisoned");
+            if state.stage.generation == generation {
+                state.stage.exists = false;
+                state.stage.listening = false;
+                state.stage.hydrated = false;
+                state.stage.layout_ready = false;
+                state.stage.visible = false;
+                true
+            } else {
+                false
+            }
+        };
+        // Nothing can be replayed to a window that is gone, and holding the
+        // envelope would keep a whole compiled script alive for the life of
+        // the process.
+        if closed {
+            self.clear_stage_document();
         }
     }
 

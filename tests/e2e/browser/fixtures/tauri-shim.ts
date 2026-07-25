@@ -522,6 +522,7 @@ function shimBody(config: ShimConfig): void {
           // The stage window really does hydrate and lay out in Tauri; here it
           // is the poll backstop in `waitForStageReady` that resolves the
           // handshake, since no second webview exists to emit `stage://ready`.
+          listening: control.stage.exists,
           hydrated: control.stage.exists,
           layoutReady: control.stage.exists,
           mediaHealthy: true,
