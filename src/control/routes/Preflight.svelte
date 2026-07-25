@@ -6,7 +6,7 @@
   audio integrations land).
 -->
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import Button from '../components/Button.svelte';
   import CalibrationPreview from '../components/CalibrationPreview.svelte';
   import CoachingSettingsFields from '../components/CoachingSettingsFields.svelte';
@@ -140,6 +140,8 @@
   let micPermission = $state<'unknown' | 'granted' | 'denied'>('unknown');
   /** Guards the one-shot adoption of an already-granted permission. */
   let micAdopted = false;
+  /** The take owns the microphone from here; the meter must let go. */
+  let micHeldForTake = $state(false);
   let micDevices = $state<AudioDeviceInfo[]>([]);
   let micDeviceId = $state<string | undefined>(undefined);
   let followSystemDefault = $state(true);
@@ -599,9 +601,21 @@
     void validateStageDisplay(fingerprint);
   });
 
-  /* Mic level meter while permission is granted (local, pre-OpenAI). */
+  /*
+   * Mic level meter while permission is granted (local, pre-OpenAI).
+   *
+   * `micHeldForTake` is what releases it. The meter holds an open
+   * `getUserMedia` stream for as long as this screen is showing, and the take
+   * opens its OWN capture — so starting a session asked WKWebView for a second
+   * concurrent stream on a device it had already granted, while this component
+   * was still mounted and still holding the first. That second call never
+   * returns: no error, no rejection, it simply hangs, and the connect attempt
+   * sat at "opening the microphone" until its deadline. The realtime
+   * connection never got as far as being attempted, which is why it looked
+   * like a network fault and was not one.
+   */
   $effect(() => {
-    if (micPermission !== 'granted') return undefined;
+    if (micPermission !== 'granted' || micHeldForTake) return undefined;
     // §28.4: the meter reads the same sensitivity the take will use, so moving
     // the slider in Settings is visible here rather than only felt mid-session.
     const unsub = getVoiceFacade().observeLevels(
@@ -940,6 +954,19 @@
     }
     starting = true;
     startError = null;
+
+    /*
+     * Hand the microphone over before the take asks for it.
+     *
+     * Both of these hold a live capture stream, and neither is released by
+     * navigating away in time — `startLiveSession` runs while this component
+     * is still mounted. `await tick()` is load-bearing: it lets the meter
+     * effect's teardown actually run before the transport calls getUserMedia,
+     * rather than after.
+     */
+    micTestSession.stop('user');
+    micHeldForTake = true;
+    await tick();
     const display = displays.find((d) => d.fingerprint === selectedFingerprint);
     /*
      * C1: open the session record FIRST.
@@ -1142,6 +1169,10 @@
     } catch (err) {
       await abandonSession(sessionId);
       startError = `Could not start the session. ${describeError(err)}`;
+      // The take did not get the microphone after all, so give it back to the
+      // meter — otherwise a failed start leaves the level bar dead and the
+      // operator with no way to see whether the input is even working.
+      micHeldForTake = false;
     } finally {
       starting = false;
     }
