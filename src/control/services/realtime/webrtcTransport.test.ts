@@ -399,6 +399,156 @@ describe('WebRtcTranscriptionTransport (spec §27.3, E.2)', () => {
   });
 
   // -------------------------------------------------------------------------
+  // ICE `disconnected` is transient, and treating it as a drop ended live takes
+  // -------------------------------------------------------------------------
+
+  /**
+   * A transport whose grace timer the test fires by hand.
+   *
+   * The default harness installs `setTimeout: () => 0`, a timer that never
+   * runs — which is why every existing test here passed both before and after
+   * this behaviour changed. Nothing in the file could observe a timer at all,
+   * so nothing observed what `disconnected` did.
+   */
+  function graceHarness() {
+    const pc = new FakePeerConnection();
+    const pending: Array<{ id: number; cb: () => void }> = [];
+    let nextId = 1;
+    const transport = new WebRtcTranscriptionTransport({
+      invoke: vi.fn().mockResolvedValue(credential()),
+      fetchFn: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('v=0 answer'),
+      }),
+      createPeerConnection: () => pc,
+      acquireMicrophone: () => {
+        const track = fakeTrack();
+        return Promise.resolve({ getAudioTracks: () => [track], getTracks: () => [track] });
+      },
+      now: () => NOW,
+      timers: {
+        setTimeout: (cb: () => void) => {
+          const id = nextId++;
+          pending.push({ id, cb });
+          return id;
+        },
+        clearTimeout: (handle: unknown) => {
+          const index = pending.findIndex((t) => t.id === handle);
+          if (index >= 0) pending.splice(index, 1);
+        },
+      },
+    });
+    const events: TranscriptEvent[] = [];
+    transport.onEvent((event) => events.push(event));
+    const origSetRemote = pc.setRemoteDescription.bind(pc);
+    pc.setRemoteDescription = async (description) => {
+      await origSetRemote(description);
+      pc.dc.open();
+    };
+    return {
+      transport,
+      pc,
+      events,
+      /** Run every timer that is still armed. */
+      runTimers: () => {
+        const due = pending.splice(0, pending.length);
+        for (const timer of due) timer.cb();
+      },
+      armedTimers: () => pending.length,
+    };
+  }
+
+  it('rides out a transient disconnect instead of ending the take', async () => {
+    /*
+     * The shipped bug. `disconnected` means ICE is still trying — a Wi-Fi roam,
+     * a NAT rebinding, a moment of CPU starvation — and it recovers on its own.
+     * Reporting it immediately meant a presenter mid-take, on camera, got "the
+     * realtime connection to OpenAI dropped" and had to restart voice
+     * following, for a blip that had already passed.
+     */
+    const h = graceHarness();
+    await h.transport.connect(DEFAULT_TRANSCRIPTION_CONFIG);
+    h.events.length = 0;
+
+    h.pc.fireConnectionState('disconnected');
+    expect(
+      h.events.filter((e) => e.type === 'failed'),
+      'a blip must not be reported the instant it happens',
+    ).toHaveLength(0);
+    expect(h.transport.getDiagnostics().transportState).toBe('connected');
+
+    // ICE recovers, as it usually does.
+    h.pc.fireConnectionState('connected');
+    h.runTimers();
+
+    expect(h.events.filter((e) => e.type === 'failed')).toHaveLength(0);
+    expect(h.transport.getDiagnostics().transportState).toBe('connected');
+  });
+
+  it('reports the drop when the grace window expires without recovery', async () => {
+    // The other half: tolerance must not become silence. A connection that is
+    // genuinely gone has to be reported, or the presenter reads on from a
+    // prompter that quietly stopped following (§60).
+    const h = graceHarness();
+    await h.transport.connect(DEFAULT_TRANSCRIPTION_CONFIG);
+    h.events.length = 0;
+
+    h.pc.fireConnectionState('disconnected');
+    h.runTimers();
+
+    expect(h.events.at(-1)).toMatchObject({
+      type: 'failed',
+      code: 'REALTIME_CONNECTION_LOST',
+      recoverable: true,
+    });
+    expect(h.transport.getDiagnostics().transportState).toBe('failed');
+  });
+
+  it('reports `failed` immediately — ICE only reaches it when recovery is out', async () => {
+    const h = graceHarness();
+    await h.transport.connect(DEFAULT_TRANSCRIPTION_CONFIG);
+    h.events.length = 0;
+
+    h.pc.fireConnectionState('failed');
+
+    expect(
+      h.events.at(-1),
+      'waiting out a grace window here would delay a failure ICE has already given up on',
+    ).toMatchObject({ type: 'failed', code: 'REALTIME_CONNECTION_LOST' });
+  });
+
+  it('does not stack a grace window per state change', async () => {
+    // `disconnected` can fire repeatedly while ICE retries. Arming a timer each
+    // time would report the drop on the FIRST window's expiry regardless of
+    // how long the connection had actually been struggling.
+    const h = graceHarness();
+    await h.transport.connect(DEFAULT_TRANSCRIPTION_CONFIG);
+    const before = h.armedTimers();
+
+    h.pc.fireConnectionState('disconnected');
+    h.pc.fireConnectionState('disconnected');
+    h.pc.fireConnectionState('disconnected');
+
+    expect(h.armedTimers() - before).toBe(1);
+  });
+
+  it('does not report a drop for a take the operator stopped', async () => {
+    // A grace window armed a moment before the stop would otherwise fire
+    // against a torn-down transport and blame the network for a deliberate
+    // stop.
+    const h = graceHarness();
+    await h.transport.connect(DEFAULT_TRANSCRIPTION_CONFIG);
+    h.pc.fireConnectionState('disconnected');
+    h.events.length = 0;
+
+    await h.transport.disconnect('stop');
+    h.runTimers();
+
+    expect(h.events.filter((e) => e.type === 'failed')).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
   // H5: device loss must be observable
   // -------------------------------------------------------------------------
 

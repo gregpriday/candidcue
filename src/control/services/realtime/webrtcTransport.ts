@@ -43,6 +43,21 @@ export const DEFAULT_DATA_CHANNEL_OPEN_TIMEOUT_MS = 10_000;
 export const DEFAULT_CONNECT_DEADLINE_MS = 30_000;
 
 /**
+ * How long ICE gets to recover from `disconnected` before it counts as a drop.
+ *
+ * `disconnected` is a recoverable state by specification — the agent is still
+ * running connectivity checks — and it is reached routinely by a Wi-Fi roam, a
+ * NAT rebinding, or a brief CPU stall. Reporting it immediately ended live
+ * takes that would have recovered on their own within a second.
+ *
+ * Five seconds is a compromise, not a tuning: long enough to ride out the
+ * ordinary blips, short enough that a presenter who has genuinely lost the
+ * network is told promptly rather than left following a prompter that quietly
+ * stopped listening (§60).
+ */
+export const DEFAULT_DISCONNECT_GRACE_MS = 5_000;
+
+/**
  * Thrown when a connect attempt is invalidated by `disconnect()`/suspend, or
  * by the total deadline. Distinct from a negotiation failure: nothing is
  * wrong with the provider, the caller simply stopped caring about this
@@ -131,6 +146,11 @@ export interface WebRtcTransportDeps {
   dataChannelOpenTimeoutMs?: number;
   /** H2: total wall-clock ceiling for one connect attempt. */
   connectDeadlineMs?: number;
+  /**
+   * How long a transient ICE `disconnected` is given to recover before it is
+   * reported as a dropped connection. See `handleConnectionStateChange`.
+   */
+  disconnectGraceMs?: number;
   timers?: TransportTimers;
   /**
    * Optional connect-progress callback so the session controller can mirror
@@ -173,6 +193,9 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
   private closingIntentionally = false;
   /** H5: detaches the device-loss listeners on the transmitted track. */
   private disposeTrackWatch: (() => void) | null = null;
+  /** Recovery window for a transient ICE `disconnected` (see below). */
+  private disconnectGraceTimer: unknown = null;
+  private readonly disconnectGraceMs: number;
 
   // -- H2 cancellable-connect state ----------------------------------------
   /**
@@ -223,6 +246,7 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
     this.callsUrl = deps.callsUrl ?? OPENAI_REALTIME_CALLS_URL;
     this.openTimeoutMs = deps.dataChannelOpenTimeoutMs ?? DEFAULT_DATA_CHANNEL_OPEN_TIMEOUT_MS;
     this.connectDeadlineMs = deps.connectDeadlineMs ?? DEFAULT_CONNECT_DEADLINE_MS;
+    this.disconnectGraceMs = deps.disconnectGraceMs ?? DEFAULT_DISCONNECT_GRACE_MS;
   }
 
   // -- RealtimeTranscriptionTransport -------------------------------------
@@ -586,6 +610,10 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
     // the attempt publish itself onto a stopped session.
     this.cancelPending(`disconnect (${reason})`);
     this.stopWatchingInputTrack();
+    // A recovery window armed moments ago must not outlive the connection it
+    // was watching — it would fire against a torn-down transport and report a
+    // dropped connection for a take the operator stopped on purpose.
+    this.clearDisconnectGrace();
 
     const connection = this.connection;
     if (!connection) {
@@ -657,16 +685,69 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
     this.emit(event);
   }
 
+  /**
+   * §29.1. `disconnected` is not a failure — it is ICE saying so.
+   *
+   * The WebRTC spec defines `disconnected` as connectivity checks failing for
+   * at least one component *while the agent keeps trying*; it recovers on its
+   * own from the things that happen constantly on a laptop — a Wi-Fi roam
+   * between access points, a NAT rebinding, a few hundred milliseconds of CPU
+   * starvation while the stage lays out a long script. `failed` is the terminal
+   * one, and it is a state ICE reaches by itself when recovery is genuinely
+   * out of reach.
+   *
+   * Treating them alike ended the take on the first blip: the transport tore
+   * down a connection that was about to come back, and the presenter — mid
+   * take, on camera — got "the realtime connection to OpenAI dropped" and had
+   * to start voice following again. On a normal home network that is a matter
+   * of when, not whether.
+   *
+   * So a transient state starts a clock instead of a teardown. Recovery cancels
+   * it and nothing is reported, because nothing happened worth reporting. The
+   * grace window is deliberately short: following has already stopped for its
+   * duration, and a presenter is better served by a clear failure at five
+   * seconds than by a prompter that silently stopped following and never said
+   * so (§60 is emphatic that a stalled follow must surface).
+   */
   private handleConnectionStateChange(): void {
     const state = this.connection?.pc.connectionState;
     if (!state || this.closingIntentionally) return;
-    if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+    if (state === 'failed' || state === 'closed') {
+      this.clearDisconnectGrace();
       this.handleUnexpectedClose(`peer connection ${state}`);
+      return;
     }
+    if (state === 'disconnected') {
+      this.armDisconnectGrace();
+      return;
+    }
+    // `connected` (or back to `connecting`) — ICE recovered on its own.
+    this.clearDisconnectGrace();
+  }
+
+  /** Start the recovery window, if one is not already running. */
+  private armDisconnectGrace(): void {
+    if (this.disconnectGraceTimer !== null) return;
+    this.disconnectGraceTimer = this.timers.setTimeout(() => {
+      this.disconnectGraceTimer = null;
+      // Re-read rather than trusting the state that armed this: the whole
+      // point is that it may have moved, and a `connected` here means the
+      // blip resolved without another state change reaching us.
+      const state = this.connection?.pc.connectionState;
+      if (state === 'connected' || state === 'completed') return;
+      this.handleUnexpectedClose(`peer connection ${state ?? 'disconnected'} beyond grace`);
+    }, this.disconnectGraceMs);
+  }
+
+  private clearDisconnectGrace(): void {
+    if (this.disconnectGraceTimer === null) return;
+    this.timers.clearTimeout(this.disconnectGraceTimer);
+    this.disconnectGraceTimer = null;
   }
 
   private handleUnexpectedClose(_detail: string): void {
     if (this.closingIntentionally || !this.connection) return;
+    this.clearDisconnectGrace();
     this.setState('failed');
     this.emit({ type: 'failed', code: 'REALTIME_CONNECTION_LOST', recoverable: true });
   }
