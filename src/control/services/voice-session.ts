@@ -638,6 +638,17 @@ export class VoiceSessionPipeline {
       ...(this.deps.vadSensitivity === undefined ? {} : { vadConfig: resolvedVad }),
     });
     this.monitor.onVadEvent((event) => {
+      /*
+       * §29.2 step 8, applied to the COMMIT rather than to the listening.
+       *
+       * The detector now runs from acquisition so the room is measured while
+       * the network work happens — but a boundary found before the controller
+       * is ready must not become a commit on a connection still being
+       * negotiated. `calibrated` is allowed through because it is a
+       * measurement, not a turn, and it is what tells the presenter they may
+       * begin.
+       */
+      if (!this.vadRequested && event.type !== 'calibrated') return;
       // The commit chain, traced. With `turn_detection: null` the server does
       // no endpointing, so a take transcribes NOTHING unless the local VAD
       // reaches `speech_ended` and the driver turns it into a commit — a
@@ -706,14 +717,24 @@ export class VoiceSessionPipeline {
      * VAD immediately or the session would come back with no commit boundaries
      * at all.
      */
-    if (this.vadRequested) {
-      // Paired with `onVadCalibrated`: the presenter is asked to hold for the
-      // two seconds the noise floor is being measured, and told when it is
-      // done. Announcing only the end would leave the first cue arriving out
-      // of nowhere, after the moment it was meant to cover.
-      this.deps.onVadCalibrating?.();
-      await this.monitor.start(result.stream);
-    }
+    /*
+     * Start listening NOW, not when the transport finishes connecting.
+     *
+     * Step 8 is about when commits may be SENT, and it was read as when the
+     * microphone may be listened to — so the monitor sat idle until the
+     * controller reached it, which is after credential mint, SDP exchange and
+     * ICE. Measured on a real take: first level frame at +5.8 s, calibration
+     * finished at +7.8 s. The presenter had been looking at their script for
+     * eight seconds with nothing listening, spoke their opening line into that
+     * gap, and the take reported hearing nothing — which was true, and had
+     * nothing whatever to do with their microphone.
+     *
+     * Acquisition is the honest moment: the stream exists, so the room can be
+     * measured while the network work happens and the detector is armed before
+     * the stage ever says "live".
+     */
+    this.deps.onVadCalibrating?.();
+    await this.monitor.start(result.stream);
     // §5.3: fan the SAME capture out to any extra consumer (the coaching
     // analyzer). This is deliberately after the monitor starts and before the
     // stream is returned to the transport, so all three consumers — peer
