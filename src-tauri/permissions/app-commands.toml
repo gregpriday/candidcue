@@ -54,6 +54,7 @@ commands.allow = [
   "classify_semantic_tracking_window",
   "classify_coaching_window",
   "cancel_semantic_request",
+  "log_client_diagnostic",
   "list_displays",
   "identify_displays",
   "open_stage",

@@ -314,3 +314,24 @@ pub async fn check_for_update() -> Result<serde_json::Value, AppError> {
 pub async fn install_update() -> Result<(), AppError> {
     Err(AppError::not_implemented("Update installation"))
 }
+
+/// Frontend diagnostic line → the process log (spec §30.1 triage).
+///
+/// The realtime transport lives in the control WEBVIEW, and a `console.log`
+/// there does not reach the terminal running `tauri dev` — so the one failure
+/// that has resisted every other kind of investigation, a realtime connection
+/// that will not open, has been invisible from the outside. Attaching Safari's
+/// Web Inspector works but is not something to ask for in a bug report.
+///
+/// Deliberately blunt: it takes a string the frontend has already composed and
+/// prints it. It is not a general logging API, it carries no user content by
+/// construction (callers pass step names, states and timings), and it is
+/// bounded so a runaway loop cannot fill a disk.
+#[tauri::command]
+pub async fn log_client_diagnostic(scope: String, line: String) -> Result<(), AppError> {
+    const MAX_LINE: usize = 2000;
+    let scope: String = scope.chars().filter(|c| c.is_ascii_graphic()).take(32).collect();
+    let line: String = line.chars().take(MAX_LINE).collect();
+    tracing::warn!(target: "candidcue::client", scope = %scope, "{line}");
+    Ok(())
+}

@@ -83,6 +83,7 @@ pub fn run() {
             commands::export_all_data,
             commands::clear_cache,
             commands::get_system_diagnostics,
+            commands::log_client_diagnostic,
             commands::export_support_bundle,
             commands::check_for_update,
             commands::install_update,

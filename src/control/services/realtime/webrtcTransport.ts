@@ -23,6 +23,7 @@ import type { Clock, MediaStreamLike, MediaStreamTrackLike } from '../audio/type
 import { releaseStream } from '../audio/permissions';
 import { watchTrackHealth } from '../audio/failures';
 import { CommitLedger } from './commitLedger';
+import { trace, traceBegin, traceConnection } from './connectTrace';
 import { mintTranscriptionCredential, type TauriInvoke } from './credentials';
 import { TranscriptEventAdapter } from './eventAdapter';
 import {
@@ -308,6 +309,8 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
     let credential: EphemeralCredential | null = null;
     try {
       // 1. Open the microphone and verify an active track (§29.2 step 4).
+      traceBegin();
+      trace('mic', 'opening the microphone');
       this.deps.onConnectProgress?.('opening_microphone');
       const micPromise = this.deps.acquireMicrophone(this.preferredDeviceId);
       // If cancellation wins the race the microphone still opens a moment
@@ -337,19 +340,23 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
       this.assertLive(epoch, 'after credential mint');
 
       // 3. Peer connection + data channel (Appendix E.2).
+      trace('credential', 'minted; opening the peer connection');
       this.deps.onConnectProgress?.('negotiating');
       const pc = this.createPc();
       attempt.pc = pc;
+      traceConnection(pc as unknown as Parameters<typeof traceConnection>[0]);
       const dc = pc.createDataChannel('oai-events');
       attempt.dc = dc;
       pc.addTrack(track, stream);
       dc.onmessage = (event) => this.handleServerMessage(event.data);
 
       // 4. SDP offer/answer via the calls endpoint, ephemeral bearer only.
+      trace('offer', 'creating');
       const offer = await this.race(attempt, pc.createOffer());
       this.assertLive(epoch, 'after createOffer');
       await this.race(attempt, pc.setLocalDescription(offer));
       this.assertLive(epoch, 'after setLocalDescription');
+      trace('sdp-post', `offer ${offer.sdp?.length ?? 0} bytes -> ${this.callsUrl}`);
       const response = await this.race(
         attempt,
         this.fetchFn(this.callsUrl, {
@@ -363,6 +370,7 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
         }),
       );
       this.assertLive(epoch, 'after SDP fetch');
+      trace('sdp-response', `status ${response.status}`);
       if (!response.ok) {
         // M4: classify on status PLUS the structured provider code. A 429 can
         // be a temporary rate limit (retry) or hard quota exhaustion (never
@@ -386,6 +394,7 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
       this.assertLive(epoch, 'after setRemoteDescription');
 
       // 5. Wait for the events channel, then send/verify session config.
+      trace('await-data-channel', `readyState ${dc.readyState}`);
       await this.race(attempt, this.waitForDataChannelOpen(dc));
       this.assertLive(epoch, 'after data channel open');
       this.adapter.reset(); // H4: item ids are unique per connection only.
@@ -394,6 +403,7 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
         ...this.deps.sessionOptions,
         vocabularyPrompt: this.deps.getVocabularyPrompt?.(),
       });
+      trace('session-update', 'data channel open; sending session config');
       dc.send(JSON.stringify(sessionUpdate));
 
       // Final checkpoint immediately before publishing. Everything above may
@@ -414,6 +424,7 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
       dc.onclose = () => this.handleUnexpectedClose('data channel closed');
       this.watchInputTrack(track); // H5: arm device-loss detection.
       this.clearAttempt(attempt);
+      trace('connected', 'the take is live');
       this.setState('connected');
     } catch (error) {
       credential = null;
@@ -428,6 +439,12 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
         this.connection = null;
         this.setState('failed');
       }
+      trace(
+        'failed',
+        error instanceof RealtimeTransportError
+          ? `${error.code}: ${error.message}`
+          : String(error instanceof Error ? error.message : error),
+      );
       throw error instanceof RealtimeTransportError
         ? error
         : new RealtimeTransportError(
