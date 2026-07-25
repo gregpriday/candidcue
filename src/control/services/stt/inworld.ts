@@ -73,6 +73,64 @@ export interface SttSessionOptions {
 }
 
 /**
+ * The ONE place a transcription session's options are built.
+ *
+ * Both callers go through this — the Preflight microphone test and a real
+ * take — and that is the entire point. They used to build their own: the test
+ * passed nothing, so Rust applied its defaults and it worked perfectly; the
+ * take passed the model from the persisted settings document, which on an
+ * upgraded install still named the PREVIOUS provider's model. Inworld answered
+ * "Unsupported model" and the take reconnected seven times in twelve seconds
+ * while the test button beside it kept working.
+ *
+ * A diagnostic that exercises a different configuration from the thing it is
+ * diagnosing is worse than no diagnostic, because it is believed. If this
+ * function returns something the provider rejects, the test fails too — which
+ * is the only arrangement in which "the test passes" means anything.
+ *
+ * Unknown values are dropped rather than forwarded: an absent field lets Rust
+ * apply a default it knows is valid, where a stale one is an error mid-take.
+ * Rust re-checks the model as well; this is the near side of the same rule.
+ */
+export function sttSessionOptions(
+  settings: { transcriptionModel?: string | null; language?: string | null } | null | undefined,
+): SttSessionOptions {
+  const options: SttSessionOptions = {};
+  const model = settings?.transcriptionModel?.trim();
+  if (model && SUPPORTED_MODELS.includes(model)) options.modelId = model;
+  const language = settings?.language?.trim();
+  if (language) options.language = language;
+  return options;
+}
+
+/**
+ * Model ids this build knows Inworld serves.
+ *
+ * Duplicated from `SUPPORTED_MODELS` in `src-tauri/src/inworld/mod.rs` on
+ * purpose — Rust is the authority and re-checks whatever arrives, so this copy
+ * only stops a bad value being offered in the UI or sent at all. A test asserts
+ * the two lists agree.
+ */
+export const SUPPORTED_MODELS = ['inworld/inworld-stt-1'];
+
+/**
+ * The languages the app offers, in one list.
+ *
+ * Preflight and Settings each had their own picker, over different values, and
+ * only Preflight's reached a take — so the Settings choice was written,
+ * displayed, and ignored. One list, one stored value, both screens.
+ */
+export const SPEECH_LANGUAGES: Array<{ value: string; label: string }> = [
+  { value: 'en-US', label: 'English (United States)' },
+  { value: 'en-GB', label: 'English (United Kingdom)' },
+  { value: 'en-AU', label: 'English (Australia)' },
+  { value: 'es-ES', label: 'Spanish (Spain)' },
+  { value: 'fr-FR', label: 'French (France)' },
+  { value: 'de-DE', label: 'German (Germany)' },
+  { value: 'pt-BR', label: 'Portuguese (Brazil)' },
+];
+
+/**
  * Turn a Rust frame into the tracking engine's event model.
  *
  * Three clocks and two generations meet here, and getting either wrong is

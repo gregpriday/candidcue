@@ -1,0 +1,58 @@
+# CopyTree Ignore File
+#
+# Tuned for exporting CandidCue as AI context: ship the code, drop everything
+# else. What survives is src/, src-tauri/src/, the schema and capability files
+# that define real runtime behaviour, and the build config that wires them up.
+#
+# Nothing here is lost — bring any subtree back on demand:
+#   copytree --scope tests/unit --scope-include-ignored -S   # one subtree
+#   echo 'docs/**' >> .copytreeinclude                       # permanently
+#
+# Syntax is .gitignore syntax, including directory pruning: once `dir/**` is
+# excluded the walker never descends into it, so a `!dir/sub/file` negation
+# needs `!dir/sub/` re-included first.
+#
+# Already handled elsewhere, so absent here: node_modules, dist, target,
+# coverage, .git, .vscode/.idea and all binary media (copytree's global
+# excludes); .env, .playwright/, *.log and build artifacts (.gitignore).
+
+# ── Tests ────────────────────────────────────────────────────────────────────
+# The suite is roughly half the export and mostly restates behaviour the source
+# already shows. Three homes: the tests/ tree, Rust integration tests, and
+# colocated *.test.ts sitting next to the module they cover.
+tests/**
+src-tauri/tests/**
+**/*.test.ts
+**/*.spec.ts
+
+# ── Specifications ───────────────────────────────────────────────────────────
+# ~660 KB of design prose describing an earlier architecture that included live
+# coaching and an OpenAI sidecar — both since removed. The README says it
+# plainly: where the specs and the code disagree, the code is the authority.
+# So the specs are actively misleading as context. Read them deliberately, not
+# by default.
+docs/**
+
+# ── Lockfiles ────────────────────────────────────────────────────────────────
+# Enormous, generated, zero signal. package.json and Cargo.toml carry the
+# dependency story. (copytree would otherwise emit them structure-only.)
+pnpm-lock.yaml
+src-tauri/Cargo.lock
+
+# ── Test and build tooling ───────────────────────────────────────────────────
+# Config for how the project is tested, not what it does. vite.config.ts and
+# svelte.config.js stay — they define the multi-window entry points and the
+# aliases every import in src/ resolves through.
+playwright.config.ts
+vitest.config.ts
+vitest.dom.config.ts
+
+# ── Binary assets and packaging ──────────────────────────────────────────────
+# Listener video, posters and app icons. Mostly binary and already dropped by
+# copytree's global excludes; this prunes the walk and the stray manifest.
+assets/**
+src-tauri/icons/**
+
+# ── Housekeeping ─────────────────────────────────────────────────────────────
+# Empty directory markers with nothing to say.
+**/.gitkeep

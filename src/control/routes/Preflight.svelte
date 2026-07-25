@@ -25,6 +25,7 @@
   import { describeError } from '../services/errors';
   import * as scriptsService from '../services/scripts';
   import * as secretsService from '../services/secrets';
+  import { SPEECH_LANGUAGES } from '../services/stt/inworld';
   import * as stageService from '../services/stage';
   import { buildStageEnvelope, buildStageSettings, resolveDocumentAssets } from '../services/stage-envelope';
   import {
@@ -172,7 +173,6 @@
 
   /* ----------------------------------------------------------- tracking */
   let mode = $state<SessionMode>('voice');
-  let language = $state('en');
   let latency = $state<'fast' | 'balanced' | 'accurate'>('balanced');
   let readHeadings = $state(false);
   let commandListening = $state(true);
@@ -1107,9 +1107,13 @@
         transcriptRetained: record.transcriptRetained,
         stageSettings,
         listener: listener ?? null,
+        // Straight from the saved document, both fields. Preflight used to keep
+        // its OWN language state, so the Settings → Speech choice was written,
+        // displayed, and then ignored by every take — a setting that appears to
+        // do nothing is worse than one that is missing.
         transcription: {
           model: $settings.inworld.transcriptionModel,
-          language,
+          language: $settings.inworld.language,
         },
         following: $settings.following,
         // "Follow system default" means exactly that: no pinned device id, so
@@ -1505,15 +1509,16 @@
             bind:value={latency}
           />
         </div>
+        <!--
+          The same list, and the same stored value, as Settings → Speech. Two
+          language pickers that disagree is how one of them silently stops
+          mattering.
+        -->
         <Select
           label="Language"
-          bind:value={language}
-          options={[
-            { value: 'en', label: 'English' },
-            { value: 'de', label: 'German' },
-            { value: 'es', label: 'Spanish' },
-            { value: 'fr', label: 'French' },
-          ]}
+          value={$settings.inworld.language}
+          options={SPEECH_LANGUAGES}
+          onchange={(value) => void patchSettings('inworld', { language: value })}
         />
       </div>
       <div class="toggle-grid">

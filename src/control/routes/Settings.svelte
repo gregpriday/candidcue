@@ -42,6 +42,7 @@
   import { VAD_SENSITIVITY_COPY } from '../services/settings-audio';
   import * as secretsService from '../services/secrets';
   import * as settingsService from '../services/settings';
+  import { SPEECH_LANGUAGES } from '../services/stt/inworld';
   import type { InworldKeyStatus } from '../services/secrets-types';
   import { appStatus } from '../stores/app-status';
   import { requestConfirm } from '../stores/confirm';
@@ -454,15 +455,7 @@
           <Select
             label="Spoken language"
             value={$settings.inworld.language}
-            options={[
-              { value: 'en-US', label: 'English (United States)' },
-              { value: 'en-GB', label: 'English (United Kingdom)' },
-              { value: 'en-AU', label: 'English (Australia)' },
-              { value: 'es-ES', label: 'Spanish (Spain)' },
-              { value: 'fr-FR', label: 'French (France)' },
-              { value: 'de-DE', label: 'German (Germany)' },
-              { value: 'pt-BR', label: 'Portuguese (Brazil)' },
-            ]}
+            options={SPEECH_LANGUAGES}
             onchange={(value) => void patchSettings('inworld', { language: value })}
           />
           <p class="hint-line">

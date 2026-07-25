@@ -393,6 +393,30 @@ fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
     }
 }
 
+/// Repair values that a previous build wrote and this one cannot honour.
+///
+/// The settings document is a JSON blob, so an upgrade in place keeps whatever
+/// was there — which is right for every setting the user chose and wrong for
+/// one that names a service the app no longer talks to. `audio.transcriptionModel`
+/// held the previous provider's model on every upgraded installation, the take
+/// forwarded it, and Inworld answered "Unsupported model" while the microphone
+/// TEST, which sent no model at all, worked perfectly.
+///
+/// Corrected on read rather than left to a caller to remember: the value is
+/// re-derived every time the document loads, so an installation that never
+/// writes settings again is still fixed.
+fn migrate_in_place(settings: &mut AppSettings) {
+    let resolved = crate::inworld::resolve_model(Some(settings.audio.transcription_model.as_str()));
+    if resolved != settings.audio.transcription_model {
+        tracing::info!(
+            "settings: replacing unsupported transcription model {:?} with {:?}",
+            settings.audio.transcription_model,
+            resolved
+        );
+        settings.audio.transcription_model = resolved;
+    }
+}
+
 pub async fn get_settings(pool: &SqlitePool) -> Result<RevisionedSettings, AppError> {
     let row: Option<(String, i64)> =
         sqlx::query_as("SELECT value_json, revision FROM settings WHERE key = ?")
@@ -401,8 +425,8 @@ pub async fn get_settings(pool: &SqlitePool) -> Result<RevisionedSettings, AppEr
             .await?;
     match row {
         Some((json, revision)) => {
-            let value: AppSettings = serde_json::from_str(&json)
-                .unwrap_or_default();
+            let mut value: AppSettings = serde_json::from_str(&json).unwrap_or_default();
+            migrate_in_place(&mut value);
             Ok(RevisionedSettings { revision, value })
         }
         None => {
@@ -545,6 +569,36 @@ mod tests {
         // so this is a value the user re-picks, not one to silently rewrite.
         assert_eq!(settings.audio.language, "en");
         assert!(validate(&settings).is_ok());
+    }
+
+    /// The one setting an upgrade must NOT preserve.
+    ///
+    /// Every other value the user chose survives a provider change; this one
+    /// names the service itself. Left alone it produced the worst possible
+    /// shape of failure: the microphone test worked (it sent no model) and
+    /// every real take failed with "Unsupported model", so the app appeared
+    /// healthy exactly where it was being checked.
+    #[test]
+    fn a_transcription_model_from_the_previous_provider_is_repaired_on_read() {
+        let mut settings: AppSettings = serde_json::from_value(serde_json::json!({
+            "audio": { "transcriptionModel": "gpt-realtime-whisper", "vadSensitivity": 0.8 },
+        }))
+        .expect("legacy document loads");
+        assert_eq!(settings.audio.transcription_model, "gpt-realtime-whisper");
+
+        migrate_in_place(&mut settings);
+
+        assert_eq!(settings.audio.transcription_model, crate::inworld::DEFAULT_MODEL);
+        // And the settings the user actually chose are untouched.
+        assert_eq!(settings.audio.vad_sensitivity, 0.8);
+    }
+
+    #[test]
+    fn a_supported_model_is_left_exactly_as_it_was() {
+        let mut settings = AppSettings::default();
+        settings.audio.transcription_model = crate::inworld::DEFAULT_MODEL.into();
+        migrate_in_place(&mut settings);
+        assert_eq!(settings.audio.transcription_model, crate::inworld::DEFAULT_MODEL);
     }
 
     /// The Inworld defaults are the ones the streaming config frame is built

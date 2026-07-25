@@ -31,9 +31,11 @@ import {
   pushTranscriptionAudio,
   startTranscription,
   stopTranscription,
+  sttSessionOptions,
   STT_EVENT,
   type SttFrame,
 } from './stt/inworld';
+import { getSettingsSnapshot } from '../stores/settings';
 import { isTauriRuntime } from './ipc';
 import { describeError } from './errors';
 import type { TranscriptTestEvents, Unsubscribe, VoiceFacade } from './voice-facade';
@@ -220,7 +222,17 @@ export function createRealVoiceFacade(): VoiceFacade {
           }
         });
 
-        generation = await startTranscription();
+        /*
+         * The SAME options a take would use, from the same settings, through
+         * the same builder.
+         *
+         * This call used to pass nothing, so Rust applied its own defaults and
+         * the test passed unconditionally — including on an installation whose
+         * saved settings named the previous provider's model, where every real
+         * take failed. A microphone test that exercises a configuration the
+         * take will not use cannot answer the only question it is asked.
+         */
+        generation = await startTranscription(sttSessionOptions(getSettingsSnapshot().inworld));
         capture = new PcmCapture({
           onFrame: (samples) => {
             const current = generation;

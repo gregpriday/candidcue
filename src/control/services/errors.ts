@@ -80,6 +80,8 @@ const ERROR_COPY: Record<string, string> = {
     'The transcription connection dropped. Check your internet connection, then start voice following again.',
   REALTIME_PROVIDER_ERROR:
     'Inworld returned an error and transcription stopped. Start the take again; if it keeps happening, check the key in Settings → Speech.',
+  REALTIME_CONFIG_REJECTED:
+    'Inworld refused the transcription settings for this take, so retrying would fail the same way. Open Settings → Speech and check the model and language.',
   REALTIME_NO_TRANSCRIPTS:
     'Audio is being sent but no transcript is coming back, so following is on hold. Stop and start the take to open a fresh connection.',
 

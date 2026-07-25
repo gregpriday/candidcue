@@ -44,6 +44,7 @@ import {
   pushTranscriptionAudio,
   startTranscription,
   stopTranscription,
+  sttSessionOptions,
   STT_EVENT,
   toTrackingEvent,
   type SttFrame,
@@ -266,10 +267,7 @@ export class VoiceSessionPipeline {
 
       if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
       this.audioOriginMs = this.now();
-      this.transportGeneration = await startTranscription({
-        ...(this.deps.language !== undefined ? { language: this.deps.language } : {}),
-        ...(this.deps.modelId !== undefined ? { modelId: this.deps.modelId } : {}),
-      });
+      this.transportGeneration = await startTranscription(this.sessionOptions());
 
       if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
       await this.startCapture(stream);
@@ -379,6 +377,17 @@ export class VoiceSessionPipeline {
       this.unlistenStt = null;
       this.setConnectionState('offline');
     }
+  }
+
+  /**
+   * The session options for this take — the same builder the Preflight
+   * microphone test uses, which is what stops the two drifting.
+   */
+  private sessionOptions(): ReturnType<typeof sttSessionOptions> {
+    return sttSessionOptions({
+      ...(this.deps.modelId !== undefined ? { transcriptionModel: this.deps.modelId } : {}),
+      ...(this.deps.language !== undefined ? { language: this.deps.language } : {}),
+    });
   }
 
   /* ---------------------------------------------------------------------- */

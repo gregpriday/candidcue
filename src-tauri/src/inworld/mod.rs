@@ -44,6 +44,31 @@ pub const SYNC_URL: &str = "https://api.inworld.ai/stt/v1/transcribe";
 pub const DEFAULT_MODEL: &str = "inworld/inworld-stt-1";
 pub const DEFAULT_LANGUAGE: &str = "en-US";
 
+/// Every model id this provider will accept for streaming transcription.
+///
+/// The list exists because of a real failure, not for tidiness. The settings
+/// document is a JSON blob that survives a provider change: a user who had
+/// used the previous build still had `audio.transcriptionModel:
+/// "gpt-realtime-whisper"` on disk, the take sent it, and Inworld answered
+/// `code 3, Unsupported model`. The microphone TEST sent no model at all and
+/// therefore worked perfectly — so the app appeared healthy everywhere except
+/// where it mattered.
+pub const SUPPORTED_MODELS: &[&str] = &["inworld/inworld-stt-1"];
+
+/// The model to actually ask for, given whatever was requested.
+///
+/// Anything this provider does not serve is replaced by the default rather
+/// than forwarded. Sending it would open a socket, bill for the attempt, and
+/// return an error the presenter cannot act on mid-take — and the value that
+/// gets here is a persisted string from a build that may predate this
+/// provider entirely, which is exactly the input that must not be trusted.
+pub fn resolve_model(requested: Option<&str>) -> String {
+    match requested.map(str::trim) {
+        Some(model) if SUPPORTED_MODELS.contains(&model) => model.to_string(),
+        _ => DEFAULT_MODEL.to_string(),
+    }
+}
+
 /// The one sample rate the app captures, streams and validates at.
 ///
 /// Pinned rather than negotiated: the renderer resamples its capture graph to

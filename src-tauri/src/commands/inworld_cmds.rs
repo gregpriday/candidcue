@@ -11,8 +11,8 @@ use tauri::State;
 
 use crate::errors::{AppError, ErrorCategory, RecoveryAction};
 use crate::inworld::{
-    decode_base64, InworldClient, KeyValidationResult, TranscribeConfig, DEFAULT_LANGUAGE,
-    DEFAULT_MODEL, SAMPLE_RATE_HZ,
+    decode_base64, resolve_model, InworldClient, KeyValidationResult, TranscribeConfig,
+    DEFAULT_LANGUAGE, SAMPLE_RATE_HZ,
 };
 use crate::secrets::{
     dev_env_key_active, KeySource, RedactedSecretMetadata, SecretStore, SecretString,
@@ -172,7 +172,10 @@ pub async fn start_transcription<R: tauri::Runtime>(
     let key = secrets.0.get_inworld_key().await?.ok_or_else(key_missing)?;
     let options = options.unwrap_or_default();
     let config = TranscribeConfig {
-        model_id: options.model_id.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+        // Resolved, never forwarded verbatim: the renderer's value comes from a
+        // persisted settings document that may name a model from a previous
+        // provider entirely. See `resolve_model`.
+        model_id: resolve_model(options.model_id.as_deref()),
         audio_encoding: "LINEAR16".to_string(),
         sample_rate_hertz: SAMPLE_RATE_HZ,
         language: options

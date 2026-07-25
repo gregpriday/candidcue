@@ -570,25 +570,40 @@ async fn read_loop<R: tauri::Runtime>(
                 .and_then(|value| value.as_str())
                 .unwrap_or("Inworld reported an error")
                 .to_string();
-            // `code: 7` is PERMISSION_DENIED — an unknown, deleted or
-            // unauthorised key. Reconnecting with the same key gets the same
-            // answer, so this ends the session instead of looping.
-            let auth = error.get("code").and_then(|value| value.as_u64()) == Some(7)
+            /*
+             * Retry only what retrying could possibly fix.
+             *
+             * These are gRPC status codes. `7` PERMISSION_DENIED is a bad or
+             * deleted key; `3` INVALID_ARGUMENT is a config the service will
+             * never accept, and `12` UNIMPLEMENTED likewise. Reconnecting with
+             * the same key and the same config gets the same answer every time,
+             * so retrying is not resilience — it is a billed loop that hides the
+             * cause. Only `3` had to be learned the hard way: a settings
+             * document written by the previous build still named that
+             * provider's model, the take forwarded it, and the session
+             * reconnected seven times in twelve seconds while reporting
+             * "reconnecting — your position is held".
+             */
+            let status = error.get("code").and_then(|value| value.as_u64());
+            let permanent = matches!(status, Some(3) | Some(7) | Some(12))
                 || message.to_lowercase().contains("api key");
+            let auth = status == Some(7) || message.to_lowercase().contains("api key");
             emit(
                 &app,
                 SttFrame::Failed {
                     generation,
                     code: if auth {
                         "AUTH_KEY_INVALID".into()
+                    } else if permanent {
+                        "REALTIME_CONFIG_REJECTED".into()
                     } else {
                         "REALTIME_PROVIDER_ERROR".into()
                     },
                     message,
-                    recoverable: !auth,
+                    recoverable: !permanent,
                 },
             );
-            return if auth {
+            return if permanent {
                 ConnectionEnd::Fatal
             } else {
                 ConnectionEnd::Dropped(None)
