@@ -154,6 +154,12 @@ export class TranscriptEventAdapter {
 
       case 'error': {
         const errorObj = (event.error ?? event) as { code?: string; type?: string };
+        // Recorded, like every unrecognised event — this was the ONE type that
+        // returned without remembering, which is backwards: a provider error is
+        // the most diagnostic thing the service ever sends. When OpenAI refuses
+        // a session config it says exactly which parameter and why, and all of
+        // that was dropped on the floor in favour of a mapped code.
+        this.remember(event);
         const mapped = mapProviderErrorEvent(errorObj);
         return { type: 'failed', code: mapped.code, recoverable: mapped.recoverable };
       }
@@ -228,6 +234,13 @@ export class TranscriptEventAdapter {
       const errType = asString((error as { type?: unknown }).type);
       if (code) summary.errorCode = code;
       if (errType) summary.errorType = errType;
+      // `param` is a SCHEMA PATH — "session.audio.input.transcription.prompt"
+      // — not provider prose. It names the field the service objected to and
+      // cannot quote speech, which makes it the one part of a rejection worth
+      // keeping: a config the service refuses is otherwise indistinguishable
+      // from a network fault by the time it reaches the user.
+      const param = asString((error as { param?: unknown }).param);
+      if (param) summary.errorParam = param;
       summary.errorBodyBytes = approximateByteLength(error);
     }
     this.diagnostics.push(summary);

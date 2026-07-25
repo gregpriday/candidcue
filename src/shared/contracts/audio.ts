@@ -65,6 +65,18 @@ export interface TransportDiagnostics {
   credentialGeneration?: number;
   sessionGeneration: number;
   reconnectAttempts: number;
+  /**
+   * Why the last connection ended unexpectedly — "data channel closed", "peer
+   * connection failed", and so on.
+   *
+   * The transport knew this and threw it away: `handleUnexpectedClose` took a
+   * `_detail` argument and discarded it, so every distinct way a live take can
+   * die arrived at the user as the single sentence "the realtime connection to
+   * OpenAI dropped", with nothing behind it. A data channel the service closed
+   * and an ICE path that failed are different problems with different fixes,
+   * and neither was distinguishable from the other in a bug report.
+   */
+  lastCloseReason?: string;
 }
 
 /**

@@ -196,6 +196,8 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
   /** Recovery window for a transient ICE `disconnected` (see below). */
   private disconnectGraceTimer: unknown = null;
   private readonly disconnectGraceMs: number;
+  /** Why the last connection ended unexpectedly, for diagnostics. */
+  private lastCloseReason: string | undefined;
 
   // -- H2 cancellable-connect state ----------------------------------------
   /**
@@ -659,6 +661,7 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
       credentialGeneration: this.connection?.credentialGeneration,
       sessionGeneration: this.ledger.getSessionGeneration(),
       reconnectAttempts: this.reconnectAttempts,
+      lastCloseReason: this.lastCloseReason,
     };
   }
 
@@ -745,9 +748,12 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
     this.disconnectGraceTimer = null;
   }
 
-  private handleUnexpectedClose(_detail: string): void {
+  private handleUnexpectedClose(detail: string): void {
     if (this.closingIntentionally || !this.connection) return;
     this.clearDisconnectGrace();
+    // Kept, not discarded: this is the only record of WHICH way the connection
+    // died, and it is what the support bundle and a bug report have to carry.
+    this.lastCloseReason = detail;
     this.setState('failed');
     this.emit({ type: 'failed', code: 'REALTIME_CONNECTION_LOST', recoverable: true });
   }
