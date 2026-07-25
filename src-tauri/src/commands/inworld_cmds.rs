@@ -66,18 +66,19 @@ pub async fn save_inworld_key(
     candidate_key: String,
 ) -> Result<RedactedSecretMetadata, AppError> {
     // Refused before the key is even looked at, because in a debug build the
-    // `INWORLD_API_KEY` override is read ahead of the credential store: a key
-    // saved now would be written successfully and then shadowed on every
-    // subsequent read. Settings would report "Connected" and show the tail of
-    // the key just typed while a different key billed the account — a lie that
-    // survives restarts. Refusing is the only outcome that cannot mislead, and
-    // it is trivially undone by unsetting the variable. Release builds never
-    // reach this branch; `dev_env_key_active` is compiled to `false` there.
+    // `INWORLD_API_KEY` override — from the environment or from the checkout's
+    // `.env` — is read ahead of the credential store: a key saved now would be
+    // written successfully and then shadowed on every subsequent read. Settings
+    // would report "Connected" and show the tail of the key just typed while a
+    // different key billed the account — a lie that survives restarts. Refusing
+    // is the only outcome that cannot mislead. Release builds never reach this
+    // branch; `dev_env_key_active` is compiled to `false` there.
     if dev_env_key_active() {
         return Err(AppError::invalid_input(format!(
-            "{DEV_KEY_ENV_VAR} is set for this development build and takes precedence over the \
-             stored key, so saving one here would have no effect. Unset it and restart CandidCue \
-             to store a key in the credential store."
+            "{DEV_KEY_ENV_VAR} is already supplying a key to this development build, from the \
+             environment or from the project's .env file, and it takes precedence over the stored \
+             key — so saving one here would have no effect. Remove it from both and restart \
+             CandidCue to store a key in the credential store."
         )));
     }
     let key = SecretString::new(candidate_key.trim().to_string());

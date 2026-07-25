@@ -99,7 +99,7 @@
   /**
    * §22. The stored revision this take reads. A `CompiledScript` carries no
    * revision number, so this is the only place it can be picked up for the
-   * coaching lane's outbound `LunaCoachRequest`.
+   * outbound transcription request.
    */
   let scriptRevision = $state(0);
 
@@ -598,7 +598,7 @@
   });
 
   /*
-   * Mic level meter while permission is granted (local, pre-OpenAI).
+   * Mic level meter while permission is granted — local, before anything is streamed.
    *
    * `micHeldForTake` is what releases it. The meter holds an open
    * `getUserMedia` stream for as long as this screen is showing, and the take
@@ -788,7 +788,7 @@
     }
   }
 
-  /* ----------------------------------------------------- OpenAI actions */
+  /* ----------------------------------------------------- speech actions */
   async function saveAndTestKey(): Promise<void> {
     const candidate = keyField.trim();
     if (!candidate) return;
@@ -819,7 +819,7 @@
       }
     } catch (err) {
       // `save_inworld_key` is refused outright when a development build is
-      // running with OPENAI_API_KEY set; without this the rejection would
+      // running with INWORLD_API_KEY set; without this the rejection would
       // escape unhandled and the pane would simply go quiet.
       keyMessage = { tone: 'danger', text: describeError(err) };
     } finally {
@@ -1275,10 +1275,10 @@
       </div>
     </Section>
 
-    <!-- B. OpenAI connection -->
+    <!-- B. Speech connection -->
     <Section
-      title="OpenAI connection"
-      description="CandidCue is bring-your-own-key. Your key is stored in your operating system's secure credential store and is used directly from this app. CandidCue does not send it to CandidCue servers."
+      title="Speech"
+      description="CandidCue is bring-your-own-key. Your key is stored in your operating system's secure credential store and is read only by CandidCue's backend — it never reaches this window, and it is never sent to CandidCue servers."
     >
       {#snippet actions()}
         <StatusPill
@@ -1291,9 +1291,9 @@
           <TextField
             bind:value={keyField}
             type="password"
-            label="OpenAI API key"
-            placeholder="sk-…"
-            hint="Voice tracking uses OpenAI Realtime transcription. Smart command interpretation and vocabulary analysis use GPT-5.6 Luna. A dedicated project key is recommended."
+            label="Inworld API key"
+            placeholder="Paste your Inworld key"
+            hint="Voice tracking uses Inworld speech-to-text. Nothing else is sent."
             onsubmit={() => void saveAndTestKey()}
           />
           <div class="row-actions">
@@ -1310,7 +1310,7 @@
               onclick={() => openExternal('https://platform.inworld.ai/')}
             >
               <Icon name="external" size={14} />
-              OpenAI API keys
+              Inworld dashboard
             </Button>
           </div>
         </div>
@@ -1338,7 +1338,7 @@
     <!-- C. Microphone -->
     <Section
       title="Microphone"
-      description="CandidCue uses your microphone only while a test or voice-tracking session is active. During voice tracking, audio is sent to OpenAI for live transcription. Audio is not recorded or saved by CandidCue by default."
+      description="CandidCue uses your microphone only while a test or voice-tracking session is active. During voice tracking, audio is streamed to Inworld for live transcription. Audio is not recorded or saved by CandidCue."
     >
       {#snippet actions()}
         <StatusPill
@@ -1389,7 +1389,7 @@
         </div>
         <MicMeter level={micLevel} />
         <!--
-          The test is a billable OpenAI realtime session, so it says so while
+          The test is a billable Inworld session, so it says so while
           it is open, it can always be stopped, and it closes itself if it is
           forgotten (see preflight-mic-test.ts for the two deadlines).
         -->
@@ -1404,7 +1404,7 @@
             <span class="mic-test-state" class:live={micTestRunning} aria-live="polite">
               {#if micTestRunning}<span class="mic-test-dot" aria-hidden="true"></span>{/if}
               {#if micTest === 'opening'}
-                Connecting to OpenAI…
+                Connecting…
               {:else if micTest === 'listening'}
                 Say: “CandidCue is following my voice.” — Listening…
               {:else if micTest === 'waiting'}
@@ -1417,7 +1417,7 @@
         </div>
         {#if micTestRunning}
           <p class="mic-test-note">
-            Connected to OpenAI and billing your key. It stops on its own after 30 seconds with
+            Connected to Inworld and billing your key. It stops on its own after 30 seconds with
             nothing transcribed, and after two minutes in any case.
           </p>
         {:else if micTestNotice}
@@ -1939,7 +1939,7 @@
     margin-top: var(--space-1);
   }
 
-  /* --- OpenAI --- */
+  /* --- speech --- */
   .key-form {
     display: flex;
     flex-direction: column;

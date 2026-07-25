@@ -59,9 +59,9 @@ pub async fn import_remote_image<R: Runtime>(
 ) -> Result<ImportedAsset, AppError> {
     let script_id = ScriptId::parse(&script_id)?;
     // A dedicated, credential-free, redirect-disabled client is built per
-    // fetch inside `assets::remote`. The shared OpenAI client must never be
-    // used here: it follows redirects and is the one client that grows
-    // provider credentials.
+    // fetch inside `assets::remote`. The shared provider client must never be
+    // used here: it follows redirects and is the one client that carries the
+    // Inworld key.
     let imported = assets::import_remote_image(db.pool(), &paths, &script_id, &url).await?;
     allow_script_assets(&app, &paths, &script_id);
     Ok(imported)

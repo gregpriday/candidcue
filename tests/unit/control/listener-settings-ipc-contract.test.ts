@@ -163,7 +163,7 @@ const ipc = vi.hoisted(() => {
         blankColor: '#000000',
       },
       audio: {
-        transcriptionModel: 'gpt-realtime-whisper',
+        transcriptionModel: 'inworld/inworld-stt-1',
         language: 'en',
         delayProfile: 'low',
         softPauseAutoDisconnectMinutes: 10,
@@ -171,8 +171,6 @@ const ipc = vi.hoisted(() => {
       commands: {
         wakePhrase: 'CandidCue',
         wakeMode: 'strict',
-        lunaFallback: true,
-        commandModel: 'gpt-5.6-luna',
       },
       listener: {},
     } as Record<string, unknown>,

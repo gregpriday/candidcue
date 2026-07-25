@@ -130,7 +130,7 @@ export interface TrackingProfile {
   /**
    * Hard ceiling on a COMMAND_PENDING freeze (spec §33.4.4, §33.11). The
    * aligner integrates nothing while pending, so an unresolved command — a
-   * Luna handoff that never returns, an IPC call without a timeout — otherwise
+   * handoff that never returns, an IPC call without a timeout — otherwise
    * stops the teleprompter for the rest of the take with no recovery path.
    */
   commandPendingTimeoutMs: number;
@@ -264,7 +264,6 @@ export interface TrackingProfile {
   catchUpRenderedLines: number;
 
   /* Semantic assist (companion §40). */
-  semanticAssistTtlMs: number;
 
   /* Diagnostics ring buffer (companion §65). */
   decisionLogCapacity: number;
@@ -338,7 +337,7 @@ export const DEFAULT_TRACKING_PROFILE: TrackingProfile = {
   shortRetakeThreshold: 0.8, // §31.12 lower threshold for short restarts
 
   manualCorrectionGraceMs: 2500, // §31.15 suppression grace period
-  commandPendingTimeoutMs: 4_000, // §33.11 lunaHardTimeoutMs (3 s) plus slack
+  commandPendingTimeoutMs: 4_000, // §33.11 — a bounded stall, never an open one
   semanticContextIntervalMs: 500, // companion §36.3 — 2 Hz, see the field docs
 
   maxSnapshotsPerSecond: 30, // §31.16
@@ -434,7 +433,6 @@ export const DEFAULT_TRACKING_PROFILE: TrackingProfile = {
   absorbRenderedLines: 1, // A.3 "< 0.5–1 line" → absorb
   catchUpRenderedLines: 3, // A.3 "~1–3 lines" → catch up, beyond → re-anchor
 
-  semanticAssistTtlMs: 4_000, // §40.4 short semantic-evidence lifetime
 
   decisionLogCapacity: 64, // §65 bounded "why did it move?" ring buffer
 };

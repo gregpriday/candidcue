@@ -106,7 +106,44 @@ fn override_from_raw(raw: Option<String>) -> Option<SecretString> {
 /// behind a branch.
 #[cfg(debug_assertions)]
 fn dev_env_key() -> Option<SecretString> {
-    override_from_raw(std::env::var(DEV_KEY_ENV_VAR).ok())
+    override_from_raw(std::env::var(DEV_KEY_ENV_VAR).ok()).or_else(dev_dotenv_key)
+}
+
+/// Second debug-only source: `INWORLD_API_KEY` in the project's `.env`.
+///
+/// `tauri dev` inherits the shell's environment, and a `.env` file is not part
+/// of it — Vite loads one for the frontend, Rust does not. So a developer who
+/// puts their key where every other tool in this stack looks for it gets an app
+/// that cannot see it, and the only symptom is a key field that will not go
+/// away. Reading it here closes that gap without asking anyone to remember an
+/// `export`.
+///
+/// Debug builds only, like its caller, and for the same reason: a packaged
+/// CandidCue must not pick up a key from a file next to wherever it happens to
+/// have been launched. The path is resolved from `CARGO_MANIFEST_DIR`, which is
+/// baked in at compile time, so it names THIS checkout rather than a working
+/// directory an attacker could choose.
+#[cfg(debug_assertions)]
+fn dev_dotenv_key() -> Option<SecretString> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()?
+        .join(".env");
+    let contents = std::fs::read_to_string(path).ok()?;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        if name.trim() != DEV_KEY_ENV_VAR {
+            continue;
+        }
+        let value = value.trim().trim_matches(|c| c == '"' || c == '\'');
+        return override_from_raw(Some(value.to_string()));
+    }
+    None
 }
 
 /// Release twin of [`dev_env_key`]. See that function for why this is a

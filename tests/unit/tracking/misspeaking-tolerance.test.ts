@@ -134,7 +134,7 @@ describe('a presenter who misspeaks is still followed', () => {
   /*
    * KNOWN DEFECT — not fixed, deliberately pinned.
    *
-   * A FLUENT reader (two sentences per breath, ~18 words, which is what OpenAI's
+   * A FLUENT reader (two sentences per breath, ~18 words, which is what the
    * realtime VAD actually emits for someone not pausing at every full stop) who
    * misspeaks half of one utterance wedges the cursor permanently:
    *

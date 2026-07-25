@@ -154,19 +154,24 @@ describe('§28.4 Settings and Preflight expose ONE value', () => {
 
   /**
    * The copy has to say what the slider does NOT move, because that bound is
-   * the reason it is safe to offer: `speech_ended` is the commit cue, and a
-   * user who thinks the slider changes how long a pause has to be will move it
-   * for the wrong reason.
+   * the reason it is safe to offer at all.
+   *
+   * The bound changed with the provider. It used to be "the pause that ends a
+   * sentence and how often audio is sent are the same at every position",
+   * which was the honest limit when a local detector decided turn boundaries.
+   * Now the recogniser endpoints server-side and this slider cannot gate a
+   * single byte — so the thing the copy must say is that it does not affect
+   * what gets transcribed. A user who believes this control can make the app
+   * hear them better will turn it up and be no better off.
    */
   it('says what stays fixed, in symptoms rather than decibels', () => {
     const text = VAD_SENSITIVITY_COPY.description.toLowerCase();
-    expect(text).toContain('pause that ends a sentence');
-    expect(text).toContain('openai');
+    expect(text).toMatch(/does not gate|not gate what/);
+    expect(text).toContain('recogniser hears everything');
     expect(text).toMatch(/raise it if/);
     expect(text).toMatch(/lower it if/);
     // Raising sensitivity lowers the threshold, so being cut off is fixed by
     // RAISING this. The copy must not have that backwards.
-    expect(text).toMatch(/raise it if[^.]*cut off/);
     expect(text).not.toContain(' db');
   });
 
@@ -208,7 +213,7 @@ const ipc = vi.hoisted(() => {
         blankColor: '#000000',
       },
       audio: {
-        transcriptionModel: 'gpt-realtime-whisper',
+        transcriptionModel: 'inworld/inworld-stt-1',
         language: 'en',
         delayProfile: 'low',
         softPauseAutoDisconnectMinutes: 10,
@@ -217,8 +222,6 @@ const ipc = vi.hoisted(() => {
       commands: {
         wakePhrase: 'CandidCue',
         wakeMode: 'strict',
-        lunaFallback: true,
-        commandModel: 'gpt-5.6-luna',
       },
       listener: {},
     } as Record<string, unknown>,

@@ -1109,3 +1109,40 @@ async fn a_debug_build_reads_the_key_from_the_environment_and_names_that_source(
         None => std::env::remove_var(DEV_KEY_ENV_VAR),
     }
 }
+
+/// The `.env` fallback finds the key a developer actually put there.
+///
+/// `tauri dev` inherits the shell's environment, and a `.env` file is not part
+/// of it — Vite loads one for the frontend, Rust does not. A developer who puts
+/// their key where every other tool in this stack looks for it would otherwise
+/// get an app that cannot see it, whose only symptom is a key field that will
+/// not go away.
+///
+/// Skips rather than fails when this checkout has no `.env`: whether the file
+/// exists is a property of the machine, not of the code.
+#[test]
+fn a_dotenv_key_is_found_without_an_exported_variable() {
+    let dotenv = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("src-tauri has a parent")
+        .join(".env");
+    let Ok(contents) = std::fs::read_to_string(&dotenv) else {
+        return; // no .env in this checkout
+    };
+    if !contents.contains(DEV_KEY_ENV_VAR) {
+        return;
+    }
+
+    let restore = std::env::var(DEV_KEY_ENV_VAR).ok();
+    std::env::remove_var(DEV_KEY_ENV_VAR);
+    let found = dev_env_key_active();
+    if let Some(value) = restore {
+        std::env::set_var(DEV_KEY_ENV_VAR, value);
+    }
+
+    assert!(
+        found,
+        "a key in {} must be picked up with nothing exported",
+        dotenv.display()
+    );
+}

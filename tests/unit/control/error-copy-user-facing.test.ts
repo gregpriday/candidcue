@@ -192,7 +192,7 @@ describe('a session-level failure toast is authored copy, not a code', () => {
     expect(message).toContain('Voice following stopped.');
     // What happened, and what to do about it.
     expect(message).toMatch(/quota|billing/i);
-    expect(message).toMatch(/OpenAI dashboard|manual mode/i);
+    expect(message).toMatch(/Inworld dashboard|manual mode/i);
   });
 
   it('gives an auth failure, a quota failure and a network drop different advice', () => {
@@ -204,13 +204,13 @@ describe('a session-level failure toast is authored copy, not a code', () => {
     const [auth, quota, network] = toastMessages();
     expect(new Set([auth, quota, network]).size).toBe(3);
     // Each names the remedy that actually applies to it.
-    expect(auth).toMatch(/Settings → OpenAI/);
+    expect(auth).toMatch(/Settings → Speech/);
     expect(quota).toMatch(/credit|billing/i);
     expect(network).toMatch(/internet connection/i);
     // …and not one that does not: re-entering a key cannot fix an empty
     // account, and adding credit cannot fix a dead Wi-Fi link.
-    expect(quota).not.toMatch(/Settings → OpenAI/);
-    expect(network).not.toMatch(/Settings → OpenAI/);
+    expect(quota).not.toMatch(/Settings → Speech/);
+    expect(network).not.toMatch(/Settings → Speech/);
   });
 
   it('distinguishes a stopped session from an interrupted one', () => {

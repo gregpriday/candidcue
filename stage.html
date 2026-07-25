@@ -7,11 +7,16 @@
       M2 — the stage's own Content-Security-Policy (spec §43.2, §50.10).
 
       Tauri applies ONE global CSP (tauri.conf.json app.security.csp) to every
-      window, and that policy has to allow `https://api.openai.com` because the
-      control window talks to the provider. The stage inherited it, which
-      directly contradicted its no-network requirement: the minimally
-      privileged window that renders the operator's script was permitted to
-      open a connection to a third party.
+      window, and it used to allow the speech provider's origin because the
+      control window talked to it directly. The stage inherited that, which
+      contradicted its no-network requirement: the minimally privileged window
+      that renders the operator's script was permitted to open a connection to
+      a third party.
+
+      The provider socket now lives in Rust, so the global policy names no
+      remote host at all — but this tag stays, because "the global policy
+      happens to be narrow today" is not the same guarantee as "the stage
+      cannot reach the network".
 
       CSP policies compose restrictively — when a document carries both a
       header policy and a meta policy, a request has to satisfy BOTH. So this

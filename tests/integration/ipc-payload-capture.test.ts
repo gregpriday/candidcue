@@ -110,7 +110,7 @@ function rustSettingsDocument() {
         blankColor: '#000000',
       },
       audio: {
-        transcriptionModel: 'gpt-4o-mini-transcribe',
+        transcriptionModel: 'inworld/inworld-stt-1',
         language: 'en',
         delayProfile: 'balanced',
         softPauseAutoDisconnectMinutes: 5,
@@ -118,8 +118,6 @@ function rustSettingsDocument() {
       commands: {
         wakePhrase: 'hey cue',
         wakeMode: 'double_gate',
-        lunaFallback: true,
-        commandModel: 'gpt-4o-mini',
       },
       listener: {},
     },

@@ -9,7 +9,7 @@
  * Appendix E replaces the primary specification's §31.6 cross-section
  * continuity *penalty* and its §31.14 unrestricted global reacquisition with
  * this gate. Everything that can move the cursor — the v1 decision path, the
- * v2 hypothesis beam, the semantic filter, and any Luna-assisted score — runs
+ * v2 hypothesis beam and the semantic motion filter — runs
  * candidates through `isEligible` first, so there is exactly one enforcement
  * point rather than a penalty scattered across scorers.
  *

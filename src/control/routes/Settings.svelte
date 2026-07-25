@@ -706,28 +706,24 @@
             </p>
             <h3 class="privacy-head">While voice tracking is active</h3>
             <p class="privacy-body">
-              Your selected microphone audio is sent to OpenAI for live transcription. CandidCue
-              does not save the audio by default.
+              Your selected microphone audio is streamed to Inworld for live transcription, and
+              only while a take or a microphone test is running. CandidCue does not save the audio.
             </p>
-            <h3 class="privacy-head">Smart vocabulary analysis</h3>
+            <h3 class="privacy-head">Your script stays here</h3>
             <p class="privacy-body">
-              When enabled, unusual terms and limited surrounding context are sent to GPT-5.6 Luna.
-              CandidCue caches the result locally.
-            </p>
-            <h3 class="privacy-head">Ambiguous voice commands</h3>
-            <p class="privacy-body">
-              Most commands are handled locally. When a command is unclear, the command phrase and
-              a compact list of script targets may be sent to GPT-5.6 Luna.
+              Only the audio leaves this device. The script itself is never sent anywhere — the
+              matching between what you say and what you wrote is done locally, on this machine.
             </p>
             <h3 class="privacy-head">CandidCue servers</h3>
             <p class="privacy-body">
               CandidCue checks for software updates and downloads optional Listener media. Your
-              OpenAI API key and scripts are not sent to CandidCue servers.
+              Inworld API key and your scripts are not sent to CandidCue servers.
             </p>
-            <h3 class="privacy-head">OpenAI retention</h3>
+            <h3 class="privacy-head">Inworld retention</h3>
             <p class="privacy-body">
-              OpenAI's current API data controls and endpoint retention rules apply.
-              <button type="button" class="inline-link" onclick={() => openExternal('https://platform.openai.com/docs/guides/your-data')}>
+              Inworld's current API data controls and retention rules apply to the audio sent for
+              transcription.
+              <button type="button" class="inline-link" onclick={() => openExternal('https://inworld.ai/privacy')}>
                 Open the current policy
               </button>
               for details.

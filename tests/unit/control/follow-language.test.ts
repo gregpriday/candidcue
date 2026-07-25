@@ -15,7 +15,6 @@ import {
   formatPace,
   formatScore,
   formatSessionTime,
-  lunaUnavailableCopy,
   type MovementDecisionRecord,
 } from '../../../src/control/lib/follow-language';
 
@@ -177,14 +176,6 @@ describe('degraded-state copy (Part XI)', () => {
       expect(copy.title.length).toBeGreaterThan(0);
       expect(copy.detail.length).toBeGreaterThan(20);
       expect(copy.detail).not.toMatch(/something went wrong/i);
-    }
-  });
-
-  it('promises that following continues without Luna (§58)', () => {
-    for (const reason of ['timeout', 'error', 'quota', 'budget', 'no_model_access', 'no_key'] as const) {
-      const copy = lunaUnavailableCopy(reason);
-      expect(copy.title).toBeTruthy();
-      expect(copy.detail).toMatch(/local matching|local tracking|Transcription/i);
     }
   });
 

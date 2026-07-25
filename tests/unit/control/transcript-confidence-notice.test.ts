@@ -28,7 +28,7 @@ import {
 /**
  * Build a finalized item whose provider pieces reconstruct its own text, so
  * `tokenConfidencesFromLogprobs` can attribute them. The word boundary rides on
- * a leading space, exactly as OpenAI emits it.
+ * a leading space, exactly as the provider emits it.
  */
 function item(
   itemId: string,

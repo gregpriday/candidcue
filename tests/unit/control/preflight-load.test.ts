@@ -3,7 +3,7 @@
  *
  * The initial load was a bare `void (async () => {…})()` with no rejection
  * handling. Because every row is set to `checking` before its work starts, a
- * throw from `getScript`, `listDisplays` or `getOpenAiKeyStatus` skipped the
+ * throw from `getScript`, `listDisplays` or `getInworldKeyStatus` skipped the
  * rest of the body and left that row reading "Opening…" / "Connecting…"
  * forever — `computeReadiness` then reported "Checks are still running" with no
  * error text and no retry. Separately, `startTranscriptionTest` only returns

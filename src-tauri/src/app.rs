@@ -125,7 +125,8 @@ pub fn run() {
             // Secrets: OS credential store only (spec §44.6).
             handle.manage(Secrets(Arc::new(OsSecretStore)));
 
-            // Rust-owned OpenAI client (spec §27.6).
+            // Rust-owned Inworld client: it holds the streaming socket, because
+            // the browser cannot send the `Authorization` header it needs.
             handle.manage(InworldClient::new());
 
             // Listener library: bundled packs from the repo assets dir in

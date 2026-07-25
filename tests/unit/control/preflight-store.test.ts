@@ -35,14 +35,14 @@ describe('computeReadiness', () => {
     expect(r.blockedReason).toContain('Stage');
   });
 
-  it('voice mode requires OpenAI and the microphone', () => {
+  it('voice mode requires speech and the microphone', () => {
     const r = computeReadiness(checks({ speech: 'blocked' }));
     expect(r.canStart).toBe(false);
     // Only voice prerequisites failed → the alternative label appears (F.10).
     expect(r.startLabel).toBe('Start in manual mode');
   });
 
-  it('manual mode ignores OpenAI/microphone problems', () => {
+  it('manual mode ignores speech/microphone problems', () => {
     const r = computeReadiness(checks({ mode: 'manual', speech: 'blocked', microphone: 'blocked' }));
     expect(r.canStart).toBe(true);
   });

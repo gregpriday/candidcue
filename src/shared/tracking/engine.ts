@@ -313,7 +313,7 @@ export class AlignmentEngine {
    * §33.4.4 / §33.11: COMMAND_PENDING is a *freeze*. `handleTranscriptEvent`
    * returns nothing while it is set and `command_pending` is an identity state
    * for the filter, so nothing integrates and the teleprompter simply stops.
-   * Whoever set it is supposed to clear it — but a Luna handoff that never
+   * Whoever set it is supposed to clear it — but a handoff that never
    * returns, or an IPC call with no timeout, means nobody ever does, and the
    * take is over.
    *

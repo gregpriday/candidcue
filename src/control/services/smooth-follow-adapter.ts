@@ -18,7 +18,7 @@
  *     motionAck) — the remaining binding is a layout/line-map error the stage
  *     raises on §62 so control can offer the rebuild action. Today the session
  *     store pattern-matches the generic stage-error event for it.
- *  3. Agent C (`src/shared/semantic/**`, `src-tauri/src/openai/**`): report
+ *  3. Runtime budget reporters (§63): report
  *     scheduler state, usage, and coach tips. `subscribeAssistStatus` is the
  *     single entry point the store expects.
  */

@@ -161,7 +161,7 @@ function shimBody(config: ShimConfig): void {
         blankColor: '#000000',
       },
       audio: {
-        transcriptionModel: 'gpt-4o-mini-transcribe',
+        transcriptionModel: 'inworld/inworld-stt-1',
         language: 'en',
         delayProfile: 'balanced',
         softPauseAutoDisconnectMinutes: 5,
@@ -438,7 +438,7 @@ function shimBody(config: ShimConfig): void {
 
       case 'get_inworld_key_status':
         // Rust's real shape: `{ present, hint?, source }` — `source` is what
-        // tells Settings whether a debug build's OPENAI_API_KEY is in play.
+        // tells Settings whether a debug build's INWORLD_API_KEY is in play.
         return config.keyStatus ?? { present: false, source: 'none' };
 
       case 'list_displays':

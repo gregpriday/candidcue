@@ -6,12 +6,11 @@ import { dismissAllToasts } from './fixtures/toasts';
 /**
  * VOICE mode, at the honest edge of what a browser can prove.
  *
- * A voice take needs a real microphone, a live Inworld transcription session
- * and the Realtime provider. This spec supplies NONE of them and fakes none of
- * them. What it does drive is the one voice-mode state that is fully reachable
- * without hardware, and that a user hits for real whenever their key is
- * rejected or Inworld is down: the streaming session cannot be opened, so
- * there is no transport and no transcription.
+ * A voice take needs a real microphone and a live Inworld session. This spec
+ * supplies neither and fakes neither. What it does drive is the one voice-mode
+ * state that is fully reachable without hardware, and that a user hits for
+ * real whenever their key is rejected or Inworld is down: `start_transcription`
+ * refuses, so there is no session and no transcription.
  *
  * That state matters precisely because it is the one where a teleprompter must
  * not lie. If the pill still reads "Connected" while nothing is listening, the
@@ -24,10 +23,10 @@ const SCRIPT = {
   source: '# Product announcement\n\nToday we are shipping something new.\n',
 };
 
-/** Exactly what Rust returns when the mint is refused and cannot be retried. */
+/** Exactly what Rust returns when the session cannot be opened. */
 const MINT_REFUSED = {
-  code: 'REALTIME_NEGOTIATION_FAILED',
-  userMessage: 'The realtime session could not be negotiated.',
+  code: 'REALTIME_CONNECT_FAILED',
+  userMessage: 'The transcription session could not be opened.',
   recoverable: false,
 };
 
@@ -43,7 +42,7 @@ test('a voice take whose realtime transport cannot be established says so instea
   });
   await page.goto('/control.html');
   await page.evaluate((err) => {
-    window.__E2E__.setFail('create_realtime_transcription_credential', err);
+    window.__E2E__.setFail('start_transcription', err);
   }, MINT_REFUSED);
 
   await page
@@ -71,20 +70,16 @@ test('a voice take whose realtime transport cannot be established says so instea
   await page.screenshot({ path: testInfo.outputPath('live-voice-no-transport.png'), fullPage: true });
 
   /*
-   * The mint really was attempted, and it carried THIS session's configuration
-   * — the model from Settings, and the language and the latency preset chosen
-   * in Preflight ('balanced' → delay 'low', spec A.6). Without this the spec
-   * would pass just as happily against a build that never opened a transport
-   * at all, which is the opposite of what it is here to prove.
+   * The session really was attempted, and it carried THIS take's
+   * configuration — the model and the language from Settings. Without this the
+   * spec would pass just as happily against a build that never tried to open a
+   * session at all, which is the opposite of what it is here to prove.
    */
-  const mint = await page.evaluate(() =>
-    window.__E2E__.lastCall('create_realtime_transcription_credential'),
-  );
-  expect(mint).not.toBeNull();
-  const config = (mint!.args as { config: Record<string, unknown> }).config;
-  expect(config['model']).toBe('gpt-4o-mini-transcribe');
-  expect(config['language']).toBe('en');
-  expect(config['delay']).toBe('low');
+  const attempt = await page.evaluate(() => window.__E2E__.lastCall('start_transcription'));
+  expect(attempt).not.toBeNull();
+  const options = (attempt!.args as { options: Record<string, unknown> }).options;
+  expect(options['modelId']).toBe('inworld/inworld-stt-1');
+  expect(options['language']).toBe('en-US');
 
   /*
    * The failure is announced in English (§44.12 / E.7). The toast used to be
@@ -142,7 +137,7 @@ test('a dead realtime transport still leaves the operator a working manual trans
   });
   await page.goto('/control.html');
   await page.evaluate((err) => {
-    window.__E2E__.setFail('create_realtime_transcription_credential', err);
+    window.__E2E__.setFail('start_transcription', err);
   }, MINT_REFUSED);
   await page
     .getByRole('list', { name: 'Scripts' })
@@ -200,7 +195,7 @@ test('a voice take still reports its realtime connection and its microphone', as
   });
   await page.goto('/control.html');
   await page.evaluate((err) => {
-    window.__E2E__.setFail('create_realtime_transcription_credential', err);
+    window.__E2E__.setFail('start_transcription', err);
   }, MINT_REFUSED);
   await page
     .getByRole('list', { name: 'Scripts' })

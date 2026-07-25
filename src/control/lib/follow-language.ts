@@ -148,9 +148,7 @@ export function formatPace(wordsPerMinute: number | null): string {
  * ------------------------------------------------------------------------- */
 
 export type FollowNoticeId =
-  /** §58 Luna timed out, errored, hit quota, or has no model access. */
-  | 'luna_unavailable'
-  /** §59 Realtime transcription interrupted. */
+  /** §59 Transcription interrupted. */
   | 'transcription_interrupted'
   /** §60 Missing or weak transcript confidence. */
   | 'low_transcript_confidence'
@@ -169,63 +167,17 @@ export interface FollowNoticeCopy {
   tone: FollowNoticeTone;
 }
 
-/** Reasons Luna can stop being available (§58, §42.4). */
-export type LunaOutageReason =
-  | 'timeout'
-  | 'error'
-  | 'quota'
-  | 'budget'
-  | 'no_model_access'
-  | 'no_key';
-
-const LUNA_COPY: Record<LunaOutageReason, FollowNoticeCopy> = {
-  timeout: {
-    title: 'Intelligent assist is backing off',
-    detail:
-      'Luna did not answer in time. CandidCue is following with local matching only and will try again shortly.',
-    tone: 'info',
-  },
-  error: {
-    title: 'Intelligent assist is unavailable',
-    detail:
-      'Luna returned an error. Local matching continues; assist retries on its own backoff schedule.',
-    tone: 'info',
-  },
-  quota: {
-    title: 'Intelligent assist is paused — OpenAI quota',
-    detail:
-      'Your OpenAI project rejected the request for quota or rate reasons. Transcription and local tracking are unaffected.',
-    tone: 'info',
-  },
-  budget: {
-    title: 'Intelligent assist reached its session limit',
-    detail:
-      'CandidCue stopped calling Luna for this session and is following with local matching only.',
-    tone: 'info',
-  },
-  no_model_access: {
-    title: 'Intelligent assist is unavailable',
-    detail:
-      'This OpenAI key cannot reach the assist model. Following continues with local matching only.',
-    tone: 'info',
-  },
-  no_key: {
-    title: 'Intelligent assist is off',
-    detail: 'No OpenAI key is stored, so CandidCue is following with local matching only.',
-    tone: 'info',
-  },
-};
-
-export function lunaUnavailableCopy(reason: LunaOutageReason): FollowNoticeCopy {
-  return LUNA_COPY[reason] ?? LUNA_COPY.error;
-}
-
 /**
- * The static half of the degraded-state matrix. `luna_unavailable` is resolved
- * through `lunaUnavailableCopy` because its wording depends on the reason.
+ * The static half of the degraded-state matrix.
+ *
+ * There used to be a sixth notice family here, for a second model that ranked
+ * the local aligner's candidates — six variants of "assist is unavailable,
+ * following continues on local matching". There is no second model now, so
+ * following is *always* local matching and there is nothing to report the
+ * absence of.
  */
 export const FOLLOW_NOTICE_COPY: Record<
-  Exclude<FollowNoticeId, 'luna_unavailable' | 'budget_exceeded'>,
+  Exclude<FollowNoticeId, 'budget_exceeded'>,
   FollowNoticeCopy
 > = {
   transcription_interrupted: {

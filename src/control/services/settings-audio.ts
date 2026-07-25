@@ -99,7 +99,7 @@ export const RUST_OWNED_AUDIO_KEYS = ['vadSensitivity'] as const;
 export const VAD_SENSITIVITY_COPY = {
   label: 'Voice-detection sensitivity',
   description:
-    'How loud a sound has to be before CandidCue treats it as speech. Raise it if you are cut off mid-sentence or quiet speech is missed; lower it if a fan, a room, or people nearby keep it listening after you have stopped. Nothing else changes: the pause that ends a sentence, and how often audio is sent to OpenAI, are the same at every position.',
+    'How loud a sound has to be before the meter counts it as speech. Raise it if a fan or people nearby keep the indicator lit after you have stopped; lower it if quiet speech does not register. This does not gate what is transcribed — the recogniser hears everything the microphone does, at every position on this slider.',
   /** 50% is the tuned default, and the readout says so rather than hiding it. */
   format(percent: number): string {
     return percent === VAD_SENSITIVITY_RANGE.neutral * 100 ? 'Default' : `${percent}%`;

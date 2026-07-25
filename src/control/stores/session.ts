@@ -283,8 +283,6 @@ let stageLayoutGeneration = 0;
 let stageBridgeToken = 0;
 let lastRelayAtMs = 0;
 /** The realtime model whose published rate the cost estimate uses. */
-const DEFAULT_COST_MODEL = 'gpt-realtime-whisper';
-let costModel = DEFAULT_COST_MODEL;
 
 /* Smooth-following bridge state (companion §50.1). The v2 producers are
  * landing in parallel; until then the control UI is fed by bridging today's
@@ -449,7 +447,7 @@ export interface StartSessionInput {
    * §22. The stored revision the compiled document was produced from.
    *
    * A `CompiledScript` carries `scriptId` and `sourceHash` but no revision
-   * number, and the outbound `LunaCoachRequest` has a `scriptRevision` field
+   * number, and the persisted take row has a `scriptRevision` field
    * that the review lane compares against the script's own to decide whether an
    * annotation still points at the text it was written about
    * (`shared/coaching/review/script-annotations.ts`). It has to be handed down.
@@ -504,7 +502,6 @@ export function startLiveSession(input: StartSessionInput): string {
   failedClipIds = [];
   heartbeatRevision = 0;
   lastRelayAtMs = 0;
-  costModel = input.transcription?.model ?? DEFAULT_COST_MODEL;
   sessionStartedAtMs = monotonicNowMs();
   lastMotionFrame = null;
   usingWorkerFrames = false;

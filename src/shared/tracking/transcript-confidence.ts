@@ -3,7 +3,7 @@
  *
  * `requestLogprobs: true` is set on every realtime session, the values are
  * normalized at the transport boundary (`realtime/eventAdapter.ts`) and carried
- * on the `completed` transcript event — so the app is already paying OpenAI for
+ * on the `completed` transcript event, when the provider supplies them — so
  * this signal. This module is the last step: turning the provider's *subword*
  * log probabilities into a confidence per *normalized word*, which is the unit
  * every consumer downstream actually holds (`LedgerToken`).

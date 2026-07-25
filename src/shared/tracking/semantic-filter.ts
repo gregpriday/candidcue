@@ -45,7 +45,7 @@ export interface FilterObservation {
   /** Beam position variance in units². */
   beamVariance: number;
   finalEvidence: boolean;
-  /** True when the observation came only from a semantic (Luna) relation. */
+  /** True when the observation came only from a semantic relation. */
   semanticOnly?: boolean;
   /**
    * This observation *is* the destination an authorized discontinuity moved

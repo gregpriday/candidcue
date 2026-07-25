@@ -1275,21 +1275,33 @@ fn the_environment_override_is_compiled_out_of_release_builds() {
 /// test because they share process-wide state.
 ///
 /// The Keychain is never touched here — `dev_env_key_active` only inspects the
-/// environment, which is the point: settling the question costs no ACL prompt.
+/// environment and the checkout's `.env`, which is the point: settling the
+/// question costs no ACL prompt.
+///
+/// Deliberately NOT asserted: that removing the variable makes the override
+/// inactive. There is a second debug-only source — `.env` in the checkout, so a
+/// developer who puts their key where every other tool in this stack looks for
+/// it gets an app that can see it — and whether that file exists is a property
+/// of the machine running the suite, not of the code. What IS the code's
+/// business is that a *variable holding whitespace* never counts as a key, and
+/// that a real one always does; both hold whichever way `.env` falls.
 #[test]
 fn the_debug_override_is_active_only_while_the_variable_holds_a_value() {
     let restore = std::env::var(DEV_KEY_ENV_VAR).ok();
-
+    // The `.env` source, if this checkout has one, is the floor for every
+    // assertion below: it is already active before the variable is touched.
     std::env::remove_var(DEV_KEY_ENV_VAR);
-    assert!(!dev_env_key_active());
+    let dotenv_supplies_a_key = dev_env_key_active();
 
     std::env::set_var(DEV_KEY_ENV_VAR, "   ");
-    assert!(
-        !dev_env_key_active(),
-        "a whitespace-only value is a shell accident, not a key"
+    assert_eq!(
+        dev_env_key_active(),
+        dotenv_supplies_a_key,
+        "a whitespace-only value is a shell accident, not a key, so it must \
+         neither create an override nor cancel one"
     );
 
-    std::env::set_var(DEV_KEY_ENV_VAR, "sk-test-override");
+    std::env::set_var(DEV_KEY_ENV_VAR, "test-override");
     assert!(
         dev_env_key_active(),
         "cargo test builds with debug_assertions on, so the override must be live"

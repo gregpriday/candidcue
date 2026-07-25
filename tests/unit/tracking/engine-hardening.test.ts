@@ -38,7 +38,7 @@ describe('COMMAND_PENDING is a bounded freeze (§33.4.4, §33.11)', () => {
   /**
    * `handleTranscriptEvent` returns `{}` for every event while pending and
    * `command_pending` is an identity state for the filter, so nothing
-   * integrates. Nothing in the pipeline timed the freeze out: the Luna branch
+   * integrates. Nothing in the pipeline timed the freeze out: the handoff
    * awaited an `ipcInvoke` with no timeout and never cleared the flag, so a
    * hung handler froze the teleprompter for the rest of the take.
    */

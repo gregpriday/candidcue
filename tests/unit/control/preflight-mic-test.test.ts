@@ -1,6 +1,6 @@
 /**
  * §14.2 C — the Preflight transcription test must not be able to stay
- * connected to OpenAI on the owner's key while nobody is watching.
+ * connected to Inworld on the owner's key while nobody is watching.
  *
  * Before this, `runTranscriptionTest` stored the session's disposer and the
  * ONLY two callers of it were component unmount and the top of
@@ -158,10 +158,10 @@ describe('the session closes itself when it is forgotten', () => {
   it('stops billing once the transport reports it cannot transcribe', async () => {
     const h = harness();
     await h.session.start('mic-1');
-    h.events.onError('OpenAI rejected the API key.');
+    h.events.onError('Inworld rejected the API key.');
 
     expect(h.dispose).toHaveBeenCalledOnce();
-    expect(h.last().error).toBe('OpenAI rejected the API key.');
+    expect(h.last().error).toBe('Inworld rejected the API key.');
   });
 
   it('leaves no timer armed after the session closed', async () => {

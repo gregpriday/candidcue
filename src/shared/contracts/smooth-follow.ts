@@ -268,7 +268,6 @@ export interface SmoothFollowProfile {
     sectionSearchLimit: number;
     retakePersistenceTokens: number;
     retakePersistenceMs: number;
-    semanticInfluenceMax: number;
   };
 
   motion: {
@@ -363,8 +362,6 @@ export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
     sectionSearchLimit: 4,
     retakePersistenceTokens: 4,
     retakePersistenceMs: 2500,
-    // Luna is bounded to a modest fraction of the decision margin (§40, A.2).
-    semanticInfluenceMax: 0.25,
   },
 
   motion: {
@@ -450,5 +447,3 @@ export function isInterpretableSmoothFollowProfile(
   );
 }
 
-/** Companion §35. How much semantic (Luna) assistance the session may use. */
-export type IntelligenceMode = 'local_only' | 'balanced' | 'enhanced';

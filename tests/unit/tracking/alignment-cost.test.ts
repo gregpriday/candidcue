@@ -7,7 +7,7 @@
  * word contributed a 161-token window per occurrence, and overlapping windows
  * merged into arbitrarily large spans — so a 6400-token script cost roughly an
  * order of magnitude more per event than a 440-token one, on identical input.
- * OpenAI Realtime emits several deltas per second, so the worker fell
+ * The recogniser emits several deltas per second, so the worker fell
  * permanently and cumulatively behind on any script longer than a few minutes.
  *
  * The assertion is a *ratio*, deliberately, so it means the same thing on a

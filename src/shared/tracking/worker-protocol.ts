@@ -10,7 +10,6 @@
  * Companion additions (Appendix E "§46 IPC"):
  *   - `initialize` accepts a `SmoothFollowProfile` alongside the v1 profile;
  *   - `tick` advances the continuous estimate between transcript events;
- *   - `semantic_assist` feeds bounded Luna evidence into the beam scorer;
  *   - `set_layout_generation` acknowledges a rebuilt stage line map;
  *   - `semantic_frame` carries `SemanticMotionFrame` out at 15–30 Hz;
  *   - `movement_decision` carries the "why did it move?" record (§65).
