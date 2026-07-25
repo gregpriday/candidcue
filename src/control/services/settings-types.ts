@@ -53,6 +53,22 @@ export interface AppSettings {
      * See services/settings-audio.ts.
      */
     vadSensitivity: number;
+    /**
+     * §28.1. Microphone access has been granted on this machine before.
+     *
+     * Per-machine capture state, so it lives in the same local overlay as the
+     * device id — a grant on this Mac says nothing about another one.
+     *
+     * It exists because `navigator.permissions.query({ name: 'microphone' })`
+     * is not implemented in WKWebView, which is the only webview this app
+     * ships in. `queryMicrophonePermission` therefore returns 'unsupported'
+     * every time, the "notice a permission that is already granted" path never
+     * fires, and the user was asked to click Allow before every single take —
+     * the exact re-prompt that path was written to prevent, on the one platform
+     * where it runs. macOS grants the microphone to the APPLICATION, so once
+     * this is true, opening the mic again raises no prompt.
+     */
+    microphoneGranted: boolean;
   };
   teleprompter: {
     fontFamilyId: string;
@@ -179,6 +195,9 @@ export function defaultAppSettings(): AppSettings {
       echoCancellation: true,
       autoGainControl: true,
       vadSensitivity: 0.5,
+      // Never assume a grant that has not happened: the first take on a
+      // machine still asks, which is the one time asking is right.
+      microphoneGranted: false,
     },
     teleprompter: {
       fontFamilyId: 'system-sans',

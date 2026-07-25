@@ -538,8 +538,27 @@
         micAdopted = false;
         micPermission = 'denied';
         updatePreflight({ microphone: 'blocked' });
+      } else if (state === 'unsupported' && $settings.audio.microphoneGranted && !micAdopted) {
+        /*
+         * The case the paragraph above excluded, which is the only case that
+         * actually happens here.
+         *
+         * WKWebView does not implement `permissions.query({name:'microphone'})`
+         * — Safari never has — so on the one platform this app ships in, the
+         * state is 'unsupported' every time and "notice a permission that is
+         * already granted" never ran. The user re-clicked Allow before every
+         * take, which is precisely what that path exists to prevent.
+         *
+         * Falling back to the remembered grant is safe because macOS grants the
+         * microphone to the APPLICATION: if this machine has said yes before,
+         * opening the mic again raises no prompt, so §28.1's rule — never
+         * surprise anyone with an OS dialog — still holds. If access was
+         * revoked in System Settings since, this fails and puts the explicit
+         * button back, which is the correct outcome and the honest one.
+         */
+        void allowMicrophone();
       }
-      // 'prompt' / 'unsupported' → keep the explicit request action visible.
+      // 'prompt' → the user has never answered; keep the explicit action.
     });
   });
 
@@ -853,6 +872,13 @@
       if (granted === 'granted') {
         micAdopted = false;
         await adoptGrantedMicrophone();
+        // Remember it for the next take. WKWebView cannot report permission
+        // state, so this is the only way a returning user is not asked again.
+        if (!$settings.audio.microphoneGranted) {
+          void patchSettings('audio', { microphoneGranted: true }).catch(() => {
+            /* a convenience, never a gate */
+          });
+        }
       } else {
         micPermission = 'denied';
         updatePreflight({ microphone: 'blocked' });
