@@ -9,6 +9,7 @@
  */
 import { classifyFillers, tokenizeNormalized, STOPWORDS } from './normalize';
 import { tokenConfidencesFromLogprobs } from './transcript-confidence';
+import { STABLE_REVISIONS } from './types';
 import type {
   CommandDisposition,
   LedgerItem,
@@ -25,6 +26,14 @@ export interface AlignableTail {
   final: boolean;
   /** Mean token confidence over the tail (1 when providers omit it). */
   confidence: number;
+}
+
+/** What one revision did to an item's tokens. */
+interface TokenRevision {
+  /** Tokens the provider withdrew. */
+  retracted: number;
+  /** Leading tokens it left untouched. */
+  stablePrefix: number;
 }
 
 export interface LedgerAnomaly {
@@ -136,18 +145,31 @@ export class TranscriptLedger {
       case 'delta': {
         const item = this.ensureItem(event.itemId, event.receivedAtMs);
         if (item.status === 'complete') return undefined; // completion supersedes deltas (§30.7)
-        // Provider deltas are treated as cumulative-append text; a shrinking
-        // delta means the provider restated the item, so take the longest
-        // stable prefix policy: keep whichever text is longer.
-        const nextText =
-          event.text.length >= item.provisionalText.length ? event.text : item.provisionalText;
-        if (nextText === item.provisionalText && item.normalizedTokens.length > 0) {
+        /*
+         * A partial is a REPLACEMENT, not an append.
+         *
+         * This used to keep whichever text was longer, which is not a revision
+         * model at all: it made a correction that removes a word unrepresentable.
+         *
+         *   revision 1: "we should build a very complicated navigation system"
+         *   revision 2: "we should build a complicated navigation system"
+         *
+         * The second is the recogniser withdrawing `very` on better evidence,
+         * and the longest-wins policy pinned the stale word in place for the
+         * rest of the utterance — where it went on to be matched against the
+         * script as though the presenter had said it.
+         *
+         * An empty partial is the one restatement not honoured: providers emit
+         * one while re-segmenting, and no evidence is not evidence of no words.
+         */
+        if (event.text.trim().length === 0) return undefined;
+        if (event.text === item.provisionalText && item.normalizedTokens.length > 0) {
           return undefined;
         }
-        item.provisionalText = nextText;
+        item.provisionalText = event.text;
         item.updatedAtMs = event.receivedAtMs;
-        this.retokenize(item, false);
-        return this.update(item, false, event.receivedAtMs);
+        const revision = this.retokenize(item, false);
+        return this.update(item, false, event.receivedAtMs, revision);
       }
       case 'completed': {
         const item = this.ensureItem(event.itemId, event.receivedAtMs);
@@ -172,9 +194,9 @@ export class TranscriptLedger {
         else delete item.logprobs;
         if (event.audioEndMs !== undefined) item.audioEndMs = event.audioEndMs;
         item.updatedAtMs = event.receivedAtMs;
-        this.retokenize(item, true);
+        const revision = this.retokenize(item, true);
         this.trim(event.receivedAtMs);
-        return this.update(item, true, event.receivedAtMs);
+        return this.update(item, true, event.receivedAtMs, revision);
       }
       case 'failed': {
         if (event.itemId === undefined) return undefined;
@@ -310,9 +332,27 @@ export class TranscriptLedger {
     this.order.splice(index, 0, item.itemId);
   }
 
-  private retokenize(item: LedgerItem, final: boolean): void {
+  /**
+   * Re-derive an item's tokens from its current text, carrying the stability of
+   * every token the revision left in place.
+   *
+   * The shared leading run is found on normalized surfaces rather than
+   * characters, so "dont" → "don't" is one token changing rather than a prefix
+   * break that retracts the rest of the sentence.
+   */
+  private retokenize(item: LedgerItem, final: boolean): TokenRevision {
     const text = final ? item.finalText ?? '' : item.provisionalText;
     const words = tokenizeNormalized(text);
+    const previous = item.normalizedTokens;
+    let stablePrefix = 0;
+    while (
+      stablePrefix < words.length &&
+      stablePrefix < previous.length &&
+      previous[stablePrefix]?.normalized === words[stablePrefix]
+    ) {
+      stablePrefix++;
+    }
+    const retracted = previous.length - stablePrefix;
     const fillers = classifyFillers(words, true);
     /**
      * §30.5 per-token ASR confidence. Provisional text has no logprobs (the
@@ -325,6 +365,17 @@ export class TranscriptLedger {
     item.normalizedTokens = words.map((word, index) => {
       const filler = fillers[index] ?? false;
       const confidence = confidences?.[index];
+      /*
+       * A token inside the untouched prefix has survived one more revision.
+       * Past the prefix the recogniser has changed its mind, so the count
+       * restarts even where a word happens to reappear further along — it is a
+       * different word in a different place, and crediting it with the old
+       * one's history is how a retraction turns back into evidence.
+       */
+      const carried = index < stablePrefix ? previous[index]?.stability ?? 0 : 0;
+      const stability = final
+        ? Math.max(carried + 1, STABLE_REVISIONS)
+        : carried + 1;
       return {
         itemId: item.itemId,
         indexInItem: index,
@@ -333,9 +384,11 @@ export class TranscriptLedger {
         final,
         filler,
         content: !filler && !STOPWORDS.has(word),
+        stability,
         ...(confidence !== undefined ? { confidence } : {}),
       };
     });
+    return { retracted, stablePrefix };
   }
 
   /** Drop detailed evidence outside the rolling horizon (spec §30.3). */
@@ -359,12 +412,15 @@ export class TranscriptLedger {
     item: LedgerItem,
     final: boolean,
     receivedAtMs: number,
+    revision: TokenRevision,
   ): ReconciledTranscriptUpdate {
     return {
       sessionGeneration: item.sessionGeneration,
       itemId: item.itemId,
       final,
       receivedAtMs,
+      retractedTokens: revision.retracted,
+      stablePrefixTokens: revision.stablePrefix,
     };
   }
 }

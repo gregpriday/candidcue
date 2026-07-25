@@ -315,6 +315,29 @@ export interface LedgerToken extends TranscriptToken {
   filler: boolean;
   /** Content tokens are non-filler, non-stopword tokens. */
   content: boolean;
+  /**
+   * Consecutive provider revisions in which this token has survived at this
+   * position, counting from 1 on the revision that introduced it.
+   *
+   * A streaming recogniser restates an utterance repeatedly and the tail of
+   * each restatement is the part it is least sure of — "we should build a
+   * very complicated system" becoming "we should build a complicated system"
+   * is a correction, not new speech. Words that have survived several
+   * revisions are evidence; the newest word in a partial is a guess. Prefer
+   * `isStableToken` over reading this directly.
+   */
+  stability: number;
+}
+
+/**
+ * Revisions a provisional token must survive before it is treated as evidence
+ * rather than as the recogniser thinking aloud.
+ */
+export const STABLE_REVISIONS = 2;
+
+/** Final text is authoritative; provisional text has to earn it. */
+export function isStableToken(token: LedgerToken): boolean {
+  return token.final || token.stability >= STABLE_REVISIONS;
 }
 
 /**
@@ -327,6 +350,17 @@ export interface ReconciledTranscriptUpdate {
   /** True when this update reflects a completed item. */
   final: boolean;
   receivedAtMs: number;
+  /**
+   * Tokens the provider withdrew in this revision — text it had previously
+   * offered and has now replaced.
+   *
+   * Non-zero means evidence the aligner may already have matched on no longer
+   * exists, which is a different event from "more speech arrived" and cannot
+   * be inferred from the new text alone.
+   */
+  retractedTokens: number;
+  /** Leading tokens this revision left untouched. */
+  stablePrefixTokens: number;
 }
 
 /* ---------------------------------------------------------------------------

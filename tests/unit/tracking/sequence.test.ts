@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_TRACKING_PROFILE } from '../../../src/shared/tracking/profile';
 import { alignSequences } from '../../../src/shared/tracking/sequence';
+import { STABLE_REVISIONS } from '../../../src/shared/tracking/types';
 import type { LedgerToken, SpokenToken } from '../../../src/shared/tracking/types';
 import { STOPWORDS } from '../../../src/shared/tracking/normalize';
 import { mulberry32, randomInt, randomWord } from '../helpers/rand';
@@ -29,6 +30,7 @@ function transcriptTokens(words: readonly string[]): LedgerToken[] {
     normalized: word,
     final: true,
     filler: ['um', 'uh'].includes(word),
+    stability: STABLE_REVISIONS,
     content: !['um', 'uh'].includes(word) && !STOPWORDS.has(word),
   }));
 }

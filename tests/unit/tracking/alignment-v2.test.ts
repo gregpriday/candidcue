@@ -13,6 +13,7 @@ import {
 import { projectBehavior } from '../../../src/shared/tracking/behavior';
 import { AlignmentEngine } from '../../../src/shared/tracking/engine';
 import { DEFAULT_TRACKING_PROFILE } from '../../../src/shared/tracking/profile';
+import { STABLE_REVISIONS } from '../../../src/shared/tracking/types';
 import type { LedgerToken } from '../../../src/shared/tracking/types';
 import { demoDocument } from '../../fixtures/alignment/fixture-script';
 import { TranscriptScripter } from '../../fixtures/transcript-events/builder';
@@ -40,6 +41,7 @@ function token(normalized: string, content = true): LedgerToken {
     normalized,
     final: true,
     filler: false,
+    stability: STABLE_REVISIONS,
     content,
   };
 }

@@ -5,6 +5,7 @@
  * being fixed; each test names the specific way the engine used to break.
  */
 import { describe, expect, it } from 'vitest';
+import { STABLE_REVISIONS } from '../../../src/shared/tracking/types';
 import { AlignmentEngine } from '../../../src/shared/tracking/engine';
 import { DocumentIndex } from '../../../src/shared/tracking/document-index';
 import { generateCandidates } from '../../../src/shared/tracking/candidates';
@@ -439,8 +440,8 @@ describe('§31.14 global reacquisition genuinely widens the search', () => {
       rareWeight: DEFAULT_TRACKING_PROFILE.rareWeight,
     });
     const tail = [
-      { itemId: 'i', indexInItem: 0, surface: 'kaleidoscope', normalized: 'kaleidoscope', final: true, filler: false, content: true },
-      { itemId: 'i', indexInItem: 1, surface: 'metronome', normalized: 'metronome', final: true, filler: false, content: true },
+      { itemId: 'i', indexInItem: 0, surface: 'kaleidoscope', normalized: 'kaleidoscope', final: true, filler: false, content: true , stability: STABLE_REVISIONS },
+      { itemId: 'i', indexInItem: 1, surface: 'metronome', normalized: 'metronome', final: true, filler: false, content: true , stability: STABLE_REVISIONS },
     ];
     const base = { committedTokenIndex: 10, transcriptTail: tail, checkpoints: [] };
     const local = generateCandidates(index, { ...base, globalSearch: false }, DEFAULT_TRACKING_PROFILE);
