@@ -459,6 +459,49 @@ describe('WebRtcTranscriptionTransport (spec §27.3, E.2)', () => {
     };
   }
 
+  it('a connect that never opened does not claim the connection dropped', async () => {
+    /*
+     * The message the user actually saw, reported twice, chased twice in the
+     * wrong direction: "The realtime connection to OpenAI dropped … then start
+     * voice following again."
+     *
+     * It came from a connect attempt hitting its 30-second deadline. Nothing
+     * had ever connected, so there was nothing to drop — but
+     * `ConnectCancelledError` carried `REALTIME_CONNECTION_LOST`, which is the
+     * copy for a live take losing its transport. It sent the presenter to
+     * check their internet while the real failure was the negotiation, and it
+     * made four unrelated situations indistinguishable in a bug report: a
+     * closed data channel, a failed ICE path, a missing audio sender, and a
+     * connect that timed out.
+     */
+    const pc = new FakePeerConnection();
+    const deadline: { fire: (() => void) | null } = { fire: null };
+    const transport = new WebRtcTranscriptionTransport({
+      invoke: vi.fn().mockResolvedValue(credential()),
+      // Never resolves: the attempt can only end at the deadline.
+      fetchFn: vi.fn().mockImplementation(() => new Promise(() => {})),
+      createPeerConnection: () => pc,
+      acquireMicrophone: () => {
+        const track = fakeTrack();
+        return Promise.resolve({ getAudioTracks: () => [track], getTracks: () => [track] });
+      },
+      now: () => NOW,
+      timers: {
+        setTimeout: (cb: () => void) => {
+          deadline.fire = cb;
+          return 1;
+        },
+        clearTimeout: () => {},
+      },
+    });
+
+    const connecting = transport.connect(DEFAULT_TRANSCRIPTION_CONFIG);
+    await flush();
+    deadline.fire?.();
+
+    await expect(connecting).rejects.toMatchObject({ code: 'REALTIME_NEGOTIATION_FAILED' });
+  });
+
   it('rides out a transient disconnect instead of ending the take', async () => {
     /*
      * The shipped bug. `disconnected` means ICE is still trying — a Wi-Fi roam,

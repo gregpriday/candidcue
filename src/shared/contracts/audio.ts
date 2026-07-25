@@ -88,7 +88,15 @@ export type TranscriptEvent =
   | { type: 'item_started'; itemId: string; commitSequence: number }
   | { type: 'delta'; itemId: string; text: string; receivedAtMs: number }
   | { type: 'completed'; itemId: string; text: string; logprobs?: TokenLogprob[] }
-  | { type: 'failed'; itemId?: string; code: string; recoverable: boolean }
+  /**
+   * `detail` is a short, text-free reason for triage — "data channel closed",
+   * "peer connection failed". One code covers several unrelated situations
+   * (a channel the service closed, an ICE path that failed, an input with no
+   * sender), and without this they are indistinguishable in a bug report:
+   * every one of them arrives as the same sentence about the connection
+   * dropping. Never provider prose, so it can never quote speech.
+   */
+  | { type: 'failed'; itemId?: string; code: string; recoverable: boolean; detail?: string }
   | { type: 'transport_state'; state: TransportState }
   /**
    * H5: the local audio input recovered (track unmuted / device restored).

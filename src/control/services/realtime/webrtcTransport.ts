@@ -8,6 +8,7 @@
  * them to `TranscriptEvent`s at the boundary (spec §27.4/§30.1).
  */
 import type {
+  AppErrorCode,
   CommitReason,
   DisconnectReason,
   EphemeralCredential,
@@ -59,13 +60,26 @@ export const DEFAULT_DISCONNECT_GRACE_MS = 5_000;
 
 /**
  * Thrown when a connect attempt is invalidated by `disconnect()`/suspend, or
- * by the total deadline. Distinct from a negotiation failure: nothing is
- * wrong with the provider, the caller simply stopped caring about this
- * attempt, so it must never be published and never be retried on its own.
+ * by the total deadline. Distinct from a negotiation failure in ORIGIN —
+ * nothing is necessarily wrong with the provider — so it must never be
+ * published and never be retried on its own.
+ *
+ * It used to carry `REALTIME_CONNECTION_LOST`, whose user-facing sentence is
+ * "The realtime connection to OpenAI dropped … then start voice following
+ * again". A connect that hits its 30-second deadline never connected to
+ * anything, so that told the presenter a connection had been lost when none had
+ * ever been established, and pointed them at their network instead of at the
+ * negotiation that was actually failing. Four unrelated situations shared that
+ * one sentence — a closed data channel, a failed ICE path, a missing audio
+ * sender, and this — which made the report impossible to act on and sent two
+ * rounds of investigation after the wrong thing.
+ *
+ * The code is a parameter now, and the default is the honest one for a connect
+ * that ran out of time: it could not be opened.
  */
 export class ConnectCancelledError extends RealtimeTransportError {
-  constructor(reason: string) {
-    super('REALTIME_CONNECTION_LOST', `Connect cancelled: ${reason}`, true);
+  constructor(reason: string, code: AppErrorCode = 'REALTIME_NEGOTIATION_FAILED') {
+    super(code, `Connect cancelled: ${reason}`, true);
     this.name = 'ConnectCancelledError';
   }
 }
@@ -755,7 +769,7 @@ export class WebRtcTranscriptionTransport implements RealtimeTranscriptionTransp
     // died, and it is what the support bundle and a bug report have to carry.
     this.lastCloseReason = detail;
     this.setState('failed');
-    this.emit({ type: 'failed', code: 'REALTIME_CONNECTION_LOST', recoverable: true });
+    this.emit({ type: 'failed', code: 'REALTIME_CONNECTION_LOST', recoverable: true, detail });
   }
 
   private waitForDataChannelOpen(dc: RtcDataChannelLike): Promise<void> {

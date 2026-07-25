@@ -34,6 +34,15 @@ const doc = demoDocument();
 const LAST_TOKEN = doc.spokenTokens.length - 1;
 
 /**
+ * Each scenario replays a whole script through the real engine and takes about
+ * two seconds on an idle machine. Vitest's 5 s default left almost no headroom,
+ * and these went red purely from running alongside the rest of the suite — a
+ * test that fails because other tests are running teaches nothing and trains
+ * people to re-run until green.
+ */
+const TOLERANCE_TIMEOUT_MS = 30_000;
+
+/**
  * Committed cursor sampled once per utterance, at the action that ends it.
  *
  * The boundaries come from the scenario, not from the trace. Recovering them
@@ -85,7 +94,7 @@ describe('a presenter who misspeaks is still followed', () => {
       `the cursor did not move on verbatim utterance(s) ${JSON.stringify(stalled)} after a ` +
         `stumble at utterance 2; per-utterance committed trace was ${JSON.stringify(committed)}`,
     ).toBeLessThanOrEqual(1);
-  });
+  }, TOLERANCE_TIMEOUT_MS);
 
   it('reaches the end despite the stumble, without cheating to get there', () => {
     const scenario = scenarioMisspokenReadThrough(
@@ -97,7 +106,7 @@ describe('a presenter who misspeaks is still followed', () => {
     const result = runPlayback(scenario);
     expect(result.committedAfterAction.at(-1) ?? 0).toBeGreaterThanOrEqual(LAST_TOKEN - 8);
     expect(result.prohibitedJumps).toHaveLength(0);
-  });
+  }, TOLERANCE_TIMEOUT_MS);
 
   it('follows a presenter who fluffs a word in every single utterance', () => {
     /*
@@ -120,7 +129,7 @@ describe('a presenter who misspeaks is still followed', () => {
       'a presenter who fluffs a word per sentence must still be followed to the end',
     ).toBeGreaterThanOrEqual(LAST_TOKEN - 12);
     expect(result.prohibitedJumps).toHaveLength(0);
-  });
+  }, TOLERANCE_TIMEOUT_MS);
 
   /*
    * KNOWN DEFECT — not fixed, deliberately pinned.
@@ -164,5 +173,5 @@ describe('a presenter who misspeaks is still followed', () => {
       `verbatim utterances that did not move the cursor: ${JSON.stringify(stalled)}; ` +
         `trace ${JSON.stringify(committed)}`,
     ).toBeLessThanOrEqual(1);
-  });
+  }, TOLERANCE_TIMEOUT_MS);
 });
