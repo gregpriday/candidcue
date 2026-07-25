@@ -9,6 +9,7 @@
     MIC_ADVICE,
     MIC_STATUS_LABEL,
     micCondition,
+    micFillPercent,
     micZone,
     reduceMicLevel,
     type MicAdviceState,
@@ -58,11 +59,17 @@
     held = accumulator;
   });
 
-  const percent = $derived(Math.round(Math.min(1, level?.rms ?? 0) * 100));
+  // Normalised against the held peak, so an ordinary voice fills an ordinary
+  // amount of bar instead of a sliver at the left edge (see mic-advice.ts).
+  const percent = $derived(micFillPercent(level, held));
   const condition = $derived(micCondition(level, held, level?.generatedAtMs ?? 0));
   const zone = $derived(micZone(level, condition));
   const statusText = $derived(MIC_STATUS_LABEL[condition]);
   const advice = $derived(MIC_ADVICE[condition]);
+  /** Conditions the operator can actually do something about (Appendix F.4). */
+  const actionable = $derived(
+    condition === 'clipping' || condition === 'no_signal' || condition === 'too_low',
+  );
 </script>
 
 <div class="meter-block">
@@ -79,9 +86,14 @@
     </div>
     <span class="status">{statusText}</span>
   </div>
-  {#if advice}
-    <p class="advice" role="status">{advice}</p>
-  {/if}
+  <!-- Always rendered, but only announced when it is actionable.
+       It used to appear only for fault states, so it came and went as the
+       speaker paused and resumed, reflowing everything below it during the one
+       activity the panel exists for. Making it permanent fixes that; leaving it
+       a live region permanently would trade the flicker for a screen reader
+       narrating every breath, so the role is attached to the fault states that
+       have something to act on. -->
+  <p class="advice" role={actionable ? 'status' : undefined}>{advice}</p>
 </div>
 
 <style>
@@ -97,6 +109,9 @@
     font-size: var(--text-label);
     line-height: var(--lh-label);
     color: var(--text-secondary);
+    /* One line, always — the height is reserved whatever the text says, so a
+       longer remedy replacing a shorter reassurance cannot move the panel. */
+    min-height: var(--lh-label);
   }
 
   .meter-row {

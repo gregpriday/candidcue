@@ -34,7 +34,35 @@ describe('MicMeter', () => {
     const { container } = render(MicMeter, { props: { level: level() } });
     const meter = container.querySelector('[role="meter"]');
     expect(meter, 'the meter must render at all').not.toBeNull();
-    expect(meter?.getAttribute('aria-valuenow')).toBe('30');
+    // Normalised, not raw RMS: 0.30 against this frame's own held peak of
+    // 0.50, so 60. A raw percentage drew an ordinary speaking voice as a
+    // sliver at the left edge, which read as "the app cannot hear me" while it
+    // could hear perfectly well.
+    expect(meter?.getAttribute('aria-valuenow')).toBe('60');
+  });
+
+  it('fills usefully for a quiet microphone rather than reading as dead', () => {
+    // A quiet-but-working input: raw RMS 0.08 is 8% of a bar, which looks
+    // broken. Normalisation is what makes the meter answer the question the
+    // user is actually asking — "is it hearing me?" — instead of reporting an
+    // absolute number that means nothing without a reference.
+    const { container } = render(MicMeter, { props: { level: level({ rms: 0.08, peak: 0.1 }) } });
+    const value = Number(container.querySelector('[role="meter"]')?.getAttribute('aria-valuenow'));
+    expect(value).toBeGreaterThan(15);
+  });
+
+  it('keeps the advice line present in every condition', () => {
+    /*
+     * The jitter. Three of the six conditions had no advice, so the line
+     * appeared when the speaker paused and vanished when they resumed, moving
+     * everything below it — during the one activity the panel exists for.
+     */
+    const speaking = render(MicMeter, { props: { level: level() } });
+    expect(speaking.container.querySelector('.advice')?.textContent?.trim()).toBeTruthy();
+    speaking.unmount();
+
+    const idle = render(MicMeter, { props: { level: null } });
+    expect(idle.container.querySelector('.advice')?.textContent?.trim()).toBeTruthy();
   });
 
   it('survives a stream of frames, which is the only way it is ever used', async () => {

@@ -42,9 +42,15 @@ function feed(frames: AudioLevelSnapshot[]): MicAdviceState {
 }
 
 describe('mic conditions', () => {
-  it('is idle before any frame has been measured', () => {
+  it('is idle before any frame has been measured, and still says so', () => {
     expect(micCondition(null, INITIAL_MIC_ADVICE_STATE, 0)).toBe('idle');
-    expect(MIC_ADVICE.idle).toBeNull();
+    // Every condition carries a line now, healthy ones included. Three of the
+    // six were null, so the line existed only while something was wrong: it
+    // appeared when the speaker paused, vanished when they resumed, and moved
+    // the panel each way. Speaking into a microphone to test it is exactly
+    // when the level changes most, so the only time it flickered was the only
+    // time anyone was watching.
+    expect(MIC_ADVICE.idle).toBeTruthy();
   });
 
   it('reports clipping and keeps it on screen past the frame that caused it', () => {
@@ -93,7 +99,32 @@ describe('mic conditions', () => {
     const gap = frame({ generatedAtMs: 200, rms: 0.05, peak: 0.06 });
     const state = feed([loud, gap]);
     expect(micCondition(gap, state, 200)).toBe('quiet');
-    expect(MIC_ADVICE.quiet).toBeNull();
+    expect(MIC_ADVICE.quiet).toBeTruthy();
+  });
+
+  it('does not call a pause between sentences a broken microphone', () => {
+    /*
+     * The complaint, exactly: "as soon as the volume goes down it says it
+     * can't hear you — what am I meant to be, making a sound all the time?"
+     *
+     * `signalPresent` is a ~90 ms reading and goes false in the gap between
+     * two words, and `no_signal` was returned from that single frame. So the
+     * meter accused the microphone of being unusable every time the speaker
+     * drew breath, and took it back a moment later.
+     */
+    const speech = frame({ generatedAtMs: 0, rms: 0.4, peak: 0.7, speaking: true });
+    const pause = frame({ generatedAtMs: 800, rms: 0, peak: 0, signalPresent: false });
+    const state = feed([speech, pause]);
+    expect(micCondition(pause, state, 800)).toBe('quiet');
+  });
+
+  it('still reports a genuinely dead input once the silence lasts', () => {
+    // Tolerance must not become silence: an input that really is gone has to
+    // be named, or the user hunts for a fault the app already knows about.
+    const speech = frame({ generatedAtMs: 0, rms: 0.4, peak: 0.7, speaking: true });
+    const gone = frame({ generatedAtMs: 6000, rms: 0, peak: 0, signalPresent: false });
+    const state = feed([speech, gone]);
+    expect(micCondition(gone, state, 6000)).toBe('no_signal');
   });
 
   it('lets the peak hold expire so a real drop is still caught', () => {
@@ -120,9 +151,14 @@ describe('rendered meter', () => {
     expect(html).toContain('role="status"');
   });
 
-  it('stays quiet when there is nothing to act on', () => {
+  it('shows a line when there is nothing to act on, but does not announce it', () => {
+    // Both halves matter and they used to be one decision. The line is always
+    // visible, so the panel cannot jitter; the live region is attached only to
+    // conditions with a remedy, so a screen reader is not made to narrate
+    // every breath the speaker takes.
     const html = render(MicMeter, { props: { level: null } }).body;
     expect(html).toContain('No signal yet');
+    expect(html).toContain('Say a few words');
     expect(html).not.toContain('role="status"');
   });
 });
