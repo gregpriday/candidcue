@@ -38,7 +38,7 @@ test('a voice take whose realtime transport cannot be established says so instea
   await installTauriShim(page, {
     welcomed: true,
     seedScripts: [SCRIPT],
-    keyStatus: { present: true, state: 'valid' },
+    keyStatus: { present: true, hint: 'sk-…live', source: 'keychain' },
     promptMode: 'voice',
   });
   await page.goto('/control.html');
@@ -137,7 +137,7 @@ test('a dead realtime transport still leaves the operator a working manual trans
   await installTauriShim(page, {
     welcomed: true,
     seedScripts: [SCRIPT],
-    keyStatus: { present: true, state: 'valid' },
+    keyStatus: { present: true, hint: 'sk-…live', source: 'keychain' },
     promptMode: 'voice',
   });
   await page.goto('/control.html');
@@ -195,7 +195,7 @@ test('a voice take still reports its realtime connection and its microphone', as
   await installTauriShim(page, {
     welcomed: true,
     seedScripts: [SCRIPT],
-    keyStatus: { present: true, state: 'valid' },
+    keyStatus: { present: true, hint: 'sk-…live', source: 'keychain' },
     promptMode: 'voice',
   });
   await page.goto('/control.html');

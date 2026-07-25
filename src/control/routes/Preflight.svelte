@@ -827,6 +827,11 @@
           text: 'OpenAI rejected this key. Check that it is active and belongs to the project you intend to bill.',
         };
       }
+    } catch (err) {
+      // `save_openai_key` is refused outright when a development build is
+      // running with OPENAI_API_KEY set; without this the rejection would
+      // escape unhandled and the pane would simply go quiet.
+      keyMessage = { tone: 'danger', text: describeError(err) };
     } finally {
       // One-shot field: always purge the plaintext after submission.
       keyField = '';

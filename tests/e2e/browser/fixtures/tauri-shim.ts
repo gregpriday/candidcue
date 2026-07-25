@@ -438,7 +438,9 @@ function shimBody(config: ShimConfig): void {
         return null;
 
       case 'get_openai_key_status':
-        return config.keyStatus ?? { present: false, state: 'unknown' };
+        // Rust's real shape: `{ present, hint?, source }` — `source` is what
+        // tells Settings whether a debug build's OPENAI_API_KEY is in play.
+        return config.keyStatus ?? { present: false, source: 'none' };
 
       case 'list_displays':
         if (control.fail['list_displays']) throw control.fail['list_displays'];

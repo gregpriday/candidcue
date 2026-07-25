@@ -28,6 +28,7 @@ import { decideExecution, type ExecutionState } from '../../shared/commands/sche
 import { TranscriptLedger } from '../../shared/tracking/ledger';
 import type { TranscriptEvent as TrackingEvent } from '../../shared/tracking/types';
 import { trace } from './realtime/connectTrace';
+import { DEFAULT_VAD_CONFIG } from './audio/defaults';
 import {
   createAnalyserGraph,
   MicrophoneDeviceManager,
@@ -235,6 +236,8 @@ export class VoiceSessionPipeline {
    * step the controller's rather than the transport's.
    */
   private vadRequested = false;
+  /** Rate-limit for the level trace. */
+  private lastLevelTraceMs = 0;
   private commandPending = false;
   private stopped = false;
   /** H5: sustained no-signal detection on the captured stream (§28.6). */
@@ -617,7 +620,26 @@ export class VoiceSessionPipeline {
       // reaches `speech_ended` and the driver turns it into a commit — a
       // healthy connection returning total silence looks identical to a broken
       // one, and this is the only place the difference is visible.
-      trace('vad', event.type);
+      /*
+       * The numbers, not just the event name.
+       *
+       * A take can connect perfectly and transcribe nothing, and the only
+       * difference between "the microphone is silent", "the speech gate is set
+       * too high" and "the noise floor was calibrated on the presenter's own
+       * voice" is three floats nobody could see. The gate is
+       * `max(minSpeechRms, noiseFloor * noiseFloorMargin)`, so a floor measured
+       * while someone was already speaking puts the threshold permanently
+       * above the voice it was measured from.
+       */
+      trace(
+        'vad',
+        event.type === 'calibrated'
+          ? `calibrated — noiseFloor ${event.noiseFloor.toFixed(4)}, gate ${Math.max(
+              DEFAULT_VAD_CONFIG.minSpeechRms,
+              event.noiseFloor * DEFAULT_VAD_CONFIG.noiseFloorMargin,
+            ).toFixed(4)}`
+          : event.type,
+      );
       this.commitDriver.handleVadEvent(event);
     });
     // H5: real captured audio is the precondition for the
@@ -626,6 +648,17 @@ export class VoiceSessionPipeline {
     // a mic that had gone dead mid-take was never detected.
     this.silentInput.reset();
     this.monitor.onLevel((snapshot) => {
+      // One line a second of what the microphone is actually delivering, so a
+      // silent take can be told apart from a gated one without guessing.
+      const nowMs = Date.now();
+      if (nowMs - this.lastLevelTraceMs > 1000) {
+        this.lastLevelTraceMs = nowMs;
+        trace(
+          'level',
+          `rms ${snapshot.rms.toFixed(4)} peak ${snapshot.peak.toFixed(4)} ` +
+            `signal ${snapshot.signalPresent} speaking ${snapshot.speaking}`,
+        );
+      }
       if (snapshot.signalPresent) {
         this.controller.noteAudioActivity();
         this.silentInput.reset();

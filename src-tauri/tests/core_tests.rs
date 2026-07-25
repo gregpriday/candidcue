@@ -1068,3 +1068,44 @@ async fn reconciliation_recovers_orphans_and_missing_files() {
         "Original."
     );
 }
+
+// ---------------------------------------------------------------------------
+// §44.6 secrets — the development escape hatch from the Keychain ACL
+// ---------------------------------------------------------------------------
+
+use candidcue_lib::secrets::{
+    dev_env_key_active, KeySource, OsSecretStore, SecretStore, DEV_KEY_ENV_VAR,
+};
+
+/// The store really does prefer the environment in a debug build, and it says
+/// so — `Environment`, not a `Keychain` label over a key that never came from
+/// there.
+///
+/// This test is careful never to reach the real Keychain: the override is
+/// asserted live BEFORE the store is asked anything, so a regression fails here
+/// instead of popping the macOS login prompt in front of whoever ran the suite.
+#[tokio::test]
+async fn a_debug_build_reads_the_key_from_the_environment_and_names_that_source() {
+    let restore = std::env::var(DEV_KEY_ENV_VAR).ok();
+    std::env::set_var(DEV_KEY_ENV_VAR, "sk-core-test-override-4d7e");
+    assert!(
+        dev_env_key_active(),
+        "the override must be live before the store is touched, or this test \
+         would fall through to the real credential store"
+    );
+
+    let described = OsSecretStore
+        .describe_openai_key()
+        .await
+        .expect("the environment path cannot fail")
+        .expect("a key is set");
+    assert_eq!(described.source, KeySource::Environment);
+    // The redacted tail, and nothing more: the value itself never leaves Rust.
+    assert_eq!(described.hint, "sk-…4d7e");
+    assert!(!described.hint.contains("override"));
+
+    match restore {
+        Some(value) => std::env::set_var(DEV_KEY_ENV_VAR, value),
+        None => std::env::remove_var(DEV_KEY_ENV_VAR),
+    }
+}

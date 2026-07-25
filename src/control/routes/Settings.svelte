@@ -201,6 +201,11 @@
       } else {
         keyNote = 'OpenAI rejected this key. Check that it is active and belongs to the project you intend to bill.';
       }
+    } catch (err) {
+      // Rust refuses the save outright when a development build is running with
+      // OPENAI_API_KEY set, and its message says so; showing it beats an
+      // unhandled rejection and a field that silently clears.
+      keyNote = describeError(err);
     } finally {
       keyField = ''; // one-shot: purge the plaintext after submission
       keyBusy = false;
@@ -208,9 +213,15 @@
   }
 
   async function removeKey(): Promise<void> {
+    // Removing the stored key does not — and cannot — unset an environment
+    // override, so promising that following will stop would be false whenever
+    // one is in play.
+    const fromEnvironment = keyStatus?.source === 'environment';
     const accepted = await requestConfirm({
       title: 'Remove OpenAI key?',
-      body: 'Voice tracking and smart analysis will stop until a key is added again. Your scripts are unaffected.',
+      body: fromEnvironment
+        ? 'This clears the key stored in your credential store. The OPENAI_API_KEY environment variable is outside CandidCue’s reach, so voice tracking will keep using it. Your scripts are unaffected.'
+        : 'Voice tracking and smart analysis will stop until a key is added again. Your scripts are unaffected.',
       confirmLabel: 'Remove key',
       danger: true,
     });
@@ -374,6 +385,14 @@
             {/if}
           {/snippet}
 
+          {#if keyStatus?.source === 'environment'}
+            <p class="hint-line">
+              This development build is using the key from the <code>OPENAI_API_KEY</code>
+              environment variable. It takes precedence over the credential store, so a key saved
+              here would have no effect until you unset it.
+            </p>
+          {/if}
+
           {#if keyStatus?.present}
             <div class="key-row">
               <span class="key-mask">••••••••{keyStatus.lastFour ?? '····'}</span>
@@ -384,7 +403,9 @@
                 <Button variant="danger" size="sm" onclick={() => removeKey()}>Remove</Button>
               </div>
             </div>
-            <p class="hint-line">To replace the key, enter a new one below. The stored key is never displayed.</p>
+            {#if keyStatus.source !== 'environment'}
+              <p class="hint-line">To replace the key, enter a new one below. The stored key is never displayed.</p>
+            {/if}
           {/if}
           <div class="key-form">
             <TextField

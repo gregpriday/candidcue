@@ -68,7 +68,7 @@ class MockState {
   scripts = new Map<string, MockScriptRecord>();
   settings: AppSettings = defaultAppSettings();
   /** Only redacted metadata is retained — never the key itself. */
-  keyStatus: OpenAiKeyStatus = { present: false, state: 'unknown' };
+  keyStatus: OpenAiKeyStatus = { present: false, state: 'unknown', source: 'none' };
   loaded = false;
 
   load(): void {
@@ -291,6 +291,9 @@ export const mockSecrets = {
       present: true,
       lastFour: candidateKey.trim().slice(-4),
       state: 'connected',
+      // The browser mock has no OS credential store and no environment
+      // override; it stands in for the packaged build's only source.
+      source: 'keychain',
       lastValidatedAt: nowIso(),
     };
     return { ...state.keyStatus };
@@ -299,7 +302,7 @@ export const mockSecrets = {
     return { ...state.keyStatus };
   },
   remove(): void {
-    state.keyStatus = { present: false, state: 'unknown' };
+    state.keyStatus = { present: false, state: 'unknown', source: 'none' };
   },
 };
 

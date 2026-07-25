@@ -46,7 +46,7 @@ const SCRIPT = {
     '## What is next\n\nWe ship the new onboarding in March.\n',
 };
 
-const READY_KEY = { present: true, state: 'valid' };
+const READY_KEY = { present: true, hint: 'sk-…live', source: 'keychain' };
 
 /** Library → Preflight → a started take, left on the Live screen. */
 async function startManualTake(page: Page): Promise<void> {
