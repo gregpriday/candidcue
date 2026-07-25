@@ -276,14 +276,32 @@ describe('stage closed (§62)', () => {
     expect(stage.publishStageDirective).toHaveBeenCalledTimes(1);
     expect(get(session).stageBlanked).toBe(true);
 
-    tauri.emitTo.mockClear();
     stage.publishStageDirective.mockClear();
     find(CONTROL_EVENT.stageClosed).at(-1)?.handler({ payload: { stageGeneration: 7 } });
-
     expect(get(session).stageAlive).toBe(false);
+
+    /*
+     * Settle BEFORE the baseline. Each heartbeat emits behind a dynamic
+     * import, so one already in flight when the stage closed lands afterwards
+     * — which is not the heartbeat still running, and clearing the spy first
+     * recorded it as though it were.
+     */
+    await flush();
+    tauri.emitTo.mockClear();
+
     await vi.advanceTimersByTimeAsync(5000);
     await flush();
-    expect(tauri.emitTo).not.toHaveBeenCalled(); // heartbeat stopped
+    /*
+     * The heartbeat specifically, not "nothing was emitted at all". A take now
+     * starts prompting the moment it starts, so the driver is producing motion
+     * frames on its own timer over these five seconds — which is the aligner
+     * working, not the heartbeat failing to stop. Asserting on every `emitTo`
+     * conflated the two.
+     */
+    const heartbeats = tauri.emitTo.mock.calls.filter(
+      (call) => (call as unknown as [string, string])[1] === STAGE_EVENT.heartbeat,
+    );
+    expect(heartbeats).toEqual([]);
 
     // The quick-control no longer publishes into the void, and the UI state
     // does not pretend the stage changed.
@@ -352,6 +370,14 @@ describe('listener media failures (§40.5)', () => {
     start(7, listenerSelection());
     await completeBridge();
     stage.publishListenerState.mockClear();
+    /*
+     * A running take publishes snapshots and directives of its own accord now
+     * that starting one starts prompting. These tests are about what the
+     * LISTENER-failure path does, so the baseline is "a take is already
+     * running" — otherwise they assert that following does not happen.
+     */
+    stage.publishStageSnapshot.mockClear();
+    stage.publishStageDirective.mockClear();
   }
 
   it('surfaces a media failure instead of discarding it', async () => {

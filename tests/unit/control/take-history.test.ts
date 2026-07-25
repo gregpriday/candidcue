@@ -56,6 +56,11 @@ const driver = vi.hoisted(() => {
     createTrackingDriver: vi.fn((deps: { onSnapshot: (s: unknown) => void }) => {
       captured.onSnapshot = deps.onSnapshot;
       return {
+        // Starting a take now starts prompting, so the fake needs the whole
+        // `TrackingDriver` surface rather than the half this file happened to
+        // exercise. A fake that is missing a method the store calls fails as
+        // `driver?.start is not a function`, which reads like a store bug.
+        start: vi.fn(),
         feedTranscript: vi.fn(),
         maskItems: vi.fn(),
         releaseItems: vi.fn(),

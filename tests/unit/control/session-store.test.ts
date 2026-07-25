@@ -40,12 +40,25 @@ afterEach(() => {
 });
 
 describe('live session store', () => {
-  it('starts inactive-prompting and waits for Start (§9.1)', () => {
+  /*
+   * This test used to assert the opposite, under §9.1 "hold position until the
+   * user explicitly starts prompting" — and in doing so it certified the worst
+   * bug this project has shipped as intended behaviour.
+   *
+   * `Present` opened the stage, claimed the microphone and transcribed speech
+   * while the aligner sat paused behind a second button called `Start`, so four
+   * consecutive takes reported "0 of 26 words (0%)" beside a live word count.
+   * Starting a take is starting to prompt; `Pause` is how a presenter stops.
+   */
+  it('starts prompting, because Present is the start (§9.1)', () => {
     start();
     const s = get(session);
     expect(s.active).toBe(true);
-    expect(s.prompting).toBe(false);
-    expect(get(liveStatusLabel)).toBe('Ready to start');
+    expect(s.prompting).toBe(true);
+    expect(s.paused).toBe('none');
+    // The driver reports `following` as soon as it is started, so the status
+    // line says so — rather than "Ready to start" over a live microphone.
+    expect(get(liveStatusLabel)).toBe('Following');
   });
 
   it('follows after Start and produces snapshots + transcript tail', () => {
@@ -67,8 +80,10 @@ describe('live session store', () => {
    */
   it('a manual take never claims a microphone or a wake word (F.11)', () => {
     start('manual');
-    expect(get(liveStatusLabel)).toBe('Ready to start');
-    startPrompting();
+    // A manual take prompts from the off too — the driver's construction-time
+    // pause is not a mode distinction, and a scroll-driven take that ignores
+    // the scroll is the same defect wearing a different hat.
+    expect(get(liveStatusLabel)).toBe('Following');
     pauseListening();
     expect(get(session).paused).toBe('listening');
     expect(get(liveStatusLabel)).toBe('Paused — the script stays where it is');
@@ -102,9 +117,11 @@ describe('live session store', () => {
     expect(get(liveStatusLabel)).toBe('Hard paused — microphone off');
   });
 
-  it('space-bar semantics: start, then pause, then resume', () => {
+  it('space-bar semantics: a take is already running, so space pauses first', () => {
     start();
-    togglePlayPause();
+    // The take starts prompting, so the first press is a pause — there is no
+    // "start" left to perform. `togglePlayPause` still handles a non-prompting
+    // session, which is reachable through a driver rebuild.
     expect(get(session).prompting).toBe(true);
     togglePlayPause();
     expect(get(session).paused).toBe('listening');

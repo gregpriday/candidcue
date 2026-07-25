@@ -588,6 +588,28 @@ export function startLiveSession(input: StartSessionInput): string {
     },
   });
 
+  /*
+   * Starting a take IS starting to prompt.
+   *
+   * The worker driver pauses the aligner the instant it is built — §9.1, "hold
+   * position until the user explicitly starts prompting" — and a paused engine
+   * discards every transcript event before it looks at a token. Nothing on the
+   * take path ever resumed it. Only the `Start` button in the Live transport
+   * bar did, and a presenter who has just pressed `Present`, watched the stage
+   * open and begun speaking has no reason to believe a second, differently
+   * named button stands between them and a teleprompter that follows.
+   *
+   * What that cost: the microphone recorded, the provider transcribed, the
+   * ledger filled, "Words heard: 26" counted up — and every one of those words
+   * was dropped on the floor. "0 of 26 words (0%)", four takes running, with a
+   * summary card that showed the evidence and the result side by side and no
+   * hint of what sat between them.
+   *
+   * The explicit start survives as `Pause`, which is the control a presenter
+   * actually reaches for. `Present` is the start.
+   */
+  startPrompting();
+
   // Voice pipeline: realtime transcription + command routing (§29, §33).
   if (input.mode === 'voice' && input.compiled && isTauriRuntime()) {
     pipeline = new VoiceSessionPipeline({
