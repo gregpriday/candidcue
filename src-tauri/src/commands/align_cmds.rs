@@ -9,6 +9,7 @@
 
 use crate::align::{AlignToken, AlignmentState};
 use crate::errors::AppError;
+use crate::inworld::InworldClient;
 
 /// Begin aligning against a compiled script.
 ///
@@ -17,6 +18,7 @@ use crate::errors::AppError;
 #[tauri::command]
 pub async fn start_alignment(
     state: tauri::State<'_, AlignmentState>,
+    inworld: tauri::State<'_, InworldClient>,
     generation: u64,
     tokens: Vec<AlignToken>,
 ) -> Result<(), AppError> {
@@ -25,7 +27,11 @@ pub async fn start_alignment(
             "cannot align against a script with no spoken tokens",
         ));
     }
-    state.start(generation, &tokens);
+    // `generation` is the take's SESSION generation — a label, echoed onto
+    // every snapshot. What the engine FILTERS frames on is the socket, which
+    // Rust owns; seeding it here covers the case where the stream started
+    // first, and `bind_stream` covers the case where it starts second.
+    state.start_bound(generation, inworld.current_generation(), &tokens);
     Ok(())
 }
 

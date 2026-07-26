@@ -116,8 +116,36 @@ pub struct AlignmentSnapshot {
 }
 
 /// A running alignment session.
+///
+/// ---------------------------------------------------------------------------
+/// TWO GENERATIONS, AND THEY ARE NOT THE SAME NUMBER
+/// ---------------------------------------------------------------------------
+/// This is the trap that has now cost two rewrites, so it is spelled out here
+/// rather than left to be rediscovered:
+///
+///   * `label` is the SESSION generation — the coordinator's count of takes.
+///     Control assigns it, both webviews already know it, and it is stamped on
+///     every snapshot purely so consumers can tell one take's output from
+///     another's. Nothing is filtered on it here.
+///
+///   * `stream_generation` is the TRANSCRIPTION generation — Rust's own count
+///     of Inworld sockets, minted by `InworldClient::start_stream`. This is
+///     what a frame carries, and therefore the only thing a frame may be
+///     filtered against.
+///
+/// They are unrelated counters and they routinely disagree: the Preflight
+/// microphone test consumes socket generation 1, so the first real take runs on
+/// socket 2 while the coordinator is still on session 1. Comparing a frame's
+/// socket number against the take's session number therefore discards every
+/// word over a connection reporting perfect health — words heard, nothing
+/// followed, no error anywhere.
 struct AlignmentSession {
-    generation: u64,
+    /// Echoed onto every snapshot as `session_generation`. Never a filter.
+    label: u64,
+    /// The socket whose frames this engine will accept, once one is bound.
+    /// `None` until a stream starts, and an unbound session follows nothing —
+    /// which is correct: there is no audio yet to follow.
+    stream_generation: Option<u64>,
     engine: Engine,
     /// Last audio-clock reading the engine was given. Manual moves that arrive
     /// between transcript frames are stamped with it, so a move is never dated
@@ -135,12 +163,29 @@ impl AlignmentState {
         Self::default()
     }
 
-    /// Compile `tokens` and begin aligning against them.
+    /// Compile `tokens` and arm the engine against them.
+    ///
+    /// `label` is the take's SESSION generation — an identity echoed onto every
+    /// snapshot, never a filter (see [`AlignmentSession`]). The session starts
+    /// UNBOUND: it follows nothing until [`AlignmentState::bind_stream`] ties
+    /// it to the socket that will feed it.
     ///
     /// Replaces any session already running: a new take supersedes the old one,
     /// and keeping the previous engine alive would let speech from before the
     /// change drag the cursor.
-    pub fn start(&self, generation: u64, tokens: &[AlignToken]) {
+    pub fn start(&self, label: u64, tokens: &[AlignToken]) {
+        self.start_bound(label, None, tokens);
+    }
+
+    /// Arm the engine, optionally already bound to a live socket.
+    ///
+    /// `stream_generation` is `Some` when a transcription stream is ALREADY
+    /// running as the take arms. That happens because both calls are async IPC
+    /// and their landing order is not guaranteed: if the socket wins the race,
+    /// `bind_stream` has already fired against no session and would never fire
+    /// again. Seeding here is what makes the binding order-independent — and a
+    /// later `bind_stream` still supersedes it, so a stale seed cannot stick.
+    pub fn start_bound(&self, label: u64, stream_generation: Option<u64>, tokens: &[AlignToken]) {
         let inputs: Vec<TokenInput> = tokens
             .iter()
             .map(|t| TokenInput {
@@ -152,19 +197,41 @@ impl AlignmentState {
         let script = cc_align::compile_tokens(&inputs);
         let engine = Engine::new(script, AlignmentConfig::default());
         *self.lock() = Some(AlignmentSession {
-            generation,
+            label,
+            stream_generation,
             engine,
             last_audio_ms: 0.0,
         });
+    }
+
+    /// Tie the armed session to the transcription socket now feeding it.
+    ///
+    /// Called by `InworldClient::start_stream` at the moment a generation is
+    /// minted, which is the only place that number exists — asking the frontend
+    /// for it would be asking it to guess, and the guess it made was the
+    /// session generation.
+    ///
+    /// Binding BEFORE the socket task is spawned is what makes this exact: no
+    /// frame of the new stream can arrive first, and the previous stream's
+    /// frames stop being accepted the instant its successor exists.
+    pub fn bind_stream(&self, generation: u64) {
+        if let Some(session) = self.lock().as_mut() {
+            session.stream_generation = Some(generation);
+        }
     }
 
     pub fn stop(&self) {
         *self.lock() = None;
     }
 
-    /// The generation currently being aligned, if any.
-    pub fn generation(&self) -> Option<u64> {
-        self.lock().as_ref().map(|s| s.generation)
+    /// The take label currently being aligned, if any.
+    pub fn label(&self) -> Option<u64> {
+        self.lock().as_ref().map(|s| s.label)
+    }
+
+    /// The socket this session accepts frames from, if one is bound.
+    pub fn bound_stream(&self) -> Option<u64> {
+        self.lock().as_ref().and_then(|s| s.stream_generation)
     }
 
     /// A poisoned alignment mutex must not take the app down: the panic that
@@ -184,6 +251,8 @@ impl AlignmentState {
     fn observe(&self, frame: &SttFrame, audio_now_ms: f64) -> Option<AlignmentSnapshot> {
         let mut guard = self.lock();
         let session = guard.as_mut()?;
+        // The SOCKET's number, not the take's. See `AlignmentSession`.
+        let bound = session.stream_generation?;
 
         let event = match frame {
             SttFrame::ItemStarted {
@@ -191,7 +260,7 @@ impl AlignmentState {
                 item_id,
                 audio_start_ms,
                 ..
-            } if *generation == session.generation => SessionEvent::ItemStarted {
+            } if *generation == bound => SessionEvent::ItemStarted {
                 item_id: item_id.clone(),
                 audio_start_ms: *audio_start_ms,
             },
@@ -199,7 +268,7 @@ impl AlignmentState {
                 generation,
                 item_id,
                 text,
-            } if *generation == session.generation => SessionEvent::Partial {
+            } if *generation == bound => SessionEvent::Partial {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_ms: audio_now_ms,
@@ -209,7 +278,7 @@ impl AlignmentState {
                 item_id,
                 text,
                 audio_end_ms,
-            } if *generation == session.generation => SessionEvent::Final {
+            } if *generation == bound => SessionEvent::Final {
                 item_id: item_id.clone(),
                 text: text.clone(),
                 audio_end_ms: *audio_end_ms,
@@ -221,7 +290,7 @@ impl AlignmentState {
 
         session.last_audio_ms = audio_now_ms.max(session.last_audio_ms);
         let snapshot = session.engine.handle(event);
-        Some(project(&snapshot, &session.engine, session.generation))
+        Some(project(&snapshot, &session.engine, session.label))
     }
 
     /// "I am here" — a tapped paragraph or a jump-to-section — published to
@@ -245,7 +314,7 @@ impl AlignmentState {
         let atom = session.engine.script.atom_at(token).round().max(0.0);
         let at = session.last_audio_ms;
         let snapshot = session.engine.set_manual_position(atom as u32, at);
-        Some(project(&snapshot, &session.engine, session.generation))
+        Some(project(&snapshot, &session.engine, session.label))
     }
 
     /// "This is what I can see." A prior on candidate ranking, never a command:
@@ -261,7 +330,17 @@ impl AlignmentState {
             return;
         }
         let first = session.engine.script.atom_at(first_token).floor().max(0.0) as u32;
-        let last = session.engine.script.atom_at(last_token).ceil().max(0.0) as u32;
+        // `last_token` is INCLUSIVE — the stage reports the last token it can
+        // see — so the visible range ends at that token's far edge, not its
+        // near one. Mapping the near edge drops the tail of any multi-atom
+        // token, and a long hyphenated compound at the bottom of the screen
+        // would then read as off-screen.
+        let last = session
+            .engine
+            .script
+            .atom_at(last_token + 1.0)
+            .ceil()
+            .max(0.0) as u32;
         session.engine.set_viewport_hint(first, last);
     }
 
@@ -286,9 +365,25 @@ fn project(snapshot: &Snapshot, engine: &Engine, generation: u64) -> AlignmentSn
     let observed_token = script.token_at(snapshot.observed);
     let horizon_seconds = snapshot.max_prediction_ms / 1000.0;
     let rate_tokens_per_second = if snapshot.rate > 0.0 && horizon_seconds > 0.0 {
-        let far_atom =
-            (snapshot.observed + snapshot.rate * horizon_seconds).min(snapshot.script_len);
-        (script.token_at(far_atom) - observed_token) / horizon_seconds
+        /*
+         * Divide by the time the engine would ACTUALLY take to cover the
+         * distance, not by the whole horizon.
+         *
+         * Near the end of the script the far endpoint clamps to `script_len`,
+         * and dividing that shortened distance by the full horizon reports a
+         * rate far below the truth: at 2 atoms/s with one atom left and a 2 s
+         * horizon it says 0.5 tokens/s, so the display crawls the last word
+         * over four times as long as the reader takes to say it. Clamping the
+         * TIME as well keeps the endpoint and the pace honest together.
+         */
+        let unclamped_far = snapshot.observed + snapshot.rate * horizon_seconds;
+        let far_atom = unclamped_far.min(snapshot.script_len);
+        let seconds = if unclamped_far > snapshot.script_len {
+            ((snapshot.script_len - snapshot.observed) / snapshot.rate).max(f64::EPSILON)
+        } else {
+            horizon_seconds
+        };
+        (script.token_at(far_atom) - observed_token) / seconds
     } else {
         // Already zeroed by the engine whenever extrapolating would be a guess.
         0.0
@@ -359,6 +454,18 @@ fn publish<R: tauri::Runtime>(app: &tauri::AppHandle<R>, snapshot: &AlignmentSna
     let _ = app.emit_to(CONTROL_LABEL, events::ALIGN_SNAPSHOT, snapshot);
 }
 
+/// Tie the armed alignment session to a newly minted transcription socket.
+///
+/// Called from `InworldClient::start_stream`, which is where the generation
+/// comes into existence. `try_state` rather than `state`: a runtime that never
+/// managed an `AlignmentState` (a Rust integration test standing up the stream
+/// alone) must not panic here — it simply has no alignment to bind.
+pub fn bind_stream_generation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, generation: u64) {
+    if let Some(state) = app.try_state::<AlignmentState>() {
+        state.bind_stream(generation);
+    }
+}
+
 /// The single hook the Inworld stream calls. Called only for transcript frames,
 /// with the audio clock read at arrival.
 pub fn observe_frame<R: tauri::Runtime>(
@@ -387,7 +494,7 @@ pub struct ViewportHint {
 }
 
 pub fn apply_viewport_hint(state: &AlignmentState, hint: &ViewportHint) {
-    if state.generation() != Some(hint.session_generation) {
+    if state.label() != Some(hint.session_generation) {
         return;
     }
     if hint.cleared {
@@ -423,6 +530,7 @@ mod tests {
     fn a_session_follows_speech_into_token_space() {
         let state = AlignmentState::new();
         state.start(7, &tokens(SCRIPT));
+        state.bind_stream(7);
 
         let heard = "good morning everyone and welcome to the quarterly review";
         let snapshot = state
@@ -453,9 +561,10 @@ mod tests {
     /// this is the check that keeps the tail of a stopped take out of the next
     /// one's alignment.
     #[test]
-    fn frames_from_another_generation_are_ignored() {
+    fn frames_from_another_socket_are_ignored() {
         let state = AlignmentState::new();
-        state.start(2, &tokens(SCRIPT));
+        state.start(1, &tokens(SCRIPT));
+        state.bind_stream(2);
         let stale = state.observe(
             &SttFrame::Final {
                 generation: 1,
@@ -468,10 +577,125 @@ mod tests {
         assert!(stale.is_none());
     }
 
+    /// THE REGRESSION THIS FILE EXISTS FOR.
+    ///
+    /// The take's session generation and the socket's generation are unrelated
+    /// counters, and they disagree the moment Preflight's microphone test has
+    /// consumed a socket. Filtering frames on the session number therefore
+    /// dropped every word of every take, over a connection reporting perfect
+    /// health — "words heard 28, script followed 0 of 26", with nothing
+    /// anywhere reporting an error.
+    #[test]
+    fn a_take_follows_when_its_label_and_its_socket_disagree() {
+        let state = AlignmentState::new();
+        // Session 1 (the first take) on socket 2 (Preflight took socket 1).
+        state.start(1, &tokens(SCRIPT));
+        state.bind_stream(2);
+
+        let snapshot = state
+            .observe(
+                &SttFrame::Final {
+                    generation: 2,
+                    item_id: "2-0".into(),
+                    text: "good morning everyone and welcome".into(),
+                    audio_end_ms: 2_000.0,
+                },
+                2_000.0,
+            )
+            .expect("a frame from the BOUND socket must reach the engine");
+
+        assert_eq!(snapshot.state, "following");
+        assert!(
+            snapshot.observed_token > 0.0,
+            "the cursor never moved: {} tokens",
+            snapshot.observed_token,
+        );
+        // And the snapshot is labelled with the TAKE, which is the identity
+        // both webviews already know.
+        assert_eq!(snapshot.session_generation, 1);
+    }
+
+    /// An armed-but-unbound session follows nothing. There is no socket, so
+    /// there is no audio — accepting a frame here would mean accepting one from
+    /// a stream this take has nothing to do with.
+    #[test]
+    fn an_unbound_session_accepts_nothing() {
+        let state = AlignmentState::new();
+        state.start(1, &tokens(SCRIPT));
+        assert_eq!(state.bound_stream(), None);
+        assert!(state
+            .observe(
+                &SttFrame::Final {
+                    generation: 1,
+                    item_id: "1-0".into(),
+                    text: "good morning everyone".into(),
+                    audio_end_ms: 900.0,
+                },
+                900.0,
+            )
+            .is_none());
+    }
+
+    /// The socket won the race: the stream was already running when the take
+    /// armed, so `bind_stream` fired against no session and will never fire
+    /// again. Seeding at arm time is what keeps that ordering from silently
+    /// costing the whole take.
+    #[test]
+    fn a_session_armed_after_its_socket_still_follows() {
+        let state = AlignmentState::new();
+        state.start_bound(1, Some(2), &tokens(SCRIPT));
+        assert_eq!(state.bound_stream(), Some(2));
+        assert!(state
+            .observe(
+                &SttFrame::Final {
+                    generation: 2,
+                    item_id: "2-0".into(),
+                    text: "good morning everyone".into(),
+                    audio_end_ms: 900.0,
+                },
+                900.0,
+            )
+            .is_some());
+    }
+
+    /// A reconnect keeps the same socket generation, so following survives it;
+    /// a NEW socket rebinds, and the old one stops being heard.
+    #[test]
+    fn rebinding_supersedes_the_previous_socket() {
+        let state = AlignmentState::new();
+        state.start(1, &tokens(SCRIPT));
+        state.bind_stream(2);
+        state.bind_stream(3);
+        assert_eq!(state.bound_stream(), Some(3));
+        assert!(state
+            .observe(
+                &SttFrame::Final {
+                    generation: 2,
+                    item_id: "2-0".into(),
+                    text: "good morning".into(),
+                    audio_end_ms: 500.0,
+                },
+                500.0,
+            )
+            .is_none());
+        assert!(state
+            .observe(
+                &SttFrame::Final {
+                    generation: 3,
+                    item_id: "3-0".into(),
+                    text: "good morning".into(),
+                    audio_end_ms: 500.0,
+                },
+                500.0,
+            )
+            .is_some());
+    }
+
     #[test]
     fn transport_frames_never_feed_the_engine() {
         let state = AlignmentState::new();
         state.start(1, &tokens(SCRIPT));
+        state.bind_stream(1);
         assert!(state
             .observe(
                 &SttFrame::Transport {
@@ -514,6 +738,7 @@ mod tests {
     fn manual_position_moves_the_cursor_and_reports_it() {
         let state = AlignmentState::new();
         state.start(1, &tokens(SCRIPT));
+        state.bind_stream(1);
         let snapshot = state.set_position(12.0).expect("session is running");
         assert_eq!(snapshot.decision, "manualAnchor");
         assert!(
@@ -531,6 +756,7 @@ mod tests {
         let state = AlignmentState::new();
         let script = tokens(&["We", "raised", "$12", "million", "last", "year", "in", "total"]);
         state.start(1, &script);
+        state.bind_stream(1);
 
         let snapshot = state
             .observe(
@@ -560,6 +786,7 @@ mod tests {
     fn projected_rate_stays_within_the_prediction_horizon() {
         let state = AlignmentState::new();
         state.start(1, &tokens(SCRIPT));
+        state.bind_stream(1);
         for (i, text) in [
             "good morning",
             "good morning everyone and",
@@ -593,10 +820,49 @@ mod tests {
         }
     }
 
+    /// The rate must describe how fast the reader is actually moving, even when
+    /// the prediction horizon runs off the end of the script. Dividing a
+    /// clamped distance by the full horizon reports a crawl.
+    #[test]
+    fn the_rate_stays_honest_at_the_end_of_the_script() {
+        let state = AlignmentState::new();
+        state.start(1, &tokens(SCRIPT));
+        state.bind_stream(1);
+
+        // Read the whole script, so the engine is at the end with a live rate.
+        let heard = SCRIPT.join(" ").to_lowercase();
+        let snapshot = state
+            .observe(
+                &SttFrame::Final {
+                    generation: 1,
+                    item_id: "1-0".into(),
+                    text: heard,
+                    audio_end_ms: 7_000.0,
+                },
+                7_000.0,
+            )
+            .expect("session is running");
+
+        if snapshot.rate_tokens_per_second > 0.0 {
+            // Whatever remains of the script, the reported pace must still be a
+            // plausible reading pace rather than an artefact of the clamp.
+            assert!(
+                snapshot.rate_tokens_per_second > 0.5,
+                "rate collapsed to {} tokens/s at the end of the script",
+                snapshot.rate_tokens_per_second
+            );
+        }
+        // And the prediction still cannot run past the end.
+        let reach = snapshot.observed_token
+            + snapshot.rate_tokens_per_second * snapshot.max_prediction_ms / 1000.0;
+        assert!(reach <= snapshot.script_len_tokens + 1e-9);
+    }
+
     #[test]
     fn viewport_hints_are_scoped_to_their_session() {
         let state = AlignmentState::new();
         state.start(4, &tokens(SCRIPT));
+        state.bind_stream(4);
 
         // A hint for a session that is not running is ignored outright.
         apply_viewport_hint(
@@ -631,15 +897,20 @@ mod tests {
         // total, and a nonsense range clears rather than poisons the prior.
         state.set_viewport(f64::NAN, 3.0);
         state.set_viewport(9.0, 2.0);
-        assert_eq!(state.generation(), Some(4));
+        assert_eq!(state.label(), Some(4));
     }
 
     #[test]
     fn starting_a_new_session_replaces_the_old_engine() {
         let state = AlignmentState::new();
         state.start(1, &tokens(SCRIPT));
+        state.bind_stream(1);
         state.start(2, &tokens(&["completely", "different", "script", "text"]));
-        assert_eq!(state.generation(), Some(2));
+        // A new take arms UNBOUND: the previous socket binding must not carry
+        // over, or the new engine would start listening to the old take.
+        assert_eq!(state.bound_stream(), None);
+        state.bind_stream(2);
+        assert_eq!(state.label(), Some(2));
         let snapshot = state
             .observe(
                 &SttFrame::Final {
@@ -653,7 +924,7 @@ mod tests {
             .expect("the new session is live");
         assert_eq!(snapshot.script_len_tokens, 4.0);
         state.stop();
-        assert_eq!(state.generation(), None);
+        assert_eq!(state.label(), None);
     }
 }
 
@@ -768,6 +1039,7 @@ mod starter_script_tests {
 
         let state = AlignmentState::new();
         state.start(1, &tokens);
+        state.bind_stream(1);
         let snapshot = replay(&state, TAKE);
 
         assert_eq!(snapshot.state, "following");
@@ -789,6 +1061,7 @@ mod starter_script_tests {
     fn the_first_sentence_commits_before_the_second_is_spoken() {
         let state = AlignmentState::new();
         state.start(1, &starter_tokens());
+        state.bind_stream(1);
         let snapshot = replay(&state, &TAKE[..1]);
 
         assert!(
@@ -809,6 +1082,7 @@ mod starter_script_tests {
     fn partials_advance_the_observed_position_before_any_final() {
         let state = AlignmentState::new();
         state.start(1, &starter_tokens());
+        state.bind_stream(1);
 
         let early = state
             .observe(

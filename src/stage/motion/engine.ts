@@ -261,13 +261,34 @@ const RELOCATION_MIN_TOKENS = 6;
 const RELOCATION_TTL_MS = 1500;
 
 /**
+ * How far back a retake may be FLOWN rather than stepped, in tokens.
+ *
+ * A `rewind` is ordinary motion under a backward-capable profile, and ordinary
+ * backward motion is hard-capped at `reverseTravelMaxPx` (420 px by default,
+ * about a third of a screen) precisely so a rewind can never run away. That cap
+ * makes a rewind the wrong shape for a DISTANT retake: the plant creeps back
+ * its 420 px, the directive expires, and forward-only following resumes with
+ * the presenter still thousands of pixels from where they restarted — stranded,
+ * with nothing left that can carry them there.
+ *
+ * So distance decides. Close enough to walk back inside the reverse-travel
+ * budget: `rewind`, and the presenter watches the script return to them. Beyond
+ * it: `reanchor`, which is a single obscured step and is the only thing that
+ * actually arrives. Twelve tokens is roughly a rendered line at the default
+ * sizes — comfortably inside 420 px, and well past the ±2-token accuracy the
+ * engine benchmarks at.
+ */
+const REWIND_MAX_TOKENS = 12;
+
+/**
  * How the stage animates each kind of accepted discontinuity.
  *
- * `retakeAccepted` is a `rewind` rather than a `reanchor` because backward
- * motion over a short distance still reads as reading — the presenter watches
- * the script walk back to where they restarted. A forward jump has no such
- * reading to show: the text between is not being spoken, so flying through it
- * at speed is a spectacle rather than information, and `catch_up` bounds it.
+ * A short `retakeAccepted` is a `rewind` because backward motion over a short
+ * distance still reads as reading — the presenter watches the script walk back
+ * to where they restarted. A long one becomes a `reanchor` (see
+ * `REWIND_MAX_TOKENS`). A forward jump has no such reading to show: the text
+ * between is not being spoken, so flying through it at speed is a spectacle
+ * rather than information, and `catch_up` bounds it.
  */
 const RELOCATION_SHAPE: Record<
   'relocationAccepted' | 'jumpForwardAccepted' | 'retakeAccepted' | 'manualAnchor',
@@ -311,10 +332,15 @@ export function relocationDirectiveFor(
   // make a short jump-to-section silently do nothing.
   if (shape.authority !== 'manual' && distance < RELOCATION_MIN_TOKENS) return null;
 
+  // A retake further back than ordinary reverse motion can carry has to be a
+  // step, not a walk — see `REWIND_MAX_TOKENS`.
+  const type: StageTransitionDirective['type'] =
+    shape.type === 'rewind' && distance > REWIND_MAX_TOKENS ? 'reanchor' : shape.type;
+
   // A catch-up runs until §30.3's duration cap retires it; everything else is
   // a single step that either lands promptly or should be forgotten.
   const ttlMs =
-    shape.type === 'catch_up'
+    type === 'catch_up'
       ? Math.max(RELOCATION_TTL_MS, profile.motion.catchUpMaxDurationMs + profile.motion.catchUpReleaseMs)
       : RELOCATION_TTL_MS;
 
@@ -322,7 +348,7 @@ export function relocationDirectiveFor(
     // Keyed on `seq`, so the idempotency check in the transition controller
     // collapses a re-delivered snapshot instead of re-running the motion.
     id: `align-${snapshot.sessionGeneration}-${snapshot.seq}`,
-    type: shape.type,
+    type,
     authority: shape.authority,
     fromUnit: from,
     toUnit: snapshot.observedToken,
@@ -749,7 +775,25 @@ export function createStageMotionEngine(
       // whose position moved a long way. It cannot issue a motion directive —
       // it has no notion of a pixel — so the classification happens here, and
       // only here, on the way in.
-      const directive = relocationDirectiveFor(accepted, previousDisplayToken, nowMs, profile);
+      /*
+       * Measured from where the display actually IS, not from the previous
+       * reported position.
+       *
+       * The presenter experiences the size of the jump on the glass, and
+       * prediction has usually carried the display some way past the last
+       * reported token by the time the next snapshot lands. Measuring from the
+       * stale report understates a backward move and overstates a forward one —
+       * a retake of ten visible words gets gated away as five, and a one-word
+       * forward correction gets animated as six.
+       *
+       * Before the first frame there is no display position; the snapshot's own
+       * position is then the only honest `from`, and a discontinuity the engine
+       * accepted is still worth flying rather than dropping — so a manual move
+       * (which has no distance gate) survives, and an ordinary one waits for the
+       * next snapshot, by which time there is a display to measure against.
+       */
+      const from = lastDisplayToken ?? previousDisplayToken;
+      const directive = relocationDirectiveFor(accepted, from, nowMs, profile);
       if (directive) transitions.submit(directive, nowMs);
       previousDisplayToken = accepted.observedToken;
       return true;

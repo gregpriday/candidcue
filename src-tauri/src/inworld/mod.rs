@@ -184,6 +184,18 @@ impl InworldClient {
         }
     }
 
+    /// The generation of the stream currently running, if any.
+    ///
+    /// Exists so an alignment session armed AFTER its socket can still bind to
+    /// it. Both are async IPC calls from the frontend and their landing order
+    /// is not guaranteed, so binding cannot rely on one arriving first.
+    pub fn current_generation(&self) -> Option<u64> {
+        self.session
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|handle| handle.generation))
+    }
+
     /// Try the key against the sync endpoint and report what happened.
     ///
     /// A real round-trip rather than a shape check: the failure this guards
@@ -238,6 +250,23 @@ impl InworldClient {
         let generation = self
             .next_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        /*
+         * Bind the alignment engine to THIS socket, before the task that reads
+         * it is spawned.
+         *
+         * The generation exists nowhere else — it is minted here and stamped on
+         * every frame — so this is the only place that can tie the two
+         * together. Asking the frontend for it would be asking it to guess, and
+         * the guess it made was the SESSION generation: an unrelated counter
+         * that routinely disagrees (Preflight's microphone test consumes socket
+         * 1, so the first real take runs on socket 2 while the coordinator is
+         * still on session 1). Every frame was then dropped on a connection
+         * reporting perfect health.
+         *
+         * Before the spawn, so no frame of the new stream can arrive ahead of
+         * the binding.
+         */
+        crate::align::bind_stream_generation(&app, generation);
         let handle = stream::SessionHandle::spawn(app, generation, key, config);
         let previous = self
             .session

@@ -20,11 +20,25 @@
  * makes no difference at all, because the horizon is clamped and the display
  * stops advancing either way.
  *
- * The offset is taken as the MINIMUM observed sample rather than the latest.
- * Each sample is `trueOffset + deliveryDelay`, and delivery delay is never
- * negative, so the samples have a hard floor and the minimum converges onto it
- * instead of tracking whichever snapshot happened to cross the window boundary
- * slowest.
+ * THE ESTIMATOR, AND THE SIGN THAT WAS WRONG
+ * ---------------------------------------------------------------------------
+ * A snapshot produced at audio time `A` reaches the stage at wall time
+ * `w = (A - trueOffset) + deliveryDelay`, so
+ *
+ *     sample = A - w = trueOffset - deliveryDelay
+ *
+ * Delivery delay is never negative, which puts a CEILING on the samples, not a
+ * floor: the best sample is the largest one. This used to take the lifetime
+ * MINIMUM on the stated reasoning that delay pushed samples up — it pushes them
+ * down — so one slow delivery pinned the clock behind for the rest of the take.
+ * A single 1 s stall left the display permanently ~3 words late, and nothing
+ * recovered it because a lifetime minimum only ever falls.
+ *
+ * So: the maximum, over a bounded WINDOW rather than the whole session. A
+ * lifetime maximum has the mirror-image failure — the offset legitimately falls
+ * when capture stalls and the audio clock stops while wall time does not, and a
+ * lifetime maximum would keep predicting from a moment the session never
+ * reached. A window recovers from both.
  *
  * ---------------------------------------------------------------------------
  * THE STAGE DOES NOT TRUST WHAT IT IS SENT
@@ -87,12 +101,26 @@ function emptyStats(): AlignmentReceiverStats {
   };
 }
 
+/**
+ * How much history the clock estimate considers.
+ *
+ * Long enough to span several snapshots (they arrive ~1/s) so one slow delivery
+ * is outvoted; short enough that a genuine change in the audio-to-wall
+ * relationship — a capture stall — is forgotten within a few seconds rather
+ * than held for the rest of the take.
+ */
+const CLOCK_WINDOW_MS = 8_000;
+
 export function createAlignmentReceiver(sessionGeneration = 0): AlignmentReceiver {
   let generation = sessionGeneration;
   let current: AlignmentSnapshot | null = null;
   let receivedAtMs: number | null = null;
-  /** audioMs − wallMs, the minimum sample seen this session. */
-  let clockOffsetMs: number | null = null;
+  /**
+   * Recent `audioMs − wallMs` samples, newest last. The estimate is their
+   * maximum; the window is what lets it come back down when the audio clock
+   * genuinely falls behind wall time.
+   */
+  let offsetSamples: Array<{ atMs: number; offsetMs: number }> = [];
   const stats = emptyStats();
 
   function reject(reason: SnapshotRejectReason, field?: string): SnapshotAcceptance {
@@ -132,14 +160,23 @@ export function createAlignmentReceiver(sessionGeneration = 0): AlignmentReceive
       stats.lastAcceptedAtMs = nowMs;
       stats.lastSeq = snapshot.seq;
 
-      const sample = snapshot.atAudioMs - nowMs;
-      clockOffsetMs = clockOffsetMs === null ? sample : Math.min(clockOffsetMs, sample);
+      offsetSamples.push({ atMs: nowMs, offsetMs: snapshot.atAudioMs - nowMs });
+      const cutoff = nowMs - CLOCK_WINDOW_MS;
+      // Always keep the newest sample, however old the window makes it look:
+      // a feed quieter than the window is still the only evidence there is.
+      while (offsetSamples.length > 1 && offsetSamples[0]!.atMs < cutoff) {
+        offsetSamples.shift();
+      }
       return { accepted: true };
     },
 
     audioNowMs(nowMs) {
-      if (clockOffsetMs === null) return null;
-      return nowMs + clockOffsetMs;
+      if (offsetSamples.length === 0) return null;
+      let best = offsetSamples[0]!.offsetMs;
+      for (const sample of offsetSamples) {
+        if (sample.offsetMs > best) best = sample.offsetMs;
+      }
+      return nowMs + best;
     },
 
     ageMs(nowMs) {
@@ -153,14 +190,14 @@ export function createAlignmentReceiver(sessionGeneration = 0): AlignmentReceive
       // offset forward would place every prediction minutes into the future.
       current = null;
       receivedAtMs = null;
-      clockOffsetMs = null;
+      offsetSamples = [];
       stats.lastSeq = null;
     },
 
     reset() {
       current = null;
       receivedAtMs = null;
-      clockOffsetMs = null;
+      offsetSamples = [];
       stats.lastSeq = null;
     },
   };

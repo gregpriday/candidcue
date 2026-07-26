@@ -160,10 +160,20 @@ export interface AlignmentSnapshot {
 /**
  * Where the display should place the reader at audio-clock time `tAudioMs`.
  *
- * The exact mirror of `Snapshot::display_at` in the engine, and the only
- * position the motion layer should chase. The horizon is clamped at both ends:
- * a clock that has not reached the evidence yet does not rewind the reader, and
- * a stale snapshot cannot scroll the document indefinitely.
+ * The mirror of `Snapshot::display_at` in the engine, and the only position the
+ * motion layer should chase. The horizon is clamped at both ends: a clock that
+ * has not reached the evidence yet does not rewind the reader, and a stale
+ * snapshot cannot scroll the document indefinitely.
+ *
+ * "Mirror" and not "identical": the engine extrapolates along the ATOM axis and
+ * this runs on a single token-space rate, and the two axes are related by a
+ * piecewise-linear map (a token like `$12` is two atoms). Wherever a
+ * multi-atom token falls inside the prediction horizon the two curves differ
+ * mid-flight — by a fraction of a token — while agreeing at both endpoints,
+ * which is what the projection in `src-tauri/src/align/mod.rs` is chosen to
+ * guarantee. Representing the difference exactly would mean shipping the axis
+ * breakpoints to the stage; a fraction of a word of interpolation error inside
+ * a bounded horizon does not justify that.
  *
  * Deliberately NOT a second prediction model. The engine has already applied
  * lag compensation and bounded the extrapolation; a stage that layered its own
