@@ -20,7 +20,7 @@ import type {
   TranscriptionConfig,
 } from '../../shared/contracts';
 import { STAGE_EVENT, CONTROL_EVENT } from '../../shared/contracts';
-import type { SemanticMotionFrame } from '../../shared/contracts';
+import type { SemanticMotionFrame, StageTranscriptTapPayload } from '../../shared/contracts';
 import type { FollowingSettings, SessionMode } from '../services/settings-types';
 import { createTrackingDriver, newSessionId, type TrackingDriver } from '../services/session';
 import { VoiceSessionPipeline } from '../services/voice-session';
@@ -503,6 +503,7 @@ export function startLiveSession(input: StartSessionInput): string {
   failedClipIds = [];
   heartbeatRevision = 0;
   lastRelayAtMs = 0;
+  resetTranscriptTap();
   sessionStartedAtMs = monotonicNowMs();
   lastMotionFrame = null;
   usingWorkerFrames = false;
@@ -632,8 +633,13 @@ export function startLiveSession(input: StartSessionInput): string {
       onResetTranscriptState: () => {
         state.update((s) => ({ ...s, transcriptTail: [] }));
         transcriptConfidence.reset();
+        resetTranscriptTap();
       },
       onTrackingEvent: (event) => {
+        // The stage's transcript bar reads from here, before the ledger and
+        // before the aligner, so it stays honest when either is wrong.
+        if (event.type === 'delta') publishTranscriptTap(event.text, false);
+        else if (event.type === 'completed') publishTranscriptTap(event.text, true);
         // §60: the same `completed` event that feeds the aligner carries the
         // provider's log probabilities, so the confidence evidence is read here
         // one step before the worker sees it — no new worker protocol needed.
@@ -992,6 +998,51 @@ async function resolveEmitTo(): Promise<EmitToFn> {
 export function setStageEmitterForTesting(fn: EmitToFn | null): void {
   cachedEmitTo = fn;
   emitToPending = fn ? Promise.resolve(fn) : null;
+}
+
+/**
+ * The last words the recogniser returned, for the stage's transcript bar.
+ *
+ * Held as a rolling word list rather than the provider's utterance text so the
+ * bar keeps reading across utterance boundaries — the provider ends an
+ * utterance wherever its voice-activity detector decides, which is nowhere in
+ * particular, and a bar that blanked at each boundary would look like a fault.
+ */
+const TAP_WORDS = 14;
+let tapCommitted: string[] = [];
+
+function resetTranscriptTap(): void {
+  tapCommitted = [];
+}
+
+/**
+ * Publish the raw recogniser text. Partials replace the open utterance rather
+ * than appending to it, for the same reason the ledger does: a partial is a
+ * restatement, and appending would show every revision of a sentence at once.
+ */
+function publishTranscriptTap(text: string, final: boolean): void {
+  if (stageGeneration === 0) return;
+  if (!cachedEmitTo && !isTauriRuntime()) return;
+  const s = get(state);
+  if (!s.sessionId || !s.stageAlive) return;
+
+  const words = text.trim().split(/\s+/).filter((word) => word.length > 0);
+  const shown = [...tapCommitted, ...words].slice(-TAP_WORDS);
+  if (final) tapCommitted = shown;
+
+  const payload: StageTranscriptTapPayload = {
+    stageGeneration,
+    text: shown.join(' '),
+    final,
+    sentAtMs: Date.now(),
+  };
+  if (cachedEmitTo) {
+    void cachedEmitTo('stage', STAGE_EVENT.transcriptTap, payload).catch(() => {});
+    return;
+  }
+  void resolveEmitTo()
+    .then((emitTo) => emitTo('stage', STAGE_EVENT.transcriptTap, payload))
+    .catch(() => {});
 }
 
 function publishSemanticFrame(frame: SemanticMotionFrame): void {

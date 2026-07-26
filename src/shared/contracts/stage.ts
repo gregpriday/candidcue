@@ -58,6 +58,13 @@ export const STAGE_EVENT = {
   semanticFrame: 'stage://semantic-frame',
 
   /**
+   * control → stage: raw recogniser text for the stage's transcript bar.
+   * Same direct `emitTo` path as the heartbeat — it is a diagnostic readout,
+   * not a validated document, and a dropped one costs nothing.
+   */
+  transcriptTap: 'stage://transcript-tap',
+
+  /**
    * stage → Rust: the stage's subscriptions are registered (handshake step 0).
    *
    * A Tauri event is delivered by evaluating JS in the target webview and is
@@ -194,6 +201,31 @@ export interface StageCloseSessionPayload {
 export interface StageHeartbeatPayload {
   stageGeneration: number;
   revision: number;
+  sentAtMs: number;
+}
+
+/**
+ * `stage://transcript-tap` — the words the recogniser is returning, shown raw
+ * along the bottom of the stage.
+ *
+ * This is a diagnostic the presenter can read at a glance, and it exists
+ * because its absence cost days. "It followed for a bit then stopped" and "the
+ * microphone was never captured" and "the transcript is fine but the aligner
+ * is not" are three completely different faults that look identical from the
+ * stage — a script that has stopped moving. One of them was another
+ * application holding the microphone, which CandidCue cannot prevent and had
+ * no way to report.
+ *
+ * Deliberately the RAW provider text rather than anything the aligner has
+ * decided: this is the reading upstream of every judgement the app makes, so
+ * it stays truthful when the judgements are wrong.
+ */
+export interface StageTranscriptTapPayload {
+  stageGeneration: number;
+  /** The most recent words heard, oldest first, already trimmed for display. */
+  text: string;
+  /** True when the provider has finalised the utterance this text came from. */
+  final: boolean;
   sentAtMs: number;
 }
 

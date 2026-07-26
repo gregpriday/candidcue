@@ -17,6 +17,7 @@
     type StageEscapePayload,
     type StageHeartbeatAckPayload,
     type StageHeartbeatPayload,
+    type StageTranscriptTapPayload,
     type StageHydratedPayload,
     type StageIntent,
     type StageIntentPayload,
@@ -91,6 +92,17 @@
   const listenerHidden = $derived(app.blanked && !app.keepListenerWhenBlanked);
   let mediaHealthy = $state(true);
   let lastInboundAt = 0;
+  /**
+   * The last words the recogniser returned, shown along the bottom.
+   *
+   * Three faults look identical from the stage — a script that has stopped
+   * moving: the microphone was never captured, the recogniser heard nothing,
+   * or the aligner failed to match good text. This bar tells them apart at a
+   * glance. One of them turned out to be another application holding the
+   * microphone, which CandidCue cannot prevent and could not report.
+   */
+  let transcriptTap = $state('');
+  let transcriptTapAtMs = $state(0);
   let heartbeatSeen = false;
   /** Layout generation the stage is currently measured at (companion §7.2). */
   let layoutGeneration = $state(0);
@@ -152,6 +164,16 @@
         subscribeStageEvent<StageSemanticFramePayload>(STAGE_EVENT.semanticFrame, (frame) => {
           lastInboundAt = performance.now();
           scriptLayer?.pushSemanticFrame(frame);
+        }),
+        /*
+         * The transcript bar. Raw recogniser text, read straight off the wire
+         * — it deliberately does not pass through the reducer, because its
+         * whole value is being true when the things that do are wrong.
+         */
+        subscribeStageEvent<StageTranscriptTapPayload>(STAGE_EVENT.transcriptTap, (payload) => {
+          lastInboundAt = performance.now();
+          transcriptTap = payload.text;
+          transcriptTapAtMs = Date.now();
         }),
         subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
         subscribeStageEvent<StageStatePayload>(STAGE_EVENT.listenerState, onDirective),
@@ -575,6 +597,19 @@
     </div>
   {/if}
 
+  <!--
+    Layer 9: the transcript bar. Outside the mirror plane on purpose — it is
+    an instrument, not part of the read, and a mirrored diagnostic is useless
+    to the person who needs it.
+  -->
+  {#if phase === 'live' && !app.blanked}
+    <div class="transcript-tap" class:silent={transcriptTap.length === 0}>
+      <span class="transcript-tap-words">
+        {transcriptTap.length > 0 ? transcriptTap : 'listening — no words yet'}
+      </span>
+    </div>
+  {/if}
+
   {#if preview}
     <div class="preview-hud">
       preview · l listener · b blank · f freeze · m mirror · c calibrate · a ack · j jump
@@ -703,6 +738,48 @@
     font-size: 12px;
     line-height: 1.6;
     pointer-events: none;
+  }
+
+  /*
+   * One line, along the bottom, newest word at the right.
+   *
+   * Right-aligned with `overflow: hidden` is what makes older words fall off
+   * the left edge as new ones arrive — no animation, no measurement, and
+   * nothing that can drift out of step with the words themselves. Small and
+   * dim so it reads as an instrument rather than competing with the script,
+   * but a monospace face so a word appearing is unmistakable in peripheral
+   * vision.
+   */
+  .transcript-tap {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 6px 18px;
+    display: flex;
+    justify-content: flex-end;
+    overflow: hidden;
+    white-space: nowrap;
+    pointer-events: none;
+    background: linear-gradient(to top, rgb(0 0 0 / 55%), transparent);
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.4;
+    letter-spacing: 0.01em;
+    color: var(--stage-text-past);
+    opacity: 0.75;
+  }
+
+  /* Nothing heard yet is a state worth showing, not an empty bar. */
+  .transcript-tap.silent {
+    opacity: 0.4;
+    font-style: italic;
+  }
+
+  .transcript-tap-words {
+    /* Never wrap to a second line: the bar must not change the stage layout. */
+    white-space: nowrap;
+    direction: ltr;
   }
 
   .preview-hud {
