@@ -65,7 +65,14 @@ pub fn phonetic_key(word: &str) -> [u8; 4] {
             _ => 0, // vowels, h, w, y, non-ASCII
         };
         if i == 0 {
-            key[0] = c.to_ascii_lowercase() as u8;
+            // Code-class the first position too: classic Soundex keeps the
+            // raw letter, which misses c/k ("CandidCue" → "Kandik") — the
+            // exact confusion recognisers produce.
+            key[0] = if code != 0 {
+                code
+            } else {
+                c.to_ascii_lowercase() as u8
+            };
             n = 1;
             last_code = code;
             continue;
