@@ -230,10 +230,19 @@ pub async fn stream_pcm(
     let frame_interval = Duration::from_secs_f64(frame_ms as f64 / 1000.0 / pace);
     let mut ticker = tokio::time::interval(frame_interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Inworld rejects chunks shorter than 20 ms ("invalid audio chunk
+    // duration"); a trailing runt gets padded with silence to the minimum.
+    let min_chunk_bytes = (SAMPLE_RATE_HZ as usize * 2 * 20 / 1000) & !1;
+    let mut padded_tail: Vec<u8>;
     while offset < pcm.len() {
         ticker.tick().await;
         let end = (offset + frame_bytes).min(pcm.len());
-        let chunk = &pcm[offset..end];
+        let mut chunk = &pcm[offset..end];
+        if chunk.len() < min_chunk_bytes {
+            padded_tail = chunk.to_vec();
+            padded_tail.resize(min_chunk_bytes, 0);
+            chunk = &padded_tail;
+        }
         let frame = serde_json::json!({
             "audioChunk": { "content": encode_base64(chunk) }
         });
