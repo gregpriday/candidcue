@@ -97,6 +97,10 @@ pub struct Snapshot {
     pub max_prediction_ms: f64,
     /// Heuristic 0..1 — NOT yet a calibrated probability; benchmarked as-is.
     pub confidence: f64,
+    /// A distant candidate accumulating evidence (the "Suggest jump"
+    /// interaction state): the UI may offer "possible match below — resume
+    /// here?" instead of teleporting. None while following normally.
+    pub suggestion: Option<f64>,
 }
 
 impl Snapshot {
@@ -723,7 +727,19 @@ impl Engine {
             1
         };
 
-        if count < c.jump_persistence && !is_final_evidence {
+        // "Automatic micro-following, manual macro-navigation": a far target
+        // the presenter cannot even SEE demands one extra round of evidence.
+        // If they scrolled there, the viewport agrees and no extra round is
+        // charged.
+        let mut required = c.jump_persistence;
+        if let Some((lo, hi)) = self.viewport {
+            let outside = target < lo.saturating_sub(16) || target > hi + 16;
+            if outside {
+                required = required.saturating_add(1);
+            }
+        }
+
+        if count < required && !is_final_evidence {
             self.pending_jump = Some(PendingJump { target, count });
             return DiscontinuityOutcome::Pending;
         }
@@ -784,7 +800,21 @@ impl Engine {
             self.regions.push((0, c.global_region.min(len)));
         }
 
-        // 3. Anchor-proposed regions. Trailing-provisional atoms are
+        // 3. Retake corridor: recently-read territory behind the cursor.
+        // Presenters re-say things they already said far more often than
+        // they quote distant text, and the re-read words need no rare
+        // anchors to be findable here (research: repetition arcs are the
+        // single largest robust-alignment win).
+        if locked {
+            let anchor = self.observed.max(0.0) as u32;
+            let start = anchor.saturating_sub(c.retake_corridor_atoms);
+            let end = anchor.saturating_sub(4).min(len);
+            if end > start {
+                self.regions.push((start, end));
+            }
+        }
+
+        // 4. Anchor-proposed regions. Trailing-provisional atoms are
         // excluded (they flicker); interior-provisional ones may PROPOSE a
         // region — acceptance gates still require persistent evidence, and
         // waiting for full stability would add a whole partial-cadence of
@@ -981,6 +1011,7 @@ impl Engine {
             at_audio_ms: now_ms,
             max_prediction_ms: self.config.max_prediction_ms,
             confidence: self.confidence,
+            suggestion: self.pending_jump.as_ref().map(|p| p.target as f64),
         }
     }
 }

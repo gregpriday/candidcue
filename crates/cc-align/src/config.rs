@@ -83,6 +83,9 @@ pub struct AlignmentConfig {
     /// Weak events before a full-script fallback region is allowed when the
     /// anchor indexes propose nothing.
     pub desperate_search_after: u32,
+    /// How far behind the cursor the always-available retake corridor
+    /// reaches (atoms).
+    pub retake_corridor_atoms: u32,
 
     // ---- beam ----
     pub beam_size: usize,
@@ -169,6 +172,7 @@ impl Default for AlignmentConfig {
             weak_unexplained_content: 3,
             weak_unexplained_total: 4,
             desperate_search_after: 3,
+            retake_corridor_atoms: 240,
 
             beam_size: 8,
             cluster_radius: 3,

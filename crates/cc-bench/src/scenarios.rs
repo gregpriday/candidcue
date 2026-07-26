@@ -226,6 +226,49 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
         });
         suite.push(scenario(&name, "substitutions", &script, 150, ops, Corruption::default()));
 
+        // 8b. Word repetitions: every ~12th word said twice ("the— the").
+        // Robust-alignment research names repetition handling as the single
+        // largest recall win; this family guards it.
+        let mut ops = Vec::new();
+        let mut at = 0u32;
+        let step = 12u32;
+        while at + step < n as u32 {
+            ops.push(PlanOp::Read {
+                from: at,
+                to: at + step,
+            });
+            let w = script.atoms[(at + step - 1) as usize].surface.clone();
+            ops.push(PlanOp::Say { words: vec![w] });
+            at += step;
+        }
+        ops.push(PlanOp::Read {
+            from: at,
+            to: n as u32,
+        });
+        suite.push(scenario(&name, "word_repeats", &script, 150, ops, Corruption::default()));
+
+        // 8c. Phrase repetitions: every ~40 atoms the presenter re-says the
+        // last 4-word phrase ("we should— we should build").
+        let mut ops = Vec::new();
+        let mut at = 0u32;
+        let step = 40u32;
+        while at + step < n as u32 {
+            ops.push(PlanOp::Read {
+                from: at,
+                to: at + step,
+            });
+            ops.push(PlanOp::Read {
+                from: at + step - 4,
+                to: at + step,
+            });
+            at += step;
+        }
+        ops.push(PlanOp::Read {
+            from: at,
+            to: n as u32,
+        });
+        suite.push(scenario(&name, "phrase_repeats", &script, 150, ops, Corruption::default()));
+
         // 9. Heavy ASR corruption (~15% WER target).
         suite.push(scenario(
             &name,

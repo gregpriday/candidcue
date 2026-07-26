@@ -215,6 +215,27 @@ fn build_table(
         "%",
         "higher",
     ));
+    // Repetitions: within ±5, because a repeated phrase legitimately puts
+    // the reader a few atoms behind the monotonic cursor for its duration —
+    // the failure this family catches is losing the lock, not the ±2 wobble.
+    for (scenario_name, bench_name) in [
+        ("word_repeats", "robust.word_repeats_within5"),
+        ("phrase_repeats", "robust.phrase_repeats_within5"),
+    ] {
+        let sel: Vec<&RunMetrics> = runs
+            .iter()
+            .filter(|r| r.scenario == scenario_name)
+            .collect();
+        let (h, e) = sel
+            .iter()
+            .fold((0, 0), |(a, e), r| (a + r.within5_hits, e + r.eligible_samples));
+        table.push(entry(
+            bench_name,
+            if e == 0 { 0.0 } else { 100.0 * h as f64 / e as f64 },
+            "%",
+            "higher",
+        ));
+    }
 
     // ---- recovery ----
     let by_kind = |kind: RecoveryKind, scenarios: Option<&[&str]>| -> (Vec<f64>, usize) {
