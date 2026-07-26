@@ -1103,3 +1103,130 @@ mod starter_script_tests {
         assert!(early.confirmed_token <= early.observed_token);
     }
 }
+
+/// One canonicalization contract, asserted from both directions.
+///
+/// The app's Markdown compiler decides WHAT is a spoken token; this crate
+/// decides what a token SOUNDS like. Those are different jobs and they live in
+/// different languages, which is exactly the arrangement that let `&` fall
+/// down the gap: the app emitted it as a token and the engine dropped it, so
+/// the app rendered a word nothing could ever match.
+///
+/// The fixtures below are the app tokenizer's output for surfaces that
+/// exercise the seam — punctuation-adjacent words, currency, percentages,
+/// compounds, acronyms. The rule they enforce is simple and total: **every
+/// spoken token the app renders must produce at least one atom**, because a
+/// token with no atom is a word on the glass that the engine cannot hear.
+///
+/// The matching TypeScript half lives in
+/// `tests/unit/markdown/spoken-token-contract.test.ts`, which asserts the app
+/// tokenizer really does produce these surfaces.
+#[cfg(test)]
+mod canonicalization_contract_tests {
+    use super::*;
+
+    /// Surfaces exactly as `tokenizeText` in `src/shared/markdown/tokenize.ts`
+    /// emits them — including the standalone `&`, which it explicitly does.
+    const APP_TOKEN_SURFACES: &[&str] = &[
+        "Hello", "world", "R", "&", "D", "AT&T", "$12", "50%", "well-known",
+        "don't", "e.g", "U.S.A", "3.14", "42", "CandidCue", "twenty-first",
+        "£20", "€5", "co-founder", "API",
+    ];
+
+    #[test]
+    fn every_spoken_token_the_app_renders_produces_at_least_one_atom() {
+        let tokens: Vec<AlignToken> = APP_TOKEN_SURFACES
+            .iter()
+            .map(|s| AlignToken {
+                surface: (*s).to_string(),
+                line: 0,
+                para: 0,
+            })
+            .collect();
+        let inputs: Vec<TokenInput> = tokens
+            .iter()
+            .map(|t| TokenInput {
+                surface: t.surface.clone(),
+                line: t.line,
+                para: t.para,
+            })
+            .collect();
+        let script = cc_align::compile_tokens(&inputs);
+
+        let unmatched: Vec<&str> = APP_TOKEN_SURFACES
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !script.atoms.iter().any(|a| a.token == *i as u32))
+            .map(|(_, s)| *s)
+            .collect();
+        assert!(
+            unmatched.is_empty(),
+            "these surfaces render as words but produce no atom, so nothing \
+             spoken can ever match them: {unmatched:?}",
+        );
+    }
+
+    /// The axis stays monotone and lands exactly on the token count, whatever
+    /// the surfaces expand to. This is the property every projected position
+    /// depends on.
+    #[test]
+    fn the_token_axis_covers_the_whole_script_monotonically() {
+        let inputs: Vec<TokenInput> = APP_TOKEN_SURFACES
+            .iter()
+            .map(|s| TokenInput {
+                surface: (*s).to_string(),
+                line: 0,
+                para: 0,
+            })
+            .collect();
+        let script = cc_align::compile_tokens(&inputs);
+
+        let mut previous = f64::NEG_INFINITY;
+        for &position in &script.atom_token_pos {
+            assert!(position >= previous, "axis went backwards at {position}");
+            previous = position;
+        }
+        assert_eq!(script.token_count, APP_TOKEN_SURFACES.len() as u32);
+        assert_eq!(
+            *script.atom_token_pos.last().unwrap(),
+            APP_TOKEN_SURFACES.len() as f64
+        );
+        // And a position at the very start is the very start.
+        assert_eq!(script.token_at(0.0), 0.0);
+    }
+
+    /// `R & D` read aloud is "r and d" — the whole point of the seam.
+    #[test]
+    fn an_ampersand_script_follows_speech_that_says_and() {
+        let state = AlignmentState::new();
+        let tokens: Vec<AlignToken> = ["Welcome", "to", "R", "&", "D", "this", "quarter"]
+            .iter()
+            .map(|s| AlignToken {
+                surface: (*s).to_string(),
+                line: 0,
+                para: 0,
+            })
+            .collect();
+        state.start(1, &tokens);
+        state.bind_stream(1);
+
+        let snapshot = state
+            .observe(
+                &SttFrame::Final {
+                    generation: 1,
+                    item_id: "1-0".into(),
+                    text: "welcome to r and d this quarter".into(),
+                    audio_end_ms: 3_000.0,
+                },
+                3_000.0,
+            )
+            .expect("session is running");
+
+        assert_eq!(snapshot.state, "following");
+        assert!(
+            snapshot.observed_token >= 6.0,
+            "the ampersand broke the match: observed {} of 7",
+            snapshot.observed_token
+        );
+    }
+}

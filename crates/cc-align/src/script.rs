@@ -401,6 +401,15 @@ fn finalize(
 /// sitting still and then stepping. Tokens that produced no atoms simply do not
 /// appear — the axis skips over them, which is what keeps it monotone.
 fn build_token_axis(atoms: &[ScriptAtom], token_count: u32) -> Vec<f64> {
+    /*
+     * A script with tokens but no atoms is entirely unspoken — every surface
+     * normalized away. The end marker alone would then be the whole axis, so
+     * `token_at(0)` would answer `token_count`: the reader reported at the end
+     * of a script before saying a word. Nothing to read means position zero.
+     */
+    if atoms.is_empty() {
+        return vec![0.0];
+    }
     let mut axis = Vec::with_capacity(atoms.len() + 1);
     let mut at = 0usize;
     while at < atoms.len() {
@@ -635,6 +644,56 @@ mod tests {
                 .collect()
         };
         assert_eq!(lexical(&markdown), lexical(&from_tokens));
+    }
+
+    /// `&` is a spoken word on BOTH sides of the seam.
+    ///
+    /// The app's tokenizer emits it as a token; if the engine dropped it, the
+    /// app would render a word the engine had no atom for, and the recogniser's
+    /// "and" would have nothing to match.
+    #[test]
+    fn ampersands_are_read_as_a_word() {
+        let tokens: Vec<TokenInput> = ["R", "&", "D", "at", "AT&T"]
+            .iter()
+            .map(|s| TokenInput {
+                surface: (*s).to_string(),
+                line: 0,
+                para: 0,
+            })
+            .collect();
+        let script = compile_tokens(&tokens);
+        let surfaces: Vec<&str> = script.atoms.iter().map(|a| a.surface.as_str()).collect();
+        assert_eq!(surfaces, vec!["r", "and", "d", "at", "at", "and", "t"]);
+        // Every host token produced at least one atom, so none is unmatchable.
+        for token in 0..script.token_count {
+            assert!(
+                script.atoms.iter().any(|a| a.token == token),
+                "token {token} produced no atoms"
+            );
+        }
+    }
+
+    /// A script whose every surface normalizes away has nothing to read, and
+    /// must report position zero rather than the end of the script.
+    #[test]
+    fn an_entirely_unspoken_script_starts_at_zero() {
+        let tokens: Vec<TokenInput> = ["...", "—"]
+            .iter()
+            .map(|s| TokenInput {
+                surface: (*s).to_string(),
+                line: 0,
+                para: 0,
+            })
+            .collect();
+        let script = compile_tokens(&tokens);
+        assert!(script.is_empty());
+        assert_eq!(script.token_count, 2);
+        assert_eq!(
+            script.token_at(0.0),
+            0.0,
+            "an unspoken script reported itself already read"
+        );
+        assert_eq!(script.atom_at(0.0), 0.0);
     }
 
     #[test]

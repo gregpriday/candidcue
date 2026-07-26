@@ -110,6 +110,29 @@ pub fn canonical_atoms(text: &str) -> Vec<String> {
 
 /// Stage 1+2+3: one whitespace-delimited chunk → zero or more word atoms.
 fn split_word(raw: &str, out: &mut Vec<String>) {
+    /*
+     * `&` is a WORD, and it is read aloud as "and".
+     *
+     * It used to be filtered out with the rest of the punctuation, which was a
+     * quiet disagreement with the app's own tokenizer: that one emits `&` as a
+     * spoken token (`R & D` is three tokens there), so the app rendered a word
+     * the engine had no atom for. Nothing crashed — the token axis simply
+     * skipped it — but the transcriber says "and" and there was nothing for it
+     * to match, and in the degenerate case of a script whose only spoken token
+     * is `&` the compiled script had no atoms at all.
+     *
+     * Rewriting it as a hyphen-delimited "and" reuses the compound path
+     * exactly, so `AT&T` becomes `at and t` — which is what a recogniser
+     * actually returns for it — and a bare `&` becomes `and`.
+     */
+    let expanded;
+    let raw = if raw.contains('&') {
+        expanded = raw.replace('&', "-and-");
+        expanded.as_str()
+    } else {
+        raw
+    };
+
     // Currency prefix is remembered, stripped, and re-emitted as a trailing
     // word: `$12` → `12 dollars`, matching how it is read aloud.
     let mut currency: Option<&'static str> = None;

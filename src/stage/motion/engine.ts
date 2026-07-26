@@ -320,6 +320,11 @@ export function relocationDirectiveFor(
   previousToken: number | null,
   nowMs: number,
   profile: SmoothFollowProfile = DEFAULT_SMOOTH_FOLLOW_PROFILE,
+  /**
+   * How long automatic correction may be suspended before this directive can
+   * be exercised at all (§30.6). Folded into the catch-up TTL below.
+   */
+  manualGraceMs = DEFAULT_MANUAL_GRACE_MS,
 ): StageTransitionDirective | null {
   if (!ALIGNMENT_RELOCATIONS.has(snapshot.decision)) return null;
   const shape = RELOCATION_SHAPE[snapshot.decision as keyof typeof RELOCATION_SHAPE];
@@ -337,11 +342,25 @@ export function relocationDirectiveFor(
   const type: StageTransitionDirective['type'] =
     shape.type === 'rewind' && distance > REWIND_MAX_TOKENS ? 'reanchor' : shape.type;
 
-  // A catch-up runs until §30.3's duration cap retires it; everything else is
-  // a single step that either lands promptly or should be forgotten.
+  /*
+   * A catch-up runs until §30.3's duration cap retires it; everything else is a
+   * single step that either lands promptly or should be forgotten.
+   *
+   * The TTL starts at RECEIPT, but the cap's clock does not start until the
+   * licence can actually be exercised — and manual authority suspends that for
+   * a whole grace interval (§30.6). With a TTL of cap + release alone, a jump
+   * that arrives while the presenter is dragging the script gets what is left
+   * after the grace: 250 ms of the 2500 ms it is entitled to, so neither the
+   * cap nor its release ramp is ever reached and the catch-up simply does not
+   * happen. Covering the grace makes the CAP the binding constraint again,
+   * which is the whole point of having one.
+   */
   const ttlMs =
     type === 'catch_up'
-      ? Math.max(RELOCATION_TTL_MS, profile.motion.catchUpMaxDurationMs + profile.motion.catchUpReleaseMs)
+      ? Math.max(
+          RELOCATION_TTL_MS,
+          manualGraceMs + profile.motion.catchUpMaxDurationMs + profile.motion.catchUpReleaseMs,
+        )
       : RELOCATION_TTL_MS;
 
   return {
@@ -793,7 +812,7 @@ export function createStageMotionEngine(
        * next snapshot, by which time there is a display to measure against.
        */
       const from = lastDisplayToken ?? previousDisplayToken;
-      const directive = relocationDirectiveFor(accepted, from, nowMs, profile);
+      const directive = relocationDirectiveFor(accepted, from, nowMs, profile, manualGraceMs);
       if (directive) transitions.submit(directive, nowMs);
       previousDisplayToken = accepted.observedToken;
       return true;

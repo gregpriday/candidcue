@@ -31,6 +31,7 @@ import {
   createJerkLimitedScrollController,
   createStageMotionEngine,
   limitsForState,
+  relocationDirectiveFor,
   type StageMotionEngine,
   type StageMotionFrameResult,
   type StageRenderedLineMap,
@@ -296,6 +297,50 @@ function licensedCeilingPxS(profile: SmoothFollowProfile, gapPx: number): number
  * violates it by more than four times as much.
  */
 const CEILING_LAG_TOLERANCE = 1.06;
+
+/**
+ * §30.3, the activation-delay case.
+ *
+ * The TTL runs from receipt; the duration cap's clock does not start until the
+ * licence can be exercised, and manual authority suspends that for a whole
+ * grace interval. A TTL of cap + release alone therefore left a jump that
+ * arrived mid-drag with a fraction of the boost it is entitled to — and with
+ * nothing anywhere reporting that the catch-up had been skipped.
+ */
+describe('§30.3 a catch-up that arrives while manual authority holds', () => {
+  it('still has its full licence once automatic correction resumes', () => {
+    const directive = relocationDirectiveFor(
+      {
+        ...snapshotAt(700, 0),
+        decision: 'jumpForwardAccepted',
+      },
+      0,
+      0,
+      PROFILE,
+    );
+    expect(directive?.type).toBe('catch_up');
+    const live = (directive?.expiresAtMs ?? 0) - (directive?.issuedAtMs ?? 0);
+    // Long enough that the whole cap, plus its release ramp, is still ahead of
+    // the directive when the grace interval ends.
+    expect(live).toBeGreaterThanOrEqual(
+      2500 + PROFILE.motion.catchUpMaxDurationMs + PROFILE.motion.catchUpReleaseMs,
+    );
+  });
+
+  it('does not extend the TTL of the discontinuities that must land promptly', () => {
+    const reanchor = relocationDirectiveFor(
+      { ...snapshotAt(700, 0), decision: 'relocationAccepted' },
+      0,
+      0,
+      PROFILE,
+    );
+    // A re-anchor is a single step: it either resolves quickly or it is stale,
+    // and holding it open for five seconds would let it land somewhere the
+    // presenter has long since left.
+    const live = (reanchor?.expiresAtMs ?? 0) - (reanchor?.issuedAtMs ?? 0);
+    expect(live).toBeLessThanOrEqual(1500);
+  });
+});
 
 describe('§30.3 corridor-relative boost decay', () => {
   function run(profile: SmoothFollowProfile) {

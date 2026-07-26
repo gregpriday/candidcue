@@ -12,7 +12,7 @@ export interface RawToken {
   end: number;
 }
 
-// A token starts with a letter/digit/$/# and continues through characters
+// A token starts with a letter/digit/currency/# and continues through characters
 // that can appear inside words: letters, digits, dots (acronyms, decimals),
 // commas (thousands), apostrophes, hyphens, %, &. Standalone '&' is a token.
 //
@@ -25,8 +25,16 @@ export interface RawToken {
 // is a known abbreviation, which widens `SpokenToken.surface` and its source
 // range by one character wherever tokens are rendered — deliberately not done
 // here as a side effect of a comment.
+//
+// The currency symbols are all three, not just `$`. The alignment engine reads
+// `£20` as "twenty pounds" — the way a presenter says it — but only if the
+// symbol reaches it, and a leading class of `$` alone silently dropped `£` and
+// `€` from the token surface. The engine then had nothing to expand, the
+// presenter said "pounds", and the word had nothing to match. Keeping the
+// symbol in the token also means the underline covers `£20` rather than
+// leaving the symbol outside the word it belongs to.
 const TOKEN_PATTERN =
-  /[\p{L}\p{N}$#][\p{L}\p{N}.,''’\-%&]*[\p{L}\p{N}%]|[\p{L}\p{N}]|&/gu;
+  /[\p{L}\p{N}$£€#][\p{L}\p{N}.,''’\-%&]*[\p{L}\p{N}%]|[\p{L}\p{N}]|&/gu;
 
 export function tokenizeText(text: string): RawToken[] {
   const tokens: RawToken[] = [];
