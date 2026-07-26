@@ -1,0 +1,9 @@
+{
+  "name": "starter__retake__gemini",
+  "script": "starter",
+  "scenario": "retake",
+  "engine": "gemini",
+  "voice_index": 3,
+  "words": 186,
+  "audio_s": 87.92
+}

@@ -1,0 +1,9 @@
+{
+  "name": "refrain__exact__gemini",
+  "script": "refrain",
+  "scenario": "exact",
+  "engine": "gemini",
+  "voice_index": 9,
+  "words": 278,
+  "audio_s": 134.82
+}

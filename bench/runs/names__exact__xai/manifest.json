@@ -1,0 +1,9 @@
+{
+  "name": "names__exact__xai",
+  "script": "names",
+  "scenario": "exact",
+  "engine": "xai",
+  "voice_index": 11,
+  "words": 337,
+  "audio_s": 137.292
+}

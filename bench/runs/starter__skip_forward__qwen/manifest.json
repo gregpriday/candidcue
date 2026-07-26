@@ -1,0 +1,9 @@
+{
+  "name": "starter__skip_forward__qwen",
+  "script": "starter",
+  "scenario": "skip_forward",
+  "engine": "qwen",
+  "voice_index": 1,
+  "words": 149,
+  "audio_s": 64.593125
+}

@@ -1,0 +1,9 @@
+{
+  "name": "technical__exact__qwen",
+  "script": "technical",
+  "scenario": "exact",
+  "engine": "qwen",
+  "voice_index": 7,
+  "words": 305,
+  "audio_s": 152.429375
+}

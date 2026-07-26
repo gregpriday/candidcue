@@ -1,0 +1,9 @@
+{
+  "name": "starter__adlib_return__xai",
+  "script": "starter",
+  "scenario": "adlib_return",
+  "engine": "xai",
+  "voice_index": 2,
+  "words": 151,
+  "audio_s": 49.692
+}
