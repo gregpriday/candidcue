@@ -52,7 +52,15 @@ import {
 } from '../lib/transcript-confidence-watch';
 import { configureFollowActions, smoothFollow } from './smooth-follow';
 import { getSettingsSnapshot, patchSettings } from './settings';
-import { showToast } from './toasts';
+import { clearConditionToasts, showToast } from './toasts';
+
+/**
+ * Lost audio is worth interrupting for — words were said and will never be
+ * followed, and unlike a hold there is no status line that can express it
+ * after the fact. Keyed so a stalling connection reports once rather than
+ * once per stall, and cleared with the take.
+ */
+const TOAST_AUDIO_DROPPED = 'audio-dropped';
 import { compiled as compiledStore } from './compiled';
 import { saveNow } from './editor';
 
@@ -675,6 +683,7 @@ export function startLiveSession(input: StartSessionInput): string {
           `The connection stalled and ${frames} ${frames === 1 ? 'moment' : 'moments'} of audio ` +
             'did not reach the transcriber. Anything said in that gap will not be followed.',
           'danger',
+          { key: TOAST_AUDIO_DROPPED },
         );
       },
       // §36.2: finalized text only, never audio. Buffered here and written
@@ -701,9 +710,22 @@ export function startLiveSession(input: StartSessionInput): string {
       onFollowingHold: (held, reason) => {
         trace('hold', `${held ? 'held' : 'released'} — ${reason ?? 'none'}`);
         smoothFollow.setFollowingPaused(held);
-        if (held) {
-          showToast(describeHold(reason), 'danger');
-        }
+        /*
+         * No toast. A hold is a STATE, and the Live status line already reports
+         * it — "Reconnecting — position held", "Microphone disconnected —
+         * position held" — accurately and with no history.
+         *
+         * A notification was the wrong instrument twice over. During a take the
+         * presenter is looking at the stage, full screen, with the control
+         * window behind it: the toast is invisible exactly when it is relevant.
+         * And because `danger` toasts never expire, an ordinary take — a few
+         * pauses between sentences, one transport blip — delivered the whole
+         * stack at once afterwards, describing a microphone no longer in use,
+         * on the summary screen of a take that had scored 96%.
+         *
+         * The stage's transcript bar is the live instrument now; the status
+         * line is the durable one. Neither accumulates.
+         */
       },
       // H5: a dead input is not a provider problem; the user must act.
       onInputDeviceLost: (code) => {
@@ -713,12 +735,11 @@ export function startLiveSession(input: StartSessionInput): string {
         // actually perform — `switchMicrophone` below drives the transport's
         // track replacement, and the status bar grows an input picker while
         // `micState` is 'disconnected'.
-        showToast(
-          code === 'MIC_NO_SIGNAL'
-            ? 'No sound is reaching the microphone. Following is on hold until audio comes back.'
-            : 'The microphone disconnected. Reconnect it or pick another input in the status bar, and following resumes.',
-          'danger',
-        );
+        /*
+         * No toast: `micState: 'disconnected'` is what the status bar renders,
+         * and it grows the input picker that fixes it. The toast said the same
+         * thing in a form that expired never and appeared behind the stage.
+         */
       },
       /*
        * §28.6: the input came back on its own — the mic was replugged, or the
@@ -735,7 +756,8 @@ export function startLiveSession(input: StartSessionInput): string {
           // down keeps its own honest 'disconnected'.
           micState: s.micState === 'disconnected' ? 'live' : s.micState,
         }));
-        showToast('The microphone is back. Voice following has resumed.', 'success');
+        // Nothing to announce: the status line goes back to normal on its own,
+        // and "the microphone is back" answers a warning we no longer give.
       },
       // H1: a session-level provider failure must never leave a green UI.
       onSessionFailure: (code, fatal) => {
@@ -1886,19 +1908,6 @@ export async function switchMicrophone(deviceId: string): Promise<boolean> {
   return true;
 }
 
-function describeHold(reason: string | null): string {
-  switch (reason) {
-    case 'input_lost':
-      return 'Microphone input stopped. Following is on hold.';
-    case 'input_silent':
-      return 'No sound is reaching the microphone. Following is on hold.';
-    case 'no_transcripts':
-      return 'No transcription is coming back. Following is on hold while we reconnect.';
-    default:
-      return 'Reconnecting — your position is held.';
-  }
-}
-
 export function togglePlayPause(): void {
   const s = get(state);
   if (!s.active) return;
@@ -2177,6 +2186,14 @@ function locateEnding(s: SessionState): string {
 }
 
 function stopInternals(): void {
+  /*
+   * The take's warnings end with the take. Every one of them describes a
+   * microphone or a transport that is no longer in use, and `danger` toasts do
+   * not expire — so left standing they arrive all at once on the summary
+   * screen, reading as a fresh pile of problems rather than an old one that
+   * resolved itself.
+   */
+  clearConditionToasts();
   driver?.dispose();
   driver = null;
   if (pipeline) {
