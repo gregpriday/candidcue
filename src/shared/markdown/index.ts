@@ -8,7 +8,6 @@ export {
   standardizeText,
   normalizeToken,
   normalizePhrase,
-  aliasesForToken,
   numberToWords,
   ABBREVIATION_ALIASES,
 } from './normalize';
@@ -26,9 +25,6 @@ export {
   type ContainerSemantics,
   type InlineDirective,
 } from './directives';
-export { phoneticKey } from './phonetic';
-export { STOPWORDS, isStopword } from './stopwords';
-export { computeTokenWeight } from './weights';
 export type {
   CompilerWorkerRequest,
   CompilerWorkerResponse,

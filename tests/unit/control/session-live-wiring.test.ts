@@ -17,10 +17,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { STAGE_EVENT } from '../../../src/shared/contracts';
-import type { CompiledScript, TrackingSnapshot } from '../../../src/shared/contracts';
+import type { CompiledScript } from '../../../src/shared/contracts';
 
 const stage = vi.hoisted(() => ({
-  publishStageSnapshot: vi.fn(async () => {}),
   publishStageDirective: vi.fn(async () => {}),
   publishListenerState: vi.fn(async () => {}),
   closeStage: vi.fn(async () => {}),
@@ -106,23 +105,46 @@ vi.mock('../../../src/control/services/ipc', async (orig) => {
   const actual = await orig<typeof import('../../../src/control/services/ipc')>();
   return { ...actual, isTauriRuntime: () => true };
 });
-vi.mock('../../../src/control/services/smooth-follow-adapter', async (orig) => {
-  const actual = await orig<typeof import('../../../src/control/services/smooth-follow-adapter')>();
+/*
+ * The snapshot feed arrives from Rust over a Tauri event channel, which does
+ * not exist in node. Capturing the subscription lets a test push a snapshot
+ * through the REAL driver and the REAL store, which is the only way to assert
+ * on anything the take summary accumulates.
+ */
+const alignmentFeed: { push: ((snapshot: unknown) => void) | null } = { push: null };
+vi.mock('../../../src/control/services/alignment', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/services/alignment')>();
+  return {
+    ...actual,
+    subscribeAlignmentSnapshots: (handler: (snapshot: never) => void) => {
+      alignmentFeed.push = handler as (snapshot: unknown) => void;
+      return () => {
+        alignmentFeed.push = null;
+      };
+    },
+  };
+});
+vi.mock('../../../src/control/services/stage-acks', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
   return { ...actual, subscribeStageMotionAcks: () => () => {} };
 });
 
+const { setInvokeForTesting } = await import('../../../src/control/services/ipc');
 const { clearSession, setStageEmitterForTesting, startLiveSession, startPrompting, stopSession } =
   await import('../../../src/control/stores/session');
 
-/** Enough of a CompiledScript for the store; the driver falls back to the mock. */
+/** Enough of a CompiledScript for the store and for the alignment handshake. */
 function compiledStub(): CompiledScript {
   return {
     sourceHash: 'hash-abc',
+    spokenTokens: [
+      { index: 0, blockId: 'b-1', sentenceId: 's-1', surface: 'Hello', normalized: 'hello' },
+      { index: 1, blockId: 'b-1', sentenceId: 's-1', surface: 'there', normalized: 'there' },
+    ],
     sentences: [
       { id: 's-1', blockId: 'b-1', startTokenIndex: 0, endTokenIndex: 3, text: 'Hello there.' },
     ],
     navigationTargets: [],
-    spokenTokens: [],
     literalCommandRanges: [],
   } as unknown as CompiledScript;
 }
@@ -154,8 +176,12 @@ const emitted: Array<{ target: string; event: string; payload: unknown }> = [];
 
 beforeEach(() => {
   vi.useFakeTimers();
+  invoked.length = 0;
+  setInvokeForTesting(async (command, args) => {
+    invoked.push({ command, args });
+    return undefined as never;
+  });
   emitted.length = 0;
-  stage.publishStageSnapshot.mockClear();
   records.appendSessionTranscript.mockClear();
   records.endSessionRecord.mockClear();
   pipeline.captured.deps = null;
@@ -167,77 +193,54 @@ beforeEach(() => {
 afterEach(() => {
   clearSession();
   setStageEmitterForTesting(null);
+  setInvokeForTesting(null);
   vi.useRealTimers();
 });
 
-/** Every snapshot the store relayed toward Rust. */
-function relayedSnapshots(): TrackingSnapshot[] {
-  return stage.publishStageSnapshot.mock.calls.map(
-    (call) => (call as unknown as [string, TrackingSnapshot])[1],
-  );
-}
+/** Every IPC command the store issued, in order. */
+const invoked: Array<{ command: string; args?: Record<string, unknown> }> = [];
 
-describe('C1 — the session generation control publishes is the one Rust assigned', () => {
-  it('stamps the Rust-assigned generation on every relayed snapshot', () => {
+/**
+ * C1 — the session generation control hands Rust is the one Rust assigned.
+ *
+ * The hard-coded `1` is what `validate_stage_payload_header` compared against a
+ * coordinator sitting elsewhere, and dropped. Motion no longer travels through
+ * control at all, but the generation still does: it is the argument that pairs
+ * an alignment session with the socket feeding it, and Rust drops every
+ * transcript frame whose generation does not match.
+ */
+describe('C1 — the generation control hands Rust is the one Rust assigned', () => {
+  it('starts alignment under the assigned generation, not a literal 1', async () => {
     start({ sessionGeneration: 7 });
     startPrompting();
-    vi.advanceTimersByTime(1600 * 3);
-
-    const snapshots = relayedSnapshots();
-    expect(snapshots.length).toBeGreaterThan(0);
-    for (const snapshot of snapshots) {
-      // The hard-coded 1 is what `validate_stage_payload_header` compared
-      // against a coordinator sitting at 0, and dropped.
-      expect(snapshot.sessionGeneration).toBe(7);
-      expect(snapshot.sessionGeneration).not.toBe(1);
-    }
+    await vi.advanceTimersByTimeAsync(0);
+    const call = invoked.find((c) => c.command === 'start_alignment');
+    expect(call, 'the take never started an alignment session').toBeDefined();
+    expect(call?.args?.generation).toBe(7);
+    expect(call?.args?.generation).not.toBe(1);
   });
 
-  it('adopts a different generation for the next take rather than reusing one', () => {
+  it('adopts a different generation for the next take rather than reusing one', async () => {
     start({ sessionGeneration: 7 });
     startPrompting();
-    vi.advanceTimersByTime(1600 * 2);
+    await vi.advanceTimersByTimeAsync(0);
     stopSession();
     clearSession();
-    stage.publishStageSnapshot.mockClear();
+    invoked.length = 0;
 
     start({ sessionGeneration: 8 });
     startPrompting();
-    vi.advanceTimersByTime(1600 * 2);
-
-    const snapshots = relayedSnapshots();
-    expect(snapshots.length).toBeGreaterThan(0);
-    expect(snapshots.every((s) => s.sessionGeneration === 8)).toBe(true);
-  });
-});
-
-describe('C2 — stage://semantic-frame has a producer', () => {
-  it('emits a semantic motion frame to the stage window as the session moves', () => {
-    start();
-    startPrompting();
-    vi.advanceTimersByTime(1600 * 3);
-
-    const frames = emitted.filter((e) => e.event === STAGE_EVENT.semanticFrame);
-    expect(frames.length).toBeGreaterThan(0);
-    expect(frames[0]?.target).toBe('stage');
-
-    const frame = frames[0]?.payload as { sessionGeneration: number; estimatedUnit: number };
-    // The frame carries the same session generation as the snapshots, so the
-    // stage's frame receiver can gate on it.
-    expect(frame.sessionGeneration).toBe(7);
-    expect(typeof frame.estimatedUnit).toBe('number');
+    await vi.advanceTimersByTimeAsync(0);
+    const call = invoked.find((c) => c.command === 'start_alignment');
+    expect(call?.args?.generation).toBe(8);
   });
 
-  it('stops producing frames once the session is over', () => {
-    start();
+  it('stops the alignment session when the take ends', async () => {
+    start({ sessionGeneration: 7 });
     startPrompting();
-    vi.advanceTimersByTime(1600 * 2);
-    expect(emitted.some((e) => e.event === STAGE_EVENT.semanticFrame)).toBe(true);
-
     stopSession();
-    emitted.length = 0;
-    vi.advanceTimersByTime(1600 * 4);
-    expect(emitted.filter((e) => e.event === STAGE_EVENT.semanticFrame)).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(invoked.some((c) => c.command === 'stop_alignment')).toBe(true);
   });
 });
 
@@ -309,6 +312,25 @@ describe('C11 — transcript retention follows the setting Rust decided (§36.2)
   it('closes the session record on stop, with the §36.1 aggregate metrics', () => {
     start({ transcriptRetained: false });
     startPrompting();
+    // One real snapshot through the real driver: `sectionsReached` is a fact
+    // about alignment output, and a take that produced none has reached none.
+    alignmentFeed.push?.({
+      sessionGeneration: 7,
+      seq: 1,
+      state: 'following',
+      decision: 'localConfirmed',
+      confirmedToken: 1,
+      observedToken: 2,
+      rateTokensPerSecond: 2.5,
+      evidenceAudioMs: 1000,
+      atAudioMs: 1000,
+      maxPredictionMs: 900,
+      confidence: 0.9,
+      suggestionToken: null,
+      scriptLenTokens: 200,
+      observedAtom: 2,
+      confirmedAtom: 1,
+    });
     vi.advanceTimersByTime(1600 * 3);
     stopSession();
 

@@ -73,11 +73,11 @@
 
     {#if recentMovements.length > 0}
       <ol class="records">
-        {#each recentMovements as record (`${record.revision}-${record.sessionTimeMs}`)}
+        {#each recentMovements as record (`${record.seq}-${record.audioMs}`)}
           {@const explanation = describeMovement(record)}
           <li class="record">
             <p class="record-head">
-              <span class="stamp">{formatSessionTime(record.sessionTimeMs)}</span>
+              <span class="stamp">{formatSessionTime(record.audioMs)}</span>
               <span class="record-summary">{explanation.headline}</span>
             </p>
             <ul class="facts">

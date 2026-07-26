@@ -5,21 +5,20 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_SMOOTH_FOLLOW_PROFILE as DEFAULT_PROFILE,
-  type SemanticMotionFrame,
+  type AlignmentSnapshot,
   type StageTransitionDirective,
 } from '../../../src/shared/contracts';
 import {
   buildRenderedLineMap,
   createStageMotionEngine,
   emptyRenderedLineMap,
-  identityUnitAxis,
-  isCalibrationEvidence,
   limitsForState,
   REANCHOR_FADE_MS,
   type StageMotionEngine,
   type StageRenderedLineMap,
 } from '../../../src/stage/motion';
 import { fixtureFingerprint, syntheticLayout } from '../../fixtures/layout';
+import { snapshot } from '../../helpers/alignment';
 
 const R = 400;
 
@@ -45,92 +44,74 @@ function mapFor(layoutGeneration = 1, options: { columnWidthPx?: number } = {}) 
   return { map, layout };
 }
 
-function frame(overrides: Partial<SemanticMotionFrame> = {}): SemanticMotionFrame {
-  return {
-    sessionId: 'session-a',
-    sessionGeneration: 1,
-    scriptCompileHash: 'hash-a',
-    layoutGeneration: 1,
-    revision: 1,
-    epoch: 1,
-    sessionTimeMs: 0,
-    estimatedUnit: 0,
-    committedUnit: 0,
-    velocityUnitsPerSecond: 3,
-    accelerationUnitsPerSecond2: 0,
-    positionVariance: 0.2,
-    confidence: 0.92,
-    sectionId: 'section:0',
-    tokenIndex: 0,
-    sentenceId: 's0',
-    blockId: 'b0',
-    state: 'following',
-    behavior: 'normal',
-    finalEvidence: true,
-    motionProfileId: 'default-v1',
+/**
+ * A snapshot at a given position, with the audio clock and the rate agreeing.
+ *
+ * The engine's own `displayAt` extrapolates from `observedToken` at
+ * `rateTokensPerSecond` for at most `maxPredictionMs`, so a test that sets a
+ * position without setting the matching audio stamp is asking the stage to
+ * extrapolate from a moment that never happened.
+ */
+function snapshotAt(
+  unit: number,
+  atMs: number,
+  overrides: Partial<AlignmentSnapshot> = {},
+): AlignmentSnapshot {
+  return snapshot({
+    observedToken: unit,
+    confirmedToken: Math.max(0, unit - 1),
+    observedAtom: unit,
+    confirmedAtom: Math.max(0, unit - 1),
+    evidenceAudioMs: atMs,
+    atAudioMs: atMs,
     ...overrides,
-  };
+  });
 }
 
 function makeEngine(map: StageRenderedLineMap, maxScrollPx: number): StageMotionEngine {
-  const engine = createStageMotionEngine({ unitAxis: identityUnitAxis() });
-  engine.configureSession(
-    {
-      sessionId: 'session-a',
-      sessionGeneration: 1,
-      scriptCompileHash: 'hash-a',
-      layoutGeneration: map.generation,
-    },
-    0,
-  );
+  const engine = createStageMotionEngine();
+  engine.configureSession(1, 0);
   engine.setLineMap(map);
   engine.setBounds(0, maxScrollPx);
   return engine;
 }
 
-/** Drive the loop at a fixed refresh rate, feeding frames on a cadence. */
+/** Drive the loop at a fixed refresh rate, feeding snapshots on a cadence. */
 function drive(
   engine: StageMotionEngine,
   options: {
     durationMs: number;
     frameHz?: number;
-    semanticHz?: number;
+    /** Snapshot cadence. Defaults to 1 Hz — what the real engine produces. */
+    snapshotHz?: number;
     unitsPerSecond?: number;
     startUnit?: number;
-    state?: SemanticMotionFrame['state'];
-    transitionAt?: { atMs: number; directive: StageTransitionDirective };
+    state?: AlignmentSnapshot['state'];
+    decision?: AlignmentSnapshot['decision'];
   },
 ) {
   const frameHz = options.frameHz ?? 60;
-  const semanticHz = options.semanticHz ?? 20;
+  const snapshotHz = options.snapshotHz ?? 1;
   const dt = 1000 / frameHz;
-  const semanticInterval = 1000 / semanticHz;
+  const snapshotInterval = 1000 / snapshotHz;
   const unitsPerSecond = options.unitsPerSecond ?? 3;
-  let revision = 0;
-  let nextSemanticAt = 0;
+  let nextSnapshotAt = 0;
   const trace: ReturnType<StageMotionEngine['frame']>[] = [];
 
   for (let t = 0; t <= options.durationMs; t += dt) {
-    if (t >= nextSemanticAt) {
-      revision++;
+    if (t >= nextSnapshotAt) {
       const unit = (options.startUnit ?? 0) + (unitsPerSecond * t) / 1000;
-      engine.receiveFrame(
-        frame({
-          revision,
-          sessionTimeMs: t,
-          estimatedUnit: unit,
-          committedUnit: unit - 1,
-          tokenIndex: Math.floor(unit),
-          velocityUnitsPerSecond: unitsPerSecond,
+      engine.receiveSnapshot(
+        snapshotAt(unit, t, {
+          rateTokensPerSecond: options.state === undefined || options.state === 'following'
+            ? unitsPerSecond
+            : 0,
           state: options.state ?? 'following',
-          transition:
-            options.transitionAt && t >= options.transitionAt.atMs
-              ? options.transitionAt.directive
-              : undefined,
+          ...(options.decision ? { decision: options.decision } : {}),
         }),
         t,
       );
-      nextSemanticAt = t + semanticInterval;
+      nextSnapshotAt += snapshotInterval;
     }
     trace.push(engine.frame(t));
   }
@@ -141,13 +122,13 @@ describe('frame → pixels (§26.2)', () => {
   it('moves continuously between semantic frames, not in steps', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
-    const trace = drive(engine, { durationMs: 4000, semanticHz: 4 });
+    const trace = drive(engine, { durationMs: 4000, snapshotHz: 4 });
 
     const moving = trace.slice(120);
     // Every frame between (4 Hz) semantic updates still advances the document.
     const advancing = moving.filter((f, i) => i > 0 && f.scrollPx > (moving[i - 1]?.scrollPx ?? 0));
     expect(advancing.length / moving.length).toBeGreaterThan(0.9);
-    expect(trace[trace.length - 1]?.source).toBe('semantic');
+    expect(trace[trace.length - 1]?.source).toBe('alignment');
   });
 
   it('never moves backward and never jumps within a frame while following', () => {
@@ -235,11 +216,8 @@ describe('holding and degraded operation (§62, §32)', () => {
   });
 
   it('holds before any map has been built at all', () => {
-    const engine = createStageMotionEngine({ unitAxis: identityUnitAxis() });
-    engine.configureSession(
-      { sessionId: 'session-a', sessionGeneration: 1, scriptCompileHash: 'hash-a', layoutGeneration: 1 },
-      0,
-    );
+    const engine = createStageMotionEngine();
+    engine.configureSession(1, 0);
     engine.setBounds(0, 10_000);
     engine.setFallbackTarget({ scrollPx: 3000, disposition: 'follow', atMs: 0 });
     for (let t = 0; t < 1000; t += 16.7) engine.frame(t);
@@ -265,10 +243,13 @@ describe('holding and degraded operation (§62, §32)', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
     drive(engine, { durationMs: 1000 });
+    // Past the staleness threshold, so the fallback is the live source and its
+    // poisoned target is the one reaching the plant.
+    let last = engine.frame(20_000);
+    for (let t = 20_000; t < 21_000; t += 16.7) last = engine.frame(t);
     const before = engine.controller.state.q;
-    engine.setFallbackTarget({ scrollPx: Number.NaN, disposition: 'follow', atMs: 4000 });
-    let last = engine.frame(5000);
-    for (let t = 5000; t < 6000; t += 16.7) last = engine.frame(t);
+    engine.setFallbackTarget({ scrollPx: Number.NaN, disposition: 'follow', atMs: 21_000 });
+    for (let t = 21_000; t < 22_000; t += 16.7) last = engine.frame(t);
     expect(Number.isFinite(last.scrollPx)).toBe(true);
     expect(engine.controller.state.q).toBe(before);
     expect(engine.diagnostics.metrics.fusedFrames).toBeGreaterThan(0);
@@ -281,17 +262,17 @@ describe('holding and degraded operation (§62, §32)', () => {
     drive(engine, { durationMs: 1500 });
 
     for (const field of [
-      'estimatedUnit',
-      'committedUnit',
-      'velocityUnitsPerSecond',
-      'accelerationUnitsPerSecond2',
+      'observedToken',
+      'confirmedToken',
+      'rateTokensPerSecond',
       'confidence',
-      'tokenIndex',
-      'layoutGeneration',
-      'positionVariance',
+      'evidenceAudioMs',
+      'atAudioMs',
+      'maxPredictionMs',
+      'scriptLenTokens',
     ] as const) {
-      const accepted = engine.receiveFrame(
-        frame({ revision: 9000, sessionTimeMs: 1500, [field]: Number.NaN } as never),
+      const accepted = engine.receiveSnapshot(
+        snapshotAt(60, 1500, { [field]: Number.NaN } as never),
         1500,
       );
       expect(accepted, field).toBe(false);
@@ -305,15 +286,25 @@ describe('holding and degraded operation (§62, §32)', () => {
     expect(engine.receiver.stats.byReason.malformed).toBe(8);
   });
 
-  it('falls back to snapshot-driven pixel targets when frames go stale', () => {
+  it('falls back to a pixel target only once the feed is GONE, not merely quiet', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
     drive(engine, { durationMs: 1000 });
-
-    // No further semantic frames: the tracking snapshot path takes over.
     engine.setFallbackTarget({ scrollPx: 2000, disposition: 'follow', atMs: 5000 });
-    let last = engine.frame(5000);
-    for (let t = 5000; t < 9000; t += 16.7) last = engine.frame(t);
+
+    /*
+     * A presenter who stops talking produces no transcript events and so no
+     * snapshots. That is silence, not a fault, and `displayAt` already stops
+     * advancing at `maxPredictionMs` — so several seconds of quiet must NOT
+     * hand the display over to a guessed target.
+     */
+    let quiet = engine.frame(5000);
+    for (let t = 5000; t < 12_000; t += 16.7) quiet = engine.frame(t);
+    expect(quiet.source).toBe('alignment');
+
+    // Past the staleness threshold the feed is treated as gone.
+    let last = engine.frame(20_000);
+    for (let t = 20_000; t < 24_000; t += 16.7) last = engine.frame(t);
     expect(last.source).toBe('fallback');
     expect(last.scrollPx).toBeCloseTo(2000, 0);
   });
@@ -338,10 +329,7 @@ describe('holding and degraded operation (§62, §32)', () => {
     const engine = makeEngine(map, layout.contentHeightPx);
     drive(engine, { durationMs: 2000 });
     const before = engine.controller.state.q;
-    engine.receiveFrame(
-      frame({ revision: 9999, sessionTimeMs: 2000, estimatedUnit: 60, tokenIndex: 60 }),
-      2000,
-    );
+    engine.receiveSnapshot(snapshotAt(60, 2000), 2000);
     const hitched = engine.frame(6000); // 4-second gap
     expect(hitched.hitch).toBe(true);
     expect(hitched.scrollPx - before).toBeLessThan(60);
@@ -365,33 +353,35 @@ describe('transitions and authority (§53, §26.3)', () => {
     const destinationLine = map.lines[10];
     expect(destinationLine).toBeDefined();
 
-    drive(engine, {
-      durationMs: 1500,
-      transitionAt: {
-        atMs: 800,
-        directive: {
-          id: 't1',
-          type: 'reanchor',
-          authority: 'ordinary',
-          fromUnit: 3,
-          toUnit: destinationLine?.spokenUnitStart ?? 0,
-          destinationTokenIndex: destinationLine?.firstTokenIndex ?? 0,
-          issuedAtMs: 800,
-          expiresAtMs: 4000,
-          semanticEpoch: 1,
-          reason: 'large_forward_skip',
-        },
-      },
-    });
+    drive(engine, { durationMs: 800 });
 
-    // The document arrived at the destination line and — crucially — did not
-    // reverse afterwards while the worker's frames still described the old
-    // position: a re-anchor is a discontinuity, not a licence to run backward.
-    expect(engine.controller.state.q).toBeCloseTo(
-      (destinationLine?.baselineY ?? 0) - R,
-      0,
+    // An accepted relocation: the position moves a long way at once, and the
+    // engine says so with a decision code. The stage classifies that into one
+    // authorized discontinuity — there is no directive on the wire.
+    engine.receiveSnapshot(
+      snapshotAt(destinationLine?.spokenUnitStart ?? 0, 800, {
+        decision: 'relocationAccepted',
+      }),
+      800,
     );
-    // Repeated frames carrying the same directive must not re-run it.
+    const trace: number[] = [];
+    for (let t = 800; t <= 2300; t += 16.7) trace.push(engine.frame(t).scrollPx);
+
+    /*
+     * The document arrived at the destination line — within a line pitch,
+     * because §47.3 voice lead deliberately places the display a little ahead
+     * of the spoken word and ordinary following resumes the moment the
+     * discontinuity is spent.
+     */
+    const destinationPx = (destinationLine?.baselineY ?? 0) - R;
+    expect(Math.abs(engine.controller.state.q - destinationPx)).toBeLessThan(map.linePitchPx);
+    // And — crucially — it did not reverse afterwards: a re-anchor is a
+    // discontinuity, not a licence to run backward.
+    const settled = trace.slice(trace.length - 30);
+    for (let i = 1; i < settled.length; i++) {
+      expect(settled[i]!).toBeGreaterThanOrEqual((settled[i - 1] ?? 0) - 0.5);
+    }
+    // The discontinuity was spent exactly once.
     expect(engine.transitions.consumePlantOverwrite()).toBeNull();
   });
 
@@ -400,24 +390,21 @@ describe('transitions and authority (§53, §26.3)', () => {
     const engine = makeEngine(map, layout.contentHeightPx);
     drive(engine, { durationMs: 1000 });
     const before = engine.controller.state.q;
-    engine.receiveFrame(
-      frame({
-        revision: 5000,
-        sessionTimeMs: 1000,
-        estimatedUnit: 3,
-        transition: {
-          id: 's1',
-          type: 'settle',
-          authority: 'ordinary',
-          fromUnit: 3,
-          toUnit: 3,
-          destinationTokenIndex: 3,
-          issuedAtMs: 1000,
-          expiresAtMs: 5000,
-          semanticEpoch: 1,
-          reason: 'layout_recovery',
-        },
-      }),
+    // Submitted directly: only `reanchor`/`reset` may overwrite plant state,
+    // and a `settle` handed straight to the controller must still not.
+    engine.transitions.submit(
+      {
+        id: 's1',
+        type: 'settle',
+        authority: 'ordinary',
+        fromUnit: 3,
+        toUnit: 3,
+        destinationTokenIndex: 3,
+        issuedAtMs: 1000,
+        expiresAtMs: 5000,
+        semanticEpoch: 1,
+        reason: 'layout_recovery',
+      },
       1000,
     );
     const after = engine.frame(1016);
@@ -469,15 +456,8 @@ describe('forward target latch (§70.5)', () => {
     expect(gapPx(map, revisedUnit, 24)).toBeLessThan(THRESHOLD_PX);
     let last = engine.frame(4000);
     for (let t = 4000; t < 6000; t += 16.7) {
-      engine.receiveFrame(
-        frame({
-          revision: 100000 + Math.round(t),
-          sessionTimeMs: t,
-          estimatedUnit: revisedUnit,
-          committedUnit: revisedUnit - 1,
-          tokenIndex: revisedUnit,
-          velocityUnitsPerSecond: 6,
-        }),
+      engine.receiveSnapshot(
+        snapshotAt(revisedUnit, t, { rateTokensPerSecond: 6 }),
         t,
       );
       last = engine.frame(t);
@@ -502,14 +482,8 @@ describe('forward target latch (§70.5)', () => {
     let accepted = 0;
     for (let t = 3000; t < 5000; t += 16.7) {
       if (
-        engine.receiveFrame(
-          frame({
-            revision: 200000 + Math.round(t),
-            sessionTimeMs: t,
-            estimatedUnit: t % 200 < 100 ? 20 : 40,
-            tokenIndex: 20,
-            velocityUnitsPerSecond: 5,
-          }),
+        engine.receiveSnapshot(
+          snapshotAt(t % 200 < 100 ? 20 : 40, t, { rateTokensPerSecond: 5 }),
           t,
         )
       ) {
@@ -539,15 +513,8 @@ describe('forward target latch (§70.5)', () => {
     let firstReanchorAtMs: number | null = null;
     let last = engine.frame(4000);
     for (let t = 4016; t < 8000; t += 16.7) {
-      engine.receiveFrame(
-        frame({
-          revision: 500000 + Math.round(t),
-          sessionTimeMs: t,
-          estimatedUnit: trueUnit,
-          committedUnit: trueUnit,
-          tokenIndex: trueUnit,
-          velocityUnitsPerSecond: 3,
-        }),
+      engine.receiveSnapshot(
+        snapshotAt(trueUnit, t, { rateTokensPerSecond: 3 }),
         t,
       );
       last = engine.frame(t);
@@ -573,28 +540,16 @@ describe('forward target latch (§70.5)', () => {
     // 300 ms of "you are at unit 2" — under the persistence window — then the
     // tracker recovers. A blip must not reposition the document.
     for (let t = 4016; t < 4316; t += 16.7) {
-      engine.receiveFrame(
-        frame({
-          revision: 600000 + Math.round(t),
-          sessionTimeMs: t,
-          estimatedUnit: 2,
-          tokenIndex: 2,
-          velocityUnitsPerSecond: 3,
-        }),
+      engine.receiveSnapshot(
+        snapshotAt(2, t, { rateTokensPerSecond: 3 }),
         t,
       );
       engine.frame(t);
     }
     expect(engine.latchReanchors).toBe(0);
     for (let t = 4316; t < 5200; t += 16.7) {
-      engine.receiveFrame(
-        frame({
-          revision: 600000 + Math.round(t),
-          sessionTimeMs: t,
-          estimatedUnit: 48 + (3 * (t - 4316)) / 1000,
-          tokenIndex: 48,
-          velocityUnitsPerSecond: 3,
-        }),
+      engine.receiveSnapshot(
+        snapshotAt(48 + (3 * (t - 4316)) / 1000, t, { rateTokensPerSecond: 3 }),
         t,
       );
       engine.frame(t);
@@ -603,34 +558,31 @@ describe('forward target latch (§70.5)', () => {
     expect(engine.controller.state.q).toBeGreaterThanOrEqual(advanced - 1e-6);
   });
 
-  it('releases the latch for a backward-capable state (an explicit regression)', () => {
-    expect(limitsForState('rewinding', DEFAULT_PROFILE).allowBackward).toBe(true);
+  it('releases the latch for an accepted retake (an explicit regression)', () => {
+    // Backward capability comes from the `rewind` directive an accepted retake
+    // mints, not from a state — which is what makes "the presenter went back"
+    // a claim the engine has to stand behind rather than a mood the display
+    // can be in.
+    expect(
+      limitsForState('following', DEFAULT_PROFILE, { transition: 'rewind' }).allowBackward,
+    ).toBe(true);
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
     drive(engine, { durationMs: 4000, unitsPerSecond: 6 });
     const advanced = engine.controller.state.q;
 
     let last = engine.frame(4000);
+    engine.receiveSnapshot(
+      snapshotAt(3, 4000, { rateTokensPerSecond: 0, decision: 'retakeAccepted' }),
+      4000,
+    );
     for (let t = 4000; t < 7000; t += 16.7) {
-      engine.receiveFrame(
-        frame({
-          revision: 300000 + Math.round(t),
-          sessionTimeMs: t,
-          estimatedUnit: 3,
-          committedUnit: 3,
-          tokenIndex: 3,
-          velocityUnitsPerSecond: -2,
-          state: 'rewinding',
-          behavior: 'return',
-        }),
-        t,
-      );
       last = engine.frame(t);
     }
     expect(last.controllerState).not.toContain('target_regression');
     expect(engine.controller.state.q).toBeLessThan(advanced);
-    // A backward-capable state classifies the regression itself; the latch's
-    // escape hatch is for the case where nothing else will.
+    // The retake classifies the regression itself; the latch's escape hatch is
+    // for the case where nothing else will.
     expect(engine.latchReanchors).toBe(0);
   });
 
@@ -643,8 +595,8 @@ describe('forward target latch (§70.5)', () => {
     // position is followed instead of being clamped to the pre-override one.
     let last = engine.frame(4000);
     for (let t = 4016; t < 9000; t += 16.7) {
-      engine.receiveFrame(
-        frame({ revision: 400000 + Math.round(t), sessionTimeMs: t, estimatedUnit: 5, tokenIndex: 5 }),
+      engine.receiveSnapshot(
+        snapshotAt(5, t),
         t,
       );
       last = engine.frame(t);
@@ -652,8 +604,18 @@ describe('forward target latch (§70.5)', () => {
     // The latch does not drag the plant back toward the position it held before
     // the manual reposition: the target is the path's own answer for unit 5.
     expect(last.controllerState).not.toContain('target_regression');
-    expect(engine.targetRegressions).toBe(0);
-    expect(last.targetPx).toBeCloseTo(map.sampleMotionPath(5)?.scrollPx ?? -1, 0);
+    // No DISCONTINUITY was spent: the latch let go because a manual reposition
+    // is an explicit classification, not because it gave up and re-anchored.
+    expect(engine.latchReanchors).toBe(0);
+    /*
+     * And the target is the path's own answer for where the display is —
+     * `lastDisplayToken`, not the raw reported position, because §47.3 voice
+     * lead deliberately places the display slightly ahead of the spoken word.
+     * Asserting against unit 5 would be asserting that the lead does nothing.
+     */
+    const displayed = engine.lastDisplayToken ?? -1;
+    expect(displayed).toBeGreaterThan(5);
+    expect(last.targetPx).toBeCloseTo(map.sampleMotionPath(displayed)?.scrollPx ?? -1, 0);
   });
 });
 
@@ -699,15 +661,8 @@ describe('visual-block spans (§8.6)', () => {
     const inside = ((span?.unitStart ?? 0) + (span?.unitEnd ?? 1)) / 2;
     let last = engine.frame(0);
     for (let t = 0; t < 2500; t += 16.7) {
-      engine.receiveFrame(
-        frame({
-          revision: 1 + Math.round(t),
-          sessionTimeMs: t,
-          estimatedUnit: inside,
-          committedUnit: inside,
-          tokenIndex: Math.floor(inside),
-          velocityUnitsPerSecond: 0.2,
-        }),
+      engine.receiveSnapshot(
+        snapshotAt(inside, t, { rateTokensPerSecond: 0.2 }),
         t,
       );
       last = engine.frame(t);
@@ -725,27 +680,15 @@ describe('visual-block spans (§8.6)', () => {
     const inside = ((span?.unitStart ?? 0) + (span?.unitEnd ?? 1)) / 2;
     let t = 0;
     for (; t < 2000; t += 16.7) {
-      engine.receiveFrame(
-        frame({
-          revision: 1 + Math.round(t),
-          sessionTimeMs: t,
-          estimatedUnit: inside,
-          tokenIndex: Math.floor(inside),
-          velocityUnitsPerSecond: 0.2,
-        }),
+      engine.receiveSnapshot(
+        snapshotAt(inside, t, { rateTokensPerSecond: 0.2 }),
         t,
       );
       engine.frame(t);
     }
     const beyond = (span?.unitEnd ?? 1) + 0.5;
-    engine.receiveFrame(
-      frame({
-        revision: 999999,
-        sessionTimeMs: t,
-        estimatedUnit: beyond,
-        tokenIndex: Math.ceil(beyond),
-        velocityUnitsPerSecond: 2,
-      }),
+    engine.receiveSnapshot(
+      snapshotAt(beyond, t, { rateTokensPerSecond: 2 }),
       t,
     );
     const crossed = engine.frame(t);
@@ -763,7 +706,7 @@ describe('layout invalidation during Live (§33)', () => {
     const wide = mapFor(1, { columnWidthPx: 900 });
     const engine = makeEngine(wide.map, wide.layout.contentHeightPx);
     drive(engine, { durationMs: 5000 });
-    const unitBefore = engine.lastPrediction?.unit ?? 0;
+    const unitBefore = engine.lastDisplayToken ?? 0;
     expect(unitBefore).toBeGreaterThan(5);
 
     // The user shrinks the column: same script, completely different wrapping.
@@ -774,89 +717,11 @@ describe('layout invalidation during Live (§33)', () => {
     const expected = narrow.map.sampleMotionPath(unitBefore)?.scrollPx ?? 0;
     expect(engine.controller.state.q).toBeCloseTo(expected, 0);
     expect(engine.controller.state.a).toBe(0);
-    expect(engine.receiver.gate.layoutGeneration).toBe(2);
+    expect(engine.map?.generation).toBe(2);
   });
 
-  it('rejects frames stamped with the superseded layout generation', () => {
-    const first = mapFor(1);
-    const engine = makeEngine(first.map, first.layout.contentHeightPx);
-    drive(engine, { durationMs: 1000 });
-    const second = mapFor(2);
-    engine.layoutRecovery({ map: second.map, nowMs: 1000 });
-    const stale = engine.receiveFrame(
-      frame({ revision: 8000, layoutGeneration: 1, sessionTimeMs: 1050 }),
-      1050,
-    );
-    expect(stale).toBe(false);
-    expect(engine.receiver.stats.byReason.layout_generation).toBeGreaterThan(0);
-  });
 });
 
-describe('unit-axis calibration evidence (§6 seam)', () => {
-  it('only calibrates on frames the tracker actually stands behind', () => {
-    expect(isCalibrationEvidence(frame())).toBe(true);
-    expect(isCalibrationEvidence(frame({ state: 'catching_up' }))).toBe(true);
-
-    // States that are guessing, coasting, or mid-correction.
-    for (const state of [
-      'uncertain',
-      'coasting',
-      'acquiring',
-      'adlib_hold',
-      'retake_pending',
-      'rewinding',
-      'reanchoring',
-      'paused',
-      'lost_local',
-    ] as const) {
-      expect(isCalibrationEvidence(frame({ state })), state).toBe(false);
-    }
-    // Low confidence, and an in-flight retake, are also not evidence.
-    expect(isCalibrationEvidence(frame({ confidence: 0.2 }))).toBe(false);
-    expect(isCalibrationEvidence(frame({ behavior: 'retake' }))).toBe(false);
-    expect(isCalibrationEvidence(frame({ behavior: 'retake_candidate' }))).toBe(false);
-  });
-
-  it('does not let uncertain frames distort the learned axis', () => {
-    const clean = createStageMotionEngine();
-    const polluted = createStageMotionEngine();
-    for (const engine of [clean, polluted]) {
-      engine.configureSession(
-        { sessionId: 'session-a', sessionGeneration: 1, scriptCompileHash: 'hash-a', layoutGeneration: 1 },
-        0,
-      );
-    }
-    let revision = 0;
-    for (let token = 0; token <= 60; token += 4) {
-      revision++;
-      const sound = frame({
-        revision,
-        sessionTimeMs: revision * 50,
-        estimatedUnit: token * 1.25,
-        tokenIndex: token,
-      });
-      clean.receiveFrame(sound, revision * 50);
-      polluted.receiveFrame(sound, revision * 50);
-      // The polluted feed also carries a low-confidence guess that is wrong by
-      // a wide margin — the kind a tracker emits while it is unsure.
-      revision++;
-      polluted.receiveFrame(
-        frame({
-          revision,
-          sessionTimeMs: revision * 50,
-          estimatedUnit: token * 1.25 + 0.6,
-          tokenIndex: token + 25,
-          state: 'uncertain',
-          confidence: 0.2,
-          behavior: 'lost',
-        }),
-        revision * 50,
-      );
-    }
-    expect(clean.unitAxis.toMapUnit(50)).toBeCloseTo(40, 3);
-    expect(polluted.unitAxis.toMapUnit(50)).toBeCloseTo(clean.unitAxis.toMapUnit(50), 3);
-  });
-});
 
 describe('acknowledgement and degradation (§54, §61)', () => {
   it('emits an ack on a low periodic cadence, not per frame', () => {
@@ -868,7 +733,7 @@ describe('acknowledgement and degradation (§54, §61)', () => {
     expect(acks.length).toBeLessThan(trace.length / 10);
 
     const ack = acks[acks.length - 1];
-    expect(ack?.sessionId).toBe('session-a');
+    expect(ack?.sessionGeneration).toBe(1);
     expect(ack?.layoutGeneration).toBe(1);
     expect(ack?.activeLineId).toBeTruthy();
     expect(ack?.controllerState).toContain('following');
@@ -882,8 +747,8 @@ describe('acknowledgement and degradation (§54, §61)', () => {
     let last = engine.frame(0);
     for (let i = 0; i < frames; i++) {
       t += intervalsMs[i % intervalsMs.length] ?? 16.7;
-      engine.receiveFrame(
-        frame({ revision: i + 1, sessionTimeMs: t, estimatedUnit: i * 0.2, tokenIndex: i }),
+      engine.receiveSnapshot(
+        snapshotAt(i * 0.2, t),
         t,
       );
       last = engine.frame(t);
@@ -901,7 +766,7 @@ describe('acknowledgement and degradation (§54, §61)', () => {
     const result = engine.frame(t + 50);
     expect(result.controllerState).toContain('degraded');
     // Still a controller, never event-driven jumps.
-    expect(result.source).toBe('semantic');
+    expect(result.source).toBe('alignment');
   });
 
   /**

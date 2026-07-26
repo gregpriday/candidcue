@@ -21,12 +21,11 @@
  * here depends on wall-clock scheduling.
  */
 import { describe, expect, it } from 'vitest';
-import type { SemanticMotionFrame, StageTransitionDirective } from '../../../src/shared/contracts';
+import type { AlignmentSnapshot, StageTransitionDirective } from '../../../src/shared/contracts';
 import {
   buildRenderedLineMap,
   createStageMotionEngine,
   emptyRenderedLineMap,
-  identityUnitAxis,
   REANCHOR_FADE_MS,
   type StageMotionEngine,
   type StageRenderedLineMap,
@@ -65,29 +64,23 @@ function pxFor(map: StageRenderedLineMap, unit: number): number {
   return at.scrollPx;
 }
 
-function semanticFrame(overrides: Partial<SemanticMotionFrame> = {}): SemanticMotionFrame {
+function alignmentSnapshot(overrides: Partial<AlignmentSnapshot> = {}): AlignmentSnapshot {
   return {
-    sessionId: 's',
     sessionGeneration: 1,
-    scriptCompileHash: 'h',
-    layoutGeneration: 1,
-    revision: 1,
-    epoch: 1,
-    sessionTimeMs: 0,
-    estimatedUnit: START_UNIT,
-    committedUnit: START_UNIT,
-    velocityUnitsPerSecond: 0,
-    accelerationUnitsPerSecond2: 0,
-    positionVariance: 0.2,
+    seq: 1,
+    atAudioMs: 0,
+    evidenceAudioMs: 0,
+    observedToken: START_UNIT,
+    confirmedToken: START_UNIT,
+    rateTokensPerSecond: 0,
+    maxPredictionMs: 900,
     confidence: 0.9,
-    sectionId: 'sec',
-    tokenIndex: START_UNIT,
-    sentenceId: 'sent',
-    blockId: 'b',
     state: 'following',
-    behavior: 'normal',
-    finalEvidence: true,
-    motionProfileId: 'default-v1',
+    decision: 'localConfirmed',
+    suggestionToken: null,
+    scriptLenTokens: 10_000,
+    observedAtom: 0,
+    confirmedAtom: 0,
     ...overrides,
   };
 }
@@ -112,11 +105,8 @@ function reanchorDirective(
 
 function scenario(options: { reducedMotion?: boolean; invalidMap?: boolean } = {}) {
   const { map, layout } = makeMap();
-  const engine = createStageMotionEngine({ unitAxis: identityUnitAxis() });
-  engine.configureSession(
-    { sessionId: 's', sessionGeneration: 1, scriptCompileHash: 'h', layoutGeneration: 1 },
-    0,
-  );
+  const engine = createStageMotionEngine();
+  engine.configureSession(1, 0);
   engine.setLineMap(
     options.invalidMap ? emptyRenderedLineMap(fixtureFingerprint({ layoutGeneration: 1 })) : map,
   );
@@ -136,10 +126,14 @@ interface Sample {
 
 /**
  * Drive the loop frame by frame on an injected clock, re-affirming the
- * presenter's position every 50 ms exactly as the worker would. `directiveAt`
- * attaches a directive to the first frame at or after that time; because
- * directives are idempotent by id, re-sending it afterwards is a no-op, which
- * is also what the real worker does.
+ * presenter's position every 50 ms.
+ *
+ * `directives` submits a directive on the first frame at or after its time.
+ * They are submitted directly rather than ridden in on a snapshot because the
+ * engine does not carry directives any more: it reports positions and decision
+ * codes, and the stage mints its own. These tests are about what the FADE does
+ * with a directive, so they hand one over rather than arranging for one to be
+ * classified into existence.
  */
 function drive(
   engine: StageMotionEngine,
@@ -168,17 +162,17 @@ function drive(
     const arriving = (options.directives ?? []).find(
       (d) => d.atMs > t - FRAME_MS && d.atMs <= t,
     );
+    if (arriving) engine.transitions.submit(arriving.directive, t);
     if (arriving || t >= nextSemanticAt) {
       revision++;
       const unit = unitFor(t);
-      engine.receiveFrame(
-        semanticFrame({
-          revision,
-          sessionTimeMs: t,
-          estimatedUnit: unit,
-          committedUnit: unit,
-          tokenIndex: unit,
-          ...(arriving ? { transition: arriving.directive } : {}),
+      engine.receiveSnapshot(
+        alignmentSnapshot({
+          seq: revision,
+          atAudioMs: t,
+          evidenceAudioMs: t,
+          observedToken: unit,
+          confirmedToken: unit,
         }),
         t,
       );
@@ -493,10 +487,7 @@ describe('§20.4 — opacity returns to 1 on every exit path', () => {
       directives: [{ atMs: DIRECTIVE_AT_MS, directive: reanchorDirective() }],
       unitFor: unitAfterDirective(),
     });
-    engine.configureSession(
-      { sessionId: 's2', sessionGeneration: 2, scriptCompileHash: 'h', layoutGeneration: 1 },
-      1000,
-    );
+  engine.configureSession(1, 1000);
     expect(engine.frame(1016).documentOpacity).toBe(1);
   });
 });
@@ -601,7 +592,7 @@ describe('§20.4 — the fade is reserved for corrections worth obscuring', () =
 });
 
 describe('§20.4 — the degraded snapshot path fades too', () => {
-  it('obscures a fade_jump disposition from the TrackingSnapshot path', () => {
+  it('obscures a fade_jump disposition from the fallback target path', () => {
     const { engine, map } = scenario();
     const target = pxFor(map, DESTINATION_UNIT);
     engine.setFallbackTarget({ scrollPx: target, disposition: 'reanchor', atMs: 0 });

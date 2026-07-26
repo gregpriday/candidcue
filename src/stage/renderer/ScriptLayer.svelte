@@ -11,21 +11,23 @@
     3. applies the resulting scroll offset to one transformed layer,
     4. refreshes active/passed styling at a separately capped rate.
 
-  `TrackingSnapshot` is still honoured, but only as the degraded path used when
-  no semantic frame is current — it supplies a pixel target to the same
-  jerk-limited controller instead of driving its own spring (companion §32.1–5,
-  which replaces primary §32).
+  A plain pixel target is still honoured, but only as the fallback used when no
+  alignment snapshot is current — it drives the same jerk-limited controller
+  rather than a spring of its own (companion §32.1–5, which replaces primary
+  §32).
 -->
 <script lang="ts">
   import { untrack } from 'svelte';
   import type {
-    SemanticMotionFrame,
+    AlignmentSnapshot,
     SmoothFollowProfile,
     StageMotionAck,
     StageRenderDocument,
     StageSettings,
-    TrackingSnapshot,
+    StageViewportHintPayload,
   } from '../../shared/contracts';
+  import { STAGE_EVENT, VIEWPORT_HINT_INTERVAL_MS } from '../../shared/contracts';
+  import { emitStageEvent } from '../events';
   import {
     computeReadingBand,
     bandCorrection,
@@ -61,7 +63,7 @@
   let {
     doc,
     settings,
-    tracking = null,
+    alignment = null,
     frozen = false,
     reducedMotion = false,
     compact = false,
@@ -79,7 +81,7 @@
   }: {
     doc: StageRenderDocument;
     settings: StageSettings;
-    tracking?: TrackingSnapshot | null;
+    alignment?: AlignmentSnapshot | null;
     frozen?: boolean;
     reducedMotion?: boolean;
     compact?: boolean;
@@ -307,14 +309,37 @@
 
   const blockIndexById = $derived(new Map(doc.blocks.map((b, i) => [b.id, i])));
   const sentencesById = $derived(new Map((doc.sentences ?? []).map((s) => [s.id, s])));
+
+  /**
+   * Which rendered block a token position falls in.
+   *
+   * Resolved through the token→node table rather than carried on the snapshot:
+   * the engine reports positions and nothing else, and block identity is a
+   * property of THIS layout, which only the stage knows.
+   */
+  function blockIndexForToken(token: number): number | undefined {
+    const entry = findTokenEntry(Math.round(token));
+    return entry ? blockIndexById.get(entry.blockId) : undefined;
+  }
+
+  /** The sentence containing `token`, for the current-phrase underlay. */
+  function sentenceForToken(token: number | null) {
+    if (token === null) return undefined;
+    for (const sentence of sentencesById.values()) {
+      if (token >= sentence.startTokenIndex && token <= sentence.endTokenIndex) return sentence;
+    }
+    return undefined;
+  }
   const currentBlockIndex = $derived(
     activeTokenIndex !== null
       ? (blockIndexById.get(findTokenEntry(activeTokenIndex)?.blockId ?? '') ?? -1)
-      : tracking
-        ? (blockIndexById.get(tracking.blockId) ?? -1)
+      : alignment
+        ? (blockIndexForToken(alignment.confirmedToken) ?? -1)
         : -1,
   );
-  const cursorTokenIndex = $derived(activeTokenIndex ?? tracking?.tokenIndex ?? null);
+  const cursorTokenIndex = $derived(
+    activeTokenIndex ?? (alignment ? Math.round(alignment.confirmedToken) : null),
+  );
 
   function zoneFor(index: number): 'past' | 'current' | 'future' {
     if (currentBlockIndex < 0) return 'future';
@@ -545,7 +570,7 @@
       // The presenter did not ask for anything: the map simply got more
       // accurate. Preserve the position ON THE GLASS rather than snapping the
       // reading line, so a corrected estimate is invisible instead of a jump.
-      const anchorUnit = engine.lastPrediction?.unit ?? null;
+      const anchorUnit = engine.lastDisplayToken;
       const wasAt = anchorUnit === null ? null : previousMap.sampleMotionPath(anchorUnit)?.scrollPx;
       engine.layoutRecovery({
         map: next,
@@ -556,7 +581,6 @@
       });
     } else {
       engine.setLineMap(next);
-      engine.receiver.setGate({ layoutGeneration }, now);
     }
     if (layoutChanged) onlayoutgeneration?.(layoutGeneration);
 
@@ -591,15 +615,7 @@
 
   /* ---- session gate (companion §26.1) ---- */
   $effect(() => {
-    engine.configureSession(
-      {
-        sessionId,
-        sessionGeneration,
-        scriptCompileHash,
-        layoutGeneration,
-      },
-      performance.now(),
-    );
+    engine.configureSession(sessionGeneration, performance.now());
   });
 
   $effect(() => {
@@ -610,17 +626,17 @@
     engine.setBounds(0, maxScroll);
   });
 
-  /* ---- degraded path: TrackingSnapshot → pixel target (§32 fallback) ---- */
+  /* ---- fallback path: snapshot → pixel target, when the engine holds ---- */
   $effect(() => {
-    const snap = tracking;
+    const snap = alignment;
     if (!snap || vh === 0) return;
     const raf = requestAnimationFrame(() => applyTrackingFallback(snap));
     return () => cancelAnimationFrame(raf);
   });
 
-  function applyTrackingFallback(snap: TrackingSnapshot) {
+  function applyTrackingFallback(snap: AlignmentSnapshot) {
     if (performance.now() < manualUntilMs) return;
-    const pos = tokenRect(snap.tokenIndex);
+    const pos = tokenRect(Math.round(snap.confirmedToken));
     if (!pos) return;
     // §62: the off-window branch of `tokenRect` estimates a position from block
     // offsets and ESTIMATED heights. That is guessed geometry, and it is exactly
@@ -637,12 +653,14 @@
     target = clamp(target, 0, maxScroll);
 
     let disposition: FallbackTarget['disposition'] = 'follow';
-    if (snap.provisional) {
-      // Provisional matches never trigger large movement (spec §16.4).
+    if (snap.state !== 'following') {
+      // Weak or contested evidence never triggers large movement (§16.4). The
+      // engine has already stopped advancing the position; this bounds what
+      // the fallback may do with the position it is holding.
       target = clampProvisionalTarget(current, target, PROVISIONAL_MAX_CORRECTION_PX);
     } else {
       const cls = classifyTransition({
-        movement: snap.movement,
+        decision: snap.decision,
         distancePx: Math.abs(target - current),
         viewportHeightPx: vh,
         reducedMotion,
@@ -787,10 +805,10 @@
     if (result.documentOpacity !== documentOpacity) documentOpacity = result.documentOpacity;
 
     if (result.styleTick) {
-      if (result.activeTokenIndex !== null && result.source === 'semantic') {
+      if (result.activeTokenIndex !== null && result.source === 'alignment') {
         activeTokenIndex = result.activeTokenIndex;
-      } else if (result.source !== 'semantic') {
-        activeTokenIndex = tracking?.tokenIndex ?? null;
+      } else if (result.source !== 'alignment') {
+        activeTokenIndex = alignment ? Math.round(alignment.confirmedToken) : null;
       }
       // Layout reads for the underlay happen on the capped styling tick, never
       // on every frame (§63).
@@ -805,6 +823,7 @@
     }
 
     if (result.ack) onmotionack?.(result.ack);
+    reportViewport(now);
     rafId = requestAnimationFrame(frame);
   }
 
@@ -825,7 +844,7 @@
       return;
     }
     const planeRect = planeEl.getBoundingClientRect();
-    const sentence = tracking ? sentencesById.get(tracking.sentenceId) : undefined;
+    const sentence = sentenceForToken(token);
     const startEl = sentence
       ? planeEl.querySelector<HTMLElement>(`[data-t="${sentence.startTokenIndex}"]`)
       : null;
@@ -867,8 +886,8 @@
   /* ---- public surface ---- */
 
   /** Feed one accepted-or-rejected semantic frame to the receiver (§26.1). */
-  export function pushSemanticFrame(frame: SemanticMotionFrame): boolean {
-    return engine.receiveFrame(frame, performance.now());
+  export function pushAlignmentSnapshot(snapshot: AlignmentSnapshot): boolean {
+    return engine.receiveSnapshot(snapshot, performance.now());
   }
 
   /**
@@ -903,6 +922,64 @@
       rejections: engine.receiver.stats,
       degraded: engine.diagnostics.degraded,
     };
+  }
+
+  /* ------------------------------------------------------------- viewport --
+   * The "this is what I can see" prior.
+   *
+   * A PRIOR, not a command: it biases the engine's candidate ranking toward
+   * the part of the script actually on the glass, which is what makes a lock
+   * that starts mid-script fast instead of ambiguous, and makes a far jump to
+   * something off-screen need an extra round of evidence before it is taken.
+   *
+   * It has to travel as an event rather than a command because the stage
+   * window holds no invoke permission at all. Debounced, because a flung
+   * scroll would otherwise put a hint on the bus for every frame of its
+   * travel, and the engine only re-ranks about once a second anyway.
+   */
+  let lastHintAtMs = 0;
+  let lastHintRange: [number, number] | null = null;
+
+  function reportViewport(nowMs: number) {
+    if (nowMs - lastHintAtMs < VIEWPORT_HINT_INTERVAL_MS) return;
+    const map = lineMap;
+    if (!map || !map.valid || vh === 0) {
+      // No measured geometry means no honest claim about what is visible.
+      // Clearing is the truthful move: an asserted range we cannot stand
+      // behind would bias the engine toward the wrong part of the script.
+      if (lastHintRange !== null) {
+        lastHintRange = null;
+        lastHintAtMs = nowMs;
+        emitStageEvent<StageViewportHintPayload>(STAGE_EVENT.viewportHint, {
+          sessionGeneration,
+          firstToken: 0,
+          lastToken: 0,
+          cleared: true,
+        });
+      }
+      return;
+    }
+
+    let first = Number.POSITIVE_INFINITY;
+    let last = Number.NEGATIVE_INFINITY;
+    for (const line of map.lines) {
+      // Document coordinates; the plane is translated by `-scrollY`, so a line
+      // is on screen when its box overlaps [scrollY, scrollY + vh].
+      if (line.bottomY < scrollY || line.topY > scrollY + vh) continue;
+      if (line.firstTokenIndex < first) first = line.firstTokenIndex;
+      if (line.lastTokenIndex > last) last = line.lastTokenIndex;
+    }
+    if (!Number.isFinite(first) || !Number.isFinite(last) || last < first) return;
+    if (lastHintRange && lastHintRange[0] === first && lastHintRange[1] === last) return;
+
+    lastHintRange = [first, last];
+    lastHintAtMs = nowMs;
+    emitStageEvent<StageViewportHintPayload>(STAGE_EVENT.viewportHint, {
+      sessionGeneration,
+      firstToken: first,
+      lastToken: last,
+      cleared: false,
+    });
   }
 
   const visibleBlocks = $derived(

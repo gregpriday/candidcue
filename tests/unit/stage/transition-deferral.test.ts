@@ -16,40 +16,33 @@
  * prevent.
  */
 import { describe, expect, it } from 'vitest';
-import type { SemanticMotionFrame, StageTransitionDirective } from '../../../src/shared/contracts';
+import type { AlignmentSnapshot, StageTransitionDirective } from '../../../src/shared/contracts';
 import {
   buildRenderedLineMap,
   createStageMotionEngine,
   createStageTransitionController,
   emptyRenderedLineMap,
-  identityUnitAxis,
   REANCHOR_FADE_MS,
 } from '../../../src/stage/motion';
 import { fixtureFingerprint, syntheticLayout } from '../../fixtures/layout';
 
-function frame(overrides: Partial<SemanticMotionFrame>): SemanticMotionFrame {
+function frame(overrides: Partial<AlignmentSnapshot>): AlignmentSnapshot {
   return {
-    sessionId: 's',
     sessionGeneration: 1,
-    scriptCompileHash: 'h',
-    layoutGeneration: 1,
-    revision: 1,
-    epoch: 1,
-    sessionTimeMs: 0,
-    estimatedUnit: 0,
-    committedUnit: 0,
-    velocityUnitsPerSecond: 0,
-    accelerationUnitsPerSecond2: 0,
-    positionVariance: 0,
+    seq: 1,
+    atAudioMs: 0,
+    evidenceAudioMs: 0,
+    observedToken: 0,
+    confirmedToken: 0,
+    rateTokensPerSecond: 0,
+    maxPredictionMs: 900,
     confidence: 0.9,
-    sectionId: 'sec',
-    tokenIndex: 0,
-    sentenceId: 'sent',
-    blockId: 'b',
-    state: 'reanchoring',
-    behavior: 'large_skip',
-    finalEvidence: true,
-    motionProfileId: 'p',
+    state: 'following',
+    decision: 'localConfirmed',
+    suggestionToken: null,
+    scriptLenTokens: 10_000,
+    observedAtom: 0,
+    confirmedAtom: 0,
     ...overrides,
   };
 }
@@ -89,11 +82,8 @@ function scenario() {
     viewportHeightPx: 1080,
     maxScrollPx: layout.contentHeightPx,
   });
-  const engine = createStageMotionEngine({ unitAxis: identityUnitAxis() });
-  engine.configureSession(
-    { sessionId: 's', sessionGeneration: 1, scriptCompileHash: 'h', layoutGeneration: 1 },
-    0,
-  );
+  const engine = createStageMotionEngine();
+  engine.configureSession(1, 0);
   // Mid-relayout retry window (§62): the map is momentarily unusable.
   engine.setLineMap(emptyRenderedLineMap(fixtureFingerprint({ layoutGeneration: 1 })));
   engine.setBounds(0, layout.contentHeightPx);
@@ -107,7 +97,8 @@ describe('a directive that cannot be resolved is parked, not spent', () => {
     const { engine, validMap } = scenario();
     const directive = retakeDirective();
 
-    engine.receiveFrame(frame({ revision: 1, sessionTimeMs: 100, transition: directive }), 100);
+    engine.transitions.submit(directive, 100);
+    engine.receiveSnapshot(frame({ seq: 1, atAudioMs: 100, evidenceAudioMs: 100 }), 100);
     const held = engine.frame(116);
     // Nothing moved — there was nowhere to move to — and the licence was
     // parked rather than burned.
@@ -121,16 +112,16 @@ describe('a directive that cannot be resolved is parked, not spent', () => {
     for (let t = 132; t < 4000; t += 16) {
       const step = Math.floor(t / 50);
       if (step * 50 >= t - 16) {
-        engine.receiveFrame(
+        // The same directive is re-submitted; it stays a duplicate, and it no
+        // longer needs to be anything else.
+        engine.transitions.submit(directive, t);
+        engine.receiveSnapshot(
           frame({
-            revision: step + 2,
-            sessionTimeMs: step * 50,
-            estimatedUnit: 10,
-            committedUnit: 10,
-            tokenIndex: 10,
-            // The worker keeps re-sending the same directive; it stays a
-            // duplicate, and it no longer needs to be anything else.
-            transition: directive,
+            seq: step + 2,
+            atAudioMs: step * 50,
+            evidenceAudioMs: step * 50,
+            observedToken: 10,
+            confirmedToken: 10,
           }),
           t,
         );
@@ -146,10 +137,8 @@ describe('a directive that cannot be resolved is parked, not spent', () => {
 
   it('spends the licence on the FIRST frame after the map resolves', () => {
     const { engine, validMap } = scenario();
-    engine.receiveFrame(
-      frame({ revision: 1, sessionTimeMs: 100, transition: retakeDirective() }),
-      100,
-    );
+    engine.transitions.submit(retakeDirective(), 100);
+    engine.receiveSnapshot(frame({ seq: 1, atAudioMs: 100, evidenceAudioMs: 100 }), 100);
     engine.frame(116);
     engine.frame(132);
     expect(engine.deferredPlantOverwrites).toBe(2);
@@ -179,12 +168,10 @@ describe('a directive that cannot be resolved is parked, not spent', () => {
 
   it('lets the directive expire rather than parking a licence forever', () => {
     const { engine, validMap } = scenario();
-    engine.receiveFrame(
-      frame({ revision: 1, sessionTimeMs: 100, transition: retakeDirective({ expiresAtMs: 800 }) }),
-      100,
-    );
+    engine.transitions.submit(retakeDirective({ expiresAtMs: 800 }), 100);
+    engine.receiveSnapshot(frame({ seq: 1, atAudioMs: 100, evidenceAudioMs: 100 }), 100);
     for (let t = 116; t < 1200; t += 16) {
-      engine.receiveFrame(frame({ revision: 1000 + t, sessionTimeMs: t }), t);
+      engine.receiveSnapshot(frame({ seq: 1000 + t, atAudioMs: t , evidenceAudioMs: t }), t);
       engine.frame(t);
     }
     expect(engine.transitions.active).toBeNull();
@@ -199,10 +186,8 @@ describe('a directive that cannot be resolved is parked, not spent', () => {
 
   it('does not resurrect a licence for a superseded directive', () => {
     const { engine, validMap } = scenario();
-    engine.receiveFrame(
-      frame({ revision: 1, sessionTimeMs: 100, transition: retakeDirective() }),
-      100,
-    );
+    engine.transitions.submit(retakeDirective(), 100);
+    engine.receiveSnapshot(frame({ seq: 1, atAudioMs: 100, evidenceAudioMs: 100 }), 100);
     engine.frame(116);
     expect(engine.deferredPlantOverwrites).toBe(1);
 
@@ -214,7 +199,8 @@ describe('a directive that cannot be resolved is parked, not spent', () => {
       issuedAtMs: 200,
       expiresAtMs: 6000,
     });
-    engine.receiveFrame(frame({ revision: 2, sessionTimeMs: 200, transition: newer }), 200);
+    engine.transitions.submit(newer, 200);
+    engine.receiveSnapshot(frame({seq: 2, atAudioMs: 200, evidenceAudioMs: 200}), 200);
     engine.setLineMap(validMap);
     let applied = engine.frame(216);
     for (let t = 232; t <= 216 + REANCHOR_FADE_MS + 16; t += 16) applied = engine.frame(t);

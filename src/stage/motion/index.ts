@@ -4,12 +4,10 @@
  * Import the engine from here; the individual modules stay separately testable.
  */
 export * from './units';
-export * from './unitAxis';
 export * from './monotone';
 export * from './lineMap';
 export * from './measure';
-export * from './frameReceiver';
-export * from './predictor';
+export * from './alignmentReceiver';
 export * from './profiles';
 export * from './controller';
 export * from './planner';

@@ -4,6 +4,7 @@
 //! boundary as the stable error payload (spec §44.12). Invoke argument names
 //! are the camelCase forms of the Rust parameter names.
 
+pub mod align_cmds;
 pub mod assets_cmds;
 pub mod listeners_cmds;
 pub mod inworld_cmds;
@@ -12,6 +13,7 @@ pub mod sessions_cmds;
 pub mod settings_cmds;
 pub mod stage_cmds;
 
+pub use align_cmds::*;
 pub use assets_cmds::*;
 pub use listeners_cmds::*;
 pub use inworld_cmds::*;

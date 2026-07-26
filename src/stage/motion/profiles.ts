@@ -14,7 +14,7 @@ import {
   isInterpretableSmoothFollowProfile,
   type SmoothFollowProfile,
   type StageTransitionDirective,
-  type TrackingStateV2,
+  type StageMotionState,
 } from '../../shared/contracts';
 
 /**
@@ -99,60 +99,50 @@ export function catchUpMultiplierFor(profile: SmoothFollowProfile, boost: number
   return 1 + (full - 1) * fraction;
 }
 
-/** Companion §30.1–30.5, plus the states that simply hold. */
+/**
+ * Companion §30.1–30.5, over the alignment engine's four states plus `paused`.
+ *
+ * The state vocabulary is deliberately small. It used to carry thirteen
+ * entries, most of which were the old TypeScript tracker's internal bookkeeping
+ * leaking into motion — `coasting`, `retake_pending`, `reanchoring` and friends
+ * described what the *tracker* was doing, not what the presenter needed to see.
+ * The engine now reports the only four distinctions that change how the
+ * document should move, and everything that used to be a state is either a
+ * transition directive (a bounded discontinuity, handled below) or nothing at
+ * all.
+ *
+ * Note what is NOT here: no multiplier tries to stop the document during a
+ * hold. It stops because the engine zeroes `rateTokensPerSecond` in exactly
+ * those states, so the target itself stops advancing. These numbers only shape
+ * how the plant settles onto a target that has already stopped moving —
+ * belt-and-braces damping, not the mechanism.
+ */
 function stateMultipliers(
-  state: TrackingStateV2,
-  profile: SmoothFollowProfile,
+  state: StageMotionState,
+  _profile: SmoothFollowProfile,
   /** §30.3 catch-up multiplier after the boost bounds; see `limitsForState`. */
-  boostedCatchUp: number,
+  _boostedCatchUp: number,
 ): StateMultipliers {
-  // The undecayed value. `reanchoring` is not §30.3 catch-up: it is an
-  // authorized discontinuity being flown out, and its bound is the destination,
-  // not the reading corridor.
-  const catchUp = Math.max(1, profile.motion.catchUpMultiplier);
   switch (state) {
     case 'following':
       return {};
-    case 'acquiring':
+    case 'searching':
+      // No lock yet. Move gently and damp hard: everything the stage does here
+      // is on weak evidence, and an eager approach to a position that is about
+      // to be revised reads as the document hunting.
       return { vForward: 0.6, accel: 0.7, feedForward: 0.8, zeta: 1.05 };
-    case 'coasting':
-      // §30.2: reduce speed, increase damping, keep enough motion to avoid a
-      // freeze; no new large visual lead.
-      return { vForward: 0.55, accel: 0.8, zeta: 1.15, feedForward: 0.8, omega: 0.9 };
-    case 'uncertain':
+    case 'holding':
+      // Off-script speech or weak evidence. The target is already frozen, so
+      // this only governs how the plant comes to rest on it.
       return { vForward: 0.35, accel: 0.6, zeta: 1.3, feedForward: 0.5, omega: 0.8 };
-    case 'adlib_hold':
+    case 'ambiguous':
+      // Two distant places both fit. The display must not drift toward either
+      // one, so no feed-forward at all — a lead here would be the stage
+      // visually picking a side the engine explicitly refused to pick.
       return { vForward: 0.15, accel: 0.5, zeta: 1.4, feedForward: 0, omega: 0.7 };
-    case 'catching_up':
-      // §30.3: more velocity and acceleration, jerk limit preserved. The boost
-      // is the only part that decays; ω stays raised so the loop keeps its
-      // bandwidth all the way into the corridor rather than going soft exactly
-      // where it has to settle.
-      return { vForward: boostedCatchUp, accel: boostedCatchUp, feedForward: 1, omega: 1.15 };
-    case 'retake_pending':
-      // §30.4: decelerate toward zero, do not reverse until commit.
-      return { vForward: 0.3, accel: 0.6, zeta: 1.3, feedForward: 0.3, allowBackward: false };
-    case 'rewinding':
-      // §30.5: lower absolute speed than forward catch-up, damped to avoid
-      // overshoot.
-      return { vForward: 0.5, vBackward: 0.8, zeta: 1.25, feedForward: 0.6, allowBackward: true };
-    case 'reanchoring':
-      return {
-        vForward: catchUp * 1.2,
-        vBackward: catchUp,
-        accel: 1.4,
-        zeta: 1.1,
-        feedForward: 0.8,
-        allowBackward: true,
-      };
-    case 'command_pending':
-      return { vForward: 0.8, feedForward: 0.6, zeta: 1.1 };
     case 'paused':
-    case 'reconnecting':
       // Target zero velocity (§27.1) — the controller still settles smoothly.
       return { vForward: 0.25, accel: 0.5, zeta: 1.4, feedForward: 0, omega: 0.8 };
-    case 'lost_local':
-      return { vForward: 0.2, accel: 0.5, zeta: 1.4, feedForward: 0, omega: 0.75 };
     default:
       return {};
   }
@@ -203,7 +193,7 @@ export interface MotionLimitOptions {
 }
 
 export function limitsForState(
-  state: TrackingStateV2,
+  state: StageMotionState,
   profile: SmoothFollowProfile,
   options: MotionLimitOptions = {},
 ): MotionLimits {

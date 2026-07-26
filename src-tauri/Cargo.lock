@@ -434,6 +434,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.23.0",
+ "cc-align",
  "chrono",
  "futures-util",
  "hex",
@@ -500,6 +501,13 @@ checksum = "c89588d05638b5b4594a3348a2d6c20277e43a7f5c5202b05cc56888475a47b8"
 dependencies = [
  "find-msvc-tools",
  "shlex",
+]
+
+[[package]]
+name = "cc-align"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

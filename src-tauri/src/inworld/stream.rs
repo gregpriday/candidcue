@@ -229,14 +229,16 @@ impl Utterances {
         let ordinal = self.ordinal.fetch_add(1, Ordering::SeqCst);
         let id = format!("{}-{}", self.generation, ordinal);
         *open = Some(id.clone());
-        emit(
+        let audio_ms = self.audio_ms.load(Ordering::Relaxed) as f64;
+        emit_transcript(
             app,
             SttFrame::ItemStarted {
                 generation: self.generation,
                 item_id: id.clone(),
                 ordinal,
-                audio_start_ms: self.audio_ms.load(Ordering::Relaxed) as f64,
+                audio_start_ms: audio_ms,
             },
+            audio_ms,
         );
         id
     }
@@ -250,6 +252,27 @@ fn emit<R: tauri::Runtime>(app: &tauri::AppHandle<R>, frame: SttFrame) {
     // A failed emit means the control window is gone, which is not something
     // this session can do anything about and not worth tearing down for.
     let _ = app.emit_to(CONTROL_LABEL, STT_EVENT, frame);
+}
+
+/// Emit a frame that carries speech, and feed the same frame to the aligner.
+///
+/// Only `ItemStarted` / `Partial` / `Final` come through here. That is a
+/// structural guarantee rather than a convention: transport, failure and
+/// audio-drop frames go through plain [`emit`] and therefore cannot reach the
+/// engine, which is what §9 of the integration note requires — a reconnect
+/// notice is not evidence about where the presenter is reading.
+///
+/// `audio_now_ms` is the bytes-sent audio clock read here, at arrival. The
+/// engine's lag model was calibrated against that clock on live captures; a
+/// wall clock would mis-time every prediction in a way nothing downstream can
+/// detect.
+fn emit_transcript<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    frame: SttFrame,
+    audio_now_ms: f64,
+) {
+    crate::align::observe_frame(app, &frame, audio_now_ms);
+    emit(app, frame);
 }
 
 /// Why a connection ended, which decides whether to reconnect.
@@ -635,25 +658,28 @@ async fn read_loop<R: tauri::Runtime>(
             .productive
             .store(true, Ordering::SeqCst);
         let item_id = utterances.current(&app);
+        let audio_ms = utterances.audio_ms.load(Ordering::Relaxed) as f64;
         if is_final {
-            emit(
+            emit_transcript(
                 &app,
                 SttFrame::Final {
                     generation,
                     item_id,
                     text: transcript.to_string(),
-                    audio_end_ms: utterances.audio_ms.load(Ordering::Relaxed) as f64,
+                    audio_end_ms: audio_ms,
                 },
+                audio_ms,
             );
             utterances.close();
         } else {
-            emit(
+            emit_transcript(
                 &app,
                 SttFrame::Partial {
                     generation,
                     item_id,
                     text: transcript.to_string(),
                 },
+                audio_ms,
             );
         }
     }

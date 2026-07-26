@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tauri::{Emitter, Listener, Manager};
 
+use crate::align::AlignmentState;
 use crate::commands::{self, inworld_cmds::Secrets};
 use crate::coordinator::AppCoordinator;
 use crate::database::{self, Database};
@@ -51,6 +52,10 @@ pub fn run() {
             commands::start_transcription,
             commands::push_transcription_audio,
             commands::stop_transcription,
+            // Speech-to-script alignment (crates/cc-align, hosted in src/align)
+            commands::start_alignment,
+            commands::stop_alignment,
+            commands::set_alignment_position,
             // Stage / windows (spec §46.6)
             commands::list_displays,
             commands::identify_displays,
@@ -58,7 +63,6 @@ pub fn run() {
             commands::close_stage,
             commands::set_stage_fullscreen,
             commands::publish_stage_document,
-            commands::publish_stage_snapshot,
             commands::publish_stage_command,
             commands::publish_listener_state,
             commands::get_stage_status,
@@ -128,6 +132,11 @@ pub fn run() {
             // Rust-owned Inworld client: it holds the streaming socket, because
             // the browser cannot send the `Authorization` header it needs.
             handle.manage(InworldClient::new());
+
+            // The alignment engine runs beside the socket that feeds it, so a
+            // transcript frame and the audio clock it is timed against never
+            // have to cross a process boundary to meet.
+            handle.manage(AlignmentState::new());
 
             // Listener library: bundled packs from the repo assets dir in
             // dev, from Tauri resources in production builds.
@@ -273,6 +282,24 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
     app.listen_any(events::STAGE_LISTENING, move |_event| {
         handle.state::<AppCoordinator>().stage_listening();
         crate::windows::replay_stage_document(&handle);
+    });
+
+    // The stage's "this is what I can see" report (§5 of the alignment
+    // integration note). It has to travel this way round because the stage
+    // window holds no invoke permission at all — it can emit events and
+    // nothing else — and the aligner genuinely wants the viewport, since a
+    // reader who starts mid-script locks on far faster when the candidate
+    // ranking knows which part of the script is on the glass.
+    //
+    // Scoped to the alignment session inside `apply_viewport_hint`, so a hint
+    // stamped for a take that has already ended is dropped rather than applied
+    // to its successor.
+    let handle = app.clone();
+    app.listen_any(events::STAGE_VIEWPORT_HINT, move |event| {
+        let Ok(hint) = serde_json::from_str::<crate::align::ViewportHint>(event.payload()) else {
+            return;
+        };
+        crate::align::apply_viewport_hint(&handle.state::<AlignmentState>(), &hint);
     });
 
     let handle = app.clone();

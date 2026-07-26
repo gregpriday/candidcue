@@ -45,10 +45,13 @@ const MUST_BE_WIRED = [
   'start_session',
   'end_session',
   'append_session_transcript',
-  'publish_stage_snapshot',
   'publish_stage_document',
   'open_stage',
   'update_settings',
+  // Without these a take connects, transcribes, and follows nothing — the
+  // exact silent failure this file exists to catch.
+  'start_alignment',
+  'stop_alignment',
 ];
 
 function registeredCommands(): string[] {
@@ -195,28 +198,42 @@ describe('the stage envelope never carries a hard-coded session generation', () 
 });
 
 /**
- * C2: `stage://semantic-frame` is documented as "emitted directly from the
- * control webview like the heartbeat", and for a long time the only dispatcher
- * was the in-browser preview driver — so the stage's v2 motion engine received
- * nothing in a packaged build.
+ * C2, in its current form: the stage's motion feed must have a producer that is
+ * not the in-browser preview driver.
+ *
+ * The original defect was `stage://semantic-frame` being dispatched only by
+ * `src/stage/preview.ts`, so the stage's motion engine received nothing at all
+ * in a packaged build. The feed now comes from Rust, which moves where the
+ * producer must be but not whether one has to exist.
  */
-describe('stage://semantic-frame has a producer outside the preview driver', () => {
-  it('is emitted from the control window', () => {
-    const producers = SOURCES.filter(
-      (f) =>
-        f.path.includes('/src/control/') &&
-        /STAGE_EVENT\.semanticFrame/.test(f.text) &&
-        /emit/i.test(f.text),
-    ).map((f) => f.path.slice(ROOT.length + 1));
-    expect(producers.length, 'no control-side producer for stage://semantic-frame').toBeGreaterThan(
-      0,
-    );
+describe('the stage motion feed has a real producer', () => {
+  it('is emitted from Rust, not only from the preview driver', () => {
+    const rust = readFileSync(join(ROOT, 'src-tauri/src/align/mod.rs'), 'utf8');
+    expect(
+      /STAGE_ALIGNMENT_SNAPSHOT/.test(rust),
+      'no Rust producer for stage://alignment-snapshot',
+    ).toBe(true);
   });
 
   it('is consumed by the stage', () => {
     const consumers = SOURCES.filter(
-      (f) => f.path.includes('/src/stage/') && /STAGE_EVENT\.semanticFrame/.test(f.text),
+      (f) => f.path.includes('/src/stage/') && /STAGE_EVENT\.alignmentSnapshot/.test(f.text),
     );
     expect(consumers.length).toBeGreaterThan(0);
+  });
+
+  /*
+   * The viewport prior travels the other way and has the same failure mode: a
+   * hint nothing emits is a prior the engine never gets, and locks that start
+   * mid-script stay slow with nothing to show why.
+   */
+  it('has a stage-side producer for the viewport prior', () => {
+    const producers = SOURCES.filter(
+      (f) =>
+        f.path.includes('/src/stage/') &&
+        /STAGE_EVENT\.viewportHint/.test(f.text) &&
+        /emitStageEvent/.test(f.text),
+    );
+    expect(producers.length, 'no stage-side producer for stage://viewport-hint').toBeGreaterThan(0);
   });
 });

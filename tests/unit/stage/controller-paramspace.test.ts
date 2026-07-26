@@ -27,7 +27,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SMOOTH_FOLLOW_PROFILE as PROFILE,
-  type TrackingStateV2,
+  type StageMotionState,
 } from '../../../src/shared/contracts';
 import {
   CONTROLLER_SUBSTEP_MS,
@@ -41,20 +41,20 @@ const DT_S = DT / 1000;
 /** Relative slack for a limit recovered by three finite differences of `q`. */
 const LIMIT_SLACK = 1 + 1e-6;
 
-const STATES: TrackingStateV2[] = [
-  'acquiring',
+const STATES: StageMotionState[] = [
+  'searching',
   'following',
-  'coasting',
-  'uncertain',
-  'adlib_hold',
-  'catching_up',
-  'retake_pending',
-  'rewinding',
-  'reanchoring',
-  'command_pending',
+  'following',
+  'holding',
+  'ambiguous',
+  'following',
+  'holding',
+  'holding',
+  'following',
+  'following',
   'paused',
-  'reconnecting',
-  'lost_local',
+  'holding',
+  'searching',
 ];
 const TRANSITIONS = [undefined, 'settle', 'catch_up', 'rewind', 'reanchor', 'reset'] as const;
 
@@ -203,14 +203,16 @@ describe('no profile sustains a limit cycle around a static target (§70.5)', ()
   });
 
   it('names the combinations that used to oscillate, so a regression is legible', () => {
-    const worst: Array<{ state: TrackingStateV2; transition: 'catch_up' | 'reanchor' | 'reset' }> = [
-      { state: 'reanchoring', transition: 'catch_up' },
-      { state: 'catching_up', transition: 'reanchor' },
-      { state: 'catching_up', transition: 'reset' },
+    const worst: Array<{ state: StageMotionState; transition: 'catch_up' | 'reanchor' | 'reset' }> = [
+      { state: 'following', transition: 'catch_up' },
+      { state: 'following', transition: 'reanchor' },
+      { state: 'following', transition: 'reset' },
     ];
     for (const combo of worst) {
       const limits = limitsForState(combo.state, PROFILE, { transition: combo.transition });
-      expect(limits.allowBackward).toBe(true);
+      // `catch_up` is a forward boost and stays forward-only; the re-anchoring
+      // directives are the ones that unlock reverse.
+      expect(limits.allowBackward).toBe(combo.transition !== 'catch_up');
       const t = trace(Array.from({ length: 12000 }, () => ({ targetPx: 5000, limits })));
       const tail = t.q.slice(8000);
       expect(
@@ -258,9 +260,9 @@ describe('stacked multipliers never compound past either factor (§30)', () => {
     const caught = limitsForState('following', PROFILE, { transition: 'catch_up' });
     expect(caught.vForwardMax).toBeCloseTo(base.vForwardMax * PROFILE.motion.catchUpMultiplier, 9);
     expect(caught.aMax).toBeCloseTo(base.aMax * PROFILE.motion.catchUpMultiplier, 9);
-    // …and a state's own profile is untouched when no transition is active.
-    const catching = limitsForState('catching_up', PROFILE);
-    expect(catching.vForwardMax).toBeCloseTo(base.vForwardMax * PROFILE.motion.catchUpMultiplier, 9);
+    // …and ordinary following, with no directive, gets no boost at all. There
+    // is one source of a catch-up licence now, and this is what says so.
+    expect(base.vForwardMax).toBe(PROFILE.motion.maxForwardVelocityPxS);
   });
 
   it('preserves a cautious state’s damping rather than letting a directive undo it', () => {
@@ -268,8 +270,8 @@ describe('stacked multipliers never compound past either factor (§30)', () => {
     // run a `catch_up` at full speed while the tracker is `uncertain`. Capping
     // the product keeps the product where it is whenever it is already the
     // least extreme of the three.
-    const uncertain = limitsForState('uncertain', PROFILE);
-    const both = limitsForState('uncertain', PROFILE, { transition: 'catch_up' });
+    const uncertain = limitsForState('holding', PROFILE);
+    const both = limitsForState('holding', PROFILE, { transition: 'catch_up' });
     expect(both.vForwardMax).toBeGreaterThan(uncertain.vForwardMax);
     expect(both.vForwardMax).toBeLessThan(limitsForState('following', PROFILE).vForwardMax);
   });
@@ -287,10 +289,10 @@ describe('a profile that shrinks between frames brakes, it does not snap (§29.2
 
   it.each([
     ['following', 'a catch_up directive expiring on its 4 s timer'],
-    ['uncertain', 'the tracker losing confidence mid catch-up'],
-    ['adlib_hold', 'the presenter going off script mid catch-up'],
+    ['holding', 'the tracker losing confidence mid catch-up'],
+    ['ambiguous', 'the presenter going off script mid catch-up'],
   ] as const)('downgrades into %s without a velocity step (%s)', (stateName, _why) => {
-    const fast = limitsForState('catching_up', PROFILE, { transition: 'catch_up' });
+    const fast = limitsForState('following', PROFILE, { transition: 'catch_up' });
     const slow = limitsForState(stateName, PROFILE);
     expect(slow.vForwardMax).toBeLessThan(fast.vForwardMax);
 
@@ -327,7 +329,7 @@ describe('a profile that shrinks between frames brakes, it does not snap (§29.2
   });
 
   it('measures the worst single-sub-step velocity change across the downgrade', () => {
-    const fast = limitsForState('catching_up', PROFILE, { transition: 'catch_up' });
+    const fast = limitsForState('following', PROFILE, { transition: 'catch_up' });
     const slow = limitsForState('following', PROFILE);
     const t = trace([
       ...spinUp(fast),
@@ -344,7 +346,7 @@ describe('a profile that shrinks between frames brakes, it does not snap (§29.2
   it('handles the backward-capable → forward-only downgrade the same way', () => {
     // The mirror image: the plant carries rewind speed into a profile that
     // forbids reverse. Slamming `v` to zero there is the same discontinuity.
-    const rewinding = limitsForState('rewinding', PROFILE, { transition: 'rewind' });
+    const rewinding = limitsForState('holding', PROFILE, { transition: 'rewind' });
     const forwardOnly = limitsForState('following', PROFILE);
     expect(rewinding.allowBackward).toBe(true);
     expect(forwardOnly.allowBackward).toBe(false);

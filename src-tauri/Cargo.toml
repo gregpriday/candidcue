@@ -53,6 +53,12 @@ image = { version = "0.25", default-features = false, features = [
   "gif",
   "webp",
 ] }
+# The speech-to-script alignment engine. A path dependency into the standalone
+# `crates/` workspace, which is deliberately NOT part of this one: the engine and
+# its benchmark harness must build and run without Tauri or a WebView, because
+# that is what lets `cc-bench` replay captured takes offline and makes the
+# numbers in bench/REPORT.md mean anything.
+cc-align = { path = "../crates/cc-align" }
 tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 base64 = "0.23.0"
 futures-util = "0.3.33"

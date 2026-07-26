@@ -4,13 +4,28 @@
  *
  * The pipeline, once per display frame:
  *
- *   accepted SemanticMotionFrame
- *     → §27 prediction (state horizon, evidence-age decay, drift budget)
+ *   accepted AlignmentSnapshot
+ *     → displayAt(audio clock now + voice lead)  → token position
  *     → §8 line-handoff path sample  → target scroll + dScroll/dUnit
- *     → §28 feed-forward velocity    = dScroll/dUnit × semantic velocity
+ *     → §28 feed-forward velocity    = dScroll/dUnit × token rate
  *     → §30 motion limits for the state / active transition
  *     → §29 jerk-limited controller, §32 frame-time compensation
  *     → pixels
+ *
+ * ---------------------------------------------------------------------------
+ * PREDICTION IS NOT THIS MODULE'S JOB ANY MORE
+ * ---------------------------------------------------------------------------
+ * The alignment engine ships a lag-compensated, hard-capped extrapolation with
+ * every snapshot, and `alignmentDisplayAt` is the exact mirror of it. The stage
+ * used to run a second prediction model on top — its own horizon, decay curve
+ * and drift budget — which meant extrapolating an extrapolation and tuning two
+ * sets of constants against each other. There is now exactly one prediction in
+ * the system, it lives in the engine, and it is benchmarked there.
+ *
+ * What the stage kept is everything prediction was never doing: turning a
+ * position into pixels through measured geometry, and moving there under jerk,
+ * velocity and acceleration limits that make it look like reading rather than
+ * scrolling.
  *
  * A new frame updates the desired *path* only. Plant state (position, velocity,
  * acceleration) is overwritten in exactly four places, all authorized: a
@@ -22,12 +37,19 @@
  * in node while the rAF loop stays in the stage window.
  */
 import {
+  alignmentDisplayAt,
+  ALIGNMENT_RELOCATIONS,
   DEFAULT_SMOOTH_FOLLOW_PROFILE,
-  type SemanticMotionFrame,
+  type AlignmentSnapshot,
   type SmoothFollowProfile,
   type StageMotionAck,
-  type TrackingStateV2,
+  type StageMotionState,
+  type StageTransitionDirective,
 } from '../../shared/contracts';
+import {
+  createAlignmentReceiver,
+  type AlignmentReceiver,
+} from './alignmentReceiver';
 import {
   createFrameIntervalEstimator,
   createJerkLimitedScrollController,
@@ -37,25 +59,19 @@ import {
   createStageMotionDiagnostics,
   type StageMotionDiagnostics,
 } from './diagnostics';
-import {
-  createSemanticFrameReceiver,
-  type SemanticFrameGate,
-  type SemanticFrameReceiver,
-} from './frameReceiver';
 import type { StageRenderedLineMap, VisualBlockSpan } from './lineMap';
 import { createLineHandoffPlanner, type LineHandoffPlanner, type LineTarget } from './planner';
-import { predictSemanticPosition, type SemanticPrediction } from './predictor';
 import { limitsForState, type MotionLimits } from './profiles';
 import {
   createStageTransitionController,
   type StageTransitionController,
 } from './transitions';
-import { createCalibratingUnitAxis, type UnitAxisAdapter } from './unitAxis';
 
 /**
- * Degraded input from the v1 `TrackingSnapshot` path: a plain pixel target the
- * renderer computed from block geometry. It drives the same controller, so
- * motion stays continuous and jerk-limited even without semantic frames.
+ * A plain pixel target the renderer computed from block geometry, used when
+ * there is no alignment feed at all — a manual scroll, a paused session, the
+ * pre-roll before the first snapshot. It drives the same controller, so motion
+ * stays continuous and jerk-limited whatever produced the target.
  */
 export interface FallbackTarget {
   scrollPx: number;
@@ -68,7 +84,7 @@ export interface FallbackTarget {
   atMs: number;
 }
 
-export type MotionSource = 'semantic' | 'fallback' | 'hold';
+export type MotionSource = 'alignment' | 'fallback' | 'hold';
 
 export interface StageMotionFrameResult {
   /** Position to render this frame (fractional; §29.4). */
@@ -81,7 +97,15 @@ export interface StageMotionFrameResult {
   /** Token the presenter is estimated to be on, for active/passed styling. */
   activeTokenIndex: number | null;
   source: MotionSource;
-  state: TrackingStateV2 | null;
+  state: StageMotionState | null;
+  /**
+   * A distant candidate the engine is accumulating evidence for but has NOT
+   * accepted. Surfaced so the renderer can offer "resume here?"; the motion
+   * layer deliberately does nothing with it, because auto-scrolling to an
+   * unaccepted suggestion is precisely what the suggestion mechanism exists to
+   * avoid.
+   */
+  suggestionToken: number | null;
   controllerState: string;
   /** True on frames where capped-rate styling should be refreshed (§26.2/7). */
   styleTick: boolean;
@@ -103,20 +127,24 @@ export interface StageMotionFrameResult {
 
 export interface StageMotionEngineOptions {
   profile?: SmoothFollowProfile;
-  /** Semantic frames older than this fall back to snapshot-driven motion. */
-  frameStaleMs?: number;
+  /**
+   * How long a snapshot stays usable after it arrives.
+   *
+   * Snapshots come one per transcript event, so a quiet feed is normal, not a
+   * fault: a presenter who stops talking produces no events and the engine has
+   * nothing new to say. `displayAt` already stops advancing at
+   * `maxPredictionMs`, so a merely-old snapshot holds the position by itself.
+   * This threshold is about something stronger — the feed being GONE (the
+   * session ended, the socket died) — after which the stage stops claiming to
+   * follow anyone and hands over to the fallback target.
+   */
+  snapshotStaleMs?: number;
   /** Capped rate for active/passed styling updates (§26.2 step 7). */
   styleIntervalMs?: number;
   /** Ack cadence (§54). */
   ackIntervalMs?: number;
   /** Manual-interaction grace before automatic correction resumes (§30.6). */
   manualGraceMs?: number;
-  /**
-   * Bridge between the worker's weighted spoken-unit axis and the axis the line
-   * map was built on. Defaults to the runtime calibrator; pass
-   * `identityUnitAxis()` once the map is built from real speech weights.
-   */
-  unitAxis?: UnitAxisAdapter;
 }
 
 export interface LayoutRecoveryRequest {
@@ -131,14 +159,14 @@ export interface LayoutRecoveryRequest {
 }
 
 export interface StageMotionEngine {
-  readonly receiver: SemanticFrameReceiver;
+  readonly receiver: AlignmentReceiver;
   readonly controller: JerkLimitedScrollController;
   readonly transitions: StageTransitionController;
   readonly diagnostics: StageMotionDiagnostics;
   readonly map: StageRenderedLineMap | null;
   readonly profile: SmoothFollowProfile;
-  readonly lastPrediction: SemanticPrediction | null;
-  readonly unitAxis: UnitAxisAdapter;
+  /** Token position the last rendered frame aimed at, or null while holding. */
+  readonly lastDisplayToken: number | null;
   /** Backward target revisions suppressed by the forward latch (§70.5). */
   readonly targetRegressions: number;
   /**
@@ -162,7 +190,12 @@ export interface StageMotionEngine {
    */
   readonly catchUpCapExpiries: number;
 
-  configureSession(gate: SemanticFrameGate, nowMs: number): void;
+  /**
+   * Point the engine at a transcription generation. Snapshots stamped with any
+   * other generation are rejected, which is what keeps the tail of a stopped
+   * take out of the next one's motion.
+   */
+  configureSession(sessionGeneration: number, nowMs: number): void;
   /**
    * §47.1/§55. Adopt a resolved motion profile — the user's Follow feel, as
    * control resolved it, arriving in the stage envelope.
@@ -172,10 +205,10 @@ export interface StageMotionEngine {
    * envelope into the SAME engine, and a profile that could only be read at
    * construction would leave the new session running the previous one's feel.
    *
-   * Nothing about plant state changes. The profile reshapes limits, the
-   * prediction horizon and the speech envelope; position, velocity and
-   * acceleration carry straight through, and the jerk limiter absorbs the new
-   * bounds over the following frames rather than stepping to them.
+   * Nothing about plant state changes. The profile reshapes the motion limits
+   * and the voice lead; position, velocity and acceleration carry straight
+   * through, and the jerk limiter absorbs the new bounds over the following
+   * frames rather than stepping to them.
    */
   setProfile(next: SmoothFollowProfile): void;
   setLineMap(map: StageRenderedLineMap | null): void;
@@ -183,7 +216,11 @@ export interface StageMotionEngine {
   setReducedMotion(reduced: boolean): void;
   setPaused(paused: boolean): void;
 
-  receiveFrame(frame: SemanticMotionFrame, nowMs: number): boolean;
+  /**
+   * Ingest one alignment snapshot. Returns whether it was accepted; a rejected
+   * snapshot changes nothing at all, which is the point.
+   */
+  receiveSnapshot(snapshot: unknown, nowMs: number): boolean;
   setFallbackTarget(target: FallbackTarget | null): void;
 
   frame(nowMs: number): StageMotionFrameResult;
@@ -196,34 +233,118 @@ export interface StageMotionEngine {
 }
 
 /**
- * States whose `(estimatedUnit, tokenIndex)` pair is a real observation of the
- * worker's cumulative weight function rather than a guess the tracker is
- * carrying while it works something out.
+ * How far the position must move for a relocation to be worth flying rather
+ * than absorbing, in tokens.
+ *
+ * A retake that backs up two words is a correction and the smoothing should
+ * swallow it; one that backs up a paragraph is a different place in the script
+ * and deserves the deliberate, obscured re-anchor. Six tokens is roughly half a
+ * spoken line — comfortably above the ±2-token accuracy the engine benchmarks
+ * at, so ordinary tracking jitter can never mint a directive.
  */
-const CALIBRATION_STATES: ReadonlySet<TrackingStateV2> = new Set<TrackingStateV2>([
-  'following',
-  'catching_up',
-]);
+const RELOCATION_MIN_TOKENS = 6;
 
-/** Minimum confidence a frame needs before it may move the unit axis. */
-const CALIBRATION_MIN_CONFIDENCE = 0.6;
+/**
+ * How long a synthesized relocation directive stays live.
+ *
+ * Long enough for the ~220 ms re-anchor fade plus a line-map rebuild; short
+ * enough that a directive whose destination never resolves dies rather than
+ * waiting for a jump that has been superseded twice over.
+ *
+ * A `catch_up` directive is the exception and gets its TTL from the profile
+ * instead — see `relocationDirectiveFor`. It is not a discontinuity waiting to
+ * be spent in one step but a boosted APPROACH, and §30.3 already bounds how
+ * long that may run. A TTL shorter than `catchUpMaxDurationMs` would retire
+ * the licence before the cap could, which would leave the cap — and its
+ * decay ramp, and every test of both — dead code that nothing could reach.
+ */
+const RELOCATION_TTL_MS = 1500;
 
-export function isCalibrationEvidence(frame: SemanticMotionFrame): boolean {
-  return (
-    CALIBRATION_STATES.has(frame.state) &&
-    frame.confidence >= CALIBRATION_MIN_CONFIDENCE &&
-    frame.behavior !== 'retake' &&
-    frame.behavior !== 'retake_candidate'
-  );
+/**
+ * How the stage animates each kind of accepted discontinuity.
+ *
+ * `retakeAccepted` is a `rewind` rather than a `reanchor` because backward
+ * motion over a short distance still reads as reading — the presenter watches
+ * the script walk back to where they restarted. A forward jump has no such
+ * reading to show: the text between is not being spoken, so flying through it
+ * at speed is a spectacle rather than information, and `catch_up` bounds it.
+ */
+const RELOCATION_SHAPE: Record<
+  'relocationAccepted' | 'jumpForwardAccepted' | 'retakeAccepted' | 'manualAnchor',
+  { type: StageTransitionDirective['type']; reason: StageTransitionDirective['reason']; authority: StageTransitionDirective['authority'] }
+> = {
+  jumpForwardAccepted: {
+    type: 'catch_up',
+    reason: 'large_forward_skip',
+    authority: 'ordinary',
+  },
+  retakeAccepted: { type: 'rewind', reason: 'distant_retake', authority: 'ordinary' },
+  relocationAccepted: { type: 'reanchor', reason: 'large_forward_skip', authority: 'ordinary' },
+  manualAnchor: { type: 'reanchor', reason: 'manual_navigation', authority: 'manual' },
+};
+
+/**
+ * Turn an accepted discontinuity into a §53 transition directive, or null when
+ * the snapshot is ordinary following.
+ *
+ * The engine reports discontinuities as an ordinary snapshot whose position
+ * moved a long way, plus a decision code saying so. It does not issue motion
+ * directives — it has no idea what a pixel is — so the stage classifies. The
+ * distance gate is applied here rather than trusting the code alone, because
+ * `retakeAccepted` fires for a two-word restart just as it does for a jump back
+ * to the top of the script.
+ */
+export function relocationDirectiveFor(
+  snapshot: AlignmentSnapshot,
+  previousToken: number | null,
+  nowMs: number,
+  profile: SmoothFollowProfile = DEFAULT_SMOOTH_FOLLOW_PROFILE,
+): StageTransitionDirective | null {
+  if (!ALIGNMENT_RELOCATIONS.has(snapshot.decision)) return null;
+  const shape = RELOCATION_SHAPE[snapshot.decision as keyof typeof RELOCATION_SHAPE];
+  if (!shape) return null;
+
+  const from = previousToken ?? snapshot.observedToken;
+  const distance = Math.abs(snapshot.observedToken - from);
+  // A manual move is authoritative regardless of distance: the presenter asked
+  // to be somewhere, and honouring that only when it is far enough away would
+  // make a short jump-to-section silently do nothing.
+  if (shape.authority !== 'manual' && distance < RELOCATION_MIN_TOKENS) return null;
+
+  // A catch-up runs until §30.3's duration cap retires it; everything else is
+  // a single step that either lands promptly or should be forgotten.
+  const ttlMs =
+    shape.type === 'catch_up'
+      ? Math.max(RELOCATION_TTL_MS, profile.motion.catchUpMaxDurationMs + profile.motion.catchUpReleaseMs)
+      : RELOCATION_TTL_MS;
+
+  return {
+    // Keyed on `seq`, so the idempotency check in the transition controller
+    // collapses a re-delivered snapshot instead of re-running the motion.
+    id: `align-${snapshot.sessionGeneration}-${snapshot.seq}`,
+    type: shape.type,
+    authority: shape.authority,
+    fromUnit: from,
+    toUnit: snapshot.observedToken,
+    destinationTokenIndex: Math.max(0, Math.round(snapshot.observedToken)),
+    issuedAtMs: nowMs,
+    expiresAtMs: nowMs + ttlMs,
+    semanticEpoch: snapshot.sessionGeneration,
+    reason: shape.reason,
+  };
 }
 
 /**
- * The worker emits slowly while the position is held, so a quiet feed is normal
- * and not a reason to change motion source. The predictor's own drift budget
- * already bounds motion on stale evidence; this threshold only decides when the
- * snapshot fallback takes over entirely.
+ * How long after the last snapshot the stage stops claiming to follow.
+ *
+ * Not a prediction bound — `displayAt` already stops advancing at
+ * `maxPredictionMs`, so an old snapshot holds position on its own. This is the
+ * threshold past which the feed is treated as GONE rather than quiet, and the
+ * fallback target takes over. Generous, because silence is a normal thing for a
+ * presenter to produce and a stage that dropped its lock every time somebody
+ * paused for breath would be worse than useless.
  */
-const DEFAULT_FRAME_STALE_MS = 3000;
+const DEFAULT_SNAPSHOT_STALE_MS = 15_000;
 const DEFAULT_STYLE_INTERVAL_MS = 100;
 const DEGRADED_STYLE_INTERVAL_MS = 250;
 const DEFAULT_MANUAL_GRACE_MS = 2500;
@@ -297,60 +418,6 @@ function fadeWorthwhile(distancePx: number, linePitchPx: number): boolean {
 
 type ReanchorFadePhase = 'idle' | 'down' | 'up';
 
-/**
- * Session clock (§9.1). Frames carry session-relative timestamps; the stage
- * only has `performance.now()`. The bridge between the two domains is one
- * number — the offset — and the estimator is the MINIMUM observed sample: the
- * arrival that spent the least time crossing the window boundary.
- *
- * A minimum is the right estimator because of a property the worker guarantees
- * rather than by luck. `SemanticMotionFrame.sessionTimeMs` is an affine
- * re-basing of the producer's clock (`SessionClock`, §9.1): it starts at 0 and
- * is monotone, and when the producer's clock contradicts itself the map is
- * RE-BASED rather than clamped. Every sample is therefore
- * `trueOffset + transportDelay` with `transportDelay >= 0` — the samples have a
- * hard floor, and the minimum converges onto it and stays there.
- *
- * The re-basing map is not a no-op, and its two discontinuities both point in
- * directions a minimum handles:
- *
- *   - The producer's clock steps FORWARD — an NTP correction, or a laptop
- *     waking with wall time advanced while the stage's monotonic clock slept.
- *     Session time steps forward with it, so every sample steps DOWN by the
- *     same amount and the minimum adopts the new floor on the first frame after
- *     the step, with nothing left to unwind. This is the scenario the
- *     compensation exists for.
- *
- *   - The producer's clock steps BACKWARD. The worker re-bases, so session time
- *     stays monotone and loses only the interval since its previous stamp — one
- *     worker tick. The offset would have to RISE by that much and a minimum
- *     will not rise, so the residual is a few ms of overstated evidence age
- *     against a 750 ms horizon and a 3 s staleness gate.
- *
- * This used to carry a `0.005` relaxation term letting the offset drift back up
- * toward the samples. It was earned when the worker stamped frames with
- * `Date.now()` and the offset genuinely wandered in both directions. Against a
- * monotone domain it has nothing to relax and it is not free: relaxing toward
- * the samples pulls the offset ABOVE the transport floor, which understates
- * evidence age and eventually makes an ordinary arrival look like it came from
- * the future.
- */
-function createSessionClock() {
-  let offset: number | null = null;
-  return {
-    observe(nowMs: number, sessionTimeMs: number) {
-      const sample = nowMs - sessionTimeMs;
-      if (offset === null || sample < offset) offset = sample;
-    },
-    sessionTime(nowMs: number): number | null {
-      return offset === null ? null : nowMs - offset;
-    },
-    reset() {
-      offset = null;
-    },
-  };
-}
-
 export function createStageMotionEngine(
   options: StageMotionEngineOptions = {},
 ): StageMotionEngine {
@@ -358,30 +425,20 @@ export function createStageMotionEngine(
   // session's envelope may carry a different feel. Read on every frame — never
   // captured — so a swap takes effect on the next one.
   let profile = options.profile ?? DEFAULT_SMOOTH_FOLLOW_PROFILE;
-  const frameStaleMs = options.frameStaleMs ?? DEFAULT_FRAME_STALE_MS;
+  const snapshotStaleMs = options.snapshotStaleMs ?? DEFAULT_SNAPSHOT_STALE_MS;
   const styleIntervalMs = options.styleIntervalMs ?? DEFAULT_STYLE_INTERVAL_MS;
   const manualGraceMs = options.manualGraceMs ?? DEFAULT_MANUAL_GRACE_MS;
 
-  const receiver = createSemanticFrameReceiver({
-    gate: {
-      sessionId: '',
-      sessionGeneration: 0,
-      scriptCompileHash: '',
-      layoutGeneration: 0,
-    },
-    profile,
-  });
+  const receiver = createAlignmentReceiver();
   const controller = createJerkLimitedScrollController();
   const transitions = createStageTransitionController();
   const diagnostics = createStageMotionDiagnostics({ ackIntervalMs: options.ackIntervalMs });
-  const clock = createSessionClock();
   /**
    * §70.8. A hitch is a MISSED REFRESH, so the threshold has to come from the
    * refresh the display actually has — a fixed one is a 60 Hz assumption, and
    * on a 30 Hz panel it made every healthy frame a dropped frame.
    */
   const frameInterval = createFrameIntervalEstimator();
-  const unitAxis = options.unitAxis ?? createCalibratingUnitAxis();
 
   let map: StageRenderedLineMap | null = null;
   let planner: LineHandoffPlanner | null = null;
@@ -391,7 +448,15 @@ export function createStageMotionEngine(
   let manualUntilMs = Number.NEGATIVE_INFINITY;
   let lastFrameAtMs: number | null = null;
   let lastStyleAtMs = Number.NEGATIVE_INFINITY;
-  let lastPrediction: SemanticPrediction | null = null;
+  /** Token position the last rendered frame aimed at — the layout-recovery anchor. */
+  let lastDisplayToken: number | null = null;
+  /**
+   * Display position of the previously accepted snapshot, which is what a
+   * relocation's distance is measured FROM. Deliberately not `observedToken` of
+   * the previous snapshot: the presenter sees the display, and the size of the
+   * jump they experience is the size of the jump from where the document is.
+   */
+  let previousDisplayToken: number | null = null;
   let lastTarget = 0;
   let lastLineId: string | null = null;
   /**
@@ -527,38 +592,56 @@ export function createStageMotionEngine(
     return token;
   }
 
-  function semanticTarget(nowMs: number): {
-    target: LineTarget;
-    prediction: SemanticPrediction;
-    mapUnit: number;
-    frame: SemanticMotionFrame;
-  } | null {
-    const frame = receiver.current;
-    if (!frame || !planner) return null;
-    const sessionNow = clock.sessionTime(nowMs);
-    if (sessionNow === null) return null;
-    const ageMs = sessionNow - frame.sessionTimeMs;
-    if (ageMs > frameStaleMs) return null;
+  /**
+   * §47.3 voice lead, in milliseconds.
+   *
+   * How far AHEAD of the spoken word the display sits, so the presenter reads
+   * into text that is already comfortably placed rather than chasing the line
+   * they are on. It is applied by asking `displayAt` for a moment slightly in
+   * the future, which means it inherits the engine's own cap for free: lead can
+   * never carry the display past `maxPredictionMs` of extrapolation, however
+   * much of it the user asks for.
+   */
+  function voiceLeadMs(): number {
+    return Math.max(0, profile.prediction.leadSeconds) * 1000;
+  }
 
-    const prediction = predictSemanticPosition(frame, sessionNow, profile);
-    const mapUnit = unitAxis.toMapUnit(prediction.unit);
-    // The path derivative is per *map* unit, so the semantic velocity has to
-    // cross the same axis change before it becomes feed-forward pixels.
-    const mapVelocity =
-      prediction.velocityUnitsPerSecond * unitAxis.slopeAt(prediction.unit);
-    // §C1: the unit axis and the prediction are arithmetic over values the
-    // stage did not produce. A non-finite result here must never reach the
-    // planner, let alone the plant.
-    if (!Number.isFinite(mapUnit) || !Number.isFinite(mapVelocity)) return null;
-    const target = planner.target(mapUnit, mapVelocity);
+  /**
+   * The position the display should be at this frame, as pixels and a
+   * feed-forward velocity.
+   *
+   * Returns null whenever the stage has no business moving: no snapshot, no
+   * line map, a feed that has gone away, or arithmetic that came out
+   * non-finite. Every one of those is a hold, never a guess.
+   */
+  function alignmentTarget(nowMs: number): {
+    target: LineTarget;
+    snapshot: AlignmentSnapshot;
+    displayToken: number;
+  } | null {
+    const snapshot = receiver.current;
+    if (!snapshot || !planner) return null;
+    if (receiver.ageMs(nowMs) > snapshotStaleMs) return null;
+    const audioNow = receiver.audioNowMs(nowMs);
+    if (audioNow === null) return null;
+
+    const displayToken = alignmentDisplayAt(snapshot, audioNow + voiceLeadMs());
+    // The path derivative is per token, and so is the engine's rate — the
+    // projection into token space happened in Rust — so the feed-forward
+    // velocity needs no axis conversion at all. It is zeroed by the engine
+    // whenever extrapolating would be a guess, which is why holding states
+    // produce no feed-forward here without the stage testing for them.
+    const velocity = snapshot.rateTokensPerSecond;
+    // The snapshot crossed a process boundary; arithmetic over it must not be
+    // allowed to reach the planner, let alone the plant.
+    if (!Number.isFinite(displayToken) || !Number.isFinite(velocity)) return null;
+
+    const target = planner.target(displayToken, velocity);
     if (target.source === 'none') return null;
-    if (
-      !Number.isFinite(target.scrollPx) ||
-      !Number.isFinite(target.feedForwardVelocityPxS)
-    ) {
+    if (!Number.isFinite(target.scrollPx) || !Number.isFinite(target.feedForwardVelocityPxS)) {
       return null;
     }
-    return { target, prediction, mapUnit, frame };
+    return { target, snapshot, displayToken };
   }
 
   /** Scroll position that places a transition's destination at the reading line. */
@@ -570,7 +653,7 @@ export function createStageMotionEngine(
     const line = Number.isFinite(destinationTokenIndex)
       ? map.lineForToken(destinationTokenIndex)
       : null;
-    const mapUnit = line ? line.spokenUnitStart : unitAxis.toMapUnit(destinationUnit);
+    const mapUnit = line ? line.spokenUnitStart : destinationUnit;
     const destination = planner.target(mapUnit, 0);
     return destination.source === 'none' ? null : destination.scrollPx;
   }
@@ -580,7 +663,6 @@ export function createStageMotionEngine(
     controller,
     transitions,
     diagnostics,
-    unitAxis,
     // A getter, not a captured value: `setProfile` must be observable through
     // the same property everything else reads.
     get profile() {
@@ -589,8 +671,8 @@ export function createStageMotionEngine(
     get map() {
       return map;
     },
-    get lastPrediction() {
-      return lastPrediction;
+    get lastDisplayToken() {
+      return lastDisplayToken;
     },
     get targetRegressions() {
       return targetRegressions;
@@ -608,14 +690,13 @@ export function createStageMotionEngine(
       return catchUpCapExpiries;
     },
 
-    configureSession(gate, nowMs) {
-      receiver.setGate(gate, nowMs);
+    configureSession(sessionGeneration) {
+      receiver.setSession(sessionGeneration);
       receiver.reset();
       transitions.reset();
-      clock.reset();
-      unitAxis.reset();
       fallback = null;
-      lastPrediction = null;
+      lastDisplayToken = null;
+      previousDisplayToken = null;
       forwardTargetLatchPx = null;
       latchExcessSinceMs = null;
       heldVisualSpan = null;
@@ -636,10 +717,8 @@ export function createStageMotionEngine(
       // every one of those would throw away the line-handoff state for nothing.
       if (next === profile) return;
       profile = next;
-      // Both of these were built FROM the profile: the receiver's plausible
-      // speech envelope (§55 `prediction.maxUnitsPerSecond`) and the planner's
-      // feed-forward ceiling. Everything else reads `profile` per frame.
-      receiver.setProfile(next);
+      // The planner's feed-forward ceiling was built FROM the profile.
+      // Everything else — limits, voice lead — reads `profile` per frame.
       rebuildPlanner();
     },
 
@@ -660,22 +739,19 @@ export function createStageMotionEngine(
       paused = next;
     },
 
-    receiveFrame(frame, nowMs) {
-      const outcome = receiver.accept(frame, nowMs);
+    receiveSnapshot(snapshot, nowMs) {
+      const outcome = receiver.accept(snapshot, nowMs);
       if (!outcome.accepted) return false;
-      clock.observe(nowMs, frame.sessionTimeMs);
-      // One sampled point of the worker's cumulative speech-weight function —
-      // but only from evidence worth calibrating on. A frame emitted while the
-      // tracker is uncertain, coasting on stale evidence, or mid-retake carries
-      // a `(unit, tokenIndex)` pair the tracker itself does not stand behind,
-      // and a bad sample distorts the axis for every later frame.
-      if (isCalibrationEvidence(frame)) {
-        unitAxis.observe(frame.estimatedUnit, frame.tokenIndex);
-      }
-      if (frame.transition) {
-        const sessionNow = clock.sessionTime(nowMs) ?? frame.sessionTimeMs;
-        transitions.submit(frame.transition, sessionNow);
-      }
+      const accepted = receiver.current;
+      if (!accepted) return false;
+
+      // The engine reports an accepted discontinuity as an ordinary snapshot
+      // whose position moved a long way. It cannot issue a motion directive —
+      // it has no notion of a pixel — so the classification happens here, and
+      // only here, on the way in.
+      const directive = relocationDirectiveFor(accepted, previousDisplayToken, nowMs, profile);
+      if (directive) transitions.submit(directive, nowMs);
+      previousDisplayToken = accepted.observedToken;
       return true;
     },
 
@@ -690,8 +766,10 @@ export function createStageMotionEngine(
       const dtMs = lastFrameAtMs === null ? 0 : nowMs - lastFrameAtMs;
       lastFrameAtMs = nowMs;
 
-      const sessionNow = clock.sessionTime(nowMs);
-      if (sessionNow !== null) transitions.update(sessionNow);
+      // Directives are stamped on the stage's own wall clock (they are minted
+      // here, in `receiveSnapshot`), so expiry is a plain comparison with no
+      // clock domain to cross.
+      transitions.update(nowMs);
 
       // §26.3: the only authorized overwrite of plant state during following.
       const overwrite = transitions.consumePlantOverwrite();
@@ -755,10 +833,10 @@ export function createStageMotionEngine(
         }
       }
 
-      const semantic = semanticTarget(nowMs);
+      const aligned = alignmentTarget(nowMs);
       const manualGrace = nowMs < manualUntilMs;
       // §62: an invalid map means the stage does not know where anything is.
-      // The semantic planner is already disabled — the *guessed* fallback has
+      // The alignment planner is already disabled — the *guessed* fallback has
       // to go with it, because its off-window branch estimates positions from
       // block offsets and estimated heights, which is exactly the "moving on
       // guessed geometry" the hold exists to prevent.
@@ -768,34 +846,36 @@ export function createStageMotionEngine(
       let source: MotionSource = 'hold';
       let targetPx = lastTarget;
       let feedForward = 0;
-      let state: TrackingStateV2 | null = null;
+      let state: StageMotionState | null = null;
       let lineId: string | null = lastLineId;
       let lineProgress = 0;
       let activeTokenIndex: number | null = null;
       let visualSpanHold = false;
+      let suggestionToken: number | null = null;
 
-      if (semantic) {
-        source = 'semantic';
-        targetPx = semantic.target.scrollPx;
-        feedForward = semantic.target.feedForwardVelocityPxS;
-        state = semantic.frame.state;
-        lineId = semantic.target.lineId;
-        lineProgress = semantic.target.lineProgress;
-        lastPrediction = semantic.prediction;
-        activeTokenIndex = activeTokenFor(semantic.mapUnit, lineId);
+      if (aligned) {
+        source = 'alignment';
+        targetPx = aligned.target.scrollPx;
+        feedForward = aligned.target.feedForwardVelocityPxS;
+        state = aligned.snapshot.state;
+        suggestionToken = aligned.snapshot.suggestionToken;
+        lineId = aligned.target.lineId;
+        lineProgress = aligned.target.lineProgress;
+        lastDisplayToken = aligned.displayToken;
+        activeTokenIndex = activeTokenFor(aligned.displayToken, lineId);
 
         // §8.6: an interval whose SECANT exceeds the visual-block limit cannot
         // be followed — the path would race the whole image height inside one
         // spoken token. Hold at the entry while the presenter is inside it, and
         // cross it as one authorized re-anchor on the way out.
-        const span = map?.visualBlockSpanAt(semantic.mapUnit) ?? null;
+        const span = map?.visualBlockSpanAt(aligned.displayToken) ?? null;
         if (span) {
           targetPx = span.scrollStartPx;
           feedForward = 0;
           visualSpanHold = true;
           heldVisualSpan = span;
         } else if (heldVisualSpan !== null) {
-          const exitedForward = semantic.mapUnit >= heldVisualSpan.unitEnd;
+          const exitedForward = aligned.displayToken >= heldVisualSpan.unitEnd;
           heldVisualSpan = null;
           // Leaving forward means the presenter is past the media: the
           // re-anchor IS the discontinuity (§53), and it is bounded because the
@@ -883,7 +963,12 @@ export function createStageMotionEngine(
       const catchUpLicensed =
         !frozen &&
         !manualGrace &&
-        (state === 'catching_up' || activeTransition?.directive.type === 'catch_up');
+        // The engine has no `catching_up` state to report — a forward skip
+        // arrives as an accepted discontinuity, which `receiveSnapshot` turns
+        // into exactly one bounded `catch_up` directive. So the directive is
+        // now the whole licence, and it carries its own TTL alongside the
+        // §30.3 duration cap below.
+        activeTransition?.directive.type === 'catch_up';
       if (catchUpLicensed) catchUpSinceMs ??= nowMs;
       else {
         catchUpSinceMs = null;
@@ -905,7 +990,7 @@ export function createStageMotionEngine(
        * Neither field is touched by the bounds, so this is the same answer.
        */
       const structuralLimits: MotionLimits = limitsForState(
-        state ?? 'uncertain',
+        state ?? 'holding',
         profile,
         limitOptions,
       );
@@ -1049,7 +1134,7 @@ export function createStageMotionEngine(
       }
 
       const limits: MotionLimits = catchUpLicensed
-        ? limitsForState(state ?? 'uncertain', profile, {
+        ? limitsForState(state ?? 'holding', profile, {
             ...limitOptions,
             catchUpBoost,
             forwardPositionCeilingPx: catchUpCeilingPx,
@@ -1131,23 +1216,25 @@ export function createStageMotionEngine(
        * generation; `revision`/`epoch` of -1 say "no accepted frame yet"
        * rather than borrowing a stale frame's counters.
        */
-      const frameForAck = receiver.current;
-      const ackSessionId = frameForAck ? frameForAck.sessionId : receiver.gate.sessionId;
-      const ack =
-        ackSessionId.length > 0 && diagnostics.shouldEmitAck(nowMs)
-          ? diagnostics.buildAck({
-              sessionId: ackSessionId,
-              revision: frameForAck ? frameForAck.revision : -1,
-              epoch: frameForAck ? frameForAck.epoch : -1,
-              layoutGeneration: receiver.gate.layoutGeneration,
-              targetPx: frozen ? controller.state.q : targetPx,
-              positionPx: step.q,
-              velocityPxS: step.v,
-              activeLineId: lineId,
-              controllerState,
-              nowMs: frameStartMs,
-            })
-          : null;
+      const snapshotForAck = receiver.current;
+      const ack = diagnostics.shouldEmitAck(nowMs)
+        ? diagnostics.buildAck({
+            // The ack is a stage→control health report, and the identity that
+            // makes it addressable is the alignment session. `revision`/`epoch`
+            // of -1 say "no snapshot accepted yet" rather than borrowing a
+            // stale one's counters.
+            sessionGeneration: receiver.sessionGeneration,
+            revision: snapshotForAck ? snapshotForAck.seq : -1,
+            epoch: snapshotForAck ? snapshotForAck.sessionGeneration : -1,
+            layoutGeneration: map?.generation ?? 0,
+            targetPx: frozen ? controller.state.q : targetPx,
+            positionPx: step.q,
+            velocityPxS: step.v,
+            activeLineId: lineId,
+            controllerState,
+            nowMs: frameStartMs,
+          })
+        : null;
 
       return {
         scrollPx: step.q,
@@ -1158,6 +1245,7 @@ export function createStageMotionEngine(
         lineProgress,
         activeTokenIndex,
         source,
+        suggestionToken,
         state,
         controllerState,
         styleTick,
@@ -1185,9 +1273,9 @@ export function createStageMotionEngine(
       const previous = map;
       map = request.map;
       rebuildPlanner();
-      const unit = request.anchorUnit ?? lastPrediction?.unit ?? null;
+      const unit = request.anchorUnit ?? lastDisplayToken;
       if (unit !== null && planner) {
-        const destination = planner.target(unitAxis.toMapUnit(unit), 0);
+        const destination = planner.target(unit, 0);
         if (destination.source !== 'none') {
           const viewportY = request.anchorViewportY;
           // Keep the semantic position at the same viewport height it occupied
@@ -1202,7 +1290,6 @@ export function createStageMotionEngine(
         reanchorTo(controller.state.q);
       }
       forwardTargetLatchPx = null;
-      receiver.setGate({ layoutGeneration: request.map.generation }, request.nowMs);
     },
 
     visibilityRestored(positionPx, nowMs) {
@@ -1220,9 +1307,9 @@ export function createStageMotionEngine(
       transitions.reset();
       receiver.reset();
       diagnostics.reset();
-      clock.reset();
       fallback = null;
-      lastPrediction = null;
+      lastDisplayToken = null;
+      previousDisplayToken = null;
       lastFrameAtMs = null;
       lastTarget = positionPx;
       lastLineId = null;

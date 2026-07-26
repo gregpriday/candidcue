@@ -5,7 +5,7 @@
  * failure this file exists for has happened twice on this project and looks
  * the same both times: the transport is healthy, frames arrive, and the take
  * reports hearing nothing. Every assertion here is on the *effects* — what
- * reached the ledger, what reached the tracking worker, what the UI was told —
+ * was retained, what the UI was told —
  * because those are the only things that distinguish a working take from a
  * connected one.
  *
@@ -18,7 +18,6 @@ import {
   type VoicePipelineDeps,
 } from '../../../src/control/services/voice-session';
 import type { SttFrame } from '../../../src/control/services/stt/inworld';
-import type { TranscriptEvent } from '../../../src/shared/tracking/types';
 import type { CompiledScript } from '../../../src/shared/contracts';
 
 function compiledStub(): CompiledScript {
@@ -38,7 +37,8 @@ function compiledStub(): CompiledScript {
 
 interface Harness {
   pipeline: VoiceSessionPipeline;
-  tracking: TranscriptEvent[];
+  /** Raw recogniser text, as the transcript bar and word count receive it. */
+  text: Array<{ text: string; final: boolean }>;
   lines: string[];
   items: Array<{ itemId: string; commitSequence: number; transcript: string }>;
   connection: string[];
@@ -48,7 +48,7 @@ interface Harness {
 }
 
 function harness(overrides: Partial<VoicePipelineDeps> = {}): Harness {
-  const tracking: TranscriptEvent[] = [];
+  const text: Harness['text'] = [];
   const lines: string[] = [];
   const items: Harness['items'] = [];
   const connection: string[] = [];
@@ -60,7 +60,7 @@ function harness(overrides: Partial<VoicePipelineDeps> = {}): Harness {
     sessionId: 'session-1',
     sessionGeneration: 1,
     compiled: compiledStub(),
-    onTrackingEvent: (event) => tracking.push(event),
+    onTranscriptText: (value, final) => text.push({ text: value, final }),
     onTranscriptLine: (line) => lines.push(line),
     onTranscriptItem: (item) =>
       items.push({
@@ -76,7 +76,7 @@ function harness(overrides: Partial<VoicePipelineDeps> = {}): Harness {
     ...overrides,
   });
 
-  return { pipeline, tracking, lines, items, connection, holds, failures, dropped };
+  return { pipeline, text, lines, items, connection, holds, failures, dropped };
 }
 
 /** One complete utterance, exactly as the Rust supervisor would emit it. */
@@ -90,24 +90,17 @@ function utterance(generation: number, itemId: string, ordinal: number, text: st
 }
 
 describe('a take turns provider frames into words the aligner can follow', () => {
-  it('feeds the ledger and the tracking worker from one utterance', () => {
+  it('surfaces one utterance as revisable text and then as settled text', () => {
     const h = harness();
     for (const frame of utterance(1, '1-0', 0, 'Good morning, everyone.')) {
       h.pipeline.handleSttFrame(frame);
     }
 
-    expect(h.tracking.map((event) => event.type)).toEqual([
-      'item_started',
-      'delta',
-      'delta',
-      'completed',
-    ]);
-
-    // The ledger is what the aligner reads; an event forwarded to the worker
-    // but never applied here is the shape of "connected and following nothing".
-    const item = h.pipeline.ledger.getItem('1-0');
-    expect(item?.finalText).toBe('Good morning, everyone.');
-    expect(item?.status).toBe('complete');
+    // Partials arrive as revisable text and the final as settled text. That
+    // ordering is what the transcript bar renders, and it is deliberately read
+    // straight off the wire so it stays honest when alignment is not.
+    expect(h.text.map((entry) => entry.final)).toEqual([false, false, true]);
+    expect(h.text.at(-1)?.text).toBe('Good morning, everyone.');
   });
 
   it('reports a finished line once, for the tail and for retention', () => {
@@ -121,14 +114,17 @@ describe('a take turns provider frames into words the aligner can follow', () =>
     ]);
   });
 
-  it('keeps consecutive utterances as separate ledger items', () => {
+  it('keeps consecutive utterances as separate retained items', () => {
     const h = harness();
     for (const frame of utterance(1, '1-0', 0, 'First sentence.')) h.pipeline.handleSttFrame(frame);
     for (const frame of utterance(1, '1-1', 1, 'Second sentence.')) h.pipeline.handleSttFrame(frame);
 
-    expect(h.pipeline.ledger.getItem('1-0')?.finalText).toBe('First sentence.');
-    expect(h.pipeline.ledger.getItem('1-1')?.finalText).toBe('Second sentence.');
-    // The ordinals are what the ledger orders on, so they must not collide.
+    expect(h.items.map((item) => item.transcript)).toEqual([
+      'First sentence.',
+      'Second sentence.',
+    ]);
+    // The commit sequence is the retained row's uniqueness key, so two
+    // utterances must not collide on it.
     expect(h.items.map((item) => item.commitSequence)).toEqual([0, 1]);
   });
 
@@ -169,26 +165,23 @@ describe('a take is not polluted by the take before it', () => {
    * session it was initialised with, so stamping the transport's number would
    * discard every word over a connection reporting perfect health.
    */
-  it('stamps the session generation regardless of the transport generation', () => {
+  it('accepts a take whose transport generation is not the session number', () => {
     const h = harness();
     for (const frame of utterance(97, '97-0', 0, 'Spoken during this take.')) {
       h.pipeline.handleSttFrame(frame);
     }
 
-    // Every event carries the SESSION's generation, which is what the ledger
-    // was initialised with and what the engine compares against.
-    expect(new Set(h.tracking.map((event) => event.sessionGeneration))).toEqual(new Set([1]));
-    expect(h.pipeline.ledger.sessionGeneration).toBe(1);
-    // And the words actually landed, rather than being silently discarded.
-    expect(h.pipeline.ledger.getItem('97-0')?.finalText).toBe('Spoken during this take.');
+    // The words actually landed rather than being silently discarded: the two
+    // generations are unrelated counters and were once compared to each other.
     expect(h.lines).toEqual(['Spoken during this take.']);
+    expect(h.items.map((item) => item.transcript)).toEqual(['Spoken during this take.']);
   });
 
   it('applies a duplicated final once, however many times it arrives', () => {
     /*
-     * The ledger is idempotent; the transcript tail, the retained record and
-     * the word count are not. A provider that repeats a final — or a reconnect
-     * that replays one — would otherwise show the line twice and inflate the
+     * The transcript tail, the retained record and the word count are not
+     * idempotent. A provider that repeats a final — or a reconnect that
+     * replays one — would otherwise show the line twice and inflate the
      * "words heard" figure past what the presenter said.
      */
     const h = harness();
@@ -240,8 +233,8 @@ describe('the presenter is told when transcription is not trustworthy', () => {
     const h = harness();
     h.pipeline.handleSttFrame({ kind: 'audioDropped', generation: 1, frames: 14 });
     expect(h.dropped).toEqual([14]);
-    // Not a transcript event: the aligner must not see a gap as evidence.
-    expect(h.tracking).toEqual([]);
+    // Not transcript text: a gap in the audio is not something anybody said.
+    expect(h.text).toEqual([]);
   });
 });
 

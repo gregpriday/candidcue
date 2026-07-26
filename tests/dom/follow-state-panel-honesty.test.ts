@@ -16,7 +16,7 @@ import FollowStatePanel from '../../src/control/components/FollowStatePanel.svel
 import { createSmoothFollowStore } from '../../src/control/stores/smooth-follow';
 import { defaultFollowingSettings } from '../../src/control/lib/follow-profiles';
 import type { SmoothFollowState } from '../../src/control/stores/smooth-follow';
-import type { SemanticMotionFrame } from '../../src/shared/contracts';
+import type { AlignmentSnapshot } from '../../src/shared/contracts';
 
 const SESSION_ID = '00000000-0000-0000-0000-0000000000f1';
 
@@ -26,32 +26,32 @@ const SESSION_ID = '00000000-0000-0000-0000-0000000000f1';
  * actually handed.
  */
 function followState(state: SmoothFollowState['state']): SmoothFollowState {
+  if (state === 'paused') {
+    const paused = createSmoothFollowStore();
+    paused.beginSession(SESSION_ID, defaultFollowingSettings());
+    paused.setFollowingPaused(true);
+    return paused.snapshot();
+  }
   const store = createSmoothFollowStore();
   store.beginSession(SESSION_ID, defaultFollowingSettings());
-  const frame: SemanticMotionFrame = {
-    sessionId: SESSION_ID,
+  const snapshot: AlignmentSnapshot = {
     sessionGeneration: 1,
-    scriptCompileHash: 'hash',
-    layoutGeneration: 0,
-    revision: 1,
-    epoch: 0,
-    sessionTimeMs: 1000,
+    seq: 1,
     state,
-    behavior: 'acquire',
+    decision: 'noEvidence',
+    confirmedToken: 0,
+    observedToken: 0,
+    rateTokensPerSecond: 0,
+    evidenceAudioMs: 1000,
+    atAudioMs: 1000,
+    maxPredictionMs: 900,
     confidence: 0.4,
-    sectionId: 'section-1',
-    blockId: 'block-1',
-    sentenceId: 'sentence-1',
-    tokenIndex: 0,
-    estimatedUnit: 0,
-    committedUnit: 0,
-    motionProfileId: defaultFollowingSettings().motionProfileId,
-    velocityUnitsPerSecond: 0,
-    accelerationUnitsPerSecond2: 0,
-    positionVariance: 0,
-    finalEvidence: false,
+    suggestionToken: null,
+    scriptLenTokens: 100,
+    observedAtom: 0,
+    confirmedAtom: 0,
   };
-  store.ingestMotionFrame(frame);
+  store.ingestSnapshot(snapshot);
   return store.snapshot();
 }
 
@@ -65,22 +65,27 @@ function textOf(voiceInput: boolean, state: SmoothFollowState['state']): string 
 describe('FollowStatePanel honesty', () => {
   it('a manual take never offers a wake word or a transcription feed', () => {
     const paused = textOf(false, 'paused');
-    expect(paused).toContain('Paused — the script stays where it is');
-    expect(paused).not.toContain('CandidCue, resume');
-    expect(paused).not.toContain('Transcription is still connected');
+    expect(paused).toContain('Following paused');
+    // A manual take has no microphone, so it must not offer to be spoken to
+    // nor claim a feed it does not have.
+    expect(paused).toContain('Use the transport to move it');
+    expect(paused).not.toContain('CandidCue');
+    expect(paused).not.toContain('Transcription');
 
-    const acquiring = textOf(false, 'acquiring');
-    expect(acquiring).not.toContain('Start speaking');
-    expect(acquiring).toContain('nothing is listening');
+    const searching = textOf(false, 'searching');
+    expect(searching).not.toContain('Start speaking');
+    expect(searching).toContain('nothing is listening');
   });
 
-  it('a voice take keeps the wake-word and transcription copy', () => {
+  it('a voice take keeps the transcription copy', () => {
     const paused = textOf(true, 'paused');
-    expect(paused).toContain('Paused — still listening for “CandidCue, resume”');
-    expect(paused).toContain('Transcription is still connected');
+    expect(paused).toContain('Following paused');
+    // §48: pausing FOLLOWING is not pausing the session. The panel has to say
+    // so, or a presenter reasonably concludes the microphone is off.
+    expect(paused).toContain('Transcription and voice commands keep running');
 
-    const acquiring = textOf(true, 'acquiring');
-    expect(acquiring).toContain('Start speaking and the stage picks up your place.');
-    expect(acquiring).not.toContain('nothing is listening');
+    const searching = textOf(true, 'searching');
+    expect(searching).toContain('Start speaking and the stage picks up your place.');
+    expect(searching).not.toContain('nothing is listening');
   });
 });

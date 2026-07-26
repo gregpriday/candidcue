@@ -1,16 +1,15 @@
 /**
  * Spoken-unit coordinate (companion §6).
  *
- * The tracking worker reports semantic position in *weighted spoken units*, not
- * token indexes: "a" and "internationalization" are both one token but do not
- * take the same time to deliver. The stage owns the units → pixels mapping, so
- * it needs the same cumulative axis the worker used.
+ * Alignment snapshots position the reader in TOKEN space — the same tokens the
+ * stage measured rectangles for — so the axis the line map is built on is the
+ * identity scale, one unit per token.
  *
- * The axis is injected rather than derived here on purpose. Until the compiler
- * publishes per-token speech weights in the stage envelope, the stage uses the
- * identity scale (one unit per token), which is exactly the axis a worker with
- * uniform weights produces. `weightedUnitScale` is ready for the moment weights
- * arrive; nothing else in the stage motion stack changes.
+ * The axis stays injectable because it is the seam where that could stop being
+ * true: if the map is ever built over weighted units ("a" and
+ * "internationalization" are both one token but do not take the same time to
+ * say), `weightedUnitScale` is the mapping, and nothing else in the motion
+ * stack changes.
  */
 
 export interface SpokenUnitScale {

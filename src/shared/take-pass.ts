@@ -11,7 +11,7 @@
  *     and never advanced it, so every retake accumulated into pass 1;
  *   - the §36.3 take history minted `` `${sessionId}:${passOrdinal}` `` and
  *     *did* advance it, and those rows are persisted in `session_takes`;
- *   - the tracking worker minted a third, three-part string of its own.
+ *   - the alignment layer minted a third, three-part string of its own.
  *
  * Take-scoped state — confirmed filler counts, ribbon events, gutter marks,
  * coaching reports, take history rows — is keyed on this value, so a retake

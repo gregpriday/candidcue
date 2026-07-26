@@ -22,15 +22,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SMOOTH_FOLLOW_PROFILE as PROFILE,
-  type SemanticMotionFrame,
+  type AlignmentSnapshot,
   type SmoothFollowProfile,
-  type TrackingStateV2,
+  type StageMotionState,
 } from '../../../src/shared/contracts';
 import {
   buildRenderedLineMap,
   createJerkLimitedScrollController,
   createStageMotionEngine,
-  identityUnitAxis,
   limitsForState,
   type StageMotionEngine,
   type StageMotionFrameResult,
@@ -39,6 +38,27 @@ import {
 import { fixtureFingerprint, syntheticLayout } from '../../fixtures/layout';
 
 const R = 400;
+
+/** A following snapshot at `unit`, with its audio stamps agreeing. */
+function snapshotAt(unit: number, atMs: number): AlignmentSnapshot {
+  return {
+    sessionGeneration: 1,
+    seq: 1,
+    state: 'following',
+    decision: 'localConfirmed',
+    confirmedToken: Math.max(0, unit - 1),
+    observedToken: unit,
+    rateTokensPerSecond: 3,
+    evidenceAudioMs: atMs,
+    atAudioMs: atMs,
+    maxPredictionMs: 900,
+    confidence: 0.92,
+    suggestionToken: null,
+    scriptLenTokens: 10_000,
+    observedAtom: unit,
+    confirmedAtom: Math.max(0, unit - 1),
+  };
+}
 
 /* -------------------------------------------------------------------------
  * Harnesses
@@ -69,16 +89,8 @@ function longMap(options: { readingBandHalfHeightPx?: number } = {}): {
 }
 
 function makeEngine(map: StageRenderedLineMap, maxScrollPx: number): StageMotionEngine {
-  const engine = createStageMotionEngine({ unitAxis: identityUnitAxis() });
-  engine.configureSession(
-    {
-      sessionId: 'session-a',
-      sessionGeneration: 1,
-      scriptCompileHash: 'hash-a',
-      layoutGeneration: map.generation,
-    },
-    0,
-  );
+  const engine = createStageMotionEngine();
+  engine.configureSession(1, 0);
   engine.setLineMap(map);
   engine.setBounds(0, maxScrollPx);
   return engine;
@@ -105,7 +117,7 @@ function driveCatchUp(
     durationMs: number;
     startUnit: number;
     unitsPerSecond?: number;
-    state?: TrackingStateV2;
+    state?: AlignmentSnapshot['state'];
     frameHz?: number;
   },
 ): EngineSample[] {
@@ -118,34 +130,43 @@ function driveCatchUp(
   let previous: StageMotionFrameResult | null = null;
   const out: EngineSample[] = [];
 
+  /*
+   * The catch-up licence comes from an ACCEPTED FORWARD JUMP, which is what
+   * catch-up now means: the engine reports a position a long way from the last
+   * one and says it accepted the discontinuity. There is no `catching_up`
+   * state to assert — the old vocabulary described the tracker's bookkeeping
+   * rather than anything the presenter sees.
+   *
+   * Priming at 0 first is what makes the jump a jump: a relocation is measured
+   * from where the display already was.
+   */
+  engine.receiveSnapshot(
+    { ...snapshotAt(0, 0), rateTokensPerSecond: unitsPerSecond },
+    0,
+  );
+  engine.frame(0);
+  engine.receiveSnapshot(
+    {
+      ...snapshotAt(options.startUnit, 0),
+      rateTokensPerSecond: unitsPerSecond,
+      decision: 'jumpForwardAccepted',
+      seq: 2,
+    },
+    0,
+  );
+  revision = 2;
+
   for (let t = 0; t <= options.durationMs; t += dt) {
     if (t >= nextSemanticAt) {
       revision++;
       const unit = options.startUnit + (unitsPerSecond * t) / 1000;
-      const frame: SemanticMotionFrame = {
-        sessionId: 'session-a',
-        sessionGeneration: 1,
-        scriptCompileHash: 'hash-a',
-        layoutGeneration: 1,
-        revision,
-        epoch: 1,
-        sessionTimeMs: t,
-        estimatedUnit: unit,
-        committedUnit: unit - 1,
-        velocityUnitsPerSecond: unitsPerSecond,
-        accelerationUnitsPerSecond2: 0,
-        positionVariance: 0.2,
-        confidence: 0.92,
-        sectionId: 'section:0',
-        tokenIndex: Math.floor(unit),
-        sentenceId: 's0',
-        blockId: 'b0',
-        state: options.state ?? 'catching_up',
-        behavior: 'normal',
-        finalEvidence: true,
-        motionProfileId: 'default-v1',
+      const frame: AlignmentSnapshot = {
+        ...snapshotAt(unit, t),
+        seq: revision + 2,
+        rateTokensPerSecond: unitsPerSecond,
+        state: options.state ?? 'following',
       };
-      engine.receiveFrame(frame, t);
+      engine.receiveSnapshot(frame, t);
       nextSemanticAt = t + semanticIntervalMs;
     }
     const result = engine.frame(t);
@@ -282,9 +303,18 @@ describe('§30.3 corridor-relative boost decay', () => {
     return driveCatchUp(engine, { durationMs: 6000, startUnit: 300, frameHz: 200 });
   }
 
-  /** Peak realized velocity — from `Δq` alone — while the gap was near `gapPx`. */
+  /**
+   * Peak realized velocity — from `Δq` alone — while the gap was near `gapPx`.
+   *
+   * The first 400 ms are excluded because the catch-up begins from an accepted
+   * jump with the plant AT REST: until it has ramped to its licensed ceiling
+   * the peak measures the acceleration limit rather than the decay under test,
+   * and a decayed and undecayed run are indistinguishable there by
+   * construction. 400 ms is comfortably past the ~350 ms the plant needs to
+   * reach boosted top speed under `maxAccelerationPxS2`.
+   */
   function peakAtGap(trace: EngineSample[], gapPx: number): number {
-    const band = trace.filter((s) => s.tMs > 200 && Math.abs(s.gapPx - gapPx) <= 15);
+    const band = trace.filter((s) => s.tMs > 400 && Math.abs(s.gapPx - gapPx) <= 15);
     return band.length === 0 ? Number.NaN : Math.max(...band.map((s) => s.vPxS));
   }
 
@@ -336,12 +366,20 @@ describe('§30.3 corridor-relative boost decay', () => {
         peakAtGap(trace, gap) > licensedCeilingPxS(PROFILE, gap) * CEILING_LAG_TOLERANCE,
     );
     expect(breaches).toEqual([500, 400, 300]);
-    // And it is not a rounding difference: the document is moving materially
-    // faster at the same distance from the reading line.
+    /*
+     * And it is not a rounding difference: across the decay window the document
+     * is moving materially faster at the same distance from the reading line.
+     *
+     * Measured over the window rather than at a single gap, because a single
+     * sample also catches whichever part of the plant's own acceleration ramp
+     * happens to overlap it — which is a fact about the controller, not about
+     * the decay this clause exists to prove does something.
+     */
     const decayed = run(PROFILE);
-    for (const gap of [400, 300, 200]) {
-      expect(peakAtGap(trace, gap)).toBeGreaterThan(peakAtGap(decayed, gap) * 1.1);
-    }
+    const gaps = [400, 300, 200];
+    const mean = (t: EngineSample[]) =>
+      gaps.reduce((sum, gap) => sum + peakAtGap(t, gap), 0) / gaps.length;
+    expect(mean(trace)).toBeGreaterThan(mean(decayed) * 1.1);
   });
 });
 
@@ -385,7 +423,8 @@ function leadTrace(options: {
   const lead: number[] = [];
   for (let i = 0; i < substeps; i++) {
     const targetPx = startPx + (options.targetVelocityPxS * i * SUBSTEP_MS) / 1000;
-    const limits = limitsForState('catching_up', PROFILE, {
+    const limits = limitsForState('following', PROFILE, {
+      transition: 'catch_up',
       catchUpBoost: 1,
       ...(options.ceiling
         ? { forwardPositionCeilingPx: targetPx + CORRIDOR_HALF_PX }
@@ -473,20 +512,20 @@ describe('all three bounds together', () => {
  * 4. The bounds do not violate the plant
  * ---------------------------------------------------------------------- */
 
-const STATES: TrackingStateV2[] = [
-  'acquiring',
+const STATES: StageMotionState[] = [
+  'searching',
   'following',
-  'coasting',
-  'uncertain',
-  'adlib_hold',
-  'catching_up',
-  'retake_pending',
-  'rewinding',
-  'reanchoring',
-  'command_pending',
+  'following',
+  'holding',
+  'ambiguous',
+  'following',
+  'holding',
+  'holding',
+  'following',
+  'following',
   'paused',
-  'reconnecting',
-  'lost_local',
+  'holding',
+  'searching',
 ];
 const TRANSITIONS = [undefined, 'settle', 'catch_up', 'rewind', 'reanchor', 'reset'] as const;
 const BOOSTS = [0, 0.25, 0.5, 1];
@@ -568,7 +607,7 @@ describe('the §30.3 bounds honour the plant across the profile space', () => {
   it('reduced motion is unaffected: the target is followed exactly', () => {
     // §32.4/A.3. Snap has no dynamics to bound, and the target is inside the
     // ceiling by construction, so the accommodation is not quietly reshaped.
-    const snap = limitsForState('catching_up', PROFILE, {
+    const snap = limitsForState('following', PROFILE, {
       reducedMotion: true,
       catchUpBoost: 0,
       forwardPositionCeilingPx: 1200,
@@ -587,7 +626,7 @@ describe('the §30.3 bounds honour the plant across the profile space', () => {
   it('manual grace drops the ceiling with the rest of automatic authority', () => {
     // §30.6: nothing automatic may move, so there is nothing to bound — and the
     // presenter's own position may legitimately sit past it.
-    const manual = limitsForState('catching_up', PROFILE, {
+    const manual = limitsForState('following', PROFILE, {
       manualGrace: true,
       forwardPositionCeilingPx: 500,
     });
@@ -596,8 +635,14 @@ describe('the §30.3 bounds honour the plant across the profile space', () => {
   });
 
   it('a boost of 0 is ordinary following limits, never a brake', () => {
-    const none = limitsForState('catching_up', PROFILE, { catchUpBoost: 0 });
-    const full = limitsForState('catching_up', PROFILE, { catchUpBoost: 1 });
+    const none = limitsForState('following', PROFILE, {
+      transition: 'catch_up',
+      catchUpBoost: 0,
+    });
+    const full = limitsForState('following', PROFILE, {
+      transition: 'catch_up',
+      catchUpBoost: 1,
+    });
     const ordinary = limitsForState('following', PROFILE);
     expect(none.vForwardMax).toBeCloseTo(ordinary.vForwardMax, 6);
     expect(none.aMax).toBeCloseTo(ordinary.aMax, 6);
@@ -610,18 +655,24 @@ describe('the §30.3 bounds honour the plant across the profile space', () => {
     expect(none.jerkMax).toBe(PROFILE.motion.maxJerkPxS3);
   });
 
-  it('the stacked cap still holds: a boosted state × transition may not compound', () => {
-    // The recent "capped to the more extreme of its two factors" rule has to
-    // survive the decay, or a decayed catch-up could reach further than an
-    // undecayed one.
-    for (const boost of BOOSTS) {
-      const stacked = limitsForState('catching_up', PROFILE, {
+  /*
+   * There is now exactly ONE source of a catch-up licence — a `catch_up`
+   * directive — so the old "state × transition may not compound" cap has
+   * nothing left to guard against by construction. What still has to hold is
+   * that the boost is monotone in the decay: a MORE decayed catch-up may never
+   * reach further than a less decayed one.
+   */
+  it('the boost is monotone in the decay, so a decayed catch-up never reaches further', () => {
+    let previous = 0;
+    for (const boost of [...BOOSTS].sort((a, b) => a - b)) {
+      const limits = limitsForState('following', PROFILE, {
         transition: 'catch_up',
         catchUpBoost: boost,
       });
-      const single = limitsForState('catching_up', PROFILE, { catchUpBoost: boost });
-      expect(stacked.vForwardMax).toBeCloseTo(single.vForwardMax, 6);
-      expect(stacked.aMax).toBeCloseTo(single.aMax, 6);
+      expect(limits.vForwardMax).toBeGreaterThanOrEqual(previous);
+      previous = limits.vForwardMax;
+      // And the jerk limit is never relaxed by any of it (§30.3).
+      expect(limits.jerkMax).toBe(PROFILE.motion.maxJerkPxS3);
     }
   });
 });

@@ -103,33 +103,39 @@ export type SafeRenderNode =
  * but does not define them; definitions follow §25 exactly.
  * ---------------------------------------------------------------------- */
 
-/** Bit flags for SpokenToken.flags (spec §25.2). */
-export const TOKEN_FLAGS = {
-  PUNCTUATION: 1 << 0,
-  STOPWORD: 1 << 1,
-  NUMBER: 1 << 2,
-  PROPER_NOUN: 1 << 3,
-  DIRECTIVE_ALIAS: 1 << 4,
-  NON_NAVIGATION: 1 << 5,
-} as const;
-
+/**
+ * One spoken word of the script, in reading order.
+ *
+ * ---------------------------------------------------------------------------
+ * THIS TYPE CARRIES NO LEXICAL JUDGEMENT
+ * ---------------------------------------------------------------------------
+ * It used to: a `weight`, a `flags` bitfield of stopword/proper-noun/number
+ * classifications, and a list of pronunciation `aliases`. All of that existed
+ * for the TypeScript aligner, and all of it is now the alignment engine's
+ * (`crates/cc-align`), which decides importance from its own normalization and
+ * frequency analysis of the very same surfaces.
+ *
+ * Keeping a second opinion here would not be redundancy, it would be a
+ * disagreement waiting to happen — which is exactly what it was the time the
+ * two tokenizers diverged and the cursor sat at `0 of 26` for a whole take. So
+ * what the compiler publishes is structural only: what the word is, where it
+ * sits in the document, and where it came from in the source. `surface` is the
+ * authored text, and it is what gets handed to the engine.
+ */
 export interface SpokenToken {
   index: number;
   blockId: string;
   sentenceId: string;
+  /** Authored text (`$12`, `well-known`). Never pre-split — the engine splits. */
   surface: string;
+  /** Casing/punctuation-folded form, used for navigation matching only. */
   normalized: string;
-  aliases: string[];
-  weight: number;
   source: { utf16Start: number; utf16End: number };
-  flags: number;
   /**
    * Authored visual text of the spoken override this token came from
    * (`API{say="A P I"}` or a `:::spoken` block, §23.4). A multi-word `say`
    * value expands into one token per spoken word, so this is the only place
-   * the visual term survives — vocabulary preparation (§26.4) keys
-   * pronunciation candidates on it, because the visual term is what the
-   * transcriber mangles. Present only on DIRECTIVE_ALIAS tokens.
+   * the visual term survives.
    */
   overrideVisual?: string;
 }

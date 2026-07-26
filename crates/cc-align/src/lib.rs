@@ -27,5 +27,5 @@ pub mod script;
 pub mod tracker;
 
 pub use config::AlignmentConfig;
-pub use script::{compile, CompileOptions, CompiledScript};
+pub use script::{compile, compile_tokens, CompileOptions, CompiledScript, TokenInput};
 pub use tracker::{DecisionCode, Engine, SessionEvent, Snapshot, TrackingState};

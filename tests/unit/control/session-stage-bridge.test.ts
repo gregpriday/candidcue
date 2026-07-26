@@ -70,8 +70,8 @@ vi.mock('../../../src/control/services/ipc', async (orig) => {
   const actual = await orig<typeof import('../../../src/control/services/ipc')>();
   return { ...actual, isTauriRuntime: () => true };
 });
-vi.mock('../../../src/control/services/smooth-follow-adapter', async (orig) => {
-  const actual = await orig<typeof import('../../../src/control/services/smooth-follow-adapter')>();
+vi.mock('../../../src/control/services/stage-acks', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
   return { ...actual, subscribeStageMotionAcks: () => () => {} };
 });
 

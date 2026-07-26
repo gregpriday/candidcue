@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { TrackingBehavior, TrackingStateV2 } from '../../../src/shared/contracts';
+import type { AlignmentDecision, StageMotionState } from '../../../src/shared/contracts';
 import {
   CONFIDENCE_BANDS,
   CONFIDENCE_BAND_LABELS,
-  FOLLOW_BEHAVIOR_LABELS,
+  FOLLOW_DECISION_LABELS,
   FOLLOW_NOTICE_COPY,
   FOLLOW_STATE_DETAIL,
   FOLLOW_STATE_LABELS,
@@ -18,52 +18,38 @@ import {
   type MovementDecisionRecord,
 } from '../../../src/control/lib/follow-language';
 
-const ALL_STATES: TrackingStateV2[] = [
-  'acquiring',
+const ALL_STATES: StageMotionState[] = [
+  'searching',
   'following',
-  'coasting',
-  'uncertain',
-  'adlib_hold',
-  'catching_up',
-  'retake_pending',
-  'rewinding',
-  'reanchoring',
-  'command_pending',
+  'holding',
+  'ambiguous',
   'paused',
-  'reconnecting',
-  'lost_local',
 ];
 
-const ALL_BEHAVIORS: TrackingBehavior[] = [
-  'acquire',
-  'normal',
-  'minor_variation',
-  'paraphrase',
-  'adlib',
-  'return',
-  'small_skip',
-  'large_skip',
-  'retake_candidate',
-  'retake',
-  'manual_navigation',
-  'command_navigation',
-  'lost',
+const ALL_DECISIONS: AlignmentDecision[] = [
+  'noEvidence',
+  'localObserved',
+  'localConfirmed',
+  'holdLowEvidence',
+  'holdOffScript',
+  'holdAmbiguous',
+  'relocationAccepted',
+  'jumpForwardAccepted',
+  'retakeAccepted',
+  'jumpPending',
+  'manualAnchor',
 ];
 
 function record(patch: Partial<MovementDecisionRecord> = {}): MovementDecisionRecord {
   return {
-    revision: 12,
-    sessionTimeMs: 65_400,
-    fromUnit: 100,
-    toUnit: 104.5,
-    behavior: 'small_skip',
+    seq: 12,
+    audioMs: 65_400,
+    fromToken: 100,
+    toToken: 104.5,
+    decision: 'jumpForwardAccepted',
     stateBefore: 'following',
-    stateAfter: 'catching_up',
-    localConfidence: 0.71,
-    secondBestMargin: 0.18,
-    sectionGate: 'allowed',
-    authority: 'ordinary',
-    visualDisposition: 'catch_up',
+    stateAfter: 'following',
+    confidence: 0.71,
     ...patch,
   };
 }
@@ -83,16 +69,37 @@ describe('follow language (§48, §49)', () => {
     }
   });
 
-  it('has a label for every tracking behavior', () => {
-    for (const behavior of ALL_BEHAVIORS) {
-      expect(FOLLOW_BEHAVIOR_LABELS[behavior]).toBeTruthy();
+  it('has a diagnostics label for every decision code', () => {
+    for (const decision of ALL_DECISIONS) {
+      expect(FOLLOW_DECISION_LABELS[decision]).toBeTruthy();
     }
   });
 
-  it('reuses the F.11 wording for held and reconnecting states', () => {
-    expect(FOLLOW_STATE_LABELS.reconnecting).toBe('Reconnecting — position held');
-    expect(FOLLOW_STATE_LABELS.lost_local).toBe('Looking for your place');
-    expect(FOLLOW_STATE_LABELS.paused).toContain('CandidCue, resume');
+  it('reuses the F.11 wording for held and searching states', () => {
+    expect(FOLLOW_STATE_LABELS.searching).toBe('Looking for your place');
+    expect(FOLLOW_STATE_LABELS.holding).toBe('Holding your place');
+    expect(FOLLOW_STATE_LABELS.paused).toContain('listening');
+  });
+
+  /*
+   * The research brief is explicit that a hold must read as calm. A warning
+   * tone here would train presenters to panic at exactly the moment the engine
+   * is being careful on their behalf — refusing to guess where they are.
+   */
+  it('never uses a warning tone for a hold', () => {
+    expect(followStateTone('holding')).toBe('neutral');
+    expect(followStateTone('ambiguous')).toBe('neutral');
+  });
+
+  /*
+   * `ambiguous` and `holding` deliberately share a status label but not a
+   * detail: "these words appear twice" is something the presenter can act on,
+   * "evidence is thin" would send them hunting a microphone fault.
+   */
+  it('distinguishes ambiguity from weak evidence in the detail, not the label', () => {
+    expect(FOLLOW_STATE_LABELS.ambiguous).toBe(FOLLOW_STATE_LABELS.holding);
+    expect(FOLLOW_STATE_DETAIL.ambiguous).not.toBe(FOLLOW_STATE_DETAIL.holding);
+    expect(FOLLOW_STATE_DETAIL.ambiguous).toContain('more than one place');
   });
 });
 
@@ -132,32 +139,32 @@ describe('confidence presentation (§48 — no false precision)', () => {
 });
 
 describe('“why did it move?” records (§65)', () => {
-  it('explains direction, behavior, and visual disposition', () => {
+  it('explains direction, distance and the decision behind it', () => {
     const explanation = describeMovement(record());
     expect(explanation.headline).toContain('forward');
-    expect(explanation.headline.toLowerCase()).toContain('skipped a little ahead');
-    expect(explanation.headline).toContain('caught up gradually');
+    expect(explanation.headline.toLowerCase()).toContain('jumped forward');
   });
 
-  it('names the state transition, the authority, and the evidence margin', () => {
-    const explanation = describeMovement(record({ authority: 'manual' }));
+  it('names the state transition and the evidence score', () => {
+    const explanation = describeMovement(
+      record({ stateBefore: 'holding', stateAfter: 'following' }),
+    );
+    expect(explanation.detail).toContain('Holding your place');
     expect(explanation.detail).toContain('Following');
-    expect(explanation.detail).toContain('Catching up');
-    expect(explanation.detail).toContain('authorized by you');
     expect(explanation.detail).toContain('0.71');
-    expect(explanation.detail).toContain('0.18');
   });
 
-
-  it('calls out a blocked section gate', () => {
-    const blocked = describeMovement(record({ sectionGate: 'blocked' }));
-    expect(blocked.detail).toContain('blocked');
-    expect(blocked.detail).toContain('command or manual authority');
+  /*
+   * Confidence is a documented heuristic, not a calibrated probability, so it
+   * must never be rendered as a percentage anywhere a presenter can read it.
+   */
+  it('never renders the match score as a percentage', () => {
+    expect(describeMovement(record()).detail).not.toContain('%');
   });
 
   it('describes a hold as holding, not as movement', () => {
     const held = describeMovement(
-      record({ fromUnit: 100, toUnit: 100, visualDisposition: 'hold', behavior: 'adlib' }),
+      record({ fromToken: 100, toToken: 100, decision: 'holdOffScript' }),
     );
     expect(held.headline).toContain('Held position');
   });

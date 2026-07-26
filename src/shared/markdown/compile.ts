@@ -29,7 +29,6 @@ import type {
   SpokenToken,
   SpokenTokenRange,
 } from '../contracts';
-import { TOKEN_FLAGS } from '../contracts';
 import { hashString, shortHash } from './hash';
 import {
   ContainerIndex,
@@ -41,11 +40,9 @@ import {
   type CoachDirective,
   type ContainerRegion,
 } from './directives';
-import { aliasesForToken, normalizePhrase, normalizeToken } from './normalize';
+import { normalizePhrase, normalizeToken } from './normalize';
 import { tokenizeText } from './tokenize';
 import { segmentSentences } from './segment';
-import { computeTokenWeight } from './weights';
-import { isStopword } from './stopwords';
 
 export const COMPILER_VERSION = '1.0.0';
 export const SCHEMA_VERSION = 1;
@@ -100,8 +97,6 @@ interface TokenDraft {
   /** Offsets within the block's spoken text. */
   textStart: number;
   textEnd: number;
-  extraAliases?: string[];
-  flagsSeed: number;
   isOverrideAnchor: boolean;
   /** Authored visual text for spoken-override tokens (§23.4). */
   overrideVisual?: string;
@@ -387,7 +382,6 @@ function appendSpoken(
       srcEnd,
       textStart: textBase + raw.start,
       textEnd: textBase + raw.end,
-      flagsSeed: 0,
       isOverrideAnchor: false,
       renderRefs: renderRef ? [renderRef] : [],
     });
@@ -650,9 +644,6 @@ function appendOverrideTokens(
   },
 ): void {
   const sayTokens = tokenizeText(spec.say);
-  const visualWords = tokenizeText(spec.visual)
-    .map((t) => normalizeToken(t.surface))
-    .filter((w) => w.length > 0);
   const refs = spec.renderRef ? [spec.renderRef] : [];
 
   if (sayTokens.length === 0) {
@@ -667,8 +658,7 @@ function appendOverrideTokens(
         srcEnd: spec.srcEnd,
         textStart: textBase + raw.start,
         textEnd: textBase + raw.end,
-        flagsSeed: 0,
-        isOverrideAnchor: false,
+          isOverrideAnchor: false,
         renderRefs: [...refs],
       });
     }
@@ -678,18 +668,8 @@ function appendOverrideTokens(
   if (draft.spokenText && !/\s$/.test(draft.spokenText)) draft.spokenText += ' ';
   const textBase = draft.spokenText.length;
   draft.spokenText += spec.say;
-  const positional = visualWords.length === sayTokens.length;
-  const sayPhrase = normalizePhrase(spec.say);
   for (let i = 0; i < sayTokens.length; i++) {
     const raw = sayTokens[i]!;
-    const aliases = positional
-      ? [visualWords[i]!]
-      : i === 0
-        ? [...visualWords]
-        : [];
-    // The full say phrase never matches a single transcript word, but it is
-    // the pronunciation payload vocabulary preparation reads (§26.4).
-    if (i === 0 && sayTokens.length > 1 && sayPhrase) aliases.push(sayPhrase);
     draft.tokens.push({
       surface: raw.surface,
       ...(spec.visual ? { overrideVisual: spec.visual } : {}),
@@ -697,8 +677,6 @@ function appendOverrideTokens(
       srcEnd: spec.sayStart === undefined ? spec.srcEnd : spec.sayStart + raw.end,
       textStart: textBase + raw.start,
       textEnd: textBase + raw.end,
-      extraAliases: aliases,
-      flagsSeed: TOKEN_FLAGS.DIRECTIVE_ALIAS,
       isOverrideAnchor: true,
       renderRefs: [...refs],
     });
@@ -1648,7 +1626,6 @@ function finalize(
   const headingStarts: { draftIndex: number; tokenStart: number }[] = [];
 
   // Pass A: mid-sentence capitalized forms, for proper-noun detection.
-  const midSentenceCapitalized = collectMidSentenceCapitalized(drafts);
 
   for (let d = 0; d < drafts.length; d++) {
     const draft = drafts[d]!;
@@ -1695,36 +1672,13 @@ function finalize(
         const tokenDraft = bucket[t]!;
         const normalized = normalizeToken(tokenDraft.surface);
         if (!normalized) continue;
-        let flags = tokenDraft.flagsSeed;
-        if (/^\$?[\d.,]+%?$/.test(normalized) || /\d/.test(normalized)) {
-          flags |= TOKEN_FLAGS.NUMBER;
-        }
-        if (isStopword(normalized)) flags |= TOKEN_FLAGS.STOPWORD;
-        const firstChar = tokenDraft.surface.charAt(0);
-        const isCapitalized = /\p{Lu}/u.test(firstChar);
-        const isAcronym = /^\p{Lu}{2,6}s?$/u.test(tokenDraft.surface.replace(/\./g, ''));
-        const sentenceInitial = t === 0;
-        if (
-          isAcronym ||
-          (isCapitalized &&
-            !isStopword(normalized) &&
-            (!sentenceInitial || midSentenceCapitalized.has(normalized)))
-        ) {
-          if (!/^\d/.test(normalized)) flags |= TOKEN_FLAGS.PROPER_NOUN;
-        }
-        const aliases = new Set<string>(aliasesForToken(tokenDraft.surface, normalized));
-        for (const alias of tokenDraft.extraAliases ?? []) aliases.add(alias);
-        aliases.delete(normalized);
         spokenTokens.push({
           index: spokenTokens.length,
           blockId,
           sentenceId,
           surface: tokenDraft.surface,
           normalized,
-          aliases: [...aliases],
-          weight: 0, // assigned after frequency pass
           source: { utf16Start: tokenDraft.srcStart, utf16End: tokenDraft.srcEnd },
-          flags,
           ...(tokenDraft.overrideVisual ? { overrideVisual: tokenDraft.overrideVisual } : {}),
         });
         for (const ref of tokenDraft.renderRefs) {
@@ -1851,20 +1805,6 @@ function finalize(
   }
   for (const { target, anchor } of takeAnchors) {
     target.tokenIndex = Math.min(anchor, Math.max(0, totalTokens - 1));
-  }
-
-  // Token weights need the frequency map (§25.7).
-  const frequency = new Map<string, number>();
-  for (const token of spokenTokens) {
-    frequency.set(token.normalized, (frequency.get(token.normalized) ?? 0) + 1);
-  }
-  for (const token of spokenTokens) {
-    token.weight = computeTokenWeight(
-      token.normalized,
-      token.flags,
-      frequency.get(token.normalized) ?? 1,
-      totalTokens,
-    );
   }
 
   // Outline and heading navigation targets (§22.4).
@@ -2158,34 +2098,6 @@ function checkWakeCollision(
       return;
     }
   }
-}
-
-function collectMidSentenceCapitalized(drafts: BlockDraft[]): Set<string> {
-  const result = new Set<string>();
-  for (const draft of drafts) {
-    if (!draft.spoken && draft.tokens.length === 0) continue;
-    const ranges = draft.singleSentence
-      ? [{ start: 0, end: draft.spokenText.length }]
-      : segmentSentences(draft.spokenText);
-    let rangeIndex = 0;
-    let firstInRange = true;
-    let lastRange = -1;
-    for (const token of draft.tokens) {
-      while (rangeIndex < ranges.length - 1 && token.textStart >= ranges[rangeIndex]!.end) {
-        rangeIndex++;
-      }
-      if (rangeIndex !== lastRange) {
-        firstInRange = true;
-        lastRange = rangeIndex;
-      }
-      if (!firstInRange && /^\p{Lu}/u.test(token.surface)) {
-        const normalized = normalizeToken(token.surface);
-        if (normalized && !isStopword(normalized)) result.add(normalized);
-      }
-      firstInRange = false;
-    }
-  }
-  return result;
 }
 
 function deriveTitle(drafts: BlockDraft[]): string {

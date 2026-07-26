@@ -26,7 +26,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SMOOTH_FOLLOW_PROFILE as BASE,
-  type SemanticMotionFrame,
+  type AlignmentSnapshot,
   type SmoothFollowProfile,
 } from '../../../src/shared/contracts';
 import {
@@ -39,7 +39,6 @@ import {
 import {
   buildRenderedLineMap,
   createStageMotionEngine,
-  identityUnitAxis,
   type StageMotionEngine,
   type StageMotionFrameResult,
   type StageRenderedLineMap,
@@ -221,16 +220,8 @@ function driveUnclosableCatchUp(profile: SmoothFollowProfile): {
     viewportHeightPx: 1080,
     maxScrollPx: layout.contentHeightPx,
   });
-  const engine = createStageMotionEngine({ unitAxis: identityUnitAxis() });
-  engine.configureSession(
-    {
-      sessionId: 'session-a',
-      sessionGeneration: 1,
-      scriptCompileHash: 'hash-a',
-      layoutGeneration: map.generation,
-    },
-    0,
-  );
+  const engine = createStageMotionEngine();
+  engine.configureSession(1, 0);
   engine.setLineMap(map);
   engine.setBounds(0, layout.contentHeightPx);
   engine.setProfile(profile);
@@ -240,34 +231,45 @@ function driveUnclosableCatchUp(profile: SmoothFollowProfile): {
   let nextSemanticAt = 0;
   let previous: StageMotionFrameResult | null = null;
   const trace: Sample[] = [];
+
+  /*
+   * The catch-up licence is an ACCEPTED FORWARD JUMP: the engine reports a
+   * position a long way from the last one and says it accepted the
+   * discontinuity. Priming at 0 first is what makes the jump a jump, since a
+   * relocation is measured from where the display already was.
+   */
+  const seed = (unit: number, seq: number, decision: AlignmentSnapshot['decision']) => ({
+    sessionGeneration: 1,
+    seq,
+    atAudioMs: 0,
+    evidenceAudioMs: 0,
+    observedToken: unit,
+    confirmedToken: Math.max(0, unit - 1),
+    rateTokensPerSecond: 3,
+    confidence: 0.92,
+    state: 'following' as const,
+    maxPredictionMs: 900,
+    decision,
+    suggestionToken: null,
+    scriptLenTokens: 10_000,
+    observedAtom: unit,
+    confirmedAtom: Math.max(0, unit - 1),
+  });
+  engine.receiveSnapshot(seed(0, 1, 'localConfirmed'), 0);
+  engine.frame(0);
+  engine.receiveSnapshot(seed(700, 2, 'jumpForwardAccepted'), 0);
+  revision = 2;
+
   for (let t = 0; t <= 4000; t += dt) {
     if (t >= nextSemanticAt) {
       revision++;
       const unit = 700 + (3 * t) / 1000;
-      const frame: SemanticMotionFrame = {
-        sessionId: 'session-a',
-        sessionGeneration: 1,
-        scriptCompileHash: 'hash-a',
-        layoutGeneration: 1,
-        revision,
-        epoch: 1,
-        sessionTimeMs: t,
-        estimatedUnit: unit,
-        committedUnit: unit - 1,
-        velocityUnitsPerSecond: 3,
-        accelerationUnitsPerSecond2: 0,
-        positionVariance: 0.2,
-        confidence: 0.92,
-        sectionId: 'section:0',
-        tokenIndex: Math.floor(unit),
-        sentenceId: 's0',
-        blockId: 'b0',
-        state: 'catching_up',
-        behavior: 'normal',
-        finalEvidence: true,
-        motionProfileId: profile.id,
+      const frame: AlignmentSnapshot = {
+        ...seed(unit, revision + 2, 'localConfirmed'),
+        atAudioMs: t,
+        evidenceAudioMs: t,
       };
-      engine.receiveFrame(frame, t);
+      engine.receiveSnapshot(frame, t);
       nextSemanticAt = t + 50;
     }
     const result = engine.frame(t);

@@ -1,53 +1,28 @@
 /**
- * Smooth-following and intelligent-alignment contracts (companion specification:
- * `docs/CandidCue_Smooth_Following_and_Intelligent_Alignment_Specification.md`).
+ * Stage motion contracts — the *geometry and plant* half of following.
  *
- * This module owns the *seam* types shared across the v2 following system:
- *
- *   tracking worker ──SemanticMotionFrame──▶ stage frame loop
+ *   Rust aligner ──AlignmentSnapshot──▶ stage frame loop  (contracts/alignment.ts)
  *   stage frame loop ──StageMotionAck──▶ control diagnostics
  *   stage layout ──RenderedLineMap──▶ stage line-handoff planner
  *
- * Per companion §0.1 these types extend — and in places replace — the primary
- * specification's tracking/motion contracts. The primary `TrackingSnapshot`
- * (contracts/tracking.ts) remains the control-side view model; `SemanticMotionFrame`
- * is the higher-rate, motion-oriented projection the stage consumes.
+ * Everything about *where the presenter is* now lives in `contracts/alignment.ts`
+ * and is decided by the Rust engine. What remains here is what the stage alone
+ * can know: how its own text is laid out, and how fast a document may move
+ * without looking like a scrollbar being dragged.
  *
  * Numeric defaults live in `DEFAULT_SMOOTH_FOLLOW_PROFILE` (companion Appendix A).
  * They are versioned starting points for evaluation, never scattered constants.
  */
+import type { AlignmentState } from './alignment';
 
-/** Companion §52. Why the tracker believes the presenter moved. */
-export type TrackingBehavior =
-  | 'acquire'
-  | 'normal'
-  | 'minor_variation'
-  | 'paraphrase'
-  | 'adlib'
-  | 'return'
-  | 'small_skip'
-  | 'large_skip'
-  | 'retake_candidate'
-  | 'retake'
-  | 'manual_navigation'
-  | 'command_navigation'
-  | 'lost';
-
-/** Companion §52/§17. The tracker's operating state. */
-export type TrackingStateV2 =
-  | 'acquiring'
-  | 'following'
-  | 'coasting'
-  | 'uncertain'
-  | 'adlib_hold'
-  | 'catching_up'
-  | 'retake_pending'
-  | 'rewinding'
-  | 'reanchoring'
-  | 'command_pending'
-  | 'paused'
-  | 'reconnecting'
-  | 'lost_local';
+/**
+ * What the motion layer is doing this frame.
+ *
+ * The four alignment states plus `paused`, which is the stage's own condition
+ * rather than anything the engine reports: the presenter stopped the take, and
+ * no amount of evidence about where they were reading changes that.
+ */
+export type StageMotionState = AlignmentState | 'paused';
 
 /**
  * Companion §53. An authorized, bounded discontinuity in the visual trajectory.
@@ -75,47 +50,21 @@ export interface StageTransitionDirective {
 }
 
 /**
- * Companion §26.1. Emitted by the tracking worker at 15–30 Hz while values change,
- * and less frequently while held. The stage discards frames with a stale revision,
- * a mismatched epoch, a different script compile hash, or an old layout generation.
- *
- * Position is expressed in *spoken units* (companion §6) — a weighted, continuous
- * coordinate — not in pixels. The stage owns the units→pixels mapping.
- */
-export interface SemanticMotionFrame {
-  sessionId: string;
-  sessionGeneration: number;
-  scriptCompileHash: string;
-  layoutGeneration: number;
-  revision: number;
-  epoch: number;
-  sessionTimeMs: number;
-
-  estimatedUnit: number;
-  committedUnit: number;
-  velocityUnitsPerSecond: number;
-  accelerationUnitsPerSecond2: number;
-  positionVariance: number;
-  confidence: number;
-
-  sectionId: string;
-  tokenIndex: number;
-  sentenceId: string;
-  blockId: string;
-  state: TrackingStateV2;
-  behavior: TrackingBehavior;
-  finalEvidence: boolean;
-
-  transition?: StageTransitionDirective;
-  motionProfileId: string;
-}
-
-/**
  * Companion §54. Periodic stage report used for diagnostics and recovery.
  * This is deliberately NOT a high-frequency feedback loop into the aligner.
  */
 export interface StageMotionAck {
-  sessionId: string;
+  /**
+   * The alignment session this report describes.
+   *
+   * A generation, not a session UUID: the stage receives snapshots stamped
+   * with a generation and knows nothing else about session identity. It used
+   * to carry a `sessionId` copied off the frames control sent it, and with
+   * control out of the motion path there is no longer anything true to put
+   * there — so the field says what the stage can actually stand behind.
+   */
+  sessionGeneration: number;
+  /** Sequence number of the last accepted snapshot, or -1 before the first. */
   revision: number;
   epoch: number;
   layoutGeneration: number;
@@ -240,34 +189,26 @@ export interface SmoothFollowProfile {
   version: number;
   id: string;
 
+  /**
+   * §47.3 voice lead — how far AHEAD of the spoken word the display sits.
+   *
+   * This is all that remains of what used to be a whole prediction model here.
+   * The alignment engine owns extrapolation now, and it publishes a hard cap
+   * (`maxPredictionMs`) with every snapshot; lead is applied by asking
+   * `alignmentDisplayAt` for a moment slightly in the future, so it inherits
+   * that cap and can never carry the display past what the engine will stand
+   * behind — however much lead the user asks for.
+   */
   prediction: {
-    normalHorizonMs: number;
-    uncertainHorizonMs: number;
-    maxCoastUnits: number;
+    /** The resolved value the stage applies, seconds. */
+    leadSeconds: number;
+    /**
+     * The envelope a feel may choose within. `applyVoiceLead` picks a half of
+     * this range and never widens it, so "more lead" cannot invent lead the
+     * profile family does not already permit.
+     */
     leadSecondsMin: number;
     leadSecondsMax: number;
-    /**
-     * Fastest spoken-unit rate the stage will believe, units/s.
-     *
-     * A frame's `velocityUnitsPerSecond` is a claim about how fast a human is
-     * SPEAKING, and speech has a ceiling. Producers derive it by finite
-     * difference, so a position correction — a skipped paragraph, a retake, a
-     * command jump — divides a large unit delta by a small time delta and
-     * reports a pace no mouth can produce. That number is then extrapolated
-     * over the prediction horizon and becomes pixels.
-     */
-    maxUnitsPerSecond: number;
-    /** Fastest believable CHANGE of speaking rate, units/s². */
-    maxAccelerationUnitsPerSecond2: number;
-  };
-
-  alignment: {
-    beamWidth: number;
-    continuityBackTokens: number;
-    continuityForwardTokens: number;
-    sectionSearchLimit: number;
-    retakePersistenceTokens: number;
-    retakePersistenceMs: number;
   };
 
   motion: {
@@ -324,7 +265,7 @@ export interface SmoothFollowProfile {
  * version cannot interpret it, in either direction, and must fall back to its
  * own default rather than apply numbers it is guessing about (§55).
  */
-export const SMOOTH_FOLLOW_PROFILE_VERSION = 1;
+export const SMOOTH_FOLLOW_PROFILE_VERSION = 2;
 
 /**
  * Companion Appendix A. Midpoints of the published starting ranges; every value is
@@ -333,35 +274,16 @@ export const SMOOTH_FOLLOW_PROFILE_VERSION = 1;
  */
 export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
   version: SMOOTH_FOLLOW_PROFILE_VERSION,
-  id: 'default-v1',
+  id: 'default-v2',
 
   prediction: {
-    // A.1: 600–900 ms normal, 150–400 ms uncertain, coast under one rendered line.
-    normalHorizonMs: 750,
-    uncertainHorizonMs: 275,
-    maxCoastUnits: 0.9,
+    // A.1 §47.3: 0.15–0.6 s of lead, balanced sitting at the midpoint. Small
+    // numbers by design — lead is comfort, not prediction, and the engine's own
+    // `maxPredictionMs` is the thing that bounds how far ahead the display can
+    // ever be.
+    leadSeconds: 0.38,
     leadSecondsMin: 0.15,
     leadSecondsMax: 0.6,
-    // Conversational delivery runs 130–160 wpm and a fast read tops out near
-    // 250 wpm; the fastest competitive speech ever recorded is about 640 wpm.
-    // A spoken unit is a weighted token, so 8 units/s ≈ 480 wpm — far above
-    // anything a presenter will ever do, and two orders of magnitude below the
-    // rates a finite-difference producer emits across a position correction.
-    maxUnitsPerSecond: 8,
-    // Reaching that ceiling from a standstill inside a third of a second is
-    // already faster than speech can change; anything above this is a
-    // measurement artefact, not a pace.
-    maxAccelerationUnitsPerSecond2: 24,
-  },
-
-  alignment: {
-    // A.2: beam 8–16; retake persistence 3–6 meaningful final tokens.
-    beamWidth: 12,
-    continuityBackTokens: 80,
-    continuityForwardTokens: 260,
-    sectionSearchLimit: 4,
-    retakePersistenceTokens: 4,
-    retakePersistenceMs: 2500,
   },
 
   motion: {

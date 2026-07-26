@@ -27,10 +27,9 @@
     type StageMotionAck,
     type StageMotionAckPayload,
     type StageReadyPayload,
-    type StageSemanticFramePayload,
     type StageSnapshotPayload,
     type StageStatePayload,
-    type StageTrackingPayload,
+    type StageAlignmentPayload,
   } from '../shared/contracts';
   import { subscribeStageEvent, emitStageEvent, isTauri, type Unsubscribe } from './events';
   import {
@@ -154,17 +153,23 @@
             sessionId: envelope.sessionId,
           });
         }),
-        subscribeStageEvent<StageTrackingPayload>(STAGE_EVENT.trackingSnapshot, (snapshot) => {
-          lastInboundAt = performance.now();
-          dispatch({ type: 'tracking', snapshot });
-        }),
-        // Companion §26.1: high-rate motion frames. They never touch the stage
-        // reducer — the frame receiver inside the motion engine is the gate,
-        // and an unaccepted frame is silently discarded.
-        subscribeStageEvent<StageSemanticFramePayload>(STAGE_EVENT.semanticFrame, (frame) => {
-          lastInboundAt = performance.now();
-          scriptLayer?.pushSemanticFrame(frame);
-        }),
+        /*
+         * Alignment snapshots, straight from Rust, about once a second.
+         *
+         * They reach the motion engine directly rather than through the
+         * reducer: the engine's own receiver is the gate that validates and
+         * rejects them, and routing motion through reactive state would put a
+         * Svelte update between the presenter's voice and the glass. The
+         * reducer gets a copy for the status readout only.
+         */
+        subscribeStageEvent<StageAlignmentPayload>(
+          STAGE_EVENT.alignmentSnapshot,
+          (snapshot) => {
+            lastInboundAt = performance.now();
+            scriptLayer?.pushAlignmentSnapshot(snapshot);
+            dispatch({ type: 'alignment', snapshot });
+          },
+        ),
         /*
          * The transcript bar. Raw recogniser text, read straight off the wire
          * — it deliberately does not pass through the reducer, because its
@@ -526,7 +531,7 @@
             bind:this={scriptLayer}
             {doc}
             {settings}
-            tracking={app.tracking}
+            alignment={app.alignment}
             frozen={motionFrozen}
             {reducedMotion}
             {compact}
@@ -585,7 +590,10 @@
       <div>phase: {phase}</div>
       <div>gen: {app.envelope?.stageGeneration ?? '—'}</div>
       <div>tracking rev: {app.lastTrackingRevision ?? '—'}</div>
-      <div>token: {app.tracking?.tokenIndex ?? '—'} ({app.tracking?.state ?? 'n/a'})</div>
+      <div>
+        token: {app.alignment ? app.alignment.confirmedToken.toFixed(1) : '—'}
+        ({app.alignment?.state ?? 'n/a'})
+      </div>
       <div>viewport: {vw}×{vh}{compact ? ' compact' : ''}</div>
       <div>layout gen: {layoutGeneration}</div>
       {#if layoutIssues.length > 0}

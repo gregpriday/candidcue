@@ -146,76 +146,8 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         .expect("mock app builds")
 }
 
-/// Register a webview labelled `stage` and a receiver for the tracking-snapshot
-/// event. `app.emit_to(STAGE_LABEL, ..)` targets `AnyLabel { "stage" }`, which
-/// matches a `WebviewWindow { "stage" }` listener — the same routing the real
-/// stage window relies on.
-fn stage_listener(
-    app: &tauri::App<tauri::test::MockRuntime>,
-) -> mpsc::Receiver<serde_json::Value> {
-    let stage = tauri::WebviewWindowBuilder::new(
-        app,
-        STAGE_LABEL,
-        tauri::WebviewUrl::App("stage.html".into()),
-    )
-    .build()
-    .expect("mock stage webview");
-    let (tx, rx) = mpsc::channel();
-    stage.listen(
-        candidcue_lib::windows::events::STAGE_TRACKING_SNAPSHOT,
-        move |event| {
-            let payload: serde_json::Value =
-                serde_json::from_str(event.payload()).expect("snapshot payload is json");
-            let _ = tx.send(payload);
-        },
-    );
-    rx
-}
 
-fn snapshot_envelope(f: &serde_json::Value, session_id: &str, generation: u64) -> serde_json::Value {
-    let mut snapshot = f["publish_stage_snapshot"]["snapshot"].clone();
-    snapshot["sessionId"] = serde_json::Value::String(session_id.to_string());
-    snapshot["sessionGeneration"] = serde_json::Value::from(generation);
-    snapshot
-}
 
-/// INVARIANT 2 — the one nothing asserted. Given live coordinator state
-/// established by `begin_session`, a snapshot carrying that generation must
-/// reach the stage.
-///
-/// Revert check: change the `sessionGeneration` below to the hard-coded `1`
-/// that `Preflight.svelte` used to send while `begin_session` is never called
-/// (i.e. drop the `begin_session` line and keep generation 1) and this test
-/// fails on `recv_timeout` — which is exactly the shipped bug, reproduced.
-#[test]
-fn a_snapshot_published_under_the_live_generation_actually_reaches_the_stage() {
-    let f = fixture();
-    let app = mock_app();
-    app.manage(AppCoordinator::default());
-    let rx = stage_listener(&app);
-
-    let coordinator = app.state::<AppCoordinator>();
-    let session_id = "1f0e5a8e-6c2b-4a3d-9f11-0a1b2c3d4e5f";
-    let stage_generation = coordinator.next_stage_generation();
-    coordinator.register_stage(stage_generation, Some(session_id.to_string()), None);
-    let session_generation =
-        coordinator.begin_session(session_id.to_string(), "script".into(), None);
-
-    let mut snapshot = snapshot_envelope(&f, session_id, session_generation);
-    snapshot["stageGeneration"] = serde_json::Value::from(stage_generation);
-
-    windows::publish_stage_snapshot(app.handle(), session_id, snapshot.clone())
-        .expect("publishing a current snapshot must succeed");
-
-    let received = rx
-        .recv_timeout(std::time::Duration::from_secs(2))
-        .expect("the stage must actually receive the snapshot");
-    assert_eq!(received["sessionId"], serde_json::json!(session_id));
-    assert_eq!(
-        received["sessionGeneration"],
-        serde_json::json!(session_generation)
-    );
-}
 
 /// The FIRST casualty of C1, and the one that makes the defect fatal rather
 /// than merely degrading: `publish_stage_document` honours the same header
@@ -271,42 +203,6 @@ fn the_hydration_envelope_reaches_the_stage_under_the_live_generation() {
     );
 }
 
-/// INVARIANT 3 — C1 must not be "fixed" by deleting the guard. A snapshot from
-/// a session generation that is no longer current is still dropped, silently
-/// (`Ok(())`, per §43.5), and must NOT reach the stage.
-#[test]
-fn a_snapshot_from_a_stale_session_generation_is_still_dropped() {
-    let f = fixture();
-    let app = mock_app();
-    app.manage(AppCoordinator::default());
-    let rx = stage_listener(&app);
-
-    let coordinator = app.state::<AppCoordinator>();
-    let session_id = "1f0e5a8e-6c2b-4a3d-9f11-0a1b2c3d4e5f";
-    let stage_generation = coordinator.next_stage_generation();
-    coordinator.register_stage(stage_generation, Some(session_id.to_string()), None);
-    let first = coordinator.begin_session(session_id.to_string(), "script".into(), None);
-    // A restart: same session id on the stage, new generation.
-    let second = coordinator.begin_session(session_id.to_string(), "script".into(), None);
-    assert!(second > first);
-
-    let mut stale = snapshot_envelope(&f, session_id, first);
-    stale["stageGeneration"] = serde_json::Value::from(stage_generation);
-    windows::publish_stage_snapshot(app.handle(), session_id, stale)
-        .expect("a stale snapshot is dropped, not an error (§43.5)");
-
-    assert!(
-        rx.recv_timeout(std::time::Duration::from_millis(400)).is_err(),
-        "a stale-generation snapshot must never reach the stage"
-    );
-
-    // …and the current one still gets through, so the guard is a filter rather
-    // than a wall.
-    let mut current = snapshot_envelope(&f, session_id, second);
-    current["stageGeneration"] = serde_json::Value::from(stage_generation);
-    windows::publish_stage_snapshot(app.handle(), session_id, current).expect("current publishes");
-    assert!(rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok());
-}
 
 // ---------------------------------------------------------------------------
 // Invariant 5 — transcript retention follows the setting, both ways.

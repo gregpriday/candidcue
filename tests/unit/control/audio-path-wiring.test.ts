@@ -9,7 +9,8 @@
  * real microphone:
  *
  *   capture → forwardFrame → push_transcription_audio → Rust
- *   stt://event → handleSttFrame → ledger + tracking worker
+ *   stt://event → handleSttFrame → transcript record + UI
+ *                 (and, inside Rust, → the alignment engine)
  *
  * Break any arrow and the app connects, bills, and transcribes nothing — the
  * failure that cost this project a full day twice. A behavioural test cannot
@@ -29,6 +30,7 @@ const PIPELINE = source('../../../src/control/services/voice-session.ts');
 const CAPTURE = source('../../../src/control/services/audio/capture.ts');
 const STORE = source('../../../src/control/stores/session.ts');
 const DRIVER = source('../../../src/control/services/session.ts');
+const STT_STREAM = source('../../../src-tauri/src/inworld/stream.rs');
 
 /** Strip comments, so a mention in prose can never satisfy a call-site check. */
 function code(text: string): string {
@@ -88,19 +90,40 @@ describe('provider frames reach the aligner', () => {
     ).toBe(true);
   });
 
-  it('a completed item is applied to the ledger AND sent to the worker', () => {
+  it('a final is recorded once and surfaced once', () => {
     const body = code(PIPELINE);
-    // Both, not either: forwarding without applying leaves the aligner reading
-    // an empty ledger; applying without forwarding leaves the cursor still.
-    expect(/this\.ledger\.apply\(event\)/.test(body)).toBe(true);
-    expect(/this\.deps\.onTrackingEvent\(event\)/.test(body)).toBe(true);
+    // Both, not either: the retained record and the visible tail are separate
+    // consumers, and a final that reaches one but not the other is a take whose
+    // transcript and whose readout disagree.
+    expect(/this\.deps\.onTranscriptText\(frame\.text, true\)/.test(body)).toBe(true);
+    expect(/this\.deps\.onTranscriptItem\?\.\(item\)/.test(body)).toBe(true);
   });
 
-  it('the session store feeds transcript events to the tracking driver', () => {
+  /*
+   * The alignment engine is fed by RUST, from the same socket, so there is no
+   * control-side hop for transcripts to fall down any more. What control still
+   * has to do is hand the engine a script — and a take that never does is
+   * exactly the "words heard, nothing followed" failure in a new costume.
+   */
+  it('the session store starts an alignment session for the take', () => {
     expect(
-      /driver\?\.feedTranscript\(event\)/.test(code(STORE)),
-      'the store must hand transcript events to the worker driver',
+      /startAlignment\(generation, compiled\)/.test(code(DRIVER)),
+      'the driver must hand Rust the compiled script',
     ).toBe(true);
+  });
+
+  it('Rust feeds transcript frames to the engine at the socket', () => {
+    expect(
+      /crate::align::observe_frame\(app, &frame, audio_now_ms\)/.test(STT_STREAM),
+      'no path from a transcript frame to the alignment engine',
+    ).toBe(true);
+    /*
+     * And ONLY transcript frames: `emit_transcript` is the funnel that reaches
+     * the engine, so a transport or audio-drop frame going through plain
+     * `emit` is a structural guarantee rather than a convention. A reconnect
+     * notice is not evidence about where the presenter is reading.
+     */
+    expect(/fn emit_transcript</.test(STT_STREAM)).toBe(true);
   });
 
   it('the session is subscribed before the microphone opens', () => {
@@ -143,9 +166,9 @@ describe('the trace has call sites, not just a module', () => {
     ['frames NOT leaving', PIPELINE, /trace\('frame-skipped'/],
     ['every inbound provider frame', PIPELINE, /trace\(\s*`rx:\$\{frame\.kind\}`/],
     ['a frame dropped by generation', PIPELINE, /trace\('rx-dropped'/],
-    ['a final the ledger refused', PIPELINE, /trace\('ledger-rejected'/],
-    ['transcripts with no worker to take them', STORE, /trace\('no-driver'/],
-    ['the committed cursor advancing', DRIVER, /trace\(\s*'committed'/],
+    ['a duplicated final', PIPELINE, /trace\('final-duplicate'/],
+    ['the confirmed cursor advancing', DRIVER, /trace\(\s*'confirmed'/],
+    ['an explicit navigation', DRIVER, /trace\('align-cmd'/],
   ] as const;
 
   for (const [what, body, pattern] of traced) {

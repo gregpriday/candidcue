@@ -28,8 +28,8 @@
  */
 import type { Uuid } from './core';
 import type { StageSessionEnvelope, StageSettings } from './display';
-import type { TrackingSnapshot } from './tracking';
-import type { SemanticMotionFrame, StageMotionAck } from './smooth-follow';
+import type { AlignmentSnapshot, AlignmentViewportHint } from './alignment';
+import type { StageMotionAck } from './smooth-follow';
 import type { ListenerStageSelection } from './listener';
 
 /* ---------------------------------------------------------------------------
@@ -39,8 +39,6 @@ import type { ListenerStageSelection } from './listener';
 export const STAGE_EVENT = {
   /** Rust → stage: full hydration snapshot (StageSessionEnvelope). */
   loadSession: 'stage://load-session',
-  /** Rust → stage: tracking motion updates (TrackingSnapshot). */
-  trackingSnapshot: 'stage://tracking-snapshot',
   /** Rust → stage: state directives (freeze/blank/ack/settings/…). */
   applyCommand: 'stage://apply-command',
   /** Rust → stage: Listener selection/geometry directive. */
@@ -50,12 +48,23 @@ export const STAGE_EVENT = {
   /** control → stage: liveness heartbeat (spec §43.5, ~1 s cadence). */
   heartbeat: 'stage://heartbeat',
   /**
-   * control → stage: `SemanticMotionFrame` at 15–30 Hz (companion §26.1).
-   * Emitted directly from the control webview like the heartbeat — it is a
-   * high-rate motion signal, not a validated document, and the stage's frame
-   * receiver is the gate that rejects stale/foreign frames.
+   * Rust → stage: one `AlignmentSnapshot` per transcript event (~1/s).
+   *
+   * From Rust, not from control: the alignment engine runs beside the Inworld
+   * socket because that is where the audio clock its predictions are timed
+   * against already is. Control is not in this path — it receives the same
+   * snapshot separately on `CONTROL_EVENT.alignmentSnapshot`.
    */
-  semanticFrame: 'stage://semantic-frame',
+  alignmentSnapshot: 'stage://alignment-snapshot',
+  /**
+   * stage → Rust: the debounced visible token range.
+   *
+   * This direction is forced: the stage capability grants event emission and
+   * no invoke permission at all, so a hint cannot be a command. It is a prior
+   * on candidate ranking rather than an instruction, which makes an event the
+   * honest shape for it anyway.
+   */
+  viewportHint: 'stage://viewport-hint',
 
   /**
    * control → stage: raw recogniser text for the stage's transcript bar.
@@ -147,6 +156,13 @@ export const CONTROL_EVENT = {
   stageClosed: 'stage://closed',
   /** Stage reported a media error. */
   stageError: 'stage://error',
+  /**
+   * Rust → control: the same `AlignmentSnapshot` the stage receives, for
+   * progress, recovery affordances and the take summary. A separate name from
+   * the stage's copy because they are different contracts to different
+   * windows — the stage follows it, control reports on it.
+   */
+  alignmentSnapshot: 'align://snapshot',
   identifyDisplays: 'app://identify-displays',
   scriptExternalChange: 'script://external-change',
   deviceOrDisplayChange: 'app://device-or-display-change',
@@ -168,10 +184,10 @@ export type StageSnapshotPayload = StageSessionEnvelope;
  * *degraded* motion path only: they are what the stage follows when no semantic
  * frame is current.
  */
-export type StageTrackingPayload = TrackingSnapshot;
+export type StageAlignmentPayload = AlignmentSnapshot;
 
 /** `stage://semantic-frame` — the v2 motion signal (companion §26.1). */
-export type StageSemanticFramePayload = SemanticMotionFrame;
+export type StageViewportHintPayload = AlignmentViewportHint;
 
 /**
  * `stage://apply-command` / `stage://listener-state` — small imperative

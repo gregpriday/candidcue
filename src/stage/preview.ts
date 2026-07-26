@@ -10,13 +10,12 @@
 import type {
   CompiledBlock,
   ListenerStageSelection,
-  SemanticMotionFrame,
+  AlignmentSnapshot,
   StageDirective,
   StageRenderDocument,
   StageSessionEnvelope,
   StageSettings,
   StageStatePayload,
-  TrackingSnapshot,
 } from '../shared/contracts';
 import { STAGE_EVENT } from '../shared/contracts';
 import { dispatchLocalStageEvent } from './events';
@@ -240,80 +239,47 @@ export function startPreviewDriver(): PreviewDriver {
 
   const trackingTick = () => {
     if (frozen || blanked) return;
-    if (tokenIndex >= built.tokenCount - 1) tokenIndex = 0;
-    else tokenIndex += 1;
-    emitTracking('advance', false);
+    audioMs += 1000;
+    // One second of speech at the preview's pace, so the position the snapshot
+    // reports and the rate it claims describe the same motion.
+    const advance = Math.max(1, Math.round(PREVIEW_TOKENS_PER_SECOND));
+    tokenIndex =
+      tokenIndex + advance >= built.tokenCount - 1 ? 0 : tokenIndex + advance;
+    emitTracking(false);
   };
 
-  function emitTracking(movement: TrackingSnapshot['movement'], provisional: boolean) {
+  function emitTracking(provisional: boolean) {
     revision += 1;
-    const snapshot: TrackingSnapshot = {
-      schemaVersion: 1,
-      revision,
-      sessionId: envelope.sessionId,
+    const snapshot: AlignmentSnapshot = {
       sessionGeneration: 1,
-      stageGeneration: STAGE_GEN,
-      scriptId: envelope.scriptId,
-      tokenIndex,
-      committedTokenIndex: Math.max(0, tokenIndex - 2),
-      blockId: built.tokenBlock[tokenIndex] ?? 'b0',
-      sentenceId: built.tokenSentence[tokenIndex] ?? 's0',
-      confidence: 0.92,
+      seq: revision,
       state: 'following',
-      provisional,
-      movement,
-      sourceItemIds: [],
-      generatedAtMs: Date.now(),
+      decision: provisional ? 'localObserved' : 'localConfirmed',
+      confirmedToken: Math.max(0, tokenIndex - 2),
+      observedToken: tokenIndex,
+      rateTokensPerSecond: PREVIEW_TOKENS_PER_SECOND,
+      evidenceAudioMs: audioMs,
+      atAudioMs: audioMs,
+      maxPredictionMs: 900,
+      confidence: 0.92,
+      suggestionToken: null,
+      scriptLenTokens: built.tokenCount,
+      observedAtom: tokenIndex,
+      confirmedAtom: Math.max(0, tokenIndex - 2),
     };
-    dispatchLocalStageEvent(STAGE_EVENT.trackingSnapshot, snapshot);
+    dispatchLocalStageEvent(STAGE_EVENT.alignmentSnapshot, snapshot);
   }
 
   /**
-   * Semantic motion frames (companion §26.1) at ~20 Hz, so the preview
-   * exercises the real v2 motion path rather than the degraded snapshot one.
-   * The preview "speaks" at a steady pace and the stage interpolates between
-   * frames — which is exactly the behavior worth eyeballing.
+   * The preview "speaks" at a steady pace and emits one snapshot a second, the
+   * same cadence the real engine produces. Everything between those snapshots
+   * is the stage extrapolating through `alignmentDisplayAt` — which is exactly
+   * the behaviour worth eyeballing, and what the preview exists for.
    */
-  const SEMANTIC_HZ = 20;
-  const PREVIEW_UNITS_PER_SECOND = 2.6;
-  const sessionStartMs = performance.now();
-  let semanticRevision = 0;
-  let semanticUnit = 0;
+  const PREVIEW_TOKENS_PER_SECOND = 2.6;
+  let audioMs = 0;
 
-  function semanticTick() {
-    if (frozen || blanked) return;
-    semanticRevision += 1;
-    semanticUnit = (semanticUnit + PREVIEW_UNITS_PER_SECOND / SEMANTIC_HZ) % built.tokenCount;
-    const token = Math.min(built.tokenCount - 1, Math.floor(semanticUnit));
-    const frame: SemanticMotionFrame = {
-      sessionId: envelope.sessionId,
-      sessionGeneration: 1,
-      scriptCompileHash: envelope.sourceHash,
-      // The stage builds its first map as generation 1.
-      layoutGeneration: 1,
-      revision: semanticRevision,
-      epoch: 1,
-      sessionTimeMs: performance.now() - sessionStartMs,
-      estimatedUnit: semanticUnit,
-      committedUnit: Math.max(0, semanticUnit - 2),
-      velocityUnitsPerSecond: PREVIEW_UNITS_PER_SECOND,
-      accelerationUnitsPerSecond2: 0,
-      positionVariance: 0.2,
-      confidence: 0.92,
-      sectionId: 'section:0',
-      tokenIndex: token,
-      sentenceId: built.tokenSentence[token] ?? 's0',
-      blockId: built.tokenBlock[token] ?? 'b0',
-      state: 'following',
-      behavior: 'normal',
-      finalEvidence: true,
-      motionProfileId: 'default-v1',
-    };
-    dispatchLocalStageEvent(STAGE_EVENT.semanticFrame, frame);
-  }
-
-  const semanticTimer = window.setInterval(semanticTick, 1000 / SEMANTIC_HZ);
-  const trackingTimer = window.setInterval(trackingTick, 340);
+  const trackingTimer = window.setInterval(trackingTick, 1000);
   const heartbeatTimer = window.setInterval(() => {
     heartbeatRevision += 1;
     dispatchLocalStageEvent(STAGE_EVENT.heartbeat, {
@@ -331,7 +297,6 @@ export function startPreviewDriver(): PreviewDriver {
 
   const driver: PreviewDriver = {
     stop() {
-      clearInterval(semanticTimer);
       clearInterval(trackingTimer);
       clearInterval(heartbeatTimer);
       delete (window as unknown as Record<string, unknown>)[PREVIEW_DRIVER_KEY];
@@ -360,48 +325,29 @@ export function startPreviewDriver(): PreviewDriver {
       directive({ kind: 'ack', label, durationMs: 900 });
     },
     jump() {
-      // A large forward skip: the semantic position moves and the stage is
-      // told to re-anchor rather than race through the skipped paragraphs.
+      // A large forward skip: the position moves a long way at once and the
+      // stage classifies it as an accepted discontinuity to fly, rather than
+      // racing through the skipped paragraphs.
       tokenIndex = Math.min(built.tokenCount - 1, tokenIndex + 40);
-      semanticUnit = tokenIndex;
-      semanticRevision += 1;
-      const nowMs = performance.now() - sessionStartMs;
-      dispatchLocalStageEvent<SemanticMotionFrame>(STAGE_EVENT.semanticFrame, {
-        sessionId: envelope.sessionId,
+      revision += 1;
+      audioMs += 1000;
+      dispatchLocalStageEvent<AlignmentSnapshot>(STAGE_EVENT.alignmentSnapshot, {
         sessionGeneration: 1,
-        scriptCompileHash: envelope.sourceHash,
-        layoutGeneration: 1,
-        revision: semanticRevision,
-        epoch: 1,
-        sessionTimeMs: nowMs,
-        estimatedUnit: semanticUnit,
-        committedUnit: semanticUnit,
-        velocityUnitsPerSecond: PREVIEW_UNITS_PER_SECOND,
-        accelerationUnitsPerSecond2: 0,
-        positionVariance: 0.5,
+        seq: revision,
+        state: 'following',
+        decision: 'jumpForwardAccepted',
+        confirmedToken: tokenIndex,
+        observedToken: tokenIndex,
+        rateTokensPerSecond: PREVIEW_TOKENS_PER_SECOND,
+        evidenceAudioMs: audioMs,
+        atAudioMs: audioMs,
+        maxPredictionMs: 900,
         confidence: 0.85,
-        sectionId: 'section:0',
-        tokenIndex,
-        sentenceId: built.tokenSentence[tokenIndex] ?? 's0',
-        blockId: built.tokenBlock[tokenIndex] ?? 'b0',
-        state: 'reanchoring',
-        behavior: 'large_skip',
-        finalEvidence: true,
-        motionProfileId: 'default-v1',
-        transition: {
-          id: `preview-jump-${semanticRevision}`,
-          type: 'reanchor',
-          authority: 'ordinary',
-          fromUnit: Math.max(0, semanticUnit - 40),
-          toUnit: semanticUnit,
-          destinationTokenIndex: tokenIndex,
-          issuedAtMs: nowMs,
-          expiresAtMs: nowMs + 3000,
-          semanticEpoch: 1,
-          reason: 'large_forward_skip',
-        },
+        suggestionToken: null,
+        scriptLenTokens: built.tokenCount,
+        observedAtom: tokenIndex,
+        confirmedAtom: tokenIndex,
       });
-      emitTracking('skip', false);
     },
   };
 

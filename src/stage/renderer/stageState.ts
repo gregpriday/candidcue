@@ -11,7 +11,7 @@ import type {
   StageSessionEnvelope,
   StageSettings,
   ListenerStageSelection,
-  TrackingSnapshot,
+  AlignmentSnapshot,
   StageDirective,
   StageHeartbeatPayload,
 } from '../../shared/contracts';
@@ -39,7 +39,7 @@ export interface StageAppState {
   envelope: StageSessionEnvelope | null;
   settings: StageSettings | null;
   listener: ListenerStageSelection | null;
-  tracking: TrackingSnapshot | null;
+  alignment: AlignmentSnapshot | null;
   lastTrackingRevision: number | null;
   frozen: boolean;
   frozenReason: FrozenReason | null;
@@ -54,7 +54,7 @@ export interface StageAppState {
 export type StageAction =
   | { type: 'snapshot'; envelope: StageSessionEnvelope }
   | { type: 'layout_ready' }
-  | { type: 'tracking'; snapshot: TrackingSnapshot }
+  | { type: 'alignment'; snapshot: AlignmentSnapshot }
   | { type: 'directive'; stageGeneration: number; directive: StageDirective }
   | { type: 'heartbeat'; payload: StageHeartbeatPayload; receivedAtMs: number }
   | { type: 'control_lost' };
@@ -65,7 +65,7 @@ export function initialStageState(): StageAppState {
     envelope: null,
     settings: null,
     listener: null,
-    tracking: null,
+    alignment: null,
     lastTrackingRevision: null,
     frozen: false,
     frozenReason: null,
@@ -103,7 +103,7 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
         // A new generation restarts the handshake (layout must settle again);
         // a same-generation re-send just refreshes the document in place.
         phase: newGeneration ? 'handshake' : state.phase,
-        tracking: newGeneration ? null : state.tracking,
+        alignment: newGeneration ? null : state.alignment,
         lastTrackingRevision: newGeneration ? null : state.lastTrackingRevision,
         frozen: newGeneration ? false : state.frozen,
         frozenReason: newGeneration ? null : state.frozenReason,
@@ -115,18 +115,18 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
       return { ...state, phase: 'ready' };
     }
 
-    case 'tracking': {
+    case 'alignment': {
       const snap = action.snapshot;
       if (!state.envelope || state.phase === 'handshake') return state;
-      if (snap.stageGeneration !== state.envelope.stageGeneration) return state;
-      if (snap.sessionGeneration !== state.envelope.sessionGeneration) return state;
-      if (state.lastTrackingRevision !== null && snap.revision <= state.lastTrackingRevision) {
+      // `seq` is monotone within a session; anything not strictly newer is a
+      // duplicate or a reordered delivery.
+      if (state.lastTrackingRevision !== null && snap.seq <= state.lastTrackingRevision) {
         return state;
       }
       return {
         ...state,
-        tracking: snap,
-        lastTrackingRevision: snap.revision,
+        alignment: snap,
+        lastTrackingRevision: snap.seq,
         phase: 'live',
       };
     }

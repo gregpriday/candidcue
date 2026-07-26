@@ -12,8 +12,7 @@ import type {
   StageSessionEnvelope,
   StageStatePayload,
   StageStatus,
-  TrackingSnapshot,
-} from '../../shared/contracts';
+  } from '../../shared/contracts';
 import { invokeOrMock } from './ipc';
 import { mockStage } from './mock-backend';
 import type {
@@ -86,12 +85,6 @@ export async function publishStageDocument(
   );
 }
 
-export async function publishStageSnapshot(
-  sessionId: string,
-  snapshot: TrackingSnapshot,
-): Promise<void> {
-  return invokeOrMock<void>('publish_stage_snapshot', { sessionId, snapshot }, () => undefined);
-}
 
 /** Relay one imperative directive to the stage (stale generations dropped). */
 export async function publishStageDirective(

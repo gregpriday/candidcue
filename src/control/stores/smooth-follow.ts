@@ -3,13 +3,16 @@
  * the controls that act on it.
  *
  * This store is the control window's single source of truth for "what is the
- * tracker doing, how sure is it, and what has quietly degraded". It is fed by
- * four producers and owns none of them:
+ * aligner doing, how sure is it, and what has quietly degraded". It is fed by
+ * two producers and owns neither:
  *
- *   tracking worker (Agent A)  ──SemanticMotionFrame──▶ ingestMotionFrame
- *   tracking worker (Agent A)  ──MovementDecisionRecord─▶ ingestMovementRecord
- *   stage frame loop (Agent B) ──StageMotionAck────────▶ ingestStageAck
- *   semantic sidecar (Agent C) ──assist status/tips────▶ ingestAssistStatus
+ *   Rust alignment engine  ──AlignmentSnapshot──▶ ingestSnapshot
+ *   stage frame loop       ──StageMotionAck─────▶ ingestStageAck
+ *
+ * The movement timeline is DERIVED here from consecutive snapshots rather than
+ * reported: the engine states where the reader is, and "it moved from here to
+ * there" is a fact about two of those statements. Deriving it is what lets the
+ * engine's contract stay as small as it is.
  *
  * Everything is pure and injectable: `createSmoothFollowStore({ now, … })`
  * takes its clock and its side-effecting actions from the caller, so the whole
@@ -24,11 +27,12 @@
  */
 import { derived, get, writable, type Readable } from 'svelte/store';
 import type {
-  SemanticMotionFrame,
+  AlignmentDecision,
+  AlignmentSnapshot,
   StageMotionAck,
-  TrackingBehavior,
-  TrackingStateV2,
+  StageMotionState,
 } from '../../shared/contracts';
+import { ALIGNMENT_RELOCATIONS } from '../../shared/contracts';
 import {
   budgetNoticeCopy,
   confidenceBand,
@@ -106,20 +110,28 @@ export interface SmoothFollowState {
   receivingFrames: boolean;
   lastFrameAtMs: number | null;
 
-  state: TrackingStateV2;
-  behavior: TrackingBehavior;
+  state: StageMotionState;
+  decision: AlignmentDecision;
   confidence: number | null;
   band: ConfidenceBand;
   paceWordsPerMinute: number | null;
 
-  sectionId: string;
-  blockId: string;
-  sentenceId: string;
-  tokenIndex: number;
-  estimatedUnit: number;
-  committedUnit: number;
-  revision: number;
-  epoch: number;
+  /**
+   * A distant candidate the engine has NOT accepted — "possible match below".
+   * The UI may offer it; it must never be acted on automatically.
+   */
+  suggestionToken: number | null;
+  observedToken: number;
+  confirmedToken: number;
+  /** Snapshot sequence number, monotone within a session. */
+  seq: number;
+  /**
+   * The alignment session snapshots must be stamped with, or null before one
+   * exists. Null rather than a numeric sentinel because the generation is
+   * ASSIGNED BY RUST: control adopts whatever it is given, and a number here
+   * would be control inventing one.
+   */
+  sessionGeneration: number | null;
   layoutGeneration: number;
   motionProfileId: string;
 
@@ -195,19 +207,16 @@ function initialState(following: FollowingSettings): SmoothFollowState {
     active: false,
     receivingFrames: false,
     lastFrameAtMs: null,
-    state: 'acquiring',
-    behavior: 'acquire',
+    state: 'searching',
+    decision: 'noEvidence',
     confidence: null,
     band: 'unknown',
     paceWordsPerMinute: null,
-    sectionId: '',
-    blockId: '',
-    sentenceId: '',
-    tokenIndex: 0,
-    estimatedUnit: 0,
-    committedUnit: 0,
-    revision: 0,
-    epoch: 0,
+    suggestionToken: null,
+    observedToken: 0,
+    confirmedToken: 0,
+    seq: 0,
+    sessionGeneration: null,
     layoutGeneration: 0,
     motionProfileId: following.motionProfileId,
     followingPaused: false,
@@ -302,21 +311,20 @@ export function deriveNotices(state: SmoothFollowState): FollowNotice[] {
 }
 
 /**
- * Spoken units are a weighted word-like coordinate (§6), so unit velocity is
- * an approximation of words per minute — reported as such, and only while the
- * engine is actually moving with usable confidence.
+ * Approximate words per minute from a snapshot's reading rate.
+ *
+ * A token is a word, so the conversion is just a factor of sixty. It is
+ * reported only while the engine is genuinely following: the rate is zeroed in
+ * every other state, and a "0 wpm" readout during a deliberate hold would
+ * describe the presenter as having stopped speaking when they have not.
  */
-export function paceFromFrame(frame: SemanticMotionFrame): number | null {
-  const moving =
-    frame.state === 'following' ||
-    frame.state === 'catching_up' ||
-    frame.state === 'coasting';
-  if (!moving) return null;
-  if (!Number.isFinite(frame.velocityUnitsPerSecond) || frame.velocityUnitsPerSecond <= 0) {
+export function paceFromSnapshot(snapshot: AlignmentSnapshot): number | null {
+  if (snapshot.state !== 'following') return null;
+  if (!Number.isFinite(snapshot.rateTokensPerSecond) || snapshot.rateTokensPerSecond <= 0) {
     return null;
   }
-  if (frame.confidence < 0.35) return null;
-  return frame.velocityUnitsPerSecond * 60;
+  if (snapshot.confidence < 0.35) return null;
+  return snapshot.rateTokensPerSecond * 60;
 }
 
 /* ---------------------------------------------------------------------------
@@ -332,8 +340,11 @@ export interface SmoothFollowStore extends Readable<SmoothFollowState> {
   setActions(actions: Partial<FollowActions>): void;
 
   /* --- producers --- */
-  ingestMotionFrame(frame: SemanticMotionFrame): void;
-  ingestMovementRecord(record: MovementDecisionRecord): void;
+  /**
+   * One alignment snapshot. Derives the movement timeline internally, so
+   * callers hand over exactly what Rust published and nothing more.
+   */
+  ingestSnapshot(snapshot: AlignmentSnapshot): void;
   ingestStageAck(ack: StageMotionAck): void;
   setCandidates(candidates: FollowCandidate[]): void;
   reportTranscriptStatus(status: TranscriptFeedStatus, detail?: string | null): void;
@@ -364,8 +375,8 @@ export interface FollowDiagnosticsExport {
   exportedAtMs: number;
   sessionId: string | null;
   motionProfileId: string;
-  state: TrackingStateV2;
-  behavior: TrackingBehavior;
+  state: StageMotionState;
+  decision: AlignmentDecision;
   confidenceBand: ConfidenceBand;
   motion: SmoothFollowState['motion'];
   transcript: SmoothFollowState['transcript'];
@@ -428,6 +439,20 @@ export function createSmoothFollowStore(
     update((s) => ({
       ...s,
       followingPaused: paused,
+      /*
+       * The reported STATE has to change too, not only the flag.
+       *
+       * Nothing is being followed while following is paused, and the engine
+       * cannot say so — it is not told about the pause, and would go on
+       * reporting `following` from the last snapshot it produced. A panel
+       * reading that state would describe a document that is tracking the
+       * presenter's voice while it sits perfectly still.
+       *
+       * Resuming drops back to `searching`: the next snapshot will say what is
+       * actually true, and until it arrives the honest answer is that the
+       * position is being re-acquired rather than already known.
+       */
+      state: paused ? 'paused' : s.state === 'paused' ? 'searching' : s.state,
       timeline: push(s, 'action', paused ? 'Following paused' : 'Following resumed'),
     }));
   }
@@ -472,78 +497,119 @@ export function createSmoothFollowStore(
       actions = { ...actions, ...next };
     },
 
-    ingestMotionFrame(frame) {
+    ingestSnapshot(snapshot) {
       update((s) => {
-        if (s.sessionId !== null && frame.sessionId !== s.sessionId) return s;
-        if (frame.revision < s.revision && frame.epoch <= s.epoch) return s;
-        const stateChanged = frame.state !== s.state;
-        const behaviorChanged = frame.behavior !== s.behavior;
-        const timeline = stateChanged
+        if (
+          s.sessionGeneration !== null &&
+          snapshot.sessionGeneration !== s.sessionGeneration
+        ) {
+          return s;
+        }
+        // `seq` is monotone within a session, so anything not strictly newer is
+        // a duplicate or a reordered delivery — a past this store has already
+        // moved through.
+        if (snapshot.seq <= s.seq && s.seq !== 0) return s;
+
+        const stateChanged = snapshot.state !== s.state;
+        let timeline = stateChanged
           ? push(
               s,
               'state',
-              `${FOLLOW_STATE_LABELS[s.state]} → ${FOLLOW_STATE_LABELS[frame.state]}`,
-              `behavior ${frame.behavior}, confidence ${frame.confidence.toFixed(2)}`,
+              `${FOLLOW_STATE_LABELS[s.state]} → ${FOLLOW_STATE_LABELS[snapshot.state]}`,
+              `${snapshot.decision}, confidence ${snapshot.confidence.toFixed(2)}`,
             )
           : s.timeline;
+
+        /*
+         * A movement worth recording.
+         *
+         * Not every snapshot is: a steady advance at good confidence is not a
+         * decision anybody needs explained, and recording each one would flood
+         * the ring buffer and bury the entries that matter. What counts is an
+         * accepted discontinuity, a state change, or evidence going soft.
+         */
+        const movedTokens = Math.abs(snapshot.observedToken - s.observedToken);
+        const nontrivial =
+          ALIGNMENT_RELOCATIONS.has(snapshot.decision) ||
+          snapshot.decision === 'jumpPending' ||
+          stateChanged ||
+          snapshot.confidence < 0.6;
+
+        let movements = s.movements;
+        let lastMovement = s.lastMovement;
+        let lastTransitionReason = s.lastTransitionReason;
+        let reanchors = s.counts.reanchors;
+
+        if (nontrivial) {
+          const record: MovementDecisionRecord = {
+            seq: snapshot.seq,
+            audioMs: snapshot.atAudioMs,
+            fromToken: s.observedToken,
+            toToken: snapshot.observedToken,
+            decision: snapshot.decision,
+            stateBefore: s.state,
+            stateAfter: snapshot.state,
+            confidence: snapshot.confidence,
+          };
+          const explanation = describeMovement(record);
+          lastMovement = record;
+          lastTransitionReason = explanation.headline;
+          const next = [...movements, record];
+          movements =
+            next.length > movementCapacity
+              ? next.slice(next.length - movementCapacity)
+              : next;
+          if (ALIGNMENT_RELOCATIONS.has(snapshot.decision) && movedTokens > 0) {
+            reanchors += 1;
+          }
+          timeline = push(
+            { ...s, timeline },
+            'movement',
+            explanation.headline,
+            explanation.detail,
+            record,
+          );
+        }
+
         return {
           ...s,
           receivingFrames: true,
           lastFrameAtMs: now(),
-          state: frame.state,
-          behavior: frame.behavior,
-          confidence: frame.confidence,
-          band: confidenceBand(frame.confidence),
-          paceWordsPerMinute: paceFromFrame(frame),
-          sectionId: frame.sectionId,
-          blockId: frame.blockId,
-          sentenceId: frame.sentenceId,
-          tokenIndex: frame.tokenIndex,
-          estimatedUnit: frame.estimatedUnit,
-          committedUnit: frame.committedUnit,
-          revision: frame.revision,
-          epoch: frame.epoch,
-          layoutGeneration: frame.layoutGeneration,
-          motionProfileId: frame.motionProfileId || s.motionProfileId,
-          // A frame that is following again clears a "lost" candidate offer.
-          candidates: frame.state === 'lost_local' ? s.candidates : [],
-          counts: { ...s.counts, frames: s.counts.frames + 1 },
-          timeline:
-            behaviorChanged && !stateChanged
-              ? push(s, 'state', `Behavior: ${frame.behavior}`)
-              : timeline,
-        };
-      });
-    },
-
-    ingestMovementRecord(record) {
-      update((s) => {
-        const explanation = describeMovement(record);
-        const movements = [...s.movements, record];
-        return {
-          ...s,
-          lastMovement: record,
-          lastTransitionReason: explanation.headline,
-          movements:
-            movements.length > movementCapacity
-              ? movements.slice(movements.length - movementCapacity)
-              : movements,
+          state: snapshot.state,
+          decision: snapshot.decision,
+          confidence: snapshot.confidence,
+          band: confidenceBand(snapshot.confidence),
+          paceWordsPerMinute: paceFromSnapshot(snapshot),
+          suggestionToken: snapshot.suggestionToken,
+          observedToken: snapshot.observedToken,
+          confirmedToken: snapshot.confirmedToken,
+          seq: snapshot.seq,
+          sessionGeneration: snapshot.sessionGeneration,
+          // A snapshot that is following again clears a stale "resume here?"
+          // offer, so the affordance never outlives the doubt that raised it.
+          candidates: snapshot.state === 'following' ? [] : s.candidates,
           counts: {
             ...s.counts,
-            movements: s.counts.movements + 1,
-            reanchors:
-              record.visualDisposition === 'reanchor'
-                ? s.counts.reanchors + 1
-                : s.counts.reanchors,
+            frames: s.counts.frames + 1,
+            movements: nontrivial ? s.counts.movements + 1 : s.counts.movements,
+            reanchors,
           },
-          timeline: push(s, 'movement', explanation.headline, explanation.detail, record),
+          movements,
+          lastMovement,
+          lastTransitionReason,
+          timeline,
         };
       });
     },
 
     ingestStageAck(ack) {
       update((s) => {
-        if (s.sessionId !== null && ack.sessionId !== s.sessionId) return s;
+        // Correlated by GENERATION: the stage knows which alignment session
+        // it is following and nothing about session UUIDs, so that is the only
+        // identity it can honestly stamp on a report.
+        if (s.sessionGeneration !== null && ack.sessionGeneration !== s.sessionGeneration) {
+          return s;
+        }
         const degraded =
           ack.droppedFrameCountWindow >= frameDropThreshold ||
           ack.controllerState.includes('degraded');
@@ -690,7 +756,7 @@ export function createSmoothFollowStore(
         sessionId: s.sessionId,
         motionProfileId: s.motionProfileId,
         state: s.state,
-        behavior: s.behavior,
+        decision: s.decision,
         confidenceBand: s.band,
         motion: s.motion,
         transcript: s.transcript,

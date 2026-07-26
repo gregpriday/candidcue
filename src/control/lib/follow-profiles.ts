@@ -217,9 +217,8 @@ export function motionProfileFamily(id: string): MotionProfileFamily {
  *    Nothing is stranded either way, because the residual gap closes at the base
  *    900 px/s, which no feel changes.
  */
-const FEEL_RATIOS: Record<FollowFeel, { prediction: Record<string, number>; motion: Record<string, number> }> = {
+const FEEL_RATIOS: Record<FollowFeel, { motion: Record<string, number> }> = {
   calm: {
-    prediction: { normalHorizonMs: 1, uncertainHorizonMs: 1.3, maxCoastUnits: 1 },
     motion: {
       naturalFrequency: 0.8,
       catchUpMultiplier: 0.85,
@@ -231,9 +230,8 @@ const FEEL_RATIOS: Record<FollowFeel, { prediction: Record<string, number>; moti
       catchUpDecayCorridors: 0.85, // 14 → 12
     },
   },
-  balanced: { prediction: {}, motion: {} },
+  balanced: { motion: {} },
   responsive: {
-    prediction: { normalHorizonMs: 0.9, uncertainHorizonMs: 0.75, maxCoastUnits: 1 },
     motion: {
       naturalFrequency: 1.2,
       catchUpMultiplier: 1.15,
@@ -254,24 +252,20 @@ function scale(base: number, ratio: number | undefined, decimals = 0): number {
   return Math.round(value * factor) / factor;
 }
 
-/** §47.1 — feel only touches prediction horizons and motion comfort limits. */
+/**
+ * §47.1 — feel only touches motion comfort limits.
+ *
+ * It used to reshape prediction horizons too. Those are gone: prediction is the
+ * alignment engine's, it is benchmarked there, and a per-feel horizon would be
+ * a second set of tuning constants nothing measures. What a feel changes now is
+ * exactly what it always visibly changed — how the document moves.
+ */
 export function applyFeel(base: SmoothFollowProfile, feel: FollowFeel): SmoothFollowProfile {
   const ratios = FEEL_RATIOS[feel] ?? FEEL_RATIOS.balanced;
   return {
     ...base,
     id: feel === 'balanced' ? base.id : `${base.id}/${feel}`,
-    prediction: {
-      ...base.prediction,
-      normalHorizonMs: scale(base.prediction.normalHorizonMs, ratios.prediction.normalHorizonMs),
-      uncertainHorizonMs: scale(
-        base.prediction.uncertainHorizonMs,
-        ratios.prediction.uncertainHorizonMs,
-      ),
-      maxCoastUnits: scale(base.prediction.maxCoastUnits, ratios.prediction.maxCoastUnits, 2),
-    },
-    // Untouched by design: beam width, continuity windows, section search
-    // limit, retake persistence, and semantic influence (§47.1 safety).
-    alignment: { ...base.alignment },
+    prediction: { ...base.prediction },
     motion: {
       ...base.motion,
       naturalFrequency: scale(base.motion.naturalFrequency, ratios.motion.naturalFrequency, 2),
@@ -307,13 +301,20 @@ export function applyVoiceLead(base: SmoothFollowProfile, lead: VoiceLead): Smoo
   const midpoint = Math.round(((floor + ceiling) / 2) * 100) / 100;
   const [min, max] =
     lead === 'less' ? [floor, midpoint] : lead === 'more' ? [midpoint, ceiling] : [floor, ceiling];
+  const leadMin = clamp(min, floor, ceiling);
+  const leadMax = clamp(max, floor, ceiling);
   return {
     ...base,
     id: lead === 'balanced' ? base.id : `${base.id}/lead-${lead}`,
     prediction: {
       ...base.prediction,
-      leadSecondsMin: clamp(min, floor, ceiling),
-      leadSecondsMax: clamp(max, floor, ceiling),
+      leadSecondsMin: leadMin,
+      leadSecondsMax: leadMax,
+      // The midpoint of the selected half is the value the stage applies. It is
+      // resolved here rather than on the stage so the whole feel arrives as one
+      // number the motion layer can read without knowing what a "voice lead"
+      // setting is.
+      leadSeconds: Math.round(((leadMin + leadMax) / 2) * 100) / 100,
     },
   };
 }

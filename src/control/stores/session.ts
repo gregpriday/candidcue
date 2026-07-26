@@ -1,8 +1,14 @@
 /**
  * Live session store (spec §15, §45.2 RealtimeStore/TrackingStore facade for
- * the Live screen). Owns session identity, the tracking worker feed, the
- * realtime voice pipeline, §15.3 pause semantics, the elapsed clock, the
- * transcript tail, stage heartbeats (§43.5), and the F.17 summary.
+ * the Live screen). Owns session identity, the alignment feed, the realtime
+ * voice pipeline, §15.3 pause semantics, the elapsed clock, the transcript
+ * tail, stage heartbeats (§43.5), and the F.17 summary.
+ *
+ * Note what this store no longer does: it does not carry motion to the stage.
+ * The alignment engine publishes snapshots to the stage directly from Rust, so
+ * control is out of the motion path entirely and receives its own copy purely
+ * to report on. A take summary built here can therefore never disagree with
+ * what the presenter saw — both are derived from the same published snapshots.
  */
 import { derived, get, writable } from 'svelte/store';
 import type {
@@ -16,11 +22,10 @@ import type {
   StageLayoutErrorPayload,
   StageListenerHealthPayload,
   StageSettings,
-  TrackingSnapshot,
   TranscriptionConfig,
 } from '../../shared/contracts';
 import { STAGE_EVENT, CONTROL_EVENT } from '../../shared/contracts';
-import type { SemanticMotionFrame, StageTranscriptTapPayload } from '../../shared/contracts';
+import type { AlignmentSnapshot, StageTranscriptTapPayload } from '../../shared/contracts';
 import type { FollowingSettings, SessionMode } from '../services/settings-types';
 import { createTrackingDriver, newSessionId, type TrackingDriver } from '../services/session';
 import { VoiceSessionPipeline } from '../services/voice-session';
@@ -28,14 +33,7 @@ import { isTauriRuntime } from '../services/ipc';
 import { describeError } from '../services/errors';
 import { trace } from '../services/audio-trace';
 import * as stageService from '../services/stage';
-import {
-  isNontrivialMovement,
-  monotonicNowMs,
-  motionFrameFromSnapshot,
-  movementRecordFromDiagnostic,
-  subscribeFollowSidecar,
-  subscribeStageMotionAcks,
-} from '../services/smooth-follow-adapter';
+import { monotonicNowMs, subscribeStageMotionAcks } from '../services/stage-acks';
 import { FIRST_TAKE_PASS_ORDINAL, takePassIdFor } from '../../shared/take-pass';
 import type { MediaStreamLike } from '../services/audio';
 import {
@@ -44,12 +42,7 @@ import {
   recordSessionTake,
   type TakeCheckpointInput,
 } from '../services/session-records';
-import { resolveSmoothFollowProfile } from '../../shared/tracking/profile';
 import { defaultFollowingSettings } from '../lib/follow-profiles';
-import {
-  TranscriptConfidenceWatch,
-  type TranscriptConfidenceInput,
-} from '../lib/transcript-confidence-watch';
 import { configureFollowActions, smoothFollow } from './smooth-follow';
 import { getSettingsSnapshot, patchSettings } from './settings';
 import { clearConditionToasts, showToast } from './toasts';
@@ -192,7 +185,7 @@ export interface SessionState {
    * "now you know, and here is how to see which panel is which".
    */
   stageWindowFault: StageWindowFault | null;
-  snapshot: TrackingSnapshot | null;
+  snapshot: AlignmentSnapshot | null;
   transcriptTail: string[];
   outline: OutlineNode[];
   sentences: SentenceUnit[];
@@ -270,17 +263,11 @@ let stageEventUnlisteners: Array<() => void> = [];
  * The stage's CURRENT layout generation, learned from its motion acks (§7.2,
  * §54).
  *
- * C1: this is not `stageGeneration`. `stageGeneration` counts stage *windows*;
- * the layout generation counts *line-map rebuilds* inside one window, and the
- * stage's frame receiver gates on the latter. Both semantic-frame producers —
- * the tracking worker and the v1 snapshot bridge — used a value that was never
- * the stage's, so every frame was stamped with a generation the stage had never
- * published: the worker's frozen 0 was permanently stale (rejected for the
- * 900 ms grace after every rebuild, then merely *tolerated* forever), and the
- * bridge's `stageGeneration` went permanently NEWER than the gate as soon as
- * the stage window was reopened mid-session, which the receiver rejects with no
- * grace and no tolerance at all. Acks are the one channel that carries the
- * stage's own number, so this is where the loop closes.
+ * Not `stageGeneration`: that counts stage *windows*, while this counts
+ * *line-map rebuilds* inside one window. Motion no longer travels through
+ * control, so nothing here stamps it onto a payload any more — it is kept
+ * because acks are the one channel carrying the stage's own number, and the
+ * §62 recovery UI needs to know which geometry the stage believes it has.
  */
 let stageLayoutGeneration = 0;
 /**
@@ -290,12 +277,10 @@ let stageLayoutGeneration = 0;
  * with no disposer and keep firing into the NEXT session.
  */
 let stageBridgeToken = 0;
-let lastRelayAtMs = 0;
 /** The realtime model whose published rate the cost estimate uses. */
 
-/* Smooth-following bridge state (companion §50.1). The v2 producers are
- * landing in parallel; until then the control UI is fed by bridging today's
- * v1 snapshots/diagnostics — see services/smooth-follow-adapter.ts. */
+/* Smooth-following state (companion §50.1). Fed by the alignment snapshots
+ * the stage's own motion reports — see services/stage-acks.ts. */
 /**
  * Session-clock origin for the §26.1 bridge, on the MONOTONIC clock.
  *
@@ -305,13 +290,10 @@ let lastRelayAtMs = 0;
  * age and pushes the predictor past its horizon into decay for no reason.
  */
 let sessionStartedAtMs = 0;
-let lastMotionFrame: SemanticMotionFrame | null = null;
 let followProfileId = defaultFollowingSettings().motionProfileId;
 let scriptCompileHash = '';
 let stopMotionAcks: (() => void) | null = null;
 let stopSidecarFeed: (() => void) | null = null;
-/** True once the worker has sent a real v2 frame — the bridge then stands down. */
-let usingWorkerFrames = false;
 
 /**
  * §60 low transcript confidence.
@@ -327,7 +309,6 @@ let usingWorkerFrames = false;
  * the hysteresis live in the watcher; see that module for why they are what they
  * are.
  */
-let transcriptConfidence = new TranscriptConfidenceWatch();
 
 /* ---------------------------------------------------------------------------
  * §36.3 take history
@@ -359,11 +340,32 @@ interface ActiveTake {
   sections: string[];
   checkpoints: TakeCheckpointInput[];
   /**
-   * §36.3 automatic retake transitions — the aligner deciding the presenter went
+   * §36.3 automatic retake transitions — the engine deciding the presenter went
    * back and re-read. Distinct from a MANUAL retake, which opens a new pass and
    * so is a row of its own rather than a counter.
    */
   automaticRetakes: number;
+  /**
+   * Accepted relocations — a skipped section or a jump the engine caught up to.
+   * Counted apart from retakes because they say opposite things about a take:
+   * a retake is the presenter redoing something, a relocation is the engine
+   * finding them somewhere else.
+   */
+  relocations: number;
+  /**
+   * §36.3 unique coverage: the furthest the CONFIRMED anchor ever reached.
+   *
+   * A high-water mark rather than the last position, which is what makes this
+   * honest — jumping to the closing line does not retroactively cover the
+   * middle, and going back for a retake does not un-cover what was already
+   * read.
+   */
+  maxConfirmedToken: number;
+  /** §36.3 availability: milliseconds spent in `following`. */
+  followingMs: number;
+  /** Wall time of the previous snapshot, for accumulating `followingMs`. */
+  lastSnapshotAtMs: number | null;
+  lastState: AlignmentSnapshot['state'] | null;
   /** §36.3 confidence summary, accumulated rather than sampled. */
   confidenceSum: number;
   confidenceSamples: number;
@@ -438,8 +440,6 @@ let transcriptFlushTimer: ReturnType<typeof setInterval> | null = null;
  */
 const TRANSCRIPT_FLUSH_INTERVAL_MS = 15000;
 
-/** Stage relay throttle (§46.6): the worker caps at 30/s; the stage gets ~15/s. */
-const STAGE_RELAY_MIN_INTERVAL_MS = 66;
 
 export interface StartSessionInput {
   scriptId: string;
@@ -510,16 +510,12 @@ export function startLiveSession(input: StartSessionInput): string {
   listenerRetiredForSession = false;
   failedClipIds = [];
   heartbeatRevision = 0;
-  lastRelayAtMs = 0;
   resetTranscriptTap();
   sessionStartedAtMs = monotonicNowMs();
-  lastMotionFrame = null;
-  usingWorkerFrames = false;
   scriptCompileHash = input.compiled?.sourceHash ?? '';
   // §60: evidence never crosses a take boundary. A fresh watcher is cheaper and
   // more obviously correct than resetting one, and it is the same lifetime as
   // every other take-scoped detector in this store.
-  transcriptConfidence = new TranscriptConfidenceWatch();
   // §36.3: the session's first take opens with it, on a fresh history.
   sessionTakes = [];
   beginTake(sessionId, 1, 0);
@@ -530,9 +526,6 @@ export function startLiveSession(input: StartSessionInput): string {
   smoothFollow.beginSession(sessionId, following);
   configureFollowActions(followActions);
   smoothFollow.reportTranscriptStatus(input.mode === 'voice' ? 'live' : 'idle');
-  stopSidecarFeed = subscribeFollowSidecar({
-    onBudgetBreach: (breach) => smoothFollow.reportBudgetBreach(breach),
-  });
 
   state.set({
     ...initial,
@@ -551,6 +544,8 @@ export function startLiveSession(input: StartSessionInput): string {
 
   // Voice mode without a Tauri runtime has no realtime feed — keep the
   // animated mock driver so browser dev stays demonstrable.
+  // Voice mode without a Tauri runtime has no Rust to align in — keep the
+  // animated mock driver so browser dev stays demonstrable.
   const useRealDriver = Boolean(input.compiled) && (isTauriRuntime() || input.mode !== 'voice');
   driver = createTrackingDriver({
     sessionId,
@@ -559,41 +554,9 @@ export function startLiveSession(input: StartSessionInput): string {
     totalTokens: input.totalTokens,
     compiled: useRealDriver ? (input.compiled ?? null) : null,
     sessionGeneration,
-    stageGeneration: stageGeneration || 1,
-    // §47.1: the worker must resolve the *same* follow profile the stage
-    // envelope did. It falls back to the settings snapshot when this is
-    // omitted, which matches production — but a session started with a
-    // `following` that differs from saved settings (a calibration preview)
-    // would otherwise resolve the stage from the passed value and the aligner
-    // from the stored one, which is the split-brain this field exists to close.
-    following,
     onSnapshot: handleSnapshot,
     onTranscript(line) {
       pushTranscriptLine(line);
-    },
-    // Real v2 output from the tracking worker (companion §26.1, §65).
-    onMotionFrame(frame) {
-      usingWorkerFrames = true;
-      lastMotionFrame = frame;
-      smoothFollow.ingestMotionFrame(frame);
-      // C2: the stage's v2 motion input. Real worker frames and the bridged
-      // ones both go out on the same event, so the stage never sees a gap.
-      publishSemanticFrame(frame);
-    },
-    onMovementRecord(record) {
-      usingWorkerFrames = true;
-      smoothFollow.ingestMovementRecord(record);
-    },
-    // Fallback for drivers without a v2 output (the mock driver used in
-    // browser dev, manual/fixed modes, and node tests).
-    onDiagnostic(diagnostic) {
-      if (usingWorkerFrames || !isNontrivialMovement(diagnostic)) return;
-      smoothFollow.ingestMovementRecord(
-        movementRecordFromDiagnostic(diagnostic, {
-          sessionStartedAtMs,
-          previousState: smoothFollow.snapshot().state,
-        }),
-      );
     },
   });
 
@@ -640,37 +603,20 @@ export function startLiveSession(input: StartSessionInput): string {
       // §29.2 step 9, the half that lives above the pipeline.
       onResetTranscriptState: () => {
         state.update((s) => ({ ...s, transcriptTail: [] }));
-        transcriptConfidence.reset();
         resetTranscriptTap();
       },
-      onTrackingEvent: (event) => {
-        // The stage's transcript bar reads from here, before the ledger and
-        // before the aligner, so it stays honest when either is wrong.
-        if (event.type === 'delta') publishTranscriptTap(event.text, false);
-        else if (event.type === 'completed') publishTranscriptTap(event.text, true);
-        // §60: the same `completed` event that feeds the aligner carries the
-        // provider's log probabilities, so the confidence evidence is read here
-        // one step before the worker sees it — no new worker protocol needed.
-        if (event.type === 'completed') {
+      onTranscriptText: (text, final) => {
+        // The stage's transcript bar reads from here — straight off the wire,
+        // before anything interprets it — so it stays honest when alignment is
+        // wrong.
+        publishTranscriptTap(text, final);
+        if (final) {
           // §36 "did it hear me". Counted here rather than from the retained
           // transcript, because retention is a SETTING and the question this
           // answers — was anything transcribed at all — has to be answerable
           // with retention off, which is the default.
-          wordsHeard += countSpokenWords(event.text);
-          noteTranscriptConfidence({
-            itemId: event.itemId,
-            text: event.text,
-            ...(event.logprobs ? { logprobs: event.logprobs } : {}),
-            receivedAtMs: event.receivedAtMs,
-          });
+          wordsHeard += countSpokenWords(text);
         }
-        if (driver === null) {
-          // The one link a "words heard, nothing followed" take can break
-          // without any other symptom: transcripts arriving with no worker to
-          // give them to.
-          trace('no-driver', `dropping ${event.type}`);
-        }
-        driver?.feedTranscript(event);
       },
       /*
        * Audio that never reached the recogniser. Surfaced rather than counted
@@ -921,68 +867,88 @@ function buildStartSequenceGate(input: StartSessionInput): {
  * ------------------------------------------------------------------------- */
 
 /**
- * Stand up the take's sidecar and connect both halves of the loop:
+ * Which authored block a token position falls in.
  *
- *   worker `semantic_context` → sidecar scheduler → Rust → validate → fuse
- *                             → worker `semantic_assist` (bounded, re-clamped)
- *
- * The `SmoothFollowProfile` here is the resolved default while the worker now
- * receives the user's resolved profile, and the seam still holds — but for a
- * narrower reason than it used to. §47.1 keeps `alignment` untouched across
- * every follow feel, so `semanticInfluenceMax` is the same number on both
- * sides regardless of which feel is selected, and the fused adjustment is
- * clamped to the identical bound the beam re-clamps it to. If a future profile
- * ever varies an `alignment` field, this must take the same resolved profile
- * the driver does rather than the default.
+ * Derived rather than reported: the engine states where the reader is, and
+ * block identity is a property of the compiled document. Resolving it here
+ * means the take history keeps answering "which sections did this pass reach"
+ * without the engine having to know what a section is.
  */
-function handleSnapshot(snapshot: TrackingSnapshot): void {
-  // §36.3: sections traversed, per take. `blocksSeen` below is the same fact
-  // for the whole session and has only ever been read as a count; this is the
-  // per-pass list, which is what makes "take 2 never reached the close" sayable.
+function blockIdForToken(token: number): string | null {
+  const compiled = compiledScript;
+  if (!compiled) return null;
+  const at = Math.round(token);
+  let best: string | null = null;
+  for (const sentence of compiled.sentences) {
+    if (sentence.startTokenIndex <= at) best = sentence.blockId;
+    else break;
+  }
+  return best;
+}
+
+/**
+ * One alignment snapshot, as control sees it.
+ *
+ * ---------------------------------------------------------------------------
+ * THE TAKE SUMMARY IS BUILT FROM PROGRESSION, NOT FROM A FINAL POSITION
+ * ---------------------------------------------------------------------------
+ * "Followed N of M words" read off the last snapshot is a number that flatters
+ * every take: a presenter who lost the thread at word 30, jumped to the end and
+ * read the closing line scores 100%. What is honest is what accumulates here —
+ * how far the CONFIRMED anchor actually advanced, how much time was spent
+ * genuinely following, and how many recoveries the engine had to make. Those
+ * are three different facts and the summary reports them as three.
+ */
+function handleSnapshot(snapshot: AlignmentSnapshot): void {
+  const nowMs = monotonicNowMs();
+  const blockId = blockIdForToken(snapshot.confirmedToken);
   if (activeTake !== null) {
-    if (snapshot.blockId && !activeTake.sections.includes(snapshot.blockId)) {
-      activeTake.sections.push(snapshot.blockId);
+    // §36.3 sections traversed, per take. `blocksSeen` below is the same fact
+    // for the whole session and has only ever been read as a count; this is
+    // the per-pass list, which is what makes "take 2 never reached the close"
+    // sayable.
+    if (blockId && !activeTake.sections.includes(blockId)) {
+      activeTake.sections.push(blockId);
     }
-    // §36.3 confidence summary, accumulated over every snapshot the pass saw.
+    // §36.3 unique coverage: the high-water mark of the conservative anchor.
+    // `confirmed` is monotone except across an accepted retake or a manual
+    // move, and taking the maximum is what makes a retake cost nothing it
+    // already earned while still refusing to credit a jump to the end.
+    if (snapshot.confirmedToken > activeTake.maxConfirmedToken) {
+      activeTake.maxConfirmedToken = snapshot.confirmedToken;
+    }
     if (Number.isFinite(snapshot.confidence)) {
       activeTake.confidenceSum += snapshot.confidence;
       activeTake.confidenceSamples += 1;
     }
-    // §36.3 automatic retake transitions: the ALIGNER concluded the presenter
-    // went back and re-read. A manual retake opens a new pass instead, so the
-    // two are never conflated into one number.
-    if (snapshot.movement === 'retake') activeTake.automaticRetakes += 1;
+    // §36.3 availability: time spent in `following`, accumulated between
+    // snapshots. Measured rather than inferred from a state count, because
+    // snapshots arrive on transcript events and a long confident passage
+    // produces no more of them than a stuttering one.
+    if (activeTake.lastSnapshotAtMs !== null && activeTake.lastState === 'following') {
+      activeTake.followingMs += nowMs - activeTake.lastSnapshotAtMs;
+    }
+    activeTake.lastSnapshotAtMs = nowMs;
+    activeTake.lastState = snapshot.state;
+    // §36.3 recovery events, from the decision codes that describe one: the
+    // engine concluded the presenter went back and re-read, or relocated. A
+    // manual retake opens a new pass instead, so the two are never conflated.
+    if (snapshot.decision === 'retakeAccepted') activeTake.automaticRetakes += 1;
+    if (
+      snapshot.decision === 'relocationAccepted' ||
+      snapshot.decision === 'jumpForwardAccepted'
+    ) {
+      activeTake.relocations += 1;
+    }
   }
+
   state.update((s) => ({
     ...s,
     snapshot,
-    blocksSeen: s.blocksSeen.includes(snapshot.blockId)
-      ? s.blocksSeen
-      : [...s.blocksSeen, snapshot.blockId],
+    blocksSeen:
+      blockId && !s.blocksSeen.includes(blockId) ? [...s.blocksSeen, blockId] : s.blocksSeen,
   }));
-  // Feed the smooth-following store. The worker's own SemanticMotionFrames
-  // take precedence; this bridge only covers drivers that emit none.
-  if (usingWorkerFrames) {
-    // §5.4/§14.10: the coaching subsystem reads the alignment cursor and the
-    // active span from the same snapshot. It is advisory — nothing it does here
-    // reaches back into motion (§2.1).
-    return relaySnapshot(snapshot);
-  }
-  const frame = motionFrameFromSnapshot(snapshot, {
-    sessionId: snapshot.sessionId,
-    sessionGeneration,
-    scriptCompileHash,
-    layoutGeneration: stageLayoutGeneration,
-    motionProfileId: followProfileId,
-    sessionStartedAtMs,
-    previous: lastMotionFrame,
-  });
-  lastMotionFrame = frame;
-  // Fed *after* the bridged frame so the coaching lane reads this snapshot's
-  // epoch rather than the previous one.
-  smoothFollow.ingestMotionFrame(frame);
-  publishSemanticFrame(frame);
-  relaySnapshot(snapshot);
+  smoothFollow.ingestSnapshot(snapshot);
 }
 
 /* ---------------------------------------------------------------------------
@@ -1067,59 +1033,22 @@ function publishTranscriptTap(text: string, final: boolean): void {
     .catch(() => {});
 }
 
-function publishSemanticFrame(frame: SemanticMotionFrame): void {
-  if (stageGeneration === 0) return;
-  if (!cachedEmitTo && !isTauriRuntime()) return;
-  const s = get(state);
-  if (!s.sessionId || !s.stageAlive) return;
-  if (cachedEmitTo) {
-    void cachedEmitTo('stage', STAGE_EVENT.semanticFrame, frame).catch(() => {});
-    return;
-  }
-  void resolveEmitTo()
-    .then((emitTo) => emitTo('stage', STAGE_EVENT.semanticFrame, frame))
-    .catch(() => {});
+/** Snapshot token positions are fractional; persisted indexes are not. */
+function roundToken(token: number | undefined): number | undefined {
+  return token === undefined || !Number.isFinite(token) ? undefined : Math.round(token);
 }
 
 /**
- * §27. Relay one Coaching Rail snapshot straight to the stage, the same direct
- * `emitTo` path the heartbeat and semantic frame use. Coaching is advisory and
- * failure-isolated (§5.2), so it never travels the validated Rust document
- * channel that can move the script. The snapshot carries its own `sessionId`
- * and monotonic `stageRevision`, which the stage validates on arrival.
- */
-function relaySnapshot(snapshot: TrackingSnapshot): void {
-  const current = get(state);
-  if (!current.sessionId || stageGeneration === 0) return;
-  const important =
-    !snapshot.provisional || snapshot.movement !== 'advance' || snapshot.state !== 'following';
-  const now = Date.now();
-  if (!important && now - lastRelayAtMs < STAGE_RELAY_MIN_INTERVAL_MS) return;
-  lastRelayAtMs = now;
-  void stageService.publishStageSnapshot(current.sessionId, snapshot).catch(() => {});
-}
-
-/**
- * §60. Feed one finalized item to the confidence watcher and, when its verdict
- * changes, say so.
+ * §36.3 "unique coverage", the honest form.
  *
- * The status field is shared with §59, so the two must not fight over it. An
- * `interrupted` feed outranks a weak one — there is no transcript at all to be
- * unconfident about — so the notice is only raised from `live`, and only ever
- * cleared back to `live` from `low_confidence`. Whichever of the two conditions
- * ends last therefore leaves the field describing reality rather than describing
- * whichever producer spoke most recently.
+ * The furthest the CONFIRMED anchor reached in this pass, not the position it
+ * finished at. Reporting the final position would score a take that lost the
+ * thread and jumped to the closing line as complete — which is precisely the
+ * summary that made the old numbers untrustworthy.
  */
-function noteTranscriptConfidence(item: TranscriptConfidenceInput): void {
-  const verdict = transcriptConfidence.observe(item);
-  if (verdict === null) return;
-  const status = smoothFollow.snapshot().transcript.status;
-  if (verdict.status === 'low_confidence') {
-    if (status !== 'live') return;
-    smoothFollow.reportTranscriptStatus('low_confidence', verdict.detail);
-    return;
-  }
-  if (status === 'low_confidence') smoothFollow.reportTranscriptStatus('live');
+function takeWordsFollowed(): number {
+  if (activeTake === null) return 0;
+  return Math.max(0, Math.round(activeTake.maxConfirmedToken));
 }
 
 /* ---------------------------------------------------------------------------
@@ -1139,6 +1068,11 @@ function beginTake(sessionId: string, passOrdinal: number, startTokenIndex: numb
     sections: [],
     checkpoints: [],
     automaticRetakes: 0,
+    relocations: 0,
+    maxConfirmedToken: startTokenIndex,
+    followingMs: 0,
+    lastSnapshotAtMs: null,
+    lastState: null,
     confidenceSum: 0,
     confidenceSamples: 0,
   };
@@ -1192,12 +1126,15 @@ function noteCheckpoint(kind: TakeCheckpointInput['kind']): void {
   if (take === null) return;
   if (take.checkpoints.length >= MAX_TAKE_CHECKPOINTS) return;
   const snapshot = get(state).snapshot;
+  const tokenIndex = Math.round(snapshot?.confirmedToken ?? take.startTokenIndex);
+  const blockId = blockIdForToken(tokenIndex);
   take.checkpoints.push({
     atMs: Math.max(0, Math.round(monotonicNowMs() - take.startedAtMs)),
-    tokenIndex: snapshot?.tokenIndex ?? take.startTokenIndex,
-    ...(snapshot?.blockId ? { blockId: snapshot.blockId } : {}),
-    ...(snapshot?.sentenceId ? { sentenceId: snapshot.sentenceId } : {}),
+    tokenIndex,
     kind,
+    // "Where did I skip to" is half of what a take history is for, and a token
+    // index alone does not answer it in a form anybody reads.
+    ...(blockId ? { blockId } : {}),
   });
 }
 
@@ -1331,13 +1268,13 @@ const followActions = {
    * own cursor.
    */
   reAnchor(): void {
-    const token = get(state).snapshot?.tokenIndex;
+    const token = get(state).snapshot?.confirmedToken;
     if (token === undefined) return;
-    driver?.moveToToken(token, 'manual');
+    driver?.moveToToken(token);
     showToast('Re-finding your place', 'info', { durationMs: 1600 });
   },
   acceptCandidate(candidate: { tokenIndex: number }): void {
-    driver?.moveToToken(candidate.tokenIndex, 'manual');
+    driver?.moveToToken(candidate.tokenIndex);
   },
   /**
    * Pausing following is not pausing the session (§15.3, §48): transcription
@@ -1363,10 +1300,10 @@ const followActions = {
 };
 
 /**
- * Adopt the stage's layout generation and forward it to the worker (§7.2).
+ * Adopt the stage's layout generation from its acks (§7.2).
  *
  * Exported for the layout-generation contract test: the ack subscription is set
- * up behind a Tauri-only dynamic import, and the loop this closes is worth
+ * up behind a Tauri-only dynamic import, and the value this tracks is worth
  * asserting without one.
  */
 export function adoptStageLayoutGeneration(generation: number): void {
@@ -1375,7 +1312,6 @@ export function adoptStageLayoutGeneration(generation: number): void {
   stageLayoutGeneration = generation;
   // The worker stamps its own frames; the v1 bridge reads the module value
   // directly in `handleSnapshot`. Both producers now carry the stage's number.
-  driver?.setLayoutGeneration(generation);
 }
 
 /** The stage layout generation control currently believes in (§7.2). */
@@ -1958,7 +1894,7 @@ export function moveSentences(delta: number): void {
  */
 export function goToToken(tokenIndex: number): void {
   if (!get(state).active) return;
-  driver?.moveToToken(Math.max(0, tokenIndex), 'manual');
+  driver?.moveToToken(Math.max(0, tokenIndex));
   // §36.3: an outline jump is a position the operator deliberately went to, and
   // "where did I skip to" is half of what a take history is for.
   noteCheckpoint('manual');
@@ -1975,10 +1911,10 @@ export function restartParagraph(): void {
   driver?.restartParagraph();
   const before = get(state);
   noteCheckpoint('paragraph_start');
-  finishTake(before.sessionId, before.snapshot?.tokenIndex);
+  finishTake(before.sessionId, roundToken(before.snapshot?.confirmedToken));
   if (before.sessionId !== null) {
     const passOrdinal = before.counts.retakes + 2;
-    beginTake(before.sessionId, passOrdinal, before.snapshot?.tokenIndex ?? 0);
+    beginTake(before.sessionId, passOrdinal, roundToken(before.snapshot?.confirmedToken) ?? 0);
   }
   state.update((s) => ({ ...s, counts: { ...s.counts, retakes: s.counts.retakes + 1 } }));
 }
@@ -2095,14 +2031,14 @@ function jumpSection(delta: number): boolean {
   };
   walk(s.outline);
   if (flat.length === 0) return false;
-  const token = s.snapshot?.tokenIndex ?? 0;
+  const token = roundToken(s.snapshot?.confirmedToken) ?? 0;
   let currentIndex = -1;
   flat.forEach((n, i) => {
     if (n.startTokenIndex <= token) currentIndex = i;
   });
   const target = flat[Math.max(0, Math.min(flat.length - 1, currentIndex + delta))];
   if (!target) return false;
-  driver?.moveToToken(target.startTokenIndex, 'command');
+  driver?.moveToToken(target.startTokenIndex);
   state.update((prev) => ({ ...prev, counts: { ...prev.counts, jumps: prev.counts.jumps + 1 } }));
   return true;
 }
@@ -2134,7 +2070,7 @@ export function stopSession(): SessionSummary {
     endingLocation: locateEnding(s),
     transcriptSaved: transcriptRetained,
     wordsHeard,
-    wordsFollowed: s.snapshot?.committedTokenIndex ?? s.snapshot?.tokenIndex ?? 0,
+    wordsFollowed: takeWordsFollowed(),
     scriptWords: scriptWordCount,
   };
   // §36.2 + §36.1: write the retained tail and close the record BEFORE the
@@ -2146,9 +2082,17 @@ export function stopSession(): SessionSummary {
     // §36.3: close the take that was running. Before the session row is closed,
     // so a listener reading the history the moment the session ends sees the
     // last take rather than a session with one pass missing.
-    finishTake(s.sessionId, s.snapshot?.tokenIndex);
+    /*
+     * Where the session ended. The conservative anchor when there is one, and
+     * the take's own high-water mark otherwise — a session that ran and ended
+     * has an end position even if alignment never produced a snapshot, and
+     * reporting `undefined` there would make "did it follow anything" and "was
+     * there a session at all" the same answer.
+     */
+    const endTokenIndex = roundToken(s.snapshot?.confirmedToken) ?? takeWordsFollowed();
+    finishTake(s.sessionId, endTokenIndex);
     void endSessionRecord(s.sessionId, {
-      endTokenIndex: s.snapshot?.tokenIndex,
+      endTokenIndex,
       commandCount: 0,
       retakeCount: s.counts.retakes,
       reconnectCount: s.counts.reconnects,
@@ -2211,8 +2155,8 @@ function locateEnding(s: SessionState): string {
   walk(s.outline);
   const section = [...flat]
     .reverse()
-    .find((n) => n.startTokenIndex <= snapshot.tokenIndex);
-  return section ? section.title : `Token ${snapshot.tokenIndex}`;
+    .find((n) => n.startTokenIndex <= snapshot.confirmedToken);
+  return section ? section.title : `Token ${Math.round(snapshot.confirmedToken)}`;
 }
 
 function stopInternals(): void {
@@ -2243,7 +2187,6 @@ function stopInternals(): void {
   stopMotionAcks = null;
   stopSidecarFeed?.();
   stopSidecarFeed = null;
-  lastMotionFrame = null;
   // Invalidate any bridge whose `listen()` calls have not settled yet, then
   // dispose the ones that have.
   stageBridgeToken += 1;
@@ -2309,18 +2252,15 @@ export const liveStatusLabel = derived(state, (s): string => {
   switch (s.snapshot?.state) {
     case 'following':
       return 'Following';
+    // `ambiguous` deliberately reads the same as `holding`. The distinction —
+    // "two places fit" versus "nothing fits" — is real, and it belongs in the
+    // detail line where it can be acted on; as a status it would only tell the
+    // presenter that the app has an internal state machine.
     case 'holding':
+    case 'ambiguous':
       return 'Holding your place';
     case 'searching':
       return 'Looking for your place';
-    case 'retake_candidate':
-      return 'Retake detected';
-    case 'command_pending':
-      return 'Command heard';
-    case 'paused':
-      return voice ? PAUSED_LISTENING_LABEL : PAUSED_MANUAL_LABEL;
-    case 'reconnecting':
-      return 'Reconnecting — position held';
     default:
       return voice ? 'Listening' : 'Prompting';
   }

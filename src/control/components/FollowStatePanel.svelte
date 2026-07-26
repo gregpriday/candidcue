@@ -13,7 +13,7 @@
   import {
     CONFIDENCE_BANDS,
     CONFIDENCE_BAND_LABELS,
-    FOLLOW_BEHAVIOR_LABELS,
+    FOLLOW_DECISION_LABELS,
     FOLLOW_STATE_DETAIL,
     FOLLOW_STATE_LABELS,
     confidenceBandIndex,
@@ -47,9 +47,10 @@
     paused: 'Paused — the script stays where it is',
   };
   const MANUAL_DETAILS: Partial<Record<SmoothFollowState['state'], string>> = {
-    acquiring: 'Manual take — nothing is listening. The transport moves the script.',
+    searching: 'Manual take — nothing is listening. The transport moves the script.',
     paused: 'Manual take — nothing is listening. The transport moves the script.',
-    lost_local: 'The text stays where it is. Use the transport to move it.',
+    holding: 'The text stays where it is. Use the transport to move it.',
+    ambiguous: 'The text stays where it is. Use the transport to move it.',
   };
 
   const statusLine = $derived(
@@ -117,7 +118,7 @@
   <dl class="facts">
     <div class="fact">
       <dt>Doing</dt>
-      <dd>{FOLLOW_BEHAVIOR_LABELS[follow.behavior]}</dd>
+      <dd>{FOLLOW_DECISION_LABELS[follow.decision]}</dd>
     </div>
     <div class="fact">
       <dt>Pace</dt>

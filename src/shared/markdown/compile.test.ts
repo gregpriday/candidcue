@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { CompiledScript, SafeRenderNode } from '../contracts';
-import { TOKEN_FLAGS } from '../contracts';
 import { compile } from './compile';
 
 const fixture = (name: string): string =>
@@ -159,7 +158,7 @@ describe('compile: §23 directives', () => {
     expect(script.spokenTokens[closing.tokenIndex]!.normalized).toBe('that');
   });
 
-  it('compiles :::spoken with say-text tokens at weight 1.65 carrying visual aliases', () => {
+  it('compiles :::spoken into one token per spoken word at the visual range', () => {
     const script = directives();
     const override = script.blocks.find((b) => b.layoutHints?.['spokenOverride'] === true)!;
     expect(flattenText(override.renderNodes)).toBe('CandidCue v2.0');
@@ -167,10 +166,6 @@ describe('compile: §23 directives', () => {
     expect(tokens.map((t) => t.normalized)).toEqual([
       'candid', 'cue', 'version', 'two', 'point', 'oh',
     ]);
-    for (const token of tokens) {
-      expect(token.weight).toBe(1.65);
-      expect(token.flags & TOKEN_FLAGS.DIRECTIVE_ALIAS).toBeTruthy();
-    }
     // Source offsets point into the say: line of the original source.
     const source = fixture('directives.md');
     const first = tokens[0]!;
@@ -180,22 +175,15 @@ describe('compile: §23 directives', () => {
   it('expands inline {say="…"} into one token per spoken word at the visual range', () => {
     const script = directives();
     const source = fixture('directives.md');
-    // The tracker pairs one transcript word with one script token, so
-    // `API{say="A P I"}` must produce three alignable tokens, not one token
-    // carrying "a p i" as an unmatched alias (§23.4).
+    // The engine pairs one transcript word with one script token, so
+    // `API{say="A P I"}` must produce three alignable tokens rather than one
+    // that no single spoken word can match (§23.4).
     const overrides = script.spokenTokens.filter((t) => t.overrideVisual === 'API');
     expect(overrides.map((t) => t.normalized)).toEqual(['a', 'p', 'i']);
     for (const token of overrides) {
-      expect(token.flags & TOKEN_FLAGS.DIRECTIVE_ALIAS).toBeTruthy();
-      expect(token.weight).toBe(1.65);
       // Every token keeps the *visual* source range (§23.4).
       expect(source.slice(token.source.utf16Start, token.source.utf16End)).toBe('API');
     }
-    // The visual form is an alias on the first token only — attaching it to
-    // all three would let one spoken "API" match any of them.
-    expect(overrides[0]!.aliases).toContain('api');
-    expect(overrides[1]!.aliases).not.toContain('api');
-    expect(overrides[2]!.aliases).not.toContain('api');
     // The {say=…} suffix never renders, and every token maps to the one
     // visual render node.
     const block = script.blocks.find((b) => b.id === overrides[0]!.blockId)!;
@@ -507,19 +495,6 @@ describe('compile: §25.6 indexes, §25.7 weights, §21.8 statistics', () => {
     const script = directives();
   });
 
-  it('weights stopwords at 0.35, proper nouns at 1.5, overrides at 1.65', () => {
-    const script = basic();
-    const the = script.spokenTokens.find((t) => t.normalized === 'the')!;
-    expect(the.weight).toBe(0.35);
-    const smith = script.spokenTokens.find((t) => t.surface === 'Smith')!;
-    expect(smith.flags & TOKEN_FLAGS.PROPER_NOUN).toBeTruthy();
-    expect(smith.weight).toBe(1.5);
-    const faq = script.spokenTokens.find((t) => t.surface === 'FAQ')!;
-    expect(faq.flags & TOKEN_FLAGS.PROPER_NOUN).toBeTruthy();
-    const numeric = script.spokenTokens.find((t) => t.normalized === '42')!;
-    expect(numeric.flags & TOKEN_FLAGS.NUMBER).toBeTruthy();
-    expect(numeric.aliases).toContain('forty two');
-  });
 
   it('computes spoken word counts and duration from spoken tokens only', () => {
     const script = basic();

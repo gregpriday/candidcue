@@ -6,7 +6,7 @@ use crate::database::Database;
 use crate::errors::AppError;
 use crate::windows::{
     self, DisplayDescriptor, DisplayProfile, IdentificationSession, OpenStageRequest, StageAck,
-    StageDocumentEnvelope, StageOpenResult, StageStatus, StageTrackingSnapshot, StageWindowState,
+    StageDocumentEnvelope, StageOpenResult, StageStatus, StageWindowState,
 };
 
 #[tauri::command]
@@ -66,18 +66,6 @@ pub fn publish_stage_document<R: Runtime>(
     document_envelope: StageDocumentEnvelope,
 ) -> Result<StageAck, AppError> {
     windows::publish_stage_document(&app, &session_id, document_envelope.into_value()?)
-}
-
-#[tauri::command]
-/// §46.6. Typed for the same reason as the envelope above: this is the payload
-/// whose silent rejection left the stage hydrated and motionless in a packaged
-/// build, and it had no shape for any contract test to hold on to.
-pub fn publish_stage_snapshot<R: Runtime>(
-    app: AppHandle<R>,
-    session_id: String,
-    snapshot: StageTrackingSnapshot,
-) -> Result<(), AppError> {
-    windows::publish_stage_snapshot(&app, &session_id, snapshot.into_value()?)
 }
 
 #[tauri::command]

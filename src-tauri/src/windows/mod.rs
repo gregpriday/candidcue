@@ -33,10 +33,14 @@ pub mod events {
     pub const DEVICE_OR_DISPLAY_CHANGE: &str = "app://device-or-display-change";
     pub const DIAGNOSTIC_WARNING: &str = "diagnostic://warning";
     pub const IDENTIFY_DISPLAYS: &str = "app://identify-displays";
+    /// Rust → control: the same `AlignmentSnapshot` the stage receives, for
+    /// progress, recovery affordances and the take summary. A separate name
+    /// from the stage's copy because they are different contracts to different
+    /// windows — the stage follows it, control reports on it.
+    pub const ALIGN_SNAPSHOT: &str = "align://snapshot";
 
     // Rust → stage.
     pub const STAGE_LOAD_SESSION: &str = "stage://load-session";
-    pub const STAGE_TRACKING_SNAPSHOT: &str = "stage://tracking-snapshot";
     pub const STAGE_APPLY_COMMAND: &str = "stage://apply-command";
     pub const STAGE_LISTENER_STATE: &str = "stage://listener-state";
     pub const STAGE_CLOSE_SESSION: &str = "stage://close-session";
@@ -46,7 +50,21 @@ pub mod events {
     // Semantic motion frames, 15–30 Hz (companion §26.1). Like the heartbeat
     // these are emitted straight from the control webview: a high-rate motion
     // signal, gated by the stage's own frame receiver rather than by Rust.
-    pub const STAGE_SEMANTIC_FRAME: &str = "stage://semantic-frame";
+    /// Raw recogniser text for the stage's transcript bar. Same direct path as
+    /// the heartbeat: a diagnostic readout, and a dropped one costs nothing.
+    pub const STAGE_TRANSCRIPT_TAP: &str = "stage://transcript-tap";
+
+    /// Rust → stage: one `AlignmentSnapshot` per transcript event (~1/s).
+    ///
+    /// This comes from Rust rather than from control because the alignment
+    /// engine lives in Rust, next to the audio clock its predictions are timed
+    /// against. Control is not in the path at all — it receives the same
+    /// snapshot separately on [`ALIGN_SNAPSHOT`] for progress and the take
+    /// summary.
+    pub const STAGE_ALIGNMENT_SNAPSHOT: &str = "stage://alignment-snapshot";
+    /// Stage → Rust: the debounced visible token range (§5 of the integration
+    /// note). A prior on candidate ranking, never a command.
+    pub const STAGE_VIEWPORT_HINT: &str = "stage://viewport-hint";
 
     // Stage → Rust (listened in app setup).
     /// The stage's event subscriptions are registered and it can now receive
@@ -915,7 +933,6 @@ pub fn stage_status<R: Runtime>(app: &AppHandle<R>) -> StageStatus {
 /// Payload cap for a stage document envelope (spec §46.10).
 const MAX_STAGE_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 /// Payload cap for a tracking snapshot.
-const MAX_SNAPSHOT_BYTES: usize = 32 * 1024;
 
 /* ---------------------------------------------------------------------------
  * Typed control → stage payloads (§46.6)
@@ -976,60 +993,6 @@ pub struct StageDocumentEnvelope {
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
-/// `TrackingSnapshot` (src/shared/contracts/tracking.ts) — the revisioned
-/// reading position, as `publish_stage_snapshot` receives it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StageTrackingSnapshot {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub schema_version: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stage_generation: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_generation: Option<u64>,
-    /// Bounds-checked in `publish_stage_snapshot`, with its own error text.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revision: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_index: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub committed_token_index: Option<i64>,
-    pub script_id: String,
-    pub block_id: String,
-    pub sentence_id: String,
-    pub confidence: f64,
-    /// `TrackingState`. A string rather than an enum on purpose: a state the
-    /// TypeScript union grew and Rust has not is a reason for a test to fail,
-    /// not a reason for every snapshot in a live take to stop being published.
-    /// `tracking_contract_unions_match_the_ts_contract` is where that is caught.
-    pub state: String,
-    pub provisional: bool,
-    pub movement: String,
-    pub source_item_ids: Vec<String>,
-    pub generated_at_ms: i64,
-    #[serde(flatten)]
-    pub rest: serde_json::Map<String, serde_json::Value>,
-}
-
-/// The bytes that reach the stage — every field, in or out of the struct.
-fn to_payload_value<T: Serialize>(payload: &T, what: &str) -> Result<serde_json::Value, AppError> {
-    serde_json::to_value(payload)
-        .map_err(|e| AppError::Internal(format!("{what} serialize: {e}")))
-}
-
-impl StageDocumentEnvelope {
-    pub fn into_value(self) -> Result<serde_json::Value, AppError> {
-        to_payload_value(&self, "envelope")
-    }
-}
-
-impl StageTrackingSnapshot {
-    pub fn into_value(self) -> Result<serde_json::Value, AppError> {
-        to_payload_value(&self, "snapshot")
-    }
-}
 
 /// The header every control→stage payload MUST carry (M1).
 ///
@@ -1193,44 +1156,16 @@ pub fn replay_stage_document<R: Runtime>(app: &AppHandle<R>) -> bool {
         .is_ok()
 }
 
-/// Validate numeric bounds, identifiers, session generation, and payload
-/// size before emitting to the stage (spec §46.6).
-pub fn publish_stage_snapshot<R: Runtime>(
-    app: &AppHandle<R>,
-    session_id: &str,
-    snapshot: serde_json::Value,
-) -> Result<(), AppError> {
-    let active = require_active_stage(app, session_id)?;
+/// The bytes that reach the stage — every field, in or out of the struct.
+fn to_payload_value<T: Serialize>(payload: &T, what: &str) -> Result<serde_json::Value, AppError> {
+    serde_json::to_value(payload)
+        .map_err(|e| AppError::Internal(format!("{what} serialize: {e}")))
+}
 
-    let serialized = serde_json::to_vec(&snapshot)
-        .map_err(|e| AppError::Internal(format!("snapshot serialize: {e}")))?;
-    if serialized.len() > MAX_SNAPSHOT_BYTES {
-        return Err(AppError::invalid_input("The tracking snapshot is too large."));
+impl StageDocumentEnvelope {
+    pub fn into_value(self) -> Result<serde_json::Value, AppError> {
+        to_payload_value(&self, "envelope")
     }
-    // Stale-generation snapshots are dropped silently (spec §43.5), but a
-    // MISSING generation is an error: it used to be a free pass.
-    if validate_stage_payload_header(
-        &snapshot,
-        session_id,
-        active.generation,
-        active.session_generation,
-        false,
-    )? == HeaderVerdict::Drop
-    {
-        return Ok(());
-    }
-    for field in ["tokenIndex", "committedTokenIndex", "revision"] {
-        match snapshot.get(field).and_then(|v| v.as_i64()) {
-            Some(value) if value >= 0 => {}
-            _ => {
-                return Err(AppError::invalid_input(format!(
-                    "Snapshot field {field} must be a non-negative integer."
-                )));
-            }
-        }
-    }
-    app.emit_to(STAGE_LABEL, events::STAGE_TRACKING_SNAPSHOT, &snapshot)?;
-    Ok(())
 }
 
 /// Allow-listed stage directive kinds (StageDirective in
@@ -1421,12 +1356,13 @@ mod tests {
             events::DEVICE_OR_DISPLAY_CHANGE,
             events::DIAGNOSTIC_WARNING,
             events::STAGE_LOAD_SESSION,
-            events::STAGE_TRACKING_SNAPSHOT,
             events::STAGE_APPLY_COMMAND,
             events::STAGE_LISTENER_STATE,
             events::STAGE_CLOSE_SESSION,
             events::STAGE_HEARTBEAT,
-            events::STAGE_SEMANTIC_FRAME,
+            events::STAGE_TRANSCRIPT_TAP,
+            events::STAGE_ALIGNMENT_SNAPSHOT,
+            events::STAGE_VIEWPORT_HINT,
             events::STAGE_LISTENING,
             events::STAGE_HYDRATED,
             events::STAGE_LAYOUT_READY,

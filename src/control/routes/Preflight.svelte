@@ -1090,7 +1090,7 @@
         typeof shown.displayFingerprint === 'string' &&
         shown.displayFingerprint !== selectedFingerprint;
 
-      // 4. Bind the tracking worker + realtime pipeline and go live.
+      // 4. Bind the alignment session + realtime pipeline and go live.
       startLiveSession({
         scriptId,
         scriptTitle,

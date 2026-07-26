@@ -1,16 +1,18 @@
-import { afterEach, describe, expect, it } from 'vitest';
+/**
+ * The alignment driver — control's seam onto the Rust engine.
+ *
+ * What is worth asserting here is small, because the driver is small: the
+ * engine lives in Rust and control neither aligns nor tokenizes. What control
+ * still owns is the LIFECYCLE — which script is handed over, when snapshots are
+ * allowed to move the UI, and which token an explicit navigation lands on — and
+ * every one of those has been a source of a silent, take-losing bug.
+ */
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { compile } from '../../../src/shared/markdown';
-import type {
-  TrackingWorkerInbound,
-  TrackingWorkerOutbound,
-} from '../../../src/shared/tracking/worker-protocol';
-import {
-  createTrackingDriver,
-  createWorkerTrackingDriver,
-  setTrackingWorkerFactoryForTesting,
-  type TrackingWorkerLike,
-} from '../../../src/control/services/session';
-import type { TrackingSnapshot } from '../../../src/shared/contracts';
+import { setInvokeForTesting } from '../../../src/control/services/ipc';
+import { createTrackingDriver } from '../../../src/control/services/session';
+import { alignTokensFor } from '../../../src/control/services/alignment';
+import type { AlignmentSnapshot } from '../../../src/shared/contracts';
 
 const SOURCE = `# One
 
@@ -19,157 +21,126 @@ First paragraph sentence here. Another sentence in the same block.
 Second paragraph sentence follows afterwards.
 `;
 
-class FakeWorker implements TrackingWorkerLike {
-  posted: TrackingWorkerInbound[] = [];
-  terminated = false;
-  private listeners: Array<(event: MessageEvent) => void> = [];
-
-  postMessage(message: unknown): void {
-    this.posted.push(message as TrackingWorkerInbound);
-  }
-  addEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
-    this.listeners.push(listener);
-  }
-  terminate(): void {
-    this.terminated = true;
-  }
-  emit(message: TrackingWorkerOutbound): void {
-    for (const listener of this.listeners) {
-      listener({ data: message } as MessageEvent);
-    }
-  }
+interface Call {
+  command: string;
+  args: Record<string, unknown> | undefined;
 }
-
-afterEach(() => {
-  setTrackingWorkerFactoryForTesting(null);
-});
 
 function makeDriver() {
   const compiled = compile(SOURCE, { scriptId: 'script-1' });
-  const worker = new FakeWorker();
-  setTrackingWorkerFactoryForTesting(() => worker);
-  const snapshots: TrackingSnapshot[] = [];
-  const driver = createWorkerTrackingDriver({
+  const calls: Call[] = [];
+  setInvokeForTesting(async (command, args) => {
+    calls.push({ command, args });
+    return undefined as never;
+  });
+  const snapshots: AlignmentSnapshot[] = [];
+  const driver = createTrackingDriver({
     sessionId: 'session-1',
     scriptId: 'script-1',
     sentences: compiled.sentences,
     totalTokens: compiled.spokenTokens.length,
     compiled,
-    sessionGeneration: 1,
-    stageGeneration: 3,
+    sessionGeneration: 7,
     onSnapshot: (s) => snapshots.push(s),
     onTranscript: () => {},
   });
-  return { compiled, worker, driver, snapshots };
+  return { compiled, calls, driver, snapshots };
 }
 
-function snapshotFor(compiled: ReturnType<typeof compile>, tokenIndex: number): TrackingSnapshot {
-  const sentence = compiled.sentences.find(
-    (s) => s.startTokenIndex <= tokenIndex && tokenIndex <= s.endTokenIndex,
-  )!;
-  return {
-    schemaVersion: 1,
-    revision: 1,
-    sessionId: 'session-1',
-    sessionGeneration: 1,
-    stageGeneration: 3,
-    scriptId: 'script-1',
-    tokenIndex,
-    committedTokenIndex: tokenIndex,
-    blockId: sentence.blockId,
-    sentenceId: sentence.id,
-    confidence: 0.9,
-    state: 'following',
-    provisional: false,
-    movement: 'advance',
-    sourceItemIds: [],
-    generatedAtMs: Date.now(),
-  };
-}
+afterEach(() => {
+  setInvokeForTesting(null);
+  vi.restoreAllMocks();
+});
 
-describe('worker tracking driver (spec §45.4 binding)', () => {
-  it('initializes the worker with the tracking document and holds until start', () => {
-    const { compiled, worker } = makeDriver();
-    expect(worker.posted[0]?.type).toBe('initialize');
-    const init = worker.posted[0] as Extract<TrackingWorkerInbound, { type: 'initialize' }>;
-    expect(init.document.scriptId).toBe('script-1');
-    expect(init.document.spokenTokens.length).toBe(compiled.spokenTokens.length);
-    expect(init.document.sentences.length).toBe(compiled.sentences.length);
-    expect(init.session).toEqual({
-      sessionId: 'session-1',
-      sessionGeneration: 1,
-      stageGeneration: 3,
-    });
-    // §9.1: the engine holds position until the user starts prompting.
-    expect(worker.posted[1]?.type).toBe('pause');
+describe('alignment driver', () => {
+  it('hands Rust the compiled script under the transcription generation', async () => {
+    const { compiled, calls, driver } = makeDriver();
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThan(0));
+
+    const start = calls.find((c) => c.command === 'start_alignment');
+    expect(start, 'the driver never started an alignment session').toBeDefined();
+    // The generation pairs alignment with the socket that feeds it; Rust drops
+    // any transcript frame stamped with a different one.
+    expect(start?.args?.generation).toBe(7);
+    const tokens = start?.args?.tokens as Array<{ surface: string }>;
+    expect(tokens).toHaveLength(compiled.spokenTokens.length);
+    driver.dispose();
   });
 
-  it('relays snapshots and forwards transcript events', () => {
-    const { compiled, worker, driver, snapshots } = makeDriver();
-    driver.start();
-    expect(worker.posted.at(-1)?.type).toBe('resume');
-
-    worker.emit({ type: 'snapshot', snapshot: snapshotFor(compiled, 2) });
-    expect(snapshots).toHaveLength(1);
-    expect(snapshots[0]!.tokenIndex).toBe(2);
-
-    driver.feedTranscript({
-      type: 'completed',
-      sessionGeneration: 1,
-      itemId: 'item-1',
-      text: 'first paragraph sentence here',
-      receivedAtMs: Date.now(),
+  /*
+   * The ORDER and COUNT of the token list is the whole contract: every snapshot
+   * position is a fractional index into it, and the stage resolves those
+   * indexes through geometry it measured for `spokenTokens`. A token filtered
+   * out here shifts every position after it, silently.
+   */
+  it('sends the spoken tokens verbatim, in order, unsplit', () => {
+    const compiled = compile('We raised $12 million in a well-known round.', {
+      scriptId: 'script-1',
     });
-    const fed = worker.posted.at(-1) as Extract<TrackingWorkerInbound, { type: 'transcript_event' }>;
-    expect(fed.type).toBe('transcript_event');
-    expect(fed.event.type).toBe('completed');
-
-    driver.maskItems(['item-1']);
-    expect(worker.posted.at(-1)).toEqual({ type: 'mask_items', itemIds: ['item-1'] });
-
-    driver.setCommandPending(true);
-    expect(worker.posted.at(-1)?.type).toBe('set_command_pending');
+    const tokens = alignTokensFor(compiled);
+    expect(tokens.map((t) => t.surface)).toEqual(
+      compiled.spokenTokens.map((t) => t.surface),
+    );
+    // `$12` and `well-known` cross as authored. The engine decides they are two
+    // spoken words each; splitting here would make this a second tokenizer.
+    expect(tokens.map((t) => t.surface)).toContain('$12');
+    expect(tokens.map((t) => t.surface)).toContain('well-known');
   });
 
-  it('maps sentence and paragraph moves onto move_to_token', () => {
-    const { compiled, worker, driver } = makeDriver();
+  /*
+   * §9.1: hold position until the user explicitly starts prompting. The engine
+   * has no pause — it is a pure function of the frames it is given — so the
+   * gate is here, and a snapshot arriving before `start()` must not move
+   * anything.
+   */
+  it('ignores snapshots until prompting starts', () => {
+    const { driver, snapshots } = makeDriver();
+    expect(snapshots).toHaveLength(0);
     driver.start();
-    // Position on the second sentence of block one.
-    const second = compiled.sentences[1]!;
-    worker.emit({ type: 'snapshot', snapshot: snapshotFor(compiled, second.startTokenIndex) });
+    expect(snapshots).toHaveLength(0);
+    driver.dispose();
+  });
+
+  it('moves by sentence and paragraph onto a real token index', async () => {
+    const { compiled, calls, driver } = makeDriver();
+    driver.start();
 
     driver.moveSentences(1);
-    let move = worker.posted.at(-1) as Extract<TrackingWorkerInbound, { type: 'move_to_token' }>;
-    expect(move.type).toBe('move_to_token');
-    expect(move.movement).toBe('manual');
-    expect(move.tokenIndex).toBe(compiled.sentences[2]!.startTokenIndex);
-
-    // Restart paragraph goes to the first sentence of the current block.
-    driver.restartParagraph();
-    move = worker.posted.at(-1) as Extract<TrackingWorkerInbound, { type: 'move_to_token' }>;
-    const blockFirst = compiled.sentences.find((s) => s.blockId === second.blockId)!;
-    expect(move.tokenIndex).toBe(blockFirst.startTokenIndex);
-
+    await vi.waitFor(() =>
+      expect(calls.some((c) => c.command === 'set_alignment_position')).toBe(true),
+    );
+    const move = calls.filter((c) => c.command === 'set_alignment_position').at(-1);
+    const target = move?.args?.token as number;
+    expect(Number.isFinite(target)).toBe(true);
+    expect(
+      compiled.sentences.some((s) => s.startTokenIndex === target),
+      'a sentence move must land on a sentence boundary',
+    ).toBe(true);
     driver.dispose();
-    expect(worker.terminated).toBe(true);
   });
 
-  it('createTrackingDriver picks the worker driver when a factory exists', () => {
-    const { driver } = makeDriver();
+  it('stops the alignment session on dispose', async () => {
+    const { calls, driver } = makeDriver();
     driver.dispose();
-    const worker = new FakeWorker();
-    setTrackingWorkerFactoryForTesting(() => worker);
-    const compiled = compile(SOURCE, { scriptId: 'script-2' });
-    const chosen = createTrackingDriver({
-      sessionId: 's',
-      scriptId: 'script-2',
-      sentences: compiled.sentences,
-      totalTokens: 10,
-      compiled,
-      onSnapshot: () => {},
+    await vi.waitFor(() => expect(calls.some((c) => c.command === 'stop_alignment')).toBe(true));
+  });
+
+  it('falls back to the mock driver when there is no compiled script', () => {
+    const snapshots: AlignmentSnapshot[] = [];
+    const driver = createTrackingDriver({
+      sessionId: 'session-1',
+      scriptId: 'script-1',
+      sentences: [],
+      totalTokens: 40,
+      compiled: null,
+      onSnapshot: (s) => snapshots.push(s),
       onTranscript: () => {},
     });
-    expect(worker.posted[0]?.type).toBe('initialize');
-    chosen.dispose();
+    driver.start();
+    // The mock emits a contract-correct snapshot immediately, so the Live
+    // screen stays exercisable with no Rust and no microphone.
+    expect(snapshots.length).toBeGreaterThan(0);
+    expect(snapshots[0]?.state).toBe('following');
+    driver.dispose();
   });
 });

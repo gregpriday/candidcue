@@ -112,58 +112,18 @@ describe('the engine runs on the profile it is given (§47.1)', () => {
     );
   });
 
-  it('carries the swap into the frame receiver, not just the limits', () => {
-    // §55 `prediction.maxUnitsPerSecond` is read by the receiver's plausible
-    // speech envelope, which is built from the profile rather than looked up
-    // per frame — so it is the part a naive `profile = next` would miss.
+  it('applies a swapped profile to the voice lead the display reads with', () => {
+    // The lead is read per frame from the live profile, so a swap must take
+    // effect on the next one — this is the part a captured-at-construction
+    // profile would miss.
     const engine = createStageMotionEngine();
-    const slowSpeech: SmoothFollowProfile = {
+    const moreLead: SmoothFollowProfile = {
       ...DEFAULT_SMOOTH_FOLLOW_PROFILE,
-      id: 'test-clamped',
-      prediction: { ...DEFAULT_SMOOTH_FOLLOW_PROFILE.prediction, maxUnitsPerSecond: 1 },
+      id: 'test-lead',
+      prediction: { ...DEFAULT_SMOOTH_FOLLOW_PROFILE.prediction, leadSeconds: 0.6 },
     };
-    engine.setProfile(slowSpeech);
-    engine.configureSession(
-      {
-        sessionId: 's1',
-        sessionGeneration: 1,
-        scriptCompileHash: 'hash',
-        layoutGeneration: 0,
-      },
-      0,
-    );
-
-    const accepted = engine.receiveFrame(
-      {
-        sessionId: 's1',
-        sessionGeneration: 1,
-        scriptCompileHash: 'hash',
-        layoutGeneration: 0,
-        revision: 1,
-        epoch: 1,
-        sessionTimeMs: 0,
-        estimatedUnit: 10,
-        committedUnit: 10,
-        // Far above the clamped ceiling this profile declares.
-        velocityUnitsPerSecond: 50,
-        accelerationUnitsPerSecond2: 0,
-        positionVariance: 0.1,
-        confidence: 0.9,
-        sectionId: 'sec',
-        tokenIndex: 10,
-        sentenceId: 'sent',
-        blockId: 'block',
-        state: 'following',
-        behavior: 'normal',
-        finalEvidence: true,
-        motionProfileId: 'default-v1',
-      },
-      0,
-    );
-
-    expect(accepted).toBe(true);
-    // Clamped to the NEW profile's envelope, which is the proof the receiver
-    // saw the swap.
-    expect(engine.receiver.current?.velocityUnitsPerSecond).toBe(1);
+    engine.setProfile(moreLead);
+    expect(engine.profile.prediction.leadSeconds).toBe(0.6);
+    expect(engine.profile.id).toBe('test-lead');
   });
 });

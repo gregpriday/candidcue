@@ -6,7 +6,7 @@ describe('transition classification (spec §32.3, §16.3)', () => {
   it('follows alignment-driven advances and holds', () => {
     expect(
       classifyTransition({
-        movement: 'advance',
+        decision: 'localConfirmed',
         distancePx: 300,
         viewportHeightPx: 1000,
         reducedMotion: false,
@@ -14,7 +14,7 @@ describe('transition classification (spec §32.3, §16.3)', () => {
     ).toBe('spring');
     expect(
       classifyTransition({
-        movement: 'hold',
+        decision: 'holdLowEvidence',
         distancePx: 10,
         viewportHeightPx: 1000,
         reducedMotion: false,
@@ -23,10 +23,15 @@ describe('transition classification (spec §32.3, §16.3)', () => {
   });
 
   it('catches up on explicit jumps within two viewport heights', () => {
-    for (const movement of ['skip', 'retake', 'command', 'manual'] as const) {
+    for (const decision of [
+      'jumpForwardAccepted',
+      'retakeAccepted',
+      'relocationAccepted',
+      'manualAnchor',
+    ] as const) {
       expect(
         classifyTransition({
-          movement,
+          decision,
           distancePx: 1900,
           viewportHeightPx: 1000,
           reducedMotion: false,
@@ -38,7 +43,7 @@ describe('transition classification (spec §32.3, §16.3)', () => {
   it('re-anchors larger jumps', () => {
     expect(
       classifyTransition({
-        movement: 'skip',
+        decision: 'jumpForwardAccepted',
         distancePx: 2100,
         viewportHeightPx: 1000,
         reducedMotion: false,
@@ -49,7 +54,7 @@ describe('transition classification (spec §32.3, §16.3)', () => {
   it('respects reduced motion with near-instant repositioning', () => {
     expect(
       classifyTransition({
-        movement: 'skip',
+        decision: 'jumpForwardAccepted',
         distancePx: 5000,
         viewportHeightPx: 1000,
         reducedMotion: true,

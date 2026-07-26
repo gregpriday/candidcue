@@ -11,8 +11,7 @@
  *  2. Appendix F.13 — where a concrete failure is known, name it. Avoid
  *     "something went wrong" language.
  */
-import type { TrackingBehavior, TrackingStateV2 } from '../../shared/contracts';
-import type { MovementDecisionRecord as EngineMovementDecisionRecord } from '../../shared/tracking/decision-log';
+import type { AlignmentDecision, StageMotionState } from '../../shared/contracts';
 
 /* ---------------------------------------------------------------------------
  * Tracking state (§48 "tracking state in plain language")
@@ -23,58 +22,46 @@ import type { MovementDecisionRecord as EngineMovementDecisionRecord } from '../
  * ("Holding your place", "Looking for your place", "Reconnecting — position
  * held") so Live never speaks two dialects.
  */
-export const FOLLOW_STATE_LABELS: Record<TrackingStateV2, string> = {
-  acquiring: 'Looking for your place',
+export const FOLLOW_STATE_LABELS: Record<StageMotionState, string> = {
+  searching: 'Looking for your place',
   following: 'Following',
-  coasting: 'Keeping pace',
-  uncertain: 'Unsure — slowing down',
-  adlib_hold: 'Off script — holding your place',
-  catching_up: 'Catching up',
-  retake_pending: 'Retake detected',
-  rewinding: 'Going back with you',
-  reanchoring: 'Moving to your place',
-  command_pending: 'Command heard',
-  paused: 'Paused — still listening for “CandidCue, resume”',
-  reconnecting: 'Reconnecting — position held',
-  lost_local: 'Looking for your place',
+  holding: 'Holding your place',
+  ambiguous: 'Holding your place',
+  paused: 'Paused — still listening',
 };
 
-/** A one-sentence explanation shown under the status line when it helps. */
-export const FOLLOW_STATE_DETAIL: Record<TrackingStateV2, string | null> = {
-  acquiring: 'Start speaking and the stage picks up your place.',
+/**
+ * A one-sentence explanation shown under the status line when it helps.
+ *
+ * `ambiguous` gets its own wording despite sharing a label with `holding`: the
+ * presenter is reading a passage that appears more than once, and "the same
+ * words appear twice" is a fact they can act on — by reading a distinctive
+ * phrase, or by tapping where they are. "Evidence is thin" would send them
+ * looking for a microphone problem that does not exist.
+ */
+export const FOLLOW_STATE_DETAIL: Record<StageMotionState, string | null> = {
+  searching: 'Start speaking and the stage picks up your place.',
   following: null,
-  coasting: 'Carrying your recent pace while it waits for the next words.',
-  uncertain: 'Evidence is thin, so the text is slowing rather than guessing.',
-  adlib_hold: 'The next scripted line stays put until you return to it.',
-  catching_up: 'Absorbing a small correction by moving a little faster.',
-  retake_pending: 'Collecting evidence that you restarted — nothing has moved yet.',
-  rewinding: 'Reversing gently to where you restarted.',
-  reanchoring: 'Moving straight to the destination instead of racing through the text.',
-  command_pending: 'Holding while the command is checked.',
+  holding: 'The text stays put until the words match the script again.',
+  ambiguous: 'These words appear in more than one place, so the text is waiting rather than guessing.',
   paused: 'Automatic movement is stopped. Transcription is still connected.',
-  reconnecting: 'Your place is held until transcription returns.',
-  lost_local: 'No local match yet. The text stays where it is.',
 };
 
 /** Tone used for the state indicator — calm by default, never alarming. */
 export type FollowStateTone = 'neutral' | 'accent' | 'success' | 'warning';
 
-export function followStateTone(state: TrackingStateV2): FollowStateTone {
+export function followStateTone(state: StageMotionState): FollowStateTone {
   switch (state) {
     case 'following':
-    case 'catching_up':
       return 'success';
-    case 'coasting':
-    case 'reanchoring':
-    case 'rewinding':
-    case 'command_pending':
+    case 'searching':
       return 'accent';
-    case 'uncertain':
-    case 'adlib_hold':
-    case 'retake_pending':
-    case 'reconnecting':
-    case 'lost_local':
-      return 'warning';
+    // Deliberately NOT 'warning'. Holding is the engine working correctly —
+    // refusing to guess — and the research brief is explicit that this moment
+    // must read as calm. A warning colour here trains presenters to panic at
+    // the exact point the system is being careful on their behalf.
+    case 'holding':
+    case 'ambiguous':
     default:
       return 'neutral';
   }
@@ -84,20 +71,28 @@ export function followStateTone(state: TrackingStateV2): FollowStateTone {
  * Behavior (§52) — why the tracker thinks you moved
  * ------------------------------------------------------------------------- */
 
-export const FOLLOW_BEHAVIOR_LABELS: Record<TrackingBehavior, string> = {
-  acquire: 'Finding the opening line',
-  normal: 'Reading as written',
-  minor_variation: 'Small wording change',
-  paraphrase: 'Paraphrasing this sentence',
-  adlib: 'Speaking off script',
-  return: 'Back on script',
-  small_skip: 'Skipped a little ahead',
-  large_skip: 'Jumped ahead in this section',
-  retake_candidate: 'Possible retake',
-  retake: 'Retake',
-  manual_navigation: 'You moved it',
-  command_navigation: 'A voice command moved it',
-  lost: 'No match yet',
+/**
+ * Diagnostics vocabulary for the engine's decision codes.
+ *
+ * **These are for the developer diagnostics panel only.** The integration
+ * contract is explicit that decision codes must not become user-facing copy —
+ * `FOLLOW_STATE_LABELS` is what the presenter reads. The distinction matters
+ * because these names describe the engine's internal reasoning, which changes
+ * as the engine is tuned; the four states are a promise about behaviour, which
+ * does not.
+ */
+export const FOLLOW_DECISION_LABELS: Record<AlignmentDecision, string> = {
+  noEvidence: 'No evidence yet',
+  localObserved: 'Local match',
+  localConfirmed: 'Local match confirmed',
+  holdLowEvidence: 'Holding — weak evidence',
+  holdOffScript: 'Holding — off script',
+  holdAmbiguous: 'Holding — two places fit',
+  relocationAccepted: 'Relocated',
+  jumpForwardAccepted: 'Jumped forward',
+  retakeAccepted: 'Retake accepted',
+  jumpPending: 'Possible jump — gathering evidence',
+  manualAnchor: 'You moved it',
 };
 
 /* ---------------------------------------------------------------------------
@@ -239,48 +234,28 @@ export function budgetNoticeCopy(
  * ------------------------------------------------------------------------- */
 
 /**
- * The companion §65 fields the control window renders.
+ * One movement, as the diagnostics timeline records it.
  *
- * The engine's record (`src/shared/tracking/decision-log.ts`) carries more
- * triage detail and is the producer; this is deliberately the narrower view it
- * satisfies, so the UI never depends on engine-internal additions and a
- * reduced bridge record can stand in where no engine is running.
+ * Derived from consecutive snapshots rather than reported by the engine: the
+ * engine states where the reader is, and "it moved from here to there" is a
+ * fact about two of those statements, not a third thing it needs to send.
+ * Redacted by design — no script or transcript text ever enters this record.
  */
-export type MovementDecisionRecord = Pick<
-  EngineMovementDecisionRecord,
-  | 'revision'
-  | 'sessionTimeMs'
-  | 'fromUnit'
-  | 'toUnit'
-  | 'behavior'
-  | 'stateBefore'
-  | 'stateAfter'
-  | 'localConfidence'
-  | 'secondBestMargin'
-  | 'sectionGate'
-  | 'authority'
-  | 'visualDisposition'
-> & {
-  /** Short machine reason from the decision layer, when the producer sets one. */
-  reason?: string;
-};
-
-const DISPOSITION_PHRASES: Record<MovementDecisionRecord['visualDisposition'], string> = {
-  absorbed: 'absorbed into the scroll speed',
-  catch_up: 'caught up gradually',
-  rewind: 'rewound gently',
-  reanchor: 're-anchored in one move',
-  hold: 'held in place',
-};
-
-const AUTHORITY_PHRASES: Record<MovementDecisionRecord['authority'], string> = {
-  ordinary: 'voice following',
-  command: 'a voice command',
-  manual: 'you',
-};
+export interface MovementDecisionRecord {
+  /** The snapshot's sequence number. */
+  seq: number;
+  /** Audio-clock time of the snapshot, ms. */
+  audioMs: number;
+  fromToken: number;
+  toToken: number;
+  decision: AlignmentDecision;
+  stateBefore: StageMotionState;
+  stateAfter: StageMotionState;
+  confidence: number;
+}
 
 export interface MovementExplanation {
-  /** One line: what happened and who authorized it. */
+  /** One line: what happened. */
   headline: string;
   /** Supporting sentence naming the evidence class. */
   detail: string;
@@ -288,41 +263,36 @@ export interface MovementExplanation {
   facts: Array<{ label: string; value: string }>;
 }
 
-/** Format a §65 record for humans. Redacted by design — no script/transcript text. */
+/** Format a movement for humans. */
 export function describeMovement(record: MovementDecisionRecord): MovementExplanation {
-  const distance = record.toUnit - record.fromUnit;
+  const distance = record.toToken - record.fromToken;
   const direction = distance > 0 ? 'forward' : distance < 0 ? 'back' : 'nowhere';
   const magnitude = Math.abs(distance);
   const moved =
-    magnitude === 0
+    magnitude < 0.05
       ? 'Held position'
-      : `Moved ${direction} ${magnitude.toFixed(magnitude < 10 ? 1 : 0)} spoken units`;
+      : `Moved ${direction} ${magnitude.toFixed(magnitude < 10 ? 1 : 0)} words`;
 
-  const headline = `${moved} — ${FOLLOW_BEHAVIOR_LABELS[record.behavior].toLowerCase()}, ${DISPOSITION_PHRASES[record.visualDisposition]}`;
-
-  const evidence = `Local match ${formatScore(record.localConfidence)} with a ${formatScore(record.secondBestMargin)} margin over the runner-up.`;
-
-  const gate =
-    record.sectionGate === 'blocked'
-      ? ' A section move was blocked — jumps between sections need a command or manual authority.'
-      : '';
-
-  const detail = `${FOLLOW_STATE_LABELS[record.stateBefore]} → ${FOLLOW_STATE_LABELS[record.stateAfter]}, authorized by ${AUTHORITY_PHRASES[record.authority]}. ${evidence}${gate}`;
+  const headline = `${moved} — ${FOLLOW_DECISION_LABELS[record.decision].toLowerCase()}`;
+  const transition =
+    record.stateBefore === record.stateAfter
+      ? FOLLOW_STATE_LABELS[record.stateAfter]
+      : `${FOLLOW_STATE_LABELS[record.stateBefore]} → ${FOLLOW_STATE_LABELS[record.stateAfter]}`;
+  // "Confidence" is a documented heuristic, not a calibrated probability, so it
+  // is reported as a bare score and never as a percentage.
+  const detail = `${transition}. Match score ${formatScore(record.confidence)}.`;
 
   return {
     headline,
     detail,
     facts: [
-      { label: 'Revision', value: String(record.revision) },
-      { label: 'Session time', value: formatSessionTime(record.sessionTimeMs) },
-      { label: 'Behavior', value: FOLLOW_BEHAVIOR_LABELS[record.behavior] },
+      { label: 'Seq', value: String(record.seq) },
+      { label: 'Audio time', value: formatSessionTime(record.audioMs) },
+      { label: 'Decision', value: FOLLOW_DECISION_LABELS[record.decision] },
       { label: 'State', value: `${record.stateBefore} → ${record.stateAfter}` },
-      { label: 'Confidence', value: formatScore(record.localConfidence) },
-      { label: 'Margin', value: formatScore(record.secondBestMargin) },
-      { label: 'Section gate', value: record.sectionGate },
-      { label: 'Authority', value: record.authority },
-      { label: 'Motion', value: record.visualDisposition },
-      ...(record.reason ? [{ label: 'Reason', value: record.reason }] : []),
+      { label: 'From', value: record.fromToken.toFixed(1) },
+      { label: 'To', value: record.toToken.toFixed(1) },
+      { label: 'Confidence', value: formatScore(record.confidence) },
     ],
   };
 }

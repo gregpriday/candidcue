@@ -60,7 +60,7 @@ export interface MotionMetrics {
 }
 
 export interface AckContext {
-  sessionId: string;
+  sessionGeneration: number;
   revision: number;
   epoch: number;
   layoutGeneration: number;
@@ -216,7 +216,7 @@ export function createStageMotionDiagnostics(
 
     buildAck(context): StageMotionAck {
       return {
-        sessionId: context.sessionId,
+        sessionGeneration: context.sessionGeneration,
         revision: context.revision,
         epoch: context.epoch,
         layoutGeneration: context.layoutGeneration,

@@ -135,8 +135,8 @@ vi.mock('../../../src/control/services/ipc', () => ({
   BackendUnavailableError: class extends Error {},
   ipcInvoke: ipc.invoke,
 }));
-vi.mock('../../../src/control/services/smooth-follow-adapter', async (orig) => {
-  const actual = await orig<typeof import('../../../src/control/services/smooth-follow-adapter')>();
+vi.mock('../../../src/control/services/stage-acks', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
   return { ...actual, subscribeStageMotionAcks: () => () => {} };
 });
 

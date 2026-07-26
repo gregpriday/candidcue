@@ -17,7 +17,7 @@
  * on the first assertion.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CompiledScript, TrackingSnapshot } from '../../../src/shared/contracts';
+import type { CompiledScript, AlignmentSnapshot } from '../../../src/shared/contracts';
 
 const stage = vi.hoisted(() => ({
   publishStageSnapshot: vi.fn(async () => {}),
@@ -101,8 +101,8 @@ vi.mock('../../../src/control/services/voice-session', () => ({
   },
   COMMAND_TICK_INTERVAL_MS: 250,
 }));
-vi.mock('../../../src/control/services/smooth-follow-adapter', async (orig) => {
-  const actual = await orig<typeof import('../../../src/control/services/smooth-follow-adapter')>();
+vi.mock('../../../src/control/services/stage-acks', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
   return { ...actual, subscribeStageMotionAcks: () => () => {} };
 });
 
@@ -122,8 +122,14 @@ function compiledStub(): CompiledScript {
   return {
     scriptId: 'script-1',
     sourceHash: 'hash-abc',
+    // Three blocks, so "which sections did this pass reach" has more than one
+    // answer. Sections are DERIVED from the reported position now — the engine
+    // reports where the reader is and nothing about document structure — so a
+    // stub with one block could not tell a working derivation from a broken one.
     sentences: [
-      { id: 's-1', blockId: 'b-1', startTokenIndex: 0, endTokenIndex: 3, text: 'Hello there.' },
+      { id: 's-1', blockId: 'b-1', startTokenIndex: 0, endTokenIndex: 29, text: 'One.' },
+      { id: 's-2', blockId: 'b-2', startTokenIndex: 30, endTokenIndex: 79, text: 'Two.' },
+      { id: 's-3', blockId: 'b-3', startTokenIndex: 80, endTokenIndex: 199, text: 'Three.' },
     ],
     navigationTargets: [],
     spokenTokens: [],
@@ -150,29 +156,35 @@ function start(): void {
   });
 }
 
+/**
+ * Push one alignment snapshot at `tokenIndex`.
+ *
+ * `blockId` survives as a caller-facing label only: the engine reports
+ * positions, and which block a position falls in is a property of the rendered
+ * document rather than of the snapshot.
+ */
 function snapshot(
-  blockId: string,
+  _blockId: string,
   tokenIndex: number,
-  extra: { confidence?: number; movement?: TrackingSnapshot['movement'] } = {},
+  extra: { confidence?: number; decision?: AlignmentSnapshot['decision'] } = {},
 ): void {
   driver.captured.onSnapshot?.({
-    schemaVersion: 1,
-    revision: tokenIndex,
-    sessionId: SESSION_ID,
     sessionGeneration: 4,
-    stageGeneration: 2,
-    scriptId: 'script-1',
-    tokenIndex,
-    committedTokenIndex: tokenIndex,
-    blockId,
-    sentenceId: `s-${tokenIndex}`,
-    confidence: extra.confidence ?? 0.9,
+    seq: tokenIndex,
     state: 'following',
-    provisional: false,
-    movement: extra.movement ?? 'advance',
-    sourceItemIds: [],
-    generatedAtMs: 1_000 + tokenIndex,
-  } satisfies TrackingSnapshot);
+    decision: extra.decision ?? 'localConfirmed',
+    confirmedToken: tokenIndex,
+    observedToken: tokenIndex,
+    rateTokensPerSecond: 2.5,
+    evidenceAudioMs: 1_000 + tokenIndex,
+    atAudioMs: 1_000 + tokenIndex,
+    maxPredictionMs: 900,
+    confidence: extra.confidence ?? 0.9,
+    suggestionToken: null,
+    scriptLenTokens: 200,
+    observedAtom: tokenIndex,
+    confirmedAtom: tokenIndex,
+  } satisfies AlignmentSnapshot);
 }
 
 /** Every `record_session_take` payload written so far, in order. */
@@ -327,8 +339,8 @@ describe('§36.3 the in-memory history the spec asks for', () => {
 
   it('counts automatic retake transitions without opening a pass', () => {
     snapshot('b-1', 30);
-    snapshot('b-1', 12, { movement: 'retake' });
-    snapshot('b-1', 14, { movement: 'retake' });
+    snapshot('b-1', 12, { decision: 'retakeAccepted' });
+    snapshot('b-1', 14, { decision: 'retakeAccepted' });
     const history = takeHistory();
     // The aligner decided the presenter re-read; that is not a new take.
     expect(history).toHaveLength(1);

@@ -160,14 +160,20 @@
   const currentSectionIndex = $derived(
     snapshot
       ? flatOutline.reduce(
-          (acc, entry, index) => (entry.node.startTokenIndex <= snapshot.tokenIndex ? index : acc),
+          (acc, entry, index) => (entry.node.startTokenIndex <= snapshot.confirmedToken ? index : acc),
           -1,
         )
       : -1,
   );
 
   const sentenceIndex = $derived(
-    snapshot ? $session.sentences.findIndex((s) => s.id === snapshot.sentenceId) : -1,
+    snapshot
+      ? $session.sentences.findIndex(
+          (s) =>
+            snapshot.confirmedToken >= s.startTokenIndex &&
+            snapshot.confirmedToken <= s.endTokenIndex,
+        )
+      : -1,
   );
 
   const previewWindow = $derived.by(() => {
@@ -469,7 +475,7 @@
           <p class="ph-title">Stage preview</p>
           <p class="ph-note">
             The scaled stage view appears here once the compiled script is available.
-            {#if snapshot}Cursor at token {snapshot.tokenIndex}.{/if}
+            {#if snapshot}Cursor at token {Math.round(snapshot.confirmedToken)}.{/if}
           </p>
         </div>
       {/if}

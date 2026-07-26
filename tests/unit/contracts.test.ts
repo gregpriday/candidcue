@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { APP_ERROR_CODES, STAGE_EVENT, CONTROL_EVENT } from '../../src/shared/contracts';
 import type {
+  AlignmentSnapshot,
   ScriptSummary,
-  TrackingSnapshot,
   StageSessionEnvelope,
   ListenerPackManifest,
 } from '../../src/shared/contracts';
@@ -28,7 +28,7 @@ describe('shared contracts', () => {
       expect(name.startsWith('stage://')).toBe(true);
     }
     expect(STAGE_EVENT.loadSession).toBe('stage://load-session');
-    expect(STAGE_EVENT.trackingSnapshot).toBe('stage://tracking-snapshot');
+    expect(STAGE_EVENT.alignmentSnapshot).toBe('stage://alignment-snapshot');
     expect(STAGE_EVENT.applyCommand).toBe('stage://apply-command');
     expect(STAGE_EVENT.listenerState).toBe('stage://listener-state');
     expect(STAGE_EVENT.closeSession).toBe('stage://close-session');
@@ -66,9 +66,9 @@ describe('shared contracts', () => {
     expect(summary.status).toBe('draft');
 
     // Compile-time only assertions that the barrel exports resolve.
-    const _snapshot: TrackingSnapshot | undefined = undefined;
     const _envelope: StageSessionEnvelope | undefined = undefined;
-    expect(_snapshot).toBeUndefined();
+    const _alignment: AlignmentSnapshot | undefined = undefined;
+    expect(_alignment).toBeUndefined();
     expect(_envelope).toBeUndefined();
   });
 

@@ -2,7 +2,7 @@
  * Voice session pipeline — microphone in, transcript events out.
  *
  *   mic → PcmCapture (24 kHz PCM16) → Rust Inworld session
- *       → stt://event → TranscriptEvent → TranscriptLedger + tracking worker
+ *       → stt://event → transcript record + UI (alignment happens in Rust)
  *
  * This replaced a pipeline roughly four times its size, and almost everything
  * that went was machinery for deciding when a sentence had ended: a local
@@ -23,8 +23,6 @@
  * stop audio reaching the recogniser.
  */
 import type { CompiledScript } from '../../shared/contracts';
-import { TranscriptLedger } from '../../shared/tracking/ledger';
-import type { TranscriptEvent as TrackingEvent } from '../../shared/tracking/types';
 import { DEFAULT_SOFT_PAUSE_AUTO_DISCONNECT_MS } from './audio/defaults';
 import { isTauriRuntime } from './ipc';
 import { trace, traceBegin } from './audio-trace';
@@ -47,7 +45,6 @@ import {
   stopTranscription,
   sttSessionOptions,
   STT_EVENT,
-  toTrackingEvent,
   type SttFrame,
 } from './stt/inworld';
 
@@ -121,8 +118,13 @@ export interface VoicePipelineDeps {
   startSequence?: StartSequenceGate;
   /** §29.2 step 9 — transcript state above this layer goes too. */
   onResetTranscriptState?(): void;
-  /** Reconciled transcript events destined for the tracking worker. */
-  onTrackingEvent(event: TrackingEvent): void;
+  /** Finalized transcript items, for retention and the visible tail. */
+  /**
+   * Raw recogniser text, for the stage's transcript bar and the "did it hear
+   * me" word count. NOT alignment input: the alignment engine is fed by Rust
+   * directly from the same socket, so nothing on this path can starve it.
+   */
+  onTranscriptText(text: string, final: boolean): void;
   /** Final transcript lines for the Live transcript tail. */
   onTranscriptLine(line: string): void;
   /**
@@ -163,7 +165,20 @@ export interface VoicePipelineDeps {
 }
 
 export class VoiceSessionPipeline {
-  readonly ledger = new TranscriptLedger();
+  /**
+   * Finalized utterances this session, by item id.
+   *
+   * All that survives of what used to be a full transcript ledger. Alignment
+   * has its own, in Rust; what is still needed here is idempotence for the
+   * things that are NOT idempotent — the retained transcript, the visible tail
+   * and the word count. A provider that re-sends a final would otherwise show
+   * the line twice and inflate "words heard" past what was said.
+   */
+  private readonly finalized = new Map<string, FinalizedTranscriptItem>();
+  /** Monotonic commit ordering — the retained row's uniqueness key. */
+  private commitSequence = 0;
+  /** Audio-clock start of each open utterance, by item id. */
+  private readonly itemStarts = new Map<string, number>();
 
   private monitor: MicrophoneMonitor | null = null;
   private capture: PcmCapture | null = null;
@@ -181,7 +196,7 @@ export class VoiceSessionPipeline {
   /**
    * Control-window time at which the current capture began, so Rust's
    * zero-based audio clock can be expressed on the same clock as
-   * `receivedAtMs`. See `toTrackingEvent`.
+   * `receivedAtMs`.
    */
   private audioOriginMs = 0;
   /**
@@ -234,7 +249,6 @@ export class VoiceSessionPipeline {
       clearTimeout: (handle) => clearTimeout(handle as Parameters<typeof clearTimeout>[0]),
     };
     this.now = deps.now ?? (() => Date.now());
-    this.ledger.setSessionGeneration(deps.sessionGeneration);
   }
 
   /** §29.2 start sequence. Billable streaming begins here. */
@@ -462,19 +476,11 @@ export class VoiceSessionPipeline {
       return;
     }
 
-    const event = toTrackingEvent(
-      frame,
-      this.now(),
-      this.deps.sessionGeneration,
-      this.audioOriginMs,
-    );
-    if (event === null) return;
-
-    if (event.type === 'transport_state') {
+    if (frame.kind === 'transport') {
       this.setConnectionState(
-        event.state === 'connected'
+        frame.state === 'connected'
           ? 'connected'
-          : event.state === 'closed'
+          : frame.state === 'closed'
             ? 'offline'
             : 'reconnecting',
       );
@@ -482,66 +488,65 @@ export class VoiceSessionPipeline {
        * `connecting` is not a degradation on the way in.
        *
        * It is the FIRST frame every healthy session emits, before a byte of
-       * audio has been sent — and treating it as a hold paused the aligner at
-       * +68 ms on every single take. A paused engine returns from
-       * `handleTranscriptEvent` before it looks at a token, so the words
-       * arrived, the ledger filled, and the cursor never moved: "words heard
-       * 28, script followed 0 of 26".
+       * audio has been sent — and treating it as a hold once paused following
+       * at +68 ms on every single take, so the words arrived and the cursor
+       * never moved: "words heard 28, script followed 0 of 26".
        *
        * After a session HAS connected, `connecting` means a reconnect, and
        * holding is then exactly right — following on a dead transport is the
-       * stage drifting on a stale pace estimate while the presenter talks.
+       * stage drifting on a stale estimate while the presenter talks.
        */
-      const opening = event.state === 'connecting' && !this.hasConnected;
-      if (event.state === 'connected') this.hasConnected = true;
-      this.setFollowingHold(
-        !opening && event.state !== 'connected',
-        `transport_${event.state}`,
-      );
-      this.deps.onTrackingEvent(event);
+      const opening = frame.state === 'connecting' && !this.hasConnected;
+      if (frame.state === 'connected') this.hasConnected = true;
+      this.setFollowingHold(!opening && frame.state !== 'connected', `transport_${frame.state}`);
       return;
     }
 
-    if (event.type === 'failed') {
+    if (frame.kind === 'failed') {
       // `recoverable: false` is a key problem, not a network problem: the
       // supervisor has already given up, so the UI must say so instead of
       // showing a reconnect that will never happen.
-      this.setConnectionState(frame.kind === 'failed' && !frame.recoverable ? 'offline' : 'reconnecting');
-      if (frame.kind === 'failed') {
-        this.deps.onSessionFailure?.(frame.code, !frame.recoverable);
-      }
-      this.deps.onTrackingEvent(event);
+      this.setConnectionState(frame.recoverable ? 'reconnecting' : 'offline');
+      this.deps.onSessionFailure?.(frame.code, !frame.recoverable);
       return;
     }
 
-    const update = this.ledger.apply(event);
-    if (update === undefined && event.type === 'completed') {
-      // The ledger refused a final. That is a silent, total loss of evidence.
-      trace('ledger-rejected', `item ${event.itemId} gen ${event.sessionGeneration}`);
+    if (frame.kind === 'itemStarted') {
+      this.itemStarts.set(frame.itemId, frame.audioStartMs);
+      return;
     }
-    this.deps.onTrackingEvent(event);
 
-    /*
-     * Side effects follow the LEDGER's verdict, not the frame's arrival. The
-     * ledger is idempotent — an identical repeated completion reconciles to
-     * nothing — but the transcript tail, the retained record and the word
-     * count are not, so a duplicated final would show the line twice and
-     * inflate "words heard" past what was said.
-     */
-    if (event.type === 'completed' && update !== undefined) {
-      const text = event.text.trim();
-      if (text.length > 0) this.deps.onTranscriptLine(text);
-      const item = this.ledger.getItem(event.itemId);
-      if (item && text.length > 0) {
-        this.deps.onTranscriptItem?.({
-          itemId: event.itemId,
-          commitSequence: item.commitSequence,
-          audioStartMs: item.audioStartMs,
-          audioEndMs: item.audioEndMs,
-          transcript: text,
-        });
-      }
+    if (frame.kind === 'partial') {
+      this.deps.onTranscriptText(frame.text, false);
+      return;
     }
+
+    // Final.
+    this.deps.onTranscriptText(frame.text, true);
+    const text = frame.text.trim();
+    if (text.length === 0) return;
+    /*
+     * Side effects follow FIRST FINALIZATION, not arrival.
+     *
+     * The transcript tail, the retained record and the word count are not
+     * idempotent, so a provider that re-sends a final would show the line
+     * twice and inflate "words heard" past what was said.
+     */
+    if (this.finalized.has(frame.itemId)) {
+      trace('final-duplicate', `item ${frame.itemId}`);
+      return;
+    }
+    const item: FinalizedTranscriptItem = {
+      itemId: frame.itemId,
+      commitSequence: this.commitSequence++,
+      audioStartMs: this.itemStarts.get(frame.itemId) ?? frame.audioEndMs,
+      audioEndMs: frame.audioEndMs,
+      transcript: text,
+    };
+    this.finalized.set(frame.itemId, item);
+    this.itemStarts.delete(frame.itemId);
+    this.deps.onTranscriptLine(text);
+    this.deps.onTranscriptItem?.(item);
   }
 
   private setConnectionState(state: ConnectionState): void {

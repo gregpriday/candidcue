@@ -189,7 +189,10 @@ describe('controller limits (§29.1)', () => {
   });
 
   it('reverses only under a backward-capable profile, and never past the travel clamp', () => {
-    const rewinding = limitsForState('rewinding', profile);
+    // Backward capability is a property of the authorized DISCONTINUITY now,
+    // not of a tracker state: the engine reports where the reader is, and
+    // "this is a rewind" is the stage's classification of an accepted retake.
+    const rewinding = limitsForState('following', profile, { transition: 'rewind' });
     const controller = createJerkLimitedScrollController({ initialPositionPx: 6000, maxPx: 1e6 });
     for (let i = 0; i < 600; i++) {
       controller.step({
@@ -338,23 +341,33 @@ describe('rest, bounds, and authority (§29.3, §26.3)', () => {
 
 describe('per-state motion profiles (§30)', () => {
   it('catch-up raises velocity and acceleration but never relaxes the jerk limit', () => {
-    const catching = limitsForState('catching_up', profile);
+    const catching = limitsForState('following', profile, { transition: 'catch_up' });
     expect(catching.vForwardMax).toBeGreaterThan(following.vForwardMax);
     expect(catching.aMax).toBeGreaterThan(following.aMax);
     expect(catching.jerkMax).toBe(following.jerkMax);
   });
 
   it('uncertainty slows down and damps harder rather than freezing', () => {
-    const uncertain = limitsForState('uncertain', profile);
+    const uncertain = limitsForState('holding', profile);
     expect(uncertain.vForwardMax).toBeGreaterThan(0);
     expect(uncertain.vForwardMax).toBeLessThan(following.vForwardMax);
     expect(uncertain.zeta).toBeGreaterThan(following.zeta);
     expect(uncertain.feedForwardScale).toBeLessThan(1);
   });
 
-  it('retake_pending refuses to reverse before the semantic commit (§30.4)', () => {
-    expect(limitsForState('retake_pending', profile).allowBackward).toBe(false);
-    expect(limitsForState('rewinding', profile).allowBackward).toBe(true);
+  /*
+   * §30.4. Ordinary following may never reverse: the engine's `confirmed`
+   * anchor is monotone except across an accepted retake, and a retake arrives
+   * as an authorized `rewind` — which is the only thing that unlocks backward
+   * motion. A display that could reverse on its own would be able to undo
+   * progress the engine still stands behind.
+   */
+  it('refuses to reverse until a retake is actually accepted (§30.4)', () => {
+    expect(limitsForState('following', profile).allowBackward).toBe(false);
+    expect(limitsForState('holding', profile).allowBackward).toBe(false);
+    expect(
+      limitsForState('following', profile, { transition: 'rewind' }).allowBackward,
+    ).toBe(true);
   });
 
   it('manual grace suspends automatic correction entirely (§30.6)', () => {
@@ -461,7 +474,7 @@ describe('realized motion limits (§29.2, §70)', () => {
     // Under `rewinding` the reverse-travel clamp used to slam `v` to zero from
     // full rewind speed — a 60 000 px/s³ realized jerk that the stored-`a`
     // assertions could not see.
-    const rewinding = limitsForState('rewinding', profile);
+    const rewinding = limitsForState('holding', profile);
     const random = seededRandom(30503);
     let target = 6000;
     const frames = Array.from({ length: 1500 }, () => {
@@ -576,7 +589,7 @@ describe('realized motion limits (§29.2, §70)', () => {
   });
 
   it('crosses the catch-up safety bound without exceeding it (§30.3)', () => {
-    const catching = limitsForState('catching_up', profile);
+    const catching = limitsForState('following', profile);
     expect(catching.jerkMax).toBe(following.jerkMax);
     const trace = substepTrace(
       catching,

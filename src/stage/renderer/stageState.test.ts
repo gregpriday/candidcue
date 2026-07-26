@@ -7,7 +7,7 @@ import {
 } from './stageState';
 import type {
   StageSessionEnvelope,
-  TrackingSnapshot,
+  AlignmentSnapshot,
 } from '../../shared/contracts';
 
 
@@ -53,26 +53,25 @@ function makeEnvelope(stageGeneration = 1, sessionGeneration = 1): StageSessionE
 }
 
 function makeTracking(
-  revision: number,
-  overrides: Partial<TrackingSnapshot> = {},
-): TrackingSnapshot {
+  seq: number,
+  overrides: Partial<AlignmentSnapshot> = {},
+): AlignmentSnapshot {
   return {
-    schemaVersion: 1,
-    revision,
-    sessionId: '00000000-0000-0000-0000-000000000001',
     sessionGeneration: 1,
-    stageGeneration: 1,
-    scriptId: '00000000-0000-0000-0000-000000000002',
-    tokenIndex: 10,
-    committedTokenIndex: 8,
-    blockId: 'b1',
-    sentenceId: 's1',
-    confidence: 0.9,
+    seq,
     state: 'following',
-    provisional: false,
-    movement: 'advance',
-    sourceItemIds: [],
-    generatedAtMs: 0,
+    decision: 'localConfirmed',
+    confirmedToken: 8,
+    observedToken: 10,
+    rateTokensPerSecond: 2.5,
+    evidenceAudioMs: 0,
+    atAudioMs: 0,
+    maxPredictionMs: 900,
+    confidence: 0.9,
+    suggestionToken: null,
+    scriptLenTokens: 100,
+    observedAtom: 10,
+    confirmedAtom: 8,
     ...overrides,
   };
 }
@@ -92,7 +91,7 @@ describe('stage state machine (spec §45.6, §43.5)', () => {
     expect(displayPhase(s)).toBe('handshake');
     s = stageReducer(s, { type: 'layout_ready' });
     expect(displayPhase(s)).toBe('ready');
-    s = stageReducer(s, { type: 'tracking', snapshot: makeTracking(1) });
+    s = stageReducer(s, { type: 'alignment', snapshot: makeTracking(1) });
     expect(displayPhase(s)).toBe('live');
   });
 
@@ -104,8 +103,8 @@ describe('stage state machine (spec §45.6, §43.5)', () => {
   it('ignores tracking before layout is ready', () => {
     let s = initialStageState();
     s = stageReducer(s, { type: 'snapshot', envelope: makeEnvelope() });
-    s = stageReducer(s, { type: 'tracking', snapshot: makeTracking(1) });
-    expect(s.tracking).toBeNull();
+    s = stageReducer(s, { type: 'alignment', snapshot: makeTracking(1) });
+    expect(s.alignment).toBeNull();
   });
 
   it('rejects stale snapshots from a previous stage generation', () => {
@@ -117,33 +116,25 @@ describe('stage state machine (spec §45.6, §43.5)', () => {
 
   it('restarts the handshake on a new stage generation', () => {
     let s = hydrated();
-    s = stageReducer(s, { type: 'tracking', snapshot: makeTracking(5) });
+    s = stageReducer(s, { type: 'alignment', snapshot: makeTracking(5) });
     s = stageReducer(s, { type: 'snapshot', envelope: makeEnvelope(2) });
     expect(s.phase).toBe('handshake');
-    expect(s.tracking).toBeNull();
+    expect(s.alignment).toBeNull();
     expect(s.lastTrackingRevision).toBeNull();
   });
 
-  it('enforces tracking revision monotonicity', () => {
+  it('enforces snapshot sequence monotonicity', () => {
     let s = hydrated();
-    s = stageReducer(s, { type: 'tracking', snapshot: makeTracking(5) });
-    s = stageReducer(s, { type: 'tracking', snapshot: makeTracking(4, { tokenIndex: 99 }) });
-    expect(s.tracking?.tokenIndex).toBe(10);
-    s = stageReducer(s, { type: 'tracking', snapshot: makeTracking(6, { tokenIndex: 12 }) });
-    expect(s.tracking?.tokenIndex).toBe(12);
-  });
-
-  it('drops tracking from a mismatched stage or session generation', () => {
-    let s = hydrated();
-    s = stageReducer(s, { type: 'tracking', snapshot: makeTracking(1, { stageGeneration: 9 }) });
-    expect(s.tracking).toBeNull();
-    s = stageReducer(s, { type: 'tracking', snapshot: makeTracking(1, { sessionGeneration: 9 }) });
-    expect(s.tracking).toBeNull();
+    s = stageReducer(s, { type: 'alignment', snapshot: makeTracking(5) });
+    s = stageReducer(s, { type: 'alignment', snapshot: makeTracking(4, { observedToken: 99 }) });
+    expect(s.alignment?.observedToken).toBe(10);
+    s = stageReducer(s, { type: 'alignment', snapshot: makeTracking(6, { observedToken: 12 }) });
+    expect(s.alignment?.observedToken).toBe(12);
   });
 
   it('applies freeze and blank directives; blank wins in displayPhase', () => {
     let s = hydrated();
-    s = stageReducer(s, { type: 'tracking', snapshot: makeTracking(1) });
+    s = stageReducer(s, { type: 'alignment', snapshot: makeTracking(1) });
     s = stageReducer(s, {
       type: 'directive',
       stageGeneration: 1,
@@ -197,7 +188,7 @@ describe('stage state machine (spec §45.6, §43.5)', () => {
 
   it('freezes on control loss and recovers on the next heartbeat', () => {
     let s = hydrated();
-    s = stageReducer(s, { type: 'tracking', snapshot: makeTracking(1) });
+    s = stageReducer(s, { type: 'alignment', snapshot: makeTracking(1) });
     s = stageReducer(s, { type: 'control_lost' });
     expect(displayPhase(s)).toBe('frozen');
     expect(s.frozenReason).toBe('control_lost');

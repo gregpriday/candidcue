@@ -4,6 +4,7 @@
 //! downloads, updates, and cross-window authority all live here; the webviews
 //! only ever see typed IPC results.
 
+pub mod align;
 pub mod app;
 pub mod assets;
 pub mod commands;
