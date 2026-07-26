@@ -1,0 +1,14 @@
+[package]
+name = "cc-stt"
+version = "0.1.0"
+description = "Tauri-free Inworld streaming STT client — same wire protocol as src-tauri/src/inworld"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+base64 = "0.23"

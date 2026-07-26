@@ -1,0 +1,18 @@
+# Standalone benchmark/alignment workspace.
+#
+# Deliberately a SEPARATE workspace from src-tauri: the alignment core and the
+# benchmark tooling must build and run without Tauri, a WebView, or the app —
+# that is what makes end-to-end testing outside the application possible.
+# src-tauri can adopt cc-align / cc-stt by path dependency once the engine is
+# proven here.
+[workspace]
+resolver = "2"
+members = ["cc-align", "cc-stt", "cc-bench"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
