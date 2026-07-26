@@ -5,7 +5,7 @@
  * (cheap for fillers, §30.6) and script omissions, and returns matched
  * positions plus a normalized confidence input.
  */
-import { idealTokenScore, matchTokens } from './matching';
+import { idealPairScore, idealTokenScore, matchTokens } from './matching';
 import type { TrackingProfile } from './profile';
 import type { LedgerToken, MatchedPair, SequenceAlignment, SpokenToken } from './types';
 
@@ -162,12 +162,33 @@ export function alignSequences(
   // (§30.5 rule 6, §31.7).
   const firstPair = pairs[0];
   const spanStart = firstPair !== undefined ? firstPair.transcriptIndex : bestI - 1;
+  /*
+   * A matched token is normalized against what THAT PAIRING could have scored,
+   * not against a guess made from the transcript side alone.
+   *
+   * `matchTokens` weighs a word by the script token's weight and stopword flag;
+   * `idealTokenScore` weighs it by the transcript token's `content` flag. Those
+   * judgements come from different lists and disagree often, so a word-perfect
+   * read was normalized against an ideal it had no way to reach — 0.55 on the
+   * app's own starter script, which the confidence model rendered as 0.60
+   * against a lock threshold of 0.78. Nothing could commit.
+   *
+   * Unmatched tokens keep the transcript-side estimate: nothing in the script
+   * explained them, so there is no pairing to ask, and they must still count
+   * against a candidate that left the newest speech unexplained.
+   */
+  const matchedScript = new Map<number, SpokenToken>();
+  for (const pair of pairs) {
+    const s = script[pair.scriptTokenIndex];
+    if (s !== undefined) matchedScript.set(pair.transcriptIndex, s);
+  }
   let ideal = 0;
   let spanTokens = 0;
   for (let k = spanStart; k < m; k++) {
     const t = transcript[k];
     if (t === undefined) continue;
-    ideal += idealTokenScore(t, profile);
+    const paired = matchedScript.get(k);
+    ideal += paired !== undefined ? idealPairScore(paired, profile) : idealTokenScore(t, profile);
     if (k < bestI && t.content) spanTokens++;
   }
   const minSpan = Math.max(profile.recentTranscriptMinContentTokens, 1);

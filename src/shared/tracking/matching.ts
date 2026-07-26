@@ -63,9 +63,36 @@ export function matchTokens(
   return undefined;
 }
 
-/** The best score this transcript token could possibly contribute. */
+/**
+ * The best score this transcript token could contribute when nothing in the
+ * script matched it — an estimate made from the transcript side alone, because
+ * there is no script token to ask.
+ */
 export function idealTokenScore(token: LedgerToken, profile: TrackingProfile): number {
   if (token.filler) return 0;
   const weight = token.content ? profile.normalWeight : profile.stopwordWeight;
   return (token.content ? profile.exactScore : profile.weakScore) * weight;
+}
+
+/**
+ * The best score this PAIRING could have produced — what `matchTokens` returns
+ * when the two tokens are identical.
+ *
+ * Normalizing a match against `idealTokenScore` instead of this made the score
+ * asymmetric, and a word-perfect read unable to reach 1.0. The two functions
+ * judge "is this word worth anything" from opposite sides: `matchTokens` uses
+ * the SCRIPT token's weight and stopword flag, `idealTokenScore` uses the
+ * TRANSCRIPT token's `content` flag. They come from different lists — the
+ * compiler marked `say`, `way` and `them` as low-weight, the ledger called
+ * them content — so each such word scored 0.175 against a demanded 3.0.
+ *
+ * On the app's own starter script that capped a perfect read at 0.55, which
+ * the confidence model turned into 0.60 against a `lockedThreshold` of 0.78.
+ * The aligner could not commit a single token of a word-perfect read, of any
+ * script, ever.
+ */
+export function idealPairScore(script: SpokenToken, profile: TrackingProfile): number {
+  return isStopwordToken(script)
+    ? profile.weakScore * Math.max(script.weight, profile.stopwordWeight)
+    : profile.exactScore * script.weight;
 }
