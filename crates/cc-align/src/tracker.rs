@@ -261,7 +261,11 @@ impl Engine {
     // -----------------------------------------------------------------
 
     fn update(&mut self, now_ms: f64) -> Snapshot {
-        let mut query = self.ledger.tail(self.config.max_query_atoms);
+        let mut query = self.ledger.tail(
+            self.config.max_query_atoms,
+            self.config.partial_lag_ms,
+            self.config.endpoint_lag_ms,
+        );
         query.retain(|q| q.audio_ms >= self.tail_horizon_ms);
         if query.is_empty() {
             return self.snapshot(DecisionCode::NoEvidence, now_ms, now_ms);

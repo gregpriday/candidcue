@@ -174,7 +174,19 @@ impl Ledger {
 
     /// The last `max_atoms` atoms across items, oldest first, with stability
     /// classes and interpolated audio times.
-    pub fn tail(&self, max_atoms: usize) -> Vec<QueryAtom> {
+    ///
+    /// The item timestamps are RECEIPT times, which lag the speech itself:
+    /// a partial shows words spoken ~`partial_lag_ms` earlier, and a final
+    /// arrives ~`endpoint_lag_ms` after the last word (server VAD waits for
+    /// silence before committing). Correcting here — per timestamp kind —
+    /// is what lets word times approximate actual speech time; a single
+    /// downstream fudge factor cannot fix both at once.
+    pub fn tail(
+        &self,
+        max_atoms: usize,
+        partial_lag_ms: f64,
+        endpoint_lag_ms: f64,
+    ) -> Vec<QueryAtom> {
         let mut out: Vec<QueryAtom> = Vec::new();
         for (item_index, item) in self.items.iter().enumerate() {
             let n = item.atoms.len();
@@ -182,10 +194,11 @@ impl Ledger {
                 continue;
             }
             let start = item.audio_start_ms;
-            let end = item
-                .audio_end_ms
-                .unwrap_or(item.last_seen_audio_ms)
-                .max(start + 1.0);
+            let end = match item.audio_end_ms {
+                Some(end) => end - endpoint_lag_ms,
+                None => item.last_seen_audio_ms - partial_lag_ms,
+            }
+            .max(start + 1.0);
             for (i, atom) in item.atoms.iter().enumerate() {
                 let stability = classify(item, i);
                 // Word i of n spans [i/n, (i+1)/n] of the item; use the end of
@@ -252,7 +265,7 @@ mod tests {
             ("hello world this is", false),
             ("hello world this is a test", false),
         ]);
-        let tail = ledger.tail(40);
+        let tail = ledger.tail(40, 0.0, 0.0);
         assert_eq!(tail[0].surface, "hello");
         // "hello" survived two revisions and is not trailing.
         assert_eq!(tail[0].stability, StabilityClass::StablePrefix);
@@ -269,7 +282,7 @@ mod tests {
         let retracted = ledger.revise(&mut interner, "1-0", "we should build a", false, 1500.0);
         assert_eq!(retracted, 1);
         ledger.revise(&mut interner, "1-0", "we should build a complicated system", true, 2000.0);
-        let tail = ledger.tail(40);
+        let tail = ledger.tail(40, 0.0, 0.0);
         assert!(tail.iter().all(|a| a.stability == StabilityClass::Final));
         assert_eq!(tail.len(), 6);
     }
@@ -282,7 +295,7 @@ mod tests {
         ledger.revise(&mut interner, "1-0", "one two three", true, 1000.0);
         ledger.item_started("1-1", 1200.0);
         ledger.revise(&mut interner, "1-1", "four five six", false, 2000.0);
-        let tail = ledger.tail(4);
+        let tail = ledger.tail(4, 0.0, 0.0);
         let surfaces: Vec<&str> = tail.iter().map(|a| a.surface.as_str()).collect();
         assert_eq!(surfaces, vec!["3", "4", "5", "6"]);
         assert_eq!(tail[0].item_index, 0);

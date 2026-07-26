@@ -101,11 +101,15 @@ pub struct AlignmentConfig {
     pub coast_ms: f64,
 
     // ---- evidence timing ----
-    /// Estimated recogniser emission lag for partials: how far behind the
-    /// audio clock the words in a partial actually are (ms). Measured from
-    /// captured live runs; used when word timestamps are absent (always, on
-    /// this provider).
+    /// Residual lag correction applied to evidence time after the ledger's
+    /// per-timestamp corrections (ms).
     pub emission_lag_ms: f64,
+    /// How far behind the audio clock the words of a PARTIAL are when it
+    /// arrives (ms). Measured against gold word times on live captures.
+    pub partial_lag_ms: f64,
+    /// How long after the last word a FINAL arrives (server VAD waits for
+    /// silence before committing) (ms).
+    pub endpoint_lag_ms: f64,
 
     // ---- viewport prior ----
     /// Rank bonus at the centre of the user-visible region.
@@ -173,7 +177,9 @@ impl Default for AlignmentConfig {
             max_prediction_ms: 1800.0,
             coast_ms: 300.0,
 
-            emission_lag_ms: 800.0,
+            emission_lag_ms: 0.0,
+            partial_lag_ms: 300.0,
+            endpoint_lag_ms: 1400.0,
 
             viewport_bonus: 0.6,
             viewport_sigma: 40.0,

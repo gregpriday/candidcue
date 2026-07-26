@@ -14,7 +14,9 @@ use crate::plan::{Corruption, GoldTimeline, GoldWord};
 /// Gaps of at least this length close an utterance (server VAD behaviour).
 const UTTERANCE_GAP_MS: f64 = 900.0;
 /// Emission lag: a partial covers words finished this long before it arrives.
-const PARTIAL_LAG_MS: f64 = 600.0;
+/// 400 ms is the p50 measured against gold word times on live Inworld
+/// captures (bench/runs) — the simulator tracks the measured provider.
+const PARTIAL_LAG_MS: f64 = 400.0;
 /// Partial cadence while speech continues.
 const PARTIAL_EVERY_MS: f64 = 900.0;
 /// Final arrives this long after the last word of the utterance ends.
