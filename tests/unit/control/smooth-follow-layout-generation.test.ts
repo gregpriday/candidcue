@@ -48,6 +48,7 @@ vi.mock('../../../src/control/services/stage', () => ({
   publishStageDirective: vi.fn(async () => {}),
   publishListenerState: vi.fn(async () => {}),
   closeStage: vi.fn(async () => {}),
+  listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
 }));
 vi.mock('../../../src/control/services/ipc', async (orig) => {
   const actual = await orig<typeof import('../../../src/control/services/ipc')>();

@@ -1383,8 +1383,36 @@ export function currentStageLayoutGeneration(): number {
   return stageLayoutGeneration;
 }
 
+/**
+ * Whether a second person watching the control window is even plausible.
+ *
+ * On a single display the stage is frameless, sized to the monitor, and
+ * always-on-top (§52.7) — it covers everything, and control is not merely
+ * behind it but on the SAME screen the stage owns. Nobody can be looking at
+ * control who is not also looking at the stage, which already carries its own
+ * on-screen hint for the same information. Defaults to `true` (an operator
+ * might be watching) until the real count resolves, so a race at startup errs
+ * toward showing the notice rather than silently dropping it for a genuine
+ * two-display setup.
+ */
+let controlOperatorPlausible = true;
+
+function refreshControlOperatorPlausible(): void {
+  void stageService
+    .listDisplays()
+    .then((displays) => {
+      controlOperatorPlausible = displays.length > 1;
+    })
+    .catch(() => {
+      // Unknown is not evidence of a solo setup; keep showing the notice.
+      controlOperatorPlausible = true;
+    });
+}
+
 function startStageBridge(sessionId: string): void {
   if (!isTauriRuntime() || stageGeneration === 0) return;
+
+  refreshControlOperatorPlausible();
 
   /*
    * Both of these are captured, never read from module scope inside the
@@ -1422,8 +1450,10 @@ function startStageBridge(sessionId: string): void {
         if (event.payload.stageGeneration !== generation) return;
         if (event.payload.presses >= 2) {
           stopSession();
+          // "Stopped" is worth saying even solo — control is where the
+          // summary appears next, so this is the one line that belongs there.
           showToast('Session stopped from the stage', 'info');
-        } else {
+        } else if (controlOperatorPlausible) {
           showToast('Press Escape again on the stage to end the session', 'info');
         }
       }),

@@ -61,6 +61,7 @@ const stage = vi.hoisted(() => ({
     async (_sessionId: string, _stageGeneration: number, _directive: unknown) => {},
   ),
   closeStage: vi.fn(async () => {}),
+  listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
 }));
 
 vi.mock('@tauri-apps/api/event', () => ({ emitTo: tauri.emitTo, listen: tauri.listen }));
@@ -95,6 +96,7 @@ const {
   useListenerPoster,
 } = await import('../../../src/control/stores/session');
 const { smoothFollow } = await import('../../../src/control/stores/smooth-follow');
+const { toasts } = await import('../../../src/control/stores/toasts');
 
 type ListenerSelection = NonNullable<
   Parameters<typeof startLiveSession>[0]['listener']
@@ -252,6 +254,50 @@ describe('stage bridge listener lifecycle', () => {
 
     stopSession();
     expect(tauri.unlistened.length).toBe(tauri.registered.length);
+  });
+});
+
+/*
+ * §16.9's first-press notice is for a SECOND person watching the control
+ * window — a display the stage is not covering. On one display the stage is
+ * frameless, sized to the monitor and always-on-top, so control sits behind
+ * it on the exact same screen: nobody can be looking at control who is not
+ * also looking at the stage's own on-screen hint. A solo presenter got the
+ * toast anyway, every single press, on top of the on-stage hint saying the
+ * same thing.
+ */
+describe('the first-press notice reflects whether a second display exists', () => {
+  it('does not toast a solo, single-display setup', async () => {
+    stage.listDisplays.mockResolvedValueOnce([{ fingerprint: 'display-0' }]);
+    start(7);
+    await completeBridge();
+
+    const before = get(toasts).length;
+    find(STAGE_EVENT.escapeRequested).at(-1)?.handler({ payload: { stageGeneration: 7, presses: 1 } });
+    expect(get(toasts).length).toBe(before);
+  });
+
+  it('still toasts when a second display is present', async () => {
+    stage.listDisplays.mockResolvedValueOnce([
+      { fingerprint: 'display-0' },
+      { fingerprint: 'display-1' },
+    ]);
+    start(7);
+    await completeBridge();
+
+    const before = get(toasts).length;
+    find(STAGE_EVENT.escapeRequested).at(-1)?.handler({ payload: { stageGeneration: 7, presses: 1 } });
+    expect(get(toasts).length).toBe(before + 1);
+  });
+
+  it('still announces the stop itself even solo — the summary appears on control next', async () => {
+    stage.listDisplays.mockResolvedValueOnce([{ fingerprint: 'display-0' }]);
+    start(7);
+    await completeBridge();
+
+    const before = get(toasts).length;
+    find(STAGE_EVENT.escapeRequested).at(-1)?.handler({ payload: { stageGeneration: 7, presses: 2 } });
+    expect(get(toasts).length).toBe(before + 1);
   });
 });
 
