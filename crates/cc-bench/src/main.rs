@@ -120,6 +120,22 @@ fn main() -> anyhow::Result<()> {
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(capture_all(&workdir, &runs_dir, flags.pace))?;
         }
+        Some("report") => {
+            // cc-bench report <a-base> <a-opt> [<b-base> <b-opt>] — merged
+            // baseline→optimized markdown table on stdout.
+            let load = |p: &str| -> anyhow::Result<SuiteResult> {
+                Ok(serde_json::from_str(&std::fs::read_to_string(p)?)?)
+            };
+            let a_base = load(&args[1])?;
+            let a_opt = load(&args[2])?;
+            let mut rows = cc_bench::report::rows(&a_base, &a_opt);
+            if args.len() >= 5 {
+                let b_base = load(&args[3])?;
+                let b_opt = load(&args[4])?;
+                rows.extend(cc_bench::report::rows(&b_base, &b_opt));
+            }
+            print!("{}", cc_bench::report::markdown_table(&rows));
+        }
         Some("sweep") => {
             // Grid sweep over display/robustness knobs. Prints one line per
             // configuration; safety metrics are hard filters.

@@ -194,10 +194,72 @@ pub fn evaluate(
         }
     }
 
+    // ---- recoveries (computed first: the initial lock time gates which
+    // samples count toward accuracy) ----
+    let total = gold.total_ms;
+    let mut recoveries = Vec::new();
+    for &(kind, at) in &recovery_targets {
+        let mut cursor = 0usize;
+        let mut recovered: Option<f64> = None;
+        let mut t = at;
+        'outer: while t <= total {
+            if let Some(point) = gold.position_at(t) {
+                if point.on_script {
+                    let sample = display_at(replay, t, &mut cursor);
+                    let err = (sample.position - point.position).abs();
+                    let following =
+                        matches!(sample.state, Some(cc_align::TrackingState::Following));
+                    if err <= RECOVER_HIT_ATOMS && following {
+                        let mut hold_cursor = cursor;
+                        let mut ht = t + SAMPLE_MS;
+                        let mut ok = true;
+                        while ht <= (t + RECOVER_SUSTAIN_MS).min(total) {
+                            if let Some(hp) = gold.position_at(ht) {
+                                if hp.on_script {
+                                    let herr = (display_at(replay, ht, &mut hold_cursor)
+                                        .position
+                                        - hp.position)
+                                        .abs();
+                                    if herr > RECOVER_HOLD_ATOMS {
+                                        ok = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            ht += SAMPLE_MS;
+                        }
+                        if ok {
+                            recovered = Some((t - at) / 1000.0);
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+            t += SAMPLE_MS;
+        }
+        recoveries.push(RecoveryEvent {
+            kind,
+            at_ms: at,
+            recovered_in_s: recovered,
+        });
+    }
+
+    // Accuracy counts from the moment the first lock lands. Before that
+    // there is no position to be accurate about — lock latency is its own
+    // benchmark, and letting a cold start pollute p95 turns every
+    // start-in-the-middle run into a fake 100-atom error.
+    let accuracy_from_ms = recoveries
+        .iter()
+        .find(|r| r.kind == RecoveryKind::Initial)
+        .map(|r| match r.recovered_in_s {
+            Some(rec) => r.at_ms + rec * 1000.0,
+            None => f64::INFINITY,
+        })
+        .unwrap_or(0.0);
+
     // ---- uniform sampling ----
     let mut cursor = 0usize;
     let mut freeze_cursor = 0usize;
-    let total = gold.total_ms;
     let mut eligible = 0usize;
     let mut within2 = 0usize;
     let mut within5 = 0usize;
@@ -230,7 +292,7 @@ pub fn evaluate(
         }
         display_prev_sample = Some((t, display));
 
-        if point.on_script && point.speaking {
+        if point.on_script && point.speaking && t >= accuracy_from_ms {
             let err = display - point.position;
             eligible += 1;
             samples.abs_err.push(err.abs());
@@ -310,59 +372,6 @@ pub fn evaluate(
         if !matched && !initial {
             false_jumps += 1;
         }
-    }
-
-    // ---- recoveries ----
-    let mut recoveries = Vec::new();
-    for &(kind, at) in &recovery_targets {
-        let mut cursor = 0usize;
-        let mut recovered: Option<f64> = None;
-        let mut t = at;
-        'outer: while t <= total {
-            if let Some(point) = gold.position_at(t) {
-                if point.on_script {
-                    let sample = display_at(replay, t, &mut cursor);
-                    let err = (sample.position - point.position).abs();
-                    // A lock requires the engine to actually be following —
-                    // a display parked at 0 that gold happens to walk past
-                    // is not a lock.
-                    let following =
-                        matches!(sample.state, Some(cc_align::TrackingState::Following));
-                    if err <= RECOVER_HIT_ATOMS && following {
-                        // Must stay within the hold band for the sustain
-                        // window (or to the end of the run).
-                        let mut hold_cursor = cursor;
-                        let mut ht = t + SAMPLE_MS;
-                        let mut ok = true;
-                        while ht <= (t + RECOVER_SUSTAIN_MS).min(total) {
-                            if let Some(hp) = gold.position_at(ht) {
-                                if hp.on_script {
-                                    let herr = (display_at(replay, ht, &mut hold_cursor)
-                                        .position
-                                        - hp.position)
-                                        .abs();
-                                    if herr > RECOVER_HOLD_ATOMS {
-                                        ok = false;
-                                        break;
-                                    }
-                                }
-                            }
-                            ht += SAMPLE_MS;
-                        }
-                        if ok {
-                            recovered = Some((t - at) / 1000.0);
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-            t += SAMPLE_MS;
-        }
-        recoveries.push(RecoveryEvent {
-            kind,
-            at_ms: at,
-            recovered_in_s: recovered,
-        });
     }
 
     // ---- pre-final movement ----

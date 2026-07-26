@@ -6,6 +6,7 @@ pub mod capture;
 pub mod metrics;
 pub mod plan;
 pub mod replay;
+pub mod report;
 pub mod scenarios;
 pub mod suite;
 pub mod synthetic;
