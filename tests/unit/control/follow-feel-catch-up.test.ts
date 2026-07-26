@@ -249,6 +249,8 @@ function driveUnclosableCatchUp(profile: SmoothFollowProfile): {
     confidence: 0.92,
     state: 'following' as const,
     maxPredictionMs: 900,
+  pauseOnsetMs: 1800,
+  leadFloorMs: 550,
     decision,
     suggestionToken: null,
     scriptLenTokens: 10_000,

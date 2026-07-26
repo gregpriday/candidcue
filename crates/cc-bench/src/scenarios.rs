@@ -98,6 +98,26 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
             Corruption::default(),
         ));
 
+        // 2b. Long mid-read pauses: 1s / 2s / 3s. Presenters pause — to
+        // breathe, to think, for emphasis — and the display must NOT run
+        // ahead while they do (the pause_overshoot benchmark).
+        suite.push(scenario(
+            &name,
+            "long_pauses",
+            &script,
+            150,
+            vec![
+                PlanOp::Read { from: 0, to: frac(n, 20) },
+                PlanOp::Pause { ms: 1_000 },
+                PlanOp::Read { from: frac(n, 20), to: frac(n, 35) },
+                PlanOp::Pause { ms: 2_000 },
+                PlanOp::Read { from: frac(n, 35), to: frac(n, 50) },
+                PlanOp::Pause { ms: 3_000 },
+                PlanOp::Read { from: frac(n, 50), to: frac(n, 65) },
+            ],
+            Corruption::default(),
+        ));
+
         // 3. Say something at the beginning, stop, then say the ending.
         suite.push(scenario(
             &name,
@@ -497,6 +517,7 @@ pub fn tier_b_selection() -> Vec<(&'static str, &'static str)> {
         ("product-update", "viewport_start"),
         ("technical", "exact"),
         ("technical", "pauses"),
+        ("starter", "long_pauses"),
         ("refrain", "exact"),
         ("refrain", "refrain_second"),
         ("names", "exact"),

@@ -36,6 +36,8 @@ function frame(overrides: Partial<AlignmentSnapshot>): AlignmentSnapshot {
     confirmedToken: 0,
     rateTokensPerSecond: 0,
     maxPredictionMs: 900,
+  pauseOnsetMs: 1800,
+  leadFloorMs: 550,
     confidence: 0.9,
     state: 'following',
     decision: 'localConfirmed',

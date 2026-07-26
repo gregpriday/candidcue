@@ -221,6 +221,8 @@ export function createMockTrackingDriver(options: TrackingDriverOptions): Tracki
       evidenceAudioMs: audioMs,
       atAudioMs: audioMs,
       maxPredictionMs: 900,
+  pauseOnsetMs: 1800,
+  leadFloorMs: 550,
       confidence,
       suggestionToken: null,
       scriptLenTokens: totalTokens,

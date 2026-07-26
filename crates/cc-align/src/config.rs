@@ -104,6 +104,14 @@ pub struct AlignmentConfig {
     pub max_prediction_ms: f64,
     /// Extrapolation window after evidence stops arriving (ms).
     pub coast_ms: f64,
+    /// Evidence age at which the display stops growing its lead and starts
+    /// easing back (ms). Just above the provider's partial cadence p90, so
+    /// an ordinary between-partials gap never triggers it — a real pause
+    /// does.
+    pub pause_onset_ms: f64,
+    /// The residual lead (ms of reading) the display keeps once a pause is
+    /// suspected — roughly "rest one word ahead of where they stopped".
+    pub lead_floor_ms: f64,
 
     // ---- evidence timing ----
     /// Residual lag correction applied to evidence time after the ledger's
@@ -236,6 +244,8 @@ impl Default for AlignmentConfig {
             rate_max: 7.0,
             max_prediction_ms: 1800.0,
             coast_ms: 300.0,
+            pause_onset_ms: 1800.0,
+            lead_floor_ms: 550.0,
 
             emission_lag_ms: 0.0,
             partial_lag_ms: 300.0,

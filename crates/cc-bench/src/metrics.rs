@@ -81,6 +81,10 @@ pub struct RunMetrics {
     pub recoveries: Vec<RecoveryEvent>,
     /// Max |display − hold anchor| during off-script intervals (atoms).
     pub adlib_max_drift: Option<f64>,
+    /// P95 of signed display lead while the reader is PAUSED (on-script,
+    /// not speaking): how far the text ran ahead during a pause. The
+    /// over-eager-forward failure lives here.
+    pub pause_overshoot_p95: Option<f64>,
     /// % of ≥8-content-word items whose display moved before the final.
     pub prefinal_move_pct: Option<f64>,
     pub event_count: usize,
@@ -95,6 +99,8 @@ pub struct RunMetrics {
 pub struct RunSamples {
     pub abs_err: Vec<f64>,
     pub signed_err: Vec<f64>,
+    /// Signed lead (display − gold hold position) during speaking pauses.
+    pub pause_lead: Vec<f64>,
 }
 
 pub struct RunEval {
@@ -352,6 +358,10 @@ pub fn evaluate(
                 }
             }
 
+        } else if point.on_script && !point.speaking && t >= accuracy_from_ms {
+            // The reader is PAUSED: gold holds at the last spoken word.
+            // Positive lead = the display ran ahead during the pause.
+            samples.pause_lead.push(display - point.position);
         } else if !point.on_script {
             // Ad-lib hold behaviour.
             let drift = (display - point.position).abs();
@@ -433,6 +443,11 @@ pub fn evaluate(
     m.catastrophic = catastrophic_periods;
     m.recoveries = recoveries;
     m.adlib_max_drift = adlib_drift;
+    m.pause_overshoot_p95 = if samples.pause_lead.is_empty() {
+        None
+    } else {
+        Some(percentile(&mut samples.pause_lead.clone(), 95.0))
+    };
     m.prefinal_move_pct = prefinal;
     m.event_count = replay.event_us.len();
     m.mean_event_us = mean(&replay.event_us.iter().map(|v| *v as f64).collect::<Vec<_>>());

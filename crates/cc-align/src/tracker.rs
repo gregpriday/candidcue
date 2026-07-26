@@ -95,6 +95,11 @@ pub struct Snapshot {
     pub at_audio_ms: f64,
     /// Cap on forward extrapolation from `evidence_audio_ms`.
     pub max_prediction_ms: f64,
+    /// Evidence age (ms) at which the lead stops growing and eases back —
+    /// a pause, not a between-partials gap.
+    pub pause_onset_ms: f64,
+    /// Residual lead (ms of reading) kept once paused.
+    pub lead_floor_ms: f64,
     /// Heuristic 0..1 — NOT yet a calibrated probability; benchmarked as-is.
     pub confidence: f64,
     /// A distant candidate accumulating evidence (the "Suggest jump"
@@ -113,8 +118,18 @@ impl Snapshot {
         if self.rate <= 0.0 {
             return self.observed;
         }
-        let horizon = (t_audio_ms - self.evidence_audio_ms).clamp(0.0, self.max_prediction_ms);
-        (self.observed + self.rate * horizon / 1000.0).min(self.script_len)
+        let age = (t_audio_ms - self.evidence_audio_ms).max(0.0);
+        let onset = self.pause_onset_ms.min(self.max_prediction_ms);
+        // While evidence is fresh the lead grows 1:1 (pipeline-lag
+        // compensation). Once it goes stale — the reader has probably
+        // paused — the lead eases back to a one-word rest instead of
+        // parking five words ahead of someone who stopped talking.
+        let lead = if age <= onset {
+            age
+        } else {
+            (onset - (age - onset)).max(self.lead_floor_ms.min(onset))
+        };
+        (self.observed + self.rate * lead / 1000.0).min(self.script_len)
     }
 }
 
@@ -241,9 +256,14 @@ impl Engine {
                 audio_start_ms,
             } => {
                 self.ledger.item_started(&item_id, audio_start_ms);
-                // No positional evidence arrived: the evidence clock stays
-                // where it was, or the display would re-extrapolate from a
-                // fresh horizon on every item boundary.
+                // speechStarted is real evidence of one thing: the reader
+                // is TALKING again. Rebase the evidence clock so the display
+                // glides forward from the parked position at reading rate,
+                // instead of waiting a full partial-cadence to move — while
+                // never leaping (the rebased horizon starts at zero).
+                if matches!(self.state, TrackingState::Following) {
+                    self.last_evidence_ms = self.last_evidence_ms.max(audio_start_ms);
+                }
                 self.snapshot(DecisionCode::NoEvidence, self.last_evidence_ms, audio_start_ms)
             }
             SessionEvent::Partial {
@@ -1035,8 +1055,18 @@ impl Engine {
 
     fn snapshot(&mut self, decision: DecisionCode, evidence_ms: f64, now_ms: f64) -> Snapshot {
         self.seq += 1;
+        // Speech is "flowing" only while an open utterance is producing
+        // words. A final means the provider's VAD saw silence: park the
+        // display exactly where the reader stopped. An empty just-opened
+        // item parks too — extrapolating from stale evidence the moment
+        // speechStarted fires would leap the whole horizon at once.
+        let flowing = self
+            .ledger
+            .current_item()
+            .map(|i| !i.is_final)
+            .unwrap_or(false);
         let rate = match self.state {
-            TrackingState::Following => self.rate,
+            TrackingState::Following if flowing => self.rate,
             _ => 0.0,
         };
         Snapshot {
@@ -1049,6 +1079,8 @@ impl Engine {
             evidence_audio_ms: evidence_ms,
             at_audio_ms: now_ms,
             max_prediction_ms: self.config.max_prediction_ms,
+            pause_onset_ms: self.config.pause_onset_ms,
+            lead_floor_ms: self.config.lead_floor_ms,
             confidence: self.confidence,
             suggestion: self.pending_jump.as_ref().map(|p| p.target as f64),
             script_len: self.script.len() as f64,

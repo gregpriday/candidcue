@@ -97,13 +97,40 @@ const target = snapshotDisplayAt(lastSnapshot, audioClockNowMs());
 ```ts
 function snapshotDisplayAt(s: Snapshot, tMs: number): number {
   if (s.rate <= 0) return s.observed;
-  const horizon = clamp(tMs - s.evidenceAudioMs, 0, s.maxPredictionMs);
-  return Math.min(s.observed + (s.rate * horizon) / 1000, s.scriptLen);
+  const age = Math.max(0, tMs - s.evidenceAudioMs);
+  const onset = Math.min(s.pauseOnsetMs, s.maxPredictionMs);
+  // Fresh evidence: lead grows 1:1 (pipeline-lag compensation). Stale
+  // evidence — the reader has probably paused — eases back to a one-word
+  // rest instead of parking five words ahead.
+  const lead =
+    age <= onset ? age : Math.max(onset - (age - onset), Math.min(s.leadFloorMs, onset));
+  return Math.min(s.observed + (s.rate * lead) / 1000, s.scriptLen);
 }
+```
+
+The engine additionally zeroes `rate` the moment the provider endpoints an
+utterance (its VAD saw silence) and re-bases the clock on `speechStarted`,
+so pauses park the display exactly where the reader stopped and gliding
+resumes the instant they speak. The canonical TS mirror lives in
+`src/shared/contracts/alignment.ts` (`alignmentDisplayAt`) — never fork it.
+
+```ts
+// (see src/shared/contracts/alignment.ts for the maintained version)
 ```
 
 `rate` is already zeroed by the engine whenever extrapolation would be a
 guess (holding/ambiguous/searching) — don't re-derive that condition.
+
+### The word underline / highlight
+
+The underline should mark **what the reader would say next** — nothing
+bolder. Concretely: underline the word at `floor(display_at(now))`, and keep
+the treatment subtle (an underline or soft tint, not a boxed highlight).
+During a pause the engine parks the display about one word past the last
+spoken word, so the underline naturally rests on the next thing to say
+without presuming further. Never underline ahead of `display_at`, and never
+animate the underline faster than the scroll — over-assuming here is the
+fastest way to make the presenter feel chased.
 
 ### Jumps and suggestions
 

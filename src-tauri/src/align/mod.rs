@@ -96,6 +96,12 @@ pub struct AlignmentSnapshot {
     pub at_audio_ms: f64,
     /// Hard cap on forward extrapolation from `evidence_audio_ms`.
     pub max_prediction_ms: f64,
+    /// Evidence age at which the display lead stops growing and eases back —
+    /// the reader has probably paused, and the underline must rest just past
+    /// the last spoken word instead of running ahead.
+    pub pause_onset_ms: f64,
+    /// Residual lead (ms of reading) kept once paused — "one word ahead".
+    pub lead_floor_ms: f64,
     /// Documented heuristic in 0..1, not a calibrated probability. Fine for a
     /// debug meter; do not gate behaviour on exact thresholds.
     pub confidence: f64,
@@ -299,6 +305,8 @@ fn project(snapshot: &Snapshot, engine: &Engine, generation: u64) -> AlignmentSn
         evidence_audio_ms: snapshot.evidence_audio_ms,
         at_audio_ms: snapshot.at_audio_ms,
         max_prediction_ms: snapshot.max_prediction_ms,
+        pause_onset_ms: snapshot.pause_onset_ms,
+        lead_floor_ms: snapshot.lead_floor_ms,
         confidence: snapshot.confidence,
         suggestion_token: snapshot.suggestion.map(|a| script.token_at(a)),
         script_len_tokens: script.token_count as f64,

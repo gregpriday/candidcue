@@ -52,6 +52,8 @@ function snapshotAt(unit: number, atMs: number): AlignmentSnapshot {
     evidenceAudioMs: atMs,
     atAudioMs: atMs,
     maxPredictionMs: 900,
+  pauseOnsetMs: 1800,
+  leadFloorMs: 550,
     confidence: 0.92,
     suggestionToken: null,
     scriptLenTokens: 10_000,

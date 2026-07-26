@@ -55,6 +55,7 @@ pub fn run_tier_a(
     // Pooled sample stores.
     let mut clean_abs: Vec<f64> = Vec::new();
     let mut clean_signed: Vec<f64> = Vec::new();
+    let mut pause_lead: Vec<f64> = Vec::new();
     let mut scale_us: std::collections::HashMap<String, f64> = Default::default();
 
     for scenario in &suite {
@@ -85,13 +86,14 @@ pub fn run_tier_a(
             clean_abs.extend_from_slice(&eval.samples.abs_err);
             clean_signed.extend_from_slice(&eval.samples.signed_err);
         }
+        pause_lead.extend_from_slice(&eval.samples.pause_lead);
         if scenario.plan.scenario == "scale_window" {
             scale_us.insert(scenario.plan.script.clone(), eval.metrics.mean_event_us);
         }
         runs.push(eval.metrics);
     }
 
-    let table = build_table(&runs, &mut clean_abs, &clean_signed, &scale_us);
+    let table = build_table(&runs, &mut clean_abs, &clean_signed, &scale_us, &mut pause_lead);
     Ok(SuiteResult {
         label: label.to_string(),
         config: config.clone(),
@@ -112,6 +114,7 @@ fn build_table(
     clean_abs: &mut Vec<f64>,
     clean_signed: &[f64],
     scale_us: &std::collections::HashMap<String, f64>,
+    pause_lead: &mut Vec<f64>,
 ) -> Vec<BenchEntry> {
     let mut table = Vec::new();
 
@@ -174,6 +177,14 @@ fn build_table(
             100.0 * frozen as f64 / freeze_eligible as f64
         },
         "%",
+        "lower",
+    ));
+    // Pause overshoot: how far ahead the display sits while the reader is
+    // silent. P95 over every pause sample in the suite.
+    table.push(entry(
+        "responsiveness.pause_overshoot_p95",
+        percentile(pause_lead, 95.0),
+        "atoms",
         "lower",
     ));
     let mut first_locks: Vec<f64> = runs
@@ -405,6 +416,7 @@ pub fn run_tier_b(
     let mut runs: Vec<RunMetrics> = Vec::new();
     let mut pooled_abs: Vec<f64> = Vec::new();
     let mut pooled_signed: Vec<f64> = Vec::new();
+    let mut pooled_pause: Vec<f64> = Vec::new();
     let mut wer_weighted = 0.0f64;
     let mut wer_words = 0usize;
 
@@ -437,6 +449,7 @@ pub fn run_tier_b(
         );
         pooled_abs.extend_from_slice(&eval.samples.abs_err);
         pooled_signed.extend_from_slice(&eval.samples.signed_err);
+        pooled_pause.extend_from_slice(&eval.samples.pause_lead);
         if let Some(wer) = eval.metrics.wer_pct {
             wer_weighted += wer * manifest.words as f64;
             wer_words += manifest.words;
@@ -487,6 +500,12 @@ pub fn run_tier_b(
             100.0 * frozen as f64 / freeze_eligible as f64
         },
         "%",
+        "lower",
+    ));
+    table.push(entry(
+        "live.pause_overshoot_p95",
+        percentile(&mut pooled_pause, 95.0),
+        "atoms",
         "lower",
     ));
     let mut recoveries: Vec<f64> = runs

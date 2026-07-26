@@ -134,3 +134,53 @@ fn intro_then_end_jump_is_followed() {
         "relocation to the ending took {recovered}s"
     );
 }
+
+#[test]
+fn pauses_do_not_run_the_display_ahead() {
+    // Greg's field report: "if I take a pause, it just keeps rushing
+    // forward." The display may rest about a word ahead of where the
+    // reader stopped — not five.
+    let script = starter_script();
+    let n = script.len() as u32;
+    let plan = PerformancePlan {
+        name: "starter_pause_guard".into(),
+        script: "starter".into(),
+        scenario: "long_pauses".into(),
+        seed: 23,
+        ops: vec![
+            PlanOp::Read { from: 0, to: n / 5 },
+            PlanOp::Pause { ms: 2_000 },
+            PlanOp::Read { from: n / 5, to: n * 2 / 5 },
+            PlanOp::Pause { ms: 3_000 },
+            PlanOp::Read { from: n * 2 / 5, to: n * 3 / 5 },
+        ],
+        corruption: Corruption::default(),
+    };
+    let performance = expand(&plan, &script);
+    let gold = synthetic_timing(&performance, 150);
+    let events = generate_events(&gold, &plan.corruption, plan.seed);
+    let result = replay(
+        script,
+        AlignmentConfig::default(),
+        &events,
+        &gold.viewport_hints,
+    );
+    let eval = evaluate("starter_pause_guard", "long_pauses", &gold, &result, None);
+
+    let overshoot = eval
+        .metrics
+        .pause_overshoot_p95
+        .expect("pauses long enough to measure");
+    assert!(
+        overshoot <= 2.5,
+        "display ran {overshoot} atoms ahead during pauses (limit 2.5)"
+    );
+    assert_eq!(eval.metrics.false_jumps, 0);
+    assert_eq!(eval.metrics.catastrophic, 0);
+    // And pausing must not break ordinary accuracy either side of the gap.
+    assert!(
+        eval.metrics.within5_pct > 95.0,
+        "within±5 {}% after pauses",
+        eval.metrics.within5_pct
+    );
+}

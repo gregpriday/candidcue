@@ -45,6 +45,8 @@ function followState(state: SmoothFollowState['state']): SmoothFollowState {
     evidenceAudioMs: 1000,
     atAudioMs: 1000,
     maxPredictionMs: 900,
+  pauseOnsetMs: 1800,
+  leadFloorMs: 550,
     confidence: 0.4,
     suggestionToken: null,
     scriptLenTokens: 100,

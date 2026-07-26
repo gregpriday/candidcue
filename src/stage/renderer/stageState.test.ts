@@ -67,6 +67,8 @@ function makeTracking(
     evidenceAudioMs: 0,
     atAudioMs: 0,
     maxPredictionMs: 900,
+  pauseOnsetMs: 1800,
+  leadFloorMs: 550,
     confidence: 0.9,
     suggestionToken: null,
     scriptLenTokens: 100,

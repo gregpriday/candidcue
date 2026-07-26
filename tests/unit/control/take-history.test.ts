@@ -179,6 +179,8 @@ function snapshot(
     evidenceAudioMs: 1_000 + tokenIndex,
     atAudioMs: 1_000 + tokenIndex,
     maxPredictionMs: 900,
+  pauseOnsetMs: 1800,
+  leadFloorMs: 550,
     confidence: extra.confidence ?? 0.9,
     suggestionToken: null,
     scriptLenTokens: 200,

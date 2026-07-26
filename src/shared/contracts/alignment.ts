@@ -129,6 +129,14 @@ export interface AlignmentSnapshot {
   atAudioMs: number;
   /** Hard cap on forward extrapolation beyond `evidenceAudioMs`. */
   maxPredictionMs: number;
+  /**
+   * Evidence age at which the lead stops growing and eases back: the reader
+   * has probably paused. Mirrors the engine's pause model — the stage never
+   * re-derives pause detection.
+   */
+  pauseOnsetMs: number;
+  /** Residual lead (ms of reading) kept once paused — "one word ahead". */
+  leadFloorMs: number;
 
   /**
    * Documented heuristic in 0..1 — NOT a calibrated probability. Fine for a
@@ -164,9 +172,15 @@ export interface AlignmentSnapshot {
 export function alignmentDisplayAt(snapshot: AlignmentSnapshot, tAudioMs: number): number {
   const { observedToken, rateTokensPerSecond, scriptLenTokens } = snapshot;
   if (!(rateTokensPerSecond > 0) || !Number.isFinite(tAudioMs)) return observedToken;
-  const elapsed = tAudioMs - snapshot.evidenceAudioMs;
-  const horizon = Math.max(0, Math.min(elapsed, snapshot.maxPredictionMs));
-  return Math.min(observedToken + (rateTokensPerSecond * horizon) / 1000, scriptLenTokens);
+  const age = Math.max(0, tAudioMs - snapshot.evidenceAudioMs);
+  const onset = Math.min(snapshot.pauseOnsetMs, snapshot.maxPredictionMs);
+  // While evidence is fresh the lead grows 1:1 (pipeline-lag compensation).
+  // Once it goes stale — the reader has probably paused — the lead eases
+  // back to a one-word rest instead of parking five words ahead of someone
+  // who stopped talking. Exact mirror of `Snapshot::display_at`.
+  const lead =
+    age <= onset ? age : Math.max(onset - (age - onset), Math.min(snapshot.leadFloorMs, onset));
+  return Math.min(observedToken + (rateTokensPerSecond * lead) / 1000, scriptLenTokens);
 }
 
 /* ---------------------------------------------------------------------------
@@ -191,6 +205,8 @@ const SNAPSHOT_FIELDS: Record<keyof AlignmentSnapshot, FieldKind> = {
   evidenceAudioMs: 'real',
   atAudioMs: 'real',
   maxPredictionMs: 'real',
+  pauseOnsetMs: 'real',
+  leadFloorMs: 'real',
   confidence: 'real',
   suggestionToken: 'nullableReal',
   scriptLenTokens: 'real',
