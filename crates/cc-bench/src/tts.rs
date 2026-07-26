@@ -127,9 +127,13 @@ impl Synthesizer {
 
         // Whatever the container (mp3 today), ffmpeg turns it into the exact
         // PCM the app's capture path produces.
-        let tmp_in = self.cache_dir.join(format!("{cache_key}.dl"));
+        // Process-unique tmp names: two overlapping harness invocations on
+        // the same cache raced on shared tmp files and fed ffmpeg a path the
+        // other process had already cleaned up.
+        let pid = std::process::id();
+        let tmp_in = self.cache_dir.join(format!("{cache_key}.{pid}.dl"));
         std::fs::write(&tmp_in, &audio)?;
-        let tmp_out = self.cache_dir.join(format!("{cache_key}.tmp"));
+        let tmp_out = self.cache_dir.join(format!("{cache_key}.{pid}.tmp"));
         let status = Command::new("ffmpeg")
             .args([
                 "-y",

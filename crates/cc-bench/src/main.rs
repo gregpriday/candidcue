@@ -332,6 +332,10 @@ async fn capture_all(
             println!("skip {name} (already captured)");
             continue;
         }
+        if !dir.join("audio.wav").exists() || !dir.join("gold.json").exists() {
+            println!("skip {name} (synthesis incomplete)");
+            continue;
+        }
         let wav = std::fs::read(dir.join("audio.wav"))?;
         anyhow::ensure!(wav.len() > 44, "empty audio for {name}");
         let pcm = &wav[44..]; // strip our own canonical WAV header
