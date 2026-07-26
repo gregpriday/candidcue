@@ -71,6 +71,16 @@ pub struct AlignmentConfig {
     pub retake_extra_content: u32,
     /// Content atoms required for the very first lock of a session.
     pub relocation_min_content: u32,
+    /// Minimum unexplained atoms before a discontinuity is even evaluated.
+    pub jump_query_min: usize,
+    /// Unexplained CONTENT atoms that mark local evidence as weak (triggers
+    /// global search).
+    pub weak_unexplained_content: usize,
+    /// Unexplained atoms of ANY kind that mark local evidence as weak.
+    pub weak_unexplained_total: usize,
+    /// Weak events before a full-script fallback region is allowed when the
+    /// anchor indexes propose nothing.
+    pub desperate_search_after: u32,
 
     // ---- beam ----
     pub beam_size: usize,
@@ -143,11 +153,15 @@ impl Default for AlignmentConfig {
 
             discontinuity_atoms: 40,
             jump_min_fidelity: 0.75,
-            jump_min_content: 4,
+            jump_min_content: 3,
             jump_margin: 0.5,
-            jump_persistence: 2,
-            retake_extra_content: 1,
+            jump_persistence: 1,
+            retake_extra_content: 0,
             relocation_min_content: 3,
+            jump_query_min: 4,
+            weak_unexplained_content: 3,
+            weak_unexplained_total: 4,
+            desperate_search_after: 3,
 
             beam_size: 8,
             cluster_radius: 3,
@@ -156,10 +170,10 @@ impl Default for AlignmentConfig {
             rate_default: 2.8,
             rate_min: 0.5,
             rate_max: 7.0,
-            max_prediction_ms: 650.0,
+            max_prediction_ms: 1800.0,
             coast_ms: 300.0,
 
-            emission_lag_ms: 900.0,
+            emission_lag_ms: 800.0,
 
             viewport_bonus: 0.6,
             viewport_sigma: 40.0,

@@ -440,6 +440,28 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
     Ok(suite)
 }
 
+/// The Tier-B live set: which (script, scenario) pairs get real TTS audio
+/// streamed through the real recogniser. Engines rotate per run, giving each
+/// engine coverage across scenario families without a full cross product.
+pub fn tier_b_selection() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("starter", "exact"),
+        ("starter", "skip_forward"),
+        ("starter", "adlib_return"),
+        ("starter", "retake"),
+        ("product-update", "exact"),
+        ("product-update", "intro_then_end"),
+        ("product-update", "viewport_start"),
+        ("technical", "exact"),
+        ("technical", "pauses"),
+        ("refrain", "exact"),
+        ("refrain", "refrain_second"),
+        ("names", "exact"),
+        ("names", "names_cold_jump"),
+        ("longform", "intro_then_end"),
+    ]
+}
+
 fn scenario(
     script_name: &str,
     scenario: &str,

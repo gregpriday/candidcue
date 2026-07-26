@@ -116,17 +116,34 @@ impl Snapshot {
 struct Candidate {
     evidence: Evidence,
     score: f64,
-    /// Distance (atoms) from the predicted position; f64::INFINITY when the
-    /// tracker has no lock.
+    /// Distance (atoms) from the OBSERVED position — the prediction can
+    /// drift ahead during a stall, and classifying against it once turned
+    /// the stale local candidate into a phantom "backward retake".
+    /// f64::INFINITY when the tracker has no lock.
     distance: f64,
     backward: bool,
+    /// True when this candidate came from phase-2 global search (aligned on
+    /// the unexplained suffix). Only these may propose discontinuities.
+    from_global: bool,
+    /// The distance penalty included in `score`. Gate margins compare
+    /// EVIDENCE (score + penalty), otherwise a legitimate 4000-atom
+    /// relocation can never out-margin nearby junk matches.
+    jump_penalty: f64,
 }
 
 #[derive(Debug, Clone)]
 struct PendingJump {
     target: u32,
     count: u8,
-    backward: bool,
+}
+
+/// What a discontinuity evaluation concluded.
+enum DiscontinuityOutcome {
+    Accepted(Snapshot),
+    /// Plausible target accumulating persistence; display should not chase
+    /// it yet.
+    Pending,
+    Rejected,
 }
 
 pub struct Engine {
@@ -146,6 +163,14 @@ pub struct Engine {
     confidence: f64,
     pending_jump: Option<PendingJump>,
     viewport: Option<(u32, u32)>,
+    /// Consecutive events with weak local evidence — the trigger for global
+    /// search (spec §9.5: global proposals only when local evidence fails).
+    weak_streak: u32,
+    /// Evidence older than this is dead: it was spoken before the last
+    /// accepted discontinuity (or manual move) and would otherwise keep
+    /// out-voting the new location in the full-tail alignment — the failure
+    /// mode where an accepted retake snapped straight back.
+    tail_horizon_ms: f64,
     /// Region scratch reused across events.
     regions: Vec<(u32, u32)>,
 }
@@ -168,6 +193,8 @@ impl Engine {
             confidence: 0.0,
             pending_jump: None,
             viewport: None,
+            weak_streak: 0,
+            tail_horizon_ms: f64::MIN,
             regions: Vec::new(),
         }
     }
@@ -194,6 +221,8 @@ impl Engine {
         self.pending_jump = None;
         self.confidence = 0.9;
         self.last_evidence_ms = at_audio_ms;
+        // Speech from before the manual move must not drag the cursor back.
+        self.tail_horizon_ms = at_audio_ms;
         self.snapshot(DecisionCode::ManualAnchor, at_audio_ms, at_audio_ms)
     }
 
@@ -232,7 +261,8 @@ impl Engine {
     // -----------------------------------------------------------------
 
     fn update(&mut self, now_ms: f64) -> Snapshot {
-        let query = self.ledger.tail(self.config.max_query_atoms);
+        let mut query = self.ledger.tail(self.config.max_query_atoms);
+        query.retain(|q| q.audio_ms >= self.tail_horizon_ms);
         if query.is_empty() {
             return self.snapshot(DecisionCode::NoEvidence, now_ms, now_ms);
         }
@@ -244,40 +274,196 @@ impl Engine {
         } else {
             self.observed
         };
+        let len = self.script.len() as u32;
 
-        self.build_regions(&query, predicted, locked);
+        // ---------------------------------------------------------------
+        // Phase 1: local continuity — the full tail against the band
+        // around the prediction. This is the every-event hot path.
+        // ---------------------------------------------------------------
+        let local_region = if locked {
+            let p = predicted.max(0.0) as u32;
+            Some((p.saturating_sub(self.config.local_back), (p + self.config.local_forward).min(len)))
+        } else {
+            None
+        };
+        let observed = self.observed;
+        let local_candidate: Option<Candidate> = local_region.and_then(|(start, end)| {
+            align(&self.script, &query, start, end, &self.config, &mut self.scratch).and_then(
+                |evidence| {
+                    if evidence.exact_matches + evidence.fuzzy_matches == 0 {
+                        return None;
+                    }
+                    let distance = (evidence.end_position as f64 - observed).abs();
+                    let backward = (evidence.end_position as f64) < observed;
+                    let (score, jump_penalty) = self.rank(&evidence, predicted, locked);
+                    Some(Candidate {
+                        evidence,
+                        score,
+                        distance,
+                        backward,
+                        from_global: false,
+                        jump_penalty,
+                    })
+                },
+            )
+        });
 
-        // Align every region, keep the best candidate per region.
-        let mut candidates: Vec<Candidate> = Vec::with_capacity(self.regions.len());
-        let regions = std::mem::take(&mut self.regions);
-        for &(start, end) in &regions {
-            if let Some(evidence) = align(
-                &self.script,
-                &query,
-                start,
-                end,
-                &self.config,
-                &mut self.scratch,
-            ) {
-                if evidence.exact_matches + evidence.fuzzy_matches == 0 {
-                    continue;
+        // How much of the tail does the local explanation actually cover?
+        // Everything after the last local match is UNEXPLAINED — the material
+        // a skip, retake or ad-lib is made of. This is what discontinuity
+        // evaluation aligns, so a jump's fidelity is not diluted by pre-jump
+        // words (the failure that made baseline recovery take 20+ seconds).
+        let unexplained_start = if locked {
+            local_candidate
+                .as_ref()
+                .and_then(|c| {
+                    // Solid runs only: one stray stopword match must not
+                    // mark everything after it as explained.
+                    c.evidence
+                        .last_solid_match_query_index
+                        .or(c.evidence.last_match_query_index)
+                })
+                .map(|i| i + 1)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let unexplained: &[QueryAtom] = &query[unexplained_start.min(query.len())..];
+        let unexplained_content = unexplained
+            .iter()
+            .filter(|q| !q.filler && !crate::normalize::is_stopword(&q.surface))
+            .count();
+
+        let local_ok = local_candidate
+            .as_ref()
+            .map(|c| {
+                c.evidence.fidelity >= self.config.observe_min_fidelity
+                    && c.evidence.coverage >= self.config.observe_min_coverage
+                    && c.evidence.content_matches >= self.config.observe_min_content
+            })
+            .unwrap_or(false);
+        // Weakness: gates failed, OR enough content went unexplained, OR a
+        // long ordered run of anything (stopword-heavy scripts would starve
+        // the content counter for seconds otherwise).
+        let weak = !local_ok
+            || unexplained_content >= self.config.weak_unexplained_content
+            || unexplained.len() >= self.config.weak_unexplained_total;
+        if weak {
+            self.weak_streak = self.weak_streak.saturating_add(1);
+            // Honesty: persistent weakness means we no longer know where the
+            // reader is. Claiming `Following` here is exactly the
+            // "confidently wrong" state the catastrophic metric punishes —
+            // hold the display instead.
+            if self.weak_streak >= 3 && matches!(self.state, TrackingState::Following) {
+                self.state = TrackingState::Holding;
+            }
+        } else {
+            self.weak_streak = 0;
+        }
+
+        // ---------------------------------------------------------------
+        // Phase 2: global search — only when something is actually wrong
+        // (or there is no lock / a jump is pending / a viewport hint
+        // exists). Keeping this off the healthy path is what makes cost
+        // independent of script length.
+        // ---------------------------------------------------------------
+        let need_global = !locked
+            || self.weak_streak >= 1
+            || self.pending_jump.is_some()
+            || self.viewport.is_some();
+
+        let mut candidates: Vec<Candidate> = Vec::new();
+        if let Some(c) = local_candidate.clone() {
+            candidates.push(c);
+        }
+
+        // The query used for global candidates: the unexplained material
+        // when locked (min length gated), the whole tail when searching.
+        let global_query: &[QueryAtom] = if locked { unexplained } else { &query[..] };
+        let global_query_ready = if locked {
+            global_query.len() >= self.config.jump_query_min
+        } else {
+            !global_query.is_empty()
+        };
+        let mut local_suffix_score = f64::MIN;
+
+        if need_global && global_query_ready {
+            self.build_global_regions(global_query, locked, local_region);
+            // Desperate fallback: evidence keeps failing — the anchors may
+            // be proposing nothing, or proposing only junk (generated or
+            // repetitive text can lack rare n-grams entirely). Cover the
+            // whole script in WINDOWS rather than one region: each window
+            // yields its own candidate, so near-duplicate passages become
+            // visible as rival clusters and the ambiguity gate can hold
+            // honestly instead of accepting the first lookalike.
+            if self.weak_streak >= self.config.desperate_search_after {
+                let window = 640u32;
+                let stride = 600u32;
+                let mut start = 0u32;
+                loop {
+                    self.regions.push((start, (start + window).min(len)));
+                    if start + window >= len {
+                        break;
+                    }
+                    start += stride;
                 }
-                let distance = if locked {
-                    (evidence.end_position as f64 - predicted).abs()
-                } else {
-                    f64::INFINITY
-                };
-                let backward = (evidence.end_position as f64) < predicted;
-                let score = self.rank(&evidence, predicted, locked);
-                candidates.push(Candidate {
-                    evidence,
-                    score,
-                    distance,
-                    backward,
-                });
+            }
+            let regions = std::mem::take(&mut self.regions);
+            for &(start, end) in &regions {
+                if let Some(evidence) = align(
+                    &self.script,
+                    global_query,
+                    start,
+                    end,
+                    &self.config,
+                    &mut self.scratch,
+                ) {
+                    if evidence.exact_matches + evidence.fuzzy_matches == 0 {
+                        continue;
+                    }
+                    let distance = if locked {
+                        (evidence.end_position as f64 - observed).abs()
+                    } else {
+                        f64::INFINITY
+                    };
+                    let backward = (evidence.end_position as f64) < observed;
+                    let (score, jump_penalty) = self.rank(&evidence, predicted, locked);
+                    candidates.push(Candidate {
+                        evidence,
+                        score,
+                        distance,
+                        backward,
+                        from_global: true,
+                        jump_penalty,
+                    });
+                }
+            }
+            self.regions = regions;
+
+            // Fair comparison for jump margins: "could the unexplained words
+            // be explained at or AHEAD of the current position?" — scored on
+            // the same query. Forward-only on purpose: a backward retake must
+            // not be allowed to out-compete itself through this band.
+            if locked && !global_query.is_empty() {
+                let p = predicted.max(0.0) as u32;
+                let start = p.saturating_sub(6);
+                // Band edge == the discontinuity threshold: "continuing"
+                // means within the same distance that makes a candidate
+                // local. Wider, and a 50-atom skip's own evidence would veto
+                // the skip through this comparison.
+                let end = (p + self.config.discontinuity_atoms).min(len);
+                if let Some(ev) = align(
+                    &self.script,
+                    global_query,
+                    start,
+                    end,
+                    &self.config,
+                    &mut self.scratch,
+                ) {
+                    local_suffix_score = self.rank(&ev, predicted, locked).0;
+                }
             }
         }
-        self.regions = regions;
 
         if candidates.is_empty() {
             return self.hold(DecisionCode::HoldLowEvidence, now_ms);
@@ -304,37 +490,87 @@ impl Engine {
             }
         }
 
-        let best = clusters[0].clone();
-        // The strongest *distant* competitor to the best cluster.
-        let competitor = clusters
-            .iter()
-            .skip(1)
-            .find(|c| {
-                (c.evidence.end_position as i64 - best.evidence.end_position as i64).unsigned_abs()
-                    > self.config.discontinuity_atoms as u64
-            })
-            .cloned();
-        let margin = competitor
-            .as_ref()
-            .map(|c| best.score - c.score)
-            .unwrap_or(f64::INFINITY);
-
         if !locked {
+            let best = clusters[0].clone();
+            let competitor = clusters
+                .iter()
+                .skip(1)
+                .find(|c| {
+                    (c.evidence.end_position as i64 - best.evidence.end_position as i64)
+                        .unsigned_abs()
+                        > self.config.discontinuity_atoms as u64
+                })
+                .cloned();
+            let margin = competitor
+                .as_ref()
+                .map(|c| best.score - c.score)
+                .unwrap_or(f64::INFINITY);
             return self.decide_relocation(best, margin, now_ms);
         }
 
-        let local = best.distance <= self.config.discontinuity_atoms as f64;
-        if local {
-            self.pending_jump = None;
-            self.decide_local(best, margin, now_ms)
-        } else {
-            // The best explanation is far away. The best local cluster (if
-            // any) is what we compare it against.
-            let best_local = clusters
+        // Locked: try a discontinuity first if a distant cluster exists,
+        // otherwise (or if it is merely pending) fall back to local.
+        // Backward moves beyond a few atoms are ALWAYS discontinuities —
+        // a monotonic alignment path cannot represent re-reading earlier
+        // text, however close it is.
+        let is_distant = |c: &Candidate| {
+            c.from_global
+                && (c.distance > self.config.discontinuity_atoms as f64
+                    || (c.backward && c.distance > 6.0))
+        };
+        let best_distant = clusters.iter().find(|c| is_distant(c)).cloned();
+        if std::env::var("CC_ALIGN_DEBUG").is_ok() {
+            eprintln!(
+                "t={now_ms:.0} pred={predicted:.1} unexpl_start={unexplained_start} unexpl_content={unexplained_content} weak={} local_ok={local_ok} local_end={:?} clusters={:?}",
+                self.weak_streak,
+                local_candidate.as_ref().map(|c| c.evidence.end_position),
+                clusters
+                    .iter()
+                    .map(|c| (c.evidence.end_position, (c.score * 100.0) as i64, c.backward))
+                    .collect::<Vec<_>>()
+            );
+        }
+        if let Some(distant) = best_distant {
+            // Ambiguity among distant targets (duplicate passages): the best
+            // distant cluster must clearly beat the next distant cluster.
+            let distant_rivals_gap = clusters
                 .iter()
-                .find(|c| c.distance <= self.config.discontinuity_atoms as f64)
-                .cloned();
-            self.decide_discontinuity(best, best_local, now_ms)
+                .filter(|c| {
+                    is_distant(c)
+                        && (c.evidence.end_position as i64
+                            - distant.evidence.end_position as i64)
+                            .unsigned_abs()
+                            > self.config.cluster_radius as u64 * 4
+                })
+                .map(|c| (distant.score + distant.jump_penalty) - (c.score + c.jump_penalty))
+                .fold(f64::INFINITY, f64::min);
+            let discontinuity_horizon = global_query.first().map(|q| q.audio_ms - 1.0);
+            match self.try_discontinuity(
+                &distant,
+                local_suffix_score,
+                distant_rivals_gap,
+                discontinuity_horizon,
+                now_ms,
+            ) {
+                DiscontinuityOutcome::Accepted(snapshot) => return snapshot,
+                DiscontinuityOutcome::Pending => {
+                    if !local_ok {
+                        self.confidence = (self.confidence * 0.85).max(0.05);
+                        return self.snapshot(
+                            DecisionCode::JumpPending,
+                            self.last_evidence_ms,
+                            now_ms,
+                        );
+                    }
+                    // A healthy local explanation continues below.
+                }
+                DiscontinuityOutcome::Rejected => {}
+            }
+        }
+
+        match local_candidate {
+            Some(local) => self.decide_local(local, f64::INFINITY, now_ms),
+            None => self.hold(DecisionCode::HoldLowEvidence, now_ms),
         }
     }
 
@@ -418,40 +654,49 @@ impl Engine {
         self.snapshot(decision, evidence_ms, now_ms)
     }
 
-    fn decide_discontinuity(
+    /// Evaluate a distant candidate scored on the unexplained suffix.
+    ///
+    /// `local_suffix_score` is the local band aligned with the SAME suffix —
+    /// the honest "could this still be explained locally?" comparison.
+    /// `distant_rivals_gap` is the margin to the next distant cluster
+    /// (duplicate-passage protection).
+    fn try_discontinuity(
         &mut self,
-        best: Candidate,
-        best_local: Option<Candidate>,
+        best: &Candidate,
+        local_suffix_score: f64,
+        distant_rivals_gap: f64,
+        horizon_ms: Option<f64>,
         now_ms: f64,
-    ) -> Snapshot {
-        let c = &self.config;
+    ) -> DiscontinuityOutcome {
+        let c = self.config.clone();
         let ev = &best.evidence;
-        let local_score = best_local.as_ref().map(|c| c.score).unwrap_or(f64::MIN);
         let needed_content = if best.backward {
             c.jump_min_content + c.retake_extra_content
         } else {
             c.jump_min_content
         };
+        // Evidence-only margin: add the distance penalty back. The penalty
+        // orders candidates; it must not make a far-but-correct relocation
+        // permanently lose to nearby junk.
+        let evidence_score = best.score + best.jump_penalty;
         let strong = ev.fidelity >= c.jump_min_fidelity
             && ev.content_matches >= needed_content
-            && best.score - local_score >= c.jump_margin;
+            && evidence_score - local_suffix_score >= c.jump_margin
+            && distant_rivals_gap >= c.ambiguity_margin;
 
         if !strong {
-            self.pending_jump = None;
-            // A decent local explanation continues to track; otherwise hold.
-            if let Some(local) = best_local {
-                if local.evidence.fidelity >= c.observe_min_fidelity
-                    && local.evidence.content_matches >= c.observe_min_content
-                {
-                    return self.decide_local(local, f64::INFINITY, now_ms);
-                }
+            // Not evidence enough to even consider — clear any stale pending
+            // target so an unrelated later fluctuation doesn't inherit its
+            // persistence count.
+            if ev.content_matches < 2 {
+                self.pending_jump = None;
             }
-            return self.hold(DecisionCode::HoldLowEvidence, now_ms);
+            return DiscontinuityOutcome::Rejected;
         }
 
         // Persistence: the same distant target must win on consecutive
-        // revisions before we move the display. A final with strong unique
-        // evidence may jump immediately.
+        // revisions before the display moves. A final with strong evidence
+        // may jump immediately.
         let is_final_evidence = self
             .ledger
             .current_item()
@@ -462,6 +707,8 @@ impl Engine {
             .pending_jump
             .as_ref()
             .map(|p| {
+                // The target advances as the reader keeps speaking, so the
+                // window is forgiving in the direction of travel.
                 (p.target as i64 - target as i64).unsigned_abs()
                     <= (c.cluster_radius as u64) * 4
             })
@@ -472,52 +719,53 @@ impl Engine {
             1
         };
 
-        let required = c.jump_persistence;
-        if count < required && !is_final_evidence {
-            self.pending_jump = Some(PendingJump {
-                target,
-                count,
-                backward: best.backward,
-            });
-            self.confidence = (self.confidence * 0.85).max(0.05);
-            return self.snapshot(DecisionCode::JumpPending, self.last_evidence_ms, now_ms);
+        if count < c.jump_persistence && !is_final_evidence {
+            self.pending_jump = Some(PendingJump { target, count });
+            return DiscontinuityOutcome::Pending;
         }
 
         // Accepted.
         let backward = best.backward;
         self.pending_jump = None;
+        self.weak_streak = 0;
+        // Evidence from before the discontinuity is dead — without this the
+        // next full-tail alignment out-votes the jump and snaps back.
+        if let Some(h) = horizon_ms {
+            self.tail_horizon_ms = self.tail_horizon_ms.max(h);
+        }
         let evidence_ms = self.evidence_time(ev, now_ms);
         self.accept(target as f64, evidence_ms, true);
         self.state = TrackingState::Following;
-        self.confidence = confidence_of(ev, best.score - local_score);
-        if backward {
+        self.confidence = confidence_of(ev, evidence_score - local_suffix_score);
+        let snapshot = if backward {
             // A retake re-reads earlier text: confirmed must follow backward,
             // or every subsequent confirm would be capped at the old position.
             self.confirmed = self.confirmed.min(target as f64);
             self.snapshot(DecisionCode::RetakeAccepted, evidence_ms, now_ms)
         } else {
             self.snapshot(DecisionCode::JumpForwardAccepted, evidence_ms, now_ms)
-        }
+        };
+        DiscontinuityOutcome::Accepted(snapshot)
     }
 
     // -----------------------------------------------------------------
     // Candidate regions
     // -----------------------------------------------------------------
 
-    fn build_regions(&mut self, query: &[QueryAtom], predicted: f64, locked: bool) {
+    /// Global candidate regions from the (unexplained) evidence: viewport
+    /// prior, script start (while searching), and anchor postings. The local
+    /// band is excluded — phase 1 already owns it.
+    fn build_global_regions(
+        &mut self,
+        query: &[QueryAtom],
+        locked: bool,
+        local_region: Option<(u32, u32)>,
+    ) {
         let c = &self.config;
         let len = self.script.len() as u32;
         self.regions.clear();
 
-        // 1. Local band around the prediction.
-        if locked {
-            let p = predicted.max(0.0) as u32;
-            let start = p.saturating_sub(c.local_back);
-            let end = (p + c.local_forward).min(len);
-            self.regions.push((start, end));
-        }
-
-        // 2. Viewport prior region.
+        // 1. Viewport prior region.
         if let Some((lo, hi)) = self.viewport {
             let start = lo.saturating_sub(c.global_region / 4).min(len);
             let end = (hi + c.global_region / 4).min(len);
@@ -526,16 +774,23 @@ impl Engine {
             }
         }
 
-        // 3. Session start region while searching: presenters usually begin
+        // 2. Session start region while searching: presenters usually begin
         // at the top.
         if !locked {
             self.regions.push((0, c.global_region.min(len)));
         }
 
-        // 4. Anchor-proposed global regions from stable evidence.
+        // 3. Anchor-proposed regions. Trailing-provisional atoms are
+        // excluded (they flicker); interior-provisional ones may PROPOSE a
+        // region — acceptance gates still require persistent evidence, and
+        // waiting for full stability would add a whole partial-cadence of
+        // recovery latency.
         let stable: Vec<&QueryAtom> = query
             .iter()
-            .filter(|q| q.stability.is_stable() && !q.filler)
+            .filter(|q| {
+                !matches!(q.stability, crate::ledger::StabilityClass::TrailingProvisional)
+                    && !q.filler
+            })
             .collect();
         let mut keys_used = 0usize;
 
@@ -567,6 +822,7 @@ impl Engine {
                 }
             }
         }
+        let _ = local_region;
 
         // Single rare-token anchors, newest first.
         for q in stable.iter().rev() {
@@ -612,13 +868,17 @@ impl Engine {
     // Ranking and bookkeeping
     // -----------------------------------------------------------------
 
-    fn rank(&self, ev: &Evidence, predicted: f64, locked: bool) -> f64 {
+    /// Rank a candidate. Returns (score, jump_penalty): the score includes
+    /// the distance prior; gate margins add the penalty back so evidence is
+    /// compared with evidence.
+    fn rank(&self, ev: &Evidence, predicted: f64, locked: bool) -> (f64, f64) {
         let c = &self.config;
         let mut score = c.rank_w_fidelity * ev.fidelity
             + c.rank_w_coverage * ev.coverage
             + c.rank_w_matched_weight * (1.0 + ev.matched_stable_weight / 1000.0).ln()
             + c.rank_w_run * (1.0 + ev.longest_run as f64).ln();
 
+        let mut jump_penalty = 0.0;
         if locked {
             let d = (ev.end_position as f64 - predicted).abs();
             let band = c.discontinuity_atoms as f64;
@@ -628,6 +888,7 @@ impl Engine {
                     penalty *= c.rank_backward_factor;
                 }
                 score -= penalty;
+                jump_penalty = penalty;
             }
         }
 
@@ -636,7 +897,7 @@ impl Engine {
             let d = ev.end_position as f64 - center;
             score += c.viewport_bonus * (-0.5 * (d / c.viewport_sigma).powi(2)).exp();
         }
-        score
+        (score, jump_penalty)
     }
 
     /// Apply an accepted position: update observed, rate anchors, timing.

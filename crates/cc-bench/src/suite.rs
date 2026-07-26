@@ -357,6 +357,167 @@ fn build_table(
     table
 }
 
+/// Manifest of one captured live run directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunManifest {
+    pub name: String,
+    pub script: String,
+    pub scenario: String,
+    pub engine: String,
+    pub voice_index: usize,
+    /// Spoken word count of the performance.
+    pub words: usize,
+    /// Audio length in seconds.
+    pub audio_s: f64,
+}
+
+/// Replay every captured live run in `runs_dir` and build the Tier-B table.
+pub fn run_tier_b(
+    runs_dir: &std::path::Path,
+    scripts_dir: &std::path::Path,
+    config: &AlignmentConfig,
+    label: &str,
+) -> anyhow::Result<SuiteResult> {
+    use crate::capture::read_events_jsonl;
+    use crate::plan::GoldTimeline;
+
+    let mut runs: Vec<RunMetrics> = Vec::new();
+    let mut pooled_abs: Vec<f64> = Vec::new();
+    let mut pooled_signed: Vec<f64> = Vec::new();
+    let mut wer_weighted = 0.0f64;
+    let mut wer_words = 0usize;
+
+    let mut dirs: Vec<_> = std::fs::read_dir(runs_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+    anyhow::ensure!(!dirs.is_empty(), "no captured runs in {}", runs_dir.display());
+
+    for dir in dirs {
+        let manifest: RunManifest =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json"))?)?;
+        let gold: GoldTimeline =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("gold.json"))?)?;
+        let events = read_events_jsonl(&dir.join("events.jsonl"))?;
+        let performance_text = std::fs::read_to_string(dir.join("performance.txt"))?;
+        let source =
+            std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
+        let script = cc_align::compile(&source, cc_align::CompileOptions::default());
+
+        let result = crate::replay::replay(script, config.clone(), &events, &gold.viewport_hints);
+        let eval = evaluate(
+            &manifest.name,
+            &manifest.scenario,
+            &gold,
+            &result,
+            Some(&performance_text),
+        );
+        pooled_abs.extend_from_slice(&eval.samples.abs_err);
+        pooled_signed.extend_from_slice(&eval.samples.signed_err);
+        if let Some(wer) = eval.metrics.wer_pct {
+            wer_weighted += wer * manifest.words as f64;
+            wer_words += manifest.words;
+        }
+        runs.push(eval.metrics);
+    }
+
+    // Tier-B table: the live end-to-end numbers.
+    let mut table = Vec::new();
+    let n = pooled_abs.len().max(1) as f64;
+    let within2 = pooled_abs.iter().filter(|v| **v <= 2.0).count() as f64 / n * 100.0;
+    let within5 = pooled_abs.iter().filter(|v| **v <= 5.0).count() as f64 / n * 100.0;
+    table.push(entry("live.within2", within2, "%", "higher"));
+    table.push(entry("live.within5", within5, "%", "higher"));
+    table.push(entry(
+        "live.p95_abs",
+        percentile(&mut pooled_abs, 95.0),
+        "atoms",
+        "lower",
+    ));
+    let mean_signed = if pooled_signed.is_empty() {
+        0.0
+    } else {
+        pooled_signed.iter().sum::<f64>() / pooled_signed.len() as f64
+    };
+    table.push(entry("live.mean_signed_abs", mean_signed.abs(), "atoms", "lower"));
+    let false_jumps: u32 = runs.iter().map(|r| r.false_jumps).sum();
+    let catastrophic: u32 = runs.iter().map(|r| r.catastrophic).sum();
+    table.push(entry("live.false_jumps", false_jumps as f64, "count", "lower"));
+    table.push(entry("live.catastrophic", catastrophic as f64, "count", "lower"));
+    let (moved, total) = runs
+        .iter()
+        .fold((0usize, 0usize), |(m, t), r| (m + r.prefinal_moved, t + r.prefinal_total));
+    table.push(entry(
+        "live.prefinal_move",
+        if total == 0 { 0.0 } else { 100.0 * moved as f64 / total as f64 },
+        "%",
+        "higher",
+    ));
+    let (frozen, freeze_eligible) = runs.iter().fold((0usize, 0usize), |(f, e), r| {
+        (f + r.freeze_frozen, e + r.freeze_eligible)
+    });
+    table.push(entry(
+        "live.freeze",
+        if freeze_eligible == 0 {
+            0.0
+        } else {
+            100.0 * frozen as f64 / freeze_eligible as f64
+        },
+        "%",
+        "lower",
+    ));
+    let mut recoveries: Vec<f64> = runs
+        .iter()
+        .flat_map(|r| &r.recoveries)
+        .filter(|e| e.kind != RecoveryKind::Initial)
+        .filter_map(|e| e.recovered_in_s)
+        .collect();
+    let recovery_failures = runs
+        .iter()
+        .flat_map(|r| &r.recoveries)
+        .filter(|e| e.recovered_in_s.is_none())
+        .count();
+    table.push(entry(
+        "live.recovery_p95",
+        percentile(&mut recoveries, 95.0),
+        "s",
+        "lower",
+    ));
+    table.push(entry(
+        "live.recovery_failures",
+        recovery_failures as f64,
+        "count",
+        "lower",
+    ));
+    let mut first_locks: Vec<f64> = runs
+        .iter()
+        .flat_map(|r| &r.recoveries)
+        .filter(|e| e.kind == RecoveryKind::Initial)
+        .filter_map(|e| e.recovered_in_s)
+        .collect();
+    table.push(entry(
+        "live.first_lock_p50",
+        percentile(&mut first_locks, 50.0),
+        "s",
+        "lower",
+    ));
+    table.push(entry(
+        "live.wer",
+        if wer_words == 0 { 0.0 } else { wer_weighted / wer_words as f64 },
+        "%",
+        "higher_is_worse_diagnostic",
+    ));
+
+    Ok(SuiteResult {
+        label: label.to_string(),
+        config: config.clone(),
+        table,
+        runs,
+    })
+}
+
 /// Render the table for the terminal.
 pub fn print_table(result: &SuiteResult) {
     println!("== {} ==", result.label);

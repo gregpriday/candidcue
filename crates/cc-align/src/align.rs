@@ -63,6 +63,11 @@ pub struct Evidence {
     pub last_match_audio_ms: f64,
     /// Query index (0-based) of the last matched atom.
     pub last_match_query_index: Option<usize>,
+    /// Query index of the last atom in the last SOLID run (≥2 consecutive
+    /// exact matches). A single stray stopword match deep in the tail must
+    /// not make the material after it look "explained" — self-similar text
+    /// produces those constantly.
+    pub last_solid_match_query_index: Option<usize>,
 }
 
 /// Scratch buffers reused across alignments so the hot path allocates nothing.
@@ -258,6 +263,8 @@ pub fn align(
     let mut consumed_script_weight: i64 = 0;
     let mut insert_denominator: i64 = 0;
     let mut first_consumed_j = best_j;
+    // Backtrace-order adjacency tracking for solid runs.
+    let mut prev_exact_qi: Option<usize> = None;
 
     while i > 0 || (state == 2 && j > 0) {
         match state {
@@ -274,6 +281,14 @@ pub fn align(
                     ev.exact_matches += 1;
                     run += 1;
                     ev.longest_run = ev.longest_run.max(run);
+                    // Backtrace runs end→start: the first adjacent exact
+                    // pair seen is the LAST solid run of the path.
+                    if ev.last_solid_match_query_index.is_none()
+                        && prev_exact_qi == Some(i)
+                    {
+                        ev.last_solid_match_query_index = Some(i);
+                    }
+                    prev_exact_qi = Some(i - 1);
                     ev.matched_weight += weight * stab_mult;
                     if q.stability.is_stable() {
                         ev.matched_stable_weight += weight * stab_mult;
@@ -297,6 +312,7 @@ pub fn align(
                 } else if fuzzy_match(&q.surface, &s.surface) {
                     ev.fuzzy_matches += 1;
                     run = 0;
+                    prev_exact_qi = None;
                     ev.matched_weight += weight * stab_mult * 0.5;
                     if q.stability.is_stable() {
                         ev.matched_stable_weight += weight * stab_mult * 0.5;
@@ -309,6 +325,7 @@ pub fn align(
                 } else {
                     ev.substitutions += 1;
                     run = 0;
+                    prev_exact_qi = None;
                 }
                 // Where did the diagonal come from?
                 let prev_m = scratch.m[idx(i - 1, j - 1)];
@@ -329,6 +346,7 @@ pub fn align(
                 let q = &query[i - 1];
                 ev.insertions += 1;
                 run = 0;
+                prev_exact_qi = None;
                 insert_denominator += insert_cost_for_denominator(q, config);
                 // Recompute the same open/extend costs the forward pass used
                 // for this row — comparing raw predecessor values would pick
@@ -355,6 +373,7 @@ pub fn align(
                 let s = &script.atoms[region_start as usize + j - 1];
                 ev.deletions += 1;
                 run = 0;
+                prev_exact_qi = None;
                 first_consumed_j = j - 1;
                 consumed_script_weight += s.weight as i64;
                 let weight = s.weight as i64;
