@@ -131,36 +131,36 @@ through both engines.
 |---|---|---|---:|---:|---|
 | `safety.false_jumps` | count | lower | 0.000 | 0.000 | unchanged |
 | `safety.catastrophic` | count | lower | 18.000 | 0.000 | 18 → 0 ✅ |
-| `accuracy.clean_within2` | % | higher | 91.890 | 99.468 | +7.58 pp ✅ |
+| `accuracy.clean_within2` | % | higher | 91.890 | 99.293 | +7.40 pp ✅ |
 | `accuracy.clean_within5` | % | higher | 99.985 | 100.000 | +0.01 pp ✅ |
 | `accuracy.clean_p95_abs` | atoms | lower | 2.185 | 1.227 | 43.9% lower ✅ |
-| `accuracy.mean_signed_abs` | atoms | lower | 0.927 | 0.739 | 20.3% lower ✅ |
+| `accuracy.mean_signed_abs` | atoms | lower | 0.927 | 0.733 | 20.9% lower ✅ |
 | `responsiveness.prefinal_move` | % | higher | 95.506 | 95.506 | unchanged |
-| `responsiveness.freeze` | % | lower | 22.412 | 0.253 | -22.16 pp ✅ |
+| `responsiveness.freeze` | % | lower | 22.246 | 0.078 | -22.17 pp ✅ |
 | `responsiveness.first_lock_p50` | s | lower | 2.650 | 2.650 | unchanged |
-| `robust.corrupt15_within5` | % | higher | 96.775 | 99.461 | +2.69 pp ✅ |
+| `robust.corrupt15_within5` | % | higher | 96.775 | 99.476 | +2.70 pp ✅ |
 | `robust.substitutions_within2` | % | higher | 90.257 | 99.796 | +9.54 pp ✅ |
 | `robust.word_repeats_within5` | % | higher | 100.000 | 100.000 | unchanged |
 | `robust.phrase_repeats_within5` | % | higher | 100.000 | 100.000 | unchanged |
 | `recovery.skip_p95` | s | lower | 23.350 | 5.350 | 77.1% lower ✅ |
 | `recovery.retake_p95` | s | lower | 15.250 | 5.350 | 64.9% lower ✅ |
-| `recovery.adlib_p95` | s | lower | 0.050 | 0.700 | -1300.0% lower ⚠️ |
+| `recovery.adlib_p95` | s | lower | 0.050 | 0.600 | -1100.0% lower ⚠️ |
 | `recovery.failures` | count | lower | 1.000 | 0.000 | 1 → 0 ✅ |
-| `recovery.adlib_drift_p95` | atoms | lower | 1.740 | 4.737 | -172.2% lower ⚠️ |
+| `recovery.adlib_drift_p95` | atoms | lower | 1.740 | 4.582 | -163.3% lower ⚠️ |
 | `viewport.start_lock_p50` | s | lower | 3.550 | 3.550 | unchanged |
 | `names.cold_jump_lock_p95` | s | lower | 7.150 | 3.550 | 50.3% lower ✅ |
 | `ambiguity.refrain_false_jumps` | count | lower | 0.000 | 0.000 | unchanged |
-| `perf.mean_event_us` | µs | lower | 179.171 | 168.702 | 5.8% lower ✅ |
-| `perf.p95_event_us` | µs | lower | 1638.000 | 932.000 | 43.1% lower ✅ |
-| `perf.scale_ratio_5k` | × | lower | 5.923 | 1.451 | 75.5% lower ✅ |
-| `live.within2` | % | higher | 76.345 | 87.067 | +10.72 pp ✅ |
-| `live.within5` | % | higher | 89.410 | 95.505 | +6.09 pp ✅ |
-| `live.p95_abs` | atoms | lower | 61.907 | 4.488 | 92.8% lower ✅ |
-| `live.mean_signed_abs` | atoms | lower | 19.219 | 3.466 | 82.0% lower ✅ |
+| `perf.mean_event_us` | µs | lower | 188.725 | 189.429 | -0.4% lower ⚠️ |
+| `perf.p95_event_us` | µs | lower | 1632.000 | 991.000 | 39.3% lower ✅ |
+| `perf.scale_ratio_5k` | × | lower | 5.992 | 1.578 | 73.7% lower ✅ |
+| `live.within2` | % | higher | 76.345 | 86.582 | +10.24 pp ✅ |
+| `live.within5` | % | higher | 89.410 | 95.496 | +6.09 pp ✅ |
+| `live.p95_abs` | atoms | lower | 61.907 | 4.490 | 92.7% lower ✅ |
+| `live.mean_signed_abs` | atoms | lower | 19.219 | 3.362 | 82.5% lower ✅ |
 | `live.false_jumps` | count | lower | 1.000 | 0.000 | 1 → 0 ✅ |
-| `live.catastrophic` | count | lower | 5.000 | 1.000 | 5 → 1 ✅ |
+| `live.catastrophic` | count | lower | 7.000 | 1.000 | 7 → 1 ✅ |
 | `live.prefinal_move` | % | higher | 98.113 | 100.000 | +1.89 pp ✅ |
-| `live.freeze` | % | lower | 40.022 | 11.423 | -28.60 pp ✅ |
+| `live.freeze` | % | lower | 37.897 | 6.971 | -30.93 pp ✅ |
 | `live.recovery_p95` | s | lower | 23.400 | 4.850 | 79.3% lower ✅ |
 | `live.recovery_failures` | count | lower | 0.000 | 0.000 | unchanged |
 | `live.first_lock_p50` | s | lower | 2.600 | 2.600 | unchanged |
@@ -168,12 +168,23 @@ through both engines.
 
 ### Reading the table
 
-* The two safety rows are the lexicographic headline: the optimized engine
-  produces **zero false jumps and zero catastrophic periods** across every
-  Tier A scenario and every live capture, while recovering from skips and
-  retakes 4× faster than the baseline.
-* `accuracy.*` and `live.within*` are render-time numbers — they include
-  provider lag, prediction, and every hold the engine chose to make.
+* The safety rows are the lexicographic headline: the optimized engine
+  produces **zero false jumps everywhere and zero catastrophic periods
+  across all 67 Tier A scenarios**; on live captures one catastrophic
+  period remains (the mangled-names cold jump — see limitations), down
+  from seven under the same strict definition. Skips and retakes recover
+  4× faster than the baseline.
+* Definitions were hardened after an external review: catastrophic
+  counting is NOT gated on first lock (a wrong early lock counts), grace
+  windows apply only around genuine reader discontinuities, and a display
+  jump is false unless it lands near the reader's actual region.
+* `accuracy.*` and `live.within*` are render-time, post-first-lock,
+  on-script speaking samples of the ENGINE TARGET (the stage's smoothing
+  is not modelled); lock latency is its own row, and a run that never
+  locks scores zero accuracy and a recovery failure.
+* Tier-B gold word times come from per-segment TTS clip boundaries with
+  character-weighted interpolation, not forced alignment — treat ±1–2
+  atoms of Tier-B gold noise as measurement floor.
 * `live.wer` is diagnostic (the recogniser's quality, not ours): ~0–4% on
   clean scripts, ~14% on the proper-noun and dense-number scripts — the
   conditions the robustness rows exist for.

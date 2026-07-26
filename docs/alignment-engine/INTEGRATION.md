@@ -98,7 +98,7 @@ const target = snapshotDisplayAt(lastSnapshot, audioClockNowMs());
 function snapshotDisplayAt(s: Snapshot, tMs: number): number {
   if (s.rate <= 0) return s.observed;
   const horizon = clamp(tMs - s.evidenceAudioMs, 0, s.maxPredictionMs);
-  return s.observed + (s.rate * horizon) / 1000;
+  return Math.min(s.observed + (s.rate * horizon) / 1000, s.scriptLen);
 }
 ```
 
