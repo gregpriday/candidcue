@@ -282,7 +282,14 @@ pub fn align(
                 first_consumed_j = j - 1;
                 consumed_script_weight += s.weight as i64;
                 insert_denominator += insert_cost_for_denominator(q, config);
-                if q.id == s.id {
+                if q.id == s.id && q.filler {
+                    // A filler matching a scripted filler consumes both
+                    // sides but carries NO positional evidence (spec: filler
+                    // insertion is cheap but never supplies position). It
+                    // must not extend runs, coverage, or matched weight.
+                    prev_exact_qi = None;
+                    run = 0;
+                } else if q.id == s.id {
                     ev.exact_matches += 1;
                     run += 1;
                     ev.longest_run = ev.longest_run.max(run);

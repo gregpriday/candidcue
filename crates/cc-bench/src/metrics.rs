@@ -292,6 +292,36 @@ pub fn evaluate(
         }
         display_prev_sample = Some((t, display));
 
+        // ---- catastrophic wrongness: NOT gated on first lock ----
+        // A wrong early lock that claims Following must count; before any
+        // lock the engine reports Searching, which never counts. Grace
+        // applies only around gold discontinuities (their acceptance takes
+        // persistence rounds by design) — not around the initial lock or
+        // ad-lib returns.
+        if point.on_script && point.speaking {
+            let err = display - point.position;
+            let in_grace = gold_jumps
+                .iter()
+                .any(|&(gt, _)| t >= gt && t < gt + DISCONTINUITY_GRACE_MS);
+            let claiming_follow =
+                matches!(sample.state, Some(cc_align::TrackingState::Following));
+            if err.abs() > CATASTROPHIC_ATOMS && !in_grace && claiming_follow {
+                catastrophic_run_ms += SAMPLE_MS;
+                if catastrophic_run_ms >= CATASTROPHIC_SUSTAIN_MS && !in_catastrophic {
+                    catastrophic_periods += 1;
+                    in_catastrophic = true;
+                }
+            } else {
+                catastrophic_run_ms = 0.0;
+                in_catastrophic = false;
+            }
+        } else {
+            // A pause must not bridge two short wrong stretches into one
+            // "sustained" period.
+            catastrophic_run_ms = 0.0;
+            in_catastrophic = false;
+        }
+
         if point.on_script && point.speaking && t >= accuracy_from_ms {
             let err = display - point.position;
             eligible += 1;
@@ -314,7 +344,7 @@ pub fn evaluate(
                         let display_moved = display - display_then;
                         if gold_moved >= FREEZE_GOLD_ATOMS {
                             freeze_eligible += 1;
-                            if display_moved < FREEZE_DISPLAY_ATOMS {
+                            if display_moved.abs() < FREEZE_DISPLAY_ATOMS {
                                 frozen += 1;
                             }
                         }
@@ -322,29 +352,6 @@ pub fn evaluate(
                 }
             }
 
-            // Catastrophic wrongness: far from gold while CLAIMING to follow,
-            // outside grace windows. A stale hold (Holding/Searching) is a
-            // recovery failure, not false confidence — recovery metrics own
-            // that.
-            let in_grace = recovery_targets
-                .iter()
-                .any(|(_, at)| t >= *at && t < *at + DISCONTINUITY_GRACE_MS)
-                || recovery_targets
-                    .first()
-                    .map(|(_, at)| t < *at + DISCONTINUITY_GRACE_MS)
-                    .unwrap_or(false);
-            let claiming_follow =
-                matches!(sample.state, Some(cc_align::TrackingState::Following));
-            if err.abs() > CATASTROPHIC_ATOMS && !in_grace && claiming_follow {
-                catastrophic_run_ms += SAMPLE_MS;
-                if catastrophic_run_ms >= CATASTROPHIC_SUSTAIN_MS && !in_catastrophic {
-                    catastrophic_periods += 1;
-                    in_catastrophic = true;
-                }
-            } else {
-                catastrophic_run_ms = 0.0;
-                in_catastrophic = false;
-            }
         } else if !point.on_script {
             // Ad-lib hold behaviour.
             let drift = (display - point.position).abs();
@@ -361,15 +368,19 @@ pub fn evaluate(
     let mut false_jumps = 0u32;
     for &(jt, jd, err_after) in &display_jumps {
         if err_after <= RECOVER_HOLD_ATOMS {
-            continue;
+            continue; // landed on the reader — a late-but-correct move
         }
+        // A sign-matched gold discontinuity (or the initial lock) excuses a
+        // jump ONLY if it also landed near the reader's actual region — a
+        // +400-atom leap during a +50-atom gold skip is still false.
+        let landed_close = err_after <= CATASTROPHIC_ATOMS;
         let matched = gold_jumps.iter().any(|&(gt, gd)| {
             (jt - gt).abs() <= JUMP_MATCH_WINDOW_MS && gd.signum() == jd.signum()
         });
         let initial = recovery_targets
             .iter()
             .any(|(k, at)| *k == RecoveryKind::Initial && (jt - at).abs() <= JUMP_MATCH_WINDOW_MS);
-        if !matched && !initial {
+        if !((matched || initial) && landed_close) {
             false_jumps += 1;
         }
     }
@@ -458,7 +469,9 @@ fn mean(v: &[f64]) -> f64 {
 
 pub fn percentile(v: &mut [f64], p: f64) -> f64 {
     if v.is_empty() {
-        return 0.0;
+        // An empty sample set has no percentile; 0.0 would read as a
+        // perfect score on lower-is-better rows.
+        return f64::NAN;
     }
     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let idx = ((v.len() as f64 - 1.0) * p / 100.0).round() as usize;

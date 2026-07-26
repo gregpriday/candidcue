@@ -197,7 +197,8 @@ pub fn compile(source: &str, options: CompileOptions) -> CompiledScript {
     // Occurrence counts, weights, flags.
     let mut counts: HashMap<u32, u16> = HashMap::new();
     for atom in &atoms {
-        *counts.entry(atom.id).or_default() += 1;
+        let c: &mut u16 = counts.entry(atom.id).or_default();
+        *c = c.saturating_add(1);
     }
     for atom in &mut atoms {
         let occurrences = counts[&atom.id];

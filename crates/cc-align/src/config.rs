@@ -133,6 +133,59 @@ pub struct AlignmentConfig {
     pub rank_backward_factor: f64,
 }
 
+impl AlignmentConfig {
+    /// Clamp pathological values to something the engine can run with.
+    /// The engine is fed persisted/user-supplied configuration in the app;
+    /// a NaN rate or negative cost must degrade to defaults, not panic or
+    /// poison every score.
+    pub fn sanitized(mut self) -> Self {
+        let d = AlignmentConfig::default();
+        fn fix(v: &mut f64, fallback: f64) {
+            if !v.is_finite() {
+                *v = fallback;
+            }
+        }
+        fix(&mut self.rate_default, d.rate_default);
+        fix(&mut self.rate_min, d.rate_min);
+        fix(&mut self.rate_max, d.rate_max);
+        if self.rate_min > self.rate_max {
+            std::mem::swap(&mut self.rate_min, &mut self.rate_max);
+        }
+        self.rate_min = self.rate_min.max(0.1);
+        self.rate_max = self.rate_max.max(self.rate_min);
+        self.rate_default = self.rate_default.clamp(self.rate_min, self.rate_max);
+        fix(&mut self.max_prediction_ms, d.max_prediction_ms);
+        self.max_prediction_ms = self.max_prediction_ms.max(0.0);
+        fix(&mut self.coast_ms, d.coast_ms);
+        self.coast_ms = self.coast_ms.max(0.0);
+        fix(&mut self.emission_lag_ms, d.emission_lag_ms);
+        fix(&mut self.partial_lag_ms, d.partial_lag_ms);
+        fix(&mut self.endpoint_lag_ms, d.endpoint_lag_ms);
+        fix(&mut self.viewport_sigma, d.viewport_sigma);
+        if self.viewport_sigma <= 0.0 {
+            self.viewport_sigma = d.viewport_sigma;
+        }
+        fix(&mut self.viewport_bonus, d.viewport_bonus);
+        for cost in [
+            &mut self.cost_fuzzy,
+            &mut self.cost_substitution,
+            &mut self.cost_phonetic,
+            &mut self.cost_insert_filler,
+            &mut self.cost_insert_open,
+            &mut self.cost_insert_extend,
+            &mut self.del_extend_factor_milli,
+        ] {
+            if *cost < 0 {
+                *cost = 0;
+            }
+        }
+        self.max_query_atoms = self.max_query_atoms.clamp(4, 200);
+        self.beam_size = self.beam_size.clamp(1, 64);
+        self.max_regions = self.max_regions.clamp(1, 64);
+        self
+    }
+}
+
 impl Default for AlignmentConfig {
     fn default() -> Self {
         Self {

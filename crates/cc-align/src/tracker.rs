@@ -101,6 +101,8 @@ pub struct Snapshot {
     /// interaction state): the UI may offer "possible match below — resume
     /// here?" instead of teleporting. None while following normally.
     pub suggestion: Option<f64>,
+    /// Total spoken atoms in the script — the hard ceiling for `display_at`.
+    pub script_len: f64,
 }
 
 impl Snapshot {
@@ -112,7 +114,7 @@ impl Snapshot {
             return self.observed;
         }
         let horizon = (t_audio_ms - self.evidence_audio_ms).clamp(0.0, self.max_prediction_ms);
-        self.observed + self.rate * horizon / 1000.0
+        (self.observed + self.rate * horizon / 1000.0).min(self.script_len)
     }
 }
 
@@ -181,6 +183,7 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(script: CompiledScript, config: AlignmentConfig) -> Self {
+        let config = config.sanitized();
         let rate_default = config.rate_default;
         Self {
             script,
@@ -223,6 +226,7 @@ impl Engine {
         self.rate_anchors.clear();
         self.rate = self.config.rate_default;
         self.pending_jump = None;
+        self.weak_streak = 0;
         self.confidence = 0.9;
         self.last_evidence_ms = at_audio_ms;
         // Speech from before the manual move must not drag the cursor back.
@@ -237,7 +241,10 @@ impl Engine {
                 audio_start_ms,
             } => {
                 self.ledger.item_started(&item_id, audio_start_ms);
-                self.snapshot(DecisionCode::NoEvidence, audio_start_ms, audio_start_ms)
+                // No positional evidence arrived: the evidence clock stays
+                // where it was, or the display would re-extrapolate from a
+                // fresh horizon on every item boundary.
+                self.snapshot(DecisionCode::NoEvidence, self.last_evidence_ms, audio_start_ms)
             }
             SessionEvent::Partial {
                 item_id,
@@ -272,12 +279,17 @@ impl Engine {
         );
         query.retain(|q| q.audio_ms >= self.tail_horizon_ms);
         if query.is_empty() {
-            return self.snapshot(DecisionCode::NoEvidence, now_ms, now_ms);
+            return self.snapshot(DecisionCode::NoEvidence, self.last_evidence_ms, now_ms);
         }
 
         let locked = !matches!(self.state, TrackingState::Searching);
         let predicted = if locked {
-            let dt = ((now_ms - self.config.emission_lag_ms) - self.last_evidence_ms).max(0.0);
+            // Coasting is bounded: after a long silence the reader is far
+            // more likely to be where they stopped than rate*60s ahead —
+            // an unbounded dt once centred the local band 170 atoms past
+            // the reader after a minute of quiet.
+            let dt = ((now_ms - self.config.emission_lag_ms) - self.last_evidence_ms)
+                .clamp(0.0, self.config.max_prediction_ms + self.config.coast_ms);
             (self.observed + self.rate * dt / 1000.0).min(self.script.len() as f64)
         } else {
             self.observed
@@ -326,10 +338,9 @@ impl Engine {
                 .as_ref()
                 .and_then(|c| {
                     // Solid runs only: one stray stopword match must not
-                    // mark everything after it as explained.
-                    c.evidence
-                        .last_solid_match_query_index
-                        .or(c.evidence.last_match_query_index)
+                    // mark everything after it as explained. If the local
+                    // path has no solid run at all, NOTHING is explained.
+                    c.evidence.last_solid_match_query_index
                 })
                 .map(|i| i + 1)
                 .unwrap_or(0)
@@ -367,6 +378,11 @@ impl Engine {
             }
         } else {
             self.weak_streak = 0;
+            // Healthy local evidence: any distant target that was
+            // accumulating persistence was a false alarm. Without this, a
+            // stale count survives arbitrarily many good revisions and a
+            // later unrelated candidate inherits it.
+            self.pending_jump = None;
         }
 
         // ---------------------------------------------------------------
@@ -577,8 +593,17 @@ impl Engine {
         }
 
         match local_candidate {
-            Some(local) => self.decide_local(local, f64::INFINITY, now_ms),
-            None => self.hold(DecisionCode::HoldLowEvidence, now_ms),
+            // A phase-1 result far from the observed position (possible with
+            // a very short tail and the band's free start) is a relocation
+            // claim, and relocation claims go through the discontinuity
+            // machinery — never through the cheap local gate.
+            Some(local)
+                if local.distance <= self.config.discontinuity_atoms as f64
+                    && !(local.backward && local.distance > 6.0) =>
+            {
+                self.decide_local(local, f64::INFINITY, now_ms)
+            }
+            _ => self.hold(DecisionCode::HoldLowEvidence, now_ms),
         }
     }
 
@@ -589,9 +614,17 @@ impl Engine {
             .viewport
             .map(|(lo, hi)| ev.end_position >= lo.saturating_sub(8) && ev.end_position <= hi + 8)
             .unwrap_or(false);
+        // The viewport lowers the ambiguity bar (the presenter scrolled
+        // here on purpose) but cannot waive it: two identical passages both
+        // inside the visible range are still ambiguous.
+        let required_margin = if viewport_agrees {
+            c.ambiguity_margin * 0.4
+        } else {
+            c.ambiguity_margin
+        };
         let enough = ev.fidelity >= c.jump_min_fidelity
             && ev.content_matches >= c.relocation_min_content
-            && (margin >= c.ambiguity_margin || viewport_agrees);
+            && margin >= required_margin;
         if !enough {
             self.confidence = (self.confidence * 0.8).max(0.05);
             let code = if margin < c.ambiguity_margin {
@@ -947,7 +980,13 @@ impl Engine {
             self.rate = self.estimate_rate();
         }
         self.observed = position;
-        self.last_evidence_ms = evidence_ms;
+        // Re-interpolated word times can move slightly backward between
+        // revisions; the evidence clock must not (it drives prediction).
+        if discontinuity {
+            self.last_evidence_ms = evidence_ms;
+        } else {
+            self.last_evidence_ms = self.last_evidence_ms.max(evidence_ms);
+        }
     }
 
     /// Weighted-median pairwise slope over recent anchors (robust to one bad
@@ -1012,6 +1051,7 @@ impl Engine {
             max_prediction_ms: self.config.max_prediction_ms,
             confidence: self.confidence,
             suggestion: self.pending_jump.as_ref().map(|p| p.target as f64),
+            script_len: self.script.len() as f64,
         }
     }
 }

@@ -280,9 +280,10 @@ fn build_table(
         "s",
         "lower",
     ));
+    let (_, initial_fail) = by_kind(RecoveryKind::Initial, None);
     table.push(entry(
         "recovery.failures",
-        (skip_fail + retake_fail + adlib_fail) as f64,
+        (skip_fail + retake_fail + adlib_fail + initial_fail) as f64,
         "count",
         "lower",
     ));
@@ -350,14 +351,14 @@ fn build_table(
     ));
 
     // ---- runtime ----
-    let mut all_event_us: Vec<f64> = runs.iter().map(|r| r.mean_event_us).collect();
+    // Weighted by event count: a 10-event run must not count as much as a
+    // 2,000-event run.
+    let (total_us, total_events) = runs.iter().fold((0.0f64, 0usize), |(us, n), r| {
+        (us + r.mean_event_us * r.event_count as f64, n + r.event_count)
+    });
     table.push(entry(
         "perf.mean_event_us",
-        if all_event_us.is_empty() {
-            0.0
-        } else {
-            all_event_us.iter().sum::<f64>() / all_event_us.len() as f64
-        },
+        if total_events == 0 { 0.0 } else { total_us / total_events as f64 },
         "µs",
         "lower",
     ));
@@ -368,7 +369,6 @@ fn build_table(
         "µs",
         "lower",
     ));
-    let _ = &mut all_event_us;
     let scale_ratio = match (scale_us.get("huge"), scale_us.get("product-update")) {
         (Some(big), Some(small)) if *small > 0.0 => big / small,
         _ => f64::NAN,
