@@ -55,7 +55,17 @@ impl TtsEngine {
 
     fn body(&self, text: &str, voice_index: usize) -> serde_json::Value {
         match self {
-            TtsEngine::Gemini => serde_json::json!({ "prompt": text }),
+            // Gemini's TTS is instruction-following: bare text that LOOKS
+            // like an instruction gets performed instead of read ("put a
+            // real pause in the middle of this one" → it improvised its own
+            // commentary). The wrapper pins it to verbatim reading; verified
+            // via the Inworld sync endpoint that the wrapper itself is not
+            // spoken.
+            TtsEngine::Gemini => serde_json::json!({
+                "prompt": format!(
+                    "Read aloud verbatim, word for word, changing nothing: {text}"
+                )
+            }),
             TtsEngine::Qwen => {
                 const VOICES: &[&str] = &["Dylan", "Serena", "Ryan"];
                 serde_json::json!({

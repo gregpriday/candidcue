@@ -44,6 +44,9 @@ pub struct Evidence {
     pub longest_run: u32,
     pub exact_matches: u32,
     pub fuzzy_matches: u32,
+    /// Phonetic-key matches on rare long words (names). Evidence for local
+    /// fidelity only — they carry no discontinuity authority.
+    pub phonetic_matches: u32,
     pub substitutions: u32,
     pub insertions: u32,
     pub deletions: u32,
@@ -206,6 +209,8 @@ pub fn align(
                 0
             } else if fuzzy_match(&q.surface, &s.surface) {
                 (config.cost_fuzzy as i64 * weight) / 1000
+            } else if phonetic_ok(q, s) {
+                (config.cost_phonetic as i64 * weight) / 1000
             } else {
                 (config.cost_substitution as i64 * weight) / 1000
             };
@@ -322,6 +327,16 @@ pub fn align(
                         ev.last_match_audio_ms = q.audio_ms;
                         ev.end_position = region_start + j as u32;
                     }
+                } else if phonetic_ok(q, s) {
+                    ev.phonetic_matches += 1;
+                    run = 0;
+                    prev_exact_qi = None;
+                    ev.matched_weight += weight * stab_mult * 0.4;
+                    if ev.last_match_query_index.is_none() {
+                        ev.last_match_query_index = Some(i - 1);
+                        ev.last_match_audio_ms = q.audio_ms;
+                        ev.end_position = region_start + j as u32;
+                    }
                 } else {
                     ev.substitutions += 1;
                     run = 0;
@@ -401,9 +416,19 @@ pub fn align(
     ev.coverage = if non_filler == 0 {
         0.0
     } else {
-        f64::from(ev.exact_matches + ev.fuzzy_matches) / f64::from(non_filler)
+        f64::from(ev.exact_matches + ev.fuzzy_matches + ev.phonetic_matches)
+            / f64::from(non_filler)
     };
     Some(ev)
+}
+
+/// Last-resort phonetic relation: both sides ≥5 chars, the script atom is a
+/// rare anchor-grade word, and the consonant skeletons agree.
+fn phonetic_ok(q: &QueryAtom, s: &crate::script::ScriptAtom) -> bool {
+    s.flags & crate::script::FLAG_ANCHOR != 0
+        && q.surface.len() >= 5
+        && s.surface.len() >= 5
+        && crate::normalize::phonetic_key(&q.surface) == crate::normalize::phonetic_key(&s.surface)
 }
 
 /// The cost this query atom would contribute to the "no matches" explanation:
@@ -479,12 +504,13 @@ mod tests {
             "we should build a complicated system for testing scripts",
             "we should build a complex system for testing scripts",
         );
-        // complicated → complex is not within edit distance; it's a plain sub
-        // OR a fuzzy match — either way position must hold and fidelity stays
-        // high because everything else matches exactly.
+        // complicated → complex is beyond edit distance; it lands as a
+        // substitution or (same consonant skeleton) a phonetic relation —
+        // either way position must hold and fidelity stays high because
+        // everything else matches exactly.
         assert!(ev.fidelity > 0.6, "fidelity {}", ev.fidelity);
         assert_eq!(ev.end_position, 9);
-        assert!(ev.substitutions + ev.fuzzy_matches == 1);
+        assert!(ev.substitutions + ev.fuzzy_matches + ev.phonetic_matches == 1);
     }
 
     #[test]

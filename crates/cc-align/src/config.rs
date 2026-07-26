@@ -37,6 +37,8 @@ pub struct AlignmentConfig {
     pub cost_fuzzy: i32,
     /// Ordinary substitution cost fraction (× weight).
     pub cost_substitution: i32,
+    /// Phonetic relation cost fraction (× weight) — rare long words only.
+    pub cost_phonetic: i32,
     /// Filler insertion (flat).
     pub cost_insert_filler: i32,
     /// Non-filler transcript insertion, opening (× stability).
@@ -144,6 +146,7 @@ impl Default for AlignmentConfig {
 
             cost_fuzzy: 350,
             cost_substitution: 1000,
+            cost_phonetic: 550,
             cost_insert_filler: 120,
             cost_insert_open: 700,
             cost_insert_extend: 400,

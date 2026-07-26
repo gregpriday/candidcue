@@ -45,6 +45,46 @@ pub fn is_filler(atom: &str) -> bool {
     FILLERS.contains(&atom)
 }
 
+/// Compact Soundex-style phonetic key. Used ONLY as a last-resort relation
+/// for rare, meaty words (names): recognisers mangle unusual spellings far
+/// beyond edit distance ("Saoirse" → "Sawersi"), but the consonant skeleton
+/// usually survives. Never applied to common words — phonetic collisions on
+/// frequent vocabulary are noise, not signal.
+pub fn phonetic_key(word: &str) -> [u8; 4] {
+    let mut key = [0u8; 4];
+    let mut n = 0;
+    let mut last_code = 0u8;
+    for (i, c) in word.chars().enumerate() {
+        let code = match c.to_ascii_lowercase() {
+            'b' | 'f' | 'p' | 'v' => 1,
+            'c' | 'g' | 'j' | 'k' | 'q' | 's' | 'x' | 'z' => 2,
+            'd' | 't' => 3,
+            'l' => 4,
+            'm' | 'n' => 5,
+            'r' => 6,
+            _ => 0, // vowels, h, w, y, non-ASCII
+        };
+        if i == 0 {
+            key[0] = c.to_ascii_lowercase() as u8;
+            n = 1;
+            last_code = code;
+            continue;
+        }
+        if code != 0 && code != last_code {
+            if n < 4 {
+                key[n] = code;
+                n += 1;
+            } else {
+                break;
+            }
+        }
+        if code != 0 || !matches!(c.to_ascii_lowercase(), 'h' | 'w') {
+            last_code = code;
+        }
+    }
+    key
+}
+
 pub fn is_stopword(atom: &str) -> bool {
     STOPWORDS.contains(&atom)
 }
