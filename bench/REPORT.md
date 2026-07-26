@@ -114,6 +114,12 @@ Ten committed rounds, each justified by a benchmark delta (chronological):
 10. **Gate tuning by sweep** — persistence 2→1 with content 3 (safety
     unchanged: the margin + rival gates carry it), weak-detection thresholds
     tightened.
+11. **Pause tolerance** (field report: "it keeps rushing forward when I
+    pause") — the provider's VAD endpoint parks the display exactly where
+    the reader stopped, `speechStarted` resumes the glide instantly, and a
+    stale-evidence lead decays to a one-word rest instead of holding the
+    full horizon. New `pause_overshoot` benchmark + 1s/2s/3s pause
+    scenarios; overshoot 4.5 → 1.5 atoms (Tier A) with freeze still ~0.
 
 Fixture quality fixes found by the harness along the way: gemini-3.1-flash
 TTS *performs* instruction-shaped text instead of reading it (now pinned with
@@ -131,36 +137,38 @@ through both engines.
 |---|---|---|---:|---:|---|
 | `safety.false_jumps` | count | lower | 0.000 | 0.000 | unchanged |
 | `safety.catastrophic` | count | lower | 18.000 | 0.000 | 18 → 0 ✅ |
-| `accuracy.clean_within2` | % | higher | 91.890 | 99.293 | +7.40 pp ✅ |
+| `accuracy.clean_within2` | % | higher | 91.890 | 99.557 | +7.67 pp ✅ |
 | `accuracy.clean_within5` | % | higher | 99.985 | 100.000 | +0.01 pp ✅ |
 | `accuracy.clean_p95_abs` | atoms | lower | 2.185 | 1.227 | 43.9% lower ✅ |
-| `accuracy.mean_signed_abs` | atoms | lower | 0.927 | 0.733 | 20.9% lower ✅ |
-| `responsiveness.prefinal_move` | % | higher | 95.506 | 95.506 | unchanged |
-| `responsiveness.freeze` | % | lower | 22.246 | 0.078 | -22.17 pp ✅ |
+| `accuracy.mean_signed_abs` | atoms | lower | 0.927 | 0.743 | 19.8% lower ✅ |
+| `responsiveness.prefinal_move` | % | higher | 96.190 | 96.190 | unchanged |
+| `responsiveness.freeze` | % | lower | 22.246 | 0.015 | -22.23 pp ✅ |
+| `responsiveness.pause_overshoot_p95` | atoms | lower | 1.625 | 1.500 | 7.7% lower ✅ |
 | `responsiveness.first_lock_p50` | s | lower | 2.650 | 2.650 | unchanged |
-| `robust.corrupt15_within5` | % | higher | 96.775 | 99.476 | +2.70 pp ✅ |
-| `robust.substitutions_within2` | % | higher | 90.257 | 99.796 | +9.54 pp ✅ |
+| `robust.corrupt15_within5` | % | higher | 96.775 | 98.398 | +1.62 pp ✅ |
+| `robust.substitutions_within2` | % | higher | 90.257 | 99.382 | +9.12 pp ✅ |
 | `robust.word_repeats_within5` | % | higher | 100.000 | 100.000 | unchanged |
 | `robust.phrase_repeats_within5` | % | higher | 100.000 | 100.000 | unchanged |
 | `recovery.skip_p95` | s | lower | 23.350 | 5.350 | 77.1% lower ✅ |
 | `recovery.retake_p95` | s | lower | 15.250 | 5.350 | 64.9% lower ✅ |
-| `recovery.adlib_p95` | s | lower | 0.050 | 0.600 | -1100.0% lower ⚠️ |
+| `recovery.adlib_p95` | s | lower | 0.050 | 0.050 | unchanged |
 | `recovery.failures` | count | lower | 1.000 | 0.000 | 1 → 0 ✅ |
 | `recovery.adlib_drift_p95` | atoms | lower | 1.740 | 4.582 | -163.3% lower ⚠️ |
 | `viewport.start_lock_p50` | s | lower | 3.550 | 3.550 | unchanged |
 | `names.cold_jump_lock_p95` | s | lower | 7.150 | 3.550 | 50.3% lower ✅ |
 | `ambiguity.refrain_false_jumps` | count | lower | 0.000 | 0.000 | unchanged |
-| `perf.mean_event_us` | µs | lower | 188.725 | 189.429 | -0.4% lower ⚠️ |
-| `perf.p95_event_us` | µs | lower | 1632.000 | 991.000 | 39.3% lower ✅ |
-| `perf.scale_ratio_5k` | × | lower | 5.992 | 1.578 | 73.7% lower ✅ |
-| `live.within2` | % | higher | 76.345 | 86.582 | +10.24 pp ✅ |
-| `live.within5` | % | higher | 89.410 | 95.496 | +6.09 pp ✅ |
-| `live.p95_abs` | atoms | lower | 61.907 | 4.490 | 92.7% lower ✅ |
-| `live.mean_signed_abs` | atoms | lower | 19.219 | 3.362 | 82.5% lower ✅ |
-| `live.false_jumps` | count | lower | 1.000 | 0.000 | 1 → 0 ✅ |
+| `perf.mean_event_us` | µs | lower | 192.336 | 197.567 | -2.7% lower ⚠️ |
+| `perf.p95_event_us` | µs | lower | 1746.000 | 960.000 | 45.0% lower ✅ |
+| `perf.scale_ratio_5k` | × | lower | 6.202 | 1.369 | 77.9% lower ✅ |
+| `live.within2` | % | higher | 76.345 | 86.590 | +10.25 pp ✅ |
+| `live.within5` | % | higher | 89.410 | 94.416 | +5.01 pp ✅ |
+| `live.p95_abs` | atoms | lower | 61.907 | 5.963 | 90.4% lower ✅ |
+| `live.mean_signed_abs` | atoms | lower | 19.219 | 3.694 | 80.8% lower ✅ |
+| `live.false_jumps` | count | lower | 1.000 | 1.000 | unchanged |
 | `live.catastrophic` | count | lower | 7.000 | 1.000 | 7 → 1 ✅ |
 | `live.prefinal_move` | % | higher | 98.113 | 100.000 | +1.89 pp ✅ |
-| `live.freeze` | % | lower | 37.897 | 6.971 | -30.93 pp ✅ |
+| `live.freeze` | % | lower | 37.897 | 4.928 | -32.97 pp ✅ |
+| `live.pause_overshoot_p95` | atoms | lower | 1.842 | 2.195 | -19.2% lower ⚠️ |
 | `live.recovery_p95` | s | lower | 23.400 | 4.850 | 79.3% lower ✅ |
 | `live.recovery_failures` | count | lower | 0.000 | 0.000 | unchanged |
 | `live.first_lock_p50` | s | lower | 2.600 | 2.600 | unchanged |
@@ -185,6 +193,11 @@ through both engines.
 * Tier-B gold word times come from per-segment TTS clip boundaries with
   character-weighted interpolation, not forced alignment — treat ±1–2
   atoms of Tier-B gold noise as measurement floor.
+* The pause rows must be read as a pair with freeze: the baseline's low
+  `pause_overshoot` came from its 650 ms prediction cap — the same cap
+  that froze it 22–40% of the time. The optimized engine holds BOTH: live
+  freeze 37.9 → 4.9% with pause overshoot ~2 atoms (about one word past
+  where the reader stopped, by design).
 * `live.wer` is diagnostic (the recogniser's quality, not ours): ~0–4% on
   clean scripts, ~14% on the proper-noun and dense-number scripts — the
   conditions the robustness rows exist for.
