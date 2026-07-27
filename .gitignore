@@ -43,5 +43,8 @@ src-tauri/gen/schemas/
 # Scratch
 .tmp/
 *.tmp
+
+# Claude Code local state (worktrees, etc.)
+.claude/
 # Throwaway probe tests written during code review to demonstrate a bug.
 tests/unit/probe/

@@ -38,7 +38,12 @@ import {
 import { getSettingsSnapshot } from '../stores/settings';
 import { isTauriRuntime } from './ipc';
 import { describeError } from './errors';
-import type { TranscriptTestEvents, Unsubscribe, VoiceFacade } from './voice-facade';
+import type {
+  AsyncUnsubscribe,
+  TranscriptTestEvents,
+  Unsubscribe,
+  VoiceFacade,
+} from './voice-facade';
 import { bindVoiceFacade } from './voice-facade';
 
 function mediaDevices(): MediaDevicesLike | null {
@@ -117,16 +122,42 @@ export function createRealVoiceFacade(): VoiceFacade {
       };
     },
 
-    observeLevels(deviceId, cb, vadSensitivity): Unsubscribe {
+    /**
+     * The disposer is ASYNCHRONOUS, and that is the point.
+     *
+     * Acquisition is a promise; the disposer used to be a plain function that
+     * set `cancelled` and stopped whatever tracks existed *at that instant*.
+     * When the caller stopped during acquisition — the microphone check being
+     * cancelled or overridden inside the ~900 ms `getUserMedia` takes — `stream`
+     * was still null, so the disposer released NOTHING, returned, and the take
+     * opened its own capture while the first claim was still outstanding. That
+     * is the contention `services/audio/ownership.ts` measured at 9.8 seconds,
+     * reintroduced by the very check meant to prevent it.
+     *
+     * Now the disposer returns the in-flight work, so an owner that is about to
+     * acquire can await genuine quiescence rather than a flag.
+     */
+    observeLevels(deviceId, cb, options): AsyncUnsubscribe {
       let cancelled = false;
       let monitor: MicrophoneMonitor | null = null;
       let stream: MediaStreamLike | null = null;
       let offLevel: Unsubscribe | null = null;
+      const vadSensitivity = options?.vadSensitivity;
 
-      void (async () => {
+      const opening = (async () => {
         const devices = mediaDevices();
         if (!devices) return;
-        const result = await requestMicAccess(devices, deviceId ? { deviceId } : {});
+        /*
+         * §28.3: the same processing the take will open with. Passing only the
+         * device left every toggle at the `getUserMedia` default of ON, so a
+         * meter — or a check — could report a healthy level that default AGC
+         * had manufactured, and the take would then open with AGC off and hear
+         * something quite different.
+         */
+        const result = await requestMicAccess(devices, {
+          ...(deviceId ? { deviceId } : {}),
+          ...(options?.processing ?? {}),
+        });
         if (!result.ok || cancelled) {
           if (result.ok) releaseStream(result.stream);
           return;
@@ -143,14 +174,37 @@ export function createRealVoiceFacade(): VoiceFacade {
         if (cancelled) {
           await monitor.stop();
           releaseStream(stream);
+          stream = null;
         }
       })();
 
-      return () => {
+      // Never let the acquisition's own failure surface as an unhandled
+      // rejection; the disposer below awaits this and handles it there.
+      opening.catch(() => {});
+
+      return async () => {
         cancelled = true;
         offLevel?.();
-        if (monitor) void monitor.stop();
+        /*
+         * Wait for acquisition to finish before claiming to have released.
+         * The `cancelled` flag above makes the tail of `opening` release
+         * whatever it ends up holding, so awaiting it is what turns "we no
+         * longer want this device" into "this device is free".
+         */
+        try {
+          await opening;
+        } catch {
+          // A failed acquisition holds nothing; there is nothing to release.
+        }
+        if (monitor) {
+          try {
+            await monitor.stop();
+          } catch {
+            // Closing the analysis graph must never block giving the device up.
+          }
+        }
         releaseStream(stream);
+        stream = null;
       };
     },
 

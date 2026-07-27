@@ -74,6 +74,30 @@ export const STAGE_EVENT = {
   transcriptTap: 'stage://transcript-tap',
 
   /**
+   * control → stage: the §29.2 microphone check, drawn on the stage itself.
+   *
+   * The check runs AFTER the stage goes full screen and BEFORE the transport
+   * opens, which is the only moment where the presenter is already looking at
+   * the surface they will read from and nothing billable has started. Control
+   * owns the capture (one microphone, one owner — see audio/ownership.ts), so
+   * the stage never asks for a device: it is handed frames and draws them.
+   *
+   * Same direct `emitTo` path as the heartbeat and the transcript tap. A
+   * dropped frame costs one bar of the waveform and nothing else; the state
+   * that matters rides every frame rather than being latched from a transition.
+   */
+  micCheck: 'stage://mic-check',
+  /**
+   * stage → control: the presenter answered the microphone check.
+   *
+   * Its own event rather than `stage://intent` because the intent bridge is
+   * installed by `startLiveSession`, and the whole point of this check is that
+   * it happens BEFORE that — a key pressed on the check would have been sent
+   * into a channel nobody was listening on yet.
+   */
+  micCheckIntent: 'stage://mic-check-intent',
+
+  /**
    * stage → Rust: the stage's subscriptions are registered (handshake step 0).
    *
    * A Tauri event is delivered by evaluating JS in the target webview and is
@@ -243,6 +267,83 @@ export interface StageTranscriptTapPayload {
   /** True when the provider has finalised the utterance this text came from. */
   final: boolean;
   sentAtMs: number;
+}
+
+/**
+ * What the microphone check is currently able to say about the input.
+ *
+ * `waiting`  — capture is open, nothing has been heard yet;
+ * `hearing`  — a voice is arriving, but not yet enough of it to pass;
+ * `too_low`  — there IS signal and it is too quiet to transcribe reliably;
+ * `clipping` — the signal is too hot;
+ * `unheard`  — a sustained absence of signal: the wrong device, a hardware
+ *              mute switch, or another application holding the microphone;
+ * `passed`   — enough voice at a usable level; the take may open.
+ */
+export type StageMicCheckState =
+  | 'waiting'
+  | 'hearing'
+  | 'too_low'
+  | 'clipping'
+  | 'unheard'
+  | 'passed';
+
+/**
+ * `stage://mic-check` — the microphone check, as the stage should draw it.
+ *
+ * Deliberately a fully-resolved view rather than raw levels plus a rule: the
+ * stage holds no audio state and no thresholds, so what the presenter reads
+ * cannot drift from what control decided. `levels` is the only history in the
+ * payload, and it is there because a waveform IS history — a single amplitude
+ * would be a meter, and a meter is the thing that was already on the Preflight
+ * screen and did not stop anyone starting a take deaf.
+ */
+export interface StageMicCheckPayload {
+  stageGeneration: number;
+  /** False tears the overlay down: the check is over, or was never needed. */
+  active: boolean;
+  state: StageMicCheckState;
+  /** Waveform trace, oldest first, each 0–1 and already normalised. */
+  levels: number[];
+  /** Large line: what is happening. Authored copy, never a code. */
+  headline: string;
+  /** Small line: what to do about it, or why it is fine. */
+  detail: string;
+  /**
+   * Whether "start anyway" is offered yet. The check must be skippable — a
+   * presenter with a working setup and an unlucky reading is not someone the
+   * app should refuse to let start — but not INSTANTLY skippable, or the
+   * affordance becomes the thing you press to make the screen go away.
+   */
+  canOverride: boolean;
+  sentAtMs: number;
+}
+
+/**
+ * Samples in the waveform trace, and therefore bars on the stage.
+ *
+ * On the contract rather than either side of it because both sides need the
+ * same number: control fills the trace to it, and the stage pads to it from
+ * the left so the waveform grows INTO the frame instead of stretching to fill
+ * it. Two independent copies of that number would drift into a trace that
+ * silently rescaled itself — which on the one screen whose job is to report a
+ * level honestly would read as the level changing when it had not.
+ */
+export const STAGE_MIC_CHECK_TRACE_SAMPLES = 72;
+
+/** `stage://mic-check-intent` — the presenter's answer to the check. */
+export interface StageMicCheckIntentPayload {
+  /**
+   * Which check is being answered.
+   *
+   * A stage `emit` is a broadcast and control has no other way to tell one
+   * check from another, so without this a delayed answer from a superseded
+   * start attempt could cancel — or skip — the one currently running.
+   */
+  stageGeneration: number;
+  /** `start` = go now (passed, or overridden); `cancel` = abandon the take. */
+  intent: 'start' | 'cancel';
+  atMs: number;
 }
 
 /**

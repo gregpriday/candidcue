@@ -23,6 +23,7 @@
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
   import { openExternal } from '../lib/app-actions';
   import { describeError } from '../services/errors';
+  import { isTauriRuntime } from '../services/ipc';
   import * as scriptsService from '../services/scripts';
   import * as secretsService from '../services/secrets';
   import { SPEECH_LANGUAGES } from '../services/stt/inworld';
@@ -61,6 +62,7 @@
   shouldAdoptRememberedMicrophone,
     type MicTestSnapshot,
   } from './preflight-mic-test';
+  import { runStageMicCheck, type MicCheckOutcome } from './preflight-mic-check';
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
   import type { InworldKeyStatus } from '../services/secrets-types';
@@ -87,7 +89,15 @@
     stopSession,
   } from '../stores/session';
   import { showToast } from '../stores/toasts';
-  import type { AudioDeviceInfo, AudioLevelSnapshot } from '../../shared/contracts';
+  import {
+    CONTROL_EVENT,
+    STAGE_EVENT,
+    type AudioDeviceInfo,
+    type AudioLevelSnapshot,
+    type ControlStageClosedPayload,
+    type StageMicCheckIntentPayload,
+    type StageMicCheckPayload,
+  } from '../../shared/contracts';
 
   interface Props {
     scriptId: string;
@@ -139,6 +149,13 @@
   let micAdopted = false;
   /** The take owns the microphone from here; the meter must let go. */
   let micHeldForTake = $state(false);
+  /**
+   * The level meter's capture disposer, so the start sequence can AWAIT it.
+   *
+   * Deliberately not `$state`: nothing renders from it, and a reactive read
+   * inside the effect that assigns it would be a self-triggering loop.
+   */
+  let releaseMeter: (() => void | Promise<void>) | null = null;
   let micDevices = $state<AudioDeviceInfo[]>([]);
   let micDeviceId = $state<string | undefined>(undefined);
   let followSystemDefault = $state(true);
@@ -612,17 +629,58 @@
    */
   $effect(() => {
     if (micPermission !== 'granted' || micHeldForTake) return undefined;
-    // §28.4: the meter reads the same sensitivity the take will use, so moving
-    // the slider in Settings is visible here rather than only felt mid-session.
+    // §28.4/§28.3: the meter reads the same sensitivity AND the same capture
+    // processing the take will use, so what is shown here is a reading of the
+    // configuration that is actually about to run — not of a default one.
     const unsub = getVoiceFacade().observeLevels(
       micDeviceId,
       (snapshot) => {
         micLevel = snapshot;
       },
-      $settings.audio.vadSensitivity,
+      {
+        vadSensitivity: $settings.audio.vadSensitivity,
+        processing: {
+          echoCancellation: $settings.audio.echoCancellation,
+          noiseSuppression: $settings.audio.noiseSuppression,
+          autoGainControl: $settings.audio.autoGainControl,
+        },
+      },
     );
-    return unsub;
+    /*
+     * The disposer is asynchronous, and somebody downstream has to be able to
+     * WAIT for it.
+     *
+     * Svelte discards whatever a cleanup returns, so relying on the effect
+     * teardown alone means the meter's release is merely started, never
+     * awaited — and `startSession` below would open the check's capture while
+     * this one was still letting go. `await tick()` cannot help: it flushes the
+     * teardown, it does not await the browser API inside it. So the disposer is
+     * published here for `releaseMeterCapture()` to await directly.
+     */
+    releaseMeter = unsub;
+    return () => {
+      if (releaseMeter === unsub) releaseMeter = null;
+      void unsub();
+    };
   });
+
+  /**
+   * Give the microphone up, and wait until it is genuinely given up.
+   *
+   * This is the meter → check handoff, and it is the same hazard the check → take
+   * handoff has (`services/audio/ownership.ts`: 9.8 s contended versus 908 ms
+   * free). Both ends of the chain have to await, or the chain has a gap in it.
+   */
+  async function releaseMeterCapture(): Promise<void> {
+    const release = releaseMeter;
+    releaseMeter = null;
+    if (!release) return;
+    try {
+      await release();
+    } catch {
+      // Failing to hang up cleanly must never stop a take from starting.
+    }
+  }
 
   function speechKeyStatusToCheck(status: InworldKeyStatus | null): CheckStatus {
     if (!status || !status.present) return 'blocked';
@@ -923,10 +981,116 @@
   }
 
   /**
+   * The microphone check, drawn on the stage between full screen and the take.
+   *
+   * Why here and not on this screen: the level meter a few hundred pixels up
+   * has always been able to prove the microphone works, and it does not,
+   * because nobody looks at it. Start is a button you press, and it is entirely
+   * normal to press it without ever having made a sound — after which the take
+   * opens, the script never moves, and the only thing the app can say is that
+   * voice tracking is unavailable. The check is on the stage because the stage
+   * is the one surface the presenter is definitely looking at, and it is after
+   * full screen because that is the last moment before anything billable opens.
+   *
+   * It runs against the SAME device and sensitivity the take is about to use
+   * (below), so a check that passes is evidence about the capture that follows
+   * rather than about some other configuration of the same machine.
+   */
+  async function runMicCheckOnStage(stageGeneration: number): Promise<MicCheckOutcome> {
+    /*
+     * Nothing to check, or nowhere to draw it.
+     *
+     * Manual mode never opens a microphone, so a check would be a gate in front
+     * of a door that is not there. No stage generation (browser dev, headless
+     * tests) means no window to render on, and no Tauri means no event bus to
+     * render through — in both cases the honest answer is to get out of the
+     * way, exactly as `awaitStageAck` does for the same conditions.
+     */
+    if (mode !== 'voice' || stageGeneration === 0 || !isTauriRuntime()) return 'passed';
+
+    const { emitTo, listen } = await import('@tauri-apps/api/event');
+    /*
+     * The stage dying has to end the check.
+     *
+     * Without this the only exits are the presenter's keyboard and the
+     * five-minute ceiling — and the keyboard is on the window that just
+     * disappeared. A stage that crashes or is closed mid-check would otherwise
+     * leave the capture held and the start sequence blocked for five minutes,
+     * and if the microphone then passed on its own, a take would open with no
+     * stage to prompt from.
+     */
+    // Holds the in-flight subscription so the `finally` can await it rather
+    // than race it.
+    const closedWatch: { pending: Promise<(() => void) | null> } = {
+      pending: Promise.resolve(null),
+    };
+    try {
+      return await runStageMicCheck({
+        stageGeneration,
+        observeLevels: (cb) =>
+          getVoiceFacade().observeLevels(
+            // Matches the take's own device resolution below: "follow system
+            // default" means no pinned id, not "the id we happen to be showing".
+            followSystemDefault ? undefined : micDeviceId,
+            cb,
+            {
+              vadSensitivity: $settings.audio.vadSensitivity,
+              // §28.3: the exact processing `startLiveSession` opens with. A
+              // check run under different constraints is evidence about a
+              // configuration the take is not going to use.
+              processing: {
+                echoCancellation: $settings.audio.echoCancellation,
+                noiseSuppression: $settings.audio.noiseSuppression,
+                autoGainControl: $settings.audio.autoGainControl,
+              },
+            },
+          ),
+        /*
+         * Returns the emit's promise rather than swallowing it. The runner
+         * awaits only the FIRST one — a stage that never received the overlay
+         * is a failed start, not a dropped frame — and treats the rest as
+         * best-effort, which is what a waveform sample is.
+         */
+        publish: (payload: StageMicCheckPayload) =>
+          emitTo('stage', STAGE_EVENT.micCheck, payload),
+        subscribeIntent: (cb) =>
+          listen<StageMicCheckIntentPayload>(STAGE_EVENT.micCheckIntent, (event) => {
+            // An answer to a different check — a superseded start attempt whose
+            // stage is gone — must not decide this one.
+            if (event.payload.stageGeneration !== stageGeneration) return;
+            cb(event.payload.intent);
+          }),
+        onAbort: (abort) => {
+          closedWatch.pending = listen<ControlStageClosedPayload>(
+            CONTROL_EVENT.stageClosed,
+            (event) => {
+              // Only this stage's death; a stale generation is somebody else's.
+              if (event.payload.stageGeneration !== stageGeneration) return;
+              abort('cancelled');
+            },
+          ).catch(() => {
+            // Losing the watch costs the ceiling as a backstop, not the check.
+            return null;
+          });
+        },
+      });
+    } finally {
+      /*
+       * Awaited, not read. `listen()` is a promise, so a check that finishes
+       * before registration completes would otherwise leave a subscription that
+       * resolved into a variable nobody looks at again — leaked for the life of
+       * the window.
+       */
+      const unlisten = await closedWatch.pending;
+      unlisten?.();
+    }
+  }
+
+  /**
    * Start sequence (spec §29.2 / §43.3): compile is already flushed to the
    * store; open the stage hidden → publish the session envelope → await the
-   * stage handshake → full screen → route to Live. The realtime transport is
-   * started by the session store (voice mode only).
+   * stage handshake → full screen → microphone check → route to Live. The
+   * realtime transport is started by the session store (voice mode only).
    */
   async function startSession(): Promise<void> {
     const readiness = computeReadiness($preflightChecks);
@@ -950,7 +1114,15 @@
      */
     micTestSession.stop('user');
     micHeldForTake = true;
+    /*
+     * `tick()` flushes the meter effect's teardown; `releaseMeterCapture()`
+     * then waits for the capture that teardown started to let go of to be
+     * genuinely free. The tick alone was never enough — it awaits Svelte, not
+     * `getUserMedia` — and the gap between the two is exactly where the
+     * documented 9.8-second device contention lives.
+     */
     await tick();
+    await releaseMeterCapture();
     const display = displays.find((d) => d.fingerprint === selectedFingerprint);
     /*
      * C1: open the session record FIRST.
@@ -1090,6 +1262,51 @@
         typeof shown.displayFingerprint === 'string' &&
         shown.displayFingerprint !== selectedFingerprint;
 
+      /*
+       * 3a. Prove the microphone before the take opens one.
+       *
+       * Blocking on purpose. Everything after this line assumes audio will
+       * arrive, and the whole class of failure being fixed is the one where it
+       * silently does not.
+       */
+      const micOutcome = await runMicCheckOnStage(opened.stageGeneration);
+      if (micOutcome === 'cancelled' || micOutcome === 'timed_out') {
+        /*
+         * The take does not start. The session record, the stage window and the
+         * capture all have to go back either way — but the two reasons are not
+         * the same event and must not be reported as one.
+         *
+         * `cancelled` is the presenter pressing Escape (or the stage window
+         * dying under them): they know what happened, and a message telling
+         * them what they just did would be noise.
+         *
+         * `timed_out` is nobody doing anything for five minutes. Silence there
+         * would leave an abandoned start with no explanation anywhere — the
+         * operator comes back to a Preflight screen that looks like the button
+         * never worked.
+         */
+        await abandonSession(sessionId);
+        if (micOutcome === 'timed_out') {
+          startError =
+            'The microphone check timed out, so the session was not started. Start it again when you are ready.';
+        }
+        // Give the microphone back to this screen's meter, for the same reason
+        // the catch below does: a start that did not happen must not leave the
+        // operator on a Preflight page whose level bar is dead.
+        micHeldForTake = false;
+        return;
+      }
+      /*
+       * Let the check's capture teardown actually run before the transport asks
+       * for the device. This is the same load-bearing `tick()` the level meter
+       * needs above, and for the same measured reason: a second `getUserMedia`
+       * while the first stream is still open does not fail, it HANGS — 9.8 s in
+       * `services/audio/ownership.ts` — and surfaces as "Voice tracking is
+       * unavailable", which is precisely the message this check exists to stop
+       * anyone ever seeing.
+       */
+      await tick();
+
       // 4. Bind the alignment session + realtime pipeline and go live.
       startLiveSession({
         scriptId,
@@ -1140,6 +1357,11 @@
         // billing meter running under a Preflight page.
         await abandonSession(sessionId);
         startError = 'Could not open the Live screen, so the session was stopped.';
+        // Same reason as the catch below: the take never got the microphone, so
+        // the meter must get it back. This path was missing it, which left the
+        // operator on a Preflight page with a permanently dead level bar and no
+        // way to tell whether the input was working.
+        micHeldForTake = false;
       }
     } catch (err) {
       await abandonSession(sessionId);

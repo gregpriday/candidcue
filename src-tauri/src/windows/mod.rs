@@ -53,6 +53,16 @@ pub mod events {
     /// Raw recogniser text for the stage's transcript bar. Same direct path as
     /// the heartbeat: a diagnostic readout, and a dropped one costs nothing.
     pub const STAGE_TRANSCRIPT_TAP: &str = "stage://transcript-tap";
+    /// The §29.2 microphone check, drawn on the stage between full screen and
+    /// the transport opening. Control owns the capture and sends a resolved
+    /// view; the stage holds no audio state. Direct control → stage emit.
+    pub const STAGE_MIC_CHECK: &str = "stage://mic-check";
+    /// The presenter's answer to the microphone check (stage → control).
+    ///
+    /// Its own event rather than [`STAGE_INTENT`]: the intent bridge is
+    /// installed with the live session, and this check deliberately runs
+    /// before there is one.
+    pub const STAGE_MIC_CHECK_INTENT: &str = "stage://mic-check-intent";
 
     /// Rust → stage: one `AlignmentSnapshot` per transcript event (~1/s).
     ///
@@ -1361,6 +1371,8 @@ mod tests {
             events::STAGE_CLOSE_SESSION,
             events::STAGE_HEARTBEAT,
             events::STAGE_TRANSCRIPT_TAP,
+            events::STAGE_MIC_CHECK,
+            events::STAGE_MIC_CHECK_INTENT,
             events::STAGE_ALIGNMENT_SNAPSHOT,
             events::STAGE_VIEWPORT_HINT,
             events::STAGE_LISTENING,
