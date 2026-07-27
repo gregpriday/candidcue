@@ -444,11 +444,11 @@
 
         <div class="panel-foot" aria-live="polite">
           {#if $compiled.status === 'compiling'}
-            <span class="foot-line neutral">Compiling…</span>
+            <span class="foot-line neutral">Reading the script…</span>
           {:else if $compiled.status === 'ready' && blockingCount === 0 && diagnostics.length === 0}
             <span class="foot-line good">
               <Icon name="check" size={14} />
-              Script compiled and ready to present.
+              Ready to present.
             </span>
           {:else if $compiled.status === 'ready'}
             <ul class="diagnostics">

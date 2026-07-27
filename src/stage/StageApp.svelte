@@ -12,6 +12,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
+    ESCAPE_DOUBLE_PRESS_MS,
     STAGE_EVENT,
     STAGE_HEARTBEAT_GRACE_MS,
     type StageEscapePayload,
@@ -384,7 +385,7 @@
     // would not.
     escapeHintTimer = window.setTimeout(() => {
       escapeHintVisible = false;
-    }, ESCAPE_DOUBLE_MS);
+    }, ESCAPE_DOUBLE_PRESS_MS);
   }
 
   function sendEscape(presses: 1 | 2) {
@@ -421,7 +422,6 @@
 
   /* ---- keyboard behavior (§16.9) ---- */
   let lastEscapeAt = 0;
-  const ESCAPE_DOUBLE_MS = 1500;
   let wheelAccum = 0;
   let wheelFlush = 0;
 
@@ -430,7 +430,12 @@
     switch (event.key) {
       case 'Escape': {
         const now = performance.now();
-        const double = now - lastEscapeAt <= ESCAPE_DOUBLE_MS;
+        // `lastEscapeAt !== 0` is load-bearing: `performance.now()` starts near
+        // zero, so without it the FIRST Escape within 1.5 s of the stage
+        // loading counted as a second press and ended the take on one tap —
+        // and the take's first 1.5 s is exactly when a presenter who did not
+        // mean to start yet reaches for Escape.
+        const double = lastEscapeAt !== 0 && now - lastEscapeAt <= ESCAPE_DOUBLE_PRESS_MS;
         lastEscapeAt = double ? 0 : now;
         sendEscape(double ? 2 : 1);
         break;

@@ -928,7 +928,7 @@ function buildStartSequenceGate(input: StartSessionInput): {
       if (compiledScript === null) {
         throw new StartSequenceError(
           'compile',
-          'The script has not finished compiling, so the session cannot start.',
+          'CandidCue has not finished reading this script, so the take cannot start.',
         );
       }
       const store = get(compiledStore);
@@ -953,7 +953,7 @@ function buildStartSequenceGate(input: StartSessionInput): {
        */
       if (store.scriptId !== null && store.scriptId !== compiledScript.scriptId) return;
       if (store.status === 'error') {
-        throw new StartSequenceError('compile', store.error ?? 'The script failed to compile.');
+        throw new StartSequenceError('compile', store.error ?? 'CandidCue could not read this script.');
       }
       const blocking = (store.result?.diagnostics ?? []).filter(
         (diagnostic) => diagnostic.blocking || diagnostic.severity === 'error',

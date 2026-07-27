@@ -103,7 +103,7 @@ const ERROR_COPY: Record<string, string> = {
   SCRIPT_FILE_MISSING:
     'The file behind this script is missing. It may have been moved or deleted outside CandidCue.',
   SCRIPT_COMPILE_FAILED:
-    'CandidCue could not compile this script. The Script readiness list says what needs attention.',
+    'CandidCue could not read this script. The notes under the outline say what needs attention.',
   IMPORT_INVALID_FORMAT: 'That file is not in a format CandidCue can import.',
   IMPORT_UNSAFE_PATH:
     'That file sits outside the folders CandidCue is allowed to read, so it was not imported.',

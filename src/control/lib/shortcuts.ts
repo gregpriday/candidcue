@@ -24,7 +24,9 @@ export type ShortcutAction =
   | 'blank-stage'
   | 'toggle-listener'
   | 'take-marker'
-  | 'command-help';
+  | 'command-help'
+  /** §16.9. Escape — twice ends the take; the screen owns the two-press rule. */
+  | 'escape';
 
 type Handler = (action: ShortcutAction) => void;
 const handlers = new Set<Handler>();
@@ -117,6 +119,25 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
   if (event.modal) return null;
   const primary = event.isMac ? event.metaKey : event.ctrlKey;
   const key = event.key;
+
+  /*
+   * Escape (§16.9), and deliberately NOT in the plain-key block at the bottom.
+   *
+   * That block stands down for a control that activates itself on the key —
+   * a button, a switch, a menu item. Escape must not: someone reaching for it
+   * has a full-screen, always-on-top stage in front of them and no interest in
+   * which button happens to have focus. It does stand down while typing, where
+   * Escape means "leave this field", and behind a modal, which owns the
+   * keyboard (handled above).
+   *
+   * The stage has always answered Escape. The control window did not, so the
+   * key worked only while the stage held focus — and the operator is at the
+   * control window, which is where they pressed Present. Pressing Escape at
+   * the machine you are sitting at did nothing at all.
+   */
+  if (key === 'Escape' && !primary && !event.altKey && !event.shiftKey && !event.typing) {
+    return 'escape';
+  }
 
   if (primary && !event.altKey) {
     if (event.shiftKey) {

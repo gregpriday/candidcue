@@ -153,7 +153,7 @@ async function compileForTake(
     // `script` is null only when the compile was superseded, which cannot
     // happen for a request made and awaited here — but a null slipping through
     // would reach the stage as an envelope with no document in it.
-    throw new Error('The script did not finish compiling.');
+    throw new Error('CandidCue did not finish reading this script.');
   }
   return { ...output, script: output.script };
 }

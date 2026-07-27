@@ -328,6 +328,20 @@ export interface StageVoicePillPayload {
 export const STAGE_VOICE_PILL_TRACE_SAMPLES = 24;
 
 /**
+ * §16.9. How long a first Escape stays "armed" for the second one.
+ *
+ * Shared because BOTH windows implement the protocol and they have to agree:
+ * the stage answers Escape when it has focus, and control answers it when it
+ * does — which is most of the time, since the operator is at the control
+ * window. Two different windows counting to two on two different clocks is how
+ * a presenter ends up pressing Escape four times.
+ *
+ * 1.5 s is long enough to be a deliberate second press and short enough that
+ * an Escape now and an Escape a minute from now are never one gesture.
+ */
+export const ESCAPE_DOUBLE_PRESS_MS = 1500;
+
+/**
  * If no heartbeat/snapshot/tracking arrives for this long while live, the
  * stage freezes locally (control is presumed gone; it owns recovery).
  */

@@ -16,6 +16,7 @@
   import Slider from '../components/Slider.svelte';
   import { formatClock } from '../lib/format';
   import { onShortcut } from '../lib/shortcuts';
+  import { ESCAPE_DOUBLE_PRESS_MS } from '../../shared/contracts';
   import { startTake } from '../lib/start-take';
   import { describeError } from '../services/errors';
   import * as stageService from '../services/stage';
@@ -276,6 +277,38 @@
     stopSession();
   }
 
+  /**
+   * §16.9. Escape twice ends the take, from whichever window has the keyboard.
+   *
+   * The stage runs the same protocol for the presenter standing in front of
+   * it; this is the half for the operator, who is at this window. Both count to
+   * two over the same `ESCAPE_DOUBLE_PRESS_MS` so the gesture means one thing.
+   *
+   * No confirmation dialog on the second press: two deliberate presses of a key
+   * that announced what it was about to do IS the confirmation, and a stage
+   * that stays full screen while a modal waits behind it for an answer nobody
+   * can see is the failure this is meant to end.
+   */
+  let lastEscapeAt = 0;
+
+  function onEscape(): void {
+    const now = performance.now();
+    // `lastEscapeAt !== 0` is load-bearing: `performance.now()` starts near
+    // zero, so without it the very first Escape within 1.5 s of this window
+    // opening reads as a second press and ends the take outright.
+    const second = lastEscapeAt !== 0 && now - lastEscapeAt <= ESCAPE_DOUBLE_PRESS_MS;
+    lastEscapeAt = second ? 0 : now;
+    if (second) {
+      stopSession();
+      return;
+    }
+    showToast('Press Escape again to end the session', 'info', {
+      // Exactly as long as the second press would still count, so the prompt
+      // stops claiming it the moment it stops being true.
+      durationMs: ESCAPE_DOUBLE_PRESS_MS,
+    });
+  }
+
   function adjustFontSize(delta: number): void {
     const next = adjustStageFontSize(delta);
     showToast(`Text ${next} px`, 'info', { durationMs: 1600 });
@@ -302,6 +335,9 @@
           break;
         case 'stop-session':
           void requestStop();
+          break;
+        case 'escape':
+          onEscape();
           break;
         case 'back-sentence':
           moveSentences(-1);

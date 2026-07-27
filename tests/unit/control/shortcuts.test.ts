@@ -196,6 +196,42 @@ describe('installShortcuts — what actually reaches the focused control', () =>
     expect(stop.action).toBeNull();
   });
 
+  /*
+   * §16.9. Escape reached the take only while the STAGE had keyboard focus —
+   * and the operator is at this window, which is where they pressed Present.
+   * Pressing Escape at the machine you are sitting at, with a full-screen
+   * always-on-top stage in front of you, did nothing at all.
+   */
+  it('delivers Escape even when a button has focus', () => {
+    installWithSubscriber();
+    // The plain-key rule stands down for a self-activating control. Escape must
+    // not: someone reaching for it has no interest in which button has focus.
+    const onButton = press('Escape', { target: new FakeHTMLElement('button') });
+    expect(onButton.action).toBe('escape');
+    const onSwitch = press('Escape', {
+      target: new FakeHTMLElement('button', { role: 'switch' }),
+    });
+    expect(onSwitch.action).toBe('escape');
+  });
+
+  it('leaves Escape to the field being typed in, and to an open dialog', () => {
+    installWithSubscriber();
+    // In a text field Escape means "leave this field", not "end the take".
+    expect(press('Escape', { target: new FakeHTMLElement('input') }).action).toBeNull();
+    // And a modal owns the keyboard: the F.17 summary and the stop-confirm both
+    // close on Escape, which must not also stop something behind them.
+    modalElement = new FakeHTMLElement('div', { role: 'dialog' });
+    expect(press('Escape', { target: new FakeHTMLElement('div') }).action).toBeNull();
+  });
+
+  it('does not confuse Escape with a modified Escape', () => {
+    installWithSubscriber();
+    const target = new FakeHTMLElement('div');
+    expect(press('Escape', { target, metaKey: true }).action).toBeNull();
+    expect(press('Escape', { target, altKey: true }).action).toBeNull();
+    expect(press('Escape', { target, shiftKey: true }).action).toBeNull();
+  });
+
   it('still delivers modifier shortcuts while a button has focus', () => {
     installWithSubscriber();
     const fired = press('s', { metaKey: true, target: new FakeHTMLElement('button') });

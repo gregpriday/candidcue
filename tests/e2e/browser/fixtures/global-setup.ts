@@ -56,19 +56,22 @@ async function compileOnce(browser: Browser): Promise<void> {
   try {
     await installTauriShim(page, { welcomed: true, seedScripts: [WARMUP_SCRIPT] });
     await page.goto('/control.html');
+    /*
+     * Through the EDITOR, not through Present.
+     *
+     * Present opens a real take now — a stage window, a session record and a
+     * transport — which is a great deal of machinery to run for a warm-up, and
+     * none of it is what needs warming. The editor reaches the same worker on
+     * the same dynamic import and stops there.
+     */
     await page
       .getByRole('list', { name: 'Scripts' })
-      .getByRole('button', { name: 'Present', exact: true })
+      .getByRole('button', { name: /Dependency warm-up/ })
       .first()
       .click();
-    /*
-     * Wait on the COMPILER's own result line, not on Start: Start is gated by
-     * the speech/microphone/stage checks too, and a warm-up that waits on those
-     * is waiting for the wrong thing.
-     */
-    await expect(page.getByText('Script compiled and ready to present.')).toBeVisible({
-      timeout: 30_000,
-    });
+    // The worker's own result line: it appears only once the compile chain has
+    // loaded and returned, which is the thing being waited for.
+    await expect(page.getByText('Ready to present.')).toBeVisible({ timeout: 30_000 });
     // Let any optimizer-triggered reload land and settle before we leave.
     await page.goto('/control.html');
     await page.waitForLoadState('networkidle');
