@@ -110,8 +110,25 @@ pub struct AlignmentConfig {
     /// does.
     pub pause_onset_ms: f64,
     /// The residual lead (ms of reading) the display keeps once a pause is
-    /// suspected — roughly "rest one word ahead of where they stopped".
+    /// suspected. Zero: rest ON the last word actually heard, not past it.
     pub lead_floor_ms: f64,
+    /// Fraction of the elapsed-time extrapolation the display actually claims.
+    ///
+    /// At 1.0 the display aims AT the reader's estimated position, which puts
+    /// it ahead of them roughly half the time — every time they slow down,
+    /// which is most of the times that matter. Below 1.0 it aims deliberately
+    /// short, so the steady state is a little behind and the error has to
+    /// accumulate before it ever becomes an overshoot. Unlike simply capping
+    /// the lead, this keeps the display *moving* between transcript events
+    /// rather than advancing and then stalling.
+    pub prediction_gain: f64,
+    /// Hard cap on the display's lead over `observed`, in atoms.
+    ///
+    /// The binding constraint on overshoot, and deliberately expressed in
+    /// words rather than milliseconds: a reader who slows down invalidates the
+    /// rate estimate without invalidating the clock, so a ms-denominated cap
+    /// silently grows in the one situation it exists to contain.
+    pub max_lead_atoms: f64,
 
     // ---- evidence timing ----
     /// Residual lag correction applied to evidence time after the ledger's
@@ -166,6 +183,14 @@ impl AlignmentConfig {
         self.max_prediction_ms = self.max_prediction_ms.max(0.0);
         fix(&mut self.coast_ms, d.coast_ms);
         self.coast_ms = self.coast_ms.max(0.0);
+        fix(&mut self.pause_onset_ms, d.pause_onset_ms);
+        self.pause_onset_ms = self.pause_onset_ms.max(0.0);
+        fix(&mut self.lead_floor_ms, d.lead_floor_ms);
+        self.lead_floor_ms = self.lead_floor_ms.max(0.0);
+        fix(&mut self.max_lead_atoms, d.max_lead_atoms);
+        self.max_lead_atoms = self.max_lead_atoms.max(0.0);
+        fix(&mut self.prediction_gain, d.prediction_gain);
+        self.prediction_gain = self.prediction_gain.clamp(0.0, 1.0);
         fix(&mut self.emission_lag_ms, d.emission_lag_ms);
         fix(&mut self.partial_lag_ms, d.partial_lag_ms);
         fix(&mut self.endpoint_lag_ms, d.endpoint_lag_ms);
@@ -245,7 +270,9 @@ impl Default for AlignmentConfig {
             max_prediction_ms: 1800.0,
             coast_ms: 300.0,
             pause_onset_ms: 1800.0,
-            lead_floor_ms: 550.0,
+            lead_floor_ms: 0.0,
+            prediction_gain: 0.35,
+            max_lead_atoms: 2.5,
 
             emission_lag_ms: 0.0,
             partial_lag_ms: 300.0,

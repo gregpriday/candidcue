@@ -55,6 +55,8 @@ function snapshotAt(unit: number, atMs: number): AlignmentSnapshot {
     maxPredictionMs: 900,
   pauseOnsetMs: 1800,
   leadFloorMs: 550,
+  maxLeadTokens: 2.5,
+  displayLimitToken: 10_000,
     confidence: 0.92,
     suggestionToken: null,
     scriptLenTokens: 10_000,

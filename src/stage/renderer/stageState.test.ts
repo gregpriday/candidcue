@@ -69,6 +69,8 @@ function makeTracking(
     maxPredictionMs: 900,
   pauseOnsetMs: 1800,
   leadFloorMs: 550,
+  maxLeadTokens: 2.5,
+  displayLimitToken: 100,
     confidence: 0.9,
     suggestionToken: null,
     scriptLenTokens: 100,

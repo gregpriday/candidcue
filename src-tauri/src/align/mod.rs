@@ -86,9 +86,10 @@ pub struct AlignmentSnapshot {
     /// Best evidence-supported position. NOT the scroll target — see
     /// `rate_tokens_per_second`.
     pub observed_token: f64,
-    /// Reading rate for display extrapolation, tokens/sec. Already zero
-    /// whenever extrapolating would be a guess, so the stage must not
-    /// re-derive that condition.
+    /// Rate for display extrapolation, tokens/sec. Already zero whenever
+    /// extrapolating would be a guess, so the stage must not re-derive that
+    /// condition — and already scaled below the reader's true pace, so the
+    /// display trails rather than leads. See `prediction_gain` in the engine.
     pub rate_tokens_per_second: f64,
     /// Audio time `observed_token` corresponds to.
     pub evidence_audio_ms: f64,
@@ -100,8 +101,16 @@ pub struct AlignmentSnapshot {
     /// the reader has probably paused, and the underline must rest just past
     /// the last spoken word instead of running ahead.
     pub pause_onset_ms: f64,
-    /// Residual lead (ms of reading) kept once paused — "one word ahead".
+    /// Residual lead (ms of reading) kept once paused. Zero: rest ON the last
+    /// word heard, not past it.
     pub lead_floor_ms: f64,
+    /// Hard cap on how far prediction may carry the display past
+    /// `observed_token`, in tokens.
+    pub max_lead_tokens: f64,
+    /// Absolute ceiling for the display this snapshot: the end of the paragraph
+    /// the reader was last heard in. Prediction stops here and waits for
+    /// evidence rather than guessing across a paragraph break.
+    pub display_limit_token: f64,
     /// Documented heuristic in 0..1, not a calibrated probability. Fine for a
     /// debug meter; do not gate behaviour on exact thresholds.
     pub confidence: f64,
@@ -402,6 +411,12 @@ fn project(snapshot: &Snapshot, engine: &Engine, generation: u64) -> AlignmentSn
         max_prediction_ms: snapshot.max_prediction_ms,
         pause_onset_ms: snapshot.pause_onset_ms,
         lead_floor_ms: snapshot.lead_floor_ms,
+        // Both are projected as DIFFERENCES/positions through the same axis as
+        // `observed_token`, so the cap and the ceiling land on exactly the
+        // token the engine meant even where a token expands into several atoms.
+        max_lead_tokens: script.token_at(snapshot.observed + snapshot.max_lead_atoms)
+            - observed_token,
+        display_limit_token: script.token_at(snapshot.display_limit),
         confidence: snapshot.confidence,
         suggestion_token: snapshot.suggestion.map(|a| script.token_at(a)),
         script_len_tokens: script.token_count as f64,

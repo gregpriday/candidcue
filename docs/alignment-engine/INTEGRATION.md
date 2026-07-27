@@ -5,9 +5,12 @@ alignment engine into the app.
 **Engine location:** `crates/cc-align` (pure Rust, no Tauri/network/clock
 dependencies — it slots into the existing Rust backend next to the Inworld
 socket).
-**Benchmarked behaviour:** `bench/REPORT.md` (99.5% within ±2 words on clean
-reads, zero false jumps across the suite; read it to know what the engine
-promises).
+**Benchmarked behaviour:** `bench/REPORT.md` — zero false jumps across the
+suite, 99.99% within ±5 words on clean reads, and the display ahead of the
+reader 3.8% of the time on live captures (down from 22.2%). Read it to know
+what the engine promises. Note the deliberate asymmetry before tuning
+anything on top of it: **the display is built to trail the reader, never to
+lead**, so the symmetric ±2-word figure is intentionally not the objective.
 
 ---
 
@@ -96,30 +99,63 @@ const target = snapshotDisplayAt(lastSnapshot, audioClockNowMs());
 
 ```ts
 function snapshotDisplayAt(s: Snapshot, tMs: number): number {
-  if (s.rate <= 0) return s.observed;
+  const ceiling = Math.min(s.displayLimitToken, s.scriptLen);
+  if (s.rate <= 0) return Math.min(s.observed, ceiling);
   const age = Math.max(0, tMs - s.evidenceAudioMs);
   const onset = Math.min(s.pauseOnsetMs, s.maxPredictionMs);
-  // Fresh evidence: lead grows 1:1 (pipeline-lag compensation). Stale
-  // evidence — the reader has probably paused — eases back to a one-word
-  // rest instead of parking five words ahead.
-  const lead =
+  // Fresh evidence: the lead grows 1:1. That is pipeline-lag compensation,
+  // not a guess about the future — the words are already said, the recogniser
+  // has simply not finished saying so. Stale evidence: the reader has
+  // probably stopped, and the lead decays to rest on the last word heard.
+  const leadMs =
     age <= onset ? age : Math.max(onset - (age - onset), Math.min(s.leadFloorMs, onset));
-  return Math.min(s.observed + (s.rate * lead) / 1000, s.scriptLen);
+  const lead = Math.min((s.rate * leadMs) / 1000, s.maxLeadTokens);
+  return Math.min(s.observed + lead, ceiling);
 }
 ```
 
-The engine additionally zeroes `rate` the moment the provider endpoints an
-utterance (its VAD saw silence) and re-bases the clock on `speechStarted`,
-so pauses park the display exactly where the reader stopped and gliding
-resumes the instant they speak. The canonical TS mirror lives in
-`src/shared/contracts/alignment.ts` (`alignmentDisplayAt`) — never fork it.
+The canonical TS mirror lives in `src/shared/contracts/alignment.ts`
+(`alignmentDisplayAt`) — never fork it.
 
-```ts
-// (see src/shared/contracts/alignment.ts for the maintained version)
-```
+**The contract this function exists to keep: the returned position must never
+get ahead of what the reader has actually said.** Four separate mechanisms
+enforce it, and none of them is something the stage should re-derive, relax,
+or compensate for:
 
-`rate` is already zeroed by the engine whenever extrapolation would be a
-guess (holding/ambiguous/searching) — don't re-derive that condition.
+* `rate` is already scaled *below* the reader's estimated pace
+  (`prediction_gain`, currently 0.35), so the steady state trails them. It is
+  not a measured reading speed and must not be "corrected" back up.
+* `rate` is already zero whenever extrapolation would be a guess
+  (holding / ambiguous / searching), and the moment the provider endpoints an
+  utterance — its VAD heard silence, so the display parks exactly where the
+  reader stopped. `speechStarted` re-bases the clock so gliding resumes the
+  instant they speak again.
+* `maxLeadTokens` caps the lead in *words*, not milliseconds, because a
+  reader who slows down invalidates the rate estimate without invalidating
+  the clock.
+* `displayLimitToken` is a hard ceiling at the end of the paragraph the
+  reader was last heard in. The engine will not predict across a paragraph
+  break on any amount of confidence: a break is where readers stop, so it is
+  simultaneously the likeliest place for a forward guess to be wrong and the
+  most visible place to be wrong in. Expect the display to sit still at a
+  paragraph end until the next paragraph is genuinely heard — that pause is
+  the feature.
+
+Benchmarked as `ahead_*` in `bench/REPORT.md`: live time-spent-ahead-of-the-
+reader is 3.8%, down from 22.2%, against a measurement floor of ~0.5%.
+
+> **`profile.prediction.leadSeconds` now works against all of this.** The
+> stage adds its own comfort lead by asking `alignmentDisplayAt` for a moment
+> in the future (`engine.ts`, `voiceLeadMs()`), default 0.38 s. That was the
+> right call for an underline — you want to read *into* placed text. For a
+> fade it is the opposite: it spends the safety margin on erasing words
+> earlier. Replaying the live captures with the lead applied measures the
+> cost directly — 3.8% → **6.5%** time-ahead at the 0.38 s default, and
+> **9.6%** at the 0.6 s maximum, roughly doubling and tripling the defect.
+> It cannot run away (it inherits `maxLeadTokens` and the paragraph ceiling),
+> but for the fade display it should be 0 by default. If a comfort lead is
+> still wanted for scrolling, apply it to the SCROLL anchor — how high on
+> screen the line sits — and not to the token position that drives the fade.
 
 ### The word underline / highlight
 

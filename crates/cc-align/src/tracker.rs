@@ -86,8 +86,10 @@ pub struct Snapshot {
     pub confirmed: f64,
     /// Best evidence-supported position (atom boundary).
     pub observed: f64,
-    /// Estimated reading rate for display extrapolation (atoms/sec). Zero
-    /// whenever extrapolating would be a guess (holding/searching/ambiguous).
+    /// Rate the DISPLAY extrapolates at (atoms/sec) — the reading-rate estimate
+    /// already scaled by `prediction_gain`, so it is deliberately short of how
+    /// fast the reader is actually going. Zero whenever extrapolating would be
+    /// a guess (holding/searching/ambiguous) or the reader has stopped.
     pub rate: f64,
     /// Audio time the observed position corresponds to.
     pub evidence_audio_ms: f64,
@@ -100,6 +102,12 @@ pub struct Snapshot {
     pub pause_onset_ms: f64,
     /// Residual lead (ms of reading) kept once paused.
     pub lead_floor_ms: f64,
+    /// Hard cap on how far prediction may carry the display past `observed`
+    /// (atoms), whatever the rate estimate says.
+    pub max_lead_atoms: f64,
+    /// Absolute ceiling for the display: the end of the paragraph the reader
+    /// was last heard in. Prediction stops here and waits for evidence.
+    pub display_limit: f64,
     /// Heuristic 0..1 — NOT yet a calibrated probability; benchmarked as-is.
     pub confidence: f64,
     /// A distant candidate accumulating evidence (the "Suggest jump"
@@ -114,22 +122,37 @@ impl Snapshot {
     /// Where the display should place the reader at audio-clock time `t`.
     /// This is the pure function the stage motion layer (and the evaluator)
     /// applies between snapshots.
+    ///
+    /// The display fades out words as they are heard, so its two directions of
+    /// error are not worth the same and it must not be tuned as if they were.
+    /// Trailing leaves a word legible a moment longer than it needed to be and
+    /// nobody notices. Leading erases a line the reader has not reached — and
+    /// they are looking straight at it. Everything below is that asymmetry: a
+    /// lead that is only ever a fraction of a word, that decays to nothing when
+    /// evidence goes stale, and that stops dead at a paragraph break.
     pub fn display_at(&self, t_audio_ms: f64) -> f64 {
+        let ceiling = self.display_limit.min(self.script_len);
         if self.rate <= 0.0 {
-            return self.observed;
+            return self.observed.min(ceiling);
         }
         let age = (t_audio_ms - self.evidence_audio_ms).max(0.0);
         let onset = self.pause_onset_ms.min(self.max_prediction_ms);
-        // While evidence is fresh the lead grows 1:1 (pipeline-lag
-        // compensation). Once it goes stale — the reader has probably
-        // paused — the lead eases back to a one-word rest instead of
-        // parking five words ahead of someone who stopped talking.
-        let lead = if age <= onset {
+        // While evidence is fresh the lead grows 1:1 — that is pipeline-lag
+        // compensation, not a guess about the future: the words are already
+        // said, the recogniser has simply not finished saying so. Once evidence
+        // goes stale the reader has probably stopped, and the lead decays to
+        // rest exactly on the last word actually heard.
+        let lead_ms = if age <= onset {
             age
         } else {
             (onset - (age - onset)).max(self.lead_floor_ms.min(onset))
         };
-        (self.observed + self.rate * lead / 1000.0).min(self.script_len)
+        // The rate estimate is the weak link — it is a median of recent
+        // slopes, and a reader who slows down invalidates it silently. Capping
+        // the lead in ATOMS bounds the damage directly instead of trusting the
+        // estimate to stay honest.
+        let lead = (self.rate * lead_ms / 1000.0).min(self.max_lead_atoms);
+        (self.observed + lead).min(ceiling)
     }
 }
 
@@ -1065,8 +1088,13 @@ impl Engine {
             .current_item()
             .map(|i| !i.is_final)
             .unwrap_or(false);
+        // The gain is applied HERE, on the way out, and not to `self.rate`:
+        // the engine's own forward prediction (the local search band) wants the
+        // reader's true pace, while the display wants a deliberately cautious
+        // one. Conflating them would drag the search band backwards and cost
+        // recovery latency to buy display safety, which is not the trade.
         let rate = match self.state {
-            TrackingState::Following if flowing => self.rate,
+            TrackingState::Following if flowing => self.rate * self.config.prediction_gain,
             _ => 0.0,
         };
         Snapshot {
@@ -1081,6 +1109,8 @@ impl Engine {
             max_prediction_ms: self.config.max_prediction_ms,
             pause_onset_ms: self.config.pause_onset_ms,
             lead_floor_ms: self.config.lead_floor_ms,
+            max_lead_atoms: self.config.max_lead_atoms,
+            display_limit: self.script.prediction_ceiling(self.observed),
             confidence: self.confidence,
             suggestion: self.pending_jump.as_ref().map(|p| p.target as f64),
             script_len: self.script.len() as f64,

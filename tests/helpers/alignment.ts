@@ -19,6 +19,14 @@ export function resetSnapshotSeq(): void {
  *
  * `seq` auto-increments so consecutive calls are accepted by the receiver's
  * monotonicity gate without every test having to count.
+ *
+ * The prediction bounds here are deliberately SLACK rather than the engine's
+ * shipping values (`AlignmentConfig` owns those). Most callers are motion
+ * tests driving long synthetic trajectories at 5–12 tokens/s, and a fixture
+ * that quietly clamped every display target to `observed + 2.5` would leave
+ * them asserting against a plant that never gets to move — passing or failing
+ * for reasons that have nothing to do with what they are named after. A test
+ * about the caps should set them explicitly and say so.
  */
 export function snapshot(overrides: Partial<AlignmentSnapshot> = {}): AlignmentSnapshot {
   seq += 1;
@@ -35,6 +43,8 @@ export function snapshot(overrides: Partial<AlignmentSnapshot> = {}): AlignmentS
     maxPredictionMs: 900,
   pauseOnsetMs: 1800,
   leadFloorMs: 550,
+  maxLeadTokens: 10_000,
+  displayLimitToken: 10_000,
     confidence: 0.92,
     suggestionToken: null,
     scriptLenTokens: 10_000,

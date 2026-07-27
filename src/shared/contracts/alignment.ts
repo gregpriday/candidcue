@@ -117,9 +117,13 @@ export interface AlignmentSnapshot {
    */
   observedToken: number;
   /**
-   * Reading rate for display extrapolation, tokens/second. Already zero
-   * whenever extrapolating would be a guess (holding, ambiguous, searching), so
+   * Rate for display extrapolation, tokens/second. Already zero whenever
+   * extrapolating would be a guess (holding, ambiguous, searching), so
    * consumers must not re-derive that condition.
+   *
+   * Deliberately BELOW the reader's estimated pace: the display is meant to
+   * trail them, never to lead. Do not "correct" it back up to a measured
+   * reading speed.
    */
   rateTokensPerSecond: number;
 
@@ -135,8 +139,19 @@ export interface AlignmentSnapshot {
    * re-derives pause detection.
    */
   pauseOnsetMs: number;
-  /** Residual lead (ms of reading) kept once paused — "one word ahead". */
+  /** Residual lead (ms of reading) kept once paused. Zero: rest on the last
+   * word actually heard, not past it. */
   leadFloorMs: number;
+  /** Hard cap on how far prediction may carry the display past
+   * `observedToken`, in tokens. */
+  maxLeadTokens: number;
+  /**
+   * Absolute ceiling for the display: the end of the paragraph the reader was
+   * last heard in. The engine will not predict across a paragraph break — a
+   * break is where readers stop, so crossing one on a rate estimate alone is
+   * the guess most likely to be wrong and most visible when it is.
+   */
+  displayLimitToken: number;
 
   /**
    * Documented heuristic in 0..1 — NOT a calibrated probability. Fine for a
@@ -181,16 +196,21 @@ export interface AlignmentSnapshot {
  */
 export function alignmentDisplayAt(snapshot: AlignmentSnapshot, tAudioMs: number): number {
   const { observedToken, rateTokensPerSecond, scriptLenTokens } = snapshot;
-  if (!(rateTokensPerSecond > 0) || !Number.isFinite(tAudioMs)) return observedToken;
+  const ceiling = Math.min(snapshot.displayLimitToken, scriptLenTokens);
+  if (!(rateTokensPerSecond > 0) || !Number.isFinite(tAudioMs)) {
+    return Math.min(observedToken, ceiling);
+  }
   const age = Math.max(0, tAudioMs - snapshot.evidenceAudioMs);
   const onset = Math.min(snapshot.pauseOnsetMs, snapshot.maxPredictionMs);
-  // While evidence is fresh the lead grows 1:1 (pipeline-lag compensation).
-  // Once it goes stale — the reader has probably paused — the lead eases
-  // back to a one-word rest instead of parking five words ahead of someone
-  // who stopped talking. Exact mirror of `Snapshot::display_at`.
-  const lead =
+  // While evidence is fresh the lead grows 1:1 — that is pipeline-lag
+  // compensation, not a guess about the future: the words are already said,
+  // the recogniser has simply not finished saying so. Once evidence goes stale
+  // the reader has probably stopped, and the lead decays to rest exactly on
+  // the last word actually heard. Exact mirror of `Snapshot::display_at`.
+  const leadMs =
     age <= onset ? age : Math.max(onset - (age - onset), Math.min(snapshot.leadFloorMs, onset));
-  return Math.min(observedToken + (rateTokensPerSecond * lead) / 1000, scriptLenTokens);
+  const lead = Math.min((rateTokensPerSecond * leadMs) / 1000, snapshot.maxLeadTokens);
+  return Math.min(observedToken + lead, ceiling);
 }
 
 /* ---------------------------------------------------------------------------
@@ -217,6 +237,8 @@ const SNAPSHOT_FIELDS: Record<keyof AlignmentSnapshot, FieldKind> = {
   maxPredictionMs: 'real',
   pauseOnsetMs: 'real',
   leadFloorMs: 'real',
+  maxLeadTokens: 'real',
+  displayLimitToken: 'real',
   confidence: 'real',
   suggestionToken: 'nullableReal',
   scriptLenTokens: 'real',

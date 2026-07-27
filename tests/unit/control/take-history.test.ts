@@ -181,6 +181,8 @@ function snapshot(
     maxPredictionMs: 900,
   pauseOnsetMs: 1800,
   leadFloorMs: 550,
+  maxLeadTokens: 2.5,
+  displayLimitToken: 200,
     confidence: extra.confidence ?? 0.9,
     suggestionToken: null,
     scriptLenTokens: 200,

@@ -135,6 +135,74 @@ fn intro_then_end_jump_is_followed() {
     );
 }
 
+/// The fade-display guarantee: the prompter dims words as it hears them, so a
+/// display that gets AHEAD of the reader erases lines they have not read yet.
+/// Greg's ruling is that this counts as a catastrophic failure rather than an
+/// accuracy wobble, and this is the test that holds the engine to it.
+///
+/// Paragraph-boundary pauses on purpose: that is where readers actually stop,
+/// and where a display extrapolating on a rate estimate used to walk into text
+/// that had not been spoken at all.
+#[test]
+fn the_display_never_fades_past_what_was_spoken() {
+    let script = starter_script();
+    let n = script.len() as u32;
+    let breaks: Vec<u32> = (1..script.len())
+        .filter(|&i| script.atoms[i].para != script.atoms[i - 1].para)
+        .map(|i| i as u32)
+        .collect();
+    assert!(
+        breaks.len() >= 3,
+        "the starter fixture must have paragraphs to stop at"
+    );
+
+    let plan = PerformancePlan {
+        name: "starter_fade_frontier".into(),
+        script: "starter".into(),
+        scenario: "para_pauses".into(),
+        seed: 31,
+        ops: vec![
+            PlanOp::Read { from: 0, to: breaks[0] },
+            PlanOp::Pause { ms: 2_500 },
+            PlanOp::Read { from: breaks[0], to: breaks[1] },
+            PlanOp::Pause { ms: 4_000 },
+            PlanOp::Read { from: breaks[1], to: breaks[2] },
+            PlanOp::Pause { ms: 1_500 },
+            PlanOp::Read { from: breaks[2], to: n },
+        ],
+        corruption: Corruption::default(),
+    };
+    let performance = expand(&plan, &script);
+    let gold = synthetic_timing(&performance, 150);
+    let events = generate_events(&gold, &plan.corruption, plan.seed);
+    let result = replay(
+        script,
+        AlignmentConfig::default(),
+        &events,
+        &gold.viewport_hints,
+    );
+    let eval = evaluate("starter_fade_frontier", "para_pauses", &gold, &result, None);
+
+    assert_eq!(
+        eval.metrics.ahead_events, 0,
+        "the display got ahead of the reader {} time(s)",
+        eval.metrics.ahead_events
+    );
+    let worst = eval.metrics.ahead_worst.expect("samples");
+    assert!(
+        worst <= 2.5,
+        "display reached {worst} atoms past the last word spoken"
+    );
+    // And it must still be a working prompter, not a frozen one.
+    assert!(
+        eval.metrics.within5_pct > 90.0,
+        "within±5 {}% — trailing is fine, falling behind is not",
+        eval.metrics.within5_pct
+    );
+    assert_eq!(eval.metrics.false_jumps, 0);
+    assert_eq!(eval.metrics.catastrophic, 0);
+}
+
 #[test]
 fn pauses_do_not_run_the_display_ahead() {
     // Greg's field report: "if I take a pause, it just keeps rushing

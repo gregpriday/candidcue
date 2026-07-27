@@ -118,6 +118,14 @@ pub struct CompiledScript {
     /// the atoms share that token's interval evenly, so the reader advances
     /// smoothly across it instead of stalling and then jumping.
     pub atom_token_pos: Vec<f64>,
+    /// For each atom, the EXCLUSIVE atom index ending its paragraph.
+    ///
+    /// The display's hard ceiling. Prediction may carry the reader to the end
+    /// of the paragraph they are audibly in, and not one word past it: crossing
+    /// a paragraph break is the one guess the engine is never allowed to make,
+    /// because a break is exactly where a reader stops to breathe, check the
+    /// camera, or decide whether to say the next bit at all.
+    pub para_end: Vec<u32>,
 }
 
 impl CompiledScript {
@@ -127,6 +135,23 @@ impl CompiledScript {
 
     pub fn is_empty(&self) -> bool {
         self.atoms.is_empty()
+    }
+
+    /// How far the display may be carried by prediction from a frontier at
+    /// `atom_pos`: the end of the paragraph the reader was last *heard* in.
+    ///
+    /// `atom_pos` is a frontier, so the last atom actually spoken is the one
+    /// below it — which is what keeps the rule honest at a break. A reader who
+    /// has just finished a paragraph has a frontier sitting exactly on the next
+    /// paragraph's first word; answering with THAT paragraph's end would let
+    /// prediction fade its opening words on the strength of having heard the
+    /// previous one end, which is the guess this function exists to refuse.
+    pub fn prediction_ceiling(&self, atom_pos: f64) -> f64 {
+        if self.atoms.is_empty() {
+            return 0.0;
+        }
+        let last_heard = (atom_pos.ceil() as i64 - 1).max(0) as usize;
+        self.para_end[last_heard.min(self.atoms.len() - 1)] as f64
     }
 
     /// Fractional atom position → fractional host-token position.
@@ -381,11 +406,13 @@ fn finalize(
     trigram_postings.retain(|_, v| v.len() <= MAX_ANCHOR_POSTINGS);
 
     let atom_token_pos = build_token_axis(&atoms, token_count);
+    let para_end = build_para_end(&atoms);
 
     CompiledScript {
         para_count,
         token_count,
         atom_token_pos,
+        para_end,
         atoms,
         interner,
         token_postings,
@@ -426,6 +453,25 @@ fn build_token_axis(atoms: &[ScriptAtom], token_count: u32) -> Vec<f64> {
     }
     axis.push(token_count as f64);
     axis
+}
+
+/// Exclusive end of each atom's paragraph. Atoms are in reading order, so a
+/// paragraph is a contiguous run and one pass over them is enough.
+fn build_para_end(atoms: &[ScriptAtom]) -> Vec<u32> {
+    let mut ends = vec![0u32; atoms.len()];
+    let mut start = 0usize;
+    while start < atoms.len() {
+        let para = atoms[start].para;
+        let mut end = start;
+        while end < atoms.len() && atoms[end].para == para {
+            end += 1;
+        }
+        for slot in ends.iter_mut().take(end).skip(start) {
+            *slot = end as u32;
+        }
+        start = end;
+    }
+    ends
 }
 
 fn compute_weight(surface: &str, stop: bool, occurrences: u16) -> u16 {
@@ -704,6 +750,37 @@ mod tests {
         assert_eq!(script.atom_token_pos, vec![0.0]);
         assert_eq!(script.token_at(0.0), 0.0);
         assert_eq!(script.atom_at(0.0), 0.0);
+    }
+
+    /// The paragraph rule, stated as behaviour: prediction may run to the end
+    /// of the paragraph the reader is audibly in, and stops dead at the break.
+    #[test]
+    fn prediction_stops_at_the_paragraph_it_was_heard_in() {
+        // Two paragraphs: atoms 0..3 and 3..6.
+        let script = compile("alpha bravo charlie\n\ndelta echo foxtrot\n", CompileOptions::default());
+        assert_eq!(script.para_end, vec![3, 3, 3, 6, 6, 6]);
+
+        // Mid-first-paragraph: may be carried to the end of it, no further.
+        assert_eq!(script.prediction_ceiling(1.0), 3.0);
+        assert_eq!(script.prediction_ceiling(2.5), 3.0);
+
+        // The frontier sits exactly ON the break: the reader has finished the
+        // first paragraph and not yet been heard in the second, so the ceiling
+        // must still be the break. Answering 6 here would let the display fade
+        // the next paragraph's opening words on no evidence at all.
+        assert_eq!(script.prediction_ceiling(3.0), 3.0);
+
+        // One word of the second paragraph heard — now it may run to ITS end.
+        assert_eq!(script.prediction_ceiling(4.0), 6.0);
+
+        // Out of range clamps rather than panicking.
+        assert_eq!(script.prediction_ceiling(0.0), 3.0);
+        assert_eq!(script.prediction_ceiling(999.0), 6.0);
+    }
+
+    #[test]
+    fn an_empty_script_has_no_prediction_room() {
+        assert_eq!(compile_tokens(&[]).prediction_ceiling(0.0), 0.0);
     }
 
     #[test]

@@ -56,6 +56,10 @@ pub fn run_tier_a(
     let mut clean_abs: Vec<f64> = Vec::new();
     let mut clean_signed: Vec<f64> = Vec::new();
     let mut pause_lead: Vec<f64> = Vec::new();
+    // Overshoot pools across EVERY family, not just the clean ones: fading a
+    // word the reader has not reached is just as wrong in a retake as in a
+    // straight read.
+    let mut ahead: Vec<f64> = Vec::new();
     let mut scale_us: std::collections::HashMap<String, f64> = Default::default();
 
     for scenario in &suite {
@@ -87,13 +91,21 @@ pub fn run_tier_a(
             clean_signed.extend_from_slice(&eval.samples.signed_err);
         }
         pause_lead.extend_from_slice(&eval.samples.pause_lead);
+        ahead.extend_from_slice(&eval.samples.ahead);
         if scenario.plan.scenario == "scale_window" {
             scale_us.insert(scenario.plan.script.clone(), eval.metrics.mean_event_us);
         }
         runs.push(eval.metrics);
     }
 
-    let table = build_table(&runs, &mut clean_abs, &clean_signed, &scale_us, &mut pause_lead);
+    let table = build_table(
+        &runs,
+        &mut clean_abs,
+        &clean_signed,
+        &scale_us,
+        &mut pause_lead,
+        &mut ahead,
+    );
     Ok(SuiteResult {
         label: label.to_string(),
         config: config.clone(),
@@ -115,6 +127,7 @@ fn build_table(
     clean_signed: &[f64],
     scale_us: &std::collections::HashMap<String, f64>,
     pause_lead: &mut Vec<f64>,
+    ahead: &mut Vec<f64>,
 ) -> Vec<BenchEntry> {
     let mut table = Vec::new();
 
@@ -126,6 +139,35 @@ fn build_table(
         "safety.catastrophic",
         catastrophic as f64,
         "count",
+        "lower",
+    ));
+    // Running ahead of the reader is a safety failure, not an accuracy one:
+    // with a fade display it deletes text they are still reading.
+    let ahead_events: u32 = runs.iter().map(|r| r.ahead_events).sum();
+    table.push(entry("safety.ahead_events", ahead_events as f64, "count", "lower"));
+    let ahead_worst = runs
+        .iter()
+        .filter_map(|r| r.ahead_worst)
+        .fold(f64::NEG_INFINITY, f64::max);
+    table.push(entry(
+        "safety.ahead_worst",
+        if ahead_worst.is_finite() { ahead_worst } else { f64::NAN },
+        "atoms",
+        "lower",
+    ));
+    let (ahead_hits, ahead_eligible) = runs
+        .iter()
+        .fold((0usize, 0usize), |(h, e), r| (h + r.ahead_samples, e + r.ahead_eligible));
+    table.push(entry(
+        "overshoot.ahead_time",
+        if ahead_eligible == 0 { 0.0 } else { 100.0 * ahead_hits as f64 / ahead_eligible as f64 },
+        "%",
+        "lower",
+    ));
+    table.push(entry(
+        "overshoot.ahead_p95",
+        percentile(ahead, 95.0),
+        "atoms",
         "lower",
     ));
 
@@ -417,6 +459,7 @@ pub fn run_tier_b(
     let mut pooled_abs: Vec<f64> = Vec::new();
     let mut pooled_signed: Vec<f64> = Vec::new();
     let mut pooled_pause: Vec<f64> = Vec::new();
+    let mut pooled_ahead: Vec<f64> = Vec::new();
     let mut wer_weighted = 0.0f64;
     let mut wer_words = 0usize;
 
@@ -450,6 +493,7 @@ pub fn run_tier_b(
         pooled_abs.extend_from_slice(&eval.samples.abs_err);
         pooled_signed.extend_from_slice(&eval.samples.signed_err);
         pooled_pause.extend_from_slice(&eval.samples.pause_lead);
+        pooled_ahead.extend_from_slice(&eval.samples.ahead);
         if let Some(wer) = eval.metrics.wer_pct {
             wer_weighted += wer * manifest.words as f64;
             wer_words += manifest.words;
@@ -505,6 +549,37 @@ pub fn run_tier_b(
     table.push(entry(
         "live.pause_overshoot_p95",
         percentile(&mut pooled_pause, 95.0),
+        "atoms",
+        "lower",
+    ));
+    let live_ahead_events: u32 = runs.iter().map(|r| r.ahead_events).sum();
+    table.push(entry("live.ahead_events", live_ahead_events as f64, "count", "lower"));
+    let (live_ahead_hits, live_ahead_eligible) = runs
+        .iter()
+        .fold((0usize, 0usize), |(h, e), r| (h + r.ahead_samples, e + r.ahead_eligible));
+    table.push(entry(
+        "live.ahead_time",
+        if live_ahead_eligible == 0 {
+            0.0
+        } else {
+            100.0 * live_ahead_hits as f64 / live_ahead_eligible as f64
+        },
+        "%",
+        "lower",
+    ));
+    table.push(entry(
+        "live.ahead_p95",
+        percentile(&mut pooled_ahead, 95.0),
+        "atoms",
+        "lower",
+    ));
+    let live_ahead_worst = runs
+        .iter()
+        .filter_map(|r| r.ahead_worst)
+        .fold(f64::NEG_INFINITY, f64::max);
+    table.push(entry(
+        "live.ahead_worst",
+        if live_ahead_worst.is_finite() { live_ahead_worst } else { f64::NAN },
         "atoms",
         "lower",
     ));

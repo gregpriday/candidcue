@@ -33,6 +33,32 @@ const CATASTROPHIC_SUSTAIN_MS: f64 = 2_000.0;
 /// Grace period after a gold discontinuity before wrongness counts as
 /// catastrophic (recovery metrics own that window).
 const DISCONTINUITY_GRACE_MS: f64 = 5_000.0;
+/// ---------------------------------------------------------------------------
+/// Overshoot: the display ahead of what the reader has actually said.
+/// ---------------------------------------------------------------------------
+/// The display fades words out as they are heard, so the two directions of
+/// error are not symmetric and must not be pooled into one `|err|`. Trailing
+/// leaves a word visible slightly too long — nobody notices. Leading *erases
+/// text the reader has not read yet*, and they are reading it. Greg's ruling:
+/// treat running ahead as the catastrophic direction and measure it on its own.
+///
+/// Measured against the HIGH-WATER MARK of `floor(gold)` — the furthest word
+/// the reader has ever finished saying — not their instantaneous position. A
+/// word is safe to fade once it has been spoken, and going back to re-read a
+/// sentence does not un-speak it: on a retake or a repeated phrase the display
+/// legitimately sits "ahead" of where the mouth is, and nothing has been
+/// erased that the reader had not already read. Against instantaneous gold
+/// that benign case swamps the metric — it scored 105 incidents, 100 of them
+/// backward moves — and the defect being hunted here would be invisible in the
+/// noise. A frontier resting on the word currently in the mouth is the
+/// generous end of correct; the tolerance is one word past that.
+const AHEAD_TOLERANCE_ATOMS: f64 = 1.0;
+/// An excursion this far ahead, held this long, is one countable "it got ahead
+/// of me" incident: two atoms past the last finished word means a word the
+/// reader has not spoken at all has been faded out, and 300 ms is long enough
+/// to see it happen.
+const AHEAD_EVENT_ATOMS: f64 = 2.0;
+const AHEAD_EVENT_SUSTAIN_MS: f64 = 300.0;
 /// Recovery: locked when |err| ≤ 3, and stays ≤ 5 for the sustain window.
 const RECOVER_HIT_ATOMS: f64 = 3.0;
 const RECOVER_HOLD_ATOMS: f64 = 5.0;
@@ -85,6 +111,19 @@ pub struct RunMetrics {
     /// not speaking): how far the text ran ahead during a pause. The
     /// over-eager-forward failure lives here.
     pub pause_overshoot_p95: Option<f64>,
+    /// % of on-script time the display sat more than a word ahead of the last
+    /// word actually spoken.
+    pub ahead_pct: f64,
+    /// Seconds of that time.
+    pub ahead_s: f64,
+    /// Distinct excursions ≥3 atoms ahead, held ≥300 ms — "the number of times
+    /// it jumped ahead of me".
+    pub ahead_events: u32,
+    /// Worst overshoot reached (atoms). None when nothing was ever ahead.
+    pub ahead_worst: Option<f64>,
+    /// Raw counts so the suite pools without re-weighting percentages.
+    pub ahead_samples: usize,
+    pub ahead_eligible: usize,
     /// % of ≥8-content-word items whose display moved before the final.
     pub prefinal_move_pct: Option<f64>,
     pub event_count: usize,
@@ -101,6 +140,9 @@ pub struct RunSamples {
     pub signed_err: Vec<f64>,
     /// Signed lead (display − gold hold position) during speaking pauses.
     pub pause_lead: Vec<f64>,
+    /// Signed overshoot (display − last word finished) at every on-script
+    /// sample, pausing or speaking. Positive means text was faded early.
+    pub ahead: Vec<f64>,
 }
 
 pub struct RunEval {
@@ -275,6 +317,14 @@ pub fn evaluate(
     let mut catastrophic_run_ms = 0.0;
     let mut catastrophic_periods = 0u32;
     let mut in_catastrophic = false;
+    let mut ahead_eligible = 0usize;
+    let mut ahead_samples = 0usize;
+    let mut ahead_events = 0u32;
+    let mut ahead_worst = f64::NEG_INFINITY;
+    let mut ahead_run_ms = 0.0;
+    let mut in_ahead = false;
+    // Furthest word the reader has ever finished — the fade frontier's ceiling.
+    let mut heard_max = f64::NEG_INFINITY;
 
     let mut display_prev_sample: Option<(f64, f64)> = None; // (t, display)
     // (t, signed delta, |display − gold| right after the jump)
@@ -298,6 +348,13 @@ pub fn evaluate(
         }
         display_prev_sample = Some((t, display));
 
+        // Inside the window after a gold discontinuity the engine is entitled
+        // to be wrong: accepting a jump takes evidence and persistence rounds
+        // by design, and the recovery metrics are what measure that.
+        let in_grace = gold_jumps
+            .iter()
+            .any(|&(gt, _)| t >= gt && t < gt + DISCONTINUITY_GRACE_MS);
+
         // ---- catastrophic wrongness: NOT gated on first lock ----
         // A wrong early lock that claims Following must count; before any
         // lock the engine reports Searching, which never counts. Grace
@@ -306,9 +363,6 @@ pub fn evaluate(
         // ad-lib returns.
         if point.on_script && point.speaking {
             let err = display - point.position;
-            let in_grace = gold_jumps
-                .iter()
-                .any(|&(gt, _)| t >= gt && t < gt + DISCONTINUITY_GRACE_MS);
             let claiming_follow =
                 matches!(sample.state, Some(cc_align::TrackingState::Following));
             if err.abs() > CATASTROPHIC_ATOMS && !in_grace && claiming_follow {
@@ -326,6 +380,38 @@ pub fn evaluate(
             // "sustained" period.
             catastrophic_run_ms = 0.0;
             in_catastrophic = false;
+        }
+
+        // ---- overshoot: ahead of what has actually been SAID ----
+        // Speaking and paused alike — a fade frontier that runs ahead is the
+        // same failure either way, and the pause is simply where it is most
+        // likely to happen.
+        //
+        // No grace window and no `speaking` gate: a display that has faded
+        // past everything ever spoken is wrong in a pause, wrong mid-word, and
+        // wrong while recovering from a jump. The high-water reference is what
+        // makes that fair — see the constants above.
+        if point.on_script {
+            heard_max = heard_max.max(point.position.floor());
+        }
+        if point.on_script && t >= accuracy_from_ms {
+            let over = display - heard_max;
+            samples.ahead.push(over);
+            ahead_eligible += 1;
+            ahead_worst = ahead_worst.max(over);
+            if over > AHEAD_TOLERANCE_ATOMS {
+                ahead_samples += 1;
+            }
+            if over > AHEAD_EVENT_ATOMS {
+                ahead_run_ms += SAMPLE_MS;
+                if ahead_run_ms >= AHEAD_EVENT_SUSTAIN_MS && !in_ahead {
+                    ahead_events += 1;
+                    in_ahead = true;
+                }
+            } else {
+                ahead_run_ms = 0.0;
+                in_ahead = false;
+            }
         }
 
         if point.on_script && point.speaking && t >= accuracy_from_ms {
@@ -447,6 +533,16 @@ pub fn evaluate(
         None
     } else {
         Some(percentile(&mut samples.pause_lead.clone(), 95.0))
+    };
+    m.ahead_eligible = ahead_eligible;
+    m.ahead_samples = ahead_samples;
+    m.ahead_pct = pct(ahead_samples, ahead_eligible);
+    m.ahead_s = ahead_samples as f64 * SAMPLE_MS / 1000.0;
+    m.ahead_events = ahead_events;
+    m.ahead_worst = if ahead_worst.is_finite() {
+        Some(ahead_worst)
+    } else {
+        None
     };
     m.prefinal_move_pct = prefinal;
     m.event_count = replay.event_us.len();

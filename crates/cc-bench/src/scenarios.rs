@@ -34,6 +34,19 @@ fn frac(n: usize, pct: u32) -> u32 {
     ((n as u64 * pct as u64) / 100) as u32
 }
 
+/// Atom indexes where a new paragraph starts (0 excluded).
+///
+/// Paragraph ends are where readers actually stop — to breathe, to check the
+/// camera, to decide whether the next bit still lands — so they are also where
+/// a display that predicts forward does its most visible damage, leaking into
+/// a paragraph that has not been spoken at all.
+fn paragraph_starts(script: &CompiledScript) -> Vec<u32> {
+    (1..script.len())
+        .filter(|&i| script.atoms[i].para != script.atoms[i - 1].para)
+        .map(|i| i as u32)
+        .collect()
+}
+
 /// Off-script filler material for ad-libs — deliberately everyday words that
 /// overlap with common script vocabulary.
 fn adlib_words(n: usize) -> Vec<String> {
@@ -117,6 +130,32 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
             ],
             Corruption::default(),
         ));
+
+        // 2c. Pauses AT paragraph boundaries: read a paragraph, stop at its
+        // full stop, then carry on. This is the shape of an ordinary take,
+        // and the one where a forward-predicting display crosses into text
+        // the reader has not begun.
+        let starts = paragraph_starts(&script);
+        if starts.len() >= 4 {
+            let pick = |pct: usize| starts[starts.len() * pct / 100];
+            let (b0, b1, b2) = (pick(25), pick(50), pick(70));
+            suite.push(scenario(
+                &name,
+                "para_pauses",
+                &script,
+                150,
+                vec![
+                    PlanOp::Read { from: 0, to: b0 },
+                    PlanOp::Pause { ms: 2_000 },
+                    PlanOp::Read { from: b0, to: b1 },
+                    PlanOp::Pause { ms: 3_000 },
+                    PlanOp::Read { from: b1, to: b2 },
+                    PlanOp::Pause { ms: 1_500 },
+                    PlanOp::Read { from: b2, to: n as u32 },
+                ],
+                Corruption::default(),
+            ));
+        }
 
         // 3. Say something at the beginning, stop, then say the ending.
         suite.push(scenario(

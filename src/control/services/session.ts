@@ -223,6 +223,8 @@ export function createMockTrackingDriver(options: TrackingDriverOptions): Tracki
       maxPredictionMs: 900,
   pauseOnsetMs: 1800,
   leadFloorMs: 550,
+  maxLeadTokens: 2.5,
+  displayLimitToken: totalTokens,
       confidence,
       suggestionToken: null,
       scriptLenTokens: totalTokens,
