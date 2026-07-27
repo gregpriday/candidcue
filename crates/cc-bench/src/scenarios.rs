@@ -282,6 +282,9 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
                 from: at + step - 1,
                 to: at + step,
                 say: vec![REPLACEMENTS[r % REPLACEMENTS.len()].to_string()],
+                // A paraphrase, not a re-spelling: the reader said a
+                // different word, so it is not a `forms.span_*` sample.
+                respelled: false,
             });
             r += 1;
             at += step;

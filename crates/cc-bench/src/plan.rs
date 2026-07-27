@@ -20,6 +20,15 @@ pub enum PlanOp {
         from: u32,
         to: u32,
         say: Vec<String>,
+        /// Is this a re-SPELLING (same sound, different notation) rather than
+        /// a paraphrase?
+        ///
+        /// Only re-spellings belong in the `forms.span_*` windows. Without the
+        /// distinction the ordinary `substitutions` family — where the reader
+        /// genuinely says a different word — reported per-run "re-spelling"
+        /// numbers for a disagreement that was never about spelling.
+        #[serde(default)]
+        respelled: bool,
     },
     /// Off-script speech (ad-lib, false start, aside). Gold holds position.
     Say { words: Vec<String> },
@@ -166,7 +175,12 @@ pub fn expand(plan: &PerformancePlan, script: &CompiledScript) -> Performance {
                 hold = to;
                 push_segments(&mut p.segments, seg_start, p.words.len(), script, from);
             }
-            PlanOp::Substitute { from, to, say } => {
+            PlanOp::Substitute {
+                from,
+                to,
+                say,
+                respelled,
+            } => {
                 let seg_start = p.words.len();
                 let n = say.len().max(1) as f64;
                 let atoms = (to - from) as f64;
@@ -184,7 +198,7 @@ pub fn expand(plan: &PerformancePlan, script: &CompiledScript) -> Performance {
                         },
                         // The span takes the time its atoms would have taken.
                         clock: atoms / n,
-                        respelled: true,
+                        respelled: *respelled,
                     });
                 }
                 hold = *to;

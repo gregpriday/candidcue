@@ -344,7 +344,7 @@ fn build_table(
     // fire and how long they take — and then a before/after is not the same
     // experiment. If this row differs between two results, read the deltas
     // below it as directional only.
-    table.push(entry("forms.span_samples", se as f64, "count", "lower"));
+    table.push(entry("forms.span_samples", se as f64, "count", "same"));
 
     for (script, bench_name) in [
         ("figures", "forms.figures_within5"),

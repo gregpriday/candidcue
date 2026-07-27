@@ -148,8 +148,15 @@ pub struct RunMetrics {
     pub wer_pct: Option<f64>,
     /// Samples inside a re-spelling window (and its 1.5 s tail), and the hits
     /// among them. Zero on every family that re-spells nothing.
+    ///
+    /// Defaulted so results saved before these existed still deserialise —
+    /// `report` and `compare` read checked-in JSON directly, and deriving
+    /// `Default` on the struct does not make a missing field optional.
+    #[serde(default)]
     pub span_eligible: usize,
+    #[serde(default)]
     pub span_within2: usize,
+    #[serde(default)]
     pub span_within5: usize,
 }
 
@@ -453,6 +460,29 @@ pub fn evaluate(
             }
         }
 
+        // Re-spelling windows are scored on their own gate: speaking OR
+        // paused. The tail exists to ask whether the display CAUGHT UP after a
+        // figure, and the reader is most often silent while it does — a comma,
+        // a breath, the end of the sentence. Scoring only while a word is in
+        // the mouth threw away exactly the samples the `asr_forms_pauses`
+        // scenario was built to produce.
+        if point.on_script && t >= accuracy_from_ms {
+            while span_cursor < spans.len() && spans[span_cursor].1 < t {
+                span_cursor += 1;
+            }
+            if spans.get(span_cursor).is_some_and(|s| t >= s.0 && t <= s.1) {
+                let err = (display - point.position).abs();
+                span_eligible += 1;
+                samples.span_abs.push(err);
+                if err <= 2.0 {
+                    span_within2 += 1;
+                }
+                if err <= 5.0 {
+                    span_within5 += 1;
+                }
+            }
+        }
+
         if point.on_script && point.speaking && t >= accuracy_from_ms {
             let err = display - point.position;
             eligible += 1;
@@ -465,21 +495,6 @@ pub fn evaluate(
                 within5 += 1;
             }
 
-            // The same sample, scored again if the two sides were arguing
-            // about how to spell what was being said right here.
-            while span_cursor < spans.len() && spans[span_cursor].1 < t {
-                span_cursor += 1;
-            }
-            if spans.get(span_cursor).is_some_and(|s| t >= s.0 && t <= s.1) {
-                span_eligible += 1;
-                samples.span_abs.push(err.abs());
-                if err.abs() <= 2.0 {
-                    span_within2 += 1;
-                }
-                if err.abs() <= 5.0 {
-                    span_within5 += 1;
-                }
-            }
 
             // Freeze: gold moved, display did not.
             if t >= FREEZE_WINDOW_MS {

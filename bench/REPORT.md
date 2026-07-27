@@ -357,7 +357,7 @@ Tier A, same fixtures, same evaluator, identical synthetic input on both sides
 | `forms.relocate_p95` | s | lower | 4.450 | 4.450 | unchanged |
 | `forms.lock_failures` | count | lower | 0.000 | 0.000 | unchanged |
 | `forms.span_samples` | count | — | 4412 | 4412 | same input ✅ |
-| `perf.mean_event_us` | µs | lower | 191.252 | 179.167 | 6.3% lower ✅ |
+| `perf.mean_event_us` | µs | lower | 197.585 | 177.407 | 10.2% lower ✅ |
 
 The `span_*` rows are the ones to read. A whole-run number on a page of
 figures is nine parts undisputed prose, so a total failure on every single
@@ -380,7 +380,7 @@ characteristic these fixtures inherit rather than create.
 The engine also got faster, which it had no right to. The word-boundary fix
 costs one hash lookup per transcript atom and initially made the engine 3.6%
 slower; the library round below then found 10% somewhere else, so the net is
-6.3% *below* baseline while doing strictly more work.
+**10.2% below baseline** while doing strictly more work.
 
 ### What the real recogniser actually did
 
@@ -489,6 +489,39 @@ for every (query, script) cell. That is worth **10.4%** of the engine's entire
 per-event cost (199.0 → 178.3 µs, three runs each side, spread ±0.5 µs) at
 byte-identical accuracy, and it survives the library being thrown away. The
 experiment that failed paid for itself.
+
+### What a review of this round caught
+
+Six defects, five of them in the measurement, all found by review rather than
+by the suite, all fixed:
+
+* **The emptiness sentinel was unsound for Unicode.** `PhoneticKey::is_empty`
+  read `primary[0] == 0`, but that slot holds the first character cast to `u8`
+  when it is not a consonant, and the cast is lossy — `ἀθήνα` begins with
+  U+1F00, whose low byte is exactly zero. A word that WAS encoded reported
+  itself unencoded and silently lost the relation. Now an explicit `filled`
+  flag, with a regression test on the reachable lowercase case.
+* **The precompute was not behaviour-preserving.** It measured eligibility in
+  characters where the inline version measured bytes, quietly dropping short
+  international names (`josé` is four characters and five bytes). Bytes
+  restored; the move is now a move.
+* **The re-spelling tail excluded pauses.** `forms.span_*` scored only while a
+  word was in the mouth, so the 1.5 s tail — which exists to ask whether the
+  display CAUGHT UP after a figure — was skipped exactly when the reader fell
+  silent. That is the failure `asr_forms_pauses` was built to catch. Fixed; it
+  does not move the numbers today because the fixtures' pauses do not land
+  inside a window.
+* **Ordinary paraphrases counted as spelling disputes.** Every
+  `PlanOp::Substitute` was marked `respelled`, so the `substitutions` family
+  reported per-run re-spelling metrics for a disagreement that was never about
+  spelling. Now a flag on the op; those runs report zero.
+* **Four checked-in result files stopped deserialising.** The three new
+  `RunMetrics` fields had no `#[serde(default)]`, and `report`/`compare` read
+  saved JSON directly, so the previous round's results could no longer be
+  compared against. Deriving `Default` does not make a Serde field optional.
+* `forms.span_samples` was tagged lower-is-better, so the report rendered a
+  shrinking sample count as an improvement. It is a diagnostic: any movement
+  is bad news, and it is now tagged to say so.
 
 ### Honest limitations of this round
 

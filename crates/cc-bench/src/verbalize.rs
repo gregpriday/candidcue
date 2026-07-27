@@ -423,6 +423,7 @@ pub fn asr_ops(
                     from: at,
                     to: at + rendering.span,
                     say: rendering.words,
+                    respelled: true,
                 });
                 at += rendering.span;
                 read_from = at;

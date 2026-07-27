@@ -61,13 +61,22 @@ const MIN_PHONETIC_LEN: usize = 5;
 /// [`PhoneticKey::matches`] safe to call on anything.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PhoneticKey {
+    /// Was this word encoded at all? An explicit flag rather than a reserved
+    /// value in `primary`: the first slot holds either a small consonant code
+    /// or the first character cast to `u8`, and that cast is lossy — a word
+    /// beginning `Ā` (U+0100) casts to exactly 0, so a sentinel of
+    /// `primary[0] == 0` would quietly declare a real encoding "not encoded"
+    /// and disable the relation for it. Canonical atoms are lowercased, which
+    /// makes that unreachable today; `phonetic_key` is public, so "unreachable
+    /// today" is not the same as safe.
+    filled: bool,
     primary: [u8; 4],
     alternate: [u8; 4],
 }
 
 impl PhoneticKey {
     pub fn is_empty(&self) -> bool {
-        self.primary[0] == 0
+        !self.filled
     }
 
     /// Do these two words sound alike?
@@ -82,6 +91,7 @@ impl PhoneticKey {
         self.primary == other.primary
             || self.primary == other.alternate
             || self.alternate == other.primary
+            || self.alternate == other.alternate
     }
 }
 
@@ -96,7 +106,12 @@ impl PhoneticKey {
 /// need, bought with recall it does. (It also panics on any non-ASCII input,
 /// which is the one input class this relation exists for.)
 pub fn phonetic_key(word: &str) -> PhoneticKey {
-    if word.chars().count() < MIN_PHONETIC_LEN {
+    // Bytes, not characters, because that is what the inline version measured
+    // and this was meant to be a pure move. Counting characters instead would
+    // have quietly dropped the relation for short international names —
+    // `josé` is four characters and five bytes — which is a behaviour change
+    // dressed up as a refactor.
+    if word.len() < MIN_PHONETIC_LEN {
         return PhoneticKey::default();
     }
     let mut key = [0u8; 4];
@@ -138,6 +153,7 @@ pub fn phonetic_key(word: &str) -> PhoneticKey {
         }
     }
     PhoneticKey {
+        filled: true,
         primary: key,
         alternate: key,
     }
@@ -879,6 +895,28 @@ mod tests {
         assert_eq!(atoms("H100"), vec!["h", "100"]);
         // A known unit splits the same way and is then spoken in full.
         assert_eq!(atoms("24kHz"), vec!["24", "kilohertz"]);
+    }
+
+    /// The relation must not switch itself off for a word it did encode.
+    #[test]
+    fn an_encoded_word_is_never_mistaken_for_an_unencoded_one() {
+        // `Ā` is U+0100; cast to `u8` it is exactly 0, which is what the old
+        // sentinel read as "empty".
+        // `ἀθήνα` is the reachable case: already lowercase, so it survives
+        // canonicalisation unchanged, and its first character U+1F00 has a low
+        // byte of exactly zero.
+        for word in ["ἀθήνα", "Ābcdef", "ōtautahi", "joaquín", "przemysław", "teleprompter"] {
+            assert!(
+                !phonetic_key(word).is_empty(),
+                "{word} encoded but reported empty"
+            );
+        }
+        // The eligibility test is byte length, as it always was: `josé` is
+        // four characters but five bytes and still encodes.
+        assert!(!phonetic_key("josé").is_empty());
+        // Too short to encode, and honest about it.
+        assert!(phonetic_key("cat").is_empty());
+        assert!(!phonetic_key("cat").matches(&phonetic_key("cot")));
     }
 
     #[test]

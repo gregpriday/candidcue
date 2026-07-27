@@ -12,9 +12,16 @@ pub struct ReportRow {
 }
 
 impl ReportRow {
+    /// Is a row that MOVED an improvement?
+    ///
+    /// `"same"` marks a diagnostic where any movement is bad news rather than
+    /// good — `forms.span_samples` is the count the span rows were computed
+    /// over, so a difference means the two results did not run the same
+    /// benchmark and every delta beside it is suspect.
     pub fn improved(&self) -> bool {
         match self.better.as_str() {
             "higher" => self.optimized > self.baseline,
+            "same" => false,
             _ => self.optimized < self.baseline,
         }
     }
