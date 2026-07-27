@@ -587,3 +587,53 @@ describe('§16.4 the provisional cap is stated in both units too', () => {
     expect(provisionalMaxCorrectionPx(85, 1080)).toBeCloseTo(170, 6);
   });
 });
+
+describe('the viewport cap does not reintroduce the limit cycle', () => {
+  /**
+   * A jerk-limited actuator needs `2·aMax/jerkMax` to swing acceleration from
+   * one rail to the other. That lag is what profiles.ts's long limit-cycle note
+   * is about: enough of it inside a loop with a stacked natural frequency and
+   * the phase margin is gone, and the document rocks about two and a half lines
+   * against a static target instead of settling.
+   *
+   * The viewport cap scales acceleration and jerk INDEPENDENTLY, so it could in
+   * principle lengthen that ratio — reduce acceleration while leaving jerk
+   * alone and the actuator gets slower without the loop getting calmer. It does
+   * not, and the reason is the order the two thresholds bind: acceleration
+   * starts binding at 1040 px and jerk only at 1000 px, so between them the
+   * ratio SHORTENS, and below them both scale by fixed factors whose quotient
+   * is smaller than the base. This test is the guard on that ordering, because
+   * it is a property of two constants that look independent.
+   */
+  const settlingLagS = (p: SmoothFollowProfile): number =>
+    (2 * p.motion.maxAccelerationPxS2) / p.motion.maxJerkPxS3;
+
+  it('never lengthens the actuator lag, at any panel height', () => {
+    const base = settlingLagS(PROFILE);
+    // Every height the app can plausibly meet, either side of both thresholds.
+    for (const heightPx of [2160, 1440, 1080, 1040, 1039, 1010, 1000, 999, 982, 900, 768, 600, 320]) {
+      const bounded = viewportBoundedProfile(PROFILE, heightPx);
+      expect(settlingLagS(bounded)).toBeLessThanOrEqual(base + 1e-9);
+    }
+  });
+
+  it('leaves the 9-inch Prompter ample correction headroom despite the cap', () => {
+    /*
+     * The cap bites hardest on the panel this product is actually used on: at
+     * 600 px it takes forward velocity from 900 to 600 px/s. That is only a
+     * problem if it could make the display fall behind a reader — so state why
+     * it cannot.
+     *
+     * Steady following is feed-forward at the SPEECH rate, not at this limit;
+     * the ceiling only bounds corrections. At an ~86 px pitch, 600 px/s is
+     * about seven lines a second, against a brisk 180 wpm read of roughly
+     * 0.4 lines a second. The headroom is more than an order of magnitude.
+     */
+    const bounded = viewportBoundedProfile(PROFILE, 600);
+    const linePitchPx = 86;
+    const linesPerSecond = bounded.motion.maxForwardVelocityPxS / linePitchPx;
+    expect(linesPerSecond).toBeGreaterThan(5);
+    // And one full screen per second is the design intent of the cap itself.
+    expect(bounded.motion.maxForwardVelocityPxS).toBeCloseTo(600, 6);
+  });
+})
