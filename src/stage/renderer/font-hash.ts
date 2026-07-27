@@ -198,8 +198,24 @@ export function fontHash(fontStack: string, options: FontHashOptions = {}): stri
   const availability = readAvailability(stack, fontWeight, options.available);
   const measurements = readMeasurements(stack, fontWeight, options.measure ?? canvasMeasurer);
 
-  // Neither channel answered: no canvas, no FontFaceSet, nothing rendered. This
-  // is the SSR and node-runner case, and it has to be the constant.
+  /*
+   * Neither channel answered: no canvas, no FontFaceSet, nothing rendered. This
+   * is the SSR and node-runner case, and it has to be the constant.
+   *
+   * An availability-only answer is deliberately NOT folded in here, though a
+   * review argued it should be — the reasoning being that `document.fonts.check()`
+   * says nothing about advances, so hashing it claims geometry without
+   * measuring any. That is true of an UNTAGGED hash, and the tag is exactly why
+   * this is safe: an availability-only answer carries its own prefix and can
+   * never be mistaken for a measured one.
+   *
+   * Discarding it would cost the signal it exists for. In an environment with a
+   * FontFaceSet but no canvas, availability is the ONLY way to notice that the
+   * bundled face has finished loading and replaced the fallback — and answering
+   * the constant there means the fingerprint never changes, no rebuild is ever
+   * scheduled, and the line map keeps describing the fallback's geometry for
+   * the whole session. A weaker signal that knows it is weak beats no signal.
+   */
   if (measurements === null && availability === null) return FONT_HASH_UNAVAILABLE;
 
   /*

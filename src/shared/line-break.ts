@@ -940,9 +940,19 @@ export function verifyLineBreakPlan(
       problems.push(`line ${i} breaks after token ${line.endIndex}, which forbids a break`);
     }
   }
+  /*
+   * Line ends collected once rather than rescanned per token.
+   *
+   * The inner `.some()` made this quadratic in the one input that maximises
+   * both terms — a script where most tokens carry `breakAfter` — so a
+   * 5,000-token document with a forced break on every token did about twelve
+   * million comparisons. Nothing in the timed tests reaches that shape, which
+   * is precisely why it survived.
+   */
+  const lineEnds = new Set(plan.lines.map((line) => line.endIndex));
   for (const [i, token] of tokens.entries()) {
     if (!token.breakAfter || i === tokens.length - 1) continue;
-    if (!plan.lines.some((line) => line.endIndex === i)) {
+    if (!lineEnds.has(i)) {
       problems.push(`forced break after token ${i} was not honoured`);
     }
   }

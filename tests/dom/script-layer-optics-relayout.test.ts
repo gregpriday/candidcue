@@ -266,3 +266,33 @@ describe('the uncalibrated rig', () => {
     expect(onlayoutgeneration.mock.calls.length).toBeGreaterThan(before);
   });
 });
+
+describe('switching the performance projection', () => {
+  /*
+   * Block ids survive the projection — a table and the one-line chip replacing
+   * it share a key — so the measured-height cache has to be emptied when the
+   * projection changes. Off-window blocks are the damaging case: they are never
+   * re-measured, so a stale six-line height stays in `maxScroll` and the
+   * reverse transition can under-estimate the document enough that its closing
+   * lines cannot be scrolled to.
+   */
+  it('is treated as a new layout, so heights are re-measured', async () => {
+    const clean = settingsWith(optics());
+    const { onlayoutgeneration, rerender } = mount(optics());
+    await settle();
+    const before = onlayoutgeneration.mock.calls.length;
+
+    await rerender({
+      doc,
+      settings: { ...clean, stageMode: 'diagnostic' as const },
+      onlayoutgeneration,
+      sessionId: 's',
+      sessionGeneration: 1,
+      stageGeneration: 1,
+      scriptCompileHash: 'hash',
+    });
+    await settle();
+
+    expect(onlayoutgeneration.mock.calls.length).toBeGreaterThan(before);
+  });
+});

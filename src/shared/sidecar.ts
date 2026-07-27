@@ -46,7 +46,16 @@ import type { DisplayShape } from './optical-discovery';
  * how Sidecar displays usually arrive anyway.
  */
 const SIDECAR_MIN_ASPECT = 1.3;
-const SIDECAR_MAX_ASPECT = 1.45;
+/*
+ * 1.46, not 1.45.
+ *
+ * The 11-inch iPad Pro is 2420x1668 at 2x, an aspect of 1.45084 — over a 1.45
+ * bound by eight ten-thousandths. A display that misses this test by that
+ * margin loses every Sidecar warning it should have shown, and only when the
+ * name is missing or renamed, which is exactly when the geometry test is the
+ * one thing left. Bounds set against real hardware want a little air.
+ */
+const SIDECAR_MAX_ASPECT = 1.46;
 
 /**
  * Logical long edge, in CSS pixels, that Sidecar's modes fall inside.

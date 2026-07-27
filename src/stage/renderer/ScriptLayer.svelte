@@ -789,6 +789,34 @@
   let measureVersion = $state(0);
   let layoutReadySent = false;
 
+  /*
+   * Block ids survive the performance projection, and that is exactly why this
+   * cache has to be emptied when the projection changes.
+   *
+   * Keeping the id is right — it keys the `{#each}`, the `[data-block-id]`
+   * lookups and this cache, and changing it would tear down and rebuild every
+   * rendered block for a change that is mostly cosmetic. But it means a table
+   * and the one-line chip that replaces it are the SAME key, so a mode switch
+   * leaves a six-line measurement standing in for a chip (or the reverse).
+   *
+   * Off-window blocks are the damaging case: they are never re-measured, so the
+   * stale height sits in `offsets` and therefore in `maxScroll`, and the reverse
+   * transition can under-estimate the document enough that its final lines
+   * cannot be scrolled to at all.
+   *
+   * Emptying is safe rather than clever: the measurement pass refills it on the
+   * next frame, and a switch is a settings change, not something that happens
+   * per frame.
+   */
+  $effect(() => {
+    void performanceMode;
+    untrack(() => {
+      if (measuredHeights.size === 0) return;
+      measuredHeights.clear();
+      measureVersion++;
+    });
+  });
+
   const heights = $derived.by(() => {
     void measureVersion;
     const colPx = Math.max(1, columnWidthPx);
