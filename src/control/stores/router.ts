@@ -21,13 +21,23 @@ export type LibraryView = 'all' | 'recent' | 'trash';
 /**
  * There is no route between Editor and Live. Present opens the stage directly
  * (`lib/start-take.ts`); what the old Preflight page configured is in Settings.
+ *
+ * `calibrate` is the one exception to "everything is set in Settings", and it
+ * earns it by being the only screen that DRIVES THE RIG: it opens a real stage
+ * window on the real panel and asks the presenter what they can see through the
+ * glass. That is a sequence with a beginning and an end rather than a page of
+ * controls, and it holds a live stage window while it runs — so it is a route
+ * that can be entered and left, not a disclosure inside a section. It carries
+ * the panel it is calibrating rather than reading it back out of settings,
+ * because the display can change while the wizard is open.
  */
 export type Route =
   | { name: 'welcome' }
   | { name: 'library'; view: LibraryView }
   | { name: 'editor'; scriptId: string }
   | { name: 'live'; sessionId: string; scriptId: string }
-  | { name: 'settings'; section: SettingsSection };
+  | { name: 'settings'; section: SettingsSection }
+  | { name: 'calibrate'; displayFingerprint: string; rigName: string };
 
 export type NavigationGuard = (to: Route, from: Route) => boolean | Promise<boolean>;
 

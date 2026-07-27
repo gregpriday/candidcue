@@ -1,10 +1,31 @@
 <!--
   Stage window shell (spec §16.1 layer model, §43.5 heartbeat, §45.6).
 
-  Layers, back to front: solid background → Listener video + treatment →
-  script text + focus fades → transient acknowledgement → calibration /
-  diagnostics overlays. Everything the presenter sees through the glass sits
-  inside the mirror plane; diagnostics stay operator-facing and unmirrored.
+  ---------------------------------------------------------------------------
+  TWO PLANES, AND WHICH ONE A THING BELONGS TO
+  ---------------------------------------------------------------------------
+  A beamsplitter reflects every pixel equally. It has no opinion about which
+  elements are "the script" and which are "instruments", so anything drawn
+  outside the corrective flip reaches the presenter's eye BACKWARDS — including,
+  and especially, the short urgent strings somebody has to read at a glance
+  mid-take.
+
+  So the split is by AUDIENCE, not by importance:
+
+    the TALENT plane   is mirrored, and holds everything the presenter reads
+                       through the glass — script, reading cue, acknowledgement,
+                       hold status, voice pill, escape confirmation, calibration
+                       cards. Presenter-facing overlays sit one level further in,
+                       inside the safe rectangle, because a hood crops the panel
+                       and a chip against the raw viewport lands under the bezel.
+
+    the OPERATOR plane is unmirrored, and holds ONLY diagnostics — read by
+                       somebody standing at the rig looking directly at the
+                       panel, never through the glass.
+
+  Layers, back to front: solid background → Listener video + treatment → script
+  text + focus fades → reading cue → presenter overlays → calibration →
+  operator diagnostics.
 
   All data arrives via Tauri events (the stage holds only event:listen);
   outbound traffic is intents/acks that control is free to ignore.
@@ -42,12 +63,21 @@
     displayPhase,
     type StageAction,
   } from './renderer/stageState';
+  import { fallbackFontMetrics } from '../shared/optics';
   import { lineBudget, computeSafeRect, computeReadingBand } from './renderer/geometry';
   import { stageFollowProfile } from './motion';
-  import ScriptLayer from './renderer/ScriptLayer.svelte';
+  import ScriptLayer, { type StageLayoutMeasurement } from './renderer/ScriptLayer.svelte';
   import AckChip from './renderer/AckChip.svelte';
+  import HoldStatus from './renderer/HoldStatus.svelte';
+  import CalibrationCard from './renderer/CalibrationCard.svelte';
   import VoicePill from './VoicePill.svelte';
   import ListenerLayer from './listener/ListenerLayer.svelte';
+  import {
+    resolveHoldStatus,
+    type HoldRung,
+    type HoldStatus as HoldStatusReading,
+    type HoldTone,
+  } from './renderer/hold-status';
   import { startPreviewDriver, type PreviewDriver } from './preview';
 
   const preview =
@@ -55,7 +85,23 @@
     new URLSearchParams(window.location.search).get('preview') === '1';
 
   let app = $state.raw(initialStageState());
-  let fontsReady = $state(false);
+  /**
+   * The script may be revealed: fonts are final, or the wait for them is over.
+   *
+   * Two flags, not one, because they answer different questions and the second
+   * one used to lie. `fontsSettled` gates the reveal; `fontsResolved` records
+   * whether `document.fonts.ready` actually resolved or whether the bounded wait
+   * simply expired. They were the same variable, set true down both branches, so
+   * the handshake reported `fontsReady: true` to control for a stage that had
+   * given up waiting — the one case where the layout is measured against a
+   * fallback face and every angular number derived from it is provisional.
+   *
+   * The reveal still happens on timeout: a font that never resolves must not
+   * hold the script off the glass for a whole take. What changes is that the
+   * stage says so, and the measurement it publishes says so too.
+   */
+  let fontsSettled = $state(false);
+  let fontsResolved = $state(false);
   let pointerHidden = $state(false);
   /*
    * Viewport size, measured with a fallback rather than measured alone.
@@ -111,7 +157,11 @@
     const band = computeReadingBand(vh, {
       centerPercent: optics ? optics.readingBandY * 100 : settings.readingBandCenterPercent,
       halfHeightPercent: settings.readingBandHalfHeightPercent,
-      ...(optics ? { linePitchPx, deadZoneLines: optics.deadZoneLines } : {}),
+      // Inside the safe rectangle, exactly as the script layer places it. The
+      // budget is counted in lines above and below the band, so a band measured
+      // against the raw window on a hooded rig reports a count for a line that
+      // is not where the presenter's is.
+      ...(optics ? { linePitchPx, deadZoneLines: optics.deadZoneLines, safeRect } : {}),
     });
     return lineBudget({
       safeRect,
@@ -120,6 +170,58 @@
       futureReserveLines: optics?.futureReserveLines,
     });
   });
+  /**
+   * Diagnostic Take, as opposed to Clean Take.
+   *
+   * Clean is the default and is what a take is recorded against: script, reading
+   * cue, authored cues, acknowledgements, a hold message once a hold has earned
+   * one, faults the presenter can act on, and the Escape confirmation. Nothing
+   * that reports on the machinery.
+   *
+   * Diagnostic adds the instruments — the raw transcript, the alignment state
+   * and token position, the frame and media health, and the voice pill's
+   * waveform. They are for the person debugging a rig, and every one of them
+   * costs the presenter attention during a take that is going fine.
+   *
+   * The `diagnostics` directive stays an independent override, because an
+   * operator who asks for the readout mid-take is asking for it whatever mode
+   * the rig is nominally in.
+   */
+  const diagnosticMode = $derived((settings?.stageMode ?? 'clean') === 'diagnostic');
+  const showDiagnostics = $derived(diagnosticMode || app.diagnostics);
+
+  /**
+   * The safe rectangle, as CSS insets for the presenter-facing overlay plane.
+   *
+   * A hood reveals less than the panel, and an overlay positioned against the
+   * raw viewport lands under the bezel — which for the hold chip and the voice
+   * pill means the one message worth reading is the one nobody can see. The
+   * script layer solves its own geometry inside the same rectangle; this is that
+   * rectangle expressed for everything that is merely placed in a corner.
+   *
+   * Solved by `computeSafeRect` against a 100-unit square — so the answer IS
+   * the percentage — rather than read off the profile edge by edge. Two reasons,
+   * and both are about the rectangle being one thing: the overlays and the
+   * script column are then inset by the same solver, and the solver's clamp
+   * comes with it. These numbers are written straight into a style attribute,
+   * where a single non-finite edge writes `NaN%`, the declaration is dropped,
+   * and the plane falls back to the corner it was supposed to be inset from.
+   */
+  const safeInsets = $derived(computeSafeRect(100, 100, settings?.optics?.safeArea));
+
+  /**
+   * The floor for presenter-readable text that is not body copy, in px.
+   *
+   * Published on the ROOT rather than only on the script layer, because the
+   * overlays that clamp to it — the acknowledgement chip, the hold status, the
+   * calibration cards — are siblings of the script layer, not children of it.
+   * They were reading the em-relative default from `stage.css` and rendering at
+   * decoration size on a rig whose optics said otherwise.
+   */
+  const secondaryMinCss = $derived(
+    settings?.optics ? `${settings.optics.secondaryMinPx}px` : null,
+  );
+
   const reducedMotion = $derived(
     (settings?.reducedMotion ?? false) ||
       (typeof window !== 'undefined' &&
@@ -140,7 +242,6 @@
    * microphone, which CandidCue cannot prevent and could not report.
    */
   let transcriptTap = $state('');
-  let transcriptTapAtMs = $state(0);
   /**
    * The voice pill, or null until control has said anything about the input.
    *
@@ -149,6 +250,89 @@
    * would let the mark and the waveform be from different frames.
    */
   let voicePill = $state<StageVoicePillPayload | null>(null);
+
+  /* ---------------------------------------------------------------------
+   * The hold ladder (renderer/hold-status.ts)
+   *
+   * The engine holds constantly and correctly — through a breath, a swallowed
+   * word, the 1.2-1.7 s gap between transcript finals — so a stage that
+   * announced every hold would put a status message on the glass several times
+   * a minute during a take that is going perfectly. The ladder waits, then says
+   * something wordless, then says a sentence.
+   *
+   * The stopwatch lives HERE and nowhere else. The reading cue's hollow state
+   * and the chip are two rungs of ONE disclosure, and a second timer beside the
+   * cue would eventually disagree with this one about how long a hold has
+   * lasted — which the presenter would read as the display arguing with itself.
+   * ------------------------------------------------------------------- */
+
+  /** How often the ladder is re-resolved while something is being withheld. */
+  const HOLD_TICK_MS = 250;
+
+  const alignmentState = $derived(app.alignment?.state ?? null);
+  /**
+   * A named hardware condition, taken from the voice pill.
+   *
+   * The pill is the only thing on the stage that knows the input chain is
+   * broken, and a fault outranks the ladder entirely: a hold usually clears
+   * itself and a dead microphone never does, so every second spent being patient
+   * about it is a second of a take recorded against a rig that is not listening.
+   */
+  const voiceFaultLabel = $derived(
+    voicePill && voicePill.reading === 'fault' && voicePill.visible ? voicePill.label : null,
+  );
+
+  let holdStatus = $state<HoldStatusReading>({ rung: 'none', message: null, tone: 'neutral' });
+  /** When the alignment state last left `following`; null while it is following. */
+  let holdSinceMs: number | null = null;
+  /* The resolved ladder, mirrored in plain locals. `resolveHoldStatus` needs the
+   * previous rung to make its thresholds hysteretic, and reading it back off
+   * `holdStatus` inside the effect that writes it would make the effect depend
+   * on its own output. */
+  let ladderRung: HoldRung | null = null;
+  let ladderMessage: string | null = null;
+  let ladderTone: HoldTone = 'neutral';
+
+  function refreshHoldStatus() {
+    const state = alignmentState;
+    const now = performance.now();
+    if (state === null || state === 'following') holdSinceMs = null;
+    else if (holdSinceMs === null) holdSinceMs = now;
+
+    const next = resolveHoldStatus(
+      {
+        // No alignment at all is not a hold: nothing is being withheld before a
+        // take has produced its first snapshot. A FAULT still reports, because
+        // `resolveHoldStatus` puts a named fault ahead of the ladder — which is
+        // exactly the take that never produces a snapshot at all.
+        alignmentState: state ?? 'following',
+        holdingForMs: holdSinceMs === null ? 0 : now - holdSinceMs,
+        hasFault: voiceFaultLabel !== null,
+        faultLabel: voiceFaultLabel,
+      },
+      ladderRung,
+    );
+    if (next.rung === ladderRung && next.message === ladderMessage && next.tone === ladderTone) {
+      return;
+    }
+    ladderRung = next.rung;
+    ladderMessage = next.message;
+    ladderTone = next.tone;
+    holdStatus = next;
+  }
+
+  $effect(() => {
+    // Resolve on every change of the two inputs, and keep a slow clock running
+    // while the display is held — a rung is earned by DURATION, and no new
+    // snapshot arrives to prompt the crossing.
+    const holding = alignmentState !== null && alignmentState !== 'following';
+    void voiceFaultLabel;
+    refreshHoldStatus();
+    if (!holding) return;
+    const timer = window.setInterval(refreshHoldStatus, HOLD_TICK_MS);
+    return () => clearInterval(timer);
+  });
+
   let heartbeatSeen = false;
   /** Layout generation the stage is currently measured at (companion §7.2). */
   let layoutGeneration = $state(0);
@@ -225,7 +409,6 @@
         subscribeStageEvent<StageTranscriptTapPayload>(STAGE_EVENT.transcriptTap, (payload) => {
           lastInboundAt = performance.now();
           transcriptTap = payload.text;
-          transcriptTapAtMs = Date.now();
         }),
         /*
          * The voice pill. Like the transcript bar it bypasses the reducer: it
@@ -290,23 +473,32 @@
       emitStageEvent<StageListeningPayload>(STAGE_EVENT.listening, { atMs: Date.now() });
     })();
 
-    // §7.1 wants the map built once fonts are final — but `document.fonts.ready`
-    // is not guaranteed to settle: one font that never resolves would otherwise
-    // hold the entire script off the glass for the whole take. Mount with
-    // whatever is available after a bounded wait; the map rebuild triggered by
-    // the fingerprint's `fontHash`/metrics change picks the real font up when it
-    // lands.
+    /*
+     * §7.1 wants the map built once fonts are final — but `document.fonts.ready`
+     * is not guaranteed to settle: one font that never resolves would otherwise
+     * hold the entire script off the glass for the whole take. So the wait is
+     * bounded, and what happens at the end of it is the part that matters.
+     *
+     * On TIMEOUT the script is revealed in whatever face is available and the
+     * layout is published as unmeasured — `fontsReady: false` on the handshake,
+     * `metricsMeasured: false` on the measurement. If the real font lands later
+     * it does not slide in unannounced: the script layer re-measures the face,
+     * the fingerprint's `fontHash` moves with it, and the rebuild is classified
+     * as a relayout with a §33 semantic re-anchor. A reflow the presenter can see
+     * is survivable; one nothing in the system admits to is not.
+     */
     const fontTimeout = window.setTimeout(() => {
-      fontsReady = true;
+      fontsSettled = true;
     }, FONT_READY_TIMEOUT_MS);
     void document.fonts.ready.then(
       () => {
         clearTimeout(fontTimeout);
-        fontsReady = true;
+        fontsResolved = true;
+        fontsSettled = true;
       },
       () => {
         clearTimeout(fontTimeout);
-        fontsReady = true;
+        fontsSettled = true;
       },
     );
 
@@ -332,19 +524,102 @@
   });
 
   /* ---- readiness ACK ---- */
-  function handleLayoutReady() {
-    dispatch({ type: 'layout_ready' });
+
+  /**
+   * What the stage measured, as it goes out on the wire.
+   *
+   * Widened locally rather than added to `StageReadyPayload` because the payload
+   * is a shared contract and this window does not own it; the fields are plain
+   * JSON on an event, so a control that knows nothing about them is unaffected.
+   * The follow-up is the interface field plus a pass-through in the Rust relay
+   * (`app.rs` builds `stage://ready` by hand), without which control sees the
+   * numbers only in the raw stage event.
+   */
+  type StageReadyMeasurementPayload = StageReadyPayload & {
+    measurement: StageLayoutMeasurement;
+  };
+
+  /** The last measurement the script layer reported; null before the first map. */
+  let layoutMeasurement = $state<StageLayoutMeasurement | null>(null);
+  /** What was last put on the wire, so a re-report only goes out when it moved. */
+  let emittedMeasurementKey: string | null = null;
+  let layoutReadyEmitted = false;
+
+  function measurementKey(measurement: StageLayoutMeasurement | null): string {
+    if (!measurement) return 'none';
+    const m = measurement.fontMetrics;
+    return [
+      m.measured ? 'm' : 'e',
+      m.capHeightRatio.toFixed(4),
+      m.avgCharWidthRatio.toFixed(4),
+      measurement.linePitchMeasured ? 'p' : 'e',
+      measurement.linePitchPx.toFixed(2),
+      measurement.charactersPerLine ?? '-',
+    ].join(':');
+  }
+
+  /**
+   * The measurement a rig is described by, or the honest stand-in for it.
+   *
+   * The handshake completes one frame before the first line map exists — the
+   * pass that proves the blocks rendered runs on an earlier rAF than the one
+   * that measures token rects — so this is the typographic pitch and no
+   * character count at the moment `layout-ready` first goes out. The font
+   * metrics ARE real by then: they come off a canvas, not off the layout.
+   */
+  function currentMeasurement(): StageLayoutMeasurement {
+    return (
+      layoutMeasurement ?? {
+        fontMetrics: fallbackFontMetrics(),
+        linePitchPx: settings ? settings.fontSizePx * settings.lineHeight : 0,
+        linePitchMeasured: false,
+        charactersPerLine: null,
+      }
+    );
+  }
+
+  function emitLayoutReady() {
     if (!app.envelope) return;
-    emitStageEvent<StageReadyPayload>(STAGE_EVENT.layoutReady, {
+    const measurement = currentMeasurement();
+    emittedMeasurementKey = measurementKey(measurement);
+    layoutReadyEmitted = true;
+    emitStageEvent<StageReadyMeasurementPayload>(STAGE_EVENT.layoutReady, {
       stageGeneration: app.envelope.stageGeneration,
       sessionId: app.envelope.sessionId,
       hydrated: true,
       layoutReady: true,
-      fontsReady,
+      // Whether the fonts RESOLVED, not whether the stage stopped waiting for
+      // them. See the note on the two flags.
+      fontsReady: fontsResolved,
       viewportWidth: vw,
       viewportHeight: vh,
       devicePixelRatio: window.devicePixelRatio,
+      measurement,
     });
+  }
+
+  function handleLayoutReady(measurement: StageLayoutMeasurement) {
+    layoutMeasurement = measurement;
+    dispatch({ type: 'layout_ready' });
+    emitLayoutReady();
+  }
+
+  /**
+   * A rebuilt map produced different numbers.
+   *
+   * Re-published rather than kept local, because the numbers control needs during
+   * calibration are the measured ones and the handshake necessarily went out
+   * before anything had been measured. Emitting `layout-ready` again is safe by
+   * construction: Rust sets two idempotent flags, and control's
+   * `waitForStageReady` resolves once and ignores everything after. It is gated
+   * on the measurement actually MOVING, so a take that is merely scrolling
+   * through a virtualized document publishes nothing.
+   */
+  function handleLayoutMeasured(measurement: StageLayoutMeasurement) {
+    layoutMeasurement = measurement;
+    if (!layoutReadyEmitted) return;
+    if (measurementKey(measurement) === emittedMeasurementKey) return;
+    emitLayoutReady();
   }
 
   /* ---- motion diagnostics (companion §54) ---- */
@@ -455,7 +730,22 @@
   }
 
   /* ---- keyboard behavior (§16.9) ---- */
-  let lastEscapeAt = 0;
+  /*
+   * "Never" rather than zero.
+   *
+   * The double-press test is `now - lastEscapeAt <= ESCAPE_DOUBLE_PRESS_MS`, and
+   * `performance.now()` counts from the moment the document started loading — so
+   * with zero as the seed, an Escape pressed during the stage's first second and
+   * a half compared against a press that never happened and read as the SECOND
+   * one. That ends the take on one keystroke, in the window where somebody is
+   * most likely to hit Escape by reflex because the stage has just taken over
+   * their screen.
+   *
+   * A sentinel value rather than a `!== 0` guard beside the comparison, because
+   * the guard has to be repeated everywhere the field is read OR written — and
+   * the reset below is exactly the place it was missed.
+   */
+  let lastEscapeAt = Number.NEGATIVE_INFINITY;
   let wheelAccum = 0;
   let wheelFlush = 0;
 
@@ -464,13 +754,12 @@
     switch (event.key) {
       case 'Escape': {
         const now = performance.now();
-        // `lastEscapeAt !== 0` is load-bearing: `performance.now()` starts near
-        // zero, so without it the FIRST Escape within 1.5 s of the stage
-        // loading counted as a second press and ended the take on one tap —
-        // and the take's first 1.5 s is exactly when a presenter who did not
-        // mean to start yet reaches for Escape.
-        const double = lastEscapeAt !== 0 && now - lastEscapeAt <= ESCAPE_DOUBLE_PRESS_MS;
-        lastEscapeAt = double ? 0 : now;
+        const double = now - lastEscapeAt <= ESCAPE_DOUBLE_PRESS_MS;
+        // Back to "never" on consumption, for the same reason the seed is:
+        // zero is a real instant 1.5 s into the stage's life, so resetting to
+        // zero left a THIRD press inside that window reading as another second
+        // press and re-sending "end the take".
+        lastEscapeAt = double ? Number.NEGATIVE_INFINITY : now;
         sendEscape(double ? 2 : 1);
         break;
       }
@@ -521,8 +810,25 @@
       case 'm':
         previewDriver.toggleMirror();
         return true;
+      /*
+       * Calibration CYCLES rather than toggles: there are five overlays now and
+       * one key that reaches all of them beats four keys nobody remembers. The
+       * cycle ends at off, so a press always changes something and the preview
+       * can never be stranded inside a full-screen card.
+       */
       case 'c':
-        previewDriver.toggleCalibration();
+        previewDriver.cycleCalibration();
+        return true;
+      /* Clean Take ⇄ Diagnostic Take: what the presenter sees against what the
+         person debugging the rig sees, judged by flipping between them. */
+      case 's':
+        previewDriver.toggleStageMode();
+        return true;
+      /* The reading cue, through ticks / wash / none. It is the one mark on the
+         glass that never moves, which is exactly why it has to be looked at
+         rather than reasoned about. */
+      case 'r':
+        previewDriver.cycleReadingCue();
         return true;
       case 'a':
         previewDriver.ack('Chapter 1');
@@ -584,6 +890,29 @@
     }
   }
 
+  /**
+   * The pill, as the current mode is willing to draw it.
+   *
+   * The MARK is presenter-facing in both modes: a cross in the corner is an
+   * actionable fault, and a tick is the one piece of evidence that the whole
+   * chain from device to model works — which is the entire reason the blocking
+   * microphone check was replaced by a corner readout.
+   *
+   * The TRACE is not. A waveform is the only thing on the glass besides the
+   * script that moves, and continuous peripheral motion competes with the words
+   * somebody is reading, for twenty-nine minutes after it has finished saying
+   * anything new. So Clean Take collapses it to the mark and Diagnostic Take
+   * leaves control's own decision alone. A fault re-expands it either way — the
+   * component insists, and it is right to: during a fault the trace is the
+   * difference between "nothing is being heard" and "something is being heard
+   * and not understood".
+   */
+  const presenterVoicePill = $derived.by((): StageVoicePillPayload | null => {
+    if (voicePill === null) return null;
+    if (diagnosticMode) return voicePill;
+    return { ...voicePill, prominence: 'collapsed' };
+  });
+
   function onListenerHealth(
     status: 'ok' | 'poster_fallback' | 'failed',
     code?: 'decode_failure' | 'unsupported_codec' | 'source_unavailable',
@@ -614,13 +943,18 @@
   data-text-intensity={settings?.textIntensity ?? 'standard'}
   bind:clientWidth={measuredVw}
   bind:clientHeight={measuredVh}
+  style:--stage-secondary-min={secondaryMinCss}
   onpointermove={onPointerMove}
   onclick={onClick}
   onwheel={onWheel}
 >
   <div class="stage-position-plane">
+    <!--
+      THE TALENT PLANE. Everything below here is read through the glass, so
+      everything below here receives the corrective flip exactly once.
+    -->
     <div
-      class="stage-mirror-plane"
+      class="stage-talent-plane"
       data-mirror-x={settings?.mirrorX ? 'true' : 'false'}
       data-mirror-y={settings?.mirrorY ? 'true' : 'false'}
     >
@@ -636,8 +970,8 @@
         />
       {/if}
 
-      <!-- Layers 4–6: compiled document, band treatment, focus fades. -->
-      {#if doc && settings && fontsReady}
+      <!-- Layers 4–6: compiled document, band treatment, reading cue, fades. -->
+      {#if doc && settings && fontsSettled}
         <div class="script-holder" class:blanked={scriptHidden}>
           <ScriptLayer
             bind:this={scriptLayer}
@@ -652,7 +986,9 @@
             scriptCompileHash={app.envelope?.sourceHash ?? ''}
             {followProfile}
             bottomInsetPx={0}
+            cueHollow={holdStatus.rung !== 'none'}
             onlayoutready={handleLayoutReady}
+            onlayoutmeasured={handleLayoutMeasured}
             onmotionack={handleMotionAck}
             onlayoutgeneration={(generation) => (layoutGeneration = generation)}
             onlayouterror={handleLayoutError}
@@ -661,110 +997,231 @@
         </div>
       {/if}
 
-      <!-- Layer 7: transient command acknowledgement (§33.10). -->
-      {#if (settings?.stageAcknowledgements ?? true) && !app.blanked}
-        <AckChip ack={app.ack} />
+      {#if app.phase === 'handshake' && !app.envelope}
+        <div class="waiting" aria-hidden="true">CandidCue</div>
       {/if}
 
-      <!-- Calibration crosshair (§17.2) — mirrored with the content the
-           presenter aligns against. -->
+      <!--
+        Presenter-facing overlays, inside the SAFE RECTANGLE.
+
+        Not against the raw viewport: a hood crops the panel, and a chip pinned
+        24px from the window's corner on a hooded rig sits under the bezel. Every
+        one of these is a short string somebody has to read at a glance, so the
+        one that gets cropped is the one that mattered.
+      -->
+      <div
+        class="stage-safe-plane"
+        style:top="{safeInsets.y}%"
+        style:left="{safeInsets.x}%"
+        style:width="{safeInsets.width}%"
+        style:height="{safeInsets.height}%"
+      >
+        <!-- Layer 7: transient command acknowledgement (§33.10). -->
+        {#if (settings?.stageAcknowledgements ?? true) && !app.blanked}
+          <AckChip ack={app.ack} />
+        {/if}
+
+        <!--
+          The top rung of the hold ladder.
+
+          Mirrored with everything else the presenter reads. It is words in the
+          corner of a beamsplitter, which is precisely the case a flip destroys —
+          and unlike the script there is no second copy of it anywhere.
+
+          Shown in Clean Take as well as Diagnostic: a hold that has lasted
+          three and a half seconds, and a named fault, are both things the
+          presenter can act on. Everything the ladder withholds below that rung
+          is withheld for the same reason.
+        -->
+        {#if !app.blanked}
+          <HoldStatus
+            rung={holdStatus.rung}
+            message={holdStatus.message}
+            tone={holdStatus.tone}
+            secondaryMinPx={settings?.optics?.secondaryMinPx ?? 0}
+          />
+        {/if}
+
+        <!--
+          Escape confirmation (§16.9).
+
+          Inside the mirror plane, like everything else the presenter reads. It
+          used to sit outside it, with a comment claiming that kept it legible
+          through a horizontal mirror — which has it exactly backwards. The glass
+          reflects this element and the script identically; leaving it out of the
+          corrective flip is what makes it read backwards. It is six words about
+          how to stop a take that is going wrong, so it is the last thing that
+          can afford to arrive mirrored.
+
+          Shown during a blank too — a blank is exactly when someone reaches for
+          Escape.
+        -->
+        {#if escapeHintVisible}
+          <div class="escape-hint" role="status">Press Escape again to end</div>
+        {/if}
+
+        <!--
+          The voice pill.
+
+          Mirrored, for the reason above: it is a mark and a word aimed at the
+          presenter, and an unmirrored one reads backwards in the glass. Mounted
+          for the whole take and faded by its own `visible` flag rather than added
+          and removed — see the component. Hidden with the rest of the stage
+          during a blank (§16.6), which is a deliberate "show nothing", not a
+          moment to report on the microphone.
+
+          Gated on the ENVELOPE ALONE, not on `phase === 'live'`, and not on the
+          handshake having finished either. That is the whole point of the pill:
+          `live` is only reached when an alignment snapshot arrives, alignment
+          snapshots are made from transcript frames, and a take that transcribes
+          nothing therefore never leaves `ready`. Gating it on the take being
+          under way hid the indicator during precisely the failure it exists to
+          explain, and a stage stuck measuring is a stage whose presenter still
+          deserves to know whether the microphone is being heard.
+        -->
+        {#if app.envelope !== null && !app.blanked && presenterVoicePill !== null}
+          <VoicePill pill={presenterVoicePill} />
+        {/if}
+      </div>
+
+      <!--
+        Calibration (§17.2), mirrored with the content it is aligned against.
+
+        Full-bleed rather than inside the safe plane, deliberately: the safe-area
+        card IS the control that sets those insets, and drawing it inside them
+        would make the frame chase itself. The crosshair is likewise positioned
+        in raw viewport fractions, because the lens is somewhere on the PANEL.
+      -->
       {#if app.calibration.active && !app.blanked}
-        <div
-          class="crosshair"
-          style:left="{app.calibration.crosshairX * 100}%"
-          style:top="{app.calibration.crosshairY * 100}%"
-          aria-hidden="true"
-        >
-          <span class="ch-h"></span>
-          <span class="ch-v"></span>
-          <span class="ch-ring"></span>
-        </div>
+        {#if app.calibration.mode === 'crosshair'}
+          <div
+            class="crosshair"
+            style:left="{app.calibration.crosshairX * 100}%"
+            style:top="{app.calibration.crosshairY * 100}%"
+            aria-hidden="true"
+          >
+            <span class="ch-h"></span>
+            <span class="ch-v"></span>
+            <span class="ch-ring"></span>
+          </div>
+        {:else}
+          <CalibrationCard
+            mode={app.calibration.mode}
+            insets={app.calibration.safeArea}
+            barLengthPx={app.calibration.rulerLengthPx}
+            fontSizePx={app.calibration.sampleFontSizePx}
+            columnCh={app.calibration.sampleColumnCh}
+            fontWeight={settings?.optics?.fontWeight ?? settings?.fontWeight ?? 500}
+            fontFamilyId={settings?.fontFamilyId ?? 'system-sans'}
+            labelSizePx={settings?.optics?.secondaryMinPx ?? 20}
+          />
+          {#if app.calibration.mode === 'type-sample' && app.calibration.sampleLabel.length > 0}
+            <!-- What the size being judged is CALLED. The card draws the
+                 passage; the name of the step belongs to whoever is stepping
+                 through it, and without this the operator is comparing
+                 unlabelled samples. -->
+            <div class="sample-label">{app.calibration.sampleLabel}</div>
+          {/if}
+        {/if}
       {/if}
     </div>
   </div>
 
-  {#if app.phase === 'handshake' && !app.envelope}
-    <div class="waiting" aria-hidden="true">CandidCue</div>
-  {/if}
+  <!--
+    THE OPERATOR PLANE. Unmirrored, and diagnostics only.
 
-  <!-- Escape confirmation (§16.9). Outside the mirror plane on purpose: it is
-       an instruction to the presenter, not part of the script, so it must stay
-       readable through a horizontal mirror. Shown during a blank too — a blank
-       is exactly when someone reaches for Escape. -->
-  {#if escapeHintVisible}
-    <div class="escape-hint" role="status">Press Escape again to end</div>
-  {/if}
-
-  <!-- Layer 8: hidden diagnostics, operator-facing, never mirrored. -->
-  {#if app.diagnostics}
-    <div class="diagnostics">
-      <div>phase: {phase}</div>
-      <div>gen: {app.envelope?.stageGeneration ?? '—'}</div>
-      <div>tracking rev: {app.lastTrackingRevision ?? '—'}</div>
-      <div>
-        token: {app.alignment ? app.alignment.confirmedToken.toFixed(1) : '—'}
-        ({app.alignment?.state ?? 'n/a'})
-      </div>
-      <div>viewport: {vw}×{vh}</div>
-      {#if budget}
-        <!-- The number that used to be a `compact` flag, said properly: what
-             the presenter can actually see. Short is worth knowing about
-             BEFORE a take, which is why it is stated rather than corrected. -->
+    This is the one plane a beamsplitter argument does NOT apply to, because
+    nothing here is read through the glass: it is for somebody standing at the
+    rig looking straight at the panel. Anything a presenter has to read has no
+    business here — an unmirrored element is the one thing that is guaranteed to
+    be unreadable in the reflection.
+  -->
+  <div class="stage-operator-plane">
+    <!-- Layer 8: the diagnostics readout. Diagnostic Take, or an explicit
+         request from the operator mid-take. -->
+    {#if showDiagnostics}
+      <div class="diagnostics">
+        <div>phase: {phase}</div>
+        <div>gen: {app.envelope?.stageGeneration ?? '—'}</div>
+        <div>tracking rev: {app.lastTrackingRevision ?? '—'}</div>
         <div>
-          lines: {budget.above}↑ / {budget.below}↓ ({budget.total}){budget.sufficient
-            ? ''
-            : ' SHORT'}
+          token: {app.alignment ? app.alignment.confirmedToken.toFixed(1) : '—'}
+          ({app.alignment?.state ?? 'n/a'})
         </div>
-      {/if}
-      <div>layout gen: {layoutGeneration}</div>
-      {#if layoutIssues.length > 0}
-        <div>layout: HELD ({layoutIssues.join(', ')})</div>
-      {/if}
-      <div>profile: {followProfile.id} (v{followProfile.version})</div>
-      <div>frames: {motionDegraded ? 'degraded' : 'ok'}</div>
-      <div>media: {mediaHealthy ? 'healthy' : 'degraded'}</div>
-    </div>
-  {/if}
+        <div>viewport: {vw}×{vh}</div>
+        {#if budget}
+          <!-- The number that used to be a `compact` flag, said properly: what
+               the presenter can actually see. Short is worth knowing about
+               BEFORE a take, which is why it is stated rather than corrected. -->
+          <div>
+            lines: {budget.above}↑ / {budget.below}↓ ({budget.total}){budget.sufficient
+              ? ''
+              : ' SHORT'}
+          </div>
+        {/if}
+        {#if layoutMeasurement}
+          <!-- What the stage measured off the face it is drawing, which is the
+               only place those numbers exist: control resolves geometry against
+               DIN fallbacks because control does not render the font. -->
+          <div>
+            pitch: {layoutMeasurement.linePitchPx.toFixed(1)}px{layoutMeasurement.linePitchMeasured
+              ? ''
+              : ' (est)'}
+          </div>
+          <div>
+            cap/em: {layoutMeasurement.fontMetrics.capHeightRatio.toFixed(3)}{layoutMeasurement
+              .fontMetrics.measured
+              ? ''
+              : ' (est)'}
+          </div>
+          <div>chars/line: {layoutMeasurement.charactersPerLine ?? '—'}</div>
+        {/if}
+        <div>fonts: {fontsResolved ? 'resolved' : 'timed out'}</div>
+        <div>layout gen: {layoutGeneration}</div>
+        {#if layoutIssues.length > 0}
+          <div>layout: HELD ({layoutIssues.join(', ')})</div>
+        {/if}
+        <div>profile: {followProfile.id} (v{followProfile.version})</div>
+        <div>frames: {motionDegraded ? 'degraded' : 'ok'}</div>
+        <div>media: {mediaHealthy ? 'healthy' : 'degraded'}</div>
+      </div>
+    {/if}
 
-  <!--
-    Layer 9: the transcript bar. Outside the mirror plane on purpose — it is
-    an instrument, not part of the read, and a mirrored diagnostic is useless
-    to the person who needs it.
-  -->
-  {#if phase === 'live' && !app.blanked}
-    <div class="transcript-tap" class:silent={transcriptTap.length === 0}>
-      <span class="transcript-tap-words">
-        {transcriptTap.length > 0 ? transcriptTap : 'listening — no words yet'}
-      </span>
-    </div>
-  {/if}
+    <!--
+      Layer 9: the transcript bar, in Diagnostic Take only.
 
-  <!--
-    Layer 10: the voice pill. Mounted for the whole take and faded by its own
-    `visible` flag rather than added and removed — see the component. Hidden
-    with the rest of the stage during a blank (§16.6), which is a deliberate
-    "show nothing", not a moment to report on the microphone.
+      It stays here rather than moving into the talent plane because it is not
+      addressed to the presenter: it is the raw recogniser text, upstream of
+      every judgement the app makes, and its value is being true when the things
+      that ARE addressed to the presenter are wrong. A person debugging a rig
+      reads it off the panel directly.
 
-    Gated on the ENVELOPE ALONE, not on `phase === 'live'` like the transcript
-    bar above it, and not on the handshake having finished either. That is the
-    whole point of the pill: `live` is only reached when an alignment snapshot
-    arrives, alignment snapshots are made from transcript frames, and a take
-    that transcribes nothing therefore never leaves `ready`. Sharing the bar's
-    gate hid the indicator during precisely the failure it exists to explain.
-    The same argument applies one step earlier — a stage still measuring, or
-    stuck measuring, is a stage whose presenter still deserves to know whether
-    the microphone is being heard.
-  -->
-  {#if app.envelope !== null && !app.blanked && voicePill !== null}
-    <VoicePill pill={voicePill} />
-  {/if}
+      And it is diagnostic-only for a reason a take makes obvious: a full-width
+      strip of changing text along the bottom edge is continuous motion in the
+      one place the presenter's peripheral vision is already busy holding the
+      reading line.
 
-  {#if preview}
-    <div class="preview-hud">
-      preview · l listener · b blank · f freeze · m mirror · c calibrate · a ack · j jump · v voice
-      pill
-    </div>
-  {/if}
+      It rides `showDiagnostics` rather than the mode alone, like the readout
+      above it. The bar is the one thing that tells "the microphone was never
+      captured" apart from "the recogniser heard nothing" apart from "the
+      aligner would not match", and an operator asking for the instruments
+      mid-take is asking for the one that answers that question too.
+    -->
+    {#if showDiagnostics && phase === 'live' && !app.blanked}
+      <div class="transcript-tap" class:silent={transcriptTap.length === 0}>
+        <span class="transcript-tap-words">
+          {transcriptTap.length > 0 ? transcriptTap : 'listening — no words yet'}
+        </span>
+      </div>
+    {/if}
+
+    {#if preview}
+      <div class="preview-hud">
+        preview · l listener · b blank · f freeze · m mirror · c calibrate · s clean/diagnostic · r
+        cue · a ack · j jump · v voice pill
+      </div>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -779,20 +1236,34 @@
   }
 
   .stage-position-plane,
-  .stage-mirror-plane {
+  .stage-talent-plane,
+  .stage-operator-plane {
     position: absolute;
     inset: 0;
   }
 
-  /* Mirror transforms live alone on the mirror plane (§16.7). */
-  .stage-mirror-plane[data-mirror-x='true'] {
+  /* The operator plane is a stack of readouts, never a target: it sits over the
+     talent plane and must not intercept a click meant for the window. */
+  .stage-operator-plane {
+    pointer-events: none;
+  }
+
+  /* Mirror transforms live alone on the talent plane (§16.7). */
+  .stage-talent-plane[data-mirror-x='true'] {
     transform: scaleX(-1);
   }
-  .stage-mirror-plane[data-mirror-y='true'] {
+  .stage-talent-plane[data-mirror-y='true'] {
     transform: scaleY(-1);
   }
-  .stage-mirror-plane[data-mirror-x='true'][data-mirror-y='true'] {
+  .stage-talent-plane[data-mirror-x='true'][data-mirror-y='true'] {
     transform: scale(-1, -1);
+  }
+
+  /* The part of the panel the presenter can actually see through the hood.
+     Overlays are positioned against THIS, not against the window. */
+  .stage-safe-plane {
+    position: absolute;
+    pointer-events: none;
   }
 
   .script-holder {
@@ -833,6 +1304,28 @@
     color: var(--stage-text);
     font-size: clamp(15px, 1.6vw, 22px);
     font-weight: 550;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  /*
+   * The name of the type sample being judged.
+   *
+   * Sized at the secondary floor like every other presenter-readable label, and
+   * placed at the top of the card where the sample's own passage is not.
+   */
+  .sample-label {
+    position: absolute;
+    top: 4%;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.3em 0.9em;
+    border-radius: var(--radius-pill, 999px);
+    background: var(--stage-overlay);
+    color: var(--stage-text);
+    font-size: var(--stage-secondary-min, 0.67em);
+    font-weight: 650;
+    letter-spacing: 0.06em;
     white-space: nowrap;
     pointer-events: none;
   }

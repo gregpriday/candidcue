@@ -193,9 +193,23 @@ export function applyProfileToStageOverrides(stage: StageSettings): StageAppeara
     readingBandCenterPercent: stage.readingBandCenterPercent,
     mirrorX: stage.mirrorX,
     mirrorY: stage.mirrorY,
-    // buildStageSettings encodes `pastDimming: false` as pastOpacity 0.92 and
-    // `phraseHighlight: false` as currentUnderlayOpacity 0.
-    pastDimming: stage.pastOpacity < 0.9,
+    /*
+     * `pastDimming: false` is encoded as an opacity near 1, so decoding it means
+     * asking "is the past visibly dimmer than the present?".
+     *
+     * The threshold used to be 0.9 against a field that only ever held 0.42 or
+     * 0.92, which made it exact. The Advanced panel now exposes `pastOpacity` as
+     * a continuous control running to 1.00, so a presenter who deliberately
+     * pins 0.95 — dimming ON, just gently — would decode as dimming OFF and get
+     * the toggle flipped under them on the next profile restore.
+     *
+     * Reading the optical profile's own record when there is one removes the
+     * guess entirely; the threshold survives only for rows written before it.
+     */
+    pastDimming:
+      stage.opticalProfile?.overrides?.pastOpacity !== undefined
+        ? stage.opticalProfile.overrides.pastOpacity < 0.99
+        : stage.pastOpacity < 0.9,
     phraseHighlight: stage.currentUnderlayOpacity > 0,
     // Rows written before the optical layer carry neither; they get the same
     // defaults an uncalibrated rig gets rather than a missing field the caller

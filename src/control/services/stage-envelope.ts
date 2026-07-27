@@ -4,6 +4,7 @@
  * hydrates from, resolving asset and Listener media URLs through Rust.
  */
 import type {
+  ReadingCueStyle,
   CompiledScript,
   ListenerStageSelection,
   OpticalProfile,
@@ -73,6 +74,8 @@ export interface StageSettingsOverrides {
   textIntensity?: TextIntensity;
   /** Clean Take hides instrumentation; Diagnostic Take shows it. */
   stageMode?: StageMode;
+  /** What marks the reading position. Fixed side ticks by default. */
+  readingCue?: ReadingCueStyle;
   optical?: OpticalOverride;
 }
 
@@ -102,19 +105,59 @@ const STAGE_FIELD_BACKGROUND = '#000000';
 const REFERENCE_VIEWPORT_HEIGHT_PX = 1080;
 
 /**
+ * The type and treatment an UNCALIBRATED take runs with.
+ *
+ * Every one of these is the historical literal, stated here rather than taken
+ * from the resolver's `DEFAULT_*`. The two are equal today — which is exactly
+ * why the distinction has to be written down rather than left to be noticed.
+ * `DEFAULT_PAST_OPACITY` has already moved once (0.42 -> 0.48) as a correction
+ * for rigs that opted into the optical model, and the resolver's other defaults
+ * are free to move for the same reason; sharing a constant between the two
+ * paths means the next such correction silently changes the stage of somebody
+ * who has never opened the calibration screen.
+ *
+ * That is the one thing the preserved uncalibrated path exists to prevent, and
+ * it is the same rule the stage's legacy padding table follows: the old path
+ * keeps its own numbers, the correction ships to the rigs that asked for it.
+ *
+ * `UNCALIBRATED_FONT_WEIGHT` is the weight the renderers already fell back to
+ * for a `StageSettings` that carried none (`optics?.fontWeight ??
+ * settings.fontWeight ?? 500`), so writing it down changes nothing on the glass
+ * and stops the field being absent — which the stage would otherwise have to
+ * keep a default for in three places.
+ */
+const UNCALIBRATED_PAST_OPACITY = 0.42;
+const UNCALIBRATED_FUTURE_OPACITY = 0.92;
+const UNCALIBRATED_LETTER_SPACING_EM = 0;
+const UNCALIBRATED_FONT_WEIGHT = 500;
+const UNCALIBRATED_PARAGRAPH_SPACING_EM = 0.7;
+
+/**
+ * How "past-text dimming off" is written down.
+ *
+ * It is an encoding, not a level: `applyProfileToStageOverrides`
+ * (services/display-profiles.ts) reads the boolean back out of a saved §52 row
+ * as `pastOpacity < 0.9`, so the off state has to land above that threshold or
+ * a restored profile silently comes back with dimming on. That is why the
+ * resolved `pastOpacity` is not consulted in this branch: the operator did not
+ * ask for a subtler dim, they asked for none.
+ */
+const PAST_DIMMING_OFF_OPACITY = 0.92;
+
+/**
  * The appearance a take runs with.
  *
  * Two paths, and the point of the function is that they agree. Without an
  * `optical` override this is the historical percentage/pixel layout, unchanged.
  * With one, `resolveStageGeometry` decides the geometry from a measured
  * distance and the result is written BOTH into `optics` (the detail, in line
- * pitches and `ch`) and back into the legacy fields (the summary, in pixels and
- * percentages) — because a stage build that predates the optical layer ignores
- * `optics` entirely and lays out from `fontSizePx`/`columnWidthPercent`. If
- * those kept carrying the Settings-screen numbers, a rig somebody had just
- * measured would prompt at the uncalibrated size on the exact panel they
- * measured it on, silently, inside an envelope carrying a full and plausible
- * optical block.
+ * pitches and `ch`) and back into EVERY legacy field that has a flat twin (the
+ * summary, in pixels, percentages and ems) — because a stage build that
+ * predates the optical layer ignores `optics` entirely and lays out from
+ * `fontSizePx`/`lineHeight`/`columnWidthPercent`. If those kept carrying the
+ * Settings-screen numbers, a rig somebody had just measured would prompt at the
+ * uncalibrated size on the exact panel they measured it on, silently, inside an
+ * envelope carrying a full and plausible optical block.
  */
 export function buildStageSettings(overrides: StageSettingsOverrides = {}): StageSettings {
   const optical = measurableOptical(overrides.optical);
@@ -134,10 +177,27 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
       }).optics
     : null;
 
-  const lineHeight = overrides.lineHeight ?? DEFAULT_STAGE_APPEARANCE.lineHeight;
   const fontSizePx = optics
     ? Math.round(optics.bodyFontSizePx)
     : overrides.fontSizePx ?? DEFAULT_STAGE_APPEARANCE.fontSizePx;
+  /*
+   * Every resolved value that has a flat twin is written into BOTH.
+   *
+   * `fontSizePx` and `columnWidthPercent` were flattened from the start and
+   * `lineHeight`, `letterSpacingEm`, `paragraphSpacingEm`, `fontWeight` and the
+   * two opacities were not — so a rig the resolver had sized at 1.38 with a
+   * past opacity of 0.48 reached a stage that predates `optics` as 1.32/0.42,
+   * and reached `bandHalfHeightPercentFor` below as 1.32 even on a stage that
+   * does read `optics`. The corridor was then computed against a line pitch
+   * four percent shorter than the one the glass would show.
+   *
+   * The rule is the one the stage's `effective` derivation states from the
+   * other end: there is ONE description of the layout, and both representations
+   * of it say the same thing.
+   */
+  const lineHeight = optics
+    ? optics.lineHeight
+    : overrides.lineHeight ?? DEFAULT_STAGE_APPEARANCE.lineHeight;
 
   return {
     schemaVersion: 1,
@@ -147,7 +207,8 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
     fontFamilyId: overrides.fontFamilyId ?? DEFAULT_STAGE_APPEARANCE.fontFamilyId,
     fontSizePx,
     lineHeight,
-    letterSpacingEm: 0,
+    letterSpacingEm: optics ? optics.letterSpacingEm : UNCALIBRATED_LETTER_SPACING_EM,
+    fontWeight: optics ? optics.fontWeight : UNCALIBRATED_FONT_WEIGHT,
     columnWidthPercent:
       optics && optical
         ? columnPercentFor(optics, optical, fontSizePx)
@@ -161,8 +222,13 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
       optics,
       optical?.viewport ?? null,
     ),
-    pastOpacity: overrides.pastDimming === false ? 0.92 : 0.42,
-    futureOpacity: 0.92,
+    pastOpacity:
+      overrides.pastDimming === false
+        ? PAST_DIMMING_OFF_OPACITY
+        : optics
+          ? optics.pastOpacity
+          : UNCALIBRATED_PAST_OPACITY,
+    futureOpacity: optics ? optics.futureOpacity : UNCALIBRATED_FUTURE_OPACITY,
     currentUnderlayOpacity: overrides.phraseHighlight === false ? 0 : 0.1,
     /*
      * Mirroring stays with the Settings toggles rather than being taken from
@@ -178,7 +244,7 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
     showCues: overrides.showCues ?? true,
     stageAcknowledgements: true,
     reducedMotion: false,
-    paragraphSpacingEm: 0.7,
+    paragraphSpacingEm: optics ? optics.paragraphSpacingEm : UNCALIBRATED_PARAGRAPH_SPACING_EM,
     stageMode: overrides.stageMode ?? 'clean',
     /*
      * A calibrated rig's own brightness and cue choice outrank the global
@@ -187,7 +253,10 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
      * rig gets, not a second opinion about a calibrated one.
      */
     textIntensity: optical ? optical.profile.intensity : overrides.textIntensity ?? 'standard',
-    readingCue: optical ? optical.profile.readingCue : 'ticks',
+    // The rig's own choice when there is one, the explicit override otherwise.
+    // A calibrated profile carries the cue style it was calibrated with, so it
+    // wins over a loose setting for the same reason its geometry does.
+    readingCue: optical ? optical.profile.readingCue : (overrides.readingCue ?? 'ticks'),
     ...(optics && optical ? { optics, opticalProfile: optical.profile } : {}),
   };
 }

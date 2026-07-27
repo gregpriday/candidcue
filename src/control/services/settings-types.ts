@@ -10,8 +10,9 @@ import {
   type OpticalCalibrationStep,
   type OpticalHardwareKind,
   type OpticalOverrides,
-  type OpticalProfile,
   type ReadingCueStyle,
+  type StageMode,
+  type OpticalProfile,
   type TextIntensity,
 } from '../../shared/contracts';
 import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
@@ -140,6 +141,18 @@ export interface AppSettings {
     fixedSpeedWpm: number;
     stageEndBehavior: 'close' | 'blank';
     hidePointer: boolean;
+    /**
+     * Clean Take hides the instrumentation; Diagnostic Take shows it.
+     *
+     * Here rather than nowhere because the stage already READS
+     * `StageSettings.stageMode` — it derives the transcript bar, the waveform
+     * and the alignment readout from it — and until something wrote it the
+     * diagnostic take was unreachable outside the dev preview. A live read with
+     * no writer is the same defect as a writer with no reader.
+     */
+    stageMode: StageMode;
+    /** What marks the reading position: fixed side ticks, a soft wash, or nothing. */
+    readingCue: ReadingCueStyle;
   };
   /**
    * Calibrated rigs, per panel (`shared/contracts/optical.ts`).
@@ -601,6 +614,8 @@ export function defaultAppSettings(): AppSettings {
       fixedSpeedWpm: 150,
       stageEndBehavior: 'close',
       hidePointer: true,
+      stageMode: 'clean',
+      readingCue: 'ticks',
     },
     // Nothing calibrated until somebody stands at a rig and measures it.
     optical: { profiles: {}, activeRig: {} },

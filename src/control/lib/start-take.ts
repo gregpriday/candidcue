@@ -120,6 +120,8 @@ export function stageSettingsFromSettings(
     pastDimming: t.pastDimming,
     phraseHighlight: t.phraseHighlight,
     textIntensity: t.textIntensity,
+    stageMode: t.stageMode,
+    readingCue: t.readingCue,
     ...(profile && display
       ? {
           optical: {

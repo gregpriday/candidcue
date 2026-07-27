@@ -7,6 +7,13 @@
  * *spent* — follow it, catch up, or re-anchor — which the renderer hands to
  * that controller as a disposition.
  *
+ * Both bounds below are stated twice, in lines and in viewport heights, and the
+ * narrower one wins. Lines because what a presenter absorbs is READING — two
+ * lines is two lines whether the pitch is 50 px or 250 px. Viewport heights
+ * because a correction that sweeps the whole glass is disruptive regardless of
+ * how tall a line happens to be on this rig, and at a calibrated 300 px pitch a
+ * purely line-relative answer is exactly that sweep.
+ *
  * Pure logic.
  */
 import {
@@ -40,6 +47,17 @@ export const PROVISIONAL_MAX_CORRECTION_PX = 180;
  */
 export const PROVISIONAL_MAX_CORRECTION_LINES = 2;
 
+/**
+ * And the viewport ceiling those two lines are met by.
+ *
+ * A third of the glass is already a large move to make on evidence the engine
+ * has explicitly declined to act on. At a 300 px pitch two lines is 600 px —
+ * the whole of a 9-inch panel — so without this the line-relative answer would
+ * license weak evidence to replace the entire visible script, which is the one
+ * thing §16.4 exists to prevent.
+ */
+export const PROVISIONAL_MAX_CORRECTION_VIEWPORT_FRACTION = 1 / 3;
+
 /** Explicit jumps within ~2 viewport heights catch up instead of re-anchoring. */
 export const SMOOTH_JUMP_VIEWPORT_FACTOR = 2;
 
@@ -63,6 +81,34 @@ export const SMOOTH_JUMP_MAX_LINES = 24;
 export type TransitionClass = 'spring' | 'smooth_jump' | 'fade_jump' | 'instant';
 
 /**
+ * A bound stated in lines, met by the bound the panel sets (§30).
+ *
+ * `resolveLineLimitPx` already refuses an implausible pitch by clamping the
+ * line-relative answer into a band around the pixel default, which catches a
+ * font that never loaded. It cannot catch a pitch that is entirely real and
+ * simply large: 300 px is a legitimate 15.6-inch-at-arm's-length calibration,
+ * three lines of it is most of a 1080 px stage, and no clamp expressed against
+ * the pixel default knows how tall the glass is. So the viewport says too.
+ */
+function lineBoundAgainstViewport(
+  lines: number,
+  fallbackPx: number,
+  linePitchPx: number | null | undefined,
+  viewportHeightPx: number | null | undefined,
+  viewportFraction: number,
+): number {
+  const resolved = resolveLineLimitPx(lines, fallbackPx, linePitchPx);
+  if (
+    typeof viewportHeightPx !== 'number' ||
+    !Number.isFinite(viewportHeightPx) ||
+    viewportHeightPx <= 0
+  ) {
+    return resolved;
+  }
+  return Math.min(resolved, viewportHeightPx * viewportFraction);
+}
+
+/**
  * The cap on a correction made from weak evidence (§16.4), at a measured pitch.
  *
  * Falls back to `PROVISIONAL_MAX_CORRECTION_PX` for an absent or unusable pitch,
@@ -70,12 +116,22 @@ export type TransitionClass = 'spring' | 'smooth_jump' | 'fade_jump' | 'instant'
  * `resolveLineLimitPx` allows — a font that never loaded must not be able to
  * license a screen-sized correction on evidence the engine has already refused
  * to act on.
+ *
+ * `viewportHeightPx` is optional and is the second half of the same sentence:
+ * supply it and two lines can never also mean most of the glass. A caller that
+ * omits it gets the line-or-pixel answer alone, which is what every caller got
+ * before the ceiling existed.
  */
-export function provisionalMaxCorrectionPx(linePitchPx?: number | null): number {
-  return resolveLineLimitPx(
+export function provisionalMaxCorrectionPx(
+  linePitchPx?: number | null,
+  viewportHeightPx?: number | null,
+): number {
+  return lineBoundAgainstViewport(
     PROVISIONAL_MAX_CORRECTION_LINES,
     PROVISIONAL_MAX_CORRECTION_PX,
     linePitchPx,
+    viewportHeightPx,
+    PROVISIONAL_MAX_CORRECTION_VIEWPORT_FRACTION,
   );
 }
 
@@ -102,6 +158,11 @@ export function classifyTransition(opts: {
      * The viewport-relative threshold is the fallback AND the sanity band: a
      * jump past a few screens is a teleport whatever the type size, so the
      * line-relative answer is clamped against it rather than trusted outright.
+     *
+     * The clamp is `resolveLineLimitPx`'s own 0.5x–3x band around the viewport
+     * figure, so this bound is already stated in both units — six viewport
+     * heights is the most a line-relative answer can ever reach — and needs no
+     * separate ceiling.
      */
     const viewportLimitPx = SMOOTH_JUMP_VIEWPORT_FACTOR * opts.viewportHeightPx;
     const limit = resolveLineLimitPx(SMOOTH_JUMP_MAX_LINES, viewportLimitPx, opts.linePitchPx);

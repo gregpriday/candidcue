@@ -20,6 +20,7 @@
   import MicMeter from '../components/MicMeter.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import Section from '../components/Section.svelte';
+  import SegmentedControl from '../components/SegmentedControl.svelte';
   import Select from '../components/Select.svelte';
   import Slider from '../components/Slider.svelte';
   import StatusPill from '../components/StatusPill.svelte';
@@ -82,12 +83,47 @@
   } from '../../shared/listener/placement';
   import type { DisplayDescriptor } from '../services/stage-types';
   import type { InworldKeyStatus } from '../services/secrets-types';
-  import type { StageBackground } from '../services/settings-types';
-  import type {
-    AudioDeviceInfo,
-    AudioLevelSnapshot,
-    ListenerPlacementMode,
+  import {
+    activeOpticalProfile,
+    opticalRigsForDisplay,
+    withOpticalProfile,
+    withoutOpticalProfile,
+  } from '../services/settings-types';
+  import {
+    OPTICAL_HARDWARE,
+    type AudioDeviceInfo,
+    type AudioLevelSnapshot,
+    type FramingPreset,
+    type ListenerPlacementMode,
+    type OpticalOverrides,
+    type OpticalProfile,
+    type ReadingCueStyle,
+    type TextIntensity,
   } from '../../shared/contracts';
+  import { discoverProfile } from '../../shared/optical-discovery';
+  import {
+    DEFAULT_BOTTOM_FADE_LINES,
+    DEFAULT_DEAD_ZONE_LINES,
+    DEFAULT_FONT_WEIGHT,
+    DEFAULT_FUTURE_OPACITY,
+    DEFAULT_FUTURE_RESERVE_LINES,
+    DEFAULT_LETTER_SPACING_EM,
+    DEFAULT_PARAGRAPH_SPACING_EM,
+    DEFAULT_PAST_OPACITY,
+    DEFAULT_SENTENCE_MICROGAP_LINES,
+    DEFAULT_TOP_FADE_LINES,
+    resolveStageGeometry,
+    resolveTargetArcminutes,
+    resolveTargetCharacters,
+  } from '../../shared/optical-resolve';
+  import {
+    ANGULAR_HARD_FLOOR_ARCMIN,
+    MIN_RENDERABLE_FONT_SIZE_PX,
+    MIN_VIEWING_DISTANCE_MM,
+    MAX_VIEWING_DISTANCE_MM,
+    READING_MEASURE,
+    isPlausibleViewingDistanceMm,
+  } from '../../shared/optics';
   import { appStatus } from '../stores/app-status';
   import { requestConfirm } from '../stores/confirm';
   import { navigate, route, type SettingsSection } from '../stores/router';
@@ -272,6 +308,295 @@
       displaysError = `CandidCue could not create the prompt window on this display. ${describeError(err)}`;
     } finally {
       stageTesting = false;
+    }
+  }
+
+  /* ------------------------------------------------------------ the rig */
+
+  /**
+   * The calibrated arrangement this panel runs with, and what it resolves to.
+   *
+   * ------------------------------------------------------------------------
+   * TWO PROFILES, AND THE DIFFERENCE MATTERS
+   * ------------------------------------------------------------------------
+   * `appliedRig` is what a take actually uses: a rig somebody stored AND chose
+   * for this panel. `discovered` is what CandidCue can work out on its own —
+   * the panel model from the display name, the physical scale from that model,
+   * a plausible distance for that hardware — and it is a PROPOSAL, not a rig.
+   *
+   * The proposal is deliberately not adopted silently. Doing so would resize
+   * the stage of every existing Elgato owner the first time they launched a new
+   * build, which is the one thing the uncalibrated path is preserved verbatim
+   * to prevent. So it is shown, with what it would give them, behind one button.
+   */
+  const displayShape = $derived(
+    effectiveDisplay
+      ? {
+          name: effectiveDisplay.name,
+          physicalSize: effectiveDisplay.physicalSize,
+          scaleFactor: effectiveDisplay.scaleFactor,
+        }
+      : null,
+  );
+  /** Rigs are stored per panel, so an unresolvable display has none. */
+  const rigFingerprint = $derived(effectiveDisplay?.fingerprint ?? null);
+  const rigs = $derived(opticalRigsForDisplay($settings.optical, rigFingerprint));
+  const appliedRig = $derived(activeOpticalProfile($settings.optical, rigFingerprint));
+  const discovered = $derived(discoverProfile(displayShape, null));
+  /**
+   * The profile the panel below describes — the applied rig, or the proposal.
+   *
+   * The proposal is given a name no rig stored against this panel is already
+   * using. Editing it is what applies it, and `withOpticalProfile` keys on
+   * (panel, name) — so a proposal that reused the name of a rig somebody had
+   * measured would replace those measurements with discovery's guesses the
+   * first time a slider moved, from a panel that says "nothing is applied to
+   * this display yet". `calibrate()` below already spells this rule out for the
+   * wizard; the proposal reaches the same store by a shorter path, and there is
+   * no version of it that may reach it with a name already spoken for.
+   *
+   * Reachable rather than theoretical: forgetting the rig in force clears the
+   * panel's choice without deleting the others, which lands exactly here with a
+   * named rig still stored.
+   */
+  const rig = $derived<OpticalProfile>(
+    appliedRig ?? { ...discovered.profile, rigName: unusedRigName(discovered.profile.rigName) },
+  );
+
+  /**
+   * The resolved geometry, live.
+   *
+   * The same `resolveStageGeometry` a take runs through, against the same
+   * panel, so the readout cannot describe a stage the take would not produce.
+   * Font metrics are not supplied and must not be: control does not render the
+   * stage font, so what comes back is marked `metricsMeasured: false` and the
+   * warnings say so rather than presenting DIN ratios as a measurement.
+   */
+  const resolvedRig = $derived.by(() => {
+    const d = effectiveDisplay;
+    if (!d) return null;
+    const widthPx = d.logicalSize.width;
+    const heightPx = d.logicalSize.height;
+    if (!(widthPx > 0) || !(heightPx > 0)) return null;
+    return resolveStageGeometry({ profile: rig, viewport: { widthPx, heightPx } });
+  });
+  const rigOptics = $derived(resolvedRig?.optics ?? null);
+
+  /**
+   * Lines of script visible at once.
+   *
+   * Not a field of `ResolvedOptics`, because the stage measures its own line
+   * pitch and this is only an estimate of it — but it is the number that
+   * decides whether a size is generous or claustrophobic, and it is invisible
+   * in "60 px" and "23 arcminutes". Six lines is a paragraph of context to read
+   * ahead into; three is a card being read one phrase at a time.
+   */
+  const rigVisibleLines = $derived.by(() => {
+    const o = rigOptics;
+    const d = effectiveDisplay;
+    if (!o || !d) return null;
+    const safeHeightPx = d.logicalSize.height * (1 - o.safeArea.top - o.safeArea.bottom);
+    const linePx = o.bodyFontSizePx * o.lineHeight;
+    if (!(linePx > 0) || !(safeHeightPx > 0)) return null;
+    return Math.floor(safeHeightPx / linePx);
+  });
+
+  const FIT_PHRASES: Record<string, string> = {
+    ok: 'The size asked for and a full reading line both fit on this panel.',
+    width_limited: 'Type is at the size asked for; the line is narrower than ideal.',
+    angle_limited: 'A readable line needs the type smaller than asked for.',
+    impossible: 'This panel cannot do both at this distance.',
+    uncalibrated: 'Not calibrated, so no claim about apparent size can be made.',
+  };
+
+  /**
+   * Store a change to the rig, and make it the one this panel runs with.
+   *
+   * Editing the discovered PROPOSAL is what applies it — which is stated on the
+   * panel rather than left to be discovered. The alternative, disabling every
+   * control until an Apply button is pressed, makes the proposal unexplorable:
+   * the whole reason to show it is so somebody can see what it would do.
+   */
+  async function updateRig(patch: Partial<OpticalProfile>): Promise<void> {
+    const fingerprint = rigFingerprint;
+    if (fingerprint === null) return;
+    const next: OpticalProfile = { ...rig, ...patch };
+    await patchSettings('optical', withOpticalProfile($settings.optical, fingerprint, next));
+  }
+
+  /** Set one override, or clear it — `null` is the reset to automatic. */
+  async function setOverride(key: keyof OpticalOverrides, value: number | null): Promise<void> {
+    const overrides: OpticalOverrides = { ...rig.overrides };
+    if (value === null) delete overrides[key];
+    else overrides[key] = value;
+    await updateRig({ overrides });
+  }
+
+  async function clearAllOverrides(): Promise<void> {
+    await updateRig({ overrides: {} });
+  }
+
+  async function chooseRig(name: string): Promise<void> {
+    const fingerprint = rigFingerprint;
+    const entry = rigs.find((r) => r.profile.rigName === name);
+    if (fingerprint === null || !entry) return;
+    await patchSettings(
+      'optical',
+      withOpticalProfile($settings.optical, fingerprint, entry.profile),
+    );
+  }
+
+  async function forgetRig(name: string): Promise<void> {
+    const fingerprint = rigFingerprint;
+    if (fingerprint === null) return;
+    const accepted = await requestConfirm({
+      title: `Forget ${name}?`,
+      body: 'The measurements for this arrangement are deleted. Takes on this display go back to the uncalibrated size until another rig is chosen.',
+      confirmLabel: 'Forget rig',
+      danger: true,
+    });
+    if (!accepted) return;
+    await patchSettings(
+      'optical',
+      withoutOpticalProfile($settings.optical, fingerprint, name),
+    );
+  }
+
+  /**
+   * Open the calibration wizard for a rig on this panel.
+   *
+   * A new rig gets a name that does not collide with an existing one, because
+   * the store is keyed on (panel, name): reusing a name silently REPLACES the
+   * other arrangement, and nobody re-measures a distance they believe is saved.
+   */
+  function calibrate(name?: string): void {
+    const fingerprint = rigFingerprint;
+    if (fingerprint === null) return;
+    void navigate({
+      name: 'calibrate',
+      displayFingerprint: fingerprint,
+      rigName: name ?? unusedRigName(discovered.profile.rigName),
+    });
+  }
+
+  function unusedRigName(preferred: string): string {
+    const taken = new Set(rigs.map((r) => r.profile.rigName));
+    if (!taken.has(preferred)) return preferred;
+    for (let n = 2; n < 100; n += 1) {
+      const candidate = `${preferred} ${n}`;
+      if (!taken.has(candidate)) return candidate;
+    }
+    return `${preferred} ${Date.now().toString(36)}`;
+  }
+
+  /** Metres, because that is the unit somebody pacing out a studio thinks in. */
+  const DISTANCE_PRESETS_M = [0.8, 1.0, 1.2, 1.5, 1.8];
+  let distanceField = $state('');
+
+  function applyTypedDistance(): void {
+    const mm = Math.round(Number(distanceField.trim()) * 1000);
+    if (!isPlausibleViewingDistanceMm(mm)) {
+      showToast(
+        `A viewing distance has to be between ${MIN_VIEWING_DISTANCE_MM / 1000} m and ${MAX_VIEWING_DISTANCE_MM / 1000} m.`,
+        'danger',
+      );
+      return;
+    }
+    void updateRig({ viewingDistanceMm: mm });
+  }
+
+  /**
+   * The largest fraction of the safe width the resolver will give a column.
+   *
+   * Mirrors `MAX_COLUMN_FRACTION` in shared/optical-resolve.ts, which is module
+   * -private. It is repeated here only so the override slider can show what
+   * "Automatic" currently means; if the resolver's value moves, this is a
+   * label that goes stale rather than a behaviour that changes.
+   */
+  const AUTOMATIC_MAX_COLUMN_FRACTION = 0.92;
+
+  /**
+   * The ceiling on the uncalibrated size slider.
+   *
+   * 320 px covers every panel CandidCue knows about at its rated distance — a
+   * Prompter XL at 4.6 m wants about 234 — and the advanced per-rig override
+   * goes to 512 for the rigs that are stranger than that. The ceiling follows a
+   * larger stored value up to that same 512 rather than clamping it, because a
+   * slider whose maximum is BELOW its own value silently rewrites that value the
+   * first time it is touched, and the operator would have no way to see that it
+   * had. Past 512 the value did not come from this control and is treated as
+   * damage: the slider offers to repair it rather than growing to fit it.
+   */
+  const ADVANCED_FONT_SIZE_CEILING_PX = 512;
+  const typeCeilingPx = $derived(
+    Math.max(320, Math.min(ADVANCED_FONT_SIZE_CEILING_PX, $settings.teleprompter.fontSizePx)),
+  );
+
+  /**
+   * How many hand-set values this rig carries.
+   *
+   * Counted from the profile's own `overrides` map rather than from
+   * `ResolvedOptics.overriddenFields`, because the two answer different
+   * questions and only one of them is what a reset acts on. The resolver
+   * records what it APPLIED — a pinned value that happens to equal the derived
+   * one is not listed — while the map records what somebody TYPED. Keying the
+   * reset off the resolver would leave a stored override with no control
+   * offering to clear it, which is the trap the override block is written
+   * against.
+   */
+  const pinnedCount = $derived(Object.keys(rig.overrides).length);
+
+  /**
+   * What "Automatic" currently means for one override.
+   *
+   * Read off the RESOLVED block wherever there is one, never off the defaults
+   * table. The point of putting a number beside the word "Automatic" is that it
+   * is what THIS panel at THIS distance actually produces — and for size,
+   * measure, the secondary-text floor and the fade depths that is nothing like
+   * the constant. A control that showed 0.84 for the dead zone while the stage
+   * ran 71 px of corridor would be describing a different instrument.
+   */
+  function automaticValue(key: keyof OpticalOverrides): number {
+    const o = rigOptics;
+    switch (key) {
+      case 'fontSizePx':
+        return o ? Math.round(o.bodyFontSizePx) : $settings.teleprompter.fontSizePx;
+      case 'arcminutes':
+        return o?.bodyArcminutes ?? resolveTargetArcminutes(rig);
+      case 'characters':
+        return o?.charactersPerLine ?? resolveTargetCharacters(rig);
+      case 'columnCh':
+        return o?.columnCh ?? 30;
+      case 'maxColumnFraction':
+        return AUTOMATIC_MAX_COLUMN_FRACTION;
+      case 'lineHeight':
+        return o?.lineHeight ?? $settings.teleprompter.lineHeight;
+      case 'fontWeight':
+        return o?.fontWeight ?? DEFAULT_FONT_WEIGHT;
+      case 'letterSpacingEm':
+        return o?.letterSpacingEm ?? DEFAULT_LETTER_SPACING_EM;
+      case 'paragraphSpacingEm':
+        return o?.paragraphSpacingEm ?? DEFAULT_PARAGRAPH_SPACING_EM;
+      case 'deadZoneLines':
+        return o?.deadZoneLines ?? DEFAULT_DEAD_ZONE_LINES;
+      case 'topFadeLines':
+        return o?.topFadeLines ?? DEFAULT_TOP_FADE_LINES;
+      case 'bottomFadeLines':
+        return o?.bottomFadeLines ?? DEFAULT_BOTTOM_FADE_LINES;
+      case 'futureReserveLines':
+        return o?.futureReserveLines ?? DEFAULT_FUTURE_RESERVE_LINES;
+      case 'sentenceMicrogapLines':
+        return o?.sentenceMicrogapLines ?? DEFAULT_SENTENCE_MICROGAP_LINES;
+      case 'pastOpacity':
+        return o?.pastOpacity ?? DEFAULT_PAST_OPACITY;
+      case 'futureOpacity':
+        return o?.futureOpacity ?? DEFAULT_FUTURE_OPACITY;
+      case 'secondaryMinPx':
+        return o?.secondaryMinPx ?? 28;
+      case 'lensOffsetDegrees':
+        // Zero, and the default is zero: the evidence supports OFFERING a small
+        // downward shift, not applying one.
+        return 0;
     }
   }
 
@@ -974,19 +1299,35 @@
             onchange={(value) =>
               void patchSettings('general', { launchBehavior: value as 'library' | 'recent' })}
           />
+          <!--
+            One mode, said out loud.
+
+            'manual' and 'fixed' are still in the `SessionMode` union because a
+            session RECORD carries the mode it ran in and old rows have to keep
+            parsing — but nothing consumes them: the stage follows a voice or it
+            holds still, and there is no wheel-driven or constant-rate motion
+            path behind either name. Offering all three made the mode look like
+            a choice, and choosing one of the two that do nothing produced a
+            take that behaved exactly like voice follow without saying so.
+          -->
           <Select
             label="Default session mode"
             value={$settings.general.defaultSessionMode}
             options={[
               { value: 'voice', label: 'Voice follow' },
-              { value: 'manual', label: 'Manual' },
-              { value: 'fixed', label: 'Fixed speed' },
+              { value: 'manual', label: 'Manual — not available in this release', disabled: true },
+              { value: 'fixed', label: 'Fixed speed — not available in this release', disabled: true },
             ]}
             onchange={(value) =>
               void patchSettings('general', {
                 defaultSessionMode: value as 'voice' | 'manual' | 'fixed',
               })}
           />
+          <p class="hint-line">
+            Every take follows your voice. Manual and fixed-speed prompting are not implemented, so
+            they are shown here rather than offered — a mode that silently behaves like another one
+            is worse than a mode that is missing.
+          </p>
           <Slider
             label="Revision retention"
             value={$settings.general.revisionRetentionDays}
@@ -1301,6 +1642,351 @@
             />
           </div>
         </Section>
+
+        <!--
+          The optical rig.
+
+          A teleprompter is an instrument, and what matters to the eye is not
+          how many pixels a letter occupies but the ANGLE it subtends. This is
+          where the panel is told how far away the presenter stands, and every
+          number below it is a consequence of that rather than a preference.
+
+          Everything here is optional and everything is reversible: the panel
+          opens showing what CandidCue worked out on its own, every derived
+          value can be pinned, and every pinned value says so and offers its way
+          back to automatic.
+        -->
+        <Section
+          title="This rig"
+          description="How the text is sized for the panel above — worked out from how far away you stand, not from a pixel default."
+        >
+          {#snippet actions()}
+            <Button size="sm" disabled={rigFingerprint === null} onclick={() => calibrate()}>
+              Calibrate…
+            </Button>
+          {/snippet}
+
+          {#if rigFingerprint === null}
+            <p class="hint-line">
+              Connect the prompter display to calibrate it. A rig is a measurement of one physical
+              arrangement, so it is stored against the panel it was measured on.
+            </p>
+          {:else}
+            <!-- The rig in force, and the others measured for this panel. One
+                 monitor routinely holds several: the same Elgato on the desk
+                 for a seated waist-up shot and on the boom arm for a standing
+                 close-up are two different rigs sharing one fingerprint. -->
+            {#if rigs.length > 0}
+              <div class="rig-list">
+                {#each rigs as entry (entry.key)}
+                  <div class="rig-row" class:active={entry.active}>
+                    <button
+                      type="button"
+                      class="rig-choose"
+                      aria-pressed={entry.active}
+                      onclick={() => void chooseRig(entry.profile.rigName)}
+                    >
+                      <span class="rig-name">{entry.profile.rigName}</span>
+                      <span class="rig-meta">
+                        {entry.profile.viewingDistanceMm === null
+                          ? 'No distance measured'
+                          : `${(entry.profile.viewingDistanceMm / 1000).toFixed(2)} m`}
+                        · {OPTICAL_HARDWARE[entry.profile.hardwareKind].label}
+                        · {entry.profile.completedSteps.length} of 8 steps
+                      </span>
+                    </button>
+                    <div class="row-actions">
+                      <Button size="sm" onclick={() => calibrate(entry.profile.rigName)}>
+                        Re-calibrate
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onclick={() => void forgetRig(entry.profile.rigName)}
+                      >
+                        Forget
+                      </Button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+
+            {#if appliedRig === null}
+              <!-- The proposal. Not applied silently, because doing so would
+                   resize the stage of everyone who already owns one of these
+                   panels the first time they launched a build that knew how. -->
+              <p class="hint-line">
+                <strong>Nothing is applied to this display yet</strong>, so takes run at the
+                uncalibrated size ({$settings.teleprompter.fontSizePx} px).
+                {#if discovered.identification.confidence === 'unknown'}
+                  CandidCue does not recognise this panel, so it cannot work out how physically
+                  large a pixel is — calibrating is the only way to size the text by distance.
+                {:else}
+                  CandidCue recognised it as {discovered.identification.label} and can size the text
+                  from that. The numbers below are what it would give you; changing any of them, or
+                  finishing the calibration, applies the rig.
+                {/if}
+              </p>
+            {/if}
+
+            <!-- The resolved answer, live. This is what makes the maths
+                 trustworthy: it is the same `resolveStageGeometry` a take runs
+                 through, against the same panel, so it cannot describe a stage
+                 the take would not produce. -->
+            {#if rigOptics}
+              <dl class="readout">
+                <div class="readout-row">
+                  <dt class="readout-label">Body text</dt>
+                  <dd class="readout-value">
+                    {Math.round(rigOptics.bodyFontSizePx)} px
+                    {#if rigOptics.bodyArcminutes !== null}
+                      · {rigOptics.bodyArcminutes.toFixed(0)}′ of cap height
+                    {/if}
+                  </dd>
+                </div>
+                <div class="readout-row">
+                  <dt class="readout-label">Line holds</dt>
+                  <dd class="readout-value">
+                    {rigOptics.charactersPerLine === null
+                      ? '—'
+                      : `about ${Math.round(rigOptics.charactersPerLine)} characters`}
+                  </dd>
+                </div>
+                <div class="readout-row">
+                  <dt class="readout-label">Visible</dt>
+                  <dd class="readout-value">
+                    {rigVisibleLines === null ? '—' : `about ${rigVisibleLines} lines`}
+                  </dd>
+                </div>
+                <div class="readout-row">
+                  <dt class="readout-label">Fit</dt>
+                  <dd class="readout-value">
+                    {FIT_PHRASES[rigOptics.fitVerdict] ?? rigOptics.fitVerdict}
+                  </dd>
+                </div>
+              </dl>
+              {#each resolvedRig?.warnings ?? [] as warning (warning)}
+                <p class="hint-line">{warning}</p>
+              {/each}
+            {/if}
+
+            <!-- Distance. The one fact that genuinely cannot be discovered, and
+                 the one every angular result is multiplied by. -->
+            <div class="control-block">
+              <span class="control-label">Viewing distance</span>
+              <div class="chip-row" role="group" aria-label="Viewing distance">
+                {#each DISTANCE_PRESETS_M as metres (metres)}
+                  <button
+                    type="button"
+                    class="chip"
+                    class:selected={rig.viewingDistanceMm === Math.round(metres * 1000)}
+                    aria-pressed={rig.viewingDistanceMm === Math.round(metres * 1000)}
+                    onclick={() => void updateRig({ viewingDistanceMm: Math.round(metres * 1000) })}
+                  >
+                    {metres.toFixed(1)} m
+                  </button>
+                {/each}
+                <div class="chip-field">
+                  <TextField
+                    label="Custom (metres)"
+                    value={distanceField}
+                    oninput={(value) => (distanceField = value)}
+                    onsubmit={() => applyTypedDistance()}
+                  />
+                </div>
+                <Button onclick={() => applyTypedDistance()}>Use</Button>
+              </div>
+              {#if rig.viewingDistanceMm !== null}
+                <p class="hint-line">
+                  Currently {(rig.viewingDistanceMm / 1000).toFixed(2)} m.
+                  {#if rig.scale === null}
+                    CandidCue still has no physical scale for this panel, so the distance changes
+                    nothing until one is measured.
+                  {/if}
+                </p>
+              {/if}
+            </div>
+
+            <!--
+              One control, not two.
+
+              Angular size and reading measure are not independent on a fixed
+              panel: bigger type is fewer characters per line, and what the
+              presenter is really choosing is a point on that trade-off. Asking
+              them to reason about arcminutes AND characters is asking them to
+              solve the constrained optimisation themselves.
+            -->
+            <Slider
+              label="More text on screen ⟷ Larger, easier text"
+              value={Math.round(rig.bias * 100)}
+              min={0}
+              max={100}
+              format={(v) => `${v}%`}
+              onchange={(value) => void updateRig({ bias: value / 100 })}
+            />
+
+            <Select
+              label="How you are framed"
+              value={rig.framing}
+              options={[
+                { value: 'close-up', label: 'Close-up' },
+                { value: 'head-and-shoulders', label: 'Head and shoulders' },
+                { value: 'waist-up', label: 'Waist up' },
+                { value: 'full-body', label: 'Full body' },
+              ]}
+              onchange={(value) => void updateRig({ framing: value as FramingPreset })}
+            />
+            <p class="hint-line">
+              A sideways eye movement that is invisible in a waist-up shot is obvious in a tight
+              headshot, so tighter framing asks for a narrower column.
+            </p>
+
+            <div class="control-block">
+              <span class="control-label">Text intensity</span>
+              <SegmentedControl
+                label="Text intensity for this rig"
+                value={rig.intensity}
+                options={[
+                  { value: 'soft', label: 'Soft' },
+                  { value: 'standard', label: 'Standard' },
+                  { value: 'strong', label: 'Strong' },
+                ]}
+                onchange={(value) => void updateRig({ intensity: value as TextIntensity })}
+              />
+            </div>
+
+            <div class="control-block">
+              <span class="control-label">Reading cue</span>
+              <SegmentedControl
+                label="Reading cue for this rig"
+                value={rig.readingCue}
+                options={[
+                  { value: 'ticks', label: 'Ticks' },
+                  { value: 'wash', label: 'Wash' },
+                  { value: 'none', label: 'None' },
+                ]}
+                onchange={(value) => void updateRig({ readingCue: value as ReadingCueStyle })}
+              />
+              <p class="hint-line">
+                What marks the line you are reading. Ticks sit in the margins; a wash lifts the band
+                itself.
+              </p>
+            </div>
+
+            <!--
+              Every derived value, reachable.
+
+              Behind a disclosure because almost nobody needs any of it, and
+              present because the person standing at the glass can see something
+              the maths cannot. Each row says whether it is automatic or set by
+              hand, shows what automatic currently RESOLVES to rather than what
+              the constant is, and offers its way back.
+            -->
+            <Disclosure label={pinnedCount === 0 ? 'Advanced' : `Advanced — ${pinnedCount} set by hand`}>
+              {#if pinnedCount > 0}
+                <div class="row-actions">
+                  <Button size="sm" onclick={() => void clearAllOverrides()}>
+                    Reset everything to automatic
+                  </Button>
+                </div>
+              {/if}
+
+              <p class="hint-line">
+                These shadow what the optical model works out. The model still runs — so if a size
+                you pin costs you the reading measure, the readout above still says so.
+              </p>
+
+              <h4 class="advanced-head">Size and measure</h4>
+              {@render override('fontSizePx', 'Text size', MIN_RENDERABLE_FONT_SIZE_PX, ADVANCED_FONT_SIZE_CEILING_PX, 1, (v) => `${Math.round(v)} px`)}
+              {@render override('arcminutes', 'Apparent cap height', ANGULAR_HARD_FLOOR_ARCMIN, 60, 0.5, (v) => `${v.toFixed(1)}′`)}
+              {@render override('characters', 'Characters per line', READING_MEASURE.hardFloor, READING_MEASURE.bandMax, 1, (v) => `${Math.round(v)}`)}
+              {@render override('columnCh', 'Column width', 8, 80, 0.5, (v) => `${v.toFixed(1)} ch`)}
+              {@render override('maxColumnFraction', 'Widest the column may go', 0.1, 1, 0.01, (v) => `${Math.round(v * 100)}% of the safe width`)}
+
+              <h4 class="advanced-head">Typography</h4>
+              {@render override('lineHeight', 'Line height', 1, 2, 0.01, (v) => v.toFixed(2))}
+              {@render override('fontWeight', 'Weight', 300, 800, 50, (v) => String(Math.round(v)))}
+              {@render override('letterSpacingEm', 'Letter spacing', -0.02, 0.08, 0.005, (v) => `${v.toFixed(3)} em`)}
+              {@render override('paragraphSpacingEm', 'Paragraph spacing', 0, 2, 0.05, (v) => `${v.toFixed(2)} em`)}
+
+              <h4 class="advanced-head">Vertical geometry</h4>
+              <p class="hint-line">
+                In line pitches, not pixels — so the stage behaves the same on a 600px panel and a
+                1080px one instead of meaning two different things on the two displays this app is
+                actually used on.
+              </p>
+              {@render override('deadZoneLines', 'Reading corridor', 0.3, 2, 0.02, (v) => `${v.toFixed(2)} lines`)}
+              {@render override('topFadeLines', 'Fade above', 0, 4, 0.05, (v) => `${v.toFixed(2)} lines`)}
+              {@render override('bottomFadeLines', 'Fade below', 0, 4, 0.05, (v) => `${v.toFixed(2)} lines`)}
+              {@render override('futureReserveLines', 'Script kept below the band', 0, 10, 0.25, (v) => `${v.toFixed(2)} lines`)}
+              {@render override('sentenceMicrogapLines', 'Gap after a sentence', 0, 1, 0.05, (v) => `${v.toFixed(2)} lines`)}
+
+              <h4 class="advanced-head">Treatment</h4>
+              {@render override('pastOpacity', 'Spoken text', 0.15, 1, 0.01, (v) => `${Math.round(v * 100)}%`)}
+              {@render override('futureOpacity', 'Upcoming text', 0.3, 1, 0.01, (v) => `${Math.round(v * 100)}%`)}
+              {@render override('secondaryMinPx', 'Smallest readable label', 8, 120, 1, (v) => `${Math.round(v)} px`)}
+              {@render override('lensOffsetDegrees', 'Reading band below the lens', -3, 3, 0.1, (v) => `${v.toFixed(1)}°`)}
+              <p class="hint-line">
+                A small downward offset can read as more direct on camera than looking at the exact
+                centre of the lens. It needs a physical scale to convert the angle, so an
+                uncalibrated rig cannot honour it — and says nothing rather than applying a wrong
+                number.
+              </p>
+            </Disclosure>
+          {/if}
+        </Section>
+
+        <!--
+          One row of the advanced panel.
+
+          `pinned` comes from the profile's own `overrides` map rather than from
+          `ResolvedOptics.overriddenFields`, because only the map is what a reset
+          acts on: the resolver lists what it APPLIED, and a value pinned to
+          exactly the number the model would have chosen is not listed. Keying
+          the reset off the resolver would leave a stored override that no
+          control offers to clear — an override you cannot undo, which is the
+          one thing the override block must never become. `applied` is the
+          resolver's answer, and it is worth saying when the two differ.
+        -->
+        {#snippet override(
+          key: keyof OpticalOverrides,
+          label: string,
+          min: number,
+          max: number,
+          step: number,
+          format: (value: number) => string,
+        )}
+          {@const pinnedValue = rig.overrides[key]}
+          {@const pinned = typeof pinnedValue === 'number'}
+          {@const applied = rigOptics?.overriddenFields.includes(key) ?? false}
+          {@const shown = pinned ? pinnedValue : automaticValue(key)}
+          <div class="override">
+            <Slider
+              {label}
+              value={Math.min(max, Math.max(min, shown))}
+              {min}
+              {max}
+              {step}
+              {format}
+              onchange={(value) => void setOverride(key, value)}
+            />
+            <div class="override-state">
+              {#if pinned}
+                <span class="override-tag">
+                  {applied ? 'Set by you' : 'Set by you — same as automatic'}
+                </span>
+                <button type="button" class="inline-link" onclick={() => void setOverride(key, null)}>
+                  Reset to automatic
+                </button>
+              {:else}
+                <span class="override-tag automatic">
+                  Automatic · {format(automaticValue(key))}
+                </span>
+              {/if}
+            </div>
+          </div>
+        {/snippet}
       {:else if section === 'teleprompter'}
         <Section title="Teleprompter">
           <Select
@@ -1314,21 +2000,46 @@
             ]}
             onchange={(value) => void patchSettings('teleprompter', { fontFamilyId: value })}
           />
-          <Select
-            label="Stage background"
-            value={$settings.teleprompter.background}
+          <!--
+            What used to be "Stage background".
+
+            That menu offered near black and high-contrast black and delivered
+            neither: `src/styles/stage.css` hard-codes `--stage-bg`, so both of
+            its options rendered identically, for as long as it existed. What a
+            presenter is actually reaching for when they go looking for a
+            background control on a prompter is how hot the type burns against
+            the glass — a bright rig washes out a soft face, a dark studio makes
+            a strong one bloom. That is the control that exists now, and the
+            stage reads it as `data-text-intensity` on `.stage-root`.
+          -->
+          <SegmentedControl
+            label="Text intensity"
+            value={$settings.teleprompter.textIntensity}
             options={[
-              { value: 'near-black', label: 'Near black' },
-              { value: 'high-contrast', label: 'High contrast black' },
+              { value: 'soft', label: 'Soft' },
+              { value: 'standard', label: 'Standard' },
+              { value: 'strong', label: 'Strong' },
             ]}
             onchange={(value) =>
-              void patchSettings('teleprompter', { background: value as StageBackground })}
+              void patchSettings('teleprompter', { textIntensity: value as TextIntensity })}
           />
+          <p class="hint-line">
+            How bright the words burn over the stage's black field. A calibrated rig carries its
+            own choice, made at the glass; this is what everything else runs with.
+          </p>
+          <!--
+            The ceiling was 160px, which is not a taste limit — it was short of
+            what the product's own hardware needs. A Prompter XL at its rated
+            4.6 m wants roughly 234px for a comfortable angular size, so this
+            control could not reach a legible size on a rig CandidCue ships
+            knowledge of, and the operator had no way to tell that the slider
+            had run out rather than the display.
+          -->
           <Slider
             label="Default font size"
             value={$settings.teleprompter.fontSizePx}
             min={24}
-            max={160}
+            max={typeCeilingPx}
             format={(v) => `${v} px`}
             onchange={(value) => void patchSettings('teleprompter', { fontSizePx: value })}
           />
@@ -1358,14 +2069,42 @@
             onchange={(value) =>
               void patchSettings('teleprompter', { readingBandCenterPercent: value })}
           />
-          <Slider
-            label="Fixed-speed default"
-            value={$settings.teleprompter.fixedSpeedWpm}
-            min={60}
-            max={260}
-            format={(v) => `${v} wpm`}
-            onchange={(value) => void patchSettings('teleprompter', { fixedSpeedWpm: value })}
-          />
+          <!--
+            Said once, here, because it is the honest scope of the four sliders
+            above and it is otherwise invisible: a calibrated rig OVERRULES all
+            of them. `resolveStageGeometry` decides size, line height, column
+            and band from a measured distance, and `buildStageSettings` writes
+            its answer into these same flat fields. Somebody who has calibrated
+            their prompter and then drags "Text column width" would otherwise be
+            moving a control that changes nothing on the glass — which is the
+            precise defect this screen exists to remove, reappearing one layer
+            along.
+          -->
+          <p class="hint-line">
+            These four are what an <strong>uncalibrated</strong> display prompts at. Calibrate one
+            under Stage display and its size, line height, column and reading band are worked out
+            from how far away you stand instead — which is the only way they can be right on two
+            panels of different sizes at once.
+          </p>
+          <!--
+            "Fixed-speed default" was a slider onto nothing.
+
+            Constant-speed scrolling is not implemented: no motion path reads
+            `fixedSpeedWpm`, and building one is a product decision that has not
+            been made — a teleprompter that crawls at a chosen rate is a
+            different instrument from one that follows a voice, and shipping a
+            half-hearted version of it would be worse than not having it.
+
+            So the number is stated as unavailable rather than offered as a
+            control. This is the same rule as the "Always on top" toggle above:
+            a setting that is persisted and never read is the defect this whole
+            screen exists to remove, and the honest form of it is a sentence.
+          -->
+          <p class="hint-line">
+            <strong>Fixed-speed scrolling is not available in this release.</strong> CandidCue moves
+            the script by following your voice; there is no constant-rate mode for it to fall back
+            to, so there is no words-per-minute to set.
+          </p>
           <!-- Mirroring lives with the display it is a property of (Stage
                display), not here: it describes the rig, not the type. -->
           <Toggle
@@ -2164,6 +2903,164 @@
     display: flex;
     gap: var(--space-1);
     margin-top: var(--space-1);
+  }
+
+  /* --- the optical rig --- */
+  .rig-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .rig-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-panel);
+  }
+  .rig-row.active {
+    border-color: var(--border-strong);
+    background: var(--accent-wash);
+  }
+  /* Inset bar, never a one-sided border on a rounded box. */
+  .rig-row.active::before {
+    content: '';
+    position: absolute;
+    left: 6px;
+    top: 10px;
+    bottom: 10px;
+    width: 2px;
+    border-radius: 1px;
+    background: var(--accent);
+  }
+  .rig-choose {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+    border: none;
+    background: transparent;
+    padding: 0;
+  }
+  .rig-name {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .rig-meta {
+    font-size: var(--text-2xs);
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .readout {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-panel);
+  }
+  .readout-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-4);
+  }
+  .readout-label {
+    flex: 0 0 116px;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+  }
+  .readout-value {
+    margin: 0;
+    min-width: 0;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .control-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    align-items: flex-start;
+  }
+  .control-label {
+    font-size: var(--text-label);
+    line-height: var(--lh-label);
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .chip-row {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .chip {
+    min-height: var(--button-h);
+    padding-inline: 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-control);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out);
+  }
+  .chip:hover {
+    background: var(--bg-hover-surface);
+  }
+  .chip.selected,
+  .chip.selected:hover {
+    background: var(--accent-wash);
+    border-color: var(--border-strong);
+  }
+  .chip-field {
+    flex: 0 1 160px;
+    min-width: 120px;
+  }
+
+  .advanced-head {
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-sm);
+    font-weight: 650;
+    color: var(--text-primary);
+  }
+
+  .override {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .override-state {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+  .override-tag {
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    /* Small terracotta TEXT has to use the strong ramp to clear AA in light. */
+    color: var(--accent-strong);
+    font-variant-numeric: tabular-nums;
+  }
+  .override-tag.automatic {
+    font-weight: 500;
+    color: var(--text-faint);
   }
 
   /* --- microphone --- */

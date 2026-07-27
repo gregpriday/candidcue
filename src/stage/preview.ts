@@ -11,6 +11,8 @@ import type {
   CompiledBlock,
   ListenerStageSelection,
   AlignmentSnapshot,
+  ReadingCueStyle,
+  StageCalibrationMode,
   StageDirective,
   StageRenderDocument,
   StageSessionEnvelope,
@@ -237,7 +239,19 @@ export interface PreviewDriver {
   toggleBlank(): void;
   toggleFreeze(): void;
   toggleMirror(): void;
-  toggleCalibration(): void;
+  /**
+   * Step through every calibration overlay and back to off.
+   *
+   * Five cards is four more than the crosshair used to be, and each of them
+   * exists to be looked at through glass at the distance somebody presents
+   * from. Judging one in a browser window costs a keystroke; judging one on a
+   * rig costs a Tauri build and a prompter.
+   */
+  cycleCalibration(): void;
+  /** Clean Take ⇄ Diagnostic Take. */
+  toggleStageMode(): void;
+  /** ticks → wash → none → ticks. */
+  cycleReadingCue(): void;
   ack(label: string): void;
   jump(): void;
 }
@@ -245,6 +259,27 @@ export interface PreviewDriver {
 /** Where {@link startPreviewDriver} parks the driver for the browser suite. */
 export const PREVIEW_DRIVER_KEY = '__stagePreview';
 
+/**
+ * The calibration cycle, in wizard order, ending at off.
+ *
+ * Off is a step rather than a separate key so one press always makes SOMETHING
+ * happen and the cycle cannot strand the preview inside a full-screen card.
+ */
+const CALIBRATION_CYCLE: StageCalibrationMode[] = [
+  'crosshair',
+  'orientation',
+  'safe-area',
+  'ruler',
+  'type-sample',
+];
+
+function nextCalibrationMode(current: StageCalibrationMode | null): StageCalibrationMode | null {
+  if (current === null) return CALIBRATION_CYCLE[0] ?? null;
+  const at = CALIBRATION_CYCLE.indexOf(current);
+  // An unknown mode restarts the cycle rather than falling off the end of it.
+  if (at < 0) return CALIBRATION_CYCLE[0] ?? null;
+  return CALIBRATION_CYCLE[at + 1] ?? null;
+}
 
 const STAGE_GEN = 1;
 
@@ -257,7 +292,8 @@ export function startPreviewDriver(): PreviewDriver {
   let listenerOn = false;
   let blanked = false;
   let frozen = false;
-  let calibration = false;
+  /** Where the calibration cycle currently is: `null` is off, otherwise the mode. */
+  let calibrationMode: StageCalibrationMode | null = null;
   let revision = 0;
   let heartbeatRevision = 0;
   let tokenIndex = 0;
@@ -373,9 +409,49 @@ export function startPreviewDriver(): PreviewDriver {
       settings = { ...settings, mirrorX: !settings.mirrorX };
       directive({ kind: 'settings', settings });
     },
-    toggleCalibration() {
-      calibration = !calibration;
-      directive({ kind: 'calibration', active: calibration, crosshairX: 0.5, crosshairY: 0.4 });
+    cycleCalibration() {
+      const next = nextCalibrationMode(calibrationMode);
+      calibrationMode = next;
+      if (next === null) {
+        directive({ kind: 'calibration', active: false });
+        return;
+      }
+      /*
+       * Every field the cards read travels on every step, deliberately.
+       *
+       * The reducer treats an absent field as "keep what you had", which is
+       * right for an operator dragging one control on the other screen and
+       * wrong for a harness stepping between whole cards: a safe-area frame
+       * left over from two steps ago would quietly become the geometry the
+       * ruler and the type sample are judged inside.
+       */
+      directive({
+        kind: 'calibration',
+        active: true,
+        mode: next,
+        crosshairX: 0.5,
+        crosshairY: 0.4,
+        // A visibly asymmetric frame: an inset that is the same on all four
+        // edges is the one shape that cannot show a mis-set edge.
+        safeArea: { top: 0.06, right: 0.04, bottom: 0.1, left: 0.04 },
+        rulerLengthPx: 400,
+        sampleFontSizePx: Math.round(settings.optics?.bodyFontSizePx ?? settings.fontSizePx),
+        sampleColumnCh: Math.round(settings.optics?.columnCh ?? 34),
+        sampleLabel: 'Standard · preview',
+      });
+    },
+    toggleStageMode() {
+      settings = {
+        ...settings,
+        stageMode: settings.stageMode === 'diagnostic' ? 'clean' : 'diagnostic',
+      };
+      directive({ kind: 'settings', settings });
+    },
+    cycleReadingCue() {
+      const order: ReadingCueStyle[] = ['ticks', 'wash', 'none'];
+      const at = order.indexOf(settings.readingCue ?? 'ticks');
+      settings = { ...settings, readingCue: order[(at + 1) % order.length] ?? 'ticks' };
+      directive({ kind: 'settings', settings });
     },
     ack(label: string) {
       directive({ kind: 'ack', label, durationMs: 900 });

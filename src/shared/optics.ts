@@ -278,10 +278,32 @@ export function isPlausibleDiagonalMm(value: unknown): value is number {
 export function mmPerCssPixelFromRuler(options: {
   barLengthPx: number;
   measuredMm: number;
+  /** Panel size in CSS px, so the implied diagonal can be sanity-checked. */
+  viewportWidthPx?: number;
+  viewportHeightPx?: number;
 }): number | null {
   const { barLengthPx, measuredMm } = options;
   if (!isPositive(barLengthPx) || !isPositive(measuredMm)) return null;
-  return measuredMm / barLengthPx;
+  const mmPerPx = measuredMm / barLengthPx;
+
+  /*
+   * A typo here is silent and total.
+   *
+   * The sibling `mmPerCssPixel` refuses an implausible diagonal, but this path
+   * asked only for a positive number — so "56" typed for a 560 mm bar gives a
+   * scale ten times off, `resolveStageGeometry` treats any positive scale as
+   * CALIBRATED, and the readout states the wrong arcminutes with complete
+   * confidence. Nothing is NaN and nothing looks broken.
+   *
+   * When the caller can say how large the panel is, check what this scale
+   * implies about it and refuse an answer no display could produce.
+   */
+  const { viewportWidthPx, viewportHeightPx } = options;
+  if (isPositive(viewportWidthPx) && isPositive(viewportHeightPx)) {
+    const impliedDiagonalMm = Math.hypot(viewportWidthPx, viewportHeightPx) * mmPerPx;
+    if (!isPlausibleDiagonalMm(impliedDiagonalMm)) return null;
+  }
+  return mmPerPx;
 }
 
 /* ---------------------------------------------------------------------------
