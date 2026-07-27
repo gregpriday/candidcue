@@ -2172,7 +2172,9 @@ Before permission, device labels may be unavailable. After permission:
 - show human-readable labels;
 - identify the current system default;
 - remember a stable device ID where the platform permits;
-- fall back to default when a saved device disappears;
+- remember the chosen device's LABEL alongside its ID, and match on the label when the ID no longer resolves. WKWebView salts device IDs per origin and session and a replug can change them, so an ID-only memory silently returns the presenter to the system default — very often a headset — on some restarts. The label is what was actually chosen; re-pin the fresh ID once it matches;
+- fall back to default when a saved device disappears, keep the pin, and say so, so the choice takes effect again when the device is reconnected;
+- offer "follow the system default" as the first row of the input picker, naming the device it currently resolves to. It is a choice about the input device and must not be a separate control that disables and blanks the picker;
 - listen for `devicechange`;
 - do not switch automatically to a newly connected microphone during a live take.
 

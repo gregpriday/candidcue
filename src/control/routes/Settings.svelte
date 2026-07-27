@@ -55,7 +55,17 @@
     resolveListenerMedia,
     type InstalledListener,
   } from '../services/listeners';
-  import { MicTestSession, micTestStopNotice, type MicTestSnapshot } from '../services/mic-test-session';
+  import {
+    SYSTEM_DEFAULT_OPTION,
+    matchRememberedMicrophone,
+    microphoneOptions,
+  } from '../services/audio';
+  import {
+    MicTestSession,
+    micTestStopNotice,
+    shouldAdoptRememberedMicrophone,
+    type MicTestSnapshot,
+  } from '../services/mic-test-session';
   import { VAD_SENSITIVITY_COPY } from '../services/settings-audio';
   import * as secretsService from '../services/secrets';
   import * as settingsService from '../services/settings';
@@ -286,6 +296,24 @@
   );
   const micTestNotice = $derived(micTestStopNotice(micTestSnapshot.stoppedReason));
   /**
+   * The pin as REMEMBERED — whether or not that microphone is plugged in now.
+   * `undefined` means the choice is "follow the system default".
+   */
+  const micPinned = $derived(
+    $settings.audio.followSystemDefault ||
+      $settings.audio.preferredDeviceId === undefined ||
+      // Older builds auto-pinned the browser's own `default` pseudo-device,
+      // which is the system-default choice spelled a second way.
+      $settings.audio.preferredDeviceId === 'default'
+      ? undefined
+      : {
+          deviceId: $settings.audio.preferredDeviceId,
+          label: $settings.audio.preferredDeviceLabel ?? 'The remembered microphone',
+        },
+  );
+  /** The remembered pin among the inputs that are connected right now. */
+  const micPinnedDevice = $derived(micPinned ? matchRememberedMicrophone(micDevices, micPinned) : undefined);
+  /**
    * The input a take would actually open — which is not always the one named in
    * the picker.
    *
@@ -294,9 +322,32 @@
    * would be measuring an input the session will not use. A diagnostic that
    * exercises a different microphone from the one under test is worse than no
    * diagnostic: it answers a question nobody asked, convincingly.
+   *
+   * A remembered device that is UNPLUGGED resolves the same way, for the same
+   * reason: the meter has to read the input the session will really open.
    */
-  const micDeviceId = $derived(
-    $settings.audio.followSystemDefault ? undefined : $settings.audio.preferredDeviceId,
+  const micDeviceId = $derived(micPinnedDevice?.deviceId);
+  /**
+   * §28.1. One control, not two.
+   *
+   * "Follow the system default" is a choice ABOUT the input device, so it is a
+   * row in the input picker rather than a toggle in a different section further
+   * down the page. It used to be the latter, and the picker was DISABLED AND
+   * BLANK whenever it was on — which is the default — so the screen's answer to
+   * "which microphone is this using?" was an empty, dead dropdown, and the
+   * control that explained it was somewhere else with no visible connection to
+   * it.
+   */
+  const micOptions = $derived(
+    microphoneOptions(
+      micDevices,
+      micPinned && !micPinnedDevice
+        ? { deviceId: micPinned.deviceId, label: micPinned.label }
+        : undefined,
+    ),
+  );
+  const micSelectValue = $derived(
+    micPinned ? (micPinnedDevice?.deviceId ?? micPinned.deviceId) : SYSTEM_DEFAULT_OPTION,
   );
 
   /**
@@ -345,8 +396,8 @@
    * §28.1: never prompt on mount, but DO notice a permission that is already
    * granted — otherwise a returning user is asked to re-click "Allow". The
    * subscription also catches a grant made in System Settings while this screen
-   * is open. Platforms that cannot report the state ('unsupported') leave the
-   * explicit button in place.
+   * is open. Platforms that cannot report the state ('unsupported') fall
+   * through to the remembered-grant effect below.
    */
   $effect(() => {
     if (section !== 'audio') return undefined;
@@ -357,6 +408,61 @@
         micAdopted = false;
         micPermission = 'denied';
       }
+    });
+  });
+
+  /**
+   * §28.1. Adopt a grant this machine has already made.
+   *
+   * THE ONLY WEBVIEW THIS APP SHIPS IN CANNOT ANSWER THE QUESTION ABOVE.
+   * `navigator.permissions.query({ name: 'microphone' })` is not implemented in
+   * WKWebView, so the watcher reports 'unsupported' every single launch, the
+   * 'granted' branch never runs, and the screen asks a returning user to click
+   * "Allow and choose microphone" again — forever, on the one platform that
+   * matters. macOS grants the microphone to the APPLICATION, so the grant is
+   * genuinely still there; only the webview's ability to see it is missing.
+   *
+   * `audio.microphoneGranted` is the record of that grant and this is what
+   * reads it. The predicate is pure and lives in services/mic-test-session.ts
+   * because getting it wrong is silent: it was first written INSIDE the watcher
+   * callback above, which fires once at mount — usually before the settings
+   * store has loaded, so the flag was still false and no second callback ever
+   * came. An `$effect` re-runs when the store lands, which is the whole point.
+   */
+  let micAdoptAttempted = false;
+  $effect(() => {
+    if (section !== 'audio') return;
+    if (
+      !shouldAdoptRememberedMicrophone({
+        remembered: $settings.audio.microphoneGranted,
+        attempted: micAdoptAttempted,
+        adopted: micAdopted,
+        permission: micPermission,
+      })
+    ) {
+      return;
+    }
+    // One try per visit: enumeration cannot prompt, but a grant revoked in
+    // System Settings must not turn this into a loop.
+    micAdoptAttempted = true;
+    void adoptGrantedMicrophone();
+  });
+
+  /*
+   * §28.2. Keep the picker honest about what is plugged in.
+   *
+   * Someone opening this screen to choose a better microphone very often plugs
+   * it in while they are looking at it, and a list enumerated once cannot show
+   * it. Reporting only — a new input is never switched to on its own.
+   */
+  $effect(() => {
+    if (section !== 'audio' || micPermission !== 'granted') return undefined;
+    return getVoiceFacade().watchInputDevices((devices) => {
+      micDevices = devices;
+      micError = null;
+      // The remembered microphone may be exactly what was just connected, and
+      // its id will not be the one that was saved.
+      repinRememberedMicrophone(devices);
     });
   });
 
@@ -449,31 +555,65 @@
     if (micAdopted) return;
     micAdopted = true;
     try {
-      micDevices = await getVoiceFacade().listMicrophones();
+      const devices = await getVoiceFacade().listMicrophones();
+      micDevices = devices;
       micPermission = 'granted';
-      micError = micDevices.length === 0
+      micError = devices.length === 0
         ? 'No microphone was found. Connect an input device and try again.'
         : null;
-      /*
-       * §28.1: adopt a real device id the first time, so the picker shows the
-       * input that is actually in use rather than an empty field. A remembered
-       * id that is no longer connected is replaced rather than kept — pinning a
-       * device that is not there is how a take opens the wrong microphone.
-       */
-      const remembered = $settings.audio.preferredDeviceId;
-      const resolved =
-        (remembered !== undefined && micDevices.some((d) => d.deviceId === remembered)
-          ? remembered
-          : undefined) ??
-        micDevices.find((d) => d.isDefault)?.deviceId ??
-        micDevices[0]?.deviceId;
-      if (resolved !== undefined && resolved !== remembered) {
-        void patchSettings('audio', { preferredDeviceId: resolved }).catch(() => {});
-      }
+      repinRememberedMicrophone(devices);
     } catch (err) {
       micAdopted = false;
       micError = describeError(err);
     }
+  }
+
+  /**
+   * §28.1. Re-bind the remembered microphone to the id it has TODAY.
+   *
+   * Device ids are salted per origin and per session and can change when
+   * hardware is replugged, so the id written last week may name nothing now
+   * while the microphone itself is sitting right there. Matching by label and
+   * writing the fresh id back is what turns "remember my microphone" into
+   * something that survives a restart.
+   *
+   * What it deliberately does NOT do is overwrite a remembered choice with a
+   * fallback when the device is absent. The old code did: an unplugged Yeti
+   * became a pin on the built-in microphone, permanently, so plugging the Yeti
+   * back in changed nothing. A pin for something that is not here is kept and
+   * SAID (see the notice under the picker) — it costs nothing, because
+   * `micDeviceId` already resolves to the system default meanwhile.
+   */
+  function repinRememberedMicrophone(devices: AudioDeviceInfo[]): void {
+    const remembered = micPinned;
+    if (!remembered) return;
+    const match = matchRememberedMicrophone(devices, remembered);
+    if (!match) return;
+    if (match.deviceId === remembered.deviceId && match.label === remembered.label) return;
+    void patchSettings('audio', {
+      preferredDeviceId: match.deviceId,
+      preferredDeviceLabel: match.label,
+    }).catch(() => {
+      /* a remembered preference is a convenience, never a gate */
+    });
+  }
+
+  /**
+   * The one place the input choice is made — the system-default row included.
+   */
+  function chooseMicrophone(value: string): void {
+    if (value === SYSTEM_DEFAULT_OPTION) {
+      void patchSettings('audio', { followSystemDefault: true }).catch(() => {});
+      return;
+    }
+    const chosen = micDevices.find((d) => d.deviceId === value);
+    void patchSettings('audio', {
+      followSystemDefault: false,
+      preferredDeviceId: value,
+      // Chosen from the "(not connected)" row: keep the label already stored,
+      // which is the only name that device has here.
+      ...(chosen ? { preferredDeviceLabel: chosen.label } : {}),
+    }).catch(() => {});
   }
 
   async function allowMicrophone(): Promise<void> {
@@ -972,11 +1112,22 @@
           {:else}
             <Select
               label="Input device"
-              value={micDeviceId ?? ''}
-              disabled={$settings.audio.followSystemDefault}
-              options={micDevices.map((d) => ({ value: d.deviceId, label: d.label }))}
-              onchange={(value) => void patchSettings('audio', { preferredDeviceId: value })}
+              value={micSelectValue}
+              options={micOptions}
+              onchange={(value) => chooseMicrophone(value)}
             />
+            {#if micPinned && !micPinnedDevice}
+              <!--
+                The pin is kept, not quietly dropped: this is a microphone that
+                is coming back, and saying so beats a picker that silently
+                reverts to the default and leaves the presenter to notice on
+                stage.
+              -->
+              <p class="hint-line">
+                {micPinned.label} is not connected. CandidCue is using the system default until it
+                is plugged back in.
+              </p>
+            {/if}
             <MicMeter level={micLevel} />
             <!--
               A billable Inworld session, so it says so while it is open, it can
@@ -1023,13 +1174,12 @@
             <p class="inline-alert" role="alert">{micError}</p>
           {/if}
         </Section>
-        <Section title="Audio">
-          <Toggle
-            checked={$settings.audio.followSystemDefault}
-            label="Follow system default microphone"
-            description="Use whichever input macOS is set to, including changes mid-take"
-            onchange={(value) => void patchSettings('audio', { followSystemDefault: value })}
-          />
+        <!--
+          "Follow system default microphone" used to be a toggle here, three
+          controls away from the picker it disabled and blanked. One control
+          now: it is the first row of the input picker above.
+        -->
+        <Section title="Capture">
           <Toggle
             checked={$settings.audio.noiseSuppression}
             label="Noise suppression"
@@ -1720,6 +1870,16 @@
     overflow-y: auto;
     padding: var(--space-6) var(--page-x) var(--space-8);
     max-width: 640px;
+    /*
+      Sections stacked as plain blocks had NO space between them: the next
+      section's heading sat directly on the previous section's last control —
+      "Audio" landing on the Test transcription button. A section heading needs
+      more air above it than the fields inside a section have between them, so
+      this is deliberately larger than Section's own --space-4 body gap.
+    */
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-9);
   }
 
   .row-actions {

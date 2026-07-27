@@ -78,6 +78,13 @@ export function createRealVoiceFacade(): VoiceFacade {
       return manager().listInputs();
     },
 
+    watchInputDevices(cb: (devices: AudioDeviceInfo[]) => void): Unsubscribe {
+      // No `navigator.mediaDevices` at all is a platform that cannot report
+      // changes; the caller keeps whatever it enumerated.
+      if (!mediaDevices()) return () => {};
+      return manager().onDeviceChange((report) => cb(report.devices));
+    },
+
     async requestMicrophoneAccess(): Promise<'granted' | 'denied'> {
       const devices = mediaDevices();
       if (!devices) return 'denied';

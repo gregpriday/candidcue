@@ -183,6 +183,23 @@ vi.mock('../../../src/control/stores/router', () => ({
   navigate: (...a: never[]) => traced('navigate', services.navigate)(...a),
 }));
 vi.mock('../../../src/control/stores/toasts', () => ({ showToast: services.showToast }));
+/**
+ * The inputs plugged in for a given test. The take resolves its remembered
+ * microphone against this list, so "the saved id is stale" and "the microphone
+ * is gone" are two different, testable situations.
+ */
+const micState = vi.hoisted(() => ({
+  devices: [] as { deviceId: string; label: string; isDefault: boolean; available: boolean }[],
+  fail: false,
+}));
+vi.mock('../../../src/control/services/voice-facade', () => ({
+  getVoiceFacade: () => ({
+    listMicrophones: async () => {
+      if (micState.fail) throw new Error('enumeration failed');
+      return micState.devices;
+    },
+  }),
+}));
 const editorState = vi.hoisted(() => ({
   value: { scriptId: null as string | null, saveState: 'idle', lastError: null as string | null },
 }));
@@ -233,6 +250,11 @@ beforeEach(() => {
   order.length = 0;
   for (const fn of Object.values(services)) fn.mockReset();
   settingsState.value = settingsWith();
+  micState.fail = false;
+  micState.devices = [
+    { deviceId: 'default', label: 'Default - Built-in Microphone', isDefault: true, available: true },
+    { deviceId: 'usb-mic', label: 'Blue Yeti', isDefault: false, available: true },
+  ];
   editorState.value = { scriptId: null, saveState: 'idle', lastError: null };
 
   services.saveNow.mockResolvedValue(undefined);
@@ -362,6 +384,47 @@ describe('settings are the only input to a take', () => {
   });
 
   it('pins the chosen device once the user has turned that off', async () => {
+    settingsState.value = settingsWith((s) => {
+      s.audio.followSystemDefault = false;
+      s.audio.preferredDeviceId = 'usb-mic';
+    });
+    await startTake('script-1');
+    expect(liveInput()['micDeviceId']).toBe('usb-mic');
+  });
+
+  it('finds the remembered microphone again when its device id has been re-salted', async () => {
+    // The saved id is stale — WKWebView re-salts ids per session — but the
+    // microphone itself is plugged in. Without the label match this take would
+    // silently open the system default, which is the whole "it keeps using my
+    // headphones" complaint.
+    settingsState.value = settingsWith((s) => {
+      s.audio.followSystemDefault = false;
+      s.audio.preferredDeviceId = 'stale-id-from-last-launch';
+      s.audio.preferredDeviceLabel = 'Blue Yeti';
+    });
+    await startTake('script-1');
+    expect(liveInput()['micDeviceId']).toBe('usb-mic');
+  });
+
+  it('falls back to the system default and says so when the chosen microphone is unplugged', async () => {
+    settingsState.value = settingsWith((s) => {
+      s.audio.followSystemDefault = false;
+      s.audio.preferredDeviceId = 'gone';
+      s.audio.preferredDeviceLabel = 'Røde NT-USB';
+    });
+    await startTake('script-1');
+    expect(liveInput()).not.toHaveProperty('micDeviceId');
+    expect(services.showToast).toHaveBeenCalledWith(
+      expect.stringContaining('Røde NT-USB is not connected'),
+      'info',
+    );
+  });
+
+  it('honours the pin when the inputs cannot be enumerated at all', async () => {
+    // Absence was not proven, so the remembered choice stands: the capture
+    // retry in voice-session is a better place to discover a dead device than a
+    // guess made here.
+    micState.fail = true;
     settingsState.value = settingsWith((s) => {
       s.audio.followSystemDefault = false;
       s.audio.preferredDeviceId = 'usb-mic';

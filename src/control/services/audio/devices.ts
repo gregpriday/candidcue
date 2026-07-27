@@ -43,6 +43,92 @@ export function toAudioDeviceInfos(devices: MediaDeviceInfoLike[]): AudioDeviceI
   });
 }
 
+/**
+ * The picker row that means "follow whatever the system input is".
+ *
+ * Deliberately NOT the browser's own `default` device id: on Chrome that id is
+ * a real enumerated entry, and conflating the two would make "follow the
+ * system default" and "pin the device that happens to be default right now"
+ * indistinguishable — which is the difference the setting exists to express.
+ */
+export const SYSTEM_DEFAULT_OPTION = '__system_default__';
+
+export interface MicrophoneOption {
+  value: string;
+  label: string;
+}
+
+/** "Default - Blue Yeti" → "Blue Yeti"; anything else is left alone. */
+function withoutDefaultPrefix(label: string): string {
+  return label.replace(/^default\s+-\s+/i, '').trim();
+}
+
+export interface RememberedMicrophone {
+  /** The id last written to settings; may be stale. */
+  deviceId?: string | undefined;
+  /** The label that id carried when it was chosen. */
+  label?: string | undefined;
+}
+
+/**
+ * The rows of the input picker: "follow the system default" first, then every
+ * connected input.
+ *
+ * The system-default row names the device it currently resolves to, because
+ * "System default" on its own is the one option whose meaning the user cannot
+ * see — and not being able to see it is exactly how someone ends up presenting
+ * through their headset without knowing why.
+ *
+ * `missing` is a remembered input that is not connected right now. It is kept
+ * in the list, marked, and selectable so the picker shows what is remembered
+ * instead of silently reading as though the choice was never made.
+ */
+export function microphoneOptions(
+  devices: AudioDeviceInfo[],
+  missing?: { deviceId: string; label: string } | undefined,
+): MicrophoneOption[] {
+  const systemDefault = devices.find((d) => d.isDefault);
+  const resolvesTo = systemDefault ? withoutDefaultPrefix(systemDefault.label) : '';
+  const options: MicrophoneOption[] = [
+    {
+      value: SYSTEM_DEFAULT_OPTION,
+      label: resolvesTo ? `System default — ${resolvesTo}` : 'System default',
+    },
+    ...devices.filter((d) => !d.isDefault).map((d) => ({ value: d.deviceId, label: d.label })),
+  ];
+  if (missing && !devices.some((d) => d.deviceId === missing.deviceId)) {
+    options.push({ value: missing.deviceId, label: `${missing.label} (not connected)` });
+  }
+  return options;
+}
+
+/**
+ * Find the remembered microphone among the inputs connected right now — by id
+ * first, then BY LABEL.
+ *
+ * A `deviceId` is not a stable name for a piece of hardware. WKWebView salts
+ * them per origin and session, and a replug can change them, so matching on the
+ * id alone means the app forgets the microphone the user chose and quietly
+ * reverts to the system default on a restart — which is precisely what "use my
+ * good microphone" must not do. The label ("Blue Yeti") is what was actually
+ * chosen, so it is the fallback, and the caller re-pins the fresh id.
+ */
+export function matchRememberedMicrophone(
+  devices: AudioDeviceInfo[],
+  remembered: RememberedMicrophone,
+): AudioDeviceInfo | undefined {
+  const specific = devices.filter((d) => !d.isDefault);
+  if (remembered.deviceId !== undefined && remembered.deviceId !== '') {
+    const byId = specific.find((d) => d.deviceId === remembered.deviceId);
+    if (byId) return byId;
+  }
+  if (remembered.label !== undefined && remembered.label !== '') {
+    const byLabel = specific.find((d) => d.label === remembered.label);
+    if (byLabel) return byLabel;
+  }
+  return undefined;
+}
+
 export interface ResolvedDevice {
   /** Constraint-ready device id; undefined means follow system default. */
   deviceId: string | undefined;

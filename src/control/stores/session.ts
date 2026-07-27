@@ -2139,7 +2139,7 @@ export function canSwitchMicrophone(): boolean {
  * the reason is shown, because a switch that silently does nothing is the
  * worst possible answer to "my microphone died".
  */
-export async function switchMicrophone(deviceId: string): Promise<boolean> {
+export async function switchMicrophone(deviceId: string, label?: string): Promise<boolean> {
   if (!pipeline || deviceId === '') return false;
   try {
     await pipeline.switchMicrophone(deviceId);
@@ -2149,8 +2149,13 @@ export async function switchMicrophone(deviceId: string): Promise<boolean> {
   }
   state.update((s) => ({ ...s, micState: 'live', inputDeviceLost: false }));
   // §28.1: remember the choice, so the next take opens the input that worked
-  // rather than the one that just vanished.
-  void patchSettings('audio', { preferredDeviceId: deviceId }).catch(() => {
+  // rather than the one that just vanished. The label goes with it — the id
+  // alone does not survive a restart (see `matchRememberedMicrophone`).
+  void patchSettings('audio', {
+    followSystemDefault: false,
+    preferredDeviceId: deviceId,
+    ...(label === undefined ? {} : { preferredDeviceLabel: label }),
+  }).catch(() => {
     /* a remembered preference is a convenience, never a gate */
   });
   showToast('Microphone switched. Voice following has resumed.', 'success');

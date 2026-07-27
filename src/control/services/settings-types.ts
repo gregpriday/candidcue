@@ -59,6 +59,19 @@ export interface AppSettings {
   };
   audio: {
     preferredDeviceId?: string;
+    /**
+     * The label `preferredDeviceId` carried when it was chosen, e.g.
+     * "Blue Yeti" (§28.1).
+     *
+     * The id alone is not a durable name for a piece of hardware — WKWebView
+     * salts device ids per origin and session, and a replug can change them —
+     * so an id-only memory hands the presenter back the system default (very
+     * often a headset) on some restarts, without saying so. The label is what
+     * the user actually picked, so it is what makes the choice survive; see
+     * `matchRememberedMicrophone`, which matches on the id first and re-pins
+     * the fresh id when only the label matches.
+     */
+    preferredDeviceLabel?: string;
     followSystemDefault: boolean;
     noiseSuppression: boolean;
     echoCancellation: boolean;

@@ -25,6 +25,7 @@
  * from at all, and each of them tears down whatever it had already built.
  */
 import { get } from 'svelte/store';
+import { matchRememberedMicrophone } from '../services/audio';
 import { compileScript, type CompileOutput } from '../services/compiler';
 import { describeError } from '../services/errors';
 import { buildListenerSelection, listInstalledListeners } from '../services/listeners';
@@ -48,6 +49,7 @@ import {
 } from '../stores/session';
 import { loadSettings, settings } from '../stores/settings';
 import { showToast } from '../stores/toasts';
+import { getVoiceFacade } from '../services/voice-facade';
 import { writable } from 'svelte/store';
 import type { ListenerStageSelection } from '../../shared/contracts';
 
@@ -162,6 +164,45 @@ async function compileForTake(
 type CompiledTake = CompileOutput & { script: NonNullable<CompileOutput['script']> };
 
 /**
+ * §28.1. The device id the remembered microphone has RIGHT NOW, or undefined
+ * for "follow the system default".
+ *
+ * The stored id is not enough on its own. Device ids are salted per origin and
+ * session and change when hardware is replugged, so a take that pinned the
+ * saved id verbatim would ask for a device that no longer answers to that name
+ * — and land on the system default (a headset, as often as not) with only a
+ * "the pinned device was busy" note to explain it. Enumerating here and
+ * matching on the label as well is what makes "use my good microphone" hold
+ * across a restart.
+ *
+ * Never fatal: a failed enumeration falls back to the stored id, which is what
+ * this used to pass unconditionally.
+ */
+async function resolvePinnedMicrophone(s: AppSettings): Promise<string | undefined> {
+  if (s.audio.followSystemDefault || s.audio.preferredDeviceId === undefined) return undefined;
+  try {
+    const devices = await getVoiceFacade().listMicrophones();
+    const match = matchRememberedMicrophone(devices, {
+      deviceId: s.audio.preferredDeviceId,
+      label: s.audio.preferredDeviceLabel,
+    });
+    if (match) return match.deviceId;
+    // Not plugged in. Presenting on the system default beats not presenting,
+    // and it is said out loud for the same reason the wrong-display case above
+    // is: a take that quietly runs on a different microphone is discovered from
+    // the transcript, which is far too late.
+    showToast(
+      `${s.audio.preferredDeviceLabel ?? 'The microphone chosen in Settings'} is not connected, so this take is using the system default.`,
+      'info',
+    );
+    return undefined;
+  } catch {
+    // Enumeration failed, so absence is not proven — honour the pin.
+    return s.audio.preferredDeviceId;
+  }
+}
+
+/**
  * Open a take for a script and route to Live. Resolves true when the take is
  * running.
  *
@@ -247,6 +288,7 @@ export async function startTake(scriptId: string): Promise<boolean> {
 
     const listener = await resolveListener(s);
     const stageSettings = stageSettingsFromSettings(s);
+    const micDeviceId = await resolvePinnedMicrophone(s);
 
     // 1. Open the stage hidden on the chosen display.
     const opened = await stageService.openStage({
@@ -325,9 +367,7 @@ export async function startTake(scriptId: string): Promise<boolean> {
       following: s.following,
       // "Follow system default" means exactly that: no pinned device id, so the
       // pipeline opens (and keeps following) whatever the system input is.
-      ...(s.audio.followSystemDefault || s.audio.preferredDeviceId === undefined
-        ? {}
-        : { micDeviceId: s.audio.preferredDeviceId }),
+      ...(micDeviceId === undefined ? {} : { micDeviceId }),
       audioProcessing: {
         echoCancellation: s.audio.echoCancellation,
         noiseSuppression: s.audio.noiseSuppression,
