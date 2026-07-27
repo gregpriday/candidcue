@@ -16,11 +16,12 @@ test('toggling "Horizontal mirror" writes stageBehavior.horizontalMirror to upda
   await installTauriShim(page, { welcomed: true });
   await page.goto('/control.html');
 
-  // Into Settings, then the Teleprompter section.
+  // Into Settings, then the Stage display section — mirroring describes the
+  // rig, not the type, so it lives with the panel it is a property of.
   await page.getByRole('button', { name: 'Settings' }).first().click();
-  await page.getByRole('button', { name: 'Teleprompter', exact: true }).click();
+  await page.getByRole('button', { name: 'Stage display', exact: true }).click();
 
-  const mirror = page.getByRole('switch', { name: 'Horizontal mirror by default' });
+  const mirror = page.getByRole('switch', { name: 'Horizontal mirror' });
   await expect(mirror).toBeVisible();
   await expect(mirror).toHaveAttribute('aria-checked', 'false');
 
@@ -45,7 +46,7 @@ test('toggling "Horizontal mirror" writes stageBehavior.horizontalMirror to upda
  * §28.4 — the voice-detection sensitivity slider leaves the browser.
  *
  * This is the defect the setting shipped with: the slider was wired to the VAD
- * and to the Preflight meter, and persisted in the localStorage overlay only.
+ * and to the level meter beside it, and persisted in the localStorage overlay only.
  * Rust declared no such field and `toRustPatch` had no `audio` arm, so a
  * presenter's mic tuning did not survive a cleared store and the backend
  * billing the key could not see the commit cadence it was paying for — this
@@ -65,8 +66,14 @@ test('moving the sensitivity slider writes audio.vadSensitivity to update_settin
   await expect(slider).toHaveValue('50');
   await expect(page.getByText('Default', { exact: true })).toBeVisible();
 
-  // The bound is in the copy: what the slider does NOT move is why it is safe.
-  await expect(page.getByText(/pause that ends a sentence/)).toBeVisible();
+  /*
+   * The bound is in the copy: what the slider does NOT move is why it is safe
+   * to offer. It used to be "the pause that ends a sentence", which was the
+   * honest limit when a local detector decided turn boundaries. Inworld
+   * endpoints server-side, so this slider cannot gate a single byte — and a
+   * user who believes it can will turn it up and be no better off.
+   */
+  await expect(page.getByText(/recogniser hears everything/)).toBeVisible();
 
   await slider.fill('80');
 

@@ -38,6 +38,29 @@ const UNWIRED_BY_DESIGN: Record<string, string> = {
   cancel_listener_download:
     'NOT_IMPLEMENTED in Rust (no CandidCue pack host); there is no download to cancel.',
   install_update: 'No updater plugin is wired in v1 (§44.10).',
+  /*
+   * §52 per-display appearance profiles. Deliberately unwired, not forgotten.
+   *
+   * They were wired to Preflight, which read a profile when a display was
+   * chosen and wrote one at Start. With Preflight gone, stage appearance is a
+   * single set of settings — which is the point of the change: what the
+   * Teleprompter screen shows is what every take runs, on every display.
+   *
+   * A half-restored profile is worse than none. The version that shipped for
+   * one afternoon restored only for an explicitly PINNED display, so the
+   * default "Automatic" path wrote a row per take and read none, and moving
+   * from a pinned panel to Automatic carried the pinned panel's type across and
+   * then saved it over the other panel's row.
+   *
+   * The Rust commands, the table and `services/display-profiles.ts` are left
+   * intact — the wrapper and its payload-shape test are what a future
+   * per-display feature would be built back on top of, and deleting them would
+   * mean rediscovering the contract rather than reading it.
+   */
+  save_display_profile:
+    'Per-display appearance memory (§52) is intentionally dormant: stage appearance is one set of settings. See services/display-profiles.ts.',
+  list_display_profiles:
+    'Per-display appearance memory (§52) is intentionally dormant: stage appearance is one set of settings. See services/display-profiles.ts.',
 };
 
 /** Commands whose absence is a user-visible failure, so they must stay wired. */
@@ -166,11 +189,13 @@ describe('every registered IPC command is reachable from the frontend', () => {
  * assigned by Rust and adopted by control; a literal is the bug.
  */
 describe('the stage envelope never carries a hard-coded session generation', () => {
-  it('Preflight starts the session record and uses the generation it returns', () => {
-    const preflight = SOURCES.find((f) => f.path.endsWith('routes/Preflight.svelte'));
-    expect(preflight).toBeDefined();
-    expect(preflight!.text).toMatch(/startSessionRecord\(/);
-    expect(preflight!.text).toMatch(/record\.sessionGeneration/);
+  it('the start sequence opens the session record and uses the generation it returns', () => {
+    // Was Preflight.svelte until the screen between Editor and Live was
+    // removed; the sequence itself is what the invariant was ever about.
+    const startTake = SOURCES.find((f) => f.path.endsWith('lib/start-take.ts'));
+    expect(startTake).toBeDefined();
+    expect(startTake!.text).toMatch(/startSessionRecord\(/);
+    expect(startTake!.text).toMatch(/record\.sessionGeneration/);
   });
 
   it('no control source assigns a literal session generation', () => {

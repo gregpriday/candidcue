@@ -25,8 +25,8 @@ describe('router', () => {
   });
 
   it('guards can block a transition', async () => {
-    const unregister = registerNavigationGuard((to) => to.name !== 'preflight');
-    const blocked = await navigate({ name: 'preflight', scriptId: 'abc' });
+    const unregister = registerNavigationGuard((to) => to.name !== 'live');
+    const blocked = await navigate({ name: 'live', sessionId: 's-1', scriptId: 'abc' });
     expect(blocked).toBe(false);
     expect(currentRoute().name).toBe('library');
 

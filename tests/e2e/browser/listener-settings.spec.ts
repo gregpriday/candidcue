@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { installTauriShim } from './fixtures/tauri-shim';
 
 /**
@@ -19,6 +19,10 @@ import { installTauriShim } from './fixtures/tauri-shim';
  *    `defaultPackId` had no reader anywhere. Every value seeded below is
  *    deliberately NOT the default, so a control still reading its old literal
  *    fails.
+ *
+ * These controls used to live on Preflight, one screen before every take, with
+ * a partial copy here in Settings. There is one copy now: what is set here is
+ * what the stage runs, because Present has nothing in between.
  */
 
 const SCRIPT = {
@@ -48,63 +52,74 @@ const LISTENER_SETTINGS = {
   saturation: 0.4,
 };
 
-async function openPreflight(page: import('@playwright/test').Page): Promise<void> {
+async function openListenerSettings(page: Page): Promise<void> {
   await page.goto('/control.html');
+  await page.getByRole('button', { name: 'Settings' }).first().click();
   await page
-    .getByRole('list', { name: 'Scripts' })
-    .getByRole('button', { name: 'Present', exact: true })
-    .first()
+    .getByRole('navigation', { name: 'Settings sections' })
+    .getByRole('button', { name: 'Listeners', exact: true })
     .click();
+  await expect(page.getByRole('heading', { name: 'Listeners' })).toBeVisible();
+}
+
+/** Reveal the framing controls, which sit behind a disclosure. */
+async function openFraming(page: Page): Promise<void> {
+  const summary = page.getByText('Framing and placement', { exact: true });
+  await expect(summary).toBeVisible();
+  await summary.click();
 }
 
 /** The inline `left` of the "look here" marker, as a percentage. */
-async function markerLeftPercent(page: import('@playwright/test').Page): Promise<number> {
+async function markerLeftPercent(page: Page): Promise<number> {
   const raw = await page.locator('.mini-target').evaluate((el) => (el as HTMLElement).style.left);
   return Number.parseFloat(raw);
 }
 
-test('the Listener defaults in settings reach the Preflight controls', async ({ page }) => {
+test('the stored Listener settings are what the controls show', async ({ page }) => {
   await installTauriShim(page, {
     welcomed: true,
     seedScripts: [SCRIPT],
     listenerSettings: LISTENER_SETTINGS,
     installedListeners: [MIRA_INSTALLED],
   });
-  await openPreflight(page);
+  await openListenerSettings(page);
 
-  // `autoplay` + `defaultPackId` had no reader at all. The Listener opens
-  // already selected, with no click.
-  await expect(page.getByRole('button', { name: /Mira/ })).toHaveClass(/selected/);
+  // `autoplay` + `defaultPackId` had no reader at all. The remembered pack is
+  // the selected one, and it is what a take opens with.
+  await expect(page.getByRole('combobox', { name: 'Listener' })).toHaveValue('mira');
 
   // Each of these is a setting that was written and never read. 62 / 8 / 40 are
   // the persisted values; 40 / 0 / 85 were the literals in the component.
-  await expect(page.getByRole('slider', { name: 'Dim' })).toHaveValue('62');
-  await expect(page.getByRole('slider', { name: 'Blur' })).toHaveValue('8');
-  await expect(page.getByRole('slider', { name: 'Colour' })).toHaveValue('40');
+  await expect(page.getByRole('slider', { name: 'Default dim' })).toHaveValue('62');
+  await expect(page.getByRole('slider', { name: 'Default blur' })).toHaveValue('8');
+  await expect(page.getByRole('slider', { name: 'Default colour' })).toHaveValue('40');
 });
 
-test('a Listener is not preselected when autoplay is off', async ({ page }) => {
+test('no remembered pack means no framing controls to set', async ({ page }) => {
   await installTauriShim(page, {
     welcomed: true,
     seedScripts: [SCRIPT],
-    listenerSettings: { ...LISTENER_SETTINGS, autoplay: false },
+    listenerSettings: { ...LISTENER_SETTINGS, defaultPackId: null, autoplay: false },
     installedListeners: [MIRA_INSTALLED],
   });
-  await openPreflight(page);
+  await openListenerSettings(page);
 
-  await expect(page.getByRole('button', { name: 'None' })).toHaveClass(/selected/);
-  // And the controls the selection reveals are not on screen.
-  await expect(page.getByRole('slider', { name: 'Dim' })).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Listener' })).toHaveValue('');
+  // Framing a person who is not on the stage is not a thing to offer.
+  await expect(page.getByText('Framing and placement', { exact: true })).toHaveCount(0);
 });
 
-test('every placement mode is selectable and moves where the presenter looks', async ({ page }, testInfo) => {
+test('every placement mode is selectable and moves where the presenter looks', async ({
+  page,
+}, testInfo) => {
   await installTauriShim(page, {
     welcomed: true,
     seedScripts: [SCRIPT],
     listenerSettings: LISTENER_SETTINGS,
     installedListeners: [MIRA_INSTALLED],
   });
-  await openPreflight(page);
+  await openListenerSettings(page);
+  await openFraming(page);
 
   const group = page.getByRole('radiogroup', { name: 'Listener placement' });
   await expect(group).toBeVisible();
@@ -119,10 +134,10 @@ test('every placement mode is selectable and moves where the presenter looks', a
   const behindTheScript = await markerLeftPercent(page);
   expect(behindTheScript).toBeCloseTo(50, 1);
 
-  await group.getByRole('radio', { name: /lens \u2014 left/ }).click();
+  await group.getByRole('radio', { name: /lens — left/ }).click();
   const lensLeft = await markerLeftPercent(page);
 
-  await group.getByRole('radio', { name: /lens \u2014 right/ }).click();
+  await group.getByRole('radio', { name: /lens — right/ }).click();
   const lensRight = await markerLeftPercent(page);
 
   // The lens modes are the ones that matter on a teleprompter rig: they put a
@@ -137,7 +152,7 @@ test('every placement mode is selectable and moves where the presenter looks', a
   await expect(page.getByRole('slider', { name: 'Size on stage' })).toHaveCount(0);
 
   await page.screenshot({
-    path: testInfo.outputPath('preflight-listener-placement.png'),
+    path: testInfo.outputPath('listener-placement.png'),
     fullPage: true,
   });
 });
@@ -149,9 +164,9 @@ test('choosing a Listener remembers it, and choosing None forgets it', async ({ 
     listenerSettings: { ...LISTENER_SETTINGS, defaultPackId: null, autoplay: true },
     installedListeners: [MIRA_INSTALLED],
   });
-  await openPreflight(page);
+  await openListenerSettings(page);
 
-  await page.getByRole('button', { name: /Mira/ }).click();
+  await page.getByRole('combobox', { name: 'Listener' }).selectOption('mira');
   await expect
     .poll(async () =>
       page.evaluate(
@@ -169,7 +184,7 @@ test('choosing a Listener remembers it, and choosing None forgets it', async ({ 
   // …and null is SENT to clear it, not omitted: Rust's merge removes a null key
   // and the container default refills it with None. Omitting it would leave the
   // old pack behind and reopen a Listener the user had just turned off.
-  await page.getByRole('button', { name: 'None' }).click();
+  await page.getByRole('combobox', { name: 'Listener' }).selectOption('');
   await expect
     .poll(async () =>
       page.evaluate(

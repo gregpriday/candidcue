@@ -1,5 +1,5 @@
 /**
- * Preflight's microphone / transcription test lifecycle (spec §14.2 C).
+ * The microphone / transcription test lifecycle (spec §14.2 C).
  *
  * This is a **billable** Inworld transcription session. The screen used to open one
  * and then hold it until the component unmounted: there was no Stop control
@@ -32,7 +32,7 @@
  *    the longest legitimate use (the §30.3 calibration preview asks for one
  *    paragraph, ~45 s) and makes the worst case finite.
  */
-import type { TranscriptTestEvents, Unsubscribe } from '../services/voice-facade';
+import type { TranscriptTestEvents, Unsubscribe } from './voice-facade';
 
 /** Idle time — since the last transcription event — before the session closes. */
 export const MIC_TEST_IDLE_TIMEOUT_MS = 30_000;
@@ -48,7 +48,9 @@ export type MicTestStopReason =
   | 'max_duration'
   | 'restart'
   | 'dispose'
-  | 'error';
+  | 'error'
+  /** The test proved what it exists to prove; there is nothing left to bill for. */
+  | 'answered';
 
 /** Everything the UI renders about the test. Replaced wholesale on change. */
 export interface MicTestSnapshot {
@@ -134,8 +136,18 @@ export class MicTestSession {
         },
         onFinal: (text) => {
           if (generation !== this.generation) return;
-          this.noteActivity();
-          this.publish({ ...this.snapshot, state: 'success', final: text });
+          /*
+           * A final transcript is the answer. Close the session.
+           *
+           * This used to publish `success` and leave the transport open until
+           * the 30-second idle timer noticed — and `running` reads false for
+           * `success`, so the screen took away the Stop button AND the "billing
+           * your key" warning at the exact moment the session became invisible.
+           * Half a minute of realtime billing, with the UI insisting the test
+           * was over.
+           */
+          this.publish({ ...this.snapshot, final: text });
+          this.stop('answered');
         },
         onError: (message) => {
           if (generation !== this.generation) return;

@@ -14,6 +14,7 @@
   import { formatSpeakingDuration, relativeTime } from '../lib/format';
   import { createAndOpenScript, exportScriptToFile, importMarkdown } from '../lib/app-actions';
   import { onShortcut } from '../lib/shortcuts';
+  import { startTake } from '../lib/start-take';
   import * as scriptsService from '../services/scripts';
   import { requestConfirm } from '../stores/confirm';
   import {
@@ -62,7 +63,7 @@
       if (action === 'new-script') void createAndOpenScript('new');
       if (action === 'present') {
         const id = $library.selectedId;
-        if (id) void navigate({ name: 'preflight', scriptId: id });
+        if (id) void startTake(id);
       }
     });
   });
@@ -77,8 +78,9 @@
     void navigate({ name: 'editor', scriptId: script.id });
   }
 
+  /** Straight to the stage — the settings a take needs are already saved. */
   function presentScript(script: ScriptSummary): void {
-    void navigate({ name: 'preflight', scriptId: script.id });
+    void startTake(script.id);
   }
 
   async function confirmTrash(script: ScriptSummary): Promise<void> {

@@ -1,7 +1,8 @@
 <!--
   Control window shell (spec §10, §45.1): store-based route machine, library
-  sidebar while browsing/editing, contextual Editor → Preflight → Live
-  transitions, workspace theme at rest and studio theme during Live.
+  sidebar while browsing/editing, Editor → Live in one press (there is no
+  screen between them — see lib/start-take.ts), workspace theme at rest and
+  studio theme during Live.
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
@@ -12,7 +13,6 @@
   import Editor from './routes/Editor.svelte';
   import Library from './routes/Library.svelte';
   import Live from './routes/Live.svelte';
-  import Preflight from './routes/Preflight.svelte';
   import Settings from './routes/Settings.svelte';
   import Welcome from './routes/Welcome.svelte';
   import { createAndOpenScript } from './lib/app-actions';
@@ -120,8 +120,6 @@
         <Library />
       {:else if $route.name === 'editor'}
         <Editor scriptId={$route.scriptId} />
-      {:else if $route.name === 'preflight'}
-        <Preflight scriptId={$route.scriptId} />
       {:else if $route.name === 'live'}
         <Live sessionId={$route.sessionId} scriptId={$route.scriptId} />
       {:else if $route.name === 'settings'}

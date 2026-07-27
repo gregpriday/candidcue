@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test';
  * routes resolve and render — it says NOTHING about the Rust backend, and the
  * mock is in places deliberately stronger than Rust. Treat these as launch/
  * render checks only; the production-path assertions live in the shim-backed
- * specs (library-editor, preflight, settings, accessibility).
+ * specs (library-editor, stage-display-settings, settings, accessibility).
  */
 
 test('[mock-backed] control window boots to Welcome and navigates to the Library', async ({ page }) => {

@@ -936,6 +936,22 @@ function buildStartSequenceGate(input: StartSessionInput): {
       // or a caller with its own compiler. The supplied script is then the only
       // authority and it has already been checked.
       if (store.status === 'idle') return;
+      /*
+       * A store holding a DIFFERENT script says nothing about this one.
+       *
+       * The editor populates this store and never clears it on the way out, so
+       * after editing script A and presenting script B the store still held A.
+       * Every check below then ran B's take against A's compile: A's stale
+       * error, A's blocking diagnostics, and — always, since two scripts never
+       * hash alike — A's source hash, which failed B with "the script changed
+       * after the session was prepared". B had compiled cleanly and its stage
+       * was already up; only voice tracking died, and the advice it gave named
+       * a screen that no longer exists.
+       *
+       * This gate is a stale-EDITOR guard. It has standing over the script it
+       * is looking at and none over any other.
+       */
+      if (store.scriptId !== null && store.scriptId !== compiledScript.scriptId) return;
       if (store.status === 'error') {
         throw new StartSequenceError('compile', store.error ?? 'The script failed to compile.');
       }
@@ -957,7 +973,7 @@ function buildStartSequenceGate(input: StartSessionInput): {
       ) {
         throw new StartSequenceError(
           'compile',
-          'The script changed after the session was prepared. Start again from Preflight.',
+          'The script changed after this take was prepared. Stop and press Present again.',
         );
       }
     },

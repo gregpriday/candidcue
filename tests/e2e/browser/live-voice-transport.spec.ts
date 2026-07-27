@@ -51,14 +51,10 @@ test('a voice take whose realtime transport cannot be established says so instea
     .first()
     .click();
 
-  // Preflight is happy: the key is present and valid, the mic enumerates, the
-  // stage is there. Nothing here can know the transport will fail.
-  const start = page.getByRole('button', { name: 'Start session' });
-  await expect(start).toBeEnabled({ timeout: 20_000 });
-  await start.click();
-
+  // Nothing before the take can know the transport will fail, and nothing
+  // tries to: the stage opens, and the failure is reported from the take.
   const statusBar = page.locator('header.statusbar');
-  await expect(statusBar).toBeVisible();
+  await expect(statusBar).toBeVisible({ timeout: 20_000 });
   await expect(statusBar.getByText('Voice', { exact: true })).toBeVisible();
 
   // The three things the operator must be told, in the three places §15.1 puts
@@ -144,10 +140,9 @@ test('a dead realtime transport still leaves the operator a working manual trans
     .getByRole('button', { name: 'Present', exact: true })
     .first()
     .click();
-  const start = page.getByRole('button', { name: 'Start session' });
-  await expect(start).toBeEnabled({ timeout: 20_000 });
-  await start.click();
-  await expect(page.locator('header.statusbar').getByText('Disconnected', { exact: true })).toBeVisible();
+  await expect(
+    page.locator('header.statusbar').getByText('Disconnected', { exact: true }),
+  ).toBeVisible({ timeout: 20_000 });
 
   // The danger toasts really are up — and stay up — while the transport is used.
   const danger = page.locator('.toast.danger');
@@ -202,11 +197,8 @@ test('a voice take still reports its realtime connection and its microphone', as
     .getByRole('button', { name: 'Present', exact: true })
     .first()
     .click();
-  const start = page.getByRole('button', { name: 'Start session' });
-  await expect(start).toBeEnabled({ timeout: 20_000 });
-  await start.click();
-
   const statusBar = page.locator('header.statusbar');
+  await expect(statusBar).toBeVisible({ timeout: 20_000 });
   // The realtime pills are PRESENT in a voice take — reporting the truth, which
   // here is a failure. "No microphone" is the manual-mode wording and must not
   // leak into a take that really does have one.

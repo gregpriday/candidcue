@@ -16,6 +16,7 @@
   import Slider from '../components/Slider.svelte';
   import { formatClock } from '../lib/format';
   import { onShortcut } from '../lib/shortcuts';
+  import { startTake } from '../lib/start-take';
   import { describeError } from '../services/errors';
   import * as stageService from '../services/stage';
   import { getVoiceFacade } from '../services/voice-facade';
@@ -340,9 +341,14 @@
     }),
   );
 
+  /**
+   * Go again. The finished session is cleared first so its stage, transport and
+   * clock are gone before a new one opens — `startTake` builds a fresh take
+   * from the same saved settings, so "again" really is again.
+   */
   async function presentAgain(): Promise<void> {
     clearSession();
-    await navigate({ name: 'preflight', scriptId });
+    await startTake(scriptId);
   }
 
   async function returnToEditor(): Promise<void> {

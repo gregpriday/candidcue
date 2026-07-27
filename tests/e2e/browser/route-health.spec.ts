@@ -29,6 +29,7 @@ const SETTINGS_SECTIONS = [
   'General',
   'Speech',
   'Audio',
+  'Stage display',
   'Teleprompter',
   'Following',
   'Listeners',
@@ -75,17 +76,17 @@ test('every control-window route renders and raises nothing', async ({ page }, t
     await expectNotBlank(page);
   }
 
-  // Preflight, all the way to a passing readiness state.
+  // Live, reached the only way it can be reached: one press of Present.
   await page.getByRole('button', { name: 'All scripts', exact: true }).click();
   await page
     .getByRole('list', { name: 'Scripts' })
     .getByRole('button', { name: 'Present', exact: true })
     .first()
     .click();
-  await expect(page.getByRole('button', { name: 'Start session' })).toBeEnabled({ timeout: 20_000 });
+  await expect(page.locator('footer.transport')).toBeVisible({ timeout: 20_000 });
   await expectNotBlank(page);
 
-  await page.screenshot({ path: testInfo.outputPath('route-sweep-preflight.png'), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('route-sweep-live.png'), fullPage: true });
 
   errors.expectClean();
 });

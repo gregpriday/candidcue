@@ -17,6 +17,7 @@
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import StatusPill from '../components/StatusPill.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
+  import { startTake, takeStarting } from '../lib/start-take';
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
   import * as inserts from '../lib/markdown-insert';
   import { onShortcut } from '../lib/shortcuts';
@@ -118,9 +119,14 @@
     await navigate({ name: 'library', view: 'all' });
   }
 
+  /**
+   * Present opens the stage. There is no screen in between — everything the
+   * old Preflight page asked for is in Settings, and the take reports its own
+   * microphone, display and connection from the stage (lib/start-take.ts).
+   */
   async function present(): Promise<void> {
     await saveNow();
-    await navigate({ name: 'preflight', scriptId });
+    await startTake(scriptId);
   }
 
   function withView(fn: (view: NonNullable<ReturnType<MarkdownEditor['getView']>>) => void): void {
@@ -333,7 +339,9 @@
         onclick={() => (panelOpen = !panelOpen)}
       />
       <OverflowMenu items={overflowItems} label="Script actions" />
-      <Button variant="primary" onclick={() => present()}>Present</Button>
+      <Button variant="primary" disabled={$takeStarting} onclick={() => present()}>
+        {$takeStarting ? 'Opening stage…' : 'Present'}
+      </Button>
     {/snippet}
   </PageHeader>
 

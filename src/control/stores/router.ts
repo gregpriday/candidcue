@@ -9,6 +9,7 @@ export type SettingsSection =
   | 'general'
   | 'inworld'
   | 'audio'
+  | 'stage'
   | 'teleprompter'
   /** Companion §47 follow settings. */
   | 'following'
@@ -17,11 +18,14 @@ export type SettingsSection =
 
 export type LibraryView = 'all' | 'recent' | 'trash';
 
+/**
+ * There is no route between Editor and Live. Present opens the stage directly
+ * (`lib/start-take.ts`); what the old Preflight page configured is in Settings.
+ */
 export type Route =
   | { name: 'welcome' }
   | { name: 'library'; view: LibraryView }
   | { name: 'editor'; scriptId: string }
-  | { name: 'preflight'; scriptId: string }
   | { name: 'live'; sessionId: string; scriptId: string }
   | { name: 'settings'; section: SettingsSection };
 

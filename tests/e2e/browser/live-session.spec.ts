@@ -6,11 +6,11 @@ import { dismissAllToasts } from './fixtures/toasts';
 /**
  * The LIVE SESSION journey, SHIM-BACKED (production IPC path).
  *
- * This journey was previously unreachable: Preflight gates Start on a finished
- * compile, and the compile worker threw `ReferenceError: document is not
- * defined` under the Vite dev server (fixed in e630311). With the compile
- * completing, Start now runs the real §29.2 sequence and the Live screen is
- * drivable end to end.
+ * Present runs the real §29.2 sequence — compile, session record, stage
+ * window, envelope, handshake, present — and lands on the Live screen, which is
+ * drivable end to end from there. There is no readiness page in between: what
+ * used to be Preflight's checks are settings, and what used to be its gate is
+ * reported from the running take instead (lib/start-take.ts).
  *
  * ----------------------------------------------------------------------------
  * WHAT A BROWSER CAN AND CANNOT PROVE HERE — read this before adding to it.
@@ -48,7 +48,7 @@ const SCRIPT = {
 
 const READY_KEY = { present: true, hint: 'sk-…live', source: 'keychain' };
 
-/** Library → Preflight → a started take, left on the Live screen. */
+/** Library → Present → a started take, left on the Live screen. */
 async function startManualTake(page: Page): Promise<void> {
   await page.goto('/control.html');
   await page
@@ -57,14 +57,16 @@ async function startManualTake(page: Page): Promise<void> {
     .first()
     .click();
 
-  // Preflight has to actually pass its checks before Start is offered — the
-  // compile is one of them, so an enabled Start proves the worker returned.
-  const start = page.getByRole('button', { name: 'Start session' });
-  await expect(start).toBeEnabled({ timeout: 20_000 });
-  await start.click();
-
-  // The Live screen is up when its always-visible transport is (spec §15.1).
-  await expect(page.locator('footer.transport')).toBeVisible();
+  /*
+   * One press. There is no screen between the library and the stage any more,
+   * so the compile, the session record, the stage window and the handshake all
+   * happen behind this click — and the Live screen appearing at all is proof
+   * that every one of them returned. The timeout covers the compile worker,
+   * which is the slow step and the one that used to be broken.
+   *
+   * The Live screen is up when its always-visible transport is (spec §15.1).
+   */
+  await expect(page.locator('footer.transport')).toBeVisible({ timeout: 20_000 });
 }
 
 test.beforeEach(async ({ page }) => {
@@ -88,7 +90,14 @@ test('Start runs the real §29.2 sequence and the Live screen comes up on the pr
   const statusBar = page.locator('header.statusbar');
   await expect(statusBar.getByText('Quarterly walkthrough')).toBeVisible();
   await expect(statusBar.getByText('Manual', { exact: true })).toBeVisible();
-  await expect(statusBar.getByText('Ready to start')).toBeVisible();
+  /*
+   * Prompting, not "Ready to start". Present IS the start: a take used to open
+   * with the engine paused, so the microphone recorded, the provider
+   * transcribed and every word was dropped on the floor until somebody found
+   * the differently-named Start button in the transport. The explicit control
+   * survives as Pause, which is the one a presenter actually reaches for.
+   */
+  await expect(statusBar.getByText('Prompting')).toBeVisible();
 
   // The script really is on this screen — outline from the compiled document.
   const outline = page.getByRole('complementary', { name: 'Sections' });
@@ -109,7 +118,9 @@ test('Start runs the real §29.2 sequence and the Live screen comes up on the pr
         ['start_session', 'open_stage', 'publish_stage_document', 'set_stage_fullscreen'].includes(c),
       ),
   );
-  // `open_stage` also appears once earlier: Preflight's hidden stage probe.
+  // Sliced from the end because a display test in Settings can have opened a
+  // throwaway stage earlier in a longer journey; the sequence that matters is
+  // the take's own, and it is the last four.
   expect(order.slice(-4)).toEqual([
     'start_session',
     'open_stage',
@@ -170,8 +181,9 @@ test('a manual take claims no connection, no microphone and no wake word', async
   await expect(tracking.getByText('Transcription is still connected')).toHaveCount(0);
   await expect(tracking.getByText('Manual take — nothing is listening.', { exact: false })).toBeVisible();
 
-  // And after a pause, where the wake-word copy used to reappear in both places.
-  await page.locator('footer.transport').getByRole('button', { name: 'Start', exact: true }).click();
+  // And after a pause, where the wake-word copy used to reappear in both
+  // places. The take is already prompting — Present is the start — so Pause is
+  // the control that is offered.
   await page.locator('footer.transport').getByRole('button', { name: 'Pause', exact: true }).click();
   await expect(statusBar.getByText('Paused — the script stays where it is')).toBeVisible();
   await expect(statusBar.getByText('still listening for')).toHaveCount(0);
@@ -198,14 +210,18 @@ test('the transport and the outline move the reading position and tell the stage
   const statusBar = page.locator('header.statusbar');
   const currentSentence = page.locator('.preview-sentence.current');
 
-  // Before Start the take is idle and there is no cursor to show.
-  await expect(transport.getByRole('button', { name: 'Start', exact: true })).toBeVisible();
-
-  await transport.getByRole('button', { name: 'Start', exact: true }).click();
-
-  // Prompting: the transport swaps to Pause and the status line says so.
+  /*
+   * The take is already prompting: Present is the start, so the transport opens
+   * on Pause and there is a cursor on the first sentence without anyone pressing
+   * anything. A take that opened idle is what put the microphone, the provider
+   * and the ledger to work on words the aligner then dropped.
+   */
   await expect(transport.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
-  await expect(statusBar.getByText('Following')).toBeVisible();
+  await expect(transport.getByRole('button', { name: 'Start', exact: true })).toHaveCount(0);
+  // 'Prompting', not 'Following': a manual take has no aligner to follow
+  // anything with, and saying otherwise is the confident-state-you-do-not-have
+  // failure the pair of tests above and below exists to catch.
+  await expect(statusBar.getByText('Prompting')).toBeVisible();
   await expect(currentSentence).toHaveText('thank you for joining me today');
 
   // A manual step really moves the reading position...
@@ -255,7 +271,6 @@ test('a stage window that disappears mid-take stands the stage controls down (§
 }, testInfo) => {
   const errors = watchPageErrors(page);
   await startManualTake(page);
-  await page.locator('footer.transport').getByRole('button', { name: 'Start', exact: true }).click();
 
   const blank = page.getByRole('button', { name: 'Blank stage' });
   await expect(blank).toBeEnabled();
@@ -329,7 +344,6 @@ test('stopping the take closes the session record and shows the F.17 summary', a
   const errors = watchPageErrors(page);
   await startManualTake(page);
   const transport = page.locator('footer.transport');
-  await transport.getByRole('button', { name: 'Start', exact: true }).click();
   await page
     .getByRole('complementary', { name: 'Sections' })
     .getByRole('button', { name: 'The numbers' })

@@ -96,11 +96,37 @@ type Overlay = Partial<{
   [K in keyof AppSettings]: Partial<AppSettings[K]>;
 }>;
 
+/**
+ * Read the local overlay, treating anything that is not a plain object of plain
+ * objects as absent.
+ *
+ * `JSON.parse` succeeds on `null`, on `[]` and on `"nonsense"`, and the old
+ * cast believed all three. A stored literal `null` then reached
+ * `overlay.general` in `fromRust` and threw on a property read — during
+ * `loadSettings`, which runs before the first route is chosen, so a single
+ * corrupt localStorage value took the whole window down at launch with no way
+ * to reach the screen that could clear it.
+ *
+ * Sections are checked but their FIELDS are not: a wrong-typed field is a
+ * narrower problem, and it is worth handling where the value is used rather
+ * than by inventing a schema for a store the app writes itself.
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 function loadOverlay(): Overlay {
   try {
     if (typeof localStorage === 'undefined') return {};
     const raw = localStorage.getItem(OVERLAY_KEY);
-    return raw ? (JSON.parse(raw) as Overlay) : {};
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPlainObject(parsed)) return {};
+    const overlay: Record<string, unknown> = {};
+    for (const [key, section] of Object.entries(parsed)) {
+      if (isPlainObject(section)) overlay[key] = section;
+    }
+    return overlay as Overlay;
   } catch {
     return {};
   }
@@ -181,6 +207,12 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       vadSensitivity: mapped.audio.vadSensitivity,
     },
     teleprompter: mergeSection(mapped.teleprompter, overlay.teleprompter),
+    // Both are UI-only sections with no Rust twin, so the overlay IS the
+    // document for them. A merge that is missing here does not fail loudly —
+    // the setting simply reverts on every read, which is how a control ends up
+    // looking live and being inert.
+    stage: mergeSection(mapped.stage, overlay.stage),
+    listenerFraming: mergeSection(mapped.listenerFraming, overlay.listenerFraming),
     // `saveTranscript` is Rust-owned (§36.2): a stale local overlay must never
     // be able to claim retention is on when the persisted document says off.
     privacy: {

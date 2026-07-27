@@ -115,41 +115,49 @@ describe('§28.4 audio settings adapter', () => {
  * One setting, two screens
  * ------------------------------------------------------------------------- */
 
-describe('§28.4 Settings and Preflight expose ONE value', () => {
+describe('\u00a728.4 one value, and the take runs on it', () => {
   const source = (path: string): string => readFileSync(resolve(process.cwd(), path), 'utf8');
   const settingsScreen = source('src/control/routes/Settings.svelte');
-  const preflightScreen = source('src/control/routes/Preflight.svelte');
+  const startTake = source('src/control/lib/start-take.ts');
 
-  it('both read the same store field and write the same patch', () => {
-    for (const [name, screen] of [
-      ['Settings', settingsScreen],
-      ['Preflight', preflightScreen],
-    ] as const) {
-      expect(screen, `${name} must read the shared value`).toContain(
-        '$settings.audio.vadSensitivity',
+  /*
+   * This used to assert that Settings and Preflight exposed ONE value, because
+   * there were two screens with a sensitivity slider on them and the risk was
+   * that they drifted into being two settings. Preflight is gone: the slider
+   * exists once. What is worth pinning now is the other half of that same
+   * invariant — that the value the meter is read at is the value the TAKE runs
+   * at. A meter tuned against settings the session then ignores is a diagnostic
+   * that lies, which is exactly what having two copies produced.
+   */
+  it('the screen reads and writes the store rather than a copy of it', () => {
+    expect(settingsScreen, 'Settings must read the shared value').toContain(
+      '$settings.audio.vadSensitivity',
+    );
+    expect(settingsScreen, 'Settings must write the shared value').toContain(
+      "patchSettings('audio', { vadSensitivity: value / 100 })",
+    );
+    // No local state: reading the store directly is what makes the meter
+    // reflect a change to the slider without a reload.
+    expect(settingsScreen.includes('let vadSensitivity'), 'must not shadow the store').toBe(false);
+  });
+
+  it('the level meter observes at the sensitivity and processing a take uses', () => {
+    expect(settingsScreen).toContain('vadSensitivity: $settings.audio.vadSensitivity');
+    for (const field of ['echoCancellation', 'noiseSuppression', 'autoGainControl']) {
+      expect(settingsScreen, `the meter must observe with ${field}`).toContain(
+        `${field}: $settings.audio.${field}`,
       );
-      expect(screen, `${name} must write the shared value`).toContain(
-        "patchSettings('audio', { vadSensitivity: value / 100 })",
+      expect(startTake, `the take must capture with ${field}`).toContain(
+        `${field}: s.audio.${field}`,
       );
     }
   });
 
-  it('neither screen keeps its own copy of the control or its wording', () => {
-    for (const [name, screen] of [
-      ['Settings', settingsScreen],
-      ['Preflight', preflightScreen],
-    ] as const) {
-      // The label and the description come from settings-audio.ts. Two screens
-      // describing one setting in two ways is how they drift into being two.
-      expect(screen, `${name} must use the shared copy`).toContain('VAD_SENSITIVITY_COPY.label');
-      expect(screen).toContain('VAD_SENSITIVITY_COPY.description');
-      expect(screen).toContain('VAD_SENSITIVITY_COPY.format');
-      // No local state: reading the store directly is what makes a change in
-      // one screen visible in the other without a refresh.
-      expect(screen.includes('let vadSensitivity'), `${name} must not shadow the store`).toBe(
-        false,
-      );
-    }
+  it('uses the shared copy rather than its own wording', () => {
+    // The label and the description come from settings-audio.ts.
+    expect(settingsScreen).toContain('VAD_SENSITIVITY_COPY.label');
+    expect(settingsScreen).toContain('VAD_SENSITIVITY_COPY.description');
+    expect(settingsScreen).toContain('VAD_SENSITIVITY_COPY.format');
   });
 
   /**

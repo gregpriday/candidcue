@@ -39,7 +39,7 @@ export interface ShimConfig {
   /** When true, list_displays rejects (degraded enumeration path). */
   failListDisplays?: boolean;
   /**
-   * Session mode Preflight opens on. Rust stores it as
+   * Session mode a take opens in. Rust stores it as
    * `stageBehavior.promptMode`; the settings service maps it to
    * `general.defaultSessionMode` (§14.2 G).
    */

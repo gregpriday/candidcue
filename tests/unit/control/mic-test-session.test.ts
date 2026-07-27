@@ -20,7 +20,7 @@ import {
   micTestStopNotice,
   shouldAdoptRememberedMicrophone,
   type MicTestSnapshot,
-} from '../../../src/control/routes/preflight-mic-test';
+} from '../../../src/control/services/mic-test-session';
 import type { TranscriptTestEvents } from '../../../src/control/services/voice-facade';
 
 interface Harness {
@@ -169,6 +169,36 @@ describe('the session closes itself when it is forgotten', () => {
     await h.session.start('mic-1');
     h.session.stop('user');
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('closes the moment the transcript comes back, because that is the answer', async () => {
+    /*
+     * The test exists to answer one question: is the microphone open and is
+     * Inworld returning text? A final transcript answers it. Staying connected
+     * after that is billing for a question that has been answered.
+     *
+     * This used to publish `success` and hold the transport for the full
+     * 30-second idle timeout — and `running` reads false for `success`, so the
+     * screen took away the Stop button and the "billing your key" warning at
+     * the exact moment the session became invisible. Half a minute of realtime
+     * billing, with the UI insisting the test was over.
+     */
+    const h = harness();
+    await h.session.start('mic-1');
+    h.events.onFinal('CandidCue is following my voice.');
+
+    expect(h.dispose, 'the billable session must be closed by the answer').toHaveBeenCalledOnce();
+    expect(vi.getTimerCount(), 'and it must leave no deadline behind').toBe(0);
+    // The user still sees what was heard, and why it stopped.
+    expect(h.last().state).toBe('success');
+    expect(h.last().final).toBe('CandidCue is following my voice.');
+    expect(h.last().stoppedReason).toBe('answered');
+  });
+
+  it('says nothing extra about a test that simply worked', () => {
+    // The self-closing deadlines are worth explaining because they surprise;
+    // "it worked and stopped" is not a notice, it is the expected ending.
+    expect(micTestStopNotice('answered')).toBeNull();
   });
 });
 
