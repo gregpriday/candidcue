@@ -123,14 +123,19 @@ guess (holding/ambiguous/searching) — don't re-derive that condition.
 
 ### The word underline / highlight
 
-The underline should mark **what the reader would say next** — nothing
-bolder. Concretely: underline the word at `floor(display_at(now))`, and keep
-the treatment subtle (an underline or soft tint, not a boxed highlight).
-During a pause the engine parks the display about one word past the last
-spoken word, so the underline naturally rests on the next thing to say
-without presuming further. Never underline ahead of `display_at`, and never
-animate the underline faster than the scroll — over-assuming here is the
-fastest way to make the presenter feel chased.
+**The stage does not mark a current word, by decision — don't add one back.**
+
+Underlining `floor(display_at(now))` was tried and removed: a mark on one
+token asserts a precision the engine does not have, and its ordinary
+sub-word wobble reads as twitching under the reader's eye. The stage instead
+dims everything *before* the position — a boundary, not a word, so a
+one-token error shades an extra word slightly grey rather than pointing
+confidently at the wrong one. Liveness comes from the scroll.
+
+What this asks of the engine is unchanged and if anything stricter: the
+position driving that boundary must never run ahead of what was actually
+heard. Any future word-level cue would have to carry `confidence` in its
+treatment rather than assert a single token.
 
 ### Jumps and suggestions
 

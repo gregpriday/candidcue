@@ -15,7 +15,10 @@
     showCues = true,
   }: {
     nodes: SafeRenderNode[];
-    /** Current token index; word tokens below it get the past treatment. */
+    /**
+     * The boundary between spoken and unspoken: word tokens below it get the
+     * past treatment. Nothing marks the token itself — see the note on `.past`.
+     */
     cursor?: number | null;
     assets?: Record<string, { url: string; mime: string; width?: number; height?: number }>;
     showCues?: boolean;
@@ -36,7 +39,6 @@
         <span
           class="w {markClasses(node.marks)}"
           class:past={cursor !== null && seg.tokenIndex < cursor}
-          class:current={cursor !== null && seg.tokenIndex === cursor}
           data-t={seg.tokenIndex}>{seg.text}</span>
       {:else}
         <span class="w {markClasses(node.marks)}">{seg.text}</span>
@@ -88,34 +90,28 @@
     transition-duration: var(--stage-fx-ms, 240ms);
     transition-timing-function: var(--ease-out, ease-out);
   }
+  /*
+   * The dimming is the ONLY per-word state, and deliberately so.
+   *
+   * There used to be an underline on the token at the cursor, justified as
+   * proof the take was alive. In use it read as a claim — "you are here, on
+   * this word" — that alignment cannot honestly make: the estimate is a
+   * position on a continuous axis, not a word, and every one of its ordinary
+   * wobbles became a mark twitching under the reader's eye. Being told you
+   * are somewhere you are not is worse than being told nothing.
+   *
+   * Dimming makes the weaker claim on purpose. It marks a boundary rather
+   * than a word, so an estimate that is a token or two off shades one extra
+   * word slightly grey instead of pointing confidently at the wrong one, and
+   * it degrades quietly as certainty drops. Liveness comes from the scroll,
+   * which is continuous and cannot lie about precision it does not have.
+   *
+   * If a current-word cue is ever wanted again, it needs to carry the
+   * engine's confidence in its treatment — not assert a single token.
+   */
   .w.past {
     opacity: var(--stage-past-opacity, 0.42);
   }
-  /*
-   * The word the prompter believes is being spoken right now.
-   *
-   * Past words already dim, but dimming answers "where have I been", not
-   * "is this thing following me" — a presenter reading a short script could
-   * not tell a working take from a dead one, because the only moving part was
-   * a fade they were not looking at.
-   *
-   * An underline rather than a highlight or a colour: it sits below the
-   * baseline, so it never alters the glyphs, never changes their spacing, and
-   * cannot reflow the line under the reader mid-sentence. Drawn with
-   * `text-decoration` for exactly that reason — a border or a background box
-   * would participate in layout.
-   */
-  .w.current {
-    text-decoration: underline;
-    text-decoration-color: var(--stage-cursor, currentColor);
-    text-decoration-thickness: 0.06em;
-    text-underline-offset: 0.18em;
-    /* The cursor moves word to word at speaking rate; a transition here would
-       smear it across the words in between rather than land on one. */
-    transition: none;
-  }
-  /* §16.4 reduced motion changes nothing here: this is a static mark, not an
-     animation, and it is the one cue that says the take is alive. */
   .m-strong {
     font-weight: 700;
   }
