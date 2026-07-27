@@ -12,7 +12,7 @@
   (lib/start-take.ts).
 -->
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import Button from '../components/Button.svelte';
   import Disclosure from '../components/Disclosure.svelte';
   import FollowSettingsFields from '../components/FollowSettingsFields.svelte';
@@ -27,7 +27,11 @@
   import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
   import { openExternal } from '../lib/app-actions';
-  import { chooseStageDisplay } from '../lib/start-take';
+  import { chooseStageDisplay, stageSettingsFromSettings } from '../lib/start-take';
+  import {
+    openStagePreview,
+    type StagePreviewHandle,
+  } from '../services/stage-preview-session';
   import {
     SUPPORT_BUNDLE_CONTENTS,
     SUPPORT_BUNDLE_EXCLUSIONS,
@@ -41,7 +45,7 @@
     recentErrorDiagnostics,
     type ErrorDiagnosticEntry,
   } from '../services/errors';
-  import { BackendUnavailableError } from '../services/ipc';
+  import { BackendUnavailableError, isTauriRuntime } from '../services/ipc';
   import {
     DOWNLOADS_SUPPORTED,
     DOWNLOADS_UNAVAILABLE_NOTE,
@@ -91,6 +95,7 @@
   } from '../services/settings-types';
   import {
     OPTICAL_HARDWARE,
+    STAGE_EVENT,
     type AudioDeviceInfo,
     type AudioLevelSnapshot,
     type FramingPreset,
@@ -98,6 +103,7 @@
     type OpticalOverrides,
     type OpticalProfile,
     type ReadingCueStyle,
+    type StageEscapePayload,
     type TextIntensity,
   } from '../../shared/contracts';
   import { discoverProfile } from '../../shared/optical-discovery';
@@ -230,8 +236,221 @@
       !displays.some((d) => d.fingerprint === chosenFingerprint),
   );
 
+  /* --------------------------------------------- the live teleprompter view */
+
+  /**
+   * The open preview window, or null.
+   *
+   * Held rather than derived: it owns an OS window and a stage session, and
+   * nothing about the settings document can be used to work out whether that
+   * window exists. Its lifetime is this screen's — see the teardown below.
+   */
+  let stagePreview = $state<StagePreviewHandle | null>(null);
+  let stagePreviewBusy = $state(false);
+  let stagePreviewError = $state<string | null>(null);
+
+  /**
+   * The appearance the preview should be showing, from the same function a take
+   * uses. Deriving it — rather than assembling one for the preview — is what
+   * makes the window trustworthy: there is no arrangement of settings that can
+   * look one way here and another way when the presenter hits Present.
+   */
+  const previewStageSettings = $derived(stageSettingsFromSettings($settings, effectiveDisplay));
+
+  /**
+   * Push every change straight to the glass.
+   *
+   * The point of the feature is dragging a slider and watching the band move,
+   * so this deliberately does not debounce. Ordering is guaranteed by the
+   * handle, which keeps one directive in flight and coalesces to the latest
+   * value behind it — no delay, and the last value the operator chose is the
+   * last one the stage is told about.
+   *
+   * `stagePreview` is TRACKED, not untracked. Untracking it opened a window
+   * where a setting changed during the open — the effect ran with no handle,
+   * and assigning the handle afterwards did not re-run it, so the window sat on
+   * the click-time appearance until something else moved. Tracking costs one
+   * redundant directive immediately after opening, which is a message the stage
+   * applies to the settings it already has.
+   */
   $effect(() => {
-    if (section === 'stage') void loadDisplays();
+    const settings = previewStageSettings;
+    const preview = stagePreview;
+    if (!preview) return;
+    void preview.applySettings(settings).catch(() => {
+      /*
+       * A dropped directive is not worth an error banner: the window is still
+       * showing the previous appearance and the next change sends another. A
+       * stage that has genuinely gone surfaces when "Stop preview" is pressed,
+       * which is where an error can be both accurate and actionable.
+       */
+    });
+  });
+
+  /**
+   * Open the preview, or close it if it is already up.
+   *
+   * One control for both directions, because there is only ever one preview and
+   * the operator's question is "is it on the glass or not".
+   */
+  async function toggleStagePreview(): Promise<void> {
+    if (stagePreviewBusy) return;
+    stagePreviewError = null;
+
+    const open = stagePreview;
+    if (open) {
+      stagePreviewBusy = true;
+      try {
+        /*
+         * Ownership is released only once the window is CONFIRMED gone.
+         *
+         * Clearing the handle first and then awaiting would lose the only
+         * reference that can close this window if the close fails — leaving a
+         * frameless always-on-top rectangle over the prompter with nothing left
+         * in the app able to address it. Keeping it means the button still says
+         * "Stop preview" and pressing it again is a real retry.
+         */
+        await open.close();
+        stagePreview = null;
+      } catch (err) {
+        stagePreviewError = `The preview window did not close. ${describeError(err)} Press Stop preview again to retry.`;
+      } finally {
+        stagePreviewBusy = false;
+      }
+      return;
+    }
+
+    const fingerprint = effectiveDisplay?.fingerprint;
+    if (fingerprint === undefined) {
+      stagePreviewError =
+        'No display is selected yet. Choose the teleprompter under Stage display first.';
+      return;
+    }
+
+    stagePreviewBusy = true;
+    // Claimed before the await: if this screen (or this section) goes away
+    // while the window is still opening, the teardown below bumps the token and
+    // the handle that eventually arrives is closed instead of stranded.
+    previewEpoch += 1;
+    const epoch = previewEpoch;
+    try {
+      const handle = await openStagePreview({
+        displayFingerprint: fingerprint,
+        settings: previewStageSettings,
+        fullscreen: $settings.stage.fullscreen,
+      });
+      if (epoch !== previewEpoch) {
+        void handle.close().catch(() => {});
+        return;
+      }
+      stagePreview = handle;
+    } catch (err) {
+      if (epoch === previewEpoch) {
+        stagePreview = null;
+        stagePreviewError = `CandidCue could not show the preview on that display. ${describeError(err)}`;
+      }
+    } finally {
+      stagePreviewBusy = false;
+    }
+  }
+
+  /**
+   * Which open attempt is current.
+   *
+   * Opening is several awaits long (compile, open, publish, handshake, present)
+   * and the screen can be left at any point in it. A handle that arrives after
+   * that belongs to nobody, so it is closed rather than assigned.
+   */
+  let previewEpoch = 0;
+
+  /** Release the preview and stop anything still opening from taking hold. */
+  function abandonStagePreview(): void {
+    previewEpoch += 1;
+    const open = stagePreview;
+    stagePreview = null;
+    /*
+     * The handle is dropped even if this close fails, because there is nobody
+     * left to hand it to — a destroyed component has no state and a section
+     * that has gone has no button. The service keeps the session id in its
+     * orphan set for exactly this case, and the next preview sweeps it.
+     */
+    void open?.close().catch(() => {});
+  }
+
+  /**
+   * "End session", pressed on the preview window itself.
+   *
+   * The stage's exit button emits the same double-Escape a presenter's second
+   * Escape does, and for a TAKE the live-session bridge is what answers it. A
+   * preview starts no bridge, so without this the button on a preview window is
+   * dead — a control that invites a click and does nothing, which is the exact
+   * defect it was added to remove, reappearing one window along.
+   *
+   * Generation-checked like every other stage payload: this must answer for
+   * THIS preview's window and never for a take running beside it.
+   */
+  $effect(() => {
+    const preview = stagePreview;
+    if (!preview || !isTauriRuntime()) return;
+    let stop: (() => void) | null = null;
+    let cancelled = false;
+    void (async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      const unlisten = await listen<StageEscapePayload>(STAGE_EVENT.escapeRequested, (event) => {
+        if (event.payload.stageGeneration !== preview.stageGeneration) return;
+        if (event.payload.presses < 2) return;
+        void toggleStagePreview();
+      });
+      if (cancelled) unlisten();
+      else stop = unlisten;
+    })().catch(() => {
+      // No listener means the stage's own button will not work; the Stop button
+      // on this screen still does, so the preview is never unclosable.
+    });
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  });
+
+  /*
+   * The preview never outlives the screen it is driven from.
+   *
+   * It is a frameless, always-on-top window covering a monitor, and it is not a
+   * take — so nothing else in the app has any reason to close it. TWO exits
+   * have to be covered, because they are different events: leaving Settings
+   * destroys this component, while moving to another SECTION does not. The
+   * second is the easier one to hit and the worse one to suffer: the Stop
+   * button goes away with the Teleprompter panel, leaving a black rectangle on
+   * the prompter and no visible control anywhere that owns it.
+   */
+  $effect(() => {
+    /*
+     * Unconditional, not gated on a handle already existing.
+     *
+     * Opening is several awaits long, and during it `stagePreview` is still
+     * null — so a guard on "is one open" does nothing about the one that is on
+     * its way. The epoch bump is precisely what covers that: leave the section
+     * mid-open and the handle that eventually arrives is closed rather than
+     * installed behind a panel whose Stop button is no longer on screen.
+     */
+    if (section !== 'teleprompter') abandonStagePreview();
+  });
+
+  $effect(() => {
+    return () => abandonStagePreview();
+  });
+
+  /*
+   * Teleprompter needs the display list too.
+   *
+   * This used to load only for Stage display, and the preview button is
+   * disabled while the list is empty — so opening Settings and going straight
+   * to Teleprompter presented a permanently dead button on a machine with the
+   * prompter plugged in, curable only by visiting an unrelated section first.
+   */
+  $effect(() => {
+    if (section === 'stage' || section === 'teleprompter') void loadDisplays();
   });
 
   async function loadDisplays(): Promise<void> {
@@ -1989,10 +2208,51 @@
         {/snippet}
       {:else if section === 'teleprompter'}
         <Section title="Teleprompter">
+          <!--
+            The controls below describe the glass, so they are set at the glass.
+            Sizes and positions on a prompter are angles from where the presenter
+            stands, and no number on a laptop at arm's length can be judged as
+            one. The reading band especially: it wants to sit over the lens, and
+            that is an alignment somebody performs by watching it move.
+          -->
+          <div class="preview-row">
+            <Button
+              variant={stagePreview ? 'default' : 'primary'}
+              disabled={stagePreviewBusy || displays.length === 0}
+              onclick={() => void toggleStagePreview()}
+            >
+              {stagePreview ? 'Stop preview' : 'Show on teleprompter'}
+            </Button>
+            <p class="hint-line preview-note">
+              {#if stagePreview}
+                Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
+                Everything below updates it as you drag.
+              {:else if displays.length === 0}
+                No displays detected — connect the teleprompter and open Stage display.
+              {:else}
+                Puts a sample script on <strong
+                  >{effectiveDisplay?.name ?? 'the stage display'}</strong
+                > so you can judge these settings where they apply.
+              {/if}
+            </p>
+          </div>
+          {#if stagePreviewError}
+            <p class="inline-alert" role="alert">{stagePreviewError}</p>
+          {/if}
+          <!--
+            The bundled face was unreachable.
+
+            `stageFontStack('high-legibility')` has resolved Atkinson Hyperlegible
+            Next since the woff2 files were bundled, `font-hash.test.ts` pins the
+            family name against the stack character for character — and this menu
+            never offered it. The one face in the app chosen for legibility
+            through glass, shipped, tested, and impossible to select.
+          -->
           <Select
             label="Default font family"
             value={$settings.teleprompter.fontFamilyId}
             options={[
+              { value: 'high-legibility', label: 'Atkinson Hyperlegible (bundled)' },
               { value: 'system-sans', label: 'System Sans' },
               { value: 'humanist-sans', label: 'Humanist Sans' },
               { value: 'serif', label: 'Serif' },
@@ -2000,6 +2260,12 @@
             ]}
             onchange={(value) => void patchSettings('teleprompter', { fontFamilyId: value })}
           />
+          <p class="hint-line">
+            Atkinson Hyperlegible travels with the app, so it renders the same on every machine
+            and needs no network. It disambiguates the characters a prompter gets wrong at
+            distance — capital I from lowercase l from 1, and 0 from O — which is the whole
+            reason to prefer it over whatever <em>System Sans</em> resolves to today.
+          </p>
           <!--
             What used to be "Stage background".
 
@@ -2069,6 +2335,20 @@
             onchange={(value) =>
               void patchSettings('teleprompter', { readingBandCenterPercent: value })}
           />
+          <!--
+            The one control on this screen that is aligning against a physical
+            object. Said here rather than in the shared note below, because the
+            others are judged (does that read easily?) and this one is measured
+            (is it over the lens?) — and because somebody who wants it exact
+            should be sent to the wizard that puts a crosshair on the glass
+            rather than left estimating a percentage.
+          -->
+          <p class="hint-line">
+            The marks at the sides of the stage are the band. With the preview running, drag this
+            until they sit over your camera lens — that is where your eyes rest, so it is where the
+            lens should be. <strong>Calibrate</strong> under Stage display does the same alignment with
+            a crosshair and remembers it per rig.
+          </p>
           <!--
             Said once, here, because it is the honest scope of the four sliders
             above and it is otherwise invisible: a calibrated rig OVERRULES all
@@ -2652,6 +2932,23 @@
     font-size: var(--text-meta);
     line-height: var(--lh-meta);
     color: var(--text-muted);
+  }
+
+  /*
+   * The preview control sits above the settings it previews, on one line with
+   * its own explanation, so the button reads as the mode switch it is rather
+   * than as another setting in the list.
+   */
+  .preview-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .preview-note {
+    flex: 1 1 24ch;
+    min-width: 24ch;
   }
 
   .packs {

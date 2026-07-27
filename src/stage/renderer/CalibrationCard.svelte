@@ -80,7 +80,9 @@
     fontSizePx = 64,
     columnCh = 34,
     fontWeight = 500,
-    fontFamilyId = 'system-sans',
+    // The bundled default, matching `DEFAULT_STAGE_APPEARANCE`: a type sample
+    // judged in one face and then prompted in another has measured nothing.
+    fontFamilyId = 'high-legibility',
     sampleText,
     labelSizePx = 20,
   }: Props = $props();

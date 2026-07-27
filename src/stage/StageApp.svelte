@@ -31,7 +31,7 @@
   outbound traffic is intents/acks that control is free to ignore.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import {
     ESCAPE_DOUBLE_PRESS_MS,
     STAGE_EVENT,
@@ -65,7 +65,11 @@
   } from './renderer/stageState';
   import { fallbackFontMetrics } from '../shared/optics';
   import { lineBudget, computeSafeRect, computeReadingBand } from './renderer/geometry';
-  import { stageFollowProfile } from './motion';
+  import {
+    stageFollowProfile,
+    type AlignmentReceiverStats,
+    type SnapshotRejectReason,
+  } from './motion';
   import ScriptLayer, { type StageLayoutMeasurement } from './renderer/ScriptLayer.svelte';
   import AckChip from './renderer/AckChip.svelte';
   import HoldStatus from './renderer/HoldStatus.svelte';
@@ -80,9 +84,16 @@
   } from './renderer/hold-status';
   import { startPreviewDriver, type PreviewDriver } from './preview';
 
-  const preview =
-    typeof window !== 'undefined' &&
-    new URLSearchParams(window.location.search).get('preview') === '1';
+  const previewParams =
+    typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const preview = previewParams?.get('preview') === '1';
+  /**
+   * `?calibrated=0` drives the preview through the UNCALIBRATED layout.
+   *
+   * Opt-out rather than opt-in so the default preview keeps showing what the
+   * optical model resolves, which is what the harness was built to make visible.
+   */
+  const previewCalibrated = previewParams?.get('calibrated') !== '0';
 
   let app = $state.raw(initialStageState());
   /**
@@ -189,6 +200,84 @@
    */
   const diagnosticMode = $derived((settings?.stageMode ?? 'clean') === 'diagnostic');
   const showDiagnostics = $derived(diagnosticMode || app.diagnostics);
+
+  /* ---- the alignment feed, as this window actually experienced it (§64) ---- */
+
+  /**
+   * Snapshots this window was HANDED, whatever became of them afterwards.
+   *
+   * Counted at the subscription rather than taken from the receiver, because
+   * the receiver only exists once the ScriptLayer is mounted. A take where this
+   * stays at zero and one where it climbs while `alignmentFeed.rejected` climbs
+   * with it are two different faults with one symptom.
+   */
+  let alignmentArrived = $state(0);
+  /**
+   * The take these counters describe.
+   *
+   * A `$derived` rather than a read inside the effect, and that is load-bearing:
+   * `app` is `$state.raw` and is REASSIGNED on every dispatch — including the
+   * one this readout is counting, once a second. An effect that read
+   * `app.envelope?.…` directly would therefore re-run on every snapshot and zero
+   * the counters it exists to accumulate, leaving the readout permanently
+   * showing "1 ok / 0 dropped". A derived value only notifies when the number
+   * itself changes, which is the actual signal: a new take.
+   *
+   * Null when the envelope omits it, which a preview envelope does — see
+   * `StageSessionEnvelope.sessionGeneration`. That is a stable value too, so it
+   * does not schedule either.
+   */
+  const feedSessionGeneration = $derived(app.envelope?.sessionGeneration ?? null);
+
+  /**
+   * Both counters start again with each SESSION.
+   *
+   * The window can outlive one — Present again opens a new session into it —
+   * and `alignmentArrived` is counted here rather than by the receiver, so
+   * nothing else would ever clear it. The receiver zeroes its own counters on
+   * the same signal (`setSession`), which is what keeps the two halves of this
+   * readout describing the same stretch of time.
+   *
+   * A retake inside a session is deliberately NOT a reset: "restart paragraph"
+   * opens a new take pass without minting a generation, and the feed it would
+   * be describing did not restart either.
+   */
+  $effect(() => {
+    void feedSessionGeneration;
+    untrack(() => {
+      alignmentArrived = 0;
+      alignmentFeed = null;
+    });
+  });
+  /** The receiver's verdict on those snapshots, or null before one is mounted. */
+  let alignmentFeed = $state<{
+    accepted: number;
+    rejected: number;
+    reason: SnapshotRejectReason | null;
+    field: string | null;
+  } | null>(null);
+
+  /**
+   * The reason the most rejections were filed under, or null if there are none.
+   *
+   * The dominant reason rather than the last one: a single stale duplicate in a
+   * healthy take is noise, and a readout that showed the most recent rejection
+   * would report that noise as the take's story. What matters is which of the
+   * three is doing the throwing away.
+   */
+  function dominantRejectReason(stats: AlignmentReceiverStats): SnapshotRejectReason | null {
+    let worst: SnapshotRejectReason | null = null;
+    let count = 0;
+    for (const [reason, n] of Object.entries(stats.byReason) as Array<
+      [SnapshotRejectReason, number]
+    >) {
+      if (n > count) {
+        count = n;
+        worst = reason;
+      }
+    }
+    return worst;
+  }
 
   /**
    * The safe rectangle, as CSS insets for the presenter-facing overlay plane.
@@ -397,8 +486,60 @@
           STAGE_EVENT.alignmentSnapshot,
           (snapshot) => {
             lastInboundAt = performance.now();
-            scriptLayer?.pushAlignmentSnapshot(snapshot);
-            dispatch({ type: 'alignment', snapshot });
+            /*
+             * The push's answer is RECORDED, not discarded.
+             *
+             * A stage that is receiving snapshots and rejecting every one of
+             * them looks, on the glass, exactly like a stage that is receiving
+             * none: the document sits still. The two have nothing in common
+             * underneath — one is a delivery failure, the other a generation or
+             * contract mismatch — and the only place the difference exists is
+             * the receiver's own counters. Reading them here costs one property
+             * access a second and is the difference between diagnosing this from
+             * a take and guessing at it from a description.
+             *
+             * `arrived` counts what the window was handed, which is the other
+             * half: with no ScriptLayer mounted yet there is no receiver to
+             * reject anything, and "nothing arrived" and "nothing was mounted to
+             * receive it" are again the same picture and different faults.
+             */
+            alignmentArrived += 1;
+            const accepted = scriptLayer?.pushAlignmentSnapshot(snapshot) ?? false;
+            /*
+             * Copied, not aliased. `alignmentFeedStats()` hands back the
+             * receiver's own live object, so assigning it would store the same
+             * reference every time — the counters would climb inside a value
+             * `$state` has no reason to believe ever changed, and the readout
+             * would sit on its first reading for the whole take.
+             */
+            const stats = scriptLayer?.alignmentFeedStats();
+            alignmentFeed = stats
+              ? {
+                  accepted: stats.accepted,
+                  rejected: stats.rejected,
+                  reason: dominantRejectReason(stats),
+                  field: stats.lastMalformedField,
+                }
+              : null;
+            /*
+             * Only an ACCEPTED snapshot reaches the reducer.
+             *
+             * The comment above this subscription says the receiver "is the
+             * gate that validates and rejects them" — and it was, for the
+             * motion engine, and only for it. The reducer copy went in
+             * unconditionally, `app.alignment` is handed back to `ScriptLayer`
+             * as a prop, and the §62 fallback path turns that prop into a
+             * scroll target whenever the rendered line map is unresolved. So a
+             * snapshot the receiver had just refused — a stale sequence, or one
+             * belonging to a session this window is not running — could still
+             * move the document, by the one path that runs precisely when the
+             * stage is least sure of its own geometry.
+             *
+             * There is exactly one gate now, and this is downstream of it. A
+             * rejected snapshot leaves the readout showing the last position
+             * the stage actually believes in, which is also the honest answer.
+             */
+            if (accepted) dispatch({ type: 'alignment', snapshot });
           },
         ),
         /*
@@ -512,12 +653,15 @@
       }
     }, 1000);
 
-    if (preview) previewDriver = startPreviewDriver();
+    if (preview) previewDriver = startPreviewDriver({ calibrated: previewCalibrated });
 
     return () => {
       disposed = true;
       unsubs.forEach((u) => u());
       clearTimeout(fontTimeout);
+      clearTimeout(pointerTimer);
+      clearTimeout(exitTimer);
+      clearTimeout(escapeHintTimer);
       clearInterval(watchdog);
       previewDriver?.stop();
     };
@@ -716,12 +860,77 @@
   let pointerTimer = 0;
   const POINTER_HIDE_DELAY_MS = 1500;
 
+  /**
+   * How long the exit affordance stays up after the pointer last moved.
+   *
+   * Longer than the cursor's own hide delay, deliberately. 1.5 s is right for
+   * getting a cursor out of the presenter's way and far too short for finding a
+   * target and travelling to it — a button that disappears while somebody is
+   * reaching for it is worse than no button, because they now know it exists
+   * and cannot use it.
+   */
+  const EXIT_HINT_VISIBLE_MS = 4000;
+  let exitTimer = 0;
+  /**
+   * §16.9's missing half: a way out that is not a keystroke.
+   *
+   * Escape ends a take from whichever window holds the keyboard, and the stage
+   * is frameless, monitor-sized and always-on-top (§52.7). Put those together
+   * and there is a reachable state with no exit: the stage is covering a screen,
+   * the operator is working in some other application, and Escape goes to that
+   * application. The stage has to be clicked before it can be dismissed, and
+   * nothing on it says so — a full-screen window with no visible way out reads
+   * as a hang.
+   *
+   * So: move the mouse over the stage and the way out appears. It cannot
+   * intrude on a take, because a take is exactly when nobody is touching the
+   * mouse.
+   */
+  let exitHintVisible = $state(false);
+  /**
+   * Held open while the button has the keyboard.
+   *
+   * Unmounting a focused element drops focus to the body, so somebody who
+   * tabbed to the way out would find it gone and their place in the tab order
+   * with it — on a window whose entire problem is being hard to leave. The
+   * timeout may take it away when nobody is holding it, and not before.
+   */
+  let exitHintFocused = $state(false);
+  const exitVisible = $derived(exitHintVisible || exitHintFocused);
+
   function onPointerMove() {
     pointerHidden = false;
     clearTimeout(pointerTimer);
     pointerTimer = window.setTimeout(() => {
       pointerHidden = true;
     }, POINTER_HIDE_DELAY_MS);
+
+    exitHintVisible = true;
+    clearTimeout(exitTimer);
+    exitTimer = window.setTimeout(() => {
+      exitHintVisible = false;
+    }, EXIT_HINT_VISIBLE_MS);
+  }
+
+  /**
+   * Leave, from the stage, in one click.
+   *
+   * The same message a second Escape sends, not a new path: ending a take is
+   * control's decision to make and it already owns the whole teardown — the
+   * transport, the microphone, the take record, the window. A stage that closed
+   * its own window would leave every one of those running behind a screen that
+   * had gone black.
+   */
+  function requestExit(event: MouseEvent) {
+    // The root's own handler reports focus on every click; this one is not a
+    // request to focus the stage, it is a request to be rid of it.
+    event.stopPropagation();
+    escapeHintVisible = false;
+    clearTimeout(escapeHintTimer);
+    exitHintVisible = false;
+    exitHintFocused = false;
+    clearTimeout(exitTimer);
+    sendEscape(2);
   }
 
   function onClick() {
@@ -1061,6 +1270,32 @@
         {/if}
 
         <!--
+          The way out, for whoever has the mouse.
+
+          Inside the talent plane with everything else that can be read, and the
+          mirror costs it nothing: the glyph is `×`, which is symmetric, so the
+          only thing a flip touches is the word beside it. A CSS transform
+          carries hit-testing with it, so the button is clickable exactly where
+          it appears on whichever surface is being looked at.
+
+          Not shown during a blank. A blank is a deliberate "show nothing", and
+          the answer to a blank is Escape — which the hint above is already there
+          to explain.
+        -->
+        {#if exitVisible && !app.blanked}
+          <button
+            type="button"
+            class="stage-exit"
+            onclick={requestExit}
+            onfocus={() => (exitHintFocused = true)}
+            onblur={() => (exitHintFocused = false)}
+          >
+            <span class="stage-exit-glyph" aria-hidden="true">×</span>
+            End session
+          </button>
+        {/if}
+
+        <!--
           The voice pill.
 
           Mirrored, for the reason above: it is a mark and a word aimed at the
@@ -1112,7 +1347,7 @@
             fontSizePx={app.calibration.sampleFontSizePx}
             columnCh={app.calibration.sampleColumnCh}
             fontWeight={settings?.optics?.fontWeight ?? settings?.fontWeight ?? 500}
-            fontFamilyId={settings?.fontFamilyId ?? 'system-sans'}
+            fontFamilyId={settings?.fontFamilyId ?? 'high-legibility'}
             labelSizePx={settings?.optics?.secondaryMinPx ?? 20}
           />
           {#if app.calibration.mode === 'type-sample' && app.calibration.sampleLabel.length > 0}
@@ -1147,6 +1382,42 @@
         <div>
           token: {app.alignment ? app.alignment.confirmedToken.toFixed(1) : '—'}
           ({app.alignment?.state ?? 'n/a'})
+        </div>
+        <!--
+          The alignment feed, which is the first question to ask of a stage that
+          is not following and the one the instruments could not previously
+          answer. Three distinguishable readings:
+
+            feed: 0 arrived            — nothing is reaching this window
+            feed: 12 arrived, no layer — arriving before there was a receiver
+            feed: 12 ok / 9 dropped …  — arriving and being thrown away, with why
+
+          The third is the one worth the line: `session_generation` means the
+          take and the envelope disagree about which session this is, `malformed`
+          names the offending field, and `stale` means seq is not advancing.
+        -->
+        <div class:diag-fault={alignmentArrived > 0 && (alignmentFeed?.accepted ?? 0) === 0}>
+          feed:
+          {#if alignmentArrived === 0}
+            0 arrived
+          {:else if alignmentFeed === null}
+            <!--
+              Phrased as history, not as a current state. This branch only means
+              no snapshot has yet been sampled from a mounted ScriptLayer — the
+              layer is gated on the fonts settling, so early snapshots can land
+              before there is a receiver. Saying "no layer" would claim the
+              layer is absent NOW, which this cannot know and which stops being
+              true the moment the next snapshot arrives.
+            -->
+            {alignmentArrived} arrived, none reached the script layer
+          {:else}
+            {alignmentFeed.accepted} ok / {alignmentFeed.rejected} dropped
+            {#if alignmentFeed.rejected > 0 && alignmentFeed.reason !== null}
+              ({alignmentFeed.reason}{alignmentFeed.reason === 'malformed' && alignmentFeed.field
+                ? `: ${alignmentFeed.field}`
+                : ''})
+            {/if}
+          {/if}
         </div>
         <div>viewport: {vw}×{vh}</div>
         {#if budget}
@@ -1325,6 +1596,66 @@
   }
 
   /*
+   * The exit affordance.
+   *
+   * Bottom-right of the SAFE rectangle, which is the one corner nothing else
+   * claims: the hold chip and the acknowledgement sit high, the voice pill sits
+   * low-left, and the reading band runs across the middle. It is the only
+   * element on the stage that takes pointer events — everything else here is
+   * `pointer-events: none` so a stray click lands on the root and reports focus
+   * rather than being swallowed by decoration.
+   *
+   * Deliberately quiet until it is under the cursor. It is on the presenter's
+   * glass, so it may not read as a lit control sitting in the corner of a take;
+   * it only has to be findable by somebody who has already gone looking with a
+   * mouse.
+   */
+  .stage-exit {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45em;
+    padding: 0.5em 1em;
+    border: 1px solid color-mix(in srgb, var(--stage-text) 30%, transparent);
+    border-radius: 999px;
+    background: var(--stage-overlay);
+    color: var(--stage-text);
+    font: inherit;
+    font-size: clamp(14px, 1.4vw, 20px);
+    font-weight: 550;
+    white-space: nowrap;
+    cursor: pointer;
+    /*
+     * The one element on this plane that must take a click.
+     *
+     * `.stage-safe-plane` is `pointer-events: none` so a stray click anywhere
+     * over the overlays lands on the root and reports focus rather than being
+     * swallowed by a chip. That is right for every other child and fatal for
+     * this one: without re-enabling it here the button paints, invites the
+     * click, and does nothing — the exact dead control this affordance exists
+     * to replace.
+     */
+    pointer-events: auto;
+    opacity: 0.55;
+    transition:
+      opacity 120ms ease-out,
+      border-color 120ms ease-out;
+  }
+
+  .stage-exit:hover,
+  .stage-exit:focus-visible {
+    opacity: 1;
+    border-color: color-mix(in srgb, var(--stage-text) 55%, transparent);
+  }
+
+  .stage-exit-glyph {
+    font-size: 1.15em;
+    line-height: 1;
+  }
+
+  /*
    * The name of the type sample being judged.
    *
    * Sized at the secondary floor like every other presenter-readable label, and
@@ -1390,6 +1721,16 @@
     max-width: 34ch;
     white-space: normal;
     opacity: 0.8;
+  }
+
+  /*
+   * The one diagnostic line that is allowed to shout. Snapshots arriving and
+   * none of them being accepted is not a degraded reading, it is the take not
+   * working — and the readout is scanned in a dark room at a glance.
+   */
+  .diag-fault {
+    color: #ffb4a2;
+    font-weight: 600;
   }
 
   .diagnostics {

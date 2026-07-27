@@ -561,7 +561,33 @@ export interface UpdateCheckResult {
  * a size derived from a measured distance.
  */
 export const DEFAULT_STAGE_APPEARANCE = {
-  fontFamilyId: 'system-sans',
+  /*
+   * The bundled face, not the system one.
+   *
+   * `system-sans` was the default for as long as the high-legibility stack was
+   * unreachable from the Settings menu, which made it a default by omission
+   * rather than by choice. Atkinson Hyperlegible Next ships in the bundle
+   * (`src/styles/fonts.css`), renders identically on every machine, needs no
+   * network, and disambiguates exactly the characters a prompter loses at
+   * distance — I/l/1 and 0/O. On a beamsplitter that is the whole job.
+   *
+   * WHO THIS ACTUALLY MOVES — and it is more than new profiles.
+   *
+   * A stored `fontFamilyId` wins: `loadSettings` merges the overlay OVER these
+   * defaults, so anyone who has ever chosen a family keeps it. But the overlay
+   * only holds fields that were written, so an existing installation that never
+   * touched the teleprompter font has nothing stored and DOES move to the
+   * bundled face on upgrade. That is deliberate rather than overlooked: the
+   * high-legibility stack was unreachable from the picker until now, so nobody
+   * on `system-sans` chose it — they were handed it. The change gives them the
+   * face the product ships for the job, and the picker (where it now appears
+   * first) takes it back in one click.
+   *
+   * `DEFAULT_STAGE_APPEARANCE` is also the fallback for any caller that omits
+   * `fontFamilyId` — previews, tests, `buildStageSettings` with no overrides —
+   * so this is the single answer to "what face, when nobody said".
+   */
+  fontFamilyId: 'high-legibility',
   fontSizePx: 64,
   lineHeight: 1.32,
   columnWidthPercent: 78,

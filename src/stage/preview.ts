@@ -64,6 +64,64 @@ export function previewListenerSelection(): ListenerStageSelection {
 }
 
 /**
+ * The appearance an UNCALIBRATED take runs with, as the preview's settings.
+ *
+ * Every number here is the literal `buildStageSettings` produces when it is
+ * handed no optical override — `DEFAULT_STAGE_APPEARANCE` plus the
+ * `UNCALIBRATED_*` constants in `control/services/stage-envelope.ts`. They are
+ * restated rather than imported because control is a different layer, and
+ * `preview-uncalibrated.test.ts` pins the two against each other so the copy
+ * cannot drift out from under the harness silently.
+ *
+ * WHY THIS EXISTS AT ALL
+ * ----------------------
+ * Until it did, `?preview=1` only ever drove the CALIBRATED path: the harness
+ * discovers a rig, resolves it, and hands the stage a full `optics` block. That
+ * is the configuration almost nobody is in. A rig is calibrated by standing at
+ * the glass with a ruler, and until somebody does that every take in the app
+ * runs on the branch below — the branch that had no end-to-end coverage of
+ * whether the document actually follows.
+ *
+ * `stage-preview.spec.ts` asserts the spoken word ARRIVES at the reading band,
+ * which is the one assertion that can tell following from highlighting. Running
+ * it against only one of the two layout paths meant half the product was
+ * covered by a test that looked like it covered all of it.
+ */
+export function uncalibratedPreviewSettings(): StageSettings {
+  const fontSizePx = 64;
+  const lineHeight = 1.32;
+  return {
+    schemaVersion: 1,
+    themeId: 'stage-dark',
+    background: '#000000',
+    foreground: '#f5f3ef',
+    fontFamilyId: 'high-legibility',
+    fontSizePx,
+    lineHeight,
+    letterSpacingEm: 0,
+    fontWeight: 500,
+    columnWidthPercent: 78,
+    readingBandCenterPercent: 38,
+    // `bandHalfHeightPercentFor(64, 1.32, null, null)`: half of
+    // 64 × 1.32 × DEFAULT_DEAD_ZONE_LINES, against the 1080 reference panel.
+    readingBandHalfHeightPercent: 3.29,
+    pastOpacity: 0.42,
+    futureOpacity: 0.92,
+    currentUnderlayOpacity: 0.1,
+    mirrorX: false,
+    mirrorY: false,
+    showCues: true,
+    stageAcknowledgements: true,
+    reducedMotion: false,
+    paragraphSpacingEm: 0.7,
+    stageMode: 'clean',
+    readingCue: 'ticks',
+    textIntensity: 'standard',
+    // No `optics`, no `opticalProfile` — that absence IS the path under test.
+  };
+}
+
+/**
  * Preview settings, resolved through the real optical model.
  *
  * This used to hold a hand-tuned pair of tables selected by a viewport
@@ -94,7 +152,7 @@ function previewSettings(viewport: { widthPx: number; heightPx: number }): Stage
     themeId: 'stage-dark',
     background: '#000000',
     foreground: '#f5f3ef',
-    fontFamilyId: 'system-sans',
+    fontFamilyId: 'high-legibility',
     fontSizePx: optics.bodyFontSizePx,
     lineHeight: optics.lineHeight,
     letterSpacingEm: optics.letterSpacingEm,
@@ -283,12 +341,25 @@ function nextCalibrationMode(current: StageCalibrationMode | null): StageCalibra
 
 const STAGE_GEN = 1;
 
-export function startPreviewDriver(): PreviewDriver {
+export interface PreviewOptions {
+  /**
+   * Drive the calibrated path (the default) or the uncalibrated one.
+   *
+   * `?preview=1&calibrated=0` selects the layout every take runs on until
+   * somebody measures their rig — see `uncalibratedPreviewSettings`.
+   */
+  calibrated?: boolean;
+}
+
+export function startPreviewDriver(options: PreviewOptions = {}): PreviewDriver {
   const built = buildDocument();
-  let settings = previewSettings({
-    widthPx: window.innerWidth,
-    heightPx: window.innerHeight,
-  });
+  let settings =
+    options.calibrated === false
+      ? uncalibratedPreviewSettings()
+      : previewSettings({
+          widthPx: window.innerWidth,
+          heightPx: window.innerHeight,
+        });
   let listenerOn = false;
   let blanked = false;
   let frozen = false;

@@ -124,6 +124,51 @@ describe('the stage audio clock', () => {
     // forward would place every prediction half a minute into the future.
     expect(receiver.audioNowMs(50_000)).toBeNull();
   });
+
+  /**
+   * The counters describe THIS take's feed, and the stage reads them to answer
+   * "is the display not moving because nothing is arriving, or because
+   * everything is being thrown away?".
+   *
+   * One window can serve two takes — present again, a retake — and the engine
+   * that owns this receiver survives the change. Carried forward, the counts
+   * stop answering that question: a take that rejected everything early keeps
+   * supplying the dominant reason for a later healthy take, and, worse in the
+   * other direction, one acceptance from the earlier take makes the next take's
+   * entirely-rejected feed read as partly healthy.
+   */
+  it('starts its counters again with each take, so one take cannot explain another', () => {
+    const receiver = createAlignmentReceiver(1);
+    expect(receiver.accept(snapshot({ seq: 1 }), 0).accepted).toBe(true);
+    receiver.accept(snapshot({ sessionGeneration: 9, seq: 2 }), 0);
+    receiver.accept(snapshot({ sessionGeneration: 9, seq: 3 }), 0);
+    // A structural rejection too, so every counter under test is non-zero
+    // before the reset — an assertion that a field is null after clearing is
+    // worth nothing if it was null to begin with.
+    receiver.accept({ ...snapshot({ seq: 4 }), confidence: Number.NaN }, 0);
+    expect(receiver.stats.accepted).toBe(1);
+    expect(receiver.stats.rejected).toBe(3);
+    expect(receiver.stats.byReason.session_generation).toBe(2);
+    expect(receiver.stats.byReason.malformed).toBe(1);
+    expect(receiver.stats.lastMalformedField).toBe('confidence');
+    expect(receiver.stats.lastAcceptedAtMs).not.toBeNull();
+
+    receiver.setSession(2);
+
+    expect(receiver.stats.accepted).toBe(0);
+    expect(receiver.stats.rejected).toBe(0);
+    expect(receiver.stats.byReason.session_generation).toBe(0);
+    expect(receiver.stats.byReason.malformed).toBe(0);
+    expect(receiver.stats.lastAcceptedAtMs).toBeNull();
+    expect(receiver.stats.lastMalformedField).toBeNull();
+
+    // And the new take's own feed is counted from zero, under the new
+    // generation — the old one is now the rejected case.
+    expect(receiver.accept(snapshot({ sessionGeneration: 2, seq: 1 }), 0).accepted).toBe(true);
+    expect(receiver.stats.accepted).toBe(1);
+    expect(receiver.accept(snapshot({ sessionGeneration: 1, seq: 2 }), 0).accepted).toBe(false);
+    expect(receiver.stats.byReason.session_generation).toBe(1);
+  });
 });
 
 describe('the stage snapshot gate', () => {

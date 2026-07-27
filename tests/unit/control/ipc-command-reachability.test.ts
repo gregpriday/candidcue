@@ -195,6 +195,29 @@ describe('the stage envelope never carries a hard-coded session generation', () 
     expect(startTake!.text).toMatch(/record\.sessionGeneration/);
   });
 
+  /**
+   * The take's envelope CARRIES it — not just the store.
+   *
+   * `sessionGeneration` became optional on `StageSessionEnvelope` so the
+   * Settings preview can publish a payload that belongs to no session (Rust
+   * validates it as "when carried, must also be current", and a preview never
+   * calls `start_session`). That optionality bought a hole: deleting the field
+   * from the TAKE's envelope now type-checks, and the assertion above would
+   * still pass because `record.sessionGeneration` also appears at
+   * `startLiveSession`. An envelope without it skips Rust's session check
+   * silently, which is the same class of miss as the literal it replaced.
+   */
+  it('the take envelope carries the generation the record returned', () => {
+    const startTake = SOURCES.find((f) => f.path.endsWith('lib/start-take.ts'));
+    expect(startTake).toBeDefined();
+    const call = /buildStageEnvelope\(\{[\s\S]*?\n    \}\)/.exec(startTake!.text);
+    expect(call, 'start-take must build the stage envelope').not.toBeNull();
+    expect(
+      call![0],
+      'the take envelope must pass sessionGeneration from the session record',
+    ).toMatch(/sessionGeneration:\s*record\.sessionGeneration/);
+  });
+
   it('no control source assigns a literal session generation', () => {
     /*
      * Exempt:

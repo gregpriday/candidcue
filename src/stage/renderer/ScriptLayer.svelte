@@ -93,6 +93,7 @@
     maxPathDisagreementPx,
     measureStageLayout,
     sameLayout,
+    type AlignmentReceiverStats,
     type FallbackTarget,
     type StageRenderedLineMap,
   } from '../motion';
@@ -1777,6 +1778,21 @@
   /** Feed one accepted-or-rejected semantic frame to the receiver (§26.1). */
   export function pushAlignmentSnapshot(snapshot: AlignmentSnapshot): boolean {
     return engine.receiveSnapshot(snapshot, performance.now());
+  }
+
+  /**
+   * What the receiver has made of the alignment feed so far (§64).
+   *
+   * Separate from `motionDiagnostics()` because it answers a different question
+   * and has to be cheap enough to read on every snapshot: that one assembles a
+   * whole picture of the motion system, this one is the two counters and the
+   * reason. It is the only place the difference between "no snapshots are
+   * arriving" and "snapshots are arriving and being thrown away" is visible —
+   * and those two have identical symptoms on the glass (a document that does
+   * not move) with completely different causes.
+   */
+  export function alignmentFeedStats(): AlignmentReceiverStats {
+    return engine.receiver.stats;
   }
 
   /**

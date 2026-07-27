@@ -74,7 +74,25 @@ export interface DisplayProfile {
 export interface StageSessionEnvelope {
   schemaVersion: 1;
   sessionId: Uuid;
-  sessionGeneration: number;
+  /**
+   * The coordinator's session generation — present on every TAKE envelope.
+   *
+   * Optional because the wire contract is optional, not because a take may omit
+   * it. Rust validates it as "when carried, must also be current"
+   * (`validate_stage_payload_header`), and the number exists only because
+   * `start_session` minted it. A payload that belongs to no session therefore
+   * has no honest value to put here: the Settings screen's live preview opens a
+   * real stage window without ever starting a session, and any literal it chose
+   * would match the coordinator only by coincidence and be silently DROPPED the
+   * rest of the time.
+   *
+   * A take must still carry it, and that is pinned at the source rather than by
+   * this type: `ipc-command-reachability.test.ts` asserts the start sequence
+   * takes it from the record Rust returns, and that no control source ever
+   * writes a literal one. That test is the real guard — it is what caught C1,
+   * and it catches the mistake this optionality would otherwise permit.
+   */
+  sessionGeneration?: number;
   stageGeneration: number;
   scriptId: Uuid;
   sourceHash: string;

@@ -191,6 +191,32 @@ export function createAlignmentReceiver(sessionGeneration = 0): AlignmentReceive
       current = null;
       receivedAtMs = null;
       offsetSamples = [];
+      /*
+       * The COUNTERS go too, not just `lastSeq`.
+       *
+       * These describe the feed, and the feed is a property of the SESSION —
+       * which is the unit this method is given, and the only one it can see.
+       * One window can serve a second session (Present again opens one), and
+       * the engine that owns this receiver survives the change. Carried
+       * forward, the counts stop answering the question anybody asks of them: a
+       * session that rejected everything early would keep supplying the
+       * "dominant" rejection reason for a later, healthy one — and, worse in
+       * the other direction, a single acceptance from the earlier session would
+       * make the next one's all-rejected feed look partly healthy, which is
+       * precisely the reading this instrument exists to make impossible.
+       *
+       * NOT per take PASS. A retake ("restart paragraph") opens a new pass
+       * inside the same session and never changes the generation, so its counts
+       * continue. That is the honest scope: nothing tells this receiver a pass
+       * began, and the feed it is describing did not restart either.
+       */
+      stats.accepted = 0;
+      stats.rejected = 0;
+      stats.byReason.malformed = 0;
+      stats.byReason.session_generation = 0;
+      stats.byReason.stale = 0;
+      stats.lastMalformedField = null;
+      stats.lastAcceptedAtMs = null;
       stats.lastSeq = null;
     },
 

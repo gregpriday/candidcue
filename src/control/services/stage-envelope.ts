@@ -427,7 +427,22 @@ export async function resolveDocumentAssets(
 export interface EnvelopeInput {
   script: CompiledScript;
   sessionId: string;
-  sessionGeneration: number;
+  /**
+   * The coordinator's session generation, when this envelope belongs to a take.
+   *
+   * Omitted for a payload that belongs to no session — the Settings screen's
+   * live preview is the only one. Rust validates it as optional ("a session
+   * generation, WHEN CARRIED, must also be current"), and the number is minted
+   * by `start_session`, which a preview never calls. Supplying any literal
+   * there would be the C1 defect in miniature: the payload would publish
+   * successfully only when the coordinator happened to be on that number, and
+   * be silently dropped otherwise.
+   *
+   * A take must always pass it. `start-take.ts` takes it from the session
+   * record Rust returns, which is the invariant `ipc-command-reachability`
+   * pins at the source level.
+   */
+  sessionGeneration?: number;
   stageGeneration: number;
   stageSettings: StageSettings;
   listener?: ListenerStageSelection;
@@ -445,7 +460,12 @@ export function buildStageEnvelope(input: EnvelopeInput): StageSessionEnvelope {
   return {
     schemaVersion: 1,
     sessionId: input.sessionId,
-    sessionGeneration: input.sessionGeneration,
+    // Absent rather than defaulted: see `EnvelopeInput.sessionGeneration`. A
+    // fallback number here would put back exactly the silent drop the omission
+    // exists to avoid.
+    ...(input.sessionGeneration === undefined
+      ? {}
+      : { sessionGeneration: input.sessionGeneration }),
     stageGeneration: input.stageGeneration,
     scriptId: input.script.scriptId,
     sourceHash: input.script.sourceHash,

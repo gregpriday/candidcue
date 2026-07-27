@@ -110,6 +110,90 @@ test('the preview renders the script, reserves the bottom band, and drives the r
   await expect(page.locator('.script-holder.blanked')).toHaveCount(0);
 });
 
+/**
+ * The same claim, on the layout almost every take actually runs.
+ *
+ * The test above drives the CALIBRATED path: the harness discovers a rig,
+ * resolves it, and hands the stage a full `optics` block. A rig only becomes
+ * calibrated when somebody stands at the glass with a ruler, so until that
+ * happens every take in the app lays out on the other branch — flat
+ * `fontSizePx`/`lineHeight`/`columnWidthPercent`, no optics at all.
+ *
+ * That branch had no end-to-end coverage of whether the document FOLLOWS. Its
+ * geometry is pinned to literals in jsdom (`script-layer-uncalibrated-parity`),
+ * but jsdom has no layout engine and cannot answer the only question that
+ * matters here: does the word being spoken arrive at the reading band. Half the
+ * product was covered by a test that looked like it covered all of it.
+ */
+test('the uncalibrated stage follows too', async ({ page }) => {
+  await page.goto('/stage.html?preview=1&calibrated=0');
+
+  const root = page.locator('.stage-root');
+  await expect(root).toHaveAttribute('data-phase', 'live');
+  await expect(root.getByText('A calm start')).toBeVisible();
+
+  const word30 = page.locator('[data-t="30"]');
+  await expect(word30).toHaveText('Reading');
+
+  const { bandCentrePx, linePitchPx } = await page.evaluate(() => ({
+    // `uncalibratedPreviewSettings()`'s own `readingBandCenterPercent`, which is
+    // `DEFAULT_STAGE_APPEARANCE`'s — the number a fresh profile prompts at.
+    bandCentrePx: window.innerHeight * 0.38,
+    linePitchPx: parseFloat(getComputedStyle(document.querySelector('.column')!).lineHeight),
+  }));
+
+  const approach: number[] = [];
+  const bandError = async (): Promise<number> => {
+    const error = Math.round(
+      (await word30.evaluate((el) => el.getBoundingClientRect().top)) - bandCentrePx,
+    );
+    approach.push(error);
+    return error;
+  };
+
+  // Arrival, and arrival by following — the same two bounds as the calibrated
+  // case, and for the same reason: a display that LEADS the reader is worse
+  // than one that trails, so the far side is the one worth pinning.
+  await expect.poll(bandError, { timeout: 25_000, intervals: [250] }).toBeLessThan(40);
+  expect(
+    Math.min(...approach),
+    `band error over the approach: ${approach.join(', ')}`,
+  ).toBeGreaterThan(-2.5 * linePitchPx);
+});
+
+/**
+ * The exit affordance is clickable, not just painted.
+ *
+ * This assertion is here rather than in jsdom because it needs real hit-testing.
+ * The button lives inside `.stage-safe-plane`, which is `pointer-events: none`
+ * so a stray click over the hold chip or the voice pill falls through to the
+ * root and reports focus instead of being swallowed by decoration. A button
+ * inheriting that rule paints perfectly and does nothing — and jsdom cannot see
+ * it, because `getComputedStyle` there reports `pointer-events: auto` without
+ * inheriting the parent's `none`, so the obvious unit assertion passes either
+ * way (checked: removing the fix leaves the jsdom suite green).
+ *
+ * Playwright's actionability check is the real thing: it hit-tests the point it
+ * is about to click and fails if some other element would receive the event.
+ */
+test('the exit affordance is clickable, not just painted', async ({ page }) => {
+  await page.goto('/stage.html?preview=1');
+  const root = page.locator('.stage-root');
+  await expect(root).toHaveAttribute('data-phase', 'live');
+
+  // It stays out of the way until somebody reaches for the mouse — a take is
+  // exactly when nobody does.
+  await expect(page.locator('.stage-exit')).toHaveCount(0);
+
+  await root.hover();
+  const exit = page.locator('.stage-exit');
+  await expect(exit).toBeVisible();
+
+  // The assertion. A `pointer-events: none` button fails this with "element
+  // intercepts pointer events" rather than clicking; it does not pass slowly.
+  await exit.click({ timeout: 5_000 });
+});
+
 /*
  * ---------------------------------------------------------------------------
  * REMOVED: "the rail does not reflow when the delivery score changes (§7.1)"
