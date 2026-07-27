@@ -120,6 +120,17 @@ Ten committed rounds, each justified by a benchmark delta (chronological):
     stale-evidence lead decays to a one-word rest instead of holding the
     full horizon. New `pause_overshoot` benchmark + 1s/2s/3s pause
     scenarios; overshoot 4.5 → 1.5 atoms (Tier A) with freeze still ~0.
+12. **The display trails, it never leads** (field report: "it tends to jump
+    too far ahead too often") — the stage stopped underlining a current word
+    and now fades words out as it hears them, which makes the two directions
+    of error worth completely different amounts. Trailing leaves a word
+    legible a moment longer. Leading *erases a line the reader is still
+    reading*. Three changes, all of them refusals to guess: a
+    `prediction_gain` of 0.35 so extrapolation aims deliberately short of the
+    reader rather than at them; a paragraph ceiling so prediction stops dead
+    at a break and waits to actually hear the next paragraph; and a stale
+    lead that decays to zero instead of to one word. New `ahead_*` benchmark
+    family. Live time-spent-ahead 22.2% → 3.8%, incidents 65 → 6.
 
 Fixture quality fixes found by the harness along the way: gemini-3.1-flash
 TTS *performs* instruction-shaped text instead of reading it (now pinned with
@@ -137,38 +148,46 @@ through both engines.
 |---|---|---|---:|---:|---|
 | `safety.false_jumps` | count | lower | 0.000 | 0.000 | unchanged |
 | `safety.catastrophic` | count | lower | 18.000 | 0.000 | 18 → 0 ✅ |
-| `accuracy.clean_within2` | % | higher | 91.890 | 99.557 | +7.67 pp ✅ |
-| `accuracy.clean_within5` | % | higher | 99.985 | 100.000 | +0.01 pp ✅ |
-| `accuracy.clean_p95_abs` | atoms | lower | 2.185 | 1.227 | 43.9% lower ✅ |
-| `accuracy.mean_signed_abs` | atoms | lower | 0.927 | 0.743 | 19.8% lower ✅ |
-| `responsiveness.prefinal_move` | % | higher | 96.190 | 96.190 | unchanged |
-| `responsiveness.freeze` | % | lower | 22.246 | 0.015 | -22.23 pp ✅ |
-| `responsiveness.pause_overshoot_p95` | atoms | lower | 1.625 | 1.500 | 7.7% lower ✅ |
+| `safety.ahead_events` | count | lower | 5.000 | 1.000 | 5 → 1 ✅ |
+| `safety.ahead_worst` | atoms | lower | 3.444 | 2.392 | 30.5% lower ✅ |
+| `overshoot.ahead_time` | % | lower | 2.826 | 0.306 | -2.52 pp ✅ |
+| `overshoot.ahead_p95` | atoms | lower | 0.651 | -0.519 | 179.7% lower ✅ |
+| `accuracy.clean_within2` | % | higher | 91.890 | 58.103 | -33.79 pp ⚠️ |
+| `accuracy.clean_within5` | % | higher | 99.985 | 99.989 | +0.00 pp ✅ |
+| `accuracy.clean_p95_abs` | atoms | lower | 2.185 | 2.992 | -36.9% lower ⚠️ |
+| `accuracy.mean_signed_abs` | atoms | lower | 0.927 | 1.901 | -105.2% lower ⚠️ |
+| `responsiveness.prefinal_move` | % | higher | 96.694 | 96.694 | unchanged |
+| `responsiveness.freeze` | % | lower | 22.246 | 0.529 | -21.72 pp ✅ |
+| `responsiveness.pause_overshoot_p95` | atoms | lower | 1.625 | 0.394 | 75.8% lower ✅ |
 | `responsiveness.first_lock_p50` | s | lower | 2.650 | 2.650 | unchanged |
-| `robust.corrupt15_within5` | % | higher | 96.775 | 98.398 | +1.62 pp ✅ |
-| `robust.substitutions_within2` | % | higher | 90.257 | 99.382 | +9.12 pp ✅ |
+| `robust.corrupt15_within5` | % | higher | 96.775 | 96.207 | -0.57 pp ⚠️ |
+| `robust.substitutions_within2` | % | higher | 90.257 | 53.163 | -37.09 pp ⚠️ |
 | `robust.word_repeats_within5` | % | higher | 100.000 | 100.000 | unchanged |
 | `robust.phrase_repeats_within5` | % | higher | 100.000 | 100.000 | unchanged |
 | `recovery.skip_p95` | s | lower | 23.350 | 5.350 | 77.1% lower ✅ |
 | `recovery.retake_p95` | s | lower | 15.250 | 5.350 | 64.9% lower ✅ |
 | `recovery.adlib_p95` | s | lower | 0.050 | 0.050 | unchanged |
 | `recovery.failures` | count | lower | 1.000 | 0.000 | 1 → 0 ✅ |
-| `recovery.adlib_drift_p95` | atoms | lower | 1.740 | 4.582 | -163.3% lower ⚠️ |
+| `recovery.adlib_drift_p95` | atoms | lower | 1.740 | 3.000 | -72.4% lower ⚠️ |
 | `viewport.start_lock_p50` | s | lower | 3.550 | 3.550 | unchanged |
 | `names.cold_jump_lock_p95` | s | lower | 7.150 | 3.550 | 50.3% lower ✅ |
 | `ambiguity.refrain_false_jumps` | count | lower | 0.000 | 0.000 | unchanged |
-| `perf.mean_event_us` | µs | lower | 192.336 | 197.567 | -2.7% lower ⚠️ |
-| `perf.p95_event_us` | µs | lower | 1746.000 | 960.000 | 45.0% lower ✅ |
-| `perf.scale_ratio_5k` | × | lower | 6.202 | 1.369 | 77.9% lower ✅ |
-| `live.within2` | % | higher | 76.345 | 86.590 | +10.25 pp ✅ |
-| `live.within5` | % | higher | 89.410 | 94.416 | +5.01 pp ✅ |
-| `live.p95_abs` | atoms | lower | 61.907 | 5.963 | 90.4% lower ✅ |
-| `live.mean_signed_abs` | atoms | lower | 19.219 | 3.694 | 80.8% lower ✅ |
+| `perf.mean_event_us` | µs | lower | 189.695 | 188.740 | 0.5% lower ✅ |
+| `perf.p95_event_us` | µs | lower | 1836.000 | 942.000 | 48.7% lower ✅ |
+| `perf.scale_ratio_5k` | × | lower | 5.707 | 1.476 | 74.1% lower ✅ |
+| `live.within2` | % | higher | 76.345 | 69.683 | -6.66 pp ⚠️ |
+| `live.within5` | % | higher | 89.410 | 93.390 | +3.98 pp ✅ |
+| `live.p95_abs` | atoms | lower | 61.907 | 6.690 | 89.2% lower ✅ |
+| `live.mean_signed_abs` | atoms | lower | 19.219 | 4.967 | 74.2% lower ✅ |
 | `live.false_jumps` | count | lower | 1.000 | 1.000 | unchanged |
 | `live.catastrophic` | count | lower | 7.000 | 1.000 | 7 → 1 ✅ |
 | `live.prefinal_move` | % | higher | 98.113 | 100.000 | +1.89 pp ✅ |
-| `live.freeze` | % | lower | 37.897 | 4.928 | -32.97 pp ✅ |
-| `live.pause_overshoot_p95` | atoms | lower | 1.842 | 2.195 | -19.2% lower ⚠️ |
+| `live.freeze` | % | lower | 37.897 | 5.899 | -32.00 pp ✅ |
+| `live.pause_overshoot_p95` | atoms | lower | 1.842 | 0.726 | 60.6% lower ✅ |
+| `live.ahead_events` | count | lower | 65.000 | 6.000 | 65 → 6 ✅ |
+| `live.ahead_time` | % | lower | 22.173 | 3.773 | -18.40 pp ✅ |
+| `live.ahead_p95` | atoms | lower | 1.902 | 0.841 | 55.8% lower ✅ |
+| `live.ahead_worst` | atoms | lower | 7.300 | 6.562 | 10.1% lower ✅ |
 | `live.recovery_p95` | s | lower | 23.400 | 4.850 | 79.3% lower ✅ |
 | `live.recovery_failures` | count | lower | 0.000 | 0.000 | unchanged |
 | `live.first_lock_p50` | s | lower | 2.600 | 2.600 | unchanged |
@@ -201,14 +220,56 @@ through both engines.
 * `live.wer` is diagnostic (the recogniser's quality, not ours): ~0–4% on
   clean scripts, ~14% on the proper-noun and dense-number scripts — the
   conditions the robustness rows exist for.
+* **The `ahead_*` rows and the `within2` rows are the two ends of one
+  decision, and they must be read together.** The display fades words out as
+  it hears them, so being early and being late are not the same mistake:
+  late leaves a word legible a moment longer than it needed to be, early
+  deletes a line the reader is still on. `within2` is a symmetric metric and
+  therefore cannot express that — it scores a word early exactly as well as a
+  word late. So the engine now aims deliberately short, `within2` falls
+  (live 76 → 70%, Tier A 92 → 58%), `within5` does not (89 → 93% live), and
+  the time spent ahead of the reader drops from 22.2% to 3.8%. Judge the
+  display on `ahead_*` plus `within5`; `within2` is retained because it is
+  the historical series, not because it is the objective.
+* `ahead_*` measures against the HIGH-WATER MARK of what has been spoken,
+  not the reader's instantaneous position, so re-reading a sentence does not
+  register as the display "running ahead" — those words were genuinely
+  already said, and nothing on screen has been erased early. Against
+  instantaneous gold the metric scored 105 incidents of which ~100 were
+  ordinary backward re-reads, which is the measurement equivalent of a
+  smoke alarm that goes off when you cook.
+* The floor for `live.ahead_*` is **not zero**: with prediction disabled
+  entirely (`prediction_gain = 0`, `max_lead_atoms = 0`) the live captures
+  still show 0.55% ahead-time and a 6.0-atom worst case, because in those
+  moments the *aligner's* observed position is ahead of Tier-B's
+  interpolated gold. So of the reducible 22.2%, the display model was
+  responsible for essentially all of it, and 3.8% is close to the fixtures'
+  measurement floor — while zero prediction would cost 37% freeze.
 
 ## Honest limitations
 
-* `recovery.adlib_drift_p95` regressed (1.7 → ~4.7 atoms): the baseline's
+* `recovery.adlib_drift_p95` regressed (1.7 → 3.0 atoms): the baseline's
   frozen display couldn't drift during ad-libs because it barely moved at
   all; the optimized display predicts forward and pays ~2 words of drift
   before the hold engages. The trade was accepted deliberately — freeze fell
-  from 22% to 0.3%.
+  from 22% to 0.5%.
+* **The benchmark measures the engine's display position, not the pixels.**
+  The stage adds its own comfort lead on top (`prediction.leadSeconds`,
+  default 0.38 s) by sampling `display_at` in the future, which the evaluator
+  does not model. Replaying the live captures with that lead applied costs
+  3.8% → 6.5% time-ahead (9.6% at the 0.6 s maximum). Every `ahead_*` number
+  here is therefore a floor for what the app shows until that lead is zeroed
+  for the fade display.
+* The paragraph ceiling is a structural rule, so it is only as good as the
+  script's structure: it does nothing inside a single long paragraph, which
+  is exactly where a reader who pauses mid-sentence gets the least
+  protection. `prediction_gain` and `max_lead_atoms` carry that case, and
+  they are blunter instruments. A sentence-level ceiling would be the
+  natural next refinement.
+* One live catastrophic period and a 6.6-atom `ahead_worst` remain, and
+  neither is a display-model failure — both are the aligner's observed
+  position drifting on the hardest fixture. See the measurement-floor note
+  above.
 * Tier-B accuracy on the names/technical scripts is bounded by recogniser
   WER (13–16%); the engine holds honestly rather than guessing, which caps
   `live.within2` around 87% until authored aliases / provider biasing exist.
