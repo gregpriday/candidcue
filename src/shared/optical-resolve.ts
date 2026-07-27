@@ -25,6 +25,8 @@ import {
   clamp,
   fontSizePxForArcminutes,
   hardwareFitCheck,
+  isPlausibleViewingDistanceMm,
+  MIN_RENDERABLE_FONT_SIZE_PX,
   normalizeFontMetrics,
   secondaryTextFloorPx,
   type AngularContext,
@@ -201,13 +203,21 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
 
   const mmPerCssPx = profile.scale?.mmPerCssPx ?? null;
   const distanceMm = profile.viewingDistanceMm;
+  /*
+   * Calibrated means PLAUSIBLE, not merely present.
+   *
+   * These come from a person typing into a box, and "positive and finite" is
+   * not the same as "possible". A viewing distance of 1mm is a real number that
+   * resolves to a 0.05px body size, which rounds to zero and leaves the
+   * presenter looking at a blank rig — with nothing NaN anywhere to notice. A
+   * value outside the plausible range is treated as no calibration at all,
+   * which falls back to a stage that works.
+   */
   const calibrated =
     typeof mmPerCssPx === 'number' &&
     Number.isFinite(mmPerCssPx) &&
     mmPerCssPx > 0 &&
-    typeof distanceMm === 'number' &&
-    Number.isFinite(distanceMm) &&
-    distanceMm > 0;
+    isPlausibleViewingDistanceMm(distanceMm);
 
   const targetArcmin = resolveTargetArcminutes(profile);
   const targetCharacters = resolveTargetCharacters(profile);
@@ -232,7 +242,9 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
    * is knowingly guessing.
    */
   const bodyFontSizePx =
-    fit.fontSizePx !== null && fit.fontSizePx > 0 ? fit.fontSizePx : UNCALIBRATED_FONT_SIZE_PX;
+    fit.fontSizePx !== null && fit.fontSizePx >= MIN_RENDERABLE_FONT_SIZE_PX
+      ? fit.fontSizePx
+      : UNCALIBRATED_FONT_SIZE_PX;
 
   const columnCh =
     fit.columnCh !== null && fit.columnCh > 0
@@ -284,15 +296,25 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
    */
   const o = profile.overrides ?? {};
   const overriddenFields: string[] = [];
+  /*
+   * Three overrides act BEFORE the fit check — they change what the model is
+   * asked for rather than shadowing what it produced — so they never reach the
+   * `take()` helper below and went unrecorded. An override the UI cannot see is
+   * one the user cannot reset, which is the whole failure this list prevents.
+   */
+  if (usable(o.arcminutes)) overriddenFields.push('arcminutes');
+  if (usable(o.characters)) overriddenFields.push('characters');
+  if (usable(o.maxColumnFraction)) overriddenFields.push('maxColumnFraction');
   const take = <T>(key: keyof OpticalOverrides, value: T, derived: T): T => {
     if (value === derived) return derived;
     overriddenFields.push(key);
     return value;
   };
 
-  const finalFontSizePx = usable(o.fontSizePx)
-    ? take('fontSizePx', o.fontSizePx, bodyFontSizePx)
-    : bodyFontSizePx;
+  const finalFontSizePx =
+    usable(o.fontSizePx) && o.fontSizePx >= MIN_RENDERABLE_FONT_SIZE_PX
+      ? take('fontSizePx', o.fontSizePx, bodyFontSizePx)
+      : bodyFontSizePx;
 
   const derivedColumnCh = columnCh;
   const finalColumnCh = usable(o.columnCh)
@@ -335,7 +357,17 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
     const offsetMm =
       (distanceMm as number) * Math.tan((o.lensOffsetDegrees * Math.PI) / 180);
     const offsetPx = offsetMm / (mmPerCssPx as number);
-    const shifted = clamp(derivedBandY + offsetPx / Math.max(1, viewport.heightPx), 0.1, 0.9);
+    /*
+     * Divided by the SAFE height, not the viewport height.
+     *
+     * `readingBandY` is a fraction of the safe rectangle — that is what every
+     * consumer resolves it against — so converting a pixel offset with the full
+     * viewport height under-shifts the band by exactly the fraction the hood
+     * crops. On a 600px panel with 20% insets a 1-degree offset moved the band
+     * 65px instead of 109px, and the error grows with the crop.
+     */
+    const safeHeightPx = Math.max(1, viewport.heightPx * (1 - safeArea.top - safeArea.bottom));
+    const shifted = clamp(derivedBandY + offsetPx / safeHeightPx, 0.1, 0.9);
     if (shifted !== derivedBandY) {
       overriddenFields.push('lensOffsetDegrees');
       finalBandY = shifted;

@@ -528,7 +528,33 @@ export function isInterpretableSmoothFollowProfile(
 ): value is SmoothFollowProfile {
   if (typeof value !== 'object' || value === null) return false;
   const profile = value as Partial<SmoothFollowProfile>;
-  if (profile.version !== SMOOTH_FOLLOW_PROFILE_VERSION) return false;
+  /*
+   * v3 is still interpretable; anything else is not.
+   *
+   * The all-or-nothing rule on a version mismatch is right and stays: a bumped
+   * version means a field's MEANING changed, so a partial application produces
+   * motion that is neither the profile control sent nor the one this stage was
+   * tuned against — an unreproducible third thing, on the presenter's glass,
+   * with no way for either side to know.
+   *
+   * v3 to v4 is the exception, and the reason is visible in the diff: v4 only
+   * ADDS an optional `lineUnits` block. Every pixel field a v3 profile carries
+   * means exactly what it meant before, and the absence of the block already
+   * means "use the pixel values" for a v4 profile that omits it. So a v3
+   * profile is a v4 profile that omits it, and rejecting one costs a presenter
+   * the calm or responsive feel they chose the moment they run a newer stage
+   * against an older control — silently, because the default is followable.
+   *
+   * A v3 that arrives WITH a `lineUnits` block is refused: that is not a
+   * version this build has ever produced, and guessing at it is the exact
+   * failure the gate exists to prevent.
+   */
+  const version = profile.version;
+  const interpretableVersion =
+    version === SMOOTH_FOLLOW_PROFILE_VERSION ||
+    (version === SMOOTH_FOLLOW_PROFILE_VERSION - 1 &&
+      (value as Record<string, unknown>).lineUnits === undefined);
+  if (!interpretableVersion) return false;
   if (typeof profile.id !== 'string' || profile.id.length === 0) return false;
   return everyNumberIsFinite(
     DEFAULT_SMOOTH_FOLLOW_PROFILE as unknown as Record<string, unknown>,

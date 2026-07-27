@@ -35,6 +35,7 @@
     computeSafeRect,
     stagePaddingPx,
     fadeDepthPx,
+    columnLeftPx,
     imageMaxHeightVh,
     clamp,
   } from './geometry';
@@ -153,6 +154,44 @@
    */
   const optics = $derived(settings.optics ?? null);
 
+  /* ---------------------------------------------------------------------
+   * The pre-optical layout, preserved exactly.
+   *
+   * These three reproduce the geometry this file shipped with — the `vh`
+   * tables and the <=700px "compact" breakpoint that selected between them —
+   * and they are used whenever `settings.optics` is absent.
+   *
+   * They are kept rather than re-derived because the optical work is meant to
+   * be ADDITIVE. The old numbers have a real defect (the closing line stops
+   * short of the reading band and only landed inside the old dead zone by
+   * luck), and the new solver fixes it — but fixing it for somebody who has
+   * never opened the calibration screen would silently change their stage on
+   * upgrade. The correction ships to rigs that opted into the new model.
+   *
+   * Deliberately local, and deliberately not re-exported from geometry.ts:
+   * this is a compatibility shim with exactly one caller, and giving it a
+   * shared home would invite new code to build on the geometry being replaced.
+   * ------------------------------------------------------------------- */
+
+  /** The old §16.8 breakpoint: a display around 1024x600 got the compact table. */
+  function legacyIsCompact(widthPx: number, heightPx: number): boolean {
+    return heightPx > 0 && heightPx <= 700 && widthPx <= 1280;
+  }
+
+  function legacyStagePaddingPx(widthPx: number, heightPx: number): { topPx: number; bottomPx: number } {
+    const compact = legacyIsCompact(widthPx, heightPx);
+    const topVh = compact ? 34 : 38;
+    const bottomVh = compact ? 60 : 55;
+    return { topPx: (heightPx * topVh) / 100, bottomPx: (heightPx * bottomVh) / 100 };
+  }
+
+  function legacyFadeDepthPx(widthPx: number, heightPx: number): { topPx: number; bottomPx: number } {
+    // Equal depths, as before — the asymmetry that favours upcoming context is
+    // part of the new model, not a bug fix owed to the old one.
+    const depth = (heightPx * (legacyIsCompact(widthPx, heightPx) ? 10 : 16)) / 100;
+    return { topPx: depth, bottomPx: depth };
+  }
+
   /**
    * The settings as they are ACTUALLY RENDERED.
    *
@@ -227,7 +266,9 @@
     computeReadingBand(vh, {
       centerPercent: optics ? optics.readingBandY * 100 : settings.readingBandCenterPercent,
       halfHeightPercent: settings.readingBandHalfHeightPercent,
-      ...(optics ? { linePitchPx: linePx, deadZoneLines: optics.deadZoneLines } : {}),
+      ...(optics
+        ? { linePitchPx: linePx, deadZoneLines: optics.deadZoneLines, safeRect }
+        : {}),
     }).centerPx,
   );
 
@@ -246,11 +287,24 @@
     linePitchPx: linePx,
     futureReserveLines: optics?.futureReserveLines,
   });
-  const padTopPx = $derived(stagePaddingPx(bandGeometry).topPx);
+  /*
+   * Calibrated rigs get the solved padding; uncalibrated ones keep the exact
+   * historical table, compact branch included.
+   *
+   * The old 38/55 (and compact 34/60) pair really is subtly wrong — the closing
+   * line stops short of the band and only landed inside the old dead zone by
+   * luck. But correcting it for somebody who has never calibrated would change
+   * their stage under them on upgrade, which is precisely what "additive" is
+   * supposed to rule out. The fix ships to rigs that opted into the new model.
+   */
+  const legacyPad = $derived(legacyStagePaddingPx(vw, vh));
+  const padTopPx = $derived(optics ? stagePaddingPx(bandGeometry).topPx : legacyPad.topPx);
   // §7.1: the rail's reserved band is folded into the bottom padding, so the
   // reading band, the total document height, and the fallback target all keep
   // the script clear of the rail with no separate bookkeeping.
-  const padBottomPx = $derived(stagePaddingPx(bandGeometry).bottomPx + bottomInsetPx);
+  const padBottomPx = $derived(
+    (optics ? stagePaddingPx(bandGeometry).bottomPx : legacyPad.bottomPx) + bottomInsetPx,
+  );
 
   const gapPx = $derived(
     (optics?.paragraphSpacingEm ?? settings.paragraphSpacingEm ?? 0.7) *
@@ -272,13 +326,69 @@
       : (vw * settings.columnWidthPercent) / 100,
   );
 
-  const fades = $derived(
-    fadeDepthPx(linePx, {
-      topLines: optics?.topFadeLines,
-      bottomLines: optics?.bottomFadeLines,
-    }),
+  /**
+   * The floor for presenter-readable text that is not body copy, in px.
+   *
+   * Published as a custom property so the block and inline renderers can clamp
+   * to it without either of them needing to know about the optical model. An
+   * uncalibrated rig gets the em-relative fallback that stage.css already
+   * defines, which is why this is only set when there is a real number.
+   */
+  const secondaryMinCss = $derived(optics ? `${optics.secondaryMinPx}px` : null);
+
+  /**
+   * Whether the per-word dimming ramp is allowed to advance.
+   *
+   * A cursor keeps arriving after the engine has stopped following: it is the
+   * last position anyone believed, and the fallback path publishes it while the
+   * aligner searches, holds, or calls two matches equally good. Motion stops
+   * there deliberately — weak evidence never moves the glass — but the styling
+   * used to keep walking on it, greying words behind a reader who had not been
+   * located for seconds.
+   *
+   * That is the display making a claim the engine explicitly refused to make,
+   * and it is the more damaging half of the pair, because a presenter reads
+   * dimming as "you are here" rather than as an estimate.
+   */
+  const dimFrozen = $derived(
+    alignment !== null && alignment.state !== 'following',
   );
-  const imageMaxH = $derived(imageMaxHeightVh(safeRect, vh));
+
+  /**
+   * Where the column sits horizontally.
+   *
+   * `margin: 0 auto` centres on the DISPLAY. A prompter whose camera is not in
+   * the middle of its hood therefore pulls the presenter's gaze sideways by
+   * exactly the offset nobody compensated for — and sideways is the direction
+   * a viewer notices, roughly twice as readily as vertical.
+   *
+   * Only a calibrated rig knows where its lens is, so an uncalibrated stage
+   * keeps centring: `columnLeftPx` against a centred optical centre returns the
+   * centred position anyway, but going through the branch makes the intent
+   * legible and keeps the auto-margin as the honest "we do not know" case.
+   */
+  const columnOffsetPx = $derived(
+    optics
+      ? columnLeftPx({ safeRect, columnWidthPx, opticalCenterX: optics.opticalCenterX })
+      : Math.max(0, (vw - columnWidthPx) / 2),
+  );
+
+  /*
+   * Fades, in line pitches when calibrated and in the historical `vh` when not.
+   *
+   * The legacy depths are kept verbatim for the uncalibrated path rather than
+   * being re-derived, because this change is meant to be additive: somebody who
+   * has never opened the calibration screen must get the stage they had
+   * yesterday, including its compact-panel treatment.
+   */
+  const fades = $derived(
+    optics
+      ? fadeDepthPx(linePx, { topLines: optics.topFadeLines, bottomLines: optics.bottomFadeLines })
+      : legacyFadeDepthPx(vw, vh),
+  );
+  const imageMaxH = $derived(
+    optics ? imageMaxHeightVh(safeRect, vh) : legacyIsCompact(vw, vh) ? 70 : 78,
+  );
 
   /* ---- scroll state ---- */
   let scrollY = $state(0);
@@ -1153,8 +1263,9 @@
   data-degraded={degraded ? 'true' : 'false'}
   bind:clientWidth={measuredVw}
   bind:clientHeight={measuredVh}
-  style:--stage-past-opacity={settings.pastOpacity}
-  style:--stage-future-opacity={settings.futureOpacity}
+  style:--stage-past-opacity={effective.pastOpacity}
+  style:--stage-future-opacity={effective.futureOpacity}
+  style:--stage-secondary-min={secondaryMinCss}
   style:--stage-image-max-h="{imageMaxH}vh"
 >
   <!-- §31.1: one immutable document layer moved by the controller. Nothing
@@ -1180,10 +1291,12 @@
     {/if}
     <div
       class="column"
-      style:width="{settings.columnWidthPercent}%"
-      style:font-size="{settings.fontSizePx}px"
-      style:line-height={settings.lineHeight}
-      style:letter-spacing="{settings.letterSpacingEm}em"
+      style:width="{columnWidthPx}px"
+      style:margin-left="{columnOffsetPx}px"
+      style:font-size="{effective.fontSizePx}px"
+      style:line-height={effective.lineHeight}
+      style:letter-spacing="{effective.letterSpacingEm}em"
+      style:font-weight={optics?.fontWeight ?? settings.fontWeight ?? 500}
       style:font-family={stageFontStack(settings.fontFamilyId)}
     >
       {#if renderWindow.leadingSpacePx > 0}
@@ -1192,6 +1305,7 @@
       {#each visibleBlocks as block, i (block.id)}
         <BlockView
           {block}
+          {dimFrozen}
           zone={zoneFor(renderWindow.startIndex + i)}
           cursor={renderWindow.startIndex + i === currentBlockIndex ? cursorTokenIndex : null}
           assets={doc.assets}

@@ -73,12 +73,14 @@
  * `--stage-text` — script, chips, marks, waveform — moves together. A control
  * that brightened the script but not the hold message would be worse than none.
  */
+.stage-root[data-text-intensity='soft'],
 :root[data-text-intensity='soft'] {
   --stage-text: rgba(245, 243, 239, 0.82);
   --stage-text-past: rgba(245, 243, 239, 0.34);
   --stage-text-future: rgba(245, 243, 239, 0.7);
 }
 
+.stage-root[data-text-intensity='strong'],
 :root[data-text-intensity='strong'] {
   --stage-text: #fffefb;
   --stage-text-past: rgba(255, 254, 251, 0.5);

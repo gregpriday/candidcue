@@ -218,9 +218,51 @@ export function mmPerCssPixel(options: {
 }): number | null {
   const { diagonalMm, widthPx, heightPx } = options;
   if (!isPositive(diagonalMm) || !isPositive(widthPx) || !isPositive(heightPx)) return null;
+  if (!isPlausibleDiagonalMm(diagonalMm)) return null;
   const diagonalPx = Math.hypot(widthPx, heightPx);
   if (!isPositive(diagonalPx)) return null;
   return diagonalMm / diagonalPx;
+}
+
+/* ---------------------------------------------------------------------------
+ * Plausible ranges
+ *
+ * Every one of these numbers is typed by a person into a box, and "positive and
+ * finite" is not the same as "possible". A viewing distance of 1mm is a real
+ * number that resolves to a 0.05px body size, which `Math.round` turns into
+ * zero and the stage into a blank screen — with no error anywhere, because
+ * nothing was NaN. Bounds are the difference between a value being rejected and
+ * a presenter looking at an empty rig.
+ *
+ * Deliberately generous. These exist to catch a typo or a unit mix-up, not to
+ * express an opinion about how anybody works: 15cm is closer than a phone and
+ * 15m is a stadium, so anything between them is somebody's business.
+ * ------------------------------------------------------------------------- */
+
+export const MIN_VIEWING_DISTANCE_MM = 150;
+export const MAX_VIEWING_DISTANCE_MM = 15000;
+/** Roughly a 2-inch panel through a 200-inch wall. */
+export const MIN_DIAGONAL_MM = 50;
+export const MAX_DIAGONAL_MM = 5000;
+/** Below this a body size is not small, it is absent. */
+export const MIN_RENDERABLE_FONT_SIZE_PX = 8;
+
+export function isPlausibleViewingDistanceMm(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= MIN_VIEWING_DISTANCE_MM &&
+    value <= MAX_VIEWING_DISTANCE_MM
+  );
+}
+
+export function isPlausibleDiagonalMm(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= MIN_DIAGONAL_MM &&
+    value <= MAX_DIAGONAL_MM
+  );
 }
 
 /**
@@ -538,12 +580,32 @@ export function hardwareFitCheck(input: HardwareFitInput): HardwareFit {
     };
   }
 
+  /*
+   * Nothing works here, so choose the failure that is least destructive.
+   *
+   * The tempting answer is the one that keeps a thirteen-character line — but
+   * `fontForFloorPx` at this point is below the angular floor, sometimes far
+   * below: a 300px column at 2.5 m resolves to about 8 arcminutes, which is
+   * half the refusal threshold and simply cannot be read. Returning it as
+   * renderable geometry would hand the stage a size the whole module exists to
+   * rule out, and the presenter would get a screen of unreadable text with a
+   * warning they may well be too far away to read either.
+   *
+   * So legibility wins here too, consistently with the branches above: hold the
+   * angular floor, report the (fewer than thirteen) characters that actually
+   * fit, and say plainly that the rig cannot do this. A short line somebody can
+   * read beats a full one nobody can.
+   */
+  const floorFontPx = fontSizePxForArcminutes(ANGULAR_SOFT_FLOOR_ARCMIN, context);
+  const usableFontPx = floorFontPx !== null && floorFontPx > 0 ? floorFontPx : fontForFloorPx;
+  const charactersAtFloor = charactersForWidthPx(usableWidthPx, usableFontPx, metrics);
+
   return {
     verdict: 'impossible',
-    fontSizePx: fontForFloorPx,
-    arcminutes: arcminAtFloor,
-    achievableCharacters: READING_MEASURE.hardFloor,
-    columnCh: chForCharacters(READING_MEASURE.hardFloor, metrics),
+    fontSizePx: usableFontPx,
+    arcminutes: arcminutesForFontSizePx(usableFontPx, context),
+    achievableCharacters: charactersAtFloor,
+    columnCh: chForCharacters(Math.max(1, charactersAtFloor), metrics),
     advice:
       'This display is too small for the distance you are standing at. Move closer, or use a larger prompter — CandidCue cannot make this comfortable to read.',
   };

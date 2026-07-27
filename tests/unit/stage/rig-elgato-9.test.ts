@@ -106,7 +106,11 @@ describe('desk distance — the way this rig is actually used', () => {
      */
     for (const distance of [1000, 1200]) {
       const { budget } = budgetFor(distance);
+      // Bounded on BOTH sides: "six or seven" is the claim, and an unbounded
+      // lower assertion would pass just as happily at twenty lines, which would
+      // mean the type had silently collapsed.
       expect(budget.total).toBeGreaterThanOrEqual(6);
+      expect(budget.total).toBeLessThanOrEqual(7);
       expect(budget.below).toBeGreaterThanOrEqual(TARGET_LINES_BELOW_BAND);
       expect(budget.above).toBeGreaterThanOrEqual(1);
       expect(budget.sufficient).toBe(true);
@@ -248,11 +252,20 @@ describe('the honest limits of a 9-inch panel', () => {
 describe('the safe area, which a hood makes real', () => {
   it('costs lines when the hood crops the panel, and reports it', () => {
     const full = budgetFor(1200);
+    // Vertical crop only, and a STRICT loss: mixing in a horizontal inset let
+    // the assertion pass while the vertical crop was being ignored entirely.
     const cropped = budgetFor(1200, {
-      safeArea: { top: 0.08, right: 0.04, bottom: 0.08, left: 0.04 },
+      safeArea: { top: 0.12, right: 0, bottom: 0.12, left: 0 },
     });
-    expect(cropped.budget.total).toBeLessThanOrEqual(full.budget.total);
-    expect(cropped.optics.charactersPerLine as number).toBeLessThan(
+    expect(cropped.budget.total).toBeLessThan(full.budget.total);
+  });
+
+  it('costs characters when the hood crops the sides', () => {
+    const full = budgetFor(1200);
+    const narrowed = budgetFor(1200, {
+      safeArea: { top: 0, right: 0.12, bottom: 0, left: 0.12 },
+    });
+    expect(narrowed.optics.charactersPerLine as number).toBeLessThan(
       full.optics.charactersPerLine as number,
     );
   });

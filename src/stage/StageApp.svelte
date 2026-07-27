@@ -611,6 +611,7 @@
   class="stage-root"
   data-phase={phase}
   data-pointer-hidden={pointerHidden}
+  data-text-intensity={settings?.textIntensity ?? 'standard'}
   bind:clientWidth={measuredVw}
   bind:clientHeight={measuredVh}
   onpointermove={onPointerMove}

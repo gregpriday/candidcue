@@ -372,3 +372,79 @@ describe('honesty fields', () => {
     }
   });
 });
+
+describe('review regressions', () => {
+  it('treats an implausible viewing distance as no calibration at all', () => {
+    /*
+     * A typed 1mm is positive and finite and resolves to about 0.05px of body
+     * type, which rounds to zero and leaves the presenter looking at a blank
+     * rig — with nothing NaN anywhere to notice. Falling back to the
+     * uncalibrated stage is the only outcome that still prompts.
+     */
+    const { optics } = resolveStageGeometry({
+      profile: calibrated({ viewingDistanceMm: 1 }),
+      viewport: PROMPTER_9,
+    });
+    expect(optics.calibrated).toBe(false);
+    expect(optics.bodyFontSizePx).toBe(UNCALIBRATED_FONT_SIZE_PX);
+  });
+
+  it('refuses an absurd physical diagonal rather than scaling everything by it', () => {
+    const { optics } = resolveStageGeometry({
+      profile: calibrated({ scale: { mmPerCssPx: 0, source: 'model', diagonalMm: 1e9 } }),
+      viewport: PROMPTER_9,
+    });
+    expect(optics.calibrated).toBe(false);
+    expect(optics.bodyFontSizePx).toBeGreaterThanOrEqual(8);
+  });
+
+  it('never resolves a body size too small to render', () => {
+    for (const distanceMm of [200, 400, 900, 1800, 4000]) {
+      const { optics } = resolveStageGeometry({
+        profile: calibrated({ viewingDistanceMm: distanceMm }),
+        viewport: PROMPTER_9,
+      });
+      expect(optics.bodyFontSizePx).toBeGreaterThanOrEqual(8);
+      expect(Number.isFinite(optics.bodyFontSizePx)).toBe(true);
+    }
+  });
+
+  it('records the overrides that act before the fit check', () => {
+    // These change what the model is ASKED for rather than shadowing what it
+    // produced, so they never reach the take() helper and went unrecorded —
+    // leaving a control the user could set but not see or reset.
+    const { optics } = resolveStageGeometry({
+      profile: calibrated({
+        overrides: { arcminutes: 26, characters: 28, maxColumnFraction: 0.6 },
+      }),
+      viewport: PROMPTER_9,
+    });
+    expect(optics.overriddenFields).toEqual(
+      expect.arrayContaining(['arcminutes', 'characters', 'maxColumnFraction']),
+    );
+  });
+
+  it('converts a lens offset against the SAFE height, not the viewport', () => {
+    /*
+     * `readingBandY` is a fraction of the safe rectangle, so dividing a pixel
+     * offset by the full viewport height under-shifts the band by exactly the
+     * fraction the hood crops — and the error grows with the crop.
+     */
+    const insets = { top: 0.2, right: 0, bottom: 0.2, left: 0 };
+    const cropped = resolveStageGeometry({
+      profile: calibrated({ safeArea: insets, overrides: { lensOffsetDegrees: 1 } }),
+      viewport: PROMPTER_9,
+    }).optics;
+    const uncropped = resolveStageGeometry({
+      profile: calibrated({ overrides: { lensOffsetDegrees: 1 } }),
+      viewport: PROMPTER_9,
+    }).optics;
+    const base = resolveStageGeometry({ profile: calibrated(), viewport: PROMPTER_9 }).optics;
+
+    // A crop shrinks the safe height, so the SAME angle is a LARGER fraction of
+    // it. Dividing by the viewport would have made the two identical.
+    expect(cropped.readingBandY - base.readingBandY).toBeGreaterThan(
+      uncropped.readingBandY - base.readingBandY,
+    );
+  });
+});

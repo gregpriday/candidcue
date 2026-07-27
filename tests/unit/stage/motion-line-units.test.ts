@@ -103,11 +103,39 @@ describe('lineUnits is additive, not required (§55)', () => {
     expect(isInterpretableSmoothFollowProfile({ ...PROFILE, lineUnits: null })).toBe(false);
   });
 
-  it('still refuses a version it cannot interpret, lineUnits or not', () => {
+  it('accepts the previous version, because this bump only ADDED a block', () => {
+    /*
+     * A v3 profile is a v4 profile that omits `lineUnits`.
+     *
+     * Every pixel field it carries means what it always meant, and omitting the
+     * block already means "use the pixel values" for a v4 profile. Rejecting it
+     * would cost a presenter the calm or responsive feel they chose the moment
+     * they ran a newer stage against an older control — silently, because the
+     * fallback default is perfectly followable and nothing looks broken.
+     *
+     * This assertion used to demand the opposite. It was codifying the defect.
+     */
     const older = { ...withoutLineUnits(), version: SMOOTH_FOLLOW_PROFILE_VERSION - 1 };
+    expect(isInterpretableSmoothFollowProfile(older)).toBe(true);
+  });
+
+  it('refuses a previous version that carries a block it never had', () => {
+    // Not a shape this build has produced, and guessing at it is the exact
+    // failure the version gate exists to prevent.
+    const impossible = { ...PROFILE, version: SMOOTH_FOLLOW_PROFILE_VERSION - 1 };
+    expect(isInterpretableSmoothFollowProfile(impossible)).toBe(false);
+  });
+
+  it('still refuses a version from the future', () => {
     const newer = { ...PROFILE, version: SMOOTH_FOLLOW_PROFILE_VERSION + 1 };
-    expect(isInterpretableSmoothFollowProfile(older)).toBe(false);
     expect(isInterpretableSmoothFollowProfile(newer)).toBe(false);
+    // And anything older than the one bump we can reason about.
+    expect(
+      isInterpretableSmoothFollowProfile({
+        ...withoutLineUnits(),
+        version: SMOOTH_FOLLOW_PROFILE_VERSION - 2,
+      }),
+    ).toBe(false);
   });
 });
 
