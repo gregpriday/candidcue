@@ -5,5 +5,6 @@
   "engine": "qwen",
   "voice_index": 4,
   "words": 298,
-  "audio_s": 122.475625
+  "audio_s": 122.475625,
+  "atom_count": 298
 }

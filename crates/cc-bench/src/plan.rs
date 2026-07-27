@@ -60,9 +60,39 @@ pub struct Corruption {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GoldTag {
     /// Word carries the reader from `pos` to `pos_after` (atom boundaries).
-    Script { pos_after: u32 },
+    Script {
+        pos_after: u32,
+        /// The fractional atom span this word actually carries the reader
+        /// across, when it is not one whole atom.
+        ///
+        /// A re-spelled run breaks the one-word-one-atom assumption in both
+        /// directions: `143` is said as five words, `three thirty` is written
+        /// as one. Rounding that to integers made the gold nonsense — five
+        /// words each sweeping the SAME atom from start to end, so the
+        /// reference position ran forward and snapped back four times inside
+        /// one number, and a two-atom span written as one token left its first
+        /// atom untraversed entirely.
+        ///
+        /// Absent in fixtures captured before this existed; the word then
+        /// carries exactly one atom, ending at `pos_after`, which is what
+        /// every plain read does anyway.
+        #[serde(default)]
+        span: Option<(f64, f64)>,
+    },
     /// Off-script word; display should hold near `hold` (atom boundary).
     Off { hold: u32 },
+}
+
+impl GoldTag {
+    /// The atom interval this word carries the reader across.
+    pub fn span(&self) -> Option<(f64, f64)> {
+        match self {
+            GoldTag::Script { pos_after, span } => {
+                Some(span.unwrap_or((*pos_after as f64 - 1.0, *pos_after as f64)))
+            }
+            GoldTag::Off { .. } => None,
+        }
+    }
 }
 
 /// A spoken word with its gold annotation. `text` is what the mouth says
@@ -71,6 +101,25 @@ pub enum GoldTag {
 pub struct SpokenWord {
     pub text: String,
     pub gold: GoldTag,
+    /// How much of the performance clock this word takes, in whole-word units.
+    ///
+    /// A re-spelled run must occupy exactly the time the words it replaced
+    /// would have: the premise of the `asr_forms` family is that the SOUND is
+    /// unchanged and only the notation differs, so `asr_forms` and `exact` on
+    /// the same script have to be the same performance, of the same length,
+    /// with the same partial cadence. Without this they were not — five words
+    /// for `143` bought the tracker four extra word-times of evidence, and the
+    /// scenario ran 10% longer than the control it is compared against.
+    #[serde(default = "one_word")]
+    pub clock: f64,
+    /// Was this word produced by a re-spelling? Marks the windows the
+    /// `forms.span_*` metrics score.
+    #[serde(default)]
+    pub respelled: bool,
+}
+
+fn one_word() -> f64 {
+    1.0
 }
 
 /// The expanded performance: what is said, in order, plus pauses, rate
@@ -108,7 +157,10 @@ pub fn expand(plan: &PerformancePlan, script: &CompiledScript) -> Performance {
                         text: script.atoms[atom as usize].surface.clone(),
                         gold: GoldTag::Script {
                             pos_after: atom + 1,
+                            span: None,
                         },
+                        clock: 1.0,
+                        respelled: false,
                     });
                 }
                 hold = to;
@@ -116,13 +168,23 @@ pub fn expand(plan: &PerformancePlan, script: &CompiledScript) -> Performance {
             }
             PlanOp::Substitute { from, to, say } => {
                 let seg_start = p.words.len();
-                let n = say.len().max(1) as u32;
+                let n = say.len().max(1) as f64;
+                let atoms = (to - from) as f64;
                 for (i, w) in say.iter().enumerate() {
-                    // Gold advances proportionally through the replaced span.
-                    let pos_after = from + ((to - from) * (i as u32 + 1)).div_ceil(n);
+                    // Gold advances proportionally, and in fractions: the
+                    // reader is a fifth of the way through `143` after saying
+                    // "one", not finished with it.
+                    let lo = *from as f64 + atoms * i as f64 / n;
+                    let hi = *from as f64 + atoms * (i as f64 + 1.0) / n;
                     p.words.push(SpokenWord {
                         text: w.clone(),
-                        gold: GoldTag::Script { pos_after },
+                        gold: GoldTag::Script {
+                            pos_after: hi.ceil() as u32,
+                            span: Some((lo, hi)),
+                        },
+                        // The span takes the time its atoms would have taken.
+                        clock: atoms / n,
+                        respelled: true,
                     });
                 }
                 hold = *to;
@@ -134,6 +196,8 @@ pub fn expand(plan: &PerformancePlan, script: &CompiledScript) -> Performance {
                     p.words.push(SpokenWord {
                         text: w.clone(),
                         gold: GoldTag::Off { hold },
+                        clock: 1.0,
+                        respelled: false,
                     });
                 }
                 p.segments.push((seg_start, p.words.len()));
@@ -191,6 +255,9 @@ pub struct GoldWord {
     pub end_ms: f64,
     pub text: String,
     pub gold: GoldTag,
+    /// Was this word produced by a re-spelling? See [`SpokenWord::respelled`].
+    #[serde(default)]
+    pub respelled: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -213,17 +280,19 @@ impl GoldTimeline {
             if t_ms < w.start_ms {
                 return last;
             }
-            let (pos, on_script) = match w.gold {
-                GoldTag::Script { pos_after } => {
+            let (pos, on_script) = match w.gold.span() {
+                Some((lo, hi)) => {
                     let frac = if w.end_ms > w.start_ms {
                         ((t_ms - w.start_ms) / (w.end_ms - w.start_ms)).clamp(0.0, 1.0)
                     } else {
                         1.0
                     };
-                    // Word carries the reader across one boundary.
-                    (pos_after as f64 - 1.0 + frac, true)
+                    (lo + (hi - lo) * frac, true)
                 }
-                GoldTag::Off { hold } => (hold as f64, false),
+                None => match w.gold {
+                    GoldTag::Off { hold } => (hold as f64, false),
+                    GoldTag::Script { .. } => unreachable!("a script tag always has a span"),
+                },
             };
             let speaking = t_ms <= w.end_ms;
             last = Some(GoldPoint {
@@ -269,12 +338,13 @@ pub fn synthetic_timing(performance: &Performance, default_wpm: u32) -> GoldTime
             timeline.viewport_hints.push((t, first, last));
             vp_idx += 1;
         }
-        let dur = 60_000.0 / wpm as f64;
+        let dur = 60_000.0 / wpm as f64 * w.clock;
         timeline.words.push(GoldWord {
             start_ms: t,
             end_ms: t + dur,
             text: w.text.clone(),
             gold: w.gold.clone(),
+            respelled: w.respelled,
         });
         t += dur;
     }
@@ -306,9 +376,9 @@ mod tests {
         };
         let p = expand(&plan, &script);
         assert_eq!(p.words.len(), 6);
-        assert!(matches!(p.words[1].gold, GoldTag::Script { pos_after: 2 }));
+        assert!(matches!(p.words[1].gold, GoldTag::Script { pos_after: 2, .. }));
         assert!(matches!(p.words[2].gold, GoldTag::Off { hold: 2 }));
-        assert!(matches!(p.words[5].gold, GoldTag::Script { pos_after: 5 }));
+        assert!(matches!(p.words[5].gold, GoldTag::Script { pos_after: 5, .. }));
     }
 
     #[test]

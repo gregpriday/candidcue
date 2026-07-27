@@ -303,48 +303,82 @@ the pieces are not all script words in their own right. A script that says
 both `light` and `house` on its own keeps them apart — two words is a reading
 it already supports, and choosing between them is the aligner's job.
 
+### Two things the harness had to fix before the numbers meant anything
+
+A review of this round found two defects in the measurement, both of which
+made the first set of numbers unusable as a paired comparison.
+
+**The gold was wrong inside every re-spelled run.** `PlanOp::Substitute`
+advanced the reference position by whole atoms with `div_ceil`, but the
+evaluator assumes each spoken word crosses exactly one atom. So `143` said as
+five words made the reference sweep the *same* atom from start to end five
+times, running forward and snapping back four times inside one number; and
+`three thirty` written as `3:30` left the first of its two atoms untraversed
+entirely. `GoldTag::Script` now carries the fractional span the word actually
+covers, so the reader is a fifth of the way through `143` after saying "one".
+The field is optional and absent from every frozen capture, where a word
+crosses one whole atom and the old behaviour was already correct.
+
+**`asr_forms` was 10% longer than the `exact` it was compared against.**
+Five words for `143` were five word-times of speech, so the scenario billed as
+"the same performance, differently spelled" was a different, slower
+performance with more partials and more evidence. A re-spelled run now takes
+exactly the clock its atoms would have taken. `figures__exact` and
+`figures__asr_forms` are now both 208 events and 3,652 samples — the same
+performance, to the event.
+
+That second fix incidentally closed a third hole. The verbalizer reads
+*compiled* atoms, so a normalisation change can alter which re-spellings fire:
+once `24kHz` compiled to `24 kilohertz`, the unit rule stopped matching and a
+different rendering took its place, and the before/after was quietly no longer
+the same experiment (228 events against 229). With the clock fixed, a
+rendering's word count no longer moves the timeline, and the unit rule now
+matches either spelling. `forms.span_samples` is in the table as the tell: if
+it differs between two results, they did not run the same benchmark and the
+deltas next to it are directional only.
+
 ### Results
 
-Tier A, same fixtures and evaluator on both sides, engine before and after.
+Tier A, same fixtures, same evaluator, identical synthetic input on both sides
+(`forms.span_samples` = 4,412 for each). Engine before and after.
 
 | Benchmark | Unit | Better | Baseline | Optimized | Improvement |
 |---|---|---|---:|---:|---|
-| `forms.within2` | % | higher | 48.011 | 53.294 | +5.28 pp ✅ |
-| `forms.within5` | % | higher | 90.305 | 96.224 | +5.92 pp ✅ |
-| `forms.figures_within5` | % | higher | 91.783 | 96.321 | +4.54 pp ✅ |
-| `forms.brands_within5` | % | higher | 88.509 | 96.106 | +7.60 pp ✅ |
-| `forms.freeze` | % | lower | 7.046 | 2.723 | -4.32 pp ✅ |
+| `forms.span_within2` | % | higher | 40.299 | 51.677 | +11.38 pp ✅ |
+| `forms.span_within5` | % | higher | 89.211 | 99.343 | +10.13 pp ✅ |
+| `forms.span_p95_abs` | atoms | lower | 8.500 | 3.031 | 64.3% lower ✅ |
+| `forms.within2` | % | higher | 47.670 | 53.563 | +5.89 pp ✅ |
+| `forms.within5` | % | higher | 92.603 | 99.215 | +6.61 pp ✅ |
+| `forms.figures_within5` | % | higher | 93.607 | 99.288 | +5.68 pp ✅ |
+| `forms.brands_within5` | % | higher | 91.443 | 99.130 | +7.69 pp ✅ |
+| `forms.corrupt_within5` | % | higher | 85.561 | 92.405 | +6.84 pp ✅ |
+| `forms.freeze` | % | lower | 5.737 | 0.957 | -4.78 pp ✅ |
 | `forms.false_jumps` | count | lower | 0.000 | 0.000 | unchanged |
-| `forms.lock_p95` | s | lower | 4.450 | 4.450 | unchanged |
+| `forms.relocate_p95` | s | lower | 4.450 | 4.450 | unchanged |
 | `forms.lock_failures` | count | lower | 0.000 | 0.000 | unchanged |
-| `perf.mean_event_us` | µs | lower | 187.9 | 192.7 | 2.6% higher ⚠️ |
-| `perf.p95_event_us` | µs | lower | 921.000 | 996.000 | 8.1% higher ⚠️ |
+| `forms.span_samples` | count | — | 4412 | 4412 | same input ✅ |
+| `perf.mean_event_us` | µs | lower | 187.5 | 194.3 | 3.6% higher ⚠️ |
+
+The `span_*` rows are the ones to read. A whole-run number on a page of
+figures is nine parts undisputed prose, so a total failure on every single
+number would still leave the headline in the nineties; `forms.span_within5`
+scores only the samples inside a re-spelled run and the 1.5 s after it, which
+is where the failure lives. **Measured there, the display went from 89.2% to
+99.3% within five words, and the 95th-percentile error fell from 8.5 words to
+3.0** — which is the same 3.0 the paired `exact` control scores.
 
 Every other row in the Tier-A table is byte-identical to the baseline —
 safety, clean accuracy, robustness, recovery, viewport and ambiguity all
 unmoved. That is the point of the shape of the fix: nothing here changes how
 the engine decides, only what the two sides agree a word is.
 
-Per run, with `exact` on the same script as the reference:
+`forms.relocate_p95` did not move, and it is the honest remaining gap: 4.45 s
+to re-lock after a 168-atom jump into a name-dense passage. That is
+relocation latency, not spelling, and it is a pre-existing engine
+characteristic these fixtures inherit rather than create.
 
-| Run | within5 before | within5 after | `exact` on that script |
-|---|---:|---:|---:|
-| `figures__asr_forms` | 92.9 | 99.2 | 100.0 |
-| `figures__asr_forms_pauses` | 94.7 | 98.9 | 100.0 |
-| `figures__asr_forms_corrupt` | 86.9 | 91.0 | — |
-| `brands__asr_forms` | 90.6 | 99.1 | 100.0 |
-| `brands__asr_forms_pauses` | 90.4 | 98.8 | 100.0 |
-| `brands__asr_forms_corrupt` | 83.7 | 91.9 | — |
-
-On the straight-read families the spelling disagreement cost 7–9 points of
-`within5` and now costs under one. What remains is not spelling: the `_cold`
-runs are relocation latency (4.45 s to re-lock after a 168-atom jump into a
-name-dense passage) and the `_corrupt` runs are recogniser noise, both
-pre-existing engine characteristics that these fixtures inherit rather than
-create.
-
-The per-event cost rose 2.6% (187.9 → 192.7 µs, three runs each side, spread
-±1.2 µs). The extra work is one hash lookup per transcript atom plus, only
+The per-event cost rose 3.6% (187.5 → 194.3 µs, three runs each side, spread
+±1.4 µs). The extra work is one hash lookup per transcript atom plus, only
 where a word is not in the script's vocabulary, up to two concatenations. The
 budget is 2 ms.
 
@@ -399,6 +433,33 @@ recogniser, not by the engine.
   correctly before any change (`nineteen ninety eight`, `three point two`,
   spelled cardinals) and are controls rather than targets — but a model can
   still be wrong about how often a shape occurs. Tier B is the check.
+* **The frequency mix is chosen, not measured.** Every eligible run is
+  re-spelled, once, consistently. The live traces show the provider doing
+  neither: it re-spells some and not others, and changes its mind between
+  partials of the same utterance — `one hundred twenty`, then `120`, then the
+  words again, inside one item. Revision churn is the largest unmodelled
+  behaviour here and is probably harder than any stable rendering, because the
+  ledger tracks stability by canonical id and a notation flip retracts the
+  atom. Modelling it from the frozen traces is the obvious next round.
+* **The shape list is the shapes someone thought of.** Missing: 24-hour and
+  `3:05` times, `07/28/2026`, ranges, scores, fractions, phone and account
+  numbers, leading zeros, currency codes, `2.4M`, `°C`, `km/h`, initialisms
+  written with spaces, and a name the provider both splits AND respells.
+  Absence from `forms.*` is absence of evidence, not evidence of absence.
+* **`brands.md` cannot exercise its own headline example.** Its explanatory
+  prose writes "Rust Light" and "Candid Cue" as separate words, which makes
+  `rust`, `light`, `candid` and `cue` script words in their own right — and
+  the rejoin refuses a join when every piece is already a script word. So
+  `RustLight` and `CandidCue` are never rejoined anywhere in that fixture; the
+  +7.69 pp on `forms.brands_within5` comes from `SoundCloud`, `PagerDuty`,
+  `OpenTable`, `BrightHarbour` and `LumenWorks`, whose halves do not appear
+  alone. That is an accidental but useful negative case — it is the timid half
+  of the rule, proving itself — and it is left in deliberately.
+* `figures.md` line 5 says it tests both "I write twenty-seven and it writes
+  27" and the reverse. It does not: both notations compile to the same `27`
+  atom before the verbalizer sees them, so the harness cannot tell the
+  author's two spellings apart. Only the recogniser's side of the
+  disagreement is modelled.
 * Compound ordinals are untouched. The script's canonical form for
   `twenty-eighth` is the two atoms `20 eighth`, which is self-consistent and
   matches `28th`, but a provider writing the bare cardinal `28` still lands
@@ -411,11 +472,21 @@ recogniser, not by the engine.
   had (`Cape Town` → `CapeTown`) is the symmetric case and is not handled,
   because nothing in the corpus produces it and an untested branch in the hot
   path is worse than a missing one.
-* `bench/runs` gained three fixtures. The Tier-B engine and voice assignment
+* `bench/runs` gained four fixtures. The Tier-B engine and voice assignment
   is now pinned per run rather than derived from list position — it was
   `index % 3`, which meant inserting one entry silently re-voiced every entry
   below it, and five already-frozen runs would have been re-rendered and
   re-captured under new names at full cost for no new evidence.
+* Every manifest now records the atom count its gold was captured against,
+  and replay refuses a run whose script no longer compiles to that many atoms.
+  Without it, a normalisation change that adds or drops one atom does not fail
+  — it shifts every gold position in every captured run for that script, and
+  the benchmark goes on printing plausible numbers about the wrong words.
+* Tier-B TTS still speaks the compiled canonical atoms, not the authored text:
+  `brands`'s performance is literally `rustlight`, `saas`, `rtx 4090 s`. Some
+  of the 17.7% WER on `figures__exact__qwen` is that, not the recogniser.
+  Speaking the authored surface needs the compiler to carry it, which is the
+  right fix and a larger one.
 
 ## Honest limitations
 

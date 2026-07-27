@@ -111,12 +111,16 @@ false jump is a regression.
 | `recovery.adlib_drift_p95` | How far the display wandered from the hold anchor during off-script speech. |
 | `viewport.start_lock_p50` | Lock time when the presenter scrolled somewhere, the app reported the visible range, and reading started there. |
 | `names.cold_jump_lock_p95` | Lock time jumping cold into a section identified only by unusually-spelled proper nouns, with ASR-style mangling. |
-| `forms.within2 / within5` | Accuracy when the script and the recogniser spell the same sound differently. Compare against `accuracy.clean_*` — the gap is what the disagreement costs. |
+| `forms.span_within2 / span_within5` | The headline. Accuracy measured ONLY inside a re-spelled run and the 1.5 s after it. A whole-run number on a page of figures is nine parts undisputed prose, so this is the one that can actually move when spelling handling changes. |
+| `forms.span_p95_abs` | 95th-percentile error in those same windows. Compare against `accuracy.clean_p95_abs` — equal means the disagreement costs nothing. |
+| `forms.span_samples` | Not a quality number: the count the span rows are computed over. If it differs between two results, the two runs did not have the same benchmark input and every delta beside it is directional only. |
+| `forms.within2 / within5` | Whole-run accuracy on the spelling-only families. Compare against `accuracy.clean_*`. |
+| `forms.corrupt_within5` | The same reading with recogniser noise on top. Kept out of the headline: it moves when recognition changes, which is a different question. |
 | `forms.figures_within5` | The same, numbers only: years, money, decimals, times, ordinals, units. Moves when normalisation changes. |
 | `forms.brands_within5` | The same, names only: compound brands the recogniser splits in two, acronyms, places. Moves when word-boundary handling changes. |
 | `forms.false_jumps` | False jumps caused by a spelling disagreement — a number that matched the wrong copy of itself elsewhere in the script. |
 | `forms.freeze` | Freeze time on those scripts: the display waiting for a word it will never match. |
-| `forms.lock_p95 / lock_failures` | Relocation into a passage whose only landmarks are figures or names the recogniser respelled. |
+| `forms.relocate_p95 / lock_failures` | Relocation into a passage whose only landmarks are figures or names the recogniser respelled. |
 | `ambiguity.refrain_false_jumps` | False jumps on a script whose refrain appears verbatim three times. |
 | `perf.mean_event_us / p95_event_us` | Engine time per transcript revision. |
 | `perf.scale_ratio_5k` | Per-event cost ratio, 5,000-word vs 300-word script (script-length independence). |

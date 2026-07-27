@@ -347,6 +347,7 @@ async fn synth_audio(
             voice_index,
             words: performance.words.len(),
             audio_s: run.gold.total_ms / 1000.0,
+            atom_count: Some(item.script.len()),
         };
         std::fs::write(
             run_dir.join("manifest.json"),

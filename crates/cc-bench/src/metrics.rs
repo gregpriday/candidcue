@@ -10,7 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::plan::{GoldTag, GoldTimeline};
+use crate::plan::GoldTimeline;
 use crate::replay::ReplayResult;
 
 /// Sampling grid for render-time metrics.
@@ -59,6 +59,21 @@ const AHEAD_TOLERANCE_ATOMS: f64 = 1.0;
 /// to see it happen.
 const AHEAD_EVENT_ATOMS: f64 = 2.0;
 const AHEAD_EVENT_SUSTAIN_MS: f64 = 300.0;
+/// ---------------------------------------------------------------------------
+/// Re-spelling windows: where the two sides disagreed about notation.
+/// ---------------------------------------------------------------------------
+/// A whole-run accuracy number on an `asr_forms` script is mostly measuring the
+/// plain prose between the figures — a page with twenty re-spelled runs still
+/// spends 90% of its words on ordinary words that were never in dispute, so a
+/// real failure on every single number moves the headline by a few points and
+/// stays inside ±5. These counters score only the samples inside a re-spelled
+/// run and the window just after it, which is where the failure actually lives.
+///
+/// The tail exists because the evidence arrives late: a word is not in a
+/// transcript until the provider emits one, so the display cannot be judged on
+/// a figure at the instant it is spoken. 1.5 s is the same window the recovery
+/// metrics use to decide a lock has held.
+const SPAN_TAIL_MS: f64 = 1_500.0;
 /// Recovery: locked when |err| ≤ 3, and stays ≤ 5 for the sustain window.
 const RECOVER_HIT_ATOMS: f64 = 3.0;
 const RECOVER_HOLD_ATOMS: f64 = 5.0;
@@ -131,6 +146,11 @@ pub struct RunMetrics {
     pub p95_event_us: u64,
     /// Diagnostic WER of the final transcripts vs what was actually said.
     pub wer_pct: Option<f64>,
+    /// Samples inside a re-spelling window (and its 1.5 s tail), and the hits
+    /// among them. Zero on every family that re-spells nothing.
+    pub span_eligible: usize,
+    pub span_within2: usize,
+    pub span_within5: usize,
 }
 
 /// Raw per-sample data kept for suite-level pooling (not serialised).
@@ -143,6 +163,8 @@ pub struct RunSamples {
     /// Signed overshoot (display − last word finished) at every on-script
     /// sample, pausing or speaking. Positive means text was faded early.
     pub ahead: Vec<f64>,
+    /// Absolute error at samples inside a re-spelling window.
+    pub span_abs: Vec<f64>,
 }
 
 pub struct RunEval {
@@ -210,9 +232,9 @@ pub fn evaluate(
         let mut off_run = 0usize;
         let mut first_script_seen = false;
         for w in &gold.words {
-            match &w.gold {
-                GoldTag::Script { pos_after } => {
-                    let start_pos = *pos_after as f64 - 1.0;
+            match w.gold.span() {
+                Some((span_start, span_end)) => {
+                    let start_pos = span_start;
                     if !first_script_seen {
                         recovery_targets.push((RecoveryKind::Initial, w.start_ms));
                         first_script_seen = true;
@@ -232,10 +254,10 @@ pub fn evaluate(
                             recovery_targets.push((RecoveryKind::AdlibReturn, w.start_ms));
                         }
                     }
-                    last_pos = Some(*pos_after as f64);
+                    last_pos = Some(span_end);
                     off_run = 0;
                 }
-                GoldTag::Off { .. } => {
+                None => {
                     off_run += 1;
                 }
             }
@@ -304,6 +326,23 @@ pub fn evaluate(
             None => f64::INFINITY,
         })
         .unwrap_or(0.0);
+
+    // ---- re-spelling windows ----
+    // Maximal runs of consecutive respelled words, each extended by the tail.
+    let mut spans: Vec<(f64, f64)> = Vec::new();
+    for w in &gold.words {
+        if !w.respelled {
+            continue;
+        }
+        match spans.last_mut() {
+            Some(last) if w.start_ms <= last.1 => last.1 = w.end_ms + SPAN_TAIL_MS,
+            _ => spans.push((w.start_ms, w.end_ms + SPAN_TAIL_MS)),
+        }
+    }
+    let mut span_cursor = 0usize;
+    let mut span_eligible = 0usize;
+    let mut span_within2 = 0usize;
+    let mut span_within5 = 0usize;
 
     // ---- uniform sampling ----
     let mut cursor = 0usize;
@@ -426,6 +465,22 @@ pub fn evaluate(
                 within5 += 1;
             }
 
+            // The same sample, scored again if the two sides were arguing
+            // about how to spell what was being said right here.
+            while span_cursor < spans.len() && spans[span_cursor].1 < t {
+                span_cursor += 1;
+            }
+            if spans.get(span_cursor).is_some_and(|s| t >= s.0 && t <= s.1) {
+                span_eligible += 1;
+                samples.span_abs.push(err.abs());
+                if err.abs() <= 2.0 {
+                    span_within2 += 1;
+                }
+                if err.abs() <= 5.0 {
+                    span_within5 += 1;
+                }
+            }
+
             // Freeze: gold moved, display did not.
             if t >= FREEZE_WINDOW_MS {
                 let t0 = t - FREEZE_WINDOW_MS;
@@ -545,6 +600,9 @@ pub fn evaluate(
         None
     };
     m.prefinal_move_pct = prefinal;
+    m.span_eligible = span_eligible;
+    m.span_within2 = span_within2;
+    m.span_within5 = span_within5;
     m.event_count = replay.event_us.len();
     m.mean_event_us = mean(&replay.event_us.iter().map(|v| *v as f64).collect::<Vec<_>>());
     m.p95_event_us = {

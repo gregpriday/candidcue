@@ -275,7 +275,11 @@ mod tests {
                 start_ms: i as f64 * 400.0,
                 end_ms: i as f64 * 400.0 + 400.0,
                 text: format!("word{i}"),
-                gold: crate::plan::GoldTag::Script { pos_after: i + 1 },
+                gold: crate::plan::GoldTag::Script {
+                    pos_after: i + 1,
+                    span: None,
+                },
+                respelled: false,
             })
             .collect();
         let gold = GoldTimeline {

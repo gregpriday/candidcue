@@ -64,6 +64,7 @@ pub fn run_tier_a(
     let mut clean_abs: Vec<f64> = Vec::new();
     let mut clean_signed: Vec<f64> = Vec::new();
     let mut pause_lead: Vec<f64> = Vec::new();
+    let mut span_abs: Vec<f64> = Vec::new();
     // Overshoot pools across EVERY family, not just the clean ones: fading a
     // word the reader has not reached is just as wrong in a retake as in a
     // straight read.
@@ -100,6 +101,9 @@ pub fn run_tier_a(
         }
         pause_lead.extend_from_slice(&eval.samples.pause_lead);
         ahead.extend_from_slice(&eval.samples.ahead);
+        if matches!(scenario.plan.scenario.as_str(), "asr_forms" | "asr_forms_pauses") {
+            span_abs.extend_from_slice(&eval.samples.span_abs);
+        }
         if scenario.plan.scenario == "scale_window" {
             scale_us.insert(scenario.plan.script.clone(), eval.metrics.mean_event_us);
         }
@@ -113,6 +117,7 @@ pub fn run_tier_a(
         &scale_us,
         &mut pause_lead,
         &mut ahead,
+        &mut span_abs,
     );
     Ok(SuiteResult {
         label: label.to_string(),
@@ -131,11 +136,12 @@ fn is_clean_family(scenario: &str) -> bool {
 
 fn build_table(
     runs: &[RunMetrics],
-    clean_abs: &mut Vec<f64>,
+    clean_abs: &mut [f64],
     clean_signed: &[f64],
     scale_us: &std::collections::HashMap<String, f64>,
-    pause_lead: &mut Vec<f64>,
-    ahead: &mut Vec<f64>,
+    pause_lead: &mut [f64],
+    ahead: &mut [f64],
+    span_abs: &mut [f64],
 ) -> Vec<BenchEntry> {
     let mut table = Vec::new();
 
@@ -306,31 +312,65 @@ fn build_table(
     // numbers was read at it. The per-script rows exist for the same reason at
     // one level down — figures fail on normalisation, names fail on word
     // boundaries, and one number covering both would move for the wrong reason.
-    let forms = |r: &RunMetrics| r.scenario.starts_with("asr_forms");
-    let (f2, f5, fe) = runs.iter().filter(|r| forms(r)).fold((0, 0, 0), |(a, b, e), r| {
+    // The headline is the spelling-only families. `asr_forms_skip` is a
+    // relocation test and `asr_forms_corrupt` is a noise test, and both were
+    // in here at first — which meant the headline moved when relocation or
+    // recognition changed, with nothing to say it had. They get their own rows.
+    let plain = |r: &RunMetrics| matches!(r.scenario.as_str(), "asr_forms" | "asr_forms_pauses");
+    let any_forms = |r: &RunMetrics| r.scenario.starts_with("asr_forms");
+    let (f2, f5, fe) = runs.iter().filter(|r| plain(r)).fold((0, 0, 0), |(a, b, e), r| {
         (a + r.within2_hits, b + r.within5_hits, e + r.eligible_samples)
     });
     table.push(entry("forms.within2", pct_of(f2, fe), "%", "higher"));
     table.push(entry("forms.within5", pct_of(f5, fe), "%", "higher"));
+
+    // The same reading, scored ONLY where the two sides disagreed about
+    // spelling. A whole-run number is nine parts undisputed prose; this one is
+    // the benchmark the family was built to be.
+    let (s2, s5, se) = runs.iter().filter(|r| plain(r)).fold((0, 0, 0), |(a, b, e), r| {
+        (a + r.span_within2, b + r.span_within5, e + r.span_eligible)
+    });
+    table.push(entry("forms.span_within2", pct_of(s2, se), "%", "higher"));
+    table.push(entry("forms.span_within5", pct_of(s5, se), "%", "higher"));
+    table.push(entry(
+        "forms.span_p95_abs",
+        percentile(span_abs, 95.0),
+        "atoms",
+        "lower",
+    ));
+    // How many samples the span rows are computed over. Not a quality number:
+    // it is the tell that the benchmark INPUT moved. The verbalizer reads
+    // compiled atoms, so a normalisation change can alter which re-spellings
+    // fire and how long they take — and then a before/after is not the same
+    // experiment. If this row differs between two results, read the deltas
+    // below it as directional only.
+    table.push(entry("forms.span_samples", se as f64, "count", "lower"));
+
     for (script, bench_name) in [
         ("figures", "forms.figures_within5"),
         ("brands", "forms.brands_within5"),
     ] {
         let (h, e) = runs
             .iter()
-            .filter(|r| forms(r) && r.run.starts_with(script))
+            .filter(|r| plain(r) && r.run.starts_with(script))
             .fold((0, 0), |(a, e), r| (a + r.within5_hits, e + r.eligible_samples));
         table.push(entry(bench_name, pct_of(h, e), "%", "higher"));
     }
+    let (c5, ce) = runs
+        .iter()
+        .filter(|r| r.scenario == "asr_forms_corrupt")
+        .fold((0, 0), |(a, e), r| (a + r.within5_hits, e + r.eligible_samples));
+    table.push(entry("forms.corrupt_within5", pct_of(c5, ce), "%", "higher"));
+
     table.push(entry(
         "forms.false_jumps",
-        runs.iter().filter(|r| forms(r)).map(|r| r.false_jumps).sum::<u32>() as f64,
+        runs.iter().filter(|r| any_forms(r)).map(|r| r.false_jumps).sum::<u32>() as f64,
         "count",
         "lower",
     ));
     let (forms_frozen, forms_freeze_eligible) = runs
         .iter()
-        .filter(|r| forms(r))
+        .filter(|r| plain(r))
         .fold((0usize, 0usize), |(f, e), r| {
             (f + r.freeze_frozen, e + r.freeze_eligible)
         });
@@ -340,23 +380,26 @@ fn build_table(
         "%",
         "lower",
     ));
-    let mut forms_locks: Vec<f64> = runs
+    // Relocation into a passage whose only landmarks were re-spelled. Skips
+    // only: pooling the initial locks in swamped two skip events with a dozen
+    // identical cold starts and made the row unable to move.
+    let mut forms_relocations: Vec<f64> = runs
         .iter()
-        .filter(|r| forms(r))
+        .filter(|r| r.scenario == "asr_forms_skip")
         .flat_map(|r| &r.recoveries)
-        .filter(|e| matches!(e.kind, RecoveryKind::Initial | RecoveryKind::SkipForward))
+        .filter(|e| e.kind == RecoveryKind::SkipForward)
         .filter_map(|e| e.recovered_in_s)
         .collect();
     table.push(entry(
-        "forms.lock_p95",
-        percentile(&mut forms_locks, 95.0),
+        "forms.relocate_p95",
+        percentile(&mut forms_relocations, 95.0),
         "s",
         "lower",
     ));
     table.push(entry(
         "forms.lock_failures",
         runs.iter()
-            .filter(|r| forms(r))
+            .filter(|r| any_forms(r))
             .flat_map(|r| &r.recoveries)
             .filter(|e| e.recovered_in_s.is_none())
             .count() as f64,
@@ -517,6 +560,18 @@ pub struct RunManifest {
     pub words: usize,
     /// Audio length in seconds.
     pub audio_s: f64,
+    /// How many atoms the script compiled to when this run was captured.
+    ///
+    /// Gold stores the reader's position as an ATOM INDEX, and replay
+    /// recompiles the script from source with whatever normaliser is current.
+    /// So a normalisation change that adds or drops one atom does not fail —
+    /// it silently shifts every gold position in every captured run for that
+    /// script, and the benchmark keeps printing plausible numbers about the
+    /// wrong words. This is the fingerprint that turns that into an error.
+    ///
+    /// `None` on fixtures captured before it existed.
+    #[serde(default)]
+    pub atom_count: Option<usize>,
 }
 
 /// Replay every captured live run in `runs_dir` and build the Tier-B table.
@@ -555,6 +610,20 @@ pub fn run_tier_b(
         let source =
             std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
         let script = cc_align::compile(&source, cc_align::CompileOptions::default());
+        if let Some(captured) = manifest.atom_count {
+            anyhow::ensure!(
+                captured == script.len(),
+                "{}: {} compiles to {} atoms now, {} when this run was captured. \
+                 Its gold is in atom indexes, so replaying it would score the engine \
+                 against the wrong words. Re-capture the run, or revert the change to \
+                 how {}.md normalises.",
+                manifest.name,
+                manifest.script,
+                script.len(),
+                captured,
+                manifest.script,
+            );
+        }
 
         let result = crate::replay::replay(script, config.clone(), &events, &gold.viewport_hints);
         let eval = evaluate(

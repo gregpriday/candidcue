@@ -20,6 +20,22 @@
 //! recogniser does emit, and several of them already normalise correctly today
 //! (spelled cardinals, `nineteen ninety eight`, `three point two`). Those are
 //! the controls. The ones that do not are the benchmark.
+//!
+//! Two things this model does NOT claim, and a reader of the numbers should
+//! hold on to both:
+//!
+//! * **The frequency mix is chosen, not measured.** Every eligible run is
+//!   re-spelled, once, consistently. A real provider re-spells some and not
+//!   others, and changes its mind between partials of the same utterance —
+//!   `one hundred twenty` then `120` then the words again, all inside one item
+//!   (see `bench/runs/figures__exact__qwen/events.jsonl`). Revision churn is
+//!   the largest unmodelled behaviour here and it is probably harder than any
+//!   stable rendering, because the ledger tracks stability by canonical id.
+//! * **The shapes are the ones someone thought of.** Missing: 24-hour and
+//!   `3:05` times, `07/28/2026`, ranges, scores, fractions, phone and account
+//!   numbers, leading zeros, currency codes, `2.4M`, `°C`, `km/h`, initialisms
+//!   written with spaces, and a name the provider both splits AND respells.
+//!   Absence from this list is absence of evidence.
 
 use std::collections::HashMap;
 
@@ -103,33 +119,58 @@ impl Verbalizer {
 
         // `2.4 million dollars` → `$2.4 million`: the currency moves to the
         // front of the amount and the scale word follows it.
+        //
+        // Alternated with the spoken order, which is what the live captures
+        // actually contained. The symbol form is a shape providers do produce,
+        // but this model has no measured frequency for it and must not imply
+        // one by using it every time.
         if let (Some(scale), Some(unit)) = (next, surface(at + 2)) {
             if is_number(head) && SCALES.contains(&scale) {
                 if let Some((_, symbol)) = CURRENCIES.iter().find(|(name, _)| *name == unit) {
-                    return Some(Rendering {
-                        span: 3,
-                        words: vec![format!("{symbol}{head}"), scale.to_string()],
-                    });
+                    let words = if at % 2 == 0 {
+                        vec![format!("{symbol}{head}"), scale.to_string()]
+                    } else {
+                        let mut spoken = spell_decimal(head)?;
+                        spoken.push(scale.to_string());
+                        spoken.push(unit.to_string());
+                        spoken
+                    };
+                    return Some(Rendering { span: 3, words });
                 }
             }
         }
 
         if let Some(next) = next {
-            // `24 khz` → `24 kilohertz`.
+            // `24 khz` ↔ `24 kilohertz`. Matched in BOTH directions on
+            // purpose: the compiled atom for a unit is whatever the engine's
+            // normaliser currently produces, so a rule keyed on one spelling
+            // stops firing the moment the engine changes which spelling that
+            // is — and then the two sides of a before/after are not running
+            // the same benchmark input.
             if is_integer(head) {
-                if let Some((_, spelled)) = UNITS.iter().find(|(abbrev, _)| *abbrev == next) {
+                if let Some((abbrev, spelled)) = UNITS
+                    .iter()
+                    .find(|(abbrev, spelled)| *abbrev == next || *spelled == next)
+                {
+                    let other = if next == *abbrev { spelled } else { abbrev };
                     return Some(Rendering {
                         span: 2,
-                        words: vec![head.to_string(), (*spelled).to_string()],
+                        words: vec![head.to_string(), (*other).to_string()],
                     });
                 }
             }
-            // `40 percent` → `40%`.
+            // `40 percent` ↔ `40%`. Alternated: the live provider writes both,
+            // and a model that only ever produced the symbol would be claiming
+            // a frequency nobody measured.
             if is_integer(head) && next == "percent" {
-                return Some(Rendering {
-                    span: 2,
-                    words: vec![format!("{head}%")],
-                });
+                let words = if at % 2 == 0 {
+                    vec![format!("{head}%")]
+                } else {
+                    let mut spelled = spell(head.parse().ok()?);
+                    spelled.push("percent".into());
+                    spelled
+                };
+                return Some(Rendering { span: 2, words });
             }
             // `three thirty` → `3:30`.
             if let (Ok(hour), Ok(minute)) = (head.parse::<u32>(), next.parse::<u32>()) {
@@ -162,19 +203,8 @@ impl Verbalizer {
         }
 
         // `1.2` → `one point two`.
-        if let Some((whole, frac)) = head.split_once('.') {
-            if !whole.is_empty()
-                && !frac.is_empty()
-                && whole.chars().all(|c| c.is_ascii_digit())
-                && frac.chars().all(|c| c.is_ascii_digit())
-            {
-                let mut words = spell(whole.parse().ok()?);
-                words.push("point".into());
-                for digit in frac.chars() {
-                    words.push(DIGITS[digit as usize - '0' as usize].into());
-                }
-                return Some(Rendering { span: 1, words });
-            }
+        if let Some(words) = spell_decimal(head) {
+            return Some(Rendering { span: 1, words });
         }
 
         // Bare integers: spell them the way they are said.
@@ -188,6 +218,24 @@ impl Verbalizer {
 
         None
     }
+}
+
+/// `1.2` → `one point two`. None when the atom is not a decimal.
+fn spell_decimal(atom: &str) -> Option<Vec<String>> {
+    let (whole, frac) = atom.split_once('.')?;
+    if whole.is_empty()
+        || frac.is_empty()
+        || !whole.chars().all(|c| c.is_ascii_digit())
+        || !frac.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+    let mut words = spell(whole.parse().ok()?);
+    words.push("point".into());
+    for digit in frac.chars() {
+        words.push(DIGITS[digit as usize - '0' as usize].into());
+    }
+    Some(words)
 }
 
 fn is_integer(s: &str) -> bool {

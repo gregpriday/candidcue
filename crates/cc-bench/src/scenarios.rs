@@ -559,12 +559,14 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
             suite.push(scenario(&name, "asr_forms_pauses", &script, 150, ops, Corruption::default()));
         }
 
-        // Cold start in the middle: nothing but the recogniser's own spelling
-        // of a figure-dense passage to relocate on.
+        // Jump into the middle: fourteen atoms, a pause, then a passage whose
+        // only landmarks are figures or names the recogniser respelled. Named
+        // `skip`, not `cold` — it reads and locks first, so it measures warm
+        // forward relocation, which is a different thing from a cold start.
         let mut ops = asr_ops(&script, &verbalizer, 0, 14);
         ops.push(PlanOp::Pause { ms: 3_000 });
         ops.extend(asr_ops(&script, &verbalizer, frac(n, 45), frac(n, 75)));
-        suite.push(scenario(&name, "asr_forms_cold", &script, 150, ops, Corruption::default()));
+        suite.push(scenario(&name, "asr_forms_skip", &script, 150, ops, Corruption::default()));
 
         // Spelling disagreement AND ordinary recogniser noise on top. A name
         // the provider splits in two is also a name it half-mishears.

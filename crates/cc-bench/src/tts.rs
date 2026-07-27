@@ -227,6 +227,7 @@ pub async fn synthesize(
                 end_ms: t + dur,
                 text: w.text.clone(),
                 gold: w.gold.clone(),
+                respelled: w.respelled,
             });
             t += dur;
         }
