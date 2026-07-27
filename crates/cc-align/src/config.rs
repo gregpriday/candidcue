@@ -122,6 +122,15 @@ pub struct AlignmentConfig {
     /// the lead, this keeps the display *moving* between transcript events
     /// rather than advancing and then stalling.
     pub prediction_gain: f64,
+    /// Gain used once the measured pace reaches `prediction_gain_fast_rate`.
+    ///
+    /// Pipeline delay costs more whole words at a fast pace, while the
+    /// ordinary/slow path should retain the conservative gain that protects
+    /// pauses and deliberate slow-downs. The engine interpolates between the
+    /// two instead of making every speaker pay for the fastest case.
+    pub prediction_gain_fast: f64,
+    /// Measured atoms/second at which `prediction_gain_fast` is fully active.
+    pub prediction_gain_fast_rate: f64,
     /// Hard cap on the display's lead over `observed`, in atoms.
     ///
     /// The binding constraint on overshoot, and deliberately expressed in
@@ -191,6 +200,14 @@ impl AlignmentConfig {
         self.max_lead_atoms = self.max_lead_atoms.max(0.0);
         fix(&mut self.prediction_gain, d.prediction_gain);
         self.prediction_gain = self.prediction_gain.clamp(0.0, 1.0);
+        fix(&mut self.prediction_gain_fast, d.prediction_gain_fast);
+        self.prediction_gain_fast = self.prediction_gain_fast.clamp(0.0, 1.0);
+        fix(
+            &mut self.prediction_gain_fast_rate,
+            d.prediction_gain_fast_rate,
+        );
+        self.prediction_gain_fast_rate =
+            self.prediction_gain_fast_rate.max(self.rate_default + 0.1);
         fix(&mut self.emission_lag_ms, d.emission_lag_ms);
         fix(&mut self.partial_lag_ms, d.partial_lag_ms);
         fix(&mut self.endpoint_lag_ms, d.endpoint_lag_ms);
@@ -237,8 +254,8 @@ impl Default for AlignmentConfig {
             cost_substitution: 1000,
             cost_phonetic: 550,
             cost_insert_filler: 120,
-            cost_insert_open: 700,
-            cost_insert_extend: 400,
+            cost_insert_open: 785,
+            cost_insert_extend: 485,
             del_extend_factor_milli: 700,
 
             observe_min_fidelity: 0.50,
@@ -253,7 +270,7 @@ impl Default for AlignmentConfig {
             jump_margin: 0.5,
             jump_persistence: 1,
             retake_extra_content: 0,
-            relocation_min_content: 3,
+            relocation_min_content: 2,
             jump_query_min: 4,
             weak_unexplained_content: 3,
             weak_unexplained_total: 4,
@@ -272,6 +289,8 @@ impl Default for AlignmentConfig {
             pause_onset_ms: 1800.0,
             lead_floor_ms: 0.0,
             prediction_gain: 0.35,
+            prediction_gain_fast: 0.55,
+            prediction_gain_fast_rate: 3.7,
             max_lead_atoms: 2.5,
 
             emission_lag_ms: 0.0,

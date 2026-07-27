@@ -53,6 +53,29 @@ impl ReportRow {
             }
         }
     }
+
+    /// Direction-normalized relative improvement. Positive is better, negative
+    /// is worse, regardless of whether the metric itself prefers higher or
+    /// lower values. A zero baseline has no meaningful relative denominator.
+    pub fn improvement_percent(&self) -> String {
+        let (b, o) = (self.baseline, self.optimized);
+        if !b.is_finite() || !o.is_finite() {
+            return "n/a".into();
+        }
+        if (b - o).abs() < 1e-9 {
+            return "0.0%".into();
+        }
+        if b.abs() < 1e-9 || self.better == "same" {
+            return "n/a".into();
+        }
+        let raw = (o - b) / b.abs() * 100.0;
+        let normalized = match self.better.as_str() {
+            "higher" => raw,
+            "lower" => -raw,
+            _ => 0.0,
+        };
+        format!("{normalized:+.1}%")
+    }
 }
 
 pub fn rows(baseline: &SuiteResult, optimized: &SuiteResult) -> Vec<ReportRow> {
@@ -73,8 +96,10 @@ pub fn rows(baseline: &SuiteResult, optimized: &SuiteResult) -> Vec<ReportRow> {
 
 pub fn markdown_table(rows: &[ReportRow]) -> String {
     let mut out = String::new();
-    out.push_str("| Benchmark | Unit | Better | Baseline | Optimized | Improvement |\n");
-    out.push_str("|---|---|---|---:|---:|---|\n");
+    out.push_str(
+        "| Benchmark | Unit | Better | Baseline | Optimized | Change | % improvement |\n",
+    );
+    out.push_str("|---|---|---|---:|---:|---|---:|\n");
     for r in rows {
         let marker = if (r.baseline - r.optimized).abs() < 1e-9 {
             ""
@@ -84,15 +109,39 @@ pub fn markdown_table(rows: &[ReportRow]) -> String {
             " ⚠️"
         };
         out.push_str(&format!(
-            "| `{}` | {} | {} | {:.3} | {:.3} | {}{} |\n",
+            "| `{}` | {} | {} | {:.3} | {:.3} | {}{} | {} |\n",
             r.name,
             r.unit,
             r.better,
             r.baseline,
             r.optimized,
             r.improvement(),
-            marker
+            marker,
+            r.improvement_percent(),
         ));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReportRow;
+
+    fn row(better: &str, baseline: f64, optimized: f64) -> ReportRow {
+        ReportRow {
+            name: "metric".into(),
+            unit: "atoms".into(),
+            better: better.into(),
+            baseline,
+            optimized,
+        }
+    }
+
+    #[test]
+    fn relative_improvement_is_positive_in_either_better_direction() {
+        assert_eq!(row("higher", 50.0, 60.0).improvement_percent(), "+20.0%");
+        assert_eq!(row("lower", 50.0, 40.0).improvement_percent(), "+20.0%");
+        assert_eq!(row("lower", 50.0, 60.0).improvement_percent(), "-20.0%");
+        assert_eq!(row("higher", 0.0, 1.0).improvement_percent(), "n/a");
+    }
 }
