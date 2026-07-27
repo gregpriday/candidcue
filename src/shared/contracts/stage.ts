@@ -74,28 +74,28 @@ export const STAGE_EVENT = {
   transcriptTap: 'stage://transcript-tap',
 
   /**
-   * control → stage: the §29.2 microphone check, drawn on the stage itself.
+   * control → stage: the voice pill — "we are picking up what you say".
    *
-   * The check runs AFTER the stage goes full screen and BEFORE the transport
-   * opens, which is the only moment where the presenter is already looking at
-   * the surface they will read from and nothing billable has started. Control
-   * owns the capture (one microphone, one owner — see audio/ownership.ts), so
-   * the stage never asks for a device: it is handed frames and draws them.
+   * There used to be a full-screen microphone check here, standing between the
+   * stage going full screen and the transport opening. It was the wrong
+   * instrument: a gate that judged a microphone from two seconds of silence and
+   * refused to open the take until it approved of what it heard, which meant it
+   * accused a working rig of being deaf before the presenter had drawn breath.
    *
-   * Same direct `emitTo` path as the heartbeat and the transcript tap. A
-   * dropped frame costs one bar of the waveform and nothing else; the state
-   * that matters rides every frame rather than being latched from a transition.
+   * The take now starts immediately and this reports on it from the corner of
+   * the stage instead: a live waveform while it is listening, a tick once real
+   * recogniser text has come back, a cross if audio or transcription stops.
+   * Evidence rather than a gate — it can be ignored, and nothing it says
+   * prevents a take from running.
+   *
+   * Same direct `emitTo` path as the heartbeat and the transcript tap. Control
+   * owns the capture (one microphone, one owner — see audio/ownership.ts) and
+   * sends a fully resolved view; the stage holds no audio state and no
+   * thresholds. A dropped frame costs one bar of the waveform and nothing else,
+   * because the state that matters rides every frame rather than being latched
+   * from a transition.
    */
-  micCheck: 'stage://mic-check',
-  /**
-   * stage → control: the presenter answered the microphone check.
-   *
-   * Its own event rather than `stage://intent` because the intent bridge is
-   * installed by `startLiveSession`, and the whole point of this check is that
-   * it happens BEFORE that — a key pressed on the check would have been sent
-   * into a channel nobody was listening on yet.
-   */
-  micCheckIntent: 'stage://mic-check-intent',
+  voicePill: 'stage://voice-pill',
 
   /**
    * stage → Rust: the stage's subscriptions are registered (handshake step 0).
@@ -270,81 +270,62 @@ export interface StageTranscriptTapPayload {
 }
 
 /**
- * What the microphone check is currently able to say about the input.
+ * What the voice pill is currently reporting.
  *
- * `waiting`  — capture is open, nothing has been heard yet;
- * `hearing`  — a voice is arriving, but not yet enough of it to pass;
- * `too_low`  — there IS signal and it is too quiet to transcribe reliably;
- * `clipping` — the signal is too hot;
- * `unheard`  — a sustained absence of signal: the wrong device, a hardware
- *              mute switch, or another application holding the microphone;
- * `passed`   — enough voice at a usable level; the take may open.
+ * `listening` — audio is arriving and nothing has come back yet. The ordinary
+ *               state at the top of a take, and NOT a warning: a presenter who
+ *               has not spoken yet is not a fault to be announced;
+ * `confirmed` — recogniser text has come back, so the whole chain (device →
+ *               capture → socket → model) demonstrably works;
+ * `fault`     — the input died, the frames stopped, or the presenter has been
+ *               speaking for several seconds with nothing coming back.
  */
-export type StageMicCheckState =
-  | 'waiting'
-  | 'hearing'
-  | 'too_low'
-  | 'clipping'
-  | 'unheard'
-  | 'passed';
+export type StageVoicePillReading = 'listening' | 'confirmed' | 'fault';
 
 /**
- * `stage://mic-check` — the microphone check, as the stage should draw it.
+ * `stage://voice-pill` — the corner readout, as the stage should draw it.
  *
  * Deliberately a fully-resolved view rather than raw levels plus a rule: the
- * stage holds no audio state and no thresholds, so what the presenter reads
+ * stage holds no audio state and no thresholds, so what the presenter sees
  * cannot drift from what control decided. `levels` is the only history in the
  * payload, and it is there because a waveform IS history — a single amplitude
- * would be a meter, and a meter is the thing that was already on the Preflight
- * screen and did not stop anyone starting a take deaf.
+ * would be a meter, and a meter cannot show a voice arriving.
  */
-export interface StageMicCheckPayload {
+export interface StageVoicePillPayload {
   stageGeneration: number;
-  /** False tears the overlay down: the check is over, or was never needed. */
-  active: boolean;
-  state: StageMicCheckState;
+  reading: StageVoicePillReading;
   /** Waveform trace, oldest first, each 0–1 and already normalised. */
   levels: number[];
-  /** Large line: what is happening. Authored copy, never a code. */
-  headline: string;
-  /** Small line: what to do about it, or why it is fine. */
-  detail: string;
   /**
-   * Whether "start anyway" is offered yet. The check must be skippable — a
-   * presenter with a working setup and an unlucky reading is not someone the
-   * app should refuse to let start — but not INSTANTLY skippable, or the
-   * affordance becomes the thing you press to make the screen go away.
+   * The reading in words (§20: state is never colour alone).
+   *
+   * Authored copy, never a code. Drawn beside the mark while something is
+   * wrong, and carried as the accessible name the rest of the time.
    */
-  canOverride: boolean;
+  label: string;
+  /**
+   * False fades the pill out — it has proved itself and the read owns the
+   * screen now. The stage keeps it MOUNTED either way, so returning to true
+   * fades it back in rather than making it appear from nowhere.
+   */
+  visible: boolean;
   sentAtMs: number;
 }
 
 /**
- * Samples in the waveform trace, and therefore bars on the stage.
+ * Bars in the pill's waveform.
  *
  * On the contract rather than either side of it because both sides need the
  * same number: control fills the trace to it, and the stage pads to it from
- * the left so the waveform grows INTO the frame instead of stretching to fill
+ * the left so the waveform grows INTO the pill instead of stretching to fill
  * it. Two independent copies of that number would drift into a trace that
- * silently rescaled itself — which on the one screen whose job is to report a
+ * silently rescaled itself — which on the one element whose job is to report a
  * level honestly would read as the level changing when it had not.
+ *
+ * Twenty-four at the ~100 ms publish cadence is about 2.4 seconds of history:
+ * enough to read as a voice, short enough to stay a pill.
  */
-export const STAGE_MIC_CHECK_TRACE_SAMPLES = 72;
-
-/** `stage://mic-check-intent` — the presenter's answer to the check. */
-export interface StageMicCheckIntentPayload {
-  /**
-   * Which check is being answered.
-   *
-   * A stage `emit` is a broadcast and control has no other way to tell one
-   * check from another, so without this a delayed answer from a superseded
-   * start attempt could cancel — or skip — the one currently running.
-   */
-  stageGeneration: number;
-  /** `start` = go now (passed, or overridden); `cancel` = abandon the take. */
-  intent: 'start' | 'cancel';
-  atMs: number;
-}
+export const STAGE_VOICE_PILL_TRACE_SAMPLES = 24;
 
 /**
  * If no heartbeat/snapshot/tracking arrives for this long while live, the

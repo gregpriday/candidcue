@@ -25,12 +25,24 @@ import type {
   TranscriptionConfig,
 } from '../../shared/contracts';
 import { STAGE_EVENT, CONTROL_EVENT } from '../../shared/contracts';
-import type { AlignmentSnapshot, StageTranscriptTapPayload } from '../../shared/contracts';
+import type {
+  AlignmentSnapshot,
+  StageTranscriptTapPayload,
+  StageVoicePillPayload,
+} from '../../shared/contracts';
+import {
+  initialVoicePillState,
+  reduceVoicePillLevel,
+  reduceVoicePillText,
+  tickVoicePill,
+  voicePillView,
+  type VoicePillState,
+} from '../services/audio/voice-pill';
 import type { FollowingSettings, SessionMode } from '../services/settings-types';
 import { createTrackingDriver, newSessionId, type TrackingDriver } from '../services/session';
 import { VoiceSessionPipeline } from '../services/voice-session';
 import { isTauriRuntime } from '../services/ipc';
-import { describeError } from '../services/errors';
+import { describeError, errorCode } from '../services/errors';
 import { trace } from '../services/audio-trace';
 import * as stageService from '../services/stage';
 import { monotonicNowMs, subscribeStageMotionAcks } from '../services/stage-acks';
@@ -584,6 +596,11 @@ export function startLiveSession(input: StartSessionInput): string {
 
   // Voice pipeline: realtime transcription + command routing (§29, §33).
   if (input.mode === 'voice' && input.compiled && isTauriRuntime()) {
+    // Before the pipeline, so the first level frame it produces has somewhere
+    // to land and the pill is on the stage while the device is being acquired.
+    // The epoch is captured here and checked in every callback below: a
+    // superseded pipeline is torn down asynchronously and can still deliver.
+    const pillEpoch = startVoicePill();
     pipeline = new VoiceSessionPipeline({
       sessionId,
       sessionGeneration,
@@ -605,11 +622,37 @@ export function startLiveSession(input: StartSessionInput): string {
         state.update((s) => ({ ...s, transcriptTail: [] }));
         resetTranscriptTap();
       },
+      /*
+       * The pill's waveform, from the ONE capture the take already owns (§5.3).
+       * A second `getUserMedia` for an indicator would contend with the take's
+       * own stream — see `services/audio/ownership.ts` for what that costs.
+       */
+      onLevel: (snapshot) => {
+        if (voicePill === null || pillEpoch !== voicePillEpoch) return;
+        voicePill = reduceVoicePillLevel(voicePill, snapshot, snapshot.generatedAtMs);
+      },
+      /*
+       * The device is about to be asked for. The pill's "no audio" window runs
+       * from HERE rather than from the take's first instant, because everything
+       * before this line — the §29.2 gate, the permission check, the socket
+       * subscription — is time in which no capture has been attempted, and a
+       * cross that means "we have not asked yet" is a lie about the microphone.
+       */
+      onCaptureAttempt: () => {
+        if (voicePill === null || pillEpoch !== voicePillEpoch) return;
+        voicePill = { ...voicePill, startedAtMs: monotonicNowMs(), lastFrameAtMs: null };
+      },
       onTranscriptText: (text, final) => {
         // The stage's transcript bar reads from here — straight off the wire,
         // before anything interprets it — so it stays honest when alignment is
         // wrong.
         publishTranscriptTap(text, final);
+        // Words coming back is the only evidence that the whole chain works,
+        // and it is what turns the pill's dot into a tick. Epoch-checked: a
+        // late partial from a superseded transport must not certify this take.
+        if (voicePill !== null && pillEpoch === voicePillEpoch) {
+          voicePill = reduceVoicePillText(voicePill, text);
+        }
         if (final) {
           // §36 "did it hear me". Counted here rather than from the retained
           // transcript, because retention is a SETTING and the question this
@@ -638,6 +681,18 @@ export function startLiveSession(input: StartSessionInput): string {
       onTranscriptItem: (item) => bufferTranscriptItem(item),
       onTranscriptLine: (line) => pushTranscriptLine(line),
       onConnectionState: (connection) => {
+        /*
+         * A superseded pipeline may not speak for the current take.
+         *
+         * `stopInternals` does not await `pipeline.stop()`, and stopping is
+         * what drives a pipeline to `offline` — so take A's teardown lands
+         * after take B has connected and hands B a connection state belonging
+         * to a session that no longer exists. On the Live screen that is a
+         * status pill lying; on the stage it is a permanent "Not connected"
+         * cross over a take that is working perfectly, because the pill reads
+         * this same field.
+         */
+        if (pillEpoch !== voicePillEpoch) return;
         state.update((s) => {
           const reconnects =
             connection === 'reconnecting' && s.connection !== 'reconnecting'
@@ -677,6 +732,18 @@ export function startLiveSession(input: StartSessionInput): string {
       onInputDeviceLost: (code) => {
         // §12.7: device loss outranks every acoustic reading on the mic tile.
         state.update((s) => ({ ...s, micState: 'disconnected', inputDeviceLost: true }));
+        /*
+         * The pill takes only the HARD half of this signal.
+         *
+         * `MIC_NO_SIGNAL` is the §28.6 detector reporting five seconds without
+         * signal, which a presenter collecting their thoughts in a treated room
+         * produces several times a take. The status bar can afford to call that
+         * a disconnected input; a cross on the stage saying "No audio" cannot —
+         * it is the microphone check's false accusation with a longer fuse.
+         */
+        if (code !== 'MIC_NO_SIGNAL' && pillEpoch === voicePillEpoch) {
+          voicePillDeviceLost = true;
+        }
         // §28.2/§28.6: the remedy named here is one the Live screen can
         // actually perform — `switchMicrophone` below drives the transport's
         // track replacement, and the status bar grows an input picker while
@@ -692,7 +759,22 @@ export function startLiveSession(input: StartSessionInput): string {
        * track unmuted. "Reconnect it and we resume" is a promise the product
        * has to keep without being asked twice, so the pills clear themselves.
        */
+      /*
+       * §28.2: the chosen device was busy and the system default was opened
+       * instead. Said out loud, once: a take running on the built-in
+       * microphone when the user selected an interface is a take whose audio
+       * is not what they think it is, and the status bar's input picker is
+       * where they change it.
+       */
+      onInputFellBackToDefault: () => {
+        showToast(
+          'The microphone you chose was busy, so CandidCue is using the system default input. ' +
+            'Pick another input in the status bar if that is wrong.',
+          'info',
+        );
+      },
       onInputRestored: () => {
+        if (pillEpoch === voicePillEpoch) voicePillDeviceLost = false;
         const before = get(state);
         if (!before.inputDeviceLost) return;
         state.update((s) => ({
@@ -729,6 +811,34 @@ export function startLiveSession(input: StartSessionInput): string {
       },
     });
     void pipeline.start().catch((err) => {
+      /*
+       * `SESSION_STOPPED` is not a failure, it is this app tearing the take
+       * down while its start was still in flight — a second `startLiveSession`,
+       * a stop, a navigation guard. Reporting it as one produced the worst
+       * possible message: "Voice tracking is unavailable. Something went wrong
+       * and CandidCue has no specific advice for it", which is both alarming
+       * and, for a session that no longer exists, addressed to nobody. The
+       * trace still records it; the presenter is not told about the internals
+       * of a take they already ended.
+       */
+      const code = errorCode(err);
+      if (code === 'SESSION_STOPPED') {
+        trace('start-abandoned', 'the session was stopped while voice was starting');
+        return;
+      }
+      /*
+       * A start that failed on the MICROPHONE must say so on the pill.
+       *
+       * Without this the take goes `connection: 'offline'` a moment later and
+       * the pill reports "Not connected" — pointing at the network for a
+       * failure that was the input device, which is the one thing the
+       * presenter could have fixed. The no-capture window would eventually
+       * reach the same conclusion, several seconds late and after they had
+       * already gone looking at their wifi.
+       */
+      if (code !== null && code.startsWith('MIC_') && pillEpoch === voicePillEpoch) {
+        voicePillDeviceLost = true;
+      }
       state.update((s) => ({ ...s, connection: 'offline' }));
       showToast(`Voice tracking is unavailable. ${describeError(err)}`, 'danger');
     });
@@ -1030,6 +1140,120 @@ function publishTranscriptTap(text: string, final: boolean): void {
   }
   void resolveEmitTo()
     .then((emitTo) => emitTo('stage', STAGE_EVENT.transcriptTap, payload))
+    .catch(() => {});
+}
+
+/* ---------------------------------------------------------------------------
+ * The voice pill (§29.2, and what replaced the microphone check)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * How often the stage is told what the pill thinks.
+ *
+ * A TIMER rather than a per-frame publish, and the reason is the whole point of
+ * the pill: the failure worth catching is the one where level frames stop
+ * arriving — the device pulled, the graph dead, another process holding the
+ * input — and a publisher driven by frames would fall silent during exactly
+ * that failure, leaving the last healthy-looking reading frozen on the stage.
+ */
+const VOICE_PILL_INTERVAL_MS = 100;
+
+let voicePill: VoicePillState | null = null;
+let voicePillTimer: ReturnType<typeof setInterval> | null = null;
+/**
+ * The DEVICE is gone — as opposed to the room being quiet.
+ *
+ * Kept here rather than read off `state.inputDeviceLost`, which is also raised
+ * by `SilentInputDetector` after five seconds without signal. The pill must
+ * never treat silence as a fault: a presenter thinking for five seconds in a
+ * quiet room is the ordinary case, and answering it with a cross is the exact
+ * behaviour the microphone check was deleted for.
+ */
+let voicePillDeviceLost = false;
+/**
+ * Which take the pill belongs to.
+ *
+ * Pipeline teardown is asynchronous — `stopInternals` does not await
+ * `pipeline.stop()` — so a superseded pipeline can still deliver a level frame
+ * or a late partial after the next take has started. Without this, take A's
+ * microphone would animate take B's waveform, and a stale partial could put a
+ * tick on a session that has transcribed nothing.
+ */
+let voicePillEpoch = 0;
+
+/** Begin a take's pill. Torn down by `stopInternals` on every path out. */
+function startVoicePill(): number {
+  voicePillEpoch += 1;
+  voicePillDeviceLost = false;
+  if (stageGeneration === 0 || !isTauriRuntime()) return voicePillEpoch;
+  voicePill = initialVoicePillState(monotonicNowMs());
+  voicePillTimer ??= setInterval(publishVoicePill, VOICE_PILL_INTERVAL_MS);
+  return voicePillEpoch;
+}
+
+function stopVoicePill(): void {
+  voicePillEpoch += 1;
+  if (voicePillTimer) clearInterval(voicePillTimer);
+  voicePillTimer = null;
+  voicePill = null;
+  voicePillDeviceLost = false;
+}
+
+/**
+ * Restart the evidence at a take boundary (§15.2 retake, §36.3 pass).
+ *
+ * Only when a pill is already running: a retake in manual mode has no capture
+ * to report on, and starting one there would put a permanent "Listening" on a
+ * stage that is not listening to anything.
+ */
+function resetVoicePill(): void {
+  if (voicePill === null) return;
+  voicePillDeviceLost = false;
+  voicePill = initialVoicePillState(monotonicNowMs());
+}
+
+/**
+ * Resolve the pill and send it.
+ *
+ * The conditions come from the session state rather than from a second set of
+ * detectors: `inputDeviceLost` is §28.6's finding, already made by the pipeline
+ * on the same level frames, and a pause is a pause. Re-deriving either here
+ * would give the stage a chance to disagree with the Live screen about the same
+ * microphone.
+ */
+function publishVoicePill(): void {
+  if (voicePill === null || stageGeneration === 0) return;
+  const s = get(state);
+  if (!s.sessionId || !s.stageAlive) return;
+  if (!cachedEmitTo && !isTauriRuntime()) return;
+
+  const nowMs = monotonicNowMs();
+  voicePill = tickVoicePill(
+    voicePill,
+    {
+      deviceLost: voicePillDeviceLost,
+      // 'reconnecting' is deliberately not a fault: it is usually over in a
+      // second, and the Live status line already says so.
+      transportOffline: s.connection === 'offline',
+      suspended: s.paused !== 'none',
+    },
+    nowMs,
+  );
+  const view = voicePillView(voicePill, nowMs);
+  const payload: StageVoicePillPayload = {
+    stageGeneration,
+    reading: view.reading,
+    levels: view.levels,
+    label: view.label,
+    visible: view.visible,
+    sentAtMs: Date.now(),
+  };
+  if (cachedEmitTo) {
+    void cachedEmitTo('stage', STAGE_EVENT.voicePill, payload).catch(() => {});
+    return;
+  }
+  void resolveEmitTo()
+    .then((emitTo) => emitTo('stage', STAGE_EVENT.voicePill, payload))
     .catch(() => {});
 }
 
@@ -1910,6 +2134,10 @@ export function goToToken(tokenIndex: number): void {
 export function restartParagraph(): void {
   driver?.restartParagraph();
   const before = get(state);
+  // §36.3: a new pass proves itself again. The evidence that the last one was
+  // heard says nothing about this one, and the pill coming back is how the
+  // presenter knows the retake is being picked up.
+  resetVoicePill();
   noteCheckpoint('paragraph_start');
   finishTake(before.sessionId, roundToken(before.snapshot?.confirmedToken));
   if (before.sessionId !== null) {
@@ -2183,6 +2411,7 @@ function stopInternals(): void {
   transcriptBuffer = [];
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   heartbeatTimer = null;
+  stopVoicePill();
   stopMotionAcks?.();
   stopMotionAcks = null;
   stopSidecarFeed?.();

@@ -22,7 +22,7 @@
  * hearing me" readout and the §28.6 dead-input detector. Nothing it decides can
  * stop audio reaching the recogniser.
  */
-import type { CompiledScript } from '../../shared/contracts';
+import type { AudioLevelSnapshot, CompiledScript } from '../../shared/contracts';
 import { DEFAULT_SOFT_PAUSE_AUTO_DISCONNECT_MS } from './audio/defaults';
 import { isTauriRuntime } from './ipc';
 import { trace, traceBegin } from './audio-trace';
@@ -143,6 +143,15 @@ export interface VoicePipelineDeps {
   onInputDeviceLost?(code: string): void;
   /** §28.6: audio is flowing again — the counterpart to `onInputDeviceLost`. */
   onInputRestored?(): void;
+  /**
+   * §28.2: the pinned device was busy, so the system default was opened.
+   *
+   * Reported rather than absorbed. A take that quietly runs on the built-in
+   * microphone when the user chose an interface is a take whose audio is not
+   * what they think it is, and the only place that can be corrected is a screen
+   * that has been told.
+   */
+  onInputFellBackToDefault?(): void;
   /** A session-level provider failure ended or interrupted the session. */
   onSessionFailure?(code: string, fatal: boolean): void;
   /** M3: soft pause will auto-disconnect in `msRemaining` (A.6). */
@@ -160,6 +169,32 @@ export interface VoicePipelineDeps {
    * second `getUserMedia` is ever issued.
    */
   onCaptureStream?(stream: MediaStreamLike): void;
+  /**
+   * Every level frame, unfiltered — the stage's voice pill draws from these.
+   *
+   * The same fan-out rule as `onCaptureStream` and for the same reason: an
+   * indicator that opened its own capture to draw a waveform would contend with
+   * the take's stream, and `services/audio/ownership.ts` measures that at 9.8
+   * seconds to acquire against 908 ms uncontended. One microphone, one owner,
+   * and everything else reads what the owner already has.
+   *
+   * Unlike `onInputDeviceLost` this fires on every frame rather than on a
+   * transition, because its consumer is a waveform: a signal reported only when
+   * it changes category cannot be drawn.
+   */
+  onLevel?(snapshot: AudioLevelSnapshot): void;
+  /**
+   * The device is about to be asked for — fired immediately before
+   * `getUserMedia`, and again for every reacquisition (a device switch, a
+   * resume from a hard pause).
+   *
+   * Exists so a consumer waiting on audio can time out against the ATTEMPT
+   * rather than against the start of the take. Everything before this line —
+   * the §29.2 gate, the permission query, the socket subscription — is time in
+   * which no capture has been tried, and "no audio" measured from before the
+   * request was made says something false about the microphone.
+   */
+  onCaptureAttempt?(): void;
   timers?: PipelineTimers;
   now?: () => number;
 }
@@ -585,11 +620,39 @@ export class VoiceSessionPipeline {
     const mediaDevices = navigator.mediaDevices as unknown as Parameters<
       typeof requestMicrophoneAccess
     >[0];
-    const result = await requestMicrophoneAccess(mediaDevices, {
-      ...(deviceId !== undefined ? { deviceId } : {}),
-      ...(this.deps.audioProcessing ?? {}),
-    });
-    if (!result.ok) throw new Error(result.code);
+    /*
+     * The take is the most contended `getUserMedia` in the app: it opens the
+     * device immediately after the Preflight meter let go of it, and macOS does
+     * not free an input the instant `track.stop()` returns (see
+     * `audio/permissions.ts`). The retry is what turns "sometimes voice
+     * tracking is unavailable" into a start that waits a few hundred
+     * milliseconds and then works.
+     */
+    this.deps.onCaptureAttempt?.();
+    const result = await requestMicrophoneAccess(
+      mediaDevices,
+      {
+        ...(deviceId !== undefined ? { deviceId } : {}),
+        ...(this.deps.audioProcessing ?? {}),
+      },
+      {
+        onRetry: (attempt, code, delayMs) =>
+          trace('microphone-busy', `attempt ${attempt} failed (${code}) — retrying in ${delayMs}ms`),
+      },
+    );
+    if (!result.ok) {
+      trace('microphone-failed', `${result.code} after ${result.attempts} attempts`);
+      throw new Error(result.code);
+    }
+    if (result.attempts > 1) {
+      trace('microphone', `acquired on attempt ${result.attempts}`);
+    }
+    if (result.fellBackToDefault) {
+      // The user picked a device and did not get it. That is theirs to know:
+      // §28.2 makes which input is in use a visible fact, not an internal one.
+      trace('microphone', 'pinned device was busy — fell back to the system default');
+      this.deps.onInputFellBackToDefault?.();
+    }
     this.activeStream = result.stream;
 
     this.monitor = new MicrophoneMonitor({
@@ -604,6 +667,12 @@ export class VoiceSessionPipeline {
     // second and "the microphone is back" is not news forty times over.
     let inputWasDead = false;
     this.monitor.onLevel((snapshot) => {
+      /*
+       * First, and outside the dead-input logic below: the pill has to keep
+       * drawing through a silent stretch — that IS the reading — so it must not
+       * be fed from a branch that returns early once signal is present.
+       */
+      this.deps.onLevel?.(snapshot);
       if (snapshot.signalPresent) {
         this.silentInput.reset();
         if (inputWasDead) {

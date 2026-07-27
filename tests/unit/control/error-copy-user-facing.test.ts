@@ -256,8 +256,14 @@ describe('no code can reach a user-visible string', () => {
     const [message] = toastMessages();
     expect(message).not.toContain('SOME_FUTURE_PROVIDER_FAULT');
     expect(message).not.toMatch(CODE_TOKEN);
-    // Honest plain English that points at where the code can be read.
-    expect(message).toMatch(/Settings → Diagnostics/);
+    /*
+     * Honest plain English that points at where the code can be read — and at
+     * a place that EXISTS. The copy used to say "Settings → Diagnostics",
+     * which is not a section: Diagnostics is a card inside "Data, privacy &
+     * updates". Being sent to a screen you cannot find is worse than being
+     * told nothing, so the path is asserted in full rather than by fragment.
+     */
+    expect(message).toMatch(/Settings → Data, privacy & updates → Diagnostics/);
     expect(recentErrorDiagnostics()[0]?.code).toBe('SOME_FUTURE_PROVIDER_FAULT');
   });
 

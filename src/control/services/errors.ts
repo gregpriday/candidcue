@@ -13,7 +13,7 @@
  * `describeError` therefore resolves a code from every shape a failure can
  * arrive in, and any string that still looks like a code is replaced rather
  * than shown. The raw code is not lost: it is recorded in a small ring buffer
- * that Settings → Diagnostics reads, which is the surface a support request is
+ * that Settings → Data, privacy & updates → Diagnostics reads, which is the surface a support request is
  * actually built from.
  */
 import { APP_ERROR_CODES, type AppError } from '../../shared/contracts';
@@ -70,6 +70,16 @@ const ERROR_COPY: Record<string, string> = {
     'No sound is reaching the microphone. Check that it is not muted and that the right input is selected.',
   MIC_CLIPPING:
     'The microphone is clipping. Lower its input gain, or move back from it a little.',
+  /*
+   * Not an IPC code — the voice pipeline throws it when a stop lands while a
+   * start is still in flight. It has copy because it reached a presenter once,
+   * as "Something went wrong and CandidCue has no specific advice for it",
+   * which is the worst sentence in the app: alarming, useless, and about
+   * nothing the presenter did. The store now swallows it when the session is
+   * genuinely gone; this is the backstop for every path that does not.
+   */
+  SESSION_STOPPED:
+    'The session ended before voice following could start. Start it again when you are ready.',
 
   /* -- transcription transport -------------------------------------------- */
   REALTIME_CONNECT_FAILED:
@@ -110,9 +120,9 @@ const ERROR_COPY: Record<string, string> = {
 
   /* -- database ----------------------------------------------------------- */
   DATABASE_MIGRATION_FAILED:
-    'CandidCue could not upgrade its database. Export a support bundle from Settings → Diagnostics before making further changes.',
+    'CandidCue could not upgrade its database. Export a support bundle from Settings → Data, privacy & updates → Diagnostics before making further changes.',
   DATABASE_INTEGRITY_FAILED:
-    'The CandidCue database did not pass its integrity check. Export a support bundle from Settings → Diagnostics before making further changes.',
+    'The CandidCue database did not pass its integrity check. Export a support bundle from Settings → Data, privacy & updates → Diagnostics before making further changes.',
 
   /* -- stage window ------------------------------------------------------- */
   STAGE_DISPLAY_MISSING:
@@ -147,7 +157,7 @@ const ERROR_COPY: Record<string, string> = {
 
   /* -- generic backend ---------------------------------------------------- */
   INTERNAL_UNEXPECTED:
-    'Something went wrong inside CandidCue. Try again; if it keeps happening, export a support bundle from Settings → Diagnostics.',
+    'Something went wrong inside CandidCue. Try again; if it keeps happening, export a support bundle from Settings → Data, privacy & updates → Diagnostics.',
   NOT_IMPLEMENTED: 'This feature is not available in this version of CandidCue.',
   NOT_FOUND: 'CandidCue could not find what that action needed.',
   VALIDATION_FAILED: 'That request was not valid, so nothing was changed.',
@@ -159,7 +169,7 @@ const ERROR_COPY: Record<string, string> = {
  * recorded) and points at the one place the raw code can be read.
  */
 const UNMAPPED_CODE_COPY =
-  'Something went wrong and CandidCue has no specific advice for it. The details are in Settings → Diagnostics.';
+  'Something went wrong and CandidCue has no specific advice for it. The details are in Settings → Data, privacy & updates → Diagnostics.';
 
 const FALLBACK_COPY = 'Something unexpected went wrong.';
 
@@ -174,7 +184,7 @@ export function isAppErrorPayload(err: unknown): err is AppError {
 }
 
 /**
- * Recent failures, newest first, for Settings → Diagnostics.
+ * Recent failures, newest first, for Settings → Data, privacy & updates → Diagnostics.
  *
  * The toast is where the user is told what to do; this is where the raw code
  * lives so a support request can name it. Bounded and in-memory only — it is a

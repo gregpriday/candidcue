@@ -24,8 +24,9 @@
     type StageLayoutErrorPayload,
     type StageListeningPayload,
     type StageListenerHealthPayload,
-    type StageMicCheckIntentPayload,
-    type StageMicCheckPayload,
+    STAGE_VOICE_PILL_TRACE_SAMPLES,
+    type StageVoicePillPayload,
+    type StageVoicePillReading,
     type StageMotionAck,
     type StageMotionAckPayload,
     type StageReadyPayload,
@@ -44,7 +45,7 @@
   import { stageFollowProfile } from './motion';
   import ScriptLayer from './renderer/ScriptLayer.svelte';
   import AckChip from './renderer/AckChip.svelte';
-  import MicCheck from './MicCheck.svelte';
+  import VoicePill from './VoicePill.svelte';
   import ListenerLayer from './listener/ListenerLayer.svelte';
   import { startPreviewDriver, type PreviewDriver } from './preview';
 
@@ -106,22 +107,13 @@
   let transcriptTap = $state('');
   let transcriptTapAtMs = $state(0);
   /**
-   * §29.2 microphone check, or null when there is not one running.
+   * The voice pill, or null until control has said anything about the input.
    *
    * Held as the whole payload rather than unpacked into fields because it is a
    * resolved view: control decided every part of it together, and splitting it
-   * would let the headline and the waveform be from different frames.
+   * would let the mark and the waveform be from different frames.
    */
-  let micCheck = $state<StageMicCheckPayload | null>(null);
-  const micCheckActive = $derived(micCheck !== null && micCheck.active);
-  /**
-   * The stage generation whose check has already been dismissed.
-   *
-   * Recorded rather than inferred from timestamps: a check ending is a fact,
-   * and it has to outlive any late frame that would otherwise put the overlay
-   * back over a live script.
-   */
-  let micCheckClosedFor = $state<number | null>(null);
+  let voicePill = $state<StageVoicePillPayload | null>(null);
   let heartbeatSeen = false;
   /** Layout generation the stage is currently measured at (companion §7.2). */
   let layoutGeneration = $state(0);
@@ -201,63 +193,35 @@
           transcriptTapAtMs = Date.now();
         }),
         /*
-         * The microphone check. Like the transcript bar it bypasses the
-         * reducer: it is not part of the session's render model, it is a gate
-         * in front of it, and it has to be able to draw before the stage has
-         * been through a single tracking snapshot.
+         * The voice pill. Like the transcript bar it bypasses the reducer: it
+         * is an instrument pointed at the session rather than part of the
+         * session's render model, and its whole value is being true when the
+         * things that do go through the reducer are wrong.
          */
-        subscribeStageEvent<StageMicCheckPayload>(STAGE_EVENT.micCheck, (payload) => {
+        subscribeStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, (payload) => {
           lastInboundAt = performance.now();
           /*
-           * Generation-checked, like every other directive. The envelope has
-           * already arrived by the time a check can run (it is published before
-           * the window is shown), so the stage always knows which lifetime it
-           * belongs to — and a payload from a superseded start attempt must not
-           * be able to draw a microphone gate over a live script.
+           * Generation-checked, like every other directive: a payload from a
+           * superseded start attempt must not be able to put a fault on the
+           * corner of a take that is running perfectly well.
+           *
+           * "No envelope yet" is a REJECTION here, not a pass. Everywhere else
+           * an unknown generation is treated as "we cannot tell, so accept";
+           * that is wrong for this one, because the window between a stage
+           * subscribing and its envelope arriving is exactly when the previous
+           * generation's last payloads are still in flight. Accepting one there
+           * left the outgoing take's reading — including a cross — sitting on
+           * the new stage until control published again.
            */
           const generation = app.envelope?.stageGeneration ?? 0;
-          if (generation !== 0 && payload.stageGeneration !== generation) return;
-          /*
-           * Once dismissed, stay dismissed.
-           *
-           * Tauri delivers by evaluating JS in this webview and makes no
-           * ordering promise across emits, so a late `active: true` frame can
-           * arrive after the terminal `active: false` — and it would resurrect
-           * the overlay on top of a take that had already started, swallowing
-           * every key with no way back. A timestamp comparison alone does not
-           * cover it (`Date.now()` can repeat, and can go backwards), so the
-           * end of a check is recorded as a fact rather than inferred.
-           */
-          if (payload.active && micCheckClosedFor === payload.stageGeneration) return;
-          if (!payload.active) micCheckClosedFor = payload.stageGeneration;
-          micCheck = payload;
+          if (generation === 0 || payload.stageGeneration !== generation) return;
+          voicePill = payload;
         }),
         subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
         subscribeStageEvent<StageStatePayload>(STAGE_EVENT.listenerState, onDirective),
         subscribeStageEvent<StageHeartbeatPayload>(STAGE_EVENT.heartbeat, (payload) => {
           lastInboundAt = performance.now();
           heartbeatSeen = true;
-          /*
-           * Backstop for a lost dismissal.
-           *
-           * Control tears the check down with a final `active: false`, and that
-           * emit is fire-and-forget — if it is dropped, the overlay stays up
-           * over a live script and keeps swallowing every key, with no way back.
-           * A heartbeat only exists once `startLiveSession` has installed the
-           * stage bridge, so receiving one is independent proof that the check
-           * is over regardless of what did or did not arrive on its own event.
-           *
-           * Generation-checked first: a heartbeat from a superseded lifetime
-           * must not be able to hide the check the CURRENT one is running.
-           */
-          if (
-            micCheck !== null &&
-            micCheck.active &&
-            payload.stageGeneration === micCheck.stageGeneration
-          ) {
-            micCheckClosedFor = micCheck.stageGeneration;
-            micCheck = { ...micCheck, active: false };
-          }
           dispatch({ type: 'heartbeat', payload, receivedAtMs: Date.now() });
           emitStageEvent<StageHeartbeatAckPayload>(STAGE_EVENT.heartbeatAck, {
             stageGeneration: payload.stageGeneration,
@@ -461,67 +425,8 @@
   let wheelAccum = 0;
   let wheelFlush = 0;
 
-  /**
-   * The presenter's answer to the microphone check.
-   *
-   * Its own event rather than `sendIntent`, because control's intent bridge is
-   * installed by `startLiveSession` and the check runs before that — an answer
-   * sent as an intent would go into a channel with no listener on it yet.
-   */
-  function sendMicCheckIntent(intent: 'start' | 'cancel') {
-    emitStageEvent<StageMicCheckIntentPayload>(STAGE_EVENT.micCheckIntent, {
-      // The generation of the check being answered, so control can tell this
-      // answer apart from one left over by a superseded start attempt.
-      stageGeneration: micCheck?.stageGeneration ?? app.envelope?.stageGeneration ?? 0,
-      intent,
-      atMs: Date.now(),
-    });
-  }
-
   function onKeyDown(event: KeyboardEvent) {
     if (preview && handlePreviewKey(event.key)) return;
-    /*
-     * The check owns the keyboard while it is up, and it must be the FIRST
-     * thing consulted.
-     *
-     * Escape is the reason. Its normal meaning here is "end the take, on the
-     * second press" — but during the check there is no take to end: control is
-     * still inside the start sequence, holding a session record, a stage window
-     * and a microphone. Falling through would emit an escape-pressed nobody is
-     * listening for and leave the presenter pressing it repeatedly at a screen
-     * that will not go away. Here it means cancel, on the FIRST press, because
-     * nothing is yet in progress that a stray keypress could destroy.
-     */
-    if (micCheckActive) {
-      switch (event.key) {
-        case 'Escape':
-          event.preventDefault();
-          sendMicCheckIntent('cancel');
-          return;
-        case 'Enter':
-        case ' ':
-          event.preventDefault();
-          /*
-           * Never on a key REPEAT. Holding Space through the four seconds
-           * before the override appears would otherwise fire it the instant it
-           * became available — the presenter would skip the check without ever
-           * deciding to, which is the one thing the delay exists to prevent.
-           * Starting requires a fresh press.
-           */
-          if (event.repeat) return;
-          // Control decides whether this counts as a pass or an override — it
-          // is the side that knows what the microphone has actually done, and
-          // it re-derives the deadline rather than trusting this window.
-          if (micCheck?.canOverride === true || micCheck?.state === 'passed') {
-            sendMicCheckIntent('start');
-          }
-          return;
-        default:
-          // Everything else is script navigation aimed at a script that is not
-          // being read yet. Swallowed rather than forwarded.
-          return;
-      }
-    }
     switch (event.key) {
       case 'Escape': {
         const now = performance.now();
@@ -586,9 +491,44 @@
       case 'j':
         previewDriver.jump();
         return true;
+      /*
+       * The voice pill, in preview. Control drives it from a real capture, so
+       * without this the only way to look at it is to start a billable take
+       * with a microphone attached — which is not a loop anybody will use to
+       * judge whether a 34-pixel pill reads correctly against a script.
+       */
+      case 'v':
+        voicePill = previewVoicePill(voicePill);
+        return true;
       default:
         return false;
     }
+  }
+
+  /** Cycle the pill through its three readings, then off. */
+  function previewVoicePill(current: StageVoicePillPayload | null): StageVoicePillPayload | null {
+    const next: StageVoicePillReading | null =
+      current === null
+        ? 'listening'
+        : current.reading === 'listening'
+          ? 'confirmed'
+          : current.reading === 'confirmed'
+            ? 'fault'
+            : null;
+    if (next === null) return null;
+    const label = next === 'confirmed' ? 'Hearing you' : next === 'fault' ? 'No audio' : 'Listening';
+    return {
+      stageGeneration: app.envelope?.stageGeneration ?? 0,
+      reading: next,
+      // A plausible voice rather than a flat line: the shape is the thing being
+      // judged, and every bar at the same height is not one.
+      levels: Array.from({ length: STAGE_VOICE_PILL_TRACE_SAMPLES }, (_, i) =>
+        Math.max(0.05, Math.abs(Math.sin(i * 0.7)) * (0.4 + 0.6 * Math.abs(Math.sin(i * 0.21)))),
+      ),
+      label,
+      visible: true,
+      sentAtMs: Date.now(),
+    };
   }
 
   function onWheel(event: WheelEvent) {
@@ -708,15 +648,6 @@
     <div class="waiting" aria-hidden="true">CandidCue</div>
   {/if}
 
-  <!--
-    The §29.2 microphone check. Above the script and outside the mirror plane:
-    it is an instruction to the presenter rather than part of the read, and it
-    covers a script that is already hydrated but must not be started on yet.
-  -->
-  {#if micCheck !== null && micCheck.active}
-    <MicCheck check={micCheck} fontFamilyId={settings?.fontFamilyId ?? 'system-sans'} />
-  {/if}
-
   <!-- Escape confirmation (§16.9). Outside the mirror plane on purpose: it is
        an instruction to the presenter, not part of the script, so it must stay
        readable through a horizontal mirror. Shown during a blank too — a blank
@@ -759,9 +690,30 @@
     </div>
   {/if}
 
+  <!--
+    Layer 10: the voice pill. Mounted for the whole take and faded by its own
+    `visible` flag rather than added and removed — see the component. Hidden
+    with the rest of the stage during a blank (§16.6), which is a deliberate
+    "show nothing", not a moment to report on the microphone.
+
+    Gated on the ENVELOPE ALONE, not on `phase === 'live'` like the transcript
+    bar above it, and not on the handshake having finished either. That is the
+    whole point of the pill: `live` is only reached when an alignment snapshot
+    arrives, alignment snapshots are made from transcript frames, and a take
+    that transcribes nothing therefore never leaves `ready`. Sharing the bar's
+    gate hid the indicator during precisely the failure it exists to explain.
+    The same argument applies one step earlier — a stage still measuring, or
+    stuck measuring, is a stage whose presenter still deserves to know whether
+    the microphone is being heard.
+  -->
+  {#if app.envelope !== null && !app.blanked && voicePill !== null}
+    <VoicePill pill={voicePill} />
+  {/if}
+
   {#if preview}
     <div class="preview-hud">
-      preview · l listener · b blank · f freeze · m mirror · c calibrate · a ack · j jump
+      preview · l listener · b blank · f freeze · m mirror · c calibrate · a ack · j jump · v voice
+      pill
     </div>
   {/if}
 </div>

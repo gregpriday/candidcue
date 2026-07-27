@@ -1,0 +1,289 @@
+/**
+ * The voice pill's wiring — the half the pure reducer cannot prove.
+ *
+ * `services/audio/voice-pill.ts` decides what the pill says and is tested on
+ * its own. What is asserted here is that the decision reaches the stage at all:
+ * a take that publishes nothing leaves the presenter with no indication that
+ * anything is being heard, which is the whole failure the pill exists to end.
+ *
+ * It also pins the two seams that are easy to break silently:
+ *   • the waveform comes from the take's OWN capture (`onLevel` on the
+ *     pipeline), never from a second `getUserMedia` — see
+ *     `services/audio/ownership.ts` for the 9.8-second reason;
+ *   • the publisher is a timer, not a level-frame callback, so the pill keeps
+ *     reporting during the one failure where frames stop arriving.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { STAGE_EVENT } from '../../../src/shared/contracts';
+import type {
+  AudioLevelSnapshot,
+  CompiledScript,
+  StageVoicePillPayload,
+} from '../../../src/shared/contracts';
+
+const stage = vi.hoisted(() => ({
+  publishStageDirective: vi.fn(async () => {}),
+  publishListenerState: vi.fn(async () => {}),
+  closeStage: vi.fn(async () => {}),
+  listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
+}));
+
+const records = vi.hoisted(() => ({
+  appendSessionTranscript: vi.fn(async () => 0),
+  endSessionRecord: vi.fn(async () => null),
+  startSessionRecord: vi.fn(),
+  listSessionRecords: vi.fn(async () => []),
+  recordSessionTake: vi.fn(async () => null),
+  listSessionTakes: vi.fn(async () => []),
+}));
+
+/** The pipeline is stubbed so the test can drive its callbacks directly. */
+const pipeline = vi.hoisted(() => {
+  const captured: { deps: Record<string, (...args: never[]) => unknown> | null } = { deps: null };
+  class FakePipeline {
+    constructor(deps: Record<string, (...args: never[]) => unknown>) {
+      captured.deps = deps;
+    }
+    async start(): Promise<void> {}
+    async stop(): Promise<void> {}
+    startListening(): void {}
+    softPause(): void {}
+    async hardPause(): Promise<void> {}
+    async resume(): Promise<void> {}
+    estimatedCostUsd(): number {
+      return 0;
+    }
+  }
+  return { captured, FakePipeline };
+});
+
+vi.mock('@tauri-apps/api/event', () => ({
+  emitTo: vi.fn(async () => {}),
+  listen: vi.fn(async () => () => {}),
+}));
+vi.mock('../../../src/control/services/stage', () => stage);
+vi.mock('../../../src/control/services/session-records', () => records);
+vi.mock('../../../src/control/services/voice-session', () => ({
+  VoiceSessionPipeline: pipeline.FakePipeline,
+  COMMAND_TICK_INTERVAL_MS: 250,
+}));
+vi.mock('../../../src/control/services/semantic-sidecar', () => ({
+  SemanticSidecar: class {
+    scheduler = {
+      getDiagnostics: () => ({
+        requestsByLane: {},
+        usage: {
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+          totalTokens: 0,
+        },
+        availability: 'disabled' as const,
+        estimatedCostUsd: null,
+      }),
+      getAvailability: () => 'disabled' as const,
+      getBudget: () => ({
+        maxRequestsPerSession: 400,
+        maxRequestsPerHour: 600,
+        maxTotalTokens: 1_500_000,
+      }),
+    };
+    attachContextSource(): void {}
+    cancelInFlight(): void {}
+    setMode(): void {}
+    setRequestLimit(): void {}
+    setPrices(): void {}
+    dispose(): void {}
+  },
+}));
+vi.mock('../../../src/control/services/ipc', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/services/ipc')>();
+  return { ...actual, isTauriRuntime: () => true };
+});
+vi.mock('../../../src/control/services/alignment', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/services/alignment')>();
+  return { ...actual, subscribeAlignmentSnapshots: () => () => {} };
+});
+vi.mock('../../../src/control/services/stage-acks', async (orig) => {
+  const actual = await orig<typeof import('../../../src/control/services/stage-acks')>();
+  return { ...actual, subscribeStageMotionAcks: () => () => {} };
+});
+
+const { setInvokeForTesting } = await import('../../../src/control/services/ipc');
+const { clearSession, setStageEmitterForTesting, startLiveSession } = await import(
+  '../../../src/control/stores/session'
+);
+
+function compiledStub(): CompiledScript {
+  return {
+    sourceHash: 'hash-abc',
+    spokenTokens: [
+      { index: 0, blockId: 'b-1', sentenceId: 's-1', surface: 'Hello', normalized: 'hello' },
+    ],
+    sentences: [
+      { id: 's-1', blockId: 'b-1', startTokenIndex: 0, endTokenIndex: 1, text: 'Hello there.' },
+    ],
+    navigationTargets: [],
+    literalCommandRanges: [],
+  } as unknown as CompiledScript;
+}
+
+function start(mode: 'voice' | 'manual' = 'voice'): void {
+  startLiveSession({
+    scriptId: 'script-1',
+    scriptTitle: 'Launch video',
+    mode,
+    displayLabel: 'Stage',
+    outline: [],
+    sentences: [],
+    totalTokens: 200,
+    sessionId: 'session-uuid-1',
+    compiled: compiledStub(),
+    stageGeneration: 4,
+    sessionGeneration: 7,
+    transcriptRetained: false,
+  });
+}
+
+function frame(overrides: Partial<AudioLevelSnapshot> = {}): AudioLevelSnapshot {
+  return {
+    rms: 0.28,
+    peak: 0.45,
+    noiseFloor: 0.02,
+    speaking: true,
+    clipped: false,
+    signalPresent: true,
+    generatedAtMs: performance.now(),
+    ...overrides,
+  };
+}
+
+const emitted: Array<{ target: string; event: string; payload: unknown }> = [];
+
+/** Every pill payload sent to the stage, in order. */
+function pills(): StageVoicePillPayload[] {
+  return emitted
+    .filter((e) => e.event === STAGE_EVENT.voicePill)
+    .map((e) => e.payload as StageVoicePillPayload);
+}
+
+function deps(): Record<string, (...args: never[]) => unknown> {
+  const captured = pipeline.captured.deps;
+  if (!captured) throw new Error('the voice pipeline was never constructed');
+  return captured;
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  emitted.length = 0;
+  pipeline.captured.deps = null;
+  setInvokeForTesting(async () => undefined as never);
+  setStageEmitterForTesting(async (target, event, payload) => {
+    emitted.push({ target, event, payload });
+  });
+});
+
+afterEach(() => {
+  clearSession();
+  setStageEmitterForTesting(null);
+  setInvokeForTesting(null);
+  vi.useRealTimers();
+});
+
+describe('the voice pill on a live take', () => {
+  it('is on the stage before a single level frame has arrived', () => {
+    /*
+     * The device takes ~900 ms to acquire and can take much longer behind a
+     * permission prompt. A pill that waited for its first frame would leave the
+     * presenter with nothing on screen during exactly the stretch where they
+     * are wondering whether the app is listening.
+     */
+    start();
+    vi.advanceTimersByTime(100);
+    const first = pills().at(0);
+    expect(first?.stageGeneration).toBe(4);
+    expect(first?.reading).toBe('listening');
+    expect(first?.visible).toBe(true);
+    expect(first?.label).toBe('Listening');
+  });
+
+  it('draws the waveform from the take’s own capture', () => {
+    // §5.3 single-capture fan-out: the pipeline hands its level frames over,
+    // and nothing here ever asks for a second microphone.
+    start();
+    const onLevel = deps().onLevel as unknown as (s: AudioLevelSnapshot) => void;
+    expect(onLevel, 'the pipeline must publish level frames for the pill').toBeTypeOf('function');
+    const at = performance.now();
+    onLevel(frame({ generatedAtMs: at }));
+    onLevel(frame({ generatedAtMs: at + 90, rms: 0.4 }));
+    vi.advanceTimersByTime(100);
+    const latest = pills().at(-1);
+    expect(latest?.levels).toHaveLength(2);
+    expect(latest?.levels.every((level) => level > 0 && level <= 1)).toBe(true);
+  });
+
+  it('turns into a tick when recogniser text comes back', () => {
+    start();
+    vi.advanceTimersByTime(100);
+    expect(pills().at(-1)?.reading).toBe('listening');
+    const onTranscriptText = deps().onTranscriptText as unknown as (
+      text: string,
+      final: boolean,
+    ) => void;
+    onTranscriptText('hello there', false);
+    vi.advanceTimersByTime(100);
+    expect(pills().at(-1)?.reading).toBe('confirmed');
+    expect(pills().at(-1)?.label).toBe('Hearing you');
+  });
+
+  it('keeps publishing while nothing at all is happening', () => {
+    /*
+     * The publisher is a timer rather than the level callback, and this is why:
+     * the failure worth catching is the one where frames STOP, and a publisher
+     * driven by frames goes quiet during precisely that failure, freezing the
+     * last healthy-looking reading on the stage.
+     */
+    start();
+    vi.advanceTimersByTime(1000);
+    expect(pills().length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('says nothing on a manual take, which never opens a microphone', () => {
+    start('manual');
+    vi.advanceTimersByTime(1000);
+    expect(pills()).toHaveLength(0);
+  });
+
+  it('ignores a superseded take reporting its own death', () => {
+    /*
+     * `stopInternals` does not await `pipeline.stop()`, and stopping is what
+     * drives a pipeline to `offline`. So take A's teardown lands after take B
+     * has started — and before the guard, it handed B a connection state
+     * belonging to a session that no longer existed: a permanent "Not
+     * connected" cross on the corner of a take that was working perfectly.
+     */
+    start();
+    const takeA = deps();
+    const reportA = takeA.onConnectionState as unknown as (state: string) => void;
+    reportA('connected');
+
+    start();
+    vi.advanceTimersByTime(100);
+    expect(pills().at(-1)?.reading).toBe('listening');
+
+    reportA('offline');
+    vi.advanceTimersByTime(200);
+    expect(pills().at(-1)?.reading, 'take A may not fault take B').toBe('listening');
+  });
+
+  it('stops when the session does', () => {
+    start();
+    vi.advanceTimersByTime(200);
+    const before = pills().length;
+    expect(before).toBeGreaterThan(0);
+    clearSession();
+    vi.advanceTimersByTime(1000);
+    expect(pills()).toHaveLength(before);
+  });
+});
