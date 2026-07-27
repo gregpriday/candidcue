@@ -153,7 +153,51 @@
    */
   const optics = $derived(settings.optics ?? null);
 
-  const linePx = $derived((optics?.bodyFontSizePx ?? settings.fontSizePx) * (optics?.lineHeight ?? settings.lineHeight));
+  /**
+   * The settings as they are ACTUALLY RENDERED.
+   *
+   * This exists because of a bug class the layout fingerprint was built to
+   * prevent, and which the optical layer reintroduced by the back door.
+   *
+   * `layoutInputs()` and `buildLayoutFingerprint()` both read the flat
+   * `StageSettings` fields, and must agree with each other — an input that
+   * moves a glyph but is missing from the fingerprint schedules a rebuild that
+   * `sameLayout()` then calls identical, so the map is replaced under the OLD
+   * generation and the §33 semantic re-anchor never runs. Once geometry could
+   * come from `settings.optics` instead, BOTH of them were reading the wrong
+   * numbers: changing the calibrated column re-wraps every line while
+   * `columnWidthPercent` sits unchanged, and the rebuild is silently classified
+   * coverage-only. (The measured-disagreement check downstream would eventually
+   * notice the path moved, but it answers with a position-preserving re-anchor
+   * rather than the semantic one, which is the wrong recovery for a change the
+   * operator deliberately made.)
+   *
+   * Projecting the resolved optics back onto the flat fields fixes both sides
+   * at once and keeps the exhaustive `IDENTIFIES_LAYOUT` table meaningful:
+   * there is one description of the layout, and everything reads it.
+   */
+  const effective = $derived.by((): StageSettings => {
+    if (!optics) return settings;
+    return {
+      ...settings,
+      fontSizePx: optics.bodyFontSizePx,
+      lineHeight: optics.lineHeight,
+      letterSpacingEm: optics.letterSpacingEm,
+      paragraphSpacingEm: optics.paragraphSpacingEm,
+      // The column is authored in `ch` but the fingerprint's horizontal term is
+      // a percentage, so it is expressed as the percentage of the viewport the
+      // resolved column actually occupies. What matters is that it MOVES when
+      // the rendered column does; the units are the fingerprint's business.
+      columnWidthPercent: vw > 0 ? (columnWidthPx / vw) * 100 : settings.columnWidthPercent,
+      readingBandCenterPercent: optics.readingBandY * 100,
+      pastOpacity: optics.pastOpacity,
+      futureOpacity: optics.futureOpacity,
+    };
+  });
+
+  const linePx = $derived(
+    (optics?.bodyFontSizePx ?? settings.fontSizePx) * (optics?.lineHeight ?? settings.lineHeight),
+  );
 
   /**
    * The rectangle the presenter can actually see through the glass.
@@ -498,18 +542,21 @@
    * `measure.test.ts`, which walks every settings field that moves a glyph.
    */
   function layoutInputs(): string {
+    // Read from `effective`, not `settings` — see the note on that derivation.
+    // A calibrated rig's geometry lives in `settings.optics`, and reading the
+    // flat fields here would miss every change the operator actually made.
     return [
-      settings.fontSizePx,
-      settings.lineHeight,
-      settings.letterSpacingEm,
-      settings.paragraphSpacingEm,
-      settings.columnWidthPercent,
-      settings.fontFamilyId,
-      settings.showCues,
-      settings.mirrorX,
-      settings.mirrorY,
-      settings.readingBandCenterPercent,
-      settings.readingBandHalfHeightPercent,
+      effective.fontSizePx,
+      effective.lineHeight,
+      effective.letterSpacingEm,
+      effective.paragraphSpacingEm,
+      effective.columnWidthPercent,
+      effective.fontFamilyId,
+      effective.showCues,
+      effective.mirrorX,
+      effective.mirrorY,
+      effective.readingBandCenterPercent,
+      effective.readingBandHalfHeightPercent,
       padTopPx,
       padBottomPx,
       vw,
@@ -552,7 +599,10 @@
     const base = {
       scriptCompileHash,
       stageGeneration,
-      settings,
+      // The rendered settings, not the authored ones: the fingerprint has to
+      // describe the layout that exists, or `sameLayout()` will call two
+      // different layouts the same one.
+      settings: effective,
       viewportWidthPx: vw,
       viewportHeightPx: vh,
       displayScaleFactor: displayScale,
