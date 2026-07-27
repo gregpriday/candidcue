@@ -16,7 +16,7 @@ use cc_bench::scenarios::{build_suite, tier_b_selection};
 use cc_bench::suite::{
     compare_tables, print_table, run_tier_a, run_tier_b, RunManifest, SuiteResult,
 };
-use cc_bench::tts::{synthesize, wav_bytes, Synthesizer, TtsEngine};
+use cc_bench::tts::{synthesize, wav_bytes, Synthesizer};
 
 fn repo_root() -> PathBuf {
     let mut dir = std::env::current_dir().expect("cwd");
@@ -110,7 +110,7 @@ fn main() -> anyhow::Result<()> {
                 .workdir
                 .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
             let runtime = tokio::runtime::Runtime::new()?;
-            runtime.block_on(synth_audio(&scripts_dir, &workdir))?;
+            runtime.block_on(synth_audio(&scripts_dir, &runs_dir, &workdir))?;
         }
         Some("capture") => {
             let flags = parse_flags(args[1..].iter())?;
@@ -291,13 +291,17 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Render every Tier-B run's audio via fal.ai into the work directory.
-async fn synth_audio(scripts_dir: &std::path::Path, workdir: &std::path::Path) -> anyhow::Result<()> {
+async fn synth_audio(
+    scripts_dir: &std::path::Path,
+    runs_dir: &std::path::Path,
+    workdir: &std::path::Path,
+) -> anyhow::Result<()> {
     let suite = build_suite(scripts_dir)?;
     let synth = Synthesizer::new(workdir.join("tts-cache"))?;
-    let engines = TtsEngine::all();
 
-    for (i, (script, scenario)) in tier_b_selection().into_iter().enumerate() {
-        let engine = engines[i % engines.len()];
+    for live in tier_b_selection() {
+        let (script, scenario, engine, voice_index) =
+            (live.script, live.scenario, live.engine, live.voice_index);
         let Some(item) = suite
             .iter()
             .find(|s| s.plan.script == script && s.plan.scenario == scenario)
@@ -310,6 +314,14 @@ async fn synth_audio(scripts_dir: &std::path::Path, workdir: &std::path::Path) -
             println!("skip {name} (already synthesised)");
             continue;
         }
+        // A run that is already a frozen fixture will never be captured again,
+        // so rendering its audio into a fresh work directory is a TTS bill for
+        // bytes nothing will read. The clip cache only helps within a workdir;
+        // this is what makes a clean workdir cheap.
+        if runs_dir.join(&name).join("events.jsonl").exists() {
+            println!("skip {name} (already captured in bench/runs)");
+            continue;
+        }
         std::fs::create_dir_all(&run_dir)?;
         let performance = expand(&item.plan, &item.script);
         println!(
@@ -317,7 +329,7 @@ async fn synth_audio(scripts_dir: &std::path::Path, workdir: &std::path::Path) -
             performance.words.len(),
             performance.segments.len()
         );
-        let run = synthesize(&synth, engine, &performance, i).await?;
+        let run = synthesize(&synth, engine, &performance, voice_index).await?;
         std::fs::write(run_dir.join("audio.wav"), wav_bytes(&run.pcm))?;
         std::fs::write(run_dir.join("gold.json"), serde_json::to_string(&run.gold)?)?;
         let spoken: String = performance
@@ -332,7 +344,7 @@ async fn synth_audio(scripts_dir: &std::path::Path, workdir: &std::path::Path) -
             script: script.to_string(),
             scenario: scenario.to_string(),
             engine: engine.slug().to_string(),
-            voice_index: i,
+            voice_index,
             words: performance.words.len(),
             audio_s: run.gold.total_ms / 1000.0,
         };

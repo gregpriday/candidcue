@@ -246,6 +246,177 @@ through both engines.
   responsible for essentially all of it, and 3.8% is close to the fixtures'
   measurement floor — while zero prediction would cost 37% freeze.
 
+## Round two: when the script and the recogniser disagree on spelling
+
+Everything above measures what happens when the reader departs from the
+script. This round measures the opposite case, which turned out to be
+unmeasured entirely: the reader says exactly what is written, and the
+recogniser writes it down in a different notation than the author used.
+
+Greg found it by reading a line of figures at the prompter — "twenty-seven,
+one hundred and forty-three, RustLight Games, Cape Town, Tuesday the
+twenty-eighth of July". Nothing was misheard. The provider simply wrote `27`
+where the script wrote the words, `$2.4 million` where the script wrote
+`2.4 million dollars`, `Rust Light` where the script wrote `RustLight`. Every
+one of those is a word the display then had no way to match, and the corpus
+had no fixture that could produce a single one of them: seven scripts of
+ordinary prose, and a Tier-A simulator that says the script's own canonical
+words back to the engine, so both sides agreed on spelling by construction.
+
+### What was added
+
+Two fixtures — `figures.md` (a page of numbers, money, dates, times, units and
+versions) and `brands.md` (compound brand names, places, acronyms and mixed
+alphanumerics) — and `crates/cc-bench/src/verbalize.rs`, a deterministic model
+of what a recogniser writes back. Each script runs `exact` in its own spelling
+as a control and four `asr_forms` families through the verbalizer, so the gap
+between the two on the same script is the cost of the spelling disagreement
+with everything else held constant. Both scripts are also in the Tier-B
+selection, as plain reads, so the real provider decides its own spelling rather
+than being handed a guess at it.
+
+### What the engine got wrong, and what fixed it
+
+| Written | Heard | Before | After |
+|---|---|---|---|
+| `three thirty` | `3:30` | `330` — one number nobody says | `3` `30` |
+| `2019` | `two thousand and nineteen` | `2000` `and` `19` | `2019` |
+| `1905` | `nineteen oh five` | `19` `oh` `5` | `1905` |
+| `one hundred and twenty` | `a hundred and twenty` | `a` `hundred` `and` `20` | `120` |
+| `1.2 seconds` | `one point two seconds` | `one` `point` `2` | `1.2` |
+| `2.4 million dollars` | `$2.4 million` | `2.4` `dollars` `million` | `2.4` `million` `dollars` |
+| `24kHz` | `24 kilohertz` | `khz` vs `kilohertz` | both `kilohertz` |
+| `RustLight` | `Rust Light` | no atom either half can match | rejoined to `rustlight` |
+
+The first seven are normalisation: colons and slashes now separate words
+instead of gluing them, the `and` after a scale word is understood to be
+inside the number rather than between two, a lone `one` heads a decimal,
+`a hundred` is `one hundred`, a currency unit follows its scale word, and a
+short closed list of unit abbreviations is spoken in full — but only after a
+number, so `Ms Okonkwo` stays a person.
+
+The last is not normalisation, because no normaliser can know where the space
+should not have been. `CompiledScript::query_atoms` reconciles transcript word
+boundaries against the script's own vocabulary: adjacent transcript atoms are
+glued back together when the concatenation is a word THIS script contains and
+the pieces are not all script words in their own right. A script that says
+both `light` and `house` on its own keeps them apart — two words is a reading
+it already supports, and choosing between them is the aligner's job.
+
+### Results
+
+Tier A, same fixtures and evaluator on both sides, engine before and after.
+
+| Benchmark | Unit | Better | Baseline | Optimized | Improvement |
+|---|---|---|---:|---:|---|
+| `forms.within2` | % | higher | 48.011 | 53.294 | +5.28 pp ✅ |
+| `forms.within5` | % | higher | 90.305 | 96.224 | +5.92 pp ✅ |
+| `forms.figures_within5` | % | higher | 91.783 | 96.321 | +4.54 pp ✅ |
+| `forms.brands_within5` | % | higher | 88.509 | 96.106 | +7.60 pp ✅ |
+| `forms.freeze` | % | lower | 7.046 | 2.723 | -4.32 pp ✅ |
+| `forms.false_jumps` | count | lower | 0.000 | 0.000 | unchanged |
+| `forms.lock_p95` | s | lower | 4.450 | 4.450 | unchanged |
+| `forms.lock_failures` | count | lower | 0.000 | 0.000 | unchanged |
+| `perf.mean_event_us` | µs | lower | 187.9 | 192.7 | 2.6% higher ⚠️ |
+| `perf.p95_event_us` | µs | lower | 921.000 | 996.000 | 8.1% higher ⚠️ |
+
+Every other row in the Tier-A table is byte-identical to the baseline —
+safety, clean accuracy, robustness, recovery, viewport and ambiguity all
+unmoved. That is the point of the shape of the fix: nothing here changes how
+the engine decides, only what the two sides agree a word is.
+
+Per run, with `exact` on the same script as the reference:
+
+| Run | within5 before | within5 after | `exact` on that script |
+|---|---:|---:|---:|
+| `figures__asr_forms` | 92.9 | 99.2 | 100.0 |
+| `figures__asr_forms_pauses` | 94.7 | 98.9 | 100.0 |
+| `figures__asr_forms_corrupt` | 86.9 | 91.0 | — |
+| `brands__asr_forms` | 90.6 | 99.1 | 100.0 |
+| `brands__asr_forms_pauses` | 90.4 | 98.8 | 100.0 |
+| `brands__asr_forms_corrupt` | 83.7 | 91.9 | — |
+
+On the straight-read families the spelling disagreement cost 7–9 points of
+`within5` and now costs under one. What remains is not spelling: the `_cold`
+runs are relocation latency (4.45 s to re-lock after a 168-atom jump into a
+name-dense passage) and the `_corrupt` runs are recogniser noise, both
+pre-existing engine characteristics that these fixtures inherit rather than
+create.
+
+The per-event cost rose 2.6% (187.9 → 192.7 µs, three runs each side, spread
+±1.2 µs). The extra work is one hash lookup per transcript atom plus, only
+where a word is not in the script's vocabulary, up to two concatenations. The
+budget is 2 ms.
+
+### What the real recogniser actually did
+
+Three new Tier-B fixtures were captured — `figures/exact` (qwen),
+`figures/pauses` (gemini) and `brands/exact` (xai) — plus `starter/long_pauses`,
+which had been in the live selection since it was added and never captured.
+`bench/runs` now holds 18 frozen runs. Both engines replay the identical logs.
+
+| Benchmark | Better | Baseline | Optimized |
+|---|---|---:|---:|
+| `live.within2` | higher | 67.368 | 67.877 |
+| `live.within5` | higher | 92.825 | 93.359 |
+| `live.p95_abs` | lower | 7.184 | 6.520 |
+| `live.freeze` | lower | 6.193 | 5.988 |
+| `live.false_jumps` | lower | 1.000 | 1.000 |
+| `live.catastrophic` | lower | 1.000 | 1.000 |
+| `live.wer` | diagnostic | 7.526 | 7.343 |
+
+Per new run:
+
+| Run | within5 before | within5 after | p95 before | p95 after | WER |
+|---|---:|---:|---:|---:|---:|
+| `brands__exact__xai` | 92.3 | 96.1 | 7.92 | 4.53 | 8.9 |
+| `figures__pauses__gemini` | 97.8 | 97.8 | 3.94 | 3.86 | 2.4 |
+| `figures__exact__qwen` | 80.3 | 79.7 | 11.43 | 11.91 | 17.7 |
+
+The live transcripts are worth reading directly, because they correct the
+model. Inworld writes `27,000` and `19,400` with grouping commas, `143`,
+`1.2 seconds`, `24 kHz`, `version 3.2`, `2019`, `the 28th of July` — and
+`2.4 million dollars` in spoken order, not as `$2.4 million`. So the currency
+reorder is a real shape but a rarer one than the verbalizer assumes, and the
+decision NOT to touch compound ordinals is vindicated: the provider writes
+`28th`, which already lands on the script's `20 eighth`. It also writes times
+with colons — `9:00 a.m.`, `9:50` — which is the fix that came out of the
+model, confirmed by the provider.
+
+`figures__exact__qwen` is the one run that did not improve, and the reason is
+in its WER: 17.7%, against 2.4% for the same script read by gemini. That voice
+reading a page of figures produced transcripts like "the infrastructure bill is
+56 million dollars a year" and "3302475905" for "three thirty, 24kHz, 1905".
+None of that is a spelling disagreement — the words were not heard. A ±0.6-point
+move on a run that noisy is not a signal, and it is left in the corpus as the
+honest lower bound: on a bad voice, a page of numbers is bounded by the
+recogniser, not by the engine.
+
+### Honest limitations of this round
+
+* The verbalizer is a MODEL of provider behaviour, not a recording of it. It
+  was written to be fair — several of its renderings already normalised
+  correctly before any change (`nineteen ninety eight`, `three point two`,
+  spelled cardinals) and are controls rather than targets — but a model can
+  still be wrong about how often a shape occurs. Tier B is the check.
+* Compound ordinals are untouched. The script's canonical form for
+  `twenty-eighth` is the two atoms `20 eighth`, which is self-consistent and
+  matches `28th`, but a provider writing the bare cardinal `28` still lands
+  nowhere near it. Unifying them would change the atom count of every script
+  containing an ordinal — including `technical.md`'s `95th` — and atom indexes
+  are what Tier-B gold is expressed in, so the fix would invalidate captured
+  fixtures. It costs about 0.8 points of `figures__asr_forms`; the trade was
+  not worth it.
+* The rejoin only closes spaces. A recogniser that REMOVES a space the script
+  had (`Cape Town` → `CapeTown`) is the symmetric case and is not handled,
+  because nothing in the corpus produces it and an untested branch in the hot
+  path is worse than a missing one.
+* `bench/runs` gained three fixtures. The Tier-B engine and voice assignment
+  is now pinned per run rather than derived from list position — it was
+  `index % 3`, which meant inserting one entry silently re-voiced every entry
+  below it, and five already-frozen runs would have been re-rendered and
+  re-captured under new names at full cost for no new evidence.
+
 ## Honest limitations
 
 * `recovery.adlib_drift_p95` regressed (1.7 → 3.0 atoms): the baseline's

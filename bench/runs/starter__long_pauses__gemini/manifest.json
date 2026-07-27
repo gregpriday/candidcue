@@ -1,0 +1,9 @@
+{
+  "name": "starter__long_pauses__gemini",
+  "script": "starter",
+  "scenario": "long_pauses",
+  "engine": "gemini",
+  "voice_index": 9,
+  "words": 161,
+  "audio_s": 82.98
+}

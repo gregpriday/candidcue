@@ -25,6 +25,8 @@
 
 use cc_align::{compile, CompileOptions, CompiledScript};
 
+use crate::tts::TtsEngine;
+
 use crate::plan::{Corruption, PerformancePlan, PlanOp};
 use crate::verbalize::{asr_ops, Verbalizer};
 
@@ -636,36 +638,63 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
     Ok(suite)
 }
 
-/// The Tier-B live set: which (script, scenario) pairs get real TTS audio
-/// streamed through the real recogniser. Engines rotate per run, giving each
-/// engine coverage across scenario families without a full cross product.
-pub fn tier_b_selection() -> Vec<(&'static str, &'static str)> {
+/// One entry in the Tier-B live set: a scenario, the TTS engine that speaks it,
+/// and the voice index that names the speaker and keys the clip cache.
+pub struct LiveRun {
+    pub script: &'static str,
+    pub scenario: &'static str,
+    pub engine: TtsEngine,
+    pub voice_index: usize,
+}
+
+/// The Tier-B live set: which scenarios get real TTS audio streamed through the
+/// real recogniser. Three engines double as the spec's held-out-voice
+/// requirement.
+///
+/// Engine and voice are PINNED here rather than derived from list position.
+/// They used to be `index % 3`, which meant a run's identity depended on how
+/// many entries sat above it: inserting `starter/long_pauses` in the middle
+/// silently re-voiced every entry below, so `refrain/exact` — captured and
+/// frozen as gemini — was suddenly gemini no longer. The next synthesis run
+/// would have re-rendered and re-captured five already-frozen fixtures under
+/// new names, at full TTS and streaming cost, for no new evidence. The mapping
+/// below is the one `bench/runs` was actually captured with.
+pub fn tier_b_selection() -> Vec<LiveRun> {
+    use TtsEngine::{Gemini, Qwen, Xai};
+    let run = |script, scenario, engine, voice_index| LiveRun {
+        script,
+        scenario,
+        engine,
+        voice_index,
+    };
     vec![
-        ("starter", "exact"),
-        ("starter", "skip_forward"),
-        ("starter", "adlib_return"),
-        ("starter", "retake"),
-        ("product-update", "exact"),
-        ("product-update", "intro_then_end"),
-        ("product-update", "viewport_start"),
-        ("technical", "exact"),
-        ("technical", "pauses"),
-        ("starter", "long_pauses"),
-        ("refrain", "exact"),
-        ("refrain", "refrain_second"),
-        ("names", "exact"),
-        ("names", "names_cold_jump"),
-        ("longform", "intro_then_end"),
-        // Appended, never inserted: the engine rotation is `index % 3`, so a
-        // new pair in the middle would re-voice every captured run below it.
+        run("starter", "exact", Gemini, 0),
+        run("starter", "skip_forward", Qwen, 1),
+        run("starter", "adlib_return", Xai, 2),
+        run("starter", "retake", Gemini, 3),
+        run("product-update", "exact", Qwen, 4),
+        run("product-update", "intro_then_end", Xai, 5),
+        run("product-update", "viewport_start", Gemini, 6),
+        run("technical", "exact", Qwen, 7),
+        run("technical", "pauses", Xai, 8),
+        run("refrain", "exact", Gemini, 9),
+        run("refrain", "refrain_second", Qwen, 10),
+        run("names", "exact", Xai, 11),
+        run("names", "names_cold_jump", Gemini, 12),
+        run("longform", "intro_then_end", Qwen, 13),
+        // Added later and never captured; pinned to the identity the old
+        // rotation had already given it, so the audio rendered under it stays
+        // valid rather than being re-billed for a new voice number.
+        run("starter", "long_pauses", Gemini, 9),
+        // The spoken-form scripts, one per engine.
         //
-        // Plain reads, deliberately. The whole point of putting these two
-        // scripts in front of the real recogniser is to find out how IT spells
-        // what it hears — feeding it a synthesised guess at its own output
-        // would just measure the guess.
-        ("figures", "exact"),
-        ("brands", "exact"),
-        ("figures", "pauses"),
+        // Plain reads, deliberately. The whole point of putting these two in
+        // front of the real recogniser is to find out how IT spells what it
+        // hears; feeding it a synthesised guess at its own output would only
+        // measure the guess.
+        run("figures", "exact", Qwen, 15),
+        run("brands", "exact", Xai, 16),
+        run("figures", "pauses", Gemini, 17),
     ]
 }
 

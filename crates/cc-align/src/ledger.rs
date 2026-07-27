@@ -119,6 +119,28 @@ impl Ledger {
         is_final: bool,
         audio_ms: f64,
     ) -> u32 {
+        self.revise_atoms(
+            interner,
+            item_id,
+            canonical_atoms(text),
+            is_final,
+            audio_ms,
+        )
+    }
+
+    /// The same, for a caller that has already canonicalised the text.
+    ///
+    /// The tracker takes this door because its canonicalisation is
+    /// script-aware — it rejoins words the recogniser split apart — and that
+    /// needs the compiled script, which the ledger has no business holding.
+    pub fn revise_atoms(
+        &mut self,
+        interner: &mut Interner,
+        item_id: &str,
+        atoms: Vec<String>,
+        is_final: bool,
+        audio_ms: f64,
+    ) -> u32 {
         // An item can, in principle, receive a transcript before its
         // ItemStarted was observed (reconnect races). Open it here.
         if !self.items.iter().any(|i| i.item_id == item_id) {
@@ -131,7 +153,7 @@ impl Ledger {
             .find(|i| i.item_id == item_id)
             .expect("item exists");
 
-        let new_atoms: Vec<LedgerAtom> = canonical_atoms(text)
+        let new_atoms: Vec<LedgerAtom> = atoms
             .into_iter()
             .map(|surface| {
                 let id = interner.intern(&surface);

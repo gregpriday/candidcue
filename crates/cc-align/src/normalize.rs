@@ -105,7 +105,70 @@ pub fn canonical_atoms(text: &str) -> Vec<String> {
     for raw in text.split_whitespace() {
         split_word(raw, &mut words);
     }
-    itn_numbers(&words)
+    let mut atoms = itn_numbers(&words);
+    reorder_currency(&mut atoms);
+    expand_units(&mut atoms);
+    atoms
+}
+
+/// `$2.4 million` is said "two point four million dollars".
+///
+/// The symbol is written at the front of the amount and the unit is spoken at
+/// the end of it, after the scale word. Emitting `dollars` where the symbol
+/// stood left a transcript holding `2.4 dollars million` against a script
+/// holding `2.4 million dollars`: the same three atoms, in an order that
+/// matches nothing.
+const CURRENCY_UNITS: &[&str] = &["dollars", "pounds", "euros"];
+
+fn reorder_currency(atoms: &mut [String]) {
+    if atoms.len() < 3 {
+        return;
+    }
+    for i in 1..atoms.len() - 1 {
+        if !atoms[i - 1].starts_with(|c: char| c.is_ascii_digit()) {
+            continue;
+        }
+        if CURRENCY_UNITS.contains(&atoms[i].as_str()) && is_scale_word(&atoms[i + 1]) {
+            atoms.swap(i, i + 1);
+        }
+    }
+}
+
+/// Unit abbreviations, rewritten as the word that is actually said.
+///
+/// A script writes `24kHz` and `250ms`; the reader says "twenty-four kilohertz"
+/// and the recogniser writes it out in full. Both sides expand, so the two meet
+/// in the middle the same way spelled numbers do.
+///
+/// Only ever after a number. `250 ms` is a duration; `Ms Okonkwo` is a person,
+/// and rewriting her name to "milliseconds" would invent a mismatch out of a
+/// perfectly good match.
+const UNIT_WORDS: &[(&str, &str)] = &[
+    ("hz", "hertz"),
+    ("khz", "kilohertz"),
+    ("mhz", "megahertz"),
+    ("ghz", "gigahertz"),
+    ("ms", "milliseconds"),
+    ("kb", "kilobytes"),
+    ("mb", "megabytes"),
+    ("gb", "gigabytes"),
+    ("tb", "terabytes"),
+    ("km", "kilometres"),
+    ("kg", "kilograms"),
+    ("cm", "centimetres"),
+    ("mm", "millimetres"),
+    ("fps", "frames"),
+];
+
+fn expand_units(atoms: &mut [String]) {
+    for i in 1..atoms.len() {
+        if !atoms[i - 1].starts_with(|c: char| c.is_ascii_digit()) {
+            continue;
+        }
+        if let Some((_, spelled)) = UNIT_WORDS.iter().find(|(abbrev, _)| *abbrev == atoms[i]) {
+            atoms[i] = (*spelled).to_string();
+        }
+    }
 }
 
 /// Stage 1+2+3: one whitespace-delimited chunk → zero or more word atoms.
@@ -162,6 +225,15 @@ fn split_word(raw: &str, out: &mut Vec<String>) {
             '\u{2019}' | '\u{02BC}' => Some('\''),
             // En/em dashes act as separators.
             '\u{2013}' | '\u{2014}' => Some('-'),
+            /*
+             * Colons and slashes separate words exactly the way a hyphen does.
+             * They used to be filtered out with the rest of the punctuation,
+             * which did not remove them so much as GLUE what they separated:
+             * a recogniser writing `3:30` produced the atom `330`, a number
+             * nobody says, and the script's own `three thirty` (`3`, `30`)
+             * could never match it. Same for `2/3`, `28/07`, `and/or`.
+             */
+            ':' | '/' => Some('-'),
             c if c.is_alphanumeric() || c == '\'' || c == '-' || c == '.' || c == ',' => Some(c),
             _ => None,
         })
@@ -408,10 +480,53 @@ fn tens_value(w: &str) -> Option<u64> {
     TENS.iter().find(|(s, _)| *s == w).map(|(_, v)| *v)
 }
 
+fn is_scale_word(w: &str) -> bool {
+    matches!(w, "hundred" | "thousand" | "million" | "billion")
+}
+
 fn is_number_word(w: &str) -> bool {
-    unit_value(w).is_some()
-        || tens_value(w).is_some()
-        || matches!(w, "hundred" | "thousand" | "million" | "billion")
+    unit_value(w).is_some() || tens_value(w).is_some() || is_scale_word(w)
+}
+
+/// Does `one` here head a number, or is it the pronoun-ish word?
+///
+/// A lone `one` is left alone on purpose — "one of the reasons" is not the
+/// numeral 1, and converting it would cost exact matches on every page. But
+/// `one point two` IS the numeral, and leaving it alone left the transcript
+/// holding `one point 2` against a script holding `1.2`: three atoms against
+/// one, right where the reader is saying a figure out loud.
+fn heads_a_decimal(words: &[String]) -> bool {
+    words.len() >= 3
+        && words[1] == "point"
+        && unit_value(&words[2]).is_some_and(|v| v <= 9)
+}
+
+/// Is this `and` inside one number, or between two of them?
+///
+/// `one hundred and five` and `two thousand and nineteen` are single numbers,
+/// and a recogniser writes both `2019` and the words. `between one thousand and
+/// two thousand` is two numbers, and folding it to 3000 would put the
+/// transcript on a figure the script never says. The tell is the tail: the part
+/// after a number's `and` is its remainder — under a hundred, and never
+/// carrying a scale word of its own.
+fn bridges_a_number(current: u64, total: u64, tail: &[String]) -> bool {
+    let Some(head) = tail.first() else {
+        return false;
+    };
+    if !is_number_word(head) {
+        return false;
+    }
+    // `one hundred and five`: the hundreds are still in `current`.
+    if current > 0 && current % 100 == 0 {
+        return true;
+    }
+    // `two thousand and nineteen`: the multiplier moved the value to `total`
+    // and left `current` empty.
+    if current != 0 || total == 0 {
+        return false;
+    }
+    let (value, consumed, _) = parse_number_phrase(tail);
+    consumed > 0 && value < 100 && !tail.get(consumed).is_some_and(|w| is_scale_word(w))
 }
 
 /// Collapse spelled-out number word runs to digit strings.
@@ -421,6 +536,33 @@ fn is_number_word(w: &str) -> bool {
 /// left alone — it is far more often the pronoun-ish word than a numeral, and
 /// converting it would cost exact matches everywhere.
 fn itn_numbers(words: &[String]) -> Vec<String> {
+    // `a hundred and twenty` is `one hundred and twenty` said at speed, and
+    // recognisers write it both ways. Rewriting the article in front of a scale
+    // word is the whole of the difference between the two spellings.
+    //
+    // Copied only when there is something to rewrite: this runs on every
+    // partial of every item, and almost no sentence contains the pattern.
+    let rewritten: Vec<String>;
+    let words = if words
+        .windows(2)
+        .any(|pair| pair[0] == "a" && is_scale_word(&pair[1]))
+    {
+        rewritten = words
+            .iter()
+            .enumerate()
+            .map(|(i, w)| {
+                if w == "a" && words.get(i + 1).is_some_and(|next| is_scale_word(next)) {
+                    "one".to_string()
+                } else {
+                    w.clone()
+                }
+            })
+            .collect();
+        &rewritten[..]
+    } else {
+        words
+    };
+
     let mut out = Vec::with_capacity(words.len());
     let mut i = 0;
     while i < words.len() {
@@ -432,7 +574,7 @@ fn itn_numbers(words: &[String]) -> Vec<String> {
         }
         // Greedily consume a number phrase, allowing interior "and".
         let (value, consumed, year_style) = parse_number_phrase(&words[i..]);
-        if consumed == 0 || (consumed == 1 && w == "one") {
+        if consumed == 0 || (consumed == 1 && w == "one" && !heads_a_decimal(&words[i..])) {
             out.push(words[i].clone());
             i += 1;
             continue;
@@ -516,13 +658,8 @@ fn parse_number_phrase(words: &[String]) -> (u64, usize, bool) {
             total += current.max(1) * mult;
             current = 0;
             i += 1;
-        } else if w == "and" && consumed_any && current % 100 == 0 && current > 0 {
-            // `one hundred and five` — only mid-number "and".
-            if i + 1 < words.len() && is_number_word(&words[i + 1]) {
-                i += 1;
-            } else {
-                break;
-            }
+        } else if w == "and" && consumed_any && bridges_a_number(current, total, &words[i + 1..]) {
+            i += 1;
         } else {
             break;
         }
@@ -538,6 +675,17 @@ fn parse_number_phrase(words: &[String]) -> (u64, usize, bool) {
     // phrase worth 0..=99 that standard grammar refused to merge.
     let mut year = false;
     if value >= 10 && value <= 99 && consumed < words.len() {
+        // `nineteen oh five`. The zero is spoken as a letter, so no number
+        // parser sees it and the year fell apart into `19 oh 5` — three atoms
+        // where the script has one.
+        if matches!(words[consumed].as_str(), "oh" | "o") {
+            if let Some(unit) = words.get(consumed + 1).and_then(|w| unit_value(w)) {
+                let joined = value * 100 + unit;
+                if unit <= 9 && (1000..=2999).contains(&joined) {
+                    return (joined, consumed + 2, true);
+                }
+            }
+        }
         let (tail, tail_consumed, _) = parse_number_phrase(&words[consumed..]);
         if tail_consumed > 0 && tail < 100 {
             // `oh` isn't handled; only join when the tail is 2 digits or a
@@ -621,11 +769,65 @@ mod tests {
     #[test]
     fn lone_one_is_not_a_numeral() {
         assert_eq!(atoms("one of the reasons"), vec!["one", "of", "the", "reasons"]);
+        // …but it is when a decimal follows it.
+        assert_eq!(atoms("one point two seconds"), vec!["1.2", "seconds"]);
+        assert_eq!(atoms("1.2 seconds"), vec!["1.2", "seconds"]);
+    }
+
+    /// Every pair here is the same sentence written by the script on one side
+    /// and by the recogniser on the other. They must land on the same atoms.
+    #[test]
+    fn the_two_spellings_of_a_figure_meet() {
+        let same = |script: &str, heard: &str| {
+            assert_eq!(atoms(script), atoms(heard), "{script:?} vs {heard:?}");
+        };
+        same("three thirty in the afternoon", "3:30 in the afternoon");
+        same("nine fifteen", "9:15");
+        same("2019", "two thousand and nineteen");
+        same("2024", "two thousand and twenty four");
+        same("1905", "nineteen oh five");
+        same("one hundred and twenty", "a hundred and twenty");
+        same("2.4 million dollars", "$2.4 million");
+        same("1.6 million dollars", "$1.6 million");
+        same("24kHz", "24 kilohertz");
+        same("250ms", "250 milliseconds");
+    }
+
+    /// The `and` that joins two numbers is not the `and` inside one.
+    #[test]
+    fn and_between_two_numbers_does_not_fuse_them() {
+        assert_eq!(
+            atoms("between one thousand and two thousand"),
+            vec!["between", "1000", "and", "2000"]
+        );
+        assert_eq!(atoms("two thousand and nineteen"), vec!["2019"]);
+    }
+
+    #[test]
+    fn colons_and_slashes_separate_rather_than_glue() {
+        assert_eq!(atoms("3:30"), vec!["3", "30"]);
+        assert_eq!(atoms("and/or"), vec!["and", "or"]);
+        assert_eq!(atoms("2/3"), vec!["2", "3"]);
+        // A sentence colon is trailing punctuation, not a separator with
+        // anything on the far side of it.
+        assert_eq!(atoms("three moments: the tease"), vec!["3", "moments", "the", "tease"]);
+    }
+
+    /// A unit abbreviation is only a unit when a number precedes it.
+    #[test]
+    fn units_expand_only_after_a_number() {
+        assert_eq!(atoms("24kHz"), vec!["24", "kilohertz"]);
+        assert_eq!(atoms("Ms Okonkwo"), vec!["ms", "okonkwo"]);
+        assert_eq!(atoms("kg of it"), vec!["kg", "of", "it"]);
     }
 
     #[test]
     fn mixed_alphanumerics_split() {
-        assert_eq!(atoms("24kHz"), vec!["24", "khz"]);
+        // The split itself, on a suffix that is not a known unit.
+        assert_eq!(atoms("4090s"), vec!["4090", "s"]);
+        assert_eq!(atoms("H100"), vec!["h", "100"]);
+        // A known unit splits the same way and is then spoken in full.
+        assert_eq!(atoms("24kHz"), vec!["24", "kilohertz"]);
     }
 
     #[test]

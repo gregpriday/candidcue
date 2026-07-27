@@ -294,8 +294,18 @@ impl Engine {
                 text,
                 audio_ms,
             } => {
-                self.ledger
-                    .revise(&mut self.script.interner, &item_id, &text, false, audio_ms);
+                // Canonicalised against the script's own vocabulary first, so
+                // a name the recogniser split in two arrives as the one word
+                // the script wrote. Two statements, not one: the script is
+                // borrowed for the atoms, then its interner for the ledger.
+                let atoms = self.script.query_atoms(&text);
+                self.ledger.revise_atoms(
+                    &mut self.script.interner,
+                    &item_id,
+                    atoms,
+                    false,
+                    audio_ms,
+                );
                 self.update(audio_ms)
             }
             SessionEvent::Final {
@@ -303,8 +313,14 @@ impl Engine {
                 text,
                 audio_end_ms,
             } => {
-                self.ledger
-                    .revise(&mut self.script.interner, &item_id, &text, true, audio_end_ms);
+                let atoms = self.script.query_atoms(&text);
+                self.ledger.revise_atoms(
+                    &mut self.script.interner,
+                    &item_id,
+                    atoms,
+                    true,
+                    audio_end_ms,
+                );
                 self.update(audio_end_ms)
             }
         }

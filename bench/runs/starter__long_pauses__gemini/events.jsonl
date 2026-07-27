@@ -1,0 +1,91 @@
+{"kind":"itemStarted","itemId":"1-0","ordinal":0,"audioStartMs":1400.0}
+{"kind":"partial","itemId":"1-0","text":"Hi!","audioMs":2100.0,"wallMs":2019.441541}
+{"kind":"partial","itemId":"1-0","text":"Hi, if you are reading this","audioMs":3200.0,"wallMs":3123.405708}
+{"kind":"partial","itemId":"1-0","text":"Hi, if you are reading this sentence off the","audioMs":4100.0,"wallMs":4059.453125}
+{"kind":"partial","itemId":"1-0","text":"Hi, if you are reading this sentence off the screen right now.","audioMs":5100.0,"wallMs":5050.229541000001}
+{"kind":"final","itemId":"1-0","text":"Hi, if you are reading this sentence off the screen right now.","audioEndMs":5800.0,"wallMs":5709.493125}
+{"kind":"itemStarted","itemId":"1-1","ordinal":1,"audioStartMs":5800.0}
+{"kind":"partial","itemId":"1-1","text":"That is exactly","audioMs":6800.0,"wallMs":6729.035458}
+{"kind":"partial","itemId":"1-1","text":"That is exactly the idea.","audioMs":7800.0,"wallMs":7791.185665999999}
+{"kind":"partial","itemId":"1-1","text":"That is exactly the idea. Keep going.","audioMs":8700.0,"wallMs":8651.26425}
+{"kind":"partial","itemId":"1-1","text":"That is exactly the idea. Keep going at whatever","audioMs":9800.0,"wallMs":9745.283374999999}
+{"kind":"partial","itemId":"1-1","text":"That is exactly the idea. Keep going at whatever pace feels natural.","audioMs":10800.0,"wallMs":10757.689083000001}
+{"kind":"final","itemId":"1-1","text":"That is exactly the idea. Keep going at whatever pace feels natural.","audioEndMs":11700.0,"wallMs":11628.662375}
+{"kind":"itemStarted","itemId":"1-2","ordinal":2,"audioStartMs":11800.0}
+{"kind":"partial","itemId":"1-2","text":"To you.","audioMs":12600.0,"wallMs":12518.269708}
+{"kind":"partial","itemId":"1-2","text":"to you and watch what","audioMs":13700.0,"wallMs":13618.350208}
+{"kind":"partial","itemId":"1-2","text":"to you, and watch what the text does.","audioMs":14600.0,"wallMs":14534.443416}
+{"kind":"partial","itemId":"1-2","text":"to you, and watch what the text does as you speak.","audioMs":15600.0,"wallMs":15536.998415999999}
+{"kind":"partial","itemId":"1-2","text":"To you, and watch what the text does as you speak.","audioMs":16700.0,"wallMs":16646.196958}
+{"kind":"partial","itemId":"1-2","text":"to you, and watch what the text does as you speak. You should see the line","audioMs":17600.0,"wallMs":17551.989833}
+{"kind":"partial","itemId":"1-2","text":"to you, and watch what the text does as you speak. You should see the line you are on,","audioMs":18600.0,"wallMs":18557.883374999998}
+{"kind":"partial","itemId":"1-2","text":"to you, and watch what the text does as you speak. You should see the line you are on stay roughly in the","audioMs":19700.0,"wallMs":19675.602875}
+{"kind":"partial","itemId":"1-2","text":"to you, and watch what the text does as you speak. You should see the line you are on stay roughly in the","audioMs":20600.0,"wallMs":20554.261916000003}
+{"kind":"partial","itemId":"1-2","text":"to you, and watch what the text does as you speak. You should see the line you are on stay roughly in the middle of","audioMs":21600.0,"wallMs":21559.293833000003}
+{"kind":"partial","itemId":"1-2","text":"to you, and watch what the text does as you speak. You should see the line you are on stay roughly in the middle of.","audioMs":22700.0,"wallMs":22658.337333}
+{"kind":"final","itemId":"1-2","text":"to you, and watch what the text does as you speak. You should see the line you are on stay roughly in the middle of.","audioEndMs":23100.0,"wallMs":23092.751916}
+{"kind":"itemStarted","itemId":"1-3","ordinal":3,"audioStartMs":23300.0}
+{"kind":"partial","itemId":"1-3","text":"The screen","audioMs":24200.0,"wallMs":24119.112875}
+{"kind":"partial","itemId":"1-3","text":"The screen, the word","audioMs":25200.0,"wallMs":25152.289041}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you.","audioMs":26100.0,"wallMs":26033.1155}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back.","audioMs":27200.0,"wallMs":27133.399041}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words","audioMs":28200.0,"wallMs":28162.308875000002}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead.","audioMs":29100.0,"wallMs":29059.633083}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit","audioMs":30200.0,"wallMs":30168.865541}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait.","audioMs":31200.0,"wallMs":31162.026333}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not.","audioMs":32100.0,"wallMs":32088.863125000003}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about.","audioMs":33200.0,"wallMs":33181.012582999996}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about.","audioMs":34200.0,"wallMs":34167.392583}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about scrolling at all.","audioMs":35100.0,"wallMs":35065.278958}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about scrolling at all.","audioMs":36200.0,"wallMs":36157.194458}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about scrolling at all. Now try","audioMs":37200.0,"wallMs":37160.43525}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about scrolling at all. Now try slowing","audioMs":38100.0,"wallMs":38060.138875}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about scrolling at all. Now try slowing right.","audioMs":39200.0,"wallMs":39161.775375}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about scrolling at all. Now try slowing right down.","audioMs":40200.0,"wallMs":40160.890916}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about scrolling at all. Now try slowing right down for a","audioMs":41100.0,"wallMs":41061.620541000004}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about scrolling at all. Now try slowing right down for a sentence.","audioMs":42200.0,"wallMs":42170.821958}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about scrolling at all. Now try slowing right down for a sentence or two.","audioMs":43200.0,"wallMs":43161.585083}
+{"kind":"partial","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about scrolling at all. Now try slowing right down for a sentence or two.","audioMs":44100.0,"wallMs":44059.571541}
+{"kind":"final","itemId":"1-3","text":"The screen, the words behind you fade back, and the words ahead of you sit and wait. You should not have to think about scrolling at all. Now try slowing right down for a sentence or two.","audioEndMs":44800.0,"wallMs":44738.243083}
+{"kind":"itemStarted","itemId":"1-4","ordinal":4,"audioStartMs":45400.0}
+{"kind":"partial","itemId":"1-4","text":"And","audioMs":46200.0,"wallMs":46110.3405}
+{"kind":"partial","itemId":"1-4","text":"and put a real","audioMs":47300.0,"wallMs":47217.655375}
+{"kind":"partial","itemId":"1-4","text":"and put a real pause in the","audioMs":48200.0,"wallMs":48117.228791}
+{"kind":"partial","itemId":"1-4","text":"And put a real pause in the middle of this one.","audioMs":49200.0,"wallMs":49134.745125}
+{"kind":"partial","itemId":"1-4","text":"And put a real pause in the middle of this one, like","audioMs":50300.0,"wallMs":50227.369166000004}
+{"kind":"partial","itemId":"1-4","text":"And put a real pause in the middle of this one, like","audioMs":51200.0,"wallMs":51140.595958}
+{"kind":"final","itemId":"1-4","text":"And put a real pause in the middle of this one, like","audioEndMs":51500.0,"wallMs":51458.978458}
+{"kind":"itemStarted","itemId":"1-5","ordinal":5,"audioStartMs":51500.0}
+{"kind":"partial","itemId":"1-5","text":"That the text","audioMs":52500.0,"wallMs":52429.10825}
+{"kind":"partial","itemId":"1-5","text":"That the text should ease off.","audioMs":53600.0,"wallMs":53523.258540999996}
+{"kind":"partial","itemId":"1-5","text":"That the text should ease off and wait for you.","audioMs":54500.0,"wallMs":54476.291166}
+{"kind":"partial","itemId":"1-5","text":"That the text should ease off and wait for you, rather than","audioMs":55500.0,"wallMs":55448.654875}
+{"kind":"partial","itemId":"1-5","text":"That the text should ease off and wait for you, rather than...","audioMs":56600.0,"wallMs":56554.86125}
+{"kind":"partial","itemId":"1-5","text":"That the text should ease off and wait for you, rather than running ahead.","audioMs":57500.0,"wallMs":57455.9425}
+{"kind":"partial","itemId":"1-5","text":"That the text should ease off and wait for you, rather than running ahead. Then,","audioMs":58500.0,"wallMs":58456.677166}
+{"kind":"partial","itemId":"1-5","text":"That the text should ease off and wait for you rather than running ahead. Then, pick the pace.","audioMs":59600.0,"wallMs":59567.738458}
+{"kind":"partial","itemId":"1-5","text":"That the text should ease off and wait for you rather than running ahead. Then, pick the pace back up again.","audioMs":60500.0,"wallMs":60481.393666}
+{"kind":"partial","itemId":"1-5","text":"That the text should ease off and wait for you rather than running ahead. Then pick the pace back up again. It should catch.","audioMs":61500.0,"wallMs":61475.033125}
+{"kind":"partial","itemId":"1-5","text":"That the text should ease off and wait for you rather than running ahead. Then, pick the pace back up again. It should catch up smoothly.","audioMs":62700.0,"wallMs":62659.5205}
+{"kind":"partial","itemId":"1-5","text":"That the text should ease off and wait for you rather than running ahead. Then, pick the pace back up again. It should catch up smoothly.","audioMs":63500.0,"wallMs":63455.08925}
+{"kind":"final","itemId":"1-5","text":"That the text should ease off and wait for you rather than running ahead. Then, pick the pace back up again. It should catch up smoothly.","audioEndMs":63900.0,"wallMs":63825.387416}
+{"kind":"itemStarted","itemId":"1-6","ordinal":6,"audioStartMs":65900.0}
+{"kind":"partial","itemId":"1-6","text":"Without","audioMs":66600.0,"wallMs":66510.25162499999}
+{"kind":"partial","itemId":"1-6","text":"Without jumping.","audioMs":67700.0,"wallMs":67616.60391600001}
+{"kind":"partial","itemId":"1-6","text":"Without jumping. Say something","audioMs":68600.0,"wallMs":68508.473916}
+{"kind":"partial","itemId":"1-6","text":"without jumping. Say something that is not written","audioMs":69600.0,"wallMs":69520.24425}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all.","audioMs":70700.0,"wallMs":70625.313916}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your","audioMs":71600.0,"wallMs":71534.30983299999}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your","audioMs":72600.0,"wallMs":72544.234875}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your day or","audioMs":73700.0,"wallMs":73636.36183299999}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your day or what you had for breakfast.","audioMs":74600.0,"wallMs":74552.34025}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your day or what you had for breakfast. For","audioMs":75600.0,"wallMs":75542.738}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your day or what you had for breakfast for five or ten seconds.","audioMs":76700.0,"wallMs":76650.483125}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your day or what you had for breakfast for five or ten seconds.","audioMs":77600.0,"wallMs":77541.88650000001}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your day or what you had for breakfast for five or ten seconds. And then","audioMs":78600.0,"wallMs":78546.2235}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your day or what you had for breakfast for five or ten seconds. And then come back to this line.","audioMs":79700.0,"wallMs":79655.576416}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your day or what you had for breakfast for five or ten seconds. And then come back to this line and carry","audioMs":80600.0,"wallMs":80570.94125}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your day or what you had for breakfast for five or ten seconds. And then come back to this line and carry on reading.","audioMs":81600.0,"wallMs":81548.506958}
+{"kind":"partial","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your day or what you had for breakfast for five or ten seconds. And then come back to this line and carry on reading.","audioMs":82700.0,"wallMs":82649.488916}
+{"kind":"final","itemId":"1-6","text":"Without jumping, say something that is not written here at all. Talk about your day or what you had for breakfast for five or ten seconds. And then come back to this line and carry on reading.","audioEndMs":82980.0,"wallMs":83264.017333}
+{"kind":"closed"}

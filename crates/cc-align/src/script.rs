@@ -154,6 +154,78 @@ impl CompiledScript {
         self.para_end[last_heard.min(self.atoms.len() - 1)] as f64
     }
 
+    /// Canonical atoms for recogniser text, with word boundaries reconciled
+    /// against this script's own vocabulary.
+    ///
+    /// A brand written `RustLight` is one word to the compiler and two to the
+    /// recogniser, which hears no capital letter and writes `Rust Light`.
+    /// Nothing was misheard, but the script has no atom either half can match,
+    /// so a partner list — the one place a presenter genuinely cannot scroll
+    /// with their eyes — is where the display was most likely to come apart.
+    ///
+    /// The join is deliberately timid. It fires only when the concatenation is
+    /// a word THIS script actually contains, and only when the pieces are not
+    /// all script words in their own right: if the script says both `rust` and
+    /// `light` on their own, two words is a reading it already supports and
+    /// guessing otherwise would be the aligner's job, not the normaliser's.
+    pub fn query_atoms(&self, text: &str) -> Vec<String> {
+        self.rejoin_split_words(canonical_atoms(text))
+    }
+
+    /// Is this canonical word one the script itself contains? The interner is
+    /// shared with the transcript, so membership is decided by the postings —
+    /// which are built from script atoms alone.
+    fn knows(&self, word: &str) -> bool {
+        self.interner
+            .get(word)
+            .is_some_and(|id| self.token_postings.contains_key(&id))
+    }
+
+    fn rejoin_split_words(&self, mut atoms: Vec<String>) -> Vec<String> {
+        if self.token_postings.is_empty() || atoms.len() < 2 {
+            return atoms;
+        }
+        // One lookup per atom, decided up front. This runs on every partial of
+        // every item, and a reader reading the script produces runs where every
+        // word is already a script word — which the guard below rejects without
+        // building a single string.
+        let known: Vec<bool> = atoms.iter().map(|a| self.knows(a)).collect();
+        if known.iter().all(|k| *k) {
+            return atoms;
+        }
+
+        let mut out: Vec<String> = Vec::with_capacity(atoms.len());
+        let mut candidate = String::new();
+        let mut i = 0;
+        while i < atoms.len() {
+            let mut joined: Option<(String, usize)> = None;
+            candidate.clear();
+            candidate.push_str(&atoms[i]);
+            let reach = MAX_REJOIN_ATOMS.min(atoms.len() - i);
+            for span in 2..=reach {
+                candidate.push_str(&atoms[i + span - 1]);
+                if known[i..i + span].iter().all(|k| *k) {
+                    continue;
+                }
+                if candidate.len() >= MIN_REJOIN_LEN && self.knows(&candidate) {
+                    joined = Some((candidate.clone(), span));
+                }
+            }
+            match joined {
+                Some((word, span)) => {
+                    out.push(word);
+                    i += span;
+                }
+                None => {
+                    // Moved, not copied: everything below `i` is finished with.
+                    out.push(std::mem::take(&mut atoms[i]));
+                    i += 1;
+                }
+            }
+        }
+        out
+    }
+
     /// Fractional atom position → fractional host-token position.
     ///
     /// Clamped at both ends: a caller extrapolating past the last atom gets the
@@ -211,6 +283,13 @@ fn interpolate(axis: &[f64], at: f64) -> f64 {
 
 /// How many postings an n-gram may have and still act as a relocation anchor.
 const MAX_ANCHOR_POSTINGS: usize = 4;
+
+/// How many transcript atoms may be glued back into one script word, and how
+/// long the result must be. Three covers the compounds people actually build
+/// (`BrightHarbour`, `LumenWorks`); six characters keeps the rule away from
+/// short function words that happen to concatenate into something real.
+const MAX_REJOIN_ATOMS: usize = 3;
+const MIN_REJOIN_LEN: usize = 6;
 
 pub fn compile(source: &str, options: CompileOptions) -> CompiledScript {
     let mut interner = Interner::default();
@@ -781,6 +860,50 @@ mod tests {
     #[test]
     fn an_empty_script_has_no_prediction_room() {
         assert_eq!(compile_tokens(&[]).prediction_ceiling(0.0), 0.0);
+    }
+
+    /// The recogniser heard no capital letter and wrote two words. The script
+    /// has one, and it is the one that has to win.
+    #[test]
+    fn a_name_the_recogniser_split_is_put_back_together() {
+        let script = compile(
+            "We ship with RustLight Games and LumenWorks every quarter.",
+            CompileOptions::default(),
+        );
+        assert_eq!(
+            script.query_atoms("we ship with rust light games"),
+            vec!["we", "ship", "with", "rustlight", "games"]
+        );
+        // Three pieces, same rule.
+        let three = compile("The BrightHarbourWorks release.", CompileOptions::default());
+        assert_eq!(
+            three.query_atoms("the bright harbour works release"),
+            vec!["the", "brightharbourworks", "release"]
+        );
+    }
+
+    /// The timid half of the rule. If the script says both words on their own,
+    /// two words is a reading it already supports, and gluing them would take a
+    /// decision that belongs to the aligner.
+    #[test]
+    fn words_the_script_uses_separately_are_left_alone() {
+        let script = compile(
+            "The lighthouse is dark. We keep a light in the house.",
+            CompileOptions::default(),
+        );
+        assert_eq!(
+            script.query_atoms("we keep a light in the house"),
+            vec!["we", "keep", "a", "light", "in", "the", "house"]
+        );
+    }
+
+    #[test]
+    fn a_join_never_invents_a_word_the_script_does_not_have() {
+        let script = compile("Nothing here matches.", CompileOptions::default());
+        assert_eq!(
+            script.query_atoms("some other words entirely"),
+            vec!["some", "other", "words", "entirely"]
+        );
     }
 
     #[test]
