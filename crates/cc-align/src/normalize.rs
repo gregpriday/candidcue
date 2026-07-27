@@ -45,12 +45,60 @@ pub fn is_filler(atom: &str) -> bool {
     FILLERS.contains(&atom)
 }
 
-/// Compact Soundex-style phonetic key. Used ONLY as a last-resort relation
-/// for rare, meaty words (names): recognisers mangle unusual spellings far
-/// beyond edit distance ("Saoirse" → "Sawersi"), but the consonant skeleton
-/// usually survives. Never applied to common words — phonetic collisions on
-/// frequent vocabulary are noise, not signal.
-pub fn phonetic_key(word: &str) -> [u8; 4] {
+/// Minimum length for a word to carry a phonetic key at all. Short words
+/// collide constantly and the relation is a last resort, not a first guess.
+const MIN_PHONETIC_LEN: usize = 5;
+
+/// A word's phonetic encoding, packed for comparison without allocating.
+///
+/// Used ONLY as a last-resort relation for rare, meaty words (names):
+/// recognisers mangle unusual spellings far beyond edit distance ("Saoirse" →
+/// "Sawersi"), but the consonant skeleton usually survives. Never applied to
+/// common words — phonetic collisions on frequent vocabulary are noise, not
+/// signal.
+///
+/// Empty when the word is too short to be worth encoding, which is what makes
+/// [`PhoneticKey::matches`] safe to call on anything.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PhoneticKey {
+    primary: [u8; 4],
+    alternate: [u8; 4],
+}
+
+impl PhoneticKey {
+    pub fn is_empty(&self) -> bool {
+        self.primary[0] == 0
+    }
+
+    /// Do these two words sound alike?
+    ///
+    /// Two slots because an encoder may offer a second reading for a word whose
+    /// pronunciation is genuinely ambiguous; a match on either counts. The
+    /// current encoder fills both with the same key.
+    pub fn matches(&self, other: &PhoneticKey) -> bool {
+        if self.is_empty() || other.is_empty() {
+            return false;
+        }
+        self.primary == other.primary
+            || self.primary == other.alternate
+            || self.alternate == other.primary
+    }
+}
+
+/// Encode a word, or nothing if it is too short to be worth encoding.
+///
+/// Double Metaphone was tried here (the `rphonetic` crate) and measurably lost:
+/// identical on the synthetic corpus, 0.15–0.17 pp worse on every live accuracy
+/// row. This relation is a last resort carrying a low weight, so its job is
+/// RECALL — catching "Saoirse" heard as "Sawersi" at all — and a more precise
+/// algorithm that correctly separates "presenter" from "president" trades away
+/// matches the looser skeleton was getting for free. Precision it does not
+/// need, bought with recall it does. (It also panics on any non-ASCII input,
+/// which is the one input class this relation exists for.)
+pub fn phonetic_key(word: &str) -> PhoneticKey {
+    if word.chars().count() < MIN_PHONETIC_LEN {
+        return PhoneticKey::default();
+    }
     let mut key = [0u8; 4];
     let mut n = 0;
     let mut last_code = 0u8;
@@ -89,7 +137,10 @@ pub fn phonetic_key(word: &str) -> [u8; 4] {
             last_code = code;
         }
     }
-    key
+    PhoneticKey {
+        primary: key,
+        alternate: key,
+    }
 }
 
 pub fn is_stopword(atom: &str) -> bool {

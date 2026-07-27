@@ -78,6 +78,7 @@ dependencies = [
  "anyhow",
  "cc-align",
  "cc-stt",
+ "num2words",
  "reqwest",
  "serde",
  "serde_json",
@@ -537,6 +538,21 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "num-bigfloat"
+version = "1.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "793a9a2afbf2b4fc1b9a47de731031b06ed362a5ede3681fbfbaeb2ad4faaa13"
+
+[[package]]
+name = "num2words"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ab78b987a0e1e6cf869a443f7f1c9dc696117d47780227e961e742d0b45d706"
+dependencies = [
+ "num-bigfloat",
 ]
 
 [[package]]

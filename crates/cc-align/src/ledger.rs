@@ -11,7 +11,7 @@
 
 use serde::Serialize;
 
-use crate::normalize::{canonical_atoms, is_filler};
+use crate::normalize::{canonical_atoms, is_filler, phonetic_key, PhoneticKey};
 use crate::script::Interner;
 
 /// Evidence class of one transcript atom at alignment time (spec §7.3).
@@ -53,6 +53,9 @@ impl StabilityClass {
 pub struct LedgerAtom {
     pub id: u32,
     pub surface: String,
+    /// Phonetic key, derived once when the atom is created rather than once
+    /// per DP cell — see [`crate::script::ScriptAtom::phonetic`].
+    pub phonetic: PhoneticKey,
     /// Consecutive revisions this atom has survived at this position.
     pub stability: u8,
     pub filler: bool,
@@ -79,6 +82,7 @@ pub struct Item {
 pub struct QueryAtom {
     pub id: u32,
     pub surface: String,
+    pub phonetic: PhoneticKey,
     pub stability: StabilityClass,
     pub filler: bool,
     /// Best-effort audio time of this word (interpolated inside the item).
@@ -159,6 +163,7 @@ impl Ledger {
                 let id = interner.intern(&surface);
                 let filler = is_filler(&surface);
                 LedgerAtom {
+                    phonetic: phonetic_key(&surface),
                     id,
                     surface,
                     stability: 0,
@@ -229,6 +234,7 @@ impl Ledger {
                 out.push(QueryAtom {
                     id: atom.id,
                     surface: atom.surface.clone(),
+                    phonetic: atom.phonetic,
                     stability,
                     filler: atom.filler,
                     audio_ms,

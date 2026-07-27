@@ -329,12 +329,40 @@ fn spell_into(n: u64, out: &mut Vec<String>) {
     }
 }
 
+/// The same number as an independent implementation says it.
+///
+/// `num2words` is not here for coverage — the hand-written `spell` below
+/// already covers these — but for provenance. Half the model's spoken forms
+/// now come from a crate that has never seen this engine, which is the only
+/// honest answer to the obvious objection: that the person who wrote the model
+/// then fixed the engine to pass it. It also disagrees usefully. It says a year
+/// as "twenty nineteen" where the hand-written branch says "two thousand and
+/// nineteen", and both are things people say, so alternating covers two real
+/// shapes where either alone covers one.
+fn spell_independently(n: u64, year: bool) -> Option<Vec<String>> {
+    let value = i64::try_from(n).ok()?;
+    let builder = num2words::Num2Words::new(value);
+    let words = if year { builder.year() } else { builder }.to_words().ok()?;
+    Some(
+        words
+            .replace('-', " ")
+            .split_whitespace()
+            .map(|w| w.to_string())
+            .collect(),
+    )
+}
+
 /// The spoken form for a bare integer, choosing among the ways people actually
 /// say it. Deterministic in `at` so the suite stays byte-for-byte reproducible.
 fn spell_as_spoken(n: u64, at: usize) -> Vec<String> {
     // Years get read as years, and the two awkward shapes are the ones worth
     // testing: `two thousand and nineteen` and `nineteen oh five`.
     if (1000..=2999).contains(&n) {
+        if at % 2 == 1 {
+            if let Some(words) = spell_independently(n, true) {
+                return words;
+            }
+        }
         let (century, tail) = (n / 100, n % 100);
         if century == 20 {
             let mut words = vec!["two".into(), "thousand".into()];
@@ -361,6 +389,11 @@ fn spell_as_spoken(n: u64, at: usize) -> Vec<String> {
         let mut words = vec!["a".into()];
         words.extend(spell(n).into_iter().skip(1));
         return words;
+    }
+    if at % 2 == 1 {
+        if let Some(words) = spell_independently(n, false) {
+            return words;
+        }
     }
     spell(n)
 }

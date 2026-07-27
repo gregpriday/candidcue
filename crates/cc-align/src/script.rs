@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::normalize::{canonical_atoms, is_stopword};
+use crate::normalize::{canonical_atoms, is_stopword, phonetic_key, PhoneticKey};
 
 pub const FLAG_STOPWORD: u8 = 1 << 0;
 pub const FLAG_NUMERIC: u8 = 1 << 1;
@@ -36,6 +36,14 @@ pub struct ScriptAtom {
     pub flags: u8,
     /// How many times this canonical token occurs in the whole script.
     pub occurrences: u16,
+    /// Phonetic key, derived once at compile time.
+    ///
+    /// The phonetic relation is evaluated in the DP inner loop, once per
+    /// (query atom, script atom) cell. Encoding there meant re-deriving the
+    /// same key thousands of times per revision — 10% of the engine's entire
+    /// per-event cost. The script does not change mid-take, so it is derived
+    /// here and the loop only compares.
+    pub phonetic: PhoneticKey,
     /// Index of the *host token* this atom was produced from.
     ///
     /// The engine never reads this — it exists so a caller that tokenized the
@@ -416,6 +424,7 @@ pub fn compile_tokens(tokens: &[TokenInput]) -> CompiledScript {
                 para: token.para,
                 flags: 0,
                 occurrences: 0,
+                phonetic: PhoneticKey::default(),
                 token: index as u32,
             });
         }
@@ -457,6 +466,11 @@ fn finalize(
         if !stop && occurrences as usize <= MAX_ANCHOR_POSTINGS && (surface.len() >= 4 || numeric)
         {
             atom.flags |= FLAG_ANCHOR;
+        }
+        // Only anchor-grade words can ever take the phonetic relation, so only
+        // they need a key; the rest keep the empty one, which never matches.
+        if atom.flags & FLAG_ANCHOR != 0 {
+            atom.phonetic = phonetic_key(&atom.surface);
         }
     }
 
@@ -584,6 +598,7 @@ fn push_line(text: &str, line: u32, para: u32, interner: &mut Interner, atoms: &
             para,
             flags: 0,
             occurrences: 0,
+            phonetic: PhoneticKey::default(),
             token,
         });
     }

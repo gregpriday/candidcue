@@ -344,20 +344,20 @@ Tier A, same fixtures, same evaluator, identical synthetic input on both sides
 
 | Benchmark | Unit | Better | Baseline | Optimized | Improvement |
 |---|---|---|---:|---:|---|
-| `forms.span_within2` | % | higher | 40.299 | 51.677 | +11.38 pp ✅ |
-| `forms.span_within5` | % | higher | 89.211 | 99.343 | +10.13 pp ✅ |
+| `forms.span_within2` | % | higher | 40.503 | 51.587 | +11.08 pp ✅ |
+| `forms.span_within5` | % | higher | 89.166 | 99.343 | +10.18 pp ✅ |
 | `forms.span_p95_abs` | atoms | lower | 8.500 | 3.031 | 64.3% lower ✅ |
-| `forms.within2` | % | higher | 47.670 | 53.563 | +5.89 pp ✅ |
-| `forms.within5` | % | higher | 92.603 | 99.215 | +6.61 pp ✅ |
-| `forms.figures_within5` | % | higher | 93.607 | 99.288 | +5.68 pp ✅ |
+| `forms.within2` | % | higher | 47.883 | 53.533 | +5.65 pp ✅ |
+| `forms.within5` | % | higher | 92.735 | 99.215 | +6.48 pp ✅ |
+| `forms.figures_within5` | % | higher | 93.854 | 99.288 | +5.43 pp ✅ |
 | `forms.brands_within5` | % | higher | 91.443 | 99.130 | +7.69 pp ✅ |
-| `forms.corrupt_within5` | % | higher | 85.561 | 92.405 | +6.84 pp ✅ |
-| `forms.freeze` | % | lower | 5.737 | 0.957 | -4.78 pp ✅ |
+| `forms.corrupt_within5` | % | higher | 85.252 | 92.479 | +7.23 pp ✅ |
+| `forms.freeze` | % | lower | 5.700 | 0.957 | -4.74 pp ✅ |
 | `forms.false_jumps` | count | lower | 0.000 | 0.000 | unchanged |
 | `forms.relocate_p95` | s | lower | 4.450 | 4.450 | unchanged |
 | `forms.lock_failures` | count | lower | 0.000 | 0.000 | unchanged |
 | `forms.span_samples` | count | — | 4412 | 4412 | same input ✅ |
-| `perf.mean_event_us` | µs | lower | 187.5 | 194.3 | 3.6% higher ⚠️ |
+| `perf.mean_event_us` | µs | lower | 191.252 | 179.167 | 6.3% lower ✅ |
 
 The `span_*` rows are the ones to read. A whole-run number on a page of
 figures is nine parts undisputed prose, so a total failure on every single
@@ -377,10 +377,10 @@ to re-lock after a 168-atom jump into a name-dense passage. That is
 relocation latency, not spelling, and it is a pre-existing engine
 characteristic these fixtures inherit rather than create.
 
-The per-event cost rose 3.6% (187.5 → 194.3 µs, three runs each side, spread
-±1.4 µs). The extra work is one hash lookup per transcript atom plus, only
-where a word is not in the script's vocabulary, up to two concatenations. The
-budget is 2 ms.
+The engine also got faster, which it had no right to. The word-boundary fix
+costs one hash lookup per transcript atom and initially made the engine 3.6%
+slower; the library round below then found 10% somewhere else, so the net is
+6.3% *below* baseline while doing strictly more work.
 
 ### What the real recogniser actually did
 
@@ -426,13 +426,79 @@ move on a run that noisy is not a signal, and it is left in the corpus as the
 honest lower bound: on a bad voice, a page of numbers is bounded by the
 recogniser, not by the engine.
 
+### Four libraries, tried and measured
+
+The obvious question after hand-writing a normaliser, a phonetic key and a
+word-boundary rule is whether somebody has already done it better. Four crates
+were swapped in and benchmarked against the frozen corpus. Three lost, and each
+lost for a reason worth keeping.
+
+**`rphonetic` 3.0.6 (Double Metaphone) — rejected.** Zero movement on every
+Tier-A accuracy row and 0.15–0.17 pp worse on every live one. The reason is
+structural rather than a defect: this relation is a last resort carrying a low
+weight, so its job is recall — catching "Saoirse" heard as "Sawersi" at all —
+and Double Metaphone is *more precise*, correctly separating "presenter" from
+"president" while losing matches the looser consonant skeleton was getting for
+free. It also panics outright on any non-ASCII input, because it uppercases and
+then indexes by byte, so `á` becomes a two-byte `Á` and the next slice lands
+mid-character. `Joaquín`, `Siobhán`, `Ōtautahi` — the exact input class the
+relation exists for — take the process down. A fold to ASCII fixes that, and the
+result still lost.
+
+**`instant-segment` 0.11.1 (Viterbi word segmentation) — rejected, and the most
+informative loss.** It should have been the principled version of
+`rejoin_split_words`: joins *and* splits, decided by likelihood against the
+script's own unigram and bigram counts, and it reaches the case the greedy rule
+refuses on principle — a compound whose halves are both script words. That is
+the case a review had flagged as an accidental limitation. Measured:
+`forms.brands_within5` **fell** 0.90 pp, `forms.span_within5` fell 0.66 pp, and
+the engine got 31% slower. Restricting it to only the case the greedy rule
+declines produced *byte-identical* numbers — proving every join it adds is one
+the greedy rule deliberately refuses, and that those joins are net harmful. The
+timid guard is not an oversight. It is load-bearing, and the benchmark says so.
+(It also shatters any input it does not recognise into single characters, which
+a script-sized vocabulary guarantees; that needs a rejection filter before it is
+safe at all.)
+
+**`text2num` 2.6.5 (inverse text normalisation) — rejected.** More complete than
+the hand-written parser in places — it produces `28th` for "the twenty eighth",
+which is what the live provider actually writes — but it does not join years at
+all: "nineteen ninety eight" comes back as `19 98`, "twenty twenty six" as
+`20 26`, "nineteen oh five" as `19 oh five`. On a script whose fixture contains
+six years that is fatal, and `forms.span_within5` fell 1.71 pp. At its default
+threshold it also converts a lone "one", so "one of the reasons" becomes "1 of
+the reasons" — the trap the hand-written parser exists to avoid. Worth noting
+what happened when it changed the atom count: Tier B refused to replay, naming
+the fixture and both counts. The fingerprint added earlier in this round worked
+exactly as intended.
+
+**`num2words` 1.2.0 (verbalisation) — adopted, in the benchmark.** Not for
+accuracy; for provenance. Half the model's spoken forms now come from a crate
+that has never seen this engine, which is the only real answer to the objection
+that the model's author then fixed the engine to pass it. It also disagrees
+usefully: it says a year as "twenty nineteen" where the hand-written branch says
+"two thousand and nineteen", and both are things people say, so alternating
+covers two real shapes where either alone covered one. The measured improvement
+is unchanged under it (+10.18 pp against +10.13 pp), which is the result that
+matters — the story does not depend on who wrote the model.
+
+**What was kept from the failures.** Plugging in an external encoder forced the
+phonetic key to be *precomputed* — once per script atom at compile time and once
+per transcript atom per revision, instead of re-derived inside the DP inner loop
+for every (query, script) cell. That is worth **10.4%** of the engine's entire
+per-event cost (199.0 → 178.3 µs, three runs each side, spread ±0.5 µs) at
+byte-identical accuracy, and it survives the library being thrown away. The
+experiment that failed paid for itself.
+
 ### Honest limitations of this round
 
 * The verbalizer is a MODEL of provider behaviour, not a recording of it. It
   was written to be fair — several of its renderings already normalised
   correctly before any change (`nineteen ninety eight`, `three point two`,
   spelled cardinals) and are controls rather than targets — but a model can
-  still be wrong about how often a shape occurs. Tier B is the check.
+  still be wrong about how often a shape occurs. Tier B is the check, and half
+  the number forms now come from `num2words` rather than from the same hand
+  that wrote the engine fix.
 * **The frequency mix is chosen, not measured.** Every eligible run is
   re-spelled, once, consistently. The live traces show the provider doing
   neither: it re-spells some and not others, and changes its mind between

@@ -429,13 +429,13 @@ pub fn align(
     Some(ev)
 }
 
-/// Last-resort phonetic relation: both sides ≥5 chars, the script atom is a
-/// rare anchor-grade word, and the consonant skeletons agree.
+/// Last-resort phonetic relation: the script atom is a rare anchor-grade word
+/// and the two sound alike.
+///
+/// The length and anchor tests that used to live here are now facts about the
+/// keys: both are empty unless the word qualified when it was encoded.
 fn phonetic_ok(q: &QueryAtom, s: &crate::script::ScriptAtom) -> bool {
-    s.flags & crate::script::FLAG_ANCHOR != 0
-        && q.surface.len() >= 5
-        && s.surface.len() >= 5
-        && crate::normalize::phonetic_key(&q.surface) == crate::normalize::phonetic_key(&s.surface)
+    q.phonetic.matches(&s.phonetic)
 }
 
 /// The cost this query atom would contribute to the "no matches" explanation:
@@ -464,6 +464,7 @@ mod tests {
                 let id = script.interner.intern(&surface);
                 let filler = crate::normalize::is_filler(&surface);
                 QueryAtom {
+                    phonetic: crate::normalize::phonetic_key(&surface),
                     id,
                     surface,
                     stability: StabilityClass::Final,
