@@ -1,5 +1,5 @@
 /**
- * Follow settings semantics (companion §47) and the mapping from the three
+ * Follow settings semantics (companion §47) and the mapping from the
  * understandable user controls onto a versioned `SmoothFollowProfile` (§55).
  *
  * Design rules this module enforces:
@@ -10,9 +10,10 @@
  *    appendix re-tunes every feel automatically.
  *  - §47.1: a feel must never weaken section safety or retake evidence gates,
  *    so `alignment` is copied through untouched.
- *  - §47.3: voice lead is clamped inside the base profile's own published
- *    lead envelope. "More lead" can never invent lead the profile does not
- *    already permit.
+ *  - §47.3 voice lead is GONE, control and all: it moved the display ahead of
+ *    the reader, which the alignment engine now treats as a defect to be
+ *    measured rather than a comfort to be offered. Nothing here may reintroduce
+ *    a setting whose effect is "claim the reader is further along than heard".
  */
 import {
   DEFAULT_SMOOTH_FOLLOW_PROFILE,
@@ -25,8 +26,6 @@ import {
 
 /** §47.1 follow feel. */
 export type FollowFeel = 'calm' | 'balanced' | 'responsive';
-/** §47.3 voice lead. */
-export type VoiceLead = 'less' | 'balanced' | 'more';
 /** §45 fidelity modes — these change coaching thresholds, not navigation. */
 export type FidelityMode = 'conversational' | 'balanced' | 'exact';
 /** §47.6 coaching display. */
@@ -34,7 +33,6 @@ export type FidelityMode = 'conversational' | 'balanced' | 'exact';
 /** The persisted §47 settings block. */
 export interface FollowingSettings {
   feel: FollowFeel;
-  voiceLead: VoiceLead;
   fidelityMode: FidelityMode;
   /** Versioned motion-profile family id (§55); see `MOTION_PROFILE_FAMILIES`. */
   motionProfileId: string;
@@ -48,7 +46,6 @@ export interface FollowingSettings {
 }
 
 export const FOLLOW_FEELS: FollowFeel[] = ['calm', 'balanced', 'responsive'];
-export const VOICE_LEADS: VoiceLead[] = ['less', 'balanced', 'more'];
 export const FIDELITY_MODES: FidelityMode[] = ['conversational', 'balanced', 'exact'];
 
 /**
@@ -58,7 +55,6 @@ export const FIDELITY_MODES: FidelityMode[] = ['conversational', 'balanced', 'ex
 export function defaultFollowingSettings(): FollowingSettings {
   return {
     feel: 'balanced', // §47.1 "Balanced — default"
-    voiceLead: 'balanced', // §47.3
     fidelityMode: 'balanced', // §45.2 "Balanced — default"
     motionProfileId: DEFAULT_SMOOTH_FOLLOW_PROFILE.id,
     semanticRequestLimit: null,
@@ -91,24 +87,6 @@ export const FOLLOW_FEEL_OPTIONS: Array<FollowOption<FollowFeel>> = [
     value: 'responsive',
     label: 'Responsive',
     description: 'Shorter grace before it acts and quicker local corrections. Livelier, slightly busier.',
-  },
-];
-
-export const VOICE_LEAD_OPTIONS: Array<FollowOption<VoiceLead>> = [
-  {
-    value: 'less',
-    label: 'Less lead',
-    description: 'The text sits closer behind you.',
-  },
-  {
-    value: 'balanced',
-    label: 'Balanced',
-    description: 'The default prediction lead.',
-  },
-  {
-    value: 'more',
-    label: 'More lead',
-    description: 'The text runs slightly ahead of your words. It never changes where you are matched.',
   },
 ];
 
@@ -151,7 +129,7 @@ export const MOTION_PROFILE_FAMILIES: MotionProfileFamily[] = [
     id: DEFAULT_SMOOTH_FOLLOW_PROFILE.id,
     label: 'Standard motion (v1)',
     description:
-      'The tuned starting profile. Follow feel and voice lead adjust it; section safety and retake evidence are never relaxed.',
+      'The tuned starting profile. Follow feel adjusts it; section safety and retake evidence are never relaxed.',
     profile: DEFAULT_SMOOTH_FOLLOW_PROFILE,
   },
 ];
@@ -265,7 +243,6 @@ export function applyFeel(base: SmoothFollowProfile, feel: FollowFeel): SmoothFo
   return {
     ...base,
     id: feel === 'balanced' ? base.id : `${base.id}/${feel}`,
-    prediction: { ...base.prediction },
     motion: {
       ...base.motion,
       naturalFrequency: scale(base.motion.naturalFrequency, ratios.motion.naturalFrequency, 2),
@@ -290,43 +267,10 @@ export function applyFeel(base: SmoothFollowProfile, feel: FollowFeel): SmoothFo
   };
 }
 
-/**
- * §47.3 — voice lead selects a half of the base profile's published lead
- * envelope. The result can never fall outside `[leadSecondsMin, leadSecondsMax]`
- * of the family profile.
- */
-export function applyVoiceLead(base: SmoothFollowProfile, lead: VoiceLead): SmoothFollowProfile {
-  const floor = base.prediction.leadSecondsMin;
-  const ceiling = base.prediction.leadSecondsMax;
-  const midpoint = Math.round(((floor + ceiling) / 2) * 100) / 100;
-  const [min, max] =
-    lead === 'less' ? [floor, midpoint] : lead === 'more' ? [midpoint, ceiling] : [floor, ceiling];
-  const leadMin = clamp(min, floor, ceiling);
-  const leadMax = clamp(max, floor, ceiling);
-  return {
-    ...base,
-    id: lead === 'balanced' ? base.id : `${base.id}/lead-${lead}`,
-    prediction: {
-      ...base.prediction,
-      leadSecondsMin: leadMin,
-      leadSecondsMax: leadMax,
-      // The midpoint of the selected half is the value the stage applies. It is
-      // resolved here rather than on the stage so the whole feel arrives as one
-      // number the motion layer can read without knowing what a "voice lead"
-      // setting is.
-      leadSeconds: Math.round(((leadMin + leadMax) / 2) * 100) / 100,
-    },
-  };
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 /** The full §47 → §55 resolution used by the session and the stage handoff. */
 export function resolveFollowProfile(following: FollowingSettings): SmoothFollowProfile {
   const family = motionProfileFamily(following.motionProfileId);
-  return applyVoiceLead(applyFeel(family.profile, following.feel), following.voiceLead);
+  return applyFeel(family.profile, following.feel);
 }
 
 /* ---------------------------------------------------------------------------
@@ -348,7 +292,6 @@ export function clampFollowing(value: Partial<FollowingSettings> | undefined | n
   const limit = value.semanticRequestLimit;
   return {
     feel: pick(value.feel, FOLLOW_FEELS, defaults.feel),
-    voiceLead: pick(value.voiceLead, VOICE_LEADS, defaults.voiceLead),
     fidelityMode: pick(value.fidelityMode, FIDELITY_MODES, defaults.fidelityMode),
     motionProfileId: motionProfileFamily(value.motionProfileId ?? defaults.motionProfileId).id,
     semanticRequestLimit:

@@ -54,8 +54,8 @@ export interface StageSessionEnvelope {
   initialTokenIndex: number;
   /**
    * Companion §47.1/§55. The resolved, versioned motion profile this session
-   * runs on — the user's Follow feel and Voice lead, already applied to the
-   * chosen profile family by `resolveFollowProfile` on the control side.
+   * runs on — the user's Follow feel, already applied to the chosen profile
+   * family by `resolveFollowProfile` on the control side.
    *
    * It travels in the envelope, not on a channel of its own, because it is
    * MOTION configuration: it must arrive on the same validated document path

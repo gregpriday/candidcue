@@ -112,18 +112,34 @@ describe('the engine runs on the profile it is given (§47.1)', () => {
     );
   });
 
-  it('applies a swapped profile to the voice lead the display reads with', () => {
-    // The lead is read per frame from the live profile, so a swap must take
-    // effect on the next one — this is the part a captured-at-construction
-    // profile would miss.
+  it('reads a swapped profile live rather than capturing it at construction', () => {
     const engine = createStageMotionEngine();
-    const moreLead: SmoothFollowProfile = {
+    const swapped: SmoothFollowProfile = {
       ...DEFAULT_SMOOTH_FOLLOW_PROFILE,
-      id: 'test-lead',
-      prediction: { ...DEFAULT_SMOOTH_FOLLOW_PROFILE.prediction, leadSeconds: 0.6 },
+      id: 'test-swap',
+      motion: { ...DEFAULT_SMOOTH_FOLLOW_PROFILE.motion, maxForwardVelocityPxS: 1234 },
     };
-    engine.setProfile(moreLead);
-    expect(engine.profile.prediction.leadSeconds).toBe(0.6);
-    expect(engine.profile.id).toBe('test-lead');
+    engine.setProfile(swapped);
+    expect(engine.profile.id).toBe('test-swap');
+    expect(engine.profile.motion.maxForwardVelocityPxS).toBe(1234);
+  });
+
+  /*
+   * §47.3 voice lead was a profile field — `prediction.leadSeconds`, resolved
+   * from a user setting and applied by asking `alignmentDisplayAt` for a moment
+   * in the future. It is gone because it doubled the share of a take the
+   * display spent ahead of the reader (3.8% → 6.5% at its default, 9.6% at its
+   * maximum, measured on the live captures).
+   *
+   * The field's absence is asserted, not just its value, because a profile
+   * crosses a process boundary: as long as the stage reads a lead from the
+   * profile at all, any envelope that reaches it can reintroduce the defect
+   * without a line of stage code changing.
+   */
+  it('publishes no lead field for a profile to reintroduce', () => {
+    expect(DEFAULT_SMOOTH_FOLLOW_PROFILE).not.toHaveProperty('prediction');
+    for (const feel of ['calm', 'balanced', 'responsive'] as const) {
+      expect(profileFor(feel)).not.toHaveProperty('prediction');
+    }
   });
 });

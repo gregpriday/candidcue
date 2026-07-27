@@ -176,8 +176,6 @@ impl Default for AudioSettings {
 pub struct FollowingSettings {
     /// 'calm' | 'balanced' | 'responsive' (§47.1).
     pub feel: String,
-    /// 'less' | 'balanced' | 'more' (§47.3).
-    pub voice_lead: String,
     /// 'conversational' | 'balanced' | 'exact' (§45, §47.5).
     pub fidelity_mode: String,
     /// Versioned motion-profile family id; matches
@@ -192,7 +190,6 @@ impl Default for FollowingSettings {
     fn default() -> Self {
         Self {
             feel: "balanced".into(),
-            voice_lead: "balanced".into(),
             fidelity_mode: "balanced".into(),
             motion_profile_id: "default-v1".into(),
             developer_diagnostics: false,
@@ -340,16 +337,11 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
 
     // Following settings (companion §47): closed vocabularies, validated here
     // so a malformed patch cannot leave a session in an unknown assist mode.
-    let following_enums: [(&str, &str, &[&str]); 3] = [
+    let following_enums: [(&str, &str, &[&str]); 2] = [
         (
             "following.feel",
             settings.following.feel.as_str(),
             &["calm", "balanced", "responsive"],
-        ),
-        (
-            "following.voiceLead",
-            settings.following.voice_lead.as_str(),
-            &["less", "balanced", "more"],
         ),
         (
             "following.fidelityMode",
@@ -521,7 +513,6 @@ mod tests {
     fn following_defaults_match_the_specified_defaults() {
         let following = AppSettings::default().following;
         assert_eq!(following.feel, "balanced");
-        assert_eq!(following.voice_lead, "balanced");
         assert_eq!(following.fidelity_mode, "balanced");
         assert!(!following.developer_diagnostics);
     }

@@ -5,7 +5,7 @@
  * The pipeline, once per display frame:
  *
  *   accepted AlignmentSnapshot
- *     → displayAt(audio clock now + voice lead)  → token position
+ *     → displayAt(audio clock now)   → token position
  *     → §8 line-handoff path sample  → target scroll + dScroll/dUnit
  *     → §28 feed-forward velocity    = dScroll/dUnit × token rate
  *     → §30 motion limits for the state / active transition
@@ -205,10 +205,10 @@ export interface StageMotionEngine {
    * envelope into the SAME engine, and a profile that could only be read at
    * construction would leave the new session running the previous one's feel.
    *
-   * Nothing about plant state changes. The profile reshapes the motion limits
-   * and the voice lead; position, velocity and acceleration carry straight
-   * through, and the jerk limiter absorbs the new bounds over the following
-   * frames rather than stepping to them.
+   * Nothing about plant state changes. The profile reshapes the motion limits;
+   * position, velocity and acceleration carry straight through, and the jerk
+   * limiter absorbs the new bounds over the following frames rather than
+   * stepping to them.
    */
   setProfile(next: SmoothFollowProfile): void;
   setLineMap(map: StageRenderedLineMap | null): void;
@@ -638,20 +638,6 @@ export function createStageMotionEngine(
   }
 
   /**
-   * §47.3 voice lead, in milliseconds.
-   *
-   * How far AHEAD of the spoken word the display sits, so the presenter reads
-   * into text that is already comfortably placed rather than chasing the line
-   * they are on. It is applied by asking `displayAt` for a moment slightly in
-   * the future, which means it inherits the engine's own cap for free: lead can
-   * never carry the display past `maxPredictionMs` of extrapolation, however
-   * much of it the user asks for.
-   */
-  function voiceLeadMs(): number {
-    return Math.max(0, profile.prediction.leadSeconds) * 1000;
-  }
-
-  /**
    * The position the display should be at this frame, as pixels and a
    * feed-forward velocity.
    *
@@ -670,7 +656,27 @@ export function createStageMotionEngine(
     const audioNow = receiver.audioNowMs(nowMs);
     if (audioNow === null) return null;
 
-    const displayToken = alignmentDisplayAt(snapshot, audioNow + voiceLeadMs());
+    /*
+     * Sampled at NOW, never at a moment in the future.
+     *
+     * The stage used to add a comfort lead here (§47.3 "voice lead", 0.38 s by
+     * default) on the reasoning that a presenter should read into text that is
+     * already placed. That was right while a current-word underline existed —
+     * you want the mark under the word you are about to say. It is wrong for a
+     * fade, where the same lead is spent erasing words before they have been
+     * spoken, and it compounds with the engine's own extrapolation rather than
+     * replacing it: replaying the live captures measured the display ahead of
+     * the reader 3.8% of the time at zero lead, 6.5% at the old default and
+     * 9.6% at the old maximum.
+     *
+     * `alignmentDisplayAt` is built to trail — four separate mechanisms in the
+     * engine enforce it (see docs/alignment-engine/INTEGRATION.md §3) — and
+     * asking it about the future defeats every one of them at once. Comfort is
+     * the reading band's job: `readingBandCenterPercent` decides how much text
+     * sits below the line, which buys the same thing without claiming the
+     * reader has said words they have not.
+     */
+    const displayToken = alignmentDisplayAt(snapshot, audioNow);
     // The path derivative is per token, and so is the engine's rate — the
     // projection into token space happened in Rust — so the feed-forward
     // velocity needs no axis conversion at all. It is zeroed by the engine
@@ -763,7 +769,7 @@ export function createStageMotionEngine(
       if (next === profile) return;
       profile = next;
       // The planner's feed-forward ceiling was built FROM the profile.
-      // Everything else — limits, voice lead — reads `profile` per frame.
+      // Everything else — the motion limits — reads `profile` per frame.
       rebuildPlanner();
     },
 

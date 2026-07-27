@@ -91,7 +91,7 @@
     scriptCompileHash?: string;
     /**
      * §47.1/§55. The versioned motion profile this session runs on — the user's
-     * Follow feel and Voice lead, resolved by control and validated by the
+     * Follow feel, resolved by control and validated by the
      * mount site (`stageFollowProfile`). Given to the engine at construction
      * AND on every change, because the stage window outlives a session.
      */

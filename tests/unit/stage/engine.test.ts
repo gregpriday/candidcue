@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_SMOOTH_FOLLOW_PROFILE as DEFAULT_PROFILE,
+  alignmentDisplayAt,
   type AlignmentSnapshot,
   type StageTransitionDirective,
 } from '../../../src/shared/contracts';
@@ -347,6 +348,33 @@ describe('holding and degraded operation (§62, §32)', () => {
 });
 
 describe('transitions and authority (§53, §26.3)', () => {
+  /*
+   * The stage used to sample `alignmentDisplayAt` at `now + leadSeconds` so the
+   * presenter read into already-placed text. That lead did not replace the
+   * engine's extrapolation, it stacked on top of it — and every millisecond of
+   * it is spent claiming words were said that were not. Measured on the live
+   * captures, it took the share of a take spent ahead of the reader from 3.8%
+   * to 6.5% at its old default.
+   *
+   * Equality with the shared contract is the assertion, not an inequality:
+   * "not much ahead" is how a lead comes back at half the size.
+   */
+  it('samples the display at now, adding no lead of its own', () => {
+    const { map, layout } = mapFor();
+    const engine = makeEngine(map, layout.contentHeightPx);
+    const snap = snapshotAt(30, 1_000, { rateTokensPerSecond: 4 });
+    engine.receiveSnapshot(snap, 1_000);
+    // Frames well after the snapshot, where a lead would compound with the
+    // engine's own extrapolation rather than hide inside it.
+    for (let t = 1_000; t < 1_400; t += 16.7) engine.frame(t);
+    engine.frame(1_400);
+
+    expect(engine.lastDisplayToken).toBeCloseTo(alignmentDisplayAt(snap, 1_400), 6);
+    // What the old 0.38 s default would have produced, spelled out: 1.5 tokens
+    // of script the reader has given no evidence of having reached.
+    expect(engine.lastDisplayToken!).toBeLessThan(alignmentDisplayAt(snap, 1_400 + 380) - 1);
+  });
+
   it('applies a reanchor exactly once and moves the document there', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
@@ -369,9 +397,8 @@ describe('transitions and authority (§53, §26.3)', () => {
 
     /*
      * The document arrived at the destination line — within a line pitch,
-     * because §47.3 voice lead deliberately places the display a little ahead
-     * of the spoken word and ordinary following resumes the moment the
-     * discontinuity is spent.
+     * because ordinary following resumes the moment the discontinuity is spent
+     * and carries the display on from there.
      */
     const destinationPx = (destinationLine?.baselineY ?? 0) - R;
     expect(Math.abs(engine.controller.state.q - destinationPx)).toBeLessThan(map.linePitchPx);
@@ -608,13 +635,15 @@ describe('forward target latch (§70.5)', () => {
     // is an explicit classification, not because it gave up and re-anchored.
     expect(engine.latchReanchors).toBe(0);
     /*
-     * And the target is the path's own answer for where the display is —
-     * `lastDisplayToken`, not the raw reported position, because §47.3 voice
-     * lead deliberately places the display slightly ahead of the spoken word.
-     * Asserting against unit 5 would be asserting that the lead does nothing.
+     * And the target is the path's own answer for where the display is.
+     *
+     * These snapshots carry evidence stamped at the frame that delivers them,
+     * so there is nothing to extrapolate across and the display sits exactly on
+     * the reported position. It used to sit slightly past it — §47.3 voice lead
+     * pushed the sample into the future — and that lead has been removed.
      */
     const displayed = engine.lastDisplayToken ?? -1;
-    expect(displayed).toBeGreaterThan(5);
+    expect(displayed).toBeCloseTo(5, 6);
     expect(last.targetPx).toBeCloseTo(map.sampleMotionPath(displayed)?.scrollPx ?? -1, 0);
   });
 });

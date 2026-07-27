@@ -5,12 +5,7 @@
 import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
 import { defaultListenerSettings } from './settings-listener';
 
-export type {
-  FidelityMode,
-  FollowFeel,
-  FollowingSettings,
-  VoiceLead,
-} from '../lib/follow-profiles';
+export type { FidelityMode, FollowFeel, FollowingSettings } from '../lib/follow-profiles';
 
 export type LaunchBehavior = 'library' | 'recent';
 export type SessionMode = 'voice' | 'manual' | 'fixed';

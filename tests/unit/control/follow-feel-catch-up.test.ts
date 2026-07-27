@@ -86,13 +86,14 @@ describe('§47.1 catch-up bounds are resolved by the feel, not inherited', () =>
   it('carries the resolution all the way through resolveFollowProfile', () => {
     const calm = resolveFollowProfile({ ...defaultFollowingSettings(), feel: 'calm' });
     expect(calm.motion.catchUpMaxDurationMs).toBe(2000);
-    // Voice lead touches prediction only, so it cannot disturb these.
-    const calmMoreLead = resolveFollowProfile({
+    // Feel is the only §47 control that reaches motion, so resolution is the
+    // identity on every other setting.
+    const calmExact = resolveFollowProfile({
       ...defaultFollowingSettings(),
       feel: 'calm',
-      voiceLead: 'more',
+      fidelityMode: 'exact',
     });
-    expect(calmMoreLead.motion).toEqual(calm.motion);
+    expect(calmExact.motion).toEqual(calm.motion);
   });
 
   it('leaves the release inside the cap it ramps out of', () => {

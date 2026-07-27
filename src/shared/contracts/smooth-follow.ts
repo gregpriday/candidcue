@@ -189,27 +189,17 @@ export interface SmoothFollowProfile {
   version: number;
   id: string;
 
-  /**
-   * §47.3 voice lead — how far AHEAD of the spoken word the display sits.
+  /*
+   * There is no `prediction` block, and the omission is the point.
    *
-   * This is all that remains of what used to be a whole prediction model here.
-   * The alignment engine owns extrapolation now, and it publishes a hard cap
-   * (`maxPredictionMs`) with every snapshot; lead is applied by asking
-   * `alignmentDisplayAt` for a moment slightly in the future, so it inherits
-   * that cap and can never carry the display past what the engine will stand
-   * behind — however much lead the user asks for.
+   * §47.3 voice lead used to live here: the stage sampled `alignmentDisplayAt`
+   * a fraction of a second in the future so the presenter read into text that
+   * was already placed. Extrapolation is the alignment engine's job now, and it
+   * is built to trail the reader deliberately — a stage lead stacked on top of
+   * it, doubling the share of the take spent ahead of the reader. Comfort is
+   * the reading band's job (`readingBandCenterPercent`), which changes where
+   * the line sits rather than what the engine claims to have heard.
    */
-  prediction: {
-    /** The resolved value the stage applies, seconds. */
-    leadSeconds: number;
-    /**
-     * The envelope a feel may choose within. `applyVoiceLead` picks a half of
-     * this range and never widens it, so "more lead" cannot invent lead the
-     * profile family does not already permit.
-     */
-    leadSecondsMin: number;
-    leadSecondsMax: number;
-  };
 
   motion: {
     dampingRatio: number;
@@ -265,7 +255,7 @@ export interface SmoothFollowProfile {
  * version cannot interpret it, in either direction, and must fall back to its
  * own default rather than apply numbers it is guessing about (§55).
  */
-export const SMOOTH_FOLLOW_PROFILE_VERSION = 2;
+export const SMOOTH_FOLLOW_PROFILE_VERSION = 3;
 
 /**
  * Companion Appendix A. Midpoints of the published starting ranges; every value is
@@ -274,17 +264,7 @@ export const SMOOTH_FOLLOW_PROFILE_VERSION = 2;
  */
 export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
   version: SMOOTH_FOLLOW_PROFILE_VERSION,
-  id: 'default-v2',
-
-  prediction: {
-    // A.1 §47.3: 0.15–0.6 s of lead, balanced sitting at the midpoint. Small
-    // numbers by design — lead is comfort, not prediction, and the engine's own
-    // `maxPredictionMs` is the thing that bounds how far ahead the display can
-    // ever be.
-    leadSeconds: 0.38,
-    leadSecondsMin: 0.15,
-    leadSecondsMax: 0.6,
-  },
+  id: 'default-v3',
 
   motion: {
     dampingRatio: 1.0,

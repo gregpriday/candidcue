@@ -21,7 +21,6 @@ import {
 /** Camel-cased twin of `settings::FollowingSettings` in Rust. */
 export interface RustFollowingSettings {
   feel: string;
-  voiceLead: string;
   fidelityMode: string;
   motionProfileId: string;
   /** `null` (Rust `None`) means "no cap" — see §42.1. */
@@ -39,7 +38,6 @@ export function followingFromRust(
   if (!rust) return defaultFollowingSettings();
   return clampFollowing({
     feel: rust.feel,
-    voiceLead: rust.voiceLead,
     fidelityMode: rust.fidelityMode,
     motionProfileId: rust.motionProfileId,
     semanticRequestLimit: rust.semanticRequestLimit ?? null,
@@ -60,7 +58,6 @@ export function followingToRustPatch(
   const clamped = clampFollowing({ ...defaultFollowingSettings(), ...patch });
   const out: Record<string, unknown> = {};
   if (patch.feel !== undefined) out.feel = clamped.feel;
-  if (patch.voiceLead !== undefined) out.voiceLead = clamped.voiceLead;
   if (patch.fidelityMode !== undefined) out.fidelityMode = clamped.fidelityMode;
   if (patch.motionProfileId !== undefined) out.motionProfileId = clamped.motionProfileId;
   if (patch.semanticRequestLimit !== undefined) {

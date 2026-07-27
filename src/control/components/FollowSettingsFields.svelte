@@ -14,11 +14,9 @@
     FIDELITY_MODE_OPTIONS,
     FOLLOW_FEEL_OPTIONS,
     MOTION_PROFILE_FAMILIES,
-    VOICE_LEAD_OPTIONS,
     type FidelityMode,
     type FollowFeel,
     type FollowingSettings,
-    type VoiceLead,
   } from '../lib/follow-profiles';
 
   interface Props {
@@ -31,9 +29,6 @@
 
   const feelNote = $derived(
     FOLLOW_FEEL_OPTIONS.find((option) => option.value === following.feel)?.description ?? '',
-  );
-  const leadNote = $derived(
-    VOICE_LEAD_OPTIONS.find((option) => option.value === following.voiceLead)?.description ?? '',
   );
   const fidelityNote = $derived(
     FIDELITY_MODE_OPTIONS.find((option) => option.value === following.fidelityMode)?.description ??
@@ -51,17 +46,6 @@
       onchange={(value) => onchange({ feel: value as FollowFeel })}
     />
     <p class="hint">{feelNote}</p>
-  </div>
-
-  <div class="field">
-    <span class="mini-label">Voice lead</span>
-    <SegmentedControl
-      label="Voice lead"
-      value={following.voiceLead}
-      options={VOICE_LEAD_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-      onchange={(value) => onchange({ voiceLead: value as VoiceLead })}
-    />
-    <p class="hint">{leadNote} It changes prediction only, never where your words are matched.</p>
   </div>
 
   {#if !compact}

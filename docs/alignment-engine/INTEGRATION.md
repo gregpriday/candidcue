@@ -144,18 +144,19 @@ or compensate for:
 Benchmarked as `ahead_*` in `bench/REPORT.md`: live time-spent-ahead-of-the-
 reader is 3.8%, down from 22.2%, against a measurement floor of ~0.5%.
 
-> **`profile.prediction.leadSeconds` now works against all of this.** The
-> stage adds its own comfort lead by asking `alignmentDisplayAt` for a moment
-> in the future (`engine.ts`, `voiceLeadMs()`), default 0.38 s. That was the
-> right call for an underline — you want to read *into* placed text. For a
-> fade it is the opposite: it spends the safety margin on erasing words
-> earlier. Replaying the live captures with the lead applied measures the
-> cost directly — 3.8% → **6.5%** time-ahead at the 0.38 s default, and
-> **9.6%** at the 0.6 s maximum, roughly doubling and tripling the defect.
-> It cannot run away (it inherits `maxLeadTokens` and the paragraph ceiling),
-> but for the fade display it should be 0 by default. If a comfort lead is
-> still wanted for scrolling, apply it to the SCROLL anchor — how high on
-> screen the line sits — and not to the token position that drives the fade.
+> **The stage adds no lead of its own — done, and removed rather than
+> zeroed.** It used to ask `alignmentDisplayAt` for a moment in the future
+> (`engine.ts`, `voiceLeadMs()`, default 0.38 s from `profile.prediction.
+> leadSeconds`). That was the right call for an underline — you want to read
+> *into* placed text — and the opposite for a fade, where it spends the safety
+> margin on erasing words earlier. Replaying the live captures measured the
+> cost: 3.8% → **6.5%** time-ahead at the 0.38 s default, **9.6%** at the 0.6 s
+> maximum. A default of 0 would have left a user-facing "More lead" control
+> whose whole function was to reintroduce the defect, so the field, the
+> setting and the control are gone (`SMOOTH_FOLLOW_PROFILE_VERSION` 3).
+> Comfort for scrolling belongs to the reading band —
+> `readingBandCenterPercent`, how high on screen the line sits — not to the
+> token position that drives the fade.
 
 ### The word underline / highlight
 
