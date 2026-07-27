@@ -812,6 +812,18 @@ export function startLiveSession(input: StartSessionInput): string {
     });
     void pipeline.start().catch((err) => {
       /*
+       * A take that has been superseded may not report on the one that
+       * replaced it. Its start can still be in flight — the microphone retry
+       * alone spends up to 1.75 s — and when it finally rejects, everything
+       * below would be about a session that no longer exists: the current
+       * take marked offline, a danger toast, and a cross on its voice pill,
+       * all for a failure that happened to a take the operator already ended.
+       */
+      if (pillEpoch !== voicePillEpoch) {
+        trace('start-superseded', 'a replaced take failed to start; not reported');
+        return;
+      }
+      /*
        * `SESSION_STOPPED` is not a failure, it is this app tearing the take
        * down while its start was still in flight — a second `startLiveSession`,
        * a stop, a navigation guard. Reporting it as one produced the worst
@@ -836,9 +848,7 @@ export function startLiveSession(input: StartSessionInput): string {
        * reach the same conclusion, several seconds late and after they had
        * already gone looking at their wifi.
        */
-      if (code !== null && code.startsWith('MIC_') && pillEpoch === voicePillEpoch) {
-        voicePillDeviceLost = true;
-      }
+      if (code !== null && code.startsWith('MIC_')) voicePillDeviceLost = true;
       state.update((s) => ({ ...s, connection: 'offline' }));
       showToast(`Voice tracking is unavailable. ${describeError(err)}`, 'danger');
     });

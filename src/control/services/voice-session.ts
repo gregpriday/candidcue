@@ -638,6 +638,14 @@ export class VoiceSessionPipeline {
       {
         onRetry: (attempt, code, delayMs) =>
           trace('microphone-busy', `attempt ${attempt} failed (${code}) — retrying in ${delayMs}ms`),
+        /*
+         * Only the take may fall back to the system default, and only after the
+         * pinned device has been busy for the best part of two seconds.
+         * Presenting from the built-in microphone beats not presenting — and it
+         * is announced (`onInputFellBackToDefault`), so it is a choice the
+         * presenter can undo rather than a substitution they never learn about.
+         */
+        allowDefaultFallback: true,
       },
     );
     if (!result.ok) {

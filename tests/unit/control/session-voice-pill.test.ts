@@ -39,12 +39,25 @@ const records = vi.hoisted(() => ({
 
 /** The pipeline is stubbed so the test can drive its callbacks directly. */
 const pipeline = vi.hoisted(() => {
-  const captured: { deps: Record<string, (...args: never[]) => unknown> | null } = { deps: null };
+  const captured: {
+    deps: Record<string, (...args: never[]) => unknown> | null;
+    /** Makes the NEXT pipeline's start reject, as a busy microphone would. */
+    failNextStart: boolean;
+  } = { deps: null, failNextStart: false };
   class FakePipeline {
+    private readonly fails: boolean;
     constructor(deps: Record<string, (...args: never[]) => unknown>) {
       captured.deps = deps;
+      this.fails = captured.failNextStart;
     }
-    async start(): Promise<void> {}
+    async start(): Promise<void> {
+      if (this.fails) {
+        // Long enough that the replacement take is already running, which is
+        // the whole point: the retry can spend 1.75 s before giving up.
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        throw new Error('MIC_DEVICE_LOST');
+      }
+    }
     async stop(): Promise<void> {}
     startListening(): void {}
     softPause(): void {}
@@ -275,6 +288,25 @@ describe('the voice pill on a live take', () => {
     reportA('offline');
     vi.advanceTimersByTime(200);
     expect(pills().at(-1)?.reading, 'take A may not fault take B').toBe('listening');
+  });
+
+  it('does not let a replaced take report its own failed start', async () => {
+    /*
+     * The microphone retry alone spends up to 1.75 s, so a superseded take can
+     * still be inside `pipeline.start()` when its replacement is already
+     * running. Its eventual rejection used to mark the CURRENT take offline,
+     * raise a danger toast, and cross the pill — all describing a session the
+     * operator had already ended.
+     */
+    pipeline.captured.failNextStart = true;
+    start();
+    pipeline.captured.failNextStart = false;
+    start();
+    vi.advanceTimersByTime(100);
+    expect(pills().at(-1)?.reading).toBe('listening');
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(pills().at(-1)?.reading, 'the dead take may not fault the live one').toBe('listening');
   });
 
   it('stops when the session does', () => {

@@ -121,6 +121,24 @@ describe('a busy device is retried (spec §28.6, macOS device handover)', () => 
     expect(sleep).not.toHaveBeenCalled();
   });
 
+  it('does not silently swap the device for a meter or a test', async () => {
+    /*
+     * The fallback is opt-in, and Preflight does not opt in. A level meter that
+     * quietly measured a different microphone from the one named above it — or
+     * a transcription test that passed on an input the take will not use — is a
+     * diagnostic that lies, which is worse than one that fails.
+     */
+    const getUserMedia = vi.fn().mockRejectedValue(busy());
+    const result = await requestMicrophoneAccess(
+      { getUserMedia } as unknown as MediaDevicesLike,
+      { deviceId: 'usb-mic' },
+      { sleep: async () => {} },
+    );
+    expect(result).toMatchObject({ ok: false, code: 'MIC_DEVICE_LOST' });
+    const asked = getUserMedia.mock.calls.map(([c]) => (c as MediaStreamConstraints).audio);
+    expect(asked.every((a) => 'deviceId' in (a as object))).toBe(true);
+  });
+
   it('falls back to the system default on the last attempt, and says so', async () => {
     /*
      * A device busy for the best part of two seconds is held by something this
@@ -139,7 +157,7 @@ describe('a busy device is retried (spec §28.6, macOS device handover)', () => 
     const result = await requestMicrophoneAccess(
       { getUserMedia } as unknown as MediaDevicesLike,
       { deviceId: 'usb-mic' },
-      { sleep: async () => {} },
+      { sleep: async () => {}, allowDefaultFallback: true },
     );
     expect(result).toMatchObject({ ok: true, attempts: 4, fellBackToDefault: true });
     // The first three asked for the pinned device; the last did not.

@@ -83,6 +83,19 @@ export interface MicAcquireRetry {
   sleep?: (ms: number) => Promise<void>;
   /** Called before each retry, for the audio trace. */
   onRetry?: (attempt: number, code: AppErrorCode, delayMs: number) => void;
+  /**
+   * Whether a still-busy pinned device may be abandoned for the system default
+   * on the final attempt. OFF unless asked for.
+   *
+   * It is the right trade for a TAKE — presenting from the built-in microphone
+   * beats not presenting, and the pipeline says so out loud when it happens.
+   * It is the wrong one everywhere else: a Preflight meter that silently
+   * measured a different microphone from the one named above it, or a
+   * transcription test that passed on an input the take will not use, is a
+   * diagnostic that lies. Those callers would rather fail and say the device
+   * is busy.
+   */
+  allowDefaultFallback?: boolean;
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -124,7 +137,8 @@ export async function requestMicrophoneAccess(
      * beats not presenting, and the caller is told it happened.
      */
     const lastChance = attempt === attempts && attempts > 1;
-    const fallingBack = lastChance && options.deviceId !== undefined;
+    const fallingBack =
+      lastChance && retry.allowDefaultFallback === true && options.deviceId !== undefined;
     const constraints = buildAudioConstraints(
       fallingBack ? { ...options, deviceId: undefined } : options,
     );
