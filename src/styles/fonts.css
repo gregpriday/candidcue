@@ -1,0 +1,104 @@
+/* ============================================================================
+   The bundled stage face.
+
+   WHY BUNDLE ANYTHING
+   -------------------
+   `stageFontStack('high-legibility')` names Atkinson Hyperlegible Next first.
+   Until this file existed, nothing provided that family, so the id resolved
+   straight past it into the humanist fallback — the presenter picked a face for
+   its disambiguated I/l/1 and 0/O and got Seravek. A stack that claims a font
+   nobody ships is worse than one that does not claim it, because the operator
+   has no way to see the difference from the stage.
+
+   It also has to be a FILE, not a CDN link. The stage window's CSP is
+   `font-src 'self' data:` and the app is expected to run on a rig with no
+   network at all; a remote face would fail silently and land back on the
+   fallback, which is the failure this file removes.
+
+   WHY THE VARIABLE FACE
+   ---------------------
+   `optics.fontWeight` is a continuous value clamped to 300-800 and the
+   resolver moves it with viewing distance, so a set of static instances would
+   either snap the operator's weight to the nearest 100 or ship seven files.
+   One `wght` axis per style covers the whole range at 34KB.
+
+   The italic file is bundled rather than left to synthesis: markdown emphasis
+   renders `font-style: italic` on the stage, and a browser-synthesised oblique
+   is a SHEAR of the upright — different advances, so different line breaks —
+   which would make emphasis a layout input that no measurement predicts.
+
+   WHY font-display: block
+   -----------------------
+   `swap` paints the fallback and then re-wraps every line under the presenter
+   mid-take. That reflow is exactly what the layout fingerprint's font term has
+   to chase, and the cheapest way to win the race is not to run it: the files
+   are local, so the block period is a frame or two, and a file that genuinely
+   fails to load errors immediately rather than waiting it out. The stage
+   already gates its own reveal on a bounded `document.fonts.ready` wait and
+   reports `fontsReady: false` when that wait times out, so a degradation here
+   is announced rather than silent.
+
+   PROVENANCE
+   ----------
+   Atkinson Hyperlegible Next v7 (Braille Institute / Google Fonts), the woff2
+   subsets published as `@fontsource-variable/atkinson-hyperlegible-next@5.3.0`,
+   unmodified. Licensed OFL-1.1; the licence and its copyright notice travel
+   with the binaries in `assets/fonts/LICENSE.txt`.
+
+   The family is declared under its own name rather than fontsource's
+   `... Next Variable`, so the name here is character-for-character the one
+   `stageFontStack` asks for. `font-hash.test.ts` pins that agreement, because
+   a one-word drift between the two would degrade to the fallback in exactly
+   the invisible way this file exists to prevent.
+
+   The subsets are split on `unicode-range` so a script that is entirely basic
+   Latin never pays for the extended file. Both are bundled: a single accented
+   name falling back to a different face mid-word is a visible jar on the
+   glass, and 39KB is not a reason to accept it.
+   ============================================================================ */
+
+@font-face {
+  font-family: 'Atkinson Hyperlegible Next';
+  font-style: normal;
+  font-display: block;
+  font-weight: 200 800;
+  src: url('../../assets/fonts/atkinson-hyperlegible-next-latin-wght-normal.woff2')
+    format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+    U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Atkinson Hyperlegible Next';
+  font-style: italic;
+  font-display: block;
+  font-weight: 200 800;
+  src: url('../../assets/fonts/atkinson-hyperlegible-next-latin-wght-italic.woff2')
+    format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+    U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Atkinson Hyperlegible Next';
+  font-style: normal;
+  font-display: block;
+  font-weight: 200 800;
+  src: url('../../assets/fonts/atkinson-hyperlegible-next-latin-ext-wght-normal.woff2')
+    format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Atkinson Hyperlegible Next';
+  font-style: italic;
+  font-display: block;
+  font-weight: 200 800;
+  src: url('../../assets/fonts/atkinson-hyperlegible-next-latin-ext-wght-italic.woff2')
+    format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308,
+    U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+2C60-2C7F, U+A720-A7FF;
+}

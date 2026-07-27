@@ -6,6 +6,7 @@
 -->
 <script lang="ts">
   import type { CompiledBlock } from '../../shared/contracts';
+  import { performanceCueKind, type PerformanceMode } from '../../shared/performance-view';
   import InlineNodes from './InlineNodes.svelte';
 
   let {
@@ -16,6 +17,7 @@
     showCues = true,
     gapPx = 0,
     dimFrozen = false,
+    performanceMode = 'rehearsal',
   }: {
     block: CompiledBlock;
     zone: 'past' | 'current' | 'future';
@@ -30,6 +32,19 @@
      * reader in, which is a claim it still stands behind while it searches.
      */
     dimFrozen?: boolean;
+    /**
+     * Which view of the script this is (`shared/performance-view.ts`).
+     *
+     * The division of labour with `projectForPerformance` is deliberate: the
+     * projection decides WHAT is on the glass — it replaces the blocks a
+     * presenter cannot read at prompting distance — and this prop decides how
+     * big the structure that survived reads. Presentation that the block model
+     * has no business carrying stays out of the block model.
+     *
+     * `rehearsal` is the default so every existing mount site (and every test)
+     * renders exactly what it rendered before this existed.
+     */
+    performanceMode?: PerformanceMode;
   } = $props();
 
   const headingLevel = $derived(
@@ -42,7 +57,30 @@
         ? 'Take'
         : null,
   );
-  const hidden = $derived(block.kind === 'cue' && !showCues);
+  const perfCue = $derived(performanceCueKind(block));
+  /**
+   * A performance cue is NOT hidden by "hide cues".
+   *
+   * That setting turns off the author's asides — [Beat], [Cue: to camera] — and
+   * the script reads fine without them. A projected cue is the opposite: it is
+   * standing in for a block that has been taken off the glass, so hiding it
+   * deletes the presenter's only evidence that the table exists at all. Content
+   * that vanishes with nothing to say it was ever there is the one outcome the
+   * media fallbacks below are also written to avoid.
+   */
+  const hidden = $derived(block.kind === 'cue' && !showCues && perfCue === null);
+  /**
+   * Compact section cue.
+   *
+   * A heading in a take is a landmark rather than a title: what it has to do is
+   * tell the presenter where they are, and every pixel it spends at display size
+   * is script pushed off a nine-inch glass. A SPOKEN heading is exempt, because
+   * `readHeadings` makes it a line the presenter reads aloud — shrinking that
+   * would be shrinking body copy.
+   */
+  const compactHeading = $derived(
+    performanceMode === 'take' && block.kind === 'heading' && !block.spoken,
+  );
 </script>
 
 {#if !hidden}
@@ -58,8 +96,15 @@
       <span class="take-marker">{takeLabel}</span>
     {/if}
 
-    {#if block.kind === 'heading'}
-      <div class="heading" data-level={headingLevel}>
+    {#if perfCue !== null}
+      <!-- The block the projection took off the glass, said in the stage's own
+           cue vocabulary: the same chip an authored [Beat] draws, so it reads as
+           direction rather than as a card that lost its contents. -->
+      <div class="perf-cue" data-performance-cue={perfCue}>
+        <InlineNodes nodes={block.renderNodes} {assets} showCues={true} {dimFrozen} />
+      </div>
+    {:else if block.kind === 'heading'}
+      <div class="heading" data-level={headingLevel} class:compact={compactHeading}>
         <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} />
       </div>
     {:else if block.kind === 'cue'}
@@ -135,8 +180,14 @@
       <div class="visual-fallback">
         <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} />
       </div>
+    {:else if block.kind === 'silent' || block.kind === 'stage_only'}
+      <!-- Not a `<p>`. `:::silent` and `:::stage` keep whatever they wrapped
+           (`innerKind`), so a table can land here — and an HTML parser closes an
+           open `<p>` before a `<table>`, which leaves the stage measuring a
+           shape the browser then takes apart underneath it. -->
+      <div class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></div>
     {:else}
-      <!-- paragraph / silent / stage_only -->
+      <!-- paragraph -->
       <p class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></p>
     {/if}
   </div>
@@ -223,6 +274,41 @@
   .heading:not([data-level='1']):not([data-level='2']) {
     font-size: 1.05em;
     line-height: 1.22;
+  }
+  /*
+   * The take-mode heading: one size for every level, because at prompting
+   * distance the level is not information the presenter can act on — where the
+   * section starts is. It is coloured like the other stage direction and is
+   * deliberately NOT uppercased the way the cue chips are: a chip is a word, a
+   * heading is a phrase, and capitals cost more than they buy over a phrase.
+   *
+   * `[data-level]` is in the selector for the cascade, not to narrow the match
+   * — the attribute is always written. `:not()` carries the specificity of its
+   * argument, so the level-3-and-up rule above counts as a class plus two
+   * attributes, and a bare `.heading.compact` loses to it outright: h3 to h6
+   * would have kept 1.05em and come out LARGER in a take than the compacted h1
+   * above them. With the attribute the two tie and source order decides, which
+   * is why this rule still has to stay BELOW all three.
+   */
+  .heading.compact[data-level] {
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.9em);
+    line-height: 1.3;
+    letter-spacing: 0.04em;
+    color: var(--stage-cue);
+  }
+
+  /*
+   * A projected cue replaces a WHOLE block, so its wrapper does not shrink.
+   *
+   * That is the whole rule: the chip inside is then exactly one multiplication
+   * away from body text, the same as an authored inline cue. Routing it through
+   * `.cue-row` would have made it two — 0.67 of 0.9 — which is precisely the
+   * compounding the floor above exists to catch, and the cheapest place to not
+   * have it is here.
+   */
+  .perf-cue {
+    font-size: 1em;
+    line-height: 1.4;
   }
 
   .cue-row {
@@ -339,7 +425,7 @@
     background: color-mix(in srgb, var(--stage-text) 5%, transparent);
   }
 
-  p.para {
+  .para {
     margin: 0;
   }
 </style>

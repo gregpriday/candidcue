@@ -181,6 +181,16 @@ export interface LayoutFingerprint {
   /** Reading-band half height, percent of the viewport. */
   readingBandHalfHeightPercent: number;
   cueLayout: string;
+  /**
+   * Which content projection is on the glass: 'take' replaces non-spoken visual
+   * blocks with one-line cues, 'rehearsal' renders them.
+   *
+   * A layout input because switching it swaps a full-height table for a chip
+   * while the document and every other declared input sit unchanged — exactly
+   * the case `sameLayout()` would otherwise call coverage-only, replacing the
+   * map under the old generation and skipping the semantic re-anchor.
+   */
+  performanceView: string;
   listenerGeometryHash: string;
 }
 

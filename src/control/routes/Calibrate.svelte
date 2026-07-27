@@ -48,6 +48,7 @@
   import { buildStageSettings } from '../services/stage-envelope';
   import { opticalRigKey, withOpticalProfile } from '../services/settings-types';
   import type { DisplayDescriptor } from '../services/stage-types';
+  import SidecarChecklist from '../components/SidecarChecklist.svelte';
   import {
     OPTICAL_HARDWARE,
     defaultOpticalProfile,
@@ -221,6 +222,24 @@
   let displays = $state<DisplayDescriptor[]>([]);
   let loadError = $state<string | null>(null);
   const display = $derived(displays.find((d) => d.fingerprint === displayFingerprint) ?? null);
+
+  /**
+   * The panel, in the structural shape the shared modules take.
+   *
+   * `DisplayDescriptor` lives in the control layer and `shared/` may not depend
+   * on it, so discovery and the Sidecar heuristic both accept the three fields
+   * they actually need. Projecting here keeps that boundary in one place rather
+   * than at every call.
+   */
+  const sidecarDisplayShape = $derived(
+    display
+      ? {
+          ...(display.name === undefined ? {} : { name: display.name }),
+          physicalSize: display.physicalSize,
+          scaleFactor: display.scaleFactor,
+        }
+      : null,
+  );
 
   /** Just enough of the panel for discovery, which must not import control types. */
   const shape = $derived(
@@ -816,6 +835,24 @@
             CandidCue could not recognise this panel, so it will ask you to measure it.
           {/if}
         </p>
+        <!--
+          Sidecar is the one rig where the things that ruin a take are invisible
+          from inside the app: a mirrored rather than extended desktop, the
+          sidebar and Touch Bar eating the safe area, an iPad app suspending the
+          session mid-sentence. The checklist renders itself away when the
+          display is not one, so it costs nothing on every other rig.
+
+          Here rather than at the end because two of its items — sidebar and
+          Touch Bar off — change the geometry that the safe-area step is about
+          to measure. Ticking them afterwards would mean measuring an aperture
+          that is about to move.
+        -->
+        <SidecarChecklist
+          display={sidecarDisplayShape}
+          hardwareKind={profile.hardwareKind}
+          {viewport}
+          onapplysafearea={(insets) => patchProfile({ safeArea: insets })}
+        />
       {:else if step.id === 'scale'}
         <div class="readout-row">
           <span class="readout-label">Physical scale</span>

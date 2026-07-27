@@ -80,6 +80,7 @@
     DEFAULT_OVERSCAN_PX,
   } from './virtualization';
   import { segmentText, stageFontStack } from './text';
+  import { projectForPerformance, type PerformanceMode } from '../../shared/performance-view';
   import { clearFontMetricsCache, measureFontMetrics } from './fontMetrics';
   import BlockView from './BlockView.svelte';
   import ReadingCue from './ReadingCue.svelte';
@@ -216,6 +217,36 @@
    * not — which is what keeps this change additive.
    */
   const optics = $derived(settings.optics ?? null);
+
+  /**
+   * Take mode reads; rehearsal mode reads AND shows the working.
+   *
+   * Derived from `stageMode` rather than given a control of its own. The two
+   * questions — how much instrumentation, how much rich content — are genuinely
+   * different axes, but nobody wants a clean take that still renders a code card
+   * at prompting distance, and nobody rehearsing wants their reference table
+   * replaced by the words REFER TO TABLE. One choice, stated once.
+   *
+   * The projection replaces non-spoken visual blocks with short readable cues.
+   * It cannot move a spoken token — `projectForPerformance` only touches blocks
+   * that carry none — which is what makes it safe to apply after the compiler
+   * has assigned the indices the aligner tracks against.
+   */
+  const performanceMode = $derived<PerformanceMode>(
+    (settings.stageMode ?? 'clean') === 'diagnostic' ? 'rehearsal' : 'take',
+  );
+
+  /**
+   * The blocks as they will actually be drawn.
+   *
+   * Everything downstream reads THIS rather than `doc.blocks`: the measurement
+   * pass, the virtualization estimates, the line map and the render all have to
+   * agree about what exists, or the map describes a document nobody is looking
+   * at. Switching mode swaps a full-height table for a one-line chip, which
+   * moves every glyph below it — so it is a layout input too, and is declared
+   * as one below.
+   */
+  const performanceBlocks = $derived(projectForPerformance(doc.blocks, performanceMode));
 
   /* ---------------------------------------------------------------------
    * The pre-optical layout, preserved exactly.
@@ -530,7 +561,7 @@
         }
       }
     };
-    for (const block of doc.blocks) walk(block.renderNodes);
+    for (const block of performanceBlocks) walk(block.renderNodes);
     return out;
   });
 
@@ -753,7 +784,7 @@
   );
 
   /* ---- measurement + virtualization ---- */
-  const virtual = $derived(shouldVirtualize(doc.blocks.length));
+  const virtual = $derived(shouldVirtualize(performanceBlocks.length));
   const measuredHeights = new Map<string, number>();
   let measureVersion = $state(0);
   let layoutReadySent = false;
@@ -761,7 +792,7 @@
   const heights = $derived.by(() => {
     void measureVersion;
     const colPx = Math.max(1, columnWidthPx);
-    return doc.blocks.map((b) => {
+    return performanceBlocks.map((b) => {
       const m = measuredHeights.get(b.id);
       if (m !== undefined) return m;
       // The rendered type, not the authored fields: on a calibrated rig those
@@ -781,7 +812,7 @@
     if (!virtual) {
       return {
         startIndex: 0,
-        endIndex: doc.blocks.length,
+        endIndex: performanceBlocks.length,
         leadingSpacePx: 0,
         trailingSpacePx: 0,
       };
@@ -832,7 +863,7 @@
     return () => query?.removeEventListener?.('change', onChange);
   });
 
-  const blockIndexById = $derived(new Map(doc.blocks.map((b, i) => [b.id, i])));
+  const blockIndexById = $derived(new Map(performanceBlocks.map((b, i) => [b.id, i])));
   const sentencesById = $derived(new Map((doc.sentences ?? []).map((s) => [s.id, s])));
 
   /**
@@ -956,7 +987,7 @@
      * `waitForStageReady`'s timeout. Asking the document how many blocks it
      * has separates "not rendered yet" from "nothing to render".
      */
-    const rendered = els.length > 0 || doc.blocks.length === 0;
+    const rendered = els.length > 0 || performanceBlocks.length === 0;
     if (!layoutReadySent && rendered) {
       layoutReadySent = true;
       onlayoutready?.(layoutMeasurement());
@@ -1063,6 +1094,10 @@
       effective.mirrorY,
       effective.readingBandCenterPercent,
       effective.readingBandHalfHeightPercent,
+      // Switching this swaps whole visual blocks for one-line chips while the
+      // document and every other input sit unchanged — `sameLayout()` would
+      // otherwise call that the same layout and skip the §33 re-anchor.
+      performanceMode,
       padTopPx,
       padBottomPx,
       /*
@@ -1193,7 +1228,7 @@
     const band = readingBand;
     const measurement = measureStageLayout({
       plane: planeEl,
-      blocks: doc.blocks,
+      blocks: performanceBlocks,
       fallbackLineHeightPx: linePx,
       // §16.7: the script sits inside the mirror plane, and
       // getBoundingClientRect() reports post-transform viewport space.
@@ -1439,7 +1474,7 @@
     }
     const top = offsets[idx] ?? 0;
     const h = heights[idx] ?? linePx;
-    const block = doc.blocks[idx];
+    const block = performanceBlocks[idx];
     let fraction = 0.5;
     if (
       block &&
@@ -1809,7 +1844,7 @@
   }
 
   const visibleBlocks = $derived(
-    doc.blocks.slice(renderWindow.startIndex, renderWindow.endIndex),
+    performanceBlocks.slice(renderWindow.startIndex, renderWindow.endIndex),
   );
 </script>
 
@@ -1870,6 +1905,7 @@
         <BlockView
           {block}
           {dimFrozen}
+          {performanceMode}
           zone={zoneFor(renderWindow.startIndex + i)}
           cursor={renderWindow.startIndex + i === currentBlockIndex ? cursorTokenIndex : null}
           assets={doc.assets}

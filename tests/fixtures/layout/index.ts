@@ -139,6 +139,7 @@ export function fixtureFingerprint(
     readingBandCenterPercent: 38,
     readingBandHalfHeightPercent: 4,
     cueLayout: 'cues',
+    performanceView: 'take',
     listenerGeometryHash: 'none',
     ...overrides,
   };

@@ -4,6 +4,20 @@
  * anchor to individual tokens. Pure logic.
  */
 
+/*
+ * The face travels with the stack that names it.
+ *
+ * `stageFontStack` is the only thing in the app that asks for Atkinson
+ * Hyperlegible Next, and `fonts.css` is the only thing that provides it. Every
+ * surface that renders the stage font reaches it through this module, so
+ * importing the declarations here makes the two impossible to separate: there
+ * is no entry point that can pick up the stack and miss the @font-face, and no
+ * new stage surface that has to remember to add a stylesheet import. Under
+ * Vite this also makes the woff2 files a build input, so a missing or renamed
+ * font file fails the build instead of degrading to the fallback on a rig.
+ */
+import '../../styles/fonts.css';
+
 export interface TextSegment {
   text: string;
   /** Token index for word segments when the compiler mapping aligns. */
@@ -48,11 +62,19 @@ const MONO_STACK = 'ui-monospace, SFMono-Regular, Consolas, monospace';
  * Atkinson Hyperlegible, degrading into the humanist stack rather than the
  * system one.
  *
- * The face may not be bundled yet, and when it is absent the fallback decides
- * the column measure the optical resolver already committed to — so it has to
- * be the closest thing available. Atkinson is humanist-proportioned; Seravek
- * and Segoe UI are much nearer to it than whatever `system-ui` resolves to on
- * a given machine, so the geometry moves least when the bundle is missing.
+ * The first name is bundled — `fonts.css`, imported above, declares
+ * 'Atkinson Hyperlegible Next' over four local woff2 subsets — so on a healthy
+ * install this stack stops at its first entry and the presenter gets the face
+ * they chose. The rest of it is what happens when that fails: the original
+ * Atkinson for anyone who has it installed system-wide, then the humanist
+ * stack.
+ *
+ * The tail still matters, because when the bundled face is absent the fallback
+ * decides the column measure the optical resolver already committed to — so it
+ * has to be the closest thing available. Atkinson is humanist-proportioned;
+ * Seravek and Segoe UI are much nearer to it than whatever `system-ui`
+ * resolves to on a given machine, so the geometry moves least in the case
+ * where the bundle did not load.
  */
 const HIGH_LEGIBILITY_STACK = `'Atkinson Hyperlegible Next', 'Atkinson Hyperlegible', ${HUMANIST_STACK}`;
 

@@ -202,6 +202,7 @@ export function buildLayoutFingerprint(input: FingerprintInput): LayoutFingerpri
     readingBandCenterPercent: s.readingBandCenterPercent,
     readingBandHalfHeightPercent: s.readingBandHalfHeightPercent,
     cueLayout: s.showCues ? 'cues' : 'none',
+    performanceView: s.stageMode === 'diagnostic' ? 'rehearsal' : 'take',
     listenerGeometryHash: input.listenerGeometryHash ?? 'none',
   };
 }
@@ -243,6 +244,7 @@ const IDENTIFIES_LAYOUT: Record<keyof LayoutFingerprint, boolean> = {
   readingBandCenterPercent: true,
   readingBandHalfHeightPercent: true,
   cueLayout: true,
+  performanceView: true,
   listenerGeometryHash: true,
 };
 
