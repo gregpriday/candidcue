@@ -750,18 +750,41 @@
 
   /* ---- the frame loop (companion §26.2, B.5) ---- */
   $effect(() => {
+    // Read the two inputs that may start or stop the loop BEFORE the untracked
+    // region, so they — and only they — are this effect's dependencies.
     const active = !frozen && vh > 0;
-    if (active) {
-      startLoop();
-    } else {
-      stopLoop();
-      /* §20.4 safety net. Nothing advances the fade once the loop is gone, so
-       * a freeze landing inside a re-anchor would otherwise leave the script
-       * parked at partial opacity for as long as the stage is stopped. The
-       * engine clears its own fade on the way back in (`visibilityRestored`,
-       * called from `startLoop`), so the two agree at 1 when frames resume. */
-      documentOpacity = 1;
-    }
+    /*
+     * `untrack` here is the whole reason the stage scrolls.
+     *
+     * `startLoop` re-anchors the engine to what is already on the glass, which
+     * means it reads `scrollY`. A `$state` read inside an effect body is a
+     * DEPENDENCY, and the frame loop writes `scrollY` on every displayed frame
+     * — so this effect re-ran once per frame: the cleanup tore the loop down,
+     * the body built a fresh one, and `visibilityRestored` zeroed the plant's
+     * velocity and acceleration on the way through.
+     *
+     * A jerk-limited plant restarted from rest every 16 ms never gets out of
+     * its own jerk ramp. Measured in the browser preview: the document moved
+     * at ~1 px/s while the reading position advanced at ~35 px/s, so the
+     * script highlighted the right words, the reader walked off the bottom of
+     * the screen, and the page never scrolled — a teleprompter that does not
+     * prompt. The effect is guarded rather than the function, because
+     * `startLoop` reading the live scroll position is correct; being
+     * re-invoked for it is not.
+     */
+    untrack(() => {
+      if (active) {
+        startLoop();
+      } else {
+        stopLoop();
+        /* §20.4 safety net. Nothing advances the fade once the loop is gone, so
+         * a freeze landing inside a re-anchor would otherwise leave the script
+         * parked at partial opacity for as long as the stage is stopped. The
+         * engine clears its own fade on the way back in (`visibilityRestored`,
+         * called from `startLoop`), so the two agree at 1 when frames resume. */
+        documentOpacity = 1;
+      }
+    });
     return () => stopLoop();
   });
 
@@ -769,12 +792,14 @@
     if (typeof document === 'undefined') return;
     const onVisibility = () => {
       // §32.4: stop work while hidden; on restore re-anchor to what is on
-      // screen rather than replaying all missed motion.
+      // screen rather than replaying all missed motion. The re-anchor is
+      // `startLoop`'s, not this handler's — it used to be both, which is one
+      // decision with two owners, and the second call landed after the first
+      // had already reset the fade.
       if (document.hidden) {
         stopLoop();
-      } else {
-        engine.visibilityRestored(scrollY, performance.now());
-        if (!frozen && vh > 0) startLoop();
+      } else if (!frozen && vh > 0) {
+        startLoop();
       }
     };
     document.addEventListener('visibilitychange', onVisibility);
