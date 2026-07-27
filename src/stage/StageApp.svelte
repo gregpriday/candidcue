@@ -1159,6 +1159,22 @@
               : ' SHORT'}
           </div>
         {/if}
+        {#if settings?.optics}
+          <!--
+            What the optical model concluded about this rig, on the rig.
+
+            The same sentence reaches the operator in Settings as a warning, but
+            that is the control window on a different desk. When somebody is
+            standing at the glass wondering why the type is the size it is, the
+            answer belongs where they are — and a verdict of `width_limited` on
+            a 9-inch panel is the expected answer, not a fault, so it is stated
+            plainly rather than styled as one.
+          -->
+          <div>fit: {settings.optics.fitVerdict}</div>
+          {#if settings.optics.fitAdvice}
+            <div class="diag-advice">{settings.optics.fitAdvice}</div>
+          {/if}
+        {/if}
         {#if layoutMeasurement}
           <!-- What the stage measured off the face it is drawing, which is the
                only place those numbers exist: control resolves geometry against
@@ -1367,6 +1383,13 @@
     box-shadow:
       0 0 0 1px rgba(0, 0, 0, 0.9),
       inset 0 0 0 1px rgba(0, 0, 0, 0.9);
+  }
+
+  /* The one multi-line entry in a panel of single-line readouts. */
+  .diag-advice {
+    max-width: 34ch;
+    white-space: normal;
+    opacity: 0.8;
   }
 
   .diagnostics {
