@@ -290,8 +290,30 @@ describe('the first-press notice reflects whether a second display exists', () =
     expect(get(toasts).length).toBe(before + 1);
   });
 
-  it('still announces the stop itself even solo — the summary appears on control next', async () => {
+  it('says nothing about the stop either, on a setup where nobody else saw it', async () => {
+    /*
+     * This used to announce the stop even solo, on the theory that control is
+     * where the summary appears next. It is — which is the point: the F.17
+     * summary is already there, saying it better. The toast added a second
+     * announcement of an action the presenter had just taken deliberately, on
+     * the screen the stage had been covering a moment earlier.
+     */
     stage.listDisplays.mockResolvedValueOnce([{ fingerprint: 'display-0' }]);
+    start(7);
+    await completeBridge();
+
+    const before = get(toasts).length;
+    find(STAGE_EVENT.escapeRequested).at(-1)?.handler({ payload: { stageGeneration: 7, presses: 2 } });
+    expect(get(toasts).length).toBe(before);
+  });
+
+  it('does announce the stop when an operator at a second display did not press it', async () => {
+    // They watched the stage go dark without touching anything; this is the
+    // line that says why.
+    stage.listDisplays.mockResolvedValueOnce([
+      { fingerprint: 'display-0' },
+      { fingerprint: 'display-1' },
+    ]);
     start(7);
     await completeBridge();
 

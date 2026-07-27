@@ -1657,9 +1657,21 @@ function startStageBridge(sessionId: string): void {
         if (event.payload.stageGeneration !== generation) return;
         if (event.payload.presses >= 2) {
           stopSession();
-          // "Stopped" is worth saying even solo — control is where the
-          // summary appears next, so this is the one line that belongs there.
-          showToast('Session stopped from the stage', 'info');
+          /*
+           * Only when somebody else is watching this window.
+           *
+           * A solo presenter on one display pressed Escape twice, watched the
+           * stage disappear, and was then told — on the screen that stage had
+           * been covering — that the session stopped. It is an announcement of
+           * their own deliberate action, arriving underneath the F.17 summary
+           * that says the same thing better, on the one setup where it can only
+           * be read after the fact.
+           *
+           * With a second display it earns its place: an operator sat at
+           * control did NOT press the key, watched the stage go dark, and this
+           * is the line that says why.
+           */
+          if (controlOperatorPlausible) showToast('Session stopped from the stage', 'info');
         } else if (controlOperatorPlausible) {
           showToast('Press Escape again on the stage to end the session', 'info');
         }
