@@ -521,10 +521,32 @@ export function viewportBoundedProfile(
     m.maxAccelerationPxS2,
     viewportHeightPx * MAX_ACCELERATION_VIEWPORTS_PER_SECOND2,
   );
-  const maxJerkPxS3 = Math.min(
+  let maxJerkPxS3 = Math.min(
     m.maxJerkPxS3,
     viewportHeightPx * MAX_JERK_VIEWPORTS_PER_SECOND3,
   );
+
+  /*
+   * The two caps are independent, and that is the one way this could hurt.
+   *
+   * A jerk-limited actuator needs `2·aMax/jerkMax` to swing acceleration from
+   * one rail to the other, and profiles.ts's limit-cycle note explains what too
+   * much of that lag does inside this loop: the phase margin goes and the
+   * document rocks against a static target instead of settling. Capping jerk
+   * harder than acceleration LENGTHENS that lag.
+   *
+   * For the profiles that ship it never happens — acceleration starts binding
+   * at a taller panel than jerk does, so the ratio only ever shortens. But the
+   * contract accepts profiles nobody here wrote, and one whose acceleration is
+   * already under its cap while its jerk is not would come out worse than it
+   * went in. Rather than rely on the shipped numbers staying where they are,
+   * give back whatever jerk the incoming ratio was entitled to.
+   */
+  const incomingLagS = m.maxJerkPxS3 > 0 ? (2 * m.maxAccelerationPxS2) / m.maxJerkPxS3 : 0;
+  if (incomingLagS > 0) {
+    const jerkForSameLag = (2 * maxAccelerationPxS2) / incomingLagS;
+    maxJerkPxS3 = Math.min(m.maxJerkPxS3, Math.max(maxJerkPxS3, jerkForSameLag));
+  }
   if (
     maxForwardVelocityPxS === m.maxForwardVelocityPxS &&
     maxBackwardVelocityPxS === m.maxBackwardVelocityPxS &&

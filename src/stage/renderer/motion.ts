@@ -155,17 +155,30 @@ export function classifyTransition(opts: {
   if (opts.reducedMotion) return 'instant';
   if (ALIGNMENT_RELOCATIONS.has(opts.decision)) {
     /*
-     * The viewport-relative threshold is the fallback AND the sanity band: a
-     * jump past a few screens is a teleport whatever the type size, so the
-     * line-relative answer is clamped against it rather than trusted outright.
+     * This threshold decides whether a correction is SHOWN travelling or hidden
+     * behind the fade, so it is the one place a line-relative answer may only
+     * ever narrow the viewport-relative one.
      *
-     * The clamp is `resolveLineLimitPx`'s own 0.5x–3x band around the viewport
-     * figure, so this bound is already stated in both units — six viewport
-     * heights is the most a line-relative answer can ever reach — and needs no
-     * separate ceiling.
+     * `resolveLineLimitPx` clamps into a 0.5x-3x band around the figure it is
+     * given, which is right for a limit where both directions are survivable —
+     * and wrong here. Three times two viewport heights is SIX SCREENS: at a
+     * 600px stage with a 150px pitch, a 2,000px correction (three and a third
+     * screens) came out `smooth_jump`, and the presenter watched the whole
+     * document fly across the glass. That is precisely the teleport §20.4
+     * introduced the fade to hide, and the failure asymmetry is not symmetric:
+     * an unnecessary fade costs 220ms of dimmed text, while a visible flight
+     * across the glass costs the reader their place mid-sentence.
+     *
+     * So the two bounds are combined with `min`, not with a band. Large type
+     * can make the stage more willing to fade; nothing can make it less.
      */
     const viewportLimitPx = SMOOTH_JUMP_VIEWPORT_FACTOR * opts.viewportHeightPx;
-    const limit = resolveLineLimitPx(SMOOTH_JUMP_MAX_LINES, viewportLimitPx, opts.linePitchPx);
+    const lineLimitPx = resolveLineLimitPx(
+      SMOOTH_JUMP_MAX_LINES,
+      viewportLimitPx,
+      opts.linePitchPx,
+    );
+    const limit = Math.min(lineLimitPx, viewportLimitPx);
     return opts.distancePx <= limit ? 'smooth_jump' : 'fade_jump';
   }
   return 'spring';

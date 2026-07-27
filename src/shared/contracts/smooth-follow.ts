@@ -362,6 +362,20 @@ export interface SmoothFollowProfile {
    * complete, tuned answer rather than a partial one. So its absence must never
    * fail `isInterpretableSmoothFollowProfile`; only a block that is PRESENT and
    * incomplete does, on the same all-or-nothing reasoning as the version gate.
+   *
+   * ONE THING THIS BLOCK DOES NOT GATE
+   * ----------------------------------
+   * The engine also bounds velocity, acceleration and jerk against the height
+   * of the panel, and that bound applies whether or not this block is present.
+   * It is deliberate, and it is not a line-unit behaviour wearing a disguise:
+   * the panel is a fact about the hardware, not about the profile, and a sweep
+   * of a screen and a half per second is disruptive regardless of which profile
+   * asked for it. Gating it here would mean an OLDER control's profile — the
+   * one least likely to have been tuned against a small panel — was the only
+   * one that got the unbounded behaviour.
+   *
+   * So "applied as written" is true of the tuned pixel numbers this block
+   * replaces, and the viewport bound sits outside that promise on purpose.
    */
   lineUnits?: SmoothFollowLineUnits;
 

@@ -303,12 +303,29 @@ describe('classifyTransition with a measured pitch (§32.3)', () => {
     ).toBe('fade_jump');
   });
 
-  it('lets large type on a small panel travel a jump the viewport rule would fade', () => {
-    // 600 px of glass at a 150 px pitch: two viewport heights is barely eight
-    // lines, so the viewport rule fades corrections the presenter would read as
-    // ordinary catching-up.
+  it('will not let large type license a flight across three screens', () => {
+    /*
+     * This assertion used to demand the opposite, on the reasoning that eight
+     * lines is a short trip whatever the panel. The reasoning is right about
+     * lines and wrong about the failure it buys: 2,000px on 600px of glass is
+     * three and a third SCREENS of travel, shown to the presenter, which is
+     * exactly the teleport §20.4 introduced the fade to hide.
+     *
+     * The asymmetry decides it. An unnecessary fade costs 220ms of dimmed text;
+     * a visible flight across the glass costs the reader their place in the
+     * middle of a sentence. So the line-relative answer may narrow the
+     * viewport-relative one and never widen it.
+     */
     const opts = { ...relocation, distancePx: 2000, viewportHeightPx: 600 };
     expect(classifyTransition(opts)).toBe('fade_jump');
+    expect(classifyTransition({ ...opts, linePitchPx: 150 })).toBe('fade_jump');
+  });
+
+  it('still lets a modest correction travel at a large pitch', () => {
+    // The line-relative rule has not become inert — a jump well inside the
+    // viewport bound is still shown travelling, which is what keeps ordinary
+    // catching-up from flickering behind a fade.
+    const opts = { ...relocation, distancePx: 900, viewportHeightPx: 600 };
     expect(classifyTransition({ ...opts, linePitchPx: 150 })).toBe('smooth_jump');
   });
 

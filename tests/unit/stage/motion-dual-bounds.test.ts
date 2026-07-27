@@ -637,3 +637,30 @@ describe('the viewport cap does not reintroduce the limit cycle', () => {
     expect(bounded.motion.maxForwardVelocityPxS).toBeCloseTo(600, 6);
   });
 })
+
+describe('the ratio guard holds for profiles nobody here wrote', () => {
+  it('never lengthens the lag even when only jerk would have been capped', () => {
+    /*
+     * The shipped profiles are safe because acceleration binds at a taller
+     * panel than jerk does. A profile whose acceleration is ALREADY below its
+     * cap has no such protection: capping its jerk alone stretches
+     * `2·aMax/jerkMax` and walks straight into the limit cycle profiles.ts
+     * documents.
+     *
+     * The contract accepts profiles this repository did not author, so the
+     * invariant is enforced rather than inherited from the numbers.
+     */
+    const awkward: SmoothFollowProfile = {
+      ...PROFILE,
+      motion: { ...PROFILE.motion, maxAccelerationPxS2: 400, maxJerkPxS3: 12000 },
+    };
+    const before = (2 * awkward.motion.maxAccelerationPxS2) / awkward.motion.maxJerkPxS3;
+    for (const heightPx of [1080, 900, 768, 600, 400, 320]) {
+      const bounded = viewportBoundedProfile(awkward, heightPx);
+      const after = (2 * bounded.motion.maxAccelerationPxS2) / bounded.motion.maxJerkPxS3;
+      expect(after).toBeLessThanOrEqual(before + 1e-9);
+      // And it may never hand back MORE jerk than the profile asked for.
+      expect(bounded.motion.maxJerkPxS3).toBeLessThanOrEqual(awkward.motion.maxJerkPxS3);
+    }
+  });
+})
