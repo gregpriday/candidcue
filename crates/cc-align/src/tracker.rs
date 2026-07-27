@@ -651,7 +651,42 @@ impl Engine {
             }
         }
 
-        match local_candidate {
+        // Phase-2 is also allowed to reconnect *inside* the continuity band.
+        // This matters after a locally mangled span (proper names, figures,
+        // acronyms): the full tail can remain attached to an old prefix while
+        // the unexplained suffix already has a strong, current match a dozen
+        // words ahead. Previously those suffix candidates were generated and
+        // ranked, then discarded solely because they were not far enough to
+        // count as a discontinuity.
+        let nearby_suffix = if self.weak_streak > 0 {
+            clusters
+                .iter()
+                .filter(|candidate| {
+                    candidate.from_global
+                        && candidate.distance <= self.config.discontinuity_atoms as f64
+                        && !(candidate.backward && candidate.distance > 6.0)
+                        && candidate.evidence.end_position as f64 > self.observed + 1.0
+                        && candidate.evidence.fidelity >= self.config.observe_min_fidelity
+                        && candidate.evidence.coverage >= self.config.observe_min_coverage
+                        && candidate.evidence.content_matches >= self.config.observe_min_content
+                })
+                .max_by(|a, b| {
+                    a.evidence
+                        .end_position
+                        .cmp(&b.evidence.end_position)
+                        .then_with(|| {
+                            a.score
+                                .partial_cmp(&b.score)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                })
+                .cloned()
+        } else {
+            None
+        };
+        let local_choice = nearby_suffix.or(local_candidate);
+
+        match local_choice {
             // A phase-1 result far from the observed position (possible with
             // a very short tail and the band's free start) is a relocation
             // claim, and relocation claims go through the discontinuity
@@ -660,7 +695,20 @@ impl Engine {
                 if local.distance <= self.config.discontinuity_atoms as f64
                     && !(local.backward && local.distance > 6.0) =>
             {
-                self.decide_local(local, f64::INFINITY, now_ms)
+                // A candidate can pass the aggregate fidelity/coverage gates
+                // indefinitely by re-matching an old solid prefix while a
+                // growing, unrecognised suffix accumulates after it. Calling
+                // that "Following" is confidently wrong: the display has not
+                // moved and the new speech has not been explained. Preserve
+                // the honest hold after persistent weakness until local
+                // evidence actually advances or a discontinuity is accepted.
+                if self.weak_streak >= 3
+                    && local.evidence.end_position as f64 <= self.observed + 1.0
+                {
+                    self.hold(DecisionCode::HoldLowEvidence, now_ms)
+                } else {
+                    self.decide_local(local, f64::INFINITY, now_ms)
+                }
             }
             _ => self.hold(DecisionCode::HoldLowEvidence, now_ms),
         }
@@ -1109,8 +1157,13 @@ impl Engine {
         // reader's true pace, while the display wants a deliberately cautious
         // one. Conflating them would drag the search band backwards and cost
         // recovery latency to buy display safety, which is not the trade.
+        let gain_span =
+            (self.config.prediction_gain_fast_rate - self.config.rate_default).max(0.1);
+        let fast_mix = ((self.rate - self.config.rate_default) / gain_span).clamp(0.0, 1.0);
+        let display_gain = self.config.prediction_gain
+            + (self.config.prediction_gain_fast - self.config.prediction_gain) * fast_mix;
         let rate = match self.state {
-            TrackingState::Following if flowing => self.rate * self.config.prediction_gain,
+            TrackingState::Following if flowing => self.rate * display_gain,
             _ => 0.0,
         };
         Snapshot {

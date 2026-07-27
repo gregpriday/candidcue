@@ -110,6 +110,18 @@ impl Default for AlignScratch {
 /// Is `b` within a small edit distance of `a`? Bounded Levenshtein used for
 /// the fuzzy relation: distance ≤1 for length 5–8, ≤2 for 9+ (spec §10.6).
 pub fn fuzzy_match(a: &str, b: &str) -> bool {
+    if a.is_ascii() && b.is_ascii() {
+        let (la, lb) = (a.len(), b.len());
+        let min_len = la.min(lb);
+        if min_len < 5 {
+            return false;
+        }
+        let max_d = if la.max(lb) >= 9 { 2 } else { 1 };
+        if la.abs_diff(lb) > max_d {
+            return false;
+        }
+        return levenshtein_bounded_ascii(a.as_bytes(), b.as_bytes(), max_d);
+    }
     let (la, lb) = (a.chars().count(), b.chars().count());
     let min_len = la.min(lb);
     if min_len < 5 {
@@ -120,6 +132,37 @@ pub fn fuzzy_match(a: &str, b: &str) -> bool {
         return false;
     }
     levenshtein_bounded(a, b, max_d)
+}
+
+/// Allocation-free fast path for the overwhelmingly common canonical-ASCII
+/// case. Script/query atoms are short in practice; unusually long tokens fall
+/// back to the Unicode implementation rather than growing the DP hot path.
+fn levenshtein_bounded_ascii(a: &[u8], b: &[u8], bound: usize) -> bool {
+    const MAX_TOKEN: usize = 64;
+    if a.len() > MAX_TOKEN || b.len() > MAX_TOKEN {
+        let a = std::str::from_utf8(a).expect("ASCII");
+        let b = std::str::from_utf8(b).expect("ASCII");
+        return levenshtein_bounded(a, b, bound);
+    }
+    let mut prev = [0u8; MAX_TOKEN + 1];
+    let mut cur = [0u8; MAX_TOKEN + 1];
+    for (j, cell) in prev.iter_mut().enumerate().take(b.len() + 1) {
+        *cell = j as u8;
+    }
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = (i + 1) as u8;
+        let mut row_min = cur[0];
+        for (j, cb) in b.iter().enumerate() {
+            let substitution = prev[j] + u8::from(ca != cb);
+            cur[j + 1] = substitution.min(prev[j + 1] + 1).min(cur[j] + 1);
+            row_min = row_min.min(cur[j + 1]);
+        }
+        if row_min as usize > bound {
+            return false;
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()] as usize <= bound
 }
 
 fn levenshtein_bounded(a: &str, b: &str, bound: usize) -> bool {

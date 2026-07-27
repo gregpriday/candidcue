@@ -16,7 +16,7 @@ protocol used for live capture (`crates/cc-stt`) is the exact protocol of
 bench/scripts/    Markdown fixture scripts (9, from 250 to 5,000 words)
 bench/runs/       Captured live-STT event logs — immutable replay fixtures
                   (events.jsonl + gold.json + manifest.json + performance.txt)
-bench/results/    Saved benchmark tables (baseline and optimized JSON)
+bench/results/    Generated benchmark tables (local/gitignored JSON)
 crates/cc-align/  The alignment engine
 crates/cc-stt/    Tauri-free Inworld streaming client
 crates/cc-bench/  Harness: plans, gold, synthetic events, TTS, capture,
