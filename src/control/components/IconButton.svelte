@@ -3,7 +3,8 @@
   name and tooltip (spec §20).
 -->
 <script lang="ts">
-  import Icon, { type IconName } from './Icon.svelte';
+  import Icon from './Icon.svelte';
+  import type { IconName } from './icon-names';
 
   interface Props {
     icon: IconName;

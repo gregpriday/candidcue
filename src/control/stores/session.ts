@@ -848,8 +848,29 @@ export function startLiveSession(input: StartSessionInput): string {
        * reach the same conclusion, several seconds late and after they had
        * already gone looking at their wifi.
        */
-      if (code !== null && code.startsWith('MIC_')) voicePillDeviceLost = true;
-      state.update((s) => ({ ...s, connection: 'offline' }));
+      const micFailure = code !== null && code.startsWith('MIC_');
+      if (micFailure) voicePillDeviceLost = true;
+      /*
+       * `micState` too, not just the connection.
+       *
+       * A start that rejected never opened a capture — whatever it failed on,
+       * there is no microphone in this take. It stayed at its initial 'live'
+       * and the status bar reported "Mic live" over a session with no input at
+       * all, which is the same never-show-a-confident-state-you-do-not-have
+       * defect the manual-mode pills were fixed for.
+       *
+       * `inputDeviceLost` is narrower on purpose: it is what offers the §28.2
+       * mid-session input picker, and a picker is only an answer when the
+       * DEVICE is what failed. Swapping microphones cannot fix a refused
+       * credential, and offering it there is the same unfollowable instruction
+       * as advice pointing at a control that does not exist.
+       */
+      state.update((s) => ({
+        ...s,
+        connection: 'offline',
+        micState: 'disconnected',
+        inputDeviceLost: micFailure || s.inputDeviceLost,
+      }));
       showToast(`Voice tracking is unavailable. ${describeError(err)}`, 'danger');
     });
   }

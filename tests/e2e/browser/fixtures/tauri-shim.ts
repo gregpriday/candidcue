@@ -162,7 +162,10 @@ function shimBody(config: ShimConfig): void {
       },
       audio: {
         transcriptionModel: 'inworld/inworld-stt-1',
-        language: 'en',
+        // A full BCP-47 tag, as the app's own default is and as Rust validates:
+        // a bare 'en' here made a take that faithfully carried the setting look
+        // like one that had dropped the region.
+        language: 'en-US',
         delayProfile: 'balanced',
         softPauseAutoDisconnectMinutes: 5,
       },
@@ -307,6 +310,45 @@ function shimBody(config: ShimConfig): void {
     control.fail['list_displays'] = { code: 'HARDWARE_ERROR', userMessage: 'Could not enumerate displays.' };
   }
   (window as unknown as { __E2E__: typeof control }).__E2E__ = control;
+
+  /**
+   * The manual-mode alignment state, and the snapshot that carries it.
+   *
+   * Every field the control-side validator insists on is present and finite:
+   * `validateAlignmentSnapshot` drops a malformed payload silently, which would
+   * look exactly like no alignment feed at all (src/shared/contracts/
+   * alignment.ts explains why it is that strict — one NaN poisons the stage's
+   * motion plant for the life of the session).
+   */
+  const alignment = { generation: 0, seq: 0, token: 0 };
+
+  function publishAlignment(): void {
+    if (alignment.generation === 0) return;
+    alignment.seq += 1;
+    control.emit('align://snapshot', {
+      sessionGeneration: alignment.generation,
+      seq: alignment.seq,
+      // A manual move is not a guess: the operator said where they are, so the
+      // engine is following, at the position it was given, with no lead.
+      state: 'following',
+      decision: 'manualAnchor',
+      confirmedToken: alignment.token,
+      observedToken: alignment.token,
+      rateTokensPerSecond: 0,
+      evidenceAudioMs: 0,
+      atAudioMs: 0,
+      maxPredictionMs: 0,
+      pauseOnsetMs: 0,
+      leadFloorMs: 0,
+      maxLeadTokens: 0,
+      displayLimitToken: alignment.token,
+      confidence: 1,
+      suggestionToken: null,
+      scriptLenTokens: 0,
+      observedAtom: alignment.token,
+      confirmedAtom: alignment.token,
+    });
+  }
 
   function handle(command: string, args: Record<string, unknown> | undefined): unknown {
     /*
@@ -587,6 +629,45 @@ function shimBody(config: ShimConfig): void {
 
       case 'list_installed_listeners':
         return config.installedListeners ?? [];
+
+      /*
+       * §29 alignment. Rust owns the engine and publishes its snapshots on
+       * `align://snapshot`; this shim owns just enough of it that a MANUAL take
+       * behaves the way a manual take does.
+       *
+       * Without this the Live screen had no reading position at all: the
+       * sentence preview, the progress meter and the outline's current-section
+       * highlight are all derived from a snapshot, so a stepped or jumped
+       * position moved nothing on screen and three specs asserted against an
+       * element that could never render. Manual moves are the one part of
+       * alignment that needs no audio, no provider and no engine — the operator
+       * says where they are and the answer is exactly that — so it is the one
+       * part worth shimming. Voice following is not faked here and must not be.
+       */
+      case 'start_alignment':
+        /*
+         * Armed, but silent. Rust publishes nothing here either: with no audio
+         * yet there is no evidence and therefore no position to report, and a
+         * snapshot invented at arming time would put the Live screen into
+         * "Following" over a take that has not heard a word — the confident
+         * state-you-do-not-have that half these specs exist to catch.
+         */
+        alignment.generation = control.sessionGeneration;
+        alignment.seq = 0;
+        alignment.token = 0;
+        return null;
+
+      case 'stop_alignment':
+        alignment.generation = 0;
+        return null;
+
+      case 'set_alignment_position': {
+        const token = Number(args?.['token'] ?? 0);
+        if (!Number.isFinite(token) || token < 0) return null;
+        alignment.token = token;
+        publishAlignment();
+        return null;
+      }
 
       default:
         return null;

@@ -90,10 +90,15 @@ test('a voice take whose realtime transport cannot be established says so instea
   // …and it says what to do next, not just that something broke.
   expect(failureText).toMatch(/Try again/i);
 
-  // The transport is still offered as the way out.
-  await expect(
-    page.locator('footer.transport').getByRole('button', { name: 'Start', exact: true }),
-  ).toBeEnabled();
+  /*
+   * The transport is still there and still working. A dead realtime session
+   * takes voice following with it and nothing else: the take is prompting
+   * (Present is the start), so what is offered is Pause, and the manual moves
+   * below it are the way through the script.
+   */
+  const transport = page.locator('footer.transport');
+  await expect(transport.getByRole('button', { name: 'Pause', exact: true })).toBeEnabled();
+  await expect(transport.getByRole('button', { name: 'Stop session' })).toBeEnabled();
 
   errors.expectClean();
 });
@@ -156,7 +161,8 @@ test('a dead realtime transport still leaves the operator a working manual trans
     );
   }
 
-  await page.locator('footer.transport').getByRole('button', { name: 'Start', exact: true }).click();
+  // Already prompting — Present is the start — so the manual transport is the
+  // thing to reach for, and it must work through a dead realtime session.
   await page.getByRole('button', { name: 'Forward one sentence' }).click();
   await expect(page.locator('.preview-sentence.current')).toHaveText(
     'today we are shipping something new',

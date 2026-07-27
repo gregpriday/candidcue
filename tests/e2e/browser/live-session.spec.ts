@@ -222,24 +222,34 @@ test('the transport and the outline move the reading position and tell the stage
   // anything with, and saying otherwise is the confident-state-you-do-not-have
   // failure the pair of tests above and below exists to catch.
   await expect(statusBar.getByText('Prompting')).toBeVisible();
-  await expect(currentSentence).toHaveText('thank you for joining me today');
+  /*
+   * And no reading position yet, which is the honest state: a manual take has
+   * heard nothing, so nothing has told it where in the script anyone is. The
+   * cursor appears when the operator says — which is the next line.
+   */
+  await expect(currentSentence).toHaveCount(0);
 
   // A manual step really moves the reading position...
   await page.getByRole('button', { name: 'Forward one sentence' }).click();
   await expect(currentSentence).toHaveText('here is what changed this quarter');
 
-  // ...and it is relayed to the stage, stamped with the adopted generation.
-  const relayed = await page.evaluate(() => {
-    const call = window.__E2E__.lastCall('publish_stage_snapshot');
-    const args = call?.args as
-      | { sessionId: string; snapshot: { tokenIndex: number; sessionGeneration: number } }
-      | undefined;
-    return { args: args ?? null, row: window.__E2E__.lastSession };
+  /*
+   * ...and it went to the ENGINE, which is the single writer of position.
+   *
+   * This used to assert a `publish_stage_snapshot` call — control computing a
+   * position and pushing it at the stage directly. That command no longer
+   * exists: alignment lives in Rust, and Rust fans one snapshot out to both
+   * windows (`align://snapshot` here, `stage://alignment-snapshot` there), so
+   * control and stage cannot disagree about where the reader is. The move a
+   * control window makes is therefore `set_alignment_position`, and everything
+   * downstream follows from it.
+   */
+  const moved = await page.evaluate(() => {
+    const call = window.__E2E__.lastCall('set_alignment_position');
+    return (call?.args as { token: number } | undefined) ?? null;
   });
-  expect(relayed.args).not.toBeNull();
-  expect(relayed.args!.sessionId).toBe(relayed.row!.id);
-  expect(relayed.args!.snapshot.sessionGeneration).toBe(relayed.row!.sessionGeneration);
-  expect(relayed.args!.snapshot.tokenIndex).toBeGreaterThan(0);
+  expect(moved, 'a manual step must reach the alignment engine').not.toBeNull();
+  expect(moved!.token).toBeGreaterThan(0);
 
   // Back a sentence returns to where it was — the transport is symmetric.
   await page.getByRole('button', { name: 'Back one sentence' }).click();

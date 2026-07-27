@@ -10,6 +10,7 @@
 -->
 <script lang="ts" module>
   import type { LucideIcon } from '@lucide/svelte';
+  import { ICON_STROKE_WIDTH, type IconName } from './icon-names';
 
   import Check from '@lucide/svelte/icons/check';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -46,43 +47,6 @@
   import User from '@lucide/svelte/icons/user';
   import Workflow from '@lucide/svelte/icons/workflow';
   import X from '@lucide/svelte/icons/x';
-
-  export type IconName =
-    | 'plus'
-    | 'search'
-    | 'import'
-    | 'export'
-    | 'trash'
-    | 'restore'
-    | 'settings'
-    | 'doc'
-    | 'chevron-left'
-    | 'chevron-right'
-    | 'chevron-down'
-    | 'chevron-up'
-    | 'dots'
-    | 'play'
-    | 'pause'
-    | 'stop'
-    | 'mic'
-    | 'monitor'
-    | 'check'
-    | 'alert'
-    | 'info'
-    | 'x'
-    | 'pencil'
-    | 'link'
-    | 'image'
-    | 'flag'
-    | 'gauge'
-    | 'eye'
-    | 'eye-off'
-    | 'keyboard'
-    | 'refresh'
-    | 'external'
-    | 'user'
-    | 'clock'
-    | 'diagram';
 
   /**
    * Product name → Lucide glyph. Names stay product-shaped ('doc', 'restore',
@@ -127,13 +91,6 @@
     diagram: Workflow,
   };
 
-  /**
-   * Lucide draws on a 24px grid at stroke 2. Our controls render at 13-22px,
-   * where 2 reads heavier than the surrounding UI text; 1.75 keeps the optical
-   * weight the previous hand-drawn set had (1.7) while staying on the Lucide
-   * grid. One value everywhere — the icons must not drift again.
-   */
-  export const ICON_STROKE_WIDTH = 1.75;
 </script>
 
 <script lang="ts">

@@ -775,7 +775,7 @@
 
   /*
    * Escape confirmation. Top centre, clear of the reading band and of the
-   * coaching rail's reserved strip at the bottom — a prompt about stopping must
+   * reserved strip at the bottom of the glass — a prompt about stopping must
    * not sit on top of the words the presenter is still speaking.
    */
   .escape-hint {

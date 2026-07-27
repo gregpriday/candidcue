@@ -5,7 +5,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
-import Icon, { ICON_STROKE_WIDTH, type IconName } from '../../../src/control/components/Icon.svelte';
+import Icon from '../../../src/control/components/Icon.svelte';
+import {
+  ICON_STROKE_WIDTH,
+  type IconName,
+} from '../../../src/control/components/icon-names';
 
 /** Product name → the Lucide glyph it must resolve to. */
 const MAPPING: Record<IconName, string> = {

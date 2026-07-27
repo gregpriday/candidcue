@@ -1077,6 +1077,27 @@ use candidcue_lib::secrets::{
     dev_env_key_active, KeySource, OsSecretStore, SecretStore, DEV_KEY_ENV_VAR,
 };
 
+/// Serialises the two tests that mutate `DEV_KEY_ENV_VAR`.
+///
+/// The environment is process-global and cargo runs these in threads of ONE
+/// process, so without this they interleave: the `.env` test removes the
+/// variable, reads it, and puts the original back — and when that restore lands
+/// between the override test's `set_var` and the read it does next, the store
+/// answers with the machine's REAL key and the hint assertion fails on a
+/// four-character tail nobody wrote.
+///
+/// It only ever failed on a machine that HAS a key exported, which is every
+/// development machine and no CI runner — the worst possible distribution for
+/// a flake, since the people who could fix it are the only ones who saw it.
+static ENV_KEY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Take the lock, surviving a panic in whichever test held it last. A poisoned
+/// mutex here means another test failed; it must not turn into a second,
+/// unrelated failure in this one.
+fn lock_env_key() -> std::sync::MutexGuard<'static, ()> {
+    ENV_KEY_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// The store really does prefer the environment in a debug build, and it says
 /// so — `Environment`, not a `Keychain` label over a key that never came from
 /// there.
@@ -1086,6 +1107,7 @@ use candidcue_lib::secrets::{
 /// instead of popping the macOS login prompt in front of whoever ran the suite.
 #[tokio::test]
 async fn a_debug_build_reads_the_key_from_the_environment_and_names_that_source() {
+    let _guard = lock_env_key();
     let restore = std::env::var(DEV_KEY_ENV_VAR).ok();
     std::env::set_var(DEV_KEY_ENV_VAR, "core-test-override-4d7e");
     assert!(
@@ -1133,6 +1155,7 @@ fn a_dotenv_key_is_found_without_an_exported_variable() {
         return;
     }
 
+    let _guard = lock_env_key();
     let restore = std::env::var(DEV_KEY_ENV_VAR).ok();
     std::env::remove_var(DEV_KEY_ENV_VAR);
     let found = dev_env_key_active();

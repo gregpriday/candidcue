@@ -124,9 +124,10 @@ vi.mock('../../../src/control/services/stage-acks', async (orig) => {
 });
 
 const { setInvokeForTesting } = await import('../../../src/control/services/ipc');
-const { clearSession, setStageEmitterForTesting, startLiveSession } = await import(
+const { clearSession, session, setStageEmitterForTesting, startLiveSession } = await import(
   '../../../src/control/stores/session'
 );
+const { get } = await import('svelte/store');
 
 function compiledStub(): CompiledScript {
   return {
@@ -307,6 +308,43 @@ describe('the voice pill on a live take', () => {
 
     await vi.advanceTimersByTimeAsync(200);
     expect(pills().at(-1)?.reading, 'the dead take may not fault the live one').toBe('listening');
+  });
+
+  it('a take whose pipeline never started does not claim a live microphone', async () => {
+    /*
+     * NEVER SHOW A CONFIDENT STATE YOU DO NOT HAVE.
+     *
+     * `micState` starts at 'live' and is only ever corrected by a running
+     * pipeline. A start that REJECTED never opened a capture, so the status bar
+     * reported "Mic live" over a take with no input at all — the same defect
+     * the manual-mode pills were fixed for, on the one path where the operator
+     * is already being told something went wrong.
+     */
+    pipeline.captured.failNextStart = true;
+    start();
+    pipeline.captured.failNextStart = false;
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(get(session).micState, 'no capture was opened').toBe('disconnected');
+    expect(get(session).connection).toBe('offline');
+  });
+
+  it('does not offer an input picker for a failure the input did not cause', async () => {
+    /*
+     * §28.2. `inputDeviceLost` is what puts the mid-session picker on screen,
+     * and swapping microphones cannot fix a refused credential. An affordance
+     * that cannot help is the same unfollowable instruction as advice pointing
+     * at a control that does not exist — the failure here is `MIC_DEVICE_LOST`,
+     * so the picker IS the answer, and the sibling case is pinned in
+     * tests/e2e/browser/live-voice-transport.spec.ts where the transport is
+     * what died.
+     */
+    pipeline.captured.failNextStart = true;
+    start();
+    pipeline.captured.failNextStart = false;
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(get(session).inputDeviceLost, 'a MIC_ failure offers the picker').toBe(true);
   });
 
   it('stops when the session does', () => {
