@@ -27,6 +27,12 @@
 import { get } from 'svelte/store';
 import { matchRememberedMicrophone } from '../services/audio';
 import { compileScript, type CompileOutput } from '../services/compiler';
+import {
+  buildDisplayProfile,
+  listDisplayProfiles,
+  profileForDisplay,
+  saveDisplayProfile,
+} from '../services/display-profiles';
 import { describeError } from '../services/errors';
 import { buildListenerSelection, listInstalledListeners } from '../services/listeners';
 import * as scriptsService from '../services/scripts';
@@ -38,7 +44,7 @@ import {
   resolveDocumentAssets,
 } from '../services/stage-envelope';
 import type { DisplayDescriptor } from '../services/stage-types';
-import type { AppSettings } from '../services/settings-types';
+import { activeOpticalProfile, type AppSettings } from '../services/settings-types';
 import { editor, saveNow } from '../stores/editor';
 import { navigate } from '../stores/router';
 import {
@@ -82,9 +88,27 @@ export function chooseStageDisplay(
   return displays.find((d) => !d.primary) ?? displays[0] ?? null;
 }
 
-/** The stage appearance a take runs with, straight out of Settings. */
-export function stageSettingsFromSettings(s: AppSettings): ReturnType<typeof buildStageSettings> {
+/**
+ * The stage appearance a take runs with, straight out of Settings.
+ *
+ * The display is an argument rather than a lookup because it is what turns a
+ * saved calibration into geometry: the rig is chosen by the panel's
+ * fingerprint, and `resolveStageGeometry` sizes type against that panel's own
+ * CSS-pixel viewport. Called without a display — a preview, a test — it falls
+ * back to the uncalibrated percentage layout, which is the same thing an
+ * uncalibrated rig gets and is labelled as a guess wherever it is shown.
+ *
+ * Font metrics are deliberately not supplied. Control cannot measure a font it
+ * does not render; the DIN fallbacks resolve a defensible size and mark
+ * themselves `metricsMeasured: false`, which the stage improves on once it has
+ * painted its own text.
+ */
+export function stageSettingsFromSettings(
+  s: AppSettings,
+  display?: DisplayDescriptor | null,
+): ReturnType<typeof buildStageSettings> {
   const t = s.teleprompter;
+  const profile = activeOpticalProfile(s.optical, display?.fingerprint ?? null);
   return buildStageSettings({
     fontFamilyId: t.fontFamilyId,
     fontSizePx: t.fontSizePx,
@@ -95,8 +119,59 @@ export function stageSettingsFromSettings(s: AppSettings): ReturnType<typeof bui
     mirrorY: t.mirrorY,
     pastDimming: t.pastDimming,
     phraseHighlight: t.phraseHighlight,
-    background: t.background === 'high-contrast' ? '#000000' : '#050505',
+    textIntensity: t.textIntensity,
+    ...(profile && display
+      ? {
+          optical: {
+            profile,
+            viewport: {
+              widthPx: display.logicalSize.width,
+              heightPx: display.logicalSize.height,
+            },
+          },
+        }
+      : {}),
   });
+}
+
+/**
+ * Record what this panel just ran with (§52).
+ *
+ * Write-only on purpose. Appearance is decided by Settings and by the rig in
+ * `settings.optical`; a take that READ a row to decide it would reintroduce the
+ * defect that made §52 dormant — the version that shipped for one afternoon
+ * restored a profile only for an explicitly PINNED display, so the default
+ * "Automatic" path wrote a row per take and read none, and moving from a pinned
+ * panel to Automatic carried the pinned panel's type across and then saved it
+ * over the other panel's row. The one read here resolves the row's ID and
+ * nothing else: Rust's upsert is keyed on `id`, so without it every take would
+ * insert a new row and the table would grow by one per Present forever.
+ *
+ * What makes the row worth writing now is `opticalProfile`, which rides inside
+ * the `StageSettings` it saves. The calibration itself lives in the
+ * localStorage overlay, and "Clear cache", a fresh profile directory or a
+ * reinstalled webview all wipe that without warning; this row is what lets the
+ * calibration screen hand a measured rig back afterwards instead of asking
+ * somebody to re-measure a distance they already measured.
+ *
+ * Nothing here may fail a take. Failing to remember a preference is not a
+ * reason not to present.
+ */
+async function rememberDisplayProfile(
+  display: DisplayDescriptor,
+  stageSettings: ReturnType<typeof buildStageSettings>,
+  listener: ListenerStageSelection | null,
+): Promise<void> {
+  const existing = profileForDisplay(await listDisplayProfiles(), display.fingerprint);
+  await saveDisplayProfile(
+    buildDisplayProfile(
+      display.name ?? 'Stage display',
+      display.fingerprint,
+      stageSettings,
+      listener?.geometry,
+      existing?.id,
+    ),
+  );
 }
 
 /**
@@ -287,7 +362,10 @@ export async function startTake(scriptId: string): Promise<boolean> {
     sessionId = record.id;
 
     const listener = await resolveListener(s);
-    const stageSettings = stageSettingsFromSettings(s);
+    // The display is passed so the take can resolve this panel's optical rig;
+    // the microphone is resolved here because a pinned device is remembered by
+    // label and has to be looked up against what is actually connected now.
+    const stageSettings = stageSettingsFromSettings(s, display);
     const micDeviceId = await resolvePinnedMicrophone(s);
 
     // 1. Open the stage hidden on the chosen display.
@@ -374,6 +452,10 @@ export async function startTake(scriptId: string): Promise<boolean> {
         autoGainControl: s.audio.autoGainControl,
       },
     });
+    // Detached, and after the take is live: this is bookkeeping about a panel,
+    // not a step the presenter is waiting on.
+    void rememberDisplayProfile(display, stageSettings, listener).catch(() => {});
+
     if (landedElsewhere) {
       reportStageWindowFault({
         code: 'STAGE_DISPLAY_MISMATCH',

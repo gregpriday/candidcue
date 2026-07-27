@@ -1,9 +1,10 @@
 /**
  * Display profile service contract and selection logic (spec §52, §46.6).
  *
- * The service exists; the UI that would call it lives in Preflight, which is
- * owned elsewhere in this pass. These tests pin the wire shape and the pure
- * logic so the remaining change there is a wiring change, not a design one.
+ * A row is now the durable record of what a panel last ran with, written by
+ * `lib/start-take.ts` and carrying the `opticalProfile` a calibration produced.
+ * These tests pin the wire shape, the selection logic, and the projection back
+ * out — which is the path a cleared localStorage overlay recovers through.
  *
  * MOCK CAVEAT: `saveDisplayProfile` has an `invokeOrMock` fallback for
  * browser dev. Every assertion below either stubs `ipc` and inspects the real
@@ -11,7 +12,8 @@
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import fixture from '../../fixtures/ipc/stage-command-payloads.json';
-import type { StageSettings } from '../../../src/shared/contracts';
+import { defaultOpticalProfile } from '../../../src/shared/contracts';
+import type { ResolvedOptics, StageSettings } from '../../../src/shared/contracts';
 import type { DisplayProfileRecord } from '../../../src/control/services/display-profiles';
 
 const calls: { command: string; payload: unknown }[] = [];
@@ -136,9 +138,46 @@ describe('choosing the profile for a display', () => {
     ];
     expect(profiles.profileForDisplay(list, 'dsp-1')!.id).toBe('new');
   });
+
+  /**
+   * One panel, several mounting arrangements. The desk hood and the boom arm
+   * share a fingerprint, so a picker that could only ever see the newest row
+   * would make the other arrangement unrecoverable the moment somebody moved
+   * the hardware back.
+   */
+  it('returns every rig saved for the panel, newest first', () => {
+    const list = [
+      record({ id: 'boom', displayFingerprint: 'dsp-1', updatedAt: '2026-01-01T00:00:00Z' }),
+      record({ id: 'other-panel', displayFingerprint: 'dsp-2', updatedAt: '2026-07-02T00:00:00Z' }),
+      record({ id: 'desk', displayFingerprint: 'dsp-1', updatedAt: '2026-07-01T00:00:00Z' }),
+    ];
+    expect(profiles.profilesForDisplay(list, 'dsp-1').map((p) => p.id)).toEqual(['desk', 'boom']);
+    expect(profiles.profilesForDisplay(list, 'dsp-3')).toEqual([]);
+    expect(profiles.profilesForDisplay(list, null)).toEqual([]);
+  });
+
+  it('agrees with the single-profile default it backs', () => {
+    const list = [
+      record({ id: 'boom', displayFingerprint: 'dsp-1', updatedAt: '2026-01-01T00:00:00Z' }),
+      record({ id: 'desk', displayFingerprint: 'dsp-1', updatedAt: '2026-07-01T00:00:00Z' }),
+    ];
+    expect(profiles.profileForDisplay(list, 'dsp-1')).toBe(profiles.profilesForDisplay(list, 'dsp-1')[0]);
+  });
+
+  it('does not reorder the caller’s array in place', () => {
+    // The list comes straight out of `listDisplayProfiles`, which the caller may
+    // hold on to; sorting it under them is the kind of shared-state bug that
+    // shows up three screens away.
+    const list = [
+      record({ id: 'boom', displayFingerprint: 'dsp-1', updatedAt: '2026-01-01T00:00:00Z' }),
+      record({ id: 'desk', displayFingerprint: 'dsp-1', updatedAt: '2026-07-01T00:00:00Z' }),
+    ];
+    profiles.profilesForDisplay(list, 'dsp-1');
+    expect(list.map((p) => p.id)).toEqual(['boom', 'desk']);
+  });
 });
 
-describe('projecting a saved profile back onto the Preflight controls', () => {
+describe('projecting a saved profile back onto the calibration controls', () => {
   it('recovers every appearance control the user can change', () => {
     const overrides = profiles.applyProfileToStageOverrides(stage);
     expect(overrides).toEqual({
@@ -151,8 +190,79 @@ describe('projecting a saved profile back onto the Preflight controls', () => {
       mirrorY: false,
       pastDimming: true,
       phraseHighlight: true,
-      background: '#050505',
+      // The fixture predates the optical layer, which is the state every row
+      // written before this change is in: it gets the uncalibrated defaults
+      // rather than a missing field every caller would have to test for.
+      textIntensity: 'standard',
+      readingCue: 'ticks',
     });
+  });
+
+  /**
+   * `background` is deliberately NOT recovered.
+   *
+   * The stage hard-codes its field colour in `src/styles/stage.css`, so the
+   * saved value never described anything that could be seen — the two-option
+   * menu that wrote it rendered identically on both options. Handing it back
+   * would keep a dead control looking answerable, which is the failure this
+   * whole pass is about.
+   */
+  it('does not hand back the background the stage never read', () => {
+    expect(profiles.applyProfileToStageOverrides(stage)).not.toHaveProperty('background');
+  });
+
+  /**
+   * The reason a §52 row is worth writing at all. The calibration lives in the
+   * localStorage overlay, which "Clear cache" wipes; the row is what lets the
+   * calibration screen hand back an arrangement somebody measured instead of a
+   * set of pixel sizes somebody would have to reverse-engineer.
+   */
+  it('round-trips the optical block a calibrated take saved', () => {
+    const opticalProfile = { ...defaultOpticalProfile(), rigName: 'Boom arm', bias: 0.75 };
+    const optics: ResolvedOptics = {
+      schemaVersion: 1,
+      safeArea: { top: 0.05, right: 0, bottom: 0.05, left: 0 },
+      opticalCenterX: 0.5,
+      readingBandY: 0.38,
+      deadZoneLines: 0.84,
+      topFadeLines: 1.25,
+      bottomFadeLines: 0.75,
+      futureReserveLines: 3,
+      sentenceMicrogapLines: 0.2,
+      columnCh: 30,
+      secondaryMinPx: 28,
+      bodyFontSizePx: 58,
+      calibrated: true,
+      metricsMeasured: false,
+      mmPerCssPx: 0.12,
+      viewingDistanceMm: 1400,
+      bodyArcminutes: 24,
+      charactersPerLine: 34,
+      fitVerdict: 'ok',
+      fitAdvice: '',
+      lineHeight: 1.3,
+      fontWeight: 500,
+      letterSpacingEm: 0,
+      paragraphSpacingEm: 0.7,
+      pastOpacity: 0.42,
+      futureOpacity: 0.92,
+      overriddenFields: [],
+    };
+    const calibrated: StageSettings = {
+      ...stage,
+      optics,
+      opticalProfile,
+      textIntensity: 'strong',
+      readingCue: 'wash',
+    };
+
+    const overrides = profiles.applyProfileToStageOverrides(calibrated);
+    // The INPUT is what makes the row recoverable — a rig name, a distance, a
+    // lens position — not the pixel sizes it happened to resolve to.
+    expect(overrides.opticalProfile).toEqual(opticalProfile);
+    expect(overrides.optics).toEqual(optics);
+    expect(overrides.textIntensity).toBe('strong');
+    expect(overrides.readingCue).toBe('wash');
   });
 
   /**

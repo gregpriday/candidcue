@@ -34,8 +34,11 @@ import {
 } from './settings-listener';
 import {
   defaultAppSettings,
+  normalizeOpticalProfile,
+  opticalRigKey,
   type AppSettings,
   type ClearResult,
+  type OpticalSettings,
   type SessionMode,
   type TranscriptRetention,
   type UpdateCheckResult,
@@ -147,6 +150,36 @@ function mergeSection<T extends object>(base: T, patch: Partial<T> | undefined):
   return { ...base, ...patch };
 }
 
+/**
+ * The optical section, with every stored rig re-validated on the way in.
+ *
+ * `mergeSection` is enough for a section of scalars, and is not enough for this
+ * one: `profiles` is a map of documents that `resolveStageGeometry` walks two
+ * levels into, and `loadOverlay` deliberately validates sections rather than
+ * fields. A rig that no longer normalizes is DROPPED rather than repaired —
+ * see `normalizeOpticalProfile` — and the panel's choice of it goes with it, so
+ * the two maps can never disagree about which arrangements exist. A rig picker
+ * that lists a calibration the resolver would refuse is worse than an empty
+ * one: the presenter believes a distance is saved and stops re-measuring it.
+ */
+function opticalFromOverlay(
+  base: OpticalSettings,
+  patch: Partial<OpticalSettings> | undefined,
+): OpticalSettings {
+  const merged = mergeSection(base, patch);
+  const profiles: OpticalSettings['profiles'] = {};
+  for (const [key, stored] of Object.entries(merged.profiles ?? {})) {
+    const profile = normalizeOpticalProfile(stored);
+    if (profile !== null) profiles[key] = profile;
+  }
+  const activeRig: OpticalSettings['activeRig'] = {};
+  for (const [fingerprint, rigName] of Object.entries(merged.activeRig ?? {})) {
+    if (typeof rigName !== 'string') continue;
+    if (profiles[opticalRigKey(fingerprint, rigName)]) activeRig[fingerprint] = rigName;
+  }
+  return { profiles, activeRig };
+}
+
 /** Rust document + overlay → the UI settings view. */
 function fromRust(revisioned: RustRevisioned): AppSettings {
   const rust = revisioned.value;
@@ -207,11 +240,12 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       vadSensitivity: mapped.audio.vadSensitivity,
     },
     teleprompter: mergeSection(mapped.teleprompter, overlay.teleprompter),
-    // Both are UI-only sections with no Rust twin, so the overlay IS the
+    // All three are UI-only sections with no Rust twin, so the overlay IS the
     // document for them. A merge that is missing here does not fail loudly —
     // the setting simply reverts on every read, which is how a control ends up
     // looking live and being inert.
     stage: mergeSection(mapped.stage, overlay.stage),
+    optical: opticalFromOverlay(defaults.optical, overlay.optical),
     listenerFraming: mergeSection(mapped.listenerFraming, overlay.listenerFraming),
     // `saveTranscript` is Rust-owned (§36.2): a stale local overlay must never
     // be able to claim retention is on when the persisted document says off.

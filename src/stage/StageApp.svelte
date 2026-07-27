@@ -42,7 +42,7 @@
     displayPhase,
     type StageAction,
   } from './renderer/stageState';
-  import { isCompactViewport } from './renderer/geometry';
+  import { lineBudget, computeSafeRect, computeReadingBand } from './renderer/geometry';
   import { stageFollowProfile } from './motion';
   import ScriptLayer from './renderer/ScriptLayer.svelte';
   import AckChip from './renderer/AckChip.svelte';
@@ -85,7 +85,41 @@
   const phase = $derived(displayPhase(app));
   const settings = $derived(app.settings);
   const doc = $derived(app.envelope?.renderDocument ?? null);
-  const compact = $derived(isCompactViewport(vw, vh));
+  /**
+   * How much script this rig actually shows, as a diagnostic.
+   *
+   * This replaces a `compact` boolean that asked whether the viewport was under
+   * 700px tall and then selected one of two hand-tuned layout tables. That was
+   * always a proxy for the real question — how many rendered line pitches fit
+   * between the top of the visible area and the reading band, and how many
+   * below it — and the proxy broke as soon as type size or line height moved.
+   *
+   * Reported rather than enforced: nothing here changes what is drawn. The type
+   * size comes from the viewing distance and the band from the lens, and
+   * silently overriding either to hit a line count would trade a legible
+   * display for a fuller one.
+   */
+  const budget = $derived.by(() => {
+    const optics = settings?.optics ?? null;
+    if (vh === 0 || !settings) return null;
+    const linePitchPx = (optics?.bodyFontSizePx ?? settings.fontSizePx) * (optics?.lineHeight ?? settings.lineHeight);
+    const safeRect = computeSafeRect(
+      vw,
+      vh,
+      optics?.safeArea ?? { top: 0, right: 0, bottom: 0, left: 0 },
+    );
+    const band = computeReadingBand(vh, {
+      centerPercent: optics ? optics.readingBandY * 100 : settings.readingBandCenterPercent,
+      halfHeightPercent: settings.readingBandHalfHeightPercent,
+      ...(optics ? { linePitchPx, deadZoneLines: optics.deadZoneLines } : {}),
+    });
+    return lineBudget({
+      safeRect,
+      bandCenterPx: band.centerPx,
+      linePitchPx,
+      futureReserveLines: optics?.futureReserveLines,
+    });
+  });
   const reducedMotion = $derived(
     (settings?.reducedMotion ?? false) ||
       (typeof window !== 'undefined' &&
@@ -611,7 +645,6 @@
             alignment={app.alignment}
             frozen={motionFrozen}
             {reducedMotion}
-            {compact}
             sessionId={app.envelope?.sessionId ?? ''}
             sessionGeneration={app.envelope?.sessionGeneration ?? 0}
             stageGeneration={app.envelope?.stageGeneration ?? 0}
@@ -671,7 +704,17 @@
         token: {app.alignment ? app.alignment.confirmedToken.toFixed(1) : '—'}
         ({app.alignment?.state ?? 'n/a'})
       </div>
-      <div>viewport: {vw}×{vh}{compact ? ' compact' : ''}</div>
+      <div>viewport: {vw}×{vh}</div>
+      {#if budget}
+        <!-- The number that used to be a `compact` flag, said properly: what
+             the presenter can actually see. Short is worth knowing about
+             BEFORE a take, which is why it is stated rather than corrected. -->
+        <div>
+          lines: {budget.above}↑ / {budget.below}↓ ({budget.total}){budget.sufficient
+            ? ''
+            : ' SHORT'}
+        </div>
+      {/if}
       <div>layout gen: {layoutGeneration}</div>
       {#if layoutIssues.length > 0}
         <div>layout: HELD ({layoutIssues.join(', ')})</div>

@@ -5,6 +5,7 @@
 export * from './core';
 export * from './alignment';
 export * from './compiler';
+export * from './optical';
 export * from './display';
 export * from './audio';
 export * from './smooth-follow';

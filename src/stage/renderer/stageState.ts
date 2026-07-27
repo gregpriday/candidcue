@@ -12,6 +12,7 @@ import type {
   StageSettings,
   ListenerStageSelection,
   AlignmentSnapshot,
+  StageCalibrationMode,
   StageDirective,
   StageHeartbeatPayload,
 } from '../../shared/contracts';
@@ -29,8 +30,14 @@ export interface StageAckState {
 
 export interface StageCalibrationState {
   active: boolean;
+  mode: StageCalibrationMode;
   crosshairX: number;
   crosshairY: number;
+  safeArea: { top: number; right: number; bottom: number; left: number };
+  rulerLengthPx: number;
+  sampleFontSizePx: number;
+  sampleColumnCh: number;
+  sampleLabel: string;
 }
 
 export interface StageAppState {
@@ -59,6 +66,31 @@ export type StageAction =
   | { type: 'heartbeat'; payload: StageHeartbeatPayload; receivedAtMs: number }
   | { type: 'control_lost' };
 
+/**
+ * Calibration starts inert, centred, and with sample values that are safe to
+ * render before control has said anything.
+ *
+ * Every field carries a usable default rather than being optional, because the
+ * directive that turns a mode on may legitimately carry only the one or two
+ * fields that mode needs — an operator dragging the safe-area border sends no
+ * crosshair position, and must not clear the one already stored.
+ */
+function initialCalibrationState(): StageCalibrationState {
+  return {
+    active: false,
+    mode: 'crosshair',
+    crosshairX: 0.5,
+    crosshairY: 0.38,
+    safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
+    // 400 px is long enough to measure accurately against a ruler and short
+    // enough to fit the short edge of a 1024x600 panel with room to spare.
+    rulerLengthPx: 400,
+    sampleFontSizePx: 64,
+    sampleColumnCh: 34,
+    sampleLabel: '',
+  };
+}
+
 export function initialStageState(): StageAppState {
   return {
     phase: 'handshake',
@@ -72,7 +104,7 @@ export function initialStageState(): StageAppState {
     blanked: false,
     keepListenerWhenBlanked: false,
     ack: null,
-    calibration: { active: false, crosshairX: 0.5, crosshairY: 0.38 },
+    calibration: initialCalibrationState(),
     diagnostics: false,
     lastHeartbeat: null,
   };
@@ -163,12 +195,28 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
         case 'listener':
           return { ...state, listener: d.listener };
         case 'calibration':
+          /*
+           * Every field falls back to what is already held.
+           *
+           * A calibration directive is a nudge, not a snapshot: the operator is
+           * dragging one control at a time on the other screen, and the message
+           * that moves the safe-area border says nothing about the lens. Reading
+           * an absent field as "clear it" would make each adjustment undo the
+           * last one — which is precisely the sort of thing that is invisible in
+           * a unit test and maddening on a rig.
+           */
           return {
             ...state,
             calibration: {
               active: d.active,
+              mode: d.mode ?? state.calibration.mode,
               crosshairX: d.crosshairX ?? state.calibration.crosshairX,
               crosshairY: d.crosshairY ?? state.calibration.crosshairY,
+              safeArea: d.safeArea ?? state.calibration.safeArea,
+              rulerLengthPx: d.rulerLengthPx ?? state.calibration.rulerLengthPx,
+              sampleFontSizePx: d.sampleFontSizePx ?? state.calibration.sampleFontSizePx,
+              sampleColumnCh: d.sampleColumnCh ?? state.calibration.sampleColumnCh,
+              sampleLabel: d.sampleLabel ?? state.calibration.sampleLabel,
             },
           };
         case 'diagnostics':

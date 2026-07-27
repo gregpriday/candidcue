@@ -6,6 +6,13 @@ import type { Uuid, IsoDateTime } from './core';
 import type { CompiledBlock } from './compiler';
 import type { ListenerGeometry, ListenerStageSelection } from './listener';
 import type { SmoothFollowProfile } from './smooth-follow';
+import type {
+  OpticalProfile,
+  ReadingCueStyle,
+  ResolvedOptics,
+  StageMode,
+  TextIntensity,
+} from './optical';
 
 export interface StageSettings {
   schemaVersion: 1;
@@ -29,6 +36,30 @@ export interface StageSettings {
   reducedMotion: boolean;
   /** Vertical rhythm between blocks in em of the stage font (A.3, default 0.7). */
   paragraphSpacingEm?: number;
+  /** Body weight. 500 by default; never thin, and 700 only for short emphasis. */
+  fontWeight?: number;
+
+  /* ---------------------------------------------------------------------
+   * The optical layer.
+   *
+   * All optional, and all additive: a settings document written before
+   * calibration existed still validates, still renders, and simply takes the
+   * uncalibrated path. Rust persists this whole object as opaque JSON checked
+   * only for `schemaVersion === 1`, so none of this needs a migration.
+   *
+   * `optics` is the RESOLVED geometry the stage renders from; `opticalProfile`
+   * is the calibration that produced it, carried along so re-opening the wizard
+   * does not start from nothing. When `optics` is absent the stage falls back to
+   * the percentage/vh fields above, which is what an uncalibrated rig gets.
+   * ------------------------------------------------------------------- */
+  optics?: ResolvedOptics;
+  opticalProfile?: OpticalProfile;
+  /** Clean Take hides instrumentation; Diagnostic Take shows it. */
+  stageMode?: StageMode;
+  /** What marks the reading position. Fixed side ticks by default. */
+  readingCue?: ReadingCueStyle;
+  /** Text luminance over the unchanging black field. */
+  textIntensity?: TextIntensity;
 }
 
 export interface DisplayProfile {

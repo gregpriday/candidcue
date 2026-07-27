@@ -15,6 +15,7 @@
     assets = {},
     showCues = true,
     gapPx = 0,
+    dimFrozen = false,
   }: {
     block: CompiledBlock;
     zone: 'past' | 'current' | 'future';
@@ -22,6 +23,13 @@
     assets?: Record<string, { url: string; mime: string; width?: number; height?: number }>;
     showCues?: boolean;
     gapPx?: number;
+    /**
+     * Passed straight through to the words: alignment is not following, so the
+     * per-word ramp holds where it is. Block-level zoning is deliberately NOT
+     * frozen with it — zoning follows the block the engine last placed the
+     * reader in, which is a claim it still stands behind while it searches.
+     */
+    dimFrozen?: boolean;
   } = $props();
 
   const headingLevel = $derived(
@@ -52,11 +60,11 @@
 
     {#if block.kind === 'heading'}
       <div class="heading" data-level={headingLevel}>
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} />
       </div>
     {:else if block.kind === 'cue'}
       <div class="cue-row">
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} showCues={true} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} showCues={true} {dimFrozen} />
       </div>
     {:else if block.kind === 'divider'}
       <div class="divider" aria-hidden="true"></div>
@@ -76,15 +84,15 @@
         {/each}
       </div>
     {:else if block.kind === 'code'}
-      <pre class="code"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} /></pre>
+      <pre class="code"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></pre>
     {:else if block.kind === 'blockquote'}
       <div class="quote">
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} />
       </div>
     {:else if block.kind === 'list_item'}
       <div class="list-item">
         <span class="bullet" aria-hidden="true"></span>
-        <span class="list-body"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} /></span>
+        <span class="list-body"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></span>
       </div>
     {:else if block.kind === 'table'}
       <!-- Tables are structured reference cards on stage (§24.6): real rows,
@@ -125,11 +133,11 @@
       </div>
     {:else if block.kind === 'diagram'}
       <div class="visual-fallback">
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} />
       </div>
     {:else}
       <!-- paragraph / silent / stage_only -->
-      <p class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} /></p>
+      <p class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></p>
     {/if}
   </div>
 {/if}
@@ -155,17 +163,42 @@
     transition-timing-function: var(--ease-out, ease-out);
   }
 
-  /* Silent / stage-only material reads as quiet stage direction. */
+  /*
+   * THE SECONDARY-TEXT FLOOR.
+   *
+   * Every rule below that sizes text a presenter has to READ is written as
+   * `max(--stage-secondary-min, <proportion>)`. The proportion is the
+   * typographic intent; the floor is an absolute pixel size the script layer
+   * resolves from the rig's optics (`secondaryTextFloorPx`), and it is what
+   * stops that intent from putting the words under the angular size at which
+   * reading works at all.
+   *
+   * The proportions themselves were also wrong, not merely unfloored. They were
+   * chosen against a laptop screen at desk distance — a take marker at 0.42em, a
+   * code block at 0.6em — which at two metres through a beamsplitter is a shape
+   * rather than a word. What is on the glass is either worth reading from where
+   * the presenter is standing, in which case it is sized for that, or it is not
+   * worth drawing.
+   *
+   * The floor is absolute rather than relative because `em` compounds: a cue
+   * inside a silent block is two multiplications away from body, and each factor
+   * was picked on its own against body text.
+   */
+
+  /* Silent / stage-only material reads as quiet stage direction. It is still
+     direction someone has to act on, so it is quiet by OPACITY and only
+     slightly smaller — dropping it to 0.7em made "look at camera" the least
+     legible thing on a screen whose whole job is legibility. */
   .unspoken {
     opacity: 0.45;
-    font-size: 0.7em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.8em);
     line-height: 1.35;
   }
 
   .take-marker {
     display: inline-block;
     color: var(--stage-cue);
-    font-size: 0.42em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.67em);
     font-weight: 650;
     letter-spacing: 0.14em;
     text-transform: uppercase;
@@ -193,7 +226,7 @@
   }
 
   .cue-row {
-    font-size: 0.9em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.9em);
   }
 
   .divider {
@@ -214,7 +247,7 @@
 
   .code {
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-    font-size: 0.6em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.75em);
     line-height: 1.5;
     white-space: pre-wrap;
     margin: 0;
@@ -258,11 +291,14 @@
     min-width: 0;
   }
 
+  /* A diagram that could not be drawn falls back to its own source text, which
+     is the only description of it anyone has — so it is sized like the other
+     two reference cards rather than like a caption. */
   .visual-fallback {
     padding: 0.5em 0.8em;
     border-radius: 12px;
     background: color-mix(in srgb, var(--stage-text) 6%, transparent);
-    font-size: 0.7em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.75em);
     line-height: 1.4;
   }
 
@@ -272,7 +308,7 @@
     border-radius: 12px;
     background: color-mix(in srgb, var(--stage-text) 6%, transparent);
     color: color-mix(in srgb, var(--stage-text) 70%, transparent);
-    font-size: 0.6em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.75em);
     line-height: 1.4;
     text-align: center;
   }
@@ -281,7 +317,7 @@
     padding: 0.5em 0.8em;
     border-radius: 12px;
     background: color-mix(in srgb, var(--stage-text) 6%, transparent);
-    font-size: 0.6em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.75em);
     line-height: 1.4;
     overflow-x: auto;
   }

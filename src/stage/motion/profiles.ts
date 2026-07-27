@@ -12,6 +12,7 @@
 import {
   DEFAULT_SMOOTH_FOLLOW_PROFILE,
   isInterpretableSmoothFollowProfile,
+  resolveLineLimitPx,
   type SmoothFollowProfile,
   type StageTransitionDirective,
   type StageMotionState,
@@ -190,6 +191,27 @@ export interface MotionLimitOptions {
    * is in force, because that is the only motion the spec bounds this way.
    */
   forwardPositionCeilingPx?: number;
+  /**
+   * The measured line pitch, CSS px — the stage's own measurement, never a
+   * setting. Supplying it switches the three POSITION bounds (`restDeadbandPx`,
+   * `reverseTravelMaxPx`, `reanchorThresholdPx`) from the profile's pixel
+   * numbers to its `lineUnits`, clamped into a band around those same pixel
+   * numbers (`resolveLineLimitPx`).
+   *
+   * Optional, and its absence is the pre-optical behaviour exactly: a caller
+   * that has not measured a pitch — the first frames of a session, a map that
+   * failed to build, every existing call site — gets the pixel bounds it always
+   * got. A pitch is only ever an improvement on a guess, never a prerequisite
+   * for motion.
+   *
+   * The VELOCITY, acceleration and jerk limits are deliberately not in this
+   * scheme. They are the plant's own dynamics, tuned together against a jerk
+   * ceiling that no state relaxes (see the limit-cycle note in `limitsForState`),
+   * and rescaling them per-panel would move three coupled numbers to chase one
+   * measurement. What the pitch changes is how far a correction may TRAVEL,
+   * which is what the presenter reads in lines.
+   */
+  linePitchPx?: number;
 }
 
 export function limitsForState(
@@ -198,6 +220,34 @@ export function limitsForState(
   options: MotionLimitOptions = {},
 ): MotionLimits {
   const m = profile.motion;
+  /*
+   * The three position bounds, resolved before any multiplier touches them.
+   *
+   * Resolving the BASE and then multiplying — rather than multiplying and then
+   * resolving — keeps `degradeDeadband` and the state's `deadband` factor
+   * meaning what they meant: "twice whatever the resting bound is", not "twice
+   * a number that has since been clamped". It also makes the no-pitch case
+   * arithmetically identical to the old code rather than merely close, because
+   * `resolveLineLimitPx` returns the pixel value unchanged and the expressions
+   * below are the ones that were already here.
+   */
+  const lines = profile.lineUnits;
+  const pitchPx = options.linePitchPx;
+  const restDeadbandBasePx = resolveLineLimitPx(
+    lines?.restDeadbandLines,
+    m.restDeadbandPx,
+    pitchPx,
+  );
+  const reverseTravelMaxPx = resolveLineLimitPx(
+    lines?.reverseTravelMaxLines,
+    m.reverseTravelMaxPx,
+    pitchPx,
+  );
+  const reanchorThresholdPx = resolveLineLimitPx(
+    lines?.reanchorThresholdLines,
+    m.reanchorThresholdPx,
+    pitchPx,
+  );
   const boostedCatchUp = catchUpMultiplierFor(profile, options.catchUpBoost ?? 1);
   const s = stateMultipliers(state, profile, boostedCatchUp);
   const t = transitionMultipliers(options.transition, profile, boostedCatchUp);
@@ -251,9 +301,9 @@ export function limitsForState(
     // from reading as visual kicks (§29.2, §30.3).
     jerkMax: m.maxJerkPxS3 * mul(s.jerk, t.jerk),
     feedForwardScale: mul(s.feedForward, t.feedForward),
-    restDeadbandPx: m.restDeadbandPx * (s.deadband ?? 1) * degradeDeadband,
-    reverseTravelMaxPx: m.reverseTravelMaxPx,
-    reanchorThresholdPx: m.reanchorThresholdPx,
+    restDeadbandPx: restDeadbandBasePx * (s.deadband ?? 1) * degradeDeadband,
+    reverseTravelMaxPx,
+    reanchorThresholdPx,
     // §30.3. A safety boundary, so it is a position and not a speed: the boost
     // decay above only shapes how fast the gap closes, and a plant that is
     // already level with a target moving at the same speed closes nothing at

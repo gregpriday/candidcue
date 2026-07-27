@@ -32,8 +32,9 @@
     computeReadingBand,
     bandCorrection,
     clampProvisionalTarget,
-    stagePadding,
-    fadeDepthVh,
+    computeSafeRect,
+    stagePaddingPx,
+    fadeDepthPx,
     imageMaxHeightVh,
     clamp,
   } from './geometry';
@@ -66,7 +67,6 @@
     alignment = null,
     frozen = false,
     reducedMotion = false,
-    compact = false,
     sessionId = '',
     sessionGeneration = 0,
     stageGeneration = 0,
@@ -84,7 +84,6 @@
     alignment?: AlignmentSnapshot | null;
     frozen?: boolean;
     reducedMotion?: boolean;
-    compact?: boolean;
     sessionId?: string;
     sessionGeneration?: number;
     stageGeneration?: number;
@@ -142,17 +141,100 @@
   const vw = $derived(measuredVw || windowVw);
   const vh = $derived(measuredVh || windowVh);
 
-  const padding = $derived(stagePadding(compact));
-  const padTopPx = $derived((vh * padding.topVh) / 100);
+  /**
+   * The resolved optical geometry, or null on a rig that has never been
+   * calibrated.
+   *
+   * Null is a first-class case, not a failure: an uncalibrated stage still has
+   * to prompt, and it does so from the percentage and line-height fields that
+   * have always been there. Every derivation below therefore reads `optics`
+   * when it exists and falls back to the historical expression when it does
+   * not — which is what keeps this change additive.
+   */
+  const optics = $derived(settings.optics ?? null);
+
+  const linePx = $derived((optics?.bodyFontSizePx ?? settings.fontSizePx) * (optics?.lineHeight ?? settings.lineHeight));
+
+  /**
+   * The rectangle the presenter can actually see through the glass.
+   *
+   * A hood, and most generic housings, reveal less than the whole panel, so
+   * every vertical and horizontal question is answered inside this rather than
+   * against the window. All-zero insets mean the whole display is visible,
+   * which is the right assumption for a bare monitor and the value an
+   * uncalibrated rig carries.
+   */
+  const safeRect = $derived(
+    computeSafeRect(vw, vh, optics?.safeArea ?? { top: 0, right: 0, bottom: 0, left: 0 }),
+  );
+
+  /*
+   * The band sits on the calibrated LENS when there is one, and at the
+   * historical 38% of the viewport when there is not.
+   *
+   * `readingBandY` is a fraction of the safe rectangle and the band API speaks
+   * in percent, which is the only reason for the conversion. The dead zone
+   * likewise switches from a viewport percentage to line pitches only once a
+   * pitch is known — 4% of viewport height is barely half a line on a 600px
+   * panel and a full line on a 1080px one, so the same setting produced
+   * materially different twitchiness on the two displays this runs on.
+   */
+  const bandCenterPx = $derived(
+    computeReadingBand(vh, {
+      centerPercent: optics ? optics.readingBandY * 100 : settings.readingBandCenterPercent,
+      halfHeightPercent: settings.readingBandHalfHeightPercent,
+      ...(optics ? { linePitchPx: linePx, deadZoneLines: optics.deadZoneLines } : {}),
+    }).centerPx,
+  );
+
+  /*
+   * Padding, derived rather than chosen.
+   *
+   * These were 38 and 55 `vh` from a hand-tuned table selected by a viewport
+   * breakpoint, and the pair did not agree with each other — 38 + 55 leaves the
+   * plane short of what the closing line needs to reach the band. Both edges
+   * are now solved from the band position and the measured line pitch, so the
+   * first and last words are reachable by construction instead of by luck.
+   */
+  const bandGeometry = $derived({
+    safeRect,
+    bandCenterPx,
+    linePitchPx: linePx,
+    futureReserveLines: optics?.futureReserveLines,
+  });
+  const padTopPx = $derived(stagePaddingPx(bandGeometry).topPx);
   // §7.1: the rail's reserved band is folded into the bottom padding, so the
   // reading band, the total document height, and the fallback target all keep
   // the script clear of the rail with no separate bookkeeping.
-  const padBottomPx = $derived((vh * padding.bottomVh) / 100 + bottomInsetPx);
-  const gapPx = $derived((settings.paragraphSpacingEm ?? 0.7) * settings.fontSizePx);
-  const columnWidthPx = $derived((vw * settings.columnWidthPercent) / 100);
-  const fadeVh = $derived(fadeDepthVh(compact));
-  const imageMaxH = $derived(imageMaxHeightVh(compact));
-  const linePx = $derived(settings.fontSizePx * settings.lineHeight);
+  const padBottomPx = $derived(stagePaddingPx(bandGeometry).bottomPx + bottomInsetPx);
+
+  const gapPx = $derived(
+    (optics?.paragraphSpacingEm ?? settings.paragraphSpacingEm ?? 0.7) *
+      (optics?.bodyFontSizePx ?? settings.fontSizePx),
+  );
+
+  /**
+   * The column, measured in characters rather than in a share of the window.
+   *
+   * A viewport percentage means a different number of characters per line on
+   * every panel and at every type size, which is the reason 78% could be right
+   * on one display and unreadable on the next. `ch` is font-relative, so the
+   * measure survives a change of size or family — and the resolver has already
+   * decided how many characters this panel can actually deliver.
+   */
+  const columnWidthPx = $derived(
+    optics
+      ? Math.min(safeRect.width, optics.columnCh * 0.55 * optics.bodyFontSizePx)
+      : (vw * settings.columnWidthPercent) / 100,
+  );
+
+  const fades = $derived(
+    fadeDepthPx(linePx, {
+      topLines: optics?.topFadeLines,
+      bottomLines: optics?.bottomFadeLines,
+    }),
+  );
+  const imageMaxH = $derived(imageMaxHeightVh(safeRect, vh));
 
   /* ---- scroll state ---- */
   let scrollY = $state(0);
@@ -480,8 +562,8 @@
       // `fontHash` is likewise not predicted — a font file swapped under the
       // same family id is caught by the MEASURED check below, which covers it
       // and every other unpredicted cause at once.
-      // The real rendered padding, not a hard-coded zero: `stagePadding()`
-      // changes with the compact-viewport breakpoint and moves every block.
+      // The real rendered padding, not a hard-coded zero: it is solved from the
+      // band position and the measured line pitch, and moves every block.
       paddingTopPx: padTopPx,
       paddingBottomPx: padBottomPx,
     };
@@ -1074,8 +1156,12 @@
   </div>
 
   <!-- Focus fades (layer 6): quiet ramps into the background at both edges. -->
-  <div class="fade fade-top" style:height="{fadeVh}vh" aria-hidden="true"></div>
-  <div class="fade fade-bottom" style:height="{fadeVh}vh" aria-hidden="true"></div>
+  <!-- Depths in line pitches, not `vh`: the top fade is deeper than the bottom
+       because material above the band has been spoken and is receding, while
+       material below it is about to be needed and must stay readable for as
+       long as possible. Equal depths treated the two as the same thing. -->
+  <div class="fade fade-top" style:height="{fades.topPx}px" aria-hidden="true"></div>
+  <div class="fade fade-bottom" style:height="{fades.bottomPx}px" aria-hidden="true"></div>
 </div>
 
 <style>

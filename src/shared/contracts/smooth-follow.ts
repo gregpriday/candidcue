@@ -184,6 +184,121 @@ export interface LayoutFingerprint {
   listenerGeometryHash: string;
 }
 
+/**
+ * The motion bounds a second time, as multiples of the MEASURED line pitch.
+ *
+ * Every pixel bound in `motion` was tuned against one body size — 64 px at a
+ * 1.32 line height, so a pitch of about 85 px — and means something different at
+ * every other size. On a 9-inch panel calibrated to 24 arcminutes at 1.8 m the
+ * pitch is nearer 50 px, and `reverseTravelMaxPx: 420` is eight rendered lines
+ * rather than five: a correction the presenter experiences as the document
+ * leaving rather than backing up. On a 15.6-inch panel read at arm's length the
+ * pitch is over 200 px and the same 420 px is two lines — not far enough to
+ * reach the start of the sentence somebody is re-reading.
+ *
+ * What a presenter perceives is LINES, so lines are the unit. The pixel fields
+ * are not replaced: they stay authoritative wherever a line-relative answer
+ * cannot be trusted — a stage that has not measured a pitch yet, and a pitch so
+ * far from the plausible band that it is a measurement failure rather than a
+ * font size (see `resolveLineLimitPx`).
+ */
+export interface SmoothFollowLineUnits {
+  /**
+   * §30 hard cap on backward travel in one correction. Five lines is about as
+   * far back as a presenter who stumbles is plausibly re-reading from; past
+   * that the honest reading is not "they repeated a phrase" but "we are
+   * somewhere they are not", which is a re-anchor's job rather than a roll.
+   */
+  reverseTravelMaxLines: number;
+  /**
+   * §30 latch escape hatch — how far the target may disagree with a latched
+   * forward position before the disagreement is treated as a relocation.
+   *
+   * Deliberately BELOW `reverseTravelMaxLines`, in the ordering AND very nearly
+   * the ratio the pixel pair has (360 < 420): the escape hatch has to be
+   * reachable before the reverse cap is spent, or a large regression exhausts
+   * its travel budget against a position it was never going to reach.
+   */
+  reanchorThresholdLines: number;
+  /**
+   * The point at which further correction stops being visible, so the plant is
+   * allowed to rest. Under a fiftieth of a line: 1.52 px at the default pitch,
+   * and still a fiftieth of a line rather than a fixed 1.5 px once the type
+   * doubles — which is the difference between resting when the correction is
+   * invisible and resting when it merely happens to be small in pixels.
+   */
+  restDeadbandLines: number;
+  /**
+   * §20.4. Below this a re-anchor is not a teleport and there is nothing worth
+   * obscuring, so fading it would be a gratuitous full-field flash. One
+   * rendered line is a correction the presenter cannot distinguish from
+   * ordinary following. Consumed by the engine's `fadeWorthwhile`.
+   */
+  fadeSkipLines: number;
+  /**
+   * §30.3 upper safety boundary during catch-up, as a distance past the target
+   * the plant may be carried. The engine derives this from the reading
+   * corridor's half-height when it knows one; this is the same bound in a unit
+   * that survives a corridor the engine could not measure, so the boundary
+   * stops disappearing entirely on the frames where it is needed most.
+   */
+  catchUpCeilingLines: number;
+}
+
+/**
+ * How far a line-relative bound may travel from its pixel default.
+ *
+ * The pixel defaults are the tuned values at a 84.48 px pitch (64 px body, 1.32
+ * line height), and every `lineUnits` multiple below is one of those numbers
+ * divided by that pitch — so clamping the RESULT to 0.5x–3x its own pixel
+ * default is the same statement as clamping the measured PITCH to 42–253 px,
+ * identically for every bound. That equivalence is why the multiples have to
+ * stay faithful to the pixels they came from: round one of them to a tidier
+ * figure and this band quietly starts meaning a different range of pitches for
+ * that bound than for the one beside it.
+ *
+ * 42–253 px spans the rigs CandidCue is used on, from a 9-inch panel read at
+ * 1.8 m to a 15.6-inch one at arm's length. Outside it the pitch is not a size
+ * anybody chose: a font that never loaded, a measurement pass that ran against
+ * an empty document, a display scale read wrong. Multiplying a bad pitch by five
+ * and handing the product to the plant is how a measurement fault turns into
+ * motion on the presenter's glass, so the band clamps rather than trusts — the
+ * same instinct as the version gate below, applied to a number instead of a
+ * payload.
+ */
+export const LINE_LIMIT_MIN_SCALE = 0.5;
+export const LINE_LIMIT_MAX_SCALE = 3;
+
+/**
+ * One line-relative bound, resolved against a measured pitch.
+ *
+ * Total, and biased toward the pixel value: anything unusable about either
+ * input — no pitch measured yet, a profile with no `lineUnits`, a nonsense
+ * multiple — answers with `fallbackPx`, which is a tuned number rather than a
+ * guess. That is what makes `lineUnits` additive: omitting it is a request for
+ * the pixel behaviour, not a truncation.
+ */
+export function resolveLineLimitPx(
+  lines: number | null | undefined,
+  fallbackPx: number,
+  linePitchPx: number | null | undefined,
+): number {
+  if (typeof lines !== 'number' || !Number.isFinite(lines) || lines <= 0) return fallbackPx;
+  if (typeof linePitchPx !== 'number' || !Number.isFinite(linePitchPx) || linePitchPx <= 0) {
+    return fallbackPx;
+  }
+  // Nothing to clamp into. A non-positive or non-finite pixel default is either
+  // a caller with no bound to offer — a viewport height it has not measured —
+  // or a profile asking for zero travel, and both want their own number handed
+  // straight back rather than a line-relative substitute for it.
+  if (!Number.isFinite(fallbackPx) || fallbackPx <= 0) return fallbackPx;
+  const scaled = lines * linePitchPx;
+  return Math.min(
+    Math.max(scaled, fallbackPx * LINE_LIMIT_MIN_SCALE),
+    fallbackPx * LINE_LIMIT_MAX_SCALE,
+  );
+}
+
 /** Companion §55. Versioned, evaluable configuration for the whole following system. */
 export interface SmoothFollowProfile {
   version: number;
@@ -239,6 +354,17 @@ export interface SmoothFollowProfile {
     restDeadbandPx: number;
   };
 
+  /**
+   * OPTIONAL, and optional is the contract rather than an oversight.
+   *
+   * A profile without this block asks for the pixel bounds above, applied as
+   * written — which is exactly what every build before this one did, and is a
+   * complete, tuned answer rather than a partial one. So its absence must never
+   * fail `isInterpretableSmoothFollowProfile`; only a block that is PRESENT and
+   * incomplete does, on the same all-or-nothing reasoning as the version gate.
+   */
+  lineUnits?: SmoothFollowLineUnits;
+
   coaching: {
     stageCooldownMs: number;
     controlCooldownMs: number;
@@ -254,8 +380,14 @@ export interface SmoothFollowProfile {
  * makes exact equality the only honest test: a consumer handed any other
  * version cannot interpret it, in either direction, and must fall back to its
  * own default rather than apply numbers it is guessing about (§55).
+ *
+ * 3 → 4 is such a change even though `lineUnits` is additive. The pixel bounds
+ * did not move, but once a profile carries `lineUnits` they stop being the
+ * value and become the CLAMP BAND around it — so a v3 consumer handed this
+ * profile would read 420 px of reverse travel where a v4 one reads five lines,
+ * and on the panels this whole change exists for those are not the same number.
  */
-export const SMOOTH_FOLLOW_PROFILE_VERSION = 3;
+export const SMOOTH_FOLLOW_PROFILE_VERSION = 4;
 
 /**
  * Companion Appendix A. Midpoints of the published starting ranges; every value is
@@ -264,7 +396,7 @@ export const SMOOTH_FOLLOW_PROFILE_VERSION = 3;
  */
 export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
   version: SMOOTH_FOLLOW_PROFILE_VERSION,
-  id: 'default-v3',
+  id: 'default-v4',
 
   motion: {
     dampingRatio: 1.0,
@@ -293,6 +425,37 @@ export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
     restDeadbandPx: 1.5,
   },
 
+  /*
+   * The same three bounds, plus the two the engine had as bare constants, in
+   * the unit the presenter reads in.
+   *
+   * These are not new tuning, and the arithmetic has to keep saying so: each is
+   * the pixel number above divided by the pitch it was tuned at — 64 px body at
+   * a 1.32 line height, so 84.48 px. 420 is 4.97 lines, 360 is 4.26, and 1.5 is
+   * 0.0178. Five, four and a quarter, and eighteen thousandths land within 1.5%
+   * of the published pixel value, so a stage that measures the reference pitch
+   * moves exactly as it does today, and the ordering that matters — the
+   * re-anchor threshold reachable before the reverse cap is spent — is inherited
+   * from the pixel pair rather than re-argued.
+   *
+   * Rounding harder than that is a retune wearing a conversion's clothes. Four
+   * lines and three and a half read better on the page and are 19% and 18% off
+   * two bounds nobody measured again, applied the instant a stage learns its own
+   * pitch and to no stage before that. `LINE_LIMIT_MIN_SCALE` leans on the same
+   * fidelity for its band to mean one pitch range — see the note there.
+   *
+   * `fadeSkipLines` and `catchUpCeilingLines` were already line- and
+   * corridor-relative in the engine; they move here so there is one table of
+   * motion bounds rather than a profile and a scatter of constants beside it.
+   */
+  lineUnits: {
+    reverseTravelMaxLines: 5,
+    reanchorThresholdLines: 4.25,
+    restDeadbandLines: 0.018,
+    fadeSkipLines: 1,
+    catchUpCeilingLines: 1,
+  },
+
   coaching: {
     // A.5: 6–10 s stage cooldown, one visible tip, never from provisional evidence.
     stageCooldownMs: 8000,
@@ -302,12 +465,35 @@ export const DEFAULT_SMOOTH_FOLLOW_PROFILE: SmoothFollowProfile = {
 };
 
 /**
+ * Top-level blocks of the default profile whose ABSENCE from a candidate is
+ * legal — the one exception to walking the default as a required shape.
+ *
+ * `lineUnits` earns it because leaving it out is a request, not a truncation:
+ * the pixel bounds are a complete and tuned description of the same motion, and
+ * a control that never learned to send lines is asking for exactly them. There
+ * is no equivalent argument for `motion` or `coaching`, where a missing block
+ * means a payload lost something on the way.
+ *
+ * Optional applies to PRESENCE only. A block that is there is walked in full,
+ * so a half-written `lineUnits` is still rejected outright — half a block is the
+ * same unreproducible third thing a half-applied profile is.
+ */
+const OPTIONAL_PROFILE_BLOCKS: ReadonlySet<string> = new Set(['lineUnits']);
+
+const EMPTY_BLOCK_SET: ReadonlySet<string> = new Set();
+
+/**
  * Every numeric leaf of `reference` must exist on `candidate` as a finite
  * number. Walking the DEFAULT profile rather than a hand-written field list is
  * deliberate: a field added to `SmoothFollowProfile` is validated the moment it
  * gets a default, with no second list to forget.
  */
-function everyNumberIsFinite(reference: Record<string, unknown>, candidate: unknown): boolean {
+function everyNumberIsFinite(
+  reference: Record<string, unknown>,
+  candidate: unknown,
+  /** Nested blocks are never optional; only the top level has exceptions. */
+  optionalBlocks: ReadonlySet<string> = EMPTY_BLOCK_SET,
+): boolean {
   if (typeof candidate !== 'object' || candidate === null) return false;
   const value = candidate as Record<string, unknown>;
   for (const [key, ref] of Object.entries(reference)) {
@@ -315,6 +501,7 @@ function everyNumberIsFinite(reference: Record<string, unknown>, candidate: unkn
     if (typeof ref === 'number') {
       if (typeof got !== 'number' || !Number.isFinite(got)) return false;
     } else if (typeof ref === 'object' && ref !== null) {
+      if (got === undefined && optionalBlocks.has(key)) continue;
       if (!everyNumberIsFinite(ref as Record<string, unknown>, got)) return false;
     }
   }
@@ -346,6 +533,7 @@ export function isInterpretableSmoothFollowProfile(
   return everyNumberIsFinite(
     DEFAULT_SMOOTH_FOLLOW_PROFILE as unknown as Record<string, unknown>,
     value,
+    OPTIONAL_PROFILE_BLOCKS,
   );
 }
 

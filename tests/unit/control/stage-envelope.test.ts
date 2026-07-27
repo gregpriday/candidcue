@@ -6,10 +6,24 @@ import {
   buildStageSettings,
 } from '../../../src/control/services/stage-envelope';
 import {
+  DEFAULT_STAGE_APPEARANCE,
+  defaultAppSettings,
+} from '../../../src/control/services/settings-types';
+import {
   defaultFollowingSettings,
   resolveFollowProfile,
 } from '../../../src/control/lib/follow-profiles';
-import { DEFAULT_SMOOTH_FOLLOW_PROFILE } from '../../../src/shared/contracts';
+import {
+  DEFAULT_SMOOTH_FOLLOW_PROFILE,
+  defaultOpticalProfile,
+  type OpticalProfile,
+} from '../../../src/shared/contracts';
+import { DEFAULT_DEAD_ZONE_LINES } from '../../../src/shared/optical-resolve';
+import {
+  ANGULAR_PRESET_ARCMIN,
+  arcminutesForFontSizePx,
+  fallbackFontMetrics,
+} from '../../../src/shared/optics';
 import { stageFollowProfile } from '../../../src/stage/motion';
 
 const SOURCE = `# Welcome back
@@ -87,6 +101,306 @@ describe('stage envelope construction (spec §29.2 / §43.3)', () => {
 
     // Envelope must stay within the Rust 8 MB cap for realistic scripts.
     expect(JSON.stringify(envelope).length).toBeLessThan(8 * 1024 * 1024);
+  });
+});
+
+/*
+ * The optical seam.
+ *
+ * `resolveStageGeometry` is where a measured rig becomes geometry, and
+ * `buildStageSettings` is the only place control calls it. Two things have to
+ * hold or a calibration is decorative:
+ *
+ *   1. The resolved block reaches the envelope at all.
+ *   2. The LEGACY fields carry the resolved numbers too. A stage build that
+ *      predates `optics` lays out from `fontSizePx`/`columnWidthPercent`, so if
+ *      those kept carrying the Settings-screen values a rig somebody had just
+ *      measured would prompt at the uncalibrated size on the exact panel they
+ *      measured it on — inside an envelope containing a full, plausible,
+ *      entirely ignored optical block.
+ */
+describe('a calibrated rig reaches the stage as geometry (shared/optical-resolve)', () => {
+  /** A 9-inch prompter, 1024x600, standing 1.2 m away. */
+  const VIEWPORT = { widthPx: 1024, heightPx: 600 };
+  const MM_PER_CSS_PX = (9 * 25.4) / Math.hypot(1024, 600);
+
+  function rig(overrides: Partial<OpticalProfile> = {}): OpticalProfile {
+    return {
+      ...defaultOpticalProfile(),
+      rigName: 'Desk hood',
+      hardwareKind: 'elgato-prompter',
+      scale: { mmPerCssPx: MM_PER_CSS_PX, source: 'model', diagonalMm: 9 * 25.4 },
+      viewingDistanceMm: 1200,
+      completedSteps: ['hardware', 'distance'],
+      ...overrides,
+    };
+  }
+
+  /** Everything a Settings screen would pass, so the resolver has to beat it. */
+  const SETTINGS_OVERRIDES = {
+    fontSizePx: 64,
+    lineHeight: 1.32,
+    columnWidthPercent: 78,
+    readingBandCenterPercent: 38,
+    textIntensity: 'soft' as const,
+  };
+
+  it('attaches the resolved block and the calibration that produced it', () => {
+    const profile = rig();
+    const settings = buildStageSettings({
+      ...SETTINGS_OVERRIDES,
+      optical: { profile, viewport: VIEWPORT },
+    });
+
+    expect(settings.optics).toBeDefined();
+    expect(settings.optics!.calibrated).toBe(true);
+    expect(settings.optics!.viewingDistanceMm).toBe(1200);
+    // The profile rides along so re-opening the wizard does not start from
+    // nothing, and so a §52 row can hand a measured rig back later.
+    expect(settings.opticalProfile).toEqual(profile);
+    // Control cannot measure a font it does not render; the result says so
+    // rather than presenting DIN ratios as a measurement.
+    expect(settings.optics!.metricsMeasured).toBe(false);
+  });
+
+  it('sizes the LEGACY font field by visual angle, overruling the settings value', () => {
+    const settings = buildStageSettings({
+      ...SETTINGS_OVERRIDES,
+      // Pinned rather than defaulted, so the assertion below can name a rung of
+      // the ladder instead of recomputing whatever the shipped default bias
+      // happens to be — which would leave the test agreeing with the code by
+      // construction and asserting nothing.
+      optical: { profile: rig({ bias: 0.5 }), viewport: VIEWPORT },
+    });
+
+    expect(settings.fontSizePx).not.toBe(SETTINGS_OVERRIDES.fontSizePx);
+    // The whole claim, checked in the units the optical model is stated in:
+    // what an old stage renders at `fontSizePx` subtends the angle the bias
+    // asked for. Bias 0.5 is the middle of the ladder — 24 arcminutes of cap.
+    const subtended = arcminutesForFontSizePx(settings.fontSizePx, {
+      distanceMm: 1200,
+      mmPerCssPx: MM_PER_CSS_PX,
+      metrics: fallbackFontMetrics(),
+    });
+    expect(subtended).toBeCloseTo(ANGULAR_PRESET_ARCMIN.standard, 0);
+  });
+
+  it('grows the type when the presenter stands further back', () => {
+    const near = buildStageSettings({
+      optical: { profile: rig({ viewingDistanceMm: 1200 }), viewport: VIEWPORT },
+    });
+    const far = buildStageSettings({
+      optical: { profile: rig({ viewingDistanceMm: 2400 }), viewport: VIEWPORT },
+    });
+    // Double the distance, double the physical size, same visual angle. This is
+    // the behaviour a percentage-of-viewport default cannot express at all.
+    expect(far.fontSizePx / near.fontSizePx).toBeCloseTo(2, 1);
+    expect(far.optics!.bodyArcminutes).toBeCloseTo(near.optics!.bodyArcminutes!, 0);
+  });
+
+  it('sets the legacy column from the resolved measure, not from the slider', () => {
+    const settings = buildStageSettings({
+      ...SETTINGS_OVERRIDES,
+      optical: { profile: rig(), viewport: VIEWPORT },
+    });
+
+    expect(settings.columnWidthPercent).not.toBe(SETTINGS_OVERRIDES.columnWidthPercent);
+    // The two mechanisms must describe the same column: `columnCh` × the `ch`
+    // advance at the resolved size, as a fraction of the panel.
+    const expectedPx =
+      settings.optics!.columnCh * fallbackFontMetrics().zeroAdvanceRatio * settings.fontSizePx;
+    expect(settings.columnWidthPercent).toBe(
+      Math.round((expectedPx / VIEWPORT.widthPx) * 100),
+    );
+  });
+
+  it('folds the safe area back into the reading band position', () => {
+    // `readingBandY` is a fraction of the SAFE rectangle — a hood hiding the top
+    // of the panel moves the band down the glass without moving it within what
+    // the presenter can see. A renderer that has never heard of a safe area
+    // needs the viewport-relative number.
+    const hooded = rig({
+      safeArea: { top: 0.2, right: 0, bottom: 0, left: 0 },
+      lens: { x: 0.5, y: 0.4 },
+    });
+    const bare = rig({ lens: { x: 0.5, y: 0.4 } });
+
+    expect(buildStageSettings({ optical: { profile: bare, viewport: VIEWPORT } })
+      .readingBandCenterPercent).toBe(40);
+    // 0.2 + 0.4 × 0.8 = 0.52 of the whole panel.
+    expect(buildStageSettings({ optical: { profile: hooded, viewport: VIEWPORT } })
+      .readingBandCenterPercent).toBe(52);
+  });
+
+  it('lets the rig decide its own brightness and reading cue', () => {
+    // Both were chosen by somebody standing at that glass looking at that
+    // reflection; the global Settings control is what an UNcalibrated rig gets,
+    // not a second opinion about a calibrated one.
+    const settings = buildStageSettings({
+      ...SETTINGS_OVERRIDES,
+      optical: {
+        profile: rig({ intensity: 'strong', readingCue: 'wash' }),
+        viewport: VIEWPORT,
+      },
+    });
+    expect(settings.textIntensity).toBe('strong');
+    expect(settings.readingCue).toBe('wash');
+  });
+
+  it('leaves mirroring to the Settings toggles', () => {
+    /*
+     * Deliberate, and worth pinning because it looks like an omission.
+     * `profile.flips` and the mirror toggles describe the same physical fact,
+     * so honouring both double-flips a rig — and a freshly created profile
+     * flips nothing, so preferring it would quietly un-mirror an operator the
+     * first time they calibrated. `flips` rides along inside `opticalProfile`
+     * for the calibration screen; wiring it to the render has to retire the
+     * toggles in the same move.
+     */
+    const settings = buildStageSettings({
+      mirrorX: true,
+      optical: {
+        profile: rig({ flips: { horizontal: false, vertical: true } }),
+        viewport: VIEWPORT,
+      },
+    });
+    expect(settings.mirrorX).toBe(true);
+    expect(settings.mirrorY).toBe(false);
+    expect(settings.opticalProfile!.flips).toEqual({ horizontal: false, vertical: true });
+  });
+
+  /**
+   * A panel that reports no size cannot size anything.
+   *
+   * `logicalSize` comes from the window server, and a display enumerated while
+   * it is waking or hot-plugging can answer 0 — or, through a failed query,
+   * NaN. Neither produces a smaller layout: the resolver's safe width carries
+   * the NaN into the column measure, and a zero width drives the fit check to
+   * its hard character floor where the body size rounds away to nothing. The
+   * take would be blank inside an envelope claiming to be fully calibrated,
+   * which is the version of this the stage has no way to detect.
+   */
+  it.each([
+    ['a panel with no size', { widthPx: 0, heightPx: 0 }],
+    ['a panel that answered with nonsense', { widthPx: Number.NaN, heightPx: 1080 }],
+  ])('takes the uncalibrated layout on %s rather than resolving against it', (_label, viewport) => {
+    const settings = buildStageSettings({
+      ...SETTINGS_OVERRIDES,
+      optical: { profile: rig(), viewport },
+    });
+
+    expect(settings.fontSizePx).toBe(SETTINGS_OVERRIDES.fontSizePx);
+    expect(settings.columnWidthPercent).toBe(SETTINGS_OVERRIDES.columnWidthPercent);
+    // And no optical claim at all: an unmeasurable panel is exactly as
+    // uncalibrated as one nobody has measured, and must read that way.
+    expect(settings.optics).toBeUndefined();
+    expect(settings.opticalProfile).toBeUndefined();
+    // The global brightness stands, because no rig was applied to overrule it.
+    expect(settings.textIntensity).toBe(SETTINGS_OVERRIDES.textIntensity);
+  });
+
+  it('carries the whole optical block through the envelope', () => {
+    const envelope = buildStageEnvelope({
+      script: compiled(),
+      sessionId: 'session-1',
+      sessionGeneration: 1,
+      stageGeneration: 7,
+      stageSettings: buildStageSettings({ optical: { profile: rig(), viewport: VIEWPORT } }),
+    });
+    expect(envelope.stageSettings.optics?.calibrated).toBe(true);
+    expect(envelope.stageSettings.opticalProfile?.rigName).toBe('Desk hood');
+  });
+});
+
+describe('an uncalibrated rig still prompts, and says nothing it cannot support', () => {
+  it('takes the percentage layout, with no optical claim attached', () => {
+    const settings = buildStageSettings();
+    expect(settings.optics).toBeUndefined();
+    expect(settings.opticalProfile).toBeUndefined();
+    expect(settings.fontSizePx).toBe(DEFAULT_STAGE_APPEARANCE.fontSizePx);
+    expect(settings.columnWidthPercent).toBe(DEFAULT_STAGE_APPEARANCE.columnWidthPercent);
+    expect(settings.lineHeight).toBe(DEFAULT_STAGE_APPEARANCE.lineHeight);
+    expect(settings.readingBandCenterPercent).toBe(
+      DEFAULT_STAGE_APPEARANCE.readingBandCenterPercent,
+    );
+  });
+
+  /**
+   * The defaults used to exist twice and disagree — 78%/1.32 on the Settings
+   * screen, 68%/1.28 in the envelope fallback — so the app demonstrated itself
+   * with a layout no user could actually get. Nothing compared them, which is
+   * why it survived.
+   */
+  it('falls back to the same numbers the Settings screen shows', () => {
+    const t = defaultAppSettings().teleprompter;
+    const settings = buildStageSettings();
+    expect(settings.fontSizePx).toBe(t.fontSizePx);
+    expect(settings.lineHeight).toBe(t.lineHeight);
+    expect(settings.columnWidthPercent).toBe(t.columnWidthPercent);
+    expect(settings.readingBandCenterPercent).toBe(t.readingBandCenterPercent);
+  });
+
+  /**
+   * `readingBandHalfHeightPercent` was the literal 4 and was exposed by no
+   * control at all — 4% of viewport height is barely half a line on a 600px
+   * panel and a full line on a 1080px one, so one number meant two different
+   * things on the two displays this app runs on. It is derived from the
+   * dead-zone corridor now, which is what makes these assertions possible.
+   */
+  it('derives the reading band half-height from the dead-zone corridor', () => {
+    const settings = buildStageSettings();
+    const expected = (settings.fontSizePx * settings.lineHeight * DEFAULT_DEAD_ZONE_LINES) / 2;
+    expect(settings.readingBandHalfHeightPercent).toBeCloseTo((expected / 1080) * 100, 2);
+  });
+
+  it('moves the band with the type, which a literal could not', () => {
+    const small = buildStageSettings({ fontSizePx: 40 });
+    const large = buildStageSettings({ fontSizePx: 96 });
+    expect(large.readingBandHalfHeightPercent).toBeGreaterThan(
+      small.readingBandHalfHeightPercent,
+    );
+    // Same corridor in line pitches, so the ratio is the ratio of the pitches.
+    expect(large.readingBandHalfHeightPercent / small.readingBandHalfHeightPercent).toBeCloseTo(
+      96 / 40,
+      1,
+    );
+  });
+
+  it('measures the corridor against the real panel once there is one', () => {
+    // 600px tall instead of the 1080 reference: the same corridor is a bigger
+    // slice of a shorter panel, and pretending otherwise is the bug the literal
+    // 4 encoded.
+    const settings = buildStageSettings({
+      optical: {
+        profile: {
+          ...defaultOpticalProfile(),
+          rigName: 'Desk hood',
+          scale: { mmPerCssPx: (9 * 25.4) / Math.hypot(1024, 600), source: 'model' },
+          viewingDistanceMm: 1200,
+        },
+        viewport: { widthPx: 1024, heightPx: 600 },
+      },
+    });
+    const expected =
+      (settings.fontSizePx * settings.lineHeight * settings.optics!.deadZoneLines) / 2;
+    expect(settings.readingBandHalfHeightPercent).toBeCloseTo((expected / 600) * 100, 2);
+  });
+
+  /**
+   * The stage hard-codes `--stage-bg`, so `background` never described anything
+   * a presenter could see — both options of the menu that wrote it rendered
+   * identically. It stays on the wire because `StageSettings` is a persisted
+   * document, but it is a constant now rather than something a dead control can
+   * appear to change.
+   */
+  it('writes one field colour, whatever the caller wanted', () => {
+    expect(buildStageSettings().background).toBe('#000000');
+    expect(buildStageSettings({ textIntensity: 'strong' }).background).toBe('#000000');
+  });
+
+  it('takes the global text intensity when there is no rig to overrule it', () => {
+    expect(buildStageSettings().textIntensity).toBe('standard');
+    expect(buildStageSettings({ textIntensity: 'soft' }).textIntensity).toBe('soft');
   });
 });
 

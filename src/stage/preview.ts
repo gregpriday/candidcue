@@ -19,7 +19,8 @@ import type {
 } from '../shared/contracts';
 import { STAGE_EVENT } from '../shared/contracts';
 import { dispatchLocalStageEvent } from './events';
-import { isCompactViewport } from './renderer/geometry';
+import { discoverProfile } from '../shared/optical-discovery';
+import { resolveStageGeometry } from '../shared/optical-resolve';
 
 const MIRA_BASE = '/assets/listeners/mira';
 
@@ -60,28 +61,65 @@ export function previewListenerSelection(): ListenerStageSelection {
   };
 }
 
-function previewSettings(compact: boolean): StageSettings {
+/**
+ * Preview settings, resolved through the real optical model.
+ *
+ * This used to hold a hand-tuned pair of tables selected by a viewport
+ * breakpoint — a "compact" column of numbers for 1024x600 and a wide one for
+ * everything else. Two tables for one question is exactly the arrangement the
+ * optical layer replaces, and keeping it here would mean the preview no longer
+ * showed what the stage does.
+ *
+ * So the preview discovers a rig the same way a take does. The window it is
+ * running in stands in for the panel, and the profile it produces is resolved by
+ * the same `resolveStageGeometry` control uses — which means a change to the
+ * model is visible in the browser preview immediately, without a Tauri build and
+ * without a physical prompter.
+ */
+function previewSettings(viewport: { widthPx: number; heightPx: number }): StageSettings {
+  const discovered = discoverProfile({
+    // The preview names itself after the panel it is standing in for, so a
+    // browser window sized to 1024x600 resolves as the 9-inch Prompter and the
+    // preview shows the geometry that panel will actually get.
+    name: 'Elgato Prompter (preview)',
+    physicalSize: { width: viewport.widthPx, height: viewport.heightPx },
+    scaleFactor: 1,
+  });
+  const { optics } = resolveStageGeometry({ profile: discovered.profile, viewport });
+
   return {
     schemaVersion: 1,
     themeId: 'stage-dark',
     background: '#000000',
     foreground: '#f5f3ef',
     fontFamilyId: 'system-sans',
-    fontSizePx: compact ? 40 : 64,
-    lineHeight: compact ? 1.22 : 1.28,
-    letterSpacingEm: 0,
-    columnWidthPercent: compact ? 82 : 68,
-    readingBandCenterPercent: compact ? 36 : 38,
-    readingBandHalfHeightPercent: compact ? 5 : 4,
-    pastOpacity: compact ? 0.48 : 0.42,
-    futureOpacity: compact ? 0.96 : 0.92,
-    currentUnderlayOpacity: compact ? 0.12 : 0.1,
+    fontSizePx: optics.bodyFontSizePx,
+    lineHeight: optics.lineHeight,
+    letterSpacingEm: optics.letterSpacingEm,
+    // Retained for an older stage build that ignores `optics`; the live path
+    // reads the column from `optics.columnCh`.
+    columnWidthPercent: Math.min(
+      100,
+      ((optics.columnCh * 0.55 * optics.bodyFontSizePx) / Math.max(1, viewport.widthPx)) * 100,
+    ),
+    readingBandCenterPercent: optics.readingBandY * 100,
+    readingBandHalfHeightPercent: 4,
+    pastOpacity: optics.pastOpacity,
+    futureOpacity: optics.futureOpacity,
+    // The phrase underlay is off by default now: fixed side ticks replace it.
+    currentUnderlayOpacity: 0,
     mirrorX: false,
     mirrorY: false,
     showCues: true,
     stageAcknowledgements: true,
     reducedMotion: false,
-    paragraphSpacingEm: 0.7,
+    paragraphSpacingEm: optics.paragraphSpacingEm,
+    fontWeight: optics.fontWeight,
+    optics,
+    opticalProfile: discovered.profile,
+    stageMode: 'clean',
+    readingCue: 'ticks',
+    textIntensity: 'standard',
   };
 }
 
@@ -211,9 +249,11 @@ export const PREVIEW_DRIVER_KEY = '__stagePreview';
 const STAGE_GEN = 1;
 
 export function startPreviewDriver(): PreviewDriver {
-  const compact = isCompactViewport(window.innerWidth, window.innerHeight);
   const built = buildDocument();
-  let settings = previewSettings(compact);
+  let settings = previewSettings({
+    widthPx: window.innerWidth,
+    heightPx: window.innerHeight,
+  });
   let listenerOn = false;
   let blanked = false;
   let frozen = false;

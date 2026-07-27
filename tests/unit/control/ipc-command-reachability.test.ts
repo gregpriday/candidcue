@@ -39,28 +39,25 @@ const UNWIRED_BY_DESIGN: Record<string, string> = {
     'NOT_IMPLEMENTED in Rust (no CandidCue pack host); there is no download to cancel.',
   install_update: 'No updater plugin is wired in v1 (§44.10).',
   /*
-   * §52 per-display appearance profiles. Deliberately unwired, not forgotten.
+   * `save_display_profile` and `list_display_profiles` used to live here,
+   * described as "intentionally dormant" — appearance was one set of settings
+   * that every take ran on every display, so a per-display row had nothing to
+   * carry.
    *
-   * They were wired to Preflight, which read a profile when a display was
-   * chosen and wrote one at Start. With Preflight gone, stage appearance is a
-   * single set of settings — which is the point of the change: what the
-   * Teleprompter screen shows is what every take runs, on every display.
+   * The optical layer is what gave them something to carry. A rig profile is a
+   * physical description of one panel in one mounting: its millimetres per
+   * pixel, the aperture its hood reveals, where the camera sits in that
+   * aperture, and how far away the presenter stands. None of that is a
+   * preference that could sensibly be shared between displays, and none of it
+   * can be re-derived after the fact — a ruler measurement held against the
+   * glass exists nowhere else. So the row is now load-bearing, and both
+   * commands are wired through services/display-profiles.ts.
    *
-   * A half-restored profile is worse than none. The version that shipped for
-   * one afternoon restored only for an explicitly PINNED display, so the
-   * default "Automatic" path wrote a row per take and read none, and moving
-   * from a pinned panel to Automatic carried the pinned panel's type across and
-   * then saved it over the other panel's row.
-   *
-   * The Rust commands, the table and `services/display-profiles.ts` are left
-   * intact — the wrapper and its payload-shape test are what a future
-   * per-display feature would be built back on top of, and deleting them would
-   * mean rediscovering the contract rather than reading it.
+   * The old warning is still worth heeding, though: the version that shipped
+   * for one afternoon restored only for an explicitly PINNED display, so the
+   * default "Automatic" path wrote a row per take and read none. Matching is by
+   * fingerprint for exactly that reason.
    */
-  save_display_profile:
-    'Per-display appearance memory (§52) is intentionally dormant: stage appearance is one set of settings. See services/display-profiles.ts.',
-  list_display_profiles:
-    'Per-display appearance memory (§52) is intentionally dormant: stage appearance is one set of settings. See services/display-profiles.ts.',
 };
 
 /** Commands whose absence is a user-visible failure, so they must stay wired. */
