@@ -17,11 +17,16 @@
 //!   reports what's visible, and the prior must help without overruling the
 //!   words;
 //! * `refrain_second` — identical repeated passage; locking onto the wrong
-//!   copy is the catastrophic failure this family exists to catch.
+//!   copy is the catastrophic failure this family exists to catch;
+//! * `asr_forms*` — the script and the recogniser spell the same sound
+//!   differently (`twenty-seven` / `27`, `three thirty` / `3:30`,
+//!   `RustLight` / `Rust Light`). Nothing is misheard; only the spelling
+//!   disagrees. See `verbalize.rs`.
 
 use cc_align::{compile, CompileOptions, CompiledScript};
 
 use crate::plan::{Corruption, PerformancePlan, PlanOp};
+use crate::verbalize::{asr_ops, Verbalizer};
 
 pub struct Scenario {
     pub plan: PerformancePlan,
@@ -486,6 +491,95 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
         ));
     }
 
+    // Spoken-form scripts: the two sides of the page disagree about how to
+    // SPELL what was said, without disagreeing about what was said.
+    //
+    // `exact` is the control — the performance says the script's own canonical
+    // words back, so any error is tracking, not spelling. The `asr_*` families
+    // run the same reading through the verbalizer, so the transcript carries
+    // `$2.4 million` where the script wrote `2.4 million dollars`, `3:30` where
+    // it wrote `three thirty`, `Rust Light` where it wrote `RustLight`. The
+    // delta between `exact` and `asr_forms` on the same script is the whole
+    // benchmark: it is the cost of the spelling disagreement alone.
+    for stem in ["figures", "brands"] {
+        let (name, script) = load(stem)?;
+        let n = script.len();
+        let source = std::fs::read_to_string(scripts_dir.join(format!("{stem}.md")))?;
+        let verbalizer = Verbalizer::from_source(&source);
+
+        suite.push(scenario(
+            &name,
+            "exact",
+            &script,
+            150,
+            vec![PlanOp::Read { from: 0, to: n as u32 }],
+            Corruption::default(),
+        ));
+
+        // A plain read with pauses — the second control, and the shape that
+        // gets real audio in Tier B.
+        suite.push(scenario(
+            &name,
+            "pauses",
+            &script,
+            150,
+            vec![
+                PlanOp::Read { from: 0, to: frac(n, 30) },
+                PlanOp::Pause { ms: 2_500 },
+                PlanOp::Read { from: frac(n, 30), to: frac(n, 65) },
+                PlanOp::Pause { ms: 1_200 },
+                PlanOp::Read { from: frac(n, 65), to: n as u32 },
+            ],
+            Corruption::default(),
+        ));
+
+        suite.push(scenario(
+            &name,
+            "asr_forms",
+            &script,
+            150,
+            asr_ops(&script, &verbalizer, 0, n as u32),
+            Corruption::default(),
+        ));
+
+        // The same disagreement across the pauses a real take has. A figure is
+        // often the last thing said before a breath, which is exactly when a
+        // display that failed to match it sits still and waits.
+        let starts = paragraph_starts(&script);
+        if starts.len() >= 4 {
+            let pick = |pct: usize| starts[starts.len() * pct / 100];
+            let (b0, b1) = (pick(30), pick(60));
+            let mut ops = asr_ops(&script, &verbalizer, 0, b0);
+            ops.push(PlanOp::Pause { ms: 2_000 });
+            ops.extend(asr_ops(&script, &verbalizer, b0, b1));
+            ops.push(PlanOp::Pause { ms: 3_000 });
+            ops.extend(asr_ops(&script, &verbalizer, b1, n as u32));
+            suite.push(scenario(&name, "asr_forms_pauses", &script, 150, ops, Corruption::default()));
+        }
+
+        // Cold start in the middle: nothing but the recogniser's own spelling
+        // of a figure-dense passage to relocate on.
+        let mut ops = asr_ops(&script, &verbalizer, 0, 14);
+        ops.push(PlanOp::Pause { ms: 3_000 });
+        ops.extend(asr_ops(&script, &verbalizer, frac(n, 45), frac(n, 75)));
+        suite.push(scenario(&name, "asr_forms_cold", &script, 150, ops, Corruption::default()));
+
+        // Spelling disagreement AND ordinary recogniser noise on top. A name
+        // the provider splits in two is also a name it half-mishears.
+        suite.push(scenario(
+            &name,
+            "asr_forms_corrupt",
+            &script,
+            150,
+            asr_ops(&script, &verbalizer, 0, n as u32),
+            Corruption {
+                substitute: 100,
+                delete: 30,
+                insert: 20,
+            },
+        ));
+    }
+
     // Huge script: far skip (hundreds of atoms) and the scale window.
     {
         let (name, script) = load("huge")?;
@@ -562,6 +656,16 @@ pub fn tier_b_selection() -> Vec<(&'static str, &'static str)> {
         ("names", "exact"),
         ("names", "names_cold_jump"),
         ("longform", "intro_then_end"),
+        // Appended, never inserted: the engine rotation is `index % 3`, so a
+        // new pair in the middle would re-voice every captured run below it.
+        //
+        // Plain reads, deliberately. The whole point of putting these two
+        // scripts in front of the real recogniser is to find out how IT spells
+        // what it hears — feeding it a synthesised guess at its own output
+        // would just measure the guess.
+        ("figures", "exact"),
+        ("brands", "exact"),
+        ("figures", "pauses"),
     ]
 }
 

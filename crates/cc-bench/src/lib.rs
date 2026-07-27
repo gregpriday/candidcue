@@ -11,3 +11,4 @@ pub mod scenarios;
 pub mod suite;
 pub mod synthetic;
 pub mod tts;
+pub mod verbalize;

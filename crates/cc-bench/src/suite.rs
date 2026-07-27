@@ -35,6 +35,14 @@ pub struct SuiteResult {
     pub runs: Vec<RunMetrics>,
 }
 
+fn pct_of(hits: usize, eligible: usize) -> f64 {
+    if eligible == 0 {
+        0.0
+    } else {
+        100.0 * hits as f64 / eligible as f64
+    }
+}
+
 fn entry(name: &str, value: f64, unit: &str, better: &str) -> BenchEntry {
     BenchEntry {
         name: name.to_string(),
@@ -289,6 +297,72 @@ fn build_table(
             "higher",
         ));
     }
+
+    // ---- spoken forms ----
+    // The script and the recogniser spelled the same sound differently. These
+    // rows are reported separately from `accuracy.*` on purpose: pooling them
+    // in would let a spelling failure hide inside a corpus that is 90% plain
+    // prose, which is how this class of bug survived unmeasured until a page of
+    // numbers was read at it. The per-script rows exist for the same reason at
+    // one level down — figures fail on normalisation, names fail on word
+    // boundaries, and one number covering both would move for the wrong reason.
+    let forms = |r: &RunMetrics| r.scenario.starts_with("asr_forms");
+    let (f2, f5, fe) = runs.iter().filter(|r| forms(r)).fold((0, 0, 0), |(a, b, e), r| {
+        (a + r.within2_hits, b + r.within5_hits, e + r.eligible_samples)
+    });
+    table.push(entry("forms.within2", pct_of(f2, fe), "%", "higher"));
+    table.push(entry("forms.within5", pct_of(f5, fe), "%", "higher"));
+    for (script, bench_name) in [
+        ("figures", "forms.figures_within5"),
+        ("brands", "forms.brands_within5"),
+    ] {
+        let (h, e) = runs
+            .iter()
+            .filter(|r| forms(r) && r.run.starts_with(script))
+            .fold((0, 0), |(a, e), r| (a + r.within5_hits, e + r.eligible_samples));
+        table.push(entry(bench_name, pct_of(h, e), "%", "higher"));
+    }
+    table.push(entry(
+        "forms.false_jumps",
+        runs.iter().filter(|r| forms(r)).map(|r| r.false_jumps).sum::<u32>() as f64,
+        "count",
+        "lower",
+    ));
+    let (forms_frozen, forms_freeze_eligible) = runs
+        .iter()
+        .filter(|r| forms(r))
+        .fold((0usize, 0usize), |(f, e), r| {
+            (f + r.freeze_frozen, e + r.freeze_eligible)
+        });
+    table.push(entry(
+        "forms.freeze",
+        pct_of(forms_frozen, forms_freeze_eligible),
+        "%",
+        "lower",
+    ));
+    let mut forms_locks: Vec<f64> = runs
+        .iter()
+        .filter(|r| forms(r))
+        .flat_map(|r| &r.recoveries)
+        .filter(|e| matches!(e.kind, RecoveryKind::Initial | RecoveryKind::SkipForward))
+        .filter_map(|e| e.recovered_in_s)
+        .collect();
+    table.push(entry(
+        "forms.lock_p95",
+        percentile(&mut forms_locks, 95.0),
+        "s",
+        "lower",
+    ));
+    table.push(entry(
+        "forms.lock_failures",
+        runs.iter()
+            .filter(|r| forms(r))
+            .flat_map(|r| &r.recoveries)
+            .filter(|e| e.recovered_in_s.is_none())
+            .count() as f64,
+        "count",
+        "lower",
+    ));
 
     // ---- recovery ----
     let by_kind = |kind: RecoveryKind, scenarios: Option<&[&str]>| -> (Vec<f64>, usize) {

@@ -13,7 +13,7 @@ protocol used for live capture (`crates/cc-stt`) is the exact protocol of
 ## Layout
 
 ```
-bench/scripts/    Markdown fixture scripts (7, from 250 to 5,000 words)
+bench/scripts/    Markdown fixture scripts (9, from 250 to 5,000 words)
 bench/runs/       Captured live-STT event logs — immutable replay fixtures
                   (events.jsonl + gold.json + manifest.json + performance.txt)
 bench/results/    Saved benchmark tables (baseline and optimized JSON)
@@ -22,6 +22,26 @@ crates/cc-stt/    Tauri-free Inworld streaming client
 crates/cc-bench/  Harness: plans, gold, synthetic events, TTS, capture,
                   replay, metrics, suites, reports
 ```
+
+## Spelling, not mishearing
+
+Most families ask what happens when the reader departs from the script. The
+`asr_forms` family asks something else: what happens when they don't, and the
+recogniser writes down what they said in a different notation than the script
+used. "Twenty-seven" comes back as `27`. "Three thirty" comes back as `3:30`.
+"RustLight" comes back as `Rust Light`. Nothing was misheard and the reader did
+nothing wrong, but if normalisation does not fold both spellings onto the same
+atom, the display stops on a word they have already passed.
+
+`bench/scripts/figures.md` and `bench/scripts/brands.md` exist for this — a page
+of numbers, dates, money and units, and a page of compound brand names, places
+and acronyms. `crates/cc-bench/src/verbalize.rs` is the deterministic model of
+what a recogniser writes back; `figures` and `brands` are also in the Tier-B
+selection so the real provider gets the deciding vote.
+
+Each of those scripts runs `exact` as well, with the same words in the script's
+own spelling. The gap between `exact` and `asr_forms` on one script is the cost
+of the spelling disagreement with everything else held constant.
 
 ## Two evidence tiers
 
@@ -91,6 +111,12 @@ false jump is a regression.
 | `recovery.adlib_drift_p95` | How far the display wandered from the hold anchor during off-script speech. |
 | `viewport.start_lock_p50` | Lock time when the presenter scrolled somewhere, the app reported the visible range, and reading started there. |
 | `names.cold_jump_lock_p95` | Lock time jumping cold into a section identified only by unusually-spelled proper nouns, with ASR-style mangling. |
+| `forms.within2 / within5` | Accuracy when the script and the recogniser spell the same sound differently. Compare against `accuracy.clean_*` — the gap is what the disagreement costs. |
+| `forms.figures_within5` | The same, numbers only: years, money, decimals, times, ordinals, units. Moves when normalisation changes. |
+| `forms.brands_within5` | The same, names only: compound brands the recogniser splits in two, acronyms, places. Moves when word-boundary handling changes. |
+| `forms.false_jumps` | False jumps caused by a spelling disagreement — a number that matched the wrong copy of itself elsewhere in the script. |
+| `forms.freeze` | Freeze time on those scripts: the display waiting for a word it will never match. |
+| `forms.lock_p95 / lock_failures` | Relocation into a passage whose only landmarks are figures or names the recogniser respelled. |
 | `ambiguity.refrain_false_jumps` | False jumps on a script whose refrain appears verbatim three times. |
 | `perf.mean_event_us / p95_event_us` | Engine time per transcript revision. |
 | `perf.scale_ratio_5k` | Per-event cost ratio, 5,000-word vs 300-word script (script-length independence). |

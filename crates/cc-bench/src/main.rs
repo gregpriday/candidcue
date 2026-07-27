@@ -239,6 +239,41 @@ fn main() -> anyhow::Result<()> {
                 );
             }
         }
+        Some("atoms") => {
+            // cc-bench atoms <script> — the compiled atom sequence, and what
+            // the verbalizer thinks the recogniser writes instead.
+            //
+            // Atom COUNT is load-bearing beyond debugging: Tier-B gold stores
+            // reader positions as atom indexes, so a normalisation change that
+            // adds or drops an atom on any fixture silently invalidates every
+            // captured run for that script. This is how you check.
+            let stem = args.get(1).cloned().unwrap_or_default();
+            let source = std::fs::read_to_string(scripts_dir.join(format!("{stem}.md")))?;
+            let script = cc_align::compile(&source, cc_align::CompileOptions::default());
+            let verbalizer = cc_bench::verbalize::Verbalizer::from_source(&source);
+            println!("{} atoms", script.len());
+            let mut at = 0usize;
+            while at < script.len() {
+                match verbalizer.render(&script, at) {
+                    Some(rendering) => {
+                        let written: Vec<&str> = (at..at + rendering.span as usize)
+                            .map(|i| script.atoms[i].surface.as_str())
+                            .collect();
+                        println!(
+                            "{:>5}  {:<28} -> {}",
+                            at,
+                            written.join(" "),
+                            rendering.words.join(" ")
+                        );
+                        at += rendering.span as usize;
+                    }
+                    None => {
+                        println!("{:>5}  {}", at, script.atoms[at].surface);
+                        at += 1;
+                    }
+                }
+            }
+        }
         Some("compare") => {
             let a: SuiteResult =
                 serde_json::from_str(&std::fs::read_to_string(&args[1])?)?;
