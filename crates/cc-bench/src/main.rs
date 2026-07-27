@@ -4,6 +4,8 @@
 //! cc-bench tier-a  --label L [--config cfg.json] [--out results.json]
 //! cc-bench synth-audio --workdir DIR            # fal.ai TTS → fixture audio
 //! cc-bench capture --workdir DIR [--pace 1.0]   # stream → bench/runs/
+//! cc-bench vocab [SCRIPT ...]                   # show extracted bias terms
+//! cc-bench prompt-ab --workdir DIR [--scripts a,b]  # live A/B of `prompts`
 //! cc-bench tier-b  --label L [--config C] [--out F]
 //! cc-bench compare baseline.json candidate.json
 //! ```
@@ -36,6 +38,8 @@ struct Flags {
     out: Option<PathBuf>,
     workdir: Option<PathBuf>,
     pace: f64,
+    scripts: Option<Vec<String>>,
+    runs: Option<PathBuf>,
 }
 
 fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags> {
@@ -45,6 +49,8 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         out: None,
         workdir: None,
         pace: 1.0,
+        scripts: None,
+        runs: None,
     };
     let mut it = it.peekable();
     while let Some(arg) = it.next() {
@@ -59,6 +65,10 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--out" => flags.out = Some(PathBuf::from(take()?)),
             "--workdir" => flags.workdir = Some(PathBuf::from(take()?)),
             "--pace" => flags.pace = take()?.parse()?,
+            "--runs" => flags.runs = Some(PathBuf::from(take()?)),
+            "--scripts" => {
+                flags.scripts = Some(take()?.split(',').map(|s| s.trim().to_string()).collect())
+            }
             other => anyhow::bail!("unknown flag {other}"),
         }
     }
@@ -100,6 +110,9 @@ fn main() -> anyhow::Result<()> {
         Some("tier-b") => {
             let flags = parse_flags(args[1..].iter())?;
             let config = load_config(&flags.config)?;
+            // `--runs` points the suite at a fixture set other than the frozen
+            // corpus — how a vocabulary capture gets scored on the same ruler.
+            let runs_dir = flags.runs.unwrap_or(runs_dir);
             let result = run_tier_b(&runs_dir, &scripts_dir, &config, &flags.label)?;
             print_table(&result);
             save_result(&result, &flags.out)?;
@@ -119,6 +132,47 @@ fn main() -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(capture_all(&workdir, &runs_dir, flags.pace))?;
+        }
+        Some("vocab") => {
+            // What would this script send? No network, no cost — the fastest
+            // way to see whether a change to the extractor helped or hurt.
+            let names: Vec<String> = if args.len() > 1 {
+                args[1..].to_vec()
+            } else {
+                cc_bench::prompt_ab::DEFAULT_SCRIPTS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            };
+            for name in names {
+                let source = std::fs::read_to_string(scripts_dir.join(format!("{name}.md")))?;
+                let terms = cc_align::extract_from_markdown(
+                    &source,
+                    cc_align::CompileOptions::default(),
+                    cc_align::VocabLimits::default(),
+                );
+                println!("{name} ({} terms)", terms.len());
+                for term in &terms {
+                    println!("  {term}");
+                }
+                println!();
+            }
+        }
+        Some("prompt-ab") => {
+            let flags = parse_flags(args[1..].iter())?;
+            let workdir = flags
+                .workdir
+                .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
+            let scripts = flags.scripts.unwrap_or_else(|| {
+                cc_bench::prompt_ab::DEFAULT_SCRIPTS
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect()
+            });
+            let runtime = tokio::runtime::Runtime::new()?;
+            let results =
+                runtime.block_on(cc_bench::prompt_ab::run(&scripts_dir, &workdir, &scripts, flags.pace))?;
+            cc_bench::prompt_ab::report(&results);
         }
         Some("report") => {
             // cc-bench report <a-base> <a-opt> [<b-base> <b-opt>] — merged

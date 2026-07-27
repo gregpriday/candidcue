@@ -118,6 +118,47 @@ describe('what the builder will and will not forward', () => {
   });
 });
 
+describe('the script vocabulary the take offers the recogniser (§26)', () => {
+  const tokens = [
+    { surface: 'RustLight', line: 0, para: 0 },
+    { surface: 'Games', line: 0, para: 0 },
+  ];
+
+  it('forwards the take’s spoken tokens, not a term list', () => {
+    /*
+     * The SCRIPT crosses the boundary, and Rust decides which of it is unusual.
+     * Choosing here would be a second opinion about rare words living in
+     * TypeScript, drifting from `cc_align`'s — the same failure the alignment
+     * core keeps one stopword list to avoid.
+     */
+    expect(sttSessionOptions({}, tokens)).toEqual({ vocabulary: tokens });
+  });
+
+  it('omits the field entirely when there is nothing to say', () => {
+    // The microphone test has no script. An empty array would be a config frame
+    // that differs from the one every take before this feature sent, for no
+    // gain — and the frame that differs is the frame that gets blamed.
+    expect(sttSessionOptions({}, [])).toEqual({});
+    expect(sttSessionOptions({}, null)).toEqual({});
+    expect(sttSessionOptions({})).toEqual({});
+  });
+
+  it('the take passes a vocabulary and the microphone test does not', () => {
+    expect(
+      /sttSessionOptions\([\s\S]{0,400}?this\.vocabularyTokens/.test(PIPELINE),
+      'the take must offer its compiled script to the builder',
+    ).toBe(true);
+    expect(
+      /alignTokensFor\(this\.deps\.compiled\)/.test(PIPELINE),
+      'the tokens must be the same ones the aligner compiles, not a second projection',
+    ).toBe(true);
+    expect(
+      /sttSessionOptions\([^)]*,/.test(MIC_TEST),
+      'the microphone test has no script and must not invent one',
+    ).toBe(false);
+  });
+});
+
 describe('the two model lists agree', () => {
   /*
    * Rust is the authority and re-checks whatever arrives, so this duplicate

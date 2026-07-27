@@ -14,10 +14,26 @@ use cc_stt::{stream_pcm, SttFrame, TranscribeConfig};
 
 /// Stream `pcm` and return every frame observed, in order.
 pub async fn capture_events(pcm: &[u8], pace: f64) -> anyhow::Result<Vec<SttFrame>> {
+    capture_events_with(pcm, pace, &[]).await
+}
+
+/// Stream `pcm` with a custom vocabulary on the config frame.
+///
+/// `prompts` empty is byte-for-byte the request [`capture_events`] has always
+/// made, which is what lets a vocabulary run be compared against a frozen
+/// fixture captured before this parameter existed.
+pub async fn capture_events_with(
+    pcm: &[u8],
+    pace: f64,
+    prompts: &[String],
+) -> anyhow::Result<Vec<SttFrame>> {
     let key = std::env::var("INWORLD_API_KEY")
         .map_err(|_| anyhow::anyhow!("INWORLD_API_KEY not set in the environment"))?;
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let config = TranscribeConfig::default();
+    let config = TranscribeConfig {
+        prompts: prompts.to_vec(),
+        ..TranscribeConfig::default()
+    };
 
     let streamer = stream_pcm(&key, &config, pcm, 100, pace, tx);
     let collector = async {

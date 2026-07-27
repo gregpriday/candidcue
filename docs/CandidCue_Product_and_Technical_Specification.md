@@ -1860,9 +1860,20 @@ Do not re-run vocabulary analysis on every keystroke. Recompile local structures
 
 ### 26.1 Verified API constraint
 
-CandidCue must not assume that the primary `gpt-realtime-whisper` session can accept a custom prompt or dictionary. In the current Realtime transcription interface, this model does not provide prompt steering. The application therefore uses script-specific vocabulary as **alignment knowledge**, not as a hidden Realtime model parameter.
+**Superseded by the move to Inworld.** This section was written against `gpt-realtime-whisper`, whose Realtime transcription interface offered no prompt steering, and it therefore required that script vocabulary be used as **alignment knowledge** only — never as a model parameter. It also required that the assumption be isolated behind model capability metadata "if a future supported Realtime transcription model accepts prompt vocabulary".
 
-The implementation must isolate this assumption behind model capability metadata. If a future supported Realtime transcription model accepts prompt vocabulary, it can be enabled without changing the script-analysis format.
+That model is the current one. `inworld/inworld-stt-1` accepts `transcribeConfig.prompts`: an array of strings biasing the recogniser towards named terms. It is a soft bias, not a keyword lock, and the gateway rejects any term containing characters outside letters, digits, spaces and basic punctuation — with `INVALID_ARGUMENT` on the config frame, which leads the socket, so an unsanitised term costs the whole take rather than one word.
+
+Two facts about the service shape the implementation and were verified live, not read:
+
+- unknown config keys are ignored in silence rather than rejected, so "the request was accepted" is never evidence that a field was read;
+- `prompts` specifically **is** validated — a term containing `#` is rejected — which is what makes acceptance of a sanitised term meaningful.
+
+Both are asserted by `crates/cc-bench/tests/prompt_config.rs`, which streams a second of silence against the live endpoint with one term per permitted character class, and a deliberately invalid term as the control.
+
+Vocabulary is therefore now used **both** ways: as alignment knowledge, and as a per-take model parameter. The extraction format is unchanged, as this section anticipated. Extraction lives in `crates/cc-align/src/vocab.rs` — beside the compiler that already owns lexical importance — and the terms are built in Rust from the spoken tokens the renderer sends, so there is no second opinion about rare words anywhere in the app.
+
+The vocabulary is fixed for the life of a socket. It is sent on the config frame, including the config frame of every reconnect, and it cannot be revised without dropping the connection — so it describes the whole script rather than a window around the reader.
 
 ### 26.2 Goals
 
@@ -1959,7 +1970,7 @@ Features:
 - import/export JSON or CSV later, not required for first release;
 - prevent empty entries and unbounded alias lists.
 
-The microphone test should explain the truth: “These terms improve CandidCue’s matching. They are not currently uploaded as a custom Realtime dictionary.”
+The microphone test should explain the truth, which §26.1 has changed: these terms improve CandidCue’s matching **and** a ranked subset of them is sent to the recogniser at the start of each take as a soft bias. It is not a custom dictionary and nothing is trained or retained — the terms accompany one session and are gone with it. The microphone test itself has no script, so it sends none.
 
 ### 26.7 Analysis cache
 

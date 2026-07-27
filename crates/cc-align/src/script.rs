@@ -302,7 +302,31 @@ const MIN_REJOIN_LEN: usize = 6;
 pub fn compile(source: &str, options: CompileOptions) -> CompiledScript {
     let mut interner = Interner::default();
     let mut atoms: Vec<ScriptAtom> = Vec::new();
+    let paras = for_each_spoken_line(source, options, |line_no, para, text| {
+        push_line(text, line_no, para, &mut interner, &mut atoms);
+    });
 
+    let para_count = if atoms.is_empty() { 0 } else { paras + 1 };
+    let token_count = atoms.len() as u32;
+    finalize(atoms, interner, para_count, token_count)
+}
+
+/// Walk the Markdown once and hand every SPOKEN run of text to `visit`, with
+/// the source line and paragraph ordinal it belongs to.
+///
+/// Extracted from [`compile`] so that everything deciding "what does the
+/// presenter actually say out loud" reads one copy of these rules. The
+/// vocabulary extractor needs the same answer as the compiler and needs it in
+/// the AUTHORED spelling — `compile` has already lowercased and split by the
+/// time it has atoms, so it could not be reused wholesale.
+///
+/// Returns the final paragraph ordinal, which is one less than the paragraph
+/// COUNT and is only meaningful when at least one line was spoken.
+pub(crate) fn for_each_spoken_line(
+    source: &str,
+    options: CompileOptions,
+    mut visit: impl FnMut(u32, u32, &str),
+) -> u32 {
     let mut in_fence = false;
     let mut in_comment = false;
     let mut container_depth = 0usize;
@@ -361,7 +385,7 @@ pub fn compile(source: &str, options: CompileOptions) -> CompiledScript {
         if trimmed.starts_with('#') {
             if options.read_headings {
                 let text = trimmed.trim_start_matches('#').trim();
-                push_line(text, line_no as u32, para, &mut interner, &mut atoms);
+                visit(line_no as u32, para, text);
                 last_line_had_content = true;
             }
             continue;
@@ -375,13 +399,10 @@ pub fn compile(source: &str, options: CompileOptions) -> CompiledScript {
             .trim_start_matches(['-', '*', '+'])
             .trim_start();
         let inline = strip_inline(stripped);
-        push_line(&inline, line_no as u32, para, &mut interner, &mut atoms);
+        visit(line_no as u32, para, &inline);
         last_line_had_content = true;
     }
-
-    let para_count = if atoms.is_empty() { 0 } else { para + 1 };
-    let token_count = atoms.len() as u32;
-    finalize(atoms, interner, para_count, token_count)
+    para
 }
 
 /// One spoken token of a script the CALLER has already tokenized.

@@ -23,6 +23,42 @@ crates/cc-bench/  Harness: plans, gold, synthetic events, TTS, capture,
                   replay, metrics, suites, reports
 ```
 
+## Custom vocabulary (`transcribeConfig.prompts`)
+
+`inworld/inworld-stt-1` accepts a soft vocabulary bias, and
+`crates/cc-align/src/vocab.rs` builds one from a script: compound brands,
+initialisms, non-ASCII names, capitalised runs away from a sentence start, and
+figures in the notation the script wrote them in. Two commands drive it.
+
+```bash
+# What would this script send? No network, no cost.
+cc-bench vocab names brands figures
+
+# The same audio, streamed twice, differing in one field.
+cc-bench prompt-ab --workdir /tmp/ab --scripts names,brands,figures
+```
+
+`prompt-ab` synthesises each script once (the clip cache makes the second
+stream free), streams it with an empty vocabulary and again with the extracted
+one, and prints three numbers per run because the two wins do not share a
+measurement:
+
+| column  | computed on | answers |
+|---|---|---|
+| `wer`   | canonical atoms | were the right WORDS heard |
+| `raw`   | bare lowercased surfaces | were they SPELLED the script's way |
+| `hits`  | verbatim term search | did the terms sent actually come back |
+
+`wer` folds `27` and `twenty-seven` onto one atom by design, so it cannot see a
+re-spelling; `raw` does nothing else. A bias the service ignores shows up as a
+flat `hits` column.
+
+`crates/cc-bench/tests/prompt_config.rs` is the cheap guard beside it: one
+second of silence against the live endpoint carrying a term per permitted
+character class, plus a deliberately invalid term as the control. It exists
+because the config frame LEADS the socket — a term the gateway dislikes does
+not degrade a take, it prevents one.
+
 ## Spelling, not mishearing
 
 Most families ask what happens when the reader departs from the script. The

@@ -91,6 +91,20 @@ pub struct TranscribeConfig {
     pub audio_encoding: String,
     pub sample_rate_hertz: u32,
     pub language: String,
+    /// Custom vocabulary (`prompts`): a soft bias towards the terms this
+    /// script uses, built by [`cc_align::vocab`] from its spoken tokens.
+    ///
+    /// Sent once, on the config frame that leads the socket — including the
+    /// one that leads every RECONNECT, since the config is held for the life
+    /// of the session. That is also why the vocabulary is a whole-script list
+    /// rather than a window around the reader: there is no way to revise it
+    /// without dropping the connection, and dropping the connection mid-take
+    /// costs more than any bias could return.
+    ///
+    /// Omitted when empty rather than sent as `[]`, so the microphone test and
+    /// any take without a script produce exactly the frame they always did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompts: Vec<String>,
 }
 
 impl Default for TranscribeConfig {
@@ -100,6 +114,7 @@ impl Default for TranscribeConfig {
             audio_encoding: "LINEAR16".to_string(),
             sample_rate_hertz: SAMPLE_RATE_HZ,
             language: DEFAULT_LANGUAGE.to_string(),
+            prompts: Vec::new(),
         }
     }
 }
@@ -384,6 +399,20 @@ mod tests {
         assert_eq!(json["audioEncoding"], "LINEAR16");
         assert_eq!(json["sampleRateHertz"], SAMPLE_RATE_HZ);
         assert_eq!(json["language"], DEFAULT_LANGUAGE);
+        // A session with no script — the microphone test — must send exactly
+        // the frame it sent before custom vocabulary existed.
+        assert!(json.get("prompts").is_none());
+    }
+
+    #[test]
+    fn a_script_vocabulary_rides_on_the_config_frame() {
+        let config = TranscribeConfig {
+            prompts: vec!["RustLight Games".into(), "three thirty".into()],
+            ..TranscribeConfig::default()
+        };
+        let json = serde_json::to_value(config).unwrap();
+        assert_eq!(json["prompts"][0], "RustLight Games");
+        assert_eq!(json["prompts"][1], "three thirty");
     }
 
     #[test]

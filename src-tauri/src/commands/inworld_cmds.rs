@@ -149,12 +149,46 @@ pub async fn delete_inworld_key(secrets: State<'_, Secrets>) -> Result<(), AppEr
 }
 
 /// What the renderer may choose about a session. Deliberately small: the sample
-/// rate and encoding are pinned app-wide, so the only real choice is language.
+/// rate and encoding are pinned app-wide, so the only real choices are language
+/// and the script to draw a vocabulary from.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranscriptionOptions {
     pub language: Option<String>,
     pub model_id: Option<String>,
+    /// The take's spoken tokens, in the app compiler's AUTHORED spelling.
+    ///
+    /// The renderer sends the script, not the vocabulary. Which words are
+    /// unusual is a lexical judgement, and lexical judgement belongs to
+    /// `cc_align` — the same crate that decides what an anchor is and which
+    /// words are cheap to mismatch. A second opinion about rare words, living
+    /// in TypeScript and drifting from the first, is precisely the failure the
+    /// alignment core is organised to prevent (see `script.rs`: "there is no
+    /// second stopword list anywhere downstream").
+    ///
+    /// It is also why this reuses `AlignToken` rather than inventing a shape:
+    /// the renderer already builds exactly this list for `start_alignment`, so
+    /// there is nothing new to construct and nothing new to keep in step.
+    pub vocabulary: Option<Vec<crate::align::AlignToken>>,
+}
+
+/// The bias terms for a take, from the tokens the renderer sent.
+///
+/// Failure here is never a failure of the take. A script that yields no terms —
+/// or one whose every term is unsendable — simply opens the socket the way it
+/// always did, which is the same outcome as not having this feature at all.
+fn vocabulary_terms(tokens: &[crate::align::AlignToken]) -> Vec<String> {
+    let view: Vec<cc_align::VocabToken<'_>> = tokens
+        .iter()
+        .map(|token| cc_align::VocabToken {
+            surface: &token.surface,
+            // The app's `line` IS its sentence ordinal (see `alignment.ts`),
+            // which is the field this needs: a capital only means "name" when
+            // a sentence did not just start.
+            sentence: token.line,
+        })
+        .collect();
+    cc_align::extract_terms(&view, cc_align::VocabLimits::default())
 }
 
 /// Open a live transcription session and return its generation.
@@ -181,6 +215,7 @@ pub async fn start_transcription<R: tauri::Runtime>(
         language: options
             .language
             .unwrap_or_else(|| DEFAULT_LANGUAGE.to_string()),
+        prompts: options.vocabulary.as_deref().map_or_else(Vec::new, vocabulary_terms),
     };
     Ok(inworld.start_stream(app, key, config))
 }

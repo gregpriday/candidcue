@@ -43,6 +43,14 @@ pub struct TranscribeConfig {
     pub audio_encoding: String,
     pub sample_rate_hertz: u32,
     pub language: String,
+    /// Custom vocabulary: a soft bias towards terms the script uses.
+    ///
+    /// Omitted entirely when empty rather than sent as `[]`, so a run without
+    /// vocabulary produces byte-for-byte the config frame this client has
+    /// always sent — which is what makes an A/B against a captured baseline a
+    /// comparison of one variable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompts: Vec<String>,
 }
 
 impl Default for TranscribeConfig {
@@ -52,6 +60,7 @@ impl Default for TranscribeConfig {
             audio_encoding: "LINEAR16".to_string(),
             sample_rate_hertz: SAMPLE_RATE_HZ,
             language: DEFAULT_LANGUAGE.to_string(),
+            prompts: Vec::new(),
         }
     }
 }
@@ -276,5 +285,17 @@ mod tests {
         assert_eq!(json["audioEncoding"], "LINEAR16");
         assert_eq!(json["sampleRateHertz"], SAMPLE_RATE_HZ);
         assert_eq!(json["language"], DEFAULT_LANGUAGE);
+        assert!(json.get("prompts").is_none(), "empty vocabulary must not be sent");
+    }
+
+    #[test]
+    fn vocabulary_serialises_as_the_prompts_array() {
+        let config = TranscribeConfig {
+            prompts: vec!["RustLight".into(), "twenty-seven".into()],
+            ..TranscribeConfig::default()
+        };
+        let json = serde_json::to_value(config).unwrap();
+        assert_eq!(json["prompts"][0], "RustLight");
+        assert_eq!(json["prompts"][1], "twenty-seven");
     }
 }

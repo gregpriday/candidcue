@@ -22,6 +22,7 @@
  * connection open and transcribe nothing — which is what it did. There is
  * nothing to configure here because there is nothing to get wrong.
  */
+import type { AlignToken } from '../alignment';
 import { ipcInvoke } from '../ipc';
 
 /** Frames the Rust session emits on `stt://event`. Mirrors `SttFrame`. */
@@ -69,6 +70,16 @@ export interface SttSessionOptions {
   /** BCP-47, e.g. `en-US`. Omitted uses the Rust default. */
   language?: string;
   modelId?: string;
+  /**
+   * The take's spoken tokens, for the recogniser's custom vocabulary (§26).
+   *
+   * The SCRIPT, not the terms. Rust decides which words are unusual enough to
+   * bias, because that is the same lexical judgement the alignment engine makes
+   * about anchors and weights, and it is made in one place on purpose.
+   *
+   * Omitted by the microphone test, which has no script to draw one from.
+   */
+  vocabulary?: AlignToken[];
 }
 
 /**
@@ -93,12 +104,14 @@ export interface SttSessionOptions {
  */
 export function sttSessionOptions(
   settings: { transcriptionModel?: string | null; language?: string | null } | null | undefined,
+  vocabulary?: AlignToken[] | null,
 ): SttSessionOptions {
   const options: SttSessionOptions = {};
   const model = settings?.transcriptionModel?.trim();
   if (model && SUPPORTED_MODELS.includes(model)) options.modelId = model;
   const language = settings?.language?.trim();
   if (language) options.language = language;
+  if (vocabulary && vocabulary.length > 0) options.vocabulary = vocabulary;
   return options;
 }
 

@@ -587,6 +587,91 @@ by the suite, all fixed:
   Speaking the authored surface needs the compiler to carry it, which is the
   right fix and a larger one.
 
+## Round three: telling the recogniser what the script says
+
+Everything above treats the transcript as given and asks the engine to cope.
+`inworld/inworld-stt-1` accepts `transcribeConfig.prompts` — an array of terms
+biasing the recogniser — which makes a different question available: how much of
+the disagreement can be prevented rather than repaired?
+
+`crates/cc-align/src/vocab.rs` builds the term list from the script; `cc-bench
+prompt-ab` streams the same cached audio twice, differing only in that field.
+
+| run | words | terms | wer − | wer + | raw − | raw + | hits −/+ |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `names__exact__xai` | 337 | 23 | 12.76 | **10.68** | 15.41 | **13.29** | 2 / **8** |
+| `brands__exact__xai` | 406 | 37 | 10.59 | **8.37** | 13.74 | **10.69** | 19 / **27** |
+| `figures__pauses__gemini` | 463 | 18 | 2.81 | 3.02 | 13.77 | **12.92** | 7 / **10** |
+
+`wer` is against canonical atoms and answers "were the right words heard".
+`raw` is against the AUTHORED page with no number folding and answers "were they
+spelled the way it was written". `hits` counts the sent terms that came back
+verbatim.
+
+Names and brands move a long way: **−2.1 and −2.2 points of WER**, a fifth of
+the recogniser's error on the two scripts built to be hard, with six and eight
+more terms landing and none lost. `Nkosinathi Dlamini`, `Tsholofelo Ramaphosa`,
+`Thandiwe Mkhwanazi`, `Ximena Achterberg`, `Kwabena Asare-Boateng`,
+`BrightHarbour`, `PagerDuty` and `OpenTable` all arrive correctly spelled only
+when they are asked for.
+
+Figures behave exactly as the design predicted and are worth reading carefully.
+Canonical WER does not move (2.81 → 3.02, noise): the normaliser was already
+folding `27` onto `twenty-seven`, so there was nothing there to win. What moves
+is the spelling — `raw` falls 0.85 points and four spelled-out figures
+(`twenty-seven thousand`, `nineteen thousand four hundred`, `eighteen thousand`,
+`one hundred`) start coming back in the script's own notation. So the bias works
+on figures; it simply buys a fold the engine was already making for free.
+
+### The alignment number, which does not agree
+
+A cleaner transcript is not the product. Both sides of each capture were kept as
+replay fixtures, so the same suite that produced every other number in this
+report could score them. Pooled over the three runs:
+
+| metric | without | with | |
+|---|---:|---:|---|
+| `live.within5` | 93.393 % | **94.638 %** | +1.25 pp ✅ |
+| `live.within2` | 65.834 % | **66.623 %** | +0.79 pp ✅ |
+| `live.p95_abs` | 6.003 | **5.241** | −0.76 atoms ✅ |
+| `live.wer` | 8.375 % | **6.965 %** | −1.41 pp ✅ |
+| `live.catastrophic` | 0 | 0 | — |
+| `live.freeze` | 5.088 % | 5.250 % | +0.16 pp ❌ |
+| `live.false_jumps` | 0 | 1 | ❌ |
+| `live.ahead_events` | 6 | 9 | **+50 % ❌** |
+| `live.ahead_time` | 4.382 % | 4.499 % | +0.12 pp ❌ |
+| `live.ahead_p95` | 0.897 | 0.922 | +0.03 atoms ❌ |
+| `live.ahead_worst` | 3.246 | 3.486 | +0.24 atoms ❌ |
+
+Read the two halves of that table against the rule this project judges by — the
+display may trail and must not lead. Positional accuracy improves on every
+symmetric measure. Every `ahead_*` measure gets worse, and a false jump appears
+where there were none.
+
+The direction was identical at two runs and at three, so it is a pattern rather
+than one bad capture, and it has an obvious mechanism: correctly spelled rare
+names are exactly the anchor-grade words the engine relocates on, so a
+vocabulary that fixes them hands it more confident forward evidence, and more
+confident forward evidence is what carries the cursor past the reader. The
+magnitudes are small — `ahead_worst` moves a quarter of an atom, `catastrophic`
+stays at zero — but small and in the wrong direction is the shape this UI cannot
+afford, and it is not something a WER improvement can buy off.
+
+**So: proven for transcription, unproven for following.** Three captures on one
+voice each is too thin to call the `ahead_*` move noise, and the honest next
+step is a wider capture rather than a decision. Baseline run-to-run variance was
+measured at roughly 0.5 pp of WER on a repeat of `brands`, which is the scale
+below which nothing here should be believed.
+
+One more thing this measurement is not:
+
+* **`brands` is measuring itself slightly wrong.** Its prose quotes the
+  spellings the recogniser gets WRONG ("it writes Rust Light"), so `Rust Light`
+  and `Candid Cue` are extracted as terms and biased FOR. `Candid Cue` duly
+  shows up in the gained list. The fixture's own explanatory text is working
+  against the fixture, as `brands.md cannot exercise its own headline example`
+  below already notes.
+
 ## Honest limitations
 
 * `recovery.adlib_drift_p95` regressed (1.7 → 3.0 atoms): the baseline's

@@ -23,6 +23,7 @@
  * stop audio reaching the recogniser.
  */
 import type { AudioLevelSnapshot, CompiledScript } from '../../shared/contracts';
+import { alignTokensFor, type AlignToken } from './alignment';
 import { DEFAULT_SOFT_PAUSE_AUTO_DISCONNECT_MS } from './audio/defaults';
 import { isTauriRuntime } from './ipc';
 import { trace, traceBegin } from './audio-trace';
@@ -455,11 +456,27 @@ export class VoiceSessionPipeline {
     return 'stopped';
   }
 
+  /**
+   * The take's spoken tokens, projected once.
+   *
+   * Once because the script cannot change mid-take, and because `start()` may
+   * run more than once for one script — a soft-pause disconnect and resume
+   * re-opens the session, and rebuilding a five-thousand-token list to say the
+   * same thing again is work nobody asked for. Rust's own reconnects never
+   * come back through here at all: it holds the config for the life of the
+   * session and re-sends it itself.
+   */
+  private vocabularyTokens: AlignToken[] | null = null;
+
   private sessionOptions(): ReturnType<typeof sttSessionOptions> {
-    return sttSessionOptions({
-      ...(this.deps.modelId !== undefined ? { transcriptionModel: this.deps.modelId } : {}),
-      ...(this.deps.language !== undefined ? { language: this.deps.language } : {}),
-    });
+    this.vocabularyTokens ??= alignTokensFor(this.deps.compiled);
+    return sttSessionOptions(
+      {
+        ...(this.deps.modelId !== undefined ? { transcriptionModel: this.deps.modelId } : {}),
+        ...(this.deps.language !== undefined ? { language: this.deps.language } : {}),
+      },
+      this.vocabularyTokens,
+    );
   }
 
   /* ---------------------------------------------------------------------- */

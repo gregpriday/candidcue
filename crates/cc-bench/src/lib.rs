@@ -5,6 +5,7 @@
 pub mod capture;
 pub mod metrics;
 pub mod plan;
+pub mod prompt_ab;
 pub mod replay;
 pub mod report;
 pub mod scenarios;
