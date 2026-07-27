@@ -240,11 +240,23 @@ export function startPreviewDriver(): PreviewDriver {
   const trackingTick = () => {
     if (frozen || blanked) return;
     audioMs += 1000;
-    // One second of speech at the preview's pace, so the position the snapshot
-    // reports and the rate it claims describe the same motion.
-    const advance = Math.max(1, Math.round(PREVIEW_TOKENS_PER_SECOND));
+    /*
+     * One second of speech at the preview's pace, so the position the snapshot
+     * reports and the rate it claims describe the same motion.
+     *
+     * Fractional, deliberately. This used to round, which advanced the position
+     * by 3 tokens a second while the snapshot went on claiming 2.6 — so the
+     * feed-forward term was 13% short of the motion it was feeding forward, and
+     * every tick opened a small target discontinuity for the controller to
+     * absorb. The alignment contract is continuous in token space (the whole
+     * point of `alignmentDisplayAt` is sub-token interpolation), so there is
+     * nothing to round for, and a harness that misreports its own pace is worse
+     * than useless for eyeballing lead and lag.
+     */
     tokenIndex =
-      tokenIndex + advance >= built.tokenCount - 1 ? 0 : tokenIndex + advance;
+      tokenIndex + PREVIEW_TOKENS_PER_SECOND >= built.tokenCount - 1
+        ? 0
+        : tokenIndex + PREVIEW_TOKENS_PER_SECOND;
     emitTracking(false);
   };
 

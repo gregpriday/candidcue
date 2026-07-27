@@ -21,13 +21,6 @@ import { test, expect } from '@playwright/test';
  *     move when the delivery score changes state or width.
  */
 
-function translateY(transform: string): number {
-  // matrix(a,b,c,d,tx,ty) or translate3d(...) -> read the vertical component.
-  const m = transform.match(/matrix\([^)]*,\s*([-\d.]+)\)/);
-  if (m) return parseFloat(m[1]!);
-  return 0;
-}
-
 test('the preview renders the script, reserves the rail band, and drives the reading band', async ({ page }, testInfo) => {
   await page.goto('/stage.html?preview=1');
 
@@ -46,14 +39,71 @@ test('the preview renders the script, reserves the rail band, and drives the rea
 
   await page.screenshot({ path: testInfo.outputPath('stage-preview.png'), fullPage: false });
 
-  // The reading band is LIVE: semantic frames advance, so the script drifts up
-  // (translateY grows more negative) rather than sitting on a static frame.
-  const first = translateY(await scrollPlane.evaluate((el) => getComputedStyle(el).transform));
-  await expect
-    .poll(async () => translateY(await scrollPlane.evaluate((el) => getComputedStyle(el).transform)), {
-      timeout: 5000,
-    })
-    .toBeLessThan(first - 5);
+  /*
+   * The stage SCROLLS — it does not merely highlight.
+   *
+   * This used to assert that the plane's `translateY` had moved 5 px inside
+   * five seconds, and that is far too weak a claim to stand for "the reading
+   * band is live". A frame loop that re-anchored the motion plant once per
+   * displayed frame left the document crawling at about 1 px/s while the
+   * reading position advanced at 35: it cleared the 5 px inside four seconds,
+   * passed this test, and then spent the rest of the take with the presenter's
+   * words a thousand pixels below the fold. Movement is not following.
+   *
+   * So the claim is now the one a presenter would make: THE WORD BEING SPOKEN
+   * ARRIVES AT THE READING BAND. The preview reads about three tokens a second,
+   * so a stage that follows brings token 30 to the band in roughly ten seconds;
+   * one that only highlights would need six minutes.
+   */
+  const word30 = page.locator('[data-t="30"]');
+  // Token 30 is the first word of the third block, so it OPENS a rendered line
+  // — which is what makes it a fair probe: the §8 motion path puts every line
+  // START at `R`, and a mid-line word would legitimately sit a whole line pitch
+  // above that. Pinned so an edit to the preview script cannot quietly turn
+  // this into a mid-line probe and loosen the assertion by a line.
+  await expect(word30).toHaveText('Reading');
+
+  const { bandCentrePx, linePitchPx } = await page.evaluate(() => ({
+    // The preview's own `readingBandCenterPercent` (src/stage/preview.ts).
+    bandCentrePx: window.innerHeight * 0.38,
+    linePitchPx: parseFloat(getComputedStyle(document.querySelector('.column')!).lineHeight),
+  }));
+
+  /**
+   * Where the 30th spoken word sits relative to the reading band, positive
+   * below. Every sample is kept, so the assertion afterwards can speak about
+   * the whole approach rather than one racy re-read.
+   */
+  const approach: number[] = [];
+  const bandError = async (): Promise<number> => {
+    const error = Math.round(
+      (await word30.evaluate((el) => el.getBoundingClientRect().top)) - bandCentrePx,
+    );
+    approach.push(error);
+    return error;
+  };
+
+  // Arrival, measured from the top of the word's box against the band's centre.
+  // `R` is where the BASELINE goes, so a line sitting exactly on the reading
+  // line reads as roughly −0.8 of a line pitch here; landing anywhere under
+  // +40 means the word has come up out of the lower half of the screen.
+  await expect.poll(bandError, { timeout: 25_000, intervals: [250] }).toBeLessThan(40);
+
+  /*
+   * And it arrived by FOLLOWING, not by flying past. The stage's fade treatment
+   * makes a display that LEADS the reader worse than one that trails, so the
+   * far side is the one worth pinning: nothing on the way in may put the word
+   * more than a couple of line pitches above the band.
+   *
+   * Measured arrival is about −0.6 of a line pitch, and a single missed 250 ms
+   * poll across a line handoff can add one more, so 2.5 is the honest floor —
+   * tight enough that an unfollowed jump to the top of the document (which puts
+   * this word a whole screen high) still fails.
+   */
+  expect(
+    Math.min(...approach),
+    `band error over the approach: ${approach.join(', ')}`,
+  ).toBeGreaterThan(-2.5 * linePitchPx);
 
   // Blank (§16.6): the script hides instantly, without unmounting.
   await root.press('b');
