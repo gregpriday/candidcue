@@ -94,6 +94,20 @@
     voicePill: StageVoicePillPayload | null;
     onexit: () => void;
     onintent?: (intent: StageIntent) => void;
+    /**
+     * The host has opened operator chrome over the stage — the presentation
+     * menu, or the appearance sheet — and owns the keyboard until it closes.
+     *
+     * Without this the stage answers keys it can see but no longer has any
+     * business acting on: Escape would end the take instead of closing the
+     * sheet that is open on top of it, Space would pause the script while
+     * somebody is tabbing through the controls, and the arrows — the ones a
+     * range input uses to move a slider — would step the script a line at a
+     * time behind the panel. All three are the same mistake, so one flag
+     * stands the whole keyboard down rather than three guards that will
+     * eventually disagree.
+     */
+    chromeOpen?: boolean;
   }
 
   let { embedded = null }: { embedded?: EmbeddedStageBridge | null } = $props();
@@ -1040,6 +1054,40 @@
   let wheelFlush = 0;
 
   function onKeyDown(event: KeyboardEvent) {
+    // Chrome is up over the stage; the host window owns the keyboard.
+    if (embedded?.chromeOpen) return;
+    /*
+     * A key that landed inside the host's operator chrome was not addressed to
+     * the script.
+     *
+     * The stage listens on the WINDOW, so it sees every keystroke in the
+     * document — including the ones aimed at a control that has focus. Space on
+     * the host's focused menu button is the case that showed it: the app
+     * shortcut layer correctly stands down for a button, the menu had not
+     * opened yet so `chromeOpen` was still false, and the stage toggled pause
+     * AND called `preventDefault()`, which suppressed the button's own
+     * activation. One key, the wrong action, and the right one cancelled.
+     *
+     * ESCAPE IS EXEMPT, and deliberately — the same exemption `resolveShortcut`
+     * makes for the same reason. Somebody reaching for Escape has a full-screen
+     * stage in front of them and no interest in which button happens to hold
+     * focus; standing down for the menu trigger would mean that after closing
+     * the menu, the key that ends a take quietly stopped working. An OPEN menu
+     * is a different matter and is already handled: `chromeOpen` stands the
+     * whole keyboard down, and the menu answers its own Escape.
+     *
+     * `defaultPrevented` is deliberately NOT consulted. The app shortcut layer
+     * calls `preventDefault()` on every key it resolves, including the Space
+     * and Escape that Live then delegates HERE on purpose — so reading it would
+     * suppress exactly the keys this handler exists to answer.
+     *
+     * Scoped to the embedded case, which is the one that has a host with chrome
+     * of its own. The standalone stage window's key handling is untouched.
+     */
+    if (embedded && event.key !== 'Escape') {
+      const target = event.target;
+      if (target instanceof Element && target.closest('[data-stage-chrome]') !== null) return;
+    }
     if (preview && handlePreviewKey(event.key)) return;
     switch (event.key) {
       case 'Escape': {
@@ -1375,8 +1423,15 @@
           Not shown during a blank. A blank is a deliberate "show nothing", and
           the answer to a blank is Escape — which the hint above is already there
           to explain.
+
+          Not shown when EMBEDDED either. Single-window presentation puts a menu
+          in the corner of the host window with "End session" inside it, and two
+          separate ways out sitting in two corners of the same screen is one way
+          out plus one thing to wonder about. The corner that survives is the
+          one that also reaches the appearance controls, because the stage is
+          the only place those can be judged.
         -->
-        {#if exitVisible && !app.blanked}
+        {#if exitVisible && !app.blanked && !embedded}
           <button
             type="button"
             class="stage-exit"

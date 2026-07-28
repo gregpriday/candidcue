@@ -39,7 +39,20 @@ import {
   voicePillView,
   type VoicePillState,
 } from '../services/audio/voice-pill';
-import type { FollowingSettings, SessionMode } from '../services/settings-types';
+import {
+  DEFAULT_STAGE_APPEARANCE,
+  type FollowingSettings,
+  type SessionMode,
+} from '../services/settings-types';
+import type { DisplayDescriptor } from '../services/stage-types';
+import { isRigResolvedStage, stageSettingsFromSettings } from '../services/stage-envelope';
+import {
+  clampStageAppearance,
+  readStageAppearance,
+  typeCeilingPx,
+  type StageAppearance,
+  type TeleprompterSettings,
+} from '../lib/stage-appearance';
 import { createTrackingDriver, newSessionId, type TrackingDriver } from '../services/session';
 import { VoiceSessionPipeline } from '../services/voice-session';
 import { isTauriRuntime } from '../services/ipc';
@@ -263,6 +276,23 @@ export interface SessionState {
   summary: SessionSummary | null;
   blocksSeen: string[];
   stageFontSizePx: number;
+  /**
+   * What the stage is prompting at RIGHT NOW, for the in-session sheet to open
+   * on.
+   *
+   * The saved settings would be the wrong source: `+`/`-` and a voice command
+   * already move the size mid-take, so a sheet seeded from the document would
+   * show a number the glass disagrees with — and the first slider touched would
+   * snap the type back to it.
+   */
+  stageAppearance: StageAppearance;
+  /**
+   * §17.2: a saved rig decided this take's appearance, so none of it is the
+   * in-session sheet's to set — see `isRigResolvedStage`.
+   */
+  stageRigResolved: boolean;
+  /** The take's size ceiling, fixed at its opening size — see `takeFontCeilingPx`. */
+  stageFontCeilingPx: number;
 }
 
 const initial: SessionState = {
@@ -295,7 +325,16 @@ const initial: SessionState = {
   counts: { jumps: 0, retakes: 0, reconnects: 0 },
   summary: null,
   blocksSeen: [],
-  stageFontSizePx: 64,
+  stageFontSizePx: DEFAULT_STAGE_APPEARANCE.fontSizePx,
+  stageAppearance: {
+    textIntensity: 'standard',
+    fontSizePx: DEFAULT_STAGE_APPEARANCE.fontSizePx,
+    lineHeight: DEFAULT_STAGE_APPEARANCE.lineHeight,
+    columnWidthPercent: DEFAULT_STAGE_APPEARANCE.columnWidthPercent,
+    readingBandCenterPercent: DEFAULT_STAGE_APPEARANCE.readingBandCenterPercent,
+  },
+  stageRigResolved: false,
+  stageFontCeilingPx: typeCeilingPx(DEFAULT_STAGE_APPEARANCE.fontSizePx),
 };
 
 const state = writable<SessionState>({ ...initial });
@@ -318,6 +357,37 @@ let stageGeneration = 0;
  */
 let sessionGeneration = 0;
 let stageSettings: StageSettings | null = null;
+/**
+ * The saved teleprompter section this take was composed from, plus whatever the
+ * in-session sheet has changed since.
+ *
+ * Held per-take rather than read back off the settings store on every keystroke
+ * because those are two different documents by design: the sheet's OK button is
+ * what promotes a take's appearance into the saved one, and until it is pressed
+ * a presenter who nudged the type up mid-sentence must not have that follow
+ * them into tomorrow's take. Null outside a take.
+ */
+let takeTeleprompter: TeleprompterSettings | null = null;
+/**
+ * The panel this take's geometry was resolved against (§52), or null when the
+ * displays could not be enumerated. Kept because a rebuild without it silently
+ * demotes a calibrated rig to the uncalibrated layout — the type would jump the
+ * first time somebody touched a slider, on the one screen where a jump is most
+ * expensive.
+ */
+let stageDisplay: DisplayDescriptor | null = null;
+/**
+ * The size ceiling for THIS take, fixed when it opened.
+ *
+ * `typeCeilingPx` follows the value it is given so a hand-set 400px is not
+ * clamped down to the ordinary 320 the moment a panel shows it. Recomputing it
+ * per change turns that into a one-way ratchet: a take opened at 400 and nudged
+ * down to 350 could never get back up, and Cancel — which is just another
+ * request, for the value the sheet opened on — was clamped to the new lower
+ * ceiling and left the take where it was. Frozen at the take's opening size,
+ * the range the operator was offered is the range they keep.
+ */
+let takeFontCeilingPx = typeCeilingPx(DEFAULT_STAGE_APPEARANCE.fontSizePx);
 let listenerSelection: ListenerStageSelection | null = null;
 let listenerVisible = false;
 /**
@@ -546,6 +616,14 @@ export interface StartSessionInput {
   transcriptRetained?: boolean;
   stageSettings?: StageSettings | null;
   stageEnvelope?: StageSessionEnvelope | null;
+  /**
+   * The saved teleprompter section `stageSettings` was composed from, so the
+   * in-session sheet can compose it again. Omitted — a preview, a test — falls
+   * back to the settings snapshot, which is what the caller would have used.
+   */
+  teleprompter?: TeleprompterSettings;
+  /** The panel the geometry was resolved against; see `stageDisplay`. */
+  stageDisplay?: DisplayDescriptor | null;
   listener?: ListenerStageSelection | null;
   transcription?: TranscriptionConfig;
   micDeviceId?: string;
@@ -589,6 +667,11 @@ export function startLiveSession(input: StartSessionInput): string {
   stageApplyReported = false;
   scriptWordCount = input.totalTokens;
   stageSettings = input.stageSettings ?? null;
+  stageDisplay = input.stageDisplay ?? null;
+  takeTeleprompter = input.teleprompter ?? currentTeleprompterSettings();
+  takeFontCeilingPx = typeCeilingPx(
+    stageSettings?.fontSizePx ?? takeTeleprompter.fontSizePx,
+  );
   listenerSelection = input.listener ?? null;
   listenerVisible = listenerSelection !== null;
   listenerRetiredForSession = false;
@@ -623,8 +706,11 @@ export function startLiveSession(input: StartSessionInput): string {
     voiceFollow: input.mode === 'voice',
     outline: input.outline,
     sentences: input.sentences,
-    stageFontSizePx: stageSettings?.fontSizePx ?? 64,
+    stageFontSizePx: stageSettings?.fontSizePx ?? DEFAULT_STAGE_APPEARANCE.fontSizePx,
     stageEnvelope: input.stageEnvelope ?? null,
+    stageAppearance: liveStageAppearance(),
+    stageRigResolved: isRigResolvedStage(stageSettings),
+    stageFontCeilingPx: takeFontCeilingPx,
   });
 
   // Voice mode without a Tauri runtime has no realtime feed — keep the
@@ -2638,27 +2724,129 @@ function pushSettings(): void {
   if (stageSettings) sendDirective({ kind: 'settings', settings: { ...stageSettings } });
 }
 
+/** The saved teleprompter section, or its defaults where settings cannot be read. */
+function currentTeleprompterSettings(): TeleprompterSettings {
+  return getSettingsSnapshot().teleprompter;
+}
+
+/**
+ * What the stage is prompting at now, as the sheet's controls describe it.
+ *
+ * Read off the RENDERED settings, falling back to the section they were
+ * composed from. The two differ on a rig-resolved take, where the geometry was
+ * worked out from a measured distance and the saved values were never consulted
+ * — and a readout that claims to say what is on the glass has to show the
+ * numbers that are on the glass.
+ *
+ * NOT clamped, deliberately. Clamping a READ to the ranges the sliders offer is
+ * how a readout starts lying: a rig may legitimately resolve a line height of
+ * 2.0 or a column narrower than 40%, and the sheet would have shown 1.80 beside
+ * type that is plainly not at 1.80. Requests are clamped, on the way in, where
+ * a value out of range is a mistake rather than a measurement.
+ */
+function liveStageAppearance(): StageAppearance {
+  const source = stageSettings ?? takeTeleprompter ?? currentTeleprompterSettings();
+  return readStageAppearance(source);
+}
+
+/**
+ * Change how the running take looks, now.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE WHOLE THING IS REBUILT
+ * ---------------------------------------------------------------------------
+ * Every caller here used to patch the one field it cared about straight onto
+ * the live `StageSettings`. That is wrong in a way nothing on the glass
+ * announces: `readingBandHalfHeightPercent` is derived from size AND line
+ * height, so a patched `fontSizePx` left the reading corridor sized for type
+ * that is no longer there — the band the presenter aligns to their lens quietly
+ * stops matching the text inside it. Recomposing through
+ * `stageSettingsFromSettings` is the same path a take opens with, so a stage
+ * adjusted mid-take and a stage started with those numbers are identical.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE ENVELOPE IS REWRITTEN TOO
+ * ---------------------------------------------------------------------------
+ * Presentation is one webview now (§62): the stage renderer is mounted inside
+ * this window and hydrates from `stageEnvelope`, not from the cross-window
+ * directive bus. The directive is still sent — a second stage window, if one is
+ * ever open, is entitled to the same change — but on its own it reached
+ * nothing, which is why `+`/`-` and Cmd+Shift+M appeared to do nothing at all
+ * in single-window presentation. The envelope is re-issued at the SAME stage
+ * generation, which `stageReducer` treats as a refresh in place: phase,
+ * alignment and the compiled document all survive it.
+ *
+ * Returns the appearance the stage is now running, which is not always the one
+ * asked for — a rig-resolved take works its geometry out for itself (§17.2).
+ */
+export function applyStageAppearance(patch: Partial<TeleprompterSettings>): StageAppearance {
+  const base = takeTeleprompter ?? currentTeleprompterSettings();
+  /*
+   * A rig-resolved take with no panel to resolve against cannot be recomposed.
+   *
+   * `stageSettingsFromSettings` needs the display to find the profile and to
+   * size type against its viewport; without it the rebuild silently produces
+   * the UNCALIBRATED layout, so the first nudge of any control — even one as
+   * unrelated as the mirror — would demote a measured rig to a guess, mid-take,
+   * with nothing on the glass to say it happened. Production always carries the
+   * display (calibration is keyed by the panel's fingerprint, so a take with no
+   * display resolves no profile in the first place); this is the guard for a
+   * caller that hand-built its settings.
+   */
+  if (stageSettings?.optics && stageDisplay === null) return liveStageAppearance();
+
+  /*
+   * Clamped HERE, not at the controls.
+   *
+   * The sliders already draw the right ranges, but they are not the only
+   * caller: `+`/`-` and the voice commands hand in a delta, and a step past the
+   * end used to land on the glass unclamped — the readout said one size and the
+   * stage prompted at another, which on the one screen with no second opinion
+   * is the worst way for a control to be wrong.
+   */
+  const merged = { ...base, ...patch };
+  takeTeleprompter = { ...merged, ...clampStageAppearance(merged, takeFontCeilingPx) };
+  const rebuilt = stageSettingsFromSettings(
+    { ...getSettingsSnapshot(), teleprompter: takeTeleprompter },
+    stageDisplay,
+  );
+  stageSettings = rebuilt;
+  pushSettings();
+  const appearance = liveStageAppearance();
+  state.update((s) => ({
+    ...s,
+    stageFontSizePx: rebuilt.fontSizePx,
+    stageAppearance: appearance,
+    stageRigResolved: isRigResolvedStage(rebuilt),
+    stageEnvelope:
+      s.stageEnvelope === null ? null : { ...s.stageEnvelope, stageSettings: rebuilt },
+  }));
+  return appearance;
+}
+
+/**
+ * The saved teleprompter section this take is currently running, for the sheet
+ * to persist when the operator presses OK.
+ */
+export function takeTeleprompterSettings(): TeleprompterSettings {
+  return takeTeleprompter ?? currentTeleprompterSettings();
+}
+
 export function adjustStageFontSize(deltaPx: number): number {
-  const next = Math.min(160, Math.max(24, (stageSettings?.fontSizePx ?? get(state).stageFontSizePx) + deltaPx));
-  if (stageSettings) {
-    stageSettings = { ...stageSettings, fontSizePx: next };
-    pushSettings();
-  }
-  state.update((s) => ({ ...s, stageFontSizePx: next }));
-  return next;
+  const current = get(state).stageAppearance.fontSizePx;
+  // Clamped by `clampStageAppearance`, which is the same ceiling the sliders
+  // draw against. It used to stop at 160px — below what this product's own
+  // hardware asks for, and a different limit from the one Settings offered.
+  return applyStageAppearance({ fontSizePx: current + deltaPx }).fontSizePx;
 }
 
 export function toggleStageMirror(axis: 'x' | 'y' = 'x'): void {
-  if (!stageSettings) return;
-  stageSettings =
-    axis === 'x'
-      ? { ...stageSettings, mirrorX: !stageSettings.mirrorX }
-      : { ...stageSettings, mirrorY: !stageSettings.mirrorY };
-  pushSettings();
+  const t = takeTeleprompter ?? currentTeleprompterSettings();
   // §7.5: the rail inherits the same mirror boundary as the script, so it must
   // learn the new mirror state too — it flips through its own snapshot, not the
   // stage transform, because it is inside the mirror plane but the boundary is
   // decided on the control side.
+  applyStageAppearance(axis === 'x' ? { mirrorX: !t.mirrorX } : { mirrorY: !t.mirrorY });
 }
 
 export function toggleListenerVisible(): boolean {
@@ -2836,6 +3024,16 @@ function stopInternals(): void {
    * resolved itself.
    */
   clearConditionToasts();
+  /*
+   * The take's appearance ends with the take.
+   *
+   * Anything the in-session sheet changed and did not save was scoped to the
+   * take on purpose; carrying `takeTeleprompter` into the next one would make
+   * "Cancel" mean "until you quit". The next take composes from the saved
+   * settings again, which is where OK put anything worth keeping.
+   */
+  takeTeleprompter = null;
+  stageDisplay = null;
   driver?.dispose();
   driver = null;
   if (pipeline) {

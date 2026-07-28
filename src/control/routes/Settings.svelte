@@ -29,6 +29,12 @@
   import { openExternal } from '../lib/app-actions';
   import { chooseStageDisplay, stageSettingsFromSettings } from '../lib/start-take';
   import {
+    ADVANCED_FONT_SIZE_CEILING_PX,
+    APPEARANCE_LIMITS,
+    MIN_FONT_SIZE_PX,
+    typeCeilingPx,
+  } from '../lib/stage-appearance';
+  import {
     openStagePreview,
     type StagePreviewHandle,
   } from '../services/stage-preview-session';
@@ -735,21 +741,12 @@
   const AUTOMATIC_MAX_COLUMN_FRACTION = 0.92;
 
   /**
-   * The ceiling on the uncalibrated size slider.
-   *
-   * 320 px covers every panel CandidCue knows about at its rated distance — a
-   * Prompter XL at 4.6 m wants about 234 — and the advanced per-rig override
-   * goes to 512 for the rigs that are stranger than that. The ceiling follows a
-   * larger stored value up to that same 512 rather than clamping it, because a
-   * slider whose maximum is BELOW its own value silently rewrites that value the
-   * first time it is touched, and the operator would have no way to see that it
-   * had. Past 512 the value did not come from this control and is treated as
-   * damage: the slider offers to repair it rather than growing to fit it.
+   * The ceiling on the uncalibrated size slider — see `typeCeilingPx` in
+   * lib/stage-appearance.ts, which the in-session sheet draws its own size
+   * slider against. The two screens set the same value and must offer the same
+   * range: a limit that lives on one of them is a limit that drifts.
    */
-  const ADVANCED_FONT_SIZE_CEILING_PX = 512;
-  const typeCeilingPx = $derived(
-    Math.max(320, Math.min(ADVANCED_FONT_SIZE_CEILING_PX, $settings.teleprompter.fontSizePx)),
-  );
+  const sizeCeilingPx = $derived(typeCeilingPx($settings.teleprompter.fontSizePx));
 
   /**
    * How many hand-set values this rig carries.
@@ -2304,33 +2301,36 @@
           <Slider
             label="Default font size"
             value={$settings.teleprompter.fontSizePx}
-            min={24}
-            max={typeCeilingPx}
+            min={MIN_FONT_SIZE_PX}
+            max={sizeCeilingPx}
             format={(v) => `${v} px`}
             onchange={(value) => void patchSettings('teleprompter', { fontSizePx: value })}
           />
+          <!-- Bounds from APPEARANCE_LIMITS, not literals: the in-session sheet
+               sets these same four values, and a range that lives on one screen
+               is a range that drifts from the other. -->
           <Slider
             label="Line height"
             value={$settings.teleprompter.lineHeight}
-            min={1.05}
-            max={1.8}
-            step={0.01}
+            min={APPEARANCE_LIMITS.lineHeight.min}
+            max={APPEARANCE_LIMITS.lineHeight.max}
+            step={APPEARANCE_LIMITS.lineHeight.step}
             format={(v) => v.toFixed(2)}
             onchange={(value) => void patchSettings('teleprompter', { lineHeight: value })}
           />
           <Slider
             label="Text column width"
             value={$settings.teleprompter.columnWidthPercent}
-            min={40}
-            max={100}
+            min={APPEARANCE_LIMITS.columnWidthPercent.min}
+            max={APPEARANCE_LIMITS.columnWidthPercent.max}
             format={(v) => `${v}%`}
             onchange={(value) => void patchSettings('teleprompter', { columnWidthPercent: value })}
           />
           <Slider
             label="Reading band position"
             value={$settings.teleprompter.readingBandCenterPercent}
-            min={20}
-            max={70}
+            min={APPEARANCE_LIMITS.readingBandCenterPercent.min}
+            max={APPEARANCE_LIMITS.readingBandCenterPercent.max}
             format={(v) => `${v}%`}
             onchange={(value) =>
               void patchSettings('teleprompter', { readingBandCenterPercent: value })}

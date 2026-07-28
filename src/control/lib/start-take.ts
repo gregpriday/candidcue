@@ -31,11 +31,11 @@ import { endSessionRecord, startSessionRecord } from '../services/session-record
 import * as stageService from '../services/stage';
 import {
   buildStageEnvelope,
-  buildStageSettings,
   resolveDocumentAssets,
+  stageSettingsFromSettings,
 } from '../services/stage-envelope';
 import type { DisplayDescriptor } from '../services/stage-types';
-import { activeOpticalProfile, type AppSettings } from '../services/settings-types';
+import type { AppSettings } from '../services/settings-types';
 import { editor, saveNow } from '../stores/editor';
 import { navigate } from '../stores/router';
 import {
@@ -80,50 +80,13 @@ export function chooseStageDisplay(
 /**
  * The stage appearance a take runs with, straight out of Settings.
  *
- * The display is an argument rather than a lookup because it is what turns a
- * saved calibration into geometry: the rig is chosen by the panel's
- * fingerprint, and `resolveStageGeometry` sizes type against that panel's own
- * CSS-pixel viewport. Called without a display — a preview, a test — it falls
- * back to the uncalibrated percentage layout, which is the same thing an
- * uncalibrated rig gets and is labelled as a guess wherever it is shown.
- *
- * Font metrics are deliberately not supplied. Control cannot measure a font it
- * does not render; the DIN fallbacks resolve a defensible size and mark
- * themselves `metricsMeasured: false`, which the stage improves on once it has
- * painted its own text.
+ * Re-exported from `services/stage-envelope`, where it moved when the session
+ * store became its second caller (the in-session appearance sheet rebuilds the
+ * take's settings through the same function). It is still named here because
+ * this is where callers have always imported it from, and because composing the
+ * settings a take opens with is what this module is about.
  */
-export function stageSettingsFromSettings(
-  s: AppSettings,
-  display?: DisplayDescriptor | null,
-): ReturnType<typeof buildStageSettings> {
-  const t = s.teleprompter;
-  const profile = activeOpticalProfile(s.optical, display?.fingerprint ?? null);
-  return buildStageSettings({
-    fontFamilyId: t.fontFamilyId,
-    fontSizePx: t.fontSizePx,
-    lineHeight: t.lineHeight,
-    columnWidthPercent: t.columnWidthPercent,
-    readingBandCenterPercent: t.readingBandCenterPercent,
-    mirrorX: t.mirrorX,
-    mirrorY: t.mirrorY,
-    pastDimming: t.pastDimming,
-    phraseHighlight: t.phraseHighlight,
-    textIntensity: t.textIntensity,
-    stageMode: t.stageMode,
-    readingCue: t.readingCue,
-    ...(profile && display
-      ? {
-          optical: {
-            profile,
-            viewport: {
-              widthPx: display.logicalSize.width,
-              heightPx: display.logicalSize.height,
-            },
-          },
-        }
-      : {}),
-  });
-}
+export { stageSettingsFromSettings };
 
 /**
  * Compile the script this take will read (§29.2 step 1).
@@ -297,6 +260,19 @@ export async function startTake(scriptId: string): Promise<boolean> {
       transcriptRetained: record.transcriptRetained,
       stageSettings,
       stageEnvelope,
+      /*
+       * Both halves of what the appearance was composed FROM, so the session
+       * can compose it again mid-take.
+       *
+       * The sheet in presentation mode changes one field and rebuilds the whole
+       * `StageSettings` rather than patching the one it changed. That is not
+       * ceremony: `readingBandHalfHeightPercent` is derived from size and line
+       * height, and a rig resolves all four from a measured distance — so a
+       * patched size with a stale band half-height is a corridor computed
+       * against type that is no longer there.
+       */
+      teleprompter: s.teleprompter,
+      stageDisplay: display,
       listener: null,
       transcription: {
         model: s.inworld.transcriptionModel,

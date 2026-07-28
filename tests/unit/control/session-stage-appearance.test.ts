@@ -1,0 +1,372 @@
+/**
+ * Changing how the prompter looks WHILE it is prompting.
+ *
+ * ---------------------------------------------------------------------------
+ * THE TWO DEFECTS THIS PINS
+ * ---------------------------------------------------------------------------
+ * 1. The quick-controls patched one field onto the live `StageSettings`.
+ *    `readingBandHalfHeightPercent` is derived from size and line height, so a
+ *    patched size left the reading corridor measured for type that is no longer
+ *    on the glass — the band a presenter aligned to their lens quietly stopped
+ *    matching the text inside it. Nothing on the stage says so.
+ *
+ * 2. They reached the stage by publishing a directive to a second webview.
+ *    Presentation is one window now (§62): the renderer is mounted inside the
+ *    control window and hydrates from `stageEnvelope`. The directive went
+ *    nowhere, so `+`/`-` and Cmd+Shift+M moved a number in the store and
+ *    nothing at all on the screen.
+ *
+ * Both are invisible from inside the store's own state, which is why these
+ * assert against the ENVELOPE — the thing the stage actually renders from.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { get } from 'svelte/store';
+import {
+  adjustStageFontSize,
+  applyStageAppearance,
+  clearSession,
+  session,
+  startLiveSession,
+  takeTeleprompterSettings,
+  toggleStageMirror,
+} from '../../../src/control/stores/session';
+import {
+  buildStageEnvelope,
+  buildStageSettings,
+  stageSettingsFromSettings,
+} from '../../../src/control/services/stage-envelope';
+import { defaultAppSettings } from '../../../src/control/services/settings-types';
+import { defaultOpticalProfile, type OpticalProfile } from '../../../src/shared/contracts';
+import type { CompiledScript, StageSessionEnvelope } from '../../../src/shared/contracts';
+
+const SETTINGS = defaultAppSettings();
+
+/** The smallest compiled document the envelope builder will accept. */
+const SCRIPT = {
+  scriptId: 'script-1',
+  sourceHash: 'hash-1',
+  title: 'Launch video',
+  blocks: [],
+  cues: [],
+  outline: [],
+  sentences: [],
+  spokenTokens: [],
+  assets: [],
+  navigationTargets: [],
+  diagnostics: [],
+} as unknown as CompiledScript;
+
+function envelopeFor(stageSettings = stageSettingsFromSettings(SETTINGS)): StageSessionEnvelope {
+  return buildStageEnvelope({
+    script: SCRIPT,
+    sessionId: 'session-1',
+    sessionGeneration: 1,
+    stageGeneration: 0,
+    stageSettings,
+    assets: {},
+    following: SETTINGS.following,
+  });
+}
+
+function start(stageSettings = stageSettingsFromSettings(SETTINGS)): void {
+  startLiveSession({
+    scriptId: 'script-1',
+    scriptTitle: 'Launch video',
+    mode: 'manual',
+    displayLabel: 'This window',
+    outline: [],
+    sentences: [],
+    totalTokens: 200,
+    stageSettings,
+    stageEnvelope: envelopeFor(stageSettings),
+    teleprompter: SETTINGS.teleprompter,
+  });
+}
+
+/** The settings the embedded stage renderer is currently hydrated from. */
+function rendered() {
+  const envelope = get(session).stageEnvelope;
+  expect(envelope).not.toBeNull();
+  return envelope!.stageSettings;
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  clearSession();
+  vi.useRealTimers();
+});
+
+describe('adjusting the prompter mid-take', () => {
+  it('re-issues the envelope the embedded stage renders from', () => {
+    start();
+    const before = get(session).stageEnvelope;
+
+    applyStageAppearance({ fontSizePx: 96 });
+
+    expect(rendered().fontSizePx).toBe(96);
+    // A NEW object, so the renderer's `envelope !== bridge.envelope` check sees
+    // it. Mutating the old one in place would leave the stage on the settings
+    // it hydrated with and nothing would ever say why.
+    expect(get(session).stageEnvelope).not.toBe(before);
+  });
+
+  it('keeps the document and the generation, so the take does not restart', () => {
+    start();
+    const before = get(session).stageEnvelope!;
+
+    applyStageAppearance({ fontSizePx: 96 });
+
+    const after = get(session).stageEnvelope!;
+    // Same generation: `stageReducer` treats this as a refresh in place and
+    // keeps phase, alignment and position. A bumped generation would restart
+    // the handshake and re-measure — mid-sentence.
+    expect(after.stageGeneration).toBe(before.stageGeneration);
+    expect(after.sessionId).toBe(before.sessionId);
+    // The same document object, so the renderer has nothing to recompile and
+    // the script cannot lose its place over a change of type size.
+    expect(after.renderDocument).toBe(before.renderDocument);
+  });
+
+  /*
+   * The corridor. This is the assertion the old patch-one-field path fails:
+   * the band's half-height is derived from size AND line height, so a stage
+   * whose type just doubled must be given a corridor that matches it.
+   */
+  it('recomputes the reading corridor from the new type, not the old', () => {
+    start();
+    const before = rendered().readingBandHalfHeightPercent;
+
+    applyStageAppearance({ fontSizePx: 128 });
+
+    const after = rendered().readingBandHalfHeightPercent;
+    expect(after).not.toBe(before);
+    // And it says exactly what a take STARTED at this size would say — one
+    // description of the layout, whichever door it came in by.
+    expect(after).toBe(
+      stageSettingsFromSettings({
+        ...SETTINGS,
+        teleprompter: { ...SETTINGS.teleprompter, fontSizePx: 128 },
+      }).readingBandHalfHeightPercent,
+    );
+  });
+
+  it('reports what is on the glass, for the sheet to open on', () => {
+    start();
+    applyStageAppearance({ readingBandCenterPercent: 52, textIntensity: 'strong' });
+
+    const s = get(session);
+    expect(s.stageAppearance.readingBandCenterPercent).toBe(52);
+    expect(s.stageAppearance.textIntensity).toBe('strong');
+    expect(s.stageAppearance.fontSizePx).toBe(rendered().fontSizePx);
+  });
+
+  it('accumulates, so one slider does not undo the last', () => {
+    start();
+    applyStageAppearance({ fontSizePx: 88 });
+    applyStageAppearance({ columnWidthPercent: 60 });
+
+    expect(rendered().fontSizePx).toBe(88);
+    expect(rendered().columnWidthPercent).toBe(60);
+  });
+
+  /*
+   * Cancel is "put it back", and it is expressed as another apply. Nothing
+   * special happens on the way out, which is the point: the take ends up in a
+   * state it could have been driven into by hand.
+   */
+  it('goes back exactly, when the sheet is cancelled', () => {
+    start();
+    const opened = get(session).stageAppearance;
+
+    applyStageAppearance({ fontSizePx: 140, lineHeight: 1.7 });
+    applyStageAppearance(opened);
+
+    expect(get(session).stageAppearance).toEqual(opened);
+    expect(rendered()).toEqual(
+      envelopeFor(stageSettingsFromSettings(SETTINGS)).stageSettings,
+    );
+  });
+});
+
+describe('the quick-controls, which used to reach nothing', () => {
+  it('steps the size on the rendered envelope', () => {
+    start();
+    const before = rendered().fontSizePx;
+
+    const next = adjustStageFontSize(8);
+
+    expect(next).toBe(before + 8);
+    expect(rendered().fontSizePx).toBe(before + 8);
+    expect(get(session).stageFontSizePx).toBe(before + 8);
+  });
+
+  /*
+   * The old clamp stopped at 160px, which is not a taste limit — it is short of
+   * what this product's own hardware asks for (a Prompter XL at its rated 4.6m
+   * wants roughly 234), and it was a different limit from the one the Settings
+   * slider offered for the same value.
+   */
+  it('reaches the sizes the product ships hardware for', () => {
+    start();
+    adjustStageFontSize(1000);
+    expect(rendered().fontSizePx).toBe(320);
+  });
+
+  it('mirrors on the rendered envelope', () => {
+    start();
+    expect(rendered().mirrorX).toBe(false);
+
+    toggleStageMirror('x');
+
+    expect(rendered().mirrorX).toBe(true);
+    expect(takeTeleprompterSettings().mirrorX).toBe(true);
+  });
+});
+
+describe('what a take keeps, and what it does not', () => {
+  it('starts from the saved settings, and says so', () => {
+    start();
+    expect(takeTeleprompterSettings()).toEqual(SETTINGS.teleprompter);
+    expect(get(session).stageAppearance.fontSizePx).toBe(SETTINGS.teleprompter.fontSizePx);
+  });
+
+  /*
+   * An unsaved in-session change is scoped to the take on purpose. Carrying it
+   * into the next one would make "Cancel" mean "until you quit" — and the
+   * presenter who nudged the type up for one difficult paragraph would find it
+   * there tomorrow with nothing to explain it.
+   */
+  it('drops an unsaved change when the session is cleared', () => {
+    start();
+    applyStageAppearance({ fontSizePx: 140 });
+    clearSession();
+
+    expect(takeTeleprompterSettings()).toEqual(SETTINGS.teleprompter);
+  });
+});
+
+describe('the size ceiling belongs to the take, not to the last value', () => {
+  const bigTeleprompter = { ...SETTINGS.teleprompter, fontSizePx: 400 };
+  const bigSettings = stageSettingsFromSettings({
+    ...SETTINGS,
+    teleprompter: bigTeleprompter,
+  });
+
+  function startBig(): void {
+    startLiveSession({
+      scriptId: 'script-1',
+      scriptTitle: 'Launch video',
+      mode: 'manual',
+      displayLabel: 'This window',
+      outline: [],
+      sentences: [],
+      totalTokens: 200,
+      stageSettings: bigSettings,
+      stageEnvelope: envelopeFor(bigSettings),
+      teleprompter: bigTeleprompter,
+    });
+  }
+
+  it('publishes the ceiling the sliders must draw against', () => {
+    startBig();
+    expect(get(session).stageFontCeilingPx).toBe(400);
+  });
+
+  /*
+   * The ratchet. `typeCeilingPx` follows the value it is handed so a hand-set
+   * 400px is not clamped to the ordinary 320 the moment a panel shows it —
+   * which, recomputed on every change, means stepping DOWN lowers the ceiling
+   * and the size can never come back up.
+   */
+  it('lets a size come back up after it has been taken down', () => {
+    startBig();
+    applyStageAppearance({ fontSizePx: 350 });
+    expect(rendered().fontSizePx).toBe(350);
+
+    applyStageAppearance({ fontSizePx: 400 });
+    expect(rendered().fontSizePx).toBe(400);
+  });
+
+  /*
+   * Cancel is the same request, so it failed the same way: the sheet promised
+   * to put the take back at 400 and left it at 350, with the button reporting
+   * success.
+   */
+  it('restores the opening size when the sheet is cancelled', () => {
+    startBig();
+    const opened = get(session).stageAppearance;
+
+    applyStageAppearance({ fontSizePx: 350 });
+    applyStageAppearance(opened);
+
+    expect(rendered().fontSizePx).toBe(400);
+  });
+});
+
+describe('a rig-resolved take', () => {
+  const VIEWPORT = { widthPx: 1024, heightPx: 600 };
+  const rig: OpticalProfile = {
+    ...defaultOpticalProfile(),
+    rigName: 'Desk hood',
+    hardwareKind: 'elgato-prompter',
+    scale: {
+      mmPerCssPx: (9 * 25.4) / Math.hypot(VIEWPORT.widthPx, VIEWPORT.heightPx),
+      source: 'model',
+      diagonalMm: 9 * 25.4,
+    },
+    viewingDistanceMm: 1200,
+  };
+
+  const rigSettings = () => buildStageSettings({ optical: { profile: rig, viewport: VIEWPORT } });
+
+  /*
+   * §17.2. Every one of these is resolved from a measured distance, so none of
+   * them is the sheet's to set. It reports them instead — which it can only do
+   * if the store tells it which kind of take this is.
+   */
+  it('is announced, so the sheet can stop offering what it does not decide', () => {
+    start(rigSettings());
+    expect(get(session).stageRigResolved).toBe(true);
+  });
+
+  it('is not claimed for an ordinary take', () => {
+    start();
+    expect(get(session).stageRigResolved).toBe(false);
+  });
+
+  /*
+   * The readout says what is ON THE GLASS. A rig may resolve a line height
+   * outside the range the sliders offer (the optical override alone allows
+   * 1.0–2.0 against the sheet's 1.05–1.8), and clamping the READ to the
+   * controls' limits made the panel report type that was not there.
+   */
+  it('reports the resolved geometry exactly, not clamped to the sliders', () => {
+    const settings = rigSettings();
+    start(settings);
+
+    const shown = get(session).stageAppearance;
+    expect(shown.lineHeight).toBe(settings.lineHeight);
+    expect(shown.fontSizePx).toBe(settings.fontSizePx);
+    expect(shown.columnWidthPercent).toBe(settings.columnWidthPercent);
+    expect(shown.readingBandCenterPercent).toBe(settings.readingBandCenterPercent);
+  });
+
+  /*
+   * Recomposing needs the panel: the profile is found by its fingerprint and
+   * the type is sized against its viewport. Without one, a rebuild silently
+   * produces the UNCALIBRATED layout — so any nudge, even the mirror, would
+   * demote a measured rig to a guess mid-take with nothing saying so.
+   */
+  it('refuses to recompose itself when the panel it was measured on is unknown', () => {
+    const settings = rigSettings();
+    start(settings);
+
+    applyStageAppearance({ fontSizePx: 96, mirrorX: true });
+
+    expect(rendered()).toEqual(settings);
+    expect(get(session).stageRigResolved).toBe(true);
+  });
+});

@@ -28,7 +28,8 @@ import {
 } from '../../shared/optics';
 import { resolveFollowProfile, type FollowingSettings } from '../lib/follow-profiles';
 import { invokeOrMock } from './ipc';
-import { DEFAULT_STAGE_APPEARANCE } from './settings-types';
+import { activeOpticalProfile, DEFAULT_STAGE_APPEARANCE, type AppSettings } from './settings-types';
+import type { DisplayDescriptor } from './stage-types';
 
 /* ---------------------------------------------------------------------------
  * Stage settings
@@ -259,6 +260,84 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
     readingCue: optical ? optical.profile.readingCue : (overrides.readingCue ?? 'ticks'),
     ...(optics && optical ? { optics, opticalProfile: optical.profile } : {}),
   };
+}
+
+/**
+ * The stage appearance a take runs with, straight out of Settings.
+ *
+ * The display is an argument rather than a lookup because it is what turns a
+ * saved calibration into geometry: the rig is chosen by the panel's
+ * fingerprint, and `resolveStageGeometry` sizes type against that panel's own
+ * CSS-pixel viewport. Called without a display — a preview, a test — it falls
+ * back to the uncalibrated percentage layout, which is the same thing an
+ * uncalibrated rig gets and is labelled as a guess wherever it is shown.
+ *
+ * Font metrics are deliberately not supplied. Control cannot measure a font it
+ * does not render; the DIN fallbacks resolve a defensible size and mark
+ * themselves `metricsMeasured: false`, which the stage improves on once it has
+ * painted its own text.
+ *
+ * It lives beside `buildStageSettings` rather than in `lib/start-take`, where
+ * it was written, because starting a take is no longer the only caller: the
+ * in-session appearance sheet rebuilds the take's settings on every drag of a
+ * slider, and it does that from the session store — which `start-take` imports,
+ * so reaching back the other way would close an import cycle. The two callers
+ * MUST compose settings identically; that is the whole reason a mid-take change
+ * and the next take's opening frame agree.
+ */
+export function stageSettingsFromSettings(
+  s: AppSettings,
+  display?: DisplayDescriptor | null,
+): StageSettings {
+  const t = s.teleprompter;
+  const profile = activeOpticalProfile(s.optical, display?.fingerprint ?? null);
+  return buildStageSettings({
+    fontFamilyId: t.fontFamilyId,
+    fontSizePx: t.fontSizePx,
+    lineHeight: t.lineHeight,
+    columnWidthPercent: t.columnWidthPercent,
+    readingBandCenterPercent: t.readingBandCenterPercent,
+    mirrorX: t.mirrorX,
+    mirrorY: t.mirrorY,
+    pastDimming: t.pastDimming,
+    phraseHighlight: t.phraseHighlight,
+    textIntensity: t.textIntensity,
+    stageMode: t.stageMode,
+    readingCue: t.readingCue,
+    ...(profile && display
+      ? {
+          optical: {
+            profile,
+            viewport: {
+              widthPx: display.logicalSize.width,
+              heightPx: display.logicalSize.height,
+            },
+          },
+        }
+      : {}),
+  });
+}
+
+/**
+ * True when a saved rig decided this take's appearance rather than the flat
+ * Settings values.
+ *
+ * The distinction the in-session sheet has to make: wherever `buildStageSettings`
+ * has an optics block, size, line height, column, reading band, brightness and
+ * cue style all come from the profile and the loose overrides are not consulted
+ * at all. A sheet that offered controls for them anyway would be offering
+ * controls that change nothing on the glass, which is the precise defect the
+ * Settings screen already carries a paragraph about.
+ *
+ * Named for what it TESTS. `ResolvedOptics.calibrated` is a different and
+ * narrower question — whether the rig carries a real physical scale and
+ * distance — and reading that one here would be wrong: an incompletely measured
+ * profile still produces an optics block, and `buildStageSettings` still
+ * ignores every flat value in its presence. The controls' authority follows the
+ * composition, not the quality of the measurement.
+ */
+export function isRigResolvedStage(settings: StageSettings | null): boolean {
+  return Boolean(settings?.optics);
 }
 
 /**

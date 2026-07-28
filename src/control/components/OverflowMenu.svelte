@@ -29,9 +29,18 @@
     items: MenuItem[];
     label?: string;
     align?: 'left' | 'right';
+    /**
+     * The menu opened or closed.
+     *
+     * Open state is this component's business, except where a host has to stand
+     * something else down while the menu owns the keyboard — the presentation
+     * stage answers the arrow keys on the window, and would scroll the script
+     * behind an open menu somebody is arrowing through.
+     */
+    onopenchange?: (open: boolean) => void;
   }
 
-  let { items, label = 'More actions', align = 'right' }: Props = $props();
+  let { items, label = 'More actions', align = 'right', onopenchange }: Props = $props();
 
   let open = $state(false);
   let activeIndex = $state(-1);
@@ -56,6 +65,7 @@
 
   function openMenu(index = firstEnabledIndex(items)): void {
     open = true;
+    onopenchange?.(true);
     focusItem(index);
   }
 
@@ -63,6 +73,7 @@
     if (!open) return;
     open = false;
     activeIndex = -1;
+    onopenchange?.(false);
     if (restoreFocus) focusTrigger();
   }
 
