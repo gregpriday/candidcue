@@ -26,6 +26,10 @@ import type { CompiledScript, StageDirective } from '../../../src/shared/contrac
 
 const stage = vi.hoisted(() => ({
   publishStageSnapshot: vi.fn(async () => {}),
+  /* §64: the heartbeat compares what control sent against what the stage
+     applied. `exists: false` means "no stage to compare with", which is the
+     right answer for a mock that is not modelling a stage window. */
+  getStageStatus: vi.fn(async () => ({ exists: false })),
   publishStageDirective: vi.fn(
     async (_sessionId: string, _stageGeneration: number, _directive: StageDirective) => {},
   ),

@@ -341,6 +341,152 @@ function nextCalibrationMode(current: StageCalibrationMode | null): StageCalibra
 
 const STAGE_GEN = 1;
 
+/* ---------------------------------------------------------------------------
+ * Fixture replay: real recorded speech, through the real renderer
+ * ------------------------------------------------------------------------- */
+
+/**
+ * A frozen Tier-B run, as emitted by `cc-bench export-run`.
+ *
+ * The tokens travel WITH the snapshots because positions are indexes, and an
+ * index means nothing without the list it indexes into: `cc_align::compile` and
+ * the app's TypeScript compiler tokenise separately, so a document rebuilt from
+ * the markdown would be numbered differently from the snapshots replayed
+ * against it. Building the document from these tokens makes them agree by
+ * construction.
+ */
+export interface FollowFixture {
+  run: string;
+  script: string;
+  totalMs: number;
+  tokens: Array<{ surface: string; para: number }>;
+  events: Array<{ atMs: number; snapshot: AlignmentSnapshot }>;
+  /** Where the reader truly was, in token space, on a 100 ms grid. */
+  gold: Array<{ atMs: number; token: number }>;
+}
+
+/** What the browser test reads back to know what it should be seeing. */
+export interface FollowReplayHandle {
+  fixture: FollowFixture;
+  /** `performance.now()` at the moment audio time zero was scheduled. */
+  startedAtMs: number;
+  stop(): void;
+}
+
+/** Where {@link startFixtureReplay} parks the handle for the browser suite. */
+export const FOLLOW_REPLAY_KEY = '__followReplay';
+
+/** One paragraph block per `para`, carrying the fixture's own token indexes. */
+function documentFromTokens(fixture: FollowFixture): StageRenderDocument {
+  const blocks: CompiledBlock[] = [];
+  const tokenToNode: StageRenderDocument['tokenToNode'] = [];
+  const sentences: NonNullable<StageRenderDocument['sentences']> = [];
+
+  let index = 0;
+  while (index < fixture.tokens.length) {
+    const para = fixture.tokens[index]!.para;
+    const start = index;
+    while (index < fixture.tokens.length && fixture.tokens[index]!.para === para) index += 1;
+    const tokenIndexes = Array.from({ length: index - start }, (_, i) => start + i);
+    const id = `p${para}`;
+    const text = tokenIndexes.map((t) => fixture.tokens[t]!.surface).join(' ');
+    for (const t of tokenIndexes) tokenToNode.push({ tokenIndex: t, blockId: id, nodeKey: 'n0' });
+    sentences.push({
+      id: `s${para}`,
+      blockId: id,
+      startTokenIndex: start,
+      endTokenIndex: index - 1,
+    });
+    blocks.push({
+      id,
+      kind: 'paragraph',
+      renderNodes: [{ type: 'text', text, tokenIndexes }],
+      startTokenIndex: start,
+      endTokenIndex: index - 1,
+      source: { utf16Start: 0, utf16End: 0 },
+      spoken: true,
+    });
+  }
+
+  return {
+    schemaVersion: 1,
+    title: fixture.script,
+    blocks,
+    tokenToNode,
+    assets: {},
+    sentences,
+  };
+}
+
+/**
+ * Replay a captured run into the live stage, at REAL TIME.
+ *
+ * Real time is not a convenience here, it is the measurement. Every snapshot
+ * carries an audio timestamp, and the stage builds its clock estimate from the
+ * offset between those stamps and wall time — then extrapolates the display
+ * between snapshots from that estimate. Compress the schedule without rewriting
+ * every stamp and the renderer runs on a clock at the wrong rate, which
+ * measures something no presenter will ever experience. So audio millisecond N
+ * is delivered at wall millisecond N from the start of the replay, and a test
+ * that wants twenty seconds of evidence waits twenty seconds for it.
+ *
+ * Uncalibrated settings, deliberately: that is the layout every take runs until
+ * somebody measures a rig with a ruler.
+ */
+export async function startFixtureReplay(url: string): Promise<FollowReplayHandle> {
+  const fixture: FollowFixture = await fetch(url).then((r) => r.json());
+  const settings = uncalibratedPreviewSettings();
+  const envelope: StageSessionEnvelope = {
+    schemaVersion: 1,
+    sessionId: '00000000-0000-0000-0000-0000000000fb',
+    sessionGeneration: 1,
+    stageGeneration: STAGE_GEN,
+    scriptId: '00000000-0000-0000-0000-0000000000fc',
+    sourceHash: fixture.run,
+    compileRevision: 1,
+    stageSettings: settings,
+    renderDocument: documentFromTokens(fixture),
+    initialTokenIndex: 0,
+  };
+  dispatchLocalStageEvent(STAGE_EVENT.loadSession, envelope);
+
+  const startedAtMs = performance.now();
+  const timers: number[] = [];
+  for (const event of fixture.events) {
+    timers.push(
+      window.setTimeout(() => {
+        dispatchLocalStageEvent<AlignmentSnapshot>(
+          STAGE_EVENT.alignmentSnapshot,
+          event.snapshot,
+        );
+      }, Math.max(0, event.atMs)),
+    );
+  }
+  // The stage's own liveness check; without it the watchdog would call control
+  // lost partway through a twenty-second replay and freeze the document.
+  let beat = 0;
+  const heartbeat = window.setInterval(() => {
+    beat += 1;
+    dispatchLocalStageEvent(STAGE_EVENT.heartbeat, {
+      stageGeneration: STAGE_GEN,
+      revision: beat,
+      sentAtMs: Date.now(),
+    });
+  }, 1000);
+
+  const handle: FollowReplayHandle = {
+    fixture,
+    startedAtMs,
+    stop() {
+      timers.forEach((t) => clearTimeout(t));
+      clearInterval(heartbeat);
+      delete (window as unknown as Record<string, unknown>)[FOLLOW_REPLAY_KEY];
+    },
+  };
+  (window as unknown as Record<string, unknown>)[FOLLOW_REPLAY_KEY] = handle;
+  return handle;
+}
+
 export interface PreviewOptions {
   /**
    * Drive the calibrated path (the default) or the uncalibrated one.

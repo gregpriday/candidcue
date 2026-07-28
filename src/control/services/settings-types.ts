@@ -640,7 +640,21 @@ export function defaultAppSettings(): AppSettings {
       fixedSpeedWpm: 150,
       stageEndBehavior: 'close',
       hidePointer: true,
-      stageMode: 'clean',
+      /*
+       * Diagnostic, not Clean.
+       *
+       * Clean Take is the right stage for a finished recording and the wrong
+       * default for a product still being trusted. What Diagnostic adds is the
+       * transcript bar — the recogniser's own words, upstream of every judgement
+       * the app makes — and the `feed:` line, which says whether alignment
+       * snapshots are arriving and being applied. Between them they separate
+       * "the microphone was never captured" from "the recogniser heard nothing"
+       * from "the aligner would not match" from "the stage is discarding what it
+       * is sent", and those four have one symptom: a script that sits still.
+       *
+       * Turned off in Settings the moment a take is being kept.
+       */
+      stageMode: 'diagnostic',
       readingCue: 'ticks',
     },
     // Nothing calibrated until somebody stands at a rig and measures it.

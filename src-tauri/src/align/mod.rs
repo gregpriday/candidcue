@@ -38,9 +38,8 @@
 
 use std::sync::Mutex;
 
-use cc_align::tracker::{DecisionCode, TrackingState};
-use cc_align::{AlignmentConfig, Engine, SessionEvent, Snapshot, TokenInput};
-use serde::{Deserialize, Serialize};
+use cc_align::{project_to_tokens, AlignmentConfig, Engine, SessionEvent, TokenInput};
+use serde::Deserialize;
 use tauri::{Emitter, Manager};
 
 use crate::inworld::stream::SttFrame;
@@ -64,65 +63,14 @@ pub struct AlignToken {
 
 /// What the stage and control receive after every transcript event.
 ///
-/// Positions are FRACTIONAL TOKEN INDEXES into the app's compiled script —
-/// already converted (see the module note). `display_at` is reproduced on the
-/// stage from `observed_token` / `rate_tokens_per_second` / the audio stamps, so
-/// the 60 Hz motion loop never has to call back into Rust.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AlignmentSnapshot {
-    /// The alignment session this belongs to. A snapshot from a superseded
-    /// session must be discarded rather than followed.
-    pub session_generation: u64,
-    /// Monotone per session; the stage drops anything not newer.
-    pub seq: u64,
-    /// `searching` | `following` | `holding` | `ambiguous`.
-    pub state: &'static str,
-    /// Diagnostics only. Never map this to user-facing copy — `state` is the
-    /// user-facing contract.
-    pub decision: &'static str,
-    /// Conservative anchor: progress, "words covered", recovery UI.
-    pub confirmed_token: f64,
-    /// Best evidence-supported position. NOT the scroll target — see
-    /// `rate_tokens_per_second`.
-    pub observed_token: f64,
-    /// Rate for display extrapolation, tokens/sec. Already zero whenever
-    /// extrapolating would be a guess, so the stage must not re-derive that
-    /// condition — and already scaled below the reader's true pace, so the
-    /// display trails rather than leads. See `prediction_gain` in the engine.
-    pub rate_tokens_per_second: f64,
-    /// Audio time `observed_token` corresponds to.
-    pub evidence_audio_ms: f64,
-    /// Audio time this snapshot was produced.
-    pub at_audio_ms: f64,
-    /// Hard cap on forward extrapolation from `evidence_audio_ms`.
-    pub max_prediction_ms: f64,
-    /// Evidence age at which the display lead stops growing and eases back —
-    /// the reader has probably paused, and the underline must rest just past
-    /// the last spoken word instead of running ahead.
-    pub pause_onset_ms: f64,
-    /// Residual lead (ms of reading) kept once paused. Zero: rest ON the last
-    /// word heard, not past it.
-    pub lead_floor_ms: f64,
-    /// Hard cap on how far prediction may carry the display past
-    /// `observed_token`, in tokens.
-    pub max_lead_tokens: f64,
-    /// Absolute ceiling for the display this snapshot: the end of the paragraph
-    /// the reader was last heard in. Prediction stops here and waits for
-    /// evidence rather than guessing across a paragraph break.
-    pub display_limit_token: f64,
-    /// Documented heuristic in 0..1, not a calibrated probability. Fine for a
-    /// debug meter; do not gate behaviour on exact thresholds.
-    pub confidence: f64,
-    /// A distant candidate accumulating evidence — "possible match below".
-    /// The UI may offer it; it must never auto-scroll to it.
-    pub suggestion_token: Option<f64>,
-    /// Total tokens, the ceiling for any display position.
-    pub script_len_tokens: f64,
-    /// Atom-space originals, for the diagnostics panel and bench parity only.
-    pub observed_atom: f64,
-    pub confirmed_atom: f64,
-}
+/// Defined by the ENGINE crate (`cc_align::TokenSnapshot`), not here. It used to
+/// be declared in this file next to the atom-to-token projection that builds it,
+/// which put both out of reach of the benchmark harness — so the harness could
+/// prove the ENGINE follows and could say nothing at all about whether the STAGE
+/// does. Those are the two halves of "does the product follow", and the failure
+/// that falls between them (the aligner is fine, the glass never moved) is
+/// exactly the one this split was hiding. `cc-bench` now emits this same shape.
+pub type AlignmentSnapshot = cc_align::TokenSnapshot;
 
 /// A running alignment session.
 ///
@@ -299,7 +247,7 @@ impl AlignmentState {
 
         session.last_audio_ms = audio_now_ms.max(session.last_audio_ms);
         let snapshot = session.engine.handle(event);
-        Some(project(&snapshot, &session.engine, session.label))
+        Some(project_to_tokens(&snapshot, &session.engine.script, session.label))
     }
 
     /// "I am here" — a tapped paragraph or a jump-to-section — published to
@@ -323,7 +271,7 @@ impl AlignmentState {
         let atom = session.engine.script.atom_at(token).round().max(0.0);
         let at = session.last_audio_ms;
         let snapshot = session.engine.set_manual_position(atom as u32, at);
-        Some(project(&snapshot, &session.engine, session.label))
+        Some(project_to_tokens(&snapshot, &session.engine.script, session.label))
     }
 
     /// "This is what I can see." A prior on candidate ranking, never a command:
@@ -357,102 +305,6 @@ impl AlignmentState {
         if let Some(session) = self.lock().as_mut() {
             session.engine.clear_viewport_hint();
         }
-    }
-}
-
-/// Project an engine snapshot from atom space into the app's token space.
-///
-/// The rate conversion is endpoint-exact rather than a local derivative: the
-/// prediction horizon's far end is mapped through the same axis as its near
-/// end, and the reported rate is whatever connects them. That matters because
-/// the axis is piecewise linear with a different slope wherever a token expands
-/// into several atoms — a derivative sampled at `observed` would be right at
-/// the start of the horizon and wrong by the end of it, which is the half of
-/// the horizon the presenter actually reaches.
-fn project(snapshot: &Snapshot, engine: &Engine, generation: u64) -> AlignmentSnapshot {
-    let script = &engine.script;
-    let observed_token = script.token_at(snapshot.observed);
-    let horizon_seconds = snapshot.max_prediction_ms / 1000.0;
-    let rate_tokens_per_second = if snapshot.rate > 0.0 && horizon_seconds > 0.0 {
-        /*
-         * Divide by the time the engine would ACTUALLY take to cover the
-         * distance, not by the whole horizon.
-         *
-         * Near the end of the script the far endpoint clamps to `script_len`,
-         * and dividing that shortened distance by the full horizon reports a
-         * rate far below the truth: at 2 atoms/s with one atom left and a 2 s
-         * horizon it says 0.5 tokens/s, so the display crawls the last word
-         * over four times as long as the reader takes to say it. Clamping the
-         * TIME as well keeps the endpoint and the pace honest together.
-         */
-        let unclamped_far = snapshot.observed + snapshot.rate * horizon_seconds;
-        let far_atom = unclamped_far.min(snapshot.script_len);
-        let seconds = if unclamped_far > snapshot.script_len {
-            ((snapshot.script_len - snapshot.observed) / snapshot.rate).max(f64::EPSILON)
-        } else {
-            horizon_seconds
-        };
-        (script.token_at(far_atom) - observed_token) / seconds
-    } else {
-        // Already zeroed by the engine whenever extrapolating would be a guess.
-        0.0
-    };
-
-    AlignmentSnapshot {
-        session_generation: generation,
-        seq: snapshot.seq,
-        state: state_name(snapshot.state),
-        decision: decision_name(snapshot.decision),
-        confirmed_token: script.token_at(snapshot.confirmed),
-        observed_token,
-        rate_tokens_per_second,
-        evidence_audio_ms: snapshot.evidence_audio_ms,
-        at_audio_ms: snapshot.at_audio_ms,
-        max_prediction_ms: snapshot.max_prediction_ms,
-        pause_onset_ms: snapshot.pause_onset_ms,
-        lead_floor_ms: snapshot.lead_floor_ms,
-        // Both are projected as DIFFERENCES/positions through the same axis as
-        // `observed_token`, so the cap and the ceiling land on exactly the
-        // token the engine meant even where a token expands into several atoms.
-        max_lead_tokens: script.token_at(snapshot.observed + snapshot.max_lead_atoms)
-            - observed_token,
-        display_limit_token: script.token_at(snapshot.display_limit),
-        confidence: snapshot.confidence,
-        suggestion_token: snapshot.suggestion.map(|a| script.token_at(a)),
-        script_len_tokens: script.token_count as f64,
-        observed_atom: snapshot.observed,
-        confirmed_atom: snapshot.confirmed,
-    }
-}
-
-/// The user-facing contract (§3 of the integration note). These four strings are
-/// matched exhaustively in TypeScript; renaming one would compile on both sides
-/// and silently stop the stage from following.
-fn state_name(state: TrackingState) -> &'static str {
-    match state {
-        TrackingState::Searching => "searching",
-        TrackingState::Following => "following",
-        TrackingState::Holding => "holding",
-        TrackingState::Ambiguous => "ambiguous",
-    }
-}
-
-/// Diagnostics vocabulary. Deliberately NOT parallel to `state_name`: these are
-/// for a log line and a debug panel, and mapping them to user-facing text is
-/// what the integration note forbids.
-fn decision_name(decision: DecisionCode) -> &'static str {
-    match decision {
-        DecisionCode::NoEvidence => "noEvidence",
-        DecisionCode::LocalObserved => "localObserved",
-        DecisionCode::LocalConfirmed => "localConfirmed",
-        DecisionCode::HoldLowEvidence => "holdLowEvidence",
-        DecisionCode::HoldOffScript => "holdOffScript",
-        DecisionCode::HoldAmbiguous => "holdAmbiguous",
-        DecisionCode::RelocationAccepted => "relocationAccepted",
-        DecisionCode::JumpForwardAccepted => "jumpForwardAccepted",
-        DecisionCode::RetakeAccepted => "retakeAccepted",
-        DecisionCode::JumpPending => "jumpPending",
-        DecisionCode::ManualAnchor => "manualAnchor",
     }
 }
 

@@ -82,7 +82,7 @@
     type HoldStatus as HoldStatusReading,
     type HoldTone,
   } from './renderer/hold-status';
-  import { startPreviewDriver, type PreviewDriver } from './preview';
+  import { startFixtureReplay, startPreviewDriver, type PreviewDriver } from './preview';
 
   const previewParams =
     typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
@@ -94,6 +94,8 @@
    * optical model resolves, which is what the harness was built to make visible.
    */
   const previewCalibrated = previewParams?.get('calibrated') !== '0';
+  /** A frozen Tier-B run to replay, instead of the synthetic preview driver. */
+  const previewReplayUrl = previewParams?.get('replay') ?? null;
 
   let app = $state.raw(initialStageState());
   /**
@@ -653,7 +655,15 @@
       }
     }, 1000);
 
-    if (preview) previewDriver = startPreviewDriver({ calibrated: previewCalibrated });
+    /*
+     * `?preview=1&replay=<url>` replays a frozen Tier-B run — real recorded
+     * speech, through the real renderer — instead of the synthetic driver. It
+     * is the only configuration in which "does the product follow" can be
+     * asserted end to end: the benchmark proves the ENGINE follows and scores
+     * Rust's own model of the display, never the code that moves the glass.
+     */
+    if (preview && previewReplayUrl) void startFixtureReplay(previewReplayUrl);
+    else if (preview) previewDriver = startPreviewDriver({ calibrated: previewCalibrated });
 
     return () => {
       disposed = true;

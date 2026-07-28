@@ -54,6 +54,10 @@ const tauri = vi.hoisted(() => {
 
 const stage = vi.hoisted(() => ({
   publishStageSnapshot: vi.fn(async () => {}),
+  /* §64: the heartbeat compares what control sent against what the stage
+     applied. `exists: false` means "no stage to compare with", which is the
+     right answer for a mock that is not modelling a stage window. */
+  getStageStatus: vi.fn(async () => ({ exists: false })),
   publishStageDirective: vi.fn(async () => {}),
   // Typed arguments so the §40.5 assertions can read the directive that was
   // published, not just the call count.

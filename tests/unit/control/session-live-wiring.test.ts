@@ -20,6 +20,10 @@ import { STAGE_EVENT } from '../../../src/shared/contracts';
 import type { CompiledScript } from '../../../src/shared/contracts';
 
 const stage = vi.hoisted(() => ({
+  /* §64: the heartbeat compares what control sent against what the stage
+     applied. `exists: false` means "no stage to compare with", which is the
+     right answer for a mock that is not modelling a stage window. */
+  getStageStatus: vi.fn(async () => ({ exists: false })),
   publishStageDirective: vi.fn(async () => {}),
   publishListenerState: vi.fn(async () => {}),
   closeStage: vi.fn(async () => {}),

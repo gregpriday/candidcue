@@ -1,0 +1,2367 @@
+{
+  "events": [
+    {
+      "atMs": 1400.0,
+      "snapshot": {
+        "atAudioMs": 1400.0,
+        "confidence": 0.0,
+        "confirmedAtom": 0.0,
+        "confirmedToken": 0.0,
+        "decision": "noEvidence",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 0.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 0.0,
+        "observedToken": 0.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.0,
+        "scriptLenTokens": 248.0,
+        "seq": 1,
+        "sessionGeneration": 1,
+        "state": "searching",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 2300.0,
+      "snapshot": {
+        "atAudioMs": 2300.0,
+        "confidence": 0.05,
+        "confirmedAtom": 0.0,
+        "confirmedToken": 0.0,
+        "decision": "holdLowEvidence",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 0.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 0.0,
+        "observedToken": 0.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.0,
+        "scriptLenTokens": 248.0,
+        "seq": 2,
+        "sessionGeneration": 1,
+        "state": "searching",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 3300.0,
+      "snapshot": {
+        "atAudioMs": 3300.0,
+        "confidence": 0.8376443649835014,
+        "confirmedAtom": 0.0,
+        "confirmedToken": 0.0,
+        "decision": "relocationAccepted",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 3000.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 7.0,
+        "observedToken": 7.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.9239999999999998,
+        "scriptLenTokens": 248.0,
+        "seq": 3,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 4200.0,
+      "snapshot": {
+        "atAudioMs": 4200.0,
+        "confidence": 0.92,
+        "confirmedAtom": 7.0,
+        "confirmedToken": 7.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 3900.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 12.0,
+        "observedToken": 12.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.9239999999999998,
+        "scriptLenTokens": 248.0,
+        "seq": 4,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 5300.0,
+      "snapshot": {
+        "atAudioMs": 5300.0,
+        "confidence": 1.0,
+        "confirmedAtom": 10.0,
+        "confirmedToken": 10.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 5000.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 12.0,
+        "observedToken": 12.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.16500000000000034,
+        "scriptLenTokens": 248.0,
+        "seq": 5,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 6300.0,
+      "snapshot": {
+        "atAudioMs": 6300.0,
+        "confidence": 1.0,
+        "confirmedAtom": 12.0,
+        "confirmedToken": 12.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 6000.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 15.0,
+        "observedToken": 15.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.47142857142857153,
+        "scriptLenTokens": 248.0,
+        "seq": 6,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 7200.0,
+      "snapshot": {
+        "atAudioMs": 7200.0,
+        "confidence": 1.0,
+        "confirmedAtom": 15.0,
+        "confirmedToken": 15.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 6900.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 17.0,
+        "observedToken": 17.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.7333333333333335,
+        "scriptLenTokens": 248.0,
+        "seq": 7,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 8400.0,
+      "snapshot": {
+        "atAudioMs": 8400.0,
+        "confidence": 1.0,
+        "confirmedAtom": 17.0,
+        "confirmedToken": 17.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 8100.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 19.0,
+        "observedToken": 19.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.6285714285714287,
+        "scriptLenTokens": 248.0,
+        "seq": 8,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 9300.0,
+      "snapshot": {
+        "atAudioMs": 9300.0,
+        "confidence": 1.0,
+        "confirmedAtom": 19.0,
+        "confirmedToken": 19.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 9000.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 22.0,
+        "observedToken": 22.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.7333333333333335,
+        "scriptLenTokens": 248.0,
+        "seq": 9,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 10200.0,
+      "snapshot": {
+        "atAudioMs": 10200.0,
+        "confidence": 1.0,
+        "confirmedAtom": 22.0,
+        "confirmedToken": 22.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 9900.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 24.0,
+        "observedToken": 24.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.7451612903225799,
+        "scriptLenTokens": 248.0,
+        "seq": 10,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 11300.0,
+      "snapshot": {
+        "atAudioMs": 11300.0,
+        "confidence": 1.0,
+        "confirmedAtom": 24.0,
+        "confirmedToken": 24.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 11000.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 26.0,
+        "observedToken": 26.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.7333333333333335,
+        "scriptLenTokens": 248.0,
+        "seq": 11,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 12300.0,
+      "snapshot": {
+        "atAudioMs": 12300.0,
+        "confidence": 1.0,
+        "confirmedAtom": 24.0,
+        "confirmedToken": 24.0,
+        "decision": "localObserved",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 12000.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 26.0,
+        "observedToken": 26.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.7333333333333335,
+        "scriptLenTokens": 248.0,
+        "seq": 12,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 13200.0,
+      "snapshot": {
+        "atAudioMs": 13200.0,
+        "confidence": 1.0,
+        "confirmedAtom": 26.0,
+        "confirmedToken": 26.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 12900.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 31.0,
+        "observedToken": 31.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.7615384615384634,
+        "scriptLenTokens": 248.0,
+        "seq": 13,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 14300.0,
+      "snapshot": {
+        "atAudioMs": 14300.0,
+        "confidence": 1.0,
+        "confirmedAtom": 31.0,
+        "confirmedToken": 31.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 14000.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 35.0,
+        "observedToken": 35.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.7857142857142839,
+        "scriptLenTokens": 248.0,
+        "seq": 14,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 15300.0,
+      "snapshot": {
+        "atAudioMs": 15300.0,
+        "confidence": 1.0,
+        "confirmedAtom": 33.0,
+        "confirmedToken": 33.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 35.0,
+        "evidenceAudioMs": 15000.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 35.0,
+        "observedToken": 35.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.7700000000000016,
+        "scriptLenTokens": 248.0,
+        "seq": 15,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 16200.0,
+      "snapshot": {
+        "atAudioMs": 16200.0,
+        "confidence": 1.0,
+        "confirmedAtom": 35.0,
+        "confirmedToken": 35.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 76.0,
+        "evidenceAudioMs": 15900.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 39.0,
+        "observedToken": 39.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.8130434782608691,
+        "scriptLenTokens": 248.0,
+        "seq": 16,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 17300.0,
+      "snapshot": {
+        "atAudioMs": 17300.0,
+        "confidence": 1.0,
+        "confirmedAtom": 39.0,
+        "confirmedToken": 39.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 76.0,
+        "evidenceAudioMs": 17000.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 43.0,
+        "observedToken": 43.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.8830985915492956,
+        "scriptLenTokens": 248.0,
+        "seq": 17,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 18300.0,
+      "snapshot": {
+        "atAudioMs": 18300.0,
+        "confidence": 0.9899860540223135,
+        "confirmedAtom": 43.0,
+        "confirmedToken": 43.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 76.0,
+        "evidenceAudioMs": 17631.11111111111,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 44.0,
+        "observedToken": 44.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 1.0155007654393857,
+        "scriptLenTokens": 248.0,
+        "seq": 18,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 19200.0,
+      "snapshot": {
+        "atAudioMs": 19200.0,
+        "confidence": 1.0,
+        "confirmedAtom": 44.0,
+        "confirmedToken": 44.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 76.0,
+        "evidenceAudioMs": 18900.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 47.0,
+        "observedToken": 47.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 1.056593297640293,
+        "scriptLenTokens": 248.0,
+        "seq": 19,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 20300.0,
+      "snapshot": {
+        "atAudioMs": 20300.0,
+        "confidence": 1.0,
+        "confirmedAtom": 47.0,
+        "confirmedToken": 47.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 76.0,
+        "evidenceAudioMs": 20000.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 51.0,
+        "observedToken": 51.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.9067637388445288,
+        "scriptLenTokens": 248.0,
+        "seq": 20,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    },
+    {
+      "atMs": 21300.0,
+      "snapshot": {
+        "atAudioMs": 21300.0,
+        "confidence": 1.0,
+        "confirmedAtom": 49.0,
+        "confirmedToken": 49.0,
+        "decision": "localConfirmed",
+        "displayLimitToken": 76.0,
+        "evidenceAudioMs": 21000.0,
+        "leadFloorMs": 0.0,
+        "maxLeadTokens": 2.5,
+        "maxPredictionMs": 1800.0,
+        "observedAtom": 51.0,
+        "observedToken": 51.0,
+        "pauseOnsetMs": 1800.0,
+        "rateTokensPerSecond": 0.8800000000000018,
+        "scriptLenTokens": 248.0,
+        "seq": 21,
+        "sessionGeneration": 1,
+        "state": "following",
+        "suggestionToken": null
+      }
+    }
+  ],
+  "gold": [
+    {
+      "atMs": 600.0,
+      "token": 0.0
+    },
+    {
+      "atMs": 700.0,
+      "token": 0.4703608247422681
+    },
+    {
+      "atMs": 800.0,
+      "token": 0.9407216494845362
+    },
+    {
+      "atMs": 900.0,
+      "token": 1.4110824742268042
+    },
+    {
+      "atMs": 1000.0,
+      "token": 1.8814432989690724
+    },
+    {
+      "atMs": 1100.0,
+      "token": 2.2814432989690725
+    },
+    {
+      "atMs": 1200.0,
+      "token": 2.657731958762887
+    },
+    {
+      "atMs": 1300.0,
+      "token": 3.0340206185567014
+    },
+    {
+      "atMs": 1400.0,
+      "token": 3.410309278350516
+    },
+    {
+      "atMs": 1500.0,
+      "token": 3.78659793814433
+    },
+    {
+      "atMs": 1600.0,
+      "token": 4.090492554410081
+    },
+    {
+      "atMs": 1700.0,
+      "token": 4.299541809851089
+    },
+    {
+      "atMs": 1800.0,
+      "token": 4.508591065292096
+    },
+    {
+      "atMs": 1900.0,
+      "token": 4.717640320733104
+    },
+    {
+      "atMs": 2000.0,
+      "token": 4.9266895761741125
+    },
+    {
+      "atMs": 2100.0,
+      "token": 5.203608247422681
+    },
+    {
+      "atMs": 2200.0,
+      "token": 5.517182130584192
+    },
+    {
+      "atMs": 2300.0,
+      "token": 5.830756013745704
+    },
+    {
+      "atMs": 2400.0,
+      "token": 6.08659793814433
+    },
+    {
+      "atMs": 2500.0,
+      "token": 6.274742268041237
+    },
+    {
+      "atMs": 2600.0,
+      "token": 6.4628865979381445
+    },
+    {
+      "atMs": 2700.0,
+      "token": 6.651030927835052
+    },
+    {
+      "atMs": 2800.0,
+      "token": 6.839175257731959
+    },
+    {
+      "atMs": 2900.0,
+      "token": 7.054639175257733
+    },
+    {
+      "atMs": 3000.0,
+      "token": 7.430927835051547
+    },
+    {
+      "atMs": 3100.0,
+      "token": 7.80721649484536
+    },
+    {
+      "atMs": 3200.0,
+      "token": 8.183505154639175
+    },
+    {
+      "atMs": 3300.0,
+      "token": 8.55979381443299
+    },
+    {
+      "atMs": 3400.0,
+      "token": 8.936082474226804
+    },
+    {
+      "atMs": 3500.0,
+      "token": 9.195231958762887
+    },
+    {
+      "atMs": 3600.0,
+      "token": 9.430412371134022
+    },
+    {
+      "atMs": 3700.0,
+      "token": 9.665592783505154
+    },
+    {
+      "atMs": 3800.0,
+      "token": 9.900773195876289
+    },
+    {
+      "atMs": 3900.0,
+      "token": 10.155375552282768
+    },
+    {
+      "atMs": 4000.0,
+      "token": 10.424153166421208
+    },
+    {
+      "atMs": 4100.0,
+      "token": 10.692930780559646
+    },
+    {
+      "atMs": 4200.0,
+      "token": 10.961708394698086
+    },
+    {
+      "atMs": 4300.0,
+      "token": 11.322680412371135
+    },
+    {
+      "atMs": 4400.0,
+      "token": 11.698969072164948
+    },
+    {
+      "atMs": 4500.0,
+      "token": 12.0
+    },
+    {
+      "atMs": 4600.0,
+      "token": 12.0
+    },
+    {
+      "atMs": 4700.0,
+      "token": 12.235119047619047
+    },
+    {
+      "atMs": 4800.0,
+      "token": 12.470238095238095
+    },
+    {
+      "atMs": 4900.0,
+      "token": 12.705357142857142
+    },
+    {
+      "atMs": 5000.0,
+      "token": 12.94047619047619
+    },
+    {
+      "atMs": 5100.0,
+      "token": 13.263392857142856
+    },
+    {
+      "atMs": 5200.0,
+      "token": 13.616071428571427
+    },
+    {
+      "atMs": 5300.0,
+      "token": 13.96875
+    },
+    {
+      "atMs": 5400.0,
+      "token": 14.142857142857142
+    },
+    {
+      "atMs": 5500.0,
+      "token": 14.299603174603174
+    },
+    {
+      "atMs": 5600.0,
+      "token": 14.456349206349206
+    },
+    {
+      "atMs": 5700.0,
+      "token": 14.613095238095237
+    },
+    {
+      "atMs": 5800.0,
+      "token": 14.769841269841269
+    },
+    {
+      "atMs": 5900.0,
+      "token": 14.9265873015873
+    },
+    {
+      "atMs": 6000.0,
+      "token": 15.149999999999999
+    },
+    {
+      "atMs": 6100.0,
+      "token": 15.432142857142857
+    },
+    {
+      "atMs": 6200.0,
+      "token": 15.714285714285714
+    },
+    {
+      "atMs": 6300.0,
+      "token": 15.99642857142857
+    },
+    {
+      "atMs": 6400.0,
+      "token": 16.232142857142858
+    },
+    {
+      "atMs": 6500.0,
+      "token": 16.467261904761905
+    },
+    {
+      "atMs": 6600.0,
+      "token": 16.70238095238095
+    },
+    {
+      "atMs": 6700.0,
+      "token": 16.9375
+    },
+    {
+      "atMs": 6800.0,
+      "token": 17.172619047619047
+    },
+    {
+      "atMs": 6900.0,
+      "token": 17.407738095238095
+    },
+    {
+      "atMs": 7000.0,
+      "token": 17.64285714285714
+    },
+    {
+      "atMs": 7100.0,
+      "token": 17.87797619047619
+    },
+    {
+      "atMs": 7200.0,
+      "token": 18.096938775510203
+    },
+    {
+      "atMs": 7300.0,
+      "token": 18.2984693877551
+    },
+    {
+      "atMs": 7400.0,
+      "token": 18.499999999999996
+    },
+    {
+      "atMs": 7500.0,
+      "token": 18.701530612244895
+    },
+    {
+      "atMs": 7600.0,
+      "token": 18.903061224489793
+    },
+    {
+      "atMs": 7700.0,
+      "token": 19.18303571428571
+    },
+    {
+      "atMs": 7800.0,
+      "token": 19.535714285714285
+    },
+    {
+      "atMs": 7900.0,
+      "token": 19.888392857142854
+    },
+    {
+      "atMs": 8000.0,
+      "token": 20.09642857142857
+    },
+    {
+      "atMs": 8100.0,
+      "token": 20.2375
+    },
+    {
+      "atMs": 8200.0,
+      "token": 20.378571428571426
+    },
+    {
+      "atMs": 8300.0,
+      "token": 20.519642857142856
+    },
+    {
+      "atMs": 8400.0,
+      "token": 20.660714285714285
+    },
+    {
+      "atMs": 8500.0,
+      "token": 20.801785714285714
+    },
+    {
+      "atMs": 8600.0,
+      "token": 20.942857142857143
+    },
+    {
+      "atMs": 8700.0,
+      "token": 21.13988095238095
+    },
+    {
+      "atMs": 8800.0,
+      "token": 21.374999999999996
+    },
+    {
+      "atMs": 8900.0,
+      "token": 21.610119047619044
+    },
+    {
+      "atMs": 9000.0,
+      "token": 21.84523809523809
+    },
+    {
+      "atMs": 9100.0,
+      "token": 22.068877551020403
+    },
+    {
+      "atMs": 9200.0,
+      "token": 22.2704081632653
+    },
+    {
+      "atMs": 9300.0,
+      "token": 22.471938775510203
+    },
+    {
+      "atMs": 9400.0,
+      "token": 22.6734693877551
+    },
+    {
+      "atMs": 9500.0,
+      "token": 22.875
+    },
+    {
+      "atMs": 9600.0,
+      "token": 23.05952380952381
+    },
+    {
+      "atMs": 9700.0,
+      "token": 23.216269841269842
+    },
+    {
+      "atMs": 9800.0,
+      "token": 23.373015873015873
+    },
+    {
+      "atMs": 9900.0,
+      "token": 23.529761904761905
+    },
+    {
+      "atMs": 10000.0,
+      "token": 23.686507936507937
+    },
+    {
+      "atMs": 10100.0,
+      "token": 23.84325396825397
+    },
+    {
+      "atMs": 10200.0,
+      "token": 24.0
+    },
+    {
+      "atMs": 10300.0,
+      "token": 24.0
+    },
+    {
+      "atMs": 10400.0,
+      "token": 24.29126213592233
+    },
+    {
+      "atMs": 10500.0,
+      "token": 24.655339805825243
+    },
+    {
+      "atMs": 10600.0,
+      "token": 25.015533980582525
+    },
+    {
+      "atMs": 10700.0,
+      "token": 25.306796116504856
+    },
+    {
+      "atMs": 10800.0,
+      "token": 25.598058252427187
+    },
+    {
+      "atMs": 10900.0,
+      "token": 25.889320388349514
+    },
+    {
+      "atMs": 11000.0,
+      "token": 26.180582524271845
+    },
+    {
+      "atMs": 11100.0,
+      "token": 26.471844660194172
+    },
+    {
+      "atMs": 11200.0,
+      "token": 26.763106796116503
+    },
+    {
+      "atMs": 11300.0,
+      "token": 27.03883495145631
+    },
+    {
+      "atMs": 11400.0,
+      "token": 27.246879334257976
+    },
+    {
+      "atMs": 11500.0,
+      "token": 27.45492371705964
+    },
+    {
+      "atMs": 11600.0,
+      "token": 27.662968099861303
+    },
+    {
+      "atMs": 11700.0,
+      "token": 27.87101248266297
+    },
+    {
+      "atMs": 11800.0,
+      "token": 28.09223300970874
+    },
+    {
+      "atMs": 11900.0,
+      "token": 28.33495145631068
+    },
+    {
+      "atMs": 12000.0,
+      "token": 28.57766990291262
+    },
+    {
+      "atMs": 12100.0,
+      "token": 28.820388349514563
+    },
+    {
+      "atMs": 12200.0,
+      "token": 29.075728155339807
+    },
+    {
+      "atMs": 12300.0,
+      "token": 29.366990291262134
+    },
+    {
+      "atMs": 12400.0,
+      "token": 29.658252427184465
+    },
+    {
+      "atMs": 12500.0,
+      "token": 29.949514563106796
+    },
+    {
+      "atMs": 12600.0,
+      "token": 30.200647249190936
+    },
+    {
+      "atMs": 12700.0,
+      "token": 30.443365695792878
+    },
+    {
+      "atMs": 12800.0,
+      "token": 30.68608414239482
+    },
+    {
+      "atMs": 12900.0,
+      "token": 30.928802588996763
+    },
+    {
+      "atMs": 13000.0,
+      "token": 31.171521035598705
+    },
+    {
+      "atMs": 13100.0,
+      "token": 31.414239482200646
+    },
+    {
+      "atMs": 13200.0,
+      "token": 31.656957928802587
+    },
+    {
+      "atMs": 13300.0,
+      "token": 31.89967637540453
+    },
+    {
+      "atMs": 13400.0,
+      "token": 32.213592233009706
+    },
+    {
+      "atMs": 13500.0,
+      "token": 32.57766990291262
+    },
+    {
+      "atMs": 13600.0,
+      "token": 32.94174757281554
+    },
+    {
+      "atMs": 13700.0,
+      "token": 33.244660194174756
+    },
+    {
+      "atMs": 13800.0,
+      "token": 33.53592233009709
+    },
+    {
+      "atMs": 13900.0,
+      "token": 33.82718446601942
+    },
+    {
+      "atMs": 14000.0,
+      "token": 34.084604715672675
+    },
+    {
+      "atMs": 14100.0,
+      "token": 34.29264909847434
+    },
+    {
+      "atMs": 14200.0,
+      "token": 34.500693481276
+    },
+    {
+      "atMs": 14300.0,
+      "token": 34.70873786407767
+    },
+    {
+      "atMs": 14400.0,
+      "token": 34.916782246879336
+    },
+    {
+      "atMs": 14500.0,
+      "token": 35.0
+    },
+    {
+      "atMs": 14600.0,
+      "token": 35.12407407407407
+    },
+    {
+      "atMs": 14700.0,
+      "token": 35.43425925925926
+    },
+    {
+      "atMs": 14800.0,
+      "token": 35.74444444444445
+    },
+    {
+      "atMs": 14900.0,
+      "token": 36.03414351851852
+    },
+    {
+      "atMs": 15000.0,
+      "token": 36.22800925925926
+    },
+    {
+      "atMs": 15100.0,
+      "token": 36.421875
+    },
+    {
+      "atMs": 15200.0,
+      "token": 36.61574074074074
+    },
+    {
+      "atMs": 15300.0,
+      "token": 36.80960648148148
+    },
+    {
+      "atMs": 15400.0,
+      "token": 37.00555555555556
+    },
+    {
+      "atMs": 15500.0,
+      "token": 37.31574074074074
+    },
+    {
+      "atMs": 15600.0,
+      "token": 37.62592592592593
+    },
+    {
+      "atMs": 15700.0,
+      "token": 37.93611111111112
+    },
+    {
+      "atMs": 15800.0,
+      "token": 38.2462962962963
+    },
+    {
+      "atMs": 15900.0,
+      "token": 38.556481481481484
+    },
+    {
+      "atMs": 16000.0,
+      "token": 38.866666666666674
+    },
+    {
+      "atMs": 16100.0,
+      "token": 39.14737654320988
+    },
+    {
+      "atMs": 16200.0,
+      "token": 39.40586419753087
+    },
+    {
+      "atMs": 16300.0,
+      "token": 39.664351851851855
+    },
+    {
+      "atMs": 16400.0,
+      "token": 39.92283950617285
+    },
+    {
+      "atMs": 16500.0,
+      "token": 40.2175925925926
+    },
+    {
+      "atMs": 16600.0,
+      "token": 40.527777777777786
+    },
+    {
+      "atMs": 16700.0,
+      "token": 40.83796296296297
+    },
+    {
+      "atMs": 16800.0,
+      "token": 41.14814814814815
+    },
+    {
+      "atMs": 16900.0,
+      "token": 41.458333333333336
+    },
+    {
+      "atMs": 17000.0,
+      "token": 41.76851851851852
+    },
+    {
+      "atMs": 17100.0,
+      "token": 42.098379629629626
+    },
+    {
+      "atMs": 17200.0,
+      "token": 42.48611111111111
+    },
+    {
+      "atMs": 17300.0,
+      "token": 42.87384259259259
+    },
+    {
+      "atMs": 17400.0,
+      "token": 43.17438271604938
+    },
+    {
+      "atMs": 17500.0,
+      "token": 43.43287037037037
+    },
+    {
+      "atMs": 17600.0,
+      "token": 43.69135802469136
+    },
+    {
+      "atMs": 17700.0,
+      "token": 43.94984567901235
+    },
+    {
+      "atMs": 17800.0,
+      "token": 44.13888888888889
+    },
+    {
+      "atMs": 17900.0,
+      "token": 44.31121399176955
+    },
+    {
+      "atMs": 18000.0,
+      "token": 44.483539094650205
+    },
+    {
+      "atMs": 18100.0,
+      "token": 44.65586419753087
+    },
+    {
+      "atMs": 18200.0,
+      "token": 44.82818930041152
+    },
+    {
+      "atMs": 18300.0,
+      "token": 45.00115740740741
+    },
+    {
+      "atMs": 18400.0,
+      "token": 45.3888888888889
+    },
+    {
+      "atMs": 18500.0,
+      "token": 45.77662037037039
+    },
+    {
+      "atMs": 18600.0,
+      "token": 46.131481481481494
+    },
+    {
+      "atMs": 18700.0,
+      "token": 46.44166666666668
+    },
+    {
+      "atMs": 18800.0,
+      "token": 46.75185185185185
+    },
+    {
+      "atMs": 18900.0,
+      "token": 47.0
+    },
+    {
+      "atMs": 19000.0,
+      "token": 47.0
+    },
+    {
+      "atMs": 19100.0,
+      "token": 47.160714285714285
+    },
+    {
+      "atMs": 19200.0,
+      "token": 47.32142857142857
+    },
+    {
+      "atMs": 19300.0,
+      "token": 47.482142857142854
+    },
+    {
+      "atMs": 19400.0,
+      "token": 47.642857142857146
+    },
+    {
+      "atMs": 19500.0,
+      "token": 47.80357142857143
+    },
+    {
+      "atMs": 19600.0,
+      "token": 47.964285714285715
+    },
+    {
+      "atMs": 19700.0,
+      "token": 48.25
+    },
+    {
+      "atMs": 19800.0,
+      "token": 48.57142857142858
+    },
+    {
+      "atMs": 19900.0,
+      "token": 48.892857142857146
+    },
+    {
+      "atMs": 20000.0,
+      "token": 49.17142857142857
+    },
+    {
+      "atMs": 20100.0,
+      "token": 49.42857142857143
+    },
+    {
+      "atMs": 20200.0,
+      "token": 49.68571428571428
+    },
+    {
+      "atMs": 20300.0,
+      "token": 49.94285714285714
+    },
+    {
+      "atMs": 20400.0,
+      "token": 50.125
+    },
+    {
+      "atMs": 20500.0,
+      "token": 50.285714285714285
+    },
+    {
+      "atMs": 20600.0,
+      "token": 50.44642857142857
+    },
+    {
+      "atMs": 20700.0,
+      "token": 50.607142857142854
+    },
+    {
+      "atMs": 20800.0,
+      "token": 50.76785714285714
+    },
+    {
+      "atMs": 20900.0,
+      "token": 50.92857142857143
+    },
+    {
+      "atMs": 21000.0,
+      "token": 51.14285714285714
+    },
+    {
+      "atMs": 21100.0,
+      "token": 51.4
+    },
+    {
+      "atMs": 21200.0,
+      "token": 51.65714285714285
+    },
+    {
+      "atMs": 21300.0,
+      "token": 51.91428571428571
+    },
+    {
+      "atMs": 21400.0,
+      "token": 52.12244897959183
+    },
+    {
+      "atMs": 21500.0,
+      "token": 52.306122448979586
+    },
+    {
+      "atMs": 21600.0,
+      "token": 52.48979591836734
+    },
+    {
+      "atMs": 21700.0,
+      "token": 52.6734693877551
+    },
+    {
+      "atMs": 21800.0,
+      "token": 52.857142857142854
+    },
+    {
+      "atMs": 21900.0,
+      "token": 53.03571428571428
+    },
+    {
+      "atMs": 22000.0,
+      "token": 53.19642857142857
+    }
+  ],
+  "run": "starter__exact__gemini",
+  "script": "starter",
+  "tokens": [
+    {
+      "para": 0,
+      "surface": "hi"
+    },
+    {
+      "para": 0,
+      "surface": "if"
+    },
+    {
+      "para": 0,
+      "surface": "you"
+    },
+    {
+      "para": 0,
+      "surface": "are"
+    },
+    {
+      "para": 0,
+      "surface": "reading"
+    },
+    {
+      "para": 0,
+      "surface": "this"
+    },
+    {
+      "para": 0,
+      "surface": "sentence"
+    },
+    {
+      "para": 0,
+      "surface": "off"
+    },
+    {
+      "para": 0,
+      "surface": "the"
+    },
+    {
+      "para": 0,
+      "surface": "screen"
+    },
+    {
+      "para": 0,
+      "surface": "right"
+    },
+    {
+      "para": 0,
+      "surface": "now"
+    },
+    {
+      "para": 0,
+      "surface": "that"
+    },
+    {
+      "para": 0,
+      "surface": "is"
+    },
+    {
+      "para": 0,
+      "surface": "exactly"
+    },
+    {
+      "para": 0,
+      "surface": "the"
+    },
+    {
+      "para": 0,
+      "surface": "idea"
+    },
+    {
+      "para": 0,
+      "surface": "keep"
+    },
+    {
+      "para": 0,
+      "surface": "going"
+    },
+    {
+      "para": 0,
+      "surface": "at"
+    },
+    {
+      "para": 0,
+      "surface": "whatever"
+    },
+    {
+      "para": 0,
+      "surface": "pace"
+    },
+    {
+      "para": 0,
+      "surface": "feels"
+    },
+    {
+      "para": 0,
+      "surface": "natural"
+    },
+    {
+      "para": 0,
+      "surface": "to"
+    },
+    {
+      "para": 0,
+      "surface": "you"
+    },
+    {
+      "para": 0,
+      "surface": "and"
+    },
+    {
+      "para": 0,
+      "surface": "watch"
+    },
+    {
+      "para": 0,
+      "surface": "what"
+    },
+    {
+      "para": 0,
+      "surface": "the"
+    },
+    {
+      "para": 0,
+      "surface": "text"
+    },
+    {
+      "para": 0,
+      "surface": "does"
+    },
+    {
+      "para": 0,
+      "surface": "as"
+    },
+    {
+      "para": 0,
+      "surface": "you"
+    },
+    {
+      "para": 0,
+      "surface": "speak"
+    },
+    {
+      "para": 1,
+      "surface": "you"
+    },
+    {
+      "para": 1,
+      "surface": "should"
+    },
+    {
+      "para": 1,
+      "surface": "see"
+    },
+    {
+      "para": 1,
+      "surface": "the"
+    },
+    {
+      "para": 1,
+      "surface": "line"
+    },
+    {
+      "para": 1,
+      "surface": "you"
+    },
+    {
+      "para": 1,
+      "surface": "are"
+    },
+    {
+      "para": 1,
+      "surface": "on"
+    },
+    {
+      "para": 1,
+      "surface": "stay"
+    },
+    {
+      "para": 1,
+      "surface": "roughly"
+    },
+    {
+      "para": 1,
+      "surface": "in"
+    },
+    {
+      "para": 1,
+      "surface": "the"
+    },
+    {
+      "para": 1,
+      "surface": "middle"
+    },
+    {
+      "para": 1,
+      "surface": "of"
+    },
+    {
+      "para": 1,
+      "surface": "the"
+    },
+    {
+      "para": 1,
+      "surface": "screen"
+    },
+    {
+      "para": 1,
+      "surface": "the"
+    },
+    {
+      "para": 1,
+      "surface": "words"
+    },
+    {
+      "para": 1,
+      "surface": "behind"
+    },
+    {
+      "para": 1,
+      "surface": "you"
+    },
+    {
+      "para": 1,
+      "surface": "fade"
+    },
+    {
+      "para": 1,
+      "surface": "back"
+    },
+    {
+      "para": 1,
+      "surface": "and"
+    },
+    {
+      "para": 1,
+      "surface": "the"
+    },
+    {
+      "para": 1,
+      "surface": "words"
+    },
+    {
+      "para": 1,
+      "surface": "ahead"
+    },
+    {
+      "para": 1,
+      "surface": "of"
+    },
+    {
+      "para": 1,
+      "surface": "you"
+    },
+    {
+      "para": 1,
+      "surface": "sit"
+    },
+    {
+      "para": 1,
+      "surface": "and"
+    },
+    {
+      "para": 1,
+      "surface": "wait"
+    },
+    {
+      "para": 1,
+      "surface": "you"
+    },
+    {
+      "para": 1,
+      "surface": "should"
+    },
+    {
+      "para": 1,
+      "surface": "not"
+    },
+    {
+      "para": 1,
+      "surface": "have"
+    },
+    {
+      "para": 1,
+      "surface": "to"
+    },
+    {
+      "para": 1,
+      "surface": "think"
+    },
+    {
+      "para": 1,
+      "surface": "about"
+    },
+    {
+      "para": 1,
+      "surface": "scrolling"
+    },
+    {
+      "para": 1,
+      "surface": "at"
+    },
+    {
+      "para": 1,
+      "surface": "all"
+    },
+    {
+      "para": 2,
+      "surface": "now"
+    },
+    {
+      "para": 2,
+      "surface": "try"
+    },
+    {
+      "para": 2,
+      "surface": "slowing"
+    },
+    {
+      "para": 2,
+      "surface": "right"
+    },
+    {
+      "para": 2,
+      "surface": "down"
+    },
+    {
+      "para": 2,
+      "surface": "for"
+    },
+    {
+      "para": 2,
+      "surface": "a"
+    },
+    {
+      "para": 2,
+      "surface": "sentence"
+    },
+    {
+      "para": 2,
+      "surface": "or"
+    },
+    {
+      "para": 2,
+      "surface": "2"
+    },
+    {
+      "para": 2,
+      "surface": "and"
+    },
+    {
+      "para": 2,
+      "surface": "put"
+    },
+    {
+      "para": 2,
+      "surface": "a"
+    },
+    {
+      "para": 2,
+      "surface": "real"
+    },
+    {
+      "para": 2,
+      "surface": "pause"
+    },
+    {
+      "para": 2,
+      "surface": "in"
+    },
+    {
+      "para": 2,
+      "surface": "the"
+    },
+    {
+      "para": 2,
+      "surface": "middle"
+    },
+    {
+      "para": 2,
+      "surface": "of"
+    },
+    {
+      "para": 2,
+      "surface": "this"
+    },
+    {
+      "para": 2,
+      "surface": "one"
+    },
+    {
+      "para": 2,
+      "surface": "like"
+    },
+    {
+      "para": 2,
+      "surface": "that"
+    },
+    {
+      "para": 2,
+      "surface": "the"
+    },
+    {
+      "para": 2,
+      "surface": "text"
+    },
+    {
+      "para": 2,
+      "surface": "should"
+    },
+    {
+      "para": 2,
+      "surface": "ease"
+    },
+    {
+      "para": 2,
+      "surface": "off"
+    },
+    {
+      "para": 2,
+      "surface": "and"
+    },
+    {
+      "para": 2,
+      "surface": "wait"
+    },
+    {
+      "para": 2,
+      "surface": "for"
+    },
+    {
+      "para": 2,
+      "surface": "you"
+    },
+    {
+      "para": 2,
+      "surface": "rather"
+    },
+    {
+      "para": 2,
+      "surface": "than"
+    },
+    {
+      "para": 2,
+      "surface": "running"
+    },
+    {
+      "para": 2,
+      "surface": "ahead"
+    },
+    {
+      "para": 3,
+      "surface": "then"
+    },
+    {
+      "para": 3,
+      "surface": "pick"
+    },
+    {
+      "para": 3,
+      "surface": "the"
+    },
+    {
+      "para": 3,
+      "surface": "pace"
+    },
+    {
+      "para": 3,
+      "surface": "back"
+    },
+    {
+      "para": 3,
+      "surface": "up"
+    },
+    {
+      "para": 3,
+      "surface": "again"
+    },
+    {
+      "para": 3,
+      "surface": "it"
+    },
+    {
+      "para": 3,
+      "surface": "should"
+    },
+    {
+      "para": 3,
+      "surface": "catch"
+    },
+    {
+      "para": 3,
+      "surface": "up"
+    },
+    {
+      "para": 3,
+      "surface": "smoothly"
+    },
+    {
+      "para": 3,
+      "surface": "without"
+    },
+    {
+      "para": 3,
+      "surface": "jumping"
+    },
+    {
+      "para": 4,
+      "surface": "say"
+    },
+    {
+      "para": 4,
+      "surface": "something"
+    },
+    {
+      "para": 4,
+      "surface": "that"
+    },
+    {
+      "para": 4,
+      "surface": "is"
+    },
+    {
+      "para": 4,
+      "surface": "not"
+    },
+    {
+      "para": 4,
+      "surface": "written"
+    },
+    {
+      "para": 4,
+      "surface": "here"
+    },
+    {
+      "para": 4,
+      "surface": "at"
+    },
+    {
+      "para": 4,
+      "surface": "all"
+    },
+    {
+      "para": 4,
+      "surface": "talk"
+    },
+    {
+      "para": 4,
+      "surface": "about"
+    },
+    {
+      "para": 4,
+      "surface": "your"
+    },
+    {
+      "para": 4,
+      "surface": "day"
+    },
+    {
+      "para": 4,
+      "surface": "or"
+    },
+    {
+      "para": 4,
+      "surface": "what"
+    },
+    {
+      "para": 4,
+      "surface": "you"
+    },
+    {
+      "para": 4,
+      "surface": "had"
+    },
+    {
+      "para": 4,
+      "surface": "for"
+    },
+    {
+      "para": 4,
+      "surface": "breakfast"
+    },
+    {
+      "para": 4,
+      "surface": "for"
+    },
+    {
+      "para": 4,
+      "surface": "5"
+    },
+    {
+      "para": 4,
+      "surface": "or"
+    },
+    {
+      "para": 4,
+      "surface": "10"
+    },
+    {
+      "para": 4,
+      "surface": "seconds"
+    },
+    {
+      "para": 4,
+      "surface": "and"
+    },
+    {
+      "para": 4,
+      "surface": "then"
+    },
+    {
+      "para": 4,
+      "surface": "come"
+    },
+    {
+      "para": 4,
+      "surface": "back"
+    },
+    {
+      "para": 4,
+      "surface": "to"
+    },
+    {
+      "para": 4,
+      "surface": "this"
+    },
+    {
+      "para": 4,
+      "surface": "line"
+    },
+    {
+      "para": 4,
+      "surface": "and"
+    },
+    {
+      "para": 4,
+      "surface": "carry"
+    },
+    {
+      "para": 4,
+      "surface": "on"
+    },
+    {
+      "para": 4,
+      "surface": "reading"
+    },
+    {
+      "para": 5,
+      "surface": "that"
+    },
+    {
+      "para": 5,
+      "surface": "is"
+    },
+    {
+      "para": 5,
+      "surface": "the"
+    },
+    {
+      "para": 5,
+      "surface": "hard"
+    },
+    {
+      "para": 5,
+      "surface": "part"
+    },
+    {
+      "para": 5,
+      "surface": "of"
+    },
+    {
+      "para": 5,
+      "surface": "following"
+    },
+    {
+      "para": 5,
+      "surface": "a"
+    },
+    {
+      "para": 5,
+      "surface": "voice"
+    },
+    {
+      "para": 5,
+      "surface": "and"
+    },
+    {
+      "para": 5,
+      "surface": "it"
+    },
+    {
+      "para": 5,
+      "surface": "is"
+    },
+    {
+      "para": 5,
+      "surface": "worth"
+    },
+    {
+      "para": 5,
+      "surface": "seeing"
+    },
+    {
+      "para": 5,
+      "surface": "how"
+    },
+    {
+      "para": 5,
+      "surface": "it"
+    },
+    {
+      "para": 5,
+      "surface": "handles"
+    },
+    {
+      "para": 5,
+      "surface": "it"
+    },
+    {
+      "para": 5,
+      "surface": "before"
+    },
+    {
+      "para": 5,
+      "surface": "you"
+    },
+    {
+      "para": 5,
+      "surface": "rely"
+    },
+    {
+      "para": 5,
+      "surface": "on"
+    },
+    {
+      "para": 5,
+      "surface": "it"
+    },
+    {
+      "para": 5,
+      "surface": "for"
+    },
+    {
+      "para": 5,
+      "surface": "anything"
+    },
+    {
+      "para": 5,
+      "surface": "real"
+    },
+    {
+      "para": 6,
+      "surface": "read"
+    },
+    {
+      "para": 6,
+      "surface": "this"
+    },
+    {
+      "para": 6,
+      "surface": "next"
+    },
+    {
+      "para": 6,
+      "surface": "sentence"
+    },
+    {
+      "para": 6,
+      "surface": "stop"
+    },
+    {
+      "para": 6,
+      "surface": "halfway"
+    },
+    {
+      "para": 6,
+      "surface": "through"
+    },
+    {
+      "para": 6,
+      "surface": "and"
+    },
+    {
+      "para": 6,
+      "surface": "then"
+    },
+    {
+      "para": 6,
+      "surface": "start"
+    },
+    {
+      "para": 6,
+      "surface": "it"
+    },
+    {
+      "para": 6,
+      "surface": "again"
+    },
+    {
+      "para": 6,
+      "surface": "from"
+    },
+    {
+      "para": 6,
+      "surface": "the"
+    },
+    {
+      "para": 6,
+      "surface": "beginning"
+    },
+    {
+      "para": 6,
+      "surface": "presenters"
+    },
+    {
+      "para": 6,
+      "surface": "do"
+    },
+    {
+      "para": 6,
+      "surface": "this"
+    },
+    {
+      "para": 6,
+      "surface": "constantly"
+    },
+    {
+      "para": 6,
+      "surface": "and"
+    },
+    {
+      "para": 6,
+      "surface": "the"
+    },
+    {
+      "para": 6,
+      "surface": "script"
+    },
+    {
+      "para": 6,
+      "surface": "should"
+    },
+    {
+      "para": 6,
+      "surface": "follow"
+    },
+    {
+      "para": 6,
+      "surface": "you"
+    },
+    {
+      "para": 6,
+      "surface": "backwards"
+    },
+    {
+      "para": 6,
+      "surface": "without"
+    },
+    {
+      "para": 6,
+      "surface": "losing"
+    },
+    {
+      "para": 6,
+      "surface": "its"
+    },
+    {
+      "para": 6,
+      "surface": "place"
+    },
+    {
+      "para": 7,
+      "surface": "that"
+    },
+    {
+      "para": 7,
+      "surface": "is"
+    },
+    {
+      "para": 7,
+      "surface": "the"
+    },
+    {
+      "para": 7,
+      "surface": "tour"
+    },
+    {
+      "para": 7,
+      "surface": "delete"
+    },
+    {
+      "para": 7,
+      "surface": "all"
+    },
+    {
+      "para": 7,
+      "surface": "of"
+    },
+    {
+      "para": 7,
+      "surface": "this"
+    },
+    {
+      "para": 7,
+      "surface": "and"
+    },
+    {
+      "para": 7,
+      "surface": "write"
+    },
+    {
+      "para": 7,
+      "surface": "your"
+    },
+    {
+      "para": 7,
+      "surface": "own"
+    },
+    {
+      "para": 7,
+      "surface": "words"
+    },
+    {
+      "para": 7,
+      "surface": "whenever"
+    },
+    {
+      "para": 7,
+      "surface": "you"
+    },
+    {
+      "para": 7,
+      "surface": "are"
+    },
+    {
+      "para": 7,
+      "surface": "ready"
+    },
+    {
+      "para": 7,
+      "surface": "the"
+    },
+    {
+      "para": 7,
+      "surface": "words"
+    },
+    {
+      "para": 7,
+      "surface": "you"
+    },
+    {
+      "para": 7,
+      "surface": "plan"
+    },
+    {
+      "para": 7,
+      "surface": "to"
+    },
+    {
+      "para": 7,
+      "surface": "say"
+    },
+    {
+      "para": 7,
+      "surface": "written"
+    },
+    {
+      "para": 7,
+      "surface": "the"
+    },
+    {
+      "para": 7,
+      "surface": "way"
+    },
+    {
+      "para": 7,
+      "surface": "you"
+    },
+    {
+      "para": 7,
+      "surface": "would"
+    },
+    {
+      "para": 7,
+      "surface": "actually"
+    },
+    {
+      "para": 7,
+      "surface": "say"
+    },
+    {
+      "para": 7,
+      "surface": "them"
+    }
+  ],
+  "totalMs": 22000.0
+}

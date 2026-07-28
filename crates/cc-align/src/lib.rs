@@ -23,11 +23,13 @@ pub mod align;
 pub mod config;
 pub mod ledger;
 pub mod normalize;
+pub mod project;
 pub mod script;
 pub mod tracker;
 pub mod vocab;
 
 pub use config::AlignmentConfig;
+pub use project::{decision_name, project_to_tokens, state_name, TokenSnapshot};
 pub use script::{compile, compile_tokens, CompileOptions, CompiledScript, TokenInput};
 pub use tracker::{DecisionCode, Engine, SessionEvent, Snapshot, TrackingState};
 pub use vocab::{extract_from_markdown, extract_terms, spoken_surfaces, VocabLimits, VocabToken};

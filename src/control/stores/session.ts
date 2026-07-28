@@ -66,6 +66,8 @@ import { clearConditionToasts, showToast } from './toasts';
  * once per stall, and cleared with the take.
  */
 const TOAST_AUDIO_DROPPED = 'audio-dropped';
+/** §64: the stage is receiving snapshots and not applying them. */
+const TOAST_STAGE_NOT_APPLYING = 'stage-not-applying';
 import { compiled as compiledStore } from './compiled';
 import { saveNow } from './editor';
 
@@ -146,6 +148,22 @@ export interface SessionSummary {
   wordsFollowed: number;
   /** Script length, so `wordsFollowed` has something to be a fraction of. */
   scriptWords: number;
+  /**
+   * Position updates SENT to the stage, and the number it reported applying.
+   *
+   * The two numbers above are both measured on the control side, and they
+   * agreed perfectly through a take where the script never moved: the aligner
+   * followed nine words, control counted nine words, and the glass sat still.
+   * Nothing on this card could distinguish "the aligner lost you" from "the
+   * aligner followed you and the stage discarded every update", which are
+   * unrelated faults with one symptom.
+   *
+   * `stageApplied` is null when the stage never reported — a browser-dev
+   * session, or one that ended before the first heartbeat ack came back — and
+   * that is stated rather than shown as zero, which would read as a fault.
+   */
+  updatesSent: number;
+  stageApplied: number | null;
 }
 
 export interface SessionState {
@@ -515,6 +533,13 @@ export function startLiveSession(input: StartSessionInput): string {
   transcriptRetained = input.transcriptRetained === true;
   transcriptBuffer = [];
   wordsHeard = 0;
+  // §64: both ends of the apply comparison are per-session. `seq` restarts with
+  // the engine, so a count carried across takes would read as a huge backlog on
+  // the first beat of the next one.
+  lastSnapshotSeq = 0;
+  stageAppliedRevision = null;
+  stageApplyDivergedAtMs = null;
+  stageApplyReported = false;
   scriptWordCount = input.totalTokens;
   stageSettings = input.stageSettings ?? null;
   listenerSelection = input.listener ?? null;
@@ -1058,6 +1083,9 @@ function blockIdForToken(token: number): string | null {
  */
 function handleSnapshot(snapshot: AlignmentSnapshot): void {
   const nowMs = monotonicNowMs();
+  // What control has been told, for the §64 comparison against what the stage
+  // has actually applied. See `checkStageApplyingSnapshots`.
+  if (snapshot.seq > lastSnapshotSeq) lastSnapshotSeq = snapshot.seq;
   const blockId = blockIdForToken(snapshot.confirmedToken);
   if (activeTake !== null) {
     // §36.3 sections traversed, per take. `blocksSeen` below is the same fact
@@ -1616,6 +1644,92 @@ function refreshControlOperatorPlausible(): void {
     });
 }
 
+/* ---------------------------------------------------------------------------
+ * §64: is the stage APPLYING what control is sending?
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The newest alignment snapshot control has been handed, by `seq`.
+ *
+ * Rust publishes every snapshot to BOTH windows, so this and the stage's own
+ * applied revision describe the same stream from its two ends. They are the
+ * only two numbers that can tell "the aligner is not following" apart from "the
+ * aligner is following and the glass is not moving" — and those two have
+ * identical symptoms and completely unrelated causes.
+ */
+let lastSnapshotSeq = 0;
+/**
+ * The stage's applied revision, as of the last beat that could read it.
+ *
+ * Kept so the end-of-session summary can state it. That card is the one
+ * artefact anybody actually looks at after a take that went wrong, and it
+ * already shows "Words heard" beside "Script followed" — two numbers that
+ * agreed completely while the glass never moved, with nothing to explain the
+ * gap. This is the third number that closes it.
+ */
+let stageAppliedRevision: number | null = null;
+/** When the two ends first disagreed, or null while they agree. */
+let stageApplyDivergedAtMs: number | null = null;
+/** Said once per take. A stuck stage does not get more true by repetition. */
+let stageApplyReported = false;
+
+/**
+ * How far apart the two ends may drift before it means anything.
+ *
+ * The stage's revision reaches control through its heartbeat ack and the Rust
+ * relay, so it trails by up to a beat, and snapshots arrive about once a second.
+ * Two is inside the ordinary lag; four is not.
+ */
+const STAGE_APPLY_LAG_TOLERANCE = 4;
+/** And how long it has to stay that way. One slow beat is not a fault. */
+const STAGE_APPLY_LAG_GRACE_MS = 5000;
+
+/**
+ * Compare the two ends, and say so when they part company.
+ *
+ * The failure this exists for looks, from the presenter's side, exactly like
+ * the aligner having lost them: the script sits still while they talk. But the
+ * summary afterwards says "Script followed: 9 of 131", because control received
+ * every one of those snapshots and counted them. Nothing anywhere joined those
+ * two facts up, so the honest diagnosis — the engine is fine, the stage is
+ * discarding what it is sent — was not available from either window.
+ *
+ * The stage already reports its applied revision on every heartbeat ack and
+ * Rust already stores it. Reading it is all that was missing.
+ */
+function checkStageApplyingSnapshots(expectedGeneration: number): void {
+  if (stageApplyReported || lastSnapshotSeq === 0) return;
+  void stageService
+    .getStageStatus()
+    .then((status) => {
+      if (!status.exists || status.stageGeneration !== expectedGeneration) return;
+      const applied = status.lastTrackingRevision ?? 0;
+      stageAppliedRevision = applied;
+      const behind = lastSnapshotSeq - applied;
+      if (behind < STAGE_APPLY_LAG_TOLERANCE) {
+        stageApplyDivergedAtMs = null;
+        return;
+      }
+      const nowMs = monotonicNowMs();
+      if (stageApplyDivergedAtMs === null) {
+        stageApplyDivergedAtMs = nowMs;
+        return;
+      }
+      if (nowMs - stageApplyDivergedAtMs < STAGE_APPLY_LAG_GRACE_MS) return;
+      stageApplyReported = true;
+      showToast(
+        `Your voice is being followed, but the stage is not applying it — ${lastSnapshotSeq} updates sent, ${applied} applied. ` +
+          'The script will not move. Press "s" on the stage for its own diagnostics, which name the reason.',
+        'danger',
+        { key: TOAST_STAGE_NOT_APPLYING },
+      );
+    })
+    .catch(() => {
+      // A failed status read is not evidence about the stage. The next beat
+      // asks again, and a stage that has genuinely gone is the watchdog's job.
+    });
+}
+
 function startStageBridge(sessionId: string): void {
   if (!isTauriRuntime() || stageGeneration === 0) return;
 
@@ -1648,6 +1762,9 @@ function startStageBridge(sessionId: string): void {
         sentAtMs: Date.now(),
       });
     })().catch(() => {});
+    // The ack this beat provokes carries the stage's applied revision, which is
+    // the other half of the comparison. Checked on the same cadence.
+    checkStageApplyingSnapshots(generation);
   }, 1000);
 
   void (async () => {
@@ -2364,6 +2481,8 @@ export function stopSession(): SessionSummary {
     wordsHeard,
     wordsFollowed: takeWordsFollowed(),
     scriptWords: scriptWordCount,
+    updatesSent: lastSnapshotSeq,
+    stageApplied: stageAppliedRevision,
   };
   // §36.2 + §36.1: write the retained tail and close the record BEFORE the
   // teardown resets `transcriptRetained`. `stopInternals` is what runs on every
@@ -2431,6 +2550,8 @@ function emptySummary(s: SessionState): SessionSummary {
     wordsHeard: 0,
     wordsFollowed: 0,
     scriptWords: scriptWordCount,
+    updatesSent: 0,
+    stageApplied: null,
   };
 }
 

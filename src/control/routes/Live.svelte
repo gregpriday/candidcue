@@ -765,6 +765,22 @@
           ({Math.round((summary.wordsFollowed / summary.scriptWords) * 100)}%)
         {/if}
       </dd>
+      <!--
+        The row that tells a lost aligner apart from a stage that ignored it.
+        Both of the rows above are measured on the control side and agreed
+        perfectly through a take where the script never moved.
+      -->
+      <dt>Stage updates</dt>
+      <dd>
+        {#if summary.stageApplied === null}
+          {summary.updatesSent} sent — the stage did not report back
+        {:else}
+          {summary.stageApplied} of {summary.updatesSent} applied
+          {#if summary.updatesSent - summary.stageApplied >= 4}
+            <span class="summary-warn">— the stage was not following control</span>
+          {/if}
+        {/if}
+      </dd>
       <dt>Sections reached</dt>
       <dd>{summary.sectionsReached}</dd>
       <dt>Retakes</dt>

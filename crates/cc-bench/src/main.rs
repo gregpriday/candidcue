@@ -40,6 +40,8 @@ struct Flags {
     pace: f64,
     scripts: Option<Vec<String>>,
     runs: Option<PathBuf>,
+    /// `export-run`: seconds of audio to freeze. None means the whole run.
+    seconds: Option<f64>,
 }
 
 fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags> {
@@ -51,6 +53,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         pace: 1.0,
         scripts: None,
         runs: None,
+        seconds: None,
     };
     let mut it = it.peekable();
     while let Some(arg) = it.next() {
@@ -66,6 +69,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--workdir" => flags.workdir = Some(PathBuf::from(take()?)),
             "--pace" => flags.pace = take()?.parse()?,
             "--runs" => flags.runs = Some(PathBuf::from(take()?)),
+            "--seconds" => flags.seconds = Some(take()?.parse()?),
             "--scripts" => {
                 flags.scripts = Some(take()?.split(',').map(|s| s.trim().to_string()).collect())
             }
@@ -300,6 +304,149 @@ fn main() -> anyhow::Result<()> {
                 }
                 prior_observed = snap.observed;
             }
+        }
+        Some("export-run") => {
+            /*
+             * cc-bench export-run <run-name> --out <path>
+             *
+             * Freeze a captured Tier-B run as the thing the STAGE consumes: the
+             * token-space snapshot stream the app would publish, the tokens it
+             * indexes into, and the gold reader position at each moment.
+             *
+             * This exists because the harness could prove the ENGINE follows and
+             * could say nothing about whether the product does. Tier A and Tier B
+             * both score `Snapshot::display_at`, which is Rust's model of the
+             * display — not the renderer that actually moves the glass. A fixture
+             * in this shape lets a browser test replay real recorded speech
+             * through the real Svelte stage and assert the words arrive under the
+             * reader's eye, which is the only claim a presenter cares about.
+             *
+             * The tokens travel WITH the snapshots, and that is not incidental.
+             * Positions are indexes, and an index means nothing without the list
+             * it indexes into: `cc_align::compile` and the app's TypeScript
+             * compiler tokenise separately, so a test that rebuilt the document
+             * from the markdown would be asserting against a different numbering
+             * than the snapshots use. Emitting both together makes them agree by
+             * construction.
+             */
+            let run_name = args.get(1).cloned().unwrap_or_default();
+            let flags = parse_flags(args[2..].iter())?;
+            let config = load_config(&flags.config)?;
+            let dir = runs_dir.join(&run_name);
+            let manifest: RunManifest =
+                serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json"))?)?;
+            let gold: cc_bench::plan::GoldTimeline =
+                serde_json::from_str(&std::fs::read_to_string(dir.join("gold.json"))?)?;
+            let events = cc_bench::capture::read_events_jsonl(&dir.join("events.jsonl"))?;
+            let source =
+                std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
+            // Compiled twice: `replay` consumes one, and the projection and the
+            // token list below need the same script it ran against.
+            let script = cc_align::compile(&source, cc_align::CompileOptions::default());
+            let axis = cc_align::compile(&source, cc_align::CompileOptions::default());
+            let result = cc_bench::replay::replay(script, config, &events, &gold.viewport_hints);
+
+            // Host tokens, rebuilt from the atoms that carry them. One host
+            // token can expand into several atoms ("$12" -> "12 dollars"), so
+            // the surface is their join and the paragraph is the first one's.
+            let mut tokens: Vec<(String, u32)> =
+                vec![(String::new(), 0); axis.token_count as usize];
+            for (i, atom) in axis.atoms.iter().enumerate() {
+                let t = axis.atom_token_pos[i].floor().max(0.0) as usize;
+                if t >= tokens.len() {
+                    continue;
+                }
+                if tokens[t].0.is_empty() {
+                    tokens[t] = (atom.surface.clone(), atom.para);
+                } else {
+                    tokens[t].0.push(' ');
+                    tokens[t].0.push_str(&atom.surface);
+                }
+            }
+
+            let transcript_events: Vec<_> = events
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e,
+                        cc_stt::SttFrame::ItemStarted { .. }
+                            | cc_stt::SttFrame::Partial { .. }
+                            | cc_stt::SttFrame::Final { .. }
+                    )
+                })
+                .collect();
+
+            /*
+             * How much of the run to freeze, in seconds of audio.
+             *
+             * A browser test has to replay this at REAL TIME — the snapshots
+             * carry audio timestamps and the stage builds its clock estimate
+             * from the offset between those and wall time, so compressing the
+             * schedule without rewriting every stamp would hand the renderer a
+             * clock that runs at the wrong rate and measure something nobody
+             * experiences. A full Tier-B run is two minutes, which is not a
+             * test; the first twenty seconds contain the first lock and enough
+             * sustained reading to prove following, which is.
+             */
+            let seconds = flags.seconds.unwrap_or(f64::INFINITY);
+            let cutoff_ms = seconds * 1000.0;
+
+            let mut out_events = Vec::new();
+            for (frame, snap) in transcript_events.iter().zip(&result.snapshots) {
+                let at_ms = match frame {
+                    cc_stt::SttFrame::ItemStarted { audio_start_ms, .. } => *audio_start_ms,
+                    cc_stt::SttFrame::Partial { audio_ms, .. } => *audio_ms,
+                    cc_stt::SttFrame::Final { audio_end_ms, .. } => *audio_end_ms,
+                    _ => continue,
+                };
+                if at_ms > cutoff_ms {
+                    break;
+                }
+                out_events.push(serde_json::json!({
+                    "atMs": at_ms,
+                    // Session generation 1: a fixture is one take, and the value
+                    // only has to match the envelope the test publishes.
+                    "snapshot": cc_align::project_to_tokens(snap, &axis, 1),
+                }));
+            }
+
+            // Gold, in TOKEN space and sampled on a fixed grid, so a test can
+            // ask "where should the reader be at t?" without re-deriving the
+            // atom axis it has no access to.
+            let mut out_gold = Vec::new();
+            let mut t_ms = 0.0f64;
+            while t_ms <= gold.total_ms.min(cutoff_ms) {
+                if let Some(p) = gold.position_at(t_ms) {
+                    out_gold.push(serde_json::json!({
+                        "atMs": t_ms,
+                        "token": axis.token_at(p.position),
+                    }));
+                }
+                t_ms += 100.0;
+            }
+
+            let doc = serde_json::json!({
+                "run": run_name,
+                "script": manifest.script,
+                "totalMs": gold.total_ms.min(cutoff_ms),
+                "tokens": tokens
+                    .iter()
+                    .map(|(surface, para)| serde_json::json!({ "surface": surface, "para": para }))
+                    .collect::<Vec<_>>(),
+                "events": out_events,
+                "gold": out_gold,
+            });
+            let out = flags
+                .out
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("export-run needs --out <path>"))?;
+            std::fs::write(&out, serde_json::to_string_pretty(&doc)?)?;
+            println!(
+                "wrote {} ({} snapshots, {} tokens)",
+                out.display(),
+                out_events.len(),
+                tokens.len()
+            );
         }
         Some("inspect") => {
             // cc-bench inspect <script> <scenario> [--config C] — per-event
