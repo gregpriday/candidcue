@@ -461,6 +461,23 @@
 
     const onDirective = (payload: StageStatePayload) => {
       lastInboundAt = performance.now();
+      if (payload.directive.kind === 'transcript') {
+        /*
+         * Generation-checked here rather than in the reducer, because the bar
+         * is local state: it has to keep reading before the envelope has
+         * arrived and after a blank, which is exactly when the reducer refuses
+         * to act. An unknown generation is accepted for the same reason the
+         * bar is not gated on `phase === 'live'` — this is the instrument that
+         * says whether anything is being heard at all, and it may not be
+         * switched off by the conditions it exists to explain.
+         */
+        const generation = app.envelope?.stageGeneration ?? 0;
+        if (generation === 0 || payload.stageGeneration === generation) {
+          transcriptTapsArrived += 1;
+          transcriptTap = payload.directive.text;
+        }
+        return;
+      }
       dispatch({
         type: 'directive',
         stageGeneration: payload.stageGeneration,

@@ -1367,17 +1367,33 @@ function publishTranscriptTap(text: string, final: boolean): void {
   // which is indistinguishable on the glass from never having been sent.
   if (payload.text.length === 0) transcriptTapsDropped.emptyText += 1;
   /*
-   * Counted on RESOLUTION, not on the attempt.
+   * Through RUST, not straight at the stage window.
    *
-   * This used to increment before the await, so "6 of 6 sent" meant "six calls
-   * were made" — and with the rejection swallowed, a channel that delivered
-   * nothing reported a perfect score. That is the same shape as every other
-   * defect in this area: a number that looks like evidence and is not.
+   * This used to be `emitTo('stage', 'stage://transcript-tap', …)` from this
+   * webview. On a real rig it delivered nothing — the bar read "listening — no
+   * words yet" for an entire take while this function counted six taps sent —
+   * and no amount of reading the two sides could explain why, when alignment
+   * snapshots reached the same window in the same seconds and moved the
+   * document to the pixel.
+   *
+   * The difference between them was the ROAD, not the payload: snapshots come
+   * from Rust (`app.emit_to(STAGE_LABEL, …)`), and everything Rust emits
+   * arrives. So the words go that way too, as a directive on the relay the
+   * stage already trusts for freeze, blank, settings and calibration. It is
+   * one IPC call a second against a channel with a proven delivery record,
+   * and it picks up Rust's generation validation on the way past, which the
+   * direct emit never had.
+   *
+   * Counted on RESOLUTION. Counting the attempt is what made "6 of 6 sent"
+   * describe six calls rather than six deliveries, and turned a dead channel
+   * into a perfect score.
    */
-  const sent = cachedEmitTo
-    ? cachedEmitTo('stage', STAGE_EVENT.transcriptTap, payload)
-    : resolveEmitTo().then((emitTo) => emitTo('stage', STAGE_EVENT.transcriptTap, payload));
-  void sent
+  void stageService
+    .publishStageDirective(s.sessionId, stageGeneration, {
+      kind: 'transcript',
+      text: payload.text,
+      final,
+    })
     .then(() => {
       transcriptTapsEmitted += 1;
     })

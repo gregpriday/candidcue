@@ -332,6 +332,44 @@ describe('the stage exit affordance', () => {
     expect(feedLine()).toMatch(/1 ok \/ 1 dropped \(session_generation\)/);
   });
 
+  /**
+   * The transcript bar's words arrive as a DIRECTIVE, on the Rust relay.
+   *
+   * They used to come straight from the control webview as
+   * `emitTo('stage', 'stage://transcript-tap', …)`, and on a real rig that
+   * delivered nothing: the bar read "listening — no words yet" for a whole take
+   * while control counted six taps sent, in the same seconds that alignment
+   * snapshots — emitted from RUST — arrived and moved the document to the
+   * pixel. The difference was the road, not the payload.
+   *
+   * This pins the new road: a `transcript` directive on `applyCommand`, which
+   * is the same channel freeze, blank, settings and calibration already use.
+   */
+  it('shows the recogniser words that arrive as a directive', async () => {
+    await mountLiveStage();
+    expect(document.querySelector('.transcript-tap')?.textContent).toContain('listening');
+
+    dispatchLocalStageEvent(STAGE_EVENT.applyCommand, {
+      stageGeneration: STAGE_GENERATION,
+      directive: { kind: 'transcript', text: 'this is a test of the transcription', final: false },
+    });
+    await settle();
+
+    expect(document.querySelector('.transcript-tap')?.textContent).toContain(
+      'this is a test of the transcription',
+    );
+  });
+
+  it('ignores transcript words addressed to another stage generation', async () => {
+    await mountLiveStage();
+    dispatchLocalStageEvent(STAGE_EVENT.applyCommand, {
+      stageGeneration: STAGE_GENERATION + 99,
+      directive: { kind: 'transcript', text: 'from a take that ended', final: true },
+    });
+    await settle();
+    expect(document.querySelector('.transcript-tap')?.textContent).toContain('listening');
+  });
+
   it('does not offer itself over a blanked stage', async () => {
     const root = await mountLiveStage();
     dispatchLocalStageEvent(STAGE_EVENT.applyCommand, {

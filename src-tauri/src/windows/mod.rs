@@ -1185,6 +1185,11 @@ const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[
     "listener",
     "calibration",
     "diagnostics",
+    // The recogniser's own words for the stage's transcript bar. It used to
+    // reach the stage as a direct `emitTo` from the control webview and, on a
+    // real rig, never arrived — while snapshots emitted from HERE reached the
+    // same window in the same seconds. It travels the proven road now.
+    "transcript",
 ];
 
 /// Validate a `StageStatePayload` ({ stageGeneration, directive }) against

@@ -223,6 +223,22 @@ export type StageDirective =
   | { kind: 'freeze'; frozen: boolean }
   | { kind: 'ack'; label: string; durationMs?: number }
   | { kind: 'settings'; settings: StageSettings }
+  /**
+   * The recogniser's own words, for the stage's transcript bar.
+   *
+   * A DIRECTIVE rather than its own event, and that is the whole point. The bar
+   * used to arrive by `emitTo('stage', 'stage://transcript-tap', …)` straight
+   * from the control webview, and on at least one real rig it never showed a
+   * word while control counted six sent — while alignment snapshots, which come
+   * from RUST, arrived and moved the document perfectly. Two roads to the same
+   * window, one of them not delivering.
+   *
+   * This puts the words on the road that demonstrably works: control invokes
+   * `publish_stage_command`, Rust validates the generation and emits to the
+   * stage, and the stage handles it beside every other directive. It also gets
+   * the generation check for free, which the old direct emit never had.
+   */
+  | { kind: 'transcript'; text: string; final: boolean }
   | { kind: 'listener'; listener: ListenerStageSelection | null }
   | ({ kind: 'calibration'; active: boolean } & StageCalibrationDirective)
   | { kind: 'diagnostics'; visible: boolean };
