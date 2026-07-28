@@ -13,7 +13,6 @@ export type SettingsSection =
   | 'teleprompter'
   /** Companion §47 follow settings. */
   | 'following'
-  | 'listeners'
   | 'privacy';
 
 export type LibraryView = 'all' | 'recent' | 'trash';

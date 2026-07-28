@@ -85,10 +85,6 @@ const stageCalls = vi.hoisted(() => ({
   closeStage: vi.fn(),
 }));
 vi.mock('../../../src/control/services/stage', () => stageCalls);
-vi.mock('../../../src/control/services/listeners', () => ({
-  listInstalledListeners: vi.fn(async () => []),
-  buildListenerSelection: vi.fn(),
-}));
 vi.mock('../../../src/control/services/display-profiles', async (original) => {
   const actual = await original<typeof import('../../../src/control/services/display-profiles')>();
   return {
@@ -197,7 +193,6 @@ describe('single-window Present', () => {
         sessionId: 'session-1',
         stageGeneration: 0,
         displayLabel: 'This window',
-        listener: null,
         compiled: expect.objectContaining({ scriptId: SCRIPT.id }),
         stageEnvelope: expect.objectContaining({
           sessionId: 'session-1',

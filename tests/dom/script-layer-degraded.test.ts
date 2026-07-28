@@ -3,15 +3,13 @@
  *
  * Detection was real and the engine already backed its own styling cadence off,
  * but `degraded` never left the engine: the renderer did not know, so no
- * nonessential effect was ever disabled, and the mount site could not tell the
- * Listener either.
+ * nonessential effect was ever disabled, and the mount site was never told.
  *
  * These mount the real ScriptLayer over a fake engine — the fake exists only so
  * the test can SAY "degraded" without having to starve a jsdom of frames — and
  * check the two things the wire is supposed to produce: a flag on the layer,
- * and a callback to the mount site. (The Listener half of §61 — step 3, the
- * simplified crossfade — is asserted in tests/unit/stage/degradation.test.ts,
- * where the component can be rendered without a video pipeline.)
+ * and a callback to the mount site. The BOUNDARY of step 1 — what degradation
+ * is not allowed to turn off — is asserted in tests/unit/stage/degradation.test.ts.
  *
  * The last test is the important one. §61 says "disable nonessential visual
  * effects", and the reading band, the past/future dimming and the current-phrase
@@ -179,7 +177,7 @@ describe('§61 degradation reaches the renderer', () => {
     expect(layer().getAttribute('data-degraded')).toBe('true');
   });
 
-  it('tells the mount site, which is where the Listener lives', () => {
+  it('tells the mount site, which reports on degradation too', () => {
     const seen: boolean[] = [];
     mountLayer((degraded) => seen.push(degraded));
     pumpFrame();
@@ -188,8 +186,8 @@ describe('§61 degradation reaches the renderer', () => {
     pumpFrame();
     expect(seen).toEqual([true]);
 
-    // …and back again: degradation is recoverable, and a Listener left on its
-    // simplified crossfade for the rest of the take would be a silent downgrade.
+    // …and back again: degradation is recoverable, and a layer left in its
+    // simplified mode for the rest of the take would be a silent downgrade.
     engineState.degraded = false;
     pumpFrame();
     expect(seen).toEqual([true, false]);

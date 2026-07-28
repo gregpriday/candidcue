@@ -190,32 +190,3 @@ test('a microphone grant remembered on this machine is not asked for again', asy
   await expect(page.getByRole('button', { name: 'Allow and choose microphone' })).toHaveCount(0);
 });
 
-/**
- * §37.4 — "keep the Listener when the stage is blanked" is a stored preference,
- * not the hard-coded `keepListener: false` the session used to put on every
- * `blank` directive.
- */
-test('the blank-behaviour toggle writes listener.keepWhenBlanked to update_settings', async ({ page }) => {
-  await installTauriShim(page, { welcomed: true });
-  await page.goto('/control.html');
-
-  await page.getByRole('button', { name: 'Settings' }).first().click();
-  await page.getByRole('button', { name: 'Listeners', exact: true }).click();
-
-  const keep = page.getByRole('switch', { name: 'Keep the Listener when the stage is blanked' });
-  await expect(keep).toBeVisible();
-  await expect(keep).toHaveAttribute('aria-checked', 'false');
-
-  await keep.click();
-  await expect(keep).toHaveAttribute('aria-checked', 'true');
-
-  await expect
-    .poll(() => page.evaluate(() => window.__E2E__.calls.filter((c) => c.command === 'update_settings').length))
-    .toBeGreaterThan(0);
-
-  const call = await page.evaluate(() => window.__E2E__.lastCall('update_settings'));
-  const args = call!.args as { patch: Record<string, Record<string, unknown>> };
-  expect(args.patch.listener?.['keepWhenBlanked']).toBe(true);
-  // The deleted field must not come back on the wire either.
-  expect(JSON.stringify(args.patch)).not.toContain('hideOnBlank');
-});

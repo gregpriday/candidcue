@@ -26,8 +26,6 @@ pub mod events {
     pub const STAGE_READY: &str = "stage://ready";
     pub const STAGE_CLOSED: &str = "stage://closed";
     pub const STAGE_ERROR: &str = "stage://error";
-    pub const LISTENER_DOWNLOAD_PROGRESS: &str = "listener://download-progress";
-    pub const LISTENER_CATALOGUE_UPDATED: &str = "listener://catalogue-updated";
     pub const UPDATE_AVAILABLE: &str = "update://available";
     pub const UPDATE_PROGRESS: &str = "update://progress";
     pub const DEVICE_OR_DISPLAY_CHANGE: &str = "app://device-or-display-change";
@@ -42,7 +40,6 @@ pub mod events {
     // Rust → stage.
     pub const STAGE_LOAD_SESSION: &str = "stage://load-session";
     pub const STAGE_APPLY_COMMAND: &str = "stage://apply-command";
-    pub const STAGE_LISTENER_STATE: &str = "stage://listener-state";
     pub const STAGE_CLOSE_SESSION: &str = "stage://close-session";
 
     // Control → stage (emitted directly from the control webview, §43.5).
@@ -105,9 +102,9 @@ pub mod events {
     // Periodic stage motion report, relayed to control (companion §54).
     pub const STAGE_MOTION_ACK: &str = "stage://motion-ack";
     // §62 stage-layout failure, relayed to control. Deliberately NOT
-    // `stage://error`: that channel already carries Listener media faults and
-    // window-layer errors, and a held stage is a different emergency with a
-    // different recovery.
+    // `stage://error`: that channel already carries the window layer's own
+    // errors, and a held stage is a different emergency with a different
+    // recovery.
     pub const STAGE_LAYOUT_FAILED: &str = "stage://layout-failed";
 
     // Stage → control (listened directly by the control webview).
@@ -967,8 +964,8 @@ const MAX_STAGE_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
  *    there is no behaviour to preserve, and they are what a contract test can
  *    finally catch drifting.
  *
- *  - `rest` keeps every field neither side names (`listener`, `followProfile`,
- *    anything added later) so the payload that reaches the stage is the payload
+ *  - `rest` keeps every field neither side names (`followProfile`, anything
+ *    added later) so the payload that reaches the stage is the payload
  *    control sent. A struct that dropped unknown fields here would be a much
  *    worse bug than the one being fixed.
  * ------------------------------------------------------------------------- */
@@ -995,7 +992,7 @@ pub struct StageDocumentEnvelope {
     /// nothing to show, which is the whole point of the envelope.
     pub render_document: serde_json::Value,
     pub initial_token_index: i64,
-    /// `listener`, `followProfile`, and anything added after this struct.
+    /// `followProfile` and anything added after this struct.
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
@@ -1184,7 +1181,6 @@ const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[
     "freeze",
     "ack",
     "settings",
-    "listener",
     "calibration",
     "diagnostics",
     // The recogniser's own words for the stage's transcript bar. It used to
@@ -1249,35 +1245,12 @@ pub fn replay_stage_live<R: Runtime>(app: &AppHandle<R>, generation: u64) -> boo
         .is_ok()
 }
 
-pub fn publish_listener_state<R: Runtime>(
-    app: &AppHandle<R>,
-    session_id: &str,
-    state: serde_json::Value,
-) -> Result<(), AppError> {
-    let active = require_active_stage(app, session_id)?;
-    if !validate_stage_directive(active.generation, &state)? {
-        return Ok(());
-    }
-    if state
-        .get("directive")
-        .and_then(|d| d.get("kind"))
-        .and_then(|v| v.as_str())
-        != Some("listener")
-    {
-        return Err(AppError::invalid_input(
-            "publish_listener_state only carries listener directives.",
-        ));
-    }
-    app.emit_to(STAGE_LABEL, events::STAGE_LISTENER_STATE, &state)?;
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Display profiles (spec §46.6 save_display_profile, table display_profiles)
 // ---------------------------------------------------------------------------
 
 /// Twin of `DisplayProfile` (src/shared/contracts/display.ts). The stage
-/// settings and listener geometry are carried as validated JSON documents.
+/// settings are carried as a validated JSON document.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DisplayProfile {
@@ -1287,8 +1260,6 @@ pub struct DisplayProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_fingerprint: Option<String>,
     pub stage: serde_json::Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub listener: Option<serde_json::Value>,
     #[serde(default)]
     pub updated_at: Option<String>,
 }
@@ -1312,25 +1283,18 @@ pub async fn save_display_profile(
     let now = now_iso();
     sqlx::query(
         "INSERT INTO display_profiles
-            (id, name, display_fingerprint, stage_settings_json, listener_geometry_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id, name, display_fingerprint, stage_settings_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             display_fingerprint = excluded.display_fingerprint,
             stage_settings_json = excluded.stage_settings_json,
-            listener_geometry_json = excluded.listener_geometry_json,
             updated_at = excluded.updated_at",
     )
     .bind(&id)
     .bind(profile.name.trim())
     .bind(&profile.display_fingerprint)
     .bind(serde_json::to_string(&profile.stage).unwrap_or_else(|_| "{}".into()))
-    .bind(
-        profile
-            .listener
-            .as_ref()
-            .and_then(|l| serde_json::to_string(l).ok()),
-    )
     .bind(&now)
     .bind(&now)
     .execute(pool)
@@ -1343,7 +1307,7 @@ pub async fn save_display_profile(
 
 pub async fn list_display_profiles(pool: &SqlitePool) -> Result<Vec<DisplayProfile>, AppError> {
     let rows = sqlx::query(
-        "SELECT id, name, display_fingerprint, stage_settings_json, listener_geometry_json, updated_at
+        "SELECT id, name, display_fingerprint, stage_settings_json, updated_at
          FROM display_profiles ORDER BY updated_at DESC",
     )
     .fetch_all(pool)
@@ -1351,13 +1315,11 @@ pub async fn list_display_profiles(pool: &SqlitePool) -> Result<Vec<DisplayProfi
     rows.iter()
         .map(|row| {
             let stage_json: String = row.try_get("stage_settings_json")?;
-            let listener_json: Option<String> = row.try_get("listener_geometry_json")?;
             Ok(DisplayProfile {
                 id: Some(row.try_get("id")?),
                 name: row.try_get("name")?,
                 display_fingerprint: row.try_get("display_fingerprint")?,
                 stage: serde_json::from_str(&stage_json).unwrap_or(serde_json::Value::Null),
-                listener: listener_json.and_then(|j| serde_json::from_str(&j).ok()),
                 updated_at: row.try_get("updated_at")?,
             })
         })
@@ -1385,7 +1347,6 @@ mod tests {
             events::DIAGNOSTIC_WARNING,
             events::STAGE_LOAD_SESSION,
             events::STAGE_APPLY_COMMAND,
-            events::STAGE_LISTENER_STATE,
             events::STAGE_CLOSE_SESSION,
             events::STAGE_HEARTBEAT,
             events::STAGE_TRANSCRIPT_TAP,

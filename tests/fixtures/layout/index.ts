@@ -140,7 +140,6 @@ export function fixtureFingerprint(
     readingBandHalfHeightPercent: 4,
     cueLayout: 'cues',
     performanceView: 'take',
-    listenerGeometryHash: 'none',
     ...overrides,
   };
 }

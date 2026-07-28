@@ -138,16 +138,6 @@ const ERROR_COPY: Record<string, string> = {
   STAGE_DISPLAY_MISMATCH:
     'The stage opened on a different display than the one selected. Use “Identify displays” to see which panel is which.',
 
-  /* -- listener packs ----------------------------------------------------- */
-  LISTENER_NOT_INSTALLED: 'That Listener pack is not installed.',
-  LISTENER_MANIFEST_INVALID:
-    'That Listener pack could not be read. Reinstall it, or present without a Listener.',
-  LISTENER_CHECKSUM_INVALID:
-    'That Listener pack’s files do not match what shipped with CandidCue, so it was not loaded.',
-  LISTENER_UNVERIFIED:
-    'That Listener pack did not ship with CandidCue, so it was not loaded.',
-  LISTENER_DECODE_FAILED:
-    'The Listener video could not be played. Use the still image, or present without a Listener.',
 
   /* -- updates ------------------------------------------------------------ */
   UPDATE_SIGNATURE_INVALID:

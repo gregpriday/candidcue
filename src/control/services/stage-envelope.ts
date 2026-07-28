@@ -1,12 +1,11 @@
 /**
  * Stage envelope construction (spec §29.2 step 3, §43.3): projects an
  * immutable CompiledScript into the StageSessionEnvelope the stage window
- * hydrates from, resolving asset and Listener media URLs through Rust.
+ * hydrates from, resolving asset URLs through Rust.
  */
 import type {
   ReadingCueStyle,
   CompiledScript,
-  ListenerStageSelection,
   OpticalProfile,
   ResolvedOptics,
   StageMode,
@@ -524,7 +523,6 @@ export interface EnvelopeInput {
   sessionGeneration?: number;
   stageGeneration: number;
   stageSettings: StageSettings;
-  listener?: ListenerStageSelection;
   initialTokenIndex?: number;
   assets?: StageRenderDocument['assets'];
   /**
@@ -551,7 +549,6 @@ export function buildStageEnvelope(input: EnvelopeInput): StageSessionEnvelope {
     compileRevision: 1,
     stageSettings: input.stageSettings,
     renderDocument: buildStageRenderDocument(input.script, input.assets ?? {}),
-    ...(input.listener ? { listener: input.listener } : {}),
     initialTokenIndex: input.initialTokenIndex ?? 0,
     ...(input.following ? { followProfile: resolveFollowProfile(input.following) } : {}),
   };

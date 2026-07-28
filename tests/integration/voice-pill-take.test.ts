@@ -208,7 +208,6 @@ const stage = vi.hoisted(() => ({
   publishStageDirective: vi.fn(
     async (_sessionId: string, _stageGeneration: number, _directive: StageDirective) => {},
   ),
-  publishListenerState: vi.fn(async () => {}),
   closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
   // The §29.2 gate the store re-checks before anything billable opens.

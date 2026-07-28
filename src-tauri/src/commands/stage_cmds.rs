@@ -78,15 +78,6 @@ pub fn publish_stage_command<R: Runtime>(
 }
 
 #[tauri::command]
-pub fn publish_listener_state<R: Runtime>(
-    app: AppHandle<R>,
-    session_id: String,
-    state: serde_json::Value,
-) -> Result<(), AppError> {
-    windows::publish_listener_state(&app, &session_id, state)
-}
-
-#[tauri::command]
 pub fn get_stage_status<R: Runtime>(app: AppHandle<R>, _session_id: Option<String>) -> StageStatus {
     windows::stage_status(&app)
 }

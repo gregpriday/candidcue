@@ -34,7 +34,6 @@
  * for is not.
  */
 import type {
-  ListenerGeometry,
   OpticalProfile,
   ReadingCueStyle,
   ResolvedOptics,
@@ -53,7 +52,6 @@ export interface DisplayProfileInput {
   name: string;
   displayFingerprint?: string;
   stage: StageSettings;
-  listener?: ListenerGeometry;
 }
 
 /** Twin of Rust `DisplayProfile` on the way OUT — id and updatedAt are set. */
@@ -229,7 +227,6 @@ export function buildDisplayProfile(
   displayName: string,
   fingerprint: string,
   stage: StageSettings,
-  listener?: ListenerGeometry,
   existingId?: string,
 ): DisplayProfileInput {
   return {
@@ -237,6 +234,5 @@ export function buildDisplayProfile(
     name: displayName.trim() === '' ? 'Stage display' : displayName.trim(),
     displayFingerprint: fingerprint,
     stage,
-    ...(listener ? { listener } : {}),
   };
 }

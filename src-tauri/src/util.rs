@@ -24,25 +24,6 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
-/// Hash a file WITHOUT reading it into memory.
-///
-/// This used to be `sha256_hex(&fs::read(path)?)`, so verifying a Listener pack
-/// allocated every clip in full — hundreds of megabytes for a pack with several
-/// loops, all at once, just to compute a digest (M3).
-pub fn sha256_file(path: &Path) -> Result<String, AppError> {
-    let mut file = fs::File::open(path)?;
-    let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 64 * 1024];
-    loop {
-        let read = std::io::Read::read(&mut file, &mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
 /// Cheap external-change fingerprint: byte size + mtime nanos (spec §47.5).
 pub fn file_fingerprint(path: &Path) -> Result<String, AppError> {
     let meta = fs::metadata(path)?;

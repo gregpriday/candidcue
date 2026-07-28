@@ -1238,9 +1238,6 @@
       viewportWidthPx: vw,
       viewportHeightPx: vh,
       displayScaleFactor: displayScale,
-      // `listenerGeometryHash` is deliberately left at its default. The listener
-      // is an absolutely positioned sibling inside the mirror plane; it does not
-      // reflow the script column, so no listener geometry can move a glyph here.
       // The real rendered padding, not a hard-coded zero: it is solved from the
       // band position and the measured line pitch, and moves every block.
       paddingTopPx: padTopPx,
@@ -1687,8 +1684,8 @@
 
     if (result.degraded !== degraded) {
       degraded = result.degraded;
-      // §61 step 3 lives outside this component (the Listener), so the flag has
-      // to leave the engine rather than stop at the styling cadence.
+      // The mount site reports on degradation too, so the flag has to leave
+      // the engine rather than stop at the styling cadence.
       ondegraded?.(degraded);
     }
 

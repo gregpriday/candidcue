@@ -13,14 +13,12 @@
 import { derived, get, writable } from 'svelte/store';
 import type {
   CompiledScript,
-  ListenerStageSelection,
   OutlineNode,
   SentenceUnit,
   StageDirective,
   StageEscapePayload,
   StageIntentPayload,
   StageLayoutErrorPayload,
-  StageListenerHealthPayload,
   StageSessionEnvelope,
   StageSettings,
   TranscriptionConfig,
@@ -91,32 +89,6 @@ import { saveNow } from './editor';
 
 export type PauseKind = 'none' | 'listening' | 'hard';
 
-/**
- * A Listener media failure reported by the stage (§40.5), and what the
- * operator has done about it.
- *
- * This is deliberately NOT the same state as a layout/line-map failure. Both
- * arrive on `stage://error`, but a broken line map is a tracking emergency and
- * a Listener that stopped decoding is a cosmetic one: the script is fine, the
- * position is fine, and the only thing wrong is that a video of a person is
- * frozen on camera behind the text. They need different words and completely
- * different actions, and the handler used to throw the media half away.
- */
-export interface ListenerFault {
-  status: 'poster_fallback' | 'failed';
-  /** Absent when the stage could not attribute a cause (autoplay refusals). */
-  code: 'decode_failure' | 'unsupported_codec' | 'source_unavailable' | null;
-  clipId: string | null;
-  atMs: number;
-  /**
-   * `unresolved` while the four §40.5 choices are still open; `retrying` after
-   * Retry / Choose another until the stage either goes quiet or reports again;
-   * `poster` and `off` are the operator's settled choices.
-   */
-  resolution: 'unresolved' | 'retrying' | 'poster' | 'off';
-  /** Clips in the pack that have not failed yet — gates "Choose another". */
-  alternativeClips: number;
-}
 
 /**
  * A window-layer failure reported on `stage://error` (§52.7).
@@ -259,13 +231,11 @@ export interface SessionState {
    * that write into the void.
    */
   stageAlive: boolean;
-  /** §40.5 Listener media failure awaiting (or after) a recovery choice. */
-  listenerFault: ListenerFault | null;
   /**
    * §52.7 window-layer failure — the stage on the wrong display, or any other
    * code the window layer reports. Null until something goes wrong, and
-   * dismissable: unlike the Listener fault there is no in-session repair, only
-   * "now you know, and here is how to see which panel is which".
+   * dismissable: there is no in-session repair, only "now you know, and here
+   * is how to see which panel is which".
    */
   stageWindowFault: StageWindowFault | null;
   snapshot: AlignmentSnapshot | null;
@@ -318,7 +288,6 @@ const initial: SessionState = {
   micState: 'live',
   inputDeviceLost: false,
   stageAlive: true,
-  listenerFault: null,
   stageWindowFault: null,
   snapshot: null,
   transcriptTail: [],
@@ -392,16 +361,6 @@ let stageDisplay: DisplayDescriptor | null = null;
  * the range the operator was offered is the range they keep.
  */
 let takeFontCeilingPx = typeCeilingPx(DEFAULT_STAGE_APPEARANCE.fontSizePx);
-let listenerSelection: ListenerStageSelection | null = null;
-let listenerVisible = false;
-/**
- * §40.5 "Turn off": once the operator retires the Listener for this take,
- * nothing may bring it back — not the quick control, not a voice command, not
- * a later recovery. It is re-armed only by the next session.
- */
-let listenerRetiredForSession = false;
-/** Clips the stage has already failed on, so "Choose another" can skip them. */
-let failedClipIds: string[] = [];
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let heartbeatRevision = 0;
 let stageEventUnlisteners: Array<() => void> = [];
@@ -628,7 +587,6 @@ export interface StartSessionInput {
   teleprompter?: TeleprompterSettings;
   /** The panel the geometry was resolved against; see `stageDisplay`. */
   stageDisplay?: DisplayDescriptor | null;
-  listener?: ListenerStageSelection | null;
   transcription?: TranscriptionConfig;
   micDeviceId?: string;
   /** §28.3 capture processing (Settings → Audio / Preflight → Advanced). */
@@ -676,10 +634,6 @@ export function startLiveSession(input: StartSessionInput): string {
   takeFontCeilingPx = typeCeilingPx(
     stageSettings?.fontSizePx ?? takeTeleprompter.fontSizePx,
   );
-  listenerSelection = input.listener ?? null;
-  listenerVisible = listenerSelection !== null;
-  listenerRetiredForSession = false;
-  failedClipIds = [];
   heartbeatRevision = 0;
   resetTranscriptTap();
   sessionStartedAtMs = monotonicNowMs();
@@ -2157,30 +2111,25 @@ function startStageBridge(sessionId: string): void {
         else smoothFollow.reportLineMapInvalid(issues.join(', '));
       }),
       /*
-       * `stage://error` carries Listener media faults (Rust relays the stage's
-       * `media-error` onto it verbatim) and the window layer's own errors.
+       * `stage://error` carries the window layer's own errors.
        *
        * B2: this handler used to test every payload against
-       * /layout|line[-_ ]?map/ and RETURN on anything that did not match — so
-       * a Listener that failed to decode was reported by the stage, relayed by
-       * Rust, and thrown away on arrival. The operator's only signal was a
-       * frozen human face on camera behind their script.
+       * /layout|line[-_ ]?map/ and RETURN on anything that did not match, so a
+       * payload that did not match the sniff was reported, relayed by Rust, and
+       * thrown away on arrival.
        *
        * That substring sniff is gone rather than merely demoted: layout
        * failures now arrive above, typed, generation-checked, and with a
        * recovery signal, so nothing on this channel is a §62 report any more.
        *
        * S7: "not this handler's business" is how the channel came to be wrong
-       * twice. A Listener health payload is identified by its `status` and
-       * handled; EVERYTHING ELSE on this channel is a window-layer error and is
-       * now surfaced, whatever its code. There is no `return` that discards a
+       * twice. EVERYTHING on this channel is a window-layer error and is
+       * surfaced, whatever its code. There is no `return` that discards a
        * payload, because both defects here were a `return` that discarded one.
        */
       listen<StageErrorPayload>(CONTROL_EVENT.stageError, (event) => {
         if (event.payload.stageGeneration !== generation) return;
-        const health = asListenerHealth(event.payload);
-        if (health !== null) handleListenerHealth(health);
-        else handleStageWindowError(event.payload);
+        handleStageWindowError(event.payload);
       }),
       listen<{ stageGeneration: number }>(CONTROL_EVENT.stageClosed, (event) => {
         if (event.payload.stageGeneration !== generation) return;
@@ -2218,18 +2167,13 @@ function handleStageClosed(): void {
  * ------------------------------------------------------------------------- */
 
 /**
- * Everything that arrives on `stage://error`, both producers together.
- *
- * The Listener half (`status`, `clipId`) is Rust relaying the stage's
- * `stage://media-error` verbatim; the window half (`code`, `message`, the two
- * fingerprints) is `windows/mod.rs` reporting on the stage window itself. They
- * are told apart by `status`, never by `code` — see `asListenerHealth`.
+ * Everything that arrives on `stage://error`: `windows/mod.rs` reporting on the
+ * stage window itself (`code`, `message`, the two fingerprints).
  */
 interface StageErrorPayload {
   stageGeneration: number;
   code?: string;
   message?: string;
-  status?: string;
   requestedFingerprint?: string;
   actualFingerprint?: string;
 }
@@ -2317,185 +2261,9 @@ export async function identifyStageDisplays(): Promise<void> {
   }
 }
 
-/* ---------------------------------------------------------------------------
- * Listener media failures and recovery (§40.5)
- *
- * Everything in this section is deliberately inert with respect to reading
- * position. A Listener is a video of a person behind the words; when it breaks,
- * the take is still perfectly good, and the recovery must not touch the
- * tracking cursor, the scroll, the semantic epoch, or the driver at all. That
- * is why nothing here calls `driver`, `moveSentences`,
- * or `relaySnapshot` — a cosmetic failure may not cost the presenter their
- * place.
- * ------------------------------------------------------------------------- */
-
-const LISTENER_HEALTH_STATUSES = new Set(['ok', 'poster_fallback', 'failed', 'disabled']);
-
-/**
- * Is this `stage://error` payload the stage's Listener health report?
- *
- * Discriminated on `status`, which only `StageListenerHealthPayload` carries —
- * the window layer's errors have `code`/`message` and no status. Matching on
- * the code would be fragile: the stage sends `code` only when it can attribute
- * a cause, and sends none at all when the autoplay policy simply keeps
- * refusing, which is a real failure the operator still has to see.
- */
-function asListenerHealth(payload: {
-  stageGeneration: number;
-  status?: string;
-}): StageListenerHealthPayload | null {
-  if (typeof payload.status !== 'string') return null;
-  if (!LISTENER_HEALTH_STATUSES.has(payload.status)) return null;
-  return payload as StageListenerHealthPayload;
-}
-
-/** Clips in the current selection the stage has not already failed on. */
-function remainingListenerClips(): number {
-  if (listenerSelection === null) return 0;
-  return listenerSelection.clipUrls.filter((clip) => !failedClipIds.includes(clip.id)).length;
-}
-
-function handleListenerHealth(health: StageListenerHealthPayload): void {
-  // 'ok' means the stage is playing again; 'disabled' means it has nothing to
-  // play by arrangement. Neither is something to offer a recovery for.
-  if (health.status === 'ok' || health.status === 'disabled') {
-    state.update((s) =>
-      s.listenerFault === null || s.listenerFault.resolution === 'off'
-        ? s
-        : { ...s, listenerFault: null },
-    );
-    return;
-  }
-  // Already retired for this take: re-alerting about a Listener the operator
-  // has switched off would be noise about a decision they already made.
-  if (listenerRetiredForSession) return;
-
-  const clipId = typeof health.clipId === 'string' ? health.clipId : null;
-  if (clipId !== null && !failedClipIds.includes(clipId)) failedClipIds.push(clipId);
-
-  state.update((s) => ({
-    ...s,
-    listenerFault: {
-      status: health.status === 'failed' ? 'failed' : 'poster_fallback',
-      code: health.code ?? null,
-      clipId,
-      atMs: Date.now(),
-      resolution: 'unresolved',
-      alternativeClips: remainingListenerClips(),
-    },
-  }));
-  // Informational, not alarming: nothing about the take is at risk, and a
-  // danger toast mid-performance would cost more attention than the fault does.
-  showToast('The Listener video stopped. Your script and position are unaffected.', 'info');
-}
-
-/**
- * Re-arm the stage's Listener layer.
- *
- * Null first, then the selection. The stage keeps its poster-fallback state
- * for as long as the layer is mounted, so re-publishing the same selection
- * only updates a prop and changes nothing; unmounting and remounting is what
- * actually restarts playback.
- */
-async function remountListener(selection: ListenerStageSelection | null): Promise<void> {
-  const s = get(state);
-  if (!s.sessionId || !s.stageAlive || stageGeneration === 0) return;
-  const sessionId = s.sessionId;
-  const generation = stageGeneration;
-  await stageService.publishListenerState(sessionId, generation, {
-    kind: 'listener',
-    listener: null,
-  });
-  if (selection === null || listenerRetiredForSession) return;
-  // The take may have ended (or the stage been replaced) while the first
-  // publish was in flight; re-mounting into that would be publishing at a
-  // stage this session no longer owns.
-  if (get(state).sessionId !== sessionId || stageGeneration !== generation) return;
-  await stageService.publishListenerState(sessionId, generation, {
-    kind: 'listener',
-    listener: selection,
-  });
-  listenerVisible = true;
-}
-
-function markListenerRetrying(): void {
-  state.update((s) => ({
-    ...s,
-    listenerFault:
-      s.listenerFault === null ? null : { ...s.listenerFault, resolution: 'retrying' },
-  }));
-}
-
-/** §40.5 "Retry": reload the same Listener and let it try again. */
-export function retryListenerMedia(): void {
-  if (listenerRetiredForSession || listenerSelection === null) return;
-  markListenerRetrying();
-  void remountListener(listenerSelection).catch(() => {});
-}
-
-/**
- * §40.5 "Use poster": settle for the still image the pack ships.
- *
- * The stage has already fallen back to it — `poster_fallback` IS that state —
- * so this sends nothing and simply stops asking the operator to decide. It is
- * the cheapest possible recovery, which is the point: no stage churn, no
- * re-decode, nothing that could stutter the text.
- *
- * (A `failed` report would mean the layer is not in poster mode at all;
- * forcing it there needs a stage-side directive that does not exist yet, and
- * belongs to the stage lane. Today the stage only ever reports the fallback.)
- */
-export function useListenerPoster(): void {
-  state.update((s) =>
-    s.listenerFault === null ? s : { ...s, listenerFault: { ...s.listenerFault, resolution: 'poster' } },
-  );
-}
-
-/**
- * §40.5 "Choose another": drop the clip that failed and play the rest of the
- * pack. The failure is per-clip — an unsupported codec or a truncated file is
- * one file's problem — so the smallest honest change is to stop offering that
- * file, not to abandon the Listener.
- */
-export function chooseAnotherListenerClip(): boolean {
-  if (listenerRetiredForSession || listenerSelection === null) return false;
-  const remaining = listenerSelection.clipUrls.filter((clip) => !failedClipIds.includes(clip.id));
-  if (remaining.length === 0) return false;
-  listenerSelection = { ...listenerSelection, clipUrls: remaining };
-  markListenerRetrying();
-  void remountListener(listenerSelection).catch(() => {});
-  return true;
-}
-
-/**
- * §40.5 "Turn off": retire the Listener for the rest of the take.
- *
- * Nothing may bring it back — not the Stage quick control, not the
- * `set_listener` voice command, not a later remount — because the operator
- * turned it off mid-performance and a Listener reappearing on camera by itself
- * is worse than the failure was. The stage falls back to the text-only theme,
- * which is exactly what §40.5 asks for, and the script never moves.
- */
-export function turnOffListenerForSession(): void {
-  listenerRetiredForSession = true;
-  listenerVisible = false;
-  sendDirective({ kind: 'listener', listener: null });
-  state.update((s) => ({
-    ...s,
-    listenerFault:
-      s.listenerFault === null ? null : { ...s.listenerFault, resolution: 'off' },
-  }));
-}
-
 function sendDirective(directive: StageDirective): void {
   const s = get(state);
   if (!s.sessionId || !s.stageAlive || stageGeneration === 0) return;
-  if (directive.kind === 'listener') {
-    void stageService
-      .publishListenerState(s.sessionId, stageGeneration, directive)
-      .catch(() => {});
-    return;
-  }
   void stageService.publishStageDirective(s.sessionId, stageGeneration, directive).catch(() => {});
 }
 
@@ -2674,46 +2442,16 @@ export function addTakeMarker(): void {
  *
  * WHAT THE USER DECIDES, AND WHAT THEY DO NOT.
  *
- * Blanking always hides the SCRIPT; that is what the word means and it is not
- * configurable. Whether it also hides the Listener is `keepListener` on the
- * directive, and it was hard-coded `false` here, which made one of the two
- * ordinary reasons to blank work and the other not: clearing a script off a
- * screen someone else can see wants the face gone with it, while blanking
- * between takes on a rig where the Listener is what the presenter looks at
- * wants the face to stay. So it is read from the §37 Listener defaults. The
- * directive is still the only carrier of the decision — the setting is where
- * its default comes from, not a second mechanism.
- *
- * The Listener is NOT frozen on a pause, and there is no setting for that. A
- * pause is a sip of water, and a listening loop that keeps breathing through
- * one is the whole point of the feature; a face that stops dead mid-blink is
- * uncanny in a way an idle loop never is, and the presenter is the only person
- * who would see it. The stage still freezes the loop where freezing is the
- * honest report — a `freeze` directive and the §43.5 control-loss watchdog —
- * and neither of those is a preference. This is why `softPause` / `hardPause`
- * were deleted from `settings::ListenerSettings` rather than wired up.
+ * Blanking hides the SCRIPT; that is what the word means and it is not
+ * configurable.
  */
 export function toggleBlankStage(): void {
   const s = get(state);
   // Nothing to blank once the stage window is gone (§62).
   if (!s.stageAlive) return;
   const blanked = !s.stageBlanked;
-  sendDirective({ kind: 'blank', blanked, keepListener: currentKeepListenerWhenBlanked() });
+  sendDirective({ kind: 'blank', blanked });
   state.update((prev) => ({ ...prev, stageBlanked: blanked }));
-}
-
-/**
- * §37.4. The saved "keep the Listener when the stage is blanked" default, or
- * `false` when settings are unavailable (browser dev, tests) — the behaviour
- * that shipped, and the safer of the two: an unreadable setting must not leave
- * a face on a screen the operator believes they just cleared.
- */
-function currentKeepListenerWhenBlanked(): boolean {
-  try {
-    return getSettingsSnapshot().listeners?.keepWhenBlanked === true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -2856,15 +2594,6 @@ export function toggleStageMirror(axis: 'x' | 'y' = 'x'): void {
   // stage transform, because it is inside the mirror plane but the boundary is
   // decided on the control side.
   applyStageAppearance(axis === 'x' ? { mirrorX: !t.mirrorX } : { mirrorY: !t.mirrorY });
-}
-
-export function toggleListenerVisible(): boolean {
-  // §40.5: a Listener the operator turned off after a failure stays off for
-  // the take, whichever control asks.
-  if (listenerRetiredForSession) return false;
-  listenerVisible = !listenerVisible && listenerSelection !== null;
-  sendDirective({ kind: 'listener', listener: listenerVisible ? listenerSelection : null });
-  return listenerVisible;
 }
 
 function jumpSection(delta: number): boolean {
@@ -3072,10 +2801,6 @@ function stopInternals(): void {
   stageGeneration = 0;
   stageLayoutGeneration = 0;
   stageSettings = null;
-  listenerSelection = null;
-  listenerVisible = false;
-  listenerRetiredForSession = false;
-  failedClipIds = [];
   // §36.3: `stopSession` closes the open take first, so anything still here got
   // past the normal stop path and belongs to a session that is already gone.
   activeTake = null;

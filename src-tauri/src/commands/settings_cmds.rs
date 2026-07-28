@@ -156,12 +156,10 @@ pub fn clear_cache_targets(paths: &DataPaths, kind: &str) -> Result<Vec<PathBuf>
         "compiled" => vec![cache("compiled")],
         "vocabulary" => vec![cache("vocabulary")],
         "thumbnails" => vec![cache("thumbnails")],
-        "downloads" => vec![cache("downloads")],
         "all" => vec![
             cache("compiled"),
             cache("vocabulary"),
             cache("thumbnails"),
-            cache("downloads"),
         ],
         "logs" => vec![paths.logs_dir()],
         other => {

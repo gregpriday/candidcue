@@ -1,13 +1,11 @@
 /**
  * S5 — §61 frame-performance degradation: what is turned off, and what is not.
  *
- * The flag's journey (engine → renderer → mount site → Listener) is asserted in
+ * The flag's journey (engine → renderer → mount site) is asserted in
  * tests/dom/script-layer-degraded.test.ts, where the components are mounted.
- * This file covers the two things better asserted without a DOM:
- *
- *   - step 3, the simplified Listener crossfade, which is a rendered attribute;
- *   - the BOUNDARY of step 1 — that the degraded rule can only shorten
- *     transitions, and cannot reach the reading aids the presenter navigates by.
+ * This file covers the BOUNDARY of step 1 — that the degraded rule can only
+ * shorten transitions, and cannot reach the reading aids the presenter
+ * navigates by.
  *
  * The boundary is the part worth guarding. "Disable nonessential visual
  * effects" is an invitation to disable the wrong thing, and the wrong thing
@@ -17,69 +15,10 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { render } from 'svelte/server';
-import ListenerLayer from '../../../src/stage/listener/ListenerLayer.svelte';
-import type { ListenerStageSelection } from '../../../src/shared/contracts';
 
 function source(relative: string): string {
   return readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
 }
-
-function selection(): ListenerStageSelection {
-  return {
-    packId: 'mira',
-    version: '1.0.0',
-    variant: '1080p',
-    placement: 'background',
-    clipUrls: [
-      { id: 'c1', url: 'blob:clip', mime: 'video/mp4', durationMs: 5000, posterUrl: '' },
-    ],
-    geometry: {
-      anchorX: 0.5,
-      anchorY: 0.5,
-      scale: 1,
-      cropX: 0,
-      cropY: 0,
-      cropZoom: 1,
-      opacity: 0.6,
-      blurPx: 0,
-      saturation: 1,
-      mirrorVideo: false,
-    },
-  };
-}
-
-function crossfadeMs(props: Record<string, unknown>): string {
-  const markup = render(ListenerLayer, { props: { selection: selection(), ...props } }).body;
-  const match = /transition-duration:\s*([0-9]+ms)/.exec(markup);
-  return match?.[1] ?? 'absent';
-}
-
-describe('§61 step 3 — the Listener crossfade is simplified under frame pressure', () => {
-  it('runs the full blend when frames are healthy', () => {
-    expect(crossfadeMs({})).toBe('180ms');
-  });
-
-  it('shortens the blend while the stage is degraded', () => {
-    // Two decoding videos composited together is the most expensive thing this
-    // layer does, and a clip boundary is the least load-bearing thing on the
-    // glass — so this is the cheapest real win §61 offers.
-    expect(crossfadeMs({ degraded: true })).toBe('60ms');
-  });
-
-  it('leaves the reduced-motion behaviour exactly as it was', () => {
-    expect(crossfadeMs({ reducedMotion: true })).toBe('60ms');
-    expect(crossfadeMs({ reducedMotion: true, degraded: true })).toBe('60ms');
-  });
-
-  it('still plays the Listener — degradation simplifies, it does not remove', () => {
-    const markup = render(ListenerLayer, {
-      props: { selection: selection(), degraded: true },
-    }).body;
-    expect(markup).toContain('<video');
-    expect(markup).toContain('listener-layer');
-  });
-});
 
 describe('§61 step 1 — what "nonessential" is allowed to mean', () => {
   const css = source('../../../src/stage/renderer/ScriptLayer.svelte');

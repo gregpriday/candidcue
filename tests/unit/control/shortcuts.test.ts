@@ -242,7 +242,6 @@ describe('installShortcuts — what actually reaches the focused control', () =>
   it('delivers the other plain keys from a non-interactive target', () => {
     installWithSubscriber();
     expect(press('b', { target: new FakeHTMLElement('div') }).action).toBe('blank-stage');
-    expect(press('l', { target: new FakeHTMLElement('div') }).action).toBe('toggle-listener');
     expect(press('t', { target: new FakeHTMLElement('div') }).action).toBe('take-marker');
   });
 
@@ -320,7 +319,6 @@ describe('resolveShortcut (spec §19)', () => {
   it('plain keys work only when not typing', () => {
     expect(resolveShortcut(event({ key: ' ' }))).toBe('play-pause');
     expect(resolveShortcut(event({ key: 'b' }))).toBe('blank-stage');
-    expect(resolveShortcut(event({ key: 'l' }))).toBe('toggle-listener');
     expect(resolveShortcut(event({ key: 't' }))).toBe('take-marker');
 
     expect(resolveShortcut(event({ key: ' ', typing: true }))).toBeNull();

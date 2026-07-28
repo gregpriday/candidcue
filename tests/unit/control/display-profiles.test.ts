@@ -283,7 +283,7 @@ describe('projecting a saved profile back onto the calibration controls', () => 
       'Studio Monitor',
     );
     expect(profiles.buildDisplayProfile('   ', 'dsp-1', stage).name).toBe('Stage display');
-    expect(profiles.buildDisplayProfile('X', 'dsp-1', stage, undefined, 'keep-me').id).toBe(
+    expect(profiles.buildDisplayProfile('X', 'dsp-1', stage, 'keep-me').id).toBe(
       'keep-me',
     );
     expect(profiles.buildDisplayProfile('X', 'dsp-1', stage).id).toBeUndefined();

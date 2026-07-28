@@ -20,7 +20,6 @@ pub struct AppSettings {
     pub stage_behavior: StageBehaviorSettings,
     pub audio: AudioSettings,
     pub following: FollowingSettings,
-    pub listener: ListenerSettings,
 }
 
 impl Default for AppSettings {
@@ -32,7 +31,6 @@ impl Default for AppSettings {
             stage_behavior: StageBehaviorSettings::default(),
             audio: AudioSettings::default(),
             following: FollowingSettings::default(),
-            listener: ListenerSettings::default(),
         }
     }
 }
@@ -197,76 +195,6 @@ impl Default for FollowingSettings {
     }
 }
 
-/// Listener defaults (spec §37, §46.7) — the values every new session starts
-/// from, before the display profile for the chosen monitor is applied.
-///
-/// This struct used to be one of two settings structures for one feature. It
-/// declared `scale`, `crossfadeMs`, `softPause`, `hardPause` and `hideOnBlank`,
-/// none of which had a mapping on the TypeScript side (`listener` was typed as
-/// an opaque `Record<string, unknown>`), while the UI kept a separate
-/// `listeners` section in a localStorage overlay. The two have been reconciled
-/// into this one, Rust-owned, and the adapter is
-/// `src/control/services/settings-listener.ts`.
-///
-/// What was deleted, and why — each of these had no reader and duplicated a
-/// decision another mechanism already owns:
-///   - `scale`: the Listener's size is per-display framing, and lives in the
-///     display profile's `ListenerGeometry` (which persists it already).
-///   - `crossfadeMs`: not a user choice. The stage varies its blend for reduced
-///     motion and for §61 frame pressure, and a persisted number would fight
-///     both; it stays a constant in `ListenerLayer.svelte`.
-///   - `softPause` / `hardPause`: whether the loop freezes is carried per
-///     directive on the stage `freeze` command, decided by the session. The
-///     session does not freeze the Listener on a pause and there is no setting
-///     for it — see `toggleBlankStage` in src/control/stores/session.ts.
-///   - `hideOnBlank`: carried per directive as `keepListener` on the stage
-///     `blank` command, for the same reason. It stays deleted; what replaced it
-///     is `keep_when_blanked` below, which differs in the way that matters —
-///     the session reads it when it builds the directive.
-///
-/// The units are the units the UI shows — dim as a percentage, not an opacity.
-/// The one Listener bug this area has shipped was an inverted conversion on a
-/// persisted value, so the conversions that remain are the ones that earn it.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", default)]
-pub struct ListenerSettings {
-    /// Pack preselected in Preflight, when `autoplay` is on. `None` = ask.
-    pub default_pack_id: Option<String>,
-    /// Preselect `default_pack_id` and enable the Listener for a new session.
-    pub autoplay: bool,
-    /// 0-80, percent. The stage renders `opacity: 1 - dimPercent/100`.
-    pub dim_percent: f64,
-    /// 0-24, CSS pixels.
-    pub blur_px: f64,
-    /// 0-1, the CSS `saturate()` factor. 0.85 is the look the stage shipped.
-    pub saturation: f64,
-    /// Keep the Listener on screen when the stage is blanked (§37.4, §16.6).
-    ///
-    /// Blanking hides the script; whether it also hides the person is a real
-    /// preference, because the two common reasons to blank pull opposite ways.
-    /// Blanking to take the script off a shared screen wants the face gone with
-    /// it; blanking between takes on a rig where the Listener is what the
-    /// presenter looks at wants the face to stay. Off by default — what shipped.
-    ///
-    /// The session reads this and puts it on the `blank` directive as
-    /// `keepListener`, so the directive stays the single carrier of the decision
-    /// and this is only where the default comes from.
-    pub keep_when_blanked: bool,
-}
-
-impl Default for ListenerSettings {
-    fn default() -> Self {
-        Self {
-            default_pack_id: None,
-            autoplay: true,
-            dim_percent: 40.0,
-            blur_px: 0.0,
-            saturation: 0.85,
-            keep_when_blanked: false,
-        }
-    }
-}
-
 /// Matches the `Revisioned<T>` contract in `src/shared/contracts/core.ts`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -282,7 +210,7 @@ fn in_range_f(value: f64, min: f64, max: f64) -> bool {
 /// Validate against the Appendix A ranges we enforce in Rust. Returns a
 /// recoverable validation error naming the offending field.
 pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
-    let checks: [(&str, bool); 11] = [
+    let checks: [(&str, bool); 8] = [
         (
             "general.autosaveDebounceMs",
             (250..=2000).contains(&settings.general.autosave_debounce_ms),
@@ -311,14 +239,6 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
             "audio.vadSensitivity",
             in_range_f(settings.audio.vad_sensitivity, 0.0, 1.0),
         ),
-        // The ranges are the ranges the Preflight sliders offer. They used to
-        // disagree with them in both directions — `opacityAfterDim <= 0.75`
-        // rejected a dim of 0, and `blurPx <= 12` rejected the top half of a
-        // slider that goes to 24 — so a value the UI could produce was a value
-        // Rust would refuse to store.
-        ("listener.dimPercent", in_range_f(settings.listener.dim_percent, 0.0, 80.0)),
-        ("listener.blurPx", in_range_f(settings.listener.blur_px, 0.0, 24.0)),
-        ("listener.saturation", in_range_f(settings.listener.saturation, 0.0, 1.0)),
     ];
     for (field, ok) in checks {
         if !ok {
@@ -602,16 +522,20 @@ mod tests {
         assert!(audio.language.contains('-'), "Inworld wants a BCP-47 tag");
     }
 
-    /// Clearing an optional value must survive the patch merge. `merge_json`
-    /// removes a key whose patch value is null, and the container-level
-    /// `default` then refills it — which is only a *clear* while the field's
-    /// default is `None`.
+    /// A null patch value resets a field to its default. `merge_json` removes
+    /// the key outright, and the container-level `default` then refills it —
+    /// so "clear this" and "put it back the way it shipped" are the same act.
+    ///
+    /// This used to be asserted through `listener.defaultPackId`, the only
+    /// `Option<T>` in the tree, where the refill happened to land on `None`.
+    /// The Listener is gone; the merge behaviour it was covering is not, so
+    /// the test moved to a field that still exists rather than leaving with it.
     #[test]
-    fn a_null_patch_value_clears_an_optional_field() {
+    fn a_null_patch_value_restores_a_fields_default() {
         let mut base = serde_json::to_value(AppSettings {
-            listener: ListenerSettings {
-                default_pack_id: Some("aurora".into()),
-                ..ListenerSettings::default()
+            stage_behavior: StageBehaviorSettings {
+                blank_color: "#123456".into(),
+                ..StageBehaviorSettings::default()
             },
             ..AppSettings::default()
         })
@@ -619,9 +543,49 @@ mod tests {
 
         merge_json(
             &mut base,
-            &serde_json::json!({ "listener": { "defaultPackId": null } }),
+            &serde_json::json!({ "stageBehavior": { "blankColor": null } }),
         );
+        assert!(
+            base["stageBehavior"].get("blankColor").is_none(),
+            "a null patch removes the key rather than storing a null"
+        );
+
         let merged: AppSettings = serde_json::from_value(base).expect("deserializes");
-        assert_eq!(merged.listener.default_pack_id, None);
+        assert_eq!(
+            merged.stage_behavior.blank_color,
+            StageBehaviorSettings::default().blank_color,
+            "and the container default refills what the patch removed"
+        );
+    }
+
+    /// §106: the Listener was removed, but settings documents already on disk
+    /// still carry its `listener` section. `AppSettings` does not (and must not)
+    /// use `deny_unknown_fields`, so those documents keep loading and every
+    /// other setting the user chose survives.
+    ///
+    /// The alternative is `unwrap_or_default()` in `get_settings` silently
+    /// resetting the whole document because one retired key is still on disk —
+    /// the same failure this file already guards against for the OpenAI-era
+    /// keys above.
+    #[test]
+    fn a_document_carrying_the_removed_listener_section_still_loads() {
+        let stored = serde_json::json!({
+            "schemaVersion": 1,
+            "editor": { "fontSizePx": 19 },
+            "listener": {
+                "defaultPackId": "mira",
+                "autoplay": true,
+                "dimPercent": 40.0,
+                "blurPx": 0.0,
+                "saturation": 0.85,
+                "keepWhenBlanked": true,
+            },
+        });
+
+        let settings: AppSettings =
+            serde_json::from_value(stored).expect("a document with a listener section still loads");
+
+        assert_eq!(settings.editor.font_size_px, 19, "surviving keys are kept");
+        assert!(validate(&settings).is_ok());
     }
 }

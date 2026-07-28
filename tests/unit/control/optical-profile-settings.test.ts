@@ -56,7 +56,6 @@ const ipc = vi.hoisted(() => {
         language: 'en',
       },
       commands: { wakePhrase: 'CandidCue', wakeMode: 'strict' },
-      listener: {},
     },
   };
   return {

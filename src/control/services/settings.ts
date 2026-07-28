@@ -3,7 +3,7 @@
  *
  * Rust owns the persisted settings document as `Revisioned<AppSettings>`
  * ({ revision, value }) with the §47.9 schema (general / editor /
- * stageBehavior / audio / commands / listener). The control UI consumes the
+ * stageBehavior / audio / commands). The control UI consumes the
  * flatter view in `settings-types.ts`, so this service is an explicit
  * adapter:
  *
@@ -27,11 +27,6 @@ import {
   followingToRustPatch,
   type RustFollowingSettings,
 } from './settings-following';
-import {
-  listenerFromRust,
-  listenerToRustPatch,
-  type RustListenerSettings,
-} from './settings-listener';
 import {
   defaultAppSettings,
   normalizeOpticalProfile,
@@ -79,13 +74,6 @@ interface RustSettings {
   audio: Partial<RustAudioSettings> & { transcriptionModel: string; language: string };
   /** Companion §47 — absent in documents written before the section existed. */
   following?: Partial<RustFollowingSettings>;
-  /**
-   * §37 Listener defaults. This used to be `Record<string, unknown>` — an
-   * opaque bag on the TypeScript side while Rust declared five typed fields —
-   * which is how the feature ended up with two settings structures and no
-   * mapping between them.
-   */
-  listener?: Partial<RustListenerSettings>;
 }
 
 interface RustRevisioned {
@@ -215,11 +203,6 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     // Following settings are Rust-owned end to end (§47) — no overlay merge,
     // so a stale local overlay can never resurrect an old assist mode.
     following: followingFromRust(rust.following),
-    // §37. Rust-owned end to end for the same reason: these are the values the
-    // stage renders from, and a localStorage copy that outlived the document
-    // would put the UI and the glass in disagreement about what the Listener
-    // looks like.
-    listeners: listenerFromRust(rust.listener),
     privacy: {
       ...defaults.privacy,
       saveTranscript: toTranscriptRetention(rust.general.saveTranscript),
@@ -246,7 +229,6 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     // looking live and being inert.
     stage: mergeSection(mapped.stage, overlay.stage),
     optical: opticalFromOverlay(defaults.optical, overlay.optical),
-    listenerFraming: mergeSection(mapped.listenerFraming, overlay.listenerFraming),
     // `saveTranscript` is Rust-owned (§36.2): a stale local overlay must never
     // be able to claim retention is on when the persisted document says off.
     privacy: {
@@ -304,11 +286,6 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     const following = followingToRustPatch(patch.following);
     for (const [key, value] of Object.entries(following)) put('following', key, value);
   }
-  if (patch.listeners) {
-    const listener = listenerToRustPatch(patch.listeners);
-    // `put` keeps `null`, which is what clearing `defaultPackId` has to send.
-    for (const [key, value] of Object.entries(listener)) put('listener', key, value);
-  }
   if (patch.privacy) {
     // §36.2 — the missing half of the mapping. Without it the setting that
     // decides whether spoken words reach disk could not be changed at all.
@@ -319,7 +296,7 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
 
 /**
  * Everything in the patch persists in the overlay so the UI view sticks —
- * except `following` (§47), `inworld` (§18.2) and `listeners` (§37), which are
+ * except `following` (§47) and `inworld` (§18.2), which are
  * Rust-owned in both directions, and the individual Rust-owned fields inside
  * otherwise-overlaid sections (`privacy.saveTranscript` §36.2,
  * `audio.vadSensitivity` §28.4). A cached copy of a retention consent is
@@ -329,7 +306,7 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
   for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
     if (key === 'revision' || key === 'schemaVersion') continue;
-    if (key === 'following' || key === 'inworld' || key === 'listeners') continue;
+    if (key === 'following' || key === 'inworld') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
     // Rust-owned fields never enter the overlay (§28.4, §36.2, §47) — a cached
@@ -400,7 +377,7 @@ export async function exportAllData(): Promise<{ path?: string; cancelled: boole
 }
 
 export async function clearCache(
-  kind: 'analysis' | 'listeners' | 'logs',
+  kind: 'analysis' | 'logs',
 ): Promise<ClearResult> {
   if (!isTauriRuntime()) return mockSettings.clearCache(kind);
   /*
@@ -411,7 +388,7 @@ export async function clearCache(
    * "Clear logs" destroyed four caches, left the logs, and reported success.
    * There is a real `logs` arm now.
    */
-  const rustKind = kind === 'analysis' ? 'vocabulary' : kind === 'listeners' ? 'downloads' : 'logs';
+  const rustKind = kind === 'analysis' ? 'vocabulary' : 'logs';
   const result = await ipcInvoke<{ kind: string; removedFiles: number; removedBytes: number }>(
     'clear_cache',
     { kind: rustKind },

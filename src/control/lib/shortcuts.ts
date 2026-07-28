@@ -1,7 +1,7 @@
 /**
  * Keyboard shortcuts (spec §19). One window-level listener translates key
  * events into named actions; screens subscribe with `onShortcut`. Cmd on
- * macOS, Ctrl elsewhere. Plain-key shortcuts (Space, B, L, T) are suppressed
+ * macOS, Ctrl elsewhere. Plain-key shortcuts (Space, B, T) are suppressed
  * while the user is typing and while the focused control activates itself on
  * the same key; nothing fires behind a modal dialog.
  */
@@ -22,7 +22,6 @@ export type ShortcutAction =
   | 'stage-text-down'
   | 'toggle-mirror'
   | 'blank-stage'
-  | 'toggle-listener'
   | 'take-marker'
   | 'command-help'
   /** §16.9. Escape — twice ends the take; the screen owns the two-press rule. */
@@ -193,8 +192,6 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
         return 'play-pause';
       case 'b':
         return 'blank-stage';
-      case 'l':
-        return 'toggle-listener';
       case 't':
         return 'take-marker';
       default:

@@ -173,7 +173,6 @@ export interface FingerprintInput {
   paddingTopPx: number;
   /** Actual rendered bottom padding, px. */
   paddingBottomPx: number;
-  listenerGeometryHash?: string;
   fontHash?: string;
 }
 
@@ -203,7 +202,6 @@ export function buildLayoutFingerprint(input: FingerprintInput): LayoutFingerpri
     readingBandHalfHeightPercent: s.readingBandHalfHeightPercent,
     cueLayout: s.showCues ? 'cues' : 'none',
     performanceView: s.stageMode === 'diagnostic' ? 'rehearsal' : 'take',
-    listenerGeometryHash: input.listenerGeometryHash ?? 'none',
   };
 }
 
@@ -245,7 +243,6 @@ const IDENTIFIES_LAYOUT: Record<keyof LayoutFingerprint, boolean> = {
   readingBandHalfHeightPercent: true,
   cueLayout: true,
   performanceView: true,
-  listenerGeometryHash: true,
 };
 
 const LAYOUT_KEYS = (

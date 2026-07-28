@@ -44,15 +44,6 @@ export interface ShimConfig {
    * `general.defaultSessionMode` (§14.2 G).
    */
   promptMode?: 'voice' | 'manual' | 'fixed';
-  /**
-   * §37 Listener defaults, as the Rust document stores them
-   * (`settings.listener`). Configurable so a spec can prove the settings really
-   * reach the controls: these fields had no reader at all before, and a default
-   * that coincidentally matched a hard-coded literal is exactly what hid it.
-   */
-  listenerSettings?: Record<string, unknown>;
-  /** Installed Listener packs returned by `list_installed_listeners`. */
-  installedListeners?: Array<Record<string, unknown>>;
 }
 
 /** The AppError the frontend maps to the F.8 external-change conflict sheet. */
@@ -169,7 +160,6 @@ function shimBody(config: ShimConfig): void {
         delayProfile: 'balanced',
         softPauseAutoDisconnectMinutes: 5,
       },
-      listener: config.listenerSettings ?? {},
     },
   };
 
@@ -551,7 +541,6 @@ function shimBody(config: ShimConfig): void {
         return null;
       }
 
-      case 'publish_listener_state':
       case 'publish_stage_snapshot':
         return null;
 
@@ -626,9 +615,6 @@ function shimBody(config: ShimConfig): void {
 
       case 'list_sessions':
         return [];
-
-      case 'list_installed_listeners':
-        return config.installedListeners ?? [];
 
       /*
        * §29 alignment. Rust owns the engine and publishes its snapshots on

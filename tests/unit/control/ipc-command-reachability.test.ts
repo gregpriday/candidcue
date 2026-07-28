@@ -33,10 +33,6 @@ const SRC = join(ROOT, 'src');
  */
 const UNWIRED_BY_DESIGN: Record<string, string> = {
   remove_asset_reference: 'Asset GC runs from the compiler side; no UI affordance yet.',
-  download_listener:
-    'NOT_IMPLEMENTED in Rust (no CandidCue pack host); Settings deliberately shows no download affordance.',
-  cancel_listener_download:
-    'NOT_IMPLEMENTED in Rust (no CandidCue pack host); there is no download to cancel.',
   install_update: 'No updater plugin is wired in v1 (§44.10).',
   save_display_profile:
     'Single-window presentation has no independently selected stage display to persist.',
@@ -157,6 +153,23 @@ describe('every registered IPC command is reachable from the frontend', () => {
       (command) => callersOf(command).length > 0,
     );
     expect(stale, 'These commands are wired now and should leave the allowlist.').toEqual([]);
+  });
+
+  /*
+   * The other way an allowlist entry goes stale: the command it exempts is
+   * DELETED. `callersOf` returns nothing for a command that no longer exists,
+   * so the check above reads a deleted command as legitimately unwired and the
+   * entry survives its subject. Removing the Listener (§106) left two such
+   * entries behind, which is what this assertion now catches.
+   */
+  it('keeps the allowlist honest — an entry must name a registered command', () => {
+    const orphaned = Object.keys(UNWIRED_BY_DESIGN).filter(
+      (command) => !COMMANDS.includes(command),
+    );
+    expect(
+      orphaned,
+      'These allowlist entries name commands that are no longer registered in app.rs.',
+    ).toEqual([]);
   });
 
   it.each(MUST_BE_WIRED)('%s is called from the control frontend', (command) => {
