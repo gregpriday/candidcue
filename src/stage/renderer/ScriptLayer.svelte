@@ -473,6 +473,9 @@
   const bandGeometry = $derived({
     safeRect,
     bandCenterPx,
+    // The plane is `inset: 0` and bounded by `totalHeight - vh`, so the
+    // padding has to be solved against the same height. See `stagePaddingPx`.
+    viewportHeightPx: vh,
     linePitchPx: linePx,
     futureReserveLines: optics?.futureReserveLines,
   });

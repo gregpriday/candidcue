@@ -80,6 +80,9 @@ function budgetFor(distanceMm: number, overrides: Partial<OpticalProfile> = {}) 
   });
   const input = {
     safeRect,
+    // The scroll plane is `inset: 0`, so the padding is solved against the
+    // whole panel even when a hood hides part of it.
+    viewportHeightPx: VIEWPORT.heightPx,
     bandCenterPx: band.centerPx,
     linePitchPx,
     futureReserveLines: optics.futureReserveLines,

@@ -28,9 +28,17 @@ const PITCH = 82;
  * and how far it is allowed to go.
  *
  * This is the arithmetic the padding exists to make work, written out
- * independently: the plane is inset to the safe rectangle, so a document y
- * appears at `safeRect.y + y - scrollY`, and the plane may not scroll past
- * `total - safeRect.height`.
+ * independently — and it is written against the DOM the stage actually
+ * renders, which is what it got wrong before.
+ *
+ * `.script-layer` is `inset: 0`: the plane fills the VIEWPORT, the transform is
+ * in viewport pixels, and `ScriptLayer` bounds it at `totalHeight - vh`. This
+ * helper used to model a plane inset to the safe rectangle — `bandCenterPx -
+ * safeRect.y`, and a ceiling of `total - safeRect.height` — so it agreed with a
+ * padding solver that made the same mistake, and the pair of them passed
+ * together while a hooded rig came out `vh - safeRect.height` short. Two wrongs
+ * that only cancel when the safe area is zero, which is every default profile
+ * and no real hood.
  */
 function scrollToPutLineOnBand(input: {
   lineIndex: number;
@@ -39,13 +47,15 @@ function scrollToPutLineOnBand(input: {
   padding: StagePaddingPx;
   safeRect: SafeRect;
   bandCenterPx: number;
+  /** The plane is `inset: 0`, so this is what it is bounded against. */
+  viewportHeightPx: number;
 }): { scrollPx: number; maxScrollPx: number } {
-  const { lineIndex, lineCount, linePitchPx, padding, safeRect, bandCenterPx } = input;
+  const { lineIndex, lineCount, linePitchPx, padding, bandCenterPx, viewportHeightPx } = input;
   const total = padding.topPx + lineCount * linePitchPx + padding.bottomPx;
   const centerDocPx = padding.topPx + lineIndex * linePitchPx + linePitchPx / 2;
   return {
-    scrollPx: centerDocPx - (bandCenterPx - safeRect.y),
-    maxScrollPx: Math.max(0, total - safeRect.height),
+    scrollPx: centerDocPx - bandCenterPx,
+    maxScrollPx: Math.max(0, total - viewportHeightPx),
   };
 }
 
@@ -288,11 +298,13 @@ describe('column padding', () => {
     });
     const padding = stagePaddingPx({
       safeRect,
+      viewportHeightPx: PROMPTER.heightPx,
       bandCenterPx: band.centerPx,
       linePitchPx: PITCH,
     });
 
     const { scrollPx } = scrollToPutLineOnBand({
+      viewportHeightPx: PROMPTER.heightPx,
       lineIndex: 0,
       lineCount: 40,
       linePitchPx: PITCH,
@@ -312,11 +324,13 @@ describe('column padding', () => {
     });
     const padding = stagePaddingPx({
       safeRect,
+      viewportHeightPx: PROMPTER.heightPx,
       bandCenterPx: band.centerPx,
       linePitchPx: PITCH,
     });
 
     const { scrollPx, maxScrollPx } = scrollToPutLineOnBand({
+      viewportHeightPx: PROMPTER.heightPx,
       lineIndex: 39,
       lineCount: 40,
       linePitchPx: PITCH,
@@ -344,11 +358,13 @@ describe('column padding', () => {
     });
     const padding = stagePaddingPx({
       safeRect,
+      viewportHeightPx: PROMPTER.heightPx,
       bandCenterPx: band.centerPx,
       linePitchPx: PITCH,
     });
 
     const first = scrollToPutLineOnBand({
+      viewportHeightPx: PROMPTER.heightPx,
       lineIndex: 0,
       lineCount: 20,
       linePitchPx: PITCH,
@@ -357,6 +373,7 @@ describe('column padding', () => {
       bandCenterPx: band.centerPx,
     });
     const last = scrollToPutLineOnBand({
+      viewportHeightPx: PROMPTER.heightPx,
       lineIndex: 19,
       lineCount: 20,
       linePitchPx: PITCH,
@@ -378,11 +395,13 @@ describe('column padding', () => {
     });
     const padding = stagePaddingPx({
       safeRect,
+      viewportHeightPx: PROMPTER.heightPx,
       bandCenterPx: band.centerPx,
       linePitchPx: PITCH,
       futureReserveLines: 0,
     });
     const { scrollPx, maxScrollPx } = scrollToPutLineOnBand({
+      viewportHeightPx: PROMPTER.heightPx,
       lineIndex: 39,
       lineCount: 40,
       linePitchPx: PITCH,
@@ -410,11 +429,13 @@ describe('column padding', () => {
 
     const short = stagePaddingPx({
       safeRect: shortRect,
+      viewportHeightPx: PROMPTER.heightPx,
       bandCenterPx: shortBand.centerPx,
       linePitchPx: PITCH,
     });
     const tall = stagePaddingPx({
       safeRect: tallRect,
+      viewportHeightPx: MONITOR.heightPx,
       bandCenterPx: tallBand.centerPx,
       linePitchPx: PITCH,
     });
@@ -426,7 +447,12 @@ describe('column padding', () => {
 
   it('gives an unmeasured pitch a padding it can still lay out with', () => {
     const safeRect = computeSafeRect(PROMPTER.widthPx, PROMPTER.heightPx, null);
-    const padding = stagePaddingPx({ safeRect, bandCenterPx: 228, linePitchPx: 0 });
+    const padding = stagePaddingPx({
+      safeRect,
+      viewportHeightPx: PROMPTER.heightPx,
+      bandCenterPx: 228,
+      linePitchPx: 0,
+    });
     expect(padding.topPx).toBeCloseTo(228, 9);
     expect(padding.bottomPx).toBeCloseTo(372, 9);
   });
@@ -521,7 +547,7 @@ describe('how much script fits', () => {
       linePitchPx: PITCH,
       safeRect,
     });
-    const budget = lineBudget({ safeRect, bandCenterPx: band.centerPx, linePitchPx: PITCH });
+    const budget = lineBudget({ safeRect, viewportHeightPx: PROMPTER.heightPx, bandCenterPx: band.centerPx, linePitchPx: PITCH });
     expect(budget.above).toBe(2);
     expect(budget.below).toBe(4);
     expect(budget.total).toBe(7);
@@ -531,7 +557,7 @@ describe('how much script fits', () => {
 
   it('says so when type this large leaves no future below the band', () => {
     const safeRect = computeSafeRect(PROMPTER.widthPx, PROMPTER.heightPx, null);
-    const budget = lineBudget({ safeRect, bandCenterPx: 228, linePitchPx: 150 });
+    const budget = lineBudget({ safeRect, viewportHeightPx: PROMPTER.heightPx, bandCenterPx: 228, linePitchPx: 150 });
     expect(budget.below).toBe(1);
     expect(budget.sufficient).toBe(false);
     expect(budget.advice).toContain('upcoming script');
@@ -539,7 +565,7 @@ describe('how much script fits', () => {
 
   it('says so when the band is too high for any context above it', () => {
     const safeRect = computeSafeRect(PROMPTER.widthPx, PROMPTER.heightPx, null);
-    const budget = lineBudget({ safeRect, bandCenterPx: 60, linePitchPx: PITCH });
+    const budget = lineBudget({ safeRect, viewportHeightPx: PROMPTER.heightPx, bandCenterPx: 60, linePitchPx: PITCH });
     expect(budget.above).toBe(0);
     expect(budget.below).toBeGreaterThanOrEqual(3);
     expect(budget.sufficient).toBe(false);
@@ -550,6 +576,7 @@ describe('how much script fits', () => {
     const safeRect = computeSafeRect(PROMPTER.widthPx, PROMPTER.heightPx, null);
     const budget = lineBudget({
       safeRect,
+      viewportHeightPx: PROMPTER.heightPx,
       bandCenterPx: 228,
       linePitchPx: 150,
       futureReserveLines: 1,
@@ -561,7 +588,7 @@ describe('how much script fits', () => {
 
   it('refuses to claim a budget before the pitch is measured', () => {
     const safeRect = computeSafeRect(PROMPTER.widthPx, PROMPTER.heightPx, null);
-    const budget = lineBudget({ safeRect, bandCenterPx: 228, linePitchPx: 0 });
+    const budget = lineBudget({ safeRect, viewportHeightPx: PROMPTER.heightPx, bandCenterPx: 228, linePitchPx: 0 });
     expect(budget.total).toBe(0);
     expect(budget.sufficient).toBe(false);
     expect(budget.advice).toContain('line pitch');

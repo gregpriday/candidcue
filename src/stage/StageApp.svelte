@@ -178,6 +178,7 @@
     });
     return lineBudget({
       safeRect,
+      viewportHeightPx: vh,
       bandCenterPx: band.centerPx,
       linePitchPx,
       futureReserveLines: optics?.futureReserveLines,

@@ -288,6 +288,15 @@ export interface BandGeometryInput {
   safeRect: SafeRect;
   /** Band centre in viewport space, from {@link computeReadingBand}. */
   bandCenterPx: number;
+  /**
+   * The full viewport height, CSS px.
+   *
+   * Required because the padding lands in a plane that is `inset: 0` and is
+   * bounded by `totalHeight - vh`. `safeRect` cannot stand in for it — the
+   * bottom inset is not recoverable from a rect — and using the safe rectangle
+   * here is exactly the coordinate confusion this field exists to end.
+   */
+  viewportHeightPx: number;
   /** The measured line pitch, CSS px. */
   linePitchPx: number;
   /** Upcoming script kept below the band (default {@link DEFAULT_FUTURE_RESERVE_LINES}). */
@@ -332,11 +341,43 @@ export function stagePaddingPx(input: BandGeometryInput): StagePaddingPx {
       : DEFAULT_FUTURE_RESERVE_LINES;
   const center = Number.isFinite(bandCenterPx) ? bandCenterPx : 0;
   const safeTop = Number.isFinite(safeRect.y) ? safeRect.y : 0;
-  const safeBottom = safeTop + (isPositive(safeRect.height) ? safeRect.height : 0);
+  const safeHeight = isPositive(safeRect.height) ? safeRect.height : 0;
+  /*
+   * VIEWPORT coordinates, because that is the box these numbers land in.
+   *
+   * ------------------------------------------------------------------------
+   * THE DEFECT THIS REPLACES
+   * ------------------------------------------------------------------------
+   * This used to read `center - safeTop` and `safeBottom - center`, which is
+   * the arithmetic for a scroll plane INSET TO THE SAFE RECTANGLE. Nothing
+   * insets it: `.script-layer` is `inset: 0`, the transform is written in
+   * viewport pixels, and the scroll bound is `totalHeight - vh` against the
+   * full viewport height. So the padding was solved in one coordinate system
+   * and consumed in another, and the two only agreed when the safe area was
+   * zero on both edges — which is every default profile, every synthetic
+   * fixture, and no hooded rig.
+   *
+   * What a hooded rig got instead: the document short by `vh - safeRect.height`
+   * overall, its first line resting `safeRect.y` too high, and — on a script
+   * whose height lands near the viewport — a `maxScroll` of zero. That last one
+   * is silent all the way down. `buildRenderedLineMap` clamps every knot into
+   * `0..maxScroll` and only rejects knots that DECREASE, so an all-zero map is
+   * still `valid`; the planner builds; snapshots are accepted and counted; and
+   * the controller clamps every target it is handed to the one position it is
+   * allowed to occupy. A stage that reports perfect health and cannot move.
+   *
+   * The safe rectangle still decides where the BAND goes — that is upstream, in
+   * `computeReadingBand`, and it is the right place for it. It does not decide
+   * how much paper sits above and below the text.
+   */
+  // Never smaller than the safe rectangle it contains, so a caller that passes
+  // a stale or zero height degrades to the old safe-local answer rather than a
+  // negative one.
+  const viewportHeight = Math.max(safeTop + safeHeight, input.viewportHeightPx);
 
   return {
-    topPx: Math.max(0, center - safeTop - halfLine),
-    bottomPx: Math.max(0, safeBottom - center - halfLine) + reserveLines * pitch,
+    topPx: Math.max(0, center - halfLine),
+    bottomPx: Math.max(0, viewportHeight - center - halfLine) + reserveLines * pitch,
   };
 }
 
