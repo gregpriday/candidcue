@@ -23,9 +23,9 @@
    ============================================================================ */
 
 :root {
-  /* Product direction: the default stage is pure black with no Listener —
-     the deepest possible background for teleprompter glass. (Spec §11.3
-     suggested #080808; the owner overrode it to true black.) */
+  /* Product direction: the stage field is pure black — the deepest possible
+     background for teleprompter glass. (Spec §11.3 suggested #080808; the
+     owner overrode it to true black.) */
   --stage-bg: #000000;
   --stage-text: #f5f3ef;
   --stage-text-past: rgba(245, 243, 239, 0.42);
