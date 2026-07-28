@@ -175,10 +175,10 @@ describe('the single-window take adopts the coordinator generation', () => {
     expect(startTake!.text).toMatch(/record\.sessionGeneration/);
   });
 
-  it('does not build or publish a second-window stage envelope', () => {
+  it('builds the renderer document locally without publishing a second-window envelope', () => {
     const startTake = SOURCES.find((f) => f.path.endsWith('lib/start-take.ts'));
     expect(startTake).toBeDefined();
-    expect(startTake!.text).not.toMatch(/buildStageEnvelope\(/);
+    expect(startTake!.text).toMatch(/buildStageEnvelope\(/);
     expect(startTake!.text).not.toMatch(/openStage\(/);
     expect(startTake!.text).not.toMatch(/publishStageDocument\(/);
   });

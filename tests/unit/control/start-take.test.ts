@@ -73,9 +73,9 @@ vi.mock('../../../src/control/services/voice-facade', () => ({
   getVoiceFacade: () => ({ listMicrophones: async () => micState.devices }),
 }));
 
-// These services belong to calibration/settings previews, not Present. Keeping
-// them as throwing doubles proves the take cannot accidentally regress to a
-// second window.
+// Present may enumerate displays to resolve the selected panel's optical
+// calibration. Every mutating window operation remains a throwing double, so
+// the take cannot accidentally regress to a second window.
 const stageCalls = vi.hoisted(() => ({
   listDisplays: vi.fn(),
   openStage: vi.fn(),
@@ -180,8 +180,10 @@ beforeEach(() => {
   calls.endSessionRecord.mockResolvedValue(null);
   calls.navigate.mockResolvedValue(true);
   calls.fullscreen.mockResolvedValue(undefined);
+  stageCalls.listDisplays.mockResolvedValue([]);
 
-  for (const fn of Object.values(stageCalls)) {
+  for (const [name, fn] of Object.entries(stageCalls)) {
+    if (name === 'listDisplays') continue;
     fn.mockRejectedValue(new Error('Present must never call the stage-window service'));
   }
 });
@@ -197,6 +199,13 @@ describe('single-window Present', () => {
         displayLabel: 'This window',
         listener: null,
         compiled: expect.objectContaining({ scriptId: SCRIPT.id }),
+        stageEnvelope: expect.objectContaining({
+          sessionId: 'session-1',
+          sessionGeneration: 9,
+          stageGeneration: 0,
+          scriptId: SCRIPT.id,
+          renderDocument: expect.objectContaining({ title: SCRIPT.title }),
+        }),
       }),
     );
     expect(calls.navigate).toHaveBeenCalledWith({
@@ -205,7 +214,10 @@ describe('single-window Present', () => {
       scriptId: SCRIPT.id,
     });
     expect(calls.fullscreen).toHaveBeenCalledWith(true);
-    for (const fn of Object.values(stageCalls)) expect(fn).not.toHaveBeenCalled();
+    expect(stageCalls.listDisplays).toHaveBeenCalledOnce();
+    for (const [name, fn] of Object.entries(stageCalls)) {
+      if (name !== 'listDisplays') expect(fn).not.toHaveBeenCalled();
+    }
   });
 
   it('uses the configured microphone without involving a stage window', async () => {
@@ -226,7 +238,9 @@ describe('single-window Present', () => {
     expect(calls.stopSession).toHaveBeenCalled();
     expect(calls.clearSession).toHaveBeenCalled();
     expect(calls.endSessionRecord).toHaveBeenCalledWith('session-1');
-    for (const fn of Object.values(stageCalls)) expect(fn).not.toHaveBeenCalled();
+    for (const [name, fn] of Object.entries(stageCalls)) {
+      if (name !== 'listDisplays') expect(fn).not.toHaveBeenCalled();
+    }
   });
 
   it('does not full-screen when navigation to the live surface is vetoed', async () => {

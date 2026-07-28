@@ -21,6 +21,7 @@ import type {
   StageIntentPayload,
   StageLayoutErrorPayload,
   StageListenerHealthPayload,
+  StageSessionEnvelope,
   StageSettings,
   TranscriptionConfig,
 } from '../../shared/contracts';
@@ -252,8 +253,10 @@ export interface SessionState {
   stageWindowFault: StageWindowFault | null;
   snapshot: AlignmentSnapshot | null;
   transcriptTail: string[];
-  /** Recent microphone amplitudes for the in-window presentation waveform. */
-  voiceLevels: number[];
+  /** Exact stage instrument payload, rendered locally in single-window mode. */
+  voicePill: StageVoicePillPayload | null;
+  /** The full production stage document rendered inside the control webview. */
+  stageEnvelope: StageSessionEnvelope | null;
   outline: OutlineNode[];
   sentences: SentenceUnit[];
   counts: SessionCounts;
@@ -285,7 +288,8 @@ const initial: SessionState = {
   stageWindowFault: null,
   snapshot: null,
   transcriptTail: [],
-  voiceLevels: [],
+  voicePill: null,
+  stageEnvelope: null,
   outline: [],
   sentences: [],
   counts: { jumps: 0, retakes: 0, reconnects: 0 },
@@ -541,6 +545,7 @@ export interface StartSessionInput {
    */
   transcriptRetained?: boolean;
   stageSettings?: StageSettings | null;
+  stageEnvelope?: StageSessionEnvelope | null;
   listener?: ListenerStageSelection | null;
   transcription?: TranscriptionConfig;
   micDeviceId?: string;
@@ -619,6 +624,7 @@ export function startLiveSession(input: StartSessionInput): string {
     outline: input.outline,
     sentences: input.sentences,
     stageFontSizePx: stageSettings?.fontSizePx ?? 64,
+    stageEnvelope: input.stageEnvelope ?? null,
   });
 
   // Voice mode without a Tauri runtime has no realtime feed — keep the
@@ -697,7 +703,6 @@ export function startLiveSession(input: StartSessionInput): string {
       onLevel: (snapshot) => {
         if (voicePill === null || pillEpoch !== voicePillEpoch) return;
         voicePill = reduceVoicePillLevel(voicePill, snapshot, snapshot.generatedAtMs);
-        state.update((s) => ({ ...s, voiceLevels: voicePill?.levels ?? [] }));
       },
       /*
        * The device is about to be asked for. The pill's "no audio" window runs
@@ -1450,9 +1455,7 @@ function startVoicePill(): number {
   voicePillDeviceLost = false;
   if (!isTauriRuntime()) return voicePillEpoch;
   voicePill = initialVoicePillState(monotonicNowMs());
-  if (stageGeneration !== 0) {
-    voicePillTimer ??= setInterval(publishVoicePill, VOICE_PILL_INTERVAL_MS);
-  }
+  voicePillTimer ??= setInterval(publishVoicePill, VOICE_PILL_INTERVAL_MS);
   return voicePillEpoch;
 }
 
@@ -1487,14 +1490,13 @@ function resetVoicePill(): void {
  * microphone.
  */
 function publishVoicePill(): void {
-  if (voicePill === null || stageGeneration === 0) return;
+  if (voicePill === null) return;
   const s = get(state);
   // Not `stageAlive` — see `publishTranscriptTap`. The pill is the readout
   // that says whether the microphone is being heard, and a liveness flag that
   // is only ever wrong when something is already wrong must not be able to
   // switch it off.
   if (!s.sessionId) return;
-  if (!cachedEmitTo && !isTauriRuntime()) return;
 
   const nowMs = monotonicNowMs();
   voicePill = tickVoicePill(
@@ -1517,6 +1519,9 @@ function publishVoicePill(): void {
     visible: view.visible,
     sentAtMs: Date.now(),
   };
+  state.update((current) => ({ ...current, voicePill: payload }));
+  if (stageGeneration === 0) return;
+  if (!cachedEmitTo && !isTauriRuntime()) return;
   /*
    * The transcript and this pill failed together on the affected real stage:
    * both were direct control-webview → stage events, while Rust-originated

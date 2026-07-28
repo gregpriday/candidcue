@@ -28,22 +28,24 @@ test.beforeEach(async ({ page }) => {
     welcomed: true,
     seedScripts: [SCRIPT],
     keyStatus: { present: true, hint: 'sk-…live', source: 'keychain' },
-    promptMode: 'manual',
+    promptMode: 'voice',
   });
 });
 
-test('Present uses this webview and never opens a stage webview', async ({ page }) => {
+test('Present mounts the production stage in this webview and never opens another', async ({
+  page,
+}) => {
   const errors = watchPageErrors(page);
   await present(page);
 
   await expect(page.locator('aside.sidebar')).toHaveCount(0);
   await expect(page.locator('footer.transport')).toHaveCount(0);
-  await expect(page.locator('.single-sentence.current')).toContainText(
-    'thank you for joining me today',
-  );
-  await expect(page.getByLabel('Microphone level')).toBeVisible();
-  await expect(page.getByLabel('Microphone level').locator('i')).toHaveCount(18);
-  await expect(page.locator('.single-transcript')).toContainText('listening — no words yet');
+  await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'ready');
+  await expect(page.locator('.script-layer')).toBeVisible();
+  await expect(page.getByText('Thank you for joining me today.')).toBeVisible();
+  await expect(page.locator('.diagnostics')).toBeVisible();
+  await expect(page.locator('.transcript-tap')).toContainText('listening — no words yet');
+  await expect(page.locator('.voice-pill')).toBeAttached({ timeout: 10_000 });
 
   const calls = await page.evaluate(() => window.__E2E__.calls.map((call) => call.command));
   expect(calls).toContain('start_session');
@@ -60,8 +62,7 @@ test('the one-screen script follows the control alignment position', async ({ pa
   const errors = watchPageErrors(page);
   await present(page);
 
-  const current = page.locator('.single-sentence.current');
-  await expect(current).toContainText('thank you for joining me today');
+  await expect(page.locator('[data-t=\"0\"]')).not.toHaveClass(/past/);
   const delivered = await page.evaluate(() => {
     const generation = window.__E2E__.lastSession?.sessionGeneration ?? 0;
     return window.__E2E__.emit('align://snapshot', {
@@ -87,7 +88,9 @@ test('the one-screen script follows the control alignment position', async ({ pa
     });
   });
   expect(delivered).toBeGreaterThan(0);
-  await expect(current).toContainText('here is what changed this quarter');
+  await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'live');
+  await expect(page.locator('[data-t=\"0\"]')).toHaveClass(/past/);
+  await expect(page.locator('.diagnostics')).toContainText('token: 6.0');
 
   errors.expectClean();
 });

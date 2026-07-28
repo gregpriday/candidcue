@@ -28,7 +28,12 @@ import { describeError } from '../services/errors';
 import { setControlFullscreen } from '../services/control-window';
 import * as scriptsService from '../services/scripts';
 import { endSessionRecord, startSessionRecord } from '../services/session-records';
-import { buildStageSettings } from '../services/stage-envelope';
+import * as stageService from '../services/stage';
+import {
+  buildStageEnvelope,
+  buildStageSettings,
+  resolveDocumentAssets,
+} from '../services/stage-envelope';
 import type { DisplayDescriptor } from '../services/stage-types';
 import { activeOpticalProfile, type AppSettings } from '../services/settings-types';
 import { editor, saveNow } from '../stores/editor';
@@ -255,7 +260,22 @@ export async function startTake(scriptId: string): Promise<boolean> {
     });
     sessionId = record.id;
 
-    const stageSettings = stageSettingsFromSettings(s);
+    // The renderer still needs the selected panel's calibrated geometry even
+    // though it no longer opens a window there. Enumeration is read-only; the
+    // user moves this window to that panel before pressing Present.
+    const displays = await stageService.listDisplays().catch(() => []);
+    const display = chooseStageDisplay(displays, s.stage.displayFingerprint);
+    const stageSettings = stageSettingsFromSettings(s, display);
+    const assets = await resolveDocumentAssets(compiled.script);
+    const stageEnvelope = buildStageEnvelope({
+      script: compiled.script,
+      sessionId,
+      sessionGeneration: record.sessionGeneration,
+      stageGeneration: 0,
+      stageSettings,
+      assets,
+      following: s.following,
+    });
     const micDeviceId = await resolvePinnedMicrophone(s);
 
     // There is no stage window. Alignment, transcription and rendering all
@@ -276,6 +296,7 @@ export async function startTake(scriptId: string): Promise<boolean> {
       stageGeneration: 0,
       transcriptRetained: record.transcriptRetained,
       stageSettings,
+      stageEnvelope,
       listener: null,
       transcription: {
         model: s.inworld.transcriptionModel,

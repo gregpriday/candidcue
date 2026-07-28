@@ -55,7 +55,8 @@
   import { settings } from '../stores/settings';
   import { smoothFollow, type FollowNotice } from '../stores/smooth-follow';
   import { showToast } from '../stores/toasts';
-  import type { AudioDeviceInfo, OutlineNode } from '../../shared/contracts';
+  import type { AudioDeviceInfo, OutlineNode, StageIntent } from '../../shared/contracts';
+  import StageApp from '../../stage/StageApp.svelte';
 
   interface Props {
     sessionId: string;
@@ -287,6 +288,14 @@
     await navigate({ name: 'editor', scriptId });
   }
 
+  function handleEmbeddedStageIntent(intent: StageIntent): void {
+    if (intent.kind === 'toggle_pause') {
+      togglePlayPause();
+    } else if (intent.kind === 'manual_step') {
+      moveSentences(intent.direction === 'forward' ? 1 : -1);
+    }
+  }
+
   function adjustFontSize(delta: number): void {
     const next = adjustStageFontSize(delta);
     showToast(`Text ${next} px`, 'info', { durationMs: 1600 });
@@ -304,6 +313,20 @@
 
   $effect(() =>
     onShortcut((action) => {
+      // These keys belong to the embedded production stage while it is
+      // mounted. Handling them again in control would turn one Space into
+      // pause-then-resume, or one Escape into two teardown attempts.
+      if (
+        $session.active &&
+        $session.stageEnvelope &&
+        (action === 'escape' ||
+          action === 'play-pause' ||
+          action === 'hard-pause' ||
+          action === 'prev-chapter' ||
+          action === 'next-chapter')
+      ) {
+        return;
+      }
       switch (action) {
         case 'play-pause':
           togglePlayPause();
@@ -378,40 +401,20 @@
 </script>
 
 {#if $session.active}
-  <section class="single-window-stage" aria-label="Teleprompter">
-    <div class="single-script" style:font-size={`${stageFontSize}px`}>
-      {#if previewWindow.length > 0}
-        {#each previewWindow as entry (entry.sentence.id)}
-          <p
-            class="single-sentence"
-            class:past={entry.offset < 0}
-            class:current={entry.offset === 0}
-          >
-            {entry.sentence.normalizedText}
-          </p>
-        {/each}
-      {:else}
-        <p class="single-empty">Preparing script…</p>
-      {/if}
-    </div>
-
-    <div class="single-transcript" class:listening={$session.transcriptTail.length === 0}>
-      <span class="single-waveform" aria-label="Microphone level">
-        {#each Array.from({ length: 18 }) as _, index}
-          <i
-            style={`--level: ${Math.max(
-              0.08,
-              $session.voiceLevels[
-                Math.max(0, $session.voiceLevels.length - 18) + index
-              ] ?? 0.08,
-            )}`}
-          ></i>
-        {/each}
-      </span>
-      {$session.transcriptTail.at(-1) ?? 'listening — no words yet'}
-    </div>
-    <div class="single-exit-hint">Esc to return</div>
-  </section>
+  {#if $session.stageEnvelope}
+    <StageApp
+      embedded={{
+        envelope: $session.stageEnvelope,
+        alignment: $session.snapshot,
+        transcript: $session.transcriptTail.at(-1) ?? '',
+        voicePill: $session.voicePill,
+        onexit: onEscape,
+        onintent: handleEmbeddedStageIntent,
+      }}
+    />
+  {:else}
+    <div class="stage-preparing">Preparing script…</div>
+  {/if}
 {:else}
 <div class="live">
   <!-- Top status bar (§15.1) -->
@@ -851,77 +854,13 @@
 </Dialog>
 
 <style>
-  .single-window-stage {
-    position: relative;
-    flex: 1 1 auto;
-    min-width: 0;
-    min-height: 0;
-    overflow: hidden;
+  .stage-preparing {
+    position: absolute;
+    inset: 0;
     display: grid;
     place-items: center;
     background: #000;
-    color: #f4f4f2;
-    cursor: none;
-  }
-  .single-script {
-    width: min(78vw, 18ch);
-    line-height: 1.28;
-    font-weight: 580;
-    letter-spacing: -0.018em;
-  }
-  .single-sentence {
-    margin: 0 0 0.72em;
-    opacity: 0.42;
-    transition: opacity 180ms ease, transform 220ms ease;
-  }
-  .single-sentence.past {
-    opacity: 0.16;
-  }
-  .single-sentence.current {
-    opacity: 1;
-  }
-  .single-empty {
     color: #777;
-  }
-  .single-transcript {
-    position: absolute;
-    right: 24px;
-    bottom: 18px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    max-width: min(70vw, 720px);
-    overflow: hidden;
-    color: rgba(255, 255, 255, 0.56);
-    font-size: 14px;
-    font-style: italic;
-    text-align: right;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .single-transcript.listening {
-    color: rgba(255, 255, 255, 0.25);
-  }
-  .single-waveform {
-    display: inline-flex;
-    align-items: center;
-    gap: 2px;
-    height: 18px;
-  }
-  .single-waveform i {
-    display: block;
-    width: 2px;
-    height: calc(3px + var(--level) * 15px);
-    border-radius: 2px;
-    background: currentColor;
-    transition: height 80ms linear;
-  }
-  .single-exit-hint {
-    position: absolute;
-    left: 18px;
-    bottom: 16px;
-    color: rgba(255, 255, 255, 0.22);
-    font-size: 12px;
   }
 
   .live {

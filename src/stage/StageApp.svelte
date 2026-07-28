@@ -54,6 +54,7 @@
     type StageMotionAckPayload,
     type StageReadyPayload,
     type StageSnapshotPayload,
+    type StageSessionEnvelope,
     type StageStatePayload,
     type StageSyncRequestPayload,
     type StageAlignmentPayload,
@@ -85,6 +86,17 @@
     type HoldTone,
   } from './renderer/hold-status';
   import { startFixtureReplay, startPreviewDriver, type PreviewDriver } from './preview';
+
+  interface EmbeddedStageBridge {
+    envelope: StageSessionEnvelope;
+    alignment: StageAlignmentPayload | null;
+    transcript: string;
+    voicePill: StageVoicePillPayload | null;
+    onexit: () => void;
+    onintent?: (intent: StageIntent) => void;
+  }
+
+  let { embedded = null }: { embedded?: EmbeddedStageBridge | null } = $props();
 
   const previewParams =
     typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
@@ -349,6 +361,21 @@
    */
   let voicePill = $state<StageVoicePillPayload | null>(null);
 
+  /*
+   * Single-window presentation uses the exact stage renderer but hands its
+   * session instruments across memory, not across a second webview. The
+   * envelope is immutable for a take; transcript and pill remain live.
+   */
+  $effect(() => {
+    const bridge = embedded;
+    if (!bridge) return;
+    if (app.envelope !== bridge.envelope) {
+      dispatch({ type: 'snapshot', envelope: bridge.envelope });
+    }
+    transcriptTap = bridge.transcript;
+    voicePill = bridge.voicePill;
+  });
+
   /* ---------------------------------------------------------------------
    * The hold ladder (renderer/hold-status.ts)
    *
@@ -457,6 +484,31 @@
     app = stageReducer(app, action);
   }
 
+  function applyAlignment(snapshot: StageAlignmentPayload) {
+    lastInboundAt = performance.now();
+    alignmentArrived += 1;
+    const accepted = scriptLayer?.pushAlignmentSnapshot(snapshot) ?? false;
+    const stats = scriptLayer?.alignmentFeedStats();
+    alignmentFeed = stats
+      ? {
+          accepted: stats.accepted,
+          rejected: stats.rejected,
+          reason: dominantRejectReason(stats),
+          field: stats.lastMalformedField,
+        }
+      : null;
+    if (accepted || embedded) dispatch({ type: 'alignment', snapshot });
+  }
+
+  let embeddedAlignmentSeq = Number.NEGATIVE_INFINITY;
+  $effect(() => {
+    const snapshot = embedded?.alignment;
+    const layer = scriptLayer;
+    if (!snapshot || !layer || snapshot.seq === embeddedAlignmentSeq) return;
+    embeddedAlignmentSeq = snapshot.seq;
+    applyAlignment(snapshot);
+  });
+
   /* ---- inbound events ---- */
   onMount(() => {
     const unsubs: Unsubscribe[] = [];
@@ -499,22 +551,6 @@
       });
     };
 
-    const onAlignment = (snapshot: StageAlignmentPayload) => {
-      lastInboundAt = performance.now();
-      alignmentArrived += 1;
-      const accepted = scriptLayer?.pushAlignmentSnapshot(snapshot) ?? false;
-      const stats = scriptLayer?.alignmentFeedStats();
-      alignmentFeed = stats
-        ? {
-            accepted: stats.accepted,
-            rejected: stats.rejected,
-            reason: dominantRejectReason(stats),
-            field: stats.lastMalformedField,
-          }
-        : null;
-      if (accepted) dispatch({ type: 'alignment', snapshot });
-    };
-
     const requestLiveSync = (stageGeneration: number) => {
       if (!isTauri || stageGeneration === 0) return;
       emitStageEvent<StageSyncRequestPayload>(STAGE_EVENT.syncRequest, {
@@ -523,8 +559,9 @@
       });
     };
 
-    void (async () => {
-      const subs = await Promise.all([
+    if (!embedded) {
+      void (async () => {
+        const subs = await Promise.all([
         subscribeStageEvent<StageSnapshotPayload>(STAGE_EVENT.loadSession, (envelope) => {
           lastInboundAt = performance.now();
           dispatch({ type: 'snapshot', envelope });
@@ -546,7 +583,7 @@
          */
         subscribeStageEvent<StageAlignmentPayload>(
           STAGE_EVENT.alignmentSnapshot,
-          onAlignment,
+          applyAlignment,
         ),
         subscribeStageEvent<StageLiveSyncPayload>(STAGE_EVENT.liveSync, (payload) => {
           const generation = app.envelope?.stageGeneration ?? 0;
@@ -555,7 +592,7 @@
           liveSyncRevision = payload.revision;
           if (payload.transcript) onDirective(payload.transcript);
           if (payload.voicePill) onDirective(payload.voicePill);
-          if (payload.alignment) onAlignment(payload.alignment);
+          if (payload.alignment) applyAlignment(payload.alignment);
         }),
         /*
          * The transcript bar. Raw recogniser text, read straight off the wire
@@ -613,12 +650,12 @@
             respondedAtMs: Date.now(),
           });
         }),
-      ]);
-      if (disposed) {
-        subs.forEach((u) => u());
-        return;
-      }
-      unsubs.push(...subs);
+        ]);
+        if (disposed) {
+          subs.forEach((u) => u());
+          return;
+        }
+        unsubs.push(...subs);
       /*
        * Handshake step 0 (§43.3): tell Rust the stage is reachable.
        *
@@ -634,8 +671,9 @@
        *
        * Rust holds the envelope and replays it when this arrives.
        */
-      emitStageEvent<StageListeningPayload>(STAGE_EVENT.listening, { atMs: Date.now() });
-    })();
+        emitStageEvent<StageListeningPayload>(STAGE_EVENT.listening, { atMs: Date.now() });
+      })();
+    }
 
     /*
      * §7.1 wants the map built once fonts are final — but `document.fonts.ready`
@@ -762,6 +800,7 @@
     const measurement = currentMeasurement();
     emittedMeasurementKey = measurementKey(measurement);
     layoutReadyEmitted = true;
+    if (embedded) return;
     emitStageEvent<StageReadyMeasurementPayload>(STAGE_EVENT.layoutReady, {
       stageGeneration: app.envelope.stageGeneration,
       sessionId: app.envelope.sessionId,
@@ -809,6 +848,7 @@
     // that reaches control directly as well as Rust, so reusing the name Rust
     // relays under (`motionAck`) delivered every ack to control twice — once
     // without the generation check.
+    if (embedded) return;
     emitStageEvent<StageMotionAckPayload>(STAGE_EVENT.motionReport, {
       ...ack,
       stageGeneration: app.envelope?.stageGeneration ?? 0,
@@ -822,6 +862,7 @@
     // §62 wants the error where the operator is, so it travels the same
     // Rust-relayed, generation-checked path as the motion report — under the
     // stage's OWN name, never the one control listens for (see S1 above).
+    if (embedded) return;
     emitStageEvent<StageLayoutErrorPayload>(STAGE_EVENT.layoutError, {
       stageGeneration: app.envelope?.stageGeneration ?? 0,
       issues,
@@ -832,6 +873,10 @@
 
   /* ---- outbound intents (§16.9: control/Rust decides) ---- */
   function sendIntent(intent: StageIntent) {
+    if (embedded) {
+      embedded.onintent?.(intent);
+      return;
+    }
     emitStageEvent<StageIntentPayload>(STAGE_EVENT.intent, {
       stageGeneration: app.envelope?.stageGeneration ?? 0,
       intent,
@@ -965,7 +1010,8 @@
     exitHintVisible = false;
     exitHintFocused = false;
     clearTimeout(exitTimer);
-    sendEscape(2);
+    if (embedded) embedded.onexit();
+    else sendEscape(2);
   }
 
   function onClick() {
@@ -997,6 +1043,11 @@
     if (preview && handlePreviewKey(event.key)) return;
     switch (event.key) {
       case 'Escape': {
+        if (embedded) {
+          event.preventDefault();
+          embedded.onexit();
+          break;
+        }
         const now = performance.now();
         const double = now - lastEscapeAt <= ESCAPE_DOUBLE_PRESS_MS;
         // Back to "never" on consumption, for the same reason the seed is:
@@ -1188,6 +1239,8 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div
   class="stage-root"
+  role={embedded ? 'region' : undefined}
+  aria-label={embedded ? 'Teleprompter' : undefined}
   data-phase={phase}
   data-pointer-hidden={pointerHidden}
   data-text-intensity={settings?.textIntensity ?? 'standard'}
@@ -1585,8 +1638,34 @@
   .stage-root {
     position: absolute;
     inset: 0;
+    --stage-bg: #000000;
+    --stage-text: #f5f3ef;
+    --stage-text-past: rgba(245, 243, 239, 0.42);
+    --stage-text-future: rgba(245, 243, 239, 0.86);
+    --stage-accent: rgba(210, 205, 255, 0.2);
+    --stage-cue: #d8b46a;
+    --stage-overlay: rgba(0, 0, 0, 0.72);
+    --stage-secondary-min: 0.67em;
+    --stage-dim-1: 0.78;
+    --stage-dim-2: 0.64;
+    --stage-dim-3: 0.52;
+    --stage-dim-4: var(--stage-past-opacity, 0.42);
     background: var(--stage-bg);
+    color: var(--stage-text);
     overflow: hidden;
+    overscroll-behavior: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .stage-root[data-text-intensity='soft'] {
+    --stage-text: rgba(245, 243, 239, 0.82);
+    --stage-text-past: rgba(245, 243, 239, 0.34);
+    --stage-text-future: rgba(245, 243, 239, 0.7);
+  }
+  .stage-root[data-text-intensity='strong'] {
+    --stage-text: #fffefb;
+    --stage-text-past: rgba(255, 254, 251, 0.5);
+    --stage-text-future: rgba(255, 254, 251, 0.94);
   }
   .stage-root[data-pointer-hidden='true'] {
     cursor: none;
