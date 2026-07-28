@@ -6,6 +6,7 @@
 -->
 <script lang="ts">
   import type { CompiledBlock } from '../../shared/contracts';
+  import { performanceCueKind, type PerformanceMode } from '../../shared/performance-view';
   import InlineNodes from './InlineNodes.svelte';
 
   let {
@@ -15,6 +16,8 @@
     assets = {},
     showCues = true,
     gapPx = 0,
+    dimFrozen = false,
+    performanceMode = 'rehearsal',
   }: {
     block: CompiledBlock;
     zone: 'past' | 'current' | 'future';
@@ -22,6 +25,26 @@
     assets?: Record<string, { url: string; mime: string; width?: number; height?: number }>;
     showCues?: boolean;
     gapPx?: number;
+    /**
+     * Passed straight through to the words: alignment is not following, so the
+     * per-word ramp holds where it is. Block-level zoning is deliberately NOT
+     * frozen with it — zoning follows the block the engine last placed the
+     * reader in, which is a claim it still stands behind while it searches.
+     */
+    dimFrozen?: boolean;
+    /**
+     * Which view of the script this is (`shared/performance-view.ts`).
+     *
+     * The division of labour with `projectForPerformance` is deliberate: the
+     * projection decides WHAT is on the glass — it replaces the blocks a
+     * presenter cannot read at prompting distance — and this prop decides how
+     * big the structure that survived reads. Presentation that the block model
+     * has no business carrying stays out of the block model.
+     *
+     * `rehearsal` is the default so every existing mount site (and every test)
+     * renders exactly what it rendered before this existed.
+     */
+    performanceMode?: PerformanceMode;
   } = $props();
 
   const headingLevel = $derived(
@@ -34,7 +57,30 @@
         ? 'Take'
         : null,
   );
-  const hidden = $derived(block.kind === 'cue' && !showCues);
+  const perfCue = $derived(performanceCueKind(block));
+  /**
+   * A performance cue is NOT hidden by "hide cues".
+   *
+   * That setting turns off the author's asides — [Beat], [Cue: to camera] — and
+   * the script reads fine without them. A projected cue is the opposite: it is
+   * standing in for a block that has been taken off the glass, so hiding it
+   * deletes the presenter's only evidence that the table exists at all. Content
+   * that vanishes with nothing to say it was ever there is the one outcome the
+   * media fallbacks below are also written to avoid.
+   */
+  const hidden = $derived(block.kind === 'cue' && !showCues && perfCue === null);
+  /**
+   * Compact section cue.
+   *
+   * A heading in a take is a landmark rather than a title: what it has to do is
+   * tell the presenter where they are, and every pixel it spends at display size
+   * is script pushed off a nine-inch glass. A SPOKEN heading is exempt, because
+   * `readHeadings` makes it a line the presenter reads aloud — shrinking that
+   * would be shrinking body copy.
+   */
+  const compactHeading = $derived(
+    performanceMode === 'take' && block.kind === 'heading' && !block.spoken,
+  );
 </script>
 
 {#if !hidden}
@@ -50,13 +96,20 @@
       <span class="take-marker">{takeLabel}</span>
     {/if}
 
-    {#if block.kind === 'heading'}
-      <div class="heading" data-level={headingLevel}>
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} />
+    {#if perfCue !== null}
+      <!-- The block the projection took off the glass, said in the stage's own
+           cue vocabulary: the same chip an authored [Beat] draws, so it reads as
+           direction rather than as a card that lost its contents. -->
+      <div class="perf-cue" data-performance-cue={perfCue}>
+        <InlineNodes nodes={block.renderNodes} {assets} showCues={true} {dimFrozen} />
+      </div>
+    {:else if block.kind === 'heading'}
+      <div class="heading" data-level={headingLevel} class:compact={compactHeading}>
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} />
       </div>
     {:else if block.kind === 'cue'}
       <div class="cue-row">
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} showCues={true} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} showCues={true} {dimFrozen} />
       </div>
     {:else if block.kind === 'divider'}
       <div class="divider" aria-hidden="true"></div>
@@ -76,15 +129,15 @@
         {/each}
       </div>
     {:else if block.kind === 'code'}
-      <pre class="code"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} /></pre>
+      <pre class="code"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></pre>
     {:else if block.kind === 'blockquote'}
       <div class="quote">
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} />
       </div>
     {:else if block.kind === 'list_item'}
       <div class="list-item">
         <span class="bullet" aria-hidden="true"></span>
-        <span class="list-body"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} /></span>
+        <span class="list-body"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></span>
       </div>
     {:else if block.kind === 'table'}
       <!-- Tables are structured reference cards on stage (§24.6): real rows,
@@ -125,11 +178,17 @@
       </div>
     {:else if block.kind === 'diagram'}
       <div class="visual-fallback">
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} />
       </div>
+    {:else if block.kind === 'silent' || block.kind === 'stage_only'}
+      <!-- Not a `<p>`. `:::silent` and `:::stage` keep whatever they wrapped
+           (`innerKind`), so a table can land here — and an HTML parser closes an
+           open `<p>` before a `<table>`, which leaves the stage measuring a
+           shape the browser then takes apart underneath it. -->
+      <div class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></div>
     {:else}
-      <!-- paragraph / silent / stage_only -->
-      <p class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} /></p>
+      <!-- paragraph -->
+      <p class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></p>
     {/if}
   </div>
 {/if}
@@ -155,17 +214,42 @@
     transition-timing-function: var(--ease-out, ease-out);
   }
 
-  /* Silent / stage-only material reads as quiet stage direction. */
+  /*
+   * THE SECONDARY-TEXT FLOOR.
+   *
+   * Every rule below that sizes text a presenter has to READ is written as
+   * `max(--stage-secondary-min, <proportion>)`. The proportion is the
+   * typographic intent; the floor is an absolute pixel size the script layer
+   * resolves from the rig's optics (`secondaryTextFloorPx`), and it is what
+   * stops that intent from putting the words under the angular size at which
+   * reading works at all.
+   *
+   * The proportions themselves were also wrong, not merely unfloored. They were
+   * chosen against a laptop screen at desk distance — a take marker at 0.42em, a
+   * code block at 0.6em — which at two metres through a beamsplitter is a shape
+   * rather than a word. What is on the glass is either worth reading from where
+   * the presenter is standing, in which case it is sized for that, or it is not
+   * worth drawing.
+   *
+   * The floor is absolute rather than relative because `em` compounds: a cue
+   * inside a silent block is two multiplications away from body, and each factor
+   * was picked on its own against body text.
+   */
+
+  /* Silent / stage-only material reads as quiet stage direction. It is still
+     direction someone has to act on, so it is quiet by OPACITY and only
+     slightly smaller — dropping it to 0.7em made "look at camera" the least
+     legible thing on a screen whose whole job is legibility. */
   .unspoken {
     opacity: 0.45;
-    font-size: 0.7em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.8em);
     line-height: 1.35;
   }
 
   .take-marker {
     display: inline-block;
     color: var(--stage-cue);
-    font-size: 0.42em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.67em);
     font-weight: 650;
     letter-spacing: 0.14em;
     text-transform: uppercase;
@@ -191,9 +275,44 @@
     font-size: 1.05em;
     line-height: 1.22;
   }
+  /*
+   * The take-mode heading: one size for every level, because at prompting
+   * distance the level is not information the presenter can act on — where the
+   * section starts is. It is coloured like the other stage direction and is
+   * deliberately NOT uppercased the way the cue chips are: a chip is a word, a
+   * heading is a phrase, and capitals cost more than they buy over a phrase.
+   *
+   * `[data-level]` is in the selector for the cascade, not to narrow the match
+   * — the attribute is always written. `:not()` carries the specificity of its
+   * argument, so the level-3-and-up rule above counts as a class plus two
+   * attributes, and a bare `.heading.compact` loses to it outright: h3 to h6
+   * would have kept 1.05em and come out LARGER in a take than the compacted h1
+   * above them. With the attribute the two tie and source order decides, which
+   * is why this rule still has to stay BELOW all three.
+   */
+  .heading.compact[data-level] {
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.9em);
+    line-height: 1.3;
+    letter-spacing: 0.04em;
+    color: var(--stage-cue);
+  }
+
+  /*
+   * A projected cue replaces a WHOLE block, so its wrapper does not shrink.
+   *
+   * That is the whole rule: the chip inside is then exactly one multiplication
+   * away from body text, the same as an authored inline cue. Routing it through
+   * `.cue-row` would have made it two — 0.67 of 0.9 — which is precisely the
+   * compounding the floor above exists to catch, and the cheapest place to not
+   * have it is here.
+   */
+  .perf-cue {
+    font-size: 1em;
+    line-height: 1.4;
+  }
 
   .cue-row {
-    font-size: 0.9em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.9em);
   }
 
   .divider {
@@ -214,7 +333,7 @@
 
   .code {
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-    font-size: 0.6em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.75em);
     line-height: 1.5;
     white-space: pre-wrap;
     margin: 0;
@@ -258,11 +377,14 @@
     min-width: 0;
   }
 
+  /* A diagram that could not be drawn falls back to its own source text, which
+     is the only description of it anyone has — so it is sized like the other
+     two reference cards rather than like a caption. */
   .visual-fallback {
     padding: 0.5em 0.8em;
     border-radius: 12px;
     background: color-mix(in srgb, var(--stage-text) 6%, transparent);
-    font-size: 0.7em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.75em);
     line-height: 1.4;
   }
 
@@ -272,7 +394,7 @@
     border-radius: 12px;
     background: color-mix(in srgb, var(--stage-text) 6%, transparent);
     color: color-mix(in srgb, var(--stage-text) 70%, transparent);
-    font-size: 0.6em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.75em);
     line-height: 1.4;
     text-align: center;
   }
@@ -281,7 +403,7 @@
     padding: 0.5em 0.8em;
     border-radius: 12px;
     background: color-mix(in srgb, var(--stage-text) 6%, transparent);
-    font-size: 0.6em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.75em);
     line-height: 1.4;
     overflow-x: auto;
   }
@@ -303,7 +425,7 @@
     background: color-mix(in srgb, var(--stage-text) 5%, transparent);
   }
 
-  p.para {
+  .para {
     margin: 0;
   }
 </style>

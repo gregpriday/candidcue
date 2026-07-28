@@ -402,6 +402,171 @@ const DEFAULT_MANUAL_GRACE_MS = 2500;
  */
 const LATCH_REANCHOR_PERSISTENCE_MS = 400;
 
+/* ------------------------------------------------------------------- §30 --
+ * Line units are half a bound. The panel sets the other half.
+ *
+ * `SmoothFollowLineUnits` restates the motion bounds as multiples of the
+ * MEASURED pitch, because what a presenter perceives is lines rather than
+ * pixels, and that is the right unit right up until a line stops being a small
+ * part of the glass. Calibrate a 15.6-inch panel for arm's length and the pitch
+ * passes 200 px: five lines of reverse travel is then more than a full screen,
+ * and ten line pitches a second is the whole document leaving. Motion the
+ * presenter reads in lines becomes motion nobody reads at all.
+ *
+ * So every bound the pitch can scale is met by a bound the panel sets and the
+ * narrower one wins. Lines because the reader experiences lines; viewport
+ * heights because a sweep across the whole glass is disruptive regardless of
+ * how tall a line happens to be on this rig.
+ *
+ * The four numbers below are deliberately just above the tuned profile's own,
+ * restated in viewport heights: 900, 600, 2600 and 12000 px on the 1080 px
+ * stage they were tuned on are 0.83 viewport heights per second, 0.56 per
+ * second, 2.41 per second squared and 11.1 per second cubed. Two consequences,
+ * both load-bearing:
+ *
+ *   - on that stage NONE of them bind. The rig the profile was evaluated
+ *     against moves exactly as it does today; these are a safety net for
+ *     panels the tuning never saw, not a retune of the tuning.
+ *   - where they do bind they scale velocity, acceleration and jerk by nearly
+ *     one factor, which is what keeps the plant coupled. The limit-cycle note
+ *     in `profiles.ts` is about `aMax` moving against a fixed `jerkMax`: the
+ *     actuator's rail-to-rail swing time `2·aMax/jerkMax` grows, phase margin
+ *     goes, and the text visibly rocks. The small spread here runs the other
+ *     way — acceleration is capped a shade harder than jerk — so the swing
+ *     time shortens and the margin can only improve.
+ */
+const MAX_FORWARD_VIEWPORTS_PER_SECOND = 1;
+/**
+ * Backward motion gets less. It is rarer, it always means something went wrong,
+ * and a reverse sweep is read as the document leaving rather than as reading —
+ * the same asymmetry the profile's own 900/600 pair already carries.
+ */
+const MAX_BACKWARD_VIEWPORTS_PER_SECOND = 0.7;
+const MAX_ACCELERATION_VIEWPORTS_PER_SECOND2 = 2.5;
+const MAX_JERK_VIEWPORTS_PER_SECOND3 = 12;
+
+/**
+ * §8.6's derivative clamp, viewport-relative. One spoken word may not move the
+ * document more than a screen however tall the type is; the line-relative
+ * clamp beside it (12 pitches) is 768 px at the reference pitch and 3600 px at
+ * a calibrated 300 px one, where it stops bounding anything a presenter would
+ * recognise as a bound.
+ */
+const MAX_DERIVATIVE_VIEWPORTS_PER_UNIT = 1;
+
+/**
+ * §20.4. A step across a quarter of the glass is one the presenter sees,
+ * whatever the type size — so that is where "too small to be worth obscuring"
+ * stops being true. Without it a 300 px pitch would quietly redefine a
+ * third-of-a-screen jump as invisible.
+ */
+const MAX_FADE_SKIP_VIEWPORT_FRACTION = 0.25;
+
+/**
+ * What `fadeSkipLines` means for a profile that carries no `lineUnits` at all.
+ *
+ * That profile is legal and stays legal: §55 makes the block additive, and its
+ * absence is a request for "the behaviour every build before this one had"
+ * rather than a truncation. For THIS bound that behaviour was one measured
+ * pitch — the engine hard-coded it — so reading the field and stopping there
+ * answers "no threshold", the one-pixel floor takes over, and a quarter-line
+ * re-anchor nobody could see drags a 220 ms full-field fade onto the glass with
+ * it. Restating the engine's old constant as the default is what makes the
+ * absent block mean what it says it means.
+ *
+ * It is deliberately NOT paired with a `catchUpCeilingLines` default. That
+ * field's old behaviour, on a map with no corridor, was no ceiling at all, so
+ * leaving it unresolved is what preserves it; defaulting there would invent a
+ * bound a profile never asked for rather than restore one it used to get.
+ */
+const DEFAULT_FADE_SKIP_LINES = 1;
+
+/**
+ * §30.3. How far past the target the plant may be carried when no reading
+ * corridor is available to say. A tenth of the glass is already generous for a
+ * bound whose whole job is to catch a plant parked ahead of its target.
+ */
+const MAX_CATCH_UP_CEILING_VIEWPORT_FRACTION = 0.1;
+
+/**
+ * The profile as this panel may actually run it (§30).
+ *
+ * Applied to the profile's BASE numbers rather than to the composed limits, so
+ * that a state or transition multiplier still means what the table says: a
+ * catch-up is 1.6× ordinary following on every rig. Capping after the
+ * multipliers would put a panel constant in front of §30.3's own three bounds
+ * on the boost — the duration cap, the corridor-relative decay, and the upper
+ * safety boundary — and none of them knows anything about the gap being
+ * closed, while all three exist precisely to shape how it is.
+ *
+ * Returns the profile ITSELF when nothing binds, which is every rig at or above
+ * the 1080 px the numbers were tuned on. That keeps the common case free of an
+ * allocation and makes "this panel changed nothing" checkable by identity.
+ */
+export function viewportBoundedProfile(
+  profile: SmoothFollowProfile,
+  viewportHeightPx: number,
+): SmoothFollowProfile {
+  if (!Number.isFinite(viewportHeightPx) || viewportHeightPx <= 0) return profile;
+  const m = profile.motion;
+  const maxForwardVelocityPxS = Math.min(
+    m.maxForwardVelocityPxS,
+    viewportHeightPx * MAX_FORWARD_VIEWPORTS_PER_SECOND,
+  );
+  const maxBackwardVelocityPxS = Math.min(
+    m.maxBackwardVelocityPxS,
+    viewportHeightPx * MAX_BACKWARD_VIEWPORTS_PER_SECOND,
+  );
+  const maxAccelerationPxS2 = Math.min(
+    m.maxAccelerationPxS2,
+    viewportHeightPx * MAX_ACCELERATION_VIEWPORTS_PER_SECOND2,
+  );
+  let maxJerkPxS3 = Math.min(
+    m.maxJerkPxS3,
+    viewportHeightPx * MAX_JERK_VIEWPORTS_PER_SECOND3,
+  );
+
+  /*
+   * The two caps are independent, and that is the one way this could hurt.
+   *
+   * A jerk-limited actuator needs `2·aMax/jerkMax` to swing acceleration from
+   * one rail to the other, and profiles.ts's limit-cycle note explains what too
+   * much of that lag does inside this loop: the phase margin goes and the
+   * document rocks against a static target instead of settling. Capping jerk
+   * harder than acceleration LENGTHENS that lag.
+   *
+   * For the profiles that ship it never happens — acceleration starts binding
+   * at a taller panel than jerk does, so the ratio only ever shortens. But the
+   * contract accepts profiles nobody here wrote, and one whose acceleration is
+   * already under its cap while its jerk is not would come out worse than it
+   * went in. Rather than rely on the shipped numbers staying where they are,
+   * give back whatever jerk the incoming ratio was entitled to.
+   */
+  const incomingLagS = m.maxJerkPxS3 > 0 ? (2 * m.maxAccelerationPxS2) / m.maxJerkPxS3 : 0;
+  if (incomingLagS > 0) {
+    const jerkForSameLag = (2 * maxAccelerationPxS2) / incomingLagS;
+    maxJerkPxS3 = Math.min(m.maxJerkPxS3, Math.max(maxJerkPxS3, jerkForSameLag));
+  }
+  if (
+    maxForwardVelocityPxS === m.maxForwardVelocityPxS &&
+    maxBackwardVelocityPxS === m.maxBackwardVelocityPxS &&
+    maxAccelerationPxS2 === m.maxAccelerationPxS2 &&
+    maxJerkPxS3 === m.maxJerkPxS3
+  ) {
+    return profile;
+  }
+  return {
+    ...profile,
+    motion: {
+      ...m,
+      maxForwardVelocityPxS,
+      maxBackwardVelocityPxS,
+      maxAccelerationPxS2,
+      maxJerkPxS3,
+    },
+  };
+}
+
 /* ------------------------------------------------------------------ §20.4 --
  * The re-anchor transition.
  *
@@ -454,11 +619,14 @@ const REDUCED_MOTION_FADE_MS = 0;
  * Below this the re-anchor is not a teleport and there is nothing worth
  * obscuring, so fading would be a gratuitous flash — a re-affirmed directive
  * whose destination is where we already are, or a session reset issued while
- * the document is already at the top. One rendered line is the natural unit:
- * a correction the presenter could not distinguish from ordinary following.
+ * the document is already at the top.
+ *
+ * The threshold is resolved by `fadeSkipThresholdPx` from the profile and the
+ * measured geometry; the one-pixel floor lives here so that "no geometry yet"
+ * still answers the question rather than fading a zero-length move.
  */
-function fadeWorthwhile(distancePx: number, linePitchPx: number): boolean {
-  return distancePx > Math.max(1, linePitchPx);
+function fadeWorthwhile(distancePx: number, skipThresholdPx: number): boolean {
+  return distancePx > Math.max(1, skipThresholdPx);
 }
 
 type ReanchorFadePhase = 'idle' | 'down' | 'up';
@@ -470,6 +638,18 @@ export function createStageMotionEngine(
   // session's envelope may carry a different feel. Read on every frame — never
   // captured — so a swap takes effect on the next one.
   let profile = options.profile ?? DEFAULT_SMOOTH_FOLLOW_PROFILE;
+  /**
+   * `profile` with its §30 viewport ceilings applied — the one every motion
+   * limit is composed from.
+   *
+   * Recomputed in `rebuildPlanner`, which already runs on every event that can
+   * move either input — `setProfile`, `setLineMap`, `layoutRecovery` — because
+   * the viewport height comes off the map's own fingerprint. Deriving it per
+   * frame instead would allocate sixty times a second for a value that changes
+   * about twice a session, against a §63 budget of a millisecond for the whole
+   * motion pass.
+   */
+  let boundedProfile = profile;
   const snapshotStaleMs = options.snapshotStaleMs ?? DEFAULT_SNAPSHOT_STALE_MS;
   const styleIntervalMs = options.styleIntervalMs ?? DEFAULT_STYLE_INTERVAL_MS;
   const manualGraceMs = options.manualGraceMs ?? DEFAULT_MANUAL_GRACE_MS;
@@ -580,7 +760,31 @@ export function createStageMotionEngine(
     if (fadePhase === 'down') return nowMs - fadeStartedAtMs >= fadeLegMs();
     return !fadeWorthwhile(
       Math.abs(destinationPx - controller.state.q),
-      map?.linePitchPx ?? 0,
+      fadeSkipThresholdPx(),
+    );
+  }
+
+  /**
+   * §20.4 + §30. How small a re-anchor has to be before obscuring it would be a
+   * gratuitous flash rather than a mercy.
+   *
+   * One rendered line is the natural unit — a correction the presenter cannot
+   * distinguish from ordinary following — and `fadeSkipLines` is where the
+   * profile says so. This used to be a hard-coded single pitch, so a profile
+   * that carried the field changed nothing whatsoever; a profile that omits the
+   * block falls back to that same single pitch (`DEFAULT_FADE_SKIP_LINES`), so
+   * every profile that does not say otherwise gets the number it always got.
+   *
+   * The viewport ceiling is the other half of the bound and it earns its place
+   * at large type: at a 300 px pitch one line is more than a quarter of a
+   * 1080 px stage, and a step across a quarter of the glass is one the
+   * presenter sees. Without it "too small to bother hiding" would come to mean
+   * "a third of the screen".
+   */
+  function fadeSkipThresholdPx(): number {
+    return lineBoundPx(
+      profile.lineUnits?.fadeSkipLines ?? DEFAULT_FADE_SKIP_LINES,
+      MAX_FADE_SKIP_VIEWPORT_FRACTION,
     );
   }
 
@@ -612,14 +816,67 @@ export function createStageMotionEngine(
     heldVisualSpan = null;
   }
 
+  /**
+   * The measured line pitch, or 0 when nothing has been measured yet.
+   *
+   * Read straight off the map rather than cached beside it. The pitch and the
+   * geometry it describes are one object, so there is no second copy that can
+   * survive a rebuild and quietly bound the new layout with the old layout's
+   * lines — which is the whole reason this is not a public setter. A stage that
+   * has no map has no pitch, and `resolveLineLimitPx` answers that with the
+   * profile's tuned pixel numbers, which is the pre-optical behaviour exactly.
+   */
+  function measuredPitchPx(): number {
+    const pitch = map?.linePitchPx ?? 0;
+    return Number.isFinite(pitch) && pitch > 0 ? pitch : 0;
+  }
+
+  /**
+   * The glass, from the fingerprint the map was built against — so the viewport
+   * a bound is measured in is always the viewport the layout was measured in.
+   * Zero means unknown, and every §30 viewport ceiling is then simply not
+   * applied rather than guessed at.
+   */
+  function viewportHeightPx(): number {
+    const height = map?.fingerprint.viewportHeightPx ?? 0;
+    return Number.isFinite(height) && height > 0 ? height : 0;
+  }
+
+  /**
+   * A line-relative bound, met by its viewport ceiling (§30).
+   *
+   * Zero for "no answer" — no pitch measured, or a profile that named no
+   * multiple — which every caller reads as "fall back to what you did before".
+   */
+  function lineBoundPx(lines: number | undefined, viewportFraction: number): number {
+    const pitch = measuredPitchPx();
+    if (pitch <= 0 || typeof lines !== 'number' || !Number.isFinite(lines) || lines <= 0) {
+      return 0;
+    }
+    const linePx = lines * pitch;
+    const height = viewportHeightPx();
+    return height > 0 ? Math.min(linePx, height * viewportFraction) : linePx;
+  }
+
   function rebuildPlanner() {
+    const heightPx = viewportHeightPx();
+    boundedProfile = viewportBoundedProfile(profile, heightPx);
     planner =
       map && map.valid
         ? createLineHandoffPlanner(map, {
-            maxFeedForwardPxS: profile.motion.maxForwardVelocityPxS,
+            maxFeedForwardPxS: boundedProfile.motion.maxForwardVelocityPxS,
             // A media or paragraph gap must never hand the controller an
-            // unbounded derivative (§8.6).
-            maxDerivativePxPerUnit: Math.max(1, map.linePitchPx) * 12,
+            // unbounded derivative (§8.6) — and neither must large type. Twelve
+            // pitches is 768 px at the reference pitch and 3600 px at a
+            // calibrated 300 px one, where the clamp has stopped bounding
+            // anything a presenter would call a bound; one viewport per spoken
+            // word is the half of it that survives the conversion (§30).
+            maxDerivativePxPerUnit: Math.min(
+              Math.max(1, map.linePitchPx) * 12,
+              heightPx > 0
+                ? heightPx * MAX_DERIVATIVE_VIEWPORTS_PER_UNIT
+                : Number.POSITIVE_INFINITY,
+            ),
           })
         : null;
   }
@@ -1050,6 +1307,21 @@ export function createStageMotionEngine(
         degraded: diagnostics.degraded,
         transition: activeTransition?.directive.type,
         manualGrace,
+        /*
+         * §30. The three POSITION bounds are resolved against the pitch this
+         * layout actually measured, so what the presenter is promised — five
+         * lines of reverse travel, a re-anchor threshold reachable before that
+         * budget is spent — is the same promise on a 9-inch panel at 1.8 m and
+         * a 15.6-inch one at arm's length.
+         *
+         * `limitsForState` has taken a `linePitchPx` since the line-unit block
+         * shipped and no production caller ever passed one, so every rig went on
+         * running the pixel numbers tuned for a 64 px body at a 1.32 line
+         * height. The pitch comes from the map rather than from a setter
+         * precisely so it cannot describe a geometry that has since been
+         * rebuilt.
+         */
+        linePitchPx: measuredPitchPx(),
       };
       /**
        * The state/transition shape of the limits, with no §30.3 bounds applied.
@@ -1060,7 +1332,7 @@ export function createStageMotionEngine(
        */
       const structuralLimits: MotionLimits = limitsForState(
         state ?? 'holding',
-        profile,
+        boundedProfile,
         limitOptions,
       );
 
@@ -1189,12 +1461,30 @@ export function createStageMotionEngine(
             decayPx <= 0
               ? (gapPx > corridorHalfPx ? 1 : 0)
               : Math.max(0, Math.min(1, (gapPx - corridorHalfPx) / decayPx));
-          // §30.3, §8.8/§16.3: the line may not be carried above the corridor's
-          // UPPER edge. Scrolling forward by one pixel past the target lifts
-          // the line one pixel above `R`, so the corridor half-height is
-          // precisely how far past the target the plant may be carried.
-          catchUpCeilingPx = targetPx + corridorHalfPx;
         }
+        /* §30.3, §8.8/§16.3: the line may not be carried above the corridor's
+         * UPPER edge. Scrolling forward by one pixel past the target lifts the
+         * line one pixel above `R`, so the corridor half-height is precisely
+         * how far past the target the plant may be carried — when the map knows
+         * one. It is measured from this layout rather than converted through a
+         * pitch, so it wins wherever it exists.
+         *
+         * `catchUpCeilingLines` is the same boundary in a unit that survives a
+         * map built without a corridor — a degraded builder, a stage whose band
+         * has not resolved yet. It was read nowhere, so the ONE bound that
+         * catches a plant parked ahead of a target moving at the same speed
+         * (zero relative velocity, invisible to the overshoot guard, the shape
+         * that once left the document 908 px ahead permanently) simply
+         * disappeared on exactly the frames it is needed most.
+         */
+        const ceilingMarginPx =
+          corridorHalfPx > 0
+            ? corridorHalfPx
+            : lineBoundPx(
+                profile.lineUnits?.catchUpCeilingLines,
+                MAX_CATCH_UP_CEILING_VIEWPORT_FRACTION,
+              );
+        if (ceilingMarginPx > 0) catchUpCeilingPx = targetPx + ceilingMarginPx;
         catchUpBoost = Math.min(timeFactor, corridorFactor);
         if (catchUpCapped && !catchUpCapCounted) {
           catchUpCapCounted = true;
@@ -1203,7 +1493,7 @@ export function createStageMotionEngine(
       }
 
       const limits: MotionLimits = catchUpLicensed
-        ? limitsForState(state ?? 'holding', profile, {
+        ? limitsForState(state ?? 'holding', boundedProfile, {
             ...limitOptions,
             catchUpBoost,
             forwardPositionCeilingPx: catchUpCeilingPx,

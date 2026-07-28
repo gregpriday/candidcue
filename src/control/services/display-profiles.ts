@@ -2,16 +2,45 @@
  * Display profiles (spec §52, §46.6) — `save_display_profile` /
  * `list_display_profiles`.
  *
- * Both commands and the `display_profiles` table have existed since the
- * windows module landed, with no TypeScript caller: every stage appearance
- * choice a user makes in Preflight is re-chosen from defaults the next time,
- * on every display.
+ * What a row is FOR has changed, so it is worth stating plainly. It is not the
+ * source of truth for stage appearance: Settings owns type, and
+ * `AppSettings.optical` owns the calibrated rigs. A row is the durable RECORD
+ * of what a panel last actually ran with — written by `lib/start-take.ts` at
+ * the moment a take goes live, and carrying the whole `StageSettings`,
+ * including the `optics` that were resolved and the `opticalProfile` they were
+ * resolved from.
  *
- * This module is the service half. The UI half belongs in Preflight, which is
- * owned elsewhere; `applyProfileToStageOverrides` is the exact seam it needs —
- * see the note at the bottom of this file.
+ * That matters because the optical section lives in the localStorage overlay,
+ * which "Clear cache", a fresh profile directory and a reinstalled webview all
+ * wipe without warning. The row is what survives that, so
+ * `applyProfileToStageOverrides` can hand a measured rig back to the
+ * calibration screen instead of asking somebody to re-measure a distance they
+ * already measured.
+ *
+ * One row per panel, though, not one per rig: `rememberDisplayProfile` resolves
+ * the panel's existing row and upserts onto it, so what survives a wiped
+ * overlay is the arrangement that panel last ran with. An operator who keeps
+ * two rigs on one fingerprint gets the one they used last back and re-measures
+ * the other. Keeping a row per rig is the change that would close that, and it
+ * has to decide what a row is CALLED first — every row is named after the
+ * display today, so three of them would arrive at a picker indistinguishable.
+ *
+ * Deliberately WRITE-ONLY on the take path. The version of §52 that shipped for
+ * one afternoon restored a profile only for an explicitly PINNED display, so
+ * the default "Automatic" path wrote a row per take and read none, and moving
+ * from a pinned panel to Automatic carried the pinned panel's type across and
+ * then saved it over the other panel's row. Reading a row to decide appearance
+ * is what reintroduces that; reading one to recover a calibration the user asks
+ * for is not.
  */
-import type { ListenerGeometry, StageSettings } from '../../shared/contracts';
+import type {
+  ListenerGeometry,
+  OpticalProfile,
+  ReadingCueStyle,
+  ResolvedOptics,
+  StageSettings,
+  TextIntensity,
+} from '../../shared/contracts';
 import { invokeOrMock } from './ipc';
 
 /**
@@ -70,35 +99,61 @@ export async function listDisplayProfiles(): Promise<DisplayProfileRecord[]> {
 }
 
 /**
- * The profile to apply for a display, or null.
+ * Every profile saved for a display, most recently updated first.
  *
  * Matching is by FINGERPRINT, never by name or position: the fingerprint is
  * panel identity and deliberately survives rearranging or rescaling displays
  * (`DisplayDescriptor.fingerprint`), while `topologyHash` does not. A profile
- * with no fingerprint is a general preset and is never auto-applied — silently
- * adopting it on an unrelated monitor is exactly the surprise §52 is trying to
+ * with no fingerprint is a general preset and is never returned — silently
+ * adopting one on an unrelated monitor is exactly the surprise §52 is trying to
  * avoid.
+ *
+ * All of them rather than one because the caller may hold a list it merged or
+ * sorted itself, and `profileForDisplay` — the head of this — is the only
+ * consumer that wants a single answer. It is deliberately NOT evidence that a
+ * panel has several rows: the take path rewrites one row per panel (see the
+ * module header), so this list is one entry deep in practice. The several
+ * arrangements a fingerprint can hold live in `AppSettings.optical`.
  */
+export function profilesForDisplay(
+  profiles: DisplayProfileRecord[],
+  fingerprint: string | null,
+): DisplayProfileRecord[] {
+  if (fingerprint === null || fingerprint === '') return [];
+  return profiles
+    .filter((p) => p.displayFingerprint === fingerprint)
+    // The Rust ordering already does this, but the caller may have merged lists.
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+/** The single default for a display — most recent wins — or null. */
 export function profileForDisplay(
   profiles: DisplayProfileRecord[],
   fingerprint: string | null,
 ): DisplayProfileRecord | null {
-  if (fingerprint === null || fingerprint === '') return null;
-  const matches = profiles.filter((p) => p.displayFingerprint === fingerprint);
-  if (matches.length === 0) return null;
-  // Most recently updated wins; the Rust ordering already does this, but the
-  // caller may have merged lists.
-  return [...matches].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]!;
+  return profilesForDisplay(profiles, fingerprint)[0] ?? null;
 }
 
 /**
- * The appearance controls Preflight actually owns, projected out of a saved
+ * The controls a user can actually change, projected out of a saved
  * `StageSettings`.
  *
  * `buildStageSettings` (services/stage-envelope.ts) turns these back into a
- * full `StageSettings`, so this is its inverse over exactly the fields a user
- * can change. Deriving the booleans from their numeric encodings — rather than
- * storing a second copy — keeps the profile a single source of truth.
+ * full `StageSettings`, so this is its inverse over the appearance controls.
+ * Deriving the booleans from their numeric encodings — rather than storing a
+ * second copy — keeps the profile a single source of truth.
+ *
+ * `readingCue` and the two optical fields are the exception, and are read-only
+ * here: `buildStageSettings` takes no loose override for any of them because
+ * all three are authored on the rig rather than in Settings. They return to a
+ * take by way of `opticalProfile`, which carries the cue alongside the
+ * measurements — so the projection is for a calibration screen to READ, not a
+ * bag to hand straight back.
+ *
+ * `background` is gone: the stage hard-codes its field colour, so the saved
+ * value never described anything, and a projection that kept handing it back
+ * would keep a dead control looking answerable. `textIntensity` is what took
+ * its place.
  */
 export interface StageAppearanceOverrides {
   fontFamilyId: string;
@@ -110,7 +165,23 @@ export interface StageAppearanceOverrides {
   mirrorY: boolean;
   pastDimming: boolean;
   phraseHighlight: boolean;
-  background: string;
+  textIntensity: TextIntensity;
+  readingCue: ReadingCueStyle;
+  /**
+   * The calibration this row was rendered from, when it had one.
+   *
+   * This is the field that makes a row worth writing. It is the INPUT — a rig
+   * name, a measured scale, a viewing distance, a lens position — so handing it
+   * to the calibration screen restores an arrangement somebody measured rather
+   * than a set of pixel sizes somebody would have to reverse-engineer.
+   */
+  opticalProfile?: OpticalProfile;
+  /**
+   * What that calibration resolved to on the panel the take ran on. Read-only
+   * and never authored; carried so a picker can say "24' at 1.4 m, 34
+   * characters" without re-resolving against a viewport it does not have.
+   */
+  optics?: ResolvedOptics;
 }
 
 export function applyProfileToStageOverrides(stage: StageSettings): StageAppearanceOverrides {
@@ -122,11 +193,31 @@ export function applyProfileToStageOverrides(stage: StageSettings): StageAppeara
     readingBandCenterPercent: stage.readingBandCenterPercent,
     mirrorX: stage.mirrorX,
     mirrorY: stage.mirrorY,
-    // buildStageSettings encodes `pastDimming: false` as pastOpacity 0.92 and
-    // `phraseHighlight: false` as currentUnderlayOpacity 0.
-    pastDimming: stage.pastOpacity < 0.9,
+    /*
+     * `pastDimming: false` is encoded as an opacity near 1, so decoding it means
+     * asking "is the past visibly dimmer than the present?".
+     *
+     * The threshold used to be 0.9 against a field that only ever held 0.42 or
+     * 0.92, which made it exact. The Advanced panel now exposes `pastOpacity` as
+     * a continuous control running to 1.00, so a presenter who deliberately
+     * pins 0.95 — dimming ON, just gently — would decode as dimming OFF and get
+     * the toggle flipped under them on the next profile restore.
+     *
+     * Reading the optical profile's own record when there is one removes the
+     * guess entirely; the threshold survives only for rows written before it.
+     */
+    pastDimming:
+      stage.opticalProfile?.overrides?.pastOpacity !== undefined
+        ? stage.opticalProfile.overrides.pastOpacity < 0.99
+        : stage.pastOpacity < 0.9,
     phraseHighlight: stage.currentUnderlayOpacity > 0,
-    background: stage.background,
+    // Rows written before the optical layer carry neither; they get the same
+    // defaults an uncalibrated rig gets rather than a missing field the caller
+    // has to test for.
+    textIntensity: stage.textIntensity ?? 'standard',
+    readingCue: stage.readingCue ?? 'ticks',
+    ...(stage.opticalProfile ? { opticalProfile: stage.opticalProfile } : {}),
+    ...(stage.optics ? { optics: stage.optics } : {}),
   };
 }
 
@@ -149,29 +240,3 @@ export function buildDisplayProfile(
     ...(listener ? { listener } : {}),
   };
 }
-
-/* ---------------------------------------------------------------------------
- * Preflight seam (the UI change this service is waiting on)
- *
- * Preflight.svelte owns the appearance state (`fontSizePx`, `lineHeight`,
- * `columnWidthPercent`, `readingBandCenterPercent`, `mirrorX`, `mirrorY`,
- * `pastDimming`, `phraseHighlight`, `stageBackground`) and already calls
- * `buildStageSettings(...)` with it at start. Three changes wire §52:
- *
- *  1. On load, after `listDisplays()` resolves and `selectedFingerprint` is
- *     known, call `listDisplayProfiles()` and
- *     `profileForDisplay(profiles, selectedFingerprint)`. If it returns a
- *     profile, spread `applyProfileToStageOverrides(profile.stage)` over the
- *     appearance state and remember `profile.id`.
- *  2. In `selectDisplay(fingerprint)`, repeat step 1 for the newly chosen
- *     display, so switching monitors switches the remembered settings.
- *  3. In the start sequence, immediately after `const stageSettings =
- *     buildStageSettings({...})`, persist it:
- *       void saveDisplayProfile(
- *         buildDisplayProfile(display?.name ?? 'Stage display',
- *                             selectedFingerprint, stageSettings,
- *                             listener?.geometry, rememberedProfileId),
- *       ).then((saved) => (rememberedProfileId = saved.id));
- *     Fire-and-forget with a `.catch` — failing to remember a preference must
- *     never block starting a session.
- * ------------------------------------------------------------------------- */

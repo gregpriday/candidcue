@@ -658,11 +658,10 @@ replay fixtures, so the alignment suite scores them on the same ruler as
 everything else in this report.
 
 With the loose extractor, following got *worse* in the one direction this UI
-cannot afford: `ahead_events` rose 6 → 9, a false jump appeared, and
-`ahead_worst` grew a quarter of an atom, even as WER fell. Tightening the
-extractor removed most of that on its own — false jumps went back to zero and
-`ahead_worst` came level — which is what you would expect once the recogniser
-stops inventing rare words for the engine to anchor on.
+cannot afford: `ahead_events` rose, a false jump appeared, and `ahead_worst`
+grew a quarter of an atom, even as WER fell. Tightening the extractor removed
+most of that on its own — false jumps returned to zero and `ahead_worst` came
+level — because the engine stopped anchoring on rare words nobody said.
 
 Closing the remainder took one configuration change, and finding it meant
 discarding the obvious theory first. The suspicion was that the engine leans on
@@ -673,60 +672,67 @@ every metric by **exactly zero**, and so did `max_lead_atoms`, `jump_margin`,
 `jump_persistence`, `jump_min_content`, `discontinuity_atoms` and `coast_ms`.
 The drift is not in ranking and not in relocation. It is in plain extrapolation
 between transcript events, which a cleaner transcript simply makes the engine
-more willing to do, and `prediction_gain` is the only knob that touches it.
-`max_prediction_ms` reaches the same safety and costs 0.65 pp more `within5`.
+more willing to do, and the prediction gains are the only knobs that touch it.
 
-`prediction_gain` 0.35 → **0.32**: the loosest value at which the paired capture
-matches or beats the no-vocabulary status quo on every metric including all four
-`ahead_*` measures. 0.33 also qualifies but sits exactly where `ahead_events`
-flips from 6 to 7, and a safety knob should not be parked on a boundary.
+`prediction_gain` 0.35 → **0.33**. `prediction_gain_fast` is deliberately left
+alone: it exists for pipeline delay at pace, it was tuned against its own
+benchmarks in the round that landed it, and four runs is not evidence enough to
+overrule that.
+
+0.31 was available and rejected. It drives `ahead_events` back down to the
+no-vocabulary count of 6, and it costs 1.8–4.5 pp of `within2` across the three
+corpora to do it. That is a lot of accuracy for one event in a four-run sample,
+particularly when `ahead_worst` — how far the display actually got in front of
+the reader — is already level. Depth is what erases a line somebody is reading.
+The count is not worth that price.
 
 **Before** is `main`: no vocabulary, `prediction_gain` 0.35. **After** is
-vocabulary plus 0.32. Same four audio renderings, one variable set changed.
+vocabulary plus 0.33. Same four audio renderings, one variable set changed.
 
 | metric | before | after | |
 |---|---:|---:|---|
-| `live.within5` | 93.991 % | **94.820 %** | +0.83 pp ✅ |
-| `live.within2` | 68.967 % | **69.131 %** | +0.16 pp ✅ |
-| `live.p95_abs` | 5.480 | **5.093** | −0.39 atoms ✅ |
+| `live.within5` | 96.311 % | **96.490 %** | +0.18 pp ✅ |
+| `live.within2` | 71.471 % | **71.837 %** | +0.37 pp ✅ |
+| `live.p95_abs` | 4.375 | **4.174** | −0.20 atoms ✅ |
 | `live.wer` | 8.670 % | **6.883 %** | −1.79 pp ✅ |
-| `live.ahead_events` | 6 | 6 | — ✅ |
-| `live.ahead_time` | 4.244 % | **4.026 %** | −0.22 pp ✅ |
-| `live.ahead_p95` | 0.875 | **0.813** | −0.06 atoms ✅ |
-| `live.ahead_worst` | 3.246 | **3.222** | −0.02 atoms ✅ |
+| `live.ahead_time` | 4.605 % | **4.538 %** | −0.07 pp ✅ |
+| `live.ahead_p95` | 0.951 | **0.928** | −0.02 atoms ✅ |
+| `live.ahead_worst` | 3.246 | **3.229** | −0.02 atoms ✅ |
 | `live.false_jumps` | 0 | 0 | — ✅ |
 | `live.catastrophic` | 0 | 0 | — ✅ |
-| `live.pause_overshoot_p95` | 0.478 | **0.473** | −0.01 atoms ✅ |
+| `live.freeze` | 4.249 % | 4.249 % | — ✅ |
 | `live.prefinal_move` | 100 % | 100 % | — |
-| `live.mean_signed_abs` | 1.773 | 1.792 | +0.02 atoms ❌ |
-| `live.freeze` | 4.972 % | 5.179 % | +0.21 pp ❌ |
+| `live.first_lock_p50` | 2.300 s | 2.300 s | — |
+| `live.mean_signed_abs` | 1.523 | 1.529 | +0.01 atoms ❌ |
+| `live.pause_overshoot_p95` | 0.498 | 0.562 | +0.06 atoms ❌ |
+| `live.ahead_events` | 6 | 7 | +1 ❌ |
 
-Two entries move the wrong way and both are the price of a lower gain: the
-display holds still a fifth of a percent more of the time, and its mean absolute
-error grows two hundredths of an atom. Both are the *trailing* direction, which
-is the one this design is willing to pay in.
+Every measure of how FAR and how LONG the display gets in front of the reader
+improves. The count of times it happens at all goes up by one, across sixteen
+minutes of audio. That is the honest shape of this result and it is not a clean
+sweep: three rows move the wrong way, two of them by hundredths of an atom.
 
 ### What the gain change costs where there is no vocabulary
 
 `prediction_gain` is global, so the corpora captured before this feature existed
-are worth checking. They lose a little accuracy and buy a little safety, which
-is the same trade in the other direction:
+are worth checking. They trade a little accuracy for a little safety, which is
+the same exchange in the other direction:
 
 | | frozen tier-B (18 runs) | | tier A (synthetic) | |
 |---|---:|---:|---:|---:|
-| | 0.35 | 0.32 | 0.35 | 0.32 |
-| `within5` | 93.359 % | 93.284 % | 99.991 % | 99.991 % |
-| `within2` | 67.877 % | 66.453 % | 57.562 % | 55.320 % |
-| `p95_abs` | 6.520 | 6.562 | 2.948 | 3.028 |
-| `ahead_time` | 4.239 % | **4.011 %** | 0.254 % | **0.208 %** |
-| `ahead_p95` | 0.893 | **0.817** | −0.519 | **−0.560** |
-| `ahead_worst` | 6.562 | **6.513** | 2.392 | **2.273** |
-| `false_jumps` | 1 | 1 | 0 | 0 |
+| | 0.35 | 0.33 | 0.35 | 0.33 |
+| `within5` | 95.509 % | 95.476 % | 99.991 % | 99.991 % |
+| `within2` | 70.368 % | 69.490 % | 59.251 % | 57.114 % |
+| `p95_abs` | 4.638 | 4.673 | 2.809 | 2.831 |
+| `ahead_time` | 4.677 % | **4.509 %** | 0.252 % | **0.216 %** |
+| `ahead_p95` | 0.990 | **0.945** | −0.519 | **−0.546** |
+| `ahead_worst` | 7.481 | **7.454** | 2.392 | **2.313** |
+| `false_jumps` | 0 | 0 | 0 | 0 |
 | `catastrophic` | — | — | 0 | 0 |
 
 `within5` is unmoved to a rounding error in both. The cost lands almost entirely
 on `within2`, which this project deliberately does not judge on: a symmetric
-±2-atom band scores a display that runs two atoms AHEAD exactly as well as one
+±2-atom band scores a display running two atoms AHEAD exactly as well as one
 two atoms behind, and those are not the same event on a fading prompter.
 
 ### What this round is still not

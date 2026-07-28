@@ -229,6 +229,78 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Some("inspect-live") => {
+            // cc-bench inspect-live <run-name> [--config C] — compact trace
+            // around discontinuities and large event-time errors in a frozen
+            // Tier-B replay.
+            let run_name = args.get(1).cloned().unwrap_or_default();
+            let flags = parse_flags(args[2..].iter())?;
+            let config = load_config(&flags.config)?;
+            let dir = runs_dir.join(&run_name);
+            let manifest: RunManifest =
+                serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json"))?)?;
+            let gold: cc_bench::plan::GoldTimeline =
+                serde_json::from_str(&std::fs::read_to_string(dir.join("gold.json"))?)?;
+            let events = cc_bench::capture::read_events_jsonl(&dir.join("events.jsonl"))?;
+            let source =
+                std::fs::read_to_string(scripts_dir.join(format!("{}.md", manifest.script)))?;
+            let script = cc_align::compile(&source, cc_align::CompileOptions::default());
+            let result =
+                cc_bench::replay::replay(script, config, &events, &gold.viewport_hints);
+            let transcript_events: Vec<_> = events
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        e,
+                        cc_stt::SttFrame::ItemStarted { .. }
+                            | cc_stt::SttFrame::Partial { .. }
+                            | cc_stt::SttFrame::Final { .. }
+                    )
+                })
+                .collect();
+            println!(
+                "{:>9} {:<8} {:<22} {:>8} {:>8} {:>8} {:>8} {:>8}",
+                "t_ms", "event", "decision", "observed", "display", "gold", "error", "delta"
+            );
+            let mut prior_observed = 0.0;
+            for (frame, snap) in transcript_events.iter().zip(&result.snapshots) {
+                let (kind, at_ms) = match frame {
+                    cc_stt::SttFrame::ItemStarted { audio_start_ms, .. } => {
+                        ("start", *audio_start_ms)
+                    }
+                    cc_stt::SttFrame::Partial { audio_ms, .. } => ("partial", *audio_ms),
+                    cc_stt::SttFrame::Final { audio_end_ms, .. } => ("final", *audio_end_ms),
+                    _ => unreachable!(),
+                };
+                let gold_pos = gold
+                    .position_at(at_ms)
+                    .map(|p| p.position)
+                    .unwrap_or(f64::NAN);
+                let display = snap.display_at(at_ms);
+                let error = display - gold_pos;
+                let delta = snap.observed - prior_observed;
+                if delta.abs() > 8.0
+                    || error.abs() > 10.0
+                    || matches!(
+                        snap.decision,
+                        cc_align::DecisionCode::RelocationAccepted
+                            | cc_align::DecisionCode::JumpForwardAccepted
+                            | cc_align::DecisionCode::RetakeAccepted
+                    )
+                {
+                    println!(
+                        "{at_ms:>9.0} {kind:<8} {:<22?} {:>8.1} {:>8.1} {:>8.1} {:>8.1} {:>8.1}",
+                        snap.decision,
+                        snap.observed,
+                        display,
+                        gold_pos,
+                        error,
+                        delta,
+                    );
+                }
+                prior_observed = snap.observed;
+            }
+        }
         Some("inspect") => {
             // cc-bench inspect <script> <scenario> [--config C] — per-event
             // decision trace for one Tier-A scenario, with gold comparison.

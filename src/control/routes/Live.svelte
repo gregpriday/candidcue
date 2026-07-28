@@ -136,7 +136,9 @@
     if (micChoice === '' || micSwitching) return;
     micSwitching = true;
     try {
-      await switchMicrophone(micChoice);
+      // The label travels with the id: it is what identifies this microphone
+      // again next launch, when the id may have been re-salted.
+      await switchMicrophone(micChoice, micInputs.find((d) => d.deviceId === micChoice)?.label);
     } finally {
       micSwitching = false;
     }

@@ -41,6 +41,27 @@
     const padding = Math.max(0, BARS - levels.length);
     return [...new Array<number>(padding).fill(0), ...levels.slice(-BARS)];
   });
+
+  /**
+   * Whether the trace is drawn at all.
+   *
+   * A waveform is the only thing on the glass besides the script that MOVES,
+   * and continuous motion in the corner of the eye competes with the words
+   * somebody is reading. It earns that cost twice: at the top of a take, when
+   * the chain from device to model is still unproven and the presenter needs to
+   * know the microphone is alive; and during a fault, when the trace is the
+   * difference between "nothing is being heard" and "something is being heard
+   * and not understood".
+   *
+   * Everywhere in between it has already said everything it exists to say, so
+   * it collapses to the mark alone rather than animating for the remaining
+   * twenty-nine minutes. A fault always re-expands it, whatever control asked
+   * for, because a fault is exactly the case the trace is diagnostic for.
+   *
+   * Absent `prominence` means expanded — an older control that knows nothing
+   * about this gets precisely today's behaviour.
+   */
+  const expanded = $derived(pill.reading === 'fault' || (pill.prominence ?? 'expanded') === 'expanded');
 </script>
 
 <!-- role="status": the reading changes as the take learns things, and a
@@ -50,12 +71,18 @@
   class="voice-pill"
   data-reading={pill.reading}
   data-visible={pill.visible}
+  data-expanded={expanded}
   role="status"
   aria-live="polite"
   aria-label={pill.label}
 >
   <!-- aria-hidden: the waveform is the same fact as the label, drawn.
-       Announcing two dozen bars would be noise. -->
+       Announcing two dozen bars would be noise.
+
+       Kept in the DOM when collapsed and closed by width instead of being
+       removed, for the same reason the pill itself is never unmounted: a trace
+       that was destroyed and rebuilt would snap back into existence at full
+       size beside a script somebody is reading. -->
   <div class="wave" aria-hidden="true">
     {#each bars as level, index (index)}
       <!-- A floor keeps the baseline visible while silent, so the trace reads
@@ -125,6 +152,21 @@
        grew with its contents would drag the mark across the screen. */
     width: 88px;
     height: 18px;
+    overflow: hidden;
+    /* Slow enough to read as the instrument standing down rather than as a
+       glitch, and on the same clock as the pill's own fade. */
+    transition:
+      width 320ms ease,
+      opacity 320ms ease,
+      margin-right 320ms ease;
+  }
+
+  /* Collapsed: the mark alone. The bars stop moving, which is the entire
+     point — the pill is still reporting, it has just stopped waving. */
+  .voice-pill[data-expanded='false'] .wave {
+    width: 0;
+    opacity: 0;
+    margin-right: -10px;
   }
 
   .bar {
@@ -179,17 +221,26 @@
     opacity: 0.5;
   }
 
+  /*
+   * The fault label. This is the one piece of text on the pill a presenter has
+   * to READ, from wherever they are standing, and it was set at a fixed 12px —
+   * unreadable at any real prompting distance, which made naming the fault
+   * pointless. It now clamps to the same secondary-text floor as everything
+   * else on the glass, and drops the uppercase treatment: sustained caps cost
+   * legibility, and this is the moment legibility matters most.
+   */
   .label {
-    padding-right: 8px;
-    font-size: 12px;
-    letter-spacing: var(--ls-caps, 0.06em);
-    text-transform: uppercase;
+    padding-right: 10px;
+    font-size: var(--stage-secondary-min, 0.67em);
+    letter-spacing: 0.01em;
+    font-weight: 550;
     white-space: nowrap;
     color: var(--stage-cue);
   }
 
   @media (prefers-reduced-motion: reduce) {
     .voice-pill,
+    .wave,
     .bar {
       transition: none;
     }

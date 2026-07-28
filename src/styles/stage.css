@@ -3,8 +3,23 @@
 
    The stage window sets no data-theme attribute, so it inherits the dark
    studio defaults from tokens.css; these variables define the near-black
-   presentation surface for teleprompter glass and camera-facing use. Users
-   may select light stage themes later, but the default stays near-black.
+   presentation surface for teleprompter glass and camera-facing use.
+
+   WHY THE FIELD STAYS BLACK
+   -------------------------
+   Ordinary screen-reading research generally favours dark text on a bright
+   field. A through-the-lens teleprompter is the case where that reverses: a
+   bright full-screen background pours stray light onto the beamsplitter, which
+   both washes out the reflection the presenter is reading and contaminates the
+   image the camera sees through the same piece of glass. So the field is black
+   and the compensation is made elsewhere — large angular text, adequate panel
+   brightness, medium weight, high text contrast, and no tiny type anywhere.
+
+   That is also why there is no background COLOUR control any more. There used
+   to be a two-option selector; both options rendered identically because
+   neither was ever applied — `StageSettings.background`, `.foreground` and
+   `.themeId` were carried the whole way to the stage and then read by nothing.
+   The honest replacement is text intensity, below.
    ============================================================================ */
 
 :root {
@@ -18,6 +33,58 @@
   --stage-accent: rgba(210, 205, 255, 0.2);
   --stage-cue: #d8b46a;
   --stage-overlay: rgba(0, 0, 0, 0.72);
+
+  /*
+   * The floor for presenter-readable text that is not body copy.
+   *
+   * Resolved from the optical profile and written onto the script layer as a
+   * px length; this is only the value used before any of that exists. Cue
+   * chips, take markers, hold messages and fault labels all clamp to it — they
+   * were set as small as 0.42em and as fixed 12px, which at prompting distance
+   * is decoration rather than communication.
+   */
+  --stage-secondary-min: 0.67em;
+
+  /*
+   * The graduated past-dimming ramp.
+   *
+   * One step per word behind the confirmed position rather than a single hard
+   * edge, so a one-token alignment error costs a slight tonal difference
+   * instead of visibly erasing a word the presenter is still saying.
+   * `--stage-dim-4` is the far-past floor and stays bound to the
+   * settings-driven value, so turning past-dimming down still works.
+   */
+  --stage-dim-1: 0.78;
+  --stage-dim-2: 0.64;
+  --stage-dim-3: 0.52;
+  --stage-dim-4: var(--stage-past-opacity, 0.42);
+}
+
+/*
+ * Text intensity.
+ *
+ * The field never changes; only the luminance of the type over it. Studio
+ * lighting, panel brightness and hood design vary enough that one fixed value
+ * either blooms through the glass in a dark room or disappears under key light
+ * — and the presenter standing at the rig is the only person who can see which
+ * of those is happening.
+ *
+ * Applied at the root rather than per element so everything that reads
+ * `--stage-text` — script, chips, marks, waveform — moves together. A control
+ * that brightened the script but not the hold message would be worse than none.
+ */
+.stage-root[data-text-intensity='soft'],
+:root[data-text-intensity='soft'] {
+  --stage-text: rgba(245, 243, 239, 0.82);
+  --stage-text-past: rgba(245, 243, 239, 0.34);
+  --stage-text-future: rgba(245, 243, 239, 0.7);
+}
+
+.stage-root[data-text-intensity='strong'],
+:root[data-text-intensity='strong'] {
+  --stage-text: #fffefb;
+  --stage-text-past: rgba(255, 254, 251, 0.5);
+  --stage-text-future: rgba(255, 254, 251, 0.94);
 }
 
 html,

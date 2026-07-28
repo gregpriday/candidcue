@@ -5,6 +5,9 @@
   (§13.3/§13.4), readiness messages (F.9).
 -->
 <script lang="ts">
+  import { tick } from 'svelte';
+  import { EditorSelection } from '@codemirror/state';
+  import { EditorView } from '@codemirror/view';
   import Button from '../components/Button.svelte';
   import Dialog from '../components/Dialog.svelte';
   import Icon from '../components/Icon.svelte';
@@ -14,12 +17,14 @@
   import PageHeader from '../components/PageHeader.svelte';
   import RenderBlocks from '../components/RenderBlocks.svelte';
   import RevisionHistory from '../components/RevisionHistory.svelte';
+  import ScriptLintPanel from '../components/ScriptLintPanel.svelte';
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import StatusPill from '../components/StatusPill.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
   import { startTake, takeStarting } from '../lib/start-take';
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
   import * as inserts from '../lib/markdown-insert';
+  import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
   import { onShortcut } from '../lib/shortcuts';
   import * as assetsService from '../services/assets';
   import { describeError } from '../services/errors';
@@ -97,6 +102,66 @@
       : '',
   );
 
+  /*
+   * Script lint (lib/script-lint.ts), run on the compile's cadence.
+   *
+   * Every rule in it is a claim about a paragraph or a sentence, and neither of
+   * those changes on a keystroke — so linting per keystroke would spend a full
+   * pass over the document to redraw the same three notes. The editor already
+   * owns one debounce for exactly this problem (`COMPILE_DEBOUNCE_MS`), and a
+   * second timer beside it would only be a second thing to keep in step, so the
+   * lint waits on that one instead: `compiled.editorRevision` catching up to
+   * `editor.editorRevision` is precisely the signal that typing has settled,
+   * and it costs no timer of its own. `saveNow()` flushes the pending compile,
+   * so pressing Present settles the notes too.
+   *
+   * The previous findings stay on screen while the next compile is in flight.
+   * Clearing them on each keystroke would make the notes blink out and back on
+   * every letter — an accusation made and withdrawn, several times a second.
+   */
+  let lintFindings = $state<ScriptLintFinding[]>([]);
+
+  /*
+   * The text `lintFindings` already describes.
+   *
+   * The revision gate below says a compile has SETTLED; it says nothing about
+   * whether the text changed since the last one. `$editor` also updates for
+   * save state, title and mode, so without this a single typing pause bought
+   * three full passes over the document — compile ready, then `saving`, then
+   * `saved` — and every Edit/Split/Preview switch bought another. A pass is not
+   * free: `lintScriptSource` masks the source character by character and
+   * re-tokenises every paragraph and every sentence in it, on the main thread,
+   * in the editor the author is still typing in.
+   *
+   * Keyed on the source rather than on the revision, because a revision number
+   * is not unique over time: reopening the same script (a restore, either arm
+   * of the conflict sheet) starts again at 0, and a memo keyed on 0 would
+   * answer a restored document with the notes from the one it replaced. The
+   * source is the lint's only input, so it is also the only honest key — and in
+   * the case this exists for, `state.update` rebuilds the state object around
+   * the same string, so the comparison is a pointer check.
+   *
+   * A plain `let`, not `$state`: the effect writes it, and the effect must not
+   * become its own dependency.
+   */
+  let lintedSource: string | null = null;
+
+  $effect(() => {
+    const ed = $editor;
+    const compiledRevision = $compiled.editorRevision;
+    // A script that is still opening still has the previous one's text in hand,
+    // and notes about a script you have left is the worst kind of stale.
+    if (ed.scriptId !== scriptId || ed.loading) {
+      lintFindings = [];
+      lintedSource = null;
+      return;
+    }
+    if (compiledRevision !== ed.editorRevision) return;
+    if (ed.source === lintedSource) return;
+    lintedSource = ed.source;
+    lintFindings = lintScriptSource(ed.source);
+  });
+
   const saveLabel = $derived(
     (
       {
@@ -164,6 +229,60 @@
     });
   }
 
+  /**
+   * Bring the editing surface back when the click came from Preview.
+   *
+   * In Preview the CodeMirror instance is unmounted and `editorRef` is null, so
+   * anything wanting to move a cursor has to flush the mode change and wait for
+   * the remount before there is a view to move it in. The `await` is
+   * load-bearing: switching mode and calling `withView` in the same tick finds
+   * nothing there and silently does nothing.
+   */
+  async function ensureEditingSurface(): Promise<void> {
+    if ($editor.mode !== 'preview') return;
+    setEditorMode('edit');
+    await tick();
+  }
+
+  /**
+   * Take a lint finding's run to the editor.
+   *
+   * The cursor lands at the start of the run and as much of the run as the pane
+   * holds follows it into view — the run is revealed, never selected.
+   * `finding.length` is a real extent — a long paragraph, a whole sentence —
+   * and selecting it would leave the next keystroke poised to replace the text
+   * the note was asking the author to look at. Advice does not get to arm a
+   * delete.
+   */
+  async function goToFinding(finding: ScriptLintFinding): Promise<void> {
+    await ensureEditingSurface();
+    withView((view) => {
+      const doc = view.state.doc;
+      const line = doc.line(Math.min(Math.max(1, finding.line), doc.lines));
+      const anchor = Math.min(line.from + Math.max(0, (finding.column ?? 1) - 1), line.to);
+      // A run may cross line endings, so its end is resolved against the
+      // document rather than against the line it was reported on.
+      const end = Math.min(anchor + Math.max(0, finding.length ?? 0), doc.length);
+      view.dispatch({
+        selection: { anchor },
+        /*
+         * End first, so the range's HEAD is the cursor.
+         *
+         * CodeMirror scrolls the union of a range's two ends, and when the run
+         * is taller than the pane it can only keep one of them. Which one is
+         * decided by `range.head < range.anchor ? -1 : 1`, and only the -1 case
+         * holds the top of the rect. Written the natural way round this scrolled
+         * a long paragraph's LAST line to the bottom edge and left the cursor —
+         * and the line the note is actually about — above the top of the view.
+         * The findings most worth clicking are the longest ones, so that was the
+         * common case, not the corner.
+         */
+        effects: EditorView.scrollIntoView(EditorSelection.range(end, anchor)),
+      });
+      view.focus();
+    });
+  }
+
   function blockFor(node: OutlineNode): CompiledBlock | undefined {
     return blocks.find((b) => b.id === node.blockId);
   }
@@ -177,9 +296,16 @@
     }
   }
 
-  /** Preview click returns to Edit mode at the block's source (§13.2). */
-  function previewBlockClick(block: CompiledBlock): void {
-    if ($editor.mode === 'preview') setEditorMode('edit');
+  /**
+   * Preview click returns to Edit mode at the block's source (§13.2).
+   *
+   * It only switched modes before. `goToOffset` ran against an `editorRef` that
+   * Preview had already unmounted, so the one thing the handler exists to do —
+   * land the caret on the block you clicked — never happened in the one mode it
+   * was written for. Split worked, because there the editor is on screen.
+   */
+  async function previewBlockClick(block: CompiledBlock): Promise<void> {
+    await ensureEditingSurface();
     goToOffset(block.source.utf16Start);
   }
 
@@ -366,7 +492,7 @@
       {:else if $editor.mode === 'preview'}
         <div class="preview only" bind:this={previewScroller}>
           {#if blocks.length > 0}
-            <RenderBlocks {blocks} onblockclick={previewBlockClick} />
+            <RenderBlocks {blocks} onblockclick={(b) => void previewBlockClick(b)} />
           {:else}
             <p class="preview-empty">Your rendered script will appear here.</p>
           {/if}
@@ -390,7 +516,7 @@
           ></div>
           <div class="preview" bind:this={previewScroller}>
             {#if blocks.length > 0}
-              <RenderBlocks {blocks} onblockclick={previewBlockClick} />
+              <RenderBlocks {blocks} onblockclick={(b) => void previewBlockClick(b)} />
             {:else}
               <p class="preview-empty">Your rendered script will appear here.</p>
             {/if}
@@ -441,6 +567,11 @@
               <p class="panel-empty">Headings appear here as you write.</p>
             {/if}
         </div>
+
+        <!-- Advisory only, and placed accordingly: above the compile status
+             rather than inside it, so prose advice never sits in the same list
+             as a diagnostic that can stop a script rendering. -->
+        <ScriptLintPanel findings={lintFindings} ongoto={(f) => void goToFinding(f)} />
 
         <div class="panel-foot" aria-live="polite">
           {#if $compiled.status === 'compiling'}

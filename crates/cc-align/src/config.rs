@@ -122,18 +122,27 @@ pub struct AlignmentConfig {
     /// the lead, this keeps the display *moving* between transcript events
     /// rather than advancing and then stalling.
     ///
-    /// This is the ONLY knob that measurably moves the `ahead_*` family. When
-    /// custom vocabulary landed, every forward-overshoot metric got slightly
-    /// worse, and the obvious suspects were all innocent: sweeping
-    /// `rank_w_matched_weight` (the term that rewards matching rare, heavy
-    /// atoms), `max_lead_atoms`, `jump_margin`, `jump_persistence`,
-    /// `jump_min_content`, `discontinuity_atoms` and `coast_ms` changed the
-    /// numbers by exactly nothing. The drift is not in ranking or in
-    /// relocation; it is in plain extrapolation between events, which a
-    /// cleaner transcript makes the engine more willing to do.
-    /// `max_prediction_ms` reaches the same place and costs 0.65 pp more
-    /// `within5` to get there.
+    /// This and [`Self::prediction_gain_fast`] are the only knobs that
+    /// measurably move the `ahead_*` family. When custom vocabulary landed and
+    /// every forward-overshoot metric got slightly worse, the obvious suspects
+    /// were all innocent: sweeping `rank_w_matched_weight` (the term that
+    /// rewards matching rare, heavy atoms), `max_lead_atoms`, `jump_margin`,
+    /// `jump_persistence`, `jump_min_content`, `discontinuity_atoms` and
+    /// `coast_ms` changed the numbers by exactly nothing. The drift is not in
+    /// ranking and not in relocation; it is in plain extrapolation between
+    /// events, which a cleaner transcript makes the engine more willing to do.
+    /// `max_prediction_ms` reaches the same place and costs more `within5` to
+    /// get there.
     pub prediction_gain: f64,
+    /// Gain used once the measured pace reaches `prediction_gain_fast_rate`.
+    ///
+    /// Pipeline delay costs more whole words at a fast pace, while the
+    /// ordinary/slow path should retain the conservative gain that protects
+    /// pauses and deliberate slow-downs. The engine interpolates between the
+    /// two instead of making every speaker pay for the fastest case.
+    pub prediction_gain_fast: f64,
+    /// Measured atoms/second at which `prediction_gain_fast` is fully active.
+    pub prediction_gain_fast_rate: f64,
     /// Hard cap on the display's lead over `observed`, in atoms.
     ///
     /// The binding constraint on overshoot, and deliberately expressed in
@@ -203,6 +212,14 @@ impl AlignmentConfig {
         self.max_lead_atoms = self.max_lead_atoms.max(0.0);
         fix(&mut self.prediction_gain, d.prediction_gain);
         self.prediction_gain = self.prediction_gain.clamp(0.0, 1.0);
+        fix(&mut self.prediction_gain_fast, d.prediction_gain_fast);
+        self.prediction_gain_fast = self.prediction_gain_fast.clamp(0.0, 1.0);
+        fix(
+            &mut self.prediction_gain_fast_rate,
+            d.prediction_gain_fast_rate,
+        );
+        self.prediction_gain_fast_rate =
+            self.prediction_gain_fast_rate.max(self.rate_default + 0.1);
         fix(&mut self.emission_lag_ms, d.emission_lag_ms);
         fix(&mut self.partial_lag_ms, d.partial_lag_ms);
         fix(&mut self.endpoint_lag_ms, d.endpoint_lag_ms);
@@ -249,8 +266,8 @@ impl Default for AlignmentConfig {
             cost_substitution: 1000,
             cost_phonetic: 550,
             cost_insert_filler: 120,
-            cost_insert_open: 700,
-            cost_insert_extend: 400,
+            cost_insert_open: 785,
+            cost_insert_extend: 485,
             del_extend_factor_milli: 700,
 
             observe_min_fidelity: 0.50,
@@ -265,7 +282,7 @@ impl Default for AlignmentConfig {
             jump_margin: 0.5,
             jump_persistence: 1,
             retake_extra_content: 0,
-            relocation_min_content: 3,
+            relocation_min_content: 2,
             jump_query_min: 4,
             weak_unexplained_content: 3,
             weak_unexplained_total: 4,
@@ -283,13 +300,23 @@ impl Default for AlignmentConfig {
             coast_ms: 300.0,
             pause_onset_ms: 1800.0,
             lead_floor_ms: 0.0,
-            // 0.35 → 0.32 with custom vocabulary. Chosen as the loosest value
-            // at which the paired capture is at or better than the
-            // no-vocabulary status quo on EVERY metric, `ahead_*` included,
-            // with margin: 0.33 also qualifies but sits exactly on the value
-            // where `ahead_events` flips from 6 to 7, and this knob should not
-            // be parked on a boundary.
-            prediction_gain: 0.32,
+            // 0.35 → 0.33 alongside custom vocabulary. A cleaner transcript
+            // makes the engine more willing to extrapolate, and this is the
+            // only knob that reaches that (see the doc comment). 0.31 would
+            // also drive `ahead_events` back down to the no-vocabulary count,
+            // but it costs 1.8–4.5 pp of `within2` across the three corpora to
+            // remove ONE event in a four-run sample, while `ahead_worst` — how
+            // far the display actually got in front of the reader — was
+            // already level. Depth is what erases a line someone is reading;
+            // the count is not worth that price.
+            //
+            // `prediction_gain_fast` is deliberately left where it was set:
+            // it exists for pipeline delay at pace, it was tuned against its
+            // own benchmarks, and four runs is not evidence enough to overrule
+            // that.
+            prediction_gain: 0.33,
+            prediction_gain_fast: 0.55,
+            prediction_gain_fast_rate: 3.7,
             max_lead_atoms: 2.5,
 
             emission_lag_ms: 0.0,

@@ -224,8 +224,54 @@ export type StageDirective =
   | { kind: 'ack'; label: string; durationMs?: number }
   | { kind: 'settings'; settings: StageSettings }
   | { kind: 'listener'; listener: ListenerStageSelection | null }
-  | { kind: 'calibration'; active: boolean; crosshairX?: number; crosshairY?: number }
+  | ({ kind: 'calibration'; active: boolean } & StageCalibrationDirective)
   | { kind: 'diagnostics'; visible: boolean };
+
+/**
+ * What the stage should draw while the operator is calibrating the rig.
+ *
+ * The crosshair used to be the whole of calibration, and it answered exactly one
+ * question: where is the lens. The optical model needs four more answers before
+ * it can size anything — how much of the panel is visible in the glass, which
+ * way the glass flips the image, how many millimetres a pixel is, and whether a
+ * given type size is actually comfortable from where the presenter stands.
+ *
+ * They are modes of one directive rather than five directives because only one
+ * can be on screen at a time, and because "leave calibration" must be a single
+ * unambiguous message. `mode` is optional so a directive from an older control
+ * still means the crosshair, which is what it always meant.
+ */
+export interface StageCalibrationDirective {
+  mode?: StageCalibrationMode;
+  /** `crosshair`: lens position, fractions of the viewport. */
+  crosshairX?: number;
+  crosshairY?: number;
+  /** `safe-area`: the adjustable border, fractions inset from each edge. */
+  safeArea?: { top: number; right: number; bottom: number; left: number };
+  /**
+   * `ruler`: length of the drawn bar in CSS pixels.
+   *
+   * The stage draws it; the operator measures it against the glass with a
+   * physical ruler and types back what they got. That round trip is the only
+   * way CandidCue can learn millimetres per pixel — the window layer reports
+   * `PhysicalSize` in device PIXELS, not physical units — and it is also the
+   * only method that measures the finished optical path rather than the panel,
+   * so it silently absorbs a beamsplitter that magnifies.
+   */
+  rulerLengthPx?: number;
+  /** `type-sample`: the size and measure being judged. */
+  sampleFontSizePx?: number;
+  sampleColumnCh?: number;
+  /** `type-sample`: what the size is being called, e.g. "Standard · 24'". */
+  sampleLabel?: string;
+}
+
+export type StageCalibrationMode =
+  | 'crosshair'
+  | 'orientation'
+  | 'safe-area'
+  | 'ruler'
+  | 'type-sample';
 
 export interface StageStatePayload {
   stageGeneration: number;
@@ -309,8 +355,30 @@ export interface StageVoicePillPayload {
    * fades it back in rather than making it appear from nowhere.
    */
   visible: boolean;
+  /**
+   * How much room the pill is entitled to take.
+   *
+   * `expanded` is the full waveform: the right answer while the chain is
+   * unproven at the top of a take, and while something is wrong. `collapsed`
+   * is the mark alone, no trace.
+   *
+   * The distinction exists because a waveform is MOTION, and continuous
+   * peripheral motion competes with the only other thing on the glass that is
+   * allowed to move — the script. Once recognition has come back, the pill has
+   * already told the presenter everything it exists to tell them, and it should
+   * stop animating in the corner of somebody's eye for the remaining
+   * twenty-nine minutes of the take.
+   *
+   * Decided by control alongside `reading` and `visible`, not inferred locally,
+   * so the whole readout is one resolved view from one frame. Optional, and
+   * absent means `expanded` — an older control that knows nothing about this
+   * gets exactly today's behaviour.
+   */
+  prominence?: StageVoicePillProminence;
   sentAtMs: number;
 }
+
+export type StageVoicePillProminence = 'expanded' | 'collapsed';
 
 /**
  * Bars in the pill's waveform.

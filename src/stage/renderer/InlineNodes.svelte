@@ -4,6 +4,7 @@
   data-t="<tokenIndex>" anchors so tracking can position individual tokens.
 -->
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { SafeRenderNode } from '../../shared/contracts';
   import { segmentText } from './text';
   import Self from './InlineNodes.svelte';
@@ -13,6 +14,7 @@
     cursor = null,
     assets = {},
     showCues = true,
+    dimFrozen = false,
   }: {
     nodes: SafeRenderNode[];
     /**
@@ -22,7 +24,97 @@
     cursor?: number | null;
     assets?: Record<string, { url: string; mime: string; width?: number; height?: number }>;
     showCues?: boolean;
+    /**
+     * Alignment is holding, ambiguous or searching: the ramp stays where it is.
+     *
+     * A cursor is still published while the engine is not following — it is the
+     * last position anyone believed — and letting the dimming keep walking
+     * through the ramp on it would have the display assert progress the engine
+     * has explicitly refused to claim. Motion has honestly stopped, so the
+     * styling stops too. It costs nothing when the estimate turns out to be
+     * right (the ramp resumes from where it was) and costs the presenter
+     * nothing when it was wrong (no words were greyed out under them while
+     * nobody knew where they were).
+     */
+    dimFrozen?: boolean;
   } = $props();
+
+  /**
+   * How many words behind the cursor the ramp spans before reaching the far
+   * past. Four is chosen against the failure it replaces: alignment error of
+   * one or two tokens is ordinary, and a step at the boundary turned exactly
+   * that error into a word erased out from under the reader. Four steps put
+   * the operator's own past opacity a comfortable margin behind the worst
+   * ordinary wobble, while still leaving spoken text visibly spoken.
+   */
+  const DIM_RAMP_WORDS = 4;
+
+  /*
+   * The ramp is drawn from a HELD cursor, not the live one.
+   *
+   * `dimFrozen` says the engine stopped believing in the position; the position
+   * itself keeps arriving regardless. Latching it here rather than asking the
+   * caller to stop sending one keeps `cursor` meaning the same thing in every
+   * state — the best available estimate — and puts the decision not to act on
+   * it next to the styling that would have acted.
+   *
+   * `null` is the one value never held, in either direction, because it is not
+   * an estimate that might be wrong: it is this block saying it is not the one
+   * the reader is in. Blocks trade that title DURING a hold — the fallback path
+   * keeps moving `confirmedToken` after following stops — and both halves of
+   * that trade go wrong if `null` is treated as a position:
+   *
+   *   - the block that inherits the title has only ever seen `null`, so unless
+   *     it is allowed to latch the first real cursor it is handed, it has
+   *     nothing to hold and walks the live one instead. That is the ramp
+   *     advancing through a hold, which is the whole thing this flag exists to
+   *     stop, on the one block the presenter is actually reading.
+   *   - the block that loses it would otherwise keep per-word past opacity
+   *     frozen on, underneath the whole-block past zoning it just gained. Two
+   *     opacities multiply, so its tail would go visibly darker than the past
+   *     around it.
+   *
+   * On the server there is no effect and so nothing is ever latched, which is
+   * why the derivation falls through to the live cursor: for a single render,
+   * refusing to dim at all would be a bigger lie than a fresh ramp.
+   *
+   * The latch is read back through `untrack` because it is this effect's own
+   * memory rather than an input — tracked, every latch would invalidate the
+   * effect that wrote it and run the whole thing twice per token.
+   */
+  let heldCursor = $state<number | null>(null);
+  $effect(() => {
+    const live = cursor;
+    if (dimFrozen && live !== null && untrack(() => heldCursor) !== null) return;
+    heldCursor = live;
+  });
+
+  /**
+   * `data-dim` is a key into the stylesheet, not a number anyone reads, so a
+   * step outside the ramp is not a wrong shade — it is no shade at all, and the
+   * word drops straight through to `.past`, which is the hard boundary this
+   * replaced. The cursor is pinned to a whole token here rather than trusted to
+   * arrive as one, and arithmetic that came out non-finite is treated as no
+   * cursor: the honest answer to not knowing where the reader is, is to mark
+   * nothing.
+   */
+  function wholeToken(at: number | null): number | null {
+    if (at === null || !Number.isFinite(at)) return null;
+    return Math.round(at);
+  }
+  const dimCursor = $derived(wholeToken(dimFrozen && heldCursor !== null ? heldCursor : cursor));
+
+  /**
+   * How many words behind the ramp cursor this token sits, capped at the depth
+   * of the ramp. `null` is "at or after the cursor" — no claim at all.
+   */
+  function dimStep(tokenIndex: number): number | null {
+    const at = dimCursor;
+    if (at === null) return null;
+    const behind = at - tokenIndex;
+    if (behind <= 0) return null;
+    return behind < DIM_RAMP_WORDS ? behind : DIM_RAMP_WORDS;
+  }
 
   function markClasses(marks?: ('strong' | 'em' | 'strike' | 'code')[]): string {
     if (!marks || marks.length === 0) return '';
@@ -38,7 +130,8 @@
       {:else if seg.tokenIndex !== null}
         <span
           class="w {markClasses(node.marks)}"
-          class:past={cursor !== null && seg.tokenIndex < cursor}
+          class:past={dimCursor !== null && seg.tokenIndex < dimCursor}
+          data-dim={dimStep(seg.tokenIndex)}
           data-t={seg.tokenIndex}>{seg.text}</span>
       {:else}
         <span class="w {markClasses(node.marks)}">{seg.text}</span>
@@ -48,7 +141,7 @@
     <br />
   {:else if node.type === 'link'}
     <!-- Links are inert on stage: label only, never navigable. -->
-    <span class="link"><Self nodes={node.label} {cursor} {assets} {showCues} /></span>
+    <span class="link"><Self nodes={node.label} {cursor} {assets} {showCues} {dimFrozen} /></span>
   {:else if node.type === 'image'}
     {#if assets[node.assetId]}
       <img class="inline-img" src={assets[node.assetId]?.url} alt={node.alt} draggable="false" />
@@ -84,7 +177,10 @@
      they are and never changes; the tween is a §61 nonessential effect and is
      zeroed by `--stage-fx-ms` on the script layer while frames are being
      missed — this is the biggest single win of the three, because it is one
-     interpolation per rendered WORD. */
+     interpolation per rendered WORD. The ramp below moves four words per cursor
+     advance where the old step moved one, but it is the same property on the
+     same elements, so the one degraded rule still takes all of them off at
+     once. */
   .w {
     transition-property: opacity;
     transition-duration: var(--stage-fx-ms, 240ms);
@@ -108,9 +204,46 @@
    *
    * If a current-word cue is ever wanted again, it needs to carry the
    * engine's confidence in its treatment — not assert a single token.
+   *
+   * That argument also condemns a HARD boundary, which is what this used to be.
+   * A single step made the edge as brittle as the pointer it replaced: one
+   * token of ordinary alignment error dropped a word to the far past while the
+   * presenter was still saying it, and a word at 0.42 opacity in the middle of
+   * a line you are reading is worse than no marking at all. `data-dim` grades
+   * the same boundary over four words, so that error now costs a shade nobody
+   * notices instead of erasing a word, and the deepest step is only reached
+   * once the reader is genuinely clear of it.
+   *
+   * The steps are an attribute plus stylesheet rules rather than an inline
+   * opacity per word, and that is load-bearing twice over: the values stay
+   * reachable from one place above (they are custom properties on an inherited
+   * subtree, which is how §61 and the operator's own settings reach them at
+   * all), and the styling tick stays a class/attribute write rather than a
+   * per-word style mutation on every rendered word.
    */
   .w.past {
     opacity: var(--stage-past-opacity, 0.42);
+  }
+  /*
+   * The ramp, counted backwards from the boundary. `data-dim="4"` has no rule
+   * of its own on purpose: four words back IS the far past, so it falls through
+   * to `.past` and there stays exactly ONE binding to the operator's setting.
+   * These match `.w.past` on specificity, so they have to stay below it.
+   *
+   * Every step is floored at that same setting, because `pastOpacity` is not
+   * only a taste dial: turning past dimming off is encoded as 0.92, and a fixed
+   * ladder would then have dimmed the four words behind the cursor MORE than
+   * the rest of the spoken script — the display quietly overruling a setting
+   * the operator went and switched off.
+   */
+  .w[data-dim='3'] {
+    opacity: max(var(--stage-past-opacity, 0.42), var(--stage-dim-3, 0.52));
+  }
+  .w[data-dim='2'] {
+    opacity: max(var(--stage-past-opacity, 0.42), var(--stage-dim-2, 0.64));
+  }
+  .w[data-dim='1'] {
+    opacity: max(var(--stage-past-opacity, 0.42), var(--stage-dim-1, 0.78));
   }
   .m-strong {
     font-weight: 700;
@@ -121,9 +254,24 @@
   .m-strike {
     text-decoration: line-through;
   }
+  /*
+   * THE SECONDARY-TEXT FLOOR.
+   *
+   * Everything below that a presenter has to READ is floored at
+   * `--stage-secondary-min`, an absolute pixel size the script layer resolves
+   * from the rig's optics (`secondaryTextFloorPx`). The em value stays as the
+   * proportion we want; the floor is what stops that proportion from taking
+   * the text under the angular size at which reading works.
+   *
+   * It has to be absolute, and it has to be a floor rather than a size, for the
+   * same reason: `em` compounds. A cue inside a silent block inside a table is
+   * three multiplications away from the body size, and each of those factors
+   * was chosen on its own against body text. The measured px value does not
+   * care how deep it is nested.
+   */
   .m-code {
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-    font-size: 0.92em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.92em);
   }
   .link {
     text-decoration: underline;
@@ -143,15 +291,19 @@
   }
   .inline-table {
     border-collapse: collapse;
-    font-size: 0.85em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.85em);
   }
   .inline-table td {
     padding: 0.2em 0.5em;
     vertical-align: baseline;
   }
+  /* An inline cue is an instruction to the performer — "beat", "to camera" —
+     read at the same distance as the line it sits in. 0.55em was a chip drawn
+     for a laptop screen; two thirds of body is the point at which it still
+     reads as an aside without becoming decoration. */
   .cue {
     color: var(--stage-cue);
-    font-size: 0.55em;
+    font-size: max(var(--stage-secondary-min, 0.67em), 0.67em);
     font-weight: 600;
     letter-spacing: 0.08em;
     text-transform: uppercase;

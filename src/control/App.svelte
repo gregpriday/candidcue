@@ -14,6 +14,7 @@
   import Library from './routes/Library.svelte';
   import Live from './routes/Live.svelte';
   import Settings from './routes/Settings.svelte';
+  import Calibrate from './routes/Calibrate.svelte';
   import Welcome from './routes/Welcome.svelte';
   import { createAndOpenScript } from './lib/app-actions';
   import { installShortcuts, onShortcut } from './lib/shortcuts';
@@ -43,8 +44,19 @@
    * summary is read on the workspace theme, like every other thing anyone reads.
    */
   const theme = $derived($route.name === 'live' && $session.active ? 'studio' : 'workspace');
+  /*
+   * Calibration keeps the sidebar.
+   *
+   * It is a settings flow — reached from Settings, and returning there when it
+   * finishes — so hiding the chrome would strand somebody mid-wizard with no
+   * way out but the window controls. Only the take hides navigation, and it
+   * does so because a presenter is reading.
+   */
   const showSidebar = $derived(
-    $route.name === 'library' || $route.name === 'editor' || $route.name === 'settings',
+    $route.name === 'library' ||
+      $route.name === 'editor' ||
+      $route.name === 'settings' ||
+      $route.name === 'calibrate',
   );
 
   /* Keep the document root in sync so scrollbars/body match the shell. */
@@ -124,6 +136,21 @@
         <Live sessionId={$route.sessionId} scriptId={$route.scriptId} />
       {:else if $route.name === 'settings'}
         <Settings section={$route.section} />
+      {:else if $route.name === 'calibrate'}
+        <Calibrate displayFingerprint={$route.displayFingerprint} rigName={$route.rigName} />
+      {:else}
+        <!--
+          A route with no branch used to paint an empty `<main>`.
+
+          With the sidebar hidden for that route it is not a blank screen, it is
+          a trap: no navigation, no back control, nothing to press. That is a
+          worse failure than a wrong screen, and it is invisible in a unit test
+          because navigation genuinely SUCCEEDED — the route store holds a valid
+          value and nothing threw.
+
+          So the fallthrough goes somewhere real rather than nowhere.
+        -->
+        <Library />
       {/if}
     </main>
   {/if}

@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   diffDeviceLists,
   FOLLOW_SYSTEM_DEFAULT,
+  matchRememberedMicrophone,
+  microphoneOptions,
   MicrophoneDeviceManager,
   resolveMicrophoneSelection,
+  SYSTEM_DEFAULT_OPTION,
   toAudioDeviceInfos,
 } from './devices';
 import type { MediaDeviceInfoLike, MediaDevicesLike, MediaStreamLike } from './types';
@@ -79,6 +82,75 @@ describe('resolveMicrophoneSelection (spec §28.2)', () => {
       deviceId: undefined,
       usedFallback: true,
     });
+  });
+});
+
+describe('microphoneOptions (spec §28.1)', () => {
+  it('leads with a system-default row that names what it resolves to', () => {
+    const options = microphoneOptions(
+      toAudioDeviceInfos([device('default', 'Default - MacBook Pro Microphone'), device('mic-1', 'Blue Yeti')]),
+    );
+    expect(options[0]).toEqual({
+      value: SYSTEM_DEFAULT_OPTION,
+      label: 'System default — MacBook Pro Microphone',
+    });
+    // The `default` pseudo-device is the row above spelled twice, so it is not
+    // offered a second time.
+    expect(options.slice(1)).toEqual([{ value: 'mic-1', label: 'Blue Yeti' }]);
+  });
+
+  it('falls back to a bare system-default row when no default is enumerated', () => {
+    const options = microphoneOptions(toAudioDeviceInfos([device('mic-1', 'Blue Yeti')]));
+    expect(options[0]?.label).toBe('System default');
+  });
+
+  it('keeps a remembered input that is unplugged, marked as such', () => {
+    const options = microphoneOptions(toAudioDeviceInfos([device('mic-1', 'Built-in')]), {
+      deviceId: 'gone',
+      label: 'Blue Yeti',
+    });
+    expect(options.at(-1)).toEqual({ value: 'gone', label: 'Blue Yeti (not connected)' });
+  });
+
+  it('does not duplicate a remembered input that is present', () => {
+    const options = microphoneOptions(toAudioDeviceInfos([device('mic-1', 'Blue Yeti')]), {
+      deviceId: 'mic-1',
+      label: 'Blue Yeti',
+    });
+    expect(options).toHaveLength(2);
+  });
+});
+
+describe('matchRememberedMicrophone (spec §28.1)', () => {
+  const connected = toAudioDeviceInfos([
+    device('default', 'Default - Built-in'),
+    device('salted-new', 'Blue Yeti'),
+  ]);
+
+  it('matches on the id when it is still current', () => {
+    expect(
+      matchRememberedMicrophone(connected, { deviceId: 'salted-new', label: 'Blue Yeti' })?.deviceId,
+    ).toBe('salted-new');
+  });
+
+  it('matches on the label when the id has been re-salted', () => {
+    // The whole point: the same microphone under a new id must still be found,
+    // or a restart silently hands the presenter the system default.
+    expect(
+      matchRememberedMicrophone(connected, { deviceId: 'salted-old', label: 'Blue Yeti' })?.deviceId,
+    ).toBe('salted-new');
+  });
+
+  it('never resolves to the system-default pseudo-device', () => {
+    expect(matchRememberedMicrophone(connected, { deviceId: 'default', label: 'Default - Built-in' })).toBeUndefined();
+  });
+
+  it('reports nothing when the remembered microphone is unplugged', () => {
+    expect(matchRememberedMicrophone(connected, { deviceId: 'gone', label: 'Røde NT-USB' })).toBeUndefined();
+  });
+
+  it('ignores an empty label rather than matching a placeholder', () => {
+    expect(matchRememberedMicrophone(connected, { deviceId: 'gone', label: '' })).toBeUndefined();
   });
 });
 

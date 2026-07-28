@@ -66,6 +66,16 @@ export interface TranscriptTestEvents {
 export interface VoiceFacade {
   /** Enumerate input devices. May prompt for permission only when asked to. */
   listMicrophones(): Promise<AudioDeviceInfo[]>;
+  /**
+   * Observe the input list (spec §28.2). Fires with the fresh list whenever a
+   * device is connected or removed.
+   *
+   * A picker that enumerated once is wrong the moment someone plugs in the
+   * microphone they actually want to use — which is the single most likely
+   * thing to happen while this screen is open. Reporting only: switching
+   * inputs is always an explicit choice, never automatic mid-take.
+   */
+  watchInputDevices(cb: (devices: AudioDeviceInfo[]) => void): Unsubscribe;
   /** Explicit permission request (spec §9.1 — never at app launch). */
   requestMicrophoneAccess(): Promise<'granted' | 'denied'>;
   /**
@@ -128,6 +138,11 @@ function setMockRealtimeState(state: RealtimeState): void {
 const mockVoiceFacade: VoiceFacade = {
   async listMicrophones() {
     return MOCK_DEVICES.map((d) => ({ ...d }));
+  },
+
+  watchInputDevices() {
+    // Nothing is ever plugged into the mock.
+    return () => {};
   },
 
   async requestMicrophoneAccess() {

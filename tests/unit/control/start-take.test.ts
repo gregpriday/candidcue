@@ -166,13 +166,19 @@ vi.mock('../../../src/control/services/listeners', () => ({
   buildListenerSelection: (...a: never[]) =>
     traced('buildListenerSelection', services.buildListenerSelection)(...a),
 }));
-vi.mock('../../../src/control/services/display-profiles', () => ({
-  listDisplayProfiles: services.listDisplayProfiles,
-  saveDisplayProfile: (...a: never[]) =>
-    traced('saveDisplayProfile', services.saveDisplayProfile)(...a),
-  profileForDisplay: () => null,
-  buildDisplayProfile: (name: string, fingerprint: string) => ({ name, displayFingerprint: fingerprint }),
-}));
+vi.mock('../../../src/control/services/display-profiles', async (orig) => {
+  // `profileForDisplay` and `buildDisplayProfile` stay REAL: they are the logic
+  // that decides WHICH row a take updates, and a stub of them would assert
+  // nothing about the one behaviour worth pinning here.
+  const actual = await orig<typeof import('../../../src/control/services/display-profiles')>();
+  return {
+    ...actual,
+    listDisplayProfiles: (...a: never[]) =>
+      traced('listDisplayProfiles', services.listDisplayProfiles)(...a),
+    saveDisplayProfile: (...a: never[]) =>
+      traced('saveDisplayProfile', services.saveDisplayProfile)(...a),
+  };
+});
 vi.mock('../../../src/control/stores/session', () => ({
   startLiveSession: (...a: never[]) => traced('startLiveSession', services.startLiveSession)(...a),
   stopSession: (...a: never[]) => traced('stopSession', services.stopSession)(...a),
@@ -183,6 +189,23 @@ vi.mock('../../../src/control/stores/router', () => ({
   navigate: (...a: never[]) => traced('navigate', services.navigate)(...a),
 }));
 vi.mock('../../../src/control/stores/toasts', () => ({ showToast: services.showToast }));
+/**
+ * The inputs plugged in for a given test. The take resolves its remembered
+ * microphone against this list, so "the saved id is stale" and "the microphone
+ * is gone" are two different, testable situations.
+ */
+const micState = vi.hoisted(() => ({
+  devices: [] as { deviceId: string; label: string; isDefault: boolean; available: boolean }[],
+  fail: false,
+}));
+vi.mock('../../../src/control/services/voice-facade', () => ({
+  getVoiceFacade: () => ({
+    listMicrophones: async () => {
+      if (micState.fail) throw new Error('enumeration failed');
+      return micState.devices;
+    },
+  }),
+}));
 const editorState = vi.hoisted(() => ({
   value: { scriptId: null as string | null, saveState: 'idle', lastError: null as string | null },
 }));
@@ -211,7 +234,11 @@ vi.mock('../../../src/control/stores/settings', async () => {
   };
 });
 
-const { defaultAppSettings } = await import('../../../src/control/services/settings-types');
+const { defaultAppSettings, withOpticalProfile } = await import(
+  '../../../src/control/services/settings-types'
+);
+const { defaultOpticalProfile } = await import('../../../src/shared/contracts');
+type OpticalProfile = import('../../../src/shared/contracts').OpticalProfile;
 const { startTake, chooseStageDisplay } = await import('../../../src/control/lib/start-take');
 
 /* ------------------------------------------------------------------ setup */
@@ -233,6 +260,11 @@ beforeEach(() => {
   order.length = 0;
   for (const fn of Object.values(services)) fn.mockReset();
   settingsState.value = settingsWith();
+  micState.fail = false;
+  micState.devices = [
+    { deviceId: 'default', label: 'Default - Built-in Microphone', isDefault: true, available: true },
+    { deviceId: 'usb-mic', label: 'Blue Yeti', isDefault: false, available: true },
+  ];
   editorState.value = { scriptId: null, saveState: 'idle', lastError: null };
 
   services.saveNow.mockResolvedValue(undefined);
@@ -338,7 +370,7 @@ describe('settings are the only input to a take', () => {
       s.teleprompter.fontSizePx = 96;
       s.teleprompter.columnWidthPercent = 55;
       s.teleprompter.mirrorX = true;
-      s.teleprompter.background = 'high-contrast';
+      s.teleprompter.textIntensity = 'strong';
     });
     await startTake('script-1');
 
@@ -346,8 +378,67 @@ describe('settings are the only input to a take', () => {
     expect(stage['fontSizePx']).toBe(96);
     expect(stage['columnWidthPercent']).toBe(55);
     expect(stage['mirrorX']).toBe(true);
-    // 'high-contrast' is pure black; the default near-black is #050505.
+    /*
+     * `textIntensity` is what replaced the "Stage background" menu, which
+     * offered two shades of black and delivered neither — the stage hard-codes
+     * `--stage-bg`, so both options rendered identically. The field colour is a
+     * constant now; the luminance of the TEXT is the thing that moves.
+     */
+    expect(stage['textIntensity']).toBe('strong');
     expect(stage['background']).toBe('#000000');
+  });
+
+  /**
+   * The optical seam, end to end: a rig calibrated for THIS panel has to reach
+   * the stage as geometry. The profile is keyed by display fingerprint, so a
+   * take on another monitor must not pick it up — that is the whole reason
+   * per-rig storage exists rather than one profile on `teleprompter`.
+   */
+  describe('a calibrated rig', () => {
+    /** A 9-inch prompter at 1.4 m, calibrated for the external display only. */
+    function calibrate(s: AppSettings, fingerprint: string): void {
+      const profile: OpticalProfile = {
+        ...defaultOpticalProfile(),
+        rigName: 'Desk hood',
+        hardwareKind: 'elgato-prompter',
+        scale: { mmPerCssPx: (9 * 25.4) / Math.hypot(1920, 1080), source: 'model' },
+        viewingDistanceMm: 1400,
+        intensity: 'soft',
+      };
+      s.optical = withOpticalProfile(s.optical, fingerprint, profile);
+    }
+
+    it('sizes the take by measured distance instead of the settings slider', async () => {
+      settingsState.value = settingsWith((s) => {
+        s.teleprompter.fontSizePx = 96;
+        calibrate(s, 'external-1');
+      });
+      await startTake('script-1');
+
+      const stage = liveInput()['stageSettings'] as Record<string, unknown>;
+      const optics = stage['optics'] as { calibrated: boolean; viewingDistanceMm: number };
+      expect(optics.calibrated).toBe(true);
+      expect(optics.viewingDistanceMm).toBe(1400);
+      // The legacy field is calibrated too, or an older stage build renders the
+      // uncalibrated size inside an envelope that looks fully calibrated.
+      expect(stage['fontSizePx']).not.toBe(96);
+      expect((stage['opticalProfile'] as { rigName: string }).rigName).toBe('Desk hood');
+      // The rig's own brightness beats the global default, which is 'standard'.
+      expect(stage['textIntensity']).toBe('soft');
+    });
+
+    it('ignores a rig calibrated for a different panel', async () => {
+      settingsState.value = settingsWith((s) => {
+        s.teleprompter.fontSizePx = 96;
+        // The stage opens on 'external-1'; this rig belongs to the laptop.
+        calibrate(s, 'primary-1');
+      });
+      await startTake('script-1');
+
+      const stage = liveInput()['stageSettings'] as Record<string, unknown>;
+      expect(stage['optics']).toBeUndefined();
+      expect(stage['fontSizePx']).toBe(96);
+    });
   });
 
   it('pins no device while "follow system default" is on', async () => {
@@ -362,6 +453,47 @@ describe('settings are the only input to a take', () => {
   });
 
   it('pins the chosen device once the user has turned that off', async () => {
+    settingsState.value = settingsWith((s) => {
+      s.audio.followSystemDefault = false;
+      s.audio.preferredDeviceId = 'usb-mic';
+    });
+    await startTake('script-1');
+    expect(liveInput()['micDeviceId']).toBe('usb-mic');
+  });
+
+  it('finds the remembered microphone again when its device id has been re-salted', async () => {
+    // The saved id is stale — WKWebView re-salts ids per session — but the
+    // microphone itself is plugged in. Without the label match this take would
+    // silently open the system default, which is the whole "it keeps using my
+    // headphones" complaint.
+    settingsState.value = settingsWith((s) => {
+      s.audio.followSystemDefault = false;
+      s.audio.preferredDeviceId = 'stale-id-from-last-launch';
+      s.audio.preferredDeviceLabel = 'Blue Yeti';
+    });
+    await startTake('script-1');
+    expect(liveInput()['micDeviceId']).toBe('usb-mic');
+  });
+
+  it('falls back to the system default and says so when the chosen microphone is unplugged', async () => {
+    settingsState.value = settingsWith((s) => {
+      s.audio.followSystemDefault = false;
+      s.audio.preferredDeviceId = 'gone';
+      s.audio.preferredDeviceLabel = 'Røde NT-USB';
+    });
+    await startTake('script-1');
+    expect(liveInput()).not.toHaveProperty('micDeviceId');
+    expect(services.showToast).toHaveBeenCalledWith(
+      expect.stringContaining('Røde NT-USB is not connected'),
+      'info',
+    );
+  });
+
+  it('honours the pin when the inputs cannot be enumerated at all', async () => {
+    // Absence was not proven, so the remembered choice stands: the capture
+    // retry in voice-session is a better place to discover a dead device than a
+    // guess made here.
+    micState.fail = true;
     settingsState.value = settingsWith((s) => {
       s.audio.followSystemDefault = false;
       s.audio.preferredDeviceId = 'usb-mic';
@@ -664,23 +796,83 @@ describe('one Present is one take', () => {
   });
 });
 
-describe('appearance is global, and stays that way', () => {
-  it('never reads or writes a per-display profile', async () => {
-    /*
-     * §52 profiles are deliberately dormant (see the allowlist note in
-     * ipc-command-reachability.test.ts). The version that shipped for one
-     * afternoon restored a profile only for an explicitly PINNED display, so
-     * the default "Automatic" path wrote a row per take and read none — and
-     * moving from a pinned panel to Automatic carried the pinned panel's type
-     * across and then saved it over the other panel's row.
-     *
-     * Asserted rather than assumed: a take that quietly starts writing profiles
-     * again is a take whose appearance can drift away from the Settings screen
-     * that claims to own it.
-     */
+describe('a take records what the panel ran with, and never asks it', () => {
+  /*
+   * §52 rows are write-only on this path, and that asymmetry is the contract.
+   *
+   * The version that shipped for one afternoon RESTORED a profile, and only for
+   * an explicitly PINNED display, so the default "Automatic" path wrote a row
+   * per take and read none — and moving from a pinned panel to Automatic
+   * carried the pinned panel's type across and then saved it over the other
+   * panel's row. Appearance still comes from Settings and from the rig in
+   * `settings.optical`; what the row is for now is durability, because the
+   * optical section lives in a localStorage overlay that "Clear cache" wipes
+   * and the row carries `opticalProfile` inside it.
+   */
+  async function settle(): Promise<void> {
+    // The write is detached from the start sequence on purpose.
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+  }
+
+  it('saves the stage settings it actually ran against the panel', async () => {
     await startTake('script-1');
-    await Promise.resolve();
+    await settle();
+
+    expect(services.saveDisplayProfile).toHaveBeenCalledTimes(1);
+    const saved = services.saveDisplayProfile.mock.calls[0]![0] as {
+      displayFingerprint: string;
+      name: string;
+    };
+    expect(saved.displayFingerprint).toBe('external-1');
+    expect(saved.name).toBe('Teleprompter Display');
+  });
+
+  it('updates the panel’s existing row instead of adding one per take', async () => {
+    // Rust's upsert is keyed on `id`, so a take that did not resolve the
+    // existing row would insert a new one on every single Present, forever.
+    services.listDisplayProfiles.mockResolvedValue([
+      { id: 'row-for-laptop', displayFingerprint: 'primary-1', updatedAt: '2026-07-02T00:00:00Z' },
+      { id: 'row-for-external', displayFingerprint: 'external-1', updatedAt: '2026-07-01T00:00:00Z' },
+    ]);
+    await startTake('script-1');
+    await settle();
+
+    expect(services.listDisplayProfiles).toHaveBeenCalled();
+    const saved = services.saveDisplayProfile.mock.calls[0]![0] as { id?: string };
+    // …and the row it picks is the one for THIS panel, not the newest overall.
+    expect(saved.id).toBe('row-for-external');
+  });
+
+  it('never lets a saved row decide what the take looks like', async () => {
+    // A row carrying wildly different type must not change a thing: Settings
+    // owns appearance, and reading a row to decide it is precisely the defect
+    // that made §52 dormant.
+    services.listDisplayProfiles.mockResolvedValue([
+      {
+        id: 'row-for-external',
+        displayFingerprint: 'external-1',
+        updatedAt: '2026-07-01T00:00:00Z',
+        stage: { schemaVersion: 1, fontSizePx: 200, columnWidthPercent: 30 },
+      },
+    ]);
+    settingsState.value = settingsWith((s) => {
+      s.teleprompter.fontSizePx = 96;
+    });
+    await startTake('script-1');
+    await settle();
+
+    const stage = liveInput()['stageSettings'] as Record<string, unknown>;
+    expect(stage['fontSizePx']).toBe(96);
+    expect(stage['columnWidthPercent']).toBe(defaultAppSettings().teleprompter.columnWidthPercent);
+  });
+
+  it('presents anyway when the profile store is unreachable', async () => {
+    // Failing to remember a preference is not a reason not to present, and an
+    // unhandled rejection from a detached write would surface minutes later
+    // with nothing to attach it to.
+    services.listDisplayProfiles.mockRejectedValue(new Error('database is locked'));
+    await expect(startTake('script-1')).resolves.toBe(true);
+    await settle();
     expect(services.saveDisplayProfile).not.toHaveBeenCalled();
-    expect(services.listDisplayProfiles).not.toHaveBeenCalled();
   });
 });

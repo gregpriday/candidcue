@@ -16,6 +16,7 @@ Thumbs.db
 
 # JavaScript
 node_modules/
+node_modules
 dist/
 .vite/
 vite.config.ts.timestamp-*
@@ -43,6 +44,9 @@ src-tauri/gen/schemas/
 # Scratch
 .tmp/
 *.tmp
+
+# Generated benchmark outputs (fixtures under bench/runs remain tracked)
+bench/results/
 
 # Claude Code local state (worktrees, etc.)
 .claude/
