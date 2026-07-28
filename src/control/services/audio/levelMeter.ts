@@ -9,6 +9,7 @@
  */
 import type { AudioLevelSnapshot, Unsubscribe } from '../../../shared/contracts';
 import { DEFAULT_ANALYSIS_INTERVAL_MS, type VadConfig } from './defaults';
+import { STT_SAMPLE_RATE_HZ } from '../stt/inworld';
 import { computeFrameStats, LocalVad, type VadEvent } from './vad';
 import {
   defaultIntervalScheduler,
@@ -46,8 +47,51 @@ export interface MicrophoneMonitorDeps {
  * every frame the VAD measured could have been silence regardless of what the
  * microphone was doing — which looks identical to a presenter who never spoke.
  */
+/**
+ * The analyser's context, at the capture's rate where the engine allows it.
+ *
+ * Safari has honoured an explicit `sampleRate` since 14.1, so the fallback is
+ * insurance rather than the normal path — but it is insurance worth carrying:
+ * an engine that REFUSES the rate would throw out of a constructor, and losing
+ * the level meter entirely is a worse outcome than the mismatch this pins.
+ * Nothing downstream depends on the rate; the monitor reads time-domain
+ * samples and computes an RMS, which is rate-agnostic.
+ */
+function analyserContext(): AudioContext {
+  try {
+    return new AudioContext({ sampleRate: STT_SAMPLE_RATE_HZ });
+  } catch {
+    return new AudioContext();
+  }
+}
+
 export const createAnalyserGraph: AnalysisGraphFactory = (stream) => {
-  const context = new AudioContext();
+  /*
+   * PINNED to the rate the PCM tap uses, and that is not a detail.
+   *
+   * One microphone is tapped twice — this analyser and `PcmCapture` — and each
+   * used to build its own `AudioContext`: this one at the hardware rate, the
+   * capture at `STT_SAMPLE_RATE_HZ`. Two `MediaStreamAudioSourceNode`s on one
+   * `MediaStream` across contexts at DIFFERENT rates is the WebKit case where
+   * one of them quietly delivers nothing, and on a RODE NT-USB Mini (48 kHz
+   * hardware) it is this one that loses. The Settings screen has been printing
+   * the contradiction all along, one line above the other:
+   *
+   *     No signal — CandidCue cannot hear this microphone.
+   *     Transcription is working.   "This is a test of the transcription."
+   *
+   * That silence reached the §28.6 dead-input detector, which held following
+   * for the whole take: the stage heard, transcribed, aligned and moved the
+   * document, then stopped, with every instrument reporting health.
+   *
+   * Matching the rates removes the mismatch. It does not make two contexts on
+   * one stream a good idea — the analyser only ever reads
+   * `getFloatTimeDomainData`, which is exactly what the capture already has, so
+   * the real answer is one context feeding both. That is a larger change than
+   * this, and `frameHasSignal` in `voice-session.ts` means a relapse can no
+   * longer stop anybody presenting.
+   */
+  const context = analyserContext();
   const source = context.createMediaStreamSource(stream as unknown as MediaStream);
   const analyser = context.createAnalyser();
   analyser.fftSize = 2048;
