@@ -1117,20 +1117,26 @@
    * chain from device to model works — which is the entire reason the blocking
    * microphone check was replaced by a corner readout.
    *
-   * The TRACE is not. A waveform is the only thing on the glass besides the
-   * script that moves, and continuous peripheral motion competes with the words
-   * somebody is reading, for twenty-nine minutes after it has finished saying
-   * anything new. So Clean Take collapses it to the mark and Diagnostic Take
-   * leaves control's own decision alone. A fault re-expands it either way — the
-   * component insists, and it is right to: during a fault the trace is the
-   * difference between "nothing is being heard" and "something is being heard
-   * and not understood".
+   * The TRACE is left to CONTROL, which is where the decision belongs and where
+   * it started.
+   *
+   * The optical work (501ca62) added a rule here that Clean Take collapses the
+   * pill to its mark, on the reasoning that a waveform is continuous peripheral
+   * motion competing with the words somebody is reading. The reasoning is sound
+   * and the rule was still wrong, because of a fact one grep answers: NOTHING in
+   * control ever sets `prominence`. The field is optional and the component
+   * reads an absent one as expanded — so "Clean Take collapses it" was not a
+   * refinement of control's choice, it was the only behaviour there had ever
+   * been, replaced. Every presenter lost the readout that says the microphone is
+   * being heard, in every take, and the first thing they noticed was its absence
+   * during a take that was not working.
+   *
+   * So the decision goes back to control. If the peripheral motion turns out to
+   * be a real problem on the glass, the fix is control sending `collapsed` when
+   * it has nothing new to show — a decision made where the audio actually is,
+   * not one the stage imposes on every session.
    */
-  const presenterVoicePill = $derived.by((): StageVoicePillPayload | null => {
-    if (voicePill === null) return null;
-    if (diagnosticMode) return voicePill;
-    return { ...voicePill, prominence: 'collapsed' };
-  });
+  const presenterVoicePill = $derived(voicePill);
 
   function onListenerHealth(
     status: 'ok' | 'poster_fallback' | 'failed',
@@ -1504,7 +1510,30 @@
       aligner would not match", and an operator asking for the instruments
       mid-take is asking for the one that answers that question too.
     -->
-    {#if showDiagnostics && phase === 'live' && !app.blanked}
+    <!--
+      NOT diagnostic-only, and not gated on the take being under way.
+      -----------------------------------------------------------------------
+      Both gates were added by the optical work (501ca62) and both were wrong,
+      for the same reason: this strip is the only thing on the glass that says
+      whether the recogniser is hearing anything at all, and it was hidden in
+      precisely the two situations where that is the question.
+
+      `showDiagnostics` hid it from everybody running a Clean Take, which is
+      everybody. A presenter whose script had stopped moving had no way to tell
+      "the microphone was never captured" from "the recogniser heard nothing"
+      from "the aligner would not match" — three unrelated faults with one
+      symptom, and this bar is what separates the first two from the third.
+
+      `phase === 'live'` was worse. `live` is only reached when an alignment
+      snapshot is ACCEPTED, and a take that transcribes nothing never produces
+      one — so the bar was hidden by the very failure it exists to explain,
+      exactly as the voice pill's own note above describes. It stays up from the
+      moment there is an envelope.
+
+      The peripheral-motion concern that motivated the gate is real and is
+      answered by `silent`: the strip is dim and still until words arrive.
+    -->
+    {#if app.envelope !== null && !app.blanked}
       <div class="transcript-tap" class:silent={transcriptTap.length === 0}>
         <span class="transcript-tap-words">
           {transcriptTap.length > 0 ? transcriptTap : 'listening — no words yet'}

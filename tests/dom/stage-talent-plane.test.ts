@@ -298,16 +298,39 @@ describe('the operator plane', () => {
 });
 
 describe('Clean Take against Diagnostic Take', () => {
-  it('keeps the transcript bar off a clean stage, live or not', async () => {
+  it('keeps the transcript bar on a clean stage, before the take is even live', async () => {
     /*
-     * The bar is the raw recogniser text — an instrument, not something
-     * addressed to the presenter — and a full-width strip of changing words
-     * along the bottom edge is continuous motion in the one place peripheral
-     * vision is already busy holding the reading line.
+     * ---------------------------------------------------------------------
+     * THIS TEST USED TO ASSERT THE OPPOSITE, AND THAT WAS THE BUG
+     * ---------------------------------------------------------------------
+     * It was written alongside the optical work to pin "the bar is diagnostic
+     * only", on the reasoning that a strip of changing words along the bottom
+     * edge is peripheral motion competing with the reading line. Sound
+     * reasoning, wrong conclusion: this bar is the only thing on the glass that
+     * says whether the recogniser is hearing ANYTHING, and hiding it in Clean
+     * Take hid it from every real take.
+     *
+     * The second gate was worse. It was also `phase === 'live'`, and `live` is
+     * only reached once an alignment snapshot is ACCEPTED — so a take that
+     * transcribed nothing never showed the one instrument that would have said
+     * so. The bar was hidden by exactly the failure it exists to explain.
+     *
+     * So: present from the moment there is an envelope, in either mode, live or
+     * not. The peripheral-motion concern is answered by `silent` — dim and
+     * still until words arrive.
      */
     const container = await mountStage('clean');
     await settleLayout();
-    dispatchLocalStageEvent(STAGE_EVENT.alignmentSnapshot, snapshot());
+
+    // No alignment snapshot at all: the stage has not reached `live`, which is
+    // the state a take that hears nothing stays in.
+    expect(container.querySelector('.stage-root')?.getAttribute('data-phase')).not.toBe('live');
+    const bar = container.querySelector('.transcript-tap');
+    expect(bar, 'the transcript bar must be up before the first snapshot').not.toBeNull();
+    expect(bar?.textContent).toContain('listening');
+    expect(bar?.classList.contains('silent')).toBe(true);
+
+    // And it carries the recogniser's words when they arrive, still in Clean.
     dispatchLocalStageEvent(STAGE_EVENT.transcriptTap, {
       stageGeneration: STAGE_GENERATION,
       text: 'hello there',
@@ -315,9 +338,10 @@ describe('Clean Take against Diagnostic Take', () => {
       sentAtMs: 1000,
     });
     await settle();
+    expect(container.querySelector('.transcript-tap')?.textContent).toContain('hello there');
 
-    expect(container.querySelector('.stage-root')?.getAttribute('data-phase')).toBe('live');
-    expect(container.querySelector('.transcript-tap')).toBeNull();
+    // The full diagnostics readout stays a Diagnostic-Take thing; only the
+    // instrument that answers "is it hearing me" is unconditional.
     expect(container.querySelector('.diagnostics')).toBeNull();
   });
 
@@ -331,13 +355,17 @@ describe('Clean Take against Diagnostic Take', () => {
     expect(container.querySelector('.diagnostics')).not.toBeNull();
   });
 
-  it('collapses the pill to its mark on a clean stage and leaves the trace to diagnostics', async () => {
+  it('draws the pill as control asked, in either mode', async () => {
     /*
-     * The mark is presenter-facing in both modes — a cross is an actionable
-     * fault and a tick is the only evidence the input chain works. The WAVEFORM
-     * is not: it is the one thing on the glass besides the script that moves,
-     * and it goes on moving for the rest of the take after it has finished
-     * saying anything new.
+     * The stage used to force `collapsed` in Clean Take. Nothing in control has
+     * ever SET `prominence` — the field is optional and an absent one reads as
+     * expanded — so that was not refining control's choice, it was replacing
+     * the only behaviour there had ever been, and it took the "is the
+     * microphone being heard" readout off every take.
+     *
+     * The decision belongs where the audio is. If the motion turns out to cost
+     * too much on the glass, control sends `collapsed`; the stage renders what
+     * it is told.
      */
     const pill: StageVoicePillPayload = {
       stageGeneration: STAGE_GENERATION,
@@ -349,25 +377,16 @@ describe('Clean Take against Diagnostic Take', () => {
       sentAtMs: 1000,
     };
 
-    const clean = await mountStage('clean');
-    dispatchLocalStageEvent(STAGE_EVENT.voicePill, pill);
-    await settle();
-    expect(clean.querySelector('.voice-pill')?.getAttribute('data-expanded')).toBe('false');
-
-    document.body.innerHTML = '';
-    const diagnostic = await mountStage('diagnostic');
-    dispatchLocalStageEvent(STAGE_EVENT.voicePill, pill);
-    await settle();
-    expect(diagnostic.querySelector('.voice-pill')?.getAttribute('data-expanded')).toBe('true');
-  });
-
-  it('still answers an explicit diagnostics directive on a clean stage', async () => {
-    // Mode is a default, not a lock: an operator asking for the readout mid-take
-    // is asking for it whatever the rig is nominally set to.
-    const container = await mountStage('clean');
-    directive({ kind: 'diagnostics', visible: true });
-    await settle();
-    expect(container.querySelector('.diagnostics')).not.toBeNull();
+    for (const mode of ['clean', 'diagnostic'] as const) {
+      document.body.innerHTML = '';
+      const container = await mountStage(mode);
+      dispatchLocalStageEvent(STAGE_EVENT.voicePill, pill);
+      await settle();
+      expect(
+        container.querySelector('.voice-pill')?.getAttribute('data-expanded'),
+        `${mode} take must honour control's prominence`,
+      ).toBe('true');
+    }
   });
 });
 
