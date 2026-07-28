@@ -269,6 +269,64 @@ export function clampProvisionalTarget(
 }
 
 /* ---------------------------------------------------------------------------
+ * Where a line ENTERS, relative to where the mark is
+ * ------------------------------------------------------------------------- */
+
+/**
+ * How far BELOW the reading mark a line sits when the presenter starts it
+ * (companion §8, §8.8).
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS NOT ZERO
+ * ---------------------------------------------------------------------------
+ * §8's path puts every line-start knot at `R`, and the line then RISES a full
+ * pitch while it is being read: at the start of line N its baseline is at `R`,
+ * and by the last word of line N the document has advanced one pitch, so `R`
+ * now falls on line N+1. That is the line-handoff contract working exactly as
+ * specified — the next line is already in position when speech reaches it — and
+ * it is correct as MOTION.
+ *
+ * The defect was treating `R` and the reading mark as the same number. The mark
+ * is fixed on the glass and says "you are here"; a line is only AT `R` for the
+ * instant it begins. Measured on the rendered map, with `R` set to the mark, the
+ * mark sat on the line being read for 15% of that line and on the FOLLOWING line
+ * for 60% of it. So the mark systematically pointed one line ahead of the
+ * reader, which reads exactly as the script running behind them.
+ *
+ * The mark cannot move — it is the lens, calibrated to where the presenter's eye
+ * rests — so `R` does. Placing line entry half a pitch below the mark centres
+ * the line's whole traversal on it: the line arrives just under the mark, passes
+ * through it at the middle of the line, and leaves just above as the next one
+ * arrives. It is on the mark for most of every line, and its error is symmetric
+ * rather than a standing bias in the direction that makes a presenter feel late.
+ *
+ * The cap-height half is the second, smaller correction. Knots are placed by
+ * BASELINE, which is the foot of the letters, so a mark level with the baseline
+ * points at the gap under the text rather than at the text. Half a cap height
+ * above the baseline is the middle of a capital — and the mark is drawn one cap
+ * high, so this is the statement that the mark and the letters share a centre.
+ *
+ * The whole document shifts down by this, padding included, so the path itself
+ * is untouched: every knot is `baselineY - R` and both terms grow together, so
+ * the same spline comes out with the same derivatives and the same velocities.
+ * Only the phase between the text and the mark changes, which is the only thing
+ * that was wrong.
+ *
+ * One number does move, and it moves to keep that promise rather than to break
+ * it: `maxScrollPx` is `totalHeight - viewportHeight`, and the top padding is
+ * part of `totalHeight`, so the ceiling a tail knot is clamped against rises by
+ * the offset too. The closing line therefore comes to rest at exactly the
+ * viewport position it always did — the document moved down by what the ceiling
+ * moved up by. Take the offset out of the padding and leave it in `R` and that
+ * cancellation is what you lose.
+ */
+export function lineEntryOffsetPx(linePitchPx: number, capHeightPx: number): number {
+  const pitch = isPositive(linePitchPx) ? linePitchPx : 0;
+  const cap = isPositive(capHeightPx) ? capHeightPx : 0;
+  return pitch / 2 + cap / 2;
+}
+
+/* ---------------------------------------------------------------------------
  * Column padding
  * ------------------------------------------------------------------------- */
 

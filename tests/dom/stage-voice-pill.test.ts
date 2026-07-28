@@ -181,7 +181,14 @@ describe('the voice pill on the stage', () => {
     expect(container.querySelector('.voice-pill .label')?.textContent).toBe('No audio');
   });
 
-  it('fades rather than unmounts when it has proved itself', async () => {
+  it('fades rather than unmounts when control clears `visible`', async () => {
+    /*
+     * The title used to say "when it has proved itself", which is no longer
+     * what clears the flag: a proven pill stays up for the whole take now, and
+     * a PAUSE is what sets `visible: false`. What this pins is unchanged and is
+     * about the renderer either way — the flag fades the pill, it never
+     * unmounts it.
+     */
     const { container } = await mountStage();
     dispatchLocalStageEvent(STAGE_EVENT.voicePill, pillPayload({ reading: 'confirmed' }));
     await settle();

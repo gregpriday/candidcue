@@ -19,6 +19,27 @@
  * defect in the old table (the closing line stops just short of the reading
  * band) is preserved here ON PURPOSE: the correction ships to rigs that opted
  * into the optical model, not to everyone else's stage on upgrade.
+ *
+ * ---------------------------------------------------------------------------
+ * THE ONE THING EVERY RIG GETS
+ * ---------------------------------------------------------------------------
+ * `lineEntryOffsetPx` — see `geometry.ts`. Top padding carries it on the
+ * calibrated and the uncalibrated path alike, because the mark pointed at the
+ * line BELOW the one being read on every rig, and "additive" was never a promise
+ * to keep the reading position wrong for people who have not calibrated.
+ *
+ * It is also the one change that cannot move anybody's motion: `R` carries the
+ * same offset, every knot is `baselineY - R`, and the two cancel. The document
+ * sits `offset` lower on the glass and travels exactly as it always did. So the
+ * literals below are the historical table PLUS that offset, and the padding
+ * table itself is still checkable — see the breakpoint test at the bottom.
+ *
+ * That cancellation is asserted where it can actually be measured, and it is not
+ * here: this file reads CSS, so it can only see one half of it. The path and the
+ * clamped closing knot are pinned in `tests/unit/stage/reading-mark-alignment.
+ * test.ts`, and the two halves being the SAME offset in
+ * `tests/dom/script-layer-reading-mark.test.ts`. What this file still owns is
+ * the legacy table underneath.
  */
 import { render } from '@testing-library/svelte';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -29,6 +50,14 @@ import type { StageRenderDocument, StageSettings } from '../../src/shared/contra
 const COMPACT = { width: 1024, height: 600 };
 /** Anything taller took the non-compact table. */
 const ROOMY = { width: 1920, height: 1080 };
+
+/**
+ * The line-entry offset at this fixture's type, transcribed rather than
+ * imported: half a pitch (64px x 1.32 / 2) plus half a cap height (64px x the
+ * 0.7 fallback ratio / 2). Same rule on both panels, because both render the
+ * authored 64px body.
+ */
+const LINE_ENTRY_PX = 42.24 + 22.4;
 
 let viewport = COMPACT;
 
@@ -120,10 +149,12 @@ describe('the compact panel, 1024x600', () => {
 
   it('keeps the 34/60 vh padding table', () => {
     // 34% and 60% of 600px. The pair does not sum to 100 and that is the known
-    // defect; preserving it is the point of this test.
+    // defect; preserving it is the point of this test. The top edge also carries
+    // the line-entry offset, which is not part of the table — the bottom, which
+    // does not, is the strict parity check.
     const { container, px } = mount(uncalibrated());
     const plane = container.querySelector('.scroll-plane');
-    expect(px(plane, 'padding-top')).toBeCloseTo(204, 1);
+    expect(px(plane, 'padding-top')).toBeCloseTo(204 + LINE_ENTRY_PX, 1);
     expect(px(plane, 'padding-bottom')).toBeCloseTo(360, 1);
   });
 
@@ -160,7 +191,7 @@ describe('the roomy panel, 1920x1080', () => {
   it('keeps the 38/55 vh padding table', () => {
     const { container, px } = mount(uncalibrated());
     const plane = container.querySelector('.scroll-plane');
-    expect(px(plane, 'padding-top')).toBeCloseTo(410.4, 1);
+    expect(px(plane, 'padding-top')).toBeCloseTo(410.4 + LINE_ENTRY_PX, 1);
     expect(px(plane, 'padding-bottom')).toBeCloseTo(594, 1);
   });
 
@@ -182,8 +213,10 @@ describe('the roomy panel, 1920x1080', () => {
     viewport = ROOMY;
     const roomyPlane = mount(uncalibrated()).container.querySelector('.scroll-plane');
 
+    // Net of the line-entry offset, which is the same on both panels and is not
+    // part of the table being selected.
     const topFraction = (el: Element | null, height: number): number =>
-      Number.parseFloat((el as HTMLElement).style.paddingTop) / height;
+      (Number.parseFloat((el as HTMLElement).style.paddingTop) - LINE_ENTRY_PX) / height;
     expect(topFraction(compactPlane, COMPACT.height)).toBeCloseTo(0.34, 4);
     expect(topFraction(roomyPlane, ROOMY.height)).toBeCloseTo(0.38, 4);
   });

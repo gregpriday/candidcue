@@ -341,9 +341,30 @@ export interface StageHeartbeatPayload {
  * decided: this is the reading upstream of every judgement the app makes, so
  * it stays truthful when the judgements are wrong.
  */
+/**
+ * How many words the tap carries, and therefore how many the stage draws.
+ *
+ * ONE number, because there are two places that crop and they were drifting:
+ * control keeps a rolling window of the last few words (so the bar reads across
+ * utterance boundaries rather than blanking wherever the provider's voice
+ * detector happens to end one), and the stage crops again on the way in — it
+ * has to, because the single-window route hands it text through memory rather
+ * than through this payload. Two constants for one policy means the wire
+ * carries words nothing will ever draw, and a change to either one silently
+ * does nothing.
+ *
+ * Ten is about a spoken phrase: enough that a presenter recognises what they
+ * just said rather than reading a fragment, few enough to take in at a glance
+ * from prompting distance, which is the only way this is ever read.
+ */
+export const STAGE_TRANSCRIPT_TAP_WORDS = 10;
+
 export interface StageTranscriptTapPayload {
   stageGeneration: number;
-  /** The most recent words heard, oldest first, already trimmed for display. */
+  /**
+   * The most recent words heard, oldest first, already trimmed for display —
+   * at most {@link STAGE_TRANSCRIPT_TAP_WORDS} of them.
+   */
   text: string;
   /** True when the provider has finalised the utterance this text came from. */
   final: boolean;
@@ -385,35 +406,43 @@ export interface StageVoicePillPayload {
    */
   label: string;
   /**
-   * False fades the pill out — it has proved itself and the read owns the
-   * screen now. The stage keeps it MOUNTED either way, so returning to true
-   * fades it back in rather than making it appear from nowhere.
+   * False fades the pill out. The stage keeps it MOUNTED either way, so
+   * returning to true fades it back in rather than making it appear from
+   * nowhere.
+   *
+   * It used to go false a couple of seconds after the pill confirmed, on the
+   * reasoning that a proven chain has said its piece. That retired the WAVEFORM
+   * along with the tick, and the waveform is not a status that resolves — it is
+   * the only live evidence that audio is arriving at all, and having been heard
+   * at 00:04 says nothing about 00:20. It now stays true for the whole take.
+   *
+   * What still sets it false is a PAUSE, where the question the pill answers
+   * has no answer: a hard pause has muted the device, so a moving trace would
+   * be a claim about a microphone that is deliberately switched off.
    */
   visible: boolean;
-  /**
-   * How much room the pill is entitled to take.
-   *
-   * `expanded` is the full waveform: the right answer while the chain is
-   * unproven at the top of a take, and while something is wrong. `collapsed`
-   * is the mark alone, no trace.
-   *
-   * The distinction exists because a waveform is MOTION, and continuous
-   * peripheral motion competes with the only other thing on the glass that is
-   * allowed to move — the script. Once recognition has come back, the pill has
-   * already told the presenter everything it exists to tell them, and it should
-   * stop animating in the corner of somebody's eye for the remaining
-   * twenty-nine minutes of the take.
-   *
-   * Decided by control alongside `reading` and `visible`, not inferred locally,
-   * so the whole readout is one resolved view from one frame. Optional, and
-   * absent means `expanded` — an older control that knows nothing about this
-   * gets exactly today's behaviour.
-   */
-  prominence?: StageVoicePillProminence;
   sentAtMs: number;
 }
 
-export type StageVoicePillProminence = 'expanded' | 'collapsed';
+/*
+ * THERE IS NO `prominence` FIELD ANY MORE, AND THAT IS DELIBERATE.
+ *
+ * It carried `'expanded' | 'collapsed'`, and `collapsed` drew the mark without
+ * the trace — on the reasoning that a waveform is continuous peripheral motion
+ * beside the only other thing allowed to move on the glass, and that once
+ * recognition has come back the pill has said everything it exists to say.
+ *
+ * The premise is wrong. The trace is not a status that resolves: it is the only
+ * live evidence that audio is arriving, and the presenter who needs it most is
+ * the one twenty minutes in wondering whether they are still being picked up.
+ * The waveform stays for the whole take, so the field's only possible value was
+ * a way to defeat that.
+ *
+ * Nothing ever set it — it shipped optional and no control path populated it —
+ * so removing it changes no behaviour. If a "quieten the corner" setting is
+ * ever wanted, it should arrive as its own decision with its own reasoning
+ * rather than be inherited from this one.
+ */
 
 /**
  * Bars in the pill's waveform.

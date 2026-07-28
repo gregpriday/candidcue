@@ -25,7 +25,11 @@ import type {
   StageSettings,
   TranscriptionConfig,
 } from '../../shared/contracts';
-import { STAGE_EVENT, CONTROL_EVENT } from '../../shared/contracts';
+import {
+  STAGE_EVENT,
+  CONTROL_EVENT,
+  STAGE_TRANSCRIPT_TAP_WORDS,
+} from '../../shared/contracts';
 import type {
   AlignmentSnapshot,
   StageTranscriptTapPayload,
@@ -1271,7 +1275,12 @@ export function setStageEmitterForTesting(fn: EmitToFn | null): void {
  * utterance wherever its voice-activity detector decides, which is nowhere in
  * particular, and a bar that blanked at each boundary would look like a fault.
  */
-const TAP_WORDS = 14;
+/*
+ * The shared display bound, not a second opinion about it. This was 14 while
+ * the stage drew the last 10, so four words crossed the wire on every tap for
+ * nothing and neither number could be changed alone.
+ */
+const TAP_WORDS = STAGE_TRANSCRIPT_TAP_WORDS;
 let tapCommitted: string[] = [];
 
 /** §64 tap accounting — see `publishTranscriptTap`. */
@@ -1510,7 +1519,7 @@ function publishVoicePill(): void {
     },
     nowMs,
   );
-  const view = voicePillView(voicePill, nowMs);
+  const view = voicePillView(voicePill);
   const payload: StageVoicePillPayload = {
     stageGeneration,
     reading: view.reading,

@@ -56,17 +56,6 @@ import { METER_REFERENCE_PEAK, PEAK_HOLD_MS } from '../../components/mic-advice'
 export const VOICE_PILL_TRACE_SAMPLES = STAGE_VOICE_PILL_TRACE_SAMPLES;
 
 /**
- * How long the pill stays up after it confirms, before it fades away.
- *
- * The presenter has to actually SEE the tick or the confirmation is worth
- * nothing — and they are reading, so it has to survive a glance that may not
- * come immediately. Two and a half seconds is long enough to catch in
- * peripheral vision and short enough that it is gone before the second
- * sentence.
- */
-export const VOICE_PILL_CONFIRM_HOLD_MS = 2500;
-
-/**
  * How much SPEECH may arrive with nothing coming back before that is a fault.
  *
  * Measured in speech, not in elapsed time, so a presenter collecting their
@@ -160,8 +149,6 @@ export interface VoicePillState {
   /** The resolved reading, updated by {@link tickVoicePill}. */
   reading: StageVoicePillReading;
   fault: VoicePillFault | null;
-  /** When the reading last BECAME 'confirmed'; -Infinity while it is not. */
-  confirmedAtMs: number;
   /** Whether the last tick found the take paused (see {@link voicePillVisible}). */
   suspended: boolean;
   /** When the take started, for the first-frame window. */
@@ -178,7 +165,6 @@ export function initialVoicePillState(startedAtMs: number): VoicePillState {
     heardText: false,
     reading: 'listening',
     fault: null,
-    confirmedAtMs: -Infinity,
     suspended: false,
     startedAtMs,
   };
@@ -331,40 +317,46 @@ export function tickVoicePill(
     : base.heardText
       ? 'confirmed'
       : 'listening';
-  /*
-   * The hold restarts every time the pill comes BACK to confirmed, which is
-   * what makes "fades once proven, returns on trouble" work: a fault brings it
-   * on screen, and the recovery is then shown for its own full hold rather than
-   * inheriting an expired one and vanishing the instant it is fixed.
-   */
-  const confirmedAtMs =
-    reading !== 'confirmed'
-      ? -Infinity
-      : base.reading === 'confirmed'
-        ? base.confirmedAtMs
-        : nowMs;
-  return { ...base, reading, fault, confirmedAtMs, suspended: false };
+  return { ...base, reading, fault, suspended: false };
 }
 
 /**
  * Whether the pill should be on screen.
  *
- * Everything except a settled confirmation is worth showing. A confirmation is
- * worth showing for as long as it takes to notice and then it is in the way —
- * the stage belongs to the script, and an indicator that never leaves is an
- * indicator nobody reads.
+ * ---------------------------------------------------------------------------
+ * IT USED TO FADE ONCE CONFIRMED, AND THAT WAS THE WRONG THING TO RETIRE
+ * ---------------------------------------------------------------------------
+ * The rule was that a settled confirmation has said its piece — the presenter
+ * saw the tick, the chain is proven, and an indicator that never leaves is an
+ * indicator nobody reads. That argument is right about the TICK and wrong about
+ * the WAVEFORM, and they share a container, so retiring one retired both.
+ *
+ * The trace is not a status that resolves. It is the only continuously true
+ * thing on the glass: audio is arriving, right now, at this level. A presenter
+ * who has been talking for ten minutes and starts wondering whether they are
+ * still being picked up has no way to ask — and being confirmed at some point
+ * in the past is not evidence about the present. Every dead microphone was a
+ * working one two and a half seconds earlier.
+ *
+ * So it stays up for the whole take. The cost is real and was correctly named
+ * when the fade was written — a moving trace is peripheral motion beside a
+ * script somebody is reading — and it is paid down where it belongs instead:
+ * the trace is small, low, dim, in the corner furthest from the reading line,
+ * and the mark beside it stops changing once it is a tick.
  */
-export function voicePillVisible(state: VoicePillState, nowMs: number): boolean {
+export function voicePillVisible(state: VoicePillState): boolean {
   /*
    * Nothing at all while the take is paused. The question the pill answers —
    * "is your voice getting through?" — has no answer during a pause, and a
    * hard pause has muted the microphone outright: "Listening" would be a claim
    * about a device that is deliberately switched off. The Live screen owns
    * saying that a take is paused.
+   *
+   * This is the one case that survives the note above, because it is not the
+   * pill deciding the presenter has seen enough. There is genuinely no audio
+   * being picked up, so there is genuinely nothing to show.
    */
-  if (state.suspended) return false;
-  if (state.reading !== 'confirmed') return true;
-  return nowMs - state.confirmedAtMs < VOICE_PILL_CONFIRM_HOLD_MS;
+  return !state.suspended;
 }
 
 /**
@@ -382,15 +374,21 @@ export function voicePillLabel(state: VoicePillState): string {
   return state.reading === 'confirmed' ? 'Hearing you' : 'Listening';
 }
 
-/** Everything the stage needs to draw, in one pure step. */
+/**
+ * Everything the stage needs to draw, in one pure step.
+ *
+ * No clock any more. Every field here is now a function of the state alone —
+ * `tickVoicePill` is where time enters, and it already folds it in. The `nowMs`
+ * this used to take was read by the confirmation fade and nothing else, so
+ * keeping it would leave callers passing a timestamp that decides nothing.
+ */
 export function voicePillView(
   state: VoicePillState,
-  nowMs: number,
 ): { reading: StageVoicePillReading; levels: number[]; label: string; visible: boolean } {
   return {
     reading: state.reading,
     levels: state.levels,
     label: voicePillLabel(state),
-    visible: voicePillVisible(state, nowMs),
+    visible: voicePillVisible(state),
   };
 }
