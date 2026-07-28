@@ -29,7 +29,7 @@
                        button is clickable where it appears — on the opposite
                        side of the screen from where it was a moment ago.
 
-  Layers, back to front: solid background → Listener video + treatment → script
+  Layers, back to front: solid background → script
   text + focus fades → reading cue → presenter overlays → calibration →
   operator instruments and dock.
 
@@ -52,7 +52,6 @@
     type StageLayoutErrorPayload,
     type StageLiveSyncPayload,
     type StageListeningPayload,
-    type StageListenerHealthPayload,
     STAGE_VOICE_PILL_TRACE_SAMPLES,
     type StageVoicePillPayload,
     type StageVoicePillReading,
@@ -84,7 +83,6 @@
   import HoldStatus from './renderer/HoldStatus.svelte';
   import CalibrationCard from './renderer/CalibrationCard.svelte';
   import StageDock from './StageDock.svelte';
-  import ListenerLayer from './listener/ListenerLayer.svelte';
   import {
     resolveHoldStatus,
     type HoldRung,
@@ -413,7 +411,6 @@
   );
   const motionFrozen = $derived(app.frozen);
   const scriptHidden = $derived(app.blanked);
-  const listenerHidden = $derived(app.blanked && !app.keepListenerWhenBlanked);
   let mediaHealthy = $state(true);
   let lastInboundAt = 0;
   /**
@@ -549,7 +546,7 @@
    * §61: the stage is missing its frame budget. The engine already backs its
    * own styling cadence and motion limits off; this is the flag the LAYERS need
    * — nonessential effects in the script layer (which owns its own) and the
-   * Listener's crossfade, which is the one §61 names explicitly (step 3).
+   * crossfade the §61 degradation ladder names explicitly (step 3).
    */
   let motionDegraded = $state(false);
   /**
@@ -719,7 +716,6 @@
           voicePill = payload;
         }),
         subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
-        subscribeStageEvent<StageStatePayload>(STAGE_EVENT.listenerState, onDirective),
         subscribeStageEvent<StageHeartbeatPayload>(STAGE_EVENT.heartbeat, (payload) => {
           lastInboundAt = performance.now();
           heartbeatSeen = true;
@@ -1280,9 +1276,6 @@
   function handlePreviewKey(key: string): boolean {
     if (!previewDriver) return false;
     switch (key) {
-      case 'l':
-        previewDriver.toggleListener();
-        return true;
       case 'b':
         previewDriver.toggleBlank();
         return true;
@@ -1400,23 +1393,6 @@
    * runs for the whole take.
    */
   const presenterVoicePill = $derived(voicePill);
-
-  function onListenerHealth(
-    status: 'ok' | 'poster_fallback' | 'failed',
-    code?: 'decode_failure' | 'unsupported_codec' | 'source_unavailable',
-    clipId?: string,
-  ) {
-    mediaHealthy = status === 'ok';
-    // Only degradations cross the boundary; recovery shows up in the next
-    // heartbeat ack's mediaHealthy flag (§40.5).
-    if (status === 'ok') return;
-    emitStageEvent<StageListenerHealthPayload>(STAGE_EVENT.mediaError, {
-      stageGeneration: app.envelope?.stageGeneration ?? 0,
-      status,
-      code,
-      clipId,
-    });
-  }
 </script>
 
 <svelte:window onkeydown={onKeyDown} bind:innerWidth={windowVw} bind:innerHeight={windowVh} />
@@ -1448,18 +1424,6 @@
       data-mirror-x={settings?.mirrorX ? 'true' : 'false'}
       data-mirror-y={settings?.mirrorY ? 'true' : 'false'}
     >
-      <!-- Layer 2+3: optional Listener; default stage is pure black, no listener. -->
-      {#if app.listener && app.listener.placement !== 'off'}
-        <ListenerLayer
-          selection={app.listener}
-          frozen={motionFrozen}
-          hidden={listenerHidden}
-          {reducedMotion}
-          degraded={motionDegraded}
-          onhealth={onListenerHealth}
-        />
-      {/if}
-
       <!-- Layers 4–6: compiled document, band treatment, reading cue, fades. -->
       {#if doc && settings && fontsSettled}
         <div class="script-holder" class:blanked={scriptHidden}>
@@ -1832,7 +1796,7 @@
 
     {#if preview}
       <div class="preview-hud">
-        preview · l listener · b blank · f freeze · m mirror · c calibrate · s clean/diagnostic · r
+        preview · b blank · f freeze · m mirror · c calibrate · s clean/diagnostic · r
         cue · a ack · j jump · v voice pill
       </div>
     {/if}
@@ -1878,7 +1842,8 @@
     /*
      * Against a true-black field a backdrop blur contributes almost nothing, so
      * the separation is carried by the border and a one-pixel inner highlight.
-     * The drop shadow is for the case where the Listener is behind the dock.
+     * The drop shadow earns its place on the calibration overlays, which are the
+     * only thing that can still be drawn under the dock now the Listener is gone.
      */
     --stage-chrome-shadow:
       0 10px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
@@ -1943,7 +1908,7 @@
     inset: 0;
   }
   /* Blank stage (§16.6): instant and local — visibility, not unmount, so
-     session state, measurements, and Listener position survive. */
+     session state and measurements survive. */
   .script-holder.blanked {
     visibility: hidden;
   }

@@ -485,12 +485,7 @@ fn revision_reasons_are_exactly_the_ones_the_ui_labels() {
     }
 }
 
-/// The error codes this pass introduced must exist on the TypeScript side, and
-/// the one it retired must be gone.
-///
-/// M3 in particular: `LISTENER_SIGNATURE_INVALID` named a check that was never
-/// implemented — a SHA-256 comparison against a hash the pack wrote about
-/// itself. Leaving the name in the contract would keep the claim alive.
+/// The error codes Rust raises must exist on the TypeScript side.
 #[test]
 fn the_typescript_error_contract_matches_the_rust_codes() {
     let ts = std::fs::read_to_string(
@@ -510,36 +505,12 @@ fn the_typescript_error_contract_matches_the_rust_codes() {
         "ASSET_DOWNLOAD_FAILED",
         // M1 — stale stage protection
         "STAGE_SESSION_MISMATCH",
-        // M3 — honest listener verification
-        "LISTENER_CHECKSUM_INVALID",
-        "LISTENER_UNVERIFIED",
     ] {
         assert!(
             ts.contains(&format!("'{code}'")),
             "{code} is raised by Rust but missing from src/shared/contracts/errors.ts"
         );
     }
-
-    assert!(
-        !ts.contains("'LISTENER_SIGNATURE_INVALID'"),
-        "LISTENER_SIGNATURE_INVALID names a signature check that does not \
-         exist; it was renamed to LISTENER_CHECKSUM_INVALID (M3)"
-    );
-
-    let rust = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("listeners")
-            .join("mod.rs"),
-    )
-    .expect("listeners/mod.rs");
-    // The module docs still MENTION the old name (in backticks) to explain what
-    // was wrong with it; what must not come back is the string literal, which
-    // is the only form that becomes an error code.
-    assert!(
-        !rust.contains("\"LISTENER_SIGNATURE_INVALID\""),
-        "the listener module must not raise a code that claims a signature check"
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -742,288 +713,13 @@ fn display_profile_validation_rules_are_the_ones_the_service_mirrors() {
 }
 
 // ---------------------------------------------------------------------------
-// §14.2 F / §46.7 listener catalogue
-// ---------------------------------------------------------------------------
-
-use candidcue_lib::listeners::{ListenerCatalogue, ListenerCatalogueEntry};
-
-fn listener_fixture() -> serde_json::Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("tests")
-        .join("fixtures")
-        .join("ipc")
-        .join("listener-command-payloads.json");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
-    serde_json::from_str(&raw).expect("fixture parses")
-}
-
-#[test]
-fn listener_catalogue_serializes_to_the_frontend_shape() {
-    let f = listener_fixture();
-    let entry = ListenerCatalogueEntry {
-        pack_id: "mira".into(),
-        latest_version: "1.0.0".into(),
-        display_name: "Mira".into(),
-        description: "A calm listener who holds eye contact.".into(),
-        thumbnail_url: "asset://localhost/listeners/mira/poster.webp".into(),
-        approximate_bytes: 18_874_368,
-        variants: vec!["720p".into()],
-        minimum_app_version: "0.1.0".into(),
-        installed_version: Some("1.0.0".into()),
-    };
-    assert_eq!(
-        serde_json::to_value(&entry).expect("serializes"),
-        f["expectedCatalogueEntry"]
-    );
-
-    let catalogue = ListenerCatalogue {
-        entries: Vec::new(),
-        fetched_at: "2026-07-24T09:15:00Z".into(),
-        source: "bundled_only".into(),
-    };
-    assert_eq!(
-        serde_json::to_value(&catalogue).expect("serializes"),
-        f["expectedCatalogue"]
-    );
-
-    // `installedVersion` is skipped when absent, so the TypeScript twin
-    // declares it optional. A pack that is merely listed must not read as
-    // installed.
-    let uninstalled = ListenerCatalogueEntry {
-        installed_version: None,
-        ..entry
-    };
-    let encoded = serde_json::to_value(&uninstalled).expect("serializes");
-    assert!(encoded.get("installedVersion").is_none());
-}
-
-/// The listener UI shows NO download affordance, and this is the assertion
-/// that keeps that honest in both directions.
-///
-/// `download_listener` and `cancel_listener_download` are deliberate
-/// NOT_IMPLEMENTED stubs — there is no CandidCue-controlled pack host — so a
-/// download button could only ever throw. If someone implements the pipeline,
-/// this test fails, which is the prompt to flip `DOWNLOADS_SUPPORTED` in
-/// src/control/services/listeners-catalogue.ts and build the affordance.
-///
-/// The reverse mistake is also covered: `remove_listener` is REAL, so it must
-/// not be allowed to decay into a stub while the UI offers a Remove button.
-#[test]
-fn listener_download_commands_are_still_honest_stubs() {
-    let f = listener_fixture();
-    let source = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("commands")
-            .join("listeners_cmds.rs"),
-    )
-    .expect("listeners_cmds.rs");
-
-    for command in f["notImplementedCommands"]
-        .as_array()
-        .expect("fixture command list")
-    {
-        let name = command.as_str().expect("command name");
-        let body = source
-            .split(&format!("pub async fn {name}("))
-            .nth(1)
-            .unwrap_or_else(|| panic!("{name} must exist in listeners_cmds.rs"))
-            .split("\n#[tauri::command]")
-            .next()
-            .expect("body");
-        assert!(
-            body.contains("not_implemented"),
-            "{name} is implemented now; the control UI hides every download \
-             affordance on the assumption that it is not (DOWNLOADS_SUPPORTED \
-             in services/listeners-catalogue.ts)"
-        );
-    }
-
-    let remove_body = source
-        .split("pub async fn remove_listener(")
-        .nth(1)
-        .expect("remove_listener exists")
-        .split("\n#[tauri::command]")
-        .next()
-        .expect("body");
-    assert!(
-        !remove_body.contains("not_implemented"),
-        "remove_listener must stay implemented; Settings offers a Remove \
-         button for downloaded packs"
-    );
-    assert!(
-        remove_body.contains("remove_pack"),
-        "remove_listener must delegate to listeners::remove_pack, which is \
-         what refuses bundled packs"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// §37 Listener settings — one structure, not two
+// §28.4 Local voice-detection sensitivity — the round trip, not one half of it
 // ---------------------------------------------------------------------------
 
 use candidcue_lib::settings::{
     validate as validate_settings, AppSettings as RustAppSettings,
-    ListenerSettings as RustListenerSettings,
+    AudioSettings as RustAudioSettings,
 };
-
-fn listener_settings_fixture() -> serde_json::Value {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("tests")
-        .join("fixtures")
-        .join("ipc")
-        .join("listener-settings-payload.json");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
-    serde_json::from_str(&raw).expect("fixture parses")
-}
-
-/// The round trip, closed on the Rust side: the patch the TypeScript adapter
-/// emits deserializes into the struct, and the struct serializes back to the
-/// identical document the adapter reads.
-///
-/// This is the assertion the previous arrangement could not have passed at all.
-/// `listener` was `Record<string, unknown>` on the TypeScript side and was never
-/// mapped in either direction, so the fields Rust declared here and the fields
-/// the UI wrote were two disjoint sets that never met.
-#[test]
-fn listener_settings_survive_the_round_trip_unchanged() {
-    let f = listener_settings_fixture();
-    let sent = f["settings"].clone();
-
-    let listener: RustListenerSettings = serde_json::from_value(sent.clone())
-        .expect("the frontend's listener patch must deserialize");
-    let stored = serde_json::to_value(&listener).expect("serializes");
-
-    assert_eq!(
-        stored, sent,
-        "a listener setting changed shape between the UI and the stored document"
-    );
-
-    // The values are the ones that were sent, not defaults that happen to
-    // serialize to the same JSON.
-    assert_eq!(listener.default_pack_id.as_deref(), Some("mira"));
-    assert!(!listener.autoplay);
-    assert_eq!(listener.dim_percent, 62.0);
-    assert_eq!(listener.blur_px, 6.5);
-    assert_eq!(listener.saturation, 0.3);
-    assert!(listener.keep_when_blanked);
-
-    // And the whole document validates, so the round trip is not passing values
-    // the backend would reject on the next write.
-    let settings = RustAppSettings {
-        listener,
-        ..RustAppSettings::default()
-    };
-    validate_settings(&settings).expect("the fixture must be a legal document");
-}
-
-/// The five deleted fields stay deleted. Each declared a decision another
-/// mechanism already owns (`scale` → the display profile's ListenerGeometry;
-/// `softPause`/`hardPause` → the stage `freeze` directive; `hideOnBlank` → the
-/// `keepListener` flag on the stage `blank` directive; `crossfadeMs` → a stage
-/// constant that reduced-motion and §61 degradation both vary).
-///
-/// `keepWhenBlanked` is NOT `hideOnBlank` under a new name, and the difference
-/// is the one that mattered about the old field rather than its spelling: this
-/// one has a reader. `toggleBlankStage` in src/control/stores/session.ts reads
-/// it every time the stage is blanked and puts it on the directive, which is
-/// still the single carrier of the decision. It is also stated in the direction
-/// the directive states it, so nothing has to invert a persisted boolean —
-/// inverting a persisted value is the one bug this feature has shipped.
-#[test]
-fn the_unreachable_listener_fields_are_gone_not_renamed() {
-    let json = serde_json::to_value(RustListenerSettings::default()).expect("serializes");
-    let object = json.as_object().expect("an object");
-    for dead in [
-        "opacityAfterDim",
-        "scale",
-        "crossfadeMs",
-        "softPause",
-        "hardPause",
-        "hideOnBlank",
-    ] {
-        assert!(
-            !object.contains_key(dead),
-            "{dead} was declared and unreachable; it must not come back"
-        );
-    }
-    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
-    keys.sort_unstable();
-    assert_eq!(
-        keys,
-        [
-            "autoplay",
-            "blurPx",
-            "defaultPackId",
-            "dimPercent",
-            "keepWhenBlanked",
-            "saturation"
-        ]
-    );
-}
-
-/// The ranges Rust enforces are the ranges the Preflight sliders offer. They
-/// used to disagree in BOTH directions — `opacityAfterDim <= 0.75` rejected a
-/// dim of 0, and `blurPx <= 12` rejected the top half of a slider that goes to
-/// 24 — so a value the UI could produce was a value Rust would refuse to store.
-#[test]
-fn listener_ranges_accept_everything_the_sliders_offer_and_nothing_beyond() {
-    for (dim, blur, saturation, legal) in [
-        (0.0, 0.0, 0.0, true),
-        (80.0, 24.0, 1.0, true),
-        (40.0, 12.0, 0.85, true),
-        (80.1, 0.0, 0.5, false),
-        (-1.0, 0.0, 0.5, false),
-        (40.0, 24.1, 0.5, false),
-        (40.0, 0.0, 1.1, false),
-    ] {
-        let settings = RustAppSettings {
-            listener: RustListenerSettings {
-                dim_percent: dim,
-                blur_px: blur,
-                saturation,
-                ..RustListenerSettings::default()
-            },
-            ..RustAppSettings::default()
-        };
-        assert_eq!(
-            validate_settings(&settings).is_ok(),
-            legal,
-            "dim={dim} blur={blur} saturation={saturation}"
-        );
-    }
-}
-
-/// A document written before this section had these fields still loads: every
-/// missing key falls to its default rather than failing the whole read.
-#[test]
-fn a_listener_section_from_an_older_document_still_loads() {
-    let listener: RustListenerSettings =
-        serde_json::from_value(serde_json::json!({})).expect("an empty section must load");
-    assert_eq!(listener, RustListenerSettings::default());
-
-    // Including one carrying only the fields that were deleted.
-    let legacy: RustListenerSettings = serde_json::from_value(serde_json::json!({
-        "opacityAfterDim": 0.22,
-        "scale": 1.0,
-        "crossfadeMs": 160,
-        "softPause": "continue",
-        "hardPause": "freeze",
-        "hideOnBlank": true,
-    }))
-    .expect("a pre-reconciliation section must load");
-    assert_eq!(legacy, RustListenerSettings::default());
-}
-
-// ---------------------------------------------------------------------------
-// §28.4 Local voice-detection sensitivity — the round trip, not one half of it
-// ---------------------------------------------------------------------------
-
-use candidcue_lib::settings::AudioSettings as RustAudioSettings;
 
 fn audio_settings_fixture() -> serde_json::Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1077,8 +773,8 @@ fn audio_settings_survive_the_round_trip_unchanged() {
     validate_settings(&settings).expect("the fixture must be a legal document");
 }
 
-/// The range Rust enforces is the range both sliders offer. The §37 Listener
-/// ranges got this wrong in both directions once — a value the UI could produce
+/// The range Rust enforces is the range the slider offers. A retired settings
+/// group got this wrong in both directions once — a value the UI could produce
 /// was a value Rust would refuse to store — so it is asserted at the ends.
 #[test]
 fn vad_sensitivity_range_accepts_the_whole_slider_and_nothing_beyond() {

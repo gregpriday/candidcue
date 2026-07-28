@@ -33,7 +33,6 @@
     adjustStageFontSize,
     applyStageAppearance,
     canSwitchMicrophone,
-    chooseAnotherListenerClip,
     clearSession,
     connectionPill,
     dismissStageWindowFault,
@@ -45,19 +44,14 @@
     pauseListening,
     restartParagraph,
     resumeSession,
-    retryListenerMedia,
     session,
     startPrompting,
     stopSession,
     switchMicrophone,
     toggleBlankStage,
-    toggleListenerVisible,
     togglePlayPause,
     toggleStageMirror,
     toggleVoiceFollow,
-    turnOffListenerForSession,
-    useListenerPoster,
-    type ListenerFault,
   } from '../stores/session';
   import { patchSettings, settings } from '../stores/settings';
   import { smoothFollow, type FollowNotice } from '../stores/smooth-follow';
@@ -198,40 +192,6 @@
     }));
   });
 
-  /* --- §40.5 Listener media failure ------------------------------------- */
-
-  function listenerFaultTitle(fault: ListenerFault): string {
-    switch (fault.resolution) {
-      case 'off':
-        return 'Listener off for the rest of this session';
-      case 'poster':
-        return 'Listener is showing its still image';
-      case 'retrying':
-        return 'Reloading the Listener…';
-      default:
-        return 'The Listener video stopped';
-    }
-  }
-
-  function listenerFaultCause(fault: ListenerFault): string {
-    switch (fault.code) {
-      case 'unsupported_codec':
-        return 'This clip’s format is not supported on this machine.';
-      case 'source_unavailable':
-        return 'The clip file could not be read.';
-      case 'decode_failure':
-        return 'The video failed to decode.';
-      default:
-        return 'Playback was refused and did not recover.';
-    }
-  }
-
-  function chooseAnotherListener(): void {
-    if (!chooseAnotherListenerClip()) {
-      showToast('No other clip in this pack to try.', 'info');
-    }
-  }
-
   const currentSectionTitle = $derived(
     currentSectionIndex >= 0 ? (flatOutline[currentSectionIndex]?.node.title ?? null) : null,
   );
@@ -339,11 +299,6 @@
     showToast('Text mirrored', 'info', { durationMs: 1600 });
   }
 
-  function toggleListener(): void {
-    const visible = toggleListenerVisible();
-    showToast(visible ? 'Listener on' : 'Listener off', 'info', { durationMs: 1600 });
-  }
-
   $effect(() =>
     onShortcut((action) => {
       // These keys belong to the embedded production stage while it is
@@ -397,9 +352,6 @@
           break;
         case 'blank-stage':
           toggleBlankStage();
-          break;
-        case 'toggle-listener':
-          toggleListener();
           break;
         case 'take-marker':
           addTakeMarker();
@@ -807,40 +759,6 @@
           </div>
         </div>
       {/if}
-      <!--
-        §40.5 Listener failure containment. The stage reports a nonfatal media
-        failure; this is where the operator gets the four recoveries. None of
-        them touches the script, the scroll, or the tracking cursor — a video
-        that stopped decoding is a cosmetic problem, and the take continues
-        through all of it.
-      -->
-      {#if $session.listenerFault}
-        {@const fault = $session.listenerFault}
-        <div class="listener-fault" data-resolution={fault.resolution} role="status">
-          <p class="lf-title">{listenerFaultTitle(fault)}</p>
-          <p class="lf-note">
-            {listenerFaultCause(fault)} Your script, position and scrolling are unaffected.
-          </p>
-          {#if fault.resolution !== 'off'}
-            <div class="lf-actions">
-              <Button size="sm" disabled={!stageAlive} onclick={() => retryListenerMedia()}>
-                Retry
-              </Button>
-              {#if fault.resolution !== 'poster'}
-                <Button size="sm" onclick={() => useListenerPoster()}>Use poster</Button>
-              {/if}
-              <Button
-                size="sm"
-                disabled={!stageAlive || fault.alternativeClips === 0}
-                onclick={() => chooseAnotherListener()}
-              >
-                Choose another
-              </Button>
-              <Button size="sm" onclick={() => turnOffListenerForSession()}>Turn off</Button>
-            </div>
-          {/if}
-        </div>
-      {/if}
       <div class="quick-controls">
         <div class="font-row">
           <IconButton
@@ -858,7 +776,6 @@
           />
         </div>
         <Button size="sm" disabled={!stageAlive} onclick={() => toggleMirror()}>Mirror text</Button>
-        <Button size="sm" disabled={!stageAlive} onclick={() => toggleListener()}>Listener</Button>
       </div>
       {#if !stageAlive}
         <p class="region-empty" role="status">
@@ -1252,29 +1169,6 @@
     opacity: 0.6;
   }
 
-  /* --- §40.5 Listener failure --- */
-  .listener-fault {
-    position: relative;
-    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--bg-elevated);
-  }
-  /* Leading rule as an inset bar — never a one-sided border on a rounded box. */
-  .listener-fault::before {
-    content: '';
-    position: absolute;
-    left: 5px;
-    top: var(--space-3);
-    bottom: var(--space-3);
-    width: 3px;
-    border-radius: var(--radius-pill);
-    background: var(--accent);
-  }
-  .listener-fault[data-resolution='off']::before,
-  .listener-fault[data-resolution='poster']::before {
-    background: var(--text-faint);
-  }
   .lf-title {
     margin: 0 0 2px;
     font-size: var(--text-xs);

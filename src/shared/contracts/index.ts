@@ -9,6 +9,5 @@ export * from './optical';
 export * from './display';
 export * from './audio';
 export * from './smooth-follow';
-export * from './listener';
 export * from './stage';
 export * from './errors';

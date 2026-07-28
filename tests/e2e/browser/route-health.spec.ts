@@ -32,7 +32,6 @@ const SETTINGS_SECTIONS = [
   'Stage display',
   'Teleprompter',
   'Following',
-  'Listeners',
   'Data, privacy & updates',
 ] as const;
 

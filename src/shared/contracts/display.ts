@@ -4,7 +4,6 @@
  */
 import type { Uuid, IsoDateTime } from './core';
 import type { CompiledBlock } from './compiler';
-import type { ListenerGeometry, ListenerStageSelection } from './listener';
 import type { SmoothFollowProfile } from './smooth-follow';
 import type {
   OpticalProfile,
@@ -67,7 +66,6 @@ export interface DisplayProfile {
   name: string;
   displayFingerprint?: string;
   stage: StageSettings;
-  listener?: ListenerGeometry;
   updatedAt: IsoDateTime;
 }
 
@@ -99,7 +97,6 @@ export interface StageSessionEnvelope {
   compileRevision: number;
   stageSettings: StageSettings;
   renderDocument: StageRenderDocument;
-  listener?: ListenerStageSelection;
   initialTokenIndex: number;
   /**
    * Companion §47.1/§55. The resolved, versioned motion profile this session

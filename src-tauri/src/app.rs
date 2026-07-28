@@ -8,7 +8,6 @@ use crate::align::AlignmentState;
 use crate::commands::{self, inworld_cmds::Secrets};
 use crate::coordinator::AppCoordinator;
 use crate::database::{self, Database};
-use crate::listeners::ListenerLibrary;
 use crate::inworld::InworldClient;
 use crate::scripts::{DataPaths, ScriptLocks};
 use crate::secrets::OsSecretStore;
@@ -64,17 +63,9 @@ pub fn run() {
             commands::set_stage_fullscreen,
             commands::publish_stage_document,
             commands::publish_stage_command,
-            commands::publish_listener_state,
             commands::get_stage_status,
             commands::save_display_profile,
             commands::list_display_profiles,
-            // Listeners (spec §46.7)
-            commands::get_listener_catalogue,
-            commands::list_installed_listeners,
-            commands::download_listener,
-            commands::cancel_listener_download,
-            commands::remove_listener,
-            commands::resolve_listener_media,
             // Settings / diagnostics (spec §46.8)
             commands::get_settings,
             commands::update_settings,
@@ -101,7 +92,6 @@ pub fn run() {
             let data_dir = handle.path().app_data_dir()?;
             let paths = DataPaths::new(data_dir.clone());
             std::fs::create_dir_all(paths.scripts_dir())?;
-            std::fs::create_dir_all(paths.listeners_dir())?;
             std::fs::create_dir_all(paths.cache_dir())?;
             std::fs::create_dir_all(paths.logs_dir())?;
 
@@ -138,32 +128,21 @@ pub fn run() {
             // have to cross a process boundary to meet.
             handle.manage(AlignmentState::new());
 
-            // Listener library: bundled packs from the repo assets dir in
-            // dev, from Tauri resources in production builds.
-            let library = ListenerLibrary {
-                bundled_dir: resolve_bundled_listeners_dir(&handle),
-                installed_dir: paths.listeners_dir(),
-            };
-            handle.manage(library.clone());
-
             // Asset protocol scope (spec §47.8, M2).
             //
-            // The scripts and listeners roots used to be granted RECURSIVELY
-            // here, which put every script's canonical `script.md` and its
-            // whole revision history in reach of the asset protocol — and
-            // therefore of the stage webview, which is only supposed to be able
-            // to see media. Both roots are now described statically in
-            // tauri.conf.json (`$APPDATA/scripts/*/assets/*`), with an explicit
-            // `deny` list that takes precedence over any runtime widening.
+            // The scripts root used to be granted RECURSIVELY here, which put
+            // every script's canonical `script.md` and its whole revision
+            // history in reach of the asset protocol — and therefore of the
+            // stage webview, which is only supposed to be able to see media.
+            // It is now described statically in tauri.conf.json
+            // (`$APPDATA/scripts/*/assets/*`), with an explicit `deny` list
+            // that takes precedence over any runtime widening.
             //
-            // The bundled listener directory is the one genuine exception: in a
-            // dev build it lives in the repo, outside `$RESOURCE`, so it cannot
-            // be expressed as a static pattern.
-            if library.bundled_dir.exists() {
-                let _ = handle
-                    .asset_protocol_scope()
-                    .allow_directory(&library.bundled_dir, true);
-            }
+            // Nothing is granted at runtime any more. The one exception was the
+            // bundled Listener pack directory, which in a dev build lived in the
+            // repo, outside `$RESOURCE`, and so could not be expressed as a
+            // static pattern. The Listener is gone (§106) and the exception with
+            // it, which leaves the static config as the whole story.
 
             register_stage_event_bridge(&handle);
 
@@ -242,25 +221,6 @@ pub fn run() {
                 crate::windows::close_identify_overlays(handle);
             }
         });
-}
-
-/// Bundled listener packs directory: `<repo>/assets/listeners` in dev,
-/// `<resource dir>/listeners` in production (bundled via tauri.conf.json
-/// `bundle.resources`).
-fn resolve_bundled_listeners_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
-    if cfg!(debug_assertions) {
-        let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("assets")
-            .join("listeners");
-        if dev.exists() {
-            return dev;
-        }
-    }
-    app.path()
-        .resource_dir()
-        .map(|dir| dir.join("listeners"))
-        .unwrap_or_else(|_| std::path::PathBuf::from("listeners"))
 }
 
 /// Stage → Rust event bridge (spec §43.5, §46.9): handshake progress,

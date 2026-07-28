@@ -6,7 +6,7 @@
  * ---------------------------------------------------------------------------
  * There used to be a Preflight page between the editor and presentation: a
  * scrollable form with a display picker, a microphone picker, a speech-key
- * field, a tracking mode, an appearance panel, a Listener panel, and a footer
+ * field, a tracking mode, an appearance panel, and a footer
  * that refused to start until five readiness rows agreed. Every one of those is
  * a choice a presenter makes once and then never thinks about again, so the
  * page was skipped without being read — which is the worst thing a gate can be,
@@ -273,7 +273,6 @@ export async function startTake(scriptId: string): Promise<boolean> {
        */
       teleprompter: s.teleprompter,
       stageDisplay: display,
-      listener: null,
       transcription: {
         model: s.inworld.transcriptionModel,
         language: s.inworld.language,

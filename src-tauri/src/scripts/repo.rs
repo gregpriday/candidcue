@@ -12,7 +12,7 @@ use super::words::{
     estimated_duration_seconds, preview_text, spoken_plain_text, word_count, SpokenTextOptions,
 };
 use super::{
-    CreateScriptInput, DataPaths, ListenerSelection, PageRequest, RevisionDocument,
+    CreateScriptInput, DataPaths, PageRequest, RevisionDocument,
     RevisionSummary, SaveResult, ScriptDocument, ScriptFilter, ScriptId, ScriptLocks,
     ScriptMetadataPatch, ScriptPage, ScriptSettings, ScriptStatus, ScriptSummary,
 };
@@ -58,7 +58,6 @@ struct ScriptRow {
     estimated_duration_seconds: i64,
     selected_display_profile_id: Option<String>,
     selected_tracking_profile_id: Option<String>,
-    listener_overrides_json: Option<String>,
     script_settings_json: String,
     updated_at: String,
     last_opened_at: Option<String>,
@@ -76,7 +75,6 @@ fn read_row(row: &SqliteRow) -> Result<ScriptRow, sqlx::Error> {
         estimated_duration_seconds: row.try_get("estimated_duration_seconds")?,
         selected_display_profile_id: row.try_get("selected_display_profile_id")?,
         selected_tracking_profile_id: row.try_get("selected_tracking_profile_id")?,
-        listener_overrides_json: row.try_get("listener_overrides_json")?,
         script_settings_json: row.try_get("script_settings_json")?,
         updated_at: row.try_get("updated_at")?,
         last_opened_at: row.try_get("last_opened_at")?,
@@ -85,10 +83,6 @@ fn read_row(row: &SqliteRow) -> Result<ScriptRow, sqlx::Error> {
 
 fn parse_settings(json: &str) -> ScriptSettings {
     serde_json::from_str(json).unwrap_or_default()
-}
-
-fn parse_listener(json: Option<&str>) -> Option<ListenerSelection> {
-    json.and_then(|j| serde_json::from_str(j).ok())
 }
 
 fn summary_from_row(row: &ScriptRow, preview: String) -> ScriptSummary {
@@ -408,7 +402,6 @@ pub async fn get_script(
         settings,
         selected_display_profile_id: row.selected_display_profile_id.clone(),
         selected_tracking_profile_id: row.selected_tracking_profile_id.clone(),
-        selected_listener: parse_listener(row.listener_overrides_json.as_deref()),
         externally_changed,
     })
 }
@@ -622,7 +615,6 @@ async fn commit_save(
             script_settings_json = ?, updated_at = ?,
             selected_display_profile_id = CASE WHEN ? THEN ? ELSE selected_display_profile_id END,
             selected_tracking_profile_id = CASE WHEN ? THEN ? ELSE selected_tracking_profile_id END,
-            listener_overrides_json = CASE WHEN ? THEN ? ELSE listener_overrides_json END,
             last_opened_at = CASE WHEN ? THEN ? ELSE last_opened_at END
          WHERE id = ? AND revision = ?",
     )
@@ -639,14 +631,6 @@ async fn commit_save(
     .bind(patch.selected_display_profile_id.clone().flatten())
     .bind(patch.selected_tracking_profile_id.is_some())
     .bind(patch.selected_tracking_profile_id.clone().flatten())
-    .bind(patch.selected_listener.is_some())
-    .bind(
-        patch
-            .selected_listener
-            .as_ref()
-            .and_then(|l| l.as_ref())
-            .and_then(|l| serde_json::to_string(l).ok()),
-    )
     .bind(patch.last_opened.unwrap_or(false))
     .bind(c.now)
     .bind(script_id.as_str())
@@ -759,8 +743,8 @@ pub async fn duplicate_script(
             (id, title, canonical_rel_path, source_hash, file_fingerprint, revision,
              status, language, spoken_word_count, estimated_duration_seconds,
              selected_display_profile_id, selected_tracking_profile_id,
-             listener_overrides_json, script_settings_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             script_settings_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, 'draft', ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(new_id.as_str())
     .bind(&title)
@@ -772,7 +756,6 @@ pub async fn duplicate_script(
     .bind(duration as i64)
     .bind(&row.selected_display_profile_id)
     .bind(&row.selected_tracking_profile_id)
-    .bind(&row.listener_overrides_json)
     .bind(&row.script_settings_json)
     .bind(&now)
     .bind(&now)
@@ -910,8 +893,8 @@ pub async fn restore_script(
 }
 
 /// Permanent deletion (spec §21.5): canonical source, revisions, copied
-/// assets, caches, analyses, database rows. Never touches Listener packs,
-/// dictionary entries, or display profiles beyond the script's own rows.
+/// assets, caches, analyses, database rows. Never touches dictionary entries,
+/// or display profiles beyond the script's own rows.
 pub async fn permanently_delete_script(
     pool: &SqlitePool,
     paths: &DataPaths,

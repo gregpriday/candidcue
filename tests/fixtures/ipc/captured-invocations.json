@@ -36,12 +36,6 @@
         "kind": "vocabulary"
       }
     },
-    "clear_cache_listeners": {
-      "command": "clear_cache",
-      "args": {
-        "kind": "downloads"
-      }
-    },
     "clear_cache_logs": {
       "command": "clear_cache",
       "args": {

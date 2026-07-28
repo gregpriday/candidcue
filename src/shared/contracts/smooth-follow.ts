@@ -191,7 +191,6 @@ export interface LayoutFingerprint {
    * map under the old generation and skipping the semantic re-anchor.
    */
   performanceView: string;
-  listenerGeometryHash: string;
 }
 
 /**

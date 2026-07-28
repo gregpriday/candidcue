@@ -221,7 +221,6 @@ fn harness() -> Harness {
             commands::close_stage,
             commands::publish_stage_document,
             commands::publish_stage_command,
-            commands::publish_listener_state,
         ])
         .build(mock_context(noop_assets()))
         .expect("mock app builds");
@@ -996,7 +995,6 @@ fn the_stage_payload_commands_have_typed_arguments() {
     }
     for (command, argument) in [
         ("publish_stage_command", "action: serde_json::Value"),
-        ("publish_listener_state", "state: serde_json::Value"),
     ] {
         assert!(
             stage_cmds.contains(argument),
@@ -1033,7 +1031,7 @@ fn stage_directive_kinds_match_the_ts_contract() {
     let ts = std::fs::read_to_string(repo_root().join("src/shared/contracts/stage.ts"))
         .expect("stage.ts");
     // NOT `split(';')`: every arm carries its own semicolons
-    // (`{ kind: 'listener'; listener: … }`), so the first one is inside arm two.
+    // (`{ kind: 'blank'; blanked: … }`), so the first one is inside arm one.
     // The union runs to the next top-level `export`.
     let union = ts
         .split("export type StageDirective =")
@@ -1324,8 +1322,8 @@ fn an_envelope_without_a_render_document_is_rejected_at_the_boundary() {
     assert!(nothing_received(&rx));
 }
 
-/// Optional envelope fields the struct does not name — `listener`,
-/// `followProfile`, anything added later — must reach the stage untouched.
+/// Optional envelope fields the struct does not name — `followProfile`,
+/// anything added later — must reach the stage untouched.
 /// A struct that quietly dropped them would be a worse bug than the one it
 /// replaced: the take would run with the wrong motion dynamics and nothing
 /// would say so.
@@ -1337,7 +1335,6 @@ fn envelope_fields_the_struct_does_not_name_still_reach_the_stage() {
 
     let mut with_extras = envelope(CAPTURED_SESSION, stage_generation, session_generation);
     with_extras["followProfile"] = json!({ "id": "natural", "version": 2 });
-    with_extras["listener"] = json!({ "packId": "mira", "clipUrls": [] });
     with_extras["somethingAddedLater"] = json!("keep me");
 
     h.expect_ok(
@@ -1346,7 +1343,6 @@ fn envelope_fields_the_struct_does_not_name_still_reach_the_stage() {
     );
     let arrived = received(&rx).expect("the envelope reaches the stage");
     assert_eq!(arrived["followProfile"]["id"], json!("natural"));
-    assert_eq!(arrived["listener"]["packId"], json!("mira"));
     assert_eq!(arrived["somethingAddedLater"], json!("keep me"));
 }
 
@@ -1357,7 +1353,6 @@ fn envelope_fields_the_struct_does_not_name_still_reach_the_stage() {
 fn the_directive_commands_bind_validate_and_emit() {
     let h = harness();
     let commands = h.watch_stage(candidcue_lib::windows::events::STAGE_APPLY_COMMAND);
-    let listener = h.watch_stage(candidcue_lib::windows::events::STAGE_LISTENER_STATE);
     let (stage_generation, _) = h.live_stage(CAPTURED_SESSION);
 
     h.expect_ok(
@@ -1416,18 +1411,6 @@ fn the_directive_commands_bind_validate_and_emit() {
     let arrived = received(&commands).expect("the voice pill directive reaches the stage");
     assert_eq!(arrived["directive"]["pill"]["label"], json!("Listening"));
 
-    h.expect_ok(
-        "publish_listener_state",
-        json!({
-            "sessionId": CAPTURED_SESSION,
-            "state": {
-                "stageGeneration": stage_generation,
-                "directive": { "kind": "listener", "listener": Value::Null },
-            },
-        }),
-    );
-    assert!(received(&listener).is_some());
-
     // A kind Rust does not allow is a structured error naming the kind, NOT an
     // argument rejection — that distinction is why these two stay untyped.
     let error = h
@@ -1450,23 +1433,6 @@ fn the_directive_commands_bind_validate_and_emit() {
             .contains("definitely_not_a_directive"),
         "the error must name the kind it refused: {error}"
     );
-
-    // And the listener channel refuses to carry anything but a listener
-    // directive, so a caller cannot smuggle a blank through it.
-    let error = h
-        .invoke(
-            "publish_listener_state",
-            json!({
-                "sessionId": CAPTURED_SESSION,
-                "state": {
-                    "stageGeneration": stage_generation,
-                    "directive": { "kind": "blank", "blanked": true },
-                },
-            }),
-        )
-        .expect_err("publish_listener_state only carries listener directives");
-    assert!(!is_argument_rejection(&error), "got: {error}");
-    assert!(nothing_received(&listener));
 }
 
 /// Every stage command refuses a session that does not own the stage (M1).

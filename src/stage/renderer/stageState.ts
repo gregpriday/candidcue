@@ -10,7 +10,6 @@
 import type {
   StageSessionEnvelope,
   StageSettings,
-  ListenerStageSelection,
   AlignmentSnapshot,
   StageCalibrationMode,
   StageDirective,
@@ -45,13 +44,11 @@ export interface StageAppState {
   phase: 'handshake' | 'ready' | 'live';
   envelope: StageSessionEnvelope | null;
   settings: StageSettings | null;
-  listener: ListenerStageSelection | null;
   alignment: AlignmentSnapshot | null;
   lastTrackingRevision: number | null;
   frozen: boolean;
   frozenReason: FrozenReason | null;
   blanked: boolean;
-  keepListenerWhenBlanked: boolean;
   ack: StageAckState | null;
   calibration: StageCalibrationState;
   diagnostics: boolean;
@@ -96,13 +93,11 @@ export function initialStageState(): StageAppState {
     phase: 'handshake',
     envelope: null,
     settings: null,
-    listener: null,
     alignment: null,
     lastTrackingRevision: null,
     frozen: false,
     frozenReason: null,
     blanked: false,
-    keepListenerWhenBlanked: false,
     ack: null,
     calibration: initialCalibrationState(),
     diagnostics: false,
@@ -131,7 +126,6 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
         ...state,
         envelope: incoming,
         settings: incoming.stageSettings,
-        listener: incoming.listener ?? null,
         // A new generation restarts the handshake (layout must settle again);
         // a same-generation re-send just refreshes the document in place.
         phase: newGeneration ? 'handshake' : state.phase,
@@ -173,7 +167,6 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
           return {
             ...state,
             blanked: d.blanked,
-            keepListenerWhenBlanked: d.keepListener ?? state.keepListenerWhenBlanked,
           };
         case 'freeze':
           return {
@@ -192,8 +185,6 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
           };
         case 'settings':
           return { ...state, settings: d.settings };
-        case 'listener':
-          return { ...state, listener: d.listener };
         case 'calibration':
           /*
            * Every field falls back to what is already held.

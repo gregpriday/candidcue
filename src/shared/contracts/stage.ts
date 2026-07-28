@@ -15,7 +15,7 @@
  * Direction summary:
  *   control → Rust command → stage : load-session, tracking-snapshot,
  *                                    apply-command (including transcript and
- *                                    voice-pill diagnostics), listener-state,
+ *                                    voice-pill diagnostics),
  *                                    close-session
  *   control → stage (direct emitTo): heartbeat (§43.5, ~1s cadence),
  *                                    semantic-frame (companion §26.1, 15–30 Hz)
@@ -31,7 +31,6 @@ import type { Uuid } from './core';
 import type { StageSessionEnvelope, StageSettings } from './display';
 import type { AlignmentSnapshot, AlignmentViewportHint } from './alignment';
 import type { StageMotionAck } from './smooth-follow';
-import type { ListenerStageSelection } from './listener';
 
 /* ---------------------------------------------------------------------------
  * Event names
@@ -42,8 +41,6 @@ export const STAGE_EVENT = {
   loadSession: 'stage://load-session',
   /** Rust → stage: state directives (freeze/blank/ack/settings/…). */
   applyCommand: 'stage://apply-command',
-  /** Rust → stage: Listener selection/geometry directive. */
-  listenerState: 'stage://listener-state',
   /** Rust → stage: the session is over; the window is about to close. */
   closeSession: 'stage://close-session',
   /** control → stage: liveness heartbeat (spec §43.5, ~1 s cadence). */
@@ -116,7 +113,7 @@ export const STAGE_EVENT = {
   layoutReady: 'stage://layout-ready',
   /** stage → Rust: heartbeat acknowledgement. */
   heartbeatAck: 'stage://heartbeat-ack',
-  /** stage → Rust: nonfatal media/Listener failure (§40.5 containment). */
+  /** stage → Rust: nonfatal media failure (§40.5 containment). */
   mediaError: 'stage://media-error',
 
   /*
@@ -153,9 +150,9 @@ export const STAGE_EVENT = {
    * Rust → control: a generation-checked §62 stage-layout failure/recovery.
    *
    * This has its own event rather than riding `stage://error`, which carries
-   * Listener media faults and window-layer errors: those are two unrelated
-   * failures with different recovery, and control was left sniffing payload
-   * substrings to tell them apart. A layout failure means motion is HELD — the
+   * the window layer's own errors: those are two unrelated failures with
+   * different recovery, and control was left sniffing payload substrings to
+   * tell them apart. A layout failure means motion is HELD — the
    * operator has to see it and can act on it (§62 "expose a recoverable
    * stage-layout error in control").
    */
@@ -214,12 +211,12 @@ export type StageAlignmentPayload = AlignmentSnapshot;
 export type StageViewportHintPayload = AlignmentViewportHint;
 
 /**
- * `stage://apply-command` / `stage://listener-state` — small imperative
+ * `stage://apply-command` — small imperative
  * directives. Each carries the stage generation so directives from a
  * previous stage lifetime are ignored.
  */
 export type StageDirective =
-  | { kind: 'blank'; blanked: boolean; keepListener?: boolean }
+  | { kind: 'blank'; blanked: boolean }
   | { kind: 'freeze'; frozen: boolean }
   | { kind: 'ack'; label: string; durationMs?: number }
   | { kind: 'settings'; settings: StageSettings }
@@ -245,7 +242,6 @@ export type StageDirective =
    * affected real rig while Rust-originated stage traffic kept arriving.
    */
   | { kind: 'voicePill'; pill: StageVoicePillPayload }
-  | { kind: 'listener'; listener: ListenerStageSelection | null }
   | ({ kind: 'calibration'; active: boolean } & StageCalibrationDirective)
   | { kind: 'diagnostics'; visible: boolean };
 
@@ -613,16 +609,6 @@ export interface StageLayoutErrorPayload {
   /** Layout generation the stage was measuring at when it gave up. */
   layoutGeneration: number;
   atMs: number;
-}
-
-/** `stage://media-error` — nonfatal Listener engine status (§40.5). */
-export type StageListenerHealthStatus = 'ok' | 'poster_fallback' | 'failed' | 'disabled';
-
-export interface StageListenerHealthPayload {
-  stageGeneration: number;
-  status: StageListenerHealthStatus;
-  code?: 'decode_failure' | 'unsupported_codec' | 'source_unavailable';
-  clipId?: string;
 }
 
 /* ---------------------------------------------------------------------------

@@ -28,7 +28,6 @@ pub struct RecoveryReport {
     /// Rows whose canonical file did not match the recorded hash — the
     /// "file rename succeeded, database commit did not" crash state.
     pub hash_mismatches_repaired: Vec<String>,
-    pub listener_installs_rolled_back: u32,
     pub trash_purged: u32,
     pub notes: Vec<String>,
 }
@@ -41,7 +40,6 @@ impl RecoveryReport {
             || !self.missing_files_restored.is_empty()
             || !self.missing_files_unrecoverable.is_empty()
             || !self.hash_mismatches_repaired.is_empty()
-            || self.listener_installs_rolled_back > 0
     }
 }
 
@@ -160,22 +158,13 @@ pub async fn run_startup_reconciliation(
         }
     }
 
-    // 5. Finish or roll back Listener installs: anything still marked
-    // 'installing' after a restart failed mid-flight.
-    let rolled_back = sqlx::query(
-        "UPDATE listener_packs SET state = 'failed' WHERE state = 'installing'",
-    )
-    .execute(pool)
-    .await?;
-    report.listener_installs_rolled_back = rolled_back.rows_affected() as u32;
-
-    // 6. Clear expired compiled caches (best effort).
+    // 5. Clear expired compiled caches (best effort).
     let compiled = paths.cache_dir().join("compiled");
     if compiled.exists() {
         let _ = remove_older_than(&compiled, Duration::from_secs(30 * 24 * 3600));
     }
 
-    // 7. Purge trash older than 30 days (spec §21.5).
+    // 6. Purge trash older than 30 days (spec §21.5).
     report.trash_purged = repo::purge_expired_trash(pool, paths, locks).await.unwrap_or(0);
 
     // Preserve evidence: write the report to the diagnostics directory.

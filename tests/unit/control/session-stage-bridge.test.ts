@@ -59,11 +59,6 @@ const stage = vi.hoisted(() => ({
      right answer for a mock that is not modelling a stage window. */
   getStageStatus: vi.fn(async () => ({ exists: false })),
   publishStageDirective: vi.fn(async () => {}),
-  // Typed arguments so the §40.5 assertions can read the directive that was
-  // published, not just the call count.
-  publishListenerState: vi.fn(
-    async (_sessionId: string, _stageGeneration: number, _directive: unknown) => {},
-  ),
   closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
 }));
@@ -87,52 +82,17 @@ vi.mock('../../../src/control/services/stage-acks', async (orig) => {
 await import('@tauri-apps/api/event');
 
 const {
-  chooseAnotherListenerClip,
   clearSession,
   dismissStageWindowFault,
-  retryListenerMedia,
   session,
   startLiveSession,
   stopSession,
   toggleBlankStage,
-  toggleListenerVisible,
-  turnOffListenerForSession,
-  useListenerPoster,
 } = await import('../../../src/control/stores/session');
 const { smoothFollow } = await import('../../../src/control/stores/smooth-follow');
 const { toasts } = await import('../../../src/control/stores/toasts');
 
-type ListenerSelection = NonNullable<
-  Parameters<typeof startLiveSession>[0]['listener']
->;
-
-/** Two clips, so "choose another" has something to choose. */
-function listenerSelection(): ListenerSelection {
-  return {
-    packId: 'mira',
-    version: '1.0.0',
-    variant: '1080p',
-    geometry: {
-      anchorX: 0.5,
-      anchorY: 0.5,
-      scale: 1,
-      cropX: 0,
-      cropY: 0,
-      cropZoom: 1,
-      opacity: 0.6,
-      blurPx: 0,
-      saturation: 1,
-      mirrorVideo: false,
-    },
-    clipUrls: [
-      { id: 'clip_a', url: 'a.mp4', mime: 'video/mp4', durationMs: 7000, posterUrl: 'a.jpg' },
-      { id: 'clip_b', url: 'b.mp4', mime: 'video/mp4', durationMs: 9000, posterUrl: 'b.jpg' },
-    ],
-    placement: 'background',
-  };
-}
-
-function start(stageGeneration: number, listener: ListenerSelection | null = null): string {
+function start(stageGeneration: number): string {
   return startLiveSession({
     scriptId: 'script-1',
     scriptTitle: 'Launch video',
@@ -142,7 +102,6 @@ function start(stageGeneration: number, listener: ListenerSelection | null = nul
     sentences: [],
     totalTokens: 200,
     stageGeneration,
-    listener,
   });
 }
 
@@ -199,7 +158,6 @@ beforeEach(async () => {
   }
   tauri.reset();
   stage.publishStageDirective.mockClear();
-  stage.publishListenerState.mockClear();
 });
 
 afterEach(() => {
@@ -399,216 +357,6 @@ describe('stage closed (§62)', () => {
 });
 
 /*
- * §40.5 Listener media failure containment.
- *
- * These drive the REAL store handler with the REAL payload the stage emits.
- * The stage's `onListenerHealth` builds `{ stageGeneration, status, code?,
- * clipId? }` and Rust relays that object VERBATIM onto `stage://error`
- * (app.rs: `emit_to(CONTROL_LABEL, events::STAGE_ERROR, value)`), so that is
- * exactly what is fed in here. Building the state the handler would have
- * produced would have proved nothing — the bug WAS the handler.
- */
-describe('listener media failures (§40.5)', () => {
-  /**
-   * Deliver to every registered handler, which is what Tauri does: an emit is
-   * a broadcast, and each handler is gated on the stage generation it was
-   * created for.
-   */
-  function dispatchStageError(payload: Record<string, unknown>): void {
-    const handlers = find(CONTROL_EVENT.stageError);
-    expect(handlers.length).toBeGreaterThan(0);
-    for (const handler of handlers) handler.handler({ payload });
-  }
-
-  /** Verbatim shape of `StageListenerHealthPayload` off the wire. */
-  function mediaError(
-    overrides: {
-      stageGeneration?: number;
-      status?: string;
-      code?: string;
-      clipId?: string;
-    } = {},
-  ): void {
-    dispatchStageError({
-      stageGeneration: 7,
-      status: 'poster_fallback',
-      code: 'decode_failure',
-      clipId: 'clip_a',
-      ...overrides,
-    });
-  }
-
-  async function startWithListener(): Promise<void> {
-    start(7, listenerSelection());
-    await completeBridge();
-    stage.publishListenerState.mockClear();
-    /*
-     * A running take publishes snapshots and directives of its own accord now
-     * that starting one starts prompting. These tests are about what the
-     * LISTENER-failure path does, so the baseline is "a take is already
-     * running" — otherwise they assert that following does not happen.
-     */
-    stage.publishStageSnapshot.mockClear();
-    stage.publishStageDirective.mockClear();
-  }
-
-  it('surfaces a media failure instead of discarding it', async () => {
-    await startWithListener();
-    expect(get(session).listenerFault).toBeNull();
-
-    mediaError();
-
-    const fault = get(session).listenerFault;
-    expect(fault).not.toBeNull();
-    expect(fault?.status).toBe('poster_fallback');
-    expect(fault?.code).toBe('decode_failure');
-    expect(fault?.clipId).toBe('clip_a');
-    expect(fault?.resolution).toBe('unresolved');
-    // One clip failed; the other is still a candidate for "Choose another".
-    expect(fault?.alternativeClips).toBe(1);
-  });
-
-  it('reports a failure the stage could not attribute (no code)', async () => {
-    await startWithListener();
-    mediaError({ code: undefined });
-    expect(get(session).listenerFault?.code).toBeNull();
-    expect(get(session).listenerFault?.resolution).toBe('unresolved');
-  });
-
-  it('does not treat a media failure as a line-map failure', async () => {
-    await startWithListener();
-    mediaError();
-    // The §62 tracking-emergency path must not fire for a cosmetic failure.
-    expect(get(smoothFollow).lineMap.valid).toBe(true);
-  });
-
-  /*
-   * S6: layout failures no longer travel this channel at all — they have their
-   * own event (below). This asserts the split holds from the other side: a
-   * media payload is a media payload, whatever words happen to be in it.
-   */
-  it('does not route a media failure into the line-map path', async () => {
-    await startWithListener();
-    mediaError({ code: 'source_unavailable' });
-    expect(get(smoothFollow).lineMap.valid).toBe(true);
-    expect(get(session).listenerFault).not.toBeNull();
-  });
-
-  it('ignores a media failure from a different stage generation', async () => {
-    await startWithListener();
-    mediaError({ stageGeneration: 3 });
-    expect(get(session).listenerFault).toBeNull();
-  });
-
-  it('leaves the reading position, the scroll and the tracking cursor alone', async () => {
-    await startWithListener();
-    const before = get(session);
-    mediaError();
-    retryListenerMedia();
-    await flush();
-    useListenerPoster();
-    turnOffListenerForSession();
-
-    const after = get(session);
-    expect(after.snapshot).toBe(before.snapshot);
-    expect(after.counts).toEqual(before.counts);
-    expect(after.prompting).toBe(before.prompting);
-    expect(after.paused).toBe(before.paused);
-    expect(after.voiceFollow).toBe(before.voiceFollow);
-    // Nothing was republished to the stage except Listener state.
-    expect(stage.publishStageSnapshot).not.toHaveBeenCalled();
-    expect(stage.publishStageDirective).not.toHaveBeenCalled();
-  });
-
-  it('Retry remounts the Listener: unmount first, then the same selection', async () => {
-    await startWithListener();
-    mediaError();
-    retryListenerMedia();
-    expect(get(session).listenerFault?.resolution).toBe('retrying');
-    await flush();
-
-    expect(stage.publishListenerState).toHaveBeenCalledTimes(2);
-    // Re-sending the same selection alone would only update a prop on a layer
-    // that is already in poster mode, so the unmount is load-bearing.
-    expect(stage.publishListenerState.mock.calls[0]?.[2]).toEqual({
-      kind: 'listener',
-      listener: null,
-    });
-    const remounted = stage.publishListenerState.mock.calls[1]?.[2] as {
-      listener: ListenerSelection;
-    };
-    expect(remounted.listener.clipUrls.map((c) => c.id)).toEqual(['clip_a', 'clip_b']);
-  });
-
-  it('Use poster settles for the still image without touching the stage', async () => {
-    await startWithListener();
-    mediaError();
-    useListenerPoster();
-    await flush();
-    expect(get(session).listenerFault?.resolution).toBe('poster');
-    // The stage is ALREADY showing the poster; re-publishing would restart a
-    // decode that just failed.
-    expect(stage.publishListenerState).not.toHaveBeenCalled();
-  });
-
-  it('Choose another drops the clip that failed and replays the rest', async () => {
-    await startWithListener();
-    mediaError();
-    expect(chooseAnotherListenerClip()).toBe(true);
-    await flush();
-
-    const remounted = stage.publishListenerState.mock.calls.at(-1)?.[2] as {
-      listener: ListenerSelection;
-    };
-    expect(remounted.listener.clipUrls.map((c) => c.id)).toEqual(['clip_b']);
-
-    // The replacement fails too: nothing is left to choose.
-    mediaError({ clipId: 'clip_b' });
-    expect(get(session).listenerFault?.alternativeClips).toBe(0);
-    expect(chooseAnotherListenerClip()).toBe(false);
-  });
-
-  it('Turn off retires the Listener for the rest of the session', async () => {
-    await startWithListener();
-    mediaError();
-    turnOffListenerForSession();
-
-    expect(get(session).listenerFault?.resolution).toBe('off');
-    expect(stage.publishListenerState).toHaveBeenCalledTimes(1);
-    expect(stage.publishListenerState.mock.calls[0]?.[2]).toEqual({
-      kind: 'listener',
-      listener: null,
-    });
-
-    // Nothing brings it back: not the quick control...
-    stage.publishListenerState.mockClear();
-    expect(toggleListenerVisible()).toBe(false);
-    expect(stage.publishListenerState).not.toHaveBeenCalled();
-    // ...not a retry...
-    retryListenerMedia();
-    await flush();
-    expect(stage.publishListenerState).not.toHaveBeenCalled();
-    // ...and a further failure report does not re-open the choice.
-    mediaError();
-    expect(get(session).listenerFault?.resolution).toBe('off');
-  });
-
-  it('re-arms the Listener for the next session', async () => {
-    await startWithListener();
-    mediaError();
-    turnOffListenerForSession();
-    stopSession();
-    clearSession();
-
-    start(9, listenerSelection());
-    await completeBridge();
-    expect(get(session).listenerFault).toBeNull();
-    expect(toggleListenerVisible()).toBe(false); // it starts visible; this turns it off
-    expect(toggleListenerVisible()).toBe(true); // ...and this turns it back on
-  });
-});
-
-/*
  * S6 — §62 recoverable stage layout error.
  *
  * The stage held its motion when line measurement stayed unusable after the
@@ -685,23 +433,16 @@ describe('stage layout failures (§62)', () => {
     expect(state.lineMap.generation).toBe(5);
     expect(state.notices.find((n) => n.id === 'invalid_line_map')).toBeUndefined();
   });
-
-  it('does not touch the Listener state', async () => {
-    await startWithLiveBridge();
-    layoutEvent({ stageGeneration: 7, issues: ['map_unresolved'], layoutGeneration: 4 });
-    expect(get(session).listenerFault).toBeNull();
-  });
 });
 
 /*
  * §52.7 window-layer failures on `stage://error`.
  *
- * S7. `stage://error` has exactly two producers: Rust relaying the stage's
- * `stage://media-error` verbatim (`app.rs`), and `windows/mod.rs` reporting on
- * the stage WINDOW. The only window-layer code emitted today is
- * `STAGE_DISPLAY_MISMATCH` — the stage opened on a monitor other than the one
- * that was picked — and control discarded it, because the handler routed on
- * `status` and returned on anything without one.
+ * S7. `stage://error` carries `windows/mod.rs` reporting on the stage WINDOW.
+ * The only window-layer code emitted today is `STAGE_DISPLAY_MISMATCH` — the
+ * stage opened on a monitor other than the one that was picked — and control
+ * discarded it, because the handler routed on `status` and returned on anything
+ * without one.
  *
  * The consequence is the worst kind: nothing looks broken. The script prompts
  * perfectly, at the wrong wall, and the operator finds out by looking at the
@@ -753,13 +494,11 @@ describe('stage window failures (§52.7)', () => {
     expect(fault?.actualFingerprint).toBe('dsp-builtin|3024x1964');
   });
 
-  it('does not mistake a window error for a Listener health report', async () => {
+  it('does not mistake a window error for a tracking emergency', async () => {
     await startWithLiveBridge();
     displayMismatch();
-    // §40.5 offers Retry / Use poster / Choose another / Turn off, none of
-    // which mean anything for a window on the wrong monitor.
-    expect(get(session).listenerFault).toBeNull();
-    // …and it is not a §62 tracking emergency either: motion is fine.
+    // A window on the wrong monitor is not a §62 tracking emergency: the
+    // script is prompting perfectly, just at the wrong wall. Motion is fine.
     expect(get(smoothFollow).lineMap.valid).toBe(true);
   });
 
@@ -808,24 +547,6 @@ describe('stage window failures (§52.7)', () => {
     expect(get(session).stageWindowFault).not.toBeNull();
     stopSession();
     start(9);
-    expect(get(session).stageWindowFault).toBeNull();
-  });
-
-  /*
-   * The other half of the split: a Listener health payload must still be
-   * handled as one. Without this the assertions above could be satisfied by a
-   * handler that routes EVERYTHING to the window-fault path.
-   */
-  it('still routes a Listener health payload to the Listener path', async () => {
-    start(7, listenerSelection());
-    await completeBridge();
-    dispatchStageError({
-      stageGeneration: 7,
-      status: 'failed',
-      code: 'decode_failure',
-      clipId: 'clip_a',
-    });
-    expect(get(session).listenerFault?.status).toBe('failed');
     expect(get(session).stageWindowFault).toBeNull();
   });
 });

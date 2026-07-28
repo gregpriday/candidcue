@@ -257,7 +257,6 @@ describe('captured IPC payloads (production services → wire)', () => {
     );
     await capture('clear_cache_logs', () => settings.clearCache('logs'));
     await capture('clear_cache_analysis', () => settings.clearCache('analysis'));
-    await capture('clear_cache_listeners', () => settings.clearCache('listeners'));
     await capture('app_version', () => settings.getAppVersion());
   });
 

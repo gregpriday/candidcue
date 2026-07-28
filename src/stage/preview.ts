@@ -9,7 +9,6 @@
  */
 import type {
   CompiledBlock,
-  ListenerStageSelection,
   AlignmentSnapshot,
   ReadingCueStyle,
   StageCalibrationMode,
@@ -24,44 +23,6 @@ import { dispatchLocalStageEvent } from './events';
 import { discoverProfile } from '../shared/optical-discovery';
 import { resolveStageGeometry } from '../shared/optical-resolve';
 
-const MIRA_BASE = '/assets/listeners/mira';
-
-export function previewListenerSelection(): ListenerStageSelection {
-  return {
-    packId: 'mira',
-    version: '1.0.0',
-    variant: '1080p',
-    placement: 'background',
-    geometry: {
-      anchorX: 0.5,
-      anchorY: 0.45,
-      scale: 1,
-      cropX: 0,
-      cropY: 0,
-      cropZoom: 1.15, // manifest defaultZoom — clips are framed loosely
-      opacity: 0.4,
-      blurPx: 0,
-      saturation: 0.85,
-      mirrorVideo: false,
-    },
-    clipUrls: [
-      {
-        id: 'listening-7s',
-        url: `${MIRA_BASE}/listening/mira-listening-7s.mp4`,
-        mime: 'video/mp4',
-        durationMs: 7042,
-        posterUrl: `${MIRA_BASE}/poster.webp`,
-      },
-      {
-        id: 'listening-10s',
-        url: `${MIRA_BASE}/listening/mira-listening-10s.mp4`,
-        mime: 'video/mp4',
-        durationMs: 10042,
-        posterUrl: `${MIRA_BASE}/poster.webp`,
-      },
-    ],
-  };
-}
 
 /**
  * The appearance an UNCALIBRATED take runs with, as the preview's settings.
@@ -217,7 +178,7 @@ function buildDocument(): BuiltDoc {
     },
     {
       kind: 'paragraph',
-      text: 'If you enable the Listener, Mira sits quietly behind the script. She never talks and never reacts to your words; she simply gives your eyes a person to find.',
+      text: 'The stage stays a plain black field behind the words, so nothing competes with the line you are reading.',
     },
     {
       kind: 'paragraph',
@@ -293,7 +254,6 @@ function buildDocument(): BuiltDoc {
 
 export interface PreviewDriver {
   stop(): void;
-  toggleListener(): void;
   toggleBlank(): void;
   toggleFreeze(): void;
   toggleMirror(): void;
@@ -506,7 +466,6 @@ export function startPreviewDriver(options: PreviewOptions = {}): PreviewDriver 
           widthPx: window.innerWidth,
           heightPx: window.innerHeight,
         });
-  let listenerOn = false;
   let blanked = false;
   let frozen = false;
   /** Where the calibration cycle currently is: `null` is off, otherwise the mode. */
@@ -610,13 +569,9 @@ export function startPreviewDriver(options: PreviewOptions = {}): PreviewDriver 
       clearInterval(heartbeatTimer);
       delete (window as unknown as Record<string, unknown>)[PREVIEW_DRIVER_KEY];
     },
-    toggleListener() {
-      listenerOn = !listenerOn;
-      directive({ kind: 'listener', listener: listenerOn ? previewListenerSelection() : null });
-    },
     toggleBlank() {
       blanked = !blanked;
-      directive({ kind: 'blank', blanked, keepListener: false });
+      directive({ kind: 'blank', blanked });
     },
     toggleFreeze() {
       frozen = !frozen;

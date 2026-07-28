@@ -148,10 +148,9 @@ describe('stage state machine (spec §45.6, §43.5)', () => {
     s = stageReducer(s, {
       type: 'directive',
       stageGeneration: 1,
-      directive: { kind: 'blank', blanked: true, keepListener: true },
+      directive: { kind: 'blank', blanked: true },
     });
     expect(displayPhase(s)).toBe('blank');
-    expect(s.keepListenerWhenBlanked).toBe(true);
     s = stageReducer(s, {
       type: 'directive',
       stageGeneration: 1,
@@ -220,7 +219,7 @@ describe('stage state machine (spec §45.6, §43.5)', () => {
   });
 
 
-  it('updates settings and listener via directives', () => {
+  it('updates settings via directives', () => {
     let s = hydrated();
     const settings = { ...makeEnvelope().stageSettings, mirrorX: true };
     s = stageReducer(s, {
@@ -229,11 +228,5 @@ describe('stage state machine (spec §45.6, §43.5)', () => {
       directive: { kind: 'settings', settings },
     });
     expect(s.settings?.mirrorX).toBe(true);
-    s = stageReducer(s, {
-      type: 'directive',
-      stageGeneration: 1,
-      directive: { kind: 'listener', listener: null },
-    });
-    expect(s.listener).toBeNull();
   });
 });

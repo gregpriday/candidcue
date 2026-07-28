@@ -41,9 +41,7 @@
             "widening cannot lift."
           ],
           "allow": [
-            "$APPDATA/scripts/*/assets/*",
-            "$APPDATA/listeners/**",
-            "$RESOURCE/listeners/**"
+            "$APPDATA/scripts/*/assets/*"
           ],
           "deny": [
             "$APPDATA/scripts/*/script.md",
@@ -62,9 +60,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": {
-      "../assets/listeners/": "listeners/"
-    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

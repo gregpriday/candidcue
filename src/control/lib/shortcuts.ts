@@ -22,7 +22,6 @@ export type ShortcutAction =
   | 'stage-text-down'
   | 'toggle-mirror'
   | 'blank-stage'
-  | 'toggle-listener'
   | 'take-marker'
   | 'command-help'
   /** §16.9. Escape — twice ends the take; the screen owns the two-press rule. */
@@ -193,8 +192,6 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
         return 'play-pause';
       case 'b':
         return 'blank-stage';
-      case 'l':
-        return 'toggle-listener';
       case 't':
         return 'take-marker';
       default:

@@ -6,8 +6,8 @@
 
   This screen is now the ONLY place a take is configured. There used to be a
   Preflight page that asked the same questions again, one screen before every
-  session — the display, the microphone, the tracking mode, the type, the
-  Listener — and answering them twice meant one of the two answers silently
+  session — the display, the microphone, the tracking mode, the type — and
+  answering them twice meant one of the two answers silently
   stopped mattering. Present opens the stage from what is set here
   (lib/start-take.ts).
 -->
@@ -53,20 +53,6 @@
   } from '../services/errors';
   import { BackendUnavailableError, isTauriRuntime } from '../services/ipc';
   import {
-    DOWNLOADS_SUPPORTED,
-    DOWNLOADS_UNAVAILABLE_NOTE,
-    formatPackSize,
-    getListenerCatalogue,
-    mergeCatalogue,
-    removeListener,
-    type ListenerPackRow,
-  } from '../services/listeners-catalogue';
-  import {
-    listInstalledListeners,
-    resolveListenerMedia,
-    type InstalledListener,
-  } from '../services/listeners';
-  import {
     SYSTEM_DEFAULT_OPTION,
     matchRememberedMicrophone,
     microphoneOptions,
@@ -83,14 +69,6 @@
   import * as stageService from '../services/stage';
   import { SPEECH_LANGUAGES } from '../services/stt/inworld';
   import { getVoiceFacade } from '../services/voice-facade';
-  import { offsetSliderBound } from '../../shared/listener/geometry';
-  import {
-    LISTENER_PLACEMENTS,
-    listenerLensTarget,
-    listenerOverlapsScriptColumn,
-    listenerPlacementBox,
-    listenerPlacementDescriptor,
-  } from '../../shared/listener/placement';
   import type { DisplayDescriptor } from '../services/stage-types';
   import type { InworldKeyStatus } from '../services/secrets-types';
   import {
@@ -105,7 +83,6 @@
     type AudioDeviceInfo,
     type AudioLevelSnapshot,
     type FramingPreset,
-    type ListenerPlacementMode,
     type OpticalOverrides,
     type OpticalProfile,
     type ReadingCueStyle,
@@ -154,7 +131,6 @@
     { id: 'stage', label: 'Stage display' },
     { id: 'teleprompter', label: 'Teleprompter' },
     { id: 'following', label: 'Following' },
-    { id: 'listeners', label: 'Listeners' },
     { id: 'privacy', label: 'Data, privacy & updates' },
   ];
 
@@ -178,43 +154,9 @@
     void secretsService.getInworldKeyStatus().then((status) => (keyStatus = status));
   });
 
-  let packs = $state<ListenerPackRow[]>([]);
-  let packsError = $state<string | null>(null);
-  let packsLoading = $state(false);
-  /**
-   * What is on disk, read independently of the catalogue.
-   *
-   * The catalogue supplies descriptions, posters and sizes and is allowed to
-   * fail; the installed list is the authority on what can actually be put on a
-   * stage. Deriving the PICKER from the merged rows made a catalogue failure
-   * look like "no Listeners installed" — which is the same class of lie as a
-   * setting that is written and never read, since choosing a Listener is now
-   * the only way one reaches a take.
-   */
-  let installedPacks = $state<InstalledListener[]>([]);
-
-  /**
-   * The remembered pack, named. `defaultPackId` is what a take opens with, so
-   * naming it here is the only place the user can see what "automatically"
-   * means — and the only way an unexpected Listener has a visible cause.
-   */
-  const rememberedPackLabel = $derived.by(() => {
-    const packId = $settings.listeners.defaultPackId;
-    if (packId === null) return null;
-    return (
-      packs.find((p) => p.packId === packId)?.displayName ??
-      installedPacks.find((p) => p.packId === packId)?.displayName ??
-      packId
-    );
-  });
-
   /** Diagnostics are only fetched for the screen that shows them (§47.10). */
   $effect(() => {
     if (section === 'privacy') void loadDiagnostics();
-  });
-
-  $effect(() => {
-    if (section === 'listeners') void loadPacks();
   });
 
   /* ------------------------------------------------------------- displays */
@@ -1177,130 +1119,6 @@
       micPermission = 'unknown';
       micError = `CandidCue could not ask for microphone access. ${describeError(err)}`;
     }
-  }
-
-  /* ------------------------------------------------------ listener framing */
-
-  const framing = $derived($settings.listenerFraming);
-  /** The installed pack that is remembered — its version resolves the media. */
-  const framingPack = $derived(
-    installedPacks.find((p) => p.packId === $settings.listeners.defaultPackId) ?? null,
-  );
-
-  /*
-   * Listener framing range (src/shared/listener/geometry.ts). The position
-   * sliders are percent of the visible frame, and the travel that exists at all
-   * is bought by the zoom: clips are object-fit: cover, so at zoom z there is
-   * only (z-1)/2 of the frame to spend on each side before the media edge shows
-   * as a black bar. The range therefore GROWS WITH ZOOM.
-   */
-  const LISTENER_FALLBACK_ZOOM = 1.15;
-  let listenerDefaultZoom = $state(LISTENER_FALLBACK_ZOOM);
-  $effect(() => {
-    const packId = $settings.listeners.defaultPackId;
-    const version = framingPack?.version ?? '1.0.0';
-    if (packId === null || section !== 'listeners') return undefined;
-    /*
-     * Reset before resolving, never after.
-     *
-     * The zoom is per-PACK, and it decides how far the position sliders can
-     * travel. Leaving the previous pack's value in place while the new one
-     * resolves — or keeping it when the lookup fails — offers a range the pack
-     * does not have, and the offsets it lets you save are the ones the stage
-     * then clamps back. The slider and the glass would quietly disagree.
-     */
-    listenerDefaultZoom = LISTENER_FALLBACK_ZOOM;
-    let cancelled = false;
-    void resolveListenerMedia(packId, version)
-      .then((media) => {
-        if (!cancelled && media.defaultZoom > 0) listenerDefaultZoom = media.defaultZoom;
-      })
-      .catch(() => {
-        /* keep the fallback zoom; the take resolves the real media anyway */
-      });
-    return () => {
-      cancelled = true;
-    };
-  });
-
-  const listenerCropZoom = $derived(listenerDefaultZoom * (framing.zoomPercent / 100));
-  const listenerOffsetBound = $derived(offsetSliderBound(listenerCropZoom));
-  const listenerPlacementInfo = $derived(listenerPlacementDescriptor(framing.placement));
-  const listenerPreviewGeometry = $derived({
-    anchorX: listenerPlacementInfo.anchorX,
-    anchorY: listenerPlacementInfo.anchorY,
-    scale: framing.sizePercent / 100,
-    cropX: framing.offsetXPercent,
-    cropY: framing.offsetYPercent,
-    cropZoom: listenerCropZoom,
-    mirrorVideo: framing.mirrorVideo,
-  });
-  const listenerPreviewBox = $derived(
-    listenerPlacementBox(framing.placement, listenerPreviewGeometry),
-  );
-  const listenerPreviewTarget = $derived(
-    listenerLensTarget(framing.placement, listenerPreviewGeometry),
-  );
-  const listenerColumnOverlap = $derived(
-    listenerOverlapsScriptColumn(
-      framing.placement,
-      $settings.teleprompter.columnWidthPercent,
-      listenerPreviewGeometry,
-    ),
-  );
-
-  /**
-   * Clamp the position sliders when the zoom shrinks the window they move in.
-   *
-   * The bound is derived from the zoom, so lowering the zoom can leave a saved
-   * offset outside it — which the stage renders as a black bar down one side of
-   * the Listener rather than as an error.
-   */
-  function patchFraming(patch: Partial<typeof framing>): void {
-    const next = { ...framing, ...patch };
-    const bound = offsetSliderBound(listenerDefaultZoom * (next.zoomPercent / 100));
-    next.offsetXPercent = clampOffset(next.offsetXPercent, bound);
-    next.offsetYPercent = clampOffset(next.offsetYPercent, bound);
-    void patchSettings('listenerFraming', next);
-  }
-
-  function clampOffset(value: number, bound: number): number {
-    return Math.abs(value) > bound ? Math.sign(value) * bound : value;
-  }
-
-  async function loadPacks(): Promise<void> {
-    packsLoading = true;
-    packsError = null;
-    try {
-      // The installed list is the authority on what is on disk; the catalogue
-      // supplies the description, poster and size.
-      const installed = await listInstalledListeners();
-      installedPacks = installed.filter((p) => p.state === 'installed');
-      const catalogue = await getListenerCatalogue();
-      packs = mergeCatalogue(catalogue, installed);
-    } catch (err) {
-      // The installed list above may have succeeded; only the catalogue half is
-      // cleared, so the picker still offers what is genuinely on disk.
-      packs = [];
-      packsError = describeError(err);
-    } finally {
-      packsLoading = false;
-    }
-  }
-
-  async function removePack(pack: ListenerPackRow): Promise<void> {
-    const accepted = await requestConfirm({
-      title: `Remove ${pack.displayName}?`,
-      body: 'The downloaded media is deleted from this device. Scripts are unaffected.',
-      confirmLabel: 'Remove',
-      danger: true,
-    });
-    if (!accepted) return;
-    await runMaintenance(
-      () => removeListener(pack.packId, pack.version),
-      () => `${pack.displayName} removed`,
-    );
-    await loadPacks();
   }
 
   /** Local time, seconds resolution — enough to match a code to "just now". */
@@ -2423,263 +2241,12 @@
             onchange={(patch) => void patchSettings('following', patch)}
           />
         </Section>
-      {:else if section === 'listeners'}
-        <Section
-          title="Listeners"
-          description="A Listener is a silent looping person behind the script. Installed packs are stored on this device."
-        >
-          {#snippet actions()}
-            <Button size="sm" disabled={packsLoading} onclick={() => void loadPacks()}>
-              {packsLoading ? 'Loading…' : 'Refresh'}
-            </Button>
-          {/snippet}
-
-          {#if packsError}
-            <p class="hint-line">{packsError}</p>
-          {:else if packsLoading && packs.length === 0}
-            <p class="hint-line">Loading Listener packs…</p>
-          {:else if packs.length === 0}
-            <p class="hint-line">No Listener packs are available on this device.</p>
-          {:else}
-            <ul class="packs">
-              {#each packs as pack (pack.packId + pack.version)}
-                <li class="pack">
-                  <div class="pack-text">
-                    <span class="pack-name">{pack.displayName}</span>
-                    <span class="pack-desc">{pack.description}</span>
-                    <span class="pack-meta">
-                      {pack.statusLabel} · v{pack.version}
-                      {#if formatPackSize(pack.approximateBytes)}
-                        · {formatPackSize(pack.approximateBytes)}
-                      {/if}
-                    </span>
-                  </div>
-                  <!--
-                    No download button: `download_listener` is an honest
-                    NOT_IMPLEMENTED stub in this build, and a control that
-                    silently does nothing is worse than an absent one.
-                  -->
-                  {#if pack.removable}
-                    <Button variant="danger" size="sm" onclick={() => void removePack(pack)}>
-                      Remove
-                    </Button>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-          {/if}
-          {#if !DOWNLOADS_SUPPORTED}
-            <p class="hint-line">{DOWNLOADS_UNAVAILABLE_NOTE}</p>
-          {/if}
-          <!--
-            These are the values every take runs with — there is no per-session
-            Listener picker any more, so this toggle and the remembered pack ARE
-            the decision. Choosing a pack here is what puts a person on the
-            stage; nothing else does.
-          -->
-          <Select
-            label="Listener"
-            value={$settings.listeners.defaultPackId ?? ''}
-            options={[
-              { value: '', label: 'None' },
-              ...installedPacks.map((p) => ({ value: p.packId, label: p.displayName })),
-            ]}
-            onchange={(value) =>
-              void patchSettings('listeners', {
-                defaultPackId: value === '' ? null : value,
-                // Choosing a person and then not showing them is not a state
-                // anyone means to be in; clearing the choice turns it off.
-                autoplay: value !== '',
-              })}
-          />
-          <Toggle
-            checked={$settings.listeners.autoplay}
-            disabled={$settings.listeners.defaultPackId === null}
-            label="Turn the Listener on automatically"
-            description={rememberedPackLabel
-              ? `Every take opens with ${rememberedPackLabel} on the stage.`
-              : 'Choose a Listener above to turn this on.'}
-            onchange={(value) => void patchSettings('listeners', { autoplay: value })}
-          />
-          <Slider
-            label="Default dim"
-            value={$settings.listeners.dimPercent}
-            min={0}
-            max={80}
-            format={(v) => `${v}%`}
-            onchange={(value) => void patchSettings('listeners', { dimPercent: value })}
-          />
-          <Slider
-            label="Default blur"
-            value={$settings.listeners.blurPx}
-            min={0}
-            max={24}
-            format={(v) => `${v} px`}
-            onchange={(value) => void patchSettings('listeners', { blurPx: value })}
-          />
-          <Slider
-            label="Default colour"
-            value={Math.round($settings.listeners.saturation * 100)}
-            min={0}
-            max={100}
-            format={(v) => (v === 0 ? 'Black and white' : `${v}%`)}
-            onchange={(value) => void patchSettings('listeners', { saturation: value / 100 })}
-          />
-          <!--
-            §37.4. `keepListener` on the stage `blank` directive was hard-coded
-            false, so blanking always took the person with it. The two reasons
-            to blank want opposite things — clearing a shared screen wants the
-            face gone, blanking between takes on a lens rig wants it to stay —
-            which is what makes this a preference rather than a constant.
-            The session reads it when it builds the directive.
-          -->
-          <Toggle
-            checked={$settings.listeners.keepWhenBlanked}
-            label="Keep the Listener when the stage is blanked"
-            description="Blanking always hides the script. With this on, the person stays on screen."
-            onchange={(value) => void patchSettings('listeners', { keepWhenBlanked: value })}
-          />
-
-          {#if $settings.listeners.defaultPackId !== null}
-            <!--
-              Placement (§37.4). Four of these five modes existed only as CSS:
-              the producer hard-coded 'background', so nothing could reach them.
-              The copy is written around EYELINE rather than layout, because
-              that is the decision — a teleprompter Listener is a place to look,
-              and the lens modes exist so the presenter can look at a face
-              beside the lens instead of through the text.
-            -->
-            <Disclosure label="Framing and placement">
-              <div class="placement">
-                <div class="placement-choices" role="radiogroup" aria-label="Listener placement">
-                  {#each LISTENER_PLACEMENTS as option (option.id)}
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={framing.placement === option.id}
-                      class="placement-option"
-                      class:selected={framing.placement === option.id}
-                      onclick={() => patchFraming({ placement: option.id as ListenerPlacementMode })}
-                    >
-                      <span class="placement-label">{option.label}</span>
-                      <span class="placement-summary">{option.summary}</span>
-                    </button>
-                  {/each}
-                </div>
-                <!--
-                  The diagram is drawn from the same `listenerPlacementBox` the
-                  stage layer positions itself with, and the marker from
-                  `listenerLensTarget`, so it cannot describe a layout the stage
-                  does not produce.
-                -->
-                <div class="placement-preview">
-                  <div class="stage-mini" aria-hidden="true">
-                    <div
-                      class="mini-box"
-                      class:pip={framing.placement === 'pip'}
-                      style:left="{listenerPreviewBox.left * 100}%"
-                      style:top="{listenerPreviewBox.top * 100}%"
-                      style:width="{listenerPreviewBox.width * 100}%"
-                      style:height="{listenerPreviewBox.height * 100}%"
-                      style:opacity={Math.max(0.15, 1 - $settings.listeners.dimPercent / 100)}
-                    ></div>
-                    <!-- Drawn at the column width actually configured under
-                         Teleprompter, so the overlap the note describes is the
-                         overlap shown. -->
-                    <div
-                      class="mini-script"
-                      style:left="{(100 - $settings.teleprompter.columnWidthPercent) / 2}%"
-                      style:right="{(100 - $settings.teleprompter.columnWidthPercent) / 2}%"
-                    ></div>
-                    <div
-                      class="mini-target"
-                      style:left="{listenerPreviewTarget.x * 100}%"
-                      style:top="{listenerPreviewTarget.y * 100}%"
-                    ></div>
-                  </div>
-                  <p class="hint-line">{listenerPlacementInfo.eyeline}</p>
-                  {#if listenerColumnOverlap}
-                    <!-- Said out loud rather than claimed away: at the default
-                         column width the script really does run across a lens
-                         panel. -->
-                    <p class="hint-line">
-                      The script column is {$settings.teleprompter.columnWidthPercent}% wide, so the
-                      text runs across this panel. Narrow it under Teleprompter to keep the Listener
-                      clear of the script.
-                    </p>
-                  {/if}
-                </div>
-              </div>
-              {#if framing.placement !== 'background'}
-                <!-- Only meaningful when the Listener has a box of her own:
-                     'background' is the whole stage, so there is nothing for a
-                     size to change. -->
-                <Slider
-                  label="Size on stage"
-                  value={framing.sizePercent}
-                  min={50}
-                  max={200}
-                  format={(v) => `${v}%`}
-                  onchange={(value) => patchFraming({ sizePercent: value })}
-                />
-              {/if}
-              <Slider
-                label="Zoom"
-                value={framing.zoomPercent}
-                min={60}
-                max={160}
-                format={(v) => `${v}%`}
-                onchange={(value) => patchFraming({ zoomPercent: value })}
-              />
-              <Slider
-                label="Horizontal position"
-                value={framing.offsetXPercent}
-                min={-listenerOffsetBound}
-                max={listenerOffsetBound}
-                step={0.1}
-                disabled={listenerOffsetBound === 0}
-                format={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`}
-                onchange={(value) => patchFraming({ offsetXPercent: value })}
-              />
-              <Slider
-                label="Vertical position"
-                value={framing.offsetYPercent}
-                min={-listenerOffsetBound}
-                max={listenerOffsetBound}
-                step={0.1}
-                disabled={listenerOffsetBound === 0}
-                format={(v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}%`}
-                onchange={(value) => patchFraming({ offsetYPercent: value })}
-              />
-              {#if listenerOffsetBound === 0}
-                <p class="hint-line">
-                  Zoom past 100% to gain room to move the Listener around the frame.
-                </p>
-              {/if}
-              <!--
-                Mirroring the VIDEO is independent of mirroring the script. A
-                glass rig flips everything on the panel optically, so a Listener
-                that reads correctly on the desk reads backwards through the
-                glass; this flips the media back. It lives inside the crop
-                transform, so it never inverts the position sliders
-                (src/shared/listener/geometry.ts).
-              -->
-              <Toggle
-                checked={framing.mirrorVideo}
-                label="Mirror the Listener"
-                description="Flips the video only. Use it on a glass rig, where the script is already mirrored."
-                onchange={(value) => patchFraming({ mirrorVideo: value })}
-              />
-            </Disclosure>
-          {/if}
-        </Section>
       {:else}
         <Section title="Data, privacy & updates">
           <div class="privacy">
             <h3 class="privacy-head">Local by default</h3>
             <p class="privacy-body">
-              Your Markdown scripts, imported images, settings, and downloaded Listeners are stored
-              on this device.
+              Your Markdown scripts, imported images, and settings are stored on this device.
             </p>
             <h3 class="privacy-head">While voice tracking is active</h3>
             <p class="privacy-body">
@@ -2693,8 +2260,8 @@
             </p>
             <h3 class="privacy-head">CandidCue servers</h3>
             <p class="privacy-body">
-              CandidCue checks for software updates and downloads optional Listener media. Your
-              Inworld API key and your scripts are not sent to CandidCue servers.
+              CandidCue checks for software updates. Your Inworld API key and your scripts are
+              not sent to CandidCue servers.
             </p>
             <h3 class="privacy-head">Inworld retention</h3>
             <p class="privacy-body">
@@ -2720,16 +2287,6 @@
                 )}
             >
               Clear analysis cache
-            </Button>
-            <Button
-              variant="ghost"
-              onclick={() =>
-                void runMaintenance(
-                  () => settingsService.clearCache('listeners'),
-                  () => 'Listener downloads cleared',
-                )}
-            >
-              Clear Listener downloads
             </Button>
             <Button variant="ghost" onclick={() => clearLogs()}>Clear logs</Button>
           </div>
@@ -3408,113 +2965,4 @@
     color: var(--prose-text-warm);
   }
 
-  /* --- listener placement --- */
-  .placement {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(200px, 260px);
-    gap: var(--space-5);
-    align-items: start;
-  }
-  .placement-choices {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-  .placement-option {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
-    text-align: left;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--bg-panel);
-    transition:
-      border-color var(--dur-fast) var(--ease-out),
-      background var(--dur-fast) var(--ease-out);
-  }
-  .placement-option:hover {
-    border-color: var(--border-strong);
-    background: var(--bg-hover-surface);
-  }
-  .placement-option.selected,
-  .placement-option.selected:hover {
-    border-color: var(--border-strong);
-    background: var(--accent-wash);
-  }
-  /* Inset bar, never a one-sided border on a rounded box. */
-  .placement-option.selected::before {
-    content: '';
-    position: absolute;
-    left: 6px;
-    top: 10px;
-    bottom: 10px;
-    width: 2px;
-    border-radius: 1px;
-    background: var(--accent);
-  }
-  .placement-label {
-    font-size: var(--text-sm);
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-  .placement-summary {
-    font-size: var(--text-2xs);
-    line-height: var(--lh-label);
-    color: var(--text-secondary);
-  }
-  .placement-preview {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-  .stage-mini {
-    position: relative;
-    aspect-ratio: 16 / 9;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: #0b0b0c;
-    overflow: hidden;
-  }
-  .mini-box {
-    position: absolute;
-    background: var(--accent);
-    transition:
-      left var(--dur-fast) var(--ease-out),
-      top var(--dur-fast) var(--ease-out),
-      width var(--dur-fast) var(--ease-out),
-      height var(--dur-fast) var(--ease-out);
-  }
-  .mini-box.pip {
-    border-radius: 4px;
-  }
-  /* Where the script column sits, so the trade-off with the text is visible. */
-  .mini-script {
-    position: absolute;
-    top: 30%;
-    height: 3px;
-    border-radius: 2px;
-    background: rgba(255, 255, 255, 0.72);
-    box-shadow:
-      0 10px 0 rgba(255, 255, 255, 0.4),
-      0 20px 0 rgba(255, 255, 255, 0.28);
-  }
-  .mini-target {
-    position: absolute;
-    width: 12px;
-    height: 12px;
-    margin: -6px 0 0 -6px;
-    border-radius: 50%;
-    border: 2px solid #fff;
-    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.55);
-    transition:
-      left var(--dur-fast) var(--ease-out),
-      top var(--dur-fast) var(--ease-out);
-  }
-  @media (max-width: 760px) {
-    .placement {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
 </style>

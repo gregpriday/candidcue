@@ -4,9 +4,7 @@ import type {
   AlignmentSnapshot,
   ScriptSummary,
   StageSessionEnvelope,
-  ListenerPackManifest,
 } from '../../src/shared/contracts';
-import miraManifest from '../../assets/listeners/mira/manifest.json';
 
 describe('shared contracts', () => {
   it('exposes the stable application error codes', () => {
@@ -30,7 +28,6 @@ describe('shared contracts', () => {
     expect(STAGE_EVENT.loadSession).toBe('stage://load-session');
     expect(STAGE_EVENT.alignmentSnapshot).toBe('stage://alignment-snapshot');
     expect(STAGE_EVENT.applyCommand).toBe('stage://apply-command');
-    expect(STAGE_EVENT.listenerState).toBe('stage://listener-state');
     expect(STAGE_EVENT.closeSession).toBe('stage://close-session');
     expect(STAGE_EVENT.heartbeat).toBe('stage://heartbeat');
     expect(STAGE_EVENT.hydrated).toBe('stage://hydrated');
@@ -70,18 +67,5 @@ describe('shared contracts', () => {
     const _alignment: AlignmentSnapshot | undefined = undefined;
     expect(_alignment).toBeUndefined();
     expect(_envelope).toBeUndefined();
-  });
-
-  it('validates the bundled mira listener manifest against the contract', () => {
-    const manifest: ListenerPackManifest = miraManifest as ListenerPackManifest;
-    expect(manifest.id).toBe('mira');
-    expect(manifest.defaultZoom).toBeCloseTo(1.15);
-    expect(manifest.fit).toBe('cover');
-    expect(manifest.clips).toHaveLength(2);
-    for (const clip of manifest.clips) {
-      expect(clip.role).toBe('neutral');
-      expect(clip.mime).toBe('video/mp4');
-      expect(clip.durationMs).toBeGreaterThan(0);
-    }
   });
 });

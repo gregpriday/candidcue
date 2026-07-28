@@ -3,7 +3,6 @@
  * window, stage window, workers, and the Rust boundary (spec Appendix C).
  */
 import type { StageSettings } from './display';
-import type { ListenerSelection } from './listener';
 
 export type Uuid = string;
 export type IsoDateTime = string;
@@ -38,7 +37,6 @@ export interface ScriptDocument extends ScriptSummary {
   settings: ScriptSettings;
   selectedDisplayProfileId?: Uuid;
   selectedTrackingProfileId?: Uuid;
-  selectedListener?: ListenerSelection;
 }
 
 export interface ScriptSettings {

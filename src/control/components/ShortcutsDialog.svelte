@@ -27,7 +27,6 @@
     ['Increase / decrease stage text', `${mod}= / ${mod}-`],
     ['Toggle horizontal mirror', `${mod}Shift+M`],
     ['Blank stage', 'B (during Live)'],
-    ['Toggle Listener', 'L (during Live)'],
     ['Add take marker', 'T (during Live)'],
     // Twice, and from either window — the stage answers it when the presenter
     // is in front of it, this window when the operator is at the desk.

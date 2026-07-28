@@ -143,10 +143,6 @@ impl DataPaths {
         self.root.join("quarantine")
     }
 
-    pub fn listeners_dir(&self) -> PathBuf {
-        self.root.join("listeners")
-    }
-
     pub fn cache_dir(&self) -> PathBuf {
         self.root.join("cache")
     }
@@ -271,15 +267,6 @@ impl Default for ScriptSettings {
     }
 }
 
-/// Twin of `ListenerSelection` (listener.ts).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ListenerSelection {
-    pub pack_id: String,
-    pub version: String,
-    pub variant: String,
-}
-
 /// Twin of `ScriptDocument` (core.ts): summary + source + settings.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -293,8 +280,6 @@ pub struct ScriptDocument {
     pub selected_display_profile_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected_tracking_profile_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected_listener: Option<ListenerSelection>,
     /// True when the canonical file changed outside CandidCue and the file
     /// content (authority, spec §48.1) was adopted during this read.
     pub externally_changed: bool,
@@ -367,8 +352,6 @@ pub struct ScriptMetadataPatch {
     pub selected_display_profile_id: Option<Option<String>>,
     #[serde(default, with = "double_option")]
     pub selected_tracking_profile_id: Option<Option<String>>,
-    #[serde(default, with = "double_option")]
-    pub selected_listener: Option<Option<ListenerSelection>>,
     /// Force a revision snapshot with this reason (e.g. `pre_session`,
     /// `before_destructive_edit`); otherwise the 5-minute policy applies.
     pub revision_reason: Option<String>,

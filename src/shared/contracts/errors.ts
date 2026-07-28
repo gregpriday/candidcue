@@ -76,15 +76,6 @@ export const APP_ERROR_CODES = [
   // A close/publish naming a session that is no longer the one on stage (M1).
   'STAGE_SESSION_MISMATCH',
   'STAGE_LAYOUT_FAILED',
-  'LISTENER_NOT_INSTALLED',
-  'LISTENER_MANIFEST_INVALID',
-  // NOT "signature": CandidCue has no pack-signing scheme, and calling a
-  // self-declared SHA-256 comparison a signature check was the M3 defect.
-  'LISTENER_CHECKSUM_INVALID',
-  // A pack that did not ship with the application. Fails closed — integrity
-  // can be checked, authenticity cannot.
-  'LISTENER_UNVERIFIED',
-  'LISTENER_DECODE_FAILED',
   'UPDATE_SIGNATURE_INVALID',
   'UPDATE_INSTALL_FAILED',
   'INTERNAL_UNEXPECTED',

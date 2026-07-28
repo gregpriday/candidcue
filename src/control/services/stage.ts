@@ -4,7 +4,7 @@
  *
  * High-level command actions never reach the stage: control translates them
  * into `StageDirective`s (contracts/stage.ts) and relays them through
- * `publish_stage_command` / `publish_listener_state`, which validate the
+ * `publish_stage_command`, which validates the
  * directive kind and stage generation in Rust.
  */
 import type {
@@ -94,16 +94,6 @@ export async function publishStageDirective(
 ): Promise<void> {
   const action: StageStatePayload = { stageGeneration, directive };
   return invokeOrMock<void>('publish_stage_command', { sessionId, action }, () => undefined);
-}
-
-/** Listener selection/geometry changes travel on their own event (§46.6). */
-export async function publishListenerState(
-  sessionId: string,
-  stageGeneration: number,
-  directive: Extract<StageDirective, { kind: 'listener' }>,
-): Promise<void> {
-  const state: StageStatePayload = { stageGeneration, directive };
-  return invokeOrMock<void>('publish_listener_state', { sessionId, state }, () => undefined);
 }
 
 /**

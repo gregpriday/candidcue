@@ -6,7 +6,6 @@ import {
   OPTICAL_HARDWARE,
   defaultOpticalProfile,
   type FramingPreset,
-  type ListenerPlacementMode,
   type OpticalCalibrationStep,
   type OpticalHardwareKind,
   type OpticalOverrides,
@@ -16,7 +15,6 @@ import {
   type TextIntensity,
 } from '../../shared/contracts';
 import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
-import { defaultListenerSettings } from './settings-listener';
 
 export type { FidelityMode, FollowFeel, FollowingSettings } from '../lib/follow-profiles';
 
@@ -183,23 +181,6 @@ export interface AppSettings {
    * `lib/follow-profiles.ts` rather than exposing control-system parameters.
    */
   following: FollowingSettings;
-  /**
-   * Listener defaults (§37, §46.7). Rust-owned in both directions, and an exact
-   * twin of `settings::ListenerSettings` — this section and the Rust struct
-   * used to be two structures for one feature, one of which nothing could set.
-   * See services/settings-listener.ts.
-   */
-  listeners: ListenerSettings;
-  /**
-   * How the Listener is framed on the stage (§37.4).
-   *
-   * Separate from `listeners` because that section is Rust-owned in both
-   * directions and these six fields have no home in the Rust document. They
-   * are the percent-scale inputs `buildListenerSelection` converts into a
-   * `ListenerGeometry`, kept in the shape the sliders bind to so there is one
-   * place a framing is written and one place it is read.
-   */
-  listenerFraming: ListenerFraming;
   privacy: {
     diagnosticLogging: boolean;
     updateChannel: UpdateChannel;
@@ -486,42 +467,6 @@ function positive(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
 }
 
-/** The percent-scale framing inputs behind a `ListenerGeometry`. */
-export interface ListenerFraming {
-  placement: ListenerPlacementMode;
-  /** Multiplier on the placement's own box; 'background' ignores it. */
-  sizePercent: number;
-  /** `cropZoom = pack defaultZoom × zoomPercent/100`. */
-  zoomPercent: number;
-  offsetXPercent: number;
-  offsetYPercent: number;
-  /** Flips the video only — never the script (see shared/listener/geometry). */
-  mirrorVideo: boolean;
-}
-
-/**
- * Listener defaults. Declared here rather than in settings-listener.ts so the
- * adapter can import the shape it maps to without a cycle; the adapter owns the
- * defaults, the clamps, and both directions of the mapping.
- */
-export interface ListenerSettings {
-  /** Pack preselected when `autoplay` is on. `null` = ask every time. */
-  defaultPackId: string | null;
-  autoplay: boolean;
-  /** 0-80. `opacity = 1 - dimPercent/100` on the stage. */
-  dimPercent: number;
-  /** 0-24 CSS pixels. */
-  blurPx: number;
-  /** 0-1, the CSS `saturate()` factor the stage applies. */
-  saturation: number;
-  /**
-   * §37.4. Keep the Listener on screen when the stage is blanked. Read by the
-   * session when it builds the `blank` directive, where it becomes
-   * `keepListener` — the directive stays the single carrier of the decision.
-   */
-  keepWhenBlanked: boolean;
-}
-
 export interface ClearResult {
   kind: string;
   /** Number of entries removed. */
@@ -660,15 +605,6 @@ export function defaultAppSettings(): AppSettings {
     // Nothing calibrated until somebody stands at a rig and measures it.
     optical: { profiles: {}, activeRig: {} },
     following: defaultFollowingSettings(),
-    listeners: defaultListenerSettings(),
-    listenerFraming: {
-      placement: 'background',
-      sizePercent: 100,
-      zoomPercent: 100,
-      offsetXPercent: 0,
-      offsetYPercent: 0,
-      mirrorVideo: false,
-    },
     privacy: {
       diagnosticLogging: false,
       updateChannel: 'stable',
