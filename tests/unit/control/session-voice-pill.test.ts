@@ -361,3 +361,63 @@ describe('the voice pill on a live take', () => {
     expect(pills()).toHaveLength(before);
   });
 });
+
+/**
+ * The recogniser's words reach the stage by the road that works.
+ *
+ * ---------------------------------------------------------------------------
+ * THE DEFECT THIS EXISTS FOR
+ * ---------------------------------------------------------------------------
+ * The transcript bar used to be fed by a direct
+ * `emitTo('stage', 'stage://transcript-tap', …)` from the control webview. On a
+ * real rig it delivered nothing: the bar read "listening — no words yet" for an
+ * entire take while control counted six taps sent, in the same seconds that
+ * alignment snapshots reached the same window and moved the document to the
+ * pixel. Reading both sides never produced a reason they should differ — same
+ * helper, same target, same generation, subscriptions registered together.
+ *
+ * What differed was the ROAD. Snapshots are emitted by RUST, and everything
+ * Rust emits arrives. So the words go that way too, as a `transcript`
+ * directive on `publish_stage_command` — the relay the stage already trusts for
+ * freeze, blank, settings and calibration.
+ *
+ * This pins the control end of that. The stage end is pinned by
+ * `tests/dom/stage-exit-affordance.test.ts`; between them the only untested
+ * link is the Rust relay itself, which every working take already exercises.
+ */
+describe('transcript words travel the Rust relay', () => {
+  it('publishes them as a directive rather than emitting at the window', () => {
+    start();
+    stage.publishStageDirective.mockClear();
+
+    const onTranscriptText = deps().onTranscriptText as unknown as (
+      text: string,
+      final: boolean,
+    ) => void;
+    onTranscriptText('this is a test of the transcription', false);
+
+    const calls = stage.publishStageDirective.mock.calls.filter(
+      ([, , directive]) => (directive as { kind: string }).kind === 'transcript',
+    );
+    expect(calls, 'the words were not published as a transcript directive').toHaveLength(1);
+    const directive = calls[0]![2] as { kind: string; text: string; final: boolean };
+    expect(directive.text).toContain('this is a test of the transcription');
+    expect(directive.final).toBe(false);
+  });
+
+  it('carries the words of a final the same way', () => {
+    start();
+    stage.publishStageDirective.mockClear();
+    const onTranscriptText = deps().onTranscriptText as unknown as (
+      text: string,
+      final: boolean,
+    ) => void;
+    onTranscriptText('hello there friend', true);
+
+    const directive = stage.publishStageDirective.mock.calls
+      .map(([, , d]) => d as { kind: string; text: string; final: boolean })
+      .find((d) => d.kind === 'transcript');
+    expect(directive?.final).toBe(true);
+    expect(directive?.text).toContain('hello there friend');
+  });
+});
