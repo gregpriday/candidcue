@@ -502,10 +502,28 @@ describe('a healthy take', () => {
     expect(latest().label).toBe('Hearing you');
     expect(latest().visible).toBe(true);
 
-    // ...and then it gets out of the way.
+    /*
+     * ...and then it STAYS, which is the point.
+     *
+     * It used to fade a couple of seconds after the tick. That retired the
+     * waveform along with the confirmation, and the waveform is the only thing
+     * on the glass that says audio is arriving NOW — a presenter ten minutes
+     * into a take has no other way to ask, and "you were heard at 00:04" is not
+     * an answer about 00:10. So the mark settles and the trace keeps running.
+     */
     await run(3000);
     expect(latest().reading).toBe('confirmed');
-    expect(latest().visible).toBe(false);
+    expect(latest().visible).toBe(true);
+
+    // And the trace is still LIVE — it follows the room down into silence and
+    // back up, rather than being a frozen picture of the level that proved the
+    // chain three seconds ago.
+    await silence(1500);
+    expect(latest().visible).toBe(true);
+    expect(latest().levels.at(-1)).toBeLessThan(0.05);
+    await speak(1500);
+    expect(latest().visible).toBe(true);
+    expect(latest().levels.at(-1)).toBeGreaterThan(0.1);
   });
 
   it('never shows a fault while the presenter simply thinks', async () => {
@@ -663,7 +681,8 @@ describe('take boundaries', () => {
     await emitStt({ kind: 'partial', generation: 1, itemId: 'i-1', text: 'hello' });
     await untilReading('confirmed');
     await run(3000);
-    expect(latest().visible, 'a proven take gets out of the way').toBe(false);
+    expect(latest().reading, 'a proven take stays proven').toBe('confirmed');
+    expect(latest().visible, 'and stays on screen — the audio is still arriving').toBe(true);
 
     restartParagraph();
     await run(150);

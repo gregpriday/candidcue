@@ -613,6 +613,168 @@ describe('forward target latch (§70.5)', () => {
     expect(engine.latchReanchors).toBe(0);
   });
 
+  /*
+   * §53 "nearby rewind, distant re-anchor" — where "nearby" is measured.
+   *
+   * A presenter who backs up to re-read a phrase has gone somewhere they can
+   * still SEE. Cutting the document there (fade down, step, fade up) is the
+   * treatment for a place they cannot see, and spending it on a move of a few
+   * lines is what made an ordinary re-read feel like being thrown. The gate is
+   * the §30.5 reverse-travel budget in pixels, so everything the plant can
+   * actually walk to is walked to.
+   */
+  describe('an accepted retake the plant can walk to (§53, §30.5)', () => {
+    /** The reverse budget this map's pitch resolves to — the gate itself. */
+    function budgetPx(map: StageRenderedLineMap): number {
+      return limitsForState('following', DEFAULT_PROFILE, { linePitchPx: map.linePitchPx })
+        .reverseTravelMaxPx;
+    }
+
+    /** The path position for a unit — asserted to exist, never defaulted to 0. */
+    function pathPx(map: StageRenderedLineMap, unit: number): number {
+      const sample = map.sampleMotionPath(unit);
+      expect(sample).not.toBeNull();
+      // The engine measures a rewind against `planner.target()`, which returns
+      // this same number untouched whenever the path covers the unit. Asserting
+      // the sample exists is what keeps the two the same measurement.
+      return sample?.scrollPx ?? Number.NaN;
+    }
+
+    /** Feed one retake, then run the loop with the tracker holding position. */
+    function retakeTo(engine: StageMotionEngine, unit: number, fromMs: number, toMs: number) {
+      expect(
+        engine.receiveSnapshot(
+          snapshotAt(unit, fromMs, { rateTokensPerSecond: 0, decision: 'retakeAccepted' }),
+          fromMs,
+        ),
+      ).toBe(true);
+      const trace: ReturnType<StageMotionEngine['frame']>[] = [];
+      for (let t = fromMs; t < toMs; t += 16.7) trace.push(engine.frame(t));
+      return trace;
+    }
+
+    it('scrolls back to it rather than cutting, well past the old token gate', () => {
+      const { map, layout } = mapFor();
+      const engine = makeEngine(map, layout.contentHeightPx);
+      drive(engine, { durationMs: 4000, unitsPerSecond: 12 });
+      const advanced = engine.controller.state.q;
+      const displayedToken = engine.lastDisplayToken ?? 0;
+
+      // A paragraph-scale re-read: far more than the twelve tokens that used to
+      // decide this, and still inside the travel the plant may spend.
+      const retakeUnit = 16;
+      const travelPx = advanced - pathPx(map, retakeUnit);
+      expect(displayedToken - retakeUnit).toBeGreaterThan(12);
+      expect(travelPx).toBeGreaterThan(map.linePitchPx * 3);
+      expect(travelPx).toBeLessThan(budgetPx(map));
+
+      const trace = retakeTo(engine, retakeUnit, 4000, 7000);
+      // The classification itself, not just its consequences.
+      expect(engine.transitions.seenIds).toBeGreaterThan(0);
+
+      // Nothing was obscured: the presenter watched the script come back.
+      expect(engine.reanchorFades).toBe(0);
+      expect(trace.every((f) => f.documentOpacity === 1)).toBe(true);
+      // And no frame stepped: the walk is continuous under the same jerk limits
+      // as ordinary following. Seeded with the pre-retake position so the FIRST
+      // frame after the directive is measured too — that is the one a step would
+      // show up on.
+      let previous = advanced;
+      let biggestStep = 0;
+      for (const frame of trace) {
+        biggestStep = Math.max(biggestStep, Math.abs(frame.scrollPx - previous));
+        previous = frame.scrollPx;
+      }
+      expect(biggestStep).toBeLessThan(map.linePitchPx);
+      // It arrives — the licence outlives the travel it authorized.
+      expect(engine.controller.state.q).toBeLessThan(advanced);
+      expect(Math.abs(engine.controller.state.q - (trace[trace.length - 1]?.targetPx ?? 0)))
+        .toBeLessThan(map.linePitchPx * 0.5);
+      // And then it ends. A backward licence that never expires would leave
+      // ordinary following able to reverse for the rest of the session.
+      expect(engine.transitions.active).toBeNull();
+    });
+
+    it('keeps the licence alive across the manual grace it cannot move during', () => {
+      /*
+       * §30.6 zeroes both velocity limits while manual authority holds, so a
+       * rewind that arrives mid-drag spends none of its licence. If it expired
+       * in there, nothing could ever carry the document back: ordinary
+       * following is forward-only, and the directive is idempotent by id, so no
+       * re-sent copy would revive it.
+       */
+      const { map, layout } = mapFor();
+      const engine = makeEngine(map, layout.contentHeightPx);
+      drive(engine, { durationMs: 4000, unitsPerSecond: 12 });
+      const advanced = engine.controller.state.q;
+
+      // The presenter grabs the script, then the tracker reports the retake.
+      engine.manualOverride(advanced, 4000);
+      const retakeUnit = 16;
+      const destinationPx = pathPx(map, retakeUnit);
+      const duringGrace = retakeTo(engine, retakeUnit, 4016, 6000);
+      // Nothing moved automatically while the grace held.
+      expect(duringGrace.every((f) => f.controllerState.includes('manual'))).toBe(true);
+      expect(Math.abs(engine.controller.state.q - advanced)).toBeLessThan(1);
+
+      // Grace over: the walk the presenter was promised still happens.
+      for (let t = 6000; t < 10000; t += 16.7) engine.frame(t);
+      expect(engine.reanchorFades).toBe(0);
+      expect(Math.abs(engine.controller.state.q - destinationPx)).toBeLessThan(map.linePitchPx);
+    });
+
+    it('cuts to a second retake when the first one spent the reverse budget', () => {
+      const { map, layout } = mapFor();
+      const engine = makeEngine(map, layout.contentHeightPx);
+      drive(engine, { durationMs: 4000, unitsPerSecond: 12 });
+
+      // A near-budget walk, which leaves most of §30.5's travel spent.
+      retakeTo(engine, 18, 4000, 7000);
+      expect(engine.reanchorFades).toBe(0);
+      expect(engine.controller.reverseTravelPx).toBeGreaterThan(budgetPx(map) * 0.5);
+
+      // The presenter re-reads a little — not far enough for forward motion to
+      // refund what the walk spent.
+      let t = 7000;
+      for (let unit = 18; unit <= 26; unit += 2) {
+        engine.receiveSnapshot(snapshotAt(unit, t, { rateTokensPerSecond: 3 }), t);
+        for (const end = t + 700; t < end; t += 16.7) engine.frame(t);
+      }
+      const remainingPx = budgetPx(map) - engine.controller.reverseTravelPx;
+
+      // A second retake that fits the budget ON PAPER but not what is left of
+      // it. Walking it would park the plant above the presenter for good.
+      const destinationPx = map.sampleMotionPath(6)?.scrollPx ?? 0;
+      const travelPx = engine.controller.state.q - destinationPx;
+      expect(travelPx).toBeLessThan(budgetPx(map));
+      expect(travelPx).toBeGreaterThan(remainingPx);
+
+      retakeTo(engine, 6, t, t + 4000);
+      expect(engine.reanchorFades).toBe(1);
+      // It arrives, which is the whole reason the step exists.
+      expect(Math.abs(engine.controller.state.q - destinationPx)).toBeLessThan(map.linePitchPx);
+    });
+
+    it('still cuts to one further back than the reverse budget can carry', () => {
+      const { map, layout } = mapFor();
+      const engine = makeEngine(map, layout.contentHeightPx);
+      drive(engine, { durationMs: 8000, unitsPerSecond: 12 });
+      const advanced = engine.controller.state.q;
+
+      const retakeUnit = 2;
+      const destinationPx = map.sampleMotionPath(retakeUnit)?.scrollPx ?? 0;
+      expect(advanced - destinationPx).toBeGreaterThan(budgetPx(map));
+
+      const trace = retakeTo(engine, retakeUnit, 8000, 11000);
+
+      // Beyond the budget a walk would strand the plant part-way, so §20.4's
+      // obscured step is the only thing that arrives.
+      expect(engine.reanchorFades).toBe(1);
+      expect(trace.some((f) => f.documentOpacity === 0)).toBe(true);
+      expect(Math.abs(engine.controller.state.q - destinationPx)).toBeLessThan(map.linePitchPx);
+    });
+  });
+
   it('releases the latch on an authorized re-anchor', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);

@@ -22,7 +22,7 @@ import { render } from '@testing-library/svelte';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import StageApp from '../../src/stage/StageApp.svelte';
 import { dispatchLocalStageEvent } from '../../src/stage/events';
-import { STAGE_EVENT } from '../../src/shared/contracts';
+import { STAGE_EVENT, STAGE_VOICE_PILL_TRACE_SAMPLES } from '../../src/shared/contracts';
 import type {
   AlignmentSnapshot,
   ResolvedOptics,
@@ -345,6 +345,37 @@ describe('Clean Take against Diagnostic Take', () => {
     expect(container.querySelector('.diagnostics')).toBeNull();
   });
 
+  it('carries only the tail of a long utterance, not everything since the last final', async () => {
+    /*
+     * The bar answers "is CandidCue hearing me?", and the words that answer it
+     * are the ones that just arrived. It used to hold the whole utterance and
+     * rely on `overflow: hidden`, which hides the excess on the glass while the
+     * element still LAYS OUT at the full width of it — a strip of moving text
+     * across the panel, under a script somebody is reading.
+     *
+     * `transcript-tail.ts` owns the rule and is unit-tested; this is the seam
+     * that says the stage actually applies it, which no unit test can see.
+     */
+    const container = await mountStage('clean');
+    await settleLayout();
+
+    const spoken = Array.from({ length: 26 }, (_, i) => `word${i + 1}`);
+    dispatchLocalStageEvent(STAGE_EVENT.transcriptTap, {
+      stageGeneration: STAGE_GENERATION,
+      text: spoken.join(' '),
+      final: false,
+      sentAtMs: 1000,
+    });
+    await settle();
+
+    const shown = (container.querySelector('.transcript-tap')?.textContent ?? '').trim();
+    expect(shown.split(/\s+/)).toHaveLength(10);
+    // The NEWEST words. Cropping the wrong end would freeze the bar on the
+    // opening of a long utterance, which is the one thing it must never do.
+    expect(shown).toBe(spoken.slice(-10).join(' '));
+    expect(shown).not.toContain('word16');
+  });
+
   it('draws both once the rig is in Diagnostic Take', async () => {
     const container = await mountStage('diagnostic');
     await settleLayout();
@@ -355,17 +386,17 @@ describe('Clean Take against Diagnostic Take', () => {
     expect(container.querySelector('.diagnostics')).not.toBeNull();
   });
 
-  it('draws the pill as control asked, in either mode', async () => {
+  it('draws the waveform in either mode, even long after the chain is proven', async () => {
     /*
-     * The stage used to force `collapsed` in Clean Take. Nothing in control has
-     * ever SET `prominence` — the field is optional and an absent one reads as
-     * expanded — so that was not refining control's choice, it was replacing
-     * the only behaviour there had ever been, and it took the "is the
-     * microphone being heard" readout off every take.
+     * Twice something has tried to retire the trace once recognition comes
+     * back: the stage forced `collapsed` in Clean Take, and control faded the
+     * whole pill a couple of seconds after it confirmed. Both were reasoning
+     * about a real cost — peripheral motion beside a script — and both left the
+     * presenter with no way to ask "am I still being picked up?", which is the
+     * only question this instrument is ever asked.
      *
-     * The decision belongs where the audio is. If the motion turns out to cost
-     * too much on the glass, control sends `collapsed`; the stage renders what
-     * it is told.
+     * A `confirmed` pill is the settled, everything-is-fine case. The bars have
+     * to be there anyway.
      */
     const pill: StageVoicePillPayload = {
       stageGeneration: STAGE_GENERATION,
@@ -373,7 +404,6 @@ describe('Clean Take against Diagnostic Take', () => {
       levels: [0.3, 0.7],
       label: 'Hearing you',
       visible: true,
-      prominence: 'expanded',
       sentAtMs: 1000,
     };
 
@@ -382,10 +412,12 @@ describe('Clean Take against Diagnostic Take', () => {
       const container = await mountStage(mode);
       dispatchLocalStageEvent(STAGE_EVENT.voicePill, pill);
       await settle();
+      const wave = container.querySelector('.voice-pill .wave');
+      expect(wave, `${mode} take must draw the trace`).not.toBeNull();
       expect(
-        container.querySelector('.voice-pill')?.getAttribute('data-expanded'),
-        `${mode} take must honour control's prominence`,
-      ).toBe('true');
+        wave?.querySelectorAll('.bar').length,
+        `${mode} take must draw a full trace, not a stub`,
+      ).toBe(STAGE_VOICE_PILL_TRACE_SAMPLES);
     }
   });
 });

@@ -17,7 +17,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AudioLevelSnapshot } from '../../../shared/contracts';
 import {
-  VOICE_PILL_CONFIRM_HOLD_MS,
   VOICE_PILL_NO_CAPTURE_MS,
   VOICE_PILL_STALE_FRAME_MS,
   VOICE_PILL_TRACE_SAMPLES,
@@ -143,36 +142,43 @@ describe('confirming', () => {
     expect(reading(later, START_MS + 25 * FRAME_MS)).toBe('confirmed');
   });
 
-  it('fades away once the confirmation has been on screen long enough', () => {
-    let state = reduceVoicePillText(feed(initialVoicePillState(START_MS), 5, START_MS), 'hello');
-    const confirmedAtMs = START_MS + 5 * FRAME_MS;
-    state = tickVoicePill(state, HEALTHY, confirmedAtMs);
-    expect(voicePillView(state, confirmedAtMs).visible).toBe(true);
-    expect(voicePillView(state, confirmedAtMs + VOICE_PILL_CONFIRM_HOLD_MS - 1).visible).toBe(true);
-    expect(voicePillView(state, confirmedAtMs + VOICE_PILL_CONFIRM_HOLD_MS).visible).toBe(false);
-  });
-
-  it('comes back, and stays for a full hold, after a fault resolves', () => {
+  it('stays on screen once confirmed, however long the take runs', () => {
     /*
-     * "Fades once proven, returns on trouble" only works if the recovery gets
-     * its own hold. Inheriting the expired one would make the pill flash on for
-     * the fault and vanish the instant it was fixed — the presenter would see
-     * the problem and never the resolution.
+     * It used to fade a couple of seconds after the tick, on the reasoning that
+     * a confirmation nobody needs any more is clutter. That retired the
+     * WAVEFORM along with the tick, and the waveform is not a status that
+     * resolves — it is the only live evidence that audio is still arriving.
+     * Being confirmed ten minutes ago says nothing about now.
      */
     let state = reduceVoicePillText(feed(initialVoicePillState(START_MS), 5, START_MS), 'hello');
     const confirmedAtMs = START_MS + 5 * FRAME_MS;
     state = tickVoicePill(state, HEALTHY, confirmedAtMs);
-    const faultedAtMs = confirmedAtMs + VOICE_PILL_CONFIRM_HOLD_MS + 1000;
+    expect(state.reading).toBe('confirmed');
+    expect(voicePillView(state).visible).toBe(true);
+
+    // Half an hour of take later, with nothing having gone wrong.
+    const laterMs = confirmedAtMs + 30 * 60_000;
+    state = reduceVoicePillLevel(state, frame({ generatedAtMs: laterMs }), laterMs);
+    state = tickVoicePill(state, HEALTHY, laterMs);
+    expect(state.reading).toBe('confirmed');
+    expect(voicePillView(state).visible).toBe(true);
+  });
+
+  it('is still there for the fault, and for the recovery after it', () => {
+    let state = reduceVoicePillText(feed(initialVoicePillState(START_MS), 5, START_MS), 'hello');
+    const confirmedAtMs = START_MS + 5 * FRAME_MS;
+    state = tickVoicePill(state, HEALTHY, confirmedAtMs);
+    const faultedAtMs = confirmedAtMs + 10_000;
     state = tickVoicePill(state, DEVICE_LOST, faultedAtMs);
     expect(state.reading).toBe('fault');
-    expect(voicePillView(state, faultedAtMs).visible).toBe(true);
+    expect(voicePillView(state).visible).toBe(true);
 
     // Feed a frame so the capture does not read as stale, then recover.
     const backAtMs = faultedAtMs + 500;
     state = reduceVoicePillLevel(state, frame({ generatedAtMs: backAtMs }), backAtMs);
     state = tickVoicePill(state, HEALTHY, backAtMs);
     expect(state.reading).toBe('confirmed');
-    expect(voicePillView(state, backAtMs + VOICE_PILL_CONFIRM_HOLD_MS - 1).visible).toBe(true);
+    expect(voicePillView(state).visible).toBe(true);
   });
 });
 
@@ -222,7 +228,7 @@ describe('faults — the two it can actually see', () => {
     const offline = tickVoicePill(state, OFFLINE, lastAtMs);
     expect(offline.reading).toBe('fault');
     expect(offline.fault).toBe('offline');
-    expect(voicePillView(offline, lastAtMs).visible).toBe(true);
+    expect(voicePillView(offline).visible).toBe(true);
   });
 
   it('reports speech that nothing comes back from', () => {
@@ -284,7 +290,7 @@ describe('faults — the two it can actually see', () => {
      * It also shows nothing at all: a hard pause has muted the microphone, so
      * "Listening" would be a claim about a device that is switched off.
      */
-    expect(voicePillView(paused, lastAtMs).visible).toBe(false);
+    expect(voicePillView(paused).visible).toBe(false);
   });
 });
 
@@ -309,13 +315,13 @@ describe('coming back from a pause', () => {
     expect(state.reading).toBe('fault'); // frozen, not re-resolved
     const stillPausedAtMs = pausedAtMs + 10_000;
     state = tickVoicePill(state, PAUSED, stillPausedAtMs);
-    expect(voicePillView(state, stillPausedAtMs).visible).toBe(false);
+    expect(voicePillView(state).visible).toBe(false);
 
     // Resumed: the recovery happens where it can be seen, with a full hold.
     const resumedAtMs = stillPausedAtMs + 100;
     state = tickVoicePill(state, HEALTHY, resumedAtMs);
     expect(state.reading).toBe('confirmed');
-    expect(voicePillView(state, resumedAtMs + VOICE_PILL_CONFIRM_HOLD_MS - 1).visible).toBe(true);
+    expect(voicePillView(state).visible).toBe(true);
   });
 
   it('does not accuse the microphone while the capture is being reopened', () => {
@@ -390,21 +396,21 @@ describe('malformed frames', () => {
 describe('what the presenter is told', () => {
   it('names every state in words, never in colour alone', () => {
     const state = initialVoicePillState(START_MS);
-    expect(voicePillView(state, START_MS).label).toBe('Listening');
+    expect(voicePillView(state).label).toBe('Listening');
 
     const heard = tickVoicePill(reduceVoicePillText(state, 'hello'), HEALTHY, START_MS);
-    expect(voicePillView(heard, START_MS).label).toBe('Hearing you');
+    expect(voicePillView(heard).label).toBe('Hearing you');
 
     const dead = tickVoicePill(state, DEVICE_LOST, START_MS);
-    expect(voicePillView(dead, START_MS).label).toBe('No audio');
+    expect(voicePillView(dead).label).toBe('No audio');
 
     const offline = tickVoicePill(reduceVoicePillText(state, 'hi'), OFFLINE, START_MS);
-    expect(voicePillView(offline, START_MS).label).toBe('Not connected');
+    expect(voicePillView(offline).label).toBe('Not connected');
 
     const frames = Math.ceil(VOICE_PILL_UNHEARD_SPEECH_MS / FRAME_MS) + 2;
     const talking = feed(initialVoicePillState(START_MS), frames, START_MS);
     const lastAtMs = START_MS + (frames - 1) * FRAME_MS;
-    expect(voicePillView(tickVoicePill(talking, HEALTHY, lastAtMs), lastAtMs).label).toBe(
+    expect(voicePillView(tickVoicePill(talking, HEALTHY, lastAtMs)).label).toBe(
       'Not hearing you',
     );
   });

@@ -40,6 +40,7 @@ import {
   alignmentDisplayAt,
   ALIGNMENT_RELOCATIONS,
   DEFAULT_SMOOTH_FOLLOW_PROFILE,
+  resolveLineLimitPx,
   type AlignmentSnapshot,
   type SmoothFollowProfile,
   type StageMotionAck,
@@ -261,7 +262,9 @@ const RELOCATION_MIN_TOKENS = 6;
 const RELOCATION_TTL_MS = 1500;
 
 /**
- * How far back a retake may be FLOWN rather than stepped, in tokens.
+ * How far back a retake may be FLOWN rather than stepped, in tokens — the
+ * BLIND fallback, used only when the geometry cannot answer the question
+ * properly (see `RewindReach`).
  *
  * A `rewind` is ordinary motion under a backward-capable profile, and ordinary
  * backward motion is hard-capped at `reverseTravelMaxPx` (420 px by default,
@@ -271,24 +274,68 @@ const RELOCATION_TTL_MS = 1500;
  * the presenter still thousands of pixels from where they restarted — stranded,
  * with nothing left that can carry them there.
  *
- * So distance decides. Close enough to walk back inside the reverse-travel
- * budget: `rewind`, and the presenter watches the script return to them. Beyond
- * it: `reanchor`, which is a single obscured step and is the only thing that
- * actually arrives. Twelve tokens is roughly a rendered line at the default
- * sizes — comfortably inside 420 px, and well past the ±2-token accuracy the
- * engine benchmarks at.
+ * So distance decides, and the honest unit for that distance is PIXELS, because
+ * the budget it is being compared against is pixels. Twelve tokens is roughly a
+ * rendered line, which is somewhere between a fifth and a half of the travel a
+ * rewind may actually spend — so as the only gate it sent every retake longer
+ * than about a line to the obscured step, including the very common one where
+ * the presenter backs up to a phrase still on the glass and would rather watch
+ * the script walk back to it than have it cut. It survives as the answer for a
+ * stage that has no map yet, where a token count is the only measure there is.
  */
 const REWIND_MAX_TOKENS = 12;
 
 /**
+ * What a `rewind` would cost, measured on the glass (§30.5).
+ *
+ * Only the stage can supply this — the alignment engine has no notion of a
+ * pixel, and `relocationDirectiveFor` has no notion of a line map — so it is
+ * handed in, and its absence falls back to `REWIND_MAX_TOKENS`.
+ */
+export interface RewindReach {
+  /** Backward travel from where the display IS to the retake point, px. */
+  travelPx: number;
+  /**
+   * How long before the licence can first be spent at all, ms.
+   *
+   * Manual authority (§30.6) zeroes both velocity limits, so a rewind issued
+   * mid-drag cannot move until the grace runs out. The TTL has to cover that or
+   * the licence dies having done nothing — and what a rewind fails to do is
+   * unrecoverable, because forward-only following cannot carry the document
+   * backward afterwards.
+   *
+   * The grace OUTSTANDING, not the profile's whole grace interval. A retake
+   * arriving when nobody has touched the script gets no extension, which keeps
+   * the window where the document may move backward — and the §70.5 forward
+   * latch is therefore released — as short as the travel actually needs.
+   */
+  graceRemainingMs: number;
+  /**
+   * §30.5 reverse-travel budget the rewind may spend, px — what is LEFT of it,
+   * not what a fresh plant would get.
+   *
+   * The budget is cumulative and only forward motion refunds it, so a second
+   * retake before the presenter has read their way back is measured against a
+   * partly spent one. Classifying it against the full budget is how a rewind
+   * gets licensed for travel the controller will not grant: measured on a
+   * paragraph retake followed by two lines of re-reading and a second retake,
+   * the walk was licensed for 197 px with 134 px left and the plant parked
+   * 69 px — over a line — above the presenter, with forward-only following
+   * unable to close it. A re-anchor is the honest answer there, and it arrives.
+   */
+  budgetPx: number;
+}
+
+/**
  * How the stage animates each kind of accepted discontinuity.
  *
- * A short `retakeAccepted` is a `rewind` because backward motion over a short
- * distance still reads as reading — the presenter watches the script walk back
- * to where they restarted. A long one becomes a `reanchor` (see
- * `REWIND_MAX_TOKENS`). A forward jump has no such reading to show: the text
- * between is not being spoken, so flying through it at speed is a spectacle
- * rather than information, and `catch_up` bounds it.
+ * A `retakeAccepted` the plant can walk to is a `rewind`, because backward
+ * motion over a distance the presenter can see still reads as reading — they
+ * watch the script return to where they restarted, which is the whole
+ * information content of the move. One beyond the reverse-travel budget becomes
+ * a `reanchor` (see `RewindReach`). A forward jump has no such reading to show:
+ * the text between is not being spoken, so flying through it at speed is a
+ * spectacle rather than information, and `catch_up` bounds it.
  */
 const RELOCATION_SHAPE: Record<
   'relocationAccepted' | 'jumpForwardAccepted' | 'retakeAccepted' | 'manualAnchor',
@@ -303,6 +350,65 @@ const RELOCATION_SHAPE: Record<
   relocationAccepted: { type: 'reanchor', reason: 'large_forward_skip', authority: 'ordinary' },
   manualAnchor: { type: 'reanchor', reason: 'manual_navigation', authority: 'manual' },
 };
+
+/**
+ * Can the plant WALK to this retake point, or does it have to step?
+ *
+ * The pixel answer whenever the stage has one: a rewind is ordinary motion, so
+ * the only thing that decides whether it arrives is whether the travel fits the
+ * §30.5 reverse budget it is allowed to spend. Travel that is zero or forward
+ * fits trivially — a backward-capable profile never obliges the plant to move
+ * backward, so a retake whose destination is already at or below the display is
+ * simply followed.
+ *
+ * With no reach to measure against, the token proxy: about a rendered line.
+ */
+function rewindFits(reach: RewindReach | null, distanceTokens: number): boolean {
+  if (!reach || !Number.isFinite(reach.travelPx) || !Number.isFinite(reach.budgetPx)) {
+    return distanceTokens <= REWIND_MAX_TOKENS;
+  }
+  return reach.travelPx <= Math.max(0, reach.budgetPx);
+}
+
+/**
+ * How long a `rewind`'s backward licence has to stay open.
+ *
+ * A rewind is not spent in one step the way a re-anchor is — it is ordinary
+ * motion under a backward-capable profile — so the DIRECTIVE has to outlive the
+ * travel. While the gate was a single line, any TTL longer than the fade
+ * covered it. Now that the gate is the reverse-travel budget itself, a flat
+ * 1.5 s expires part-way up the far end of that budget: `allowBackward` goes
+ * false with the plant still parked below the retake point, and forward-only
+ * following has nothing that can bring it down again.
+ *
+ * So the licence is the base TTL — which covers the jerk-limited reversal at
+ * the start, including whatever forward velocity the plant is carrying — plus
+ * the travel's own cruise time at the profile's backward ceiling, doubled for
+ * the damped approach that follows it. A second-order controller spends about
+ * as long easing into the last few pixels as it does crossing the rest, and it
+ * spends longer the further it came, so the allowance has to scale with the
+ * distance rather than sit in the constant.
+ *
+ * And whatever manual grace is still outstanding, for the same reason `catch_up`
+ * carries it (§30.6) — see `RewindReach.graceRemainingMs`. Unlike catch-up this
+ * takes the grace REMAINING rather than the profile's whole interval, because a
+ * live rewind releases the §70.5 forward latch, and a licence held open for
+ * seconds after the walk is done is a licence for tracker jitter to reverse the
+ * document. Travel is what this bound is trying to describe; the grace only
+ * covers the part of it that cannot be spent yet.
+ */
+const REWIND_APPROACH_SHARE = 2;
+
+function rewindTtlMs(reach: RewindReach | null, profile: SmoothFollowProfile): number {
+  const travelPx = reach && Number.isFinite(reach.travelPx) ? Math.max(0, reach.travelPx) : 0;
+  const graceMs =
+    reach && Number.isFinite(reach.graceRemainingMs) ? Math.max(0, reach.graceRemainingMs) : 0;
+  // The ceiling the rewind will actually run under, multiplier included, read
+  // from the same table the frame loop reads rather than restated here.
+  const vBackwardPxS = limitsForState('following', profile, { transition: 'rewind' }).vBackwardMax;
+  if (!(vBackwardPxS > 0) || !Number.isFinite(vBackwardPxS)) return RELOCATION_TTL_MS + graceMs;
+  return RELOCATION_TTL_MS + graceMs + (travelPx / vBackwardPxS) * 1000 * REWIND_APPROACH_SHARE;
+}
 
 /**
  * Turn an accepted discontinuity into a §53 transition directive, or null when
@@ -325,6 +431,11 @@ export function relocationDirectiveFor(
    * be exercised at all (§30.6). Folded into the catch-up TTL below.
    */
   manualGraceMs = DEFAULT_MANUAL_GRACE_MS,
+  /**
+   * What a rewind would cost on this stage's geometry, when it is known.
+   * Null — no map, an unresolvable destination — falls back to the token proxy.
+   */
+  rewindReach: RewindReach | null = null,
 ): StageTransitionDirective | null {
   if (!ALIGNMENT_RELOCATIONS.has(snapshot.decision)) return null;
   const shape = RELOCATION_SHAPE[snapshot.decision as keyof typeof RELOCATION_SHAPE];
@@ -338,13 +449,15 @@ export function relocationDirectiveFor(
   if (shape.authority !== 'manual' && distance < RELOCATION_MIN_TOKENS) return null;
 
   // A retake further back than ordinary reverse motion can carry has to be a
-  // step, not a walk — see `REWIND_MAX_TOKENS`.
+  // step, not a walk — see `RewindReach`.
   const type: StageTransitionDirective['type'] =
-    shape.type === 'rewind' && distance > REWIND_MAX_TOKENS ? 'reanchor' : shape.type;
+    shape.type === 'rewind' && !rewindFits(rewindReach, distance) ? 'reanchor' : shape.type;
 
   /*
-   * A catch-up runs until §30.3's duration cap retires it; everything else is a
-   * single step that either lands promptly or should be forgotten.
+   * A catch-up runs until §30.3's duration cap retires it, and a rewind until
+   * its travel is done (`rewindTtlMs`); a re-anchor is a single step that either
+   * lands promptly or should be forgotten. The first two both cover the manual
+   * grace, for the reason spelled out immediately below.
    *
    * The TTL starts at RECEIPT, but the cap's clock does not start until the
    * licence can actually be exercised — and manual authority suspends that for
@@ -361,7 +474,9 @@ export function relocationDirectiveFor(
           RELOCATION_TTL_MS,
           manualGraceMs + profile.motion.catchUpMaxDurationMs + profile.motion.catchUpReleaseMs,
         )
-      : RELOCATION_TTL_MS;
+      : type === 'rewind'
+        ? rewindTtlMs(rewindReach, profile)
+        : RELOCATION_TTL_MS;
 
   return {
     // Keyed on `seq`, so the idempotency check in the transition controller
@@ -952,6 +1067,53 @@ export function createStageMotionEngine(
     return { target, snapshot, displayToken };
   }
 
+  /**
+   * What a rewind to this snapshot's position would cost on the glass (§30.5).
+   *
+   * Measured from where the display IS — the same `q` the reverse-travel budget
+   * is spent from — rather than from the reported token, because that is the
+   * distance the plant has to walk and the distance the presenter watches.
+   *
+   * Null whenever the geometry cannot answer: no map, no planner, a destination
+   * that does not resolve. `relocationDirectiveFor` then falls back to counting
+   * tokens, which is what this stage did before it could measure anything.
+   */
+  function rewindReachFor(snapshot: AlignmentSnapshot, nowMs: number): RewindReach | null {
+    // Only a retake can become a rewind, and the shape table is where that is
+    // decided — asked here rather than restated, so the two cannot drift.
+    const shape = RELOCATION_SHAPE[snapshot.decision as keyof typeof RELOCATION_SHAPE];
+    if (shape?.type !== 'rewind') return null;
+    if (!planner || !Number.isFinite(snapshot.observedToken)) return null;
+    /*
+     * The target ORDINARY FOLLOWING will aim at, not `destinationScrollPx`.
+     *
+     * They are different places, and the difference is the point: a re-anchor
+     * lands on a line start, because a step that leaves the presenter mid-line
+     * is a step to the wrong place. A rewind never uses that — it simply
+     * follows the path, and the path answers for the unit itself. Classifying
+     * against the line start would charge a rewind for up to a whole pitch of
+     * travel it is not going to make.
+     */
+    const destination = planner.target(snapshot.observedToken, 0);
+    if (destination.source === 'none' || !Number.isFinite(destination.scrollPx)) return null;
+    return {
+      travelPx: controller.state.q - destination.scrollPx,
+      // Zero unless the presenter is actually holding the script right now.
+      graceRemainingMs: Math.max(0, manualUntilMs - nowMs),
+      // The bound exactly as the frame loop will resolve it — the profile this
+      // panel may run, in lines where a pitch has been measured — LESS what the
+      // plant has already spent going backward. Resolving it any other way here
+      // would let a retake be classified against travel the controller is not
+      // going to grant. See `RewindReach`.
+      budgetPx:
+        resolveLineLimitPx(
+          boundedProfile.lineUnits?.reverseTravelMaxLines,
+          boundedProfile.motion.reverseTravelMaxPx,
+          measuredPitchPx(),
+        ) - controller.reverseTravelPx,
+    };
+  }
+
   /** Scroll position that places a transition's destination at the reading line. */
   function destinationScrollPx(
     destinationTokenIndex: number,
@@ -1075,7 +1237,14 @@ export function createStageMotionEngine(
        * next snapshot, by which time there is a display to measure against.
        */
       const from = lastDisplayToken ?? previousDisplayToken;
-      const directive = relocationDirectiveFor(accepted, from, nowMs, profile, manualGraceMs);
+      const directive = relocationDirectiveFor(
+        accepted,
+        from,
+        nowMs,
+        boundedProfile,
+        manualGraceMs,
+        rewindReachFor(accepted, nowMs),
+      );
       if (directive) transitions.submit(directive, nowMs);
       previousDisplayToken = accepted.observedToken;
       return true;

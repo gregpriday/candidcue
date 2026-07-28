@@ -2,10 +2,13 @@
   The voice pill — the stage's corner readout of whether CandidCue is picking up
   what the presenter says.
 
-  Small, low in the corner, and outside the mirror plane on purpose: like the
-  Escape hint and the transcript bar it is an instrument aimed at the presenter
-  rather than part of the read, so it has to stay legible through a horizontal
-  mirror.
+  Small, low in the corner, and INSIDE the mirror plane with the script. This
+  comment used to say the opposite — that being outside it was what kept the
+  pill legible — which is backwards for a beamsplitter: it reflects every pixel
+  equally, so the one element left out of the corrective flip is the one that
+  reaches the presenter's eye reversed. Anything the presenter reads is
+  mirrored with the read. (The transcript bar is not, and that is deliberate for
+  the opposite reason: it is addressed to an operator standing at the panel.)
 
   It holds no audio state and no thresholds. Control owns the capture and sends
   a fully resolved view (`StageVoicePillPayload`), so what is drawn here cannot
@@ -42,26 +45,24 @@
     return [...new Array<number>(padding).fill(0), ...levels.slice(-BARS)];
   });
 
-  /**
-   * Whether the trace is drawn at all.
+  /*
+   * THE TRACE IS ALWAYS DRAWN.
    *
-   * A waveform is the only thing on the glass besides the script that MOVES,
-   * and continuous motion in the corner of the eye competes with the words
-   * somebody is reading. It earns that cost twice: at the top of a take, when
-   * the chain from device to model is still unproven and the presenter needs to
-   * know the microphone is alive; and during a fault, when the trace is the
-   * difference between "nothing is being heard" and "something is being heard
-   * and not understood".
+   * There used to be a `prominence` field that could collapse it to the mark
+   * alone, on the reasoning that a waveform is the only thing on the glass
+   * besides the script that MOVES, and that once recognition has come back it
+   * has said everything it exists to say.
    *
-   * Everywhere in between it has already said everything it exists to say, so
-   * it collapses to the mark alone rather than animating for the remaining
-   * twenty-nine minutes. A fault always re-expands it, whatever control asked
-   * for, because a fault is exactly the case the trace is diagnostic for.
+   * The second half is what was wrong. "Audio is arriving" is not a fact that
+   * settles — a microphone that worked a minute ago tells the presenter nothing
+   * about now, and the moment they most need to ask is the one where the script
+   * has stopped moving and they cannot tell whether it is them or the rig. The
+   * trace answers that continuously or it does not answer it at all.
    *
-   * Absent `prominence` means expanded — an older control that knows nothing
-   * about this gets precisely today's behaviour.
+   * The cost is real and is paid where it belongs: 88x18 px, dim, in the corner
+   * furthest from the reading line, and beside a mark that stops changing once
+   * it is a tick.
    */
-  const expanded = $derived(pill.reading === 'fault' || (pill.prominence ?? 'expanded') === 'expanded');
 </script>
 
 <!-- role="status": the reading changes as the take learns things, and a
@@ -71,18 +72,12 @@
   class="voice-pill"
   data-reading={pill.reading}
   data-visible={pill.visible}
-  data-expanded={expanded}
   role="status"
   aria-live="polite"
   aria-label={pill.label}
 >
   <!-- aria-hidden: the waveform is the same fact as the label, drawn.
-       Announcing two dozen bars would be noise.
-
-       Kept in the DOM when collapsed and closed by width instead of being
-       removed, for the same reason the pill itself is never unmounted: a trace
-       that was destroyed and rebuilt would snap back into existence at full
-       size beside a script somebody is reading. -->
+       Announcing two dozen bars would be noise. -->
   <div class="wave" aria-hidden="true">
     {#each bars as level, index (index)}
       <!-- A floor keeps the baseline visible while silent, so the trace reads
@@ -120,8 +115,11 @@
 <style>
   .voice-pill {
     position: absolute;
-    /* Clear of the transcript bar along the bottom edge, which is a full-width
-       strip: the two must never overlap, and the pill is the one that moves. */
+    /* Clear of the transcript bar, which sits at `bottom: 8px` and is about
+       26px tall. The two share this right margin and read as a stack on a plain
+       panel, but they are in different planes — this one is mirrored with the
+       script, the bar is not — so under a mirror or a hood they part company.
+       See the note on `.transcript-tap` in StageApp. */
     right: 18px;
     bottom: 40px;
     display: flex;
@@ -153,20 +151,6 @@
     width: 88px;
     height: 18px;
     overflow: hidden;
-    /* Slow enough to read as the instrument standing down rather than as a
-       glitch, and on the same clock as the pill's own fade. */
-    transition:
-      width 320ms ease,
-      opacity 320ms ease,
-      margin-right 320ms ease;
-  }
-
-  /* Collapsed: the mark alone. The bars stop moving, which is the entire
-     point — the pill is still reporting, it has just stopped waving. */
-  .voice-pill[data-expanded='false'] .wave {
-    width: 0;
-    opacity: 0;
-    margin-right: -10px;
   }
 
   .bar {

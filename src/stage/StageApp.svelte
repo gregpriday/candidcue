@@ -85,6 +85,7 @@
     type HoldStatus as HoldStatusReading,
     type HoldTone,
   } from './renderer/hold-status';
+  import { transcriptTail } from './renderer/transcript-tail';
   import { startFixtureReplay, startPreviewDriver, type PreviewDriver } from './preview';
 
   interface EmbeddedStageBridge {
@@ -366,6 +367,14 @@
    * microphone, which CandidCue cannot prevent and could not report.
    */
   let transcriptTap = $state('');
+  /**
+   * What the bar actually draws: the last few words, whitespace normalised.
+   *
+   * The crop is here rather than in CSS because `overflow: hidden` only hides
+   * the excess — the element still lays out at the full width of everything the
+   * recogniser has said since its last finalisation. See `transcript-tail.ts`.
+   */
+  const transcriptWords = $derived(transcriptTail(transcriptTap));
   /**
    * The voice pill, or null until control has said anything about the input.
    *
@@ -1234,31 +1243,30 @@
   }
 
   /**
-   * The pill, as the current mode is willing to draw it.
+   * The pill, drawn the same way in both modes.
    *
-   * The MARK is presenter-facing in both modes: a cross in the corner is an
+   * The MARK is presenter-facing either way: a cross in the corner is an
    * actionable fault, and a tick is the one piece of evidence that the whole
    * chain from device to model works — which is the entire reason the blocking
    * microphone check was replaced by a corner readout.
    *
-   * The TRACE is left to CONTROL, which is where the decision belongs and where
-   * it started.
+   * So is the TRACE, and it is the half that keeps being argued about. Twice
+   * now something has tried to retire it once the chain is proven: the optical
+   * work made Clean Take collapse it to the mark, and control's own view faded
+   * the whole pill a couple of seconds after it confirmed. Both were reasoning
+   * about the same real cost — a waveform is continuous peripheral motion
+   * beside the words somebody is reading — and both got the same thing wrong.
    *
-   * The optical work (501ca62) added a rule here that Clean Take collapses the
-   * pill to its mark, on the reasoning that a waveform is continuous peripheral
-   * motion competing with the words somebody is reading. The reasoning is sound
-   * and the rule was still wrong, because of a fact one grep answers: NOTHING in
-   * control ever sets `prominence`. The field is optional and the component
-   * reads an absent one as expanded — so "Clean Take collapses it" was not a
-   * refinement of control's choice, it was the only behaviour there had ever
-   * been, replaced. Every presenter lost the readout that says the microphone is
-   * being heard, in every take, and the first thing they noticed was its absence
-   * during a take that was not working.
+   * "The microphone is being heard" is not a fact that stays true. It is a
+   * claim about the last second, and the presenter who needs it is the one
+   * twenty minutes in whose script has stopped moving and who cannot tell
+   * whether that is them, the microphone, or the aligner. An instrument that
+   * retires itself once things are going well is an instrument that is never
+   * there for the only question anybody asks it.
    *
-   * So the decision goes back to control. If the peripheral motion turns out to
-   * be a real problem on the glass, the fix is control sending `collapsed` when
-   * it has nothing new to show — a decision made where the audio actually is,
-   * not one the stage imposes on every session.
+   * There is therefore nothing left here to decide, which is why this is a
+   * plain alias: control resolves the reading, the stage draws it, and the
+   * trace runs for the whole take.
    */
   const presenterVoicePill = $derived(voicePill);
 
@@ -1673,9 +1681,9 @@
       answered by `silent`: the strip is dim and still until words arrive.
     -->
     {#if app.envelope !== null && !app.blanked}
-      <div class="transcript-tap" class:silent={transcriptTap.length === 0}>
+      <div class="transcript-tap" class:silent={transcriptWords.length === 0}>
         <span class="transcript-tap-words">
-          {transcriptTap.length > 0 ? transcriptTap : 'listening — no words yet'}
+          {transcriptWords.length > 0 ? transcriptWords : 'listening — no words yet'}
         </span>
       </div>
     {/if}
@@ -1952,27 +1960,60 @@
   }
 
   /*
-   * One line, along the bottom, newest word at the right.
+   * One line in the bottom corner, under the voice pill, newest word at the
+   * right.
    *
-   * Right-aligned with `overflow: hidden` is what makes older words fall off
-   * the left edge as new ones arrive — no animation, no measurement, and
-   * nothing that can drift out of step with the words themselves. Small and
-   * dim so it reads as an instrument rather than competing with the script,
-   * but a monospace face so a word appearing is unmistakable in peripheral
-   * vision.
+   * ------------------------------------------------------------------------
+   * IT USED TO RUN THE WHOLE WIDTH OF THE PANEL
+   * ------------------------------------------------------------------------
+   * `left: 0; right: 0` with a gradient behind it, holding everything the
+   * recogniser had said since its last finalisation. It was therefore the
+   * widest element on the glass, and a long utterance drew a strip of moving
+   * text across the full width, underneath a script somebody is reading — the
+   * one place peripheral vision is already busy.
+   *
+   * Now it is a bounded box in the corner. The width cap and the ten-word crop
+   * in `transcript-tail.ts` do different halves of the same job: ten long words
+   * are still wide, and a box with no word limit fills with whatever fits
+   * rather than with what was just said.
+   *
+   * ON LINING UP WITH THE VOICE PILL, which sits directly above it: they agree
+   * on a plain unmirrored panel, and that is worth having because that is the
+   * rig this bar is read on. It is NOT a guarantee, and must not be written as
+   * one. The pill is presenter-facing and lives in the mirrored talent plane
+   * inside the safe rectangle; this is operator-facing and lives in the
+   * unmirrored operator plane against the raw viewport. Under `mirrorX` they
+   * are in opposite physical corners, and under a hood their right margins are
+   * measured from different edges. That is correct rather than unfortunate —
+   * they are addressed to two different people — but it means the alignment is
+   * a convenience of the common rig, not a relationship the code maintains.
+   *
+   * Right-aligned with `overflow: hidden` is retained, and still does the same
+   * thing: on the rare tail that is wider than the cap, the oldest words fall
+   * off the left edge rather than pushing the newest ones out of view. No
+   * animation, no measurement, nothing that can drift out of step with the
+   * words themselves. Small and dim so it reads as an instrument rather than
+   * competing with the script, but a monospace face so a word appearing is
+   * unmistakable in peripheral vision.
    */
   .transcript-tap {
     position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    padding: 6px 18px;
+    /* The pill's own number, so the two line up on a plain panel — see the
+       note above for why that is a convenience rather than a contract. */
+    right: 18px;
+    bottom: 8px;
+    /* Never more than a corner's worth of glass. The `ch` term is what the
+       text actually needs at this size; the viewport term is what keeps a
+       narrow panel from handing most of its width to a diagnostic. */
+    max-width: min(44ch, 42vw);
+    padding: 4px 12px;
+    border-radius: var(--radius-pill, 999px);
     display: flex;
     justify-content: flex-end;
     overflow: hidden;
     white-space: nowrap;
     pointer-events: none;
-    background: linear-gradient(to top, rgb(0 0 0 / 55%), transparent);
+    background: var(--stage-overlay);
     font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
     font-size: 13px;
     line-height: 1.4;

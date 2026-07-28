@@ -65,6 +65,7 @@
     bandCorrection,
     clampProvisionalTarget,
     computeSafeRect,
+    lineEntryOffsetPx,
     stagePaddingPx,
     fadeDepthPx,
     columnLeftPx,
@@ -461,6 +462,22 @@
   );
   const bandCenterPx = $derived(readingBand.centerPx);
 
+  /**
+   * `R` — where a line ENTERS, which is not where the mark is.
+   *
+   * See `lineEntryOffsetPx`. The document (padding included) sits this far below
+   * the mark so that the line being read passes THROUGH the mark instead of
+   * arriving on it and immediately climbing away, which is what made the script
+   * feel permanently one line behind the reader.
+   *
+   * Derived from the typographic pitch rather than the measured one on purpose:
+   * the same number has to reach the top padding and the line map, and those are
+   * computed at different moments. A pitch the two could disagree about would
+   * put the offset in the document twice with different values, which is the
+   * one way this can go wrong.
+   */
+  const lineEntryPx = $derived(lineEntryOffsetPx(linePx, capHeightPx));
+
   /*
    * Padding, derived rather than chosen.
    *
@@ -490,7 +507,29 @@
    * supposed to rule out. The fix ships to rigs that opted into the new model.
    */
   const legacyPad = $derived(legacyStagePaddingPx(vw, vh));
-  const padTopPx = $derived(optics ? stagePaddingPx(bandGeometry).topPx : legacyPad.topPx);
+  /*
+   * The line-entry offset is paid here, once, in the paper above the first line.
+   *
+   * Adding it to the top padding AND to `R` is what makes the change a pure
+   * shift: every knot is `baselineY - R`, both terms grow by the same amount,
+   * and the path comes out numerically identical to the one this stage was
+   * tuned and benchmarked against. It also carries the tail — the padding is
+   * part of the height `maxScroll` is derived from, so the ceiling a clamped
+   * closing knot rests on rises with it and the last line ends up exactly where
+   * it always did on the glass. Only the phase between the document and the
+   * mark moves.
+   *
+   * Skipping it here would instead compress the opening lines — the first knot
+   * would clamp at scroll 0 and the script would crawl through line one — and
+   * strand the closing line an offset short of the mark. Real artefacts, not
+   * rounding differences.
+   *
+   * Both branches, calibrated and legacy: the mark points at the wrong line on
+   * every rig, so the correction belongs to every rig.
+   */
+  const padTopPx = $derived(
+    (optics ? stagePaddingPx(bandGeometry).topPx : legacyPad.topPx) + lineEntryPx,
+  );
   // §7.1: the rail's reserved band is folded into the bottom padding, so the
   // reading band, the total document height, and the fallback target all keep
   // the script clear of the rail with no separate bookkeeping.
@@ -1275,10 +1314,22 @@
             fingerprint,
             tokens: measurement.tokens,
             blocks: measurement.blocks,
-            readingLineStartY: band.centerPx,
-            // §30.3's upper safety boundary is the corridor's top edge, so what
-            // the motion engine needs is the distance from `R` up to it — the
-            // computed band, including its clamps, not the raw setting.
+            // Line ENTRY, half a pitch below the mark — see `lineEntryPx`. The
+            // top padding carries the same offset, so the knots are unchanged.
+            readingLineStartY: band.centerPx + lineEntryPx,
+            // The corridor half-height as measured on the glass — the computed
+            // band, including its clamps, not the raw setting.
+            //
+            // Deliberately NOT offset by `lineEntryPx`, though `R` now is. The
+            // engine reads this for two things that want opposite corrections:
+            // the catch-up boost decays as the line rises INTO the corridor
+            // (which wants the distance down to the lower edge, half - offset)
+            // and the §30.3 ceiling bounds how far past the target the plant may
+            // be carried (the distance up to the upper edge, half + offset).
+            // Folding the offset into one number would fix one and break the
+            // other by the same amount; leaving it is conservative for both —
+            // the boost finishes a little early and the ceiling sits a little
+            // tighter, and ordinary following covers the difference.
             readingBandHalfHeightPx: band.centerPx - band.topPx,
             lineHeightPx: measurement.lineHeightPx,
             viewportHeightPx: vh,
