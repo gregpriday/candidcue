@@ -18,17 +18,18 @@
   ---------------------------------------------------------------------------
   WHERE IT SITS
   ---------------------------------------------------------------------------
-  Top left, deliberately away from three things: the text column (centred on the
-  lens), the transcript bar (full width along the bottom) and the voice pill
-  (bottom right). It also sits above the reading band, so a glance at it is a
-  glance the eye can make and return from without losing the line.
+  Top left, deliberately away from two things: the text column (centred on the
+  lens) and the session dock (bottom left, with the audio readout and the
+  transcript above it). It also sits above the reading band, so a glance at it
+  is a glance the eye can make and return from without losing the line.
 
-  It must be mounted OUTSIDE the mirror plane and inside the safe rectangle.
-  Like the voice pill and the transcript bar this is an instrument aimed at the
-  presenter rather than part of the read, so a horizontal flip would leave it
-  reading backwards — and a chip placed against the raw viewport on a hooded rig
-  lands under the bezel, where the one message worth reading is the one nobody
-  can see. The offsets below are relative to whatever container it is given.
+  It is mounted INSIDE the mirror plane and inside the safe rectangle. This is
+  the only route a fault name has to the presenter — the audio readout in the
+  dock is unmirrored operator chrome, and an unmirrored word is the one thing
+  guaranteed to be unreadable in a beamsplitter's reflection. A chip placed
+  against the raw viewport on a hooded rig lands under the bezel, where the one
+  message worth reading is the one nobody can see. The offsets below are
+  relative to whatever container it is given.
 
   Presentational: `resolveHoldStatus` in ./hold-status decides what is said and
   when. This decides only how it looks.
@@ -106,12 +107,17 @@
 <style>
   .hold-status {
     position: absolute;
-    top: 24px;
-    left: 24px;
+    /* The shared chrome geometry, so the chip lines up with the dock's left
+       edge and carries the same material as everything else that floats over
+       the script. It was 24px against a stage whose other overlays used 18px, a
+       spacing token, and a viewport fraction. */
+    top: var(--stage-chrome-inset, 20px);
+    left: var(--stage-chrome-inset, 20px);
     max-width: 40vw;
     padding: 0.45em 0.85em;
-    border-radius: var(--radius-pill, 999px);
-    background: var(--stage-overlay);
+    border: 1px solid var(--stage-chrome-border, rgba(255, 255, 255, 0.13));
+    border-radius: var(--stage-chrome-radius, 12px);
+    background: var(--stage-chrome-bg, rgba(12, 14, 18, 0.74));
     color: var(--stage-text);
     font-weight: 550;
     letter-spacing: 0.01em;

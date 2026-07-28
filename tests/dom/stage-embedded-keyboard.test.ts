@@ -168,11 +168,22 @@ describe('a key aimed at the host chrome', () => {
    * button happens to hold focus. Without the exemption, closing the menu left
    * focus on its trigger and the key that ends a take silently stopped working.
    */
-  it('still ends the take on Escape, wherever focus is parked', () => {
+  it('still answers Escape, wherever focus is parked', () => {
     const { onexit } = mount();
 
+    /*
+     * TWO presses, and that is the change worth pinning.
+     *
+     * Presentation used to end the take on the FIRST Escape while the
+     * standalone stage window asked for a second — the same key, on the same
+     * screen, meaning two different things depending on an architectural detail
+     * nobody using it can see. The confirmation is now universal, so one press
+     * shows the prompt and ends nothing.
+     */
     press(trigger, 'Escape');
+    expect(onexit).not.toHaveBeenCalled();
 
+    press(trigger, 'Escape');
     expect(onexit).toHaveBeenCalledTimes(1);
   });
 });
@@ -190,9 +201,11 @@ describe('a key aimed at the stage', () => {
     space.preventDefault(); // what `emit()` does before this handler ever runs
     window.dispatchEvent(space);
 
-    const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
-    escape.preventDefault();
-    window.dispatchEvent(escape);
+    for (const _ of [1, 2]) {
+      const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      escape.preventDefault();
+      window.dispatchEvent(escape);
+    }
 
     expect(onintent).toHaveBeenCalledWith({ kind: 'toggle_pause' });
     expect(onexit).toHaveBeenCalledTimes(1);

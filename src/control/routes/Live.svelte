@@ -4,7 +4,6 @@
   transport, §15.3 pause semantics, F.17 end-of-session summary.
 -->
 <script lang="ts">
-  import { tick } from 'svelte';
   import Button from '../components/Button.svelte';
   import Dialog from '../components/Dialog.svelte';
   import FollowControls from '../components/FollowControls.svelte';
@@ -433,63 +432,65 @@
     await navigate({ name: 'library', view: 'all' });
   }
 
-  /* ------------------------------------------- the presentation corner (§14.2)
+  /* ------------------------------------------------ the appearance panel (§14.2)
    *
    * Presentation fills this window with the production stage, which is exactly
-   * where the prompter's appearance can be judged and — until now — the one
-   * place it could not be changed. Four of these five controls answer a
+   * where the prompter's appearance can be judged and — before this existed —
+   * the one place it could not be changed. Four of these five controls answer a
    * question about a physical arrangement (can I read this from there? is the
    * band over the lens?), so setting them anywhere else is guesswork that costs
    * a take to check.
+   *
+   * ---------------------------------------------------------------------------
+   * THERE IS NO PRESENTATION CORNER ANY MORE
+   * ---------------------------------------------------------------------------
+   * This used to be a floating chip in the top-right of the window holding an
+   * overflow menu with two items — "Adjust settings…" and "End session" — plus
+   * its own idle timer, its own glass treatment, and its own focus-return
+   * dance. All of it is now the stage's own session dock, bottom left, and what
+   * is left here is the half that genuinely belongs to control: the panel's
+   * contents and the transaction they run in. The stage raises it; this owns it.
+   *
+   * The duplicate "End session" went with the menu. There were three ways to end
+   * a take on one screen (the menu item, the stage's exit affordance, Escape)
+   * and two of them ran different code — one through `requestStop`'s confirm
+   * dialog, one straight to teardown. Now there is one control, one anchored
+   * confirmation, and one teardown path.
    */
 
-  /** How long the corner stays up after the pointer last moved. */
-  const CHROME_IDLE_MS = 4000;
-
-  let stageMenuOpen = $state(false);
   let appearanceOpen = $state(false);
+  /** `requestStop`'s confirm dialog is up over the take. */
   let confirmingStop = $state(false);
-  let chromeAwake = $state(true);
-  let chromeTimer = 0;
-  let chromeRoot: HTMLElement | null = $state(null);
   /**
-   * The appearance the sheet was opened on, so Cancel is exact.
+   * The appearance the panel was opened on, so Cancel is exact.
    *
-   * Captured here rather than inside the sheet because it is the take's state,
+   * Captured here rather than inside the panel because it is the take's state,
    * not the panel's: the panel can be closed and reopened, and what "put it
    * back" means has to survive that.
    */
   let appearanceOnOpen: StageAppearance | null = null;
-
-  /** Open chrome owns the keyboard — see `chromeOpen` on the stage bridge. */
-  const stageChromeOpen = $derived(stageMenuOpen || appearanceOpen || confirmingStop);
-  const stageChromeVisible = $derived(chromeAwake || stageChromeOpen);
-
-  /*
-   * Window-level, not on the stage root: the corner is a sibling of the stage,
-   * so a pointer moving over the menu or the sheet never reaches the stage's
-   * own idle handler — and chrome that fades while you are reaching for it is
-   * worse than chrome that never hides.
+  /**
+   * What the stage measured off the face it is drawing — see `onmeasurement`.
+   *
+   * `charactersPerLine` is the number that actually governs eye travel, and the
+   * width slider is a percentage. Only the stage can produce it.
    */
-  $effect(() => {
-    if (!$session.active) return undefined;
-    const wake = (): void => {
-      chromeAwake = true;
-      clearTimeout(chromeTimer);
-      chromeTimer = window.setTimeout(() => (chromeAwake = false), CHROME_IDLE_MS);
-    };
-    wake();
-    window.addEventListener('pointermove', wake);
-    return () => {
-      window.removeEventListener('pointermove', wake);
-      clearTimeout(chromeTimer);
-    };
-  });
+  let stageCharactersPerLine = $state<number | null>(null);
+
+  /**
+   * Open chrome owns the keyboard — see `chromeOpen` on the stage bridge.
+   *
+   * `confirmingStop` is still in here even though the dock's End button no
+   * longer goes through it: Cmd+. is not one of the shortcuts Live delegates to
+   * the embedded stage, so it still reaches `requestStop` and can still raise
+   * the confirm dialog over a running take.
+   */
+  const stageChromeOpen = $derived(appearanceOpen || confirmingStop);
 
   /**
    * Open once. A second open must not re-capture the baseline.
    *
-   * The menu that reaches this is hidden while the sheet is up, so the ordinary
+   * The dock's settings button toggles rather than re-opens, so the ordinary
    * route cannot ask twice — but "the rollback snapshot is whatever the last
    * open saw" is a bad property to leave lying around for the next caller. Drag
    * the band from 38% to 50%, reopen, press Cancel, and the take would keep 50%
@@ -507,25 +508,24 @@
   }
 
   /**
-   * OK: what is on the glass becomes what the next take opens with.
+   * Done: what is on the glass becomes what the next take opens with.
    *
    * The take is already running these values — every drag applied them — so
    * this writes and closes and changes nothing visible.
    *
    * Nothing is written for a RIG-RESOLVED take. Its numbers came from the
-   * profile, not from these controls (the sheet shows them read-only and offers
-   * no OK), and persisting them would copy one rig's measurements into the
+   * profile, not from these controls (the panel shows them read-only and offers
+   * no Done), and persisting them would copy one rig's measurements into the
    * global defaults every uncalibrated take opens with.
    */
   async function keepAppearance(): Promise<void> {
     const live = $session.stageAppearance;
     closeAppearanceSheet();
-    void focusSessionMenu();
     /*
-     * Compared against the SAVED settings, not against what the sheet opened
+     * Compared against the SAVED settings, not against what the panel opened
      * on. Those are different questions, and only one of them is "is there
      * anything to write?": a presenter who bumps the type with Cmd+= and then
-     * opens the sheet to press OK has changed nothing SINCE OPENING, and a
+     * opens the panel to press Done has changed nothing SINCE OPENING, and a
      * comparison against the opening state would quietly decline to save the
      * very thing they opened the panel to keep.
      */
@@ -553,40 +553,57 @@
   function revertAppearance(): void {
     if (appearanceOnOpen) applyStageAppearance(appearanceOnOpen);
     closeAppearanceSheet();
-    void focusSessionMenu();
   }
 
-  /**
-   * Put the keyboard back on the menu button after the sheet closes.
+  /*
+   * FOCUS RETURN IS THE PANEL'S JOB NOW, AND IT ALWAYS SHOULD HAVE BEEN.
    *
-   * The sheet restores focus to its opener on teardown, which is the right
-   * contract and is not enough here: this corner REPLACES the menu with the
-   * sheet rather than layering over it, so the opener is gone by the time the
-   * sheet unmounts and the trigger that comes back is a different element.
-   * Without this, closing the panel drops focus on `<body>` — on a full-screen
-   * stage, that is the keyboard landing somewhere nobody can see.
+   * There used to be a `focusSessionMenu` here that hunted the first button in
+   * the chrome corner after the panel closed. It existed because that corner
+   * REPLACED its trigger with the panel rather than layering over it, so the
+   * opener the panel restores focus to was gone by the time it unmounted.
+   *
+   * The dock does not do that: the settings button stays mounted and stays put
+   * while the panel is up, so `StageAppearanceSheet`'s own opener-restore lands
+   * on the control somebody actually pressed. One mechanism, in the place that
+   * owns the contract.
    */
-  async function focusSessionMenu(): Promise<void> {
-    await tick();
-    chromeRoot?.querySelector('button')?.focus();
-  }
 
   /**
-   * Chrome belongs to the take that opened it.
+   * The panel belongs to the take that opened it.
    *
-   * All three of these are component state and this component survives the end
-   * of a session — Live stays mounted for the summary, and "Present again"
-   * starts a fresh take inside it. A sheet left open across that boundary
-   * remounts over the new take holding the OLD take's rollback snapshot, and a
-   * `stageMenuOpen` left true suspends the new stage's keyboard until somebody
-   * opens and closes the menu to clear it.
+   * This is component state and this component survives the end of a session —
+   * Live stays mounted for the summary, and "Present again" starts a fresh take
+   * inside it. A panel left open across that boundary remounts over the new
+   * take holding the OLD take's rollback snapshot, and an `appearanceOpen` left
+   * true suspends the new stage's keyboard until somebody opens and closes it.
    */
   $effect(() => {
     if ($session.active) return;
-    stageMenuOpen = false;
     closeAppearanceSheet();
   });
 </script>
+
+<!--
+  The appearance panel, rendered by the stage's dock.
+
+  A snippet handed across the bridge rather than a sibling element, because the
+  panel has to be positioned against the settings button that raised it — 8px
+  clear of it, left-aligned with the dock — and that button lives inside the
+  stage's own operator plane. The contents and the transaction stay here, where
+  the session state they read and write actually is.
+-->
+{#snippet appearancePanel()}
+  <StageAppearanceSheet
+    appearance={$session.stageAppearance}
+    rigResolved={$session.stageRigResolved}
+    maxFontSizePx={$session.stageFontCeilingPx}
+    charactersPerLine={stageCharactersPerLine}
+    onchange={(patch) => applyStageAppearance(patch)}
+    onok={() => void keepAppearance()}
+    oncancel={revertAppearance}
+  />
+{/snippet}
 
 {#if $session.active}
   {#if $session.stageEnvelope}
@@ -599,56 +616,21 @@
         onexit: onEscape,
         onintent: handleEmbeddedStageIntent,
         chromeOpen: stageChromeOpen,
+        appearancePanel,
+        appearanceOpen,
+        onappearanceopen: openAppearanceSheet,
+        /*
+         * A click away, or Escape, means CANCEL — not "leave it as it is".
+         * The panel applies every drag to the running take on the way past, so
+         * a dismissal that merely closed would silently keep changes the
+         * operator never confirmed, with the button that would have undone
+         * them gone.
+         */
+        onappearanceclose: revertAppearance,
+        onmeasurement: (measurement) =>
+          (stageCharactersPerLine = measurement.charactersPerLine ?? null),
       }}
     />
-    <!--
-      The presentation corner (§16.9, §14.2).
-
-      Outside `.stage-root` on purpose, so it sits OUTSIDE the mirror plane.
-      Everything the presenter reads is flipped to survive a beamsplitter; this
-      is the one surface aimed at whoever has the mouse, and a mirrored slider
-      moves the wrong way under the hand dragging it. On an unmirrored rig the
-      two planes are identical anyway, so nothing is lost by being outside.
-
-      Faded out with the pointer, like the exit affordance it replaces: a chip
-      in the corner of a prompter is in shot, and the presenter has no use for
-      it while they are talking.
-    -->
-    <div
-      class="stage-chrome"
-      class:idle={!stageChromeVisible}
-      data-stage-chrome
-      bind:this={chromeRoot}
-    >
-      <!--
-        Hidden while the sheet is up, because the sheet says it is modal.
-
-        A trigger left live beside an `aria-modal` panel is a promise the panel
-        does not keep: it opens a menu over the modal, and "Adjust settings…"
-        from there re-enters the sheet and takes its rollback snapshot with it.
-        Removing it is cheaper and more honest than a scrim, which is the one
-        thing this panel cannot have — the stage behind it is the point.
-      -->
-      {#if !appearanceOpen}
-        <OverflowMenu
-          label="Session menu"
-          items={[
-            { label: 'Adjust settings…', onselect: openAppearanceSheet },
-            { label: 'End session', danger: true, onselect: () => void requestStop() },
-          ]}
-          onopenchange={(open) => (stageMenuOpen = open)}
-        />
-      {:else}
-        <StageAppearanceSheet
-          appearance={$session.stageAppearance}
-          rigResolved={$session.stageRigResolved}
-          maxFontSizePx={$session.stageFontCeilingPx}
-          onchange={(patch) => applyStageAppearance(patch)}
-          onok={() => void keepAppearance()}
-          oncancel={revertAppearance}
-        />
-      {/if}
-    </div>
   {:else}
     <div class="stage-preparing">Preparing script…</div>
   {/if}
@@ -1101,96 +1083,15 @@
   }
 
   /*
-   * The presentation corner. Fixed rather than absolute: the stage root is
-   * `position: absolute; inset: 0` with `overflow: hidden`, and a popover
-   * anchored inside it would be clipped by the stage it is floating over.
-   */
-  .stage-chrome {
-    position: fixed;
-    top: var(--space-4);
-    right: var(--space-4);
-    z-index: 60;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: var(--space-2);
-    transition: opacity var(--dur-med) var(--ease-out);
-  }
-
-  /*
-   * Idle: faded, not removed.
+   * THE PRESENTATION CORNER'S STYLES ARE GONE WITH THE CORNER.
    *
-   * `visibility` and `display` both take the trigger out of the tab order and
-   * out of the accessibility tree, which would make the only route to "End
-   * session" and the appearance controls disappear for anyone driving by
-   * keyboard — on the one screen where the mouse may well be across the room.
-   * Opacity alone keeps it reachable, and any key or pointer wakes it.
-   *
-   * Hit-testing goes with the visibility, though: an invisible button that
-   * still takes a click is a trap, and a pointer resting in that corner when
-   * the timer expires is exactly where a stray click lands. Any pointer
-   * movement wakes the corner before a click can follow it, so nothing that is
-   * visible is ever unclickable.
+   * They dressed an OverflowMenu and its dropdown in glass so they could float
+   * over a running prompter, plus an idle-fade and a `@supports` fallback. All
+   * of that now lives in the stage's own dock, where the geometry tokens it
+   * shares with the hold chip and the transcript are. The appearance panel is
+   * handed across as a snippet and positions itself against the button that
+   * raised it.
    */
-  .stage-chrome.idle {
-    opacity: 0;
-    pointer-events: none;
-  }
-  .stage-chrome.idle:focus-within {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  /*
-   * The corner is one pane of glass.
-   *
-   * The menu and the sheet drop from the same point over the same moving text,
-   * so they get the same treatment — scoped HERE rather than changed in
-   * OverflowMenu, because everywhere else that component sits on an opaque
-   * panel where a blur has nothing to do and the studio surface is correct.
-   *
-   * The trigger carries a little of it too: a bare glyph is legible over the
-   * stage's black field and disappears the moment a white line of script scrolls
-   * under it, which is most of the time on a wide column.
-   */
-  .stage-chrome[data-stage-chrome] :global(.icon-button) {
-    border-color: rgba(255, 255, 255, 0.14);
-    background: rgba(9, 11, 15, 0.62);
-    backdrop-filter: blur(18px) saturate(140%);
-    -webkit-backdrop-filter: blur(18px) saturate(140%);
-    color: rgba(245, 246, 248, 0.92);
-  }
-  /*
-   * Stated rather than inherited. The component's own hover rule and this one
-   * land on the same specificity, and which of two tied rules wins is decided
-   * by bundle order — so leaving it implicit means a hover state that depends
-   * on how the app was built.
-   */
-  .stage-chrome[data-stage-chrome] :global(.icon-button:hover),
-  .stage-chrome[data-stage-chrome] :global(.icon-button:focus-visible) {
-    border-color: rgba(255, 255, 255, 0.3);
-    background: rgba(24, 28, 35, 0.86);
-    color: #fff;
-  }
-  .stage-chrome[data-stage-chrome] :global(.menu) {
-    border-color: rgba(255, 255, 255, 0.14);
-    background: rgba(9, 11, 15, 0.76);
-    backdrop-filter: blur(22px) saturate(140%);
-    -webkit-backdrop-filter: blur(22px) saturate(140%);
-  }
-  /* `--bg-hover-surface` is an opaque studio grey, which on glass paints a
-     solid tile over the script and undoes the transparency for that one row. */
-  .stage-chrome[data-stage-chrome] :global(.menu .item:hover:not(:disabled)) {
-    background: rgba(255, 255, 255, 0.1);
-  }
-  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    .stage-chrome[data-stage-chrome] :global(.icon-button) {
-      background: rgba(9, 11, 15, 0.92);
-    }
-    .stage-chrome[data-stage-chrome] :global(.menu) {
-      background: rgba(9, 11, 15, 0.94);
-    }
-  }
 
   .live {
     flex: 1 1 auto;

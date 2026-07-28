@@ -1,32 +1,45 @@
 <!--
-  The in-session appearance sheet.
+  The in-session appearance inspector.
 
   ---------------------------------------------------------------------------
   WHY THIS EXISTS AT ALL
   ---------------------------------------------------------------------------
   Every control on it already existed on the Settings screen, where none of them
-  can be judged. "Reading band position" is aligned against a camera lens;
-  "Default font size" is answered by standing where you will stand and seeing
-  whether you can read it; "Text intensity" is a question about a reflection in
-  a piece of glass. All of them have exactly one correct place to be set — in
-  front of the running prompter — and until now that was the one place they
-  could not be reached.
+  can be judged. "Reading line" is aligned against a camera lens; "Text size" is
+  answered by standing where you will stand and seeing whether you can read it;
+  "Text intensity" is a question about a reflection in a piece of glass. All of
+  them have exactly one correct place to be set — in front of the running
+  prompter — and until now that was the one place they could not be reached.
+
+  ---------------------------------------------------------------------------
+  IT RISES FROM THE DOCK, AND THAT CHANGES ITS SIZE
+  ---------------------------------------------------------------------------
+  It used to drop from a menu in the top-right corner and was allowed to be
+  560px tall. The Elgato Prompter it is judged on is 600px tall in total, so a
+  panel that now rises from a control 16px off the BOTTOM edge would cover
+  essentially the whole left half of the stage — including the reading band, the
+  one part the operator opened the panel to look at.
+
+  So it is 304 wide, capped just above 400 tall, and every row inside it earns
+  its height. The long explanatory paragraphs are gone: they were written for a
+  settings screen with room to teach, and this is a panel somebody is operating
+  mid-take with a presenter waiting.
 
   ---------------------------------------------------------------------------
   WHAT IT PROMISES
   ---------------------------------------------------------------------------
-  Every move is live: the stage behind the sheet re-renders as the slider moves,
-  because a control you have to close a panel to evaluate is a control you
-  evaluate twice. OK writes what is on the glass into the saved settings, so the
-  next take opens on it. Cancel puts the take back exactly as it was found and
-  saves nothing — which is why the caller hands in the appearance it opened
-  with rather than this sheet remembering it.
+  Every move is live: the stage behind re-renders as the slider moves, because a
+  control you have to close a panel to evaluate is a control you evaluate twice.
+  Done writes what is on the glass into the saved settings, so the next take
+  opens on it. Cancel puts the take back exactly as it was found and saves
+  nothing — which is why the caller hands in the appearance it opened with
+  rather than this panel remembering it.
 
-  The sheet is `aria-modal` and traps Tab. It has no scrim: the whole point is
-  that the stage stays visible and legible behind it, so it takes one corner of
-  the screen and leaves the reading band alone. Modality without a scrim still
-  owes the rest of the promise — the caller hides the chrome behind it, so there
-  is nothing live to reach past this panel.
+  It is `aria-modal` and traps Tab. It has no scrim: the whole point is that the
+  stage stays visible and legible behind it, so it takes one corner of the
+  screen and leaves the reading band alone. Modality without a scrim still owes
+  the rest of the promise — the dock's other popover closes when this opens, so
+  there is nothing live to reach past this panel.
 
   ---------------------------------------------------------------------------
   A RIG-RESOLVED TAKE GETS A READOUT, NOT CONTROLS
@@ -35,10 +48,10 @@
   every one of these values out from a measured distance and never consults the
   loose ones — including text intensity, which a calibrated profile carries
   because it was chosen by somebody standing at that glass looking at that
-  reflection. Sliders here would move and change nothing, and an OK button would
-  write the RIG's numbers into the global defaults, quietly changing what every
-  uncalibrated take opens with. So the sheet says what the rig resolved, says
-  where to change it, and offers nothing it cannot deliver.
+  reflection. Sliders here would move and change nothing, and a Done button
+  would write the RIG's numbers into the global defaults, quietly changing what
+  every uncalibrated take opens with. So the panel says what the rig resolved,
+  says where to change it, and offers nothing it cannot deliver.
 -->
 <script lang="ts">
   import Button from './Button.svelte';
@@ -53,7 +66,7 @@
     appearance: StageAppearance;
     /**
      * §17.2: a saved rig decided this take's appearance, so none of it is the
-     * sheet's to set. It reports and points at the wizard instead.
+     * panel's to set. It reports and points at the wizard instead.
      */
     rigResolved: boolean;
     /**
@@ -65,6 +78,19 @@
      * opened stops being the range they have.
      */
     maxFontSizePx: number;
+    /**
+     * What the stage MEASURED off the face it is drawing, or null before the
+     * first line map.
+     *
+     * A percentage cannot produce consistent reading behaviour across a
+     * 1024x600 Prompter, a 1080p Prompter XL and a Sidecar iPad — the same 78%
+     * is a different measure on each. The character count is the number that
+     * actually governs eye travel, and only the stage can know it: control
+     * resolves geometry against DIN fallbacks because control does not render
+     * the font. Shown beside the width control rather than instead of it,
+     * because the operator is dragging a percentage and reading a consequence.
+     */
+    charactersPerLine?: number | null;
     /** Apply to the running take. Called on every move. */
     onchange: (patch: Partial<StageAppearance>) => void;
     /** Keep it: save to settings and close. */
@@ -73,7 +99,15 @@
     oncancel: () => void;
   }
 
-  let { appearance, rigResolved, maxFontSizePx, onchange, onok, oncancel }: Props = $props();
+  let {
+    appearance,
+    rigResolved,
+    maxFontSizePx,
+    charactersPerLine = null,
+    onchange,
+    onok,
+    oncancel,
+  }: Props = $props();
 
   const uid = $props.id();
   let panel: HTMLElement | null = $state(null);
@@ -85,11 +119,35 @@
   };
 
   /**
+   * The step the minus/plus buttons take.
+   *
+   * Two pixels because that is the smallest change anybody can see through
+   * glass at prompting distance, and because it matches the Cmd+= shortcut the
+   * same value already has. Shift multiplies it, so an operator who is a long
+   * way from the size they want is not clicking twenty times.
+   */
+  const SIZE_STEP_PX = 2;
+  const SIZE_STEP_COARSE_PX = 10;
+
+  function nudgeSize(direction: 1 | -1, event: MouseEvent | KeyboardEvent): void {
+    const step = event.shiftKey ? SIZE_STEP_COARSE_PX : SIZE_STEP_PX;
+    const next = Math.round(appearance.fontSizePx + direction * step);
+    // Clamped here as well as by the caller: a disabled-looking button that
+    // silently sends an out-of-range value is worse than one that stops.
+    const clamped = Math.min(maxFontSizePx, Math.max(APPEARANCE_LIMITS.fontSizePx.min, next));
+    if (clamped === Math.round(appearance.fontSizePx)) return;
+    onchange({ fontSizePx: clamped });
+  }
+
+  const atMinSize = $derived(Math.round(appearance.fontSizePx) <= APPEARANCE_LIMITS.fontSizePx.min);
+  const atMaxSize = $derived(Math.round(appearance.fontSizePx) >= Math.round(maxFontSizePx));
+
+  /**
    * Focus moves in on open and back to the opener on close, the same contract
-   * Dialog.svelte keeps. Without the second half, closing the sheet unmounts
+   * Dialog.svelte keeps. Without the second half, closing the panel unmounts
    * the focused node and leaves focus on `<body>` — which on a full-screen
    * stage means the next Tab starts from the top of a page nobody can see, and
-   * the menu button that opened this is no longer where the keyboard is.
+   * the dock button that opened this is no longer where the keyboard is.
    */
   $effect(() => {
     if (!panel) return undefined;
@@ -104,12 +162,12 @@
 
   /*
    * Escape and Tab, on the window and in the capture phase, for the reason
-   * Dialog.svelte states: clicking the sheet's own prose drops focus on
+   * Dialog.svelte states: clicking the panel's own prose drops focus on
    * `<body>`, and a panel-scoped handler then never sees the key again.
    *
    * Escape here means "cancel", not "end the take". The stage stands its own
    * key handling down while this is open (`chromeOpen`), so this is the only
-   * thing answering — a presenter who opens the sheet mid-take and hits Escape
+   * thing answering — a presenter who opens the panel mid-take and hits Escape
    * out of reflex gets their panel closed, not their session ended.
    */
   $effect(() => {
@@ -153,12 +211,13 @@
   bind:this={panel}
 >
   <header class="sheet-head">
-    <h2 class="title" id="{uid}-title">Adjust the prompter</h2>
-    <p class="sub">
-      {rigResolved
-        ? 'This display runs from a saved rig.'
-        : 'Changes show on the stage as you make them.'}
-    </p>
+    <h2 class="title" id="{uid}-title">Prompter appearance</h2>
+    {#if rigResolved}
+      <!-- A badge rather than a sentence. "This display runs from a saved rig"
+           was doing two jobs — naming the state and explaining it — and the
+           explanation belongs with the values it applies to, below. -->
+      <span class="badge">Calibrated</span>
+    {/if}
   </header>
 
   <div class="body">
@@ -171,34 +230,103 @@
       -->
       <dl class="readout">
         <div class="row">
-          <dt>Text intensity</dt>
-          <dd>{INTENSITY_LABEL[appearance.textIntensity]}</dd>
-        </div>
-        <div class="row">
-          <dt>Font size</dt>
+          <dt>Text size</dt>
           <dd>{Math.round(appearance.fontSizePx)} px</dd>
         </div>
         <div class="row">
-          <dt>Line height</dt>
+          <dt>Text width</dt>
+          <dd>
+            {Math.round(appearance.columnWidthPercent)}%{charactersPerLine
+              ? ` · ${charactersPerLine} chars`
+              : ''}
+          </dd>
+        </div>
+        <div class="row">
+          <dt>Reading line</dt>
+          <dd>{Math.round(appearance.readingBandCenterPercent)}%</dd>
+        </div>
+        <div class="row">
+          <dt>Line spacing</dt>
           <dd>{appearance.lineHeight.toFixed(2)}</dd>
         </div>
         <div class="row">
-          <dt>Text column width</dt>
-          <dd>{Math.round(appearance.columnWidthPercent)}%</dd>
-        </div>
-        <div class="row">
-          <dt>Reading band position</dt>
-          <dd>{Math.round(appearance.readingBandCenterPercent)}%</dd>
+          <dt>Intensity</dt>
+          <dd>{INTENSITY_LABEL[appearance.textIntensity]}</dd>
         </div>
       </dl>
       <p class="hint">
-        Every one of these was worked out from how far away you stand, which is the
-        only way they can be right on two panels of different sizes at once. To
-        change them, recalibrate this display under <strong>Settings → Stage display</strong>.
+        Worked out from how far away you stand. Change them under
+        <strong>Settings → Stage display</strong>.
       </p>
     {:else}
+      <!--
+        ORDERED BY HOW OFTEN IT IS TOUCHED.
+        The panel used to open on text intensity, which is a decision somebody
+        makes once per room. Size is the one that gets changed, so it is first
+        and it is the only control with buttons as well as a track — a
+        two-pixel nudge is not a drag anybody can make accurately.
+      -->
+      <div class="size-row">
+        <Slider
+          label="Text size"
+          value={appearance.fontSizePx}
+          min={APPEARANCE_LIMITS.fontSizePx.min}
+          max={maxFontSizePx}
+          step={APPEARANCE_LIMITS.fontSizePx.step}
+          format={(v) => `${v} px`}
+          onchange={(value) => onchange({ fontSizePx: value })}
+        />
+        <div class="nudge">
+          <button
+            type="button"
+            aria-label="Smaller text"
+            title="Smaller text (hold Shift for a bigger step)"
+            disabled={atMinSize}
+            onclick={(event) => nudgeSize(-1, event)}>−</button
+          >
+          <button
+            type="button"
+            aria-label="Larger text"
+            title="Larger text (hold Shift for a bigger step)"
+            disabled={atMaxSize}
+            onclick={(event) => nudgeSize(1, event)}>+</button
+          >
+        </div>
+      </div>
+
+      <Slider
+        label="Text width"
+        value={appearance.columnWidthPercent}
+        min={APPEARANCE_LIMITS.columnWidthPercent.min}
+        max={APPEARANCE_LIMITS.columnWidthPercent.max}
+        format={(v) => `${v}%${charactersPerLine ? ` · ${charactersPerLine} chars` : ''}`}
+        onchange={(value) => onchange({ columnWidthPercent: value })}
+      />
+
+      <Slider
+        label="Reading line"
+        value={appearance.readingBandCenterPercent}
+        min={APPEARANCE_LIMITS.readingBandCenterPercent.min}
+        max={APPEARANCE_LIMITS.readingBandCenterPercent.max}
+        format={(v) => `${v}%`}
+        onchange={(value) => onchange({ readingBandCenterPercent: value })}
+      />
+      <!-- One sentence. The three-line version of this was the tallest thing
+           in the panel and said the same thing. -->
+      <p class="hint">Align the side markers with the camera lens.</p>
+
+      <Slider
+        label="Line spacing"
+        value={appearance.lineHeight}
+        min={APPEARANCE_LIMITS.lineHeight.min}
+        max={APPEARANCE_LIMITS.lineHeight.max}
+        step={APPEARANCE_LIMITS.lineHeight.step}
+        format={(v) => v.toFixed(2)}
+        onchange={(value) => onchange({ lineHeight: value })}
+      />
+
       <SegmentedControl
-        label="Text intensity"
+        label="Intensity"
         size="sm"
         value={appearance.textIntensity}
         options={[
@@ -208,47 +336,6 @@
         ]}
         onchange={(value) => onchange({ textIntensity: value as TextIntensity })}
       />
-      <p class="hint">How bright the words burn over the stage's black field.</p>
-
-      <Slider
-        label="Font size"
-        value={appearance.fontSizePx}
-        min={APPEARANCE_LIMITS.fontSizePx.min}
-        max={maxFontSizePx}
-        step={APPEARANCE_LIMITS.fontSizePx.step}
-        format={(v) => `${v} px`}
-        onchange={(value) => onchange({ fontSizePx: value })}
-      />
-      <Slider
-        label="Line height"
-        value={appearance.lineHeight}
-        min={APPEARANCE_LIMITS.lineHeight.min}
-        max={APPEARANCE_LIMITS.lineHeight.max}
-        step={APPEARANCE_LIMITS.lineHeight.step}
-        format={(v) => v.toFixed(2)}
-        onchange={(value) => onchange({ lineHeight: value })}
-      />
-      <Slider
-        label="Text column width"
-        value={appearance.columnWidthPercent}
-        min={APPEARANCE_LIMITS.columnWidthPercent.min}
-        max={APPEARANCE_LIMITS.columnWidthPercent.max}
-        format={(v) => `${v}%`}
-        onchange={(value) => onchange({ columnWidthPercent: value })}
-      />
-      <Slider
-        label="Reading band position"
-        value={appearance.readingBandCenterPercent}
-        min={APPEARANCE_LIMITS.readingBandCenterPercent.min}
-        max={APPEARANCE_LIMITS.readingBandCenterPercent.max}
-        format={(v) => `${v}%`}
-        onchange={(value) => onchange({ readingBandCenterPercent: value })}
-      />
-      <p class="hint">
-        The marks at the sides of the stage are the reading band. Drag it until they
-        sit over your camera lens — that is where your eyes rest, so it is where the
-        lens should be.
-      </p>
     {/if}
   </div>
 
@@ -257,7 +344,7 @@
       <Button variant="primary" size="sm" onclick={oncancel}>Close</Button>
     {:else}
       <Button variant="ghost" size="sm" onclick={oncancel}>Cancel</Button>
-      <Button variant="primary" size="sm" onclick={onok}>OK</Button>
+      <Button variant="primary" size="sm" onclick={onok}>Done</Button>
     {/if}
   </footer>
 </div>
@@ -266,13 +353,17 @@
   /*
    * A pane of dark glass, not a panel.
    *
-   * It drops down from the corner over a running prompter, and on a narrow
-   * screen — or a wide column — it WILL overlap the script. That is allowed:
-   * what it may not do is hide what is going on behind it. So the fill is
-   * translucent and dark, which lets the shape and motion of the text read
-   * through while dropping white script type far enough below the panel's own
-   * text to keep this readable. A solid slab would be a hole in the stage at
-   * exactly the moment the operator is judging the stage.
+   * It rises from the dock over a running prompter and WILL overlap the script.
+   * That is allowed: what it may not do is hide what is going on behind it. So
+   * the fill is translucent and dark, which lets the shape and motion of the
+   * text read through while dropping white script type far enough below the
+   * panel's own text to keep this readable. A solid slab would be a hole in the
+   * stage at exactly the moment the operator is judging the stage.
+   *
+   * It is a little MORE opaque than the dock beneath it (0.74). Sliders and
+   * numbers need stronger separation than a waveform does, and the rule the
+   * whole surface follows is one sheet of glass at a time — never glass inside
+   * glass, which is why no row here has a translucent card of its own.
    */
   .sheet {
     display: flex;
@@ -281,15 +372,28 @@
        and the whole point is to watch it while dragging. */
     width: min(304px, calc(100vw - 32px));
     /*
-     * Never taller than the screen it floats over, and the BODY is what
-     * scrolls — the title stays readable and OK stays reachable without a
-     * scroll, which on a panel somebody is operating mid-take is the
-     * difference between a control and a hunt.
+     * 412, not 560. This rises from a control 16px off the bottom of a panel
+     * that may be only 600px tall; see the note at the top of the file.
+     *
+     * The number is what the five controls plus their one hint actually measure
+     * at this width, measured at 1024x600 rather than guessed: at 360 the
+     * intensity control fell below the fold, and a control nobody can see
+     * without discovering that a panel scrolls is a control that is not there.
+     * The BODY still scrolls if a longer rig readout needs it, so the title
+     * stays readable and Done stays reachable either way.
      */
-    max-height: min(560px, calc(100vh - 96px));
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: var(--radius-md);
-    background: rgba(9, 11, 15, 0.76);
+    /*
+     * `--stage-popover-max-height` is published by the stage from the rig's
+     * SAFE rectangle, not from the window: a hood crops the panel, and a sheet
+     * sized against the viewport rises straight off the top of the visible area
+     * where `.stage-root`'s `overflow: hidden` takes its title and its Done
+     * button with it. It inherits down to here through the dock. The viewport
+     * fallback is what a plain panel — and the Settings screen — gets.
+     */
+    max-height: min(412px, var(--stage-popover-max-height, calc(100vh - 96px)));
+    border: 1px solid var(--stage-chrome-border, rgba(255, 255, 255, 0.13));
+    border-radius: var(--stage-chrome-radius, 12px);
+    background: rgba(9, 11, 15, 0.88);
     /* Saturation lifted a little so the terracotta on the controls survives the
        blur instead of going grey behind it. */
     backdrop-filter: blur(22px) saturate(140%);
@@ -301,38 +405,94 @@
   /*
    * Where the glass cannot be made, the panel is simply darker.
    *
-   * Without a blur behind it, 76% over moving white type is unreadable in both
-   * directions — the panel's text and the script's compete. Opacity is the only
-   * honest fallback: still translucent enough to see that something is there,
-   * opaque enough to read.
+   * Without a blur behind it, translucency over moving white type is unreadable
+   * in both directions — the panel's text and the script's compete. Opacity is
+   * the only honest fallback: still translucent enough to see that something is
+   * there, opaque enough to read.
    */
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .sheet {
-      background: rgba(9, 11, 15, 0.94);
+      background: rgba(9, 11, 15, 0.96);
     }
   }
 
   .sheet-head {
-    padding: var(--space-4) var(--space-4) var(--space-2);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4) var(--space-2);
   }
   .title {
     margin: 0;
-    font-size: var(--text-md);
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: 650;
     color: var(--text-primary);
   }
-  .sub {
-    margin: 2px 0 0;
-    font-size: var(--text-xs);
-    color: var(--text-muted);
+  .badge {
+    flex: 0 0 auto;
+    padding: 2px 7px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+    font-size: var(--text-meta);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
   }
 
   .body {
     display: flex;
     flex-direction: column;
-    gap: var(--space-4);
-    padding: var(--space-3) var(--space-4) var(--space-4);
+    /* Tighter than the studio rhythm, deliberately: this is six rows on a panel
+       that has to clear a 600px display and still leave the reading band in
+       view behind it. */
+    gap: 10px;
+    padding: var(--space-2) var(--space-4) var(--space-3);
     overflow-y: auto;
+  }
+
+  /*
+   * The size row: a track plus two buttons that step it.
+   *
+   * The slider alone cannot be operated accurately at two pixels a step — the
+   * whole range is 24 to 320 in a 200px-wide panel — and two pixels is exactly
+   * the size of adjustment somebody makes when they are nearly right.
+   */
+  .size-row {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-2);
+  }
+  .size-row :global(.slider) {
+    flex: 1 1 auto;
+  }
+  .nudge {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 4px;
+    padding-bottom: 2px;
+  }
+  .nudge button {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .nudge button:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.14);
+    color: var(--text-primary);
+  }
+  .nudge button:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   .readout {
@@ -364,9 +524,9 @@
   }
 
   .hint {
-    margin: -6px 0 0;
-    font-size: var(--text-xs);
-    line-height: 1.45;
+    margin: -4px 0 0;
+    font-size: var(--text-meta);
+    line-height: 1.4;
     color: var(--text-muted);
   }
 
@@ -379,7 +539,7 @@
     display: flex;
     justify-content: flex-end;
     gap: var(--space-2);
-    padding: var(--space-3) var(--space-4);
+    padding: var(--space-2) var(--space-4) var(--space-3);
     border-top: 1px solid rgba(255, 255, 255, 0.1);
   }
 </style>

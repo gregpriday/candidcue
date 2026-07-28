@@ -46,6 +46,7 @@
  * `stores/session.ts`.
  */
 import {
+  STAGE_VOICE_PILL_CONFIRM_HOLD_MS,
   STAGE_VOICE_PILL_TRACE_SAMPLES,
   type AudioLevelSnapshot,
   type StageVoicePillReading,
@@ -146,6 +147,17 @@ export interface VoicePillState {
   speechSinceTextMs: number;
   /** True once any non-empty recogniser text has arrived this take. */
   heardText: boolean;
+  /**
+   * The instant the tick stops being shown, on the same clock everything else
+   * here is on.
+   *
+   * `-Infinity` rather than 0 for the reason `lastEscapeAt` on the stage uses a
+   * sentinel: 0 is a real instant on a monotonic clock, and a state seeded with
+   * it would report "the confirmation is over" correctly by accident and "the
+   * confirmation is running" incorrectly if a caller ever passed a negative
+   * timestamp. Never-confirmed is its own value.
+   */
+  confirmedUntilMs: number;
   /** The resolved reading, updated by {@link tickVoicePill}. */
   reading: StageVoicePillReading;
   fault: VoicePillFault | null;
@@ -163,6 +175,7 @@ export function initialVoicePillState(startedAtMs: number): VoicePillState {
     lastFrameAtMs: null,
     speechSinceTextMs: 0,
     heardText: false,
+    confirmedUntilMs: Number.NEGATIVE_INFINITY,
     reading: 'listening',
     fault: null,
     suspended: false,
@@ -312,12 +325,36 @@ export function tickVoicePill(
     : state;
 
   const fault = resolveFault(base, conditions, nowMs);
+
+  /*
+   * The tick is spent on NEWS, and there are exactly two kinds.
+   *
+   * The first partial of a take proves the whole chain at once, and a fault
+   * clearing proves it again after something had genuinely broken. Both are
+   * moments; neither is a status. Anything else — a healthy take continuing to
+   * be healthy — settles into the steady dot, because a mark that stays lit for
+   * twenty minutes is reporting an event nobody can still act on, in the corner
+   * of a script somebody is reading.
+   *
+   * Read off the PREVIOUS reading rather than from a flag set where the text
+   * arrives, because `reduceVoicePillText` has no clock and inventing one for
+   * it would put two sources of time in a module whose whole discipline is
+   * having one.
+   */
+  const enteringConfirm =
+    !fault && base.heardText && (base.reading === 'listening' || base.reading === 'fault');
+  const confirmedUntilMs = enteringConfirm
+    ? nowMs + STAGE_VOICE_PILL_CONFIRM_HOLD_MS
+    : base.confirmedUntilMs;
+
   const reading: StageVoicePillReading = fault
     ? 'fault'
-    : base.heardText
-      ? 'confirmed'
-      : 'listening';
-  return { ...base, reading, fault, suspended: false };
+    : !base.heardText
+      ? 'listening'
+      : nowMs < confirmedUntilMs
+        ? 'confirmed'
+        : 'steady';
+  return { ...base, reading, confirmedUntilMs, fault, suspended: false };
 }
 
 /**
@@ -371,7 +408,12 @@ export function voicePillLabel(state: VoicePillState): string {
     if (state.fault === 'no_audio') return 'No audio';
     return state.fault === 'offline' ? 'Not connected' : 'Not hearing you';
   }
-  return state.reading === 'confirmed' ? 'Hearing you' : 'Listening';
+  // `confirmed` and `steady` are the same fact drawn two ways — a tick that has
+  // just landed, and the dot it settles into — so they say the same thing. The
+  // accessible name is deliberately NOT re-announced on the settle: a screen
+  // reader repeating "Hearing you" a second later would be the audible version
+  // of the flashing mark this split exists to remove.
+  return state.reading === 'listening' ? 'Listening' : 'Hearing you';
 }
 
 /**

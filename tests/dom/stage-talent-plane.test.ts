@@ -211,17 +211,6 @@ describe('everything the presenter reads through the glass', () => {
     await settle();
     expect(planeOf(container, '.ack'), 'the acknowledgement chip').toBe('talent');
 
-    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
-      stageGeneration: STAGE_GENERATION,
-      reading: 'listening',
-      levels: [0.2, 0.6],
-      label: 'Listening',
-      visible: true,
-      sentAtMs: 1000,
-    });
-    await settle();
-    expect(planeOf(container, '.voice-pill'), 'the voice pill').toBe('talent');
-
     expect(planeOf(container, '.hold-status'), 'the hold status chip').toBe('talent');
     expect(planeOf(container, '.script-layer'), 'the script itself').toBe('talent');
     expect(planeOf(container, '.cue'), 'the reading cue').toBe('talent');
@@ -233,17 +222,9 @@ describe('everything the presenter reads through the glass', () => {
     // nobody can see.
     const container = await mountStage('clean', hoodedOptics());
     directive({ kind: 'ack', label: 'Chapter 1', durationMs: 900 });
-    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
-      stageGeneration: STAGE_GENERATION,
-      reading: 'listening',
-      levels: [0.2, 0.6],
-      label: 'Listening',
-      visible: true,
-      sentAtMs: 1000,
-    });
     await settle();
 
-    for (const selector of ['.hold-status', '.ack', '.voice-pill']) {
+    for (const selector of ['.hold-status', '.ack']) {
       const el = container.querySelector(selector);
       expect(el, `${selector} is not mounted at all`).not.toBeNull();
       expect(
@@ -289,48 +270,110 @@ describe('the operator plane', () => {
     expect(planeOf(container, '.diagnostics'), 'the diagnostics readout').toBe('operator');
     expect(planeOf(container, '.transcript-tap'), 'the transcript bar').toBe('operator');
 
-    // And nothing presenter-facing leaked into it.
+    /*
+     * THE AUDIO READOUT AND THE WAY OUT LIVE HERE NOW.
+     *
+     * This test used to assert the opposite for the pill, and the argument for
+     * that was about the fault NAME: a word the presenter has to read at a
+     * glance, which an unmirrored plane guarantees will arrive backwards in the
+     * glass. That argument is still correct and is now satisfied somewhere
+     * else — `resolveHoldStatus` puts a named fault at the top of the hold
+     * ladder, so "No audio" reaches the presenter through the mirrored hold
+     * chip, in presenter-sized type. What is left in the dock is a waveform, a
+     * mark, and two mouse targets.
+     *
+     * The mouse targets are what force the move rather than merely allow it. A
+     * CSS transform carries hit-testing with it, so a mirrored button is
+     * clickable exactly where it appears — on the opposite side of the screen
+     * from where it was before somebody turned mirroring on. That is not a
+     * property a control may have.
+     */
+    expect(planeOf(container, '.stage-dock'), 'the session dock').toBe('operator');
+
+    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
+      stageGeneration: STAGE_GENERATION,
+      reading: 'listening',
+      levels: [0.2, 0.6],
+      label: 'Listening',
+      visible: true,
+      sentAtMs: 1000,
+    });
+    await settle();
+    expect(planeOf(container, '.voice-pill'), 'the audio readout').toBe('operator');
+
+    // And nothing the presenter has to READ leaked into it.
     const operator = container.querySelector('.stage-operator-plane');
     expect(operator?.querySelector('.escape-hint')).toBeNull();
-    expect(operator?.querySelector('.voice-pill')).toBeNull();
     expect(operator?.querySelector('.hold-status')).toBeNull();
+  });
+
+  it('insets the dock and the transcript by the rig\'s own safe rectangle', async () => {
+    // A hood crops the panel. The operator's instruments are inside the same
+    // rectangle the presenter's overlays are, for the same reason — a dock 20px
+    // from the window's corner on a hooded rig is a dock under the bezel.
+    const container = await mountStage('diagnostic', hoodedOptics());
+    await settleLayout();
+
+    for (const selector of ['.stage-dock', '.transcript-tap']) {
+      expect(
+        container.querySelector(selector)?.closest('.stage-operator-safe'),
+        `${selector} is outside the operator safe plane`,
+      ).not.toBeNull();
+    }
+
+    const plane = container.querySelector<HTMLElement>('.stage-operator-safe');
+    expect(parseFloat(plane?.style.top ?? 'NaN')).toBeCloseTo(8, 3);
+    expect(parseFloat(plane?.style.left ?? 'NaN')).toBeCloseTo(5, 3);
+    expect(parseFloat(plane?.style.width ?? 'NaN')).toBeCloseTo(90, 3);
+    expect(parseFloat(plane?.style.height ?? 'NaN')).toBeCloseTo(80, 3);
+
+    /*
+     * And the popovers that rise from the dock are bounded by that rectangle
+     * rather than by the window.
+     *
+     * This is the failure it prevents: the appearance panel is ~412px, the dock
+     * sits 16px above the safe bottom, and a rig with a deep bottom inset — the
+     * optical model accepts up to 45% an edge — puts the panel's title and its
+     * Done button above the top of the visible area, where `.stage-root`'s
+     * `overflow: hidden` removes them and nothing can scroll them back.
+     */
+    const budget = plane?.style.getPropertyValue('--stage-popover-max-height') ?? '';
+    expect(budget, 'the dock must publish a popover height budget').toMatch(/^\d+px$/);
+    // Strictly less than the viewport answer, which is the whole point.
+    expect(parseFloat(budget)).toBeLessThan(window.innerHeight - 72);
+    expect(parseFloat(budget)).toBeGreaterThan(0);
   });
 });
 
 describe('Clean Take against Diagnostic Take', () => {
-  it('keeps the transcript bar on a clean stage, before the take is even live', async () => {
+  it('keeps the raw transcript out of Clean Take, and says why it can afford to', async () => {
     /*
      * ---------------------------------------------------------------------
-     * THIS TEST USED TO ASSERT THE OPPOSITE, AND THAT WAS THE BUG
+     * THIS TEST HAS NOW ASSERTED BOTH ANSWERS, AND BOTH WERE RIGHT AT THE TIME
      * ---------------------------------------------------------------------
-     * It was written alongside the optical work to pin "the bar is diagnostic
-     * only", on the reasoning that a strip of changing words along the bottom
-     * edge is peripheral motion competing with the reading line. Sound
-     * reasoning, wrong conclusion: this bar is the only thing on the glass that
-     * says whether the recogniser is hearing ANYTHING, and hiding it in Clean
-     * Take hid it from every real take.
+     * It first pinned "diagnostic only", on the reasoning that a strip of
+     * changing words along the bottom edge is peripheral motion competing with
+     * the reading line. Then it pinned the opposite, because that reasoning had
+     * hidden the ONLY instrument that separated three unrelated faults with one
+     * symptom: a script that has stopped moving, because the microphone was
+     * never captured, or because the recogniser heard nothing, or because the
+     * aligner would not match.
      *
-     * The second gate was worse. It was also `phase === 'live'`, and `live` is
-     * only reached once an alignment snapshot is ACCEPTED — so a take that
-     * transcribed nothing never showed the one instrument that would have said
-     * so. The bar was hidden by exactly the failure it exists to explain.
+     * The separation no longer depends on this bar. Each of those three has a
+     * first-class reading somewhere the presenter is already looking — a named
+     * fault on the audio readout AND, through `resolveHoldStatus`, the same
+     * sentence in the mirrored hold chip; "Not hearing you" for speech with
+     * nothing coming back; "Holding here" for an aligner that will not match.
+     * So the strip goes back to being what it always was — a raw recogniser
+     * dump for somebody debugging a rig — and Clean Take stops looking like a
+     * development HUD.
      *
-     * So: present from the moment there is an envelope, in either mode, live or
-     * not. The peripheral-motion concern is answered by `silent` — dim and
-     * still until words arrive.
+     * The claim is not "it is hidden". It is "it is hidden AND nothing was
+     * lost", so this asserts the replacement as well.
      */
     const container = await mountStage('clean');
     await settleLayout();
 
-    // No alignment snapshot at all: the stage has not reached `live`, which is
-    // the state a take that hears nothing stays in.
-    expect(container.querySelector('.stage-root')?.getAttribute('data-phase')).not.toBe('live');
-    const bar = container.querySelector('.transcript-tap');
-    expect(bar, 'the transcript bar must be up before the first snapshot').not.toBeNull();
-    expect(bar?.textContent).toContain('listening');
-    expect(bar?.classList.contains('silent')).toBe(true);
-
-    // And it carries the recogniser's words when they arrive, still in Clean.
     dispatchLocalStageEvent(STAGE_EVENT.transcriptTap, {
       stageGeneration: STAGE_GENERATION,
       text: 'hello there',
@@ -338,11 +381,24 @@ describe('Clean Take against Diagnostic Take', () => {
       sentAtMs: 1000,
     });
     await settle();
-    expect(container.querySelector('.transcript-tap')?.textContent).toContain('hello there');
-
-    // The full diagnostics readout stays a Diagnostic-Take thing; only the
-    // instrument that answers "is it hearing me" is unconditional.
+    expect(container.querySelector('.transcript-tap')).toBeNull();
     expect(container.querySelector('.diagnostics')).toBeNull();
+
+    // The replacement: a named fault, in the mirrored chip the presenter reads.
+    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
+      stageGeneration: STAGE_GENERATION,
+      reading: 'fault',
+      levels: [0.2, 0.6],
+      label: 'No audio',
+      visible: true,
+      sentAtMs: 1000,
+    });
+    await settle();
+
+    const chip = container.querySelector('.hold-status');
+    expect(chip?.getAttribute('data-visible'), 'the fault must reach the glass').toBe('true');
+    expect(chip?.textContent).toContain('No audio');
+    expect(planeOf(container, '.hold-status'), 'mirrored, so it reads in the glass').toBe('talent');
   });
 
   it('carries only the tail of a long utterance, not everything since the last final', async () => {
@@ -356,7 +412,7 @@ describe('Clean Take against Diagnostic Take', () => {
      * `transcript-tail.ts` owns the rule and is unit-tested; this is the seam
      * that says the stage actually applies it, which no unit test can see.
      */
-    const container = await mountStage('clean');
+    const container = await mountStage('diagnostic');
     await settleLayout();
 
     const spoken = Array.from({ length: 26 }, (_, i) => `word${i + 1}`);

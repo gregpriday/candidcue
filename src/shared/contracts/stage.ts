@@ -377,12 +377,44 @@ export interface StageTranscriptTapPayload {
  * `listening` — audio is arriving and nothing has come back yet. The ordinary
  *               state at the top of a take, and NOT a warning: a presenter who
  *               has not spoken yet is not a fault to be announced;
- * `confirmed` — recogniser text has come back, so the whole chain (device →
- *               capture → socket → model) demonstrably works;
+ * `confirmed` — recogniser text has JUST come back, so the whole chain (device
+ *               → capture → socket → model) demonstrably works. Transient — see
+ *               below;
+ * `steady`    — the chain has been proven and nothing has gone wrong since;
  * `fault`     — the input died, the frames stopped, or the presenter has been
  *               speaking for several seconds with nothing coming back.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY `confirmed` AND `steady` ARE TWO STATES
+ * ---------------------------------------------------------------------------
+ * `confirmed` used to be terminal: the first partial that came back lit a
+ * filled tick, and that tick stayed lit for the rest of the take. It was the
+ * brightest mark on the glass and it was reporting an event from twenty minutes
+ * ago — a permanently celebrated success sitting beside a script somebody is
+ * reading.
+ *
+ * So the tick is now an EVENT, held for {@link STAGE_VOICE_PILL_CONFIRM_HOLD_MS}
+ * and then settled into a quiet dot. It is spent on the three moments that are
+ * genuinely news — the first lock of a take, and coming back from a fault — and
+ * on nothing else.
+ *
+ * `steady` exists so that settling loses no information. The obvious version of
+ * this change drops back to `listening`, which then means two incompatible
+ * things at once: "nothing has ever come back" and "everything is fine". A
+ * presenter glancing at the corner could not tell a working take from one that
+ * has transcribed nothing since it started, which is the single question the
+ * readout exists to answer. Hollow dot before the first lock, solid dot after;
+ * both are still, neither is an announcement.
  */
-export type StageVoicePillReading = 'listening' | 'confirmed' | 'fault';
+export type StageVoicePillReading = 'listening' | 'confirmed' | 'steady' | 'fault';
+
+/**
+ * How long the tick is held before it settles into the steady dot.
+ *
+ * Long enough to be noticed by somebody who was not looking at the corner when
+ * it happened, short enough that it is over before it becomes scenery.
+ */
+export const STAGE_VOICE_PILL_CONFIRM_HOLD_MS = 800;
 
 /**
  * `stage://voice-pill` — the corner readout, as the stage should draw it.

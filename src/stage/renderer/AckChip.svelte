@@ -53,10 +53,18 @@
     letter-spacing: 0.01em;
     white-space: nowrap;
     pointer-events: none;
-    animation: ack-in 160ms var(--ease-out, ease-out);
+    animation: ack-in 120ms var(--ease-out, ease-out);
   }
 
-  /* An acknowledgement is a confirmation, not an entrance. */
+  /*
+   * A FADE, NOT A RISE.
+   *
+   * It used to slide up six pixels on the way in. A command acknowledgement is
+   * already a new object appearing in the reader's peripheral field — that is
+   * the whole signal — and the translation added nothing to the meaning while
+   * adding the one thing this surface spends its whole design budget avoiding:
+   * something moving beside the words somebody is speaking.
+   */
   @media (prefers-reduced-motion: reduce) {
     .ack {
       animation: none;
@@ -66,11 +74,9 @@
   @keyframes ack-in {
     from {
       opacity: 0;
-      transform: translateX(-50%) translateY(6px);
     }
     to {
       opacity: 1;
-      transform: translateX(-50%) translateY(0);
     }
   }
 </style>

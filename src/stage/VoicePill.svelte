@@ -1,14 +1,25 @@
 <!--
-  The voice pill — the stage's corner readout of whether CandidCue is picking up
-  what the presenter says.
+  The audio display — whether CandidCue is picking up what the presenter says.
 
-  Small, low in the corner, and INSIDE the mirror plane with the script. This
-  comment used to say the opposite — that being outside it was what kept the
-  pill legible — which is backwards for a beamsplitter: it reflects every pixel
-  equally, so the one element left out of the corrective flip is the one that
-  reaches the presenter's eye reversed. Anything the presenter reads is
-  mirrored with the read. (The transcript bar is not, and that is deliberate for
-  the opposite reason: it is addressed to an operator standing at the panel.)
+  ---------------------------------------------------------------------------
+  IT IS OPERATOR CHROME NOW, AND THAT IS A CHANGE OF ADDRESS
+  ---------------------------------------------------------------------------
+  This used to sit in the mirrored talent plane, on the argument that a
+  beamsplitter reflects every pixel equally so anything the presenter reads has
+  to ride the corrective flip. That argument is still correct, and it is about
+  the fault NAME — the one string on this readout somebody has to read at a
+  glance from where they are standing.
+
+  That name is no longer this component's only route to the presenter.
+  `resolveHoldStatus` puts a named fault at the top of the hold ladder, so "No
+  audio" reaches the glass through the mirrored hold chip in presenter-sized
+  type. What is left here is a waveform and a mark, which are read by whoever
+  is standing at the rig — and they now live in the dock with the two controls
+  that same person uses, unmirrored, at the physical bottom left.
+
+  The fault label stays on the pill as well. It costs nothing when things are
+  fine (it is not drawn), and on an unmirrored rig — which is most desks — it
+  is the fastest place to read what broke.
 
   It holds no audio state and no thresholds. Control owns the capture and sends
   a fully resolved view (`StageVoicePillPayload`), so what is drawn here cannot
@@ -16,9 +27,11 @@
   do that control does not is turn an array of amplitudes into a waveform.
 
   Never unmounted while a take is live — `visible` fades it instead. A pill that
-  was removed and re-added would pop back into existence at full opacity in the
-  corner of a script somebody is reading, which is exactly the kind of movement
-  the stage is supposed to be free of.
+  was removed and re-added would pop back into existence at full opacity beside
+  a script somebody is reading, which is exactly the kind of movement the stage
+  is supposed to be free of.
+
+  It is laid out by the dock, not positioned by itself. See StageDock.
 -->
 <script lang="ts">
   import { STAGE_VOICE_PILL_TRACE_SAMPLES, type StageVoicePillPayload } from '../shared/contracts';
@@ -59,21 +72,34 @@
    * has stopped moving and they cannot tell whether it is them or the rig. The
    * trace answers that continuously or it does not answer it at all.
    *
-   * The cost is real and is paid where it belongs: 88x18 px, dim, in the corner
-   * furthest from the reading line, and beside a mark that stops changing once
-   * it is a tick.
+   * The MARK is the part that settles, and it does: the tick is held briefly
+   * and then becomes a quiet solid dot (see `StageVoicePillReading`). So the
+   * only thing still moving here once a take is under way is the waveform, dim,
+   * in the corner furthest from the reading line.
    */
 </script>
 
 <!-- role="status": the reading changes as the take learns things, and a
      presenter using a screen reader needs those changes announced without the
      pill stealing focus from a window that has none to give. -->
+<!--
+  `aria-hidden` tracks the visual state, and that is not decoration.
+
+  `visible` is set false by a PAUSE, where the question this answers has no
+  answer: a hard pause has muted the device. Fading the pixels while leaving the
+  live region in the accessibility tree meant a screen reader could still be
+  told "Hearing you" — or, worse, left holding the fault from before the pause —
+  about a microphone that is deliberately switched off. The element stays
+  MOUNTED either way, so returning fades it back in rather than making it appear
+  from nowhere.
+-->
 <div
   class="voice-pill"
   data-reading={pill.reading}
   data-visible={pill.visible}
   role="status"
   aria-live="polite"
+  aria-hidden={!pill.visible}
   aria-label={pill.label}
 >
   <!-- aria-hidden: the waveform is the same fact as the label, drawn.
@@ -87,9 +113,17 @@
     {/each}
   </div>
 
-  <!-- The mark. A tick once the words have come back, a cross when something is
-       wrong, and a quiet dot while it is still listening — the dot is what
-       makes the pill read as live rather than as a decoration. -->
+  <!--
+    The mark, and there are only four of them.
+
+      hollow dot — listening, nothing has come back yet;
+      tick       — it just did, held for under a second;
+      solid dot  — and it is still fine;
+      cross      — something is wrong, in the cue colour, with its name beside.
+
+    Three of the four are still. Only the tick appears and goes, and it only
+    does so on news: the first lock of a take, and a recovery.
+  -->
   <span class="mark" aria-hidden="true">
     {#if pill.reading === 'confirmed'}
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
@@ -113,28 +147,30 @@
 </div>
 
 <style>
+  /*
+   * Dock geometry: 40px tall, ~104px wide, on the same material and radius as
+   * the two buttons beside it. It is laid out in the dock's row rather than
+   * positioned against a corner, which is the whole reason the three read as
+   * one instrument instead of three chips that happen to be near each other.
+   */
   .voice-pill {
-    position: absolute;
-    /* Clear of the transcript bar, which sits at `bottom: 8px` and is about
-       26px tall. The two share this right margin and read as a stack on a plain
-       panel, but they are in different planes — this one is mirrored with the
-       script, the bar is not — so under a mirror or a hood they part company.
-       See the note on `.transcript-tap` in StageApp. */
-    right: 18px;
-    bottom: 40px;
+    flex: 0 0 auto;
     display: flex;
     align-items: center;
-    gap: 10px;
-    height: 34px;
-    padding: 0 6px 0 14px;
-    border-radius: var(--radius-pill, 999px);
-    background: var(--stage-overlay);
-    /* The stage has no pointer affordances; this one is a readout, not a
-       control, and it must never eat a click meant for the window beneath. */
+    gap: 8px;
+    height: 40px;
+    padding: 0 10px;
+    border: 1px solid var(--stage-chrome-border);
+    border-radius: var(--stage-chrome-radius);
+    background: var(--stage-chrome-bg);
+    box-shadow: var(--stage-chrome-shadow);
+    -webkit-backdrop-filter: blur(16px) saturate(130%);
+    backdrop-filter: blur(16px) saturate(130%);
+    /* A readout, not a control. It must never eat a click meant for the window
+       beneath, and it is skipped in the tab order for the same reason. */
     pointer-events: none;
     opacity: 0;
-    /* Slow enough to read as a fade rather than a blink, and the only thing on
-       the stage that animates besides the script itself. */
+    /* Slow enough to read as a fade rather than a blink. */
     transition: opacity 420ms ease;
   }
 
@@ -148,16 +184,18 @@
     gap: 2px;
     /* Fixed, so the pill does not resize as the trace fills — a container that
        grew with its contents would drag the mark across the screen. */
-    width: 88px;
-    height: 18px;
+    width: 60px;
+    height: 16px;
     overflow: hidden;
+    /* Below the body text it sits beside, deliberately. It is the only thing
+       on this surface that moves. */
+    opacity: 0.64;
   }
 
   .bar {
     flex: 1 1 0;
     border-radius: var(--radius-pill, 999px);
-    background: var(--stage-text);
-    opacity: 0.85;
+    background: var(--stage-text, #f5f3ef);
     /* Just longer than the ~100 ms publish cadence, so the trace flows instead
        of strobing, and short enough that it still reads as a direct response to
        the presenter's voice. */
@@ -167,59 +205,81 @@
   .mark {
     display: grid;
     place-items: center;
-    width: 22px;
-    height: 22px;
+    width: 16px;
+    height: 16px;
     border-radius: 50%;
-    background: rgb(245 243 239 / 14%);
-    color: var(--stage-text);
+    color: var(--stage-text, #f5f3ef);
   }
 
   .mark svg {
-    width: 13px;
-    height: 13px;
+    width: 12px;
+    height: 12px;
   }
 
+  /*
+   * Hollow before the first lock, solid after.
+   *
+   * The distinction is the whole reason the tick is allowed to be transient:
+   * without it, settling would mean "nothing has ever come back" and "we are
+   * fine" drew the same mark, and the readout would stop answering the only
+   * question anybody asks it.
+   */
   .dot {
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: var(--stage-text);
+    border: 1px solid currentColor;
     opacity: 0.55;
   }
 
-  /* Confirmed: the mark fills, the way the reference does — a positive state
-     reads as solid, not as an outline. */
-  .voice-pill[data-reading='confirmed'] .mark {
-    background: var(--stage-text);
-    color: var(--stage-bg);
+  .voice-pill[data-reading='steady'] .dot {
+    background: currentColor;
+    opacity: 0.62;
   }
 
-  /* Fault: the cue colour the stage already uses for authored cues, so a
-     presenter who has seen one knows this is the app talking to them. */
+  /* Confirmed: the mark fills for its brief hold, the way the reference does —
+     a positive state reads as solid, not as an outline. */
+  .voice-pill[data-reading='confirmed'] .mark {
+    background: var(--stage-text, #f5f3ef);
+    color: #000;
+    border-radius: 50%;
+  }
+
+  /* Fault: the cue colour the stage already uses for authored cues and for the
+     hold chip's fault tone, so somebody who has seen one recognises this as the
+     app talking to them. Emphatically not red. */
   .voice-pill[data-reading='fault'] .mark {
-    background: var(--stage-cue);
-    color: var(--stage-bg);
+    background: var(--stage-cue, #d8b46a);
+    color: #000;
   }
   .voice-pill[data-reading='fault'] .bar {
-    background: var(--stage-cue);
-    opacity: 0.5;
+    background: var(--stage-cue, #d8b46a);
+  }
+  .voice-pill[data-reading='fault'] .wave {
+    opacity: 0.55;
   }
 
   /*
-   * The fault label. This is the one piece of text on the pill a presenter has
-   * to READ, from wherever they are standing, and it was set at a fixed 12px —
-   * unreadable at any real prompting distance, which made naming the fault
-   * pointless. It now clamps to the same secondary-text floor as everything
-   * else on the glass, and drops the uppercase treatment: sustained caps cost
-   * legibility, and this is the moment legibility matters most.
+   * The fault label, at chrome size rather than at the optical floor.
+   *
+   * It used to clamp to `--stage-secondary-min`, and that was right while this
+   * readout was presenter-facing: a fault name set at 12px is unreadable at
+   * prompting distance, which makes naming the fault pointless. It is the wrong
+   * rule here. A calibrated rig resolves that floor at 20–30px, and a 30px word
+   * inside a 40px dock would blow the whole instrument apart — while the
+   * presenter's copy of the same sentence, in presenter-sized type, is already
+   * on the glass in the mirrored hold chip.
+   *
+   * So this one is sized for the person standing at the panel, like every other
+   * string in the dock.
    */
   .label {
-    padding-right: 10px;
-    font-size: var(--stage-secondary-min, 0.67em);
+    padding-right: 2px;
+    font-size: 12px;
     letter-spacing: 0.01em;
-    font-weight: 550;
+    font-weight: 600;
     white-space: nowrap;
-    color: var(--stage-cue);
+    color: var(--stage-cue, #d8b46a);
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -227,6 +287,12 @@
     .wave,
     .bar {
       transition: none;
+    }
+  }
+
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .voice-pill {
+      background: rgb(12 14 18 / 92%);
     }
   }
 </style>

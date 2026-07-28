@@ -503,16 +503,21 @@ describe('a healthy take', () => {
     expect(latest().visible).toBe(true);
 
     /*
-     * ...and then it STAYS, which is the point.
+     * ...and then the PILL stays and the TICK settles, which is the point.
      *
-     * It used to fade a couple of seconds after the tick. That retired the
-     * waveform along with the confirmation, and the waveform is the only thing
-     * on the glass that says audio is arriving NOW — a presenter ten minutes
-     * into a take has no other way to ask, and "you were heard at 00:04" is not
-     * an answer about 00:10. So the mark settles and the trace keeps running.
+     * The pill used to fade a couple of seconds after the tick. That retired
+     * the waveform along with the confirmation, and the waveform is the only
+     * thing on the glass that says audio is arriving NOW — a presenter ten
+     * minutes into a take has no other way to ask, and "you were heard at
+     * 00:04" is not an answer about 00:10.
+     *
+     * The mark is the opposite case: a filled tick lit for the whole take is
+     * reporting an event nobody can act on any more. It settles into the steady
+     * dot, which is still a claim ("we have heard you") and is not an
+     * announcement.
      */
     await run(3000);
-    expect(latest().reading).toBe('confirmed');
+    expect(latest().reading).toBe('steady');
     expect(latest().visible).toBe(true);
 
     // And the trace is still LIVE — it follows the room down into silence and
@@ -552,7 +557,7 @@ describe('a healthy take', () => {
     });
     stop();
     expect(inputDeviceLost, 'the §28.6 detector should have fired').toBe(true);
-    expect(latest().reading, 'but silence is not a fault').toBe('confirmed');
+    expect(latest().reading, 'but silence is not a fault').toBe('steady');
     expect(pills().every((p) => p.reading !== 'fault')).toBe(true);
   });
 });
@@ -681,7 +686,7 @@ describe('take boundaries', () => {
     await emitStt({ kind: 'partial', generation: 1, itemId: 'i-1', text: 'hello' });
     await untilReading('confirmed');
     await run(3000);
-    expect(latest().reading, 'a proven take stays proven').toBe('confirmed');
+    expect(latest().reading, 'a proven take stays proven').toBe('steady');
     expect(latest().visible, 'and stays on screen — the audio is still arriving').toBe(true);
 
     restartParagraph();

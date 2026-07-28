@@ -14,24 +14,30 @@
 
     the TALENT plane   is mirrored, and holds everything the presenter reads
                        through the glass — script, reading cue, acknowledgement,
-                       hold status, voice pill, escape confirmation, calibration
-                       cards. Presenter-facing overlays sit one level further in,
+                       hold status, escape confirmation, calibration cards.
+                       Presenter-facing overlays sit one level further in,
                        inside the safe rectangle, because a hood crops the panel
                        and a chip against the raw viewport lands under the bezel.
 
-    the OPERATOR plane is unmirrored, and holds ONLY diagnostics — read by
-                       somebody standing at the rig looking directly at the
-                       panel, never through the glass.
+    the OPERATOR plane is unmirrored, and holds the instruments and the
+                       controls — the diagnostics readout, the raw transcript,
+                       and the session dock. All of it is read by somebody
+                       standing at the rig looking directly at the panel, never
+                       through the glass, and the dock is additionally OPERATED
+                       by them. That last part is why it may not be mirrored: a
+                       CSS transform carries hit-testing with it, so a mirrored
+                       button is clickable where it appears — on the opposite
+                       side of the screen from where it was a moment ago.
 
   Layers, back to front: solid background → Listener video + treatment → script
   text + focus fades → reading cue → presenter overlays → calibration →
-  operator diagnostics.
+  operator instruments and dock.
 
   All data arrives via Tauri events (the stage holds only event:listen);
   outbound traffic is intents/acks that control is free to ignore.
 -->
 <script lang="ts">
-  import { onMount, untrack } from 'svelte';
+  import { onMount, untrack, type Snippet } from 'svelte';
   import {
     ESCAPE_DOUBLE_PRESS_MS,
     STAGE_EVENT,
@@ -77,7 +83,7 @@
   import AckChip from './renderer/AckChip.svelte';
   import HoldStatus from './renderer/HoldStatus.svelte';
   import CalibrationCard from './renderer/CalibrationCard.svelte';
-  import VoicePill from './VoicePill.svelte';
+  import StageDock from './StageDock.svelte';
   import ListenerLayer from './listener/ListenerLayer.svelte';
   import {
     resolveHoldStatus,
@@ -95,6 +101,30 @@
     voicePill: StageVoicePillPayload | null;
     onexit: () => void;
     onintent?: (intent: StageIntent) => void;
+    /**
+     * The appearance panel, for the dock to raise over the settings button.
+     *
+     * A snippet the host renders into, rather than anything this window owns.
+     * The stage receives a resolved envelope and holds no settings; the sheet's
+     * transaction — live preview, Done saves, Cancel restores the snapshot —
+     * runs against state that only the host has. Omitting it removes the
+     * settings button entirely, which is the honest answer for a standalone
+     * stage window: there is nothing there for it to adjust.
+     */
+    appearancePanel?: Snippet;
+    appearanceOpen?: boolean;
+    onappearanceopen?: () => void;
+    onappearanceclose?: () => void;
+    /**
+     * What the stage measured off the face it is actually drawing.
+     *
+     * Control resolves geometry against DIN fallbacks because control does not
+     * render the font, so `charactersPerLine` exists only here — and the width
+     * control that most needs it is on the host's panel. In a separate-window
+     * session the same numbers travel on `layout-ready`; this is the in-memory
+     * equivalent for the single-window one.
+     */
+    onmeasurement?: (measurement: StageLayoutMeasurement) => void;
     /**
      * The host has opened operator chrome over the stage — the presentation
      * menu, or the appearance sheet — and owns the keyboard until it closes.
@@ -333,6 +363,35 @@
    * and the plane falls back to the corner it was supposed to be inset from.
    */
   const safeInsets = $derived(computeSafeRect(100, 100, settings?.optics?.safeArea));
+
+  /**
+   * How tall a popover rising from the dock is allowed to be, in px.
+   *
+   * A popover cannot be sized against the VIEWPORT, which is what it was doing:
+   * `calc(100vh - 96px)` describes the panel, and the dock is positioned inside
+   * the SAFE rectangle, which a hood can crop to a fraction of it. The optical
+   * model accepts insets up to 45% per edge — so a 412px panel rising from a
+   * dock 16px above a bottom inset of 25% starts about 26px above the top of
+   * the window, where `.stage-root`'s `overflow: hidden` cuts its title and its
+   * Done button off and there is no way to scroll them back.
+   *
+   * Published as a custom property rather than applied here because the thing
+   * that has to obey it — the host's appearance panel — is a snippet rendered
+   * by control, several components away. Custom properties inherit, so it
+   * reaches whatever ends up inside the dock without either side importing the
+   * other.
+   *
+   * The floor is deliberate: below about 180px a panel is not worth opening,
+   * and a rig whose safe rectangle is that short has a bigger problem than this
+   * popover. Better to overflow one clearly than to render a sliver.
+   */
+  const dockPopoverMaxPx = $derived.by(() => {
+    if (vh === 0) return null;
+    // The dock's own geometry, matching StageDock's CSS: 16px bottom inset,
+    // 40px of controls, 8px of gap, and a little air at the top.
+    const consumed = 16 + 40 + 8 + 8;
+    return Math.max(180, Math.round((vh * safeInsets.height) / 100) - consumed);
+  });
 
   /**
    * The floor for presenter-readable text that is not body copy, in px.
@@ -750,12 +809,23 @@
     if (preview && previewReplayUrl) void startFixtureReplay(previewReplayUrl);
     else if (preview) previewDriver = startPreviewDriver({ calibrated: previewCalibrated });
 
+    /*
+     * The dock opens visible and then fades.
+     *
+     * Somebody has just had a full-screen window take over a display. Showing
+     * them where the controls are once, for a few seconds, is the difference
+     * between a stage that is quiet and a stage that looks like it has hung —
+     * and it costs the take nothing, because it is over before anybody has
+     * finished drawing breath to start reading.
+     */
+    revealDock();
+
     return () => {
       disposed = true;
       unsubs.forEach((u) => u());
       clearTimeout(fontTimeout);
       clearTimeout(pointerTimer);
-      clearTimeout(exitTimer);
+      clearTimeout(dockTimer);
       clearTimeout(escapeHintTimer);
       clearInterval(watchdog);
       clearInterval(liveSync);
@@ -841,6 +911,7 @@
 
   function handleLayoutReady(measurement: StageLayoutMeasurement) {
     layoutMeasurement = measurement;
+    embedded?.onmeasurement?.(measurement);
     dispatch({ type: 'layout_ready' });
     emitLayoutReady();
   }
@@ -858,6 +929,7 @@
    */
   function handleLayoutMeasured(measurement: StageLayoutMeasurement) {
     layoutMeasurement = measurement;
+    embedded?.onmeasurement?.(measurement);
     if (!layoutReadyEmitted) return;
     if (measurementKey(measurement) === emittedMeasurementKey) return;
     emitLayoutReady();
@@ -950,6 +1022,26 @@
       escapeHintVisible = false;
       clearTimeout(escapeHintTimer);
     }
+    /*
+     * ONE ending rule, whichever window the stage is living in.
+     *
+     * Single-window presentation used to end the take on the FIRST Escape,
+     * because the host was right there to hear it and the round trip the
+     * two-press rule exists to cover did not apply. The result was a keyboard
+     * that meant two different things depending on an architectural detail
+     * nobody using it can see: the same key, on the same screen, ends the
+     * session on one machine and shows a prompt on another. A presenter who
+     * hits Escape by reflex — which is what happens when a full-screen window
+     * takes over a display — deserves the same answer either way.
+     *
+     * So the confirmation is universal, and the second press is what ends it.
+     * The embedded case never reaches the event bus: `onexit` is the host's own
+     * teardown, and it is the same one the dock's confirmation calls.
+     */
+    if (embedded) {
+      if (presses === 2) embedded.onexit();
+      return;
+    }
     // Escape travels on its own event so the Rust bridge can relay it (§46.9),
     // under a name control does NOT listen for — see S1 on motionReport above.
     emitStageEvent<StageEscapePayload>(STAGE_EVENT.escapePressed, {
@@ -964,16 +1056,17 @@
   const POINTER_HIDE_DELAY_MS = 1500;
 
   /**
-   * How long the exit affordance stays up after the pointer last moved.
+   * How long the dock's buttons stay up after the pointer last moved.
    *
-   * Longer than the cursor's own hide delay, deliberately. 1.5 s is right for
-   * getting a cursor out of the presenter's way and far too short for finding a
-   * target and travelling to it — a button that disappears while somebody is
-   * reaching for it is worse than no button, because they now know it exists
-   * and cannot use it.
+   * Longer than the cursor's own hide delay, deliberately, and a separate
+   * system from it. 1.5 s is right for getting a cursor out of the presenter's
+   * way and far too short for finding a target and travelling to it — a button
+   * that disappears while somebody is reaching for it is worse than no button,
+   * because they now know it exists and cannot use it. The cursor is allowed to
+   * vanish while the controls are still up.
    */
-  const EXIT_HINT_VISIBLE_MS = 4000;
-  let exitTimer = 0;
+  const DOCK_VISIBLE_MS = 4000;
+  let dockTimer = 0;
   /**
    * §16.9's missing half: a way out that is not a keystroke.
    *
@@ -985,38 +1078,80 @@
    * nothing on it says so — a full-screen window with no visible way out reads
    * as a hang.
    *
-   * So: move the mouse over the stage and the way out appears. It cannot
+   * So: move the mouse over the stage and the controls appear. They cannot
    * intrude on a take, because a take is exactly when nobody is touching the
    * mouse.
    */
-  let exitHintVisible = $state(false);
+  let dockRevealed = $state(true);
   /**
-   * Held open while the button has the keyboard.
+   * The dock is holding itself up: pointer over it, keyboard in it, a popup
+   * open, or a fault it wants somebody to be able to reach.
    *
-   * Unmounting a focused element drops focus to the body, so somebody who
-   * tabbed to the way out would find it gone and their place in the tab order
-   * with it — on a window whose entire problem is being hard to leave. The
-   * timeout may take it away when nobody is holding it, and not before.
+   * Reported by the dock rather than inferred here, because three of those four
+   * are facts only it has — and taking a focused control away is the specific
+   * failure this guards: unmounting or disabling a focused element drops focus
+   * to the body, so somebody who tabbed to the way out would find it gone and
+   * their place in the tab order with it, on a window whose entire problem is
+   * being hard to leave.
    */
-  let exitHintFocused = $state(false);
-  const exitVisible = $derived(exitHintVisible || exitHintFocused);
+  let dockHeld = $state(false);
+  const dockVisible = $derived(dockRevealed || dockHeld);
+  /** A pane of glass is up over the dock; get the transcript out from behind it. */
+  let dockPopoverOpen = $state(false);
 
-  function onPointerMove() {
+  /**
+   * The cursor hides on its own clock — EXCEPT while the dock is holding itself
+   * up.
+   *
+   * The two timers are separate on purpose: 1.5 s is right for getting a
+   * pointer out of the presenter's way and far too short for finding a control
+   * and travelling to it. What they may not do is contradict each other. A
+   * pointer resting on the dock, or a confirmation asking "end session?" with
+   * no cursor left to answer it, is a screen that has swallowed the mouse.
+   */
+  const cursorHidden = $derived(pointerHidden && !dockHeld);
+
+  /*
+   * Trackpads emit `pointermove` for hand tremor. Waking the controls on every
+   * one of those events means a stage that never settles: the buttons brighten,
+   * the timer restarts, and the corner of the presenter's eye has something
+   * flickering in it for the whole take with nobody touching anything.
+   *
+   * So the dock wakes on DISPLACEMENT, not on events. The cursor's own
+   * un-hiding deliberately does not — a cursor is a thing you are looking for,
+   * and making somebody swipe four pixels to find it is a worse trade.
+   */
+  const DOCK_WAKE_THRESHOLD_PX = 4;
+  let lastPointerX = Number.NaN;
+  let lastPointerY = Number.NaN;
+
+  function revealDock(): void {
+    dockRevealed = true;
+    clearTimeout(dockTimer);
+    dockTimer = window.setTimeout(() => {
+      dockRevealed = false;
+    }, DOCK_VISIBLE_MS);
+  }
+
+  function onPointerMove(event: PointerEvent) {
     pointerHidden = false;
     clearTimeout(pointerTimer);
     pointerTimer = window.setTimeout(() => {
       pointerHidden = true;
     }, POINTER_HIDE_DELAY_MS);
 
-    exitHintVisible = true;
-    clearTimeout(exitTimer);
-    exitTimer = window.setTimeout(() => {
-      exitHintVisible = false;
-    }, EXIT_HINT_VISIBLE_MS);
+    const moved =
+      !Number.isFinite(lastPointerX) ||
+      Math.abs(event.clientX - lastPointerX) + Math.abs(event.clientY - lastPointerY) >=
+        DOCK_WAKE_THRESHOLD_PX;
+    if (!moved) return;
+    lastPointerX = event.clientX;
+    lastPointerY = event.clientY;
+    revealDock();
   }
 
   /**
-   * Leave, from the stage, in one click.
+   * Leave, from the stage, after the dock's confirmation.
    *
    * The same message a second Escape sends, not a new path: ending a take is
    * control's decision to make and it already owns the whole teardown — the
@@ -1024,15 +1159,9 @@
    * its own window would leave every one of those running behind a screen that
    * had gone black.
    */
-  function requestExit(event: MouseEvent) {
-    // The root's own handler reports focus on every click; this one is not a
-    // request to focus the stage, it is a request to be rid of it.
-    event.stopPropagation();
+  function requestExit() {
     escapeHintVisible = false;
     clearTimeout(escapeHintTimer);
-    exitHintVisible = false;
-    exitHintFocused = false;
-    clearTimeout(exitTimer);
     if (embedded) embedded.onexit();
     else sendEscape(2);
   }
@@ -1090,21 +1219,22 @@
      * and Escape that Live then delegates HERE on purpose — so reading it would
      * suppress exactly the keys this handler exists to answer.
      *
-     * Scoped to the embedded case, which is the one that has a host with chrome
-     * of its own. The standalone stage window's key handling is untouched.
+     * IT USED TO BE SCOPED TO THE EMBEDDED CASE, on the reasoning that only the
+     * host had chrome of its own. The dock ends that: the standalone stage
+     * window now carries real buttons — a settings trigger, an End control, and
+     * a confirmation with two more — so Space on a focused Cancel button would
+     * toggle pause AND call `preventDefault()`, suppressing the very activation
+     * it was pressed for. That is the same defect this guard was written for,
+     * in the one configuration it had been excused from.
      */
-    if (embedded && event.key !== 'Escape') {
+    if (event.key !== 'Escape') {
       const target = event.target;
       if (target instanceof Element && target.closest('[data-stage-chrome]') !== null) return;
     }
     if (preview && handlePreviewKey(event.key)) return;
     switch (event.key) {
       case 'Escape': {
-        if (embedded) {
-          event.preventDefault();
-          embedded.onexit();
-          break;
-        }
+        event.preventDefault();
         const now = performance.now();
         const double = now - lastEscapeAt <= ESCAPE_DOUBLE_PRESS_MS;
         // Back to "never" on consumption, for the same reason the seed is:
@@ -1202,7 +1332,7 @@
     }
   }
 
-  /** Cycle the pill through its three readings, then off. */
+  /** Cycle the pill through its four readings, then off. */
   function previewVoicePill(current: StageVoicePillPayload | null): StageVoicePillPayload | null {
     const next: StageVoicePillReading | null =
       current === null
@@ -1210,10 +1340,12 @@
         : current.reading === 'listening'
           ? 'confirmed'
           : current.reading === 'confirmed'
-            ? 'fault'
-            : null;
+            ? 'steady'
+            : current.reading === 'steady'
+              ? 'fault'
+              : null;
     if (next === null) return null;
-    const label = next === 'confirmed' ? 'Hearing you' : next === 'fault' ? 'No audio' : 'Listening';
+    const label = next === 'listening' ? 'Listening' : next === 'fault' ? 'No audio' : 'Hearing you';
     return {
       stageGeneration: app.envelope?.stageGeneration ?? 0,
       reading: next,
@@ -1243,30 +1375,29 @@
   }
 
   /**
-   * The pill, drawn the same way in both modes.
+   * The audio readout, drawn the same way in both modes.
    *
-   * The MARK is presenter-facing either way: a cross in the corner is an
-   * actionable fault, and a tick is the one piece of evidence that the whole
-   * chain from device to model works — which is the entire reason the blocking
-   * microphone check was replaced by a corner readout.
-   *
-   * So is the TRACE, and it is the half that keeps being argued about. Twice
-   * now something has tried to retire it once the chain is proven: the optical
-   * work made Clean Take collapse it to the mark, and control's own view faded
-   * the whole pill a couple of seconds after it confirmed. Both were reasoning
-   * about the same real cost — a waveform is continuous peripheral motion
-   * beside the words somebody is reading — and both got the same thing wrong.
+   * The TRACE is the half that keeps being argued about. Twice now something
+   * has tried to retire it once the chain is proven: the optical work made
+   * Clean Take collapse it to the mark, and control's own view faded the whole
+   * pill a couple of seconds after it confirmed. Both were reasoning about the
+   * same real cost — a waveform is continuous peripheral motion beside the
+   * words somebody is reading — and both got the same thing wrong.
    *
    * "The microphone is being heard" is not a fact that stays true. It is a
-   * claim about the last second, and the presenter who needs it is the one
-   * twenty minutes in whose script has stopped moving and who cannot tell
-   * whether that is them, the microphone, or the aligner. An instrument that
-   * retires itself once things are going well is an instrument that is never
-   * there for the only question anybody asks it.
+   * claim about the last second, and whoever needs it is twenty minutes into a
+   * take whose script has stopped moving, unable to tell whether that is them,
+   * the microphone, or the aligner. An instrument that retires itself once
+   * things are going well is an instrument that is never there for the only
+   * question anybody asks it.
+   *
+   * The MARK does settle, and that is a different decision: see
+   * `StageVoicePillReading`. A tick held for the length of a take is reporting
+   * an event nobody can still act on.
    *
    * There is therefore nothing left here to decide, which is why this is a
-   * plain alias: control resolves the reading, the stage draws it, and the
-   * trace runs for the whole take.
+   * plain alias: control resolves the reading, the dock draws it, and the trace
+   * runs for the whole take.
    */
   const presenterVoicePill = $derived(voicePill);
 
@@ -1298,7 +1429,7 @@
   role={embedded ? 'region' : undefined}
   aria-label={embedded ? 'Teleprompter' : undefined}
   data-phase={phase}
-  data-pointer-hidden={pointerHidden}
+  data-pointer-hidden={cursorHidden}
   data-text-intensity={settings?.textIntensity ?? 'standard'}
   bind:clientWidth={measuredVw}
   bind:clientHeight={measuredVh}
@@ -1420,60 +1551,18 @@
         {/if}
 
         <!--
-          The way out, for whoever has the mouse.
+          THE WAY OUT AND THE AUDIO READOUT ARE NOT HERE ANY MORE.
 
-          Inside the talent plane with everything else that can be read, and the
-          mirror costs it nothing: the glyph is `×`, which is symmetric, so the
-          only thing a flip touches is the word beside it. A CSS transform
-          carries hit-testing with it, so the button is clickable exactly where
-          it appears on whichever surface is being looked at.
-
-          Not shown during a blank. A blank is a deliberate "show nothing", and
-          the answer to a blank is Escape — which the hint above is already there
-          to explain.
-
-          Not shown when EMBEDDED either. Single-window presentation puts a menu
-          in the corner of the host window with "End session" inside it, and two
-          separate ways out sitting in two corners of the same screen is one way
-          out plus one thing to wonder about. The corner that survives is the
-          one that also reaches the appearance controls, because the stage is
-          the only place those can be judged.
+          Both moved into the session dock, in the unmirrored operator plane at
+          the bottom of this file. The exit button had to move: a CSS transform
+          carries hit-testing with it, so a mirrored button is clickable where it
+          appears — but it appears on the opposite side of the screen the moment
+          somebody turns mirroring on, which is not a property a mouse target
+          may have. The audio readout followed it because the one part of it the
+          presenter has to READ is the fault name, and that already reaches the
+          glass, mirrored and in presenter-sized type, through the hold chip
+          above.
         -->
-        {#if exitVisible && !app.blanked && !embedded}
-          <button
-            type="button"
-            class="stage-exit"
-            onclick={requestExit}
-            onfocus={() => (exitHintFocused = true)}
-            onblur={() => (exitHintFocused = false)}
-          >
-            <span class="stage-exit-glyph" aria-hidden="true">×</span>
-            End session
-          </button>
-        {/if}
-
-        <!--
-          The voice pill.
-
-          Mirrored, for the reason above: it is a mark and a word aimed at the
-          presenter, and an unmirrored one reads backwards in the glass. Mounted
-          for the whole take and faded by its own `visible` flag rather than added
-          and removed — see the component. Hidden with the rest of the stage
-          during a blank (§16.6), which is a deliberate "show nothing", not a
-          moment to report on the microphone.
-
-          Gated on the ENVELOPE ALONE, not on `phase === 'live'`, and not on the
-          handshake having finished either. That is the whole point of the pill:
-          `live` is only reached when an alignment snapshot arrives, alignment
-          snapshots are made from transcript frames, and a take that transcribes
-          nothing therefore never leaves `ready`. Gating it on the take being
-          under way hid the indicator during precisely the failure it exists to
-          explain, and a stage stuck measuring is a stage whose presenter still
-          deserves to know whether the microphone is being heard.
-        -->
-        {#if app.envelope !== null && !app.blanked && presenterVoicePill !== null}
-          <VoicePill pill={presenterVoicePill} />
-        {/if}
       </div>
 
       <!--
@@ -1658,35 +1747,88 @@
       mid-take is asking for the one that answers that question too.
     -->
     <!--
-      NOT diagnostic-only, and not gated on the take being under way.
-      -----------------------------------------------------------------------
-      Both gates were added by the optical work (501ca62) and both were wrong,
-      for the same reason: this strip is the only thing on the glass that says
-      whether the recogniser is hearing anything at all, and it was hidden in
-      precisely the two situations where that is the question.
+      The operator's own safe rectangle.
 
-      `showDiagnostics` hid it from everybody running a Clean Take, which is
-      everybody. A presenter whose script had stopped moving had no way to tell
-      "the microphone was never captured" from "the recogniser heard nothing"
-      from "the aligner would not match" — three unrelated faults with one
-      symptom, and this bar is what separates the first two from the third.
-
-      `phase === 'live'` was worse. `live` is only reached when an alignment
-      snapshot is ACCEPTED, and a take that transcribes nothing never produces
-      one — so the bar was hidden by the very failure it exists to explain,
-      exactly as the voice pill's own note above describes. It stays up from the
-      moment there is an envelope.
-
-      The peripheral-motion concern that motivated the gate is real and is
-      answered by `silent`: the strip is dim and still until words arrive.
+      The same inset the presenter's overlays use, for the same reason: a hood
+      crops the panel, and a dock 20px from the window's corner on a hooded rig
+      is a dock under the bezel. Unmirrored, because everything inside it is
+      read by somebody standing at the rig looking straight at the glass — and,
+      for the dock, operated by them with a mouse.
     -->
-    {#if app.envelope !== null && !app.blanked}
-      <div class="transcript-tap" class:silent={transcriptWords.length === 0}>
-        <span class="transcript-tap-words">
-          {transcriptWords.length > 0 ? transcriptWords : 'listening — no words yet'}
-        </span>
-      </div>
-    {/if}
+    <div
+      class="stage-operator-safe"
+      style:top="{safeInsets.y}%"
+      style:left="{safeInsets.x}%"
+      style:width="{safeInsets.width}%"
+      style:height="{safeInsets.height}%"
+      style:--stage-popover-max-height={dockPopoverMaxPx === null
+        ? null
+        : `${dockPopoverMaxPx}px`}
+    >
+      <!--
+        The raw transcript, in Diagnostic Take only.
+
+        -------------------------------------------------------------------
+        IT USED TO RUN IN CLEAN TAKE TOO, AND THE ARGUMENT FOR THAT HAS BEEN
+        ANSWERED RATHER THAN OVERRULED
+        -------------------------------------------------------------------
+        The case for showing it always was that three unrelated faults look
+        identical from the stage — a script that has stopped moving — and only
+        this bar separated "the microphone was never captured" and "the
+        recogniser heard nothing" from "the aligner would not match".
+
+        Every one of those now has a first-class reading somewhere the presenter
+        is already looking. A dead input or a dead socket resolves to a named
+        fault on the audio readout AND, through `resolveHoldStatus`, to that
+        same sentence in the mirrored hold chip; several seconds of speech with
+        nothing coming back is `not_heard`, which reads "Not hearing you"; and
+        an aligner that will not match is the hold ladder's own "Holding here".
+        The distinction survives without a strip of small changing text beside
+        an animated waveform, which is what made the finished surface read as a
+        development HUD.
+
+        Aligned to the dock's left edge and sitting directly above it, so the
+        two instruments read as one column instead of as two corners — which is
+        exactly what they were before, in different planes, parting company
+        whenever anybody turned mirroring on.
+      -->
+      {#if showDiagnostics && app.envelope !== null && !app.blanked && !dockPopoverOpen}
+        <div class="transcript-tap" class:silent={transcriptWords.length === 0}>
+          <span class="transcript-tap-words">
+            {transcriptWords.length > 0 ? transcriptWords : 'listening — no words yet'}
+          </span>
+        </div>
+      {/if}
+
+      <!--
+        The session dock: adjustments, audio, end.
+
+        Not shown during a blank. A blank is a deliberate "show nothing", and
+        the answer to a blank is Escape — which the hint on the talent plane is
+        already there to explain.
+
+        The audio readout inside it is gated on the ENVELOPE ALONE, not on
+        `phase === 'live'` and not on the handshake having finished. That is the
+        whole point of it: `live` is only reached when an alignment snapshot
+        arrives, alignment snapshots are made from transcript frames, and a take
+        that transcribes nothing therefore never leaves `ready`. Gating it on
+        the take being under way hid the indicator during precisely the failure
+        it exists to explain.
+      -->
+      {#if !app.blanked}
+        <StageDock
+          pill={app.envelope !== null ? presenterVoicePill : null}
+          revealed={dockVisible}
+          appearancePanel={embedded?.appearancePanel ?? null}
+          appearanceOpen={embedded?.appearanceOpen ?? false}
+          onappearanceopen={() => embedded?.onappearanceopen?.()}
+          onappearanceclose={() => embedded?.onappearanceclose?.()}
+          onend={requestExit}
+          onhold={(held) => (dockHeld = held)}
+          onpopover={(open) => (dockPopoverOpen = open)}
+        />
+      {/if}
+    </div>
 
     {#if preview}
       <div class="preview-hud">
@@ -1709,6 +1851,37 @@
     --stage-cue: #d8b46a;
     --stage-overlay: rgba(0, 0, 0, 0.72);
     --stage-secondary-min: 0.67em;
+
+    /*
+     * ONE GEOMETRY SYSTEM FOR EVERYTHING THAT SITS OVER THE SCRIPT.
+     *
+     * The overlays used to be inset by 18px, 24px, a spacing token and a
+     * viewport fraction depending on which one you were looking at, with three
+     * different radii and two background colours between them. None of those
+     * differences meant anything; they were four people's idea of "a bit in
+     * from the corner", and the result is a screen whose furniture does not
+     * line up with itself — which is precisely what makes a display read as
+     * assembled rather than designed.
+     *
+     * Declared here as well as in `stage.css` on purpose. `stage.css` is loaded
+     * by the stage WINDOW; single-window presentation mounts this same
+     * component inside the control window, which never loads it. A token that
+     * lived only there would resolve to nothing in the one configuration the
+     * product actually ships.
+     */
+    --stage-chrome-inset: 20px;
+    --stage-chrome-bottom-inset: 16px;
+    --stage-chrome-radius: 12px;
+    --stage-chrome-border: rgba(255, 255, 255, 0.13);
+    --stage-chrome-bg: rgba(12, 14, 18, 0.74);
+    --stage-chrome-text: rgba(245, 243, 239, 0.88);
+    /*
+     * Against a true-black field a backdrop blur contributes almost nothing, so
+     * the separation is carried by the border and a one-pixel inner highlight.
+     * The drop shadow is for the case where the Listener is behind the dock.
+     */
+    --stage-chrome-shadow:
+      0 10px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     --stage-dim-1: 0.78;
     --stage-dim-2: 0.64;
     --stage-dim-3: 0.52;
@@ -1808,63 +1981,16 @@
   }
 
   /*
-   * The exit affordance.
+   * The operator's safe rectangle.
    *
-   * Bottom-right of the SAFE rectangle, which is the one corner nothing else
-   * claims: the hold chip and the acknowledgement sit high, the voice pill sits
-   * low-left, and the reading band runs across the middle. It is the only
-   * element on the stage that takes pointer events — everything else here is
-   * `pointer-events: none` so a stray click lands on the root and reports focus
-   * rather than being swallowed by decoration.
-   *
-   * Deliberately quiet until it is under the cursor. It is on the presenter's
-   * glass, so it may not read as a lit control sitting in the corner of a take;
-   * it only has to be findable by somebody who has already gone looking with a
-   * mouse.
+   * `pointer-events: none` like the presenter's, and for the same reason: a
+   * stray click over a diagnostic must land on the stage root and report focus
+   * rather than being swallowed by decoration. The dock re-enables it for
+   * itself, which is the only thing in either plane that takes a click.
    */
-  .stage-exit {
+  .stage-operator-safe {
     position: absolute;
-    right: 0;
-    bottom: 0;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.45em;
-    padding: 0.5em 1em;
-    border: 1px solid color-mix(in srgb, var(--stage-text) 30%, transparent);
-    border-radius: 999px;
-    background: var(--stage-overlay);
-    color: var(--stage-text);
-    font: inherit;
-    font-size: clamp(14px, 1.4vw, 20px);
-    font-weight: 550;
-    white-space: nowrap;
-    cursor: pointer;
-    /*
-     * The one element on this plane that must take a click.
-     *
-     * `.stage-safe-plane` is `pointer-events: none` so a stray click anywhere
-     * over the overlays lands on the root and reports focus rather than being
-     * swallowed by a chip. That is right for every other child and fatal for
-     * this one: without re-enabling it here the button paints, invites the
-     * click, and does nothing — the exact dead control this affordance exists
-     * to replace.
-     */
-    pointer-events: auto;
-    opacity: 0.55;
-    transition:
-      opacity 120ms ease-out,
-      border-color 120ms ease-out;
-  }
-
-  .stage-exit:hover,
-  .stage-exit:focus-visible {
-    opacity: 1;
-    border-color: color-mix(in srgb, var(--stage-text) 55%, transparent);
-  }
-
-  .stage-exit-glyph {
-    font-size: 1.15em;
-    line-height: 1;
+    pointer-events: none;
   }
 
   /*
@@ -1947,11 +2073,14 @@
 
   .diagnostics {
     position: absolute;
-    top: 12px;
-    right: 12px;
+    /* The one thing left in the top-right corner, and only in Diagnostic Take.
+       Same inset and radius as everything else that floats over the script. */
+    top: var(--stage-chrome-inset);
+    right: var(--stage-chrome-inset);
     padding: 10px 12px;
-    border-radius: 10px;
-    background: var(--stage-overlay);
+    border: 1px solid var(--stage-chrome-border);
+    border-radius: var(--stage-chrome-radius);
+    background: var(--stage-chrome-bg);
     color: var(--stage-text);
     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
     font-size: 12px;
@@ -1960,60 +2089,56 @@
   }
 
   /*
-   * One line in the bottom corner, under the voice pill, newest word at the
-   * right.
+   * One line directly above the dock, newest word at the right.
    *
    * ------------------------------------------------------------------------
-   * IT USED TO RUN THE WHOLE WIDTH OF THE PANEL
+   * IT USED TO RUN THE WHOLE WIDTH OF THE PANEL, AND THEN IT USED TO SIT IN A
+   * DIFFERENT CORNER FROM THE INSTRUMENT IT BELONGS WITH
    * ------------------------------------------------------------------------
-   * `left: 0; right: 0` with a gradient behind it, holding everything the
-   * recogniser had said since its last finalisation. It was therefore the
-   * widest element on the glass, and a long utterance drew a strip of moving
-   * text across the full width, underneath a script somebody is reading — the
-   * one place peripheral vision is already busy.
+   * First it was `left: 0; right: 0` with a gradient behind it, holding
+   * everything the recogniser had said since its last finalisation — the widest
+   * element on the glass, a strip of moving text under a script somebody is
+   * reading.
    *
-   * Now it is a bounded box in the corner. The width cap and the ten-word crop
-   * in `transcript-tail.ts` do different halves of the same job: ten long words
-   * are still wide, and a box with no word limit fills with whatever fits
-   * rather than with what was just said.
+   * Then it was a bounded box in the bottom RIGHT, lined up with a voice pill
+   * that lived in the mirrored plane. The old comment here was careful to say
+   * that the alignment was a convenience of the common rig rather than a
+   * relationship the code maintained — under `mirrorX` the two were in opposite
+   * physical corners, and under a hood their right margins were measured from
+   * different edges. That was an honest description of a defect.
    *
-   * ON LINING UP WITH THE VOICE PILL, which sits directly above it: they agree
-   * on a plain unmirrored panel, and that is worth having because that is the
-   * rig this bar is read on. It is NOT a guarantee, and must not be written as
-   * one. The pill is presenter-facing and lives in the mirrored talent plane
-   * inside the safe rectangle; this is operator-facing and lives in the
-   * unmirrored operator plane against the raw viewport. Under `mirrorX` they
-   * are in opposite physical corners, and under a hood their right margins are
-   * measured from different edges. That is correct rather than unfortunate —
-   * they are addressed to two different people — but it means the alignment is
-   * a convenience of the common rig, not a relationship the code maintains.
+   * Both instruments are now in the same plane, in the same safe rectangle, on
+   * the same left edge, so the alignment IS a relationship the code maintains.
    *
-   * Right-aligned with `overflow: hidden` is retained, and still does the same
-   * thing: on the rare tail that is wider than the cap, the oldest words fall
-   * off the left edge rather than pushing the newest ones out of view. No
-   * animation, no measurement, nothing that can drift out of step with the
-   * words themselves. Small and dim so it reads as an instrument rather than
-   * competing with the script, but a monospace face so a word appearing is
-   * unmistakable in peripheral vision.
+   * The width cap and the ten-word crop in `transcript-tail.ts` still do
+   * different halves of one job: ten long words are still wide, and a box with
+   * no word limit fills with whatever fits rather than with what was just said.
+   * Right-aligned with `overflow: hidden`, so on the rare tail that is wider
+   * than the cap the oldest words fall off the left edge rather than pushing
+   * the newest ones out of view. No animation, no measurement, nothing that can
+   * drift out of step with the words themselves. Small and dim so it reads as
+   * an instrument, but a monospace face so a word appearing is unmistakable in
+   * peripheral vision.
    */
   .transcript-tap {
     position: absolute;
-    /* The pill's own number, so the two line up on a plain panel — see the
-       note above for why that is a convenience rather than a contract. */
-    right: 18px;
-    bottom: 8px;
+    /* The dock's own left edge and its height plus the popover gap, so the two
+       read as one column rather than as two boxes that nearly line up. */
+    left: var(--stage-chrome-inset);
+    bottom: calc(var(--stage-chrome-bottom-inset) + 40px + 8px);
     /* Never more than a corner's worth of glass. The `ch` term is what the
        text actually needs at this size; the viewport term is what keeps a
        narrow panel from handing most of its width to a diagnostic. */
-    max-width: min(44ch, 42vw);
-    padding: 4px 12px;
-    border-radius: var(--radius-pill, 999px);
+    max-width: min(40ch, 35vw);
+    padding: 4px 10px;
+    border: 1px solid var(--stage-chrome-border);
+    border-radius: var(--stage-chrome-radius);
     display: flex;
     justify-content: flex-end;
     overflow: hidden;
     white-space: nowrap;
     pointer-events: none;
-    background: var(--stage-overlay);
+    background: var(--stage-chrome-bg);
     font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
     font-size: 13px;
     line-height: 1.4;
@@ -2034,13 +2159,30 @@
     direction: ltr;
   }
 
+  /*
+   * The preview key legend, in the one corner nothing claims.
+   *
+   * Bottom-LEFT was the dock's corner, and a centred strip along the bottom put
+   * two lines of grey text straight through the script. Centred at the TOP was
+   * no better: the escape confirmation sits at 4vh and the diagnostics panel
+   * owns the top-right, so a full-width legend crossed both. Bottom-right is
+   * empty in every mode now that the audio readout has moved, and this is
+   * preview-only chrome that no take ever sees.
+   */
   .preview-hud {
     position: absolute;
-    left: 14px;
-    bottom: 10px;
+    bottom: var(--stage-chrome-bottom-inset);
+    right: var(--stage-chrome-inset);
+    max-width: calc(100% - 2 * var(--stage-chrome-inset));
+    padding: 3px 10px;
+    border-radius: var(--stage-chrome-radius);
+    background: var(--stage-chrome-bg);
     color: var(--stage-text-past);
-    font-size: 12px;
-    letter-spacing: 0.04em;
+    font-size: 11px;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     pointer-events: none;
   }
 </style>

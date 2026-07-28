@@ -95,11 +95,26 @@ test('the one-screen script follows the control alignment position', async ({ pa
   errors.expectClean();
 });
 
-test('one Escape ends the take, leaves full screen, and returns to the editor', async ({
+/*
+ * ONE ESCAPE ASKS; TWO END IT — the same rule the standalone stage window has
+ * always had.
+ *
+ * Presentation used to end the take on the first press, because the host was
+ * right there and the round trip the two-press rule exists to cover did not
+ * apply. That made the same key on the same screen mean two different things
+ * depending on an architectural detail nobody using it can see, and the case
+ * that matters is a presenter hitting Escape by reflex when a full-screen
+ * window takes over their display.
+ */
+test('the first Escape prompts and the second ends the take, leaves full screen, and returns to the editor', async ({
   page,
 }) => {
   const errors = watchPageErrors(page);
   await present(page);
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.escape-hint')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible();
 
   await page.keyboard.press('Escape');
   await expect(page.getByRole('region', { name: 'Teleprompter' })).toHaveCount(0);
@@ -113,6 +128,131 @@ test('one Escape ends the take, leaves full screen, and returns to the editor', 
     2,
   );
   expect(result.commands).toContain('end_session');
+
+  errors.expectClean();
+});
+
+/*
+ * The session dock, on the surface it actually ships on.
+ *
+ * Three claims that only a real browser can settle: that the routine controls
+ * are all in one corner and the other three are empty in a Clean Take; that the
+ * appearance panel rises from the button that raised it and fits; and that
+ * turning the text mirror on does not move a single mouse target — a CSS
+ * transform carries hit-testing with it, so a control inside the mirror plane
+ * is clickable exactly where it appears, on the opposite side of the screen
+ * from where it was a moment ago.
+ */
+test('the session dock is the only routine control surface, and mirroring does not move it', async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  /*
+   * The Elgato Prompter's own geometry, not the default 1280x720.
+   *
+   * Everything this test asserts about fit is only interesting on the panel the
+   * product is judged on — a 9-inch, 1024x600, non-Retina display behind glass.
+   * At 720 tall the appearance panel has room to spare and the assertions below
+   * pass whether or not the layout is right, which is worse than not having
+   * them.
+   */
+  await page.setViewportSize({ width: 1024, height: 600 });
+  await present(page);
+
+  const dock = page.locator('.stage-dock');
+  await expect(dock).toBeVisible();
+  const before = await dock.boundingBox();
+  expect(before).not.toBeNull();
+
+  // Bottom left of the window, not merely somewhere.
+  const viewport = page.viewportSize()!;
+  expect(before!.x).toBeLessThan(viewport.width / 2);
+  expect(before!.y).toBeGreaterThan(viewport.height / 2);
+
+  // Cmd/Ctrl+Shift+M is the mirror shortcut; the script flips, the dock does not.
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+M' : 'Control+Shift+M');
+  await expect(page.locator('.stage-talent-plane')).toHaveAttribute('data-mirror-x', 'true');
+  const after = await dock.boundingBox();
+  expect(after!.x).toBeCloseTo(before!.x, 0);
+  expect(after!.y).toBeCloseTo(before!.y, 0);
+
+  // The appearance panel opens upward from its own button and stays on screen.
+  await page.locator('.stage-root').hover();
+  await page.locator('.stage-dock .dock-button.adjust').click();
+  const panel = page.locator('.stage-dock .appearance-popover');
+  await expect(panel).toBeVisible();
+  const panelBox = await panel.boundingBox();
+  expect(panelBox!.y).toBeGreaterThanOrEqual(0);
+  expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(before!.y + 1);
+
+  /*
+   * ...and every control in it is REACHABLE without discovering that the panel
+   * scrolls. A control below the fold of a scrimless popover somebody is
+   * operating mid-take, with a presenter waiting, is a control that is not
+   * there. Asserted at the Prompter's own 1024x600 rather than at whatever the
+   * developer's display happens to be.
+   */
+  const overflow = await panel
+    .locator('.sheet .body')
+    .evaluate((el) => el.scrollHeight - el.clientHeight);
+  expect(overflow, 'the appearance panel must fit on a 1024x600 Prompter').toBe(0);
+
+  // Escape closes the panel and does NOT begin ending the take.
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+  await expect(page.locator('.escape-hint')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible();
+
+  errors.expectClean();
+});
+
+/*
+ * The appearance transaction, end to end, on the real surface.
+ *
+ * This is the seam nothing else covers: the panel is control's, the button that
+ * raises it is the stage's, and the snapshot that Cancel restores is the
+ * session store's. Each of the three is unit-tested and the promise only exists
+ * where they meet — every drag reaches the glass on the way past, and backing
+ * out puts the take back exactly as it was found.
+ *
+ * Both dismissals are checked because the dock routes them to the same place
+ * for a reason: a click away that merely CLOSED would silently keep changes
+ * nobody confirmed, with the button that would have undone them gone.
+ */
+test('the appearance panel applies live and restores what it opened on', async ({ page }) => {
+  const errors = watchPageErrors(page);
+  await page.setViewportSize({ width: 1024, height: 600 });
+  await present(page);
+
+  const scriptColumn = page.locator('.script-layer .column').first();
+  const widthOf = async () => (await scriptColumn.boundingBox())!.width;
+
+  await page.locator('.stage-root').hover();
+  await page.locator('.stage-dock .dock-button.adjust').click();
+  const panel = page.locator('.stage-dock .appearance-popover');
+  await expect(panel).toBeVisible();
+
+  const opened = await widthOf();
+  const width = panel.locator('input[type="range"]').nth(1); // Text width
+  await width.fill('50');
+  await width.dispatchEvent('input');
+  // Live, on the way past — not on the way out.
+  await expect.poll(widthOf).toBeLessThan(opened - 20);
+
+  // Escape means cancel, and cancel means exactly what it was found as.
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
+  await expect.poll(widthOf).toBeCloseTo(opened, 0);
+
+  // And a click away is the same promise, not a quiet keep.
+  await page.locator('.stage-dock .dock-button.adjust').click();
+  await expect(panel).toBeVisible();
+  await width.fill('50');
+  await width.dispatchEvent('input');
+  await expect.poll(widthOf).toBeLessThan(opened - 20);
+  await page.mouse.click(900, 120);
+  await expect(panel).toHaveCount(0);
+  await expect.poll(widthOf).toBeCloseTo(opened, 0);
 
   errors.expectClean();
 });

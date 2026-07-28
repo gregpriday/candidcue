@@ -90,6 +90,35 @@ describe('VoicePill', () => {
     expect(confirmed.container.querySelector('.label')).toBeNull();
   });
 
+  /*
+   * The tick is an EVENT and the dot is a STATE, and the dot has to be able to
+   * say two different things or the settle loses information.
+   *
+   * `confirmed` is held briefly and then becomes `steady`. If `steady` drew the
+   * same mark as `listening`, "nothing has ever come back" and "everything is
+   * fine" would be indistinguishable — which is the one question this readout
+   * exists to answer. Hollow before the first lock, solid after; both still.
+   */
+  it('draws a different dot for "not yet heard" and "heard, and fine"', () => {
+    const listening = render(VoicePill, { props: { pill: pill() } });
+    const steady = render(VoicePill, {
+      props: { pill: pill({ reading: 'steady', label: 'Hearing you' }) },
+    });
+
+    expect(root(listening.container).dataset.reading).toBe('listening');
+    expect(root(steady.container).dataset.reading).toBe('steady');
+    // Both are a dot, so neither is an announcement...
+    expect(listening.container.querySelector('.dot')).not.toBeNull();
+    expect(steady.container.querySelector('.dot')).not.toBeNull();
+    // ...and neither is the tick, which is reserved for the moment it lands.
+    expect(steady.container.querySelector('.mark svg')).toBeNull();
+    expect(
+      render(VoicePill, { props: { pill: pill({ reading: 'confirmed' }) } }).container.querySelector(
+        '.mark svg',
+      ),
+    ).not.toBeNull();
+  });
+
   it('announces changes without stealing focus from a window that has none', () => {
     const { container } = render(VoicePill, { props: { pill: pill() } });
     expect(root(container).getAttribute('role')).toBe('status');

@@ -15,7 +15,10 @@
  *     for, and the pill has to say so without being asked.
  */
 import { describe, expect, it } from 'vitest';
-import type { AudioLevelSnapshot } from '../../../shared/contracts';
+import {
+  STAGE_VOICE_PILL_CONFIRM_HOLD_MS,
+  type AudioLevelSnapshot,
+} from '../../../shared/contracts';
 import {
   VOICE_PILL_NO_CAPTURE_MS,
   VOICE_PILL_STALE_FRAME_MS,
@@ -128,18 +131,37 @@ describe('confirming', () => {
     expect(reading(state, START_MS + 5 * FRAME_MS)).toBe('listening');
   });
 
-  it('stays confirmed once it has been confirmed', () => {
-    // The presenter falling silent after proving the chain works is not
-    // evidence against it.
+  it('settles the tick into the steady dot, and never back to listening', () => {
+    /*
+     * The presenter falling silent after proving the chain works is not
+     * evidence against it — so the reading may not go back to `listening`,
+     * which means "nothing has ever come back". It settles to `steady`, which
+     * is the same claim as the tick with none of the announcement: a still,
+     * solid dot instead of a filled tick lit for the rest of the take.
+     */
     let state = reduceVoicePillText(feed(initialVoicePillState(START_MS), 5, START_MS), 'hello');
     state = tickVoicePill(state, HEALTHY, START_MS + 5 * FRAME_MS);
+    expect(state.reading).toBe('confirmed');
+
     const later = feed(state, 20, START_MS + 6 * FRAME_MS, {
       rms: 0,
       peak: 0,
       speaking: false,
       signalPresent: false,
     });
-    expect(reading(later, START_MS + 25 * FRAME_MS)).toBe('confirmed');
+    expect(reading(later, START_MS + 25 * FRAME_MS)).toBe('steady');
+  });
+
+  it('holds the tick for its full hold and not a tick longer', () => {
+    let state = reduceVoicePillText(feed(initialVoicePillState(START_MS), 5, START_MS), 'hello');
+    const confirmedAtMs = START_MS + 5 * FRAME_MS;
+    state = tickVoicePill(state, HEALTHY, confirmedAtMs);
+
+    const justBefore = confirmedAtMs + STAGE_VOICE_PILL_CONFIRM_HOLD_MS - 1;
+    expect(tickVoicePill(state, HEALTHY, justBefore).reading).toBe('confirmed');
+
+    const atTheEnd = confirmedAtMs + STAGE_VOICE_PILL_CONFIRM_HOLD_MS;
+    expect(tickVoicePill(state, HEALTHY, atTheEnd).reading).toBe('steady');
   });
 
   it('stays on screen once confirmed, however long the take runs', () => {
@@ -149,6 +171,9 @@ describe('confirming', () => {
      * WAVEFORM along with the tick, and the waveform is not a status that
      * resolves — it is the only live evidence that audio is still arriving.
      * Being confirmed ten minutes ago says nothing about now.
+     *
+     * The MARK settling is a different decision and is tested above; what may
+     * never happen is the pill leaving the screen.
      */
     let state = reduceVoicePillText(feed(initialVoicePillState(START_MS), 5, START_MS), 'hello');
     const confirmedAtMs = START_MS + 5 * FRAME_MS;
@@ -160,7 +185,7 @@ describe('confirming', () => {
     const laterMs = confirmedAtMs + 30 * 60_000;
     state = reduceVoicePillLevel(state, frame({ generatedAtMs: laterMs }), laterMs);
     state = tickVoicePill(state, HEALTHY, laterMs);
-    expect(state.reading).toBe('confirmed');
+    expect(state.reading).toBe('steady');
     expect(voicePillView(state).visible).toBe(true);
   });
 
@@ -177,8 +202,15 @@ describe('confirming', () => {
     const backAtMs = faultedAtMs + 500;
     state = reduceVoicePillLevel(state, frame({ generatedAtMs: backAtMs }), backAtMs);
     state = tickVoicePill(state, HEALTHY, backAtMs);
+    // A recovery is news, so it spends the tick again — and then settles, like
+    // the first one did. Coming back from a fault must not leave the mark lit.
     expect(state.reading).toBe('confirmed');
     expect(voicePillView(state).visible).toBe(true);
+
+    const settledAtMs = backAtMs + STAGE_VOICE_PILL_CONFIRM_HOLD_MS;
+    state = reduceVoicePillLevel(state, frame({ generatedAtMs: settledAtMs }), settledAtMs);
+    state = tickVoicePill(state, HEALTHY, settledAtMs);
+    expect(state.reading).toBe('steady');
   });
 });
 

@@ -162,11 +162,11 @@ test('the uncalibrated stage follows too', async ({ page }) => {
 });
 
 /**
- * The exit affordance is clickable, not just painted.
+ * The dock is clickable, not just painted.
  *
- * This assertion is here rather than in jsdom because it needs real hit-testing.
- * The button lives inside `.stage-safe-plane`, which is `pointer-events: none`
- * so a stray click over the hold chip or the voice pill falls through to the
+ * This assertion is here rather than in jsdom because it needs real
+ * hit-testing. The dock lives in the operator plane, which is
+ * `pointer-events: none` so a stray click over a readout falls through to the
  * root and reports focus instead of being swallowed by decoration. A button
  * inheriting that rule paints perfectly and does nothing — and jsdom cannot see
  * it, because `getComputedStyle` there reports `pointer-events: auto` without
@@ -174,24 +174,64 @@ test('the uncalibrated stage follows too', async ({ page }) => {
  * way (checked: removing the fix leaves the jsdom suite green).
  *
  * Playwright's actionability check is the real thing: it hit-tests the point it
- * is about to click and fails if some other element would receive the event.
+ * is about to click and fails if some other element would receive the event —
+ * which additionally covers the hidden buttons, since they keep their place in
+ * the layout and would otherwise sit invisibly over the audio readout.
  */
-test('the exit affordance is clickable, not just painted', async ({ page }) => {
+test('the session dock is clickable, not just painted', async ({ page }) => {
   await page.goto('/stage.html?preview=1');
   const root = page.locator('.stage-root');
   await expect(root).toHaveAttribute('data-phase', 'live');
 
-  // It stays out of the way until somebody reaches for the mouse — a take is
-  // exactly when nobody does.
-  await expect(page.locator('.stage-exit')).toHaveCount(0);
+  // It introduces itself and then gets out of the way — a take is exactly when
+  // nobody touches the mouse.
+  const end = page.locator('.stage-dock .dock-button.end');
+  await expect(end).toHaveAttribute('data-hidden', 'true', { timeout: 10_000 });
 
   await root.hover();
-  const exit = page.locator('.stage-exit');
-  await expect(exit).toBeVisible();
+  await expect(end).toHaveAttribute('data-hidden', 'false');
 
   // The assertion. A `pointer-events: none` button fails this with "element
   // intercepts pointer events" rather than clicking; it does not pass slowly.
-  await exit.click({ timeout: 5_000 });
+  await end.click({ timeout: 5_000 });
+
+  // And one click asks rather than acts.
+  await expect(page.locator('.stage-dock .confirm-end')).toBeVisible();
+});
+
+/**
+ * A hidden dock button cannot be clicked through.
+ *
+ * The other half of the rule above, and the half jsdom structurally cannot see:
+ * it reports `pointer-events` as the initial `auto` without inheriting an
+ * ancestor's `none`, so the obvious unit assertion passes with the rule deleted.
+ *
+ * The failure it guards is specific. The buttons keep their place in the layout
+ * while invisible — otherwise the audio readout would jump sideways every time
+ * the mouse moved — so an invisible button that still took a click would be a
+ * live "end session" target sitting in the corner where a pointer is most
+ * likely to be resting when the idle timer expires.
+ */
+test('a hidden dock button cannot be clicked through', async ({ page }) => {
+  await page.goto('/stage.html?preview=1');
+  const root = page.locator('.stage-root');
+  await expect(root).toHaveAttribute('data-phase', 'live');
+
+  const end = page.locator('.stage-dock .dock-button.end');
+  await expect(end).toHaveAttribute('data-hidden', 'true', { timeout: 10_000 });
+
+  // It is still laid out — that is the point of hiding it this way...
+  const box = await end.boundingBox();
+  expect(box, 'the hidden button must keep its place in the row').not.toBeNull();
+  expect(box!.width).toBeGreaterThan(0);
+
+  // ...and the browser's own hit test says nothing there answers a click. This
+  // fails if `pointer-events: none` is dropped, which is the regression.
+  const hit = await page.evaluate(([x, y]) => {
+    const el = document.elementFromPoint(x, y);
+    return el === null || el.closest('.dock-button') === null;
+  }, [box!.x + box!.width / 2, box!.y + box!.height / 2] as const);
+  expect(hit, 'a hidden button must not be the element under the pointer').toBe(true);
 });
 
 /*

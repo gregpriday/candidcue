@@ -72,8 +72,8 @@ describe('the sheet applies as you go', () => {
   it('reports every move, not just the last one', () => {
     const { container, onchange, onok } = open();
 
-    drag(slider(container, 'Reading band position'), 44);
-    drag(slider(container, 'Reading band position'), 45);
+    drag(slider(container, 'Reading line'), 44);
+    drag(slider(container, 'Reading line'), 45);
 
     expect(onchange).toHaveBeenNthCalledWith(1, { readingBandCenterPercent: 44 });
     expect(onchange).toHaveBeenNthCalledWith(2, { readingBandCenterPercent: 45 });
@@ -83,9 +83,9 @@ describe('the sheet applies as you go', () => {
   it('sends the field its own control owns', () => {
     const { container, onchange } = open();
 
-    drag(slider(container, 'Font size'), 90);
-    drag(slider(container, 'Line height'), 1.5);
-    drag(slider(container, 'Text column width'), 60);
+    drag(slider(container, 'Text size'), 90);
+    drag(slider(container, 'Line spacing'), 1.5);
+    drag(slider(container, 'Text width'), 60);
 
     expect(onchange).toHaveBeenCalledWith({ fontSizePx: 90 });
     expect(onchange).toHaveBeenCalledWith({ lineHeight: 1.5 });
@@ -100,11 +100,74 @@ describe('the sheet applies as you go', () => {
   });
 });
 
+describe('the size nudges', () => {
+  /*
+   * A slider alone cannot be operated accurately at two pixels a step — the
+   * range is 24 to 320 across a track about 200px wide — and two pixels is
+   * exactly the size of adjustment somebody makes when they are nearly right
+   * and standing at the glass.
+   */
+  it('steps by two, and by ten with Shift', () => {
+    const { getByLabelText, onchange } = open();
+
+    getByLabelText('Larger text').click();
+    flushSync();
+    expect(onchange).toHaveBeenLastCalledWith({ fontSizePx: 66 });
+
+    getByLabelText('Smaller text').dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true }),
+    );
+    flushSync();
+    expect(onchange).toHaveBeenLastCalledWith({ fontSizePx: 54 });
+  });
+
+  /*
+   * Stopped, not clamped-and-sent. A button that looks live and quietly posts
+   * the value the control is already showing reads as a key that did not
+   * register, which is the complaint `adjustFontSize` already carries a comment
+   * about one screen along.
+   */
+  it('stops at the ends of the range it was given', () => {
+    // Queried through each render's own container: two panels coexist in this
+    // test, and a document-wide lookup finds both.
+    const nudge = (container: HTMLElement, label: string) =>
+      container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+
+    const top = open({ maxFontSizePx: 80, appearance: { ...APPEARANCE, fontSizePx: 80 } });
+    expect(nudge(top.container, 'Larger text').disabled).toBe(true);
+    expect(nudge(top.container, 'Smaller text').disabled).toBe(false);
+
+    const bottom = open({ appearance: { ...APPEARANCE, fontSizePx: 24 } });
+    expect(nudge(bottom.container, 'Smaller text').disabled).toBe(true);
+  });
+});
+
+describe('the width control reports a measure, not only a percentage', () => {
+  /*
+   * The same 78% is a different measure on a 1024x600 Prompter, a 1080p
+   * Prompter XL and a Sidecar iPad, and it is the CHARACTER count that governs
+   * eye travel. Only the stage can produce it — control resolves geometry
+   * against DIN fallbacks because control does not render the font — so it
+   * arrives as a prop and is shown beside the thing being dragged.
+   */
+  it('shows the measured characters per line when the stage has reported one', () => {
+    const { container } = open({ charactersPerLine: 42 });
+    const value = [...container.querySelectorAll('.slider .value')].map((el) => el.textContent);
+    expect(value).toContain('78% · 42 chars');
+  });
+
+  it('says nothing about it before the first line map', () => {
+    const { container } = open({ charactersPerLine: null });
+    const value = [...container.querySelectorAll('.slider .value')].map((el) => el.textContent);
+    expect(value).toContain('78%');
+  });
+});
+
 describe('keeping or discarding', () => {
-  it('keeps on OK and discards on Cancel, and never both', () => {
+  it('keeps on Done and discards on Cancel, and never both', () => {
     const { getByRole, onok, oncancel } = open();
 
-    getByRole('button', { name: 'OK' }).click();
+    getByRole('button', { name: 'Done' }).click();
     flushSync();
     expect(onok).toHaveBeenCalledTimes(1);
     expect(oncancel).not.toHaveBeenCalled();
@@ -181,7 +244,7 @@ describe('the range the size slider draws', () => {
    */
   it('is the ceiling it was given, not one derived from the current value', () => {
     const { container } = open({ maxFontSizePx: 400, appearance: { ...APPEARANCE, fontSizePx: 350 } });
-    expect(slider(container, 'Font size').max).toBe('400');
+    expect(slider(container, 'Text size').max).toBe('400');
   });
 });
 
@@ -212,19 +275,20 @@ describe('a rig-resolved take', () => {
 
     expect(getByText('234 px')).toBeTruthy();
     expect(getByText('2.00')).toBeTruthy();
-    expect(getByText(/recalibrate this display/i)).toBeTruthy();
+    expect(getByText('Calibrated')).toBeTruthy();
+    expect(getByText(/Settings . Stage display/i)).toBeTruthy();
   });
 
   /*
-   * There is nothing here the sheet could save. An OK button would write the
+   * There is nothing here the sheet could save. A Done button would write the
    * RIG's resolved numbers into the global defaults — quietly changing what
    * every uncalibrated take opens with, on a panel the operator opened to look
    * at one display.
    */
-  it('offers no OK, because it has nothing to save', () => {
+  it('offers no Done, because it has nothing to save', () => {
     const { queryByRole, getByRole, oncancel } = open({ rigResolved: true });
 
-    expect(queryByRole('button', { name: 'OK' })).toBeNull();
+    expect(queryByRole('button', { name: 'Done' })).toBeNull();
     getByRole('button', { name: 'Close' }).click();
     flushSync();
     expect(oncancel).toHaveBeenCalledTimes(1);

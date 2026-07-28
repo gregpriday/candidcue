@@ -22,17 +22,18 @@
  * stage has to be clicked before it can be told anything. A full-screen window
  * with no visible way out reads as a hang.
  *
- * The affordance that fixes it lives inside `.stage-safe-plane`, alongside the
- * hold chip and the voice pill — and that plane is `pointer-events: none`, on
- * purpose, so a stray click over any of those lands on the root and reports
- * focus instead of being swallowed by decoration. A button inheriting that rule
+ * The affordance that fixes it lives in the session dock, inside the operator
+ * plane — and that plane is `pointer-events: none`, on purpose, so a stray
+ * click over any of the readouts in it lands on the root and reports focus
+ * instead of being swallowed by decoration. A button inheriting that rule
  * paints perfectly, invites the click, and does nothing: the exact dead control
  * it was added to replace. Nothing else can see that. Its markup is right, its
  * handler is right, its unit behaviour is right, and it is inert.
  *
- * So this drives the mounted `StageApp` and asserts the two facts that are only
- * true of a real, hittable control: it takes pointer events, and clicking it
- * sends the same "end the take" message a second Escape sends.
+ * So this drives the mounted `StageApp` and asserts the facts that are only
+ * true of a real, hittable control: it takes pointer events, one click on it
+ * asks rather than acts, and confirming sends the same "end the take" message a
+ * second Escape sends.
  */
 import { render } from '@testing-library/svelte';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -181,13 +182,45 @@ async function mountLiveStage(): Promise<HTMLElement> {
   return root;
 }
 
-/** Wake the affordance the way a person does: by moving the mouse. */
-function movePointer(root: HTMLElement): void {
-  root.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }));
+/**
+ * Wake the dock the way a person does: by moving the mouse.
+ *
+ * Coordinates, because the dock wakes on DISPLACEMENT rather than on events —
+ * trackpad tremor emits `pointermove` continuously, and a dock that brightened
+ * for every one of those would flicker in the corner of the presenter's eye for
+ * a whole take with nobody touching anything.
+ */
+function movePointer(root: HTMLElement, x = 40, y = 40): void {
+  root.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: x, clientY: y }));
 }
 
+/** The dock's End control, or null while the dock's buttons are hidden. */
 function exitButton(): HTMLButtonElement | null {
-  return document.querySelector('.stage-exit');
+  const button = document.querySelector<HTMLButtonElement>('.stage-dock .dock-button.end');
+  // Present in the DOM the whole time — it keeps its place in the layout so the
+  // audio readout beside it never moves — so "offered" means visible and
+  // hittable, not mounted.
+  if (!button || button.dataset.hidden === 'true') return null;
+  return button;
+}
+
+/** Whichever button in the anchored confirmation actually ends the take. */
+function confirmEndButton(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>('.stage-dock .confirm-end');
+}
+
+/** Put the stage into Diagnostic Take, which is where the raw transcript is. */
+async function showDiagnostics(): Promise<void> {
+  dispatchLocalStageEvent(STAGE_EVENT.applyCommand, {
+    stageGeneration: STAGE_GENERATION,
+    directive: { kind: 'diagnostics', visible: true },
+  });
+  await settle();
+}
+
+/** The escape prompt the stage answers a single press with. */
+function escapeHint(): Element | null {
+  return document.querySelector('.escape-hint');
 }
 
 /** One line of the Diagnostic Take readout, by its leading label. */
@@ -201,19 +234,48 @@ const feedLine = () => diagnosticLine('feed:');
 const tokenLine = () => diagnosticLine('token:');
 
 describe('the stage exit affordance', () => {
-  it('stays hidden until somebody reaches for the mouse', async () => {
-    await mountLiveStage();
-    // A take is exactly when nobody touches the mouse, so an affordance that
-    // sat there permanently would be a lit control in the corner of the
-    // presenter's glass for the whole performance.
-    expect(exitButton()).toBeNull();
+  /*
+   * IT SHOWS ITSELF ONCE, AND THEN GETS OUT OF THE WAY.
+   *
+   * The old rule was "hidden until somebody reaches for the mouse", full stop.
+   * That is right about the steady state and wrong about the first four
+   * seconds: somebody has just had a full-screen, always-on-top window take
+   * over a display, and a screen with no visible way out reads as a hang. The
+   * take has not started — nobody has drawn breath yet — so the opening reveal
+   * costs it nothing.
+   *
+   * What must not happen is the controls STAYING. A take is exactly when nobody
+   * touches the mouse, and a lit button in the corner of the presenter's glass
+   * for the whole performance is in shot.
+   */
+  it('shows itself at the top of a take and then fades', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await mountLiveStage();
+      expect(exitButton(), 'the dock should introduce itself').not.toBeNull();
+
+      vi.advanceTimersByTime(5000);
+      await settle();
+      expect(exitButton(), 'and then leave').toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('appears on pointer movement', async () => {
-    const root = await mountLiveStage();
-    movePointer(root);
-    await settle();
-    expect(exitButton()).not.toBeNull();
+  it('comes back on pointer movement', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const root = await mountLiveStage();
+      vi.advanceTimersByTime(5000);
+      await settle();
+      expect(exitButton()).toBeNull();
+
+      movePointer(root);
+      await settle();
+      expect(exitButton()).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   /*
@@ -235,7 +297,19 @@ describe('the stage exit affordance', () => {
    * is exactly the defect.
    */
 
-  it('ends the take on one click, as a second Escape would', async () => {
+  /*
+   * ONE CLICK ASKS. It used to end the take outright, on the reasoning that
+   * somebody who has found a button labelled "End session" and pressed it has
+   * already confirmed.
+   *
+   * That reasoning depends on the button being hard to hit by accident, and
+   * this one is not: it sits in a dock at the bottom-left corner, six pixels
+   * from the audio readout somebody may well be leaning in to inspect, on a
+   * screen where the pointer is invisible most of the time. The cost of the
+   * mistake is a ruined take. So the click opens an anchored confirmation, and
+   * the confirmation is what sends the message.
+   */
+  it('asks before it ends anything', async () => {
     const root = await mountLiveStage();
     movePointer(root);
     await settle();
@@ -243,15 +317,46 @@ describe('the stage exit affordance', () => {
     exitButton()!.click();
     await settle();
 
+    expect(confirmEndButton(), 'the confirmation should be up').not.toBeNull();
+    expect(emitted.filter(([name]) => name === STAGE_EVENT.escapePressed)).toEqual([]);
+  });
+
+  it('ends the take when the confirmation is taken, as a second Escape would', async () => {
+    const root = await mountLiveStage();
+    movePointer(root);
+    await settle();
+
+    exitButton()!.click();
+    await settle();
+    confirmEndButton()!.click();
+    await settle();
+
     const escapes = emitted
       .filter(([name]) => name === STAGE_EVENT.escapePressed)
       .map(([, payload]) => payload as StageEscapePayload);
 
-    // Two presses: ending the take, not asking for confirmation. Somebody who
-    // has found a button labelled "End session" and clicked it has already
-    // confirmed — the double-press exists because a KEY can be hit by reflex.
+    // Two presses: the SAME message a second Escape sends, not a second way of
+    // ending a take. Control owns the whole teardown either way.
     expect(escapes.map((e) => e.presses)).toEqual([2]);
     expect(escapes[0]?.stageGeneration).toBe(STAGE_GENERATION);
+  });
+
+  it('backs out of the confirmation on Escape without ending the take', async () => {
+    const root = await mountLiveStage();
+    movePointer(root);
+    await settle();
+    exitButton()!.click();
+    await settle();
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await settle();
+
+    // Both halves matter. The confirmation closes, and — the part that would be
+    // a disaster — the key that backs out of "end the session?" is not also
+    // counted towards the double press that ends it.
+    expect(confirmEndButton()).toBeNull();
+    expect(emitted.filter(([name]) => name === STAGE_EVENT.escapePressed)).toEqual([]);
+    expect(escapeHint(), 'and it did not reach the stage as a first press').toBeNull();
   });
 
   /**
@@ -347,6 +452,7 @@ describe('the stage exit affordance', () => {
    */
   it('shows the recogniser words that arrive as a directive', async () => {
     await mountLiveStage();
+    await showDiagnostics();
     expect(document.querySelector('.transcript-tap')?.textContent).toContain('listening');
 
     dispatchLocalStageEvent(STAGE_EVENT.applyCommand, {
@@ -362,6 +468,7 @@ describe('the stage exit affordance', () => {
 
   it('recovers recogniser words from the Rust live checkpoint after an event loss', async () => {
     await mountLiveStage();
+    await showDiagnostics();
     expect(document.querySelector('.transcript-tap')?.textContent).toContain('listening');
 
     // Deliberately do not dispatch applyCommand: this models the immediate
@@ -386,6 +493,7 @@ describe('the stage exit affordance', () => {
 
   it('ignores transcript words addressed to another stage generation', async () => {
     await mountLiveStage();
+    await showDiagnostics();
     dispatchLocalStageEvent(STAGE_EVENT.applyCommand, {
       stageGeneration: STAGE_GENERATION + 99,
       directive: { kind: 'transcript', text: 'from a take that ended', final: true },
@@ -405,6 +513,7 @@ describe('the stage exit affordance', () => {
     await settle();
     // A blank is a deliberate "show nothing", and Escape is already the answer
     // to one — the hint that says so is the thing on screen at that moment.
-    expect(exitButton()).toBeNull();
+    // The whole dock goes, not just the button.
+    expect(document.querySelector('.stage-dock')).toBeNull();
   });
 });

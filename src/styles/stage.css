@@ -35,6 +35,25 @@
   --stage-overlay: rgba(0, 0, 0, 0.72);
 
   /*
+   * The chrome geometry system — one inset, one radius, one border, one fill
+   * for every surface that floats over the script: the hold chip, the session
+   * dock, the diagnostic transcript, the diagnostics readout.
+   *
+   * Mirrored in `StageApp.svelte`'s own `.stage-root` block, deliberately.
+   * This file is loaded by the stage WINDOW; single-window presentation mounts
+   * the same component inside the control window, which never loads it. See
+   * the note there.
+   */
+  --stage-chrome-inset: 20px;
+  --stage-chrome-bottom-inset: 16px;
+  --stage-chrome-radius: 12px;
+  --stage-chrome-border: rgba(255, 255, 255, 0.13);
+  --stage-chrome-bg: rgba(12, 14, 18, 0.74);
+  --stage-chrome-text: rgba(245, 243, 239, 0.88);
+  --stage-chrome-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+
+  /*
    * The floor for presenter-readable text that is not body copy.
    *
    * Resolved from the optical profile and written onto the script layer as a
