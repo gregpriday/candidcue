@@ -39,6 +39,7 @@ import {
   type MediaStreamLike,
 } from './audio';
 import { PcmCapture } from './audio/capture';
+import { frameHasSignal } from './audio/levelMeter';
 import {
   encodePcm16,
   pushTranscriptionAudio,
@@ -259,6 +260,21 @@ export class VoiceSessionPipeline {
 
   /** §28.6 sustained no-signal detection on the captured stream. */
   private readonly silentInput = new SilentInputDetector();
+  /** Wall time of the last PCM frame that carried anything, or 0. */
+  private lastPcmSignalAtMs = 0;
+
+  /**
+   * Has the tap that feeds the recogniser carried signal lately?
+   *
+   * The window is generous on purpose: this is not a speech detector, it is a
+   * check on whether the DEVICE is producing audio at all, and a presenter who
+   * pauses for three seconds mid-paragraph has not unplugged their microphone.
+   * `SilentInputDetector` already applies its own, much longer patience before
+   * it declares anything; this only decides whether to believe it.
+   */
+  private pcmHeardRecently(): boolean {
+    return this.lastPcmSignalAtMs > 0 && Date.now() - this.lastPcmSignalAtMs < 5000;
+  }
   /** Frames handed to Rust this session; traced, not merely counted. */
   private framesSent = 0;
   /** True once this session has reached `connected` at least once. */
@@ -711,6 +727,34 @@ export class VoiceSessionPipeline {
         return;
       }
       const code = this.silentInput.observe(snapshot);
+      /*
+       * Vetoed by the PCM tap. A dead input is a real fault worth holding for,
+       * but only the tap that feeds the recogniser can say the input is dead —
+       * and if it has carried signal recently, it is not.
+       */
+      if (code && this.pcmHeardRecently()) {
+        trace(
+          'input-monitor-disagrees',
+          `level meter reports ${code} while the PCM tap is carrying signal — not holding`,
+        );
+        /*
+         * RELEASING matters as much as not holding.
+         *
+         * The release path below lives in the `signalPresent` branch, which is
+         * the analyser's opinion — and on a device where the analyser is the
+         * thing that is broken, that branch never runs. So a hold taken before
+         * the PCM tap opened (capture starts after the monitor) would stand for
+         * the rest of the take with nothing able to lift it: the exact
+         * unrecoverable state this veto exists to prevent, arrived at one
+         * second later.
+         */
+        if (inputWasDead) {
+          inputWasDead = false;
+          this.deps.onInputRestored?.();
+          this.setFollowingHold(false, null);
+        }
+        return;
+      }
       if (code && !inputWasDead) {
         inputWasDead = true;
         this.deps.onInputDeviceLost?.(code);
@@ -743,6 +787,26 @@ export class VoiceSessionPipeline {
    * callback would only tear down the capture graph mid-take.
    */
   private forwardFrame(samples: Float32Array): void {
+    /*
+     * The PCM tap is the ground truth about whether there is audio.
+     *
+     * There are two taps on one microphone: this one, which encodes the frames
+     * the recogniser actually transcribes, and a separate AnalyserNode graph
+     * (`MicrophoneMonitor`) that drives the level meter and the §28.6
+     * dead-input detector. They can disagree, and on at least one real device —
+     * a RODE NT-USB Mini on macOS — they do: the analyser reports pure silence
+     * while this tap carries perfectly transcribable speech. Settings shows
+     * both answers side by side, "No signal" above "Transcription is working".
+     *
+     * When they disagree the analyser used to win, and it held following for
+     * the whole take. So the take heard the presenter, transcribed them,
+     * aligned them, and refused to move the script — while the only readout
+     * that could have explained it said the microphone was fine.
+     *
+     * Whatever is wrong with the analyser path on that device, this frame is
+     * evidence that cannot be argued with: bytes on their way to Inworld.
+     */
+    if (frameHasSignal(samples)) this.lastPcmSignalAtMs = Date.now();
     const generation = this.transportGeneration;
     if (generation === null || this.paused || this.stopped) {
       // Silence with a cause is the thing worth naming: an unforwarded frame

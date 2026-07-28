@@ -153,3 +153,25 @@ export class MicrophoneMonitor {
     }
   }
 }
+
+/**
+ * Does this PCM frame carry anything at all?
+ *
+ * Deliberately a floor, not a speech threshold. It answers "is this device
+ * producing audio" — the question the §28.6 dead-input detector is really
+ * asking — and it has to be true of a quiet room, because a quiet room is a
+ * working microphone. Real analog silence still carries thermal noise and a
+ * dither floor; a dead capture path returns samples that are exactly zero.
+ *
+ * The bar sits just above absolute silence for that reason: anything a real
+ * converter produces clears it, and only a stream of literal zeros fails.
+ */
+const PCM_SIGNAL_FLOOR = 1e-4;
+
+export function frameHasSignal(samples: Float32Array): boolean {
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = samples[i];
+    if (sample !== undefined && Math.abs(sample) > PCM_SIGNAL_FLOOR) return true;
+  }
+  return false;
+}
