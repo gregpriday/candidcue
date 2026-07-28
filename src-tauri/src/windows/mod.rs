@@ -1191,6 +1191,11 @@ const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[
     // Same failure class as the transcript: this status readout was produced
     // by control and disappeared on the direct webview-to-webview event road.
     "voicePill",
+    // The fixed-pace transport — the fallback for a take voice following
+    // cannot carry. It travels the same proven road for the same reason, and
+    // it is generation-checked on both ends because unlike the two above it
+    // MOVES the document.
+    "autoScroll",
 ];
 
 /// Validate a `StageStatePayload` ({ stageGeneration, directive }) against

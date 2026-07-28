@@ -92,6 +92,15 @@ export interface HoldStatusInput {
   hasFault: boolean;
   /** The name of that condition. Never a code, never "something went wrong". */
   faultLabel: string | null;
+  /**
+   * The fixed-pace transport is already carrying the script.
+   *
+   * Suppresses the recovery hint, because it would be advice to do the thing
+   * they are already doing — and a message that describes the state wrongly is
+   * worse than no message, particularly the one message on the glass that a
+   * presenter has been taught is worth reading.
+   */
+  autoScrollRunning?: boolean;
 }
 
 export interface HoldStatus {
@@ -99,7 +108,39 @@ export interface HoldStatus {
   /** The sentence for the `message` rung; null on every other rung. */
   message: string | null;
   tone: HoldTone;
+  /**
+   * A quieter second line naming what the presenter can DO, or null.
+   *
+   * Separate from `message` because they are different kinds of sentence and
+   * the chip draws them differently: the message names a condition, this names
+   * a key. Keeping them apart is also what stops the hint being spoken as part
+   * of the condition by a screen reader every time the fault text changes.
+   */
+  hint: string | null;
 }
+
+/**
+ * What to do when the input chain is down.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY A FAULT EARNS A HINT AND A HOLD DOES NOT
+ * ---------------------------------------------------------------------------
+ * An ordinary hold clears itself: the presenter's next sentence is usually all
+ * it needed, and telling somebody mid-sentence to reach for a key would be
+ * advice to fix something that is already fixing itself.
+ *
+ * A fault is the opposite. The microphone is not coming back on its own, so the
+ * script will not move again this take no matter what the presenter says — and
+ * until now the glass named that condition and stopped there, leaving somebody
+ * standing at a camera correctly informed and with nothing to do. The transport
+ * is the thing to do, it is one key, and it leaves their hands free afterwards,
+ * which stepping the script by arrow keys does not.
+ *
+ * It names the key rather than describing the feature because the presenter is
+ * READING; six words they can act on beats a sentence explaining what auto
+ * scrolling is.
+ */
+export const HOLD_FAULT_HINT = 'Press A to scroll at a set pace';
 
 /**
  * The sentence each state earns once it has held long enough to earn one.
@@ -146,7 +187,12 @@ export function resolveHoldStatus(
    */
   const faultLabel = typeof input.faultLabel === 'string' ? input.faultLabel.trim() : '';
   if (input.hasFault && faultLabel.length > 0) {
-    return { rung: 'message', message: faultLabel, tone: 'fault' };
+    return {
+      rung: 'message',
+      message: faultLabel,
+      tone: 'fault',
+      hint: input.autoScrollRunning === true ? null : HOLD_FAULT_HINT,
+    };
   }
 
   /*
@@ -160,7 +206,7 @@ export function resolveHoldStatus(
   const message = HOLD_MESSAGES[input.alignmentState] ?? null;
   if (message === null) {
     // Following. The display is moving; there is nothing being withheld.
-    return { rung: 'none', message: null, tone: 'neutral' };
+    return { rung: 'none', message: null, tone: 'neutral', hint: null };
   }
 
   const elapsed =
@@ -173,6 +219,8 @@ export function resolveHoldStatus(
     rung,
     message: rung === 'message' ? message : null,
     tone: 'neutral',
+    // Never on an ordinary hold. See HOLD_FAULT_HINT.
+    hint: null,
   };
 }
 

@@ -42,6 +42,15 @@
     message: string | null;
     tone: HoldTone;
     /**
+     * A second line naming what the presenter can do about it, or null.
+     *
+     * Drawn quieter and smaller than the condition above it, because it is the
+     * less urgent half of the chip: the message is what is happening and has to
+     * be legible at a glance, the hint is what to do about it and is read on
+     * purpose by somebody who has already decided to act.
+     */
+    hint?: string | null;
+    /**
      * The floor from `ResolvedOptics`. This is words somebody has to read from
      * where they are standing, so it is sized like the secondary text it is —
      * not at the fixed 12–13 px that made every other stage label decoration
@@ -50,7 +59,7 @@
     secondaryMinPx: number;
   }
 
-  let { rung, message, tone, secondaryMinPx }: Props = $props();
+  let { rung, message, tone, hint = null, secondaryMinPx }: Props = $props();
 
   const visible = $derived(rung === 'message' && typeof message === 'string' && message.length > 0);
 
@@ -72,6 +81,30 @@
   $effect(() => {
     if (typeof message === 'string' && message.length > 0) latched = message;
   });
+
+  /**
+   * The hint latches with the message, and for the same reason.
+   *
+   * It is latched SEPARATELY rather than folded into the message, because the
+   * two clear independently: turning the transport on withdraws the hint while
+   * the fault it accompanied is still true, and a single latch would either
+   * strand the advice or blank the condition along with it.
+   *
+   * It is cleared only while something is actually BEING SAID. A hint withdrawn
+   * mid-fault has to disappear — it is advice to do a thing already being done.
+   * One that is merely fading out with the chip must not, because removing it
+   * shrinks the box while the box is fading, and that is movement at the one
+   * moment the presenter should be able to ignore entirely. The same rule keeps
+   * a spent fault hint from reappearing under the next ordinary hold message,
+   * which has no advice to offer and must not borrow the last one's.
+   */
+  // svelte-ignore state_referenced_locally
+  let latchedHint = $state(hint ?? '');
+  $effect(() => {
+    if (typeof hint === 'string' && hint.length > 0) latchedHint = hint;
+    else if (visible) latchedHint = '';
+  });
+  const hintVisible = $derived(latchedHint.length > 0);
 
   /**
    * The floor, floored again.
@@ -102,6 +135,9 @@
   style:font-size="{fontSizePx}px"
 >
   {latched}
+  {#if hintVisible}
+    <span class="hint">{latchedHint}</span>
+  {/if}
 </div>
 
 <style>
@@ -158,6 +194,24 @@
    */
   .hold-status[data-tone='fault'] {
     color: var(--stage-cue);
+  }
+
+  /*
+   * The recovery line: its own row, quieter, and never the cue colour.
+   *
+   * Sized in `em` so it tracks whatever floor the optics resolved rather than
+   * pinning itself to a pixel count that is legible on one rig and not on the
+   * next — and it inherits the chip's own colour at reduced opacity rather than
+   * taking the fault's warm cue, because two lines in the alarm colour make the
+   * advice look like a second fault instead of the answer to the first.
+   */
+  .hint {
+    display: block;
+    margin-top: 0.25em;
+    font-size: 0.82em;
+    font-weight: 500;
+    color: var(--stage-text);
+    opacity: 0.72;
   }
 
   @media (prefers-reduced-motion: reduce) {

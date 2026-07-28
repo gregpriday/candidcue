@@ -22,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import HoldStatus from '../../../src/stage/renderer/HoldStatus.svelte';
 import {
+  HOLD_FAULT_HINT,
   HOLD_HOLLOW_MS,
   HOLD_HYSTERESIS_MS,
   HOLD_MESSAGE_MS,
@@ -79,7 +80,7 @@ describe('the bottom of the ladder is silence', () => {
     // claiming a hold that is not happening — the presenter can see the text
     // moving and would rightly stop trusting everything else on the glass.
     const status = resolveHoldStatus(held(30_000, { alignmentState: 'following' }));
-    expect(status).toEqual({ rung: 'none', message: null, tone: 'neutral' });
+    expect(status).toEqual({ rung: 'none', message: null, tone: 'neutral', hint: null });
   });
 });
 
@@ -112,6 +113,7 @@ describe('a named fault outranks the ladder', () => {
       rung: 'message',
       message: 'No audio from the microphone',
       tone: 'fault',
+      hint: HOLD_FAULT_HINT,
     });
   });
 
@@ -129,13 +131,41 @@ describe('a named fault outranks the ladder', () => {
     // nothing to act on. The ladder's wording is at least true.
     for (const label of [null, '', '   ']) {
       const status = resolveHoldStatus(held(400, { hasFault: true, faultLabel: label }));
-      expect(status).toEqual({ rung: 'none', message: null, tone: 'neutral' });
+      expect(status).toEqual({ rung: 'none', message: null, tone: 'neutral', hint: null });
     }
     expect(resolveHoldStatus(held(5000, { hasFault: true, faultLabel: null }))).toEqual({
       rung: 'message',
       message: 'Holding here',
       tone: 'neutral',
+      hint: null,
     });
+  });
+
+  it('names the recovery, because a fault is the one hold that will not clear itself', () => {
+    /*
+     * The presenter is at a camera with a script that has stopped and no reason
+     * to believe anything they do will restart it. Naming the condition and
+     * stopping there leaves them correctly informed and stuck.
+     */
+    const status = resolveHoldStatus(held(0, { hasFault: true, faultLabel: 'No audio' }));
+    expect(status.hint).toBe(HOLD_FAULT_HINT);
+  });
+
+  it('withdraws the hint once the transport is already carrying the script', () => {
+    // Advice to do the thing they are visibly already doing reads as the chip
+    // not knowing what is going on — on the one message worth reading.
+    const status = resolveHoldStatus(
+      held(0, { hasFault: true, faultLabel: 'No audio', autoScrollRunning: true }),
+    );
+    expect(status.message).toBe('No audio');
+    expect(status.tone).toBe('fault');
+    expect(status.hint).toBeNull();
+  });
+
+  it('never hints on an ordinary hold, which usually clears itself', () => {
+    for (const state of ['holding', 'searching', 'ambiguous'] as const) {
+      expect(resolveHoldStatus(held(20_000, { alignmentState: state })).hint).toBeNull();
+    }
   });
 });
 

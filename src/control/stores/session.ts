@@ -15,6 +15,7 @@ import type {
   CompiledScript,
   OutlineNode,
   SentenceUnit,
+  StageAutoScrollPayload,
   StageDirective,
   StageEscapePayload,
   StageIntentPayload,
@@ -70,6 +71,13 @@ import {
   recordSessionTake,
   type TakeCheckpointInput,
 } from '../services/session-records';
+import {
+  AUTO_SCROLL_DEFAULT_WPM,
+  AUTO_SCROLL_MAX_WPM,
+  AUTO_SCROLL_MIN_WPM,
+  AUTO_SCROLL_WPM_STEP,
+  clampAutoScrollWpm,
+} from '../../stage/renderer/autoscroll';
 import { defaultFollowingSettings } from '../lib/follow-profiles';
 import { configureFollowActions, smoothFollow } from './smooth-follow';
 import { getSettingsSnapshot, patchSettings } from './settings';
@@ -132,6 +140,28 @@ export interface SessionSummary {
    * decided at session start.
    */
   transcriptSaved: boolean;
+  /**
+   * Times the operator JUMPED the script — sentence steps and outline moves.
+   *
+   * Named for what `counts.jumps` actually counts, which is narrower than
+   * "everything the operator did by hand": a wheel scroll on the stage is
+   * deliberately not counted (the tracker re-acquires around it and no
+   * correction was requested), and restarting a paragraph books a retake
+   * instead. Calling it "manual corrections" would have promised a total that
+   * this number is not.
+   *
+   * Already counted and already persisted onto the session record as
+   * `manualCorrectionCount`; it simply was never shown to the person doing the
+   * jumping. It is the plainest measure of how hard following worked — a take
+   * that needed no help and one that needed eleven are the same take by every
+   * other number on this summary.
+   */
+  manualJumps: number;
+  /**
+   * Share of the take the engine spent following, 0–1, or null when it saw no
+   * snapshots at all. See `takeFollowingShare`.
+   */
+  followingShare: number | null;
   /**
    * Words the recogniser FINALISED this take. Zero means nothing was heard.
    *
@@ -267,6 +297,17 @@ export interface SessionState {
   stageRigResolved: boolean;
   /** The take's size ceiling, fixed at its opening size — see `takeFontCeilingPx`. */
   stageFontCeilingPx: number;
+  /**
+   * The fixed-pace transport (§autoscroll): the fallback for a take that voice
+   * following cannot carry.
+   *
+   * Held whole rather than as two fields because it is one instruction and the
+   * stage receives it as one — and because a pace is only meaningful beside the
+   * flag that says whether anything is using it. `wordsPerMinute` survives a
+   * stop so resuming returns to the speed the operator dialled in, which is the
+   * whole reason the flag and the pace are not the same number.
+   */
+  autoScroll: StageAutoScrollPayload;
 }
 
 const initial: SessionState = {
@@ -308,6 +349,7 @@ const initial: SessionState = {
   },
   stageRigResolved: false,
   stageFontCeilingPx: typeCeilingPx(DEFAULT_STAGE_APPEARANCE.fontSizePx),
+  autoScroll: { running: false, wordsPerMinute: AUTO_SCROLL_DEFAULT_WPM },
 };
 
 const state = writable<SessionState>({ ...initial });
@@ -669,6 +711,18 @@ export function startLiveSession(input: StartSessionInput): string {
     stageAppearance: liveStageAppearance(),
     stageRigResolved: isRigResolvedStage(stageSettings),
     stageFontCeilingPx: takeFontCeilingPx,
+    /*
+     * The saved pace, and finally something that reads it.
+     *
+     * `fixedSpeedWpm` has been persisted through Rust and offered in Settings
+     * since before there was any motion path to spend it on — a setting with a
+     * writer and no reader, which is the defect the Settings screen keeps
+     * calling out in its own copy. This is the reader.
+     */
+    autoScroll: {
+      running: false,
+      wordsPerMinute: clampAutoScrollWpm(takeTeleprompter.fixedSpeedWpm),
+    },
   });
 
   // Voice mode without a Tauri runtime has no realtime feed — keep the
@@ -1240,11 +1294,32 @@ function handleSnapshot(snapshot: AlignmentSnapshot): void {
       activeTake.confidenceSum += snapshot.confidence;
       activeTake.confidenceSamples += 1;
     }
-    // §36.3 availability: time spent in `following`, accumulated between
-    // snapshots. Measured rather than inferred from a state count, because
-    // snapshots arrive on transcript events and a long confident passage
-    // produces no more of them than a stuttering one.
-    if (activeTake.lastSnapshotAtMs !== null && activeTake.lastState === 'following') {
+    /*
+     * §36.3 availability: time spent in `following`, accumulated between
+     * snapshots. Measured rather than inferred from a state count, because
+     * snapshots arrive on transcript events and a long confident passage
+     * produces no more of them than a stuttering one.
+     *
+     * THE GAP IS CAPPED, and that cap is what makes the number honest.
+     *
+     * An interval is classified entirely by the state of the snapshot that
+     * OPENED it, so a gap of any length is credited to whatever was true when it
+     * began. That is fine at the cadence snapshots actually arrive at, and badly
+     * wrong for the gaps that are not cadence at all: following gets paused for
+     * ten minutes of auto-scroll, or the socket drops, and the next snapshot to
+     * arrive silently books the whole silence as time spent following. The
+     * summary then reports its healthiest number for the take that did least.
+     *
+     * So an interval longer than a gap the feed could plausibly produce is not
+     * evidence of anything and is credited to nothing. Time is never invented
+     * either way: uncredited time still counts in the denominator, which is
+     * exactly what "not following then" should look like.
+     */
+    if (
+      activeTake.lastSnapshotAtMs !== null &&
+      activeTake.lastState === 'following' &&
+      nowMs - activeTake.lastSnapshotAtMs <= FOLLOWING_CREDIT_MAX_GAP_MS
+    ) {
       activeTake.followingMs += nowMs - activeTake.lastSnapshotAtMs;
     }
     activeTake.lastSnapshotAtMs = nowMs;
@@ -1659,6 +1734,48 @@ export function takeHistory(): ReadonlyArray<{
     confidenceMean: takeConfidenceMean(take),
     open: take === activeTake,
   }));
+}
+
+/**
+ * The longest gap between snapshots that still counts as continuous following.
+ *
+ * Measured cadence has finals landing 1.2–1.7 s apart and partials about every
+ * second, so four seconds is several times the ordinary interval — comfortably
+ * past a breath, a swallowed word, or a sentence the recogniser lost the tail
+ * of. Beyond it the feed is not quiet, it is absent, and the stage itself stops
+ * claiming to follow not long after (`DEFAULT_SNAPSHOT_STALE_MS`).
+ */
+const FOLLOWING_CREDIT_MAX_GAP_MS = 4000;
+
+/**
+ * How much of the take the engine was actually following, 0–1.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS BELONGS ON THE SUMMARY
+ * ---------------------------------------------------------------------------
+ * The summary could already say how long the take ran, how many words came back
+ * and how far the cursor got — and none of those answer the question somebody
+ * actually has when they walk back from the camera, which is whether the thing
+ * followed them. A take can transcribe a thousand words and spend half its
+ * length holding; the word counts look identical either way.
+ *
+ * `followingMs` has been accumulated on every snapshot since §36.3 shipped and
+ * read by nothing. It is measured between snapshots rather than counted from
+ * states on purpose (see `handleSnapshot`): snapshots arrive on transcript
+ * events, so a confident passage produces no more of them than a stuttering one
+ * and counting would report the stuttering take as the healthier of the two.
+ *
+ * Null rather than zero when the pass saw no snapshots at all. Those are
+ * different takes — one followed nothing, the other never got the chance — and
+ * "0% followed" over a take whose microphone never opened is an accusation
+ * pointed at the wrong thing.
+ */
+function takeFollowingShare(): number | null {
+  const take = activeTake;
+  if (take === null || take.lastSnapshotAtMs === null) return null;
+  const elapsedMs = monotonicNowMs() - take.startedAtMs;
+  if (!(elapsedMs > 0)) return null;
+  return Math.min(1, Math.max(0, take.followingMs / elapsedMs));
 }
 
 /** §36.3 confidence summary. Null, never 0, when the pass saw no snapshots. */
@@ -2089,6 +2206,14 @@ function startStageBridge(sessionId: string): void {
         if (intent.kind === 'toggle_pause') togglePlayPause();
         else if (intent.kind === 'manual_step') {
           moveSentences(intent.direction === 'forward' ? 1 : -1);
+        } else if (intent.kind === 'auto_scroll_end') {
+          autoScrollReachedEnd();
+        } else if (intent.kind === 'auto_scroll_toggle') {
+          toggleAutoScroll();
+        } else if (intent.kind === 'auto_scroll_pace') {
+          nudgeAutoScrollWpm(
+            intent.direction === 'faster' ? AUTO_SCROLL_WPM_STEP : -AUTO_SCROLL_WPM_STEP,
+          );
         }
         // manual_scroll is already applied locally on the stage; the tracker
         // re-acquires around it (§16.9).
@@ -2464,6 +2589,219 @@ export function toggleVoiceFollow(): void {
 }
 
 /* ---------------------------------------------------------------------------
+ * The fixed-pace transport
+ *
+ * What this is FOR: the takes voice following cannot carry. No speech key
+ * entered, no network, a room loud enough that finals stop arriving, a language
+ * the recogniser handles badly. In every one of those the stage holds still and
+ * is right to — but "holds still" was the whole of the answer, and a presenter
+ * standing at a camera with a script that will not move has no recourse they can
+ * reach.
+ *
+ * It is deliberately NOT a second way to prompt. Running it pauses following,
+ * and stopping it resumes following, because the alternative is two things
+ * moving the same document with different ideas about where the presenter is —
+ * and the one that is wrong would be invisible until it had already carried
+ * somebody off their line.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * What the operator ASKED for. `autoScrollLive` is what the stage is told.
+ *
+ * They are not the same thing and keeping them apart is the whole of how the
+ * transport interacts with the transport controls: `state.autoScroll.running`
+ * survives a pause so that resuming picks the script back up where it was, and
+ * a presenter who paused a take does not have to remember to re-arm it.
+ */
+function publishAutoScroll(next: StageAutoScrollPayload): void {
+  state.update((s) => ({ ...s, autoScroll: next }));
+}
+
+/**
+ * Did the transport pause voice following, or was it already paused?
+ *
+ * The transport gives back only what it took — see `toggleAutoScroll`. Module
+ * scope rather than session state because it is bookkeeping about a decision,
+ * not something any view renders, and it is cleared with the take.
+ */
+let autoScrollPausedFollowing = false;
+
+/**
+ * The transport as the stage should actually run it.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS DERIVED AND NOT JUST THE FLAG
+ * ---------------------------------------------------------------------------
+ * Pause has to stop the script. In a voice take it does so by itself — the
+ * driver stops, no snapshots arrive, and the engine holds — but a fixed-pace
+ * transport has no such feedback: it rolls because a pace says so, and it would
+ * go on rolling straight through a pause, a hard pause and the end of the take.
+ * The stage cannot notice on its own either, because the `freeze` directive that
+ * would tell it stands down at stage generation 0, which is every single-window
+ * take.
+ *
+ * So the gate lives here, where all four facts are already known, rather than
+ * being bolted onto each of the five places that write `paused`. Anything that
+ * pauses, hard-pauses, un-prompts or ends a take stops the script by
+ * construction, including paths written later that have never heard of this.
+ */
+export const autoScrollLive = derived(
+  state,
+  (s): StageAutoScrollPayload => ({
+    running: s.autoScroll.running && s.active && s.prompting && s.paused === 'none',
+    wordsPerMinute: s.autoScroll.wordsPerMinute,
+  }),
+);
+
+/*
+ * The standalone stage window hears the effective value as a directive; the
+ * single-window stage reads the same derived store through its bridge. A
+ * subscription rather than a call inside `publishAutoScroll`, because the value
+ * changes for reasons the transport actions never see — a pause, a stop, a
+ * pipeline that failed to resume.
+ */
+let lastPublishedAutoScroll: StageAutoScrollPayload | null = null;
+autoScrollLive.subscribe((next) => {
+  const previous = lastPublishedAutoScroll;
+  const unchanged =
+    previous !== null &&
+    previous.running === next.running &&
+    previous.wordsPerMinute === next.wordsPerMinute;
+  /*
+   * A pace the stage is not using is not news.
+   *
+   * Without this the take's opening pace, and every later adjustment made while
+   * the transport is stopped, would each send a `running: false` directive
+   * saying nothing the stage can act on. The pace is carried on the directive
+   * that STARTS the transport, so nothing is lost by staying quiet until then.
+   */
+  const silent = !next.running && (previous === null || !previous.running);
+  lastPublishedAutoScroll = next;
+  if (unchanged || silent) return;
+  sendDirective({ kind: 'autoScroll', autoScroll: next });
+});
+
+/**
+ * Start or stop rolling the script at a fixed pace.
+ *
+ * Starting pauses voice following through the follow store rather than by
+ * reaching past it, so the Live panel, the timeline and the notices all say the
+ * same thing about why the document is moving without a voice behind it.
+ */
+export function toggleAutoScroll(): void {
+  const s = get(state);
+  if (!s.active) return;
+  const running = !s.autoScroll.running;
+  publishAutoScroll({ ...s.autoScroll, running });
+
+  /*
+   * Following is only resumed by whoever paused it.
+   *
+   * The obvious version — "stopping the transport resumes following" — hands
+   * the script back to an aligner the OPERATOR had deliberately paused before
+   * any of this started, which is a decision of theirs being quietly undone by
+   * an unrelated key. So the transport remembers whether the pause was its
+   * doing, and gives back only what it took.
+   *
+   * The guards also keep the follow timeline honest: `setFollowingPaused`
+   * writes an entry every time it is called, and calling it for a take that was
+   * already paused would fill the operator's history with pauses that never
+   * happened.
+   */
+  if (running) {
+    autoScrollPausedFollowing = s.voiceFollow;
+    if (s.voiceFollow) smoothFollow.setFollowingPaused(true);
+  } else {
+    const restore = autoScrollPausedFollowing;
+    autoScrollPausedFollowing = false;
+    if (restore && !s.voiceFollow) smoothFollow.setFollowingPaused(false);
+  }
+
+  showToast(
+    running
+      ? `Auto-scroll on — ${s.autoScroll.wordsPerMinute} wpm`
+      : 'Auto-scroll off — following your voice again',
+    'info',
+    { durationMs: 1800 },
+  );
+  sendDirective({
+    kind: 'ack',
+    label: running ? `Auto-scroll ${s.autoScroll.wordsPerMinute} wpm` : 'Auto-scroll off',
+  });
+}
+
+/**
+ * Change the pace, in words per minute.
+ *
+ * Works whether or not the transport is running: dialling a speed in before
+ * starting is the ordinary way somebody sets one, and a control that only
+ * responded while the script was already moving would have to be found in a
+ * hurry, mid-take, by somebody reading.
+ */
+export function nudgeAutoScrollWpm(deltaWpm: number): void {
+  const s = get(state);
+  if (!s.active) return;
+  const wordsPerMinute = clampAutoScrollWpm(s.autoScroll.wordsPerMinute + deltaWpm);
+  if (wordsPerMinute === s.autoScroll.wordsPerMinute) {
+    /*
+     * At the end of the range, and that has to be said.
+     *
+     * Returning in silence makes a key at its limit indistinguishable from a
+     * key that did not register, and the operator presses it harder. Naming the
+     * limit answers the actual question in one glance.
+     */
+    showToast(
+      `Auto-scroll ${wordsPerMinute} wpm — ${
+        wordsPerMinute >= AUTO_SCROLL_MAX_WPM ? 'fastest' : 'slowest'
+      }`,
+      'info',
+      { durationMs: 1200 },
+    );
+    return;
+  }
+  publishAutoScroll({ ...s.autoScroll, wordsPerMinute });
+  /*
+   * BOTH, and not by accident.
+   *
+   * The ack chip is the right instrument — a number means most beside the text
+   * it moves — but `sendDirective` stands down at stage generation 0, which is
+   * every single-window take, i.e. the way this app actually presents. A pace
+   * key with no feedback at all reads as a key that did not register, and the
+   * operator presses it again. So the toast is what reports in the shipped
+   * configuration, exactly as it does for the take marker and the mirror, and
+   * the chip is there for a separate stage window, where it is better.
+   */
+  showToast(`Auto-scroll ${wordsPerMinute} wpm`, 'info', { durationMs: 1200 });
+  sendDirective({ kind: 'ack', label: `Auto-scroll ${wordsPerMinute} wpm` });
+}
+
+/**
+ * The stage ran out of script.
+ *
+ * Stands the transport down and gives back the pause it took, on the same rule
+ * as stopping it by hand. The alternative — leaving following paused because
+ * reaching the end is no evidence the microphone recovered — is true as far as
+ * it goes, and it strands the take in a state nothing announces and no key
+ * obviously clears. Resuming is the safer of the two: a paused aligner that is
+ * handed the document back holds until it has evidence, so the worst case is
+ * that nothing happens, which is also the likeliest one.
+ */
+export function autoScrollReachedEnd(): void {
+  const s = get(state);
+  if (!s.autoScroll.running) return;
+  publishAutoScroll({ ...s.autoScroll, running: false });
+  // The pause is still given back — the transport took it and is done with it —
+  // but nothing here claims the microphone started working. See the note above.
+  const restore = autoScrollPausedFollowing;
+  autoScrollPausedFollowing = false;
+  if (restore && !s.voiceFollow) smoothFollow.setFollowingPaused(false);
+  showToast('Auto-scroll reached the end of the script', 'info', { durationMs: 2400 });
+}
+
+/** The offered pace range, for the controls that present it. */
+export const AUTO_SCROLL_WPM_RANGE = { min: AUTO_SCROLL_MIN_WPM, max: AUTO_SCROLL_MAX_WPM };
+
+/* ---------------------------------------------------------------------------
  * Stage appearance quick-controls (Live screen + voice commands)
  * ------------------------------------------------------------------------- */
 
@@ -2645,6 +2983,8 @@ export function stopSession(): SessionSummary {
     reconnects: s.counts.reconnects,
     endingLocation: locateEnding(s),
     transcriptSaved: transcriptRetained,
+    manualJumps: s.counts.jumps,
+    followingShare: takeFollowingShare(),
     wordsHeard,
     wordsFollowed: takeWordsFollowed(),
     scriptWords: scriptWordCount,
@@ -2722,6 +3062,8 @@ function emptySummary(s: SessionState): SessionSummary {
     reconnects: 0,
     endingLocation: 'Beginning',
     transcriptSaved: false,
+    manualJumps: 0,
+    followingShare: null,
     wordsHeard: 0,
     wordsFollowed: 0,
     scriptWords: scriptWordCount,

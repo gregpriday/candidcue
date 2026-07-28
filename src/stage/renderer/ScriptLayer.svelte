@@ -53,6 +53,7 @@
     AlignmentSnapshot,
     SafeRenderNode,
     SmoothFollowProfile,
+    StageAutoScrollPayload,
     StageMotionAck,
     StageRenderDocument,
     StageSettings,
@@ -73,6 +74,12 @@
     clamp,
   } from './geometry';
   import { classifyTransition, provisionalMaxCorrectionPx } from './motion';
+  import {
+    advanceAutoScrollTarget,
+    autoScrollAtEnd,
+    autoScrollPxPerSecond,
+    measureAutoScrollScale,
+  } from './autoscroll';
   import {
     shouldVirtualize,
     computeOffsets,
@@ -112,6 +119,8 @@
     followProfile = undefined,
     bottomInsetPx = 0,
     cueHollow = false,
+    autoScroll = null,
+    onautoscrollend = undefined,
     onlayoutready = undefined,
     onlayoutmeasured = undefined,
     onmotionack = undefined,
@@ -153,6 +162,29 @@
      * would guarantee they eventually did.
      */
     cueHollow?: boolean;
+    /**
+     * The fixed-pace transport, when the operator has taken the wheel.
+     *
+     * Null and `running: false` are the same instruction — do not drive — and
+     * both are ordinary: the second is a paused transport that still remembers
+     * its pace, which is what the operator gets back when they resume.
+     *
+     * This never competes with voice following. The engine prefers an accepted
+     * alignment frame over any fallback target, so on the frames where
+     * recognition is working the pace set here is simply not consulted, and the
+     * one place the two could actually collide — the alignment path's own
+     * fallback corrections — stands down below while this is running.
+     */
+    autoScroll?: StageAutoScrollPayload | null;
+    /**
+     * The transport reached the end of the script.
+     *
+     * Reported rather than handled here, because "there is no more script" is
+     * not the renderer's decision to act on: the mount site owns the transport's
+     * running flag, and a stage that quietly stopped itself would leave control
+     * showing a Pause button for a document that cannot move.
+     */
+    onautoscrollend?: () => void;
     /**
      * The layout settled. Carries what the stage measured about the face it
      * drew, because the window that paints the font is the only one that can
@@ -1455,7 +1487,189 @@
     return () => cancelAnimationFrame(raf);
   });
 
+  /* ---- the fixed-pace transport (renderer/autoscroll.ts) ---- */
+
+  /**
+   * Where the auto-scroll goal has crept to, or null while it is stood down.
+   *
+   * Null is also what a resume reads: the goal is re-seeded from wherever the
+   * document actually is at that moment, so a transport that was paused while
+   * the operator scrolled somewhere else picks up from there rather than
+   * snapping back to a position it remembered from before.
+   */
+  let autoTargetPx: number | null = null;
+  let autoLastFrameMs: number | null = null;
+  /** The end has been announced once; it must not be announced every frame. */
+  let autoEndReported = false;
+  /**
+   * The layout the target's coordinate belongs to.
+   *
+   * `autoTargetPx` is a raw document pixel, and document pixels do not survive a
+   * relayout: change the type size mid-roll and the same line is at a different
+   * offset, while the engine has re-anchored the plant to where that line
+   * actually is now. A target left in the old coordinate system would then be
+   * behind or ahead of the document by however much the layout moved — the
+   * plant would stall until it caught up, or sweep forward, or clamp early and
+   * report an end that had not happened.
+   */
+  let autoTargetLayout = 0;
+
+  function driveAutoScroll(now: number) {
+    if (!autoScroll?.running) {
+      if (autoTargetPx === null) return;
+      /*
+       * Stood down. Letting go of the fallback target entirely is what makes
+       * stopping smooth: with nothing to aim at the engine holds, and holding
+       * means aiming at where the plant already is — so it decelerates to rest
+       * under its own jerk limits instead of parking on a stale goal that a
+       * later relayout could make wrong.
+       */
+      autoTargetPx = null;
+      autoLastFrameMs = null;
+      autoEndReported = false;
+      engine.setFallbackTarget(null);
+      return;
+    }
+    if (vh === 0) return;
+
+    /*
+     * A script with nowhere to go is already at its end.
+     *
+     * Reported rather than silently ignored: the transport is nominally running,
+     * control has paused voice following to make room for it, and without this
+     * both of those would stay true for the rest of a take that can never move.
+     * `autoScrollAtEnd` treats a zero range as the end for exactly this reason;
+     * returning before asking it was what made the state unreachable.
+     */
+    if (maxScroll <= 0) {
+      if (!autoEndReported) {
+        autoEndReported = true;
+        onautoscrollend?.();
+      }
+      return;
+    }
+
+    const layoutChanged = autoTargetPx !== null && autoTargetLayout !== layoutGeneration;
+    if (autoTargetPx === null || layoutChanged) {
+      /*
+       * Seed from where the document actually IS, on this layout.
+       *
+       * The same line of reasoning covers both callers: a fresh start has no
+       * previous position to honour, and a relayout has invalidated the one it
+       * had. `scrollY` is the engine's own current position in the coordinates
+       * that exist now, which is the only number either case can trust.
+       */
+      autoTargetPx = clamp(scrollY, 0, maxScroll);
+      autoLastFrameMs = now;
+      autoTargetLayout = layoutGeneration;
+      autoEndReported = false;
+      /*
+       * Take the wheel, once, on the frame the transport starts.
+       *
+       * An accepted alignment frame outranks any fallback for fifteen seconds,
+       * which is right for a presenter drawing breath and wrong for somebody who
+       * has just pressed a key. Without this the script holds for up to fifteen
+       * seconds after the press and then jumps the distance the target accrued
+       * meanwhile — a key that looks broken, followed by a lurch. Not repeated on
+       * a relayout: the lock is already gone by then.
+       */
+      if (!layoutChanged) engine.releaseAlignment();
+    }
+
+    /*
+     * Re-measured every frame rather than cached, because the answer changes
+     * under the operator's hand: the size control is live during a take, and a
+     * pace that stayed pinned to the density of the type that WAS on the glass
+     * would silently become a different reading speed the moment they used it.
+     * It is a subtraction and a divide over two array ends — the map is already
+     * built, and nothing here touches the DOM.
+     */
+    const scale = measureAutoScrollScale(lineMap?.lines ?? []);
+    const pxPerSecond = autoScrollPxPerSecond(autoScroll.wordsPerMinute, scale);
+    const dtMs = autoLastFrameMs === null ? 0 : now - autoLastFrameMs;
+    autoLastFrameMs = now;
+
+    /*
+     * A manual step suspends automatic motion for a grace interval, and the
+     * goal has to wait it out with the document.
+     *
+     * The engine zeroes forward velocity and feed-forward for the whole of
+     * `MANUAL_GRACE_MS`. A goal that went on creeping through it would build up
+     * two and a half seconds of travel behind the operator's back, and the
+     * script would then sit still and afterwards chase — the exact opposite of
+     * "move, and carry on from here", and worse the faster the pace is set.
+     */
+    const inManualGrace = now < manualUntilMs;
+
+    /*
+     * No measured density — a map mid-rebuild, or one that never resolved — so
+     * the goal stays where it is and the document settles on it. Deliberately
+     * NOT a stand-down: a rebuild lasts a frame or two, and releasing the
+     * target for each one would turn every relayout into a visible stutter.
+     */
+    if (pxPerSecond > 0 && !inManualGrace) {
+      autoTargetPx = advanceAutoScrollTarget({
+        targetPx: autoTargetPx,
+        pxPerSecond,
+        dtMs,
+        maxScrollPx: maxScroll,
+      });
+    }
+
+    /*
+     * The rate travels WITH the target, and it has to.
+     *
+     * A goal creeping a third of a pixel per frame sits inside §29.3's rest
+     * deadband on every frame, and a caller that says nothing about its speed is
+     * taken at its word: the plant is snapped to the goal with its velocity
+     * reported as zero, the limits stop being applied because nothing is being
+     * integrated, and `restingSnap` below quantises the painted offset to the
+     * device pixel grid — turning smooth travel into a visible step twenty times
+     * a second. Naming the rate is what keeps this ordinary, integrated motion.
+     */
+    /*
+     * The feed-forward describes what the TARGET is doing, so it goes to zero
+     * whenever the target is not moving — through a manual grace, and once it
+     * has clamped at the bottom of the document. Left positive it would be
+     * telling the controller to keep accelerating toward a goal that has
+     * stopped, which is how a roll ends in an overshoot against the end stop.
+     */
+    const targetMoving = pxPerSecond > 0 && !inManualGrace && !autoScrollAtEnd(autoTargetPx, maxScroll);
+
+    engine.setFallbackTarget({
+      scrollPx: autoTargetPx,
+      disposition: 'follow',
+      atMs: now,
+      feedForwardVelocityPxS: targetMoving ? pxPerSecond : 0,
+    });
+
+    /*
+     * The END is where the DOCUMENT stops, not where the goal does.
+     *
+     * Control releases the target the moment this fires, and releasing it makes
+     * the engine hold — aim at where the plant already is. Firing on the goal
+     * would therefore stop the script wherever it had got to while the goal ran
+     * ahead to the bottom, leaving the closing lines above the reading band and
+     * the take ending short of its last sentence.
+     */
+    if (!autoEndReported && autoScrollAtEnd(scrollY, maxScroll)) {
+      autoEndReported = true;
+      onautoscrollend?.();
+    }
+  }
+
   function applyTrackingFallback(snap: AlignmentSnapshot) {
+    /*
+     * The transport owns the fallback target while it is running.
+     *
+     * Both of these compute the same one field, and on the frames where an
+     * alignment frame is current the engine ignores it anyway — so the only
+     * thing that could come of letting both write is the engine picking up
+     * whichever of two disagreeing goals happened to be written last when
+     * recognition lapsed. The operator turning the transport on is the more
+     * explicit of the two instructions, so it wins outright.
+     */
+    if (autoScroll?.running) return;
     if (performance.now() < manualUntilMs) return;
     const pos = tokenRect(Math.round(snap.confirmedToken));
     if (!pos) return;
@@ -1663,6 +1877,7 @@
 
   function frame(now: number) {
     if (!loopRunning) return;
+    driveAutoScroll(now);
     const result = engine.frame(now);
     setScroll(restingSnap(result.scrollPx, result.velocityPxS));
     // §20.4: never a CSS transition. The obscuration has to be on the engine's
@@ -1856,6 +2071,20 @@
     engine.manualOverride(y, now);
     manualUntilMs = now + MANUAL_GRACE_MS;
     setScroll(y);
+    /*
+     * Carry the transport to where the operator just put the document.
+     *
+     * Without this the goal is still creeping forward from where it was before
+     * the key was pressed, so a nudge backward is undone over the next second
+     * and a nudge forward is followed by the script sitting still until the goal
+     * catches up. Either way the key appears not to have worked. Re-seeding
+     * makes a manual step during auto-scroll mean what it looks like it means:
+     * move, and carry on from here.
+     */
+    if (autoTargetPx !== null) {
+      autoTargetPx = y;
+      autoEndReported = false;
+    }
   }
 
   /** One text line in logical pixels, for arrow-key steps. */

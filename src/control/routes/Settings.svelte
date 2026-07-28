@@ -113,6 +113,10 @@
     READING_MEASURE,
     isPlausibleViewingDistanceMm,
   } from '../../shared/optics';
+  import {
+    AUTO_SCROLL_MAX_WPM,
+    AUTO_SCROLL_MIN_WPM,
+  } from '../../stage/renderer/autoscroll';
   import { appStatus } from '../stores/app-status';
   import { requestConfirm } from '../stores/confirm';
   import { navigate, route, type SettingsSection } from '../stores/router';
@@ -1338,11 +1342,17 @@
 
             'manual' and 'fixed' are still in the `SessionMode` union because a
             session RECORD carries the mode it ran in and old rows have to keep
-            parsing — but nothing consumes them: the stage follows a voice or it
-            holds still, and there is no wheel-driven or constant-rate motion
-            path behind either name. Offering all three made the mode look like
-            a choice, and choosing one of the two that do nothing produced a
-            take that behaved exactly like voice follow without saying so.
+            parsing — but nothing STARTS a take in either of them. Offering all
+            three made the mode look like a choice, and choosing one of the two
+            that do nothing produced a take that behaved exactly like voice
+            follow without saying so.
+
+            Constant-rate motion is no longer the thing that is missing: there
+            is a fixed-pace transport, and the pace slider further down this
+            section sets it. What is missing is a MODE — a take that opens with
+            no microphone, no socket and no meter, and prompts by the clock
+            alone. That is a different decision from "can the script roll", and
+            until somebody makes it, a take always opens listening.
           -->
           <Select
             label="Default session mode"
@@ -1358,9 +1368,10 @@
               })}
           />
           <p class="hint-line">
-            Every take follows your voice. Manual and fixed-speed prompting are not implemented, so
-            they are shown here rather than offered — a mode that silently behaves like another one
-            is worse than a mode that is missing.
+            Every take opens listening. Auto-scroll can roll the script at a set pace from inside
+            any take (see the pace below), but there is no mode that starts one without a
+            microphone — so these two are shown here rather than offered, because a mode that
+            silently behaves like another one is worse than a mode that is missing.
           </p>
           <Slider
             label="Revision retention"
@@ -2185,23 +2196,32 @@
             panels of different sizes at once.
           </p>
           <!--
-            "Fixed-speed default" was a slider onto nothing.
+            "Fixed-speed default" was a slider onto nothing, and then a sentence
+            saying so. It is a control again, because there is finally something
+            reading it.
 
-            Constant-speed scrolling is not implemented: no motion path reads
-            `fixedSpeedWpm`, and building one is a product decision that has not
-            been made — a teleprompter that crawls at a chosen rate is a
-            different instrument from one that follows a voice, and shipping a
-            half-hearted version of it would be worse than not having it.
-
-            So the number is stated as unavailable rather than offered as a
-            control. This is the same rule as the "Always on top" toggle above:
-            a setting that is persisted and never read is the defect this whole
-            screen exists to remove, and the honest form of it is a sentence.
+            What changed is narrow and worth stating precisely: this is not a
+            second way to prompt. Auto-scroll is the FALLBACK for the takes voice
+            following cannot carry — no speech key, no network, a room loud
+            enough that finals stop arriving — and the reason it earns a setting
+            is that the pace has to be dialled in before it is needed, by
+            somebody who is not yet standing at a camera with a script that has
+            stopped moving.
           -->
+          <Slider
+            label="Auto-scroll pace"
+            value={$settings.teleprompter.fixedSpeedWpm}
+            min={AUTO_SCROLL_MIN_WPM}
+            max={AUTO_SCROLL_MAX_WPM}
+            format={(v) => `${v} wpm`}
+            onchange={(value) =>
+              void patchSettings('teleprompter', { fixedSpeedWpm: value })}
+          />
           <p class="hint-line">
-            <strong>Fixed-speed scrolling is not available in this release.</strong> CandidCue moves
-            the script by following your voice; there is no constant-rate mode for it to fall back
-            to, so there is no words-per-minute to set.
+            Auto-scroll rolls the script at this pace when your voice is not getting through.
+            Press <kbd>A</kbd> during a take to start or stop it; <kbd>[</kbd> and <kbd>]</kbd>
+            change the pace while it runs. Starting it pauses voice following, and stopping it
+            hands the script back.
           </p>
           <!-- Mirroring lives with the display it is a property of (Stage
                display), not here: it describes the rig, not the type. -->

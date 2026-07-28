@@ -20,6 +20,7 @@
     stageAppearanceEquals,
     type StageAppearance,
   } from '../lib/stage-appearance';
+  import { AUTO_SCROLL_WPM_STEP } from '../../stage/renderer/autoscroll';
   import { formatClock } from '../lib/format';
   import { onShortcut } from '../lib/shortcuts';
   import { startTake } from '../lib/start-take';
@@ -32,6 +33,10 @@
     addTakeMarker,
     adjustStageFontSize,
     applyStageAppearance,
+    autoScrollLive,
+    autoScrollReachedEnd,
+    nudgeAutoScrollWpm,
+    toggleAutoScroll,
     canSwitchMicrophone,
     clearSession,
     connectionPill,
@@ -66,8 +71,6 @@
   let { sessionId, scriptId }: Props = $props();
 
   let costOpen = $state(false);
-  /** Display-only until a fixed-speed transport exists (see the slider below). */
-  let manualWpm = $state(150);
 
   const stageFontSize = $derived($session.stageFontSizePx);
   /** §62: the stage window is gone; its quick-controls have nothing to talk to. */
@@ -274,6 +277,14 @@
       togglePlayPause();
     } else if (intent.kind === 'manual_step') {
       moveSentences(intent.direction === 'forward' ? 1 : -1);
+    } else if (intent.kind === 'auto_scroll_end') {
+      autoScrollReachedEnd();
+    } else if (intent.kind === 'auto_scroll_toggle') {
+      toggleAutoScroll();
+    } else if (intent.kind === 'auto_scroll_pace') {
+      nudgeAutoScrollWpm(
+        intent.direction === 'faster' ? AUTO_SCROLL_WPM_STEP : -AUTO_SCROLL_WPM_STEP,
+      );
     }
   }
 
@@ -311,7 +322,14 @@
           action === 'play-pause' ||
           action === 'hard-pause' ||
           action === 'prev-chapter' ||
-          action === 'next-chapter')
+          action === 'next-chapter' ||
+          // The transport keys are answered by the mounted stage too, so that
+          // the hold chip's advice works on a separate-stage rig where that
+          // window holds the keyboard. Handling them in both places would turn
+          // one press into an on-and-off again.
+          action === 'toggle-auto-scroll' ||
+          action === 'auto-scroll-faster' ||
+          action === 'auto-scroll-slower')
       ) {
         return;
       }
@@ -356,6 +374,21 @@
         case 'take-marker':
           addTakeMarker();
           showToast('Take marker added', 'info', { durationMs: 1600 });
+          break;
+        /*
+         * The transport keys are NOT in the delegate-to-the-stage list above.
+         * The stage renders auto-scroll but does not own it: the running flag,
+         * the pace and the mutual exclusion with voice following are all
+         * session state, and this is the window that holds it.
+         */
+        case 'toggle-auto-scroll':
+          toggleAutoScroll();
+          break;
+        case 'auto-scroll-faster':
+          nudgeAutoScrollWpm(AUTO_SCROLL_WPM_STEP);
+          break;
+        case 'auto-scroll-slower':
+          nudgeAutoScrollWpm(-AUTO_SCROLL_WPM_STEP);
           break;
         default:
           break;
@@ -565,6 +598,7 @@
         alignment: $session.snapshot,
         transcript: $session.transcriptTail.at(-1) ?? '',
         voicePill: $session.voicePill,
+        autoScroll: $autoScrollLive,
         onexit: onEscape,
         onintent: handleEmbeddedStageIntent,
         chromeOpen: stageChromeOpen,
@@ -784,26 +818,23 @@
         </p>
       {/if}
 
-      {#if $session.mode !== 'voice' || !$session.voiceFollow}
-        <!--
-          Fixed-speed scrolling has no transport yet: neither the tracking
-          driver nor `StageDirective` carries a speed, so this slider had
-          nothing to set. It stays visible and disabled rather than looking
-          live and doing nothing.
-        -->
-        <Slider
-          label="Manual speed"
-          bind:value={manualWpm}
-          min={60}
-          max={260}
-          disabled
-          format={(v) => `${v} wpm`}
-        />
-        <p class="region-empty">
-          Fixed-speed scrolling is not available yet — use the transport or voice following to move
-          the stage.
-        </p>
-      {/if}
+      <!--
+        THE FIXED-SPEED SLIDER IS GONE FROM HERE, AND NOT BECAUSE IT STOPPED
+        MATTERING.
+
+        It was a disabled range input beside the words "not available yet". The
+        transport exists now — but this panel does not render during a take
+        (single-window presentation replaces the whole screen with the stage),
+        so a live control here would set a pace for a session that is over.
+        Its two real homes are Settings, where the saved default lives, and the
+        `[` / `]` keys, which are the only interface that exists at the moment
+        somebody actually needs to change it.
+      -->
+      <p class="region-empty">
+        Auto-scroll rolls the script at a set pace when your voice is not getting through.
+        Press <kbd>A</kbd> during a take to start it, <kbd>[</kbd> and <kbd>]</kbd> to change
+        the pace. Its starting speed is under Settings → Teleprompter.
+      </p>
     </aside>
   </div>
 
@@ -970,6 +1001,28 @@
           <span class="summary-warn">— words were heard but never offered to the stage</span>
         {/if}
       </dd>
+      <!--
+        How hard following actually worked.
+
+        Everything else on this list describes the take; these two describe the
+        APP's part in it, which is the question somebody has walking back from
+        the camera and the one the summary could not answer. A take that
+        transcribed a thousand words and held for half its length reads exactly
+        like a clean one on every other row here.
+      -->
+      <dt>Followed</dt>
+      <dd>
+        {#if summary.followingShare === null}
+          No tracking this take
+        {:else}
+          {Math.round(summary.followingShare * 100)}% of the take
+          {#if summary.followingShare < 0.6}
+            <span class="summary-warn">— the stage spent most of it holding</span>
+          {/if}
+        {/if}
+      </dd>
+      <dt>Manual jumps</dt>
+      <dd>{summary.manualJumps}</dd>
       <dt>Sections reached</dt>
       <dd>{summary.sectionsReached}</dd>
       <dt>Retakes</dt>

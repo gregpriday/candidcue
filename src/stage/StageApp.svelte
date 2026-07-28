@@ -42,6 +42,7 @@
     ESCAPE_DOUBLE_PRESS_MS,
     STAGE_EVENT,
     STAGE_HEARTBEAT_GRACE_MS,
+    type StageAutoScrollPayload,
     type StageEscapePayload,
     type StageHeartbeatAckPayload,
     type StageHeartbeatPayload,
@@ -97,6 +98,11 @@
     alignment: StageAlignmentPayload | null;
     transcript: string;
     voicePill: StageVoicePillPayload | null;
+    /**
+     * The fixed-pace transport. Null is "not running and never was", which is
+     * the same instruction as a stopped one and is what an older host sends.
+     */
+    autoScroll?: StageAutoScrollPayload | null;
     onexit: () => void;
     onintent?: (intent: StageIntent) => void;
     /**
@@ -450,10 +456,21 @@
    */
   let voicePill = $state<StageVoicePillPayload | null>(null);
 
+  /**
+   * The fixed-pace transport, or null while nothing has ever set it.
+   *
+   * Local state for the same reason the transcript bar is: it arrives on the
+   * directive road, it has to survive the phases where the reducer refuses to
+   * act, and the presenter's document must not start or stop rolling because a
+   * generation changed underneath it.
+   */
+  let autoScroll = $state<StageAutoScrollPayload | null>(null);
+
   /*
    * Single-window presentation uses the exact stage renderer but hands its
    * session instruments across memory, not across a second webview. The
-   * envelope is immutable for a take; transcript and pill remain live.
+   * envelope is immutable for a take; transcript, pill and transport remain
+   * live.
    */
   $effect(() => {
     const bridge = embedded;
@@ -463,7 +480,20 @@
     }
     transcriptTap = bridge.transcript;
     voicePill = bridge.voicePill;
+    autoScroll = bridge.autoScroll ?? null;
   });
+
+  /**
+   * The transport ran out of script.
+   *
+   * Sent as an intent and otherwise ignored here. The stage does not stop
+   * itself: control owns the running flag, and a renderer that quietly stood the
+   * transport down would leave the operator looking at a Pause button for a
+   * document with nowhere left to go.
+   */
+  function handleAutoScrollEnd(): void {
+    sendIntent({ kind: 'auto_scroll_end' });
+  }
 
   /* ---------------------------------------------------------------------
    * The hold ladder (renderer/hold-status.ts)
@@ -496,7 +526,12 @@
     voicePill && voicePill.reading === 'fault' && voicePill.visible ? voicePill.label : null,
   );
 
-  let holdStatus = $state<HoldStatusReading>({ rung: 'none', message: null, tone: 'neutral' });
+  let holdStatus = $state<HoldStatusReading>({
+    rung: 'none',
+    message: null,
+    tone: 'neutral',
+    hint: null,
+  });
   /** When the alignment state last left `following`; null while it is following. */
   let holdSinceMs: number | null = null;
   /* The resolved ladder, mirrored in plain locals. `resolveHoldStatus` needs the
@@ -506,6 +541,7 @@
   let ladderRung: HoldRung | null = null;
   let ladderMessage: string | null = null;
   let ladderTone: HoldTone = 'neutral';
+  let ladderHint: string | null = null;
 
   function refreshHoldStatus() {
     const state = alignmentState;
@@ -523,15 +559,22 @@
         holdingForMs: holdSinceMs === null ? 0 : now - holdSinceMs,
         hasFault: voiceFaultLabel !== null,
         faultLabel: voiceFaultLabel,
+        autoScrollRunning: autoScroll?.running === true,
       },
       ladderRung,
     );
-    if (next.rung === ladderRung && next.message === ladderMessage && next.tone === ladderTone) {
+    if (
+      next.rung === ladderRung &&
+      next.message === ladderMessage &&
+      next.tone === ladderTone &&
+      next.hint === ladderHint
+    ) {
       return;
     }
     ladderRung = next.rung;
     ladderMessage = next.message;
     ladderTone = next.tone;
+    ladderHint = next.hint;
     holdStatus = next;
   }
 
@@ -541,6 +584,9 @@
     // snapshot arrives to prompt the crossing.
     const holding = alignmentState !== null && alignmentState !== 'following';
     void voiceFaultLabel;
+    // Starting the transport withdraws the recovery hint while the fault that
+    // earned it is still true, so the running flag is a real input here.
+    void autoScroll?.running;
     refreshHoldStatus();
     if (!holding) return;
     const timer = window.setInterval(refreshHoldStatus, HOLD_TICK_MS);
@@ -629,6 +675,22 @@
           payload.directive.pill.stageGeneration === generation
         ) {
           voicePill = payload.directive.pill;
+        }
+        return;
+      }
+      if (payload.directive.kind === 'autoScroll') {
+        /*
+         * Local state, beside the transcript bar and the pill, and generation
+         * checked here for the same reason: the transport must keep running
+         * across the phases where the reducer stands down. An unknown
+         * generation is NOT accepted, though — unlike the bar, this one moves
+         * the document, and a stale window rolling somebody's script because it
+         * could not tell whose instruction it was is the failure the generation
+         * check exists to prevent.
+         */
+        const generation = app.envelope?.stageGeneration ?? 0;
+        if (generation !== 0 && payload.stageGeneration === generation) {
+          autoScroll = payload.directive.autoScroll;
         }
         return;
       }
@@ -1279,6 +1341,35 @@
         sendIntent({ kind: 'toggle_pause' });
         break;
       }
+      /*
+       * The transport, answered where the hold chip advertises it.
+       *
+       * On a separate-stage rig this window is the one holding the keyboard —
+       * the presenter is standing at it — and the chip that names these keys is
+       * drawn HERE. A key named on the glass and answered only by a window on a
+       * desk behind them is advice that does not work where it is read.
+       *
+       * `repeat` is refused for the toggle and allowed for the pace keys, the
+       * same split the control window's shortcut layer makes: a held toggle
+       * flips the transport on and off many times a second, and a held pace key
+       * is how somebody dials a speed in while watching the script.
+       */
+      case 'a':
+      case 'A': {
+        event.preventDefault();
+        if (!event.repeat) sendIntent({ kind: 'auto_scroll_toggle' });
+        break;
+      }
+      case ']': {
+        event.preventDefault();
+        sendIntent({ kind: 'auto_scroll_pace', direction: 'faster' });
+        break;
+      }
+      case '[': {
+        event.preventDefault();
+        sendIntent({ kind: 'auto_scroll_pace', direction: 'slower' });
+        break;
+      }
     }
   }
 
@@ -1450,6 +1541,8 @@
             {followProfile}
             bottomInsetPx={0}
             cueHollow={holdStatus.rung !== 'none'}
+            {autoScroll}
+            onautoscrollend={handleAutoScrollEnd}
             onlayoutready={handleLayoutReady}
             onlayoutmeasured={handleLayoutMeasured}
             onmotionack={handleMotionAck}
@@ -1501,6 +1594,7 @@
             rung={holdStatus.rung}
             message={holdStatus.message}
             tone={holdStatus.tone}
+            hint={holdStatus.hint}
             secondaryMinPx={settings?.optics?.secondaryMinPx ?? 0}
           />
         {/if}
