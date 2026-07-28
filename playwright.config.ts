@@ -66,21 +66,67 @@ export default defineConfig({
     // "launched but never rendered" regression is visible in the report.
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
-    // Grant fake media so Preflight's getUserMedia probe resolves rather than
-    // hanging on a permission prompt. It never asserts real audio.
-    launchOptions: {
-      args: [
-        '--use-fake-device-for-media-stream',
-        '--use-fake-ui-for-media-stream',
-      ],
-    },
-    permissions: ['microphone'],
   },
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        /*
+         * Chromium-only, and that is why they live here rather than in the
+         * shared `use` block. WebKit rejects `permissions: ['microphone']`
+         * outright ("Unknown permission"), so a shared grant made the WebKit
+         * project unable to open a page at all.
+         */
+        launchOptions: {
+          args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+        },
+        permissions: ['microphone'],
+      },
+      /*
+       * Chromium runs it by default — a fake device, no prompt, and it still
+       * proves the rates agree and both taps stay alive. WebKit adds the engine
+       * that actually exhibits the silence, and is opt-in for the reason below.
+       */
     },
+    /*
+     * WebKit, for the audio graph only.
+     *
+     * The app ships in a Tauri window, which on macOS is WKWebView — WebKit,
+     * not Chromium. That distinction is not academic here: the defect this spec
+     * covers is two `MediaStreamAudioSourceNode`s on one `MediaStream` from
+     * contexts at different sample rates, and it is WEBKIT that lets one of
+     * them fall silent. Chromium reports the mismatch and keeps both taps
+     * alive, so a Chromium-only run can prove the rates agree and cannot prove
+     * the thing that actually broke on the presenter's rig.
+     *
+     * Scoped to the one spec rather than the whole suite: everything else here
+     * asserts DOM, layout and motion, which are the same in both engines and
+     * already slow enough once.
+     */
+    /*
+     * OPT-IN, because it uses the REAL microphone.
+     *
+     * Playwright's WebKit has no fake capture device, so `getUserMedia` opens
+     * the actual input and macOS prompts for permission — every run, in front
+     * of whoever is at the machine. That is intolerable in a default suite and
+     * is exactly why this is behind a flag rather than simply enabled.
+     *
+     * It is the run that matters most, though: it exercises WKWebView's engine
+     * on real hardware, which is the only place the sample-rate mismatch this
+     * spec covers actually silences a tap.
+     *
+     *     CANDIDCUE_E2E_WEBKIT=1 pnpm test:e2e
+     */
+    ...(process.env['CANDIDCUE_E2E_WEBKIT'] === '1'
+      ? [
+          {
+            name: 'webkit',
+            use: { ...devices['Desktop Safari'] },
+            testMatch: '**/one-microphone-two-taps.spec.ts',
+          },
+        ]
+      : []),
   ],
   webServer: {
     command: 'pnpm dev',
