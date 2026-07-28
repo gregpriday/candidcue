@@ -16,10 +16,9 @@
   import Slider from '../components/Slider.svelte';
   import { formatClock } from '../lib/format';
   import { onShortcut } from '../lib/shortcuts';
-  import { ESCAPE_DOUBLE_PRESS_MS } from '../../shared/contracts';
   import { startTake } from '../lib/start-take';
+  import { setControlFullscreen } from '../services/control-window';
   import { describeError } from '../services/errors';
-  import * as stageService from '../services/stage';
   import { getVoiceFacade } from '../services/voice-facade';
   import { requestConfirm } from '../stores/confirm';
   import { navigate } from '../stores/router';
@@ -172,12 +171,14 @@
 
   const sentenceIndex = $derived(
     snapshot
-      ? $session.sentences.findIndex(
+      ? Math.max(0, $session.sentences.findIndex(
           (s) =>
             snapshot.confirmedToken >= s.startTokenIndex &&
             snapshot.confirmedToken <= s.endTokenIndex,
-        )
-      : -1,
+        ))
+      : $session.sentences.length > 0
+        ? 0
+        : -1,
   );
 
   const previewWindow = $derived.by(() => {
@@ -270,45 +271,20 @@
     if ($settings.general.confirmEndSession) {
       const accepted = await requestConfirm({
         title: 'Stop the session?',
-        body: 'The realtime connection closes and the stage leaves full screen. Your script keeps its place.',
+        body: 'The realtime connection closes and presentation leaves full screen. Your script keeps its place.',
         confirmLabel: 'Stop session',
         danger: true,
       });
       if (!accepted) return;
     }
-    stopSession();
+    await onEscape();
   }
 
-  /**
-   * §16.9. Escape twice ends the take, from whichever window has the keyboard.
-   *
-   * The stage runs the same protocol for the presenter standing in front of
-   * it; this is the half for the operator, who is at this window. Both count to
-   * two over the same `ESCAPE_DOUBLE_PRESS_MS` so the gesture means one thing.
-   *
-   * No confirmation dialog on the second press: two deliberate presses of a key
-   * that announced what it was about to do IS the confirmation, and a stage
-   * that stays full screen while a modal waits behind it for an answer nobody
-   * can see is the failure this is meant to end.
-   */
-  let lastEscapeAt = 0;
-
-  function onEscape(): void {
-    const now = performance.now();
-    // `lastEscapeAt !== 0` is load-bearing: `performance.now()` starts near
-    // zero, so without it the very first Escape within 1.5 s of this window
-    // opening reads as a second press and ends the take outright.
-    const second = lastEscapeAt !== 0 && now - lastEscapeAt <= ESCAPE_DOUBLE_PRESS_MS;
-    lastEscapeAt = second ? 0 : now;
-    if (second) {
-      stopSession();
-      return;
-    }
-    showToast('Press Escape again to end the session', 'info', {
-      // Exactly as long as the second press would still count, so the prompt
-      // stops claiming it the moment it stops being true.
-      durationMs: ESCAPE_DOUBLE_PRESS_MS,
-    });
+  async function onEscape(): Promise<void> {
+    stopSession();
+    await setControlFullscreen(false).catch(() => {});
+    clearSession();
+    await navigate({ name: 'editor', scriptId });
   }
 
   function adjustFontSize(delta: number): void {
@@ -339,7 +315,7 @@
           void requestStop();
           break;
         case 'escape':
-          onEscape();
+          void onEscape();
           break;
         case 'back-sentence':
           moveSentences(-1);
@@ -394,17 +370,49 @@
     await navigate({ name: 'editor', scriptId });
   }
 
-  async function closeStageAndFinish(): Promise<void> {
-    // Rust refuses a close whose session is not the one currently on the stage
-    // (M1: a late close used to destroy a stage that a different session had
-    // opened). That refusal must not strand the operator here — this window's
-    // own session is finished either way.
-    await stageService.closeStage(sessionId).catch(() => {});
+  async function finishAndReturnToLibrary(): Promise<void> {
+    await setControlFullscreen(false).catch(() => {});
     clearSession();
     await navigate({ name: 'library', view: 'all' });
   }
 </script>
 
+{#if $session.active}
+  <section class="single-window-stage" aria-label="Teleprompter">
+    <div class="single-script" style:font-size={`${stageFontSize}px`}>
+      {#if previewWindow.length > 0}
+        {#each previewWindow as entry (entry.sentence.id)}
+          <p
+            class="single-sentence"
+            class:past={entry.offset < 0}
+            class:current={entry.offset === 0}
+          >
+            {entry.sentence.normalizedText}
+          </p>
+        {/each}
+      {:else}
+        <p class="single-empty">Preparing script…</p>
+      {/if}
+    </div>
+
+    <div class="single-transcript" class:listening={$session.transcriptTail.length === 0}>
+      <span class="single-waveform" aria-label="Microphone level">
+        {#each Array.from({ length: 18 }) as _, index}
+          <i
+            style={`--level: ${Math.max(
+              0.08,
+              $session.voiceLevels[
+                Math.max(0, $session.voiceLevels.length - 18) + index
+              ] ?? 0.08,
+            )}`}
+          ></i>
+        {/each}
+      </span>
+      {$session.transcriptTail.at(-1) ?? 'listening — no words yet'}
+    </div>
+    <div class="single-exit-hint">Esc to return</div>
+  </section>
+{:else}
 <div class="live">
   <!-- Top status bar (§15.1) -->
   <header class="statusbar">
@@ -733,6 +741,7 @@
     </div>
   </footer>
 </div>
+{/if}
 
 <!-- End-of-session summary (F.17) -->
 <Dialog
@@ -835,13 +844,86 @@
     </dl>
   {/if}
   {#snippet footer()}
-    <Button variant="ghost" onclick={() => void closeStageAndFinish()}>Close stage</Button>
+    <Button variant="ghost" onclick={() => void finishAndReturnToLibrary()}>Finish</Button>
     <Button onclick={() => void returnToEditor()}>Return to editor</Button>
     <Button variant="primary" onclick={() => void presentAgain()}>Present again</Button>
   {/snippet}
 </Dialog>
 
 <style>
+  .single-window-stage {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: #000;
+    color: #f4f4f2;
+    cursor: none;
+  }
+  .single-script {
+    width: min(78vw, 18ch);
+    line-height: 1.28;
+    font-weight: 580;
+    letter-spacing: -0.018em;
+  }
+  .single-sentence {
+    margin: 0 0 0.72em;
+    opacity: 0.42;
+    transition: opacity 180ms ease, transform 220ms ease;
+  }
+  .single-sentence.past {
+    opacity: 0.16;
+  }
+  .single-sentence.current {
+    opacity: 1;
+  }
+  .single-empty {
+    color: #777;
+  }
+  .single-transcript {
+    position: absolute;
+    right: 24px;
+    bottom: 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: min(70vw, 720px);
+    overflow: hidden;
+    color: rgba(255, 255, 255, 0.56);
+    font-size: 14px;
+    font-style: italic;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .single-transcript.listening {
+    color: rgba(255, 255, 255, 0.25);
+  }
+  .single-waveform {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    height: 18px;
+  }
+  .single-waveform i {
+    display: block;
+    width: 2px;
+    height: calc(3px + var(--level) * 15px);
+    border-radius: 2px;
+    background: currentColor;
+    transition: height 80ms linear;
+  }
+  .single-exit-hint {
+    position: absolute;
+    left: 18px;
+    bottom: 16px;
+    color: rgba(255, 255, 255, 0.22);
+    font-size: 12px;
+  }
+
   .live {
     flex: 1 1 auto;
     min-width: 0;

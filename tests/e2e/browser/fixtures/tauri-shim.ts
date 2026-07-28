@@ -675,6 +675,10 @@ function shimBody(config: ShimConfig): void {
   }
 
   (window as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+    metadata: {
+      currentWindow: { label: 'control' },
+      currentWebview: { label: 'control', windowLabel: 'control' },
+    },
     invoke(command: string, args: Record<string, unknown> | undefined) {
       control.calls.push({ command, args: args ?? null });
       if (control.fail[command] && command !== 'list_displays') {

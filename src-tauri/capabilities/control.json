@@ -5,6 +5,7 @@
   "windows": ["control"],
   "permissions": [
     "core:default",
+    "core:window:allow-set-fullscreen",
     "allow-control-commands",
     "opener:default"
   ]

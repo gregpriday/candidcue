@@ -38,26 +38,10 @@ const UNWIRED_BY_DESIGN: Record<string, string> = {
   cancel_listener_download:
     'NOT_IMPLEMENTED in Rust (no CandidCue pack host); there is no download to cancel.',
   install_update: 'No updater plugin is wired in v1 (§44.10).',
-  /*
-   * `save_display_profile` and `list_display_profiles` used to live here,
-   * described as "intentionally dormant" — appearance was one set of settings
-   * that every take ran on every display, so a per-display row had nothing to
-   * carry.
-   *
-   * The optical layer is what gave them something to carry. A rig profile is a
-   * physical description of one panel in one mounting: its millimetres per
-   * pixel, the aperture its hood reveals, where the camera sits in that
-   * aperture, and how far away the presenter stands. None of that is a
-   * preference that could sensibly be shared between displays, and none of it
-   * can be re-derived after the fact — a ruler measurement held against the
-   * glass exists nowhere else. So the row is now load-bearing, and both
-   * commands are wired through services/display-profiles.ts.
-   *
-   * The old warning is still worth heeding, though: the version that shipped
-   * for one afternoon restored only for an explicitly PINNED display, so the
-   * default "Automatic" path wrote a row per take and read none. Matching is by
-   * fingerprint for exactly that reason.
-   */
+  save_display_profile:
+    'Single-window presentation has no independently selected stage display to persist.',
+  list_display_profiles:
+    'Single-window presentation uses Settings directly; legacy stage-display rows are dormant.',
 };
 
 /** Commands whose absence is a user-visible failure, so they must stay wired. */
@@ -181,12 +165,8 @@ describe('every registered IPC command is reachable from the frontend', () => {
   });
 });
 
-/**
- * C1, stated as the source-level invariant it actually was. The generation is
- * assigned by Rust and adopted by control; a literal is the bug.
- */
-describe('the stage envelope never carries a hard-coded session generation', () => {
-  it('the start sequence opens the session record and uses the generation it returns', () => {
+describe('the single-window take adopts the coordinator generation', () => {
+  it('opens the session record and passes its generation to the live store', () => {
     // Was Preflight.svelte until the screen between Editor and Live was
     // removed; the sequence itself is what the invariant was ever about.
     const startTake = SOURCES.find((f) => f.path.endsWith('lib/start-take.ts'));
@@ -195,27 +175,12 @@ describe('the stage envelope never carries a hard-coded session generation', () 
     expect(startTake!.text).toMatch(/record\.sessionGeneration/);
   });
 
-  /**
-   * The take's envelope CARRIES it — not just the store.
-   *
-   * `sessionGeneration` became optional on `StageSessionEnvelope` so the
-   * Settings preview can publish a payload that belongs to no session (Rust
-   * validates it as "when carried, must also be current", and a preview never
-   * calls `start_session`). That optionality bought a hole: deleting the field
-   * from the TAKE's envelope now type-checks, and the assertion above would
-   * still pass because `record.sessionGeneration` also appears at
-   * `startLiveSession`. An envelope without it skips Rust's session check
-   * silently, which is the same class of miss as the literal it replaced.
-   */
-  it('the take envelope carries the generation the record returned', () => {
+  it('does not build or publish a second-window stage envelope', () => {
     const startTake = SOURCES.find((f) => f.path.endsWith('lib/start-take.ts'));
     expect(startTake).toBeDefined();
-    const call = /buildStageEnvelope\(\{[\s\S]*?\n    \}\)/.exec(startTake!.text);
-    expect(call, 'start-take must build the stage envelope').not.toBeNull();
-    expect(
-      call![0],
-      'the take envelope must pass sessionGeneration from the session record',
-    ).toMatch(/sessionGeneration:\s*record\.sessionGeneration/);
+    expect(startTake!.text).not.toMatch(/buildStageEnvelope\(/);
+    expect(startTake!.text).not.toMatch(/openStage\(/);
+    expect(startTake!.text).not.toMatch(/publishStageDocument\(/);
   });
 
   it('no control source assigns a literal session generation', () => {

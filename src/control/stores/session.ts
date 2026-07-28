@@ -252,6 +252,8 @@ export interface SessionState {
   stageWindowFault: StageWindowFault | null;
   snapshot: AlignmentSnapshot | null;
   transcriptTail: string[];
+  /** Recent microphone amplitudes for the in-window presentation waveform. */
+  voiceLevels: number[];
   outline: OutlineNode[];
   sentences: SentenceUnit[];
   counts: SessionCounts;
@@ -283,6 +285,7 @@ const initial: SessionState = {
   stageWindowFault: null,
   snapshot: null,
   transcriptTail: [],
+  voiceLevels: [],
   outline: [],
   sentences: [],
   counts: { jumps: 0, retakes: 0, reconnects: 0 },
@@ -694,6 +697,7 @@ export function startLiveSession(input: StartSessionInput): string {
       onLevel: (snapshot) => {
         if (voicePill === null || pillEpoch !== voicePillEpoch) return;
         voicePill = reduceVoicePillLevel(voicePill, snapshot, snapshot.generatedAtMs);
+        state.update((s) => ({ ...s, voiceLevels: voicePill?.levels ?? [] }));
       },
       /*
        * The device is about to be asked for. The pill's "no audio" window runs
@@ -1444,9 +1448,11 @@ let voicePillEpoch = 0;
 function startVoicePill(): number {
   voicePillEpoch += 1;
   voicePillDeviceLost = false;
-  if (stageGeneration === 0 || !isTauriRuntime()) return voicePillEpoch;
+  if (!isTauriRuntime()) return voicePillEpoch;
   voicePill = initialVoicePillState(monotonicNowMs());
-  voicePillTimer ??= setInterval(publishVoicePill, VOICE_PILL_INTERVAL_MS);
+  if (stageGeneration !== 0) {
+    voicePillTimer ??= setInterval(publishVoicePill, VOICE_PILL_INTERVAL_MS);
+  }
   return voicePillEpoch;
 }
 
@@ -2757,7 +2763,9 @@ export function stopSession(): SessionSummary {
   }
   stopInternals();
   smoothFollow.endSession();
-  if (s.sessionId) void stageService.closeStage(s.sessionId).catch(() => {});
+  if (s.sessionId && stageGeneration !== 0) {
+    void stageService.closeStage(s.sessionId).catch(() => {});
+  }
   state.update((prev) => ({ ...prev, active: false, prompting: false, summary }));
   return summary;
 }

@@ -83,7 +83,9 @@ test('every control-window route renders and raises nothing', async ({ page }, t
     .getByRole('button', { name: 'Present', exact: true })
     .first()
     .click();
-  await expect(page.locator('footer.transport')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({
+    timeout: 20_000,
+  });
   await expectNotBlank(page);
 
   await page.screenshot({ path: testInfo.outputPath('route-sweep-live.png'), fullPage: true });

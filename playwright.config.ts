@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const e2ePort = process.env['CANDIDCUE_E2E_PORT'] ?? '1420';
+
 /**
  * Browser-driven end-to-end layer (spec §55.8 alternative).
  *
@@ -61,7 +63,7 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 7_000 },
   use: {
-    baseURL: 'http://localhost:1420',
+    baseURL: `http://localhost:${e2ePort}`,
     // A blank frame is a failed launch, not a pass — capture on failure so a
     // "launched but never rendered" regression is visible in the report.
     screenshot: 'only-on-failure',
@@ -129,8 +131,8 @@ export default defineConfig({
       : []),
   ],
   webServer: {
-    command: 'pnpm dev',
-    url: 'http://localhost:1420/control.html',
+    command: `pnpm dev -- --port ${e2ePort}`,
+    url: `http://localhost:${e2ePort}/control.html`,
     reuseExistingServer: !process.env['CI'],
     timeout: 60_000,
     stdout: 'ignore',

@@ -28,7 +28,7 @@ import { installTauriShim } from './tauri-shim';
  * this layer, and this keeps the suite honest either way.
  */
 
-const BASE_URL = 'http://localhost:1420';
+const BASE_URL = `http://localhost:${process.env.CANDIDCUE_E2E_PORT ?? '1420'}`;
 const WARMUP_SCRIPT = {
   id: '00000000-0000-4000-8000-000000000000',
   title: 'Dependency warm-up',
@@ -59,10 +59,9 @@ async function compileOnce(browser: Browser): Promise<void> {
     /*
      * Through the EDITOR, not through Present.
      *
-     * Present opens a real take now — a stage window, a session record and a
-     * transport — which is a great deal of machinery to run for a warm-up, and
-     * none of it is what needs warming. The editor reaches the same worker on
-     * the same dynamic import and stops there.
+     * Present opens a real take now — a session record, microphone transport
+     * and fullscreen presentation — which is a great deal of machinery to run
+     * for a warm-up. The editor reaches the same worker import and stops there.
      */
     await page
       .getByRole('list', { name: 'Scripts' })

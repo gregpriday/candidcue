@@ -3,6 +3,8 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+const devPort = Number(process.env['CANDIDCUE_E2E_PORT'] ?? 1420);
+
 /**
  * Absolute path to `decode-named-character-reference`'s non-DOM build.
  *
@@ -64,7 +66,7 @@ export default defineConfig({
     ],
   },
   server: {
-    port: 1420,
+    port: devPort,
     strictPort: true,
   },
   build: {
