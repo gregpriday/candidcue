@@ -754,7 +754,13 @@
       <dt>Words heard</dt>
       <dd>
         {summary.wordsHeard}
-        {#if summary.mode === 'voice' && summary.wordsHeard === 0}
+        {#if summary.wordsInFlight > 0}
+          <!-- Finals only. A continuous read leaves the last utterance open,
+               and the summary is taken before `endTurn` closes it — so this
+               said "11" for a passage heard in full. -->
+          + {summary.wordsInFlight} still being transcribed
+        {/if}
+        {#if summary.mode === 'voice' && summary.wordsHeard === 0 && summary.wordsInFlight === 0}
           <span class="summary-warn">— nothing was transcribed</span>
         {/if}
       </dd>

@@ -142,8 +142,17 @@ export interface SessionSummary {
    * decided at session start.
    */
   transcriptSaved: boolean;
-  /** Words the recogniser returned this take. Zero means nothing was heard. */
+  /**
+   * Words the recogniser FINALISED this take. Zero means nothing was heard.
+   *
+   * Finals only, and the summary is taken before `endTurn` closes the last
+   * utterance — so on a continuous read this undercounts, sometimes badly.
+   * `wordsInFlight` carries what was still open, which is the difference
+   * between "the microphone failed" and "you had not stopped talking".
+   */
   wordsHeard: number;
+  /** Words in the utterance still open when the take ended. */
+  wordsInFlight: number;
   /** How far the cursor actually got, in script words. */
   wordsFollowed: number;
   /** Script length, so `wordsFollowed` has something to be a fraction of. */
@@ -708,7 +717,28 @@ export function startLiveSession(input: StartSessionInput): string {
         if (voicePill !== null && pillEpoch === voicePillEpoch) {
           voicePill = reduceVoicePillText(voicePill, text);
         }
+        /*
+         * The open utterance counts too — as an ESTIMATE, separately.
+         *
+         * `wordsHeard` totals finals only, and the summary is snapshotted
+         * before `endTurn` gets the last one back: Rust's stop returns
+         * immediately and finalises in the background for up to 2.5 s. So a
+         * presenter who reads for fourteen seconds without a long enough pause
+         * to close an utterance is told "Words heard: 11" for a passage the
+         * recogniser heard in full, and reasonably concludes the microphone is
+         * failing. The display, which follows PARTIAL evidence, moves the whole
+         * time — and the two facts flatly contradict each other on one card.
+         *
+         * Kept as its own number rather than folded into `wordsHeard`: a
+         * partial is a restatement and may be revised or withdrawn, so adding
+         * it to a total of committed words would make that total wrong in the
+         * other direction. This is "and this much more was in flight".
+         */
+        if (!final) {
+          wordsInFlight = countSpokenWords(text);
+        }
         if (final) {
+          wordsInFlight = 0;
           // §36 "did it hear me". Counted here rather than from the retained
           // transcript, because retention is a SETTING and the question this
           // answers — was anything transcribed at all — has to be answerable
@@ -749,12 +779,33 @@ export function startLiveSession(input: StartSessionInput): string {
          */
         if (pillEpoch !== voicePillEpoch) return;
         state.update((s) => {
+          /*
+           * A reconnect is a connection RE-established, not the first one.
+           *
+           * The store initialises `connection: 'connected'` — an optimistic
+           * placeholder, since nothing has connected yet — and the pipeline
+           * announces `reconnecting` on its way to opening the very first
+           * socket. That transition satisfied the test below, so EVERY healthy
+           * take reported exactly one reconnect, from its first second, having
+           * lost nothing.
+           *
+           * It cost more than a wrong number. "Reconnects: 1" appeared on every
+           * summary of a take that was not working and was read, repeatedly, as
+           * evidence of a transport dropping mid-session — sending two people
+           * hunting a fault that had never happened while the real one sat
+           * elsewhere on the same card. A diagnostic that cries wolf on every
+           * healthy run is worse than no diagnostic.
+           *
+           * So it counts only a return to `reconnecting` AFTER something has
+           * actually connected. A genuine mid-take reconnect still reads 1.
+           */
           const reconnects =
-            connection === 'reconnecting' && s.connection !== 'reconnecting'
+            connection === 'reconnecting' && s.connection === 'connected' && everConnected
               ? s.counts.reconnects + 1
               : s.counts.reconnects;
           return { ...s, connection, counts: { ...s.counts, reconnects } };
         });
+        if (connection === 'connected') everConnected = true;
         // §59: an interrupted transcript is a first-class degraded state.
         smoothFollow.reportTranscriptStatus(
           connection === 'connected' ? 'live' : 'interrupted',
@@ -1215,6 +1266,15 @@ const TAP_WORDS = 14;
 let tapCommitted: string[] = [];
 
 /** §64 tap accounting — see `publishTranscriptTap`. */
+/**
+ * Has a socket ever reached `connected` this take?
+ *
+ * The store's initial `connection: 'connected'` is a placeholder, not a fact,
+ * so "was connected, is now reconnecting" cannot be read off the state alone.
+ */
+let everConnected = false;
+/** Words in the utterance still open when the take ended. See `wordsHeard`. */
+let wordsInFlight = 0;
 let transcriptTapsSeen = 0;
 let transcriptTapsEmitted = 0;
 const transcriptTapsDropped = {
@@ -1234,6 +1294,8 @@ function transcriptTapFault(): string | null {
 
 function resetTranscriptTap(): void {
   tapCommitted = [];
+  everConnected = false;
+  wordsInFlight = 0;
   transcriptTapsSeen = 0;
   transcriptTapsEmitted = 0;
   transcriptTapsDropped.noStageGeneration = 0;
@@ -2599,6 +2661,7 @@ export function stopSession(): SessionSummary {
     stageApplied: stageAppliedRevision,
     documentTravelPx: travelPx(scrollSeenMinPx, scrollSeenMaxPx),
     targetTravelPx: travelPx(targetSeenMinPx, targetSeenMaxPx),
+    wordsInFlight,
     transcriptTapsSeen,
     transcriptTapsEmitted,
     transcriptTapFault: transcriptTapFault(),
@@ -2673,6 +2736,7 @@ function emptySummary(s: SessionState): SessionSummary {
     stageApplied: null,
     documentTravelPx: null,
     targetTravelPx: null,
+    wordsInFlight: 0,
     transcriptTapsSeen: 0,
     transcriptTapsEmitted: 0,
     transcriptTapFault: null,
