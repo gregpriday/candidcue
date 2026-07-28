@@ -802,6 +802,20 @@
           {/if}
         {/if}
       </dd>
+      <!--
+        Whether the recogniser's own words reached the stage's transcript bar.
+        The bar read "listening — no words yet" through a take that heard
+        eleven, and nothing anywhere said which side dropped them.
+      -->
+      <dt>Transcript to stage</dt>
+      <dd>
+        {summary.transcriptTapsEmitted} of {summary.transcriptTapsSeen} sent
+        {#if summary.transcriptTapFault !== null}
+          <span class="summary-warn">— dropped: {summary.transcriptTapFault}</span>
+        {:else if summary.transcriptTapsSeen === 0 && summary.wordsHeard > 0}
+          <span class="summary-warn">— words were heard but never offered to the stage</span>
+        {/if}
+      </dd>
       <dt>Sections reached</dt>
       <dd>{summary.sectionsReached}</dd>
       <dt>Retakes</dt>

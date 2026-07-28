@@ -175,6 +175,21 @@ export interface SessionSummary {
    */
   documentTravelPx: number | null;
   targetTravelPx: number | null;
+  /**
+   * Recogniser text control was handed, and how much of it reached the stage.
+   *
+   * The stage's transcript bar is the instrument that answers "is it hearing
+   * me", and it read "listening — no words yet" through a take that heard
+   * eleven words. Four separate guards in `publishTranscriptTap` can drop the
+   * text before it is emitted, all silently, and an emitted tap with empty text
+   * looks identical on the glass to one that was never sent. These three
+   * numbers separate all of it: seen but not emitted is control's fault and
+   * `transcriptTapFault` names which guard; emitted but not shown is the
+   * stage's.
+   */
+  transcriptTapsSeen: number;
+  transcriptTapsEmitted: number;
+  transcriptTapFault: string | null;
 }
 
 export interface SessionState {
@@ -1199,8 +1214,32 @@ export function setStageEmitterForTesting(fn: EmitToFn | null): void {
 const TAP_WORDS = 14;
 let tapCommitted: string[] = [];
 
+/** §64 tap accounting — see `publishTranscriptTap`. */
+let transcriptTapsSeen = 0;
+let transcriptTapsEmitted = 0;
+const transcriptTapsDropped = {
+  noStageGeneration: 0,
+  noRuntime: 0,
+  stageNotAlive: 0,
+  emptyText: 0,
+};
+
+/** The first reason taps were dropped, or null when none were. */
+function transcriptTapFault(): string | null {
+  for (const [reason, count] of Object.entries(transcriptTapsDropped)) {
+    if (count > 0) return reason;
+  }
+  return null;
+}
+
 function resetTranscriptTap(): void {
   tapCommitted = [];
+  transcriptTapsSeen = 0;
+  transcriptTapsEmitted = 0;
+  transcriptTapsDropped.noStageGeneration = 0;
+  transcriptTapsDropped.noRuntime = 0;
+  transcriptTapsDropped.stageNotAlive = 0;
+  transcriptTapsDropped.emptyText = 0;
 }
 
 /**
@@ -1209,10 +1248,28 @@ function resetTranscriptTap(): void {
  * restatement, and appending would show every revision of a sentence at once.
  */
 function publishTranscriptTap(text: string, final: boolean): void {
-  if (stageGeneration === 0) return;
-  if (!cachedEmitTo && !isTauriRuntime()) return;
+  /*
+   * Every early return is COUNTED, not silent.
+   *
+   * The bar on the stage read "listening — no words yet" through a take that
+   * heard eleven words, and there was no way to tell whether control had
+   * declined to send them or the stage had failed to draw them. Four guards sit
+   * above, any of which drops the text on the floor, and none of them said so.
+   */
+  transcriptTapsSeen += 1;
+  if (stageGeneration === 0) {
+    transcriptTapsDropped.noStageGeneration += 1;
+    return;
+  }
+  if (!cachedEmitTo && !isTauriRuntime()) {
+    transcriptTapsDropped.noRuntime += 1;
+    return;
+  }
   const s = get(state);
-  if (!s.sessionId || !s.stageAlive) return;
+  if (!s.sessionId || !s.stageAlive) {
+    transcriptTapsDropped.stageNotAlive += 1;
+    return;
+  }
 
   const words = text.trim().split(/\s+/).filter((word) => word.length > 0);
   const shown = [...tapCommitted, ...words].slice(-TAP_WORDS);
@@ -1224,6 +1281,10 @@ function publishTranscriptTap(text: string, final: boolean): void {
     final,
     sentAtMs: Date.now(),
   };
+  // An emitted tap whose TEXT is empty renders as "listening — no words yet",
+  // which is indistinguishable on the glass from never having been sent.
+  if (payload.text.length === 0) transcriptTapsDropped.emptyText += 1;
+  else transcriptTapsEmitted += 1;
   if (cachedEmitTo) {
     void cachedEmitTo('stage', STAGE_EVENT.transcriptTap, payload).catch(() => {});
     return;
@@ -2538,6 +2599,9 @@ export function stopSession(): SessionSummary {
     stageApplied: stageAppliedRevision,
     documentTravelPx: travelPx(scrollSeenMinPx, scrollSeenMaxPx),
     targetTravelPx: travelPx(targetSeenMinPx, targetSeenMaxPx),
+    transcriptTapsSeen,
+    transcriptTapsEmitted,
+    transcriptTapFault: transcriptTapFault(),
   };
   // §36.2 + §36.1: write the retained tail and close the record BEFORE the
   // teardown resets `transcriptRetained`. `stopInternals` is what runs on every
@@ -2609,6 +2673,9 @@ function emptySummary(s: SessionState): SessionSummary {
     stageApplied: null,
     documentTravelPx: null,
     targetTravelPx: null,
+    transcriptTapsSeen: 0,
+    transcriptTapsEmitted: 0,
+    transcriptTapFault: null,
   };
 }
 
