@@ -1282,6 +1282,8 @@ const transcriptTapsDropped = {
   noRuntime: 0,
   noSession: 0,
   emptyText: 0,
+  /** The emit itself rejected — the channel, not a guard. */
+  emitFailed: 0,
 };
 
 /** The first reason taps were dropped, or null when none were. */
@@ -1301,6 +1303,7 @@ function resetTranscriptTap(): void {
   transcriptTapsDropped.noStageGeneration = 0;
   transcriptTapsDropped.noRuntime = 0;
   transcriptTapsDropped.noSession = 0;
+  transcriptTapsDropped.emitFailed = 0;
   transcriptTapsDropped.emptyText = 0;
 }
 
@@ -1363,14 +1366,24 @@ function publishTranscriptTap(text: string, final: boolean): void {
   // An emitted tap whose TEXT is empty renders as "listening — no words yet",
   // which is indistinguishable on the glass from never having been sent.
   if (payload.text.length === 0) transcriptTapsDropped.emptyText += 1;
-  else transcriptTapsEmitted += 1;
-  if (cachedEmitTo) {
-    void cachedEmitTo('stage', STAGE_EVENT.transcriptTap, payload).catch(() => {});
-    return;
-  }
-  void resolveEmitTo()
-    .then((emitTo) => emitTo('stage', STAGE_EVENT.transcriptTap, payload))
-    .catch(() => {});
+  /*
+   * Counted on RESOLUTION, not on the attempt.
+   *
+   * This used to increment before the await, so "6 of 6 sent" meant "six calls
+   * were made" — and with the rejection swallowed, a channel that delivered
+   * nothing reported a perfect score. That is the same shape as every other
+   * defect in this area: a number that looks like evidence and is not.
+   */
+  const sent = cachedEmitTo
+    ? cachedEmitTo('stage', STAGE_EVENT.transcriptTap, payload)
+    : resolveEmitTo().then((emitTo) => emitTo('stage', STAGE_EVENT.transcriptTap, payload));
+  void sent
+    .then(() => {
+      transcriptTapsEmitted += 1;
+    })
+    .catch(() => {
+      transcriptTapsDropped.emitFailed += 1;
+    });
 }
 
 /* ---------------------------------------------------------------------------

@@ -215,6 +215,8 @@
    * with it are two different faults with one symptom.
    */
   let alignmentArrived = $state(0);
+  /** Transcript taps this window was handed. See the subscription. */
+  let transcriptTapsArrived = $state(0);
   /**
    * The take these counters describe.
    *
@@ -249,6 +251,7 @@
     void feedSessionGeneration;
     untrack(() => {
       alignmentArrived = 0;
+      transcriptTapsArrived = 0;
       alignmentFeed = null;
     });
   });
@@ -552,6 +555,14 @@
          */
         subscribeStageEvent<StageTranscriptTapPayload>(STAGE_EVENT.transcriptTap, (payload) => {
           lastInboundAt = performance.now();
+          /*
+           * Counted, because "control sent 6 of 6" and an empty bar cannot both
+           * be true and neither side could see the other. Control counts what
+           * it EMITS — which is an attempt, not a delivery, since the promise
+           * is fire-and-forget with a swallowed rejection. This counts what
+           * arrived, so the next take says plainly which of the two it is.
+           */
+          transcriptTapsArrived += 1;
           transcriptTap = payload.text;
         }),
         /*
@@ -1435,6 +1446,12 @@
                 : ''})
             {/if}
           {/if}
+        </div>
+        <!-- Control emits these; Rust emits the snapshots. If this stays 0
+             while the summary reports taps sent, the control -> stage channel
+             is the fault and the snapshots are arriving by a different road. -->
+        <div class:diag-fault={transcriptTapsArrived === 0 && alignmentArrived > 0}>
+          taps: {transcriptTapsArrived} arrived
         </div>
         <div>viewport: {vw}×{vh}</div>
         {#if budget}
