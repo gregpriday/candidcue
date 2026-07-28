@@ -164,6 +164,17 @@ export interface SessionSummary {
    */
   updatesSent: number;
   stageApplied: number | null;
+  /**
+   * How far the document actually travelled on the glass, in CSS pixels, and
+   * how far the motion controller was aiming to travel. Null when the stage
+   * never reported a frame.
+   *
+   * These are the only numbers in the summary measured on the STAGE. Everything
+   * else is control's own bookkeeping, which is why a take could report perfect
+   * health along every row and still never have moved a pixel.
+   */
+  documentTravelPx: number | null;
+  targetTravelPx: number | null;
 }
 
 export interface SessionState {
@@ -538,6 +549,10 @@ export function startLiveSession(input: StartSessionInput): string {
   // the first beat of the next one.
   lastSnapshotSeq = 0;
   stageAppliedRevision = null;
+  scrollSeenMinPx = Number.POSITIVE_INFINITY;
+  scrollSeenMaxPx = Number.NEGATIVE_INFINITY;
+  targetSeenMinPx = Number.POSITIVE_INFINITY;
+  targetSeenMaxPx = Number.NEGATIVE_INFINITY;
   stageApplyDivergedAtMs = null;
   stageApplyReported = false;
   scriptWordCount = input.totalTokens;
@@ -1668,6 +1683,20 @@ let lastSnapshotSeq = 0;
  * gap. This is the third number that closes it.
  */
 let stageAppliedRevision: number | null = null;
+/**
+ * The extremes of the document's real scroll offset, and of the offset the
+ * controller was aiming at, over this take. Infinities mean the stage never
+ * acked — a browser-dev session, or one that ended before the first frame.
+ */
+let scrollSeenMinPx = Number.POSITIVE_INFINITY;
+let scrollSeenMaxPx = Number.NEGATIVE_INFINITY;
+let targetSeenMinPx = Number.POSITIVE_INFINITY;
+let targetSeenMaxPx = Number.NEGATIVE_INFINITY;
+
+/** Travel over the take, or null when the stage never reported a position. */
+function travelPx(minPx: number, maxPx: number): number | null {
+  return Number.isFinite(minPx) && Number.isFinite(maxPx) ? maxPx - minPx : null;
+}
 /** When the two ends first disagreed, or null while they agree. */
 let stageApplyDivergedAtMs: number | null = null;
 /** Said once per take. A stuck stage does not get more true by repetition. */
@@ -1749,6 +1778,30 @@ function startStageBridge(sessionId: string): void {
   stopMotionAcks = subscribeStageMotionAcks((ack) => {
     adoptStageLayoutGeneration(ack.layoutGeneration);
     smoothFollow.ingestStageAck(ack);
+    /*
+     * §64: how far the GLASS actually travelled.
+     *
+     * Every ack has always carried the document's real scroll offset and the
+     * offset the controller was aiming at, and both were dropped on the floor
+     * after feeding the follow store. That left "the script did not move" as
+     * the one claim the app could neither confirm nor deny — a take could
+     * report words heard, words followed and snapshots applied, all healthy,
+     * and nothing anywhere knew whether a single pixel had moved.
+     *
+     * Two numbers, because they fail differently. `target` not advancing means
+     * the stage never derived a position to travel to — a snapshot, layout or
+     * line-map problem. `target` advancing while `actual` does not means the
+     * motion controller is not moving the document it was told to move. Those
+     * are unrelated faults and, from the presenter's chair, identical.
+     */
+    if (Number.isFinite(ack.actualScrollPx)) {
+      scrollSeenMinPx = Math.min(scrollSeenMinPx, ack.actualScrollPx);
+      scrollSeenMaxPx = Math.max(scrollSeenMaxPx, ack.actualScrollPx);
+    }
+    if (Number.isFinite(ack.targetScrollPx)) {
+      targetSeenMinPx = Math.min(targetSeenMinPx, ack.targetScrollPx);
+      targetSeenMaxPx = Math.max(targetSeenMaxPx, ack.targetScrollPx);
+    }
   });
 
   // Heartbeat: control → stage at ~1 s cadence; the stage acks to Rust.
@@ -2483,6 +2536,8 @@ export function stopSession(): SessionSummary {
     scriptWords: scriptWordCount,
     updatesSent: lastSnapshotSeq,
     stageApplied: stageAppliedRevision,
+    documentTravelPx: travelPx(scrollSeenMinPx, scrollSeenMaxPx),
+    targetTravelPx: travelPx(targetSeenMinPx, targetSeenMaxPx),
   };
   // §36.2 + §36.1: write the retained tail and close the record BEFORE the
   // teardown resets `transcriptRetained`. `stopInternals` is what runs on every
@@ -2552,6 +2607,8 @@ function emptySummary(s: SessionState): SessionSummary {
     scriptWords: scriptWordCount,
     updatesSent: 0,
     stageApplied: null,
+    documentTravelPx: null,
+    targetTravelPx: null,
   };
 }
 

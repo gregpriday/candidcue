@@ -781,6 +781,27 @@
           {/if}
         {/if}
       </dd>
+      <!--
+        The only row measured on the GLASS. Everything above it is control's own
+        bookkeeping, which is how a take reported words heard, words followed
+        and snapshots applied — all healthy — while the script never moved.
+      -->
+      <dt>Script moved</dt>
+      <dd>
+        {#if summary.documentTravelPx === null}
+          the stage did not report a position
+        {:else}
+          {Math.round(summary.documentTravelPx)} px
+          {#if summary.targetTravelPx !== null}
+            (aimed at {Math.round(summary.targetTravelPx)} px)
+          {/if}
+          {#if summary.documentTravelPx < 20 && (summary.targetTravelPx ?? 0) >= 20}
+            <span class="summary-warn">— the document never followed its target</span>
+          {:else if summary.documentTravelPx < 20 && summary.wordsFollowed > 5}
+            <span class="summary-warn">— the script did not move</span>
+          {/if}
+        {/if}
+      </dd>
       <dt>Sections reached</dt>
       <dd>{summary.sectionsReached}</dd>
       <dt>Retakes</dt>
