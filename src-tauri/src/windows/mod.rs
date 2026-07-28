@@ -1190,6 +1190,9 @@ const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[
     // real rig, never arrived — while snapshots emitted from HERE reached the
     // same window in the same seconds. It travels the proven road now.
     "transcript",
+    // Same failure class as the transcript: this status readout was produced
+    // by control and disappeared on the direct webview-to-webview event road.
+    "voicePill",
 ];
 
 /// Validate a `StageStatePayload` ({ stageGeneration, directive }) against

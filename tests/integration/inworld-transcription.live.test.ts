@@ -125,6 +125,7 @@ interface StreamRun {
 async function transcribeFixture(options: {
   endTurn: boolean;
   trailingSilenceMs: number;
+  prompts?: string[];
 }): Promise<StreamRun> {
   const speech = pcmFromWav(AUDIO);
   const silence = Buffer.alloc(Math.round((SAMPLE_RATE * 2 * options.trailingSilenceMs) / 1000));
@@ -168,6 +169,7 @@ async function transcribeFixture(options: {
             audioEncoding: 'LINEAR16',
             sampleRateHertz: SAMPLE_RATE,
             language: 'en-US',
+            ...(options.prompts?.length ? { prompts: options.prompts } : {}),
           },
         }),
       );
@@ -297,6 +299,31 @@ describe.skipIf(!ENABLED)('Inworld streaming STT turns real speech into real wor
     // which is what lets the UI replace rather than append.
     const last = run.partials[run.partials.length - 1]!;
     expect(run.finals[0]!.length).toBeGreaterThanOrEqual(last.length - 1);
+  }, 45_000);
+
+  it('still transcribes when a take seeds uncommon script vocabulary', async () => {
+    /*
+     * Settings sends no vocabulary, while a real take does. This is the exact
+     * A/B needed for a stage that works in Settings and appears silent in a
+     * take: send deliberately uncommon terms on the same config frame and
+     * prove ordinary speech still produces partials and a final.
+     */
+    const run = await transcribeFixture({
+      endTurn: true,
+      trailingSilenceMs: 0,
+      prompts: ['CandidCue', 'Xylophoridian', 'Qorvex Zynthara', 'RØDE NT-USB Mini'],
+    });
+
+    expect(
+      run.partials.length,
+      `vocabulary-seeded stream produced no partials. errors: ${JSON.stringify(run.errors)}`,
+    ).toBeGreaterThan(0);
+    expect(
+      run.finals.length,
+      `vocabulary-seeded stream produced no final. errors: ${JSON.stringify(run.errors)}`,
+    ).toBeGreaterThan(0);
+    const heard = run.finals.join(' ');
+    expect(wordRecall(heard), `seeded stream heard "${heard}"`).toBeGreaterThan(0.7);
   }, 45_000);
 
   it('rejects the key as a query parameter, so nobody "simplifies" the header away', async () => {

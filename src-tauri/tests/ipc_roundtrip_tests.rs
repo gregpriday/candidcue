@@ -1374,6 +1374,49 @@ fn the_directive_commands_bind_validate_and_emit() {
     assert_eq!(arrived["directive"]["blanked"], json!(true));
 
     h.expect_ok(
+        "publish_stage_command",
+        json!({
+            "sessionId": CAPTURED_SESSION,
+            "action": {
+                "stageGeneration": stage_generation,
+                "directive": {
+                    "kind": "transcript",
+                    "text": "Good morning from the recogniser",
+                    "final": false
+                },
+            },
+        }),
+    );
+    let arrived = received(&commands).expect("the transcript directive reaches the stage");
+    assert_eq!(
+        arrived["directive"]["text"],
+        json!("Good morning from the recogniser")
+    );
+
+    h.expect_ok(
+        "publish_stage_command",
+        json!({
+            "sessionId": CAPTURED_SESSION,
+            "action": {
+                "stageGeneration": stage_generation,
+                "directive": {
+                    "kind": "voicePill",
+                    "pill": {
+                        "stageGeneration": stage_generation,
+                        "reading": "listening",
+                        "levels": [0.1, 0.3],
+                        "label": "Listening",
+                        "visible": true,
+                        "sentAtMs": 1000
+                    }
+                },
+            },
+        }),
+    );
+    let arrived = received(&commands).expect("the voice pill directive reaches the stage");
+    assert_eq!(arrived["directive"]["pill"]["label"], json!("Listening"));
+
+    h.expect_ok(
         "publish_listener_state",
         json!({
             "sessionId": CAPTURED_SESSION,

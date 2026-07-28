@@ -14,7 +14,8 @@
  *
  * Direction summary:
  *   control → Rust command → stage : load-session, tracking-snapshot,
- *                                    apply-command, listener-state,
+ *                                    apply-command (including transcript and
+ *                                    voice-pill diagnostics), listener-state,
  *                                    close-session
  *   control → stage (direct emitTo): heartbeat (§43.5, ~1s cadence),
  *                                    semantic-frame (companion §26.1, 15–30 Hz)
@@ -66,11 +67,7 @@ export const STAGE_EVENT = {
    */
   viewportHint: 'stage://viewport-hint',
 
-  /**
-   * control → stage: raw recogniser text for the stage's transcript bar.
-   * Same direct `emitTo` path as the heartbeat — it is a diagnostic readout,
-   * not a validated document, and a dropped one costs nothing.
-   */
+  /** Legacy direct route; current control sends this through applyCommand. */
   transcriptTap: 'stage://transcript-tap',
 
   /**
@@ -88,12 +85,11 @@ export const STAGE_EVENT = {
    * Evidence rather than a gate — it can be ignored, and nothing it says
    * prevents a take from running.
    *
-   * Same direct `emitTo` path as the heartbeat and the transcript tap. Control
-   * owns the capture (one microphone, one owner — see audio/ownership.ts) and
-   * sends a fully resolved view; the stage holds no audio state and no
-   * thresholds. A dropped frame costs one bar of the waveform and nothing else,
-   * because the state that matters rides every frame rather than being latched
-   * from a transition.
+   * Control owns the capture (one microphone, one owner — see
+   * audio/ownership.ts) and sends a fully resolved view through Rust's
+   * apply-command relay; the stage holds no audio state and no thresholds.
+   * The legacy direct event remains subscribed for compatibility with an older
+   * control window during development reloads.
    */
   voicePill: 'stage://voice-pill',
 
@@ -239,6 +235,12 @@ export type StageDirective =
    * the generation check for free, which the old direct emit never had.
    */
   | { kind: 'transcript'; text: string; final: boolean }
+  /**
+   * The microphone/transcription status readout. It shares the transcript's
+   * Rust relay because both direct control-webview events disappeared on the
+   * affected real rig while Rust-originated stage traffic kept arriving.
+   */
+  | { kind: 'voicePill'; pill: StageVoicePillPayload }
   | { kind: 'listener'; listener: ListenerStageSelection | null }
   | ({ kind: 'calibration'; active: boolean } & StageCalibrationDirective)
   | { kind: 'diagnostics'; visible: boolean };

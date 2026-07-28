@@ -158,6 +158,18 @@ describe('the voice pill on the stage', () => {
     expect(container.querySelectorAll('.bar')).toHaveLength(STAGE_VOICE_PILL_TRACE_SAMPLES);
   });
 
+  it('draws the pill delivered through Rust’s apply-command relay', async () => {
+    const { container } = await mountStage();
+    const payload = pillPayload();
+    dispatchLocalStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, {
+      stageGeneration: STAGE_GENERATION,
+      directive: { kind: 'voicePill', pill: payload },
+    });
+    await settle();
+
+    expect(pill(container)?.getAttribute('aria-label')).toBe('Listening');
+  });
+
   it('shows a fault, in words, on a stage that has never gone live', async () => {
     const { container } = await mountStage();
     dispatchLocalStageEvent(

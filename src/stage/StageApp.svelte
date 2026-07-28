@@ -478,6 +478,17 @@
         }
         return;
       }
+      if (payload.directive.kind === 'voicePill') {
+        const generation = app.envelope?.stageGeneration ?? 0;
+        if (
+          generation !== 0 &&
+          payload.stageGeneration === generation &&
+          payload.directive.pill.stageGeneration === generation
+        ) {
+          voicePill = payload.directive.pill;
+        }
+        return;
+      }
       dispatch({
         type: 'directive',
         stageGeneration: payload.stageGeneration,

@@ -14,10 +14,10 @@
  *     reporting during the one failure where frames stop arriving.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { STAGE_EVENT } from '../../../src/shared/contracts';
 import type {
   AudioLevelSnapshot,
   CompiledScript,
+  StageDirective,
   StageVoicePillPayload,
 } from '../../../src/shared/contracts';
 
@@ -26,7 +26,9 @@ const stage = vi.hoisted(() => ({
      applied. `exists: false` means "no stage to compare with", which is the
      right answer for a mock that is not modelling a stage window. */
   getStageStatus: vi.fn(async () => ({ exists: false })),
-  publishStageDirective: vi.fn(async () => {}),
+  publishStageDirective: vi.fn(
+    async (_sessionId: string, _stageGeneration: number, _directive: StageDirective) => {},
+  ),
   publishListenerState: vi.fn(async () => {}),
   closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
@@ -177,13 +179,15 @@ function frame(overrides: Partial<AudioLevelSnapshot> = {}): AudioLevelSnapshot 
   };
 }
 
-const emitted: Array<{ target: string; event: string; payload: unknown }> = [];
-
 /** Every pill payload sent to the stage, in order. */
 function pills(): StageVoicePillPayload[] {
-  return emitted
-    .filter((e) => e.event === STAGE_EVENT.voicePill)
-    .map((e) => e.payload as StageVoicePillPayload);
+  return stage.publishStageDirective.mock.calls
+    .map(([, , directive]) => directive as StageDirective)
+    .filter(
+      (directive): directive is Extract<StageDirective, { kind: 'voicePill' }> =>
+        directive.kind === 'voicePill',
+    )
+    .map((directive) => directive.pill);
 }
 
 function deps(): Record<string, (...args: never[]) => unknown> {
@@ -194,12 +198,10 @@ function deps(): Record<string, (...args: never[]) => unknown> {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  emitted.length = 0;
+  stage.publishStageDirective.mockClear();
   pipeline.captured.deps = null;
   setInvokeForTesting(async () => undefined as never);
-  setStageEmitterForTesting(async (target, event, payload) => {
-    emitted.push({ target, event, payload });
-  });
+  setStageEmitterForTesting(async () => {});
 });
 
 afterEach(() => {

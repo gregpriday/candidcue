@@ -34,9 +34,12 @@
  * the audio clock and the decision clock together, exactly as production does.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { STAGE_EVENT } from '../../src/shared/contracts';
 import { STT_SAMPLE_RATE_HZ } from '../../src/control/services/stt/inworld';
-import type { CompiledScript, StageVoicePillPayload } from '../../src/shared/contracts';
+import type {
+  CompiledScript,
+  StageDirective,
+  StageVoicePillPayload,
+} from '../../src/shared/contracts';
 
 /* ---------------------------------------------------------------------------
  * The operating system, faked
@@ -202,7 +205,9 @@ async function emitStt(payload: Record<string, unknown>): Promise<void> {
 }
 
 const stage = vi.hoisted(() => ({
-  publishStageDirective: vi.fn(async () => {}),
+  publishStageDirective: vi.fn(
+    async (_sessionId: string, _stageGeneration: number, _directive: StageDirective) => {},
+  ),
   publishListenerState: vi.fn(async () => {}),
   closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
@@ -276,12 +281,14 @@ const { clearSession, setStageEmitterForTesting, startLiveSession, restartParagr
  * Harness
  * ------------------------------------------------------------------------- */
 
-const emitted: Array<{ event: string; payload: unknown }> = [];
-
 function pills(): StageVoicePillPayload[] {
-  return emitted
-    .filter((e) => e.event === STAGE_EVENT.voicePill)
-    .map((e) => e.payload as StageVoicePillPayload);
+  return stage.publishStageDirective.mock.calls
+    .map(([, , directive]) => directive)
+    .filter(
+      (directive): directive is Extract<StageDirective, { kind: 'voicePill' }> =>
+        directive.kind === 'voicePill',
+    )
+    .map((directive) => directive.pill);
 }
 
 function latest(): StageVoicePillPayload {
@@ -347,7 +354,6 @@ async function run(ms: number): Promise<void> {
  */
 async function until(predicate: () => boolean, what: string): Promise<void> {
   for (let i = 0; i < 600 && !predicate(); i += 1) {
-    await vi.advanceTimersByTimeAsync(50);
     /*
      * A REAL turn of the event loop as well as a fake one.
      *
@@ -355,12 +361,20 @@ async function until(predicate: () => boolean, what: string): Promise<void> {
      * the way to `getUserMedia`, and a module load completes on the macrotask
      * queue — which fake timers do not drive. Advancing fake time alone can
      * therefore spin 120 times while the pipeline sits one real tick from
-     * continuing. `process.nextTick` is not faked by Vitest, so this is the
-     * one yield that always lands.
+     * continuing. Under a loaded parallel suite, advancing fake time before
+     * giving imports and promises their turn can manufacture thirty seconds of
+     * "no microphone" during a real sub-second module load. That falsely trips
+     * the pill's stale-input detector. Drain several real turns FIRST, then
+     * advance the product clock only if the condition still needs a timer.
+     * `process.nextTick` is not faked by Vitest, so this is the yield that
+     * always lands.
      */
-    await new Promise((resolve) => {
-      process.nextTick(resolve);
-    });
+    for (let turn = 0; turn < 5 && !predicate(); turn += 1) {
+      await new Promise((resolve) => {
+        process.nextTick(resolve);
+      });
+    }
+    if (!predicate()) await vi.advanceTimersByTimeAsync(50);
   }
   if (!predicate()) throw new Error(`timed out waiting for: ${what}`);
 }
@@ -407,7 +421,7 @@ beforeEach(async () => {
    */
   await import('@tauri-apps/api/event');
   vi.useFakeTimers();
-  emitted.length = 0;
+  stage.publishStageDirective.mockClear();
   listeners.clear();
   amplitude = 0;
   refusals = 0;
@@ -434,9 +448,7 @@ beforeEach(async () => {
     if (command === 'start_transcription') return 1 as never;
     return undefined as never;
   });
-  setStageEmitterForTesting(async (_target, event, payload) => {
-    emitted.push({ event, payload });
-  });
+  setStageEmitterForTesting(async () => {});
 });
 
 afterEach(async () => {

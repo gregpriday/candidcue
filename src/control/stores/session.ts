@@ -1511,12 +1511,16 @@ function publishVoicePill(): void {
     visible: view.visible,
     sentAtMs: Date.now(),
   };
-  if (cachedEmitTo) {
-    void cachedEmitTo('stage', STAGE_EVENT.voicePill, payload).catch(() => {});
-    return;
-  }
-  void resolveEmitTo()
-    .then((emitTo) => emitTo('stage', STAGE_EVENT.voicePill, payload))
+  /*
+   * The transcript and this pill failed together on the affected real stage:
+   * both were direct control-webview → stage events, while Rust-originated
+   * snapshots continued to arrive. Keep both diagnostics on the same
+   * demonstrably working control → Rust → stage relay. At 10 Hz this is the
+   * same cadence and payload the direct event carried, just through a command
+   * Rust generation-checks before emitting.
+   */
+  void stageService
+    .publishStageDirective(s.sessionId, stageGeneration, { kind: 'voicePill', pill: payload })
     .catch(() => {});
 }
 
