@@ -136,7 +136,7 @@ pub fn extract_terms(tokens: &[VocabToken<'_>], limits: VocabLimits) -> Vec<Stri
     let mut candidates: Vec<Candidate> = Vec::new();
     collect_figure_phrases(&words, &mut candidates);
     collect_name_phrases(&words, &mut candidates);
-    collect_singletons(&words, &occurrences, &mut candidates);
+    collect_singletons(&words, &mut candidates);
     rank(candidates, &occurrences, limits)
 }
 
@@ -505,10 +505,22 @@ const SCORE_FIGURE: u32 = 35;
 const SCORE_HYPHENATED: u32 = 25;
 const SCORE_UNCOMMON: u32 = 15;
 const SCORE_PHRASE: u32 = 8;
-const SCORE_PLAIN_RARE: u32 = 12;
 
-/// Shortest plain lowercase word worth offering with no other signal.
-const MIN_PLAIN_RARE_LEN: usize = 7;
+/// Shortest an ASCII, ordinarily-cased proper noun may be and still be sent.
+///
+/// Measured, not guessed. A capture of `technical.md` with no length bar sent
+/// `Rust`, `API` and `IPC`, and the recogniser came back having written each of
+/// them TWICE where the script said them once — nine spurious insertions in 305
+/// words, enough to push WER from 10.5% to 15.1% while the term-hit count
+/// tripled. Short, ordinary-looking words are ones the model already knows;
+/// biasing them cannot improve recognition and can only inflate their prior.
+const MIN_PLAIN_NAME_LEN: usize = 6;
+
+/// Shortest initialism worth sending, by the same measurement.
+///
+/// `GDPR` was recovered by the bias and `API`/`IPC`/`SDK` were duplicated by
+/// it. Three letters is where an acronym stops being unusual.
+const MIN_INITIALISM_LEN: usize = 4;
 
 /* ------------------------------ figures ------------------------------ */
 
@@ -547,6 +559,16 @@ fn is_unit_word(word: &str) -> bool {
     UNIT_WORDS
         .binary_search(&word.to_lowercase().as_str())
         .is_ok()
+}
+
+/// `28th`, `95th`, `3rd` — digits wearing an ordinal suffix.
+fn is_ordinal_suffixed(word: &str) -> bool {
+    let lowered = word.to_lowercase();
+    ["st", "nd", "rd", "th"].iter().any(|suffix| {
+        lowered
+            .strip_suffix(suffix)
+            .is_some_and(|stem| !stem.is_empty() && stem.chars().all(|c| c.is_ascii_digit()))
+    })
 }
 
 fn is_figure_token(word: &Word<'_>) -> bool {
@@ -621,7 +643,19 @@ fn collect_figure_phrases(words: &[Word<'_>], out: &mut Vec<Candidate>) {
         // Two figure tokens in a row, a spelled-out number with real structure,
         // a token whose own notation is unusual, or a number belonging to a
         // named thing. A lone `27` matches none of them.
-        let worth_it = complex || qualified || spelled_richly || spans_words >= 3;
+        // A lone figure must carry a real letter to be worth sending. `24kHz`
+        // is a notation the recogniser can get wrong; `0.29`, `3.2` and `95th`
+        // are not, and the `technical` capture wrote each of them one more time
+        // than it was said. An ordinal suffix does not count as a letter — it
+        // is the digits that carry the meaning.
+        let lone_figure_is_notable = spans_words > 1
+            || span.iter().any(|w| {
+                w.shape.letters > 0
+                    && !is_ordinal_suffixed(w.core)
+                    && (w.shape.digits == 0 || w.shape.letters >= 2)
+            });
+        let worth_it =
+            (complex || qualified || spelled_richly || spans_words >= 3) && lone_figure_is_notable;
         if worth_it {
             let text = span
                 .iter()
@@ -669,10 +703,17 @@ fn shape_score(word: &Word<'_>, ordinary: bool) -> u32 {
     if shape.non_ascii_letter && shape.letters >= 3 {
         score += SCORE_NON_ASCII;
     }
-    if shape.all_upper && !ordinary && !is_ordinary_capitalised(word.core) {
+    if shape.all_upper
+        && shape.letters >= MIN_INITIALISM_LEN
+        && !ordinary
+        && !is_ordinary_capitalised(word.core)
+    {
         score += SCORE_ALL_UPPER;
     }
-    if shape.digits > 0 && shape.letters > 0 {
+    // `24kHz` mixes digits and letters into a notation; `95th` mixes them into
+    // an ordinal, where the letters are grammar rather than spelling and there
+    // is nothing for a bias to teach.
+    if shape.digits > 0 && shape.letters > 0 && !is_ordinal_suffixed(word.core) {
         score += SCORE_DIGIT_LETTER_MIX;
     }
     score
@@ -747,11 +788,7 @@ fn collect_name_phrases(words: &[Word<'_>], out: &mut Vec<Candidate>) {
 
 /* ----------------------------- singletons ---------------------------- */
 
-fn collect_singletons(
-    words: &[Word<'_>],
-    occurrences: &std::collections::BTreeMap<String, u32>,
-    out: &mut Vec<Candidate>,
-) {
+fn collect_singletons(words: &[Word<'_>], out: &mut Vec<Candidate>) {
     for (index, word) in words.iter().enumerate() {
         if word.core.is_empty() || word.shape.letters == 0 {
             continue;
@@ -769,30 +806,29 @@ fn collect_singletons(
         {
             score += SCORE_HYPHENATED;
         }
-        // A lone capital is a name only away from the start of its sentence.
+        // A lone capital is a name only away from the start of its sentence —
+        // and only when it is long enough to be one the recogniser could
+        // plausibly miss. `Dlamini` and `Saoirse` clear the bar; `Rust` and
+        // `Mac` do not, and sending them is how a bias starts writing words
+        // nobody said.
         if shape.leading_upper
             && !shape.all_upper
             && !word.sentence_start
             && !ordinary
+            && shape.letters >= MIN_PLAIN_NAME_LEN
             && !is_ordinary_capitalised(word.core)
         {
             score += SCORE_PROPER_NOUN;
         }
-        // Nothing distinctive about it at all — no capital, no digit, no
-        // unusual letter, just a word the NGSL happens not to carry. Most of
-        // those are ordinary vocabulary the recogniser knows perfectly well
-        // (`flinching`, `predate`), so one more signal is required before
-        // spending a slot: the script has to say it MORE THAN ONCE. A word a
-        // presenter returns to is a term of art — `recogniser`, `onboarding` —
-        // and one said in passing is just a word.
-        if score == 0
-            && !ordinary
-            && !shape.leading_upper
-            && shape.letters >= MIN_PLAIN_RARE_LEN
-            && occurrences.get(&fold_key(word.core)).copied().unwrap_or(0) >= 2
-        {
-            score += SCORE_PLAIN_RARE;
-        }
+        // A plain lowercase word with no shape signal is NEVER sent, however
+        // rare the word list thinks it is. This class used to be offered when
+        // the script repeated it, and every member it ever produced —
+        // `backend`, `microphone`, `milliseconds`, `transcribe`, `ingestion`,
+        // `onboarding` — is ordinary technical English that no recogniser has
+        // trouble with. It bought nothing and, on `technical.md`, cost four of
+        // the nine duplications that made that capture worse. The word list is
+        // a filter on candidates orthography has already found; it is not
+        // itself a reason to send a word.
         if score == 0 {
             continue;
         }
@@ -995,12 +1031,12 @@ mod tests {
         let terms = extract(&[
             "We ship with RustLight Games, who were first.",
             "Then SoundCloud, PagerDuty and OpenTable signed.",
-            "The box has an RTX card in it.",
+            "The rules under GDPR have not changed.",
         ]);
         assert!(has(&terms, "RustLight Games"), "{terms:?}");
         assert!(has(&terms, "SoundCloud"), "{terms:?}");
         assert!(has(&terms, "PagerDuty"), "{terms:?}");
-        assert!(has(&terms, "RTX"), "{terms:?}");
+        assert!(has(&terms, "GDPR"), "{terms:?}");
     }
 
     #[test]
@@ -1031,7 +1067,9 @@ mod tests {
         assert!(has(&terms, "twenty-seven"), "{terms:?}");
         assert!(has(&terms, "three thirty"), "{terms:?}");
         assert!(has(&terms, "24kHz"), "{terms:?}");
-        assert!(has(&terms, "3.2"), "{terms:?}");
+        // A bare decimal is NOT offered: it is not a notation the recogniser
+        // gets wrong, and sending it made `technical.md` measurably worse.
+        assert!(!has(&terms, "3.2"), "{terms:?}");
         assert!(
             terms.iter().any(|t| t.contains("2.4 million")),
             "{terms:?}"
@@ -1128,14 +1166,44 @@ mod tests {
     }
 
     #[test]
-    fn a_plain_word_needs_repetition_before_it_takes_a_slot() {
-        let once = extract(&["I can say all of those out loud without flinching now."]);
-        assert!(!has(&once, "flinching"), "{once:?}");
-        let twice = extract(&[
-            "The recogniser writes it down its own way.",
-            "That is what a recogniser does.",
+    fn a_plain_lowercase_word_is_never_sent_however_rare_it_looks() {
+        // Repetition used to promote these. It was measured and withdrawn: a
+        // capture of `technical.md` sent `backend`, `microphone`, `transcribe`
+        // and `milliseconds`, and the recogniser wrote each of them one more
+        // time than it was said.
+        let terms = extract(&[
+            "The recogniser writes it down its own way through the backend.",
+            "That is what a recogniser does to the backend, in milliseconds.",
         ]);
-        assert!(has(&twice, "recogniser"), "{twice:?}");
+        for plain in ["recogniser", "backend", "milliseconds"] {
+            assert!(!has(&terms, plain), "{plain} in {terms:?}");
+        }
+    }
+
+    #[test]
+    fn short_words_the_recogniser_already_knows_are_not_sent() {
+        // Every one of these was duplicated into the transcript by the bias.
+        let terms = extract(&[
+            "We publish an API and ship an SDK over IPC.",
+            "The whole backend is written in Rust by Mac.",
+        ]);
+        for short in ["API", "SDK", "IPC", "Rust", "Mac"] {
+            assert!(!has(&terms, short), "{short} in {terms:?}");
+        }
+        // Four letters is where an initialism becomes worth the risk.
+        let kept = extract(&["Our GDPR posture is reviewed every year."]);
+        assert!(has(&kept, "GDPR"), "{kept:?}");
+    }
+
+    #[test]
+    fn a_bare_figure_is_not_a_notation_worth_biasing() {
+        let terms = extract(&[
+            "Latency sits at 0.29 and the 95th percentile is fine.",
+            "We ship version 3.2 today.",
+        ]);
+        for bare in ["0.29", "95th", "3.2"] {
+            assert!(!has(&terms, bare), "{bare} in {terms:?}");
+        }
     }
 
     #[test]

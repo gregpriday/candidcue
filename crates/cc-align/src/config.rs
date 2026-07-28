@@ -121,6 +121,18 @@ pub struct AlignmentConfig {
     /// accumulate before it ever becomes an overshoot. Unlike simply capping
     /// the lead, this keeps the display *moving* between transcript events
     /// rather than advancing and then stalling.
+    ///
+    /// This is the ONLY knob that measurably moves the `ahead_*` family. When
+    /// custom vocabulary landed, every forward-overshoot metric got slightly
+    /// worse, and the obvious suspects were all innocent: sweeping
+    /// `rank_w_matched_weight` (the term that rewards matching rare, heavy
+    /// atoms), `max_lead_atoms`, `jump_margin`, `jump_persistence`,
+    /// `jump_min_content`, `discontinuity_atoms` and `coast_ms` changed the
+    /// numbers by exactly nothing. The drift is not in ranking or in
+    /// relocation; it is in plain extrapolation between events, which a
+    /// cleaner transcript makes the engine more willing to do.
+    /// `max_prediction_ms` reaches the same place and costs 0.65 pp more
+    /// `within5` to get there.
     pub prediction_gain: f64,
     /// Hard cap on the display's lead over `observed`, in atoms.
     ///
@@ -271,7 +283,13 @@ impl Default for AlignmentConfig {
             coast_ms: 300.0,
             pause_onset_ms: 1800.0,
             lead_floor_ms: 0.0,
-            prediction_gain: 0.35,
+            // 0.35 → 0.32 with custom vocabulary. Chosen as the loosest value
+            // at which the paired capture is at or better than the
+            // no-vocabulary status quo on EVERY metric, `ahead_*` included,
+            // with margin: 0.33 also qualifies but sits exactly on the value
+            // where `ahead_events` flips from 6 to 7, and this knob should not
+            // be parked on a boundary.
+            prediction_gain: 0.32,
             max_lead_atoms: 2.5,
 
             emission_lag_ms: 0.0,

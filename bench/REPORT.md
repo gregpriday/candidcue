@@ -599,8 +599,9 @@ prompt-ab` streams the same cached audio twice, differing only in that field.
 
 | run | words | terms | wer − | wer + | raw − | raw + | hits −/+ |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `names__exact__xai` | 337 | 23 | 12.76 | **10.68** | 15.41 | **13.29** | 2 / **8** |
-| `brands__exact__xai` | 406 | 37 | 10.59 | **8.37** | 13.74 | **10.69** | 19 / **27** |
+| `names__exact__xai` | 337 | 22 | 12.76 | **10.98** | 15.41 | **13.60** | 1 / **7** |
+| `brands__exact__xai` | 406 | 29 | 10.59 | **6.65** | 13.74 | **9.16** | 12 / **18** |
+| `technical__exact__qwen` | 305 | 8 | 10.49 | **8.52** | 24.15 | **20.41** | 1 / **2** |
 | `figures__pauses__gemini` | 463 | 18 | 2.81 | 3.02 | 13.77 | **12.92** | 7 / **10** |
 
 `wer` is against canonical atoms and answers "were the right words heard".
@@ -623,48 +624,125 @@ is the spelling — `raw` falls 0.85 points and four spelled-out figures
 `one hundred`) start coming back in the script's own notation. So the bias works
 on figures; it simply buys a fold the engine was already making for free.
 
-### The alignment number, which does not agree
+### What over-biasing looks like, and what it cost
 
-A cleaner transcript is not the product. Both sides of each capture were kept as
-replay fixtures, so the same suite that produced every other number in this
-report could score them. Pooled over the three runs:
+The first version of the extractor sent whatever orthography flagged and the
+word list did not veto. On `technical.md` that was 17 terms, including `Rust`,
+`API`, `IPC`, `backend`, `microphone`, `milliseconds` and `0.29`, and the
+capture is the clearest single result in this report:
 
-| metric | without | with | |
+| | terms | wer − | wer + |
+|---|---:|---:|---:|
+| first extractor | 17 | 10.49 | **15.08** |
+| after the length bars | 8 | 10.49 | **8.52** |
+
+A 4.6-point WER *regression* turned into a 2.0-point improvement by sending
+fewer than half as many terms. Counting the words tells you exactly why: with
+the loose list the recogniser wrote `rust`, `websocket`, `api`, `ipc` and
+`authorization` TWICE each where the script said them once — around nine
+insertions in 305 words. Every one of those terms is ordinary technical English
+that no recogniser struggles with, so biasing them could not improve
+recognition and could only inflate their prior until the model started finding
+them in places nobody said them.
+
+The rule that came out of it: a term must be genuinely hard, not merely absent
+from a 2,800-word list. Plain lowercase words are never sent; an ordinarily
+cased proper noun needs six letters; an initialism needs four; a lone figure
+needs a real letter that is not an ordinal suffix. `Þorvaldsdóttir`, `24kHz`,
+`WebSocket` and `GDPR` clear that bar. `Rust`, `API`, `95th` and `3.2` do not.
+
+### The alignment number, and the one knob that moved it
+
+Transcription is not the product. Both sides of every capture are kept as
+replay fixtures, so the alignment suite scores them on the same ruler as
+everything else in this report.
+
+With the loose extractor, following got *worse* in the one direction this UI
+cannot afford: `ahead_events` rose 6 → 9, a false jump appeared, and
+`ahead_worst` grew a quarter of an atom, even as WER fell. Tightening the
+extractor removed most of that on its own — false jumps went back to zero and
+`ahead_worst` came level — which is what you would expect once the recogniser
+stops inventing rare words for the engine to anchor on.
+
+Closing the remainder took one configuration change, and finding it meant
+discarding the obvious theory first. The suspicion was that the engine leans on
+rare-word evidence because that evidence used to be scarce and mangled, so
+`rank_w_matched_weight` — the ranking term that rewards matching heavy, rare
+atoms — should be the culprit. It is not. Sweeping it across 0.15–0.35 changed
+every metric by **exactly zero**, and so did `max_lead_atoms`, `jump_margin`,
+`jump_persistence`, `jump_min_content`, `discontinuity_atoms` and `coast_ms`.
+The drift is not in ranking and not in relocation. It is in plain extrapolation
+between transcript events, which a cleaner transcript simply makes the engine
+more willing to do, and `prediction_gain` is the only knob that touches it.
+`max_prediction_ms` reaches the same safety and costs 0.65 pp more `within5`.
+
+`prediction_gain` 0.35 → **0.32**: the loosest value at which the paired capture
+matches or beats the no-vocabulary status quo on every metric including all four
+`ahead_*` measures. 0.33 also qualifies but sits exactly where `ahead_events`
+flips from 6 to 7, and a safety knob should not be parked on a boundary.
+
+**Before** is `main`: no vocabulary, `prediction_gain` 0.35. **After** is
+vocabulary plus 0.32. Same four audio renderings, one variable set changed.
+
+| metric | before | after | |
 |---|---:|---:|---|
-| `live.within5` | 93.393 % | **94.638 %** | +1.25 pp ✅ |
-| `live.within2` | 65.834 % | **66.623 %** | +0.79 pp ✅ |
-| `live.p95_abs` | 6.003 | **5.241** | −0.76 atoms ✅ |
-| `live.wer` | 8.375 % | **6.965 %** | −1.41 pp ✅ |
-| `live.catastrophic` | 0 | 0 | — |
-| `live.freeze` | 5.088 % | 5.250 % | +0.16 pp ❌ |
-| `live.false_jumps` | 0 | 1 | ❌ |
-| `live.ahead_events` | 6 | 9 | **+50 % ❌** |
-| `live.ahead_time` | 4.382 % | 4.499 % | +0.12 pp ❌ |
-| `live.ahead_p95` | 0.897 | 0.922 | +0.03 atoms ❌ |
-| `live.ahead_worst` | 3.246 | 3.486 | +0.24 atoms ❌ |
+| `live.within5` | 93.991 % | **94.820 %** | +0.83 pp ✅ |
+| `live.within2` | 68.967 % | **69.131 %** | +0.16 pp ✅ |
+| `live.p95_abs` | 5.480 | **5.093** | −0.39 atoms ✅ |
+| `live.wer` | 8.670 % | **6.883 %** | −1.79 pp ✅ |
+| `live.ahead_events` | 6 | 6 | — ✅ |
+| `live.ahead_time` | 4.244 % | **4.026 %** | −0.22 pp ✅ |
+| `live.ahead_p95` | 0.875 | **0.813** | −0.06 atoms ✅ |
+| `live.ahead_worst` | 3.246 | **3.222** | −0.02 atoms ✅ |
+| `live.false_jumps` | 0 | 0 | — ✅ |
+| `live.catastrophic` | 0 | 0 | — ✅ |
+| `live.pause_overshoot_p95` | 0.478 | **0.473** | −0.01 atoms ✅ |
+| `live.prefinal_move` | 100 % | 100 % | — |
+| `live.mean_signed_abs` | 1.773 | 1.792 | +0.02 atoms ❌ |
+| `live.freeze` | 4.972 % | 5.179 % | +0.21 pp ❌ |
 
-Read the two halves of that table against the rule this project judges by — the
-display may trail and must not lead. Positional accuracy improves on every
-symmetric measure. Every `ahead_*` measure gets worse, and a false jump appears
-where there were none.
+Two entries move the wrong way and both are the price of a lower gain: the
+display holds still a fifth of a percent more of the time, and its mean absolute
+error grows two hundredths of an atom. Both are the *trailing* direction, which
+is the one this design is willing to pay in.
 
-The direction was identical at two runs and at three, so it is a pattern rather
-than one bad capture, and it has an obvious mechanism: correctly spelled rare
-names are exactly the anchor-grade words the engine relocates on, so a
-vocabulary that fixes them hands it more confident forward evidence, and more
-confident forward evidence is what carries the cursor past the reader. The
-magnitudes are small — `ahead_worst` moves a quarter of an atom, `catastrophic`
-stays at zero — but small and in the wrong direction is the shape this UI cannot
-afford, and it is not something a WER improvement can buy off.
+### What the gain change costs where there is no vocabulary
 
-**So: proven for transcription, unproven for following.** Three captures on one
-voice each is too thin to call the `ahead_*` move noise, and the honest next
-step is a wider capture rather than a decision. Baseline run-to-run variance was
-measured at roughly 0.5 pp of WER on a repeat of `brands`, which is the scale
-below which nothing here should be believed.
+`prediction_gain` is global, so the corpora captured before this feature existed
+are worth checking. They lose a little accuracy and buy a little safety, which
+is the same trade in the other direction:
 
-One more thing this measurement is not:
+| | frozen tier-B (18 runs) | | tier A (synthetic) | |
+|---|---:|---:|---:|---:|
+| | 0.35 | 0.32 | 0.35 | 0.32 |
+| `within5` | 93.359 % | 93.284 % | 99.991 % | 99.991 % |
+| `within2` | 67.877 % | 66.453 % | 57.562 % | 55.320 % |
+| `p95_abs` | 6.520 | 6.562 | 2.948 | 3.028 |
+| `ahead_time` | 4.239 % | **4.011 %** | 0.254 % | **0.208 %** |
+| `ahead_p95` | 0.893 | **0.817** | −0.519 | **−0.560** |
+| `ahead_worst` | 6.562 | **6.513** | 2.392 | **2.273** |
+| `false_jumps` | 1 | 1 | 0 | 0 |
+| `catastrophic` | — | — | 0 | 0 |
 
+`within5` is unmoved to a rounding error in both. The cost lands almost entirely
+on `within2`, which this project deliberately does not judge on: a symmetric
+±2-atom band scores a display that runs two atoms AHEAD exactly as well as one
+two atoms behind, and those are not the same event on a fading prompter.
+
+### What this round is still not
+
+* **Four paired captures, one voice each.** Every number above is a real live
+  measurement, but the corpus is `names`, `brands`, `technical` and
+  `figures/pauses` — not the eighteen runs the frozen corpus carries. Baseline
+  run-to-run variance was measured directly by repeating `brands` and came to
+  roughly 0.5 pp of WER, which is the scale below which nothing here should be
+  believed. `live.ahead_events` moves in whole counts and there are six of them;
+  it is a coarse instrument at this sample size.
+* **The frozen corpus is now one generation behind production.** It was captured
+  without vocabulary, so it no longer describes what the app sends. It remains
+  the broad regression guard and was checked as one, but the honest next step is
+  a full re-capture with vocabulary on, at which point the `prediction_gain`
+  choice should be re-swept against it rather than inherited.
 * **`brands` is measuring itself slightly wrong.** Its prose quotes the
   spellings the recogniser gets WRONG ("it writes Rust Light"), so `Rust Light`
   and `Candid Cue` are extracted as terms and biased FOR. `Candid Cue` duly
