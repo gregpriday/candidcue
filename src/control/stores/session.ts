@@ -1280,7 +1280,7 @@ let transcriptTapsEmitted = 0;
 const transcriptTapsDropped = {
   noStageGeneration: 0,
   noRuntime: 0,
-  stageNotAlive: 0,
+  noSession: 0,
   emptyText: 0,
 };
 
@@ -1300,7 +1300,7 @@ function resetTranscriptTap(): void {
   transcriptTapsEmitted = 0;
   transcriptTapsDropped.noStageGeneration = 0;
   transcriptTapsDropped.noRuntime = 0;
-  transcriptTapsDropped.stageNotAlive = 0;
+  transcriptTapsDropped.noSession = 0;
   transcriptTapsDropped.emptyText = 0;
 }
 
@@ -1328,8 +1328,25 @@ function publishTranscriptTap(text: string, final: boolean): void {
     return;
   }
   const s = get(state);
-  if (!s.sessionId || !s.stageAlive) {
-    transcriptTapsDropped.stageNotAlive += 1;
+  /*
+   * `stageAlive` is deliberately NOT consulted.
+   *
+   * It was, and that is the same mistake as gating the bar on `phase ===
+   * 'live'`: a DIAGNOSTIC suppressed by a flag that is only ever wrong when
+   * something has already gone wrong. `stageAlive` is set from a `stage://
+   * closed` event and cleared by nothing until the next take, so any spurious
+   * or mis-generationed close silently darkens the one readout that says
+   * whether the recogniser is hearing anything — while alignment snapshots,
+   * which travel Rust -> stage and never consult it, keep arriving. The
+   * presenter is then looking at a stage that is visibly working and a
+   * transcript bar that says "no words yet".
+   *
+   * Sending to a stage that has genuinely gone costs a rejected promise the
+   * catch below already swallows. That is strictly cheaper than being unable
+   * to see what the microphone is doing.
+   */
+  if (!s.sessionId) {
+    transcriptTapsDropped.noSession += 1;
     return;
   }
 
@@ -1437,7 +1454,11 @@ function resetVoicePill(): void {
 function publishVoicePill(): void {
   if (voicePill === null || stageGeneration === 0) return;
   const s = get(state);
-  if (!s.sessionId || !s.stageAlive) return;
+  // Not `stageAlive` — see `publishTranscriptTap`. The pill is the readout
+  // that says whether the microphone is being heard, and a liveness flag that
+  // is only ever wrong when something is already wrong must not be able to
+  // switch it off.
+  if (!s.sessionId) return;
   if (!cachedEmitTo && !isTauriRuntime()) return;
 
   const nowMs = monotonicNowMs();
