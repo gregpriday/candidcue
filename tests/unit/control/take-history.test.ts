@@ -22,7 +22,6 @@ import type { CompiledScript, AlignmentSnapshot } from '../../../src/shared/cont
 const stage = vi.hoisted(() => ({
   publishStageSnapshot: vi.fn(async () => {}),
   publishStageDirective: vi.fn(async () => {}),
-  publishListenerState: vi.fn(async () => {}),
   closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
   getStageStatus: vi.fn(async () => ({

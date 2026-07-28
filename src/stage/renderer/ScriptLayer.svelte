@@ -1684,8 +1684,8 @@
 
     if (result.degraded !== degraded) {
       degraded = result.degraded;
-      // §61 step 3 lives outside this component, so the flag has to leave the
-      // engine rather than stop at the styling cadence.
+      // The mount site reports on degradation too, so the flag has to leave
+      // the engine rather than stop at the styling cadence.
       ondegraded?.(degraded);
     }
 

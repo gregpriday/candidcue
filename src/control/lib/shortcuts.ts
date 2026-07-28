@@ -1,7 +1,7 @@
 /**
  * Keyboard shortcuts (spec §19). One window-level listener translates key
  * events into named actions; screens subscribe with `onShortcut`. Cmd on
- * macOS, Ctrl elsewhere. Plain-key shortcuts (Space, B, L, T) are suppressed
+ * macOS, Ctrl elsewhere. Plain-key shortcuts (Space, B, T) are suppressed
  * while the user is typing and while the focused control activates itself on
  * the same key; nothing fires behind a modal dialog.
  */

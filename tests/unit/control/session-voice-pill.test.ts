@@ -29,7 +29,6 @@ const stage = vi.hoisted(() => ({
   publishStageDirective: vi.fn(
     async (_sessionId: string, _stageGeneration: number, _directive: StageDirective) => {},
   ),
-  publishListenerState: vi.fn(async () => {}),
   closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
 }));

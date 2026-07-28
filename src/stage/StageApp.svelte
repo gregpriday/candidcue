@@ -411,6 +411,16 @@
   );
   const motionFrozen = $derived(app.frozen);
   const scriptHidden = $derived(app.blanked);
+  /**
+   * Reported on every heartbeat ack and read by the coordinator (§40.5).
+   *
+   * It has had no producer since the Listener was removed (§106): the layer
+   * that decoded video was the only thing on the stage that could report a
+   * media failure, so this is constant `true` today. The channel is kept
+   * because the health field is part of the `StageStatus` contract rather than
+   * anything Listener-shaped — but nothing sets it false, and a reader should
+   * not mistake "healthy" here for a measurement.
+   */
   let mediaHealthy = $state(true);
   let lastInboundAt = 0;
   /**
@@ -544,9 +554,8 @@
   let layoutIssues = $state<string[]>([]);
   /**
    * §61: the stage is missing its frame budget. The engine already backs its
-   * own styling cadence and motion limits off; this is the flag the LAYERS need
-   * — nonessential effects in the script layer (which owns its own) and the
-   * crossfade the §61 degradation ladder names explicitly (step 3).
+   * own styling cadence and motion limits off; this is the flag the LAYERS
+   * need for the nonessential effects each one owns.
    */
   let motionDegraded = $state(false);
   /**

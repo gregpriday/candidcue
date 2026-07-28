@@ -2508,45 +2508,6 @@
     min-width: 24ch;
   }
 
-  .packs {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-  .pack {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
-    padding: var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg-panel);
-  }
-  .pack-text {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .pack-name {
-    font-size: var(--text-sm);
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-  .pack-desc {
-    font-size: var(--text-meta);
-    line-height: var(--lh-meta);
-    color: var(--text-secondary);
-  }
-  .pack-meta {
-    font-size: var(--text-2xs);
-    color: var(--text-muted);
-  }
-
   .diag {
     margin: 0;
     display: flex;

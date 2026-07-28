@@ -357,6 +357,41 @@ describe('stage closed (§62)', () => {
 });
 
 /*
+ * §16.6 the `blank` directive, asserted on the PAYLOAD rather than the call.
+ *
+ * This used to live in tests/unit/control/listener-blank-directive.test.ts,
+ * which was really two tests wearing one name: the Listener's `keepListener`
+ * flag, and the plain blank/unblank pair underneath it. The Listener half went
+ * with the feature (§106); this half did not, and every other blank assertion
+ * in this file checks only that `publishStageDirective` was CALLED — which a
+ * producer emitting the wrong kind, or the wrong `blanked` value, would still
+ * satisfy.
+ */
+describe('the blank directive (§16.6)', () => {
+  function blankDirectives(): unknown[] {
+    return stage.publishStageDirective.mock.calls.map((call) => (call as unknown[])[2]);
+  }
+
+  it('sends the toggled state, and the unblank agrees with the blank', async () => {
+    start(7);
+    await completeBridge();
+    stage.publishStageDirective.mockClear();
+
+    toggleBlankStage();
+    expect(get(session).stageBlanked).toBe(true);
+    toggleBlankStage();
+    expect(get(session).stageBlanked).toBe(false);
+
+    // No `keepListener` — the flag left with the feature, and a directive that
+    // still carried it would mean the stage contract had not actually changed.
+    expect(blankDirectives()).toEqual([
+      { kind: 'blank', blanked: true },
+      { kind: 'blank', blanked: false },
+    ]);
+  });
+});
+
+/*
  * S6 — §62 recoverable stage layout error.
  *
  * The stage held its motion when line measurement stayed unusable after the

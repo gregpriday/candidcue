@@ -119,7 +119,6 @@ function rustSettingsDocument() {
         wakePhrase: 'hey cue',
         wakeMode: 'double_gate',
       },
-      listener: {},
     },
   };
 }

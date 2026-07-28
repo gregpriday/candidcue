@@ -962,13 +962,13 @@ fn the_capture_fixture_covers_the_replayed_commands() {
 
 /// The other half of finding #55: the stage payloads have a typed boundary now.
 ///
-/// These four commands used to take a bare `serde_json::Value`, so the path
-/// that carries the script and the reading cursor had no argument shape at all
-/// — a control side that renamed `renderDocument` or dropped `sourceItemIds`
-/// would have produced a stage that hydrated with nothing, or a snapshot that
-/// meant nothing, with no error anywhere in either language.
+/// These commands used to take a bare `serde_json::Value`, so the path that
+/// carries the script and the reading cursor had no argument shape at all — a
+/// control side that renamed `renderDocument` or dropped `sourceItemIds` would
+/// have produced a stage that hydrated with nothing, or a snapshot that meant
+/// nothing, with no error anywhere in either language.
 ///
-/// The two payload-carrying commands are typed. The two DIRECTIVE commands are
+/// The payload-carrying command is typed. The DIRECTIVE command is
 /// deliberately not: `validate_stage_directive` is an allow-list that answers
 /// an unknown `kind` with `AppError::invalid_input("Unknown stage directive
 /// kind: …")`, and a `#[serde(tag = "kind")]` enum would convert that

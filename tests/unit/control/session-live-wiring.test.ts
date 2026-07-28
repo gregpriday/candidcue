@@ -25,7 +25,6 @@ const stage = vi.hoisted(() => ({
      right answer for a mock that is not modelling a stage window. */
   getStageStatus: vi.fn(async () => ({ exists: false })),
   publishStageDirective: vi.fn(async () => {}),
-  publishListenerState: vi.fn(async () => {}),
   closeStage: vi.fn(async () => {}),
   listDisplays: vi.fn(async () => [{ fingerprint: 'display-0' }]),
 }));

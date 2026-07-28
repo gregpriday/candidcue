@@ -10,7 +10,7 @@
  *
  * Reads the same fixture as `src-tauri/tests/ipc_contract_tests.rs`
  * (`tests/fixtures/ipc/audio-settings-payload.json`), the pattern §30 coaching
- * and §37 Listener settings established.
+ * established.
  *
  * The tests fall into three groups, and each fails on a different revert:
  *
@@ -231,7 +231,6 @@ const ipc = vi.hoisted(() => {
         wakePhrase: 'CandidCue',
         wakeMode: 'strict',
       },
-      listener: {},
     } as Record<string, unknown>,
   };
   let document = structuredClone(base);
