@@ -80,6 +80,8 @@ pub mod events {
     /// is lost outright. This is the stage saying it is reachable; Rust
     /// answers by replaying the envelope it is holding, if any.
     pub const STAGE_LISTENING: &str = "stage://listening";
+    pub const STAGE_SYNC_REQUEST: &str = "stage://sync-request";
+    pub const STAGE_LIVE_SYNC: &str = "stage://live-sync";
     pub const STAGE_HYDRATED: &str = "stage://hydrated";
     pub const STAGE_LAYOUT_READY: &str = "stage://layout-ready";
     pub const STAGE_HEARTBEAT_ACK: &str = "stage://heartbeat-ack";
@@ -1230,8 +1232,21 @@ pub fn publish_stage_command<R: Runtime>(
     if !validate_stage_directive(active.generation, &action)? {
         return Ok(());
     }
+    app.state::<AppCoordinator>()
+        .store_stage_directive(active.generation, &action);
     app.emit_to(STAGE_LABEL, events::STAGE_APPLY_COMMAND, &action)?;
     Ok(())
+}
+
+pub fn replay_stage_live<R: Runtime>(app: &AppHandle<R>, generation: u64) -> bool {
+    let Some(payload) = app
+        .state::<AppCoordinator>()
+        .stage_live_for_replay(generation)
+    else {
+        return false;
+    };
+    app.emit_to(STAGE_LABEL, events::STAGE_LIVE_SYNC, payload)
+        .is_ok()
 }
 
 pub fn publish_listener_state<R: Runtime>(
@@ -1378,6 +1393,8 @@ mod tests {
             events::STAGE_ALIGNMENT_SNAPSHOT,
             events::STAGE_VIEWPORT_HINT,
             events::STAGE_LISTENING,
+            events::STAGE_SYNC_REQUEST,
+            events::STAGE_LIVE_SYNC,
             events::STAGE_HYDRATED,
             events::STAGE_LAYOUT_READY,
             events::STAGE_HEARTBEAT_ACK,
@@ -1424,6 +1441,7 @@ mod tests {
     fn no_relayed_control_event_reuses_a_name_the_stage_emits() {
         let emitted_by_stage = [
             events::STAGE_LISTENING,
+            events::STAGE_SYNC_REQUEST,
             events::STAGE_HYDRATED,
             events::STAGE_LAYOUT_READY,
             events::STAGE_HEARTBEAT_ACK,

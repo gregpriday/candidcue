@@ -44,6 +44,7 @@
     type StageIntent,
     type StageIntentPayload,
     type StageLayoutErrorPayload,
+    type StageLiveSyncPayload,
     type StageListeningPayload,
     type StageListenerHealthPayload,
     STAGE_VOICE_PILL_TRACE_SAMPLES,
@@ -54,6 +55,7 @@
     type StageReadyPayload,
     type StageSnapshotPayload,
     type StageStatePayload,
+    type StageSyncRequestPayload,
     type StageAlignmentPayload,
   } from '../shared/contracts';
   import { subscribeStageEvent, emitStageEvent, isTauri, type Unsubscribe } from './events';
@@ -139,6 +141,7 @@
   const vw = $derived(measuredVw || windowVw);
   const vh = $derived(measuredVh || windowVh);
   let scriptLayer: ScriptLayer | undefined = $state();
+  let liveSyncRevision = 0;
   let previewDriver: PreviewDriver | null = null;
 
   const phase = $derived(displayPhase(app));
@@ -496,6 +499,30 @@
       });
     };
 
+    const onAlignment = (snapshot: StageAlignmentPayload) => {
+      lastInboundAt = performance.now();
+      alignmentArrived += 1;
+      const accepted = scriptLayer?.pushAlignmentSnapshot(snapshot) ?? false;
+      const stats = scriptLayer?.alignmentFeedStats();
+      alignmentFeed = stats
+        ? {
+            accepted: stats.accepted,
+            rejected: stats.rejected,
+            reason: dominantRejectReason(stats),
+            field: stats.lastMalformedField,
+          }
+        : null;
+      if (accepted) dispatch({ type: 'alignment', snapshot });
+    };
+
+    const requestLiveSync = (stageGeneration: number) => {
+      if (!isTauri || stageGeneration === 0) return;
+      emitStageEvent<StageSyncRequestPayload>(STAGE_EVENT.syncRequest, {
+        stageGeneration,
+        lastRevision: liveSyncRevision,
+      });
+    };
+
     void (async () => {
       const subs = await Promise.all([
         subscribeStageEvent<StageSnapshotPayload>(STAGE_EVENT.loadSession, (envelope) => {
@@ -506,6 +533,7 @@
             stageGeneration: envelope.stageGeneration,
             sessionId: envelope.sessionId,
           });
+          requestLiveSync(envelope.stageGeneration);
         }),
         /*
          * Alignment snapshots, straight from Rust, about once a second.
@@ -518,64 +546,17 @@
          */
         subscribeStageEvent<StageAlignmentPayload>(
           STAGE_EVENT.alignmentSnapshot,
-          (snapshot) => {
-            lastInboundAt = performance.now();
-            /*
-             * The push's answer is RECORDED, not discarded.
-             *
-             * A stage that is receiving snapshots and rejecting every one of
-             * them looks, on the glass, exactly like a stage that is receiving
-             * none: the document sits still. The two have nothing in common
-             * underneath — one is a delivery failure, the other a generation or
-             * contract mismatch — and the only place the difference exists is
-             * the receiver's own counters. Reading them here costs one property
-             * access a second and is the difference between diagnosing this from
-             * a take and guessing at it from a description.
-             *
-             * `arrived` counts what the window was handed, which is the other
-             * half: with no ScriptLayer mounted yet there is no receiver to
-             * reject anything, and "nothing arrived" and "nothing was mounted to
-             * receive it" are again the same picture and different faults.
-             */
-            alignmentArrived += 1;
-            const accepted = scriptLayer?.pushAlignmentSnapshot(snapshot) ?? false;
-            /*
-             * Copied, not aliased. `alignmentFeedStats()` hands back the
-             * receiver's own live object, so assigning it would store the same
-             * reference every time — the counters would climb inside a value
-             * `$state` has no reason to believe ever changed, and the readout
-             * would sit on its first reading for the whole take.
-             */
-            const stats = scriptLayer?.alignmentFeedStats();
-            alignmentFeed = stats
-              ? {
-                  accepted: stats.accepted,
-                  rejected: stats.rejected,
-                  reason: dominantRejectReason(stats),
-                  field: stats.lastMalformedField,
-                }
-              : null;
-            /*
-             * Only an ACCEPTED snapshot reaches the reducer.
-             *
-             * The comment above this subscription says the receiver "is the
-             * gate that validates and rejects them" — and it was, for the
-             * motion engine, and only for it. The reducer copy went in
-             * unconditionally, `app.alignment` is handed back to `ScriptLayer`
-             * as a prop, and the §62 fallback path turns that prop into a
-             * scroll target whenever the rendered line map is unresolved. So a
-             * snapshot the receiver had just refused — a stale sequence, or one
-             * belonging to a session this window is not running — could still
-             * move the document, by the one path that runs precisely when the
-             * stage is least sure of its own geometry.
-             *
-             * There is exactly one gate now, and this is downstream of it. A
-             * rejected snapshot leaves the readout showing the last position
-             * the stage actually believes in, which is also the honest answer.
-             */
-            if (accepted) dispatch({ type: 'alignment', snapshot });
-          },
+          onAlignment,
         ),
+        subscribeStageEvent<StageLiveSyncPayload>(STAGE_EVENT.liveSync, (payload) => {
+          const generation = app.envelope?.stageGeneration ?? 0;
+          if (generation === 0 || payload.stageGeneration !== generation) return;
+          if (payload.revision <= liveSyncRevision) return;
+          liveSyncRevision = payload.revision;
+          if (payload.transcript) onDirective(payload.transcript);
+          if (payload.voicePill) onDirective(payload.voicePill);
+          if (payload.alignment) onAlignment(payload.alignment);
+        }),
         /*
          * The transcript bar. Raw recogniser text, read straight off the wire
          * — it deliberately does not pass through the reducer, because its
@@ -694,6 +675,9 @@
         dispatch({ type: 'control_lost' });
       }
     }, 1000);
+    const liveSync = window.setInterval(() => {
+      requestLiveSync(app.envelope?.stageGeneration ?? 0);
+    }, 500);
 
     /*
      * `?preview=1&replay=<url>` replays a frozen Tier-B run — real recorded
@@ -713,6 +697,7 @@
       clearTimeout(exitTimer);
       clearTimeout(escapeHintTimer);
       clearInterval(watchdog);
+      clearInterval(liveSync);
       previewDriver?.stop();
     };
   });

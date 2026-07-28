@@ -92,6 +92,16 @@ impl LateStage {
         });
         rx
     }
+
+    fn subscribe_live_sync(&self) -> mpsc::Receiver<serde_json::Value> {
+        let (tx, rx) = mpsc::channel();
+        self.window.listen(events::STAGE_LIVE_SYNC, move |event| {
+            let payload: serde_json::Value =
+                serde_json::from_str(event.payload()).expect("live checkpoint is json");
+            let _ = tx.send(payload);
+        });
+        rx
+    }
 }
 
 /// Coordinator state for a stage that has been opened for a live session.
@@ -179,6 +189,44 @@ fn the_replay_delivers_the_envelope_the_stage_was_too_late_to_hear() {
         serde_json::json!(stage_generation),
         "and it must be the envelope for THIS stage window"
     );
+}
+
+#[test]
+fn live_sync_recovers_a_transcript_event_the_stage_was_too_late_to_hear() {
+    let app = mock_app();
+    app.manage(AppCoordinator::default());
+    let stage = LateStage::build(&app);
+    let (stage_generation, _session_generation) = open_stage_for_session(&app);
+
+    // Publish while the stage has no apply-command listener: the immediate
+    // event is deliberately lost, exactly like the failure on the real rig.
+    windows::publish_stage_command(
+        app.handle(),
+        SESSION_ID,
+        serde_json::json!({
+            "stageGeneration": stage_generation,
+            "directive": {
+                "kind": "transcript",
+                "text": "recovered across the webview boundary",
+                "final": false
+            }
+        }),
+    )
+    .expect("current transcript directive");
+
+    let rx = stage.subscribe_live_sync();
+    assert!(
+        windows::replay_stage_live(app.handle(), stage_generation),
+        "the stage pull must produce a Rust-owned checkpoint"
+    );
+    let recovered = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the real Tauri stage event hop must deliver the checkpoint");
+    assert_eq!(
+        recovered["transcript"]["directive"]["text"],
+        "recovered across the webview boundary"
+    );
+    assert_eq!(recovered["stageGeneration"], stage_generation);
 }
 
 /// The other ordering, which is equally normal and must stay a no-op: the stage
@@ -405,6 +453,12 @@ fn the_event_bridge_actually_calls_the_replay() {
         "…and record that the stage is reachable, which is what lets control \
          stop charging boot time against the layout budget"
     );
+    assert!(
+        code.contains("listen_any(events::STAGE_SYNC_REQUEST")
+            && code.matches("replay_stage_live").count() >= 2,
+        "live recovery must answer explicit stage pulls and accepted heartbeat \
+         ACKs; either route can heal a dropped webview event"
+    );
     // The bridge is a function. Asserting on its BODY says nothing about
     // whether setup ever runs it — deleting the single call site would leave
     // every other assertion in this file green and the app unable to start.
@@ -416,5 +470,6 @@ fn the_event_bridge_actually_calls_the_replay() {
     // Guard on the guard: if the constant is renamed, the assertions above
     // would pass vacuously against a bridge that wires nothing.
     assert_eq!(events::STAGE_LISTENING, "stage://listening");
+    assert_eq!(events::STAGE_SYNC_REQUEST, "stage://sync-request");
     assert!(app_rs.len() > 1000);
 }

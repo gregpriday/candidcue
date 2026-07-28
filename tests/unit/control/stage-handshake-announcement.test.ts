@@ -86,6 +86,14 @@ describe('the stage announces itself once it can receive events', () => {
     expect(STAGE_EVENT.listening).toBe('stage://listening');
     expect(STAGE_APP.length).toBeGreaterThan(1000);
   });
+
+  it('keeps pulling recoverable live state after hydration', () => {
+    const body = code(STAGE_APP);
+    expect(STAGE_EVENT.syncRequest).toBe('stage://sync-request');
+    expect(body).toContain('STAGE_EVENT.syncRequest');
+    expect(body).toMatch(/setInterval\(\(\)\s*=>\s*\{[\s\S]*requestLiveSync/);
+    expect(body).toContain('clearInterval(liveSync)');
+  });
 });
 
 describe('a stalled handshake says which step stalled', () => {

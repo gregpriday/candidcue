@@ -106,6 +106,10 @@ export const STAGE_EVENT = {
    * `tauri dev`.
    */
   listening: 'stage://listening',
+  /** stage → Rust: ask for the newest recoverable live checkpoint. */
+  syncRequest: 'stage://sync-request',
+  /** Rust → stage: newest alignment and presenter diagnostics. */
+  liveSync: 'stage://live-sync',
   /** stage → Rust: envelope received and applied (handshake step 1). */
   hydrated: 'stage://hydrated',
   /** stage → Rust: fonts + first stable layout done (handshake step 2). */
@@ -294,6 +298,19 @@ export type StageCalibrationMode =
 export interface StageStatePayload {
   stageGeneration: number;
   directive: StageDirective;
+}
+
+export interface StageLiveSyncPayload {
+  stageGeneration: number;
+  revision: number;
+  alignment: AlignmentSnapshot | null;
+  transcript: StageStatePayload | null;
+  voicePill: StageStatePayload | null;
+}
+
+export interface StageSyncRequestPayload {
+  stageGeneration: number;
+  lastRevision: number;
 }
 
 /** `stage://close-session` — emitted just before the window is destroyed. */

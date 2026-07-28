@@ -284,6 +284,14 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
         crate::windows::replay_stage_document(&handle);
     });
 
+    let handle = app.clone();
+    app.listen_any(events::STAGE_SYNC_REQUEST, move |event| {
+        let Some((generation, _)) = generation(event.payload()) else {
+            return;
+        };
+        crate::windows::replay_stage_live(&handle, generation);
+    });
+
     // The stage's "this is what I can see" report (§5 of the alignment
     // integration note). It has to travel this way round because the stage
     // window holds no invoke permission at all — it can emit events and
@@ -339,7 +347,7 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
             let coordinator = handle.state::<AppCoordinator>();
             let revision = value.get("trackingRevision").and_then(|v| v.as_i64());
             let media_healthy = value.get("mediaHealthy").and_then(|v| v.as_bool());
-            coordinator.stage_event(gen, |stage| {
+            let accepted = coordinator.stage_event(gen, |stage| {
                 stage.last_heartbeat_ms = Some(chrono::Utc::now().timestamp_millis());
                 if revision.is_some() {
                     stage.last_tracking_revision = revision;
@@ -348,6 +356,12 @@ fn register_stage_event_bridge(app: &tauri::AppHandle) {
                     stage.media_healthy = healthy;
                 }
             });
+            // The heartbeat was the one control↔stage route proven alive on
+            // the affected rig. Make every accepted ACK carry a replay of the
+            // Rust-owned checkpoint as a second, independent recovery trigger.
+            if accepted {
+                crate::windows::replay_stage_live(&handle, gen);
+            }
         }
     });
 

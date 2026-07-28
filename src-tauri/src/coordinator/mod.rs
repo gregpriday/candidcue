@@ -7,6 +7,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
+use serde::Serialize;
+
 #[derive(Debug, Default, Clone)]
 pub struct StageState {
     pub exists: bool,
@@ -45,6 +47,16 @@ pub struct CoordinatorSnapshot {
     pub session: SessionState,
 }
 
+#[derive(Debug, Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StageLiveSnapshot {
+    pub stage_generation: u64,
+    pub revision: u64,
+    pub alignment: Option<serde_json::Value>,
+    pub transcript: Option<serde_json::Value>,
+    pub voice_pill: Option<serde_json::Value>,
+}
+
 #[derive(Default)]
 pub struct AppCoordinator {
     state: Mutex<CoordinatorSnapshot>,
@@ -76,6 +88,8 @@ pub struct AppCoordinator {
     /// an old generation discards a new generation's envelope. Nothing may
     /// take `pending_document` first and then reach for `state`.
     pending_document: Mutex<Option<(u64, serde_json::Value)>>,
+    /// Latest idempotent live checkpoint for stage recovery.
+    pending_stage_live: Mutex<StageLiveSnapshot>,
     stage_generation: AtomicU64,
     session_generation: AtomicU64,
     quitting: AtomicBool,
@@ -104,6 +118,7 @@ impl AppCoordinator {
         // holding `state`, so the two facts change together — see the lock
         // ordering note on `pending_document`.
         self.clear_stage_document();
+        self.clear_stage_live();
         state.stage = StageState {
             exists: true,
             visible: false,
@@ -175,6 +190,61 @@ impl AppCoordinator {
         *self.pending_document.lock().expect("coordinator poisoned") = None;
     }
 
+    fn clear_stage_live(&self) {
+        *self.pending_stage_live.lock().expect("coordinator poisoned") =
+            StageLiveSnapshot::default();
+    }
+
+    pub fn store_stage_alignment(&self, alignment: serde_json::Value) -> bool {
+        let state = self.state.lock().expect("coordinator poisoned");
+        if !state.stage.exists {
+            return false;
+        }
+        let mut live = self.pending_stage_live.lock().expect("coordinator poisoned");
+        live.stage_generation = state.stage.generation;
+        live.revision = live.revision.saturating_add(1);
+        live.alignment = Some(alignment);
+        true
+    }
+
+    pub fn store_stage_directive(&self, generation: u64, payload: &serde_json::Value) -> bool {
+        let state = self.state.lock().expect("coordinator poisoned");
+        if !state.stage.exists || state.stage.generation != generation {
+            return false;
+        }
+        let kind = payload
+            .get("directive")
+            .and_then(|directive| directive.get("kind"))
+            .and_then(|kind| kind.as_str());
+        if !matches!(kind, Some("transcript" | "voicePill")) {
+            return false;
+        }
+        let mut live = self.pending_stage_live.lock().expect("coordinator poisoned");
+        live.stage_generation = generation;
+        live.revision = live.revision.saturating_add(1);
+        if kind == Some("transcript") {
+            live.transcript = Some(payload.clone());
+        } else {
+            live.voice_pill = Some(payload.clone());
+        }
+        true
+    }
+
+    pub fn stage_live_for_replay(&self, generation: u64) -> Option<StageLiveSnapshot> {
+        let state = self.state.lock().expect("coordinator poisoned");
+        if !state.stage.exists || state.stage.generation != generation {
+            return None;
+        }
+        let live = self.pending_stage_live.lock().expect("coordinator poisoned");
+        if live.stage_generation != 0 && live.stage_generation != generation {
+            return None;
+        }
+        Some(StageLiveSnapshot {
+            stage_generation: generation,
+            ..live.clone()
+        })
+    }
+
     pub fn stage_closed(&self, generation: u64) {
         let mut state = self.state.lock().expect("coordinator poisoned");
         if state.stage.generation == generation {
@@ -202,6 +272,10 @@ impl AppCoordinator {
         let mut pending = self.pending_document.lock().expect("coordinator poisoned");
         if matches!(pending.as_ref(), Some((held, _)) if *held == generation) {
             *pending = None;
+        }
+        let mut live = self.pending_stage_live.lock().expect("coordinator poisoned");
+        if live.stage_generation == generation {
+            *live = StageLiveSnapshot::default();
         }
     }
 
@@ -259,5 +333,67 @@ impl AppCoordinator {
 
     pub fn is_quitting(&self) -> bool {
         self.quitting.load(Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn live_checkpoint_recovers_values_without_an_immediate_delivery() {
+        let coordinator = AppCoordinator::default();
+        coordinator.register_stage(7, Some("take-1".into()), None);
+
+        // These stores model production having generated the live values while
+        // the corresponding immediate webview events were dropped.
+        assert!(coordinator.store_stage_alignment(json!({ "seq": 41 })));
+        assert!(coordinator.store_stage_directive(
+            7,
+            &json!({
+                "stageGeneration": 7,
+                "directive": { "kind": "transcript", "text": "hello stage", "final": false }
+            }),
+        ));
+        assert!(coordinator.store_stage_directive(
+            7,
+            &json!({
+                "stageGeneration": 7,
+                "directive": { "kind": "voicePill", "pill": { "reading": "confirmed" } }
+            }),
+        ));
+
+        let replay = coordinator
+            .stage_live_for_replay(7)
+            .expect("current stage can pull the checkpoint");
+        assert_eq!(replay.stage_generation, 7);
+        assert_eq!(replay.revision, 3);
+        assert_eq!(replay.alignment, Some(json!({ "seq": 41 })));
+        assert_eq!(
+            replay.transcript.unwrap()["directive"]["text"],
+            "hello stage"
+        );
+        assert_eq!(
+            replay.voice_pill.unwrap()["directive"]["pill"]["reading"],
+            "confirmed"
+        );
+    }
+
+    #[test]
+    fn live_checkpoint_never_crosses_stage_generations() {
+        let coordinator = AppCoordinator::default();
+        coordinator.register_stage(7, Some("take-1".into()), None);
+        assert!(coordinator.store_stage_alignment(json!({ "seq": 1 })));
+
+        coordinator.register_stage(8, Some("take-2".into()), None);
+        assert!(coordinator.stage_live_for_replay(7).is_none());
+        let replay = coordinator
+            .stage_live_for_replay(8)
+            .expect("new stage has an empty checkpoint");
+        assert_eq!(replay.revision, 0);
+        assert!(replay.alignment.is_none());
+        assert!(replay.transcript.is_none());
+        assert!(replay.voice_pill.is_none());
     }
 }

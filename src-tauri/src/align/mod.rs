@@ -315,6 +315,12 @@ impl AlignmentState {
 /// contracts to different windows, and a stage that starts receiving control's
 /// diagnostics traffic is a stage doing work it has no reason to do.
 fn publish<R: tauri::Runtime>(app: &tauri::AppHandle<R>, snapshot: &AlignmentSnapshot) {
+    if let (Some(coordinator), Ok(value)) = (
+        app.try_state::<crate::coordinator::AppCoordinator>(),
+        serde_json::to_value(snapshot),
+    ) {
+        coordinator.store_stage_alignment(value);
+    }
     // A failed emit means that window is gone, which alignment can do nothing
     // about and must not tear the session down for.
     let _ = app.emit_to(STAGE_LABEL, events::STAGE_ALIGNMENT_SNAPSHOT, snapshot);

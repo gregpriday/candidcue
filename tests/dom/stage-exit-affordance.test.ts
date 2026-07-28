@@ -360,6 +360,30 @@ describe('the stage exit affordance', () => {
     );
   });
 
+  it('recovers recogniser words from the Rust live checkpoint after an event loss', async () => {
+    await mountLiveStage();
+    expect(document.querySelector('.transcript-tap')?.textContent).toContain('listening');
+
+    // Deliberately do not dispatch applyCommand: this models the immediate
+    // webview event being lost. The next stage pull returns the Rust-owned
+    // checkpoint and must produce the same visible result.
+    dispatchLocalStageEvent(STAGE_EVENT.liveSync, {
+      stageGeneration: STAGE_GENERATION,
+      revision: 4,
+      alignment: null,
+      transcript: {
+        stageGeneration: STAGE_GENERATION,
+        directive: { kind: 'transcript', text: 'recovered after a dropped event', final: false },
+      },
+      voicePill: null,
+    });
+    await settle();
+
+    expect(document.querySelector('.transcript-tap')?.textContent).toContain(
+      'recovered after a dropped event',
+    );
+  });
+
   it('ignores transcript words addressed to another stage generation', async () => {
     await mountLiveStage();
     dispatchLocalStageEvent(STAGE_EVENT.applyCommand, {
