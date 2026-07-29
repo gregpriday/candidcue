@@ -189,6 +189,45 @@
    */
   let fontsSettled = $state(false);
   let fontsResolved = $state(false);
+  /**
+   * The reading composition is on the glass, in the position it will stay in.
+   *
+   * Reported by `ScriptLayer` (`onplacedchange`) rather than inferred here,
+   * because the layer is the only thing that knows: it owns the line map, the
+   * opening placement and the wheel gesture that can settle the question early.
+   * False until it says otherwise, including before the layer exists at all.
+   */
+  let scriptPlaced = $state(false);
+
+  /**
+   * How long the opening plate takes to clear once the script is in place.
+   *
+   * The script is revealed UNDER the plate and the plate then fades off it, so
+   * the first thing the presenter sees is the composition already where it
+   * belongs rather than a cut. Two frames of black would read as a glitch and
+   * half a second would read as a wait; this is the same 200 ms the rest of the
+   * stage chrome uses.
+   */
+  const OPENING_PLATE_FADE_MS = 200;
+  /**
+   * The plate outlives `scriptPlaced` by the length of its own fade.
+   *
+   * Unmounting on the flag would delete the element mid-transition and cut to
+   * the script, which is the thing the fade exists to avoid.
+   */
+  let openingPlateMounted = $state(true);
+  $effect(() => {
+    if (!scriptPlaced) {
+      openingPlateMounted = true;
+      return;
+    }
+    if (reducedMotion) {
+      openingPlateMounted = false;
+      return;
+    }
+    const timer = window.setTimeout(() => (openingPlateMounted = false), OPENING_PLATE_FADE_MS);
+    return () => window.clearTimeout(timer);
+  });
   let pointerHidden = $state(false);
   /*
    * Viewport size, measured with a fallback rather than measured alone.
@@ -1676,12 +1715,35 @@
             onlayoutgeneration={(generation) => (layoutGeneration = generation)}
             onlayouterror={handleLayoutError}
             ondegraded={(degraded) => (motionDegraded = degraded)}
+            onplacedchange={(placed) => (scriptPlaced = placed)}
           />
         </div>
       {/if}
 
-      {#if app.phase === 'handshake' && !app.envelope}
-        <div class="waiting" aria-hidden="true">CandidCue</div>
+      <!--
+        The plate the take opens behind.
+
+        One uninterrupted surface from the moment the stage comes up until the
+        reading composition is on the glass in the position it will stay in —
+        handshake, the envelope arriving, the bounded font wait, the line map
+        being measured, the plant reaching the opening. It used to cover only
+        the first of those, and the rest of the interval was answered by
+        painting the script at scroll zero and moving it a second later.
+
+        A later sibling of `.script-holder` so it covers the script, and an
+        earlier one than the safe plane, the calibration card and the operator
+        plane so all of those still cover IT: a card you calibrate against and
+        the only button that ends a take must not be behind a plate.
+      -->
+      {#if openingPlateMounted}
+        <div
+          class="waiting"
+          class:lifted={scriptPlaced}
+          class:blanked={scriptHidden}
+          aria-hidden="true"
+        >
+          CandidCue
+        </div>
       {/if}
 
       <!--
@@ -2145,16 +2207,53 @@
     visibility: hidden;
   }
 
+  /*
+   * The opening plate. Full-bleed and OPAQUE — unlike the transparent wordmark
+   * this grew out of — because the reveal is a crossfade: the script layer
+   * becomes visible underneath, then this clears off it. With nothing of its
+   * own to fade there is nothing to cross and the script simply appears.
+   *
+   * The field is `--stage-bg`, the same black `.stage-root` paints, so the
+   * plate is invisible as a surface and only its wordmark reads.
+   *
+   * `pointer-events: none` is load-bearing rather than tidy: this covers the
+   * whole stage, and the dock's End button is one of only two ways out of a
+   * take.
+   */
   .waiting {
     position: absolute;
     inset: 0;
     display: grid;
     place-items: center;
+    background: var(--stage-bg);
     color: var(--stage-text-past);
     font-size: var(--text-lg);
     letter-spacing: var(--ls-caps);
     text-transform: uppercase;
     pointer-events: none;
+    transition: opacity var(--dur-slow, 200ms) var(--ease-out, ease-out);
+  }
+
+  .waiting.lifted {
+    opacity: 0;
+  }
+
+  /*
+   * Blank stage (§16.6) reaches this too, and has to.
+   *
+   * The plate is a SIBLING of `.script-holder`, so it is outside the subtree
+   * that rule hides. An opening blanked by the operator would otherwise show a
+   * wordmark on glass that control is reporting as blank — which makes the
+   * report a lie rather than merely looking odd.
+   */
+  .waiting.blanked {
+    visibility: hidden;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .waiting {
+      transition: none;
+    }
   }
 
   /*

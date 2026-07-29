@@ -269,6 +269,92 @@ test('the script is never painted at a position it then leaves', async ({ page }
 });
 
 /*
+ * ...INCLUDING WHEN THE FACE LANDS LATE, WHICH IS WHEN IT USED TO FAIL.
+ *
+ * The test above passes on a warm start and always did: the map is measured
+ * about 150 ms in and the gate opens on the placed position. The presenter's
+ * report was of a COLD one — "it always starts with the top of the screen black
+ * and the text all the way down", then a jump.
+ *
+ * The map cannot be built until the layout is final, and `awaitLayoutStable`
+ * waits on `document.fonts.ready` and on every image to decide that. The reveal
+ * deadline was a flat 700 ms, so any rig where that wait ran longer — a cold
+ * bundled face, a full-screen transition, a busy first second — showed the
+ * script at scroll zero, where the first spoken line sits a fifth of a viewport
+ * BELOW the mark and the glass above it is empty, and then hopped it into
+ * place. Measured before the fix at 1440x900 with the woff2 responses held for
+ * 1.5 s: painted unplaced at 823 ms, jumped 207 px at 1646 ms.
+ *
+ * Delaying the font is the mechanism itself rather than a stand-in for it, and
+ * it is the one input this harness can hold back on demand. The assertion is
+ * the same one as above — one painted position, ever — plus the plate that now
+ * covers the wait, because a gate with nothing behind it is just a dark stage.
+ */
+test('a font that lands late does not open the take at a position it then leaves', async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.route('**/*.woff2', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await route.continue();
+  });
+  await page.goto('/control.html');
+
+  await page.evaluate(() => {
+    (window as unknown as { __TRACE__: unknown[] }).__TRACE__ = [];
+    const tick = () => {
+      const el = document.querySelector('.scroll-plane') as HTMLElement | null;
+      const plate = document.querySelector('.waiting') as HTMLElement | null;
+      if (el) {
+        const m = /translate3d\(0(?:px)?,\s*(-?[\d.]+)px/.exec(el.style.transform);
+        (window as unknown as { __TRACE__: unknown[] }).__TRACE__.push({
+          y: m?.[1] === undefined ? 0 : -Number(m[1]),
+          painted: getComputedStyle(el).visibility !== 'hidden',
+          // The plate covers the stage only while it is opaque and not blanked.
+          covered:
+            plate !== null &&
+            getComputedStyle(plate).visibility !== 'hidden' &&
+            Number(getComputedStyle(plate).opacity) > 0.9,
+        });
+      }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  });
+
+  await page
+    .getByRole('list', { name: 'Scripts' })
+    .getByRole('button', { name: 'Present', exact: true })
+    .first()
+    .click();
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({ timeout: 20_000 });
+  // Past the held font, the map build it gates, and the plate's own fade.
+  await page.waitForTimeout(3000);
+
+  const trace = (await page.evaluate(
+    () => (window as unknown as { __TRACE__: unknown[] }).__TRACE__,
+  )) as Array<{ y: number; painted: boolean; covered: boolean }>;
+
+  const paintedAt = [...new Set(trace.filter((f) => f.painted).map((f) => Math.round(f.y)))];
+  expect(paintedAt.length, `painted at ${paintedAt.join(', ')}`).toBe(1);
+  expect(trace.some((f) => f.painted)).toBe(true);
+
+  // The wait was covered rather than merely dark, and the cover did lift.
+  const beforeReveal = trace.slice(
+    0,
+    trace.findIndex((f) => f.painted),
+  );
+  expect(beforeReveal.length).toBeGreaterThan(0);
+  expect(beforeReveal.every((f) => f.covered)).toBe(true);
+  await expect(page.locator('.waiting')).toHaveCount(0);
+
+  await expect(page.getByText('Thank you for joining me today.')).toBeVisible();
+
+  errors.expectClean();
+});
+
+/*
  * ...AND IT IS STILL SITTING THERE AFTER THE LAYOUT MOVES UNDER IT.
  *
  * A scroll position is a pixel, and before the first spoken word there is no

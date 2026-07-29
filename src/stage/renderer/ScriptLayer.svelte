@@ -130,6 +130,7 @@
     onlayoutgeneration = undefined,
     onlayouterror = undefined,
     ondegraded = undefined,
+    onplacedchange = undefined,
   }: {
     doc: StageRenderDocument;
     settings: StageSettings;
@@ -229,6 +230,23 @@
      * cadence and the motion limits already back off inside the engine.
      */
     ondegraded?: (degraded: boolean) => void;
+    /**
+     * Whether the reading composition may be shown, and the plate lifted.
+     *
+     * Named for what the caller does with it rather than for a guarantee it
+     * cannot make. On every ordinary path this IS "placed in its final
+     * position" — the frame loop reports it the frame the plant reaches its
+     * target. On the two §62 paths it is not: an unusable map after the retry
+     * budget is spent, and the reveal ceiling, both show the script without
+     * knowing where it belongs, because the alternative is a stage that stays
+     * dark. Waiting is bounded; hiding is not a state a take can be left in.
+     *
+     * It has to come from here rather than be recomputed at the mount site:
+     * `manualScrollBy` reveals SYNCHRONOUSLY on a wheel gesture, and a plate
+     * driven by a parallel predicate would sit over a script the presenter has
+     * just put where they want it.
+     */
+    onplacedchange?: (placed: boolean) => void;
   } = $props();
 
   /* ---- viewport + derived layout ---- */
@@ -821,6 +839,13 @@
   const MAP_REBUILD_THROTTLE_MS = 250;
   /** §62 recovery: one bounded retry, then report and stay held. */
   let mapRetries = 0;
+  /**
+   * A §62 rebuild is scheduled but has not run.
+   *
+   * Read by the opening's reveal deadline, which must not call a wait that is
+   * 300 ms from its answer a wait that failed.
+   */
+  let mapRetryPending = false;
   let layoutErrorReported = false;
   const MAX_MAP_RETRIES = 1;
   const MAP_RETRY_DELAY_MS = 300;
@@ -1484,7 +1509,9 @@
       if (mapRetries < MAX_MAP_RETRIES) {
         mapRetries++;
         retryScheduled = true;
+        mapRetryPending = true;
         window.setTimeout(() => {
+          mapRetryPending = false;
           lastMapBuildAtMs = 0;
           scheduleLineMapBuild();
         }, MAP_RETRY_DELAY_MS);
@@ -1693,18 +1720,71 @@
    * hidden behind — a map that never validates must still show its script.
    */
   function revealScript(): void {
-    if (!scriptRevealed) scriptRevealed = true;
+    if (scriptRevealed) return;
+    scriptRevealed = true;
+    onplacedchange?.(true);
   }
 
   /**
-   * How long the stage may stay dark waiting for a position.
+   * How long the stage waits before showing a script it has NOT placed.
    *
-   * Above the frame or two a warm start takes, and well under the point where
-   * a presenter would wonder whether Present had worked. A rig whose fonts or
-   * images take longer than this gets the old behaviour — visible, then a
-   * correction — which is exactly the trade to make at that end of the scale.
+   * Above the frame or two a warm start takes. It is the whole answer only when
+   * nothing is still working on a position — see `openingPlacementStillComing`.
    */
   const OPENING_REVEAL_TIMEOUT_MS = 700;
+
+  /**
+   * The absolute end of the wait, whatever is still in flight.
+   *
+   * Measured on the rig this exists for: with the bundled face already warm the
+   * opening places at ~260 ms, and with it cold the map lands at ~1.6 s — so
+   * three seconds clears both by a wide margin and still fires long before a
+   * presenter would conclude Present had not worked. §62's rule holds at the
+   * end of it: an unusable measurement is reported and lived with, not hidden
+   * behind, so this reveals unconditionally.
+   *
+   * Deliberately under every timeout in the browser suite (7 s default
+   * `expect`, the 10 s opening polls) so a stage that hits the ceiling fails a
+   * test rather than quietly extending one.
+   */
+  const OPENING_REVEAL_CEILING_MS = 3000;
+
+  /**
+   * Something is still working on a position, so waiting is not the same as
+   * being stuck.
+   *
+   * This is the whole correction. The old deadline asked only "has 700 ms
+   * passed", and a rig whose fonts landed at 1.6 s — an ordinary cold start —
+   * answered yes with the line map still being measured. The script was then
+   * painted at scroll zero, where the top of the glass is empty and the first
+   * spoken line sits a fifth of a viewport BELOW the mark, and hopped into
+   * place a second later. Measured at 1440x900: revealed at 823 ms, jumped
+   * 207 px at 1646 ms.
+   *
+   * Three things count as work in flight, and nothing else does:
+   *
+   *   - a map build is running. `awaitLayoutStable` inside it waits on
+   *     `document.fonts.ready` and on every image, which is exactly the wait
+   *     that outlasts 700 ms on a cold start.
+   *   - a §62 rebuild is scheduled. That retry very often succeeds, and
+   *     revealing during it shows scroll zero for 300 ms and then places the
+   *     opening underneath the presenter.
+   *   - an opening target is armed and the frame loop is stopped, so nothing
+   *     is being painted and nothing is being waited for. (Pre-existing; it
+   *     kept its own behaviour.)
+   *
+   * A plant travelling toward a LIVE alignment target is deliberately not on
+   * the list. A presenter who speaks before the map lands hands the document to
+   * the aligner, whose target keeps moving, so `plantAtTarget` may not come
+   * true for as long as they keep talking — and waiting on that would hold the
+   * glass dark through the opening of the take. The frame loop still reveals
+   * the instant it does land.
+   */
+  function openingPlacementStillComing(): boolean {
+    if (lineMapPending) return true;
+    if (mapRetryPending) return true;
+    return openingTargetOutstanding && !loopRunning;
+  }
 
   /**
    * Give up the opening, permanently, and take its target with it.
@@ -1925,18 +2005,76 @@
     mapEverBuilt = false;
     // The engine's own copy goes with `configureSession`; this is ours.
     openingTargetOutstanding = false;
+    /*
+     * The §62 recovery budget belongs to a take, not to a component.
+     *
+     * Left standing, a session that begins during the 300 ms retry window
+     * inherits a spent budget and a pending flag from the take before it: its
+     * own first unusable map gets no retry and is revealed immediately, and the
+     * old timer then rebuilds and places the opening after the plate has
+     * already lifted — which is the correction this whole change exists to
+     * stop, arriving from the one direction nothing else covers.
+     */
+    mapRetries = 0;
+    mapRetryPending = false;
+    onplacedchange?.(false);
+    /*
+     * A new session over a document this component is already showing.
+     *
+     * The three flags above have just declared the position unknown, and
+     * nothing else would ever contradict them: the build effect keys on the
+     * document, the layout inputs and the render window, none of which a
+     * session bump changes. So a second take on a stage window that outlived
+     * the first would sit behind the plate for the whole ceiling and then
+     * reveal wherever the LAST take had left the script — the new take never
+     * opening at the top being the older half of that bug.
+     *
+     * Forcing the build answers both: `placeOpeningPosition` runs off the
+     * rebuilt map, so the take opens where a take opens.
+     *
+     * With one hole left, on long scripts only. The render window is measured
+     * around the retained `scrollY`, which a session bump does not reset, so a
+     * previous take that ended more than the overscan below the top produces a
+     * map that is valid but does not `covers(0)` — and `placeOpeningPosition`
+     * declines a map that cannot answer for the opening rather than guessing
+     * (§62). The second take then reveals where the first one stopped. Fixing
+     * it means resetting the logical position before the rebuild, or forcing
+     * the window to cover token 0; neither is done here.
+     *
+     * `untrack` because this effect's whole contract is "keyed on the session".
+     * `scheduleLineMapBuild` reads `planeEl`, and a tracked read of it would
+     * subscribe the opening to the element binding — re-running the reset, and
+     * with it the plate, on a signal that has nothing to do with a new take.
+     * The build itself declines a stage it cannot measure.
+     */
+    untrack(() => {
+      lastMapBuildAtMs = 0;
+      scheduleLineMapBuild();
+    });
+
     let timer = 0;
+    const startedAtMs = performance.now();
     const deadline = () => {
       /*
-       * A placement that is waiting on a STOPPED frame loop is not a placement
-       * that failed. The window is hidden or the stage is frozen — nothing is
-       * being painted, so nothing is being waited for — and revealing here
-       * would clear the wait while leaving the engine's target armed, so the
-       * document would move the moment the loop came back. Come back later
-       * instead; the frame loop reveals the instant it lands the position.
+       * Waiting is not being stuck — but only until the ceiling, which is what
+       * makes this a bounded promise rather than an open-ended one. Every
+       * branch of `openingPlacementStillComing` is something that can fail to
+       * finish: `awaitLayoutStable` has no bound of its own, a hung image or a
+       * `document.fonts.ready` that never settles holds it forever, and the
+       * `lineMapPending` latch means no later build can take over from it.
        */
-      if (openingTargetOutstanding && !loopRunning) {
-        timer = window.setTimeout(deadline, OPENING_REVEAL_TIMEOUT_MS);
+      const elapsedMs = performance.now() - startedAtMs;
+      if (openingPlacementStillComing() && elapsedMs < OPENING_REVEAL_CEILING_MS) {
+        /*
+         * The remaining time, not another full poll. Re-arming the poll blindly
+         * would make the ceiling the next MULTIPLE of 700 ms above it — 3.5 s
+         * for a 3 s ceiling — which is a number nothing in the code says and
+         * the presenter would be the one to find.
+         */
+        timer = window.setTimeout(
+          deadline,
+          Math.min(OPENING_REVEAL_TIMEOUT_MS, OPENING_REVEAL_CEILING_MS - elapsedMs),
+        );
         return;
       }
       revealScript();
