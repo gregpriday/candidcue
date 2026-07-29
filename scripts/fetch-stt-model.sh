@@ -62,5 +62,7 @@ for file in "${FILES[@]}"; do
   mv "${DEST}/.${file}.part" "${DEST}/${file}"
 done
 
+# ATTRIBUTION.md is committed and must survive a re-fetch — the upstream
+# archive has no licence file, so this repo carries the Apache-2.0 notice.
 echo "Installed into ${DEST}:"
 du -ch "${DEST}" | tail -1
