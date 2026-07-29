@@ -96,6 +96,286 @@ test('the one-screen script follows the control alignment position', async ({ pa
 });
 
 /*
+ * WHERE THE SCRIPT IS SITTING THE MOMENT THE GLASS LIGHTS UP.
+ *
+ * The document's top padding puts the first LINE on the reading mark at scroll
+ * zero, and this script — like nearly every script — opens on a heading nobody
+ * is going to say out loud. So the mark used to point above the words, and the
+ * first thing the presenter heard themselves do was make the document jump
+ * down to the sentence they had already started reading.
+ *
+ * Measured on the real glass because that is the only place it exists: the
+ * position comes from the rendered line map, which is built from measured
+ * rects and is all zeroes without layout.
+ */
+test('the take opens with the first spoken word on the reading mark, not the heading', async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  await page.setViewportSize({ width: 1024, height: 600 });
+  await present(page);
+
+  const firstWord = page.locator('[data-t="0"]');
+  await expect(firstWord).toBeVisible();
+  /*
+   * The PAINTED arrow, not the box it is positioned in.
+   *
+   * The tick's span is a `unitPx`-tall slot centred on the band by transform,
+   * and the triangle is an SVG drawn inside it. Measuring the slot would prove
+   * a claim about the layout; what the presenter looks at is the triangle, so
+   * the path's own rendered rect — stroke included — is what this measures.
+   */
+  const mark = page.locator('.script-layer .cue .tick svg path').first();
+  await expect(mark).toBeAttached();
+
+  // The map is built a frame or two after the first paint, and the opening
+  // placement rides on it.
+  const centreOf = async (locator: typeof firstWord) => {
+    const box = await locator.boundingBox();
+    return box === null ? null : box.y + box.height / 2;
+  };
+  /**
+   * The centre of the first spoken ROW, unioned across every token on it —
+   * which is what the opening actually promises. One token's box is the same
+   * number on a homogeneous row and a different one the moment a row mixes
+   * sizes, so measure the promise rather than a proxy for it.
+   */
+  const rowCentre = async () =>
+    page.evaluate(() => {
+      const first = document.querySelector('[data-t="0"]');
+      if (!first) return null;
+      const firstTop = Math.round(first.getBoundingClientRect().top);
+      let top = Number.POSITIVE_INFINITY;
+      let bottom = Number.NEGATIVE_INFINITY;
+      document.querySelectorAll('[data-t]').forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (Math.round(r.top) !== firstTop) return;
+        top = Math.min(top, r.top);
+        bottom = Math.max(bottom, r.bottom);
+      });
+      return Number.isFinite(top) ? (top + bottom) / 2 : null;
+    });
+
+  const markCentre = (await centreOf(mark))!;
+  const lineHeight = (await firstWord.boundingBox())!.height;
+
+  /*
+   * ON the line, and the claim is exact rather than "near": the opening is the
+   * measured ink centre of the first spoken line placed on the measured mark,
+   * so the only slack this needs is the pixel rounding of two rects. A tenth of
+   * a line fails both phases this replaced — the path's own position for unit 0
+   * (half a pitch high, on the line's top edge) and the pitch-arithmetic that
+   * followed it (about a seventh of a line low, on the baseline).
+   */
+  await expect
+    .poll(async () => Math.abs((await rowCentre())! - markCentre), {
+      message: 'the first spoken line should open centred on the reading mark',
+      timeout: 10_000,
+    })
+    .toBeLessThan(lineHeight / 10);
+
+  /*
+   * ...and the same claim at four shapes of glass. The opening is derived from
+   * measured geometry, so the way it fails is a rig whose numbers differ from
+   * the developer's — a short wide prompter strip, a large panel — which is
+   * exactly what a single viewport cannot see. (A 1920x520 stage is in the list
+   * because it is the shape that caught the map merging two rendered rows into
+   * one map line, which put the mark exactly half a row low and nowhere else.)
+   */
+  for (const size of [
+    { width: 1920, height: 520 },
+    { width: 2560, height: 900 },
+    { width: 1280, height: 720 },
+  ]) {
+    await page.setViewportSize(size);
+    await expect
+      .poll(
+        async () => {
+          const arrow = await centreOf(mark);
+          const row = await rowCentre();
+          return arrow === null || row === null ? Number.POSITIVE_INFINITY : Math.abs(arrow - row);
+        },
+        { message: `arrow centred on the first line at ${size.width}x${size.height}`, timeout: 10_000 },
+      )
+      .toBeLessThan(1.5);
+  }
+
+  // ...and the heading it skipped is still on screen, above the mark, where a
+  // presenter can see what section they are in.
+  const heading = page.getByText('Opening', { exact: true }).first();
+  expect((await centreOf(heading))!).toBeLessThan(markCentre);
+
+  errors.expectClean();
+});
+
+/*
+ * THE SCRIPT IS NEVER PAINTED SOMEWHERE IT IS NOT GOING TO STAY.
+ *
+ * The opening position cannot be known until the document has been laid out and
+ * measured, and the map that measures it lands a frame or more after the first
+ * paint — behind a font wait with no bound. So the honest sequence was: the
+ * script appears at scroll zero, then moves to where it belongs. One frame,
+ * entirely correct, and it reads as a teleprompter twitching as it opens.
+ *
+ * This is the assertion that the presenter's own report becomes: sample every
+ * animation frame from before Present is pressed, and require that every frame
+ * in which the script was actually PAINTED shows it in the same place.
+ */
+test('the script is never painted at a position it then leaves', async ({ page }) => {
+  const errors = watchPageErrors(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto('/control.html');
+
+  // Sampling starts BEFORE Present, so the first painted frame is in the trace.
+  await page.evaluate(() => {
+    (window as unknown as { __TRACE__: unknown[] }).__TRACE__ = [];
+    const tick = () => {
+      const el = document.querySelector('.scroll-plane') as HTMLElement | null;
+      if (el) {
+        const m = /translate3d\(0(?:px)?,\s*(-?[\d.]+)px/.exec(el.style.transform);
+        (window as unknown as { __TRACE__: unknown[] }).__TRACE__.push({
+          y: m?.[1] === undefined ? 0 : -Number(m[1]),
+          // COMPUTED, so it sees the gate wherever it is applied — the layer
+          // holds the whole reading composition, and visibility inherits.
+          painted: getComputedStyle(el).visibility !== 'hidden',
+        });
+      }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  });
+
+  await page
+    .getByRole('list', { name: 'Scripts' })
+    .getByRole('button', { name: 'Present', exact: true })
+    .first()
+    .click();
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({ timeout: 20_000 });
+  await page.waitForTimeout(2000);
+
+  const trace = (await page.evaluate(
+    () => (window as unknown as { __TRACE__: unknown[] }).__TRACE__,
+  )) as Array<{ y: number; painted: boolean }>;
+
+  const paintedAt = [...new Set(trace.filter((f) => f.painted).map((f) => Math.round(f.y)))];
+  expect(paintedAt.length, `painted at ${paintedAt.join(', ')}`).toBe(1);
+
+  // ...and it did get painted. A gate that never opened would satisfy the line
+  // above and leave the presenter looking at a blank stage.
+  expect(trace.some((f) => f.painted)).toBe(true);
+  await expect(page.getByText('Thank you for joining me today.')).toBeVisible();
+
+  errors.expectClean();
+});
+
+/*
+ * ...AND IT IS STILL SITTING THERE AFTER THE LAYOUT MOVES UNDER IT.
+ *
+ * A scroll position is a pixel, and before the first spoken word there is no
+ * anchor to carry a pixel across a relayout: §33 re-anchors on the unit the
+ * aligner was on, and there is no unit yet. So an opening that was placed once
+ * and left alone is stale the moment anything re-wraps the script — the bundled
+ * font landing after the bounded wait, a virtualized height estimate being
+ * replaced by a measurement, the type size being nudged while the presenter
+ * settles. It lands about a line out, which is exactly far enough to point at
+ * the wrong line and no further.
+ *
+ * A viewport change is the relayout this harness can order on demand; the
+ * mechanism it stands in for is the font.
+ */
+test('the opening position survives a relayout that happens before the first word', async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await present(page);
+
+  /** How far down the script the document is painted, in pixels. */
+  const scrollPx = async () =>
+    page.locator('.scroll-plane').evaluate((el) => {
+      const match = /translate3d\(0(?:px)?,\s*(-?[\d.]+)px/.exec((el as HTMLElement).style.transform);
+      return match?.[1] === undefined ? 0 : -Number(match[1]);
+    });
+
+  const arrow = page.locator('.script-layer .cue .tick svg path').first();
+  const firstWord = page.locator('[data-t="0"]');
+  const centreOf = async (locator: typeof firstWord) => {
+    const box = await locator.boundingBox();
+    return box === null ? null : box.y + box.height / 2;
+  };
+  const arrowOffFirstLine = async () => {
+    const a = await centreOf(arrow);
+    const line = await centreOf(firstWord);
+    return a === null || line === null ? Number.POSITIVE_INFINITY : Math.abs(a - line);
+  };
+
+  /*
+   * Relayouts with nothing spoken between them. A viewport change is the one
+   * this harness can order on demand; the mechanism it stands in for is a font
+   * landing late. The shapes are chosen to move the WRAP as well as the height,
+   * because a re-wrap is what makes a remembered pixel meaningless.
+   */
+  for (const size of [
+    { width: 980, height: 820 },
+    { width: 1600, height: 620 },
+    { width: 1920, height: 520 },
+  ]) {
+    await page.setViewportSize(size);
+    await expect
+      .poll(arrowOffFirstLine, {
+        message: `the arrow should still be on the first line at ${size.width}x${size.height}`,
+        timeout: 10_000,
+      })
+      .toBeLessThan(1.5);
+  }
+
+  /*
+   * ...and when the aligner finally speaks, it does not drag the document
+   * BACKWARD to say it.
+   *
+   * The opening is the middle of the first line; the path's own position for
+   * unit 0 is that line's entry, a fraction of a line earlier. The engine holds
+   * rather than un-reads (the forward latch), and the difference is absorbed as
+   * the presenter reads into the line. Backwards is the direction that matters:
+   * a teleprompter that reverses under someone mid-sentence has lost them.
+   */
+  const opened = await scrollPx();
+  await page.evaluate(() => {
+    const generation = window.__E2E__.lastSession?.sessionGeneration ?? 0;
+    window.__E2E__.emit('align://snapshot', {
+      sessionGeneration: generation,
+      seq: 1,
+      state: 'following',
+      decision: 'localConfirmed',
+      confirmedToken: 0,
+      observedToken: 0,
+      rateTokensPerSecond: 2,
+      evidenceAudioMs: 1000,
+      atAudioMs: 1000,
+      maxPredictionMs: 0,
+      pauseOnsetMs: 400,
+      leadFloorMs: 0,
+      maxLeadTokens: 0,
+      displayLimitToken: 0,
+      confidence: 0.95,
+      suggestionToken: null,
+      scriptLenTokens: 30,
+      observedAtom: 0,
+      confirmedAtom: 0,
+    });
+  });
+  await expect(page.locator('.stage-root')).toHaveAttribute('data-phase', 'live');
+  await page.waitForTimeout(2000);
+
+  expect(
+    (await scrollPx()) - opened,
+    'the first snapshot must never move the document backward',
+  ).toBeGreaterThanOrEqual(-1);
+
+  errors.expectClean();
+});
+
+/*
  * ONE ESCAPE ASKS; TWO END IT — the same rule the standalone stage window has
  * always had.
  *

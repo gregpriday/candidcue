@@ -50,6 +50,50 @@ async function present(page: Page): Promise<void> {
   // The map is built from measured rects on a later frame than the first paint;
   // the transport has no pace until it exists.
   await expect(page.locator('.script-layer')).toBeVisible();
+  await settleOpening(page);
+}
+
+/**
+ * Wait out the OPENING PLACEMENT before anything here samples a position.
+ *
+ * A take opens by putting the first spoken word on the reading mark, which on a
+ * script that begins with a heading means one instant move on the first valid
+ * line map — a frame or two after the layer is visible, which is exactly the
+ * window a test that presents and immediately samples would catch. Every claim
+ * in this file is about what the TRANSPORT does; racing that move would make
+ * the negative case fail for something that is not the transport at all.
+ */
+async function settleOpening(page: Page): Promise<void> {
+  /*
+   * The script is not PAINTED until it is at its opening position, so the gate
+   * opening is the signal — not a run of unchanged pixels, which scroll zero
+   * satisfies perfectly while the real position is still being measured.
+   */
+  await expect
+    .poll(
+      () =>
+        page
+          .locator('.script-layer')
+          .evaluate((el) => getComputedStyle(el).visibility !== 'hidden'),
+      { timeout: 10_000, intervals: [80] },
+    )
+    .toBe(true);
+
+  /*
+   * Then the belt: consecutive UNCHANGED samples over real elapsed time, so a
+   * relayout landing just after the reveal cannot be mistaken for the transport.
+   */
+  const deadline = Date.now() + 5_000;
+  let previous = Number.NaN;
+  let unchanged = 0;
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(120);
+    const now = await scrollPx(page);
+    unchanged = Math.abs(now - previous) < 0.5 ? unchanged + 1 : 0;
+    previous = now;
+    if (unchanged >= 3) return;
+  }
+  throw new Error('the opening placement never settled');
 }
 
 /**
@@ -89,6 +133,66 @@ test.beforeEach(async ({ page }) => {
     keyStatus: { present: true, hint: 'sk-…live', source: 'keychain' },
     promptMode: 'voice',
   });
+});
+
+/*
+ * A ROLL IS A TAKE IN PROGRESS, AND A RELAYOUT AFTERWARDS MUST NOT ARGUE WITH IT.
+ *
+ * The take's opening position is re-stated on every line-map rebuild until
+ * something with more authority takes the document, and the transport is one of
+ * those things — but it is nearly invisible to a rebuild: nothing about a roll
+ * is guaranteed to build a map, and starting one calls `releaseAlignment`,
+ * which clears the aligner's token. Change the type size after rolling three
+ * paragraphs down with no recogniser running, and the presenter can be thrown
+ * back to the top of the script.
+ *
+ * Honest about its own reach: on this fixture a rebuild does land during the
+ * roll, so the position also survives on the strength of the guard that samples
+ * authority AT a rebuild. What that guard cannot cover — a roll with no rebuild
+ * inside it — is covered by latching the handover on the frame the transport
+ * starts, which is argued in `ScriptLayer` rather than proven here.
+ */
+test('a relayout after a roll leaves the document where the roll left it', async ({ page }) => {
+  const errors = watchPageErrors(page);
+  await present(page);
+
+  /*
+   * Travel measured FROM THE OPENING, not from zero. The take now opens partway
+   * down the script — the first spoken line is placed on the mark — so an
+   * absolute threshold can be satisfied by the opening alone and prove nothing
+   * about the roll.
+   */
+  const opened = await scrollPx(page);
+  await page.keyboard.press('a');
+  await expect
+    .poll(() => scrollPx(page), { timeout: 15_000, intervals: [250] })
+    .toBeGreaterThan(opened + 120);
+  await page.keyboard.press('a');
+  // Stopping is a coast; let the plant come to rest before reading a position.
+  await page.waitForTimeout(1500);
+  const stopped = await scrollPx(page);
+
+  // The relayout. No words have been spoken in this take at any point.
+  await page.setViewportSize({ width: 1180, height: 780 });
+  await page.waitForTimeout(2000);
+
+  /*
+   * Semantic, not pixel: a resize re-wraps the script, so the scroll offset
+   * that holds the same words on the mark is a different number afterwards.
+   * What must not have happened is a return to the opening — which is what the
+   * distance is measured against.
+   */
+  const after = await scrollPx(page);
+  /*
+   * Compared against the OPENING, which is where a lost roll would land: the
+   * take no longer starts at zero, so `stopped / 2` could be cleared by a
+   * document that had been thrown all the way back.
+   */
+  expect(after, 'the roll must not be undone by a rebuild').toBeGreaterThan(
+    opened + (stopped - opened) / 2,
+  );
+
+  errors.expectClean();
 });
 
 test('the script does not roll until it is asked to', async ({ page }) => {

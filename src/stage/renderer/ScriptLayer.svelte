@@ -104,6 +104,7 @@
     sameLayout,
     type AlignmentReceiverStats,
     type FallbackTarget,
+    type MeasuredTokenRect,
     type StageRenderedLineMap,
   } from '../motion';
 
@@ -1435,6 +1436,18 @@
     const geometryMoved = disagreementPx > GEOMETRY_DRIFT_TOLERANCE_PX;
 
     lineMap = next;
+    /*
+     * VALID, not merely built. The reveal gate reads this as "the stage now
+     * knows where the script is", and an unusable measurement knows nothing —
+     * §62 rebuilds it once, 300 ms later, and that rebuild very often succeeds
+     * because layout had simply not settled. Counting the failed attempt would
+     * open the gate at scroll zero for those 300 ms and then place the opening
+     * underneath the presenter: the exact hop this gate exists to prevent,
+     * arriving through the one path most likely to hit it. The retry is bounded
+     * and the deadline covers it; when the retries are spent, the tail of this
+     * function reveals deliberately rather than by omission.
+     */
+    if (next.valid) mapEverBuilt = true;
     engine.setBounds(0, maxScroll);
 
     if (layoutChanged && hadValidMap && next.valid) {
@@ -1459,14 +1472,18 @@
     }
     if (layoutChanged) onlayoutgeneration?.(layoutGeneration);
 
+    placeOpeningPosition(next, now, firstSpokenRowCentre(measurement.tokens));
+
     // §62: an unusable measurement is recoverable — layout may simply not have
     // settled yet. Rebuild ONCE, then stop retrying and report it. The stage
     // holds throughout (the engine suspends both the semantic planner and the
     // guessed snapshot fallback while the map is unresolved), so a retry loop
     // would only burn frames on the presenter's glass.
+    let retryScheduled = false;
     if (!next.valid) {
       if (mapRetries < MAX_MAP_RETRIES) {
         mapRetries++;
+        retryScheduled = true;
         window.setTimeout(() => {
           lastMapBuildAtMs = 0;
           scheduleLineMapBuild();
@@ -1486,11 +1503,398 @@
         onlayouterror?.([]);
       }
     }
+
+    /*
+     * A build has happened and armed no reveal — the map is unusable (§62), or
+     * the opening has already been handed over. The position is then as known
+     * as it is ever going to be, so the script is shown NOW rather than left
+     * behind the reveal's deadline: the dark window is bounded by the work, and
+     * the timer exists only for a build that never finishes at all.
+     *
+     * Except while a retry is in flight, which is why this sits BELOW the block
+     * above rather than beside the placement. A first map that failed to
+     * measure is the case most likely to be fixed 300 ms later, and revealing
+     * in between would show the script at scroll zero and then move it — the
+     * exact hop this gate exists to prevent, in the one path most likely to hit
+     * it.
+     */
+    if (!next.valid && !retryScheduled) revealScript();
+  }
+
+  /* ---------------------------------------------------------------------
+   * Where the take opens
+   *
+   * The document's top padding puts the FIRST LINE on the reading mark at
+   * scroll 0, and until the first snapshot lands that is where the stage sits.
+   * When the script opens on a heading — which is how nearly every script is
+   * written, and headings are not spoken unless the presenter asked for them —
+   * the mark therefore points at a line nobody is going to read, and the first
+   * thing the presenter hears themselves do is make the document jump down to
+   * the sentence they had already started.
+   *
+   * So the opening position is built from the one the aligner would choose for
+   * the first spoken word: `sampleMotionPath` at unit 0, which is the first
+   * knot of the path and by construction the first line that HAS spoken tokens
+   * on it. A script that opens straight into prose barely moves; one that opens
+   * on a heading starts under it, on the words. Turning on "read headings"
+   * makes the heading unit 0 and the mark stays where it was — the rule is the
+   * same one either way, which is why it is expressed as the path and not as a
+   * skip.
+   *
+   * ---------------------------------------------------------------------------
+   * ...PLUS HALF A LINE, WHICH IS NOT A FUDGE
+   * ---------------------------------------------------------------------------
+   * `R` is where a line ENTERS, not where the mark is (see `lineEntryPx`): the
+   * document sits an offset below the mark so the line being read passes
+   * THROUGH it rather than arriving on it. So the path's own position for unit
+   * 0 — a line nobody has started — puts the mark on that line's top edge, half
+   * a pitch above its middle. Measured on the glass at 1280x720, pitch 85: the
+   * mark sits 39px above the first line's centre at unit 0, dead on its centre
+   * two words in, and 37px below it four words in. It sweeps the line.
+   *
+   * A presenter looking at a stopped stage is not reading a line's entry, they
+   * are looking for the line. Half a pitch is exactly the difference between
+   * the entry phase and the middle of that sweep, which is where the mark sits
+   * for the whole middle of every line they will read — including two words
+   * into this one, which is where the first transcript partial lands. So the
+   * opening is not a different rule from following; it is the SAME phase, read
+   * at the moment following will actually pick it up. That is why the first
+   * words no longer move the document: there is nothing left to correct.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY IT IS RE-ASSERTED, NOT PLACED ONCE
+   * ---------------------------------------------------------------------------
+   * A scroll position is a PIXEL, and pixels do not survive a relayout. Before
+   * the first spoken word there is no anchor to carry one across either: §33's
+   * `layoutRecovery` re-anchors on the unit the aligner was on, and with no
+   * snapshot yet — and no gesture — there is no unit, so it preserves nothing
+   * and the plant keeps a number the new layout has made meaningless.
+   *
+   * Relayouts before the first word are not exotic, they are the norm: the
+   * bundled font landing after the bounded wait re-wraps every line, a
+   * virtualized height estimate is replaced by a measurement, the operator
+   * nudges the type size while the presenter settles. Placing once and walking
+   * away leaves the mark wherever the old geometry happened to put it — about a
+   * line out, which is exactly far enough to point at the wrong line and no
+   * further, so it reads as the tracking being broken rather than as a stale
+   * number.
+   *
+   * So the opening is a STANDING position: every valid map re-states it, until
+   * something with more authority takes the document — and then never again,
+   * because `handOverOpening` latches.
+   *
+   * The handover is latched AT THE EVENTS, not sampled here when a map happens
+   * to rebuild, and the difference is a real bug rather than tidiness. Nothing
+   * about starting or stopping the fixed-pace transport rebuilds the line map,
+   * and starting it calls `releaseAlignment`, which nulls `lastDisplayToken`.
+   * So a roll that began and ended between two rebuilds would leave every
+   * sampled guard reading false, and the next relayout — a font nudge, a
+   * resize — would answer it by re-stating the opening and throwing the
+   * presenter back to the top of the script mid-take.
+   * ------------------------------------------------------------------- */
+
+  /** Something with more authority than an opening guess has the document. */
+  let openingHandedOver = false;
+  /** An opening target has been written and nothing has consumed it yet. */
+  let openingTargetOutstanding = false;
+
+  /* ---------------------------------------------------------------------
+   * Showing the script only once it is where it belongs
+   *
+   * The opening position cannot be known before the document has been laid out
+   * and measured, and the map that measures it is built a frame or more after
+   * the first paint — behind a font wait that has no bound at all
+   * (`awaitLayoutStable` waits on `document.fonts.ready` and every image). So
+   * the honest sequence is: the script appears at scroll 0, and then moves.
+   *
+   * The presenter sees that as the take starting slightly low and hopping. It
+   * is one frame and it is correct, and it still looks like a bug — a
+   * teleprompter that twitches as it opens is a teleprompter you do not trust
+   * at the moment you most need to.
+   *
+   * So the reading composition is not PAINTED until the position is real.
+   * Nothing fades and nothing eases: the script is simply not shown in a place
+   * it is not going to stay.
+   *
+   * Three decisions inside that, none of them arbitrary:
+   *
+   * `visibility`, not opacity. Opacity on the moving plane is the motion
+   * engine's channel for the §20.4 re-anchor obscuration, and two owners on one
+   * property is how a guarantee about the ordering of two writes gets quietly
+   * broken. Visibility also keeps the boxes — layout, `Range.getClientRects`
+   * and therefore the line map all proceed underneath — so this hides the paint
+   * without delaying the work that ends it.
+   *
+   * On the LAYER, not the plane. The mark, the fades and the script are one
+   * composition; a mark hanging over an empty stage waiting for its script to
+   * arrive is its own small "is this thing working?". The take opens as one
+   * thing. Deliberately not wider than that: the dock, the voice pill and the
+   * status chrome belong to the stage, not to the reading, and a presenter
+   * pressing Present should see the session come up immediately.
+   *
+   * And it is a GATE, not a delay: every path that could end the wait opens it,
+   * including a map that never validates.
+   *
+   * It authors `hidden` and NOTHING ELSE — never `visible`. Blanking the stage
+   * hides an ANCESTOR (`.script-holder.blanked`), and visibility is the one
+   * inherited property a descendant can countermand: an explicit `visible` here
+   * would punch the script, the mark and the fades straight back through a
+   * blanked stage while control reported it as blanked.
+   * ------------------------------------------------------------------- */
+
+  let scriptRevealed = $state(false);
+  /** A VALID map has existed this session. Before that, no position is knowable. */
+  let mapEverBuilt = $state(false);
+  /** The plant has arrived at whatever the frame loop is aiming it at. */
+  let plantAtTarget = $state(false);
+
+  /**
+   * The stage does not know where the script belongs yet, so it is not shown.
+   *
+   * Two conditions, and they are the two halves of the same question — does a
+   * position exist, and is the document at it:
+   *
+   *   - no VALID map has been built, so nothing has been measured to aim at;
+   *   - the plant has not reached the target it is being aimed at.
+   *
+   * The second is deliberately about the TARGET rather than about the opening.
+   * The opening is only one of the things that can own the document during
+   * those first frames — a presenter who speaks before the map lands hands it
+   * to the aligner instead, and a rule written in terms of the opening would
+   * reveal at scroll zero and then let the aligner glide the script into place
+   * under them. Asking whether the plant is where it is being sent covers every
+   * authority, including the ones that arrive while the glass is still dark.
+   *
+   * The viewport terms keep it honest rather than merely cautious. A stage with
+   * no measurable glass — a hidden window, a harness where every rect is zero —
+   * has no map coming and nothing to wait for, and a gate that waited anyway
+   * would be a blank teleprompter with a timer as its only way out.
+   */
+  const awaitingOpeningPlacement = $derived(
+    !scriptRevealed && vh > 0 && vw > 0 && (!mapEverBuilt || !plantAtTarget),
+  );
+
+  /**
+   * How close the plant must be to its target to call the document placed.
+   *
+   * Two pixels: an instant placement lands exactly, and a jerk-limited
+   * approach to a live alignment target settles inside this within a frame or
+   * two — which is the case this tolerance is for. Zero would wait on a plant
+   * that is legitimately still converging by fractions.
+   */
+  const REVEAL_SETTLE_PX = 2;
+
+  /**
+   * Show the script, whatever the opening did or did not manage.
+   *
+   * Every path that ends the wait calls this, and so does a timer, because the
+   * one outcome worse than a hop is a presenter looking at a blank stage. §62
+   * is explicit that an unusable measurement is reported and lived with, not
+   * hidden behind — a map that never validates must still show its script.
+   */
+  function revealScript(): void {
+    if (!scriptRevealed) scriptRevealed = true;
+  }
+
+  /**
+   * How long the stage may stay dark waiting for a position.
+   *
+   * Above the frame or two a warm start takes, and well under the point where
+   * a presenter would wonder whether Present had worked. A rig whose fonts or
+   * images take longer than this gets the old behaviour — visible, then a
+   * correction — which is exactly the trade to make at that end of the scale.
+   */
+  const OPENING_REVEAL_TIMEOUT_MS = 700;
+
+  /**
+   * Give up the opening, permanently, and take its target with it.
+   *
+   * The target is retired rather than left to expire because it cannot expire:
+   * it was written `instant`, and an `instant` target is only downgraded on the
+   * frame it is actually SELECTED (`engine.ts`, the fallback branch). One
+   * written while an accepted snapshot outranks it is never selected and never
+   * downgraded — it stays armed, and the fifteen-second staleness window is
+   * long enough for the presenter to have read half a page by the time it
+   * fires. Whoever is taking over writes their own target on their next frame;
+   * a null one in the meantime means the engine holds, which is correct.
+   */
+  function handOverOpening(): void {
+    if (openingHandedOver) return;
+    openingHandedOver = true;
+    if (openingTargetOutstanding) {
+      openingTargetOutstanding = false;
+      engine.setFallbackTarget(null);
+    }
+    /*
+     * Stop WAITING for an opening — but do not, by itself, show the script.
+     *
+     * The two are different questions and running them together is a way to
+     * reproduce the original bug. A snapshot accepted before the first map is a
+     * real handover, and the engine explicitly cannot act on it yet: there is
+     * no planner to ask. Revealing there would paint the script at scroll zero
+     * and then move it the moment the map lands, which is the hop this gate
+     * exists to prevent, arriving by a different road.
+     *
+     * So the reveal stays with the condition that describes it — a map exists,
+     * or the deadline passed. `manualScrollBy` is the exception and says so
+     * itself: it writes the position synchronously, so there is something
+     * correct to show the instant it is asked for.
+     */
+  }
+
+  /**
+   * The middle of the first spoken ROW, in document pixels, from the same rects
+   * the map was built from.
+   *
+   * Deliberately NOT `map.lines[0]`. A map "line" groups token rects whose tops
+   * agree within `0.35 x lineHeightPx`, and `lineHeightPx` is a MEDIAN over the
+   * script — so on a layout where most paragraphs fit on one row, the median
+   * becomes the paragraph-to-paragraph distance and the tolerance grows past a
+   * real row. Two rows then merge into one "line", whose ink centre is the gap
+   * between them. Measured: a 1920x520 stage put the mark exactly half a row
+   * low, and only on that shape, which is the kind of bug that ships.
+   *
+   * A row is tokens that share a top to within a quarter of their own height —
+   * a test made of the thing being grouped, so it cannot be widened by a
+   * statistic about the rest of the document.
+   */
+  function firstSpokenRowCentre(tokens: readonly MeasuredTokenRect[]): number | null {
+    let first: MeasuredTokenRect | null = null;
+    for (const token of tokens) {
+      if (!Number.isFinite(token.topY) || !Number.isFinite(token.bottomY)) continue;
+      if (first === null || token.tokenIndex < first.tokenIndex) first = token;
+    }
+    if (first === null) return null;
+    /*
+     * Membership is vertical OVERLAP, not a distance between tops.
+     *
+     * A tolerance measured off the first token asks every other token to look
+     * like that one, which is wrong in both directions the moment a row is not
+     * homogeneous: a small first run (inline code in another face) would
+     * exclude its own normal-sized neighbours and centre the mark on the small
+     * run, and an oversized first token would swallow the row below. Overlap
+     * asks the question that actually defines a row — do these two boxes sit
+     * across the same band of the glass — and it scales itself.
+     */
+    let top = first.topY;
+    let bottom = first.bottomY;
+    for (const token of tokens) {
+      const overlap =
+        Math.min(token.bottomY, first.bottomY) - Math.max(token.topY, first.topY);
+      const shorter = Math.min(token.bottomY - token.topY, first.bottomY - first.topY);
+      if (!(overlap > shorter * 0.5)) continue;
+      top = Math.min(top, token.topY);
+      bottom = Math.max(bottom, token.bottomY);
+    }
+    return (top + bottom) / 2;
+  }
+
+  function placeOpeningPosition(
+    map: StageRenderedLineMap,
+    now: number,
+    inkCentreDoc: number | null,
+  ): void {
+    if (openingHandedOver) return;
+
+    /*
+     * The same doors, re-checked here as well as latched at their events: an
+     * accepted snapshot means the aligner knows where the reader is, which an
+     * opening only ever guessed, and a gesture is the presenter saying where
+     * they want to be. (`followPaused` is deliberately NOT one of them —
+     * following being off says nothing about where the script should be sitting
+     * when it opens.)
+     *
+     * The transport's door is `autoTargetPx` — the goal it is actually rolling
+     * toward — rather than `autoScroll.running`, so a transport that is
+     * nominally on but has never seeded does not read as having taken the
+     * document.
+     *
+     * The seed waits for a valid map for the same reason (see `driveAutoScroll`),
+     * so a transport key pressed during the opening's dark window no longer
+     * takes the document out from under an opening that has not happened yet:
+     * the map lands, the opening places, and the roll seeds from there.
+     */
+    if (
+      engine.lastDisplayToken !== null ||
+      autoTargetPx !== null ||
+      now < manualUntilMs ||
+      engine.awaitingManualEvidence
+    ) {
+      handOverOpening();
+      return;
+    }
+
+    // No geometry, nothing to place against: hold, and take the next valid map.
+    if (!map.valid) return;
+    /*
+     * ...and a map that does not COVER the opening cannot answer for it either.
+     * Windowed rendering measures only the part of a long script that is near
+     * the viewport, and `sampleMotionPath` clamps below its first knot rather
+     * than refusing — so a map built while the document sits far down a
+     * three-hundred-block script would answer "unit 0" with a position near
+     * wherever it happens to be measuring. That is a guess wearing a
+     * measurement's clothes, and §62's rule is the whole reason this file does
+     * not act on those.
+     */
+    if (!map.covers(0)) return;
+
+    /*
+     * MEASURED INK ON THE MEASURED MARK — not a number derived from the phase.
+     *
+     * The first attempt expressed the opening as the path's position for unit 0
+     * plus half a line pitch: the entry phase, advanced to the middle of its
+     * sweep. Correct arithmetic about the MODEL, and it landed the mark visibly
+     * low on the glass, because every term in it is a different approximation
+     * of where the letters actually are — `R` carries a cap height from the
+     * font metrics, the knot carries a baseline the map ESTIMATES at 80% of the
+     * line box (`lineMap.ts`, `baselineFraction`), and the pitch is a median
+     * over the whole script. None of those errors is large; none of them
+     * cancels.
+     *
+     * So the target is measured, on both sides. `inkCentreDoc` is the middle of
+     * the first spoken ROW as the rects put it, and `bandCenterPx` is the
+     * number the mark is drawn on (`ReadingCue` centres its tick on it with a
+     * transform). Both describe what is on the glass, in the same coordinate
+     * space, so putting one on the other has nothing left to approximate:
+     *
+     *     the middle of the first line I am going to read
+     *     sits exactly on the mark I am going to read it at.
+     *
+     * A document point `D` is painted at viewport `D - scroll`, which is the
+     * whole derivation.
+     */
+    if (inkCentreDoc === null || !Number.isFinite(inkCentreDoc)) return;
+    const at = clamp(inkCentreDoc - bandCenterPx, 0, maxScroll);
+
+    /*
+     * `instant`, and it has to be: this is the position the take OPENS at, not
+     * a correction made during one. Travelling to it would show the presenter a
+     * scroll they did not cause before they had said a word.
+     *
+     * Written unconditionally — including when `at` is 0, and including when it
+     * is where the plant already is. A re-statement that skipped the cases it
+     * judged uninteresting would be trusting the plant to have kept a pixel
+     * across the relayout that just invalidated it.
+     */
+    engine.setFallbackTarget({ scrollPx: at, disposition: 'instant', atMs: now });
+    openingTargetOutstanding = true;
+    /*
+     * The plant is not there yet, and the gate must know it BEFORE the next
+     * paint. The frame loop and the map build are two separate rAF callbacks in
+     * the same frame and the loop can run first, so `plantAtTarget` may be
+     * carrying a `true` earned against the old target — scroll zero against
+     * scroll zero. Left standing, that value opens the gate for the one frame
+     * between arming this target and the engine spending it, which is the whole
+     * hop in miniature.
+     */
+    if (!scriptRevealed) plantAtTarget = false;
   }
 
   /* ---- session gate (companion §26.1) ---- */
   $effect(() => {
     engine.configureSession(sessionGeneration, performance.now());
+    // A new take opens where a take opens, on its own geometry.
+    openingHandedOver = false;
     /*
      * The two pieces of manual state this component owns go with it.
      *
@@ -1504,6 +1908,41 @@
      */
     manualUntilMs = 0;
     lastAlignmentTargetPx = null;
+  });
+
+  /*
+   * The reveal's deadline, and the only thing in this file that is allowed to
+   * show the script without knowing where it is.
+   *
+   * Keyed on the session so a second take on a stage window that outlived the
+   * first gets its own opening rather than inheriting a reveal from a script
+   * that is no longer on the glass.
+   */
+  $effect(() => {
+    void sessionGeneration;
+    scriptRevealed = false;
+    plantAtTarget = false;
+    mapEverBuilt = false;
+    // The engine's own copy goes with `configureSession`; this is ours.
+    openingTargetOutstanding = false;
+    let timer = 0;
+    const deadline = () => {
+      /*
+       * A placement that is waiting on a STOPPED frame loop is not a placement
+       * that failed. The window is hidden or the stage is frozen — nothing is
+       * being painted, so nothing is being waited for — and revealing here
+       * would clear the wait while leaving the engine's target armed, so the
+       * document would move the moment the loop came back. Come back later
+       * instead; the frame loop reveals the instant it lands the position.
+       */
+      if (openingTargetOutstanding && !loopRunning) {
+        timer = window.setTimeout(deadline, OPENING_REVEAL_TIMEOUT_MS);
+        return;
+      }
+      revealScript();
+    };
+    timer = window.setTimeout(deadline, OPENING_REVEAL_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
   });
 
   $effect(() => {
@@ -1584,6 +2023,23 @@
       return;
     }
 
+    /*
+     * Geometry first, even for the transport.
+     *
+     * The roll's pace comes out of the line map, so before one exists the
+     * transport is running and cannot move — and seeding here would still take
+     * the document, permanently, on the frame a presenter pressed the key
+     * during the opening's dark window. The opening would never run and the
+     * roll would start on the heading instead of the first spoken line.
+     *
+     * Placed BELOW the stand-down and end-of-script branches on purpose: those
+     * two report states the operator is waiting on, and a return above them is
+     * what once made "a script with nowhere to go" unreachable. Nothing is lost
+     * by waiting here — with no valid map the engine refuses the target anyway
+     * (§62), so this changes when the transport takes over, not whether.
+     */
+    if (lineMap === null || !lineMap.valid) return;
+
     const layoutChanged = autoTargetPx !== null && autoTargetLayout !== layoutGeneration;
     if (autoTargetPx === null || layoutChanged) {
       /*
@@ -1598,6 +2054,12 @@
       autoLastFrameMs = now;
       autoTargetLayout = layoutGeneration;
       autoEndReported = false;
+      // Seeding IS the transport taking the document, and it is the moment to
+      // say so: nothing about a roll is guaranteed to rebuild the line map, so
+      // a run that started and stopped between two rebuilds would leave every
+      // guard a rebuild could sample reading false, and the next relayout would
+      // answer it by re-stating the opening in the middle of a take.
+      handOverOpening();
       /*
        * Take the wheel, once, on the frame the transport starts.
        *
@@ -1925,6 +2387,16 @@
     driveAutoScroll(now);
     const result = engine.frame(now);
     setScroll(restingSnap(result.scrollPx, result.velocityPxS));
+    /*
+     * The script becomes visible on the frame it is in the RIGHT PLACE, never
+     * before — and "the right place" is read off the engine rather than from
+     * anything this file remembers, so it is true of the opening, of an aligner
+     * that took over before the opening could run, and of a transport.
+     */
+    if (!scriptRevealed) {
+      plantAtTarget = Math.abs(result.scrollPx - result.targetPx) <= REVEAL_SETTLE_PX;
+      if (mapEverBuilt && plantAtTarget) revealScript();
+    }
     // Where the alignment feed last wanted the document, kept for
     // `alignmentGapPx`. Only from frames the feed actually drove: a hold or a
     // fallback target says nothing about where the tracker believes the
@@ -2094,7 +2566,16 @@
 
   /** Feed one accepted-or-rejected semantic frame to the receiver (§26.1). */
   export function pushAlignmentSnapshot(snapshot: AlignmentSnapshot): boolean {
-    return engine.receiveSnapshot(snapshot, performance.now());
+    const accepted = engine.receiveSnapshot(snapshot, performance.now());
+    /*
+     * ACCEPTED, not "produced a display token". The two come apart exactly when
+     * it matters: a snapshot accepted while the map is unresolved has no
+     * planner to ask, so it leaves `lastDisplayToken` null while being, in
+     * every sense that counts, the aligner taking over. A REJECTED one changes
+     * nothing at all and must not hand anything over.
+     */
+    if (accepted) handOverOpening();
+    return accepted;
   }
 
   /**
@@ -2128,6 +2609,13 @@
      */
     engine.manualOverride(y, now, readingAnchorToken());
     manualUntilMs = now + MANUAL_GRACE_MS;
+    // Their hand is on the script; the opening has nothing left to say about
+    // where it should be, now or after any later relayout. And unlike the other
+    // two handovers this one has a position ALREADY — `setScroll(y)` above —
+    // so if the script is still behind the opening gate, show it: they asked
+    // for the document to be somewhere and it is there.
+    handOverOpening();
+    revealScript();
     /*
      * Carry the transport to where the presenter just put the document.
      *
@@ -2317,6 +2805,7 @@
   data-degraded={degraded ? 'true' : 'false'}
   bind:clientWidth={measuredVw}
   bind:clientHeight={measuredVh}
+  style:visibility={awaitingOpeningPlacement ? 'hidden' : null}
   style:--stage-past-opacity={effective.pastOpacity}
   style:--stage-future-opacity={effective.futureOpacity}
   style:--stage-secondary-min={secondaryMinCss}

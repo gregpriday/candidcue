@@ -772,6 +772,12 @@
      the container (a straight panel edge, not a rounded box). */
   .panel {
     flex: 0 0 264px;
+    /* A flex item's automatic minimum is its CONTENT's minimum, and a heading
+       row is `white-space: nowrap` — so one long headline made the rail's
+       min-content width the width of that headline and the basis above stopped
+       meaning anything. The rail grew to ~750px and took the editor's column
+       with it. The row still ellipsizes; this is what lets it. */
+    min-width: 0;
     min-height: 0;
     display: flex;
     flex-direction: column;
@@ -779,13 +785,31 @@
     border-left: 1px solid var(--border);
   }
   .panel-head {
-    padding: var(--space-3) var(--space-4);
+    padding: var(--space-3) var(--space-4) var(--space-2);
   }
+  /* The rail's section label. Sized here rather than left to the UA, which
+     gives a bare `<p>` a 1em margin top and bottom — that margin sat inside
+     `.panel-head`'s own padding and read as a doubled inset. */
+  .panel-title {
+    margin: 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+  /* ONE text edge for the whole rail.
+     A row carries a 10px inset of its own so its hover pill has somewhere to
+     be, so the container gives exactly that much back: row text then starts on
+     the same 16px edge as the label above it, and only the pill reaches
+     further out. Both paddings at full width stacked into a 26px inset that
+     read as a margin inside a margin. `--rail-pill-inset` is shared with the
+     plain text below, which has no pill and so pays the inset itself. */
   .panel-body {
+    --rail-pill-inset: 10px;
     flex: 1 1 auto;
+    min-width: 0;
     min-height: 0;
     overflow-y: auto;
-    padding: 0 var(--space-4) var(--space-4);
+    padding: 0 calc(var(--space-4) - var(--rail-pill-inset)) var(--space-4);
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
@@ -835,8 +859,11 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* Plain text in the rail: no pill of its own, so it pays the row inset
+     itself and lands on the same edge as the rows and the label. */
   .panel-meta {
     margin: 0;
+    padding: 0 var(--rail-pill-inset, 10px);
     font-size: var(--text-meta);
     color: var(--text-muted);
   }
@@ -887,12 +914,14 @@
   }
   .panel-empty {
     margin: 0;
+    padding: 0 var(--rail-pill-inset, 10px);
     font-size: var(--text-sm);
     line-height: var(--lh-label);
     color: var(--text-muted);
   }
   .panel-note {
     margin: 0;
+    padding: 0 var(--rail-pill-inset, 10px);
     font-size: var(--text-meta);
     line-height: var(--lh-meta);
     color: var(--text-faint);

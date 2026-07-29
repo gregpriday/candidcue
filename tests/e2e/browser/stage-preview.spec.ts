@@ -106,8 +106,23 @@ test('the preview renders the script, reserves the bottom band, and drives the r
   // Blank (§16.6): the script hides instantly, without unmounting.
   await root.press('b');
   await expect(page.locator('.script-holder.blanked')).toHaveCount(1);
+  /*
+   * ...and it is GONE, not merely classed.
+   *
+   * Blanking hides an ancestor with `visibility: hidden`, and visibility is the
+   * one inherited property a descendant can countermand. Anything inside the
+   * stage that writes an explicit `visibility: visible` on itself — the opening
+   * gate is the live example — punches the script straight back through a
+   * blanked stage while control goes on reporting it as blanked. The class is
+   * not the claim; the glass is.
+   */
+  const scriptVisibility = () =>
+    page.locator('.script-layer').evaluate((el) => getComputedStyle(el).visibility);
+  await expect.poll(scriptVisibility).toBe('hidden');
+
   await root.press('b');
   await expect(page.locator('.script-holder.blanked')).toHaveCount(0);
+  await expect.poll(scriptVisibility).toBe('visible');
 });
 
 /**

@@ -134,15 +134,20 @@
     transform: rotate(90deg);
   }
 
+  /* Same text edge as the outline above it: a finding row carries a 10px inset
+     for its hover pill, so the container gives that much back rather than
+     stacking a second full-width padding on top of it. */
   .body {
+    --rail-pill-inset: 10px;
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    padding: 0 var(--space-4) var(--space-3);
+    padding: 0 calc(var(--space-4) - var(--rail-pill-inset)) var(--space-3);
   }
 
   .preamble {
     margin: 0;
+    padding: 0 var(--rail-pill-inset);
     font-size: var(--text-2xs);
     line-height: var(--lh-meta);
     color: var(--text-faint);
