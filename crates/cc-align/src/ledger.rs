@@ -197,11 +197,27 @@ impl Ledger {
             }
             merged.push(atom);
         }
+        // Did this revision actually say anything new? A revision that
+        // reproduces the previous atom sequence exactly is a HEARTBEAT, not
+        // evidence: the provider is telling us it is still listening, not that
+        // the words moved. Grok emits one every ~500 ms whether or not it
+        // decoded anything (19 % of its partials across the benchmark corpus,
+        // against 3 % on the previous provider), so the distinction is not
+        // academic here.
+        let unchanged = retracted == 0 && merged.len() == item.atoms.len();
         item.atoms = merged;
         item.is_final = is_final;
         item.revision_count += 1;
         item.retracted_atoms += retracted;
-        item.last_seen_audio_ms = audio_ms;
+        // The content horizon is when the newest word was SPOKEN, and a
+        // heartbeat does not move it. Advancing it here would re-date words
+        // that have not changed — `tail` interpolates every word in the item
+        // between its start and this value, so each heartbeat would slide the
+        // whole utterance later in time and keep resetting the display's
+        // extrapolation origin while the reader is still talking.
+        if !unchanged {
+            item.last_seen_audio_ms = audio_ms;
+        }
         if is_final {
             item.audio_end_ms = Some(audio_ms);
         }

@@ -1079,7 +1079,20 @@ impl Engine {
         if discontinuity {
             self.rate_anchors.clear();
             self.rate = self.config.rate_default;
-        } else if evidence_ms > self.last_evidence_ms {
+        } else if evidence_ms > self.last_evidence_ms && position > self.observed {
+            // Only genuine forward progress is a rate sample. `estimate_rate`
+            // is a median over pairwise slopes, so an anchor at the SAME
+            // position as its predecessor contributes a zero slope — and with
+            // only eight anchors, a provider that restates without decoding
+            // (see `Ledger::observe`) can fill the window with zeroes and drag
+            // the estimate to `rate_min`. The display then stalls, and stalls
+            // for longer than the silence that caused it, because the estimate
+            // has to be re-earned one real advance at a time.
+            //
+            // A reader who has genuinely stopped is not handled here. That is
+            // `pause_onset_ms` decaying the lead in `Snapshot::display_at`,
+            // which recovers the instant they speak again — where collapsing
+            // the rate does not.
             self.rate_anchors.push((evidence_ms, position));
             if self.rate_anchors.len() > 8 {
                 self.rate_anchors.remove(0);

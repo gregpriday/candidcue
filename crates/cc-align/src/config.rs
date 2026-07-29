@@ -154,9 +154,29 @@ pub struct AlignmentConfig {
     // ---- evidence timing ----
     /// Residual lag correction applied to evidence time after the ledger's
     /// per-timestamp corrections (ms).
+    ///
+    /// This and [`Self::partial_lag_ms`] are ONE axis, not two: a 2-D sweep
+    /// over the pair is flat along `partial_lag - emission_lag = const`, so
+    /// only their sum reaches the metrics. They are kept apart because they
+    /// apply at different places — the ledger backdates a whole item, this
+    /// backdates one matched word — but they should be tuned as a pair.
     pub emission_lag_ms: f64,
     /// How far behind the audio clock the words of a PARTIAL are when it
     /// arrives (ms). Measured against gold word times on live captures.
+    ///
+    /// Understating it is not free, and `ahead_time` will lie to you about
+    /// that. Read `AHEAD_TOLERANCE_ATOMS` in `cc-bench/src/metrics.rs` before
+    /// tuning against it: "ahead" is `display > floor(gold) + 1.0`, so it is a
+    /// BOUNDARY-CROSSING COUNT, not a depth. With prediction switched off
+    /// entirely the two providers score 0.82 % and 0.76 %; restoring a lead of
+    /// 1e-9 atoms takes them to 7.17 % and 3.85 %. Nearly all of the gap is
+    /// therefore the display resting exactly ONE atom past the last completed
+    /// gold word, which a faster provider does more often precisely because
+    /// its position estimate is fresher and better centred.
+    ///
+    /// So a sweep will happily trade real accuracy for that number. Judge a
+    /// lag change on `ahead_worst` — the depth the display actually reached —
+    /// and on `within5`, never on `ahead_time` alone.
     pub partial_lag_ms: f64,
     /// How long after the last word a FINAL arrives (server VAD waits for
     /// silence before committing) (ms).
@@ -252,7 +272,11 @@ impl Default for AlignmentConfig {
     fn default() -> Self {
         Self {
             max_query_atoms: 40,
-            observe_min_content: 2,
+            // 2 → 1: Grok revises twice as often, so waiting for a second
+            // matched content atom holds the display back by a whole extra
+            // revision for no safety gained — the observed-position gate below
+            // (fidelity + coverage) is what actually keeps a bad match out.
+            observe_min_content: 1,
 
             local_back: 48,
             local_forward: 112,
@@ -315,10 +339,30 @@ impl Default for AlignmentConfig {
             // own benchmarks, and four runs is not evidence enough to overrule
             // that.
             prediction_gain: 0.33,
-            prediction_gain_fast: 0.55,
-            prediction_gain_fast_rate: 3.7,
+            // 0.55 → 0.10 when the provider became Grok. The fast gain exists
+            // to pay pipeline delay back at pace, and it multiplies a rate
+            // that is itself already high — at rate 3.7 the old pair moved the
+            // display 2.04 atoms/s against 0.92 at rate 2.8, so a single
+            // estimator spike more than doubled display speed. Grok's partial
+            // cadence is half the old provider's, which means the estimator
+            // spikes more often and there is far less delay left to pay back.
+            // Raising the threshold alongside keeps the ordinary and slow
+            // paths on the conservative gain, where they belong.
+            prediction_gain_fast: 0.10,
+            prediction_gain_fast_rate: 4.2,
             max_lead_atoms: 2.5,
 
+            // These stayed at their measured values across the provider
+            // change, and the measurement is why. Per-word emission lag is
+            // near-identical on the two providers — Grok p25/p50/p75 =
+            // 89/350/607 ms against the previous provider's 100/336/597 — so
+            // 300 ms is calibrated for both and there was nothing to correct.
+            //
+            // A sweep WILL claim otherwise. Driving the pair down to a net
+            // −350 ms buys `ahead_time` 7.66 → 6.04 and looks like the best
+            // config in the space. It is not: see [`Self::partial_lag_ms`] for
+            // why `ahead_time` rewards that, and what it costs — 5.6 pp of
+            // `within2` and 16 pp on Tier A — to buy a metric artifact.
             emission_lag_ms: 0.0,
             partial_lag_ms: 300.0,
             endpoint_lag_ms: 1400.0,
