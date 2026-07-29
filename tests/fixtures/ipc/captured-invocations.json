@@ -233,6 +233,18 @@
         }
       }
     },
+    "set_control_presenting_off": {
+      "command": "set_control_presenting",
+      "args": {
+        "enabled": false
+      }
+    },
+    "set_control_presenting_on": {
+      "command": "set_control_presenting",
+      "args": {
+        "enabled": true
+      }
+    },
     "set_stage_fullscreen": {
       "command": "set_stage_fullscreen",
       "args": {

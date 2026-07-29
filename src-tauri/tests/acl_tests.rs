@@ -159,6 +159,32 @@ fn stage_window_cannot_reach_secrets_deletion_or_export() {
     }
 }
 
+/// NEITHER window may drive OS full-screen from JavaScript.
+///
+/// Presentation is borderless and lives in Rust (`windows::present`). The
+/// renderer calling `core:window:set_fullscreen` itself is the defect that
+/// change exists to remove: on macOS it animates the window into a new Space,
+/// and for the length of that animation the webview's painted surface is the
+/// old, smaller one — so every take opened with the script at the bottom of the
+/// glass under a white bar.
+///
+/// `capabilities/control.json` states that withholding the permission is what
+/// stops that path coming back. This is that claim as a test: without it the
+/// only enforcement is a runtime ACL denial on a real machine, which is the one
+/// place this project cannot run anything automatically.
+#[test]
+fn no_window_can_drive_os_fullscreen_from_javascript() {
+    let authority = authority();
+    for window in [CONTROL_WINDOW, STAGE_WINDOW] {
+        assert!(
+            !allowed_for(&authority, "plugin:window|set_fullscreen", window),
+            "`{window}` can invoke plugin:window|set_fullscreen; presentation is \
+             borderless (src/windows/present.rs) and the renderer must not be \
+             able to ask the OS for full-screen directly"
+        );
+    }
+}
+
 #[test]
 fn control_window_can_invoke_every_application_command() {
     let authority = authority();

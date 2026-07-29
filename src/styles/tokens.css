@@ -348,6 +348,30 @@ body {
   font-feature-settings: 'kern' 1;
 }
 
+/*
+ * The page canvas during a take (single-window presentation).
+ *
+ * `src/styles/stage.css` does this unconditionally for the separate stage
+ * window, but that file is loaded only by `stage.html` — the control window has
+ * never had it, and in single-window presentation the control window IS the
+ * teleprompter. The black on the glass comes from `.stage-root`, an
+ * absolutely-positioned element; the canvas underneath it stayed `--bg-app`.
+ *
+ * That is invisible until the window changes size, at which point the viewport
+ * gains area before the layout reaches it and the canvas is what paints there —
+ * a light strip along the edge of every window change for the whole take. The
+ * attribute is set by `App.svelte` from `stores/presenting.ts`.
+ *
+ * `html` as well as `body`: with no background of its own, `html` is what
+ * propagates `body`'s to the canvas, and being explicit on both means neither
+ * a future `html` rule nor a future `body` rule can quietly reintroduce the
+ * light one.
+ */
+html[data-presenting='true'],
+html[data-presenting='true'] body {
+  background: #000;
+}
+
 ::selection {
   background: var(--selection);
 }

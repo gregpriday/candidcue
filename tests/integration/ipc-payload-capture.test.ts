@@ -29,6 +29,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import * as controlWindow from '../../src/control/services/control-window';
 import { setInvokeForTesting } from '../../src/control/services/ipc';
 import * as scripts from '../../src/control/services/scripts';
 import * as sessionRecords from '../../src/control/services/session-records';
@@ -267,6 +268,11 @@ describe('captured IPC payloads (production services → wire)', () => {
     await capture('set_stage_fullscreen', () =>
       stage.setStageFullscreen(PLACEHOLDER_SESSION_ID, true),
     );
+    // Single-window presentation's counterpart: this window becomes the
+    // teleprompter and comes back. Both directions, because the payload is the
+    // only thing that distinguishes them.
+    await capture('set_control_presenting_on', () => controlWindow.enterPresentation());
+    await capture('set_control_presenting_off', () => controlWindow.exitPresentation());
     await capture('get_stage_status', () => stage.getStageStatus());
     await capture('list_displays', () => stage.listDisplays());
     await capture('identify_displays', () => stage.identifyDisplays());
@@ -288,6 +294,10 @@ describe('captured IPC payloads (production services → wire)', () => {
       'save_script', // H1 — compare-and-swap revision
       'start_session', // §43.5 — the generation the stage never got
       'update_settings', // §36.2 — the retention mapping that was missing
+      // Both directions of single-window presentation. Named rather than left
+      // to the count above, which would still pass if both vanished.
+      'set_control_presenting_on',
+      'set_control_presenting_off',
     ]) {
       expect(captured.has(name), `${name} was not captured`).toBe(true);
     }

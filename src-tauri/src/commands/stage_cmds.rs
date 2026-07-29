@@ -5,8 +5,9 @@ use tauri::{AppHandle, Runtime, State};
 use crate::database::Database;
 use crate::errors::AppError;
 use crate::windows::{
-    self, DisplayDescriptor, DisplayProfile, IdentificationSession, OpenStageRequest, StageAck,
-    StageDocumentEnvelope, StageOpenResult, StageStatus, StageWindowState,
+    self, ControlPresentationState, DisplayDescriptor, DisplayProfile, IdentificationSession,
+    OpenStageRequest, StageAck, StageDocumentEnvelope, StageOpenResult, StageStatus,
+    StageWindowState,
 };
 
 #[tauri::command]
@@ -50,6 +51,22 @@ pub fn set_stage_fullscreen<R: Runtime>(
     native: Option<bool>,
 ) -> Result<StageWindowState, AppError> {
     windows::set_stage_fullscreen(&app, &session_id, enabled, native.unwrap_or(false))
+}
+
+#[tauri::command]
+/// Turn the control window into the teleprompter, and back (§52.7).
+///
+/// This is single-window presentation's counterpart to `set_stage_fullscreen`,
+/// and it presents the same way for the same reasons: borderless at the
+/// monitor's exact bounds, always-on-top, no OS fullscreen. The renderer used
+/// to call `core:window:set_fullscreen` directly, which on macOS animates into
+/// a new Space and shows a white bar over the half-painted webview for the
+/// length of the animation — see `windows::present` for the full account.
+pub fn set_control_presenting<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<ControlPresentationState, AppError> {
+    windows::set_control_presenting(&app, enabled)
 }
 
 #[tauri::command]

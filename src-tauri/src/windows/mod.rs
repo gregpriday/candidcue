@@ -10,7 +10,10 @@ use crate::coordinator::AppCoordinator;
 use crate::errors::{AppError, ErrorCategory};
 use crate::util::{new_uuid, now_iso};
 
+pub mod present;
 pub mod sleep;
+
+pub use present::{set_control_presenting, ControlPresentationState};
 
 pub const STAGE_LABEL: &str = "stage";
 pub const CONTROL_LABEL: &str = "control";

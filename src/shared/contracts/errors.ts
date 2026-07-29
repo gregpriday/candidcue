@@ -76,6 +76,16 @@ export const APP_ERROR_CODES = [
   // A close/publish naming a session that is no longer the one on stage (M1).
   'STAGE_SESSION_MISMATCH',
   'STAGE_LAYOUT_FAILED',
+  /*
+   * Single-window presentation could not reshape THIS window (§52.7).
+   *
+   * Distinct from `STAGE_OPEN_FAILED` because they are different failures with
+   * different remedies, and sharing a code meant sharing copy: a take that
+   * could not go borderless told the operator CandidCue "could not open the
+   * stage window on that display" and to "choose another display" — naming a
+   * window this path never opens and a picker it never consults.
+   */
+  'PRESENTATION_FAILED',
   'UPDATE_SIGNATURE_INVALID',
   'UPDATE_INSTALL_FAILED',
   'INTERNAL_UNEXPECTED',

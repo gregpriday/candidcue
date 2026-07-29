@@ -61,6 +61,7 @@ pub fn run() {
             commands::open_stage,
             commands::close_stage,
             commands::set_stage_fullscreen,
+            commands::set_control_presenting,
             commands::publish_stage_document,
             commands::publish_stage_command,
             commands::get_stage_status,

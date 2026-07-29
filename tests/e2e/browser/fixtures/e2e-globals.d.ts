@@ -14,6 +14,10 @@ declare global {
       /** The last row `start_session` minted — Rust assigns, control adopts. */
       lastSession: { id: string; sessionGeneration: number } | null;
       stage: { exists: boolean; visible: boolean; fullscreen: boolean; nativeFullscreen: boolean };
+      /** Whether THIS window is presenting (single-window takes). */
+      presenting: boolean;
+      /** Hold a command open for `ms` before it answers; null clears. */
+      setDelay(command: string, ms: number | null): void;
       /** StageDirectives relayed through publish_stage_command, in order. */
       directives: Array<{ kind: string; payload: Record<string, unknown> }>;
       setFail(command: string, error: unknown): void;

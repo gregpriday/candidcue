@@ -25,7 +25,12 @@ import { get } from 'svelte/store';
 import { matchRememberedMicrophone } from '../services/audio';
 import { compileScript, type CompileOutput } from '../services/compiler';
 import { describeError } from '../services/errors';
-import { setControlFullscreen } from '../services/control-window';
+import {
+  awaitViewportSettled,
+  enterPresentation,
+  exitPresentation,
+  painted,
+} from '../services/control-window';
 import * as scriptsService from '../services/scripts';
 import { endSessionRecord, startSessionRecord } from '../services/session-records';
 import * as stageService from '../services/stage';
@@ -43,6 +48,7 @@ import {
   startLiveSession,
   stopSession,
 } from '../stores/session';
+import { setPresentingPhase } from '../stores/presenting';
 import { loadSettings, settings } from '../stores/settings';
 import { showToast } from '../stores/toasts';
 import { getVoiceFacade } from '../services/voice-facade';
@@ -241,6 +247,41 @@ export async function startTake(scriptId: string): Promise<boolean> {
     });
     const micDeviceId = await resolvePinnedMicrophone(s);
 
+    /*
+     * ------------------------------------------------------------------------
+     * THE WINDOW CHANGES SHAPE BEFORE THE STAGE EXISTS, NOT AFTER
+     * ------------------------------------------------------------------------
+     * This used to be one line at the very END of the sequence: navigate to
+     * Live, mount the stage, and only then ask the window to go full screen.
+     * Both of the things that made a take open badly follow from that order.
+     *
+     * The visible one: the presenter watched the script appear at the bottom of
+     * the glass with a white bar above it. Native full screen on macOS animates
+     * over about half a second, and for the length of that animation the
+     * webview's painted surface is the old, smaller one — AppKit fills the rest
+     * with the window's background. Nothing rendered INSIDE the page can cover
+     * a region the page has not been laid out into, which is why the opening
+     * plate in `StageApp` never touched this. `services/control-window.ts` has
+     * the full account.
+     *
+     * The wasteful one: `vw`/`vh` are line-map layout inputs (ScriptLayer's
+     * `layoutInputs`). A stage that mounts at the editor's window size measures
+     * its whole document there, then has that map invalidated by the resize and
+     * measures it again — two `awaitLayoutStable` waits, two font settles, for
+     * one opening. Presenting first means the map is built once, at the size it
+     * will be read at.
+     *
+     * So the order is: cover, prove the cover is on screen, move the window,
+     * wait for the viewport to actually be the new size, and only then let the
+     * session go live and the stage mount. Every step waits on the one before
+     * it — the cover in particular, because raising a cover and moving the
+     * window in the same frame is the same bug with a different first frame.
+     */
+    setPresentingPhase('opening');
+    await painted();
+    const presentation = await enterPresentation();
+    await awaitViewportSettled(presentation);
+
     // There is no stage window. Alignment, transcription and rendering all
     // live in this one webview, so generation zero deliberately disables every
     // cross-window bridge in the session store.
@@ -296,7 +337,22 @@ export async function startTake(scriptId: string): Promise<boolean> {
       showToast('Could not open the Live screen, so the session was stopped.', 'danger');
       return false;
     }
-    await setControlFullscreen(true);
+
+    /*
+     * Hand the glass from this cover to the stage's own plate.
+     *
+     * `navigate` resolving means the route store changed, not that Svelte has
+     * rendered `StageApp` — let alone that the browser has painted it. Dropping
+     * the cover here would show whatever the editor left behind for a frame,
+     * which is a worse artifact than the one being fixed because it is the
+     * WRONG SCREEN rather than a blank one.
+     *
+     * After this the stage is uncovered but not unprotected: `StageApp`'s
+     * opening plate starts mounted and stays up until `ScriptLayer` reports the
+     * script placed, which is the interval the previous fix already owns.
+     */
+    await painted();
+    setPresentingPhase('on');
     return true;
   } catch (err) {
     await abandonTake(sessionId);
@@ -307,12 +363,32 @@ export async function startTake(scriptId: string): Promise<boolean> {
   }
 }
 
-/** Undo a partially-started take and every resource it already acquired. */
+/**
+ * Undo a partially-started take and every resource it already acquired.
+ *
+ * Including the window itself. A take can fail after the window is already
+ * borderless and monitor-sized — the compile is behind us by then, but the
+ * session record, the microphone and the navigation are not — and a failure
+ * that left the window like that would strand the operator full-screen with no
+ * titlebar, looking at the editor and a toast. `exitPresentation` is planned as
+ * a no-op in Rust when nothing was ever presented, so this is unconditional.
+ *
+ * The cover comes down in a `finally` for the same reason it does in Live's
+ * `leavePresentation`: it is opaque and covers the whole window, so leaving the
+ * phase at `opening` because the teardown itself threw would replace a failed
+ * take with an app the operator cannot see. This is the error path — it is
+ * exactly where the teardown is most likely to hit a second fault.
+ */
 async function abandonTake(sessionId: string): Promise<void> {
-  stopSession();
-  clearSession();
-  // The record may have been opened before the failure. Closing it twice is
-  // harmless (it rewrites `ended_at`); leaving it open is not — an unfinished
-  // row is indistinguishable from a crash and would be closed at next launch.
-  if (sessionId) await endSessionRecord(sessionId).catch(() => {});
+  try {
+    stopSession();
+    clearSession();
+    await exitPresentation().catch(() => {});
+    // The record may have been opened before the failure. Closing it twice is
+    // harmless (it rewrites `ended_at`); leaving it open is not — an unfinished
+    // row is indistinguishable from a crash and would be closed at next launch.
+    if (sessionId) await endSessionRecord(sessionId).catch(() => {});
+  } finally {
+    setPresentingPhase('off');
+  }
 }

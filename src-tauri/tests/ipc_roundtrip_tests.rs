@@ -173,6 +173,14 @@ const REPLAYED: &[&str] = &[
     "app_version",
     "get_script",
     "get_stage_status",
+    // Single-window presentation. The harness builds a `control`-labelled
+    // webview, so the `{ enabled }` binding is reachable here even though the
+    // geometry work behind it is not — `current_monitor` has no answer on the
+    // MockRuntime and entering ends in a domain error. That is precisely the
+    // distinction this test draws: a domain error is fine, an argument
+    // rejection is the defect. `set_stage_fullscreen` stays out because it
+    // needs a real stage window to exist first.
+    "set_control_presenting",
 ];
 
 struct Harness {

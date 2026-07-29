@@ -257,6 +257,12 @@ function shimBody(config: ShimConfig): void {
     lastSession: null as null | { id: string; sessionGeneration: number },
     /** Stage window state, mutated by open/close/fullscreen like Rust's. */
     stage: { exists: false, visible: false, fullscreen: false, nativeFullscreen: false },
+    /**
+     * Whether THIS window is presenting (single-window takes). Separate from
+     * `stage` above, which describes the second window that single-window
+     * presentation deliberately never opens.
+     */
+    presenting: false,
     /** Every StageDirective relayed through publish_stage_command, in order. */
     directives: [] as Array<{ kind: string; payload: Record<string, unknown> }>,
     /** Test seam: force a command to reject with the given AppError (or clear). */
@@ -264,6 +270,19 @@ function shimBody(config: ShimConfig): void {
       if (error === null || error === undefined) delete this.fail[command];
       else this.fail[command] = error;
     },
+    /**
+     * Test seam: hold a command open for `ms` before it answers.
+     *
+     * `setFail` can prove what happens when a command is refused, but not what
+     * the app LOOKS LIKE while one is still in flight — and for the presentation
+     * commands that interval is the whole point of the cover. Without this a
+     * spec can only assert the settled states either side of it.
+     */
+    setDelay(command: string, ms: number | null) {
+      if (ms === null) delete this.delay[command];
+      else this.delay[command] = ms;
+    },
+    delay: {} as Record<string, number>,
     lastCall(command: string) {
       for (let i = this.calls.length - 1; i >= 0; i--) if (this.calls[i]?.command === command) return this.calls[i];
       return null;
@@ -538,6 +557,28 @@ function shimBody(config: ShimConfig): void {
         };
       }
 
+      /*
+       * Single-window presentation: the control window becomes the
+       * teleprompter (borderless, monitor-sized) and comes back afterwards.
+       *
+       * The browser has one viewport and no window management, so the honest
+       * answer is the viewport it already has — which is also what makes
+       * `awaitViewportSettled` resolve on its first check here instead of
+       * burning its ceiling on every Present in the suite.
+       *
+       * What this shim CANNOT do is resize anything, which is worth being
+       * explicit about: the artifact this command exists to remove — a window
+       * mid-shape-change with a half-painted webview in it — has no
+       * representation in Playwright at all. The ordering is asserted in
+       * `tests/unit/control/start-take.test.ts`; the appearance is not asserted
+       * anywhere, and cannot be on this machine.
+       */
+      case 'set_control_presenting': {
+        const enabled = args?.['enabled'] === true;
+        control.presenting = enabled;
+        return { presenting: enabled, width: window.innerWidth, height: window.innerHeight };
+      }
+
       case 'publish_stage_command': {
         const action = (args?.['action'] ?? {}) as { directive?: Record<string, unknown> };
         const directive = action.directive ?? {};
@@ -674,8 +715,12 @@ function shimBody(config: ShimConfig): void {
       if (control.fail[command] && command !== 'list_displays') {
         return Promise.reject(control.fail[command]);
       }
+      const held = control.delay[command];
       try {
-        return Promise.resolve(handle(command, args));
+        const answer = handle(command, args);
+        return held === undefined
+          ? Promise.resolve(answer)
+          : new Promise((resolve) => setTimeout(() => resolve(answer), held));
       } catch (err) {
         return Promise.reject(err);
       }
