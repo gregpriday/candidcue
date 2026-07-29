@@ -932,3 +932,88 @@ That is a deliberate decision, not a tweak.
 4. **A larger model.** The 20M is the smallest streaming Zipformer; the same
    integration takes a bigger one unchanged if WER turns out to matter more
    than this corpus suggests.
+
+---
+
+## Optimisation pass (2026-07-29, after the swap landed)
+
+Two changes did almost all of the work, and a third fixed a benchmark that was
+measuring the wrong thing.
+
+### 1. `blank_penalty = 3.0` — the counter-intuitive one
+
+The model's worst habit was emitting **blank** over roughly the first five words
+of a stream, losing them for good. That, not the encoder's context window, is
+what made the first lock slow: decoder priming with leading silence was tried
+and changed nothing, because the words were being decoded and discarded rather
+than never reaching the decoder.
+
+Penalising blank makes the decoder commit to a token where it would have
+skipped. Swept on the Tier-B corpus:
+
+| blank_penalty | first_lock | recovery_p95 | within5 | p95_abs | WER |
+|---|---|---|---|---|---|
+| 0.0 | 3.10 s | 4.35 s | 92.26 | 7.40 | 19.3% |
+| 2.0 | 2.40 s | 4.35 s | 92.55 | 7.25 | 19.4% |
+| **3.0** | **2.10 s** | **3.60 s** | **92.74** | **6.99** | 20.1% |
+| 5.0 | 2.10 s | 3.60 s | 91.84 | 7.92 | 24.7% |
+| 6.0 | 2.10 s | 3.60 s | 90.69 | 9.03 | 31.2% |
+
+**Word error rate gets worse while following gets better**, monotonically, up to
+a clear turn at 3.0. That is the clearest statement this benchmark has produced
+of what the recogniser is for: a wrong word inside a correct run costs the
+tracker nothing, a missing word costs it evidence, and past 3.0 the guesses stop
+being anchored to anything at all.
+
+WER is a diagnostic here. It is not the objective, and tuning to minimise it
+would have made the product worse.
+
+### 2. Engine constants re-calibrated to the new recogniser
+
+* `partial_lag_ms` 300 -> **0**. It corrects for the delay between audio and
+  hypothesis; the hosted service had a network round trip, a local transducer
+  publishes in the same call that consumed the samples.
+* `max_lead_atoms` 2.5 -> **1.75**. Tightening the display's permitted lead cut
+  `recovery_p95` from 5.80 s to 4.35 s on its own.
+
+### 3. Tier A was simulating a recogniser that no longer exists
+
+`synthetic.rs` fabricated Inworld-shaped events: partials every 900 ms lagging
+400 ms. Measured on `bench/runs-local`, the on-device model emits every **300 ms**
+with ~0 lag. Scoring the engine against the old simulator while the config was
+calibrated for the new recogniser made `partial_lag_ms = 0` look like a
+16-point regression no presenter could ever have experienced.
+
+Re-based, Tier A measures the system that ships:
+
+| Tier A, clean reads | Inworld-cadence sim | on-device sim |
+|---|---|---|
+| `clean_within2` | 57.11% | **99.88%** |
+| `clean_within5` | 99.99% | **100.00%** |
+| `clean_p95_abs` | 2.83 | **1.21** |
+| `responsiveness.freeze` | 0.517% | **0.012%** |
+| `first_lock_p50` | 1.75 s | **1.35 s** |
+| `robust.substitutions_within2` | 51.07% | **99.13%** |
+| `robust.corrupt15_within5` | 97.97% | **99.66%** |
+
+**Tier-A numbers from before this re-base are not comparable with numbers from
+after it.** Three times the evidence rate is most of the difference.
+
+### Measured and rejected
+
+* **Decoder priming** (300 ms / 1000 ms of leading silence): no effect on the
+  lost opening words. The knob survives, defaulted off, with the negative
+  result recorded, because it is an obvious thing to try twice.
+* **`modified_beam_search`**: worse on every axis (`within5` 91.04,
+  `recovery_p95` 5.95) and slower. Greedy stays.
+* **`blank_penalty` above 3.0**: WER degrades faster than the extra evidence
+  helps; every metric turns.
+* **`endpoint_lag_ms`, `coast_ms`, `max_prediction_ms` >= 1800**: no measurable
+  effect on this corpus.
+
+### Fairness note
+
+The Inworld baseline was swept over the same knobs and is already at its
+optimum — the best alternative config moved `within5` by 0.11 and left
+`first_lock` and `recovery_p95` untouched. The comparison is a tuned
+on-device recogniser against a tuned hosted one, not against a handicapped one.

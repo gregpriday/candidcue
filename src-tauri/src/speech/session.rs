@@ -298,7 +298,7 @@ fn run_session<R: tauri::Runtime>(
 
     // The model is already resident; creating a stream is cheap, so the session
     // is usable immediately rather than after a load.
-    let mut session = recognizer.session(generation);
+    let mut session = recognizer.session_with(generation, cc_stt::LocalSttConfig::default().prime_ms);
 
     emit(
         &app,

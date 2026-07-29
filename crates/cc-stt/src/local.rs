@@ -84,6 +84,49 @@ pub struct LocalSttConfig {
     pub rule2_min_trailing_silence: f32,
     /// Hard cap on a single utterance, seconds.
     pub rule3_min_utterance_length: f32,
+    /// Penalty subtracted from the blank symbol's score at each step.
+    ///
+    /// The single most valuable knob on this model, and the one that most
+    /// clearly shows why word error rate is the wrong thing to tune for here.
+    ///
+    /// The model's worst habit is emitting blank over roughly the first five
+    /// words of a stream, which are then lost for good — that is what made the
+    /// first lock slow. A positive penalty makes blank less attractive, so the
+    /// decoder commits to a token where it would otherwise have skipped.
+    ///
+    /// Swept on the Tier-B corpus, WER gets steadily WORSE as this rises while
+    /// following gets BETTER, up to a clear optimum at 3.0:
+    ///
+    /// | blank_penalty | first_lock | recovery_p95 | within5 | p95   | WER   |
+    /// |---------------|-----------|--------------|---------|-------|-------|
+    /// | 0.0           | 3.10 s    | 4.35 s       | 92.26   | 7.40  | 19.3% |
+    /// | 2.0           | 2.40 s    | 4.35 s       | 92.55   | 7.25  | 19.4% |
+    /// | **3.0**       | **2.10 s**| **3.60 s**   | **92.74** | **6.99** | 20.1% |
+    /// | 5.0           | 2.10 s    | 3.60 s       | 91.84   | 7.92  | 24.7% |
+    /// | 6.0           | 2.10 s    | 3.60 s       | 90.69   | 9.03  | 31.2% |
+    ///
+    /// A recogniser that guesses more is a worse transcriber and a better
+    /// position sensor, because a wrong word inside a correct run costs the
+    /// tracker nothing while a missing word costs it evidence. Past 3.0 the
+    /// guesses stop being anchored to anything and every metric turns.
+    pub blank_penalty: f32,
+    /// Decoding beam width, used only by `modified_beam_search`.
+    pub max_active_paths: i32,
+    /// Milliseconds of silence fed to the decoder before a take's first real
+    /// sample, to give the encoder acoustic context it would otherwise not
+    /// have when the first word arrives.
+    ///
+    /// This model loses roughly the first five words of a stream — measured,
+    /// and not an artefact of chunked feeding: decoding a whole fixture in one
+    /// call loses them too. A streaming Zipformer needs left context before it
+    /// will commit to a token, and at the very start of a session it has none,
+    /// so the opening of a take is decoded from nothing and discarded.
+    ///
+    /// The primed silence is fed to the recogniser but NOT counted on the audio
+    /// clock, because the clock is the contract with the alignment engine: it
+    /// means "how much of the presenter's audio has been heard", and silence
+    /// this side of the microphone is not that.
+    pub prime_ms: u32,
 }
 
 impl Default for LocalSttConfig {
@@ -102,6 +145,9 @@ impl Default for LocalSttConfig {
             rule1_min_trailing_silence: 2.4,
             rule2_min_trailing_silence: 1.2,
             rule3_min_utterance_length: 20.0,
+            blank_penalty: 3.0,
+            max_active_paths: 4,
+            prime_ms: 0,
         }
     }
 }
@@ -153,6 +199,8 @@ impl LocalRecognizer {
         sys.rule1_min_trailing_silence = config.rule1_min_trailing_silence;
         sys.rule2_min_trailing_silence = config.rule2_min_trailing_silence;
         sys.rule3_min_utterance_length = config.rule3_min_utterance_length;
+        sys.blank_penalty = config.blank_penalty;
+        sys.max_active_paths = config.max_active_paths;
 
         OnlineRecognizer::create(&sys)
             .map(|inner| Self { inner })
@@ -167,9 +215,28 @@ impl LocalRecognizer {
     /// Begin one take. `generation` is minted into the item ids exactly as the
     /// app's session generation was on the websocket path.
     pub fn session(&self, generation: u64) -> LocalSession<'_> {
+        self.session_with(generation, 0)
+    }
+
+    /// Begin one take, priming the decoder with `prime_ms` of silence first.
+    ///
+    /// See [`LocalSttConfig::prime_ms`]. The priming is deliberately invisible
+    /// to the audio clock and emits nothing: silence cannot produce a
+    /// hypothesis, so nothing is published and no utterance is minted.
+    pub fn session_with(&self, generation: u64, prime_ms: u32) -> LocalSession<'_> {
+        let stream = self.inner.create_stream();
+        if prime_ms > 0 {
+            // Fed at the model's own feature rate; the samples never reach the
+            // clock, so the rate here only has to be one the recogniser accepts.
+            let samples = vec![0.0f32; (16_000 * prime_ms as usize) / 1000];
+            stream.accept_waveform(16_000, &samples);
+            while self.inner.is_ready(&stream) {
+                self.inner.decode(&stream);
+            }
+        }
         LocalSession {
             recognizer: &self.inner,
-            stream: self.inner.create_stream(),
+            stream,
             generation,
             ordinal: 0,
             open_item: None,
@@ -367,15 +434,17 @@ impl LocalSession<'_> {
 /// benchmark harness uses. `pace = 1.0` is the honest setting: the model is
 /// ~16× faster than real time here, so streaming faster would report partial
 /// latencies no presenter will ever see.
+#[allow(clippy::too_many_arguments)]
 pub fn stream_pcm16(
     recognizer: &LocalRecognizer,
     pcm: &[u8],
     sample_rate: u32,
     frame_ms: u64,
     pace: f64,
+    prime_ms: u32,
     mut emit: impl FnMut(SttFrame),
 ) {
-    let mut session = recognizer.session(1);
+    let mut session = recognizer.session_with(1, prime_ms);
     let frame_bytes = (sample_rate as usize * 2 * frame_ms as usize / 1000) & !1;
     let frame_interval = std::time::Duration::from_secs_f64(frame_ms as f64 / 1000.0 / pace);
     let start = std::time::Instant::now();

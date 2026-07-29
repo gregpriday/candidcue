@@ -44,6 +44,14 @@ struct Flags {
     seconds: Option<f64>,
     /// `capture-local`: directory holding the on-device model files.
     model: Option<PathBuf>,
+    /// `capture-local`: ms of silence to prime the decoder with.
+    prime_ms: u32,
+    /// `capture-local`: blank penalty override. `None` means "use the
+    /// recogniser's own default" — a plain `f32` here silently overrode the
+    /// tuned default with 0.0 and captured a whole corpus with the knob off.
+    blank_penalty: Option<f32>,
+    /// `capture-local`: `greedy_search` | `modified_beam_search`.
+    decoding: Option<String>,
 }
 
 fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags> {
@@ -57,6 +65,9 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         runs: None,
         seconds: None,
         model: None,
+        prime_ms: 0,
+        blank_penalty: None,
+        decoding: None,
     };
     let mut it = it.peekable();
     while let Some(arg) = it.next() {
@@ -74,6 +85,9 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--runs" => flags.runs = Some(PathBuf::from(take()?)),
             "--seconds" => flags.seconds = Some(take()?.parse()?),
             "--model" => flags.model = Some(PathBuf::from(take()?)),
+            "--prime-ms" => flags.prime_ms = take()?.parse()?,
+            "--blank-penalty" => flags.blank_penalty = Some(take()?.parse()?),
+            "--decoding" => flags.decoding = Some(take()?),
             "--scripts" => {
                 flags.scripts = Some(take()?.split(',').map(|s| s.trim().to_string()).collect())
             }
@@ -167,7 +181,15 @@ fn main() -> anyhow::Result<()> {
             let out_runs = flags
                 .runs
                 .ok_or_else(|| anyhow::anyhow!("--runs <dir> required (do not overwrite bench/runs)"))?;
-            capture_all_local(&workdir, &out_runs, &model_dir, flags.pace)?;
+            capture_all_local(
+                &workdir,
+                &out_runs,
+                &model_dir,
+                flags.pace,
+                flags.prime_ms,
+                flags.blank_penalty,
+                flags.decoding.clone(),
+            )?;
         }
         Some("vocab") => {
             // What would this script send? No network, no cost — the fastest
@@ -670,22 +692,35 @@ async fn synth_audio(
 /// The model is loaded once for the whole corpus and a fresh stream is created
 /// per run, which is also how the app is meant to hold it: loading costs
 /// ~200 ms and belongs nowhere near the start of a take.
+#[allow(clippy::too_many_arguments)]
 fn capture_all_local(
     workdir: &std::path::Path,
     runs_dir: &std::path::Path,
     model_dir: &std::path::Path,
     pace: f64,
+    prime_ms: u32,
+    blank_penalty: Option<f32>,
+    decoding: Option<String>,
 ) -> anyhow::Result<()> {
-    let config = cc_stt::LocalSttConfig::with_model_dir(model_dir);
+    let mut config = cc_stt::LocalSttConfig::with_model_dir(model_dir);
+    config.prime_ms = prime_ms;
+    if let Some(penalty) = blank_penalty {
+        config.blank_penalty = penalty;
+    }
+    if let Some(method) = decoding {
+        config.decoding_method = method;
+    }
     config.validate().map_err(|e| anyhow::anyhow!(e))?;
     let loading = std::time::Instant::now();
     let recognizer = cc_stt::LocalRecognizer::load(&config).map_err(|e| anyhow::anyhow!(e))?;
     println!(
-        "loaded {} in {:.0}ms ({} threads, {})",
+        "loaded {} in {:.0}ms ({} threads, {}, prime {}ms, blank_penalty {})",
         model_dir.display(),
         loading.elapsed().as_secs_f64() * 1000.0,
         config.num_threads,
         config.decoding_method,
+        config.prime_ms,
+        config.blank_penalty,
     );
 
     let tts_dir = workdir.join("tts");
@@ -721,7 +756,8 @@ fn capture_all_local(
         println!("capturing {name}: {audio_s:.1}s at {pace}× …");
 
         let started = std::time::Instant::now();
-        let events = cc_bench::capture_local::capture_events(&recognizer, pcm, sample_rate, pace);
+        let events =
+            cc_bench::capture_local::capture_events(&recognizer, pcm, sample_rate, pace, prime_ms);
         let transcripts = events
             .iter()
             .filter(|e| {

@@ -23,9 +23,10 @@ pub fn capture_events(
     pcm: &[u8],
     sample_rate: u32,
     pace: f64,
+    prime_ms: u32,
 ) -> Vec<SttFrame> {
     let mut events = Vec::new();
-    cc_stt::local::stream_pcm16(recognizer, pcm, sample_rate, 100, pace, |frame| {
+    cc_stt::local::stream_pcm16(recognizer, pcm, sample_rate, 100, pace, prime_ms, |frame| {
         events.push(frame)
     });
     events

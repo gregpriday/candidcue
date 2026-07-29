@@ -1,11 +1,31 @@
 //! Tier A: deterministic synthetic transcript events.
 //!
-//! Simulates the observed Inworld cadence without audio or network: server
-//! VAD opens an item at speech onset, full-restatement partials arrive on a
-//! ~900 ms cadence lagging the audio clock, a final restates the utterance
-//! ~1.2 s after the closing pause. Corruption is seeded and reproducible, so
-//! a Tier-A suite is a pure function of (plan, seed) and runs in
-//! milliseconds — this is what CI regression numbers come from.
+//! Simulates the cadence of the recogniser the app SHIPS, without audio or
+//! model: an item opens at speech onset, full-restatement partials arrive on a
+//! ~300 ms cadence, a final restates the utterance after the closing pause.
+//! Corruption is seeded and reproducible, so a Tier-A suite is a pure function
+//! of (plan, seed) and runs in milliseconds — this is what CI regression
+//! numbers come from.
+//!
+//! ---------------------------------------------------------------------------
+//! RE-BASED WHEN SPEECH RECOGNITION MOVED ON-DEVICE
+//! ---------------------------------------------------------------------------
+//! These constants used to describe Inworld: partials every 900 ms, lagging
+//! the audio clock by 400 ms, because that is what the hosted service did. The
+//! on-device transducer emits more than three times as often and publishes in
+//! the same call that consumed the samples, so the old numbers modelled a
+//! cadence no recogniser in this app produces.
+//!
+//! That mattered for more than realism. `AlignmentConfig::partial_lag_ms` is
+//! the engine's correction for exactly this delay; tuning it against real
+//! captures gave 0, and scoring THAT against a simulator still emitting a
+//! 400 ms lag made Tier A look like a 16-point regression that no presenter
+//! would ever have experienced. A simulator and a config that disagree about
+//! the provider produce numbers that are precise and meaningless.
+//!
+//! Measured from `bench/runs-local` (18 runs, 33 min of speech): median
+//! partial interval 300 ms, median onset delay 300 ms. Tier-A numbers from
+//! before this change are NOT comparable with numbers from after it.
 
 use cc_stt::SttFrame;
 
@@ -14,15 +34,20 @@ use crate::plan::{Corruption, GoldTimeline, GoldWord};
 /// Gaps of at least this length close an utterance (server VAD behaviour).
 const UTTERANCE_GAP_MS: f64 = 900.0;
 /// Emission lag: a partial covers words finished this long before it arrives.
-/// 400 ms is the p50 measured against gold word times on live Inworld
-/// captures (bench/runs) — the simulator tracks the measured provider.
-const PARTIAL_LAG_MS: f64 = 400.0;
-/// Partial cadence while speech continues.
-const PARTIAL_EVERY_MS: f64 = 900.0;
+///
+/// ~0 for a local transducer, which publishes in the same call that consumed
+/// the samples — there is no network round trip and no server-side buffer
+/// between the audio and the hypothesis. This is the simulator's half of the
+/// same fact `AlignmentConfig::partial_lag_ms` encodes.
+const PARTIAL_LAG_MS: f64 = 0.0;
+/// Partial cadence while speech continues. Median measured on the on-device
+/// corpus; the hosted service was 900.
+const PARTIAL_EVERY_MS: f64 = 300.0;
 /// Final arrives this long after the last word of the utterance ends.
 const FINAL_DELAY_MS: f64 = 1_200.0;
-/// speechStarted (ItemStarted) fires this long after actual onset.
-const ONSET_DELAY_MS: f64 = 250.0;
+/// ItemStarted fires this long after actual onset — the decoder needs acoustic
+/// context before it will commit to a first token. Median measured at 300 ms.
+const ONSET_DELAY_MS: f64 = 300.0;
 
 /// Deterministic 64-bit LCG (Numerical Recipes constants) — no rand crate,
 /// no platform variance.
