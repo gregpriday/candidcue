@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyTransition } from './motion';
+import { classifyTransition, manualScrollRelocated } from './motion';
 import { ALIGNMENT_RELOCATIONS } from '../../shared/contracts';
 import { segmentText } from './text';
 
@@ -144,5 +144,49 @@ describe('the smooth-jump threshold may narrow with pitch, never widen', () => {
   it('leaves a caller with no measured pitch exactly where it was', () => {
     expect(classify(1199, 600)).toBe('smooth_jump');
     expect(classify(1201, 600)).toBe('fade_jump');
+  });
+});
+
+describe('a settled wheel gesture: move or look? (§16.9)', () => {
+  const VH = 1080;
+
+  it('treats a glance as a glance', () => {
+    // A third of a screen leaves the place the aligner is holding plainly in
+    // view. Re-seeding its cursor would discard a lock that is still right.
+    expect(manualScrollRelocated(VH * 0.3, VH)).toBe(false);
+  });
+
+  it('treats half a screen as having moved', () => {
+    expect(manualScrollRelocated(VH * 0.5, VH)).toBe(true);
+    expect(manualScrollRelocated(VH * 2, VH)).toBe(true);
+  });
+
+  it('reads the same in both directions', () => {
+    // Scrolling back to re-read is as much a move as scrolling on.
+    expect(manualScrollRelocated(-VH * 0.6, VH)).toBe(true);
+    expect(manualScrollRelocated(-VH * 0.2, VH)).toBe(false);
+  });
+
+  it('says no when there is nothing to measure against', () => {
+    /*
+     * A null gap is not a small one: it means no frame has arrived from the
+     * feed this session, so the stage does not know whether the presenter has
+     * moved. Not knowing is a reason to leave the tracker alone, never a reason
+     * to overwrite it.
+     */
+    expect(manualScrollRelocated(null, VH)).toBe(false);
+    expect(manualScrollRelocated(Number.NaN, VH)).toBe(false);
+  });
+
+  it('says no before the viewport has been measured', () => {
+    // Every gap is "half of nothing" against a zero-height viewport, which
+    // would make the very first gesture of a take a relocation.
+    expect(manualScrollRelocated(400, 0)).toBe(false);
+  });
+
+  it('scales with the glass, so the rule is the same on every panel', () => {
+    // 300 px is a third of a 900 px stage and most of a 600 px one.
+    expect(manualScrollRelocated(300, 900)).toBe(false);
+    expect(manualScrollRelocated(300, 600)).toBe(true);
   });
 });

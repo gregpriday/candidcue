@@ -139,6 +139,41 @@ describe('a named fault outranks the ladder', () => {
   });
 });
 
+describe('following switched off skips the ladder too (§48)', () => {
+  it('says so at once, because nothing is going to clear it', () => {
+    /*
+     * The ladder's patience is bought by a hold resolving itself — say nothing
+     * for a second and a half, because the presenter's next sentence probably
+     * fixes it. Nothing fixes this one. Waiting would leave somebody staring at
+     * a script that is never going to advance, with no explanation.
+     */
+    const status = resolveHoldStatus(held(0, { alignmentState: 'following', followPaused: true }));
+    expect(status).toEqual({ rung: 'message', message: 'Following off', tone: 'neutral' });
+  });
+
+  it('is neutral, not a fault: a mode in force is not a thing gone wrong', () => {
+    expect(resolveHoldStatus(held(9000, { followPaused: true })).tone).toBe('neutral');
+  });
+
+  it('still lets a named fault through, because that one is still true', () => {
+    // Transcription stays connected while following is off (§48), so a
+    // microphone that has stopped working is both real and more urgent.
+    const status = resolveHoldStatus(
+      held(0, { followPaused: true, hasFault: true, faultLabel: 'No audio' }),
+    );
+    expect(status).toEqual({ rung: 'message', message: 'No audio', tone: 'fault' });
+  });
+
+  it('goes quiet again the moment following comes back', () => {
+    const status = resolveHoldStatus(
+      held(0, { alignmentState: 'following', followPaused: false }),
+      'message',
+    );
+    expect(status.rung).toBe('none');
+    expect(status.message).toBeNull();
+  });
+});
+
 describe('the rung does not flap', () => {
   it('holds hollow while the timer oscillates across the 1.5 s threshold', () => {
     // What a frame clock actually produces: the same hold, sampled either side

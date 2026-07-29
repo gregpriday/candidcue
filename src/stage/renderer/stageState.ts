@@ -49,6 +49,15 @@ export interface StageAppState {
   frozen: boolean;
   frozenReason: FrozenReason | null;
   blanked: boolean;
+  /**
+   * §48. Voice following is switched off; the presenter is driving the script.
+   *
+   * Off by default and for every take that never touches the control, because
+   * following is what a take IS — the switch exists for the presenter who wants
+   * to read from a script at their own pace, and a stage that opened with it
+   * already flipped would be a prompter that does not prompt.
+   */
+  followPaused: boolean;
   ack: StageAckState | null;
   calibration: StageCalibrationState;
   diagnostics: boolean;
@@ -98,6 +107,7 @@ export function initialStageState(): StageAppState {
     frozen: false,
     frozenReason: null,
     blanked: false,
+    followPaused: false,
     ack: null,
     calibration: initialCalibrationState(),
     diagnostics: false,
@@ -133,6 +143,20 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
         lastTrackingRevision: newGeneration ? null : state.lastTrackingRevision,
         frozen: newGeneration ? false : state.frozen,
         frozenReason: newGeneration ? null : state.frozenReason,
+        /*
+         * §48. A new take follows the presenter's voice — that is what a take
+         * IS — so the switch goes back on with it.
+         *
+         * The standalone stage window outlives a session, and control sends no
+         * `follow` directive at the start of one: it has nothing to say, the
+         * switch being on by default. So a take that ended with following
+         * switched off left this reducer holding `true`, and the NEXT take
+         * opened on a window that was motion-paused and captioned "Following
+         * off" while control believed it was following perfectly. Embedded
+         * presentation never had this — its prop is read off session state,
+         * which does reset — which is exactly why it would have shipped.
+         */
+        followPaused: newGeneration ? false : state.followPaused,
       };
     }
 
@@ -210,6 +234,8 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
               sampleLabel: d.sampleLabel ?? state.calibration.sampleLabel,
             },
           };
+        case 'follow':
+          return { ...state, followPaused: d.paused };
         case 'diagnostics':
           return { ...state, diagnostics: d.visible };
         default:

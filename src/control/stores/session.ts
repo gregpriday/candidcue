@@ -214,6 +214,16 @@ export interface SessionState {
   /** §6. Whether coaching is running at all this take (mode !== 'off'). */
   coachingActive: boolean;
   voiceFollow: boolean;
+  /**
+   * §48. Following is off because somebody switched it off — the dock's own
+   * control, the transport checkbox, or the Live panel's button.
+   *
+   * Narrower than `!voiceFollow`, which also goes false for an automatic hold
+   * when the transcript stops being trustworthy. Only this one reaches the
+   * stage, because only this one is a mode the presenter chose; the other is a
+   * fault, and the glass already has honest words for a fault.
+   */
+  followPausedByUser: boolean;
   connection: 'connected' | 'reconnecting' | 'offline';
   micState: 'live' | 'muted' | 'disconnected';
   /**
@@ -284,6 +294,7 @@ const initial: SessionState = {
   coachRailVisible: false,
   coachingActive: false,
   voiceFollow: true,
+  followPausedByUser: false,
   connection: 'connected',
   micState: 'live',
   inputDeviceLost: false,
@@ -869,7 +880,11 @@ export function startLiveSession(input: StartSessionInput): string {
       // than letting the stage drift on stale or absent speech.
       onFollowingHold: (held, reason) => {
         trace('hold', `${held ? 'held' : 'released'} — ${reason ?? 'none'}`);
-        smoothFollow.setFollowingPaused(held);
+        // Not deliberate: this is the transcript going untrustworthy, not the
+        // presenter switching following off. The stage hears about the fault
+        // through the hold ladder and the audio readout, which word it as the
+        // fault it is.
+        smoothFollow.setFollowingPaused(held, false);
         /*
          * No toast. A hold is a STATE, and the Live status line already reports
          * it — "Reconnecting — position held", "Microphone disconnected —
@@ -1822,21 +1837,51 @@ const followActions = {
     const token = get(state).snapshot?.confirmedToken;
     if (token === undefined) return;
     driver?.moveToToken(token);
+    noteReposition();
     showToast('Re-finding your place', 'info', { durationMs: 1600 });
   },
   acceptCandidate(candidate: { tokenIndex: number }): void {
     driver?.moveToToken(candidate.tokenIndex);
+    noteReposition();
   },
   /**
    * Pausing following is not pausing the session (§15.3, §48): transcription
    * stays connected and voice commands keep working — only automatic movement
    * stops.
    */
-  setFollowingPaused(paused: boolean): void {
+  setFollowingPaused(paused: boolean, deliberate = true): void {
+    // The follow store owns the "an automatic release may not overrule a
+    // deliberate pause" rule, because it is the one funnel every road into
+    // pausing goes through and its own state has to agree with the outcome.
     trace('follow-pause', paused ? 'paused by the follow store' : 'resumed by the follow store');
     if (paused) driver?.pause();
     else driver?.resume();
-    state.update((s) => ({ ...s, voiceFollow: !paused }));
+    state.update((s) => ({
+      ...s,
+      voiceFollow: !paused,
+      // Only a decision reaches the glass. An automatic hold stops following
+      // too, and saying "Following off" over it would tell the presenter they
+      // had switched something off when what actually happened is that the
+      // transcript stopped being trustworthy.
+      ...(deliberate ? { followPausedByUser: paused } : {}),
+    }));
+    if (!deliberate) return;
+    /*
+     * And tell the stage, because the stage is where the consequence is.
+     *
+     * Stopping the driver stops the snapshots, which the stage could in
+     * principle notice — but only as an ABSENCE, and it cannot tell an absence
+     * from a presenter who has gone quiet until its 15 s staleness window
+     * expires. For those fifteen seconds it would keep predicting forward from
+     * the last snapshot it had: the script would carry on drifting after the
+     * switch was flipped, which is precisely the thing the switch was flipped
+     * to stop.
+     *
+     * Single-window presentation reads this off session state instead (the
+     * `followPaused` bridge prop), because directives are a no-op at stage
+     * generation 0. Sent anyway, for the standalone window that may be open.
+     */
+    sendDirective({ kind: 'follow', paused });
   },
   /**
    * §62 recovery. Re-publishing the current stage settings forces the stage to
@@ -2089,9 +2134,14 @@ function startStageBridge(sessionId: string): void {
         if (intent.kind === 'toggle_pause') togglePlayPause();
         else if (intent.kind === 'manual_step') {
           moveSentences(intent.direction === 'forward' ? 1 : -1);
+        } else if (intent.kind === 'manual_scroll') {
+          // The scroll itself was applied on the stage; what travels here is
+          // where it LEFT the presenter, and only when it left them somewhere
+          // else (§16.9). See `anchorManualScroll`.
+          if (intent.anchorToken !== null) anchorManualScroll(intent.anchorToken, intent.atMs);
+        } else if (intent.kind === 'toggle_follow') {
+          toggleVoiceFollow();
         }
-        // manual_scroll is already applied locally on the stage; the tracker
-        // re-acquires around it (§16.9).
       }),
       /*
        * §62. A stage-layout failure has its own event, so this is the whole
@@ -2393,6 +2443,7 @@ export function togglePlayPause(): void {
 
 export function moveSentences(delta: number): void {
   driver?.moveSentences(delta);
+  noteReposition();
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
 }
 
@@ -2404,10 +2455,69 @@ export function moveSentences(delta: number): void {
 export function goToToken(tokenIndex: number): void {
   if (!get(state).active) return;
   driver?.moveToToken(Math.max(0, tokenIndex));
+  noteReposition();
   // §36.3: an outline jump is a position the operator deliberately went to, and
   // "where did I skip to" is half of what a take history is for.
   noteCheckpoint('manual');
   state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
+}
+
+/**
+ * §16.9. The presenter scrolled the stage somewhere else; put the tracker
+ * there too.
+ *
+ * The gap this closes is the oldest one in the manual-scroll path. A wheel
+ * gesture moved the DOCUMENT and told the aligner nothing, so the cursor stayed
+ * where it was and the next sentence the presenter spoke was matched against a
+ * place they had left — which either dragged the script back at the profile's
+ * full forward speed, or held it in the wrong place for however long the
+ * aligner took to relocate on evidence alone. The arrow keys never had this
+ * problem: they travel as `manual_step`, and every one of them re-seeds the
+ * cursor.
+ *
+ * NO CHECKPOINT, and that is the difference from `goToToken`. An outline jump
+ * is an operator deciding to be somewhere and is worth a mark in the take
+ * history; scrolling is how a presenter reads, and a history with a checkpoint
+ * per wheel gesture is a history nobody can find the real jumps in. The
+ * correction still COUNTS — `manualCorrectionCount` in the summary is a measure
+ * of how much hand-holding the take needed, and this is exactly that.
+ *
+ * The stage decides whether a gesture was a move at all; by the time one
+ * arrives here the question has been answered (see `manual_scroll`).
+ */
+export function anchorManualScroll(tokenIndex: number, atMs?: number): void {
+  if (!get(state).active) return;
+  if (!Number.isFinite(tokenIndex)) return;
+  /*
+   * A report the take has already moved past is not a report, it is a rewind.
+   *
+   * The gesture settles 200 ms after the presenter stops scrolling, and an
+   * operator can restart the paragraph, jump the outline, or step a sentence
+   * inside that window — all of which put the aligner somewhere deliberately.
+   * The stale gesture then landed on top of it and dragged the cursor back to
+   * where the presenter had been BEFORE the restart, undoing the one action
+   * somebody had just taken on purpose.
+   */
+  if (typeof atMs === 'number' && Number.isFinite(atMs) && atMs <= lastRepositionAtMs) {
+    trace('manual-scroll', 'anchor dropped: a deliberate reposition overtook it');
+    return;
+  }
+  driver?.moveToToken(Math.max(0, Math.round(tokenIndex)));
+  noteReposition();
+  state.update((s) => ({ ...s, counts: { ...s.counts, jumps: s.counts.jumps + 1 } }));
+}
+
+/**
+ * When the aligner was last put somewhere on purpose, wall clock.
+ *
+ * Read by `anchorManualScroll` to drop a wheel report that a deliberate
+ * reposition has overtaken. Module state rather than store state because
+ * nothing renders it — it is a race guard, not a fact about the take.
+ */
+let lastRepositionAtMs = Number.NEGATIVE_INFINITY;
+
+function noteReposition(): void {
+  lastRepositionAtMs = Date.now();
 }
 
 /**
@@ -2418,6 +2528,7 @@ export function goToToken(tokenIndex: number): void {
  */
 export function restartParagraph(): void {
   driver?.restartParagraph();
+  noteReposition();
   const before = get(state);
   // §36.3: a new pass proves itself again. The evidence that the last one was
   // heard says nothing about this one, and the pill coming back is how the
@@ -2460,7 +2571,17 @@ export function toggleBlankStage(): void {
  * in sync.
  */
 export function toggleVoiceFollow(): void {
-  smoothFollow.setFollowingPaused(get(state).voiceFollow);
+  /*
+   * Toggles the presenter's own switch, NOT `voiceFollow`.
+   *
+   * `voiceFollow` also goes false for an automatic hold, and toggling off that
+   * made the control do the opposite of what it says: with a transcription
+   * hold in force the switch still (correctly) reads ON, and clicking it to
+   * turn following off computed "currently off, so resume" — the one click
+   * that could restart a script mid-fault, from the control whose whole job is
+   * stopping it.
+   */
+  smoothFollow.setFollowingPaused(!get(state).followPausedByUser);
 }
 
 /* ---------------------------------------------------------------------------

@@ -171,6 +171,48 @@ function transitionMultipliers(
   }
 }
 
+/**
+ * How fast the document may travel while it re-grabs the presenter's place
+ * after they moved it by hand, in rendered lines per second.
+ *
+ * LINES, because what makes a correction followable is whether the reader's eye
+ * can stay on the text while it moves, and that is a claim about reading. Four
+ * lines a second is comfortably faster than anybody reads — a half-screen gap
+ * closes in about two seconds — and slow enough that the words stay words
+ * rather than becoming a blur with a destination.
+ *
+ * The number this replaces was not a number at all: ordinary following simply
+ * ran at `maxForwardVelocityPxS`, which is 900 px/s, about ten lines a second,
+ * most of a screen every second. That ceiling is right for the case it was
+ * tuned for — the tracker legitimately reporting that the presenter has moved
+ * on — and completely wrong for the case where the DOCUMENT was moved and the
+ * tracker never knew, because then the "correction" is a full-speed flight back
+ * to a place the presenter has deliberately left.
+ */
+export const REACQUIRE_LINES_PER_SECOND = 4;
+
+/**
+ * The same ceiling for a stage that has not measured a pitch, px/s.
+ *
+ * 340 px/s is four lines at the ~85 px reference pitch, and it is the number
+ * `resolveLineLimitPx` clamps the line-relative answer around — so an
+ * implausible pitch (a font that never loaded) can move this by at most half or
+ * three times, never by the factor a raw multiplication would allow.
+ */
+export const REACQUIRE_FALLBACK_VELOCITY_PX_S = 340;
+
+/**
+ * Slack added to the backward licence a re-acquisition is granted.
+ *
+ * The licence is sized to the gap being closed, because §30.5's standing 420 px
+ * reverse budget is a bound on how far ordinary tracker jitter may reverse the
+ * document, and this is not that: the presenter asked to be somewhere else and
+ * the document is walking back to meet them. A licence cut exactly to the gap
+ * strands the last few pixels — the plant brakes into the wall while still
+ * short — so it carries one ordinary line of slack.
+ */
+export const REACQUIRE_REVERSE_SLACK_PX = 96;
+
 export interface MotionLimitOptions {
   reducedMotion?: boolean;
   /** §61: the frame budget is being missed; simplify rather than jump. */
@@ -178,6 +220,31 @@ export interface MotionLimitOptions {
   transition?: StageTransitionDirective['type'];
   /** Manual authority suppresses automatic correction for a grace interval. */
   manualGrace?: boolean;
+  /**
+   * §30.6. The presenter moved the script by hand and has now started speaking
+   * again: this is the correction that re-grabs their place.
+   *
+   * A distinct shape from every transition in the table above, because it is a
+   * distinct situation. A `catch_up` is the presenter having moved ahead in the
+   * SCRIPT and the document following them; a re-acquisition is the document
+   * having been moved and the reader standing still. Nothing about it is urgent
+   * — the presenter is already reading the words they want — so it is the one
+   * correction that is allowed to take its time.
+   */
+  reacquire?: boolean;
+  /**
+   * Total backward travel this re-acquisition is authorized to spend, px —
+   * already inclusive of whatever the plant has spent, because that is what the
+   * controller's cumulative `reverseTravelPx` is compared against.
+   *
+   * An ABSOLUTE licence, latched by the caller when the episode begins, not a
+   * remaining distance. Deriving it from the shrinking gap each frame lowered
+   * the ceiling as fast as the counter rose and dead-stopped long re-grabs
+   * short of their destination; see `reacquireBudgetPx` in the engine.
+   *
+   * Omitted or non-finite leaves the profile's standing §30.5 budget alone.
+   */
+  reacquireReverseBudgetPx?: number;
   /**
    * §30.3. Fraction of the profile's catch-up boost the frame loop licenses
    * this frame — the smaller of the corridor-relative decay and the duration
@@ -325,6 +392,53 @@ export function limitsForState(
     // Nothing automatic may move, so there is nothing for a safety ceiling to
     // bound — and the presenter's own position may legitimately be past it.
     limits.forwardPositionCeilingPx = Number.POSITIVE_INFINITY;
+  } else if (options.reacquire && options.reducedMotion !== true) {
+    /*
+     * §30.6, the other end of the same interval: the grace is over and the
+     * document has to come back to the reader.
+     *
+     * Applied AFTER the state and transition shaping and as a `min`, never as a
+     * multiplier, for the reason the §32.3 fade threshold is combined the same
+     * way: this is a bound on a correction the presenter did not ask for, so a
+     * state that happens to be feeling energetic may not raise it. Large type
+     * can make the re-grab faster in pixels — that is what keeps it four LINES
+     * a second on every rig — and nothing can make it faster in lines.
+     *
+     * Reduced motion is exempt and goes back to `snap`: somebody who has asked
+     * their system not to animate is not asking for a gentler animation (§32.4).
+     */
+    const ceilingPxS = resolveLineLimitPx(
+      REACQUIRE_LINES_PER_SECOND,
+      REACQUIRE_FALLBACK_VELOCITY_PX_S,
+      options.linePitchPx,
+    );
+    limits.vForwardMax = Math.min(limits.vForwardMax, ceilingPxS);
+    limits.vBackwardMax = Math.min(limits.vBackwardMax, ceilingPxS);
+    /*
+     * Backward is the direction this exists for.
+     *
+     * Ordinary following forbids reverse, and rightly — but the commonest
+     * manual gesture on a prompter is scrolling BACK to re-read a line, which
+     * leaves the plant behind the tracker's target and closes the gap forward.
+     * The mirror case, scrolling ahead to look and then carrying on from where
+     * you were, leaves the plant AHEAD, and with reverse forbidden the document
+     * simply froze until the reader's own progress caught up with it — the
+     * script sitting still while somebody reads is the failure this whole
+     * surface is built to avoid.
+     */
+    limits.allowBackward = true;
+    const budgetPx = options.reacquireReverseBudgetPx;
+    if (typeof budgetPx === 'number' && Number.isFinite(budgetPx) && budgetPx > 0) {
+      limits.reverseTravelMaxPx = Math.max(limits.reverseTravelMaxPx, budgetPx);
+    }
+    // No leading while re-grabbing. Feed-forward is a bet on where the reader
+    // will be next, and the one thing this frame knows for certain is that the
+    // display and the tracker disagree about where they are NOW.
+    limits.feedForwardScale = 0;
+    // Damp harder and soften the approach: an overshoot at the end of a
+    // correction the presenter did not ask for reads as the document hunting.
+    limits.zeta = limits.zeta * 1.2;
+    limits.omega = limits.omega * 0.9;
   }
 
   return limits;

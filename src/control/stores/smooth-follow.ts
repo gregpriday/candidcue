@@ -187,8 +187,19 @@ export interface FollowActions {
   reAnchor(): void;
   /** Accept one of the offered local candidates when lost (§48). */
   acceptCandidate(candidate: FollowCandidate): void;
-  /** Pause/resume automatic following without touching the session (§48). */
-  setFollowingPaused(paused: boolean): void;
+  /**
+   * Pause/resume automatic following without touching the session (§48).
+   *
+   * `deliberate` separates a decision from a symptom, and the stage is why it
+   * has to. Somebody switching following off is a MODE, and the glass says so
+   * in words with a lit control beside them; transcription going untrustworthy
+   * (`onFollowingHold`) is a fault, and the hold ladder and the audio readout
+   * already word that one properly. They arrive at this action by the same
+   * road and mean opposite things — one is "I am driving now", the other is "I
+   * cannot hear you" — so a stage told only that following stopped would blame
+   * the presenter for the microphone.
+   */
+  setFollowingPaused(paused: boolean, deliberate?: boolean): void;
   /** Ask the stage to rebuild its line map after §62. */
   rebuildStageLayout(): void;
 }
@@ -358,7 +369,8 @@ export interface SmoothFollowStore extends Readable<SmoothFollowState> {
   reAnchorHere(): void;
   acceptCandidate(candidateId: string): void;
   toggleFollowingPaused(): void;
-  setFollowingPaused(paused: boolean): void;
+  /** `deliberate` is false only for an automatic hold; see `FollowActions`. */
+  setFollowingPaused(paused: boolean, deliberate?: boolean): void;
   /** §62 recovery: ask the stage to rebuild its line map. */
   requestLayoutRebuild(): void;
 
@@ -434,8 +446,35 @@ export function createSmoothFollowStore(
     });
   }
 
-  function setFollowingPaused(paused: boolean): void {
-    actions.setFollowingPaused(paused);
+  /**
+   * Whether the presenter/operator switched following off, as opposed to the
+   * transcript going untrustworthy underneath them.
+   *
+   * Kept HERE, in the one function every road into pausing goes through, rather
+   * than only in the session store's action. Guarding at the action alone let
+   * this store's own `followingPaused` drift out of step with what the action
+   * actually did: an automatic release over a deliberate pause left the driver
+   * paused (correctly) and this store saying "resumed", so the Live panel
+   * offered "Pause following" over a take that was already paused and the first
+   * click did nothing visible.
+   */
+  let userPaused = false;
+
+  function setFollowingPaused(paused: boolean, deliberate = true): void {
+    if (deliberate) {
+      userPaused = paused;
+    } else if (!paused && userPaused) {
+      /*
+       * An automatic release may not overrule a deliberate pause.
+       *
+       * "The transcript is trustworthy again" is not permission to start moving
+       * a script the presenter has taken off automatic control. Only the
+       * release direction is guarded — an automatic hold engaging over a
+       * deliberate pause is harmless, following having already stopped.
+       */
+      return;
+    }
+    actions.setFollowingPaused(paused, deliberate);
     update((s) => ({
       ...s,
       followingPaused: paused,

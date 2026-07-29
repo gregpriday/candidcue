@@ -89,6 +89,7 @@
     type HoldStatus as HoldStatusReading,
     type HoldTone,
   } from './renderer/hold-status';
+  import { manualScrollRelocated } from './renderer/motion';
   import { transcriptTail } from './renderer/transcript-tail';
   import { startFixtureReplay, startPreviewDriver, type PreviewDriver } from './preview';
 
@@ -97,6 +98,16 @@
     alignment: StageAlignmentPayload | null;
     transcript: string;
     voicePill: StageVoicePillPayload | null;
+    /**
+     * §48. Voice following is off — the host's own switch, read straight rather
+     * than through a directive.
+     *
+     * Single-window presentation runs at stage generation 0 and the directive
+     * bus is a no-op there, so a mode that only travelled by directive would be
+     * dead in exactly the configuration most people use. The standalone window
+     * gets the same fact through `{ kind: 'follow' }`.
+     */
+    followPaused?: boolean;
     onexit: () => void;
     onintent?: (intent: StageIntent) => void;
     /**
@@ -412,6 +423,17 @@
   const motionFrozen = $derived(app.frozen);
   const scriptHidden = $derived(app.blanked);
   /**
+   * §48. Whether voice following is off, from whichever of the two roads
+   * carries it: the host's prop in single-window presentation, the `follow`
+   * directive in a standalone stage window.
+   *
+   * The bridge wins where it exists rather than being merged with the reducer's
+   * copy, because in the embedded case the host IS the owner of the switch —
+   * the same state its own transport checkbox reads — and a stage that kept a
+   * second opinion could only ever disagree with it.
+   */
+  const followPaused = $derived(embedded ? (embedded.followPaused ?? false) : app.followPaused);
+  /**
    * Reported on every heartbeat ack and read by the coordinator (§40.5).
    *
    * It has had no producer since the Listener was removed (§106): the layer
@@ -523,6 +545,7 @@
         holdingForMs: holdSinceMs === null ? 0 : now - holdSinceMs,
         hasFault: voiceFaultLabel !== null,
         faultLabel: voiceFaultLabel,
+        followPaused,
       },
       ladderRung,
     );
@@ -541,6 +564,9 @@
     // snapshot arrives to prompt the crossing.
     const holding = alignmentState !== null && alignmentState !== 'following';
     void voiceFaultLabel;
+    // The third input. Following being switched off changes the chip with no
+    // snapshot and no hold to prompt it, so the effect has to depend on it.
+    void followPaused;
     refreshHoldStatus();
     if (!holding) return;
     const timer = window.setInterval(refreshHoldStatus, HOLD_TICK_MS);
@@ -1193,8 +1219,65 @@
    * the reset below is exactly the place it was missed.
    */
   let lastEscapeAt = Number.NEGATIVE_INFINITY;
-  let wheelAccum = 0;
-  let wheelFlush = 0;
+  /* ---------------------------------------------------------- wheel gesture --
+   * One report per gesture, not one per 250 ms.
+   *
+   * The intent used to be throttled: the first wheel event armed a timer, and
+   * whatever had accumulated when it fired was sent. That is the right shape
+   * for a stream of deltas and the wrong shape for a DECISION, and this now
+   * carries one — where the presenter ended up, and whether they moved at all
+   * or only looked. Half of a gesture answers that question wrong, and a long
+   * scroll produced several halves.
+   */
+  let wheelSettleTimer = 0;
+  /** When the gesture in progress began, or 0 between gestures. */
+  let wheelGestureStartedAtMs = 0;
+  /**
+   * Where the document sat when the gesture began, or null between gestures.
+   *
+   * The gesture's travel is measured from the DOCUMENT, not by summing wheel
+   * deltas, because the document clamps at both ends and the wheel does not.
+   * Flick up at the top of the script and straight back down and the deltas sum
+   * to zero while the page has genuinely moved a screen — and a summed-delta
+   * rule read that as "nothing happened" and told the aligner nothing, which is
+   * precisely the relocation this whole path exists to report.
+   */
+  let wheelGestureStartPx: number | null = null;
+
+  /**
+   * Quiet time that ends a wheel gesture.
+   *
+   * A trackpad fling delivers events a few milliseconds apart and a notched
+   * wheel about every 50–120 ms, so 200 ms is comfortably past the gap inside a
+   * continuous gesture and comfortably short of the pause before somebody
+   * starts a new one.
+   */
+  const WHEEL_SETTLE_MS = 200;
+
+  /**
+   * How long a gesture may run before it reports anyway.
+   *
+   * Somebody holding a trackpad scroll for ten seconds is not going to hit a
+   * quiet window, and the tracker should not have to wait for them to stop
+   * before it learns they have gone somewhere else.
+   */
+  const WHEEL_MAX_GESTURE_MS = 1200;
+
+  /* Whether the gesture moved the presenter or only showed them something:
+     `manualScrollRelocated`, which is where that judgement is written down. */
+
+  /*
+   * The settle timer must not outlive the component.
+   *
+   * A gesture interrupted by the take ending — the presenter scrolls, then hits
+   * Escape twice — would otherwise fire its report into a session that is gone.
+   * Both handlers on the far side guard on an active session, so nothing acts
+   * on it, but a timer that survives the thing that armed it is a leak waiting
+   * for a less careful reader on the other end.
+   */
+  $effect(() => () => {
+    if (wheelSettleTimer) clearTimeout(wheelSettleTimer);
+  });
 
   function onKeyDown(event: KeyboardEvent) {
     // Chrome is up over the stage; the host window owns the keyboard.
@@ -1291,6 +1374,12 @@
       case 'f':
         previewDriver.toggleFreeze();
         return true;
+      /* Voice following off and on. The off state is a lit control in the dock
+         and a chip on the glass, and both are judged by looking at them beside
+         a script rather than by reasoning about them. */
+      case 'o':
+        previewDriver.toggleFollow();
+        return true;
       case 'm':
         previewDriver.toggleMirror();
         return true;
@@ -1365,15 +1454,52 @@
   function onWheel(event: WheelEvent) {
     if (app.blanked || !doc) return;
     event.preventDefault();
-    scriptLayer?.manualScrollBy(event.deltaY);
-    wheelAccum += event.deltaY;
-    if (!wheelFlush) {
-      wheelFlush = window.setTimeout(() => {
-        sendIntent({ kind: 'manual_scroll', deltaPx: wheelAccum });
-        wheelAccum = 0;
-        wheelFlush = 0;
-      }, 250);
+    // Read the position BEFORE the scroll lands, so the gesture's travel is
+    // measured from where it actually started.
+    if (wheelGestureStartPx === null) {
+      wheelGestureStartPx = scriptLayer?.scrollPositionPx() ?? 0;
     }
+    scriptLayer?.manualScrollBy(event.deltaY);
+
+    const now = performance.now();
+    if (wheelGestureStartedAtMs === 0) wheelGestureStartedAtMs = now;
+    if (now - wheelGestureStartedAtMs >= WHEEL_MAX_GESTURE_MS) {
+      flushWheelGesture();
+      return;
+    }
+    if (wheelSettleTimer) clearTimeout(wheelSettleTimer);
+    wheelSettleTimer = window.setTimeout(flushWheelGesture, WHEEL_SETTLE_MS);
+  }
+
+  /** The gesture is over: report where it left the presenter. */
+  function flushWheelGesture() {
+    if (wheelSettleTimer) {
+      clearTimeout(wheelSettleTimer);
+      wheelSettleTimer = 0;
+    }
+    const startPx = wheelGestureStartPx;
+    wheelGestureStartedAtMs = 0;
+    wheelGestureStartPx = null;
+    if (startPx === null) return;
+    const deltaPx = (scriptLayer?.scrollPositionPx() ?? startPx) - startPx;
+    const anchorToken = relocationAnchorToken();
+    // Nothing moved and nowhere to send anybody: a wheel event the document
+    // absorbed entirely is not news.
+    if (deltaPx === 0 && anchorToken === null) return;
+    sendIntent({ kind: 'manual_scroll', deltaPx, anchorToken, atMs: Date.now() });
+  }
+
+  /**
+   * Where to re-seed the tracker, or null if this gesture was a look.
+   *
+   * Both halves have to be answerable before this claims anything. No measured
+   * gap means no alignment target to be far from — the feed has not produced a
+   * frame this session — and the honest answer then is that the stage does not
+   * know whether the presenter has moved, not that they have.
+   */
+  function relocationAnchorToken(): number | null {
+    if (!manualScrollRelocated(scriptLayer?.alignmentGapPx() ?? null, vh)) return null;
+    return scriptLayer?.readingAnchorToken() ?? null;
   }
 
   /**
@@ -1442,6 +1568,7 @@
             {settings}
             alignment={app.alignment}
             frozen={motionFrozen}
+            {followPaused}
             {reducedMotion}
             sessionId={app.envelope?.sessionId ?? ''}
             sessionGeneration={app.envelope?.sessionGeneration ?? 0}
@@ -1792,6 +1919,8 @@
         <StageDock
           pill={app.envelope !== null ? presenterVoicePill : null}
           revealed={dockVisible}
+          {followPaused}
+          onfollowtoggle={() => sendIntent({ kind: 'toggle_follow' })}
           appearancePanel={embedded?.appearancePanel ?? null}
           appearanceOpen={embedded?.appearanceOpen ?? false}
           onappearanceopen={() => embedded?.onappearanceopen?.()}
@@ -1805,8 +1934,8 @@
 
     {#if preview}
       <div class="preview-hud">
-        preview · b blank · f freeze · m mirror · c calibrate · s clean/diagnostic · r
-        cue · a ack · j jump · v voice pill
+        preview · b blank · f freeze · o follow · m mirror · c calibrate · s
+        clean/diagnostic · r cue · a ack · j jump · v voice pill
       </div>
     {/if}
   </div>

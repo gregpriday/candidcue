@@ -258,6 +258,15 @@ export interface PreviewDriver {
   toggleFreeze(): void;
   toggleMirror(): void;
   /**
+   * Voice following on and off (§48).
+   *
+   * Here for the same reason the voice pill is: the off state puts a lit
+   * control in the corner of the dock and a chip on the glass, both of which
+   * are judged by looking at them beside a script, and the only other way to
+   * see either is to start a billable take with a microphone attached.
+   */
+  toggleFollow(): void;
+  /**
    * Step through every calibration overlay and back to off.
    *
    * Five cards is four more than the crosshair used to be, and each of them
@@ -468,6 +477,7 @@ export function startPreviewDriver(options: PreviewOptions = {}): PreviewDriver 
         });
   let blanked = false;
   let frozen = false;
+  let followPaused = false;
   /** Where the calibration cycle currently is: `null` is off, otherwise the mode. */
   let calibrationMode: StageCalibrationMode | null = null;
   let revision = 0;
@@ -576,6 +586,10 @@ export function startPreviewDriver(options: PreviewOptions = {}): PreviewDriver 
     toggleFreeze() {
       frozen = !frozen;
       directive({ kind: 'freeze', frozen });
+    },
+    toggleFollow() {
+      followPaused = !followPaused;
+      directive({ kind: 'follow', paused: followPaused });
     },
     toggleMirror() {
       settings = { ...settings, mirrorX: !settings.mirrorX };

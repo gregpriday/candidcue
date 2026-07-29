@@ -69,6 +69,10 @@
     onappearanceopen?: () => void;
     /** Escape, a click outside, or the settings button again. Means "cancel". */
     onappearanceclose?: () => void;
+    /** §48. Voice following is off; the presenter is driving the script. */
+    followPaused?: boolean;
+    /** The follow control was activated. The host owns the decision (§16.9). */
+    onfollowtoggle?: () => void;
     /** End the take. Called only after the anchored confirmation. */
     onend: () => void;
     /**
@@ -91,6 +95,8 @@
   let {
     pill,
     revealed,
+    followPaused = false,
+    onfollowtoggle,
     appearancePanel = null,
     appearanceOpen = false,
     onappearanceopen,
@@ -268,6 +274,50 @@
   }}
 >
   <div class="dock-row">
+    <!--
+      THE FOLLOW SWITCH, AND WHY IT DOES NOT FADE WHEN IT IS OFF.
+
+      Every other control in this dock is a verb somebody reaches for and then
+      forgets: adjust the prompter, end the session. This one sets a MODE, and a
+      mode that hides itself is how a presenter ends up staring at a script that
+      will not move, with the control that explains it invisible until they
+      happen to move the mouse.
+
+      So it obeys `buttonsVisible` in exactly one direction. While following is
+      on — the ordinary case, the whole take — it fades with the rest, because
+      it is then reporting the state everybody already assumes. While it is off
+      it stays lit, because it is then the answer to the only question the
+      presenter is going to ask.
+
+      The hold chip says the same thing in words, in the mirror plane, in
+      presenter-sized type (`resolveHoldStatus`). This is the half somebody can
+      click.
+    -->
+    <button
+      type="button"
+      class="dock-button follow"
+      class:paused={followPaused}
+      data-hidden={!buttonsVisible && !followPaused}
+      aria-pressed={!followPaused}
+      aria-label={followPaused
+        ? 'Voice following is off — switch it on'
+        : 'Voice following is on — switch it off'}
+      title={followPaused ? 'Follow my voice' : 'Stop following my voice'}
+      onclick={() => onfollowtoggle?.()}
+    >
+      <!-- The reading line, and the script advancing under it. Struck through
+           when nothing is advancing it. Deliberately not a waveform: the audio
+           display sits inches away in this same row and two waveforms in one
+           corner would read as two claims about the microphone. -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M4 9h16" stroke-linecap="round" />
+        <path d="M9 14l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
+        {#if followPaused}
+          <path d="M5 19 19 5" stroke-linecap="round" />
+        {/if}
+      </svg>
+    </button>
+
     {#if appearancePanel}
       <button
         type="button"
@@ -425,6 +475,32 @@
        icon, and the whole dock is judged through a beamsplitter. */
     width: 16px;
     height: 16px;
+  }
+
+  .follow {
+    color: rgb(245 243 239 / 72%);
+  }
+
+  /*
+   * Off is a STATE, so it is drawn as one rather than left to the icon alone.
+   *
+   * A 16px glyph with a stroke through it is a legible difference on a monitor
+   * and a coin toss through a beamsplitter at two metres, which is where this
+   * is read from. The tint does the work the geometry cannot; it is the amber
+   * end of the palette rather than the red the end button borrows, because
+   * nothing is wrong — the presenter asked for this.
+   */
+  .follow.paused {
+    color: #e8b661;
+    background: rgb(232 182 97 / 12%);
+    border-color: rgb(232 182 97 / 38%);
+  }
+
+  .follow.paused:hover,
+  .follow.paused:focus-visible {
+    color: #f2c97e;
+    background: rgb(232 182 97 / 18%);
+    border-color: rgb(232 182 97 / 52%);
   }
 
   .adjust {

@@ -43,6 +43,7 @@ function mount(overrides: Record<string, unknown> = {}) {
   const onpopover = vi.fn<(open: boolean) => void>();
   const onappearanceopen = vi.fn();
   const onappearanceclose = vi.fn();
+  const onfollowtoggle = vi.fn();
   const result = render(StageDock, {
     props: {
       pill: payload(),
@@ -52,14 +53,24 @@ function mount(overrides: Record<string, unknown> = {}) {
       onpopover,
       onappearanceopen,
       onappearanceclose,
+      onfollowtoggle,
       ...overrides,
     } as never,
   });
   flushSync();
-  return { ...result, onend, onhold, onpopover, onappearanceopen, onappearanceclose };
+  return {
+    ...result,
+    onend,
+    onhold,
+    onpopover,
+    onappearanceopen,
+    onappearanceclose,
+    onfollowtoggle,
+  };
 }
 
 const endButton = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.dock-button.end')!;
+const followButton = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.dock-button.follow')!;
 const adjustButton = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.dock-button.adjust');
 const confirmEnd = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.confirm-end');
 const confirmCancel = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.confirm-cancel');
@@ -338,6 +349,54 @@ describe('what the dock tells the stage around it', () => {
     endButton(container).click();
     flushSync();
     expect(onpopover).toHaveBeenLastCalledWith(true);
+  });
+});
+
+describe('the follow switch (§48)', () => {
+  it('reports the decision rather than taking it', () => {
+    // §16.9: the stage never acts on a privileged decision itself. Following is
+    // control's state — the same switch its own transport checkbox reads — so
+    // the button says what happened and nothing else.
+    const { container, onfollowtoggle } = mount();
+    followButton(container).click();
+    flushSync();
+    expect(onfollowtoggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('fades with the other buttons while following is on', () => {
+    // On is the ordinary case and the whole take. A lit control in the corner
+    // of a script that is behaving is a mark reporting nothing.
+    const { container } = mount({ revealed: false, followPaused: false });
+    expect(followButton(container).getAttribute('data-hidden')).toBe('true');
+  });
+
+  it('stays lit while following is off, even when nothing is revealed', () => {
+    /*
+     * The failure this prevents: a presenter looks up at a script that will not
+     * move, and the one control that explains why is invisible until they
+     * happen to move the mouse. Every other control here is a verb somebody
+     * reaches for and forgets; this one sets a mode.
+     */
+    const { container } = mount({ revealed: false, followPaused: true });
+    expect(followButton(container).getAttribute('data-hidden')).toBe('false');
+    // The others go, which is the point: this is one control staying behind,
+    // not the idle timer failing to fire.
+    expect(endButton(container).getAttribute('data-hidden')).toBe('true');
+  });
+
+  it('says which way it is set, in words and in colour', () => {
+    const on = mount({ followPaused: false });
+    expect(followButton(on.container).getAttribute('aria-pressed')).toBe('true');
+    expect(followButton(on.container).getAttribute('aria-label')).toContain('is on');
+    expect(followButton(on.container).classList.contains('paused')).toBe(false);
+    document.body.innerHTML = '';
+
+    const off = mount({ followPaused: true });
+    expect(followButton(off.container).getAttribute('aria-pressed')).toBe('false');
+    expect(followButton(off.container).getAttribute('aria-label')).toContain('is off');
+    // A struck-through 16px glyph is a coin toss through a beamsplitter at two
+    // metres; the tint is what carries the state at that distance.
+    expect(followButton(off.container).classList.contains('paused')).toBe(true);
   });
 });
 

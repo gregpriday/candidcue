@@ -243,6 +243,18 @@ export type StageDirective =
    */
   | { kind: 'voicePill'; pill: StageVoicePillPayload }
   | ({ kind: 'calibration'; active: boolean } & StageCalibrationDirective)
+  /**
+   * Voice following is on or off (§48).
+   *
+   * The state lives in control — the same switch the transport checkbox and the
+   * Live "Pause following" button already flip — and the stage has to be told
+   * because the stage is where the consequence is visible. Without it the only
+   * way the glass learns that following stopped is that snapshots stop
+   * arriving, which it cannot distinguish from a presenter who has gone quiet
+   * until the 15 s staleness window expires. A mode has to be announced, not
+   * inferred from an absence.
+   */
+  | { kind: 'follow'; paused: boolean }
   | { kind: 'diagnostics'; visible: boolean };
 
 /**
@@ -575,12 +587,53 @@ export interface StageEscapePayload {
  * separately as `stage://escape-pressed` so Rust can relay it.
  */
 export type StageIntent =
-  /** Mouse-wheel manual scroll, in logical stage pixels (already applied locally). */
-  | { kind: 'manual_scroll'; deltaPx: number }
+  /**
+   * One settled wheel gesture, in logical stage pixels (already applied
+   * locally).
+   *
+   * `anchorToken` is the half that was missing for as long as this intent has
+   * existed. The stage moved its own document and told nobody where to, so the
+   * tracker's cursor stayed where it was: the presenter scrolled back a
+   * paragraph to re-read a line, spoke, and the document ran forward at the
+   * profile's ceiling to a place they were no longer looking at. The wheel had
+   * no way to say "I am here" while the arrow keys — which travel as
+   * `manual_step` and reach `set_manual_position` — always had.
+   *
+   * Null means the gesture was a LOOK, not a move: the presenter glanced ahead
+   * and their place has not changed, so re-anchoring the tracker on it would
+   * throw away a lock that is still correct. The stage decides which it was,
+   * because the distinction is "has the place I was reading left the glass",
+   * and only the stage knows how tall the glass is.
+   */
+  | {
+      kind: 'manual_scroll';
+      /** Where the gesture actually left the document, px — travel, not wheel deltas. */
+      deltaPx: number;
+      anchorToken: number | null;
+      /**
+       * When the gesture settled, wall clock.
+       *
+       * Carried on the intent itself rather than only on the event envelope,
+       * because single-window presentation hands intents straight to the host
+       * and never builds an envelope — and control needs this to tell a report
+       * that is merely in flight from one that has been overtaken. The gesture
+       * settles 200 ms after the presenter stops scrolling, and an operator who
+       * restarts the paragraph inside that window would otherwise have the
+       * stale report drag the freshly restarted aligner back.
+       */
+      atMs: number;
+    }
   /** Arrow/page keys: semantic step requests. */
   | { kind: 'manual_step'; direction: 'forward' | 'back'; unit: 'line' | 'paragraph' }
   /** Space bar. */
   | { kind: 'toggle_pause' }
+  /**
+   * The dock's follow control (§48). Voice following is a mode the presenter
+   * may switch off — to read from a script at their own pace, with the wheel
+   * — and switching it off is not pausing the session: transcription stays
+   * connected and only automatic movement stops.
+   */
+  | { kind: 'toggle_follow' }
   /** Single click focused the stage; no script movement occurred. */
   | { kind: 'stage_focused' };
 

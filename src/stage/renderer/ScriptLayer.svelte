@@ -51,6 +51,7 @@
   import { untrack } from 'svelte';
   import type {
     AlignmentSnapshot,
+    RenderedLine,
     SafeRenderNode,
     SmoothFollowProfile,
     StageMotionAck,
@@ -104,6 +105,7 @@
     settings,
     alignment = null,
     frozen = false,
+    followPaused = false,
     reducedMotion = false,
     sessionId = '',
     sessionGeneration = 0,
@@ -123,6 +125,16 @@
     settings: StageSettings;
     alignment?: AlignmentSnapshot | null;
     frozen?: boolean;
+    /**
+     * §48. Voice following is switched off: the presenter is driving the script
+     * themselves, by wheel or by key.
+     *
+     * Distinct from `frozen`, which stops the frame loop outright — the loop
+     * has to keep running here, because the plant still has to settle, the
+     * wheel still writes positions into it, and the fade still has to be able
+     * to unwind. What stops is automatic motion.
+     */
+    followPaused?: boolean;
     reducedMotion?: boolean;
     sessionId?: string;
     sessionGeneration?: number;
@@ -735,6 +747,11 @@
   let documentOpacity = $state(1);
   let manualUntilMs = 0;
   const MANUAL_GRACE_MS = 2500;
+  /**
+   * Scroll position the alignment feed last asked for, or null before it has
+   * asked for anything. See `alignmentGapPx`.
+   */
+  let lastAlignmentTargetPx: number | null = null;
 
   /* ---- the persistent motion controller (companion §26.2) ---- */
   /*
@@ -756,6 +773,11 @@
   );
   $effect(() => {
     if (followProfile) engine.setProfile(followProfile);
+  });
+  // §48. The engine holds the document while following is off, and arms the
+  // §30.6 re-grab on the way back on — see `setPaused`.
+  $effect(() => {
+    engine.setPaused(followPaused, performance.now());
   });
   let rafId = 0;
   let loopRunning = false;
@@ -1437,6 +1459,19 @@
   /* ---- session gate (companion §26.1) ---- */
   $effect(() => {
     engine.configureSession(sessionGeneration, performance.now());
+    /*
+     * The two pieces of manual state this component owns go with it.
+     *
+     * `configureSession` clears the engine's copy, and these were left behind:
+     * a new take beginning within 2.5 s of the last gesture of the old one
+     * inherited a live grace window — which suppresses the §62 degraded
+     * fallback — and `lastAlignmentTargetPx` still held the PREVIOUS session's
+     * target, so the first wheel gesture of the new take measured its gap
+     * against a number from a script that is no longer on screen and could
+     * call a glance a relocation, re-seeding the aligner from it.
+     */
+    manualUntilMs = 0;
+    lastAlignmentTargetPx = null;
   });
 
   $effect(() => {
@@ -1456,7 +1491,22 @@
   });
 
   function applyTrackingFallback(snap: AlignmentSnapshot) {
-    if (performance.now() < manualUntilMs) return;
+    /*
+     * Every reason nothing automatic may move, checked in the one place the
+     * frame loop's own limits cannot reach.
+     *
+     * This path can RE-ANCHOR — `disposition: 'instant'` and `'reanchor'` write
+     * the plant directly (§62, §32.4) — so the zeroed velocities that enforce
+     * manual authority inside `limitsForState` do not bind here. Anything that
+     * holds the document has to be repeated at this door or it is not a hold.
+     *
+     * §30.6, both halves: the grace interval, and the engine's own "they have
+     * not spoken since". §48: following switched off. This is the path that
+     * runs at exactly the moments the line map is unresolved, which is when a
+     * correction the presenter did not ask for is least defensible of all.
+     */
+    if (followPaused) return;
+    if (performance.now() < manualUntilMs || engine.awaitingManualEvidence) return;
     const pos = tokenRect(Math.round(snap.confirmedToken));
     if (!pos) return;
     // §62: the off-window branch of `tokenRect` estimates a position from block
@@ -1665,6 +1715,12 @@
     if (!loopRunning) return;
     const result = engine.frame(now);
     setScroll(restingSnap(result.scrollPx, result.velocityPxS));
+    // Where the alignment feed last wanted the document, kept for
+    // `alignmentGapPx`. Only from frames the feed actually drove: a hold or a
+    // fallback target says nothing about where the tracker believes the
+    // presenter is, and answering with one would make a settled wheel gesture
+    // compare itself against the stage's own last guess.
+    if (result.source === 'alignment') lastAlignmentTargetPx = result.targetPx;
     // §20.4: never a CSS transition. The obscuration has to be on the engine's
     // clock, because the guarantee being made is about the ordering of two
     // writes to this element — hand the browser its own easing curve and the
@@ -1853,14 +1909,99 @@
   export function manualScrollBy(deltaPx: number) {
     const y = clamp(scrollY + deltaPx, 0, maxScroll);
     const now = performance.now();
-    engine.manualOverride(y, now);
-    manualUntilMs = now + MANUAL_GRACE_MS;
     setScroll(y);
+    /*
+     * The anchor is read AFTER the scroll lands, because it is a fact about
+     * where the presenter now is. It is handed to the engine so a relayout
+     * arriving during the hold preserves their position rather than the
+     * aligner's — see `manualOverride`.
+     */
+    engine.manualOverride(y, now, readingAnchorToken());
+    manualUntilMs = now + MANUAL_GRACE_MS;
+  }
+
+  /**
+   * The token sitting on the reading line right now, or null when the geometry
+   * cannot answer.
+   *
+   * This is the wheel's answer to the question the arrow keys have always been
+   * able to answer: WHERE did the presenter just put themselves. A scroll moves
+   * the document and nothing else, so without this the tracker keeps its old
+   * cursor and the next thing the presenter says is matched against a place
+   * they have left.
+   *
+   * The reading line rather than the top of the viewport, because the reading
+   * line is where the script is read from — it is the position the whole of §8
+   * is built around, and answering with the first visible token would hand the
+   * tracker a cursor most of a screen above where the presenter is looking.
+   *
+   * Null rather than a guess whenever the map is missing or invalid: a wrong
+   * anchor is worse than none at all, because it re-seeds the tracker's cursor
+   * with confidence and the aligner then needs real evidence to climb back out
+   * of it.
+   */
+  export function readingAnchorToken(): number | null {
+    const map = lineMap;
+    if (!map || !map.valid || map.lines.length === 0) return null;
+    const readingY = scrollY + map.readingLineStartY;
+    /*
+     * The line the reading mark is ON, or the next one down.
+     *
+     * A linear scan rather than a binary search: `lines` is only the MEASURED
+     * window on a virtualized script, this runs once per settled wheel gesture
+     * rather than per frame, and a search needs the array to be sorted by a key
+     * it is only incidentally sorted by. Simple beats clever at this cadence.
+     */
+    let line: RenderedLine | null = null;
+    for (const candidate of map.lines) {
+      if (candidate.bottomY < readingY) continue;
+      line = candidate;
+      break;
+    }
+    /*
+     * Off the end of what was MEASURED is not the same as off the end of the
+     * script, and on a virtualized document (§51.3) it usually is not.
+     *
+     * `map.lines` covers the rendered window plus overscan, and the map is
+     * rebuilt on a 250 ms throttle while a wheel gesture settles in 200 ms — so
+     * a fast scroll routinely asks this question against a map built for where
+     * the document USED to be. Answering with the nearest measured line would
+     * hand the aligner a cursor from the edge of last frame's window, stated
+     * with confidence, and it would then need real evidence to climb back out
+     * of it. Refusing is the whole reason this returns null at all.
+     */
+    if (!line) return null;
+    const first = map.lines[0];
+    if (first && readingY < first.topY) return null;
+    if (!Number.isFinite(line.firstTokenIndex)) return null;
+    return Math.max(0, Math.round(line.firstTokenIndex));
+  }
+
+  /**
+   * How far the document now sits from where the alignment feed would put it,
+   * in logical pixels, or null while there is no alignment target to measure
+   * against.
+   *
+   * The measure the stage uses to tell a LOOK from a MOVE. Not the raw scroll
+   * delta: a presenter who scrolls two screens ahead to check something and
+   * then scrolls back has travelled four screens and gone nowhere, and a rule
+   * written on distance travelled would re-anchor the tracker to a place they
+   * have already left again. What matters is where they have ended up relative
+   * to where the aligner thinks they are.
+   */
+  export function alignmentGapPx(): number | null {
+    if (lastAlignmentTargetPx === null) return null;
+    return Math.abs(scrollY - lastAlignmentTargetPx);
   }
 
   /** One text line in logical pixels, for arrow-key steps. */
   export function lineHeightPx(): number {
     return linePx;
+  }
+
+  /** Where the document currently sits, for measuring a gesture's real travel. */
+  export function scrollPositionPx(): number {
+    return scrollY;
   }
 
   /** Operator diagnostics (§64) — never rendered on the presenter's glass. */

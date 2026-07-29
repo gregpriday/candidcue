@@ -1191,6 +1191,12 @@ const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[
     // Same failure class as the transcript: this status readout was produced
     // by control and disappeared on the direct webview-to-webview event road.
     "voicePill",
+    // Voice following switched on or off (§48). The stage cannot infer this
+    // from the snapshots stopping: an absence is indistinguishable from a
+    // presenter who has gone quiet until the staleness window expires, and for
+    // those seconds the script would keep drifting on prediction — which is the
+    // exact thing the switch was flipped to stop.
+    "follow",
 ];
 
 /// Validate a `StageStatePayload` ({ stageGeneration, directive }) against
@@ -1474,6 +1480,20 @@ mod tests {
             "directive": { "kind": "freeze", "frozen": true }
         });
         assert!(validate_stage_directive(4, &missing_generation).is_err());
+    }
+
+    /// Every kind the TypeScript `StageDirective` union can produce has to be
+    /// on the allow-list, or control raises an error at the moment somebody
+    /// uses the feature. The follow switch is the one this caught: the whole
+    /// path was built, typechecked and unit-tested, and would have failed here
+    /// the first time a presenter switched following off on a real rig.
+    #[test]
+    fn stage_directive_allow_list_covers_the_follow_switch() {
+        let follow = serde_json::json!({
+            "stageGeneration": 4,
+            "directive": { "kind": "follow", "paused": true }
+        });
+        assert!(validate_stage_directive(4, &follow).unwrap());
     }
 
     // -----------------------------------------------------------------

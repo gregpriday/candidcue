@@ -92,6 +92,8 @@ export interface HoldStatusInput {
   hasFault: boolean;
   /** The name of that condition. Never a code, never "something went wrong". */
   faultLabel: string | null;
+  /** §48. Voice following is switched off; the presenter is driving. */
+  followPaused?: boolean;
 }
 
 export interface HoldStatus {
@@ -156,6 +158,30 @@ export function resolveHoldStatus(
    * gives them nothing to do about it, mid-take. The ladder's wording is at
    * least true.
    */
+
+  /*
+   * Following is off, and that also skips the ladder — in the other direction.
+   *
+   * The ladder's patience is bought by a hold resolving itself: say nothing for
+   * a second and a half, because the presenter's next sentence probably clears
+   * it. Nothing clears this. The script is still because somebody switched the
+   * thing that moves it off, and every second spent not saying so is a second
+   * of a presenter waiting for a prompter that is never going to advance —
+   * which is the single most alarming thing this surface can do, and the one
+   * failure the presenter can fix instantly if they are simply told.
+   *
+   * `neutral`, not `fault`. Nothing is broken; a mode is in force. Wording that
+   * treats a deliberate setting as an alarm is how presenters learn to
+   * distrust the corner of the glass.
+   *
+   * BELOW the named fault, deliberately. A microphone that has stopped working
+   * is still worth naming while following is off — transcription stays
+   * connected either way (§48), so the fault is still true, still actionable,
+   * and still the more urgent of the two.
+   */
+  if (input.followPaused === true) {
+    return { rung: 'message', message: 'Following off', tone: 'neutral' };
+  }
 
   const message = HOLD_MESSAGES[input.alignmentState] ?? null;
   if (message === null) {

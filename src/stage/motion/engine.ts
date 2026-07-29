@@ -41,6 +41,7 @@ import {
   ALIGNMENT_RELOCATIONS,
   DEFAULT_SMOOTH_FOLLOW_PROFILE,
   resolveLineLimitPx,
+  type AlignmentDecision,
   type AlignmentSnapshot,
   type SmoothFollowProfile,
   type StageMotionAck,
@@ -62,7 +63,11 @@ import {
 } from './diagnostics';
 import type { StageRenderedLineMap, VisualBlockSpan } from './lineMap';
 import { createLineHandoffPlanner, type LineHandoffPlanner, type LineTarget } from './planner';
-import { limitsForState, type MotionLimits } from './profiles';
+import {
+  limitsForState,
+  REACQUIRE_REVERSE_SLACK_PX,
+  type MotionLimits,
+} from './profiles';
 import {
   createStageTransitionController,
   type StageTransitionController,
@@ -190,6 +195,20 @@ export interface StageMotionEngine {
    * and were handed back to ordinary following — diagnostics only.
    */
   readonly catchUpCapExpiries: number;
+  /**
+   * §30.6. The presenter moved the script by hand and has not spoken since, so
+   * manual authority stands until they do — the half of the hold that the grace
+   * interval's clock cannot express.
+   *
+   * Exposed rather than folded into a single `manualHoldActive` flag because
+   * this side of it has no clock in it, and the engine deliberately owns no
+   * clock: every temporal decision it makes is against the `nowMs` its caller
+   * hands to `frame()`, which is what lets the whole of it be tested without a
+   * browser. The renderer's degraded fallback (§62) is a second writer of
+   * position that does not run through the frame loop, and it already keeps a
+   * grace timer of its own — this is the fact it was missing.
+   */
+  readonly awaitingManualEvidence: boolean;
 
   /**
    * Point the engine at a transcription generation. Snapshots stamped with any
@@ -215,7 +234,12 @@ export interface StageMotionEngine {
   setLineMap(map: StageRenderedLineMap | null): void;
   setBounds(minPx: number, maxPx: number): void;
   setReducedMotion(reduced: boolean): void;
-  setPaused(paused: boolean): void;
+  /**
+   * §48. Stop/resume automatic motion. `nowMs` stamps the takeover so ordinary
+   * directives issued before it can be recognised as superseded; omitting it
+   * leaves that stamp untouched.
+   */
+  setPaused(paused: boolean, nowMs?: number): void;
 
   /**
    * Ingest one alignment snapshot. Returns whether it was accepted; a rejected
@@ -226,8 +250,16 @@ export interface StageMotionEngine {
 
   frame(nowMs: number): StageMotionFrameResult;
 
-  /** Authorized plant writes. */
-  manualOverride(positionPx: number, nowMs: number): void;
+  /**
+   * Authorized plant writes.
+   *
+   * `anchorUnit` is the spoken unit the presenter's hand left on the reading
+   * line. Optional because only the renderer can work it out — it owns the
+   * measured line map — and load-bearing when a relayout lands during the hold
+   * that follows: without it, `layoutRecovery` preserves the ALIGNER's token
+   * and snaps the document back to the place they just scrolled away from.
+   */
+  manualOverride(positionPx: number, nowMs: number, anchorUnit?: number | null): void;
   layoutRecovery(request: LayoutRecoveryRequest): void;
   visibilityRestored(positionPx: number, nowMs: number): void;
   reset(positionPx: number): void;
@@ -504,6 +536,44 @@ export function relocationDirectiveFor(
  * presenter to produce and a stage that dropped its lock every time somebody
  * paused for breath would be worse than useless.
  */
+/**
+ * Decisions that end a manual hold (§30.6).
+ *
+ * The hold that follows a manual scroll waits for EVIDENCE, not for a clock —
+ * see `manualAwaitingEvidence` — and "evidence" has to mean the tracker
+ * actually heard the presenter say something it was willing to act on. The
+ * codes left out are the ones that report the opposite: `noEvidence` is
+ * silence, `jumpPending` is a jump the engine has explicitly not accepted, and
+ * the three `hold*` codes are the tracker declining to move on what it heard.
+ *
+ * Releasing on those would put the wall clock back in charge by the side door,
+ * because the aligner emits them on its own cadence whether or not anybody is
+ * speaking — which is exactly how the document used to start travelling while
+ * the presenter was still deciding where to read from.
+ */
+const MANUAL_HOLD_RELEASE_DECISIONS: ReadonlySet<AlignmentDecision> = new Set<AlignmentDecision>([
+  'localObserved',
+  'localConfirmed',
+  'relocationAccepted',
+  'jumpForwardAccepted',
+  'retakeAccepted',
+  'manualAnchor',
+]);
+
+/**
+ * How long the gentle re-acquisition may run before ordinary following takes
+ * the correction back.
+ *
+ * A bound rather than "until it arrives", for the same reason §30.3 caps
+ * catch-up: a correction that is still visibly running seconds later has
+ * stopped being a re-grab and become the document travelling on its own. At
+ * four lines a second this carries about ten lines, which is more than the
+ * gesture that produced it can leave behind — a scroll further than half a
+ * screen re-anchors the tracker instead (see `manual_scroll`), so the gap this
+ * closes is bounded by construction and the cap is a backstop, not the design.
+ */
+const REACQUIRE_MAX_MS = 2500;
+
 const DEFAULT_SNAPSHOT_STALE_MS = 15_000;
 const DEFAULT_STYLE_INTERVAL_MS = 100;
 const DEGRADED_STYLE_INTERVAL_MS = 250;
@@ -786,6 +856,75 @@ export function createStageMotionEngine(
   let reducedMotion = false;
   let paused = false;
   let manualUntilMs = Number.NEGATIVE_INFINITY;
+  /**
+   * §30.6. The presenter moved the script by hand and has not spoken since.
+   *
+   * The grace interval used to be the whole of manual authority, and a wall
+   * clock is the wrong instrument for it. The presenter scrolls back a
+   * paragraph, reads the line to themselves, draws breath — and two and a half
+   * seconds later, with the stage still silent, the grace expired and the
+   * document set off for wherever the tracker's last snapshot said they were.
+   * The correction they eventually saw was not a response to anything they had
+   * done; it was a timer.
+   *
+   * So the timer became the floor and this is the real condition: hold where
+   * they put it until they say something. A presenter who scrolls and never
+   * speaks again is answered by a document that never moves, which is the only
+   * honest thing a stage with no evidence can do.
+   */
+  let manualAwaitingEvidence = false;
+  /**
+   * The token the presenter's own hand left on the reading line, or null when
+   * they have not moved the script.
+   *
+   * Kept because `lastDisplayToken` cannot answer for them: it follows the
+   * ALIGNER, and goes on following it through a manual hold. A live relayout
+   * during that hold — a font change, a resize, an optics rebuild — asks
+   * `layoutRecovery` which token to preserve, and answering with the aligner's
+   * snapped the document straight back to the place the presenter had just
+   * scrolled away from, silently, while the hold was still in force.
+   */
+  let manualAnchorUnit: number | null = null;
+  /**
+   * When the presenter last took the script off automatic control, on the
+   * stage's own clock. `Number.NEGATIVE_INFINITY` means they never have.
+   *
+   * Ordinary transition directives minted before this moment described a
+   * document that no longer exists. See `supersededTransition`.
+   */
+  let manualAuthorityAtMs = Number.NEGATIVE_INFINITY;
+  /**
+   * A gentle re-grab is owed: the presenter moved the script, has since spoken,
+   * and the correction has not been spent yet.
+   *
+   * A DEBT rather than a deadline, and the difference is the whole bug it fixes.
+   * An absolute `reacquireUntilMs` was armed the moment evidence arrived — which
+   * is routinely the same second the gesture ended, because a presenter who
+   * scrolls mid-sentence never stops speaking. The clock then ran through the
+   * remaining wall-clock grace, during which re-acquisition is forbidden and
+   * the plant cannot move at all, and expired with the gap barely touched.
+   * Ordinary following picked the rest up at 900 px/s: the original defect,
+   * rebuilt out of its own fix.
+   *
+   * So the cap is spent in ELIGIBLE time (`reacquireElapsedMs`), and frozen,
+   * held, faded, hidden and manual frames cost it nothing.
+   */
+  let reacquireOwed = false;
+  /** Eligible milliseconds spent on the re-grab so far. See `REACQUIRE_MAX_MS`. */
+  let reacquireElapsedMs = 0;
+  /**
+   * The backward licence this re-grab was granted, latched on its first eligible
+   * frame, or null while none is in flight.
+   *
+   * LATCHED, because the controller's `reverseTravelPx` is cumulative and the
+   * gap being closed is not. Recomputing the cap from the remaining gap each
+   * frame let the ceiling fall as fast as the counter rose: a 500 px backward
+   * re-grab against a 420 px standing budget started with 596 px of licence,
+   * and by the time 420 px had been spent the recomputed cap was back to 420 —
+   * so the plant hit the §30.5 wall and dead-stopped about 80 px short, with
+   * ordinary forward-only following unable to finish the journey.
+   */
+  let reacquireBudgetPx: number | null = null;
   let lastFrameAtMs: number | null = null;
   let lastStyleAtMs = Number.NEGATIVE_INFINITY;
   /** Token position the last rendered frame aimed at — the layout-recovery anchor. */
@@ -1159,6 +1298,9 @@ export function createStageMotionEngine(
     get catchUpCapExpiries() {
       return catchUpCapExpiries;
     },
+    get awaitingManualEvidence() {
+      return manualAwaitingEvidence;
+    },
 
     configureSession(sessionGeneration) {
       receiver.setSession(sessionGeneration);
@@ -1176,6 +1318,24 @@ export function createStageMotionEngine(
       catchUpSinceMs = null;
       catchUpCapCounted = false;
       catchUpCapExpiries = 0;
+      /*
+       * §30.6. Manual authority does not survive a session either, and this is
+       * the one place it could have.
+       *
+       * The stage window outlives a take — that is the whole reason this
+       * function exists — so a take that ENDED with the presenter's hand on the
+       * script would have carried the hold into the next one: take two would
+       * open holding, and the §62 degraded fallback would be suppressed with
+       * it, until somebody said something. The hold is a fact about a gesture
+       * in a session that is over.
+       */
+      manualAwaitingEvidence = false;
+      manualAnchorUnit = null;
+      manualAuthorityAtMs = Number.NEGATIVE_INFINITY;
+      manualUntilMs = Number.NEGATIVE_INFINITY;
+      reacquireOwed = false;
+      reacquireElapsedMs = 0;
+      reacquireBudgetPx = null;
       // A new session cannot inherit a half-finished fade from the old one.
       resetFade();
       reanchorFades = 0;
@@ -1205,8 +1365,52 @@ export function createStageMotionEngine(
       reducedMotion = reduced;
     },
 
-    setPaused(next) {
+    /**
+     * §48. Automatic movement is off — the session's pause, or the presenter
+     * switching voice following off at the dock.
+     *
+     * Both are the same instruction to this layer ("nothing automatic moves the
+     * document"), and both differ from a HOLD, which is the engine declining to
+     * guess on weak evidence and will resolve itself the moment the evidence
+     * improves. Reported as `paused` so the glass can say which of the two is
+     * keeping the script still.
+     *
+     * Resuming arms the manual-evidence hold rather than releasing straight
+     * into following, and that is the whole reason this is not a one-line
+     * setter. The presenter has spent the paused stretch scrolling the script
+     * wherever they liked, so the tracker's cursor and the document are in
+     * different places by construction; releasing into ordinary following would
+     * spend that difference at the profile's forward ceiling the instant the
+     * switch flipped. Waiting for them to speak, and then re-grabbing at
+     * reading speed, is the same treatment a wheel gesture gets — and for
+     * exactly the same reason.
+     *
+     * WHAT "STOPS" MEANS HERE: no new automatic motion, and the motion already
+     * under way is BRAKED rather than cut. Zeroing the velocity limits leaves
+     * the plant to decelerate under its own jerk bound (§29.2), so switching
+     * following off mid-glide costs a few pixels of run-off — more if it is
+     * switched off mid-catch-up — instead of a dead stop the presenter would
+     * read as the script snapping. That is the deliberate reading: this surface
+     * spends a great deal of effort never moving abruptly, and the moment
+     * somebody takes manual control is a poor place to make an exception.
+     *
+     * `nowMs` stamps the takeover for `supersededTransition`. It defaults to
+     * leaving that stamp alone, so a caller with no clock to offer cannot
+     * accidentally revoke directives by passing nothing.
+     */
+    setPaused(next, nowMs = manualAuthorityAtMs) {
+      if (next === paused) return;
       paused = next;
+      if (next) {
+        reacquireOwed = false;
+        reacquireElapsedMs = 0;
+        reacquireBudgetPx = null;
+        // Switching following off is the presenter taking the script, so it
+        // supersedes an ordinary directive the same way a wheel gesture does.
+        if (Number.isFinite(nowMs)) manualAuthorityAtMs = nowMs;
+      } else {
+        manualAwaitingEvidence = true;
+      }
     },
 
     receiveSnapshot(snapshot, nowMs) {
@@ -1247,6 +1451,30 @@ export function createStageMotionEngine(
       );
       if (directive) transitions.submit(directive, nowMs);
       previousDisplayToken = accepted.observedToken;
+
+      /*
+       * §30.6. The presenter has spoken since moving the script by hand, so the
+       * hold is over and the correction it was holding back is now due.
+       *
+       * It is spent as a re-acquisition rather than as ordinary following. The
+       * gap in front of it was not made by the presenter reading — it was made
+       * by the presenter's own hand — so closing it at the profile's forward
+       * ceiling is a full-speed flight back to somewhere they deliberately
+       * left. `REACQUIRE_LINES_PER_SECOND` is the same distance travelled at a
+       * pace an eye can stay with.
+       *
+       * A relocation the tracker classified itself keeps its own directive: the
+       * conditional in the frame loop stands down for `catch_up`, because the
+       * engine saying "they have moved on in the script" outranks the stage
+       * saying "somebody touched the wheel".
+       */
+      if (manualAwaitingEvidence && MANUAL_HOLD_RELEASE_DECISIONS.has(accepted.decision)) {
+        manualAwaitingEvidence = false;
+        manualAnchorUnit = null;
+        reacquireOwed = true;
+        reacquireElapsedMs = 0;
+        reacquireBudgetPx = null;
+      }
       return true;
     },
 
@@ -1278,7 +1506,24 @@ export function createStageMotionEngine(
       let fadeHold = false;
       /** True on the one frame that spends a re-anchor while obscured. */
       let reanchorApplied = false;
-      if (overwrite) {
+      if (overwrite && paused) {
+        /*
+         * §48. Following is off, and a re-anchor is automatic motion.
+         *
+         * This licence is the ONE authorized overwrite of plant state during
+         * following (§26.3), and it is consumed at the top of the frame before
+         * anything has looked at whether motion is wanted — so with following
+         * switched off, an ordinary relocation still faded the glass and moved
+         * the document to wherever the aligner had gone. The presenter had
+         * turned that off; a teleport is not a smaller version of it.
+         *
+         * Parked rather than dropped, the same way §20.4 parks one behind a
+         * fade: parking keeps it revocable, so it dies with its own TTL if
+         * following stays off, and is there to be spent if it is still live
+         * when following comes back.
+         */
+        transitions.deferPlantOverwrite(overwrite);
+      } else if (overwrite) {
         const destination = destinationScrollPx(overwrite.destinationTokenIndex, overwrite.toUnit);
         if (destination !== null && fadeAdmitsReanchor(nowMs, destination)) {
           reanchorTo(destination);
@@ -1329,7 +1574,18 @@ export function createStageMotionEngine(
       }
 
       const aligned = alignmentTarget(nowMs);
-      const manualGrace = nowMs < manualUntilMs;
+      /*
+       * The interval, then the condition it is the floor of: manual authority
+       * lasts at least `manualGraceMs` and then until the presenter says
+       * something (§30.6, `manualAwaitingEvidence`).
+       *
+       * `paused` joins them because it is the same instruction with no end date
+       * — following is off, so nothing automatic may move the document — and
+       * because the multiplier table's `paused` state only shapes how the plant
+       * SETTLES onto a target that is still advancing underneath it. A state
+       * that damps hard is not a state that stops.
+       */
+      const manualGrace = nowMs < manualUntilMs || manualAwaitingEvidence || paused;
       // §62: an invalid map means the stage does not know where anything is.
       // The alignment planner is already disabled — the *guessed* fallback has
       // to go with it, because its off-window branch estimates positions from
@@ -1455,9 +1711,33 @@ export function createStageMotionEngine(
        * licence however it arrived, so a directive is bounded by whichever of
        * its TTL and the cap comes first, and the state is bounded at all.
        */
+      /*
+       * A directive the presenter's own hand has overtaken.
+       *
+       * An ordinary directive describes where the ALIGNER thinks the document
+       * should go, decided before the presenter grabbed the wheel or switched
+       * following off. Afterwards it is describing a document that no longer
+       * exists — and a `catch_up` is the dangerous one, because its whole
+       * purpose is boosted travel: it outlives the 2.5 s grace comfortably (its
+       * TTL is built to cover exactly that), and on the first frame after the
+       * grace it took the correction back at `catchUpMultiplier` speed, around
+       * the four-lines-a-second re-grab entirely. The presenter scrolled, spoke,
+       * and watched the script fly anyway.
+       *
+       * Scoped to `ordinary` authority on purpose. A `command` or `manual`
+       * directive IS somebody's decision — an outline jump, a re-find, a
+       * retake — and those outrank a wheel gesture rather than being
+       * superseded by it.
+       */
+      const supersededTransition =
+        activeTransition !== null &&
+        activeTransition.directive.authority === 'ordinary' &&
+        activeTransition.directive.issuedAtMs <= manualAuthorityAtMs;
+
       const catchUpLicensed =
         !frozen &&
         !manualGrace &&
+        !supersededTransition &&
         // The engine has no `catching_up` state to report — a forward skip
         // arrives as an accepted discontinuity, which `receiveSnapshot` turns
         // into exactly one bounded `catch_up` directive. So the directive is
@@ -1564,6 +1844,64 @@ export function createStageMotionEngine(
         }
       }
 
+      /* ------------------------------------------------------------ §30.6 --
+       * The re-grab, measured against the target the latch has finished with.
+       *
+       * Three ways it ends, and all three are here rather than at the point it
+       * is granted, because a licence that can only be revoked by the thing
+       * that issued it is a licence that outlives its reason. It ends when the
+       * gap is closed (there is nothing left to re-acquire), when the plant is
+       * not moving under it anyway (a hold, a fade, a visual-block freeze —
+       * spending the cap while frozen would retire the licence before it could
+       * be used), and at the cap.
+       */
+      let reacquiring = false;
+      let reacquireGapPx = 0;
+      if (reacquireOwed) {
+        /*
+         * Eligibility first, and nothing is measured or spent without it.
+         *
+         * A frame the re-grab cannot move on is a frame it must not be charged
+         * for, and — the subtler half — a frame it must not be judged ARRIVED
+         * on either. While the plant holds, `targetPx` falls back to
+         * `lastTarget`, which is the last thing the feed asked for, possibly
+         * under a layout that no longer exists. That stale number sitting
+         * within a pixel and a half of where the document happens to be parked
+         * would retire the licence for a journey nobody had taken.
+         *
+         * A relocation the tracker classified itself is a better description of
+         * events than "somebody touched the wheel", and arrives with bounds of
+         * its own (§30.3) — so it wins, unless it predates the presenter's own
+         * hand, in which case it is describing a document that no longer exists.
+         */
+        const transitionOwnsIt = activeTransition !== null && !supersededTransition;
+        const eligible =
+          !frozen && !visualSpanHold && !manualGrace && !catchUpLicensed && !transitionOwnsIt;
+        if (eligible) {
+          reacquireGapPx = Math.abs(targetPx - controller.state.q);
+          /*
+           * The licence, sized once, from where the plant actually is.
+           *
+           * `controller.reverseTravelPx` is included because the cap it becomes
+           * is compared against that same cumulative counter — a licence that
+           * ignored what had already been spent would be short by exactly that
+           * much. It is normally zero here (`manualOverride` re-anchors, and
+           * `reanchor` zeroes the counter), and is not zero when a re-grab
+           * follows following being switched back on.
+           */
+          reacquireBudgetPx ??=
+            controller.reverseTravelPx + reacquireGapPx + REACQUIRE_REVERSE_SLACK_PX;
+          reacquireElapsedMs += dtMs;
+          const arrived = reacquireGapPx <= Math.max(1, structuralLimits.restDeadbandPx);
+          if (arrived || reacquireElapsedMs >= REACQUIRE_MAX_MS) {
+            reacquireOwed = false;
+            reacquireBudgetPx = null;
+          } else {
+            reacquiring = true;
+          }
+        }
+      }
+
       /* ------------------------------------------------------------ §30.3 --
        * The three bounds, now that the target they are measured against exists.
        *
@@ -1667,7 +2005,15 @@ export function createStageMotionEngine(
             catchUpBoost,
             forwardPositionCeilingPx: catchUpCeilingPx,
           })
-        : structuralLimits;
+        : reacquiring
+          ? limitsForState(state ?? 'holding', boundedProfile, {
+              ...limitOptions,
+              reacquire: true,
+              ...(reacquireBudgetPx === null
+                ? {}
+                : { reacquireReverseBudgetPx: reacquireBudgetPx }),
+            })
+          : structuralLimits;
 
       const step = controller.step({
         dtMs,
@@ -1686,6 +2032,7 @@ export function createStageMotionEngine(
         activeTransition ? activeTransition.directive.type : null,
         diagnostics.degraded ? 'degraded' : null,
         manualGrace ? 'manual' : null,
+        reacquiring ? 'reacquire' : null,
         mapUnresolved ? 'map_unresolved' : null,
         visualSpanHold ? 'visual_block' : null,
         regressed ? 'target_regression' : null,
@@ -1784,11 +2131,21 @@ export function createStageMotionEngine(
       };
     },
 
-    manualOverride(positionPx, nowMs) {
+    manualOverride(positionPx, nowMs, anchorUnit = null) {
       // §30.6: manual interaction has immediate authority; reacquire without
-      // snapping once the grace interval expires.
+      // snapping once the presenter starts speaking again.
       reanchorTo(positionPx);
       manualUntilMs = nowMs + manualGraceMs;
+      manualAwaitingEvidence = true;
+      manualAnchorUnit = Number.isFinite(anchorUnit as number) ? anchorUnit : null;
+      // Everything the aligner decided before this instant was decided about a
+      // document the presenter has since moved. See `supersededTransition`.
+      manualAuthorityAtMs = nowMs;
+      // A re-acquisition already in flight is over: it was closing a gap to a
+      // position the presenter has just overruled by hand.
+      reacquireOwed = false;
+      reacquireElapsedMs = 0;
+      reacquireBudgetPx = null;
       fallback = null;
       // Direct manipulation is never obscured: the presenter is looking at the
       // text they are dragging. If a directive was mid-fade it re-fades from
@@ -1801,7 +2158,20 @@ export function createStageMotionEngine(
       const previous = map;
       map = request.map;
       rebuildPlanner();
-      const unit = request.anchorUnit ?? lastDisplayToken;
+      /*
+       * The presenter's own anchor outranks the aligner's while their hand is
+       * on the script (§30.6).
+       *
+       * `lastDisplayToken` keeps tracking the feed right through a manual hold,
+       * so a relayout landing inside one — a font change, a resize, an optics
+       * rebuild, all of which happen mid-take — preserved the token the ALIGNER
+       * was on and re-anchored the document there. The presenter scrolled to a
+       * different page, said nothing, changed the type size, and the script
+       * jumped back to where it had been and then froze, still holding.
+       */
+      const manualHeld = manualAwaitingEvidence || paused;
+      const unit =
+        request.anchorUnit ?? (manualHeld ? manualAnchorUnit : null) ?? lastDisplayToken;
       if (unit !== null && planner) {
         const destination = planner.target(unit, 0);
         if (destination.source !== 'none') {
@@ -1848,6 +2218,13 @@ export function createStageMotionEngine(
       catchUpSinceMs = null;
       catchUpCapCounted = false;
       catchUpCapExpiries = 0;
+      manualAwaitingEvidence = false;
+      manualAnchorUnit = null;
+      manualAuthorityAtMs = Number.NEGATIVE_INFINITY;
+      manualUntilMs = Number.NEGATIVE_INFINITY;
+      reacquireOwed = false;
+      reacquireElapsedMs = 0;
+      reacquireBudgetPx = null;
       resetFade();
       reanchorFades = 0;
     },

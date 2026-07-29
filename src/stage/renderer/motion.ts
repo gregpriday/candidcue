@@ -183,3 +183,47 @@ export function classifyTransition(opts: {
   }
   return 'spring';
 }
+
+/* ---------------------------------------------------------------------------
+ * Was that gesture a move, or a look? (§16.9)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * How far from the aligner's position counts as having MOVED, in viewports.
+ *
+ * The question this stands in for is "can the presenter still see the place the
+ * aligner thinks they are". If they can, the sensible reading of a scroll is
+ * that they glanced at something — the next paragraph, a figure, the line they
+ * fluffed — and their place has not changed; re-seeding the tracker's cursor
+ * would throw away a lock that is still correct and make the aligner earn it
+ * back on evidence alone.
+ *
+ * Half a viewport is where the answer becomes reliably no. The reading line
+ * sits at 38% of the glass, so half a screen of movement in either direction
+ * takes the old position off it or close enough to an edge to be unreadable.
+ */
+export const MANUAL_RELOCATION_VIEWPORT_FRACTION = 0.5;
+
+/**
+ * Whether a settled manual scroll left the presenter somewhere else.
+ *
+ * Measured on the GAP — where the document ended up relative to where the
+ * aligner believes the presenter is — and never on the distance travelled.
+ * Somebody who scrolls two screens ahead to check something and then scrolls
+ * back has travelled four screens and gone nowhere, and a rule written on
+ * travel would re-anchor the tracker to a place they had already left again.
+ *
+ * A null gap is not a small one. It means the stage has no alignment target to
+ * measure against — no frame from the feed this session — and the honest answer
+ * is then that it does not know whether the presenter has moved, which is a
+ * reason to leave the tracker alone rather than to overwrite it.
+ */
+export function manualScrollRelocated(
+  gapPx: number | null,
+  viewportHeightPx: number,
+  fraction: number = MANUAL_RELOCATION_VIEWPORT_FRACTION,
+): boolean {
+  if (gapPx === null || !Number.isFinite(gapPx)) return false;
+  if (!Number.isFinite(viewportHeightPx) || viewportHeightPx <= 0) return false;
+  return Math.abs(gapPx) >= viewportHeightPx * fraction;
+}

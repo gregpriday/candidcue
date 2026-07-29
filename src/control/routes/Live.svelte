@@ -31,6 +31,7 @@
   import {
     addTakeMarker,
     adjustStageFontSize,
+    anchorManualScroll,
     applyStageAppearance,
     canSwitchMicrophone,
     clearSession,
@@ -269,11 +270,24 @@
     await navigate({ name: 'editor', scriptId });
   }
 
+  /*
+   * The embedded stage's intents, handled here rather than on the event bus.
+   *
+   * Deliberately the same set as the Rust-relayed listener in the session store
+   * — the two are one contract with two transports, and an intent that only one
+   * of them answers is a control that works in a separate-window session and
+   * silently does nothing in single-window presentation, which is the
+   * configuration most takes actually run in.
+   */
   function handleEmbeddedStageIntent(intent: StageIntent): void {
     if (intent.kind === 'toggle_pause') {
       togglePlayPause();
     } else if (intent.kind === 'manual_step') {
       moveSentences(intent.direction === 'forward' ? 1 : -1);
+    } else if (intent.kind === 'manual_scroll') {
+      if (intent.anchorToken !== null) anchorManualScroll(intent.anchorToken, intent.atMs);
+    } else if (intent.kind === 'toggle_follow') {
+      toggleVoiceFollow();
     }
   }
 
@@ -565,6 +579,9 @@
         alignment: $session.snapshot,
         transcript: $session.transcriptTail.at(-1) ?? '',
         voicePill: $session.voicePill,
+        // The switch, not the symptom: an automatic hold stops following too,
+        // and the stage words that one as the fault it is (§48).
+        followPaused: $session.followPausedByUser,
         onexit: onEscape,
         onintent: handleEmbeddedStageIntent,
         chromeOpen: stageChromeOpen,
