@@ -129,6 +129,10 @@ const ERROR_COPY: Record<string, string> = {
     'The selected display is no longer connected. Reconnect it, or choose another display.',
   STAGE_OPEN_FAILED:
     'CandidCue could not open the stage window on that display. Choose another display, then try again.',
+  // Single-window presentation: no second window, no display picker, so the
+  // copy above would send the operator somewhere that cannot help them.
+  PRESENTATION_FAILED:
+    'CandidCue could not turn this window into the teleprompter. The window has been left as it was — try Present again.',
   STAGE_SESSION_MISMATCH:
     'That stage window belongs to a different session, so the change was not applied.',
   STAGE_LAYOUT_FAILED:

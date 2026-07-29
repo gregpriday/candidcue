@@ -24,10 +24,11 @@
   import { formatClock } from '../lib/format';
   import { onShortcut } from '../lib/shortcuts';
   import { startTake } from '../lib/start-take';
-  import { setControlFullscreen } from '../services/control-window';
+  import { awaitViewportSettled, exitPresentation, painted } from '../services/control-window';
   import { describeError } from '../services/errors';
   import { getVoiceFacade } from '../services/voice-facade';
   import { requestConfirm } from '../stores/confirm';
+  import { setPresentingPhase } from '../stores/presenting';
   import { navigate } from '../stores/router';
   import {
     addTakeMarker,
@@ -266,11 +267,46 @@
     await onEscape();
   }
 
+  /**
+   * Give the window back its titlebar and its old bounds, covered.
+   *
+   * The mirror of `startTake`'s opening, and it needs the cover for the same
+   * reason: leaving presentation is another window-geometry change, and the
+   * webview repaints it asynchronously. Un-presenting bare showed the workspace
+   * theme's light editor arriving in pieces around a shrinking window — the
+   * same artifact as the opening, running backwards.
+   *
+   * The cover is raised and PAINTED before anything moves, held across both the
+   * window change and the navigation that follows it, and dropped only once the
+   * destination screen has painted. The caller does the navigating, because
+   * where it goes is the only part of this that differs between the three exits.
+   *
+   * `finally`, and it is not ceremony. The cover is opaque, full-window and
+   * above everything, so a phase left at `closing` is not a cosmetic loose end —
+   * it is an app the operator can no longer see or use, with no way back but
+   * quitting. `destination` is a navigation, navigation runs guards, and a guard
+   * is arbitrary app code that can throw. The cover must come down whether or
+   * not it does.
+   */
+  async function leavePresentation(destination: () => Promise<unknown>): Promise<void> {
+    setPresentingPhase('closing');
+    try {
+      await painted();
+      const restored = await exitPresentation().catch(() => null);
+      if (restored) await awaitViewportSettled(restored);
+      await destination();
+      await painted();
+    } finally {
+      setPresentingPhase('off');
+    }
+  }
+
   async function onEscape(): Promise<void> {
     stopSession();
-    await setControlFullscreen(false).catch(() => {});
-    clearSession();
-    await navigate({ name: 'editor', scriptId });
+    await leavePresentation(async () => {
+      clearSession();
+      await navigate({ name: 'editor', scriptId });
+    });
   }
 
   /*
@@ -420,15 +456,31 @@
     await startTake(scriptId);
   }
 
+  /*
+   * Both summary exits un-present, and one of them did not used to.
+   *
+   * `returnToEditor` navigated straight out with the window still borderless
+   * and monitor-sized — full screen, in the old implementation — so the operator
+   * landed back in the editor with no titlebar and no obvious way to get one.
+   * It was survivable when the summary was usually reached through Escape
+   * (which did un-present), and invisible in every test, because nothing that
+   * runs headlessly has a window to leave behind.
+   *
+   * Rust plans an un-present with nothing saved as a no-op, so calling it on a
+   * path that may not have been presenting is correct rather than merely safe.
+   */
   async function returnToEditor(): Promise<void> {
-    clearSession();
-    await navigate({ name: 'editor', scriptId });
+    await leavePresentation(async () => {
+      clearSession();
+      await navigate({ name: 'editor', scriptId });
+    });
   }
 
   async function finishAndReturnToLibrary(): Promise<void> {
-    await setControlFullscreen(false).catch(() => {});
-    clearSession();
-    await navigate({ name: 'library', view: 'all' });
+    await leavePresentation(async () => {
+      clearSession();
+      await navigate({ name: 'library', view: 'all' });
+    });
   }
 
   /* ------------------------------------------------ the appearance panel (§14.2)

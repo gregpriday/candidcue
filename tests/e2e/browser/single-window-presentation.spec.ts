@@ -23,6 +23,21 @@ async function present(page: Page): Promise<void> {
   });
 }
 
+/**
+ * The `enabled` flag of every `set_control_presenting`, in order.
+ *
+ * The command name alone cannot tell a present from an un-present, and the
+ * pairing is the interesting part: one of each, in that order, is a take that
+ * gave the window back.
+ */
+function presentationSwitches(
+  calls: Array<{ command: string; args: unknown }>,
+): boolean[] {
+  return calls
+    .filter((call) => call.command === 'set_control_presenting')
+    .map((call) => (call.args as { enabled?: boolean } | null)?.enabled === true);
+}
+
 test.beforeEach(async ({ page }) => {
   await installTauriShim(page, {
     welcomed: true,
@@ -50,10 +65,82 @@ test('Present mounts the production stage in this webview and never opens anothe
   const calls = await page.evaluate(() => window.__E2E__.calls.map((call) => call.command));
   expect(calls).toContain('start_session');
   expect(calls).toContain('start_alignment');
-  expect(calls).toContain('plugin:window|set_fullscreen');
+  expect(calls).toContain('set_control_presenting');
   expect(calls).not.toContain('open_stage');
   expect(calls).not.toContain('publish_stage_document');
   expect(calls).not.toContain('set_stage_fullscreen');
+  /*
+   * And NOT through the core window plugin.
+   *
+   * Presentation is borderless (src-tauri/src/windows/present.rs). The renderer
+   * calling OS full screen directly is what animated the window into a new
+   * macOS Space and left a white bar over the half-painted webview for the
+   * length of the animation. The capability no longer grants
+   * `core:window:allow-set-fullscreen`, so a reintroduction would fail at the
+   * ACL — but it would fail at RUNTIME, on a machine, which is exactly the
+   * place this project cannot test. So it is asserted here too.
+   */
+  expect(calls).not.toContain('plugin:window|set_fullscreen');
+  expect(await page.evaluate(() => window.__E2E__.presenting)).toBe(true);
+
+  errors.expectClean();
+});
+
+/*
+ * THE COVER, AND THE BLACK UNDERNEATH IT.
+ *
+ * The artifact this whole change exists to remove — a window mid-shape-change
+ * with a half-painted webview in it — cannot be reproduced here: Playwright
+ * never performs a native window transition and the shim resizes nothing. What
+ * CAN be proved is the two things the fix does inside the page, and both of
+ * them were previously untested:
+ *
+ *   - the stage does not mount until the window has finished changing shape,
+ *     and something opaque is over the whole window for that entire interval;
+ *   - the page CANVAS is black for the take. `src/styles/stage.css` blacks
+ *     html/body but is loaded only by the separate stage window's entry point,
+ *     so in single-window presentation the canvas stayed `--bg-app` — warm paper
+ *     — and painted every strip the viewport grew into before layout reached it.
+ *
+ * The presentation command is held open to make the interval observable at all;
+ * on a real machine it is the window move that takes the time.
+ */
+test('nothing of the take is on screen until the window has finished changing shape', async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  await page.goto('/control.html');
+  await page.evaluate(() => window.__E2E__.setDelay('set_control_presenting', 1500));
+
+  await page
+    .getByRole('list', { name: 'Scripts' })
+    .getByRole('button', { name: 'Present', exact: true })
+    .first()
+    .click();
+
+  // Mid-transition: the cover is up, and the stage does not exist yet.
+  const cover = page.locator('.present-cover');
+  await expect(cover).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toHaveCount(0);
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
+    'rgb(0, 0, 0)',
+  );
+  expect(
+    await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor),
+  ).toBe('rgb(0, 0, 0)');
+  // Opaque, and over everything — a cover that let the editor through would be
+  // showing exactly what it exists to hide.
+  expect(await cover.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+
+  // Settled: the stage is up, the cover is gone, the canvas is still black.
+  await page.evaluate(() => window.__E2E__.setDelay('set_control_presenting', null));
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(cover).toHaveCount(0);
+  expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(
+    'rgb(0, 0, 0)',
+  );
 
   errors.expectClean();
 });
@@ -472,7 +559,7 @@ test('the opening position survives a relayout that happens before the first wor
  * that matters is a presenter hitting Escape by reflex when a full-screen
  * window takes over their display.
  */
-test('the first Escape prompts and the second ends the take, leaves full screen, and returns to the editor', async ({
+test('the first Escape prompts and the second ends the take, un-presents, and returns to the editor', async ({
   page,
 }) => {
   const errors = watchPageErrors(page);
@@ -488,12 +575,30 @@ test('the first Escape prompts and the second ends the take, leaves full screen,
 
   const result = await page.evaluate(() => ({
     commands: window.__E2E__.calls.map((call) => call.command),
+    calls: window.__E2E__.calls.map((call) => ({ command: call.command, args: call.args })),
+    presenting: window.__E2E__.presenting,
     session: window.__E2E__.lastSession,
   }));
-  expect(result.commands.filter((command) => command === 'plugin:window|set_fullscreen')).toHaveLength(
-    2,
-  );
+  /*
+   * Three switches, and each one is load-bearing.
+   *
+   * The leading `false` is startup reconciliation. The presentation latch lives
+   * in Rust and outlives the renderer, but nothing else about a take does — so
+   * a reload mid-take (⌘R, an HMR failure, a web-content crash) would otherwise
+   * boot the Library inside a borderless, monitor-sized, above-the-menu-bar
+   * window that no remaining code path knows to undo. The app therefore gives
+   * the window back before it paints anything, and this is where that is
+   * pinned: a startup that stopped doing it would land here as `[true, false]`.
+   *
+   * Then the take: presented once, un-presented once. The un-present is the
+   * half that used to be missable — it is what returns the titlebar and the old
+   * bounds, so a take that ended without it left the operator borderless and
+   * monitor-sized with no obvious way out.
+   */
+  expect(presentationSwitches(result.calls)).toEqual([false, true, false]);
+  expect(result.commands).not.toContain('plugin:window|set_fullscreen');
   expect(result.commands).toContain('end_session');
+  expect(result.presenting).toBe(false);
 
   errors.expectClean();
 });

@@ -23,6 +23,8 @@
   import { requestConfirm } from './stores/confirm';
   import { saveNow } from './stores/editor';
   import { loadLibrary } from './stores/library';
+  import { awaitViewportSettled, exitPresentation, painted } from './services/control-window';
+  import { canvasIsBlack, coverIsUp, presentingPhase, setPresentingPhase } from './stores/presenting';
   import { navigate, registerNavigationGuard, route, setInitialRoute } from './stores/router';
   import { clearSession, session, stopSession } from './stores/session';
   import { loadSettings } from './stores/settings';
@@ -64,6 +66,33 @@
     document.documentElement.dataset['theme'] = theme;
   });
 
+  /**
+   * The page canvas goes black for the length of a take.
+   *
+   * Not cosmetic, and not the same job as the cover below. `body`'s background
+   * is `--bg-app` — warm paper under the workspace theme, still a light-ish
+   * grey under studio — and the stage's true black comes from `.stage-root`,
+   * an absolutely-positioned element. When the window grows, the viewport gains
+   * area before the layout reaches it, and what paints there is the CANVAS. So
+   * a take that did not set this shows a strip of `--bg-app` down the side of
+   * every window change, plate or no plate.
+   *
+   * Set on the document element rather than in this component's own scoped
+   * style block, because the canvas background propagates from `body` — which
+   * is outside every component in this app.
+   *
+   * (And because writing that tag name literally here breaks the build:
+   * svelte2tsx scans the script for block tags without knowing it is inside a
+   * comment, so a style-open in a doc comment leaves the parser convinced the
+   * script never closed. `svelte` itself compiles the file happily, so the only
+   * symptom is `pnpm check` failing at the last line of the file.)
+   */
+  $effect(() => {
+    const black = canvasIsBlack($presentingPhase);
+    if (black) document.documentElement.dataset['presenting'] = 'true';
+    else delete document.documentElement.dataset['presenting'];
+  });
+
   onMount(() => {
     // §30.1 triage. Off unless the operator switched it on for this window;
     // see audio-trace.ts for why the audio path needs it at all.
@@ -83,8 +112,37 @@
           danger: true,
         });
         if (!accepted) return false;
-        stopSession();
-        clearSession();
+        /*
+         * The window has to come back too, and covered — this is a geometry
+         * change like any other.
+         *
+         * Live's own exits un-present, but this guard is the path for every
+         * OTHER way out of a take: a shortcut, a sidebar click, anything that
+         * navigates while a session is live. It used to stop the session and
+         * leave the window borderless with no titlebar; then it un-presented
+         * bare, which fixed the window and left the reverse transition artifact
+         * — `clearSession()` unmounts the stage, so the shrinking window shows
+         * the light editor arriving in pieces.
+         *
+         * The cover goes up FIRST, before `clearSession()` tears the stage
+         * down, so nothing between here and the destination is ever on screen
+         * mid-resize. `finally` because this is a navigation guard: returning
+         * true hands control to a router that runs more guards, and a phase
+         * stuck at `closing` is an app the operator cannot see.
+         *
+         * `exitPresentation` is a no-op in Rust when nothing was presented, so
+         * it is safe on the paths that reach here without one.
+         */
+        setPresentingPhase('closing');
+        try {
+          await painted();
+          stopSession();
+          clearSession();
+          const restored = await exitPresentation().catch(() => null);
+          if (restored) await awaitViewportSettled(restored);
+        } finally {
+          setPresentingPhase('off');
+        }
       }
       return true;
     });
@@ -96,6 +154,28 @@
     });
 
     void (async () => {
+      /*
+       * GIVE THE WINDOW BACK BEFORE SHOWING ANYTHING.
+       *
+       * The presentation latch lives in Rust and deliberately outlives the
+       * renderer, so it survives a webview reload — but nothing else about a
+       * take does. The session store, the transport, the aligner and this
+       * store all come back as "no take in progress", because they cannot come
+       * back any other way: the audio and the transcript are gone.
+       *
+       * So a reload mid-take (a crash in the web content process, a dev-server
+       * HMR failure, ⌘R) would boot the Library inside a borderless,
+       * monitor-sized, above-the-menu-bar window with no titlebar, and no
+       * remaining code path that knows to undo it. Rust plans this as a no-op
+       * when nothing was presented, which is the overwhelmingly common case, so
+       * it costs one IPC round trip at startup to close a hole that otherwise
+       * needs a force-quit.
+       *
+       * Before `ready`, so the first thing painted is already the right shape.
+       */
+      await exitPresentation().catch(() => {});
+      setPresentingPhase('off');
+
       const status = await initAppStatus();
       await loadSettings();
       await loadLibrary();
@@ -160,6 +240,24 @@
   <ShortcutsDialog open={shortcutsOpen} onclose={() => (shortcutsOpen = false)} />
 </div>
 
+<!--
+  The cover that spans a presentation transition.
+
+  Outside `.shell` and `position: fixed`, because the one thing it must do is
+  span the WINDOW rather than a route: while it is up, the window is changing
+  size, the editor is being torn down and the stage is being built, and an
+  element positioned against any of those would be the wrong size for part of
+  the interval.
+
+  `aria-hidden` and no focusable contents: it is up for a few hundred
+  milliseconds around a transition the operator already asked for, and
+  announcing it would interrupt the toast or dialog that actually has something
+  to say.
+-->
+{#if coverIsUp($presentingPhase)}
+  <div class="present-cover" aria-hidden="true"></div>
+{/if}
+
 <style>
   .shell {
     display: flex;
@@ -175,6 +273,28 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+  }
+
+  /*
+   * Opaque black, over everything, and NOT animated.
+   *
+   * A fade would defeat the point: the frames it faded through are the ones
+   * that show the half-painted window. It appears instantly, the geometry moves
+   * behind it, and it is removed only once whatever comes next has painted —
+   * so the cut happens between two settled pictures, which is the one kind of
+   * cut nobody notices.
+   *
+   * The z-index clears the toast region and the dialog host deliberately. A
+   * toast raised during the transition is still there when the cover drops, and
+   * a toast painted over a window that is mid-resize is exactly the artifact
+   * being removed.
+   */
+  .present-cover {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: #000;
+    pointer-events: none;
   }
 
   .boot {

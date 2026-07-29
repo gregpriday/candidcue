@@ -1,12 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "control-capability",
-  "description": "The privileged control window: application commands and approved-link opening on top of core defaults. The dialog plugin is deliberately NOT granted — file pickers run in Rust (src/dialogs.rs) so no filesystem path is ever chosen by, or passed through, JavaScript (H5, spec §50.7). Updater/window-state/global-shortcut permissions are added when those plugins ship (spec Appendix D.2).",
+  "description": "The privileged control window: application commands and approved-link opening on top of core defaults. The dialog plugin is deliberately NOT granted — file pickers run in Rust (src/dialogs.rs) so no filesystem path is ever chosen by, or passed through, JavaScript (H5, spec §50.7). `core:window:allow-set-fullscreen` is deliberately NOT granted either: presentation is borderless (windows/present.rs), and the renderer calling OS fullscreen directly is what put a white bar over the opening of every take — withholding the permission is what stops that path being reintroduced by accident. Updater/window-state/global-shortcut permissions are added when those plugins ship (spec Appendix D.2).",
   "windows": ["control"],
-  "permissions": [
-    "core:default",
-    "core:window:allow-set-fullscreen",
-    "allow-control-commands",
-    "opener:default"
-  ]
+  "permissions": ["core:default", "allow-control-commands", "opener:default"]
 }
