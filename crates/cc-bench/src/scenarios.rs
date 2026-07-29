@@ -295,6 +295,69 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
         });
         suite.push(scenario(&name, "substitutions", &script, 150, ops, Corruption::default()));
 
+        // 8a. Transpositions: the right words, in the wrong order.
+        //
+        // A presenter reorders a phrase live because it sounds better in the
+        // moment — "clear and steady" comes out "steady and clear". Every word
+        // is on the page and not one of them is where the script put it, which
+        // is the case a strictly monotonic alignment cannot express at all: it
+        // can only charge two full substitutions and hope the neighbours carry
+        // the position.
+        //
+        // Four shapes cycle, chosen so the family spans the DISTANCES a word can
+        // travel, which is the only thing the engine can actually discriminate
+        // on. Each entry is a permutation: read this span, say it in this order.
+        //
+        //   [1,0]       adjacent swap — the textbook transposition, distance 1.
+        //   [2,1,0]     three-word reversal, distance 2. "clear and steady"
+        //               becoming "steady and clear": the shape that actually
+        //               happens, because reordered words are usually joined by
+        //               a stopword. An adjacent-swap rule misses it entirely.
+        //   [2,3,0,1]   four words, two chunks swapped. Every word travels 2,
+        //               so this is a four-word reorder that a two-atom reach
+        //               still covers.
+        //   [3,1,2,0]   four words, ends exchanged. The outer pair travels 3.
+        //               This is the shape that says whether the window needs to
+        //               be wider than the phrase is long.
+        const REORDERS: &[&[usize]] = &[&[1, 0], &[2, 1, 0], &[2, 3, 0, 1], &[3, 1, 2, 0]];
+
+        let mut ops = Vec::new();
+        let mut at = 0u32;
+        let step = (n as u32 / 8).max(8);
+        let mut k = 0usize;
+        while at + step < n as u32 {
+            let order = REORDERS[k % REORDERS.len()];
+            let width = order.len() as u32;
+            let start = at + step - width;
+            ops.push(PlanOp::Read { from: at, to: start });
+            let say: Vec<String> = order
+                .iter()
+                .map(|&p| script.atoms[(start + p as u32) as usize].surface.clone())
+                .collect();
+            ops.push(PlanOp::Substitute {
+                from: start,
+                to: start + width,
+                say,
+                // Reordering is not a re-spelling: the notation is the
+                // script's own, so these are not `forms.span_*` samples.
+                respelled: false,
+            });
+            k += 1;
+            at = start + width;
+        }
+        ops.push(PlanOp::Read {
+            from: at,
+            to: n as u32,
+        });
+        suite.push(scenario(
+            &name,
+            "transpositions",
+            &script,
+            150,
+            ops,
+            Corruption::default(),
+        ));
+
         // 8b. Word repetitions: every ~12th word said twice ("the— the").
         // Robust-alignment research names repetition handling as the single
         // largest recall win; this family guards it.

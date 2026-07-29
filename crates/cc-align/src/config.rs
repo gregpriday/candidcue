@@ -39,6 +39,73 @@ pub struct AlignmentConfig {
     pub cost_substitution: i32,
     /// Phonetic relation cost fraction (× weight) — rare long words only.
     pub cost_phonetic: i32,
+    /// Displaced relation cost fraction (× weight): the query word is not what
+    /// this slot holds, but it IS a content word sitting within
+    /// [`Self::displaced_window_atoms`] of it — the reader said the right words
+    /// in the wrong order.
+    ///
+    /// Dearer than `cost_phonetic` on purpose. A phonetic near-miss is weak
+    /// evidence about THIS slot; a displaced match is strong evidence about the
+    /// NEIGHBOURHOOD and none at all about the slot, and the relation is barred
+    /// from advancing the position for exactly that reason.
+    pub cost_displaced: i32,
+    /// How far either side of the current script column a content word may have
+    /// moved and still read as displaced rather than substituted (atoms).
+    ///
+    /// Deliberately TIGHT — much tighter than the clause this was originally
+    /// modelled on, because a wider window cannot tell a reorder from a repeat.
+    /// Both look identical from inside the DP: a content word turning up again
+    /// a few atoms from where the script put it. The difference is only ever
+    /// distance. A transposition moves a word one or two atoms; a presenter
+    /// re-saying a phrase moves it however long the phrase was.
+    ///
+    /// Swept on Tier A against a transposition family that spans reorder
+    /// DISTANCES — adjacent swap, three-word reversal, four-word chunk swap,
+    /// four-word end swap — because distance is the only thing the engine can
+    /// discriminate on.
+    ///
+    /// Tier A, reach ±2, varying `cost_displaced`. Every safety row — false
+    /// jumps, catastrophic, ahead_events, ahead_worst, refrain — is unchanged at
+    /// every setting; the trade is entirely among the robustness families:
+    ///
+    /// | cost | transpositions | phrase_repeats | corrupt15 |
+    /// |------|----------------|----------------|-----------|
+    /// | off  | 98.006         | 99.881         | 98.459    |
+    /// | 600  | 98.223         | 99.524         | 98.248    |
+    /// | 500  | 98.528         | 99.491         | 98.248    |
+    /// | 400  | 98.666         | 99.148         | 98.001    |
+    /// | 300  | 99.152         | 98.916         | 97.732    |
+    ///
+    /// There is no free setting. Reorder evidence and repeat/noise confusion are
+    /// the SAME signal — a content word turning up a step from where the script
+    /// put it — and every point bought on the left is paid for on the right.
+    /// Widening the reach to ±3 moves both columns further in the same
+    /// directions without changing the exchange rate.
+    ///
+    /// An asymmetric reach was tried on the theory that repeats only ever
+    /// displace a word BACKWARD while reorders displace both ways. It does not
+    /// separate them: forward reach is inert (3-ahead/2-behind measures
+    /// bit-identical to ±2) and the backward half carries all of the gain and
+    /// all of the damage.
+    ///
+    /// Zero disables the relation, restoring the previous behaviour exactly,
+    /// and zero is what ships. Two independent problems block enabling it:
+    ///
+    /// 1. It can carry the display ACROSS AN UNSPOKEN WORD. The displaced
+    ///    branch never writes `end_position`, but its diagonal consumes a
+    ///    script slot, and the next exact match then sets a position past it.
+    /// 2. The `transpositions` benchmark family cannot see (1). Gold for a
+    ///    reordered span advances by spoken ordinal, so a display that runs
+    ///    past a slot the reader has not reached is scored as CORRECT. The
+    ///    clean safety rows above are therefore not evidence of safety for
+    ///    this particular failure — they are evidence the oracle is blind to
+    ///    it.
+    ///
+    /// Fixing (1) means a positional frontier that will not cross an
+    /// unresolved displaced cell without a trustworthy re-anchor; fixing (2)
+    /// means gold that advances a safety frontier only through the contiguous
+    /// SPOKEN prefix of a reordered span. Neither is done.
+    pub displaced_window_atoms: u32,
     /// Filler insertion (flat).
     pub cost_insert_filler: i32,
     /// Non-filler transcript insertion, opening (× stability).
@@ -301,6 +368,7 @@ impl AlignmentConfig {
             &mut self.cost_fuzzy,
             &mut self.cost_substitution,
             &mut self.cost_phonetic,
+            &mut self.cost_displaced,
             &mut self.cost_insert_filler,
             &mut self.cost_insert_open,
             &mut self.cost_insert_extend,
@@ -310,6 +378,10 @@ impl AlignmentConfig {
                 *cost = 0;
             }
         }
+        // The window is scanned as a sliding count over the DP row, so a
+        // pathological value costs memory and time rather than correctness.
+        // 64 atoms is already far wider than the clause this models.
+        self.displaced_window_atoms = self.displaced_window_atoms.min(64);
         self.max_query_atoms = self.max_query_atoms.clamp(4, 200);
         self.beam_size = self.beam_size.clamp(1, 64);
         self.max_regions = self.max_regions.clamp(1, 64);
@@ -334,6 +406,28 @@ impl Default for AlignmentConfig {
             cost_fuzzy: 350,
             cost_substitution: 1000,
             cost_phonetic: 550,
+            // Because the cost is stability-scaled (see `align.rs`), the
+            // comparison against insertion is stability-INVARIANT: two displaced
+            // matches beat two insertions whenever `2 × cost × weight / 1000 <
+            // 1270`, at every stability class alike. So the knee is a statement
+            // about word weight, not about how fresh the transcript is:
+            //
+            //   weight 1000 (ordinary content)  → fires below cost 635
+            //   weight 1300 (8+ characters)     → fires below cost 488
+            //
+            // At 600 the relation therefore does NOT fire for long words, which
+            // are the most distinctive vocabulary in any script and the ones a
+            // reorder is most visible on. That is a known, unresolved limitation
+            // rather than a tuned choice; lowering the cost far enough to cover
+            // them costs `phrase_repeats` and `corrupt15` accuracy faster than it
+            // buys transposition accuracy. See the sweep in the field docs below.
+            cost_displaced: 600,
+            // OFF. The relation is implemented, tested and benchmarked, and it
+            // is not sound enough to enable — see the field docs below and
+            // `Evidence::displaced_matches`. Set to 2 to turn it on for
+            // experiments; do not ship it on without fixing the positional
+            // frontier first.
+            displaced_window_atoms: 0,
             cost_insert_filler: 120,
             cost_insert_open: 785,
             cost_insert_extend: 485,

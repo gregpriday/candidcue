@@ -23,6 +23,8 @@ use crate::script::CompiledScript;
 pub enum Relation {
     Exact,
     Fuzzy,
+    /// The word is not here, but it is nearby — see [`Evidence::displaced_matches`].
+    Displaced,
     Substitution,
     Insertion,
 }
@@ -47,6 +49,22 @@ pub struct Evidence {
     /// Phonetic-key matches on rare long words (names). Evidence for local
     /// fidelity only — they carry no discontinuity authority.
     pub phonetic_matches: u32,
+    /// Content words spoken here that belong a few atoms away — a phrase read
+    /// back in the wrong order, a self-correction, a mild paraphrase that
+    /// reuses the sentence's own vocabulary.
+    ///
+    /// Evidence that the reader is still in this neighbourhood, and nothing
+    /// whatever about WHICH word they are on.
+    ///
+    /// UNSOUND AS IT STANDS, WHICH IS WHY THE RELATION SHIPS DISABLED. The
+    /// displaced BRANCH does not write `end_position` — but its diagonal still
+    /// consumes a script slot, so a later exact match sets `end_position`
+    /// BEYOND a word the reader has not spoken. Measured on a live partial
+    /// against `keeping voice alpha and steady`: off, the mark parks at
+    /// `voice`; on, it reaches `and`, having faded the unspoken `alpha`.
+    /// Fixing this needs a positional frontier that refuses to cross an
+    /// unresolved displaced cell without a trustworthy re-anchor.
+    pub displaced_matches: u32,
     pub substitutions: u32,
     pub insertions: u32,
     pub deletions: u32,
@@ -66,10 +84,15 @@ pub struct Evidence {
     pub last_match_audio_ms: f64,
     /// Query index (0-based) of the last matched atom.
     pub last_match_query_index: Option<usize>,
-    /// Query index of the last atom in the last SOLID run (≥2 consecutive
-    /// exact matches). A single stray stopword match deep in the tail must
-    /// not make the material after it look "explained" — self-similar text
-    /// produces those constantly.
+    /// Query index of the last atom in the last SOLID run: two adjacent
+    /// matches, at least one of them exact. A single stray stopword match deep
+    /// in the tail must not make the material after it look "explained" —
+    /// self-similar text produces those constantly.
+    ///
+    /// The pair may include a displaced match, which is how a phrase read back
+    /// in the wrong order stays accounted for; it may not consist of two, which
+    /// is how off-script speech that happens to reuse the paragraph's own words
+    /// stays unaccounted for.
     pub last_solid_match_query_index: Option<usize>,
 }
 
@@ -78,6 +101,15 @@ pub struct AlignScratch {
     m: Vec<i64>,
     i: Vec<i64>,
     d: Vec<i64>,
+    /// One bit per DP cell: did the displaced relation apply here?
+    ///
+    /// The forward pass computes this as a sliding window count — O(1) per
+    /// cell — and the backtrace needs the same answer several hundred cells
+    /// later, by which time the window is long gone. Recomputing it there with
+    /// a scan would be a second implementation of the predicate and an
+    /// opportunity for the two to disagree, so the one answer is recorded.
+    /// A 40 × 640 worst case is 3.2 KB.
+    displaced: Vec<u64>,
 }
 
 const HUGE: i64 = i64::MAX / 4;
@@ -88,6 +120,7 @@ impl AlignScratch {
             m: Vec::new(),
             i: Vec::new(),
             d: Vec::new(),
+            displaced: Vec::new(),
         }
     }
 
@@ -98,6 +131,24 @@ impl AlignScratch {
             self.i.resize(need, 0);
             self.d.resize(need, 0);
         }
+        let words = need.div_ceil(64);
+        if self.displaced.len() < words {
+            self.displaced.resize(words, 0);
+        }
+        // Cleared rather than merely sized: this buffer is read by index, and a
+        // stale bit from a wider previous alignment would read as a displaced
+        // match in a cell that never computed one.
+        self.displaced[..words].fill(0);
+    }
+
+    #[inline]
+    fn set_displaced(&mut self, cell: usize) {
+        self.displaced[cell / 64] |= 1u64 << (cell % 64);
+    }
+
+    #[inline]
+    fn is_displaced(&self, cell: usize) -> bool {
+        self.displaced[cell / 64] & (1u64 << (cell % 64)) != 0
     }
 }
 
@@ -221,9 +272,49 @@ pub fn align(
         scratch.d[idx(0, j)] = HUGE;
     }
 
+    // Only content words can be displaced. "the" occurs within a few atoms of
+    // very nearly everything, so letting a stopword claim the relation would
+    // discount half the substitutions in the script and tell us nothing.
+    // Hoisted out of the inner loop: this is a per-word fact, and the string
+    // comparison behind it has no business running once per DP cell.
+    let window = config.displaced_window_atoms as usize;
+
     for i in 1..rows {
         let q = &query[i - 1];
         let stab = q.stability.multiplier_milli() as i64;
+        let q_displaceable =
+            window > 0 && !q.filler && !crate::normalize::is_stopword(&q.surface);
+        /*
+         * Every position this word occupies in the script, ascending.
+         *
+         * This relation costs ~11% of total engine time (90 → 101 µs/event on
+         * Tier A) and that is inherent, not a defect of this formulation: the
+         * predicate has to be answered for essentially every DP cell, because
+         * all but the diagonal fall through to it. A sliding count over
+         * `script.atoms` was written first and measured identically, so the fat
+         * `ScriptAtom` array was not the cost and neither is the postings walk.
+         * Evaluating it lazily inside the `else if` saves nothing for the same
+         * reason. Postings are kept because the cursor below is easier to prove
+         * correct than a hand-maintained enter/leave count, not because they are
+         * faster.
+         *
+         * 101 µs against a partial cadence of ~1 s is not a budget problem, and
+         * `perf.scale_ratio_5k` — the property the architecture actually cares
+         * about — stays flat.
+         */
+        let postings: &[u32] = if q_displaceable {
+            script
+                .token_postings
+                .get(&q.id)
+                .map(|v| v.as_slice())
+                .unwrap_or(&[])
+        } else {
+            &[]
+        };
+        // Cursor into `postings`. `j` only increases across the row, so the
+        // window's left edge only increases, so this only moves forward — the
+        // whole scan is amortised O(1) per cell.
+        let mut post_lo = 0usize;
         // Insertion cost: fillers are cheap; provisional atoms are cheaper to
         // ignore than stable ones (they may be about to be retracted).
         let (ins_open, ins_extend) = if q.filler {
@@ -244,16 +335,73 @@ pub fn align(
             .min(above_m.saturating_add(ins_open));
 
         for j in 1..cols {
-            let s = &script.atoms[region_start as usize + j - 1];
+            let center = region_start as usize + j - 1;
+            let s = &script.atoms[center];
             let weight = s.weight as i64;
 
-            // --- M: diagonal (exact / fuzzy / substitution) ---
+            // Drop postings that have fallen off the left of the window.
+            // Phrased as `p + window < center` rather than `p < center - window`
+            // because `center` is below `window` for the first columns of a
+            // region that starts at the top of the script, and the subtraction
+            // would wrap.
+            while post_lo < postings.len()
+                && (postings[post_lo] as usize) + window < center
+            {
+                post_lo += 1;
+            }
+            // Does this word sit somewhere else inside the window? Bounded by
+            // the window width, and one comparison in the overwhelmingly common
+            // case of a word that occurs once.
+            //
+            // Occurrences outside the aligned region do not count: the region is
+            // what this alignment is explaining, and a word beyond its edge is
+            // evidence for a candidate nobody asked about.
+            let mut displaced_here = false;
+            let mut k = post_lo;
+            while k < postings.len() {
+                let p = postings[k] as usize;
+                if p > center + window {
+                    break;
+                }
+                if p != center && p >= region_start as usize && p < region_end as usize {
+                    displaced_here = true;
+                    break;
+                }
+                k += 1;
+            }
+
+            // --- M: diagonal (exact / fuzzy / phonetic / displaced / sub) ---
+            //
+            // The column itself is excluded above, so a hit is by construction
+            // somewhere OTHER than the slot being scored.
             let rel_cost = if q.id == s.id {
                 0
             } else if fuzzy_match(&q.surface, &s.surface) {
                 (config.cost_fuzzy as i64 * weight) / 1000
             } else if phonetic_ok(q, s) {
                 (config.cost_phonetic as i64 * weight) / 1000
+            } else if displaced_here {
+                scratch.set_displaced(idx(i, j));
+                /*
+                 * Scaled by query STABILITY as well as script weight — the only
+                 * relation in the ladder that is, and it has to be.
+                 *
+                 * This relation's real competitor is not substitution, it is
+                 * INSERTION: an unexplained tail can always be dropped instead
+                 * of related to anything, and insertion cost is stability-scaled
+                 * (`cost_insert_open` × stab). The trailing atoms of a live
+                 * partial are `TrailingProvisional`, ×0.35, so dropping the two
+                 * words of a fresh scramble costs 443 — against 1200 for two
+                 * unscaled displaced matches. Without this the relation loses
+                 * every time, and it loses in exactly the window it exists for:
+                 * the reader mid-phrase, the mark stalled behind them, the
+                 * transcript still provisional. It would only start working once
+                 * the utterance finalised, which is after the stall.
+                 *
+                 * Scaling both sides the same way makes the comparison mean
+                 * something at every stability class instead of only at Final.
+                 */
+                (config.cost_displaced as i64 * weight * stab) / 1_000_000
             } else {
                 (config.cost_substitution as i64 * weight) / 1000
             };
@@ -311,8 +459,11 @@ pub fn align(
     let mut consumed_script_weight: i64 = 0;
     let mut insert_denominator: i64 = 0;
     let mut first_consumed_j = best_j;
-    // Backtrace-order adjacency tracking for solid runs.
-    let mut prev_exact_qi: Option<usize> = None;
+    // Backtrace-order adjacency tracking for solid runs: the query index of the
+    // atom visited immediately before this one (so, the NEXT one in time) and
+    // whether it matched exactly. Displaced matches are carried here so they can
+    // JOIN a solid run without being able to form one — see the exact branch.
+    let mut prev_match: Option<(usize, bool)> = None;
 
     while i > 0 || (state == 2 && j > 0) {
         match state {
@@ -330,20 +481,20 @@ pub fn align(
                     // sides but carries NO positional evidence (spec: filler
                     // insertion is cheap but never supplies position). It
                     // must not extend runs, coverage, or matched weight.
-                    prev_exact_qi = None;
+                    prev_match = None;
                     run = 0;
                 } else if q.id == s.id {
                     ev.exact_matches += 1;
                     run += 1;
                     ev.longest_run = ev.longest_run.max(run);
-                    // Backtrace runs end→start: the first adjacent exact
+                    // Backtrace runs end→start: the first adjacent solid
                     // pair seen is the LAST solid run of the path.
                     if ev.last_solid_match_query_index.is_none()
-                        && prev_exact_qi == Some(i)
+                        && matches!(prev_match, Some((idx, _)) if idx == i)
                     {
                         ev.last_solid_match_query_index = Some(i);
                     }
-                    prev_exact_qi = Some(i - 1);
+                    prev_match = Some((i - 1, true));
                     ev.matched_weight += weight * stab_mult;
                     if q.stability.is_stable() {
                         ev.matched_stable_weight += weight * stab_mult;
@@ -367,7 +518,7 @@ pub fn align(
                 } else if fuzzy_match(&q.surface, &s.surface) {
                     ev.fuzzy_matches += 1;
                     run = 0;
-                    prev_exact_qi = None;
+                    prev_match = None;
                     ev.matched_weight += weight * stab_mult * 0.5;
                     if q.stability.is_stable() {
                         ev.matched_stable_weight += weight * stab_mult * 0.5;
@@ -380,17 +531,52 @@ pub fn align(
                 } else if phonetic_ok(q, s) {
                     ev.phonetic_matches += 1;
                     run = 0;
-                    prev_exact_qi = None;
+                    prev_match = None;
                     ev.matched_weight += weight * stab_mult * 0.4;
                     if ev.last_match_query_index.is_none() {
                         ev.last_match_query_index = Some(i - 1);
                         ev.last_match_audio_ms = q.audio_ms;
                         ev.end_position = region_start + j as u32;
                     }
+                } else if scratch.is_displaced(idx(i, j)) {
+                    ev.displaced_matches += 1;
+                    // Breaks the exact run — `longest_run` means verbatim, and
+                    // this is the opposite of verbatim.
+                    run = 0;
+                    /*
+                     * A displaced match may JOIN a solid run and may never form
+                     * one: the pair must contain an exact match. Two scrambled
+                     * words with nothing verbatim beside them are the profile of
+                     * genuinely off-script speech that happens to reuse the
+                     * paragraph's vocabulary, and `last_solid_match_query_index`
+                     * is what licenses the tracker to stop looking for a jump.
+                     * That authority stays anchored to words actually read.
+                     */
+                    if ev.last_solid_match_query_index.is_none()
+                        && matches!(prev_match, Some((idx, true)) if idx == i)
+                    {
+                        ev.last_solid_match_query_index = Some(i);
+                    }
+                    prev_match = Some((i - 1, false));
+                    ev.matched_weight += weight * stab_mult * 0.4;
+                    if q.stability.is_stable() {
+                        ev.matched_stable_weight += weight * stab_mult * 0.4;
+                    }
+                    /*
+                     * Deliberately NOT setting `last_match_query_index`,
+                     * `last_match_audio_ms` or `end_position`.
+                     *
+                     * This is the safety property of the whole relation. We know
+                     * the reader is in this neighbourhood; we do not know which
+                     * word they are on, and a word said out of order is evidence
+                     * for the former and none at all for the latter. Advancing
+                     * the position here would fade text they have not reached —
+                     * the one error this engine may never make.
+                     */
                 } else {
                     ev.substitutions += 1;
                     run = 0;
-                    prev_exact_qi = None;
+                    prev_match = None;
                 }
                 // Where did the diagonal come from?
                 let prev_m = scratch.m[idx(i - 1, j - 1)];
@@ -411,7 +597,7 @@ pub fn align(
                 let q = &query[i - 1];
                 ev.insertions += 1;
                 run = 0;
-                prev_exact_qi = None;
+                prev_match = None;
                 insert_denominator += insert_cost_for_denominator(q, config);
                 // Recompute the same open/extend costs the forward pass used
                 // for this row — comparing raw predecessor values would pick
@@ -438,7 +624,7 @@ pub fn align(
                 let s = &script.atoms[region_start as usize + j - 1];
                 ev.deletions += 1;
                 run = 0;
-                prev_exact_qi = None;
+                prev_match = None;
                 first_consumed_j = j - 1;
                 consumed_script_weight += s.weight as i64;
                 let weight = s.weight as i64;
@@ -466,8 +652,12 @@ pub fn align(
     ev.coverage = if non_filler == 0 {
         0.0
     } else {
-        f64::from(ev.exact_matches + ev.fuzzy_matches + ev.phonetic_matches)
-            / f64::from(non_filler)
+        // Coverage asks how much of what was HEARD this region accounts for,
+        // which is a different question from where the reader is — so a
+        // displaced word counts here even though it may not move the position.
+        f64::from(
+            ev.exact_matches + ev.fuzzy_matches + ev.phonetic_matches + ev.displaced_matches,
+        ) / f64::from(non_filler)
     };
     Some(ev)
 }
@@ -520,9 +710,29 @@ mod tests {
     }
 
     fn run(script_text: &str, spoken: &str) -> (Evidence, CompiledScript) {
+        run_with(script_text, spoken, AlignmentConfig::default())
+    }
+
+    /// The displaced relation ships DISABLED (`displaced_window_atoms: 0`), so
+    /// every test of its mechanics has to turn it on explicitly. Doing that
+    /// here rather than reading the default is deliberate: these tests describe
+    /// what the relation DOES, and must not silently become vacuous if the
+    /// default changes again in either direction.
+    const TEST_WINDOW: u32 = 2;
+
+    fn run_displaced(script_text: &str, spoken: &str) -> (Evidence, CompiledScript) {
+        let mut config = AlignmentConfig::default();
+        config.displaced_window_atoms = TEST_WINDOW;
+        run_with(script_text, spoken, config)
+    }
+
+    fn run_with(
+        script_text: &str,
+        spoken: &str,
+        config: AlignmentConfig,
+    ) -> (Evidence, CompiledScript) {
         let mut script = compile(script_text, CompileOptions::default());
         let query = query_from(spoken, &mut script);
-        let config = AlignmentConfig::default();
         let mut scratch = AlignScratch::new();
         let len = script.len() as u32;
         let ev = align(&script, &query, 0, len, &config, &mut scratch).unwrap();
@@ -592,6 +802,149 @@ mod tests {
         assert!(fuzzy_match("presenter", "presentor"));
         assert!(!fuzzy_match("cat", "car")); // too short
         assert!(!fuzzy_match("system", "systematic"));
+    }
+
+    /// The case this relation was built for: the reader reorders a phrase live.
+    /// Note the swap is over a DISTANCE OF TWO — an adjacent-transposition rule
+    /// (the textbook Damerau extension) would not catch it.
+    #[test]
+    fn transposed_phrase_is_displaced_not_substituted() {
+        let (ev, _) = run_displaced(
+            "the presenter is keeping my voice clear and steady throughout the whole take",
+            "the presenter is keeping my voice steady and clear",
+        );
+        assert_eq!(ev.displaced_matches, 2, "steady and clear both moved");
+        assert_eq!(ev.substitutions, 0, "neither is an unexplained word");
+        // The scramble is accounted for: the tracker's unexplained-tail slice
+        // starts after it, so a reorder does not read as the reader vanishing.
+        assert_eq!(ev.last_solid_match_query_index, Some(8));
+    }
+
+    /// The safety property. A displaced match says the reader is in this
+    /// neighbourhood; it must never claim to know which word they are on,
+    /// because fading a word they have not reached is unrecoverable.
+    #[test]
+    fn displaced_match_never_advances_the_position() {
+        let script = "alpha bravo charlie keeping my voice clear and steady omega";
+        let (ev, _) = run_displaced(script, "keeping my voice steady and clear");
+        // "keeping my voice" is atoms 3..6, "clear and steady" is 6..9.
+        // The last EXACT match is "and" at atom 7, so the position stops there
+        // — not at 9, which is where the path actually ends.
+        assert_eq!(ev.end_position, 8);
+    }
+
+    /// The relation must not fire on genuine off-script speech. An ad-lib is
+    /// made of words the paragraph does not contain, and every one of them has
+    /// to stay a substitution or an insertion — otherwise going off script
+    /// would look like reading it, which is the failure `recovery.adlib_*`
+    /// exists to catch.
+    #[test]
+    fn genuine_adlib_produces_no_displaced_matches() {
+        let (ev, _) = run(
+            "we should build the system for testing scripts today",
+            "we should build sorry let me start that sentence again",
+        );
+        assert_eq!(ev.displaced_matches, 0);
+    }
+
+    /// Stopwords occur within a few atoms of nearly everything; letting them
+    /// claim the relation would discount half the substitutions in any script.
+    #[test]
+    fn stopwords_are_never_displaced() {
+        let (ev, _) = run(
+            "we should build the system for testing and shipping scripts",
+            "we should build for system the testing xylophone shipping scripts",
+        );
+        assert_eq!(
+            ev.displaced_matches, 0,
+            "'the' and 'for' moved, but they are stopwords"
+        );
+    }
+
+    /// Far enough away is a substitution again — the relation claims locality
+    /// and has to mean it.
+    #[test]
+    fn a_word_outside_the_window_is_not_displaced() {
+        let mut config = AlignmentConfig::default();
+        config.displaced_window_atoms = 2;
+        let mut script = compile(
+            "engineering alpha bravo charlie delta echo foxtrot marketing",
+            CompileOptions::default(),
+        );
+        let query = query_from("marketing alpha bravo", &mut script);
+        let mut scratch = AlignScratch::new();
+        let len = script.len() as u32;
+        let ev = align(&script, &query, 0, len, &config, &mut scratch).unwrap();
+        assert_eq!(
+            ev.displaced_matches, 0,
+            "'marketing' is 7 atoms from where it was said, well past the window"
+        );
+    }
+
+    /// Zeroing the window restores the previous engine exactly — the escape
+    /// hatch the config comment promises — and running the same input both ways
+    /// is the clearest statement of what the relation actually buys.
+    ///
+    /// Without it the scramble parses as two INSERTIONS: the reader appears to
+    /// have stopped reading after "voice" and said two off-script words. The
+    /// position parks there and the accounted-for tail ends at "voice", which
+    /// is the stall this whole change is about.
+    #[test]
+    fn zero_window_disables_the_relation() {
+        let script_text = "keeping my voice clear and steady throughout";
+        let spoken = "keeping my voice steady and clear";
+
+        let evaluate = |window: u32| {
+            let mut config = AlignmentConfig::default();
+            config.displaced_window_atoms = window;
+            let mut script = compile(script_text, CompileOptions::default());
+            let query = query_from(spoken, &mut script);
+            let mut scratch = AlignScratch::new();
+            let len = script.len() as u32;
+            align(&script, &query, 0, len, &config, &mut scratch).unwrap()
+        };
+
+        let off = evaluate(0);
+        assert_eq!(off.displaced_matches, 0);
+        assert_eq!(off.insertions, 2, "the scramble reads as off-script speech");
+        assert_eq!(off.last_solid_match_query_index, Some(2), "explained to 'voice'");
+
+        // Explicit 2: the shipped default is 0 (relation disabled).
+        let on = evaluate(2);
+        assert_eq!(on.displaced_matches, 2);
+        assert_eq!(on.insertions, 0);
+        assert_eq!(
+            on.last_solid_match_query_index,
+            Some(5),
+            "the whole scramble is accounted for"
+        );
+        assert!(on.fidelity > off.fidelity, "{} vs {}", on.fidelity, off.fidelity);
+    }
+
+    /// The scratch bitset is reused across alignments of different shapes; a
+    /// stale bit would read as a displaced match in a cell that never computed
+    /// one. Runs a wide alignment, then a narrow one, in the same scratch.
+    #[test]
+    fn scratch_reuse_does_not_leak_displaced_bits() {
+        let mut scratch = AlignScratch::new();
+        let mut config = AlignmentConfig::default();
+        config.displaced_window_atoms = TEST_WINDOW;
+
+        let mut wide = compile(
+            "keeping my voice clear and steady throughout the whole of this particular take today",
+            CompileOptions::default(),
+        );
+        let wide_query = query_from("keeping my voice steady and clear throughout", &mut wide);
+        let len = wide.len() as u32;
+        let first = align(&wide, &wide_query, 0, len, &config, &mut scratch).unwrap();
+        assert!(first.displaced_matches > 0, "primes the buffer with set bits");
+
+        let mut narrow = compile("alpha bravo charlie delta", CompileOptions::default());
+        let narrow_query = query_from("alpha bravo charlie delta", &mut narrow);
+        let len = narrow.len() as u32;
+        let second = align(&narrow, &narrow_query, 0, len, &config, &mut scratch).unwrap();
+        assert_eq!(second.displaced_matches, 0, "verbatim read, no displacement");
+        assert_eq!(second.fidelity, 1.0);
     }
 
     #[test]

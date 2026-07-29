@@ -65,6 +65,10 @@ pub fn run_tier_a(
     let mut clean_signed: Vec<f64> = Vec::new();
     let mut pause_lead: Vec<f64> = Vec::new();
     let mut span_abs: Vec<f64> = Vec::new();
+    // Transposition samples pool separately: the family is not "clean" (the
+    // reader departs from the script), so it is excluded from `clean_abs`, but
+    // its error DEPTH is the thing the displaced relation is meant to move.
+    let mut trans_abs: Vec<f64> = Vec::new();
     // Overshoot pools across EVERY family, not just the clean ones: fading a
     // word the reader has not reached is just as wrong in a retake as in a
     // straight read.
@@ -110,6 +114,9 @@ pub fn run_tier_a(
         if matches!(scenario.plan.scenario.as_str(), "asr_forms" | "asr_forms_pauses") {
             span_abs.extend_from_slice(&eval.samples.span_abs);
         }
+        if scenario.plan.scenario == "transpositions" {
+            trans_abs.extend_from_slice(&eval.samples.abs_err);
+        }
         if scenario.plan.scenario == "scale_window" {
             scale_us.insert(scenario.plan.script.clone(), eval.metrics.mean_event_us);
         }
@@ -125,6 +132,7 @@ pub fn run_tier_a(
         &mut ahead,
         &mut span_abs,
         &mut velocity,
+        &mut trans_abs,
     );
     Ok(SuiteResult {
         label: label.to_string(),
@@ -150,6 +158,7 @@ fn build_table(
     ahead: &mut [f64],
     span_abs: &mut [f64],
     velocity: &mut [f64],
+    trans_abs: &mut [f64],
 ) -> Vec<BenchEntry> {
     let mut table = Vec::new();
 
@@ -344,6 +353,43 @@ fn build_table(
         if se == 0 { 0.0 } else { 100.0 * s2 as f64 / se as f64 },
         "%",
         "higher",
+    ));
+    // ±5 as well, and it is the row to read. The display deliberately trails
+    // the reader by `lead_margin_atoms`, so on THIS suite the whole ±2 family
+    // sits near zero for reasons that have nothing to do with the words — a
+    // change in how a paraphrase is scored cannot show up in a number that is
+    // already pinned by the lead profile. ±5 is where it becomes visible.
+    let (s5, _) = subs
+        .iter()
+        .fold((0, 0), |(a, e), r| (a + r.within5_hits, e + r.eligible_samples));
+    table.push(entry(
+        "robust.substitutions_within5",
+        if se == 0 { 0.0 } else { 100.0 * s5 as f64 / se as f64 },
+        "%",
+        "higher",
+    ));
+    // Transpositions: the right words in the wrong order. Scored at ±5 for the
+    // reason above, and additionally on P95 error, because the failure this
+    // family exists to catch is the display parking mid-phrase and waiting —
+    // a tail, not a shift, and a percentage inside a band cannot see its depth.
+    let trans: Vec<&RunMetrics> = runs
+        .iter()
+        .filter(|r| r.scenario == "transpositions")
+        .collect();
+    let (t5, te) = trans
+        .iter()
+        .fold((0, 0), |(a, e), r| (a + r.within5_hits, e + r.eligible_samples));
+    table.push(entry(
+        "robust.transpositions_within5",
+        if te == 0 { 0.0 } else { 100.0 * t5 as f64 / te as f64 },
+        "%",
+        "higher",
+    ));
+    table.push(entry(
+        "robust.transpositions_p95_abs",
+        percentile(trans_abs, 95.0),
+        "atoms",
+        "lower",
     ));
     // Repetitions: within ±5, because a repeated phrase legitimately puts
     // the reader a few atoms behind the monotonic cursor for its duration —
