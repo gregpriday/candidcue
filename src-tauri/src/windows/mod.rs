@@ -1197,6 +1197,11 @@ const ALLOWED_STAGE_DIRECTIVES: &[&str] = &[
     // those seconds the script would keep drifting on prediction — which is the
     // exact thing the switch was flipped to stop.
     "follow",
+    // The fixed-pace transport — the fallback for a take voice following
+    // cannot carry. It travels the same proven road for the same reason, and
+    // it is generation-checked on both ends because unlike the two above it
+    // MOVES the document.
+    "autoScroll",
 ];
 
 /// Validate a `StageStatePayload` ({ stageGeneration, directive }) against

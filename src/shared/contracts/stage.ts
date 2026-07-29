@@ -242,6 +242,15 @@ export type StageDirective =
    * affected real rig while Rust-originated stage traffic kept arriving.
    */
   | { kind: 'voicePill'; pill: StageVoicePillPayload }
+  /**
+   * Roll the script at a fixed pace, because nothing is following a voice.
+   *
+   * Travels the same Rust relay as the transcript and the pill, for the same
+   * reason: it is a live transport command, and the one road to the stage that
+   * has demonstrably kept working on every rig is the one that goes through
+   * Rust with a generation check on it.
+   */
+  | { kind: 'autoScroll'; autoScroll: StageAutoScrollPayload }
   | ({ kind: 'calibration'; active: boolean } & StageCalibrationDirective)
   /**
    * Voice following is on or off (§48).
@@ -256,6 +265,25 @@ export type StageDirective =
    */
   | { kind: 'follow'; paused: boolean }
   | { kind: 'diagnostics'; visible: boolean };
+
+/**
+ * The auto-scroll transport, as the stage should run it.
+ *
+ * A pace and a running flag, and deliberately nothing else — no pixel rate, no
+ * position, no direction. The stage is the only window that has measured how
+ * much script a pixel of travel carries, so control naming a pixel rate would be
+ * control guessing at the type size on the glass. It names the pace a presenter
+ * would recognise; the stage converts it against what it actually rendered.
+ *
+ * `running` is separate from a zero pace because they are different states and
+ * only one of them is reversible in the presenter's head: a paused transport
+ * resumes at the speed it was set to, where a pace dialled to nothing has lost
+ * the setting it was at.
+ */
+export interface StageAutoScrollPayload {
+  running: boolean;
+  wordsPerMinute: number;
+}
 
 /**
  * What the stage should draw while the operator is calibrating the rig.
@@ -635,7 +663,31 @@ export type StageIntent =
    */
   | { kind: 'toggle_follow' }
   /** Single click focused the stage; no script movement occurred. */
-  | { kind: 'stage_focused' };
+  | { kind: 'stage_focused' }
+  /**
+   * The fixed-pace transport ran out of script.
+   *
+   * Reported rather than acted on, like everything else here. The stage knows
+   * the document has no further to go; only control knows whether that should
+   * stand the transport down, and control is where the button that says
+   * "running" lives.
+   */
+  | { kind: 'auto_scroll_end' }
+  /**
+   * The presenter asked for the transport from the glass.
+   *
+   * These exist because the hold chip tells them to. When the input chain dies
+   * the chip names the key that starts the transport, and on a rig with a
+   * separate stage window that window is the one holding the keyboard — the
+   * presenter is standing at it, and the control window is on a desk behind
+   * them. Advice naming a key that does nothing where it is read would be worse
+   * than no advice.
+   *
+   * Reported, not acted on: the running flag, the pace and the mutual exclusion
+   * with voice following are all session state, and none of it is the stage's.
+   */
+  | { kind: 'auto_scroll_toggle' }
+  | { kind: 'auto_scroll_pace'; direction: 'faster' | 'slower' };
 
 export interface StageIntentPayload {
   stageGeneration: number;

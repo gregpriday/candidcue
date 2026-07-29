@@ -28,6 +28,7 @@ import type {
   StageVoicePillPayload,
 } from '../../src/shared/contracts';
 import { buildStageSettings } from '../../src/control/services/stage-envelope';
+import { HOLD_FAULT_HINT } from '../../src/stage/renderer/hold-status';
 
 const STAGE_GENERATION = 11;
 
@@ -222,9 +223,30 @@ describe('a named fault', () => {
     await settle();
 
     expect(chip(container)?.getAttribute('data-visible')).toBe('true');
-    expect(chip(container)?.textContent?.trim()).toBe('No audio from the microphone');
+    // The condition, drawn as its own line above the recovery hint.
+    expect(chip(container)?.firstChild?.textContent?.trim()).toBe('No audio from the microphone');
     // Not an escalation of a hold: a different claim, in a different voice.
     expect(chip(container)?.getAttribute('data-tone')).toBe('fault');
+  });
+
+  it('names the recovery, because this is the one hold that will not clear itself', async () => {
+    /*
+     * Naming the condition and stopping there leaves somebody standing at a
+     * camera correctly informed and with nothing to do about it. The transport
+     * is the thing to do, and it is one key.
+     */
+    const container = await mountLiveStage();
+    dispatchLocalStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, {
+      stageGeneration: STAGE_GENERATION,
+      reading: 'fault',
+      levels: [0, 0, 0],
+      label: 'No audio from the microphone',
+      visible: true,
+      sentAtMs: 1000,
+    });
+    await settle();
+
+    expect(chip(container)?.querySelector('.hint')?.textContent?.trim()).toBe(HOLD_FAULT_HINT);
   });
 
   it('is reported on a stage that has never received a single snapshot', async () => {

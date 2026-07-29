@@ -88,6 +88,34 @@ export interface FallbackTarget {
    */
   disposition: 'follow' | 'catch_up' | 'reanchor' | 'instant';
   atMs: number;
+  /**
+   * How fast this target is itself moving, px/s. Optional; 0 for a target that
+   * is standing still, which is every caller that does not set it.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY A STATIONARY-LOOKING TARGET IS NOT THE SAME AS A CRAWLING ONE
+   * ---------------------------------------------------------------------------
+   * §29.3's rest deadband exists to stop subpixel shimmer once everything has
+   * genuinely settled: inside the deadband, with no feed-forward and a slow
+   * plant, it snaps `q` to the target and zeroes `v`.
+   *
+   * A target that creeps forward a third of a pixel per frame — which is what
+   * the fixed-pace transport at a readable speed looks like — satisfies every
+   * one of those conditions on every frame. The plant is then teleported to the
+   * target sixty times a second with `v` reported as zero, and two things go
+   * wrong at once: the limits stop being applied, because nothing is being
+   * integrated; and the RENDERER, which quantises the painted offset to the
+   * device pixel grid whenever velocity reads as at-rest, turns smooth
+   * sub-pixel travel into a visible 1 px step twenty times a second. On the
+   * 1024x600 panel this app targets there is no spare resolution to hide that
+   * in.
+   *
+   * A caller that knows how fast its target is moving can say so, and then none
+   * of that happens: the deadband correctly declines to call it rest, the plant
+   * integrates under its own limits, and the reported velocity is true — which
+   * is what the renderer needs to leave the fractional offset alone.
+   */
+  feedForwardVelocityPxS?: number;
 }
 
 export type MotionSource = 'alignment' | 'fallback' | 'hold';
@@ -246,6 +274,31 @@ export interface StageMotionEngine {
    * snapshot changes nothing at all, which is the point.
    */
   receiveSnapshot(snapshot: unknown, nowMs: number): boolean;
+  /**
+   * Give up the current alignment lock, because something else is driving now.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY THIS IS NOT THE SAME AS THE FEED GOING QUIET
+   * ---------------------------------------------------------------------------
+   * An accepted snapshot outranks any fallback target for
+   * `DEFAULT_SNAPSHOT_STALE_MS` — fifteen seconds — and that generosity is
+   * deliberate: silence is a normal thing for a presenter to produce, and a
+   * stage that dropped its lock every time somebody paused for breath would be
+   * worse than useless.
+   *
+   * It is exactly wrong for an EXPLICIT instruction. When the operator starts
+   * the fixed-pace transport, "the last thing the recogniser said is still
+   * roughly true" stops being the question: they have told the stage to roll,
+   * and a stage that answered by holding for fifteen seconds and then jumping
+   * the accumulated distance would be a key that appeared not to work followed
+   * by a lurch.
+   *
+   * So this is narrow on purpose. It does not weaken the precedence rule — an
+   * ordinary fallback still loses to a live alignment frame, which is the
+   * protection that keeps guessed geometry off the glass. It says the lock is
+   * VOID, which only something with the authority to say so may do.
+   */
+  releaseAlignment(): void;
   setFallbackTarget(target: FallbackTarget | null): void;
 
   frame(nowMs: number): StageMotionFrameResult;
@@ -1413,6 +1466,25 @@ export function createStageMotionEngine(
       }
     },
 
+    releaseAlignment() {
+      receiver.reset();
+      // An in-flight re-anchor or catch-up is a decision the tracker made about
+      // where the presenter is. Once the operator has taken the wheel that is
+      // no longer a question anybody is asking, and spending the directive
+      // afterwards would move the document somewhere they did not put it.
+      transitions.reset();
+      lastDisplayToken = null;
+      previousDisplayToken = null;
+      forwardTargetLatchPx = null;
+      latchExcessSinceMs = null;
+      heldVisualSpan = null;
+      catchUpSinceMs = null;
+      catchUpCapCounted = false;
+      // `fallback` is deliberately NOT cleared: the caller releasing the lock is
+      // the one about to drive, and dropping its target here would cost a frame
+      // of hold at exactly the moment it takes over.
+    },
+
     receiveSnapshot(snapshot, nowMs) {
       const outcome = receiver.accept(snapshot, nowMs);
       if (!outcome.accepted) return false;
@@ -1637,7 +1709,12 @@ export function createStageMotionEngine(
       } else if (fallbackUsable && fallback) {
         source = 'fallback';
         targetPx = fallback.scrollPx;
-        feedForward = 0;
+        // Zero unless the caller knows better — see `FallbackTarget`.
+        feedForward =
+          typeof fallback.feedForwardVelocityPxS === 'number' &&
+          Number.isFinite(fallback.feedForwardVelocityPxS)
+            ? fallback.feedForwardVelocityPxS
+            : 0;
         state = 'following';
         if (fallback.disposition === 'instant') {
           // §32.4 reduced motion: reposition with no spectacle at all.

@@ -1,9 +1,9 @@
 /**
  * Keyboard shortcuts (spec §19). One window-level listener translates key
  * events into named actions; screens subscribe with `onShortcut`. Cmd on
- * macOS, Ctrl elsewhere. Plain-key shortcuts (Space, B, T) are suppressed
- * while the user is typing and while the focused control activates itself on
- * the same key; nothing fires behind a modal dialog.
+ * macOS, Ctrl elsewhere. Plain-key shortcuts (Space, B, T, A, [, ]) are
+ * suppressed while the user is typing and while the focused control activates
+ * itself on the same key; nothing fires behind a modal dialog.
  */
 
 export type ShortcutAction =
@@ -24,6 +24,16 @@ export type ShortcutAction =
   | 'blank-stage'
   | 'take-marker'
   | 'command-help'
+  /**
+   * The fixed-pace transport: start/stop, and the pace itself.
+   *
+   * Keys rather than a control, because during a take there is no control
+   * window to put a control in — the stage is full screen and the operator is
+   * standing at a camera. These are the whole of the in-take interface for it.
+   */
+  | 'toggle-auto-scroll'
+  | 'auto-scroll-faster'
+  | 'auto-scroll-slower'
   /** §16.9. Escape — twice ends the take; the screen owns the two-press rule. */
   | 'escape';
 
@@ -111,6 +121,15 @@ export interface ShortcutQuery {
   selfActivating?: boolean;
   /** A modal dialog owns the keyboard; no app shortcut fires behind it. */
   modal?: boolean;
+  /**
+   * The key is auto-repeating because it is being held down.
+   *
+   * Only the actions for which repetition is meaningless stand down for it. A
+   * held pace key SHOULD keep changing the pace — that is how somebody dials a
+   * speed in while watching the glass — but a held toggle flips the transport on
+   * and off many times a second, which is not something anybody can have meant.
+   */
+  repeat?: boolean;
 }
 
 /** Resolve a KeyboardEvent to a shortcut action, or null. Pure — testable. */
@@ -194,6 +213,23 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
         return 'blank-stage';
       case 't':
         return 'take-marker';
+      /*
+       * The transport, on unmodified keys, beside the other three.
+       *
+       * `a` for the transport itself and the bracket keys for its pace: they sit
+       * together under one hand, they are not something a presenter reaches for
+       * by accident mid-sentence, and — the reason they are not the arrow keys —
+       * the arrows already step the script by a line, which is the thing an
+       * operator does INSTEAD of changing the speed.
+       */
+      case 'a':
+        // Held, this would flip the transport on and off at the key-repeat
+        // rate. The pace keys below deliberately do not stand down.
+        return event.repeat === true ? null : 'toggle-auto-scroll';
+      case ']':
+        return 'auto-scroll-faster';
+      case '[':
+        return 'auto-scroll-slower';
       default:
         return null;
     }
@@ -215,6 +251,7 @@ export function installShortcuts(): () => void {
       isMac: isMacPlatform(),
       selfActivating: isSelfActivatingTarget(event.target),
       modal: isModalOpen(),
+      repeat: event.repeat,
     });
     if (action) emit(action, event);
   };
