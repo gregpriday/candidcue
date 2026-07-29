@@ -38,6 +38,7 @@
  */
 import {
   alignmentDisplayAt,
+  alignmentDisplayRateAt,
   ALIGNMENT_RELOCATIONS,
   DEFAULT_SMOOTH_FOLLOW_PROFILE,
   resolveLineLimitPx,
@@ -1241,12 +1242,19 @@ export function createStageMotionEngine(
      * reader has said words they have not.
      */
     const displayToken = alignmentDisplayAt(snapshot, audioNow);
-    // The path derivative is per token, and so is the engine's rate — the
-    // projection into token space happened in Rust — so the feed-forward
-    // velocity needs no axis conversion at all. It is zeroed by the engine
-    // whenever extrapolating would be a guess, which is why holding states
-    // produce no feed-forward here without the stage testing for them.
-    const velocity = snapshot.rateTokensPerSecond;
+    /*
+     * The feed-forward is the DISPLAY PATH's own speed, not the engine's rate
+     * estimate — see `alignmentDisplayRateAt`. Both are per token, and so is
+     * the path derivative below, because the projection into token space
+     * happened in Rust, so no axis conversion is needed here.
+     *
+     * It is zero whenever the path is not advancing — a holding state, a
+     * saturated lead, a paragraph ceiling, a settle onto a pause — which is
+     * what keeps the §70.5 overshoot guard meaningful: that guard measures the
+     * plant's speed relative to this number, so a feed-forward the target
+     * cannot justify is a guard that cannot fire.
+     */
+    const velocity = alignmentDisplayRateAt(snapshot, audioNow);
     // The snapshot crossed a process boundary; arithmetic over it must not be
     // allowed to reach the planner, let alone the plant.
     if (!Number.isFinite(displayToken) || !Number.isFinite(velocity)) return null;
@@ -2092,10 +2100,36 @@ export function createStageMotionEngine(
             })
           : structuralLimits;
 
+      /*
+       * Never feed forward faster than the target is ACTUALLY moving.
+       *
+       * `feedForward` is the display path's own derivative, which is right
+       * about how the path would move if this snapshot were the last word. It
+       * is not always right about how the target moves, because a new snapshot
+       * can re-pin `observedToken` to the same place frame after frame — a
+       * tracker repeating "you are here, at three tokens a second" while the
+       * reader does not advance. The path says three tokens a second; the
+       * target has not moved at all.
+       *
+       * That gap is a safety hole, not an inefficiency. The §70.5 overshoot
+       * guard measures the plant's speed RELATIVE to the feed-forward — match
+       * the target's speed and you are not overshooting — so a feed-forward the
+       * target cannot justify disables the guard by exactly that much, and the
+       * plant sails past a stationary target with nothing to arrest it.
+       *
+       * Taking the smaller of the two closes it: they agree while following
+       * normally, and where they disagree the one that reflects what the
+       * document is really doing wins. `min` rather than the realized value
+       * alone because a snapshot boundary steps the target, and one frame of
+       * that step is not a velocity.
+       */
+      const realizedTargetPxS = dtMs > 0 ? ((targetPx - lastTarget) * 1000) / dtMs : 0;
+      const boundedFeedForward = Math.max(0, Math.min(feedForward, realizedTargetPxS));
+
       const step = controller.step({
         dtMs,
         targetPx: frozen ? controller.state.q : targetPx,
-        feedForwardVelocityPxS: frozen ? 0 : feedForward,
+        feedForwardVelocityPxS: frozen ? 0 : boundedFeedForward,
         limits,
         allowRest: true,
       });

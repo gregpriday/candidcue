@@ -44,6 +44,14 @@ export function snapshot(overrides: Partial<AlignmentSnapshot> = {}): AlignmentS
   pauseOnsetMs: 1800,
   leadFloorMs: 550,
   maxLeadTokens: 10_000,
+  // Zero for exactly the reason `maxLeadTokens` is 10 000 above: the shipped
+  // 1.2 would shift every display target in every fixture a word and a bit
+  // back, so tests named after something else would pass or fail on it. A test
+  // about the margin should set it explicitly and say so.
+  leadMarginTokens: 0,
+  leadEaseMs: 450,
+  leadHoldMs: 0,
+  leadDecayMs: 1200,
   displayLimitToken: 10_000,
     confidence: 0.92,
     suggestionToken: null,

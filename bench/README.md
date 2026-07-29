@@ -158,9 +158,40 @@ false jump is a regression.
 | `forms.freeze` | Freeze time on those scripts: the display waiting for a word it will never match. |
 | `forms.relocate_p95 / lock_failures` | Relocation into a passage whose only landmarks are figures or names the recogniser respelled. |
 | `ambiguity.refrain_false_jumps` | False jumps on a script whose refrain appears verbatim three times. |
+| `smoothness.*` | See below — these score the *derivative* of the display path, not its position. |
 | `perf.mean_event_us / p95_event_us` | Engine time per transcript revision. |
 | `perf.scale_ratio_5k` | Per-event cost ratio, 5,000-word vs 300-word script (script-length independence). |
 | `live.*` | The same ideas measured end-to-end on captured live STT runs, plus `live.wer` (diagnostic recogniser quality). |
+
+## Smoothness: how it moves, not where it is
+
+Every row above scores the display's **position** at each 50 ms sample. None of
+them can see the path it took to get there. A display that crawls at a third of
+the reader's pace and then steps forward once a second scores *identically* to
+one that glides — same samples, same errors — and only one of them is watchable.
+Every knob in the engine was tuned against position alone, which is why the
+system is safe and jerky rather than safe and calm.
+
+These rows score the derivative, on the clean families only, gated on the reader
+actually speaking (a stopped display during a silence is correct, and pooling
+those samples in would swamp the signal with legitimate rest). Intervals
+spanning a display jump are excluded: a relocation is a deliberate
+discontinuity that `safety.false_jumps` and the recovery rows already own.
+
+| Benchmark | Meaning |
+|---|---|
+| `smoothness.vel_mean` | Mean display speed (atoms/s). Over a run this **must** equal the reader's true pace — otherwise the display would fall arbitrarily behind — so this row is the reader, not a quality number. |
+| `smoothness.vel_p50` | *Typical* display speed. The gap between this and `vel_mean` is the whole defect: time spent moving slower than the reader, repaid later in steps. |
+| `smoothness.vel_p10 / vel_p90` | The crawl and the surge. A system moving *with* the reader has these close to `vel_p50`. |
+| `smoothness.vel_cov` | σ/μ of display speed. Scale-free, so it compares across readers and scripts. 0 is a perfect glide. The headline smoothness number. |
+| `smoothness.stationary` | % of speaking time the display was not moving at all — the stop half of stop-start. |
+| `smoothness.stalls_per_min` | Distinct hesitations: speed under 20% of **the reader's** pace (`vel_mean`), held ≥150 ms. "The number of times it paused on me." Per minute of scored speech, so adding scenarios is not a regression. Referenced to the reader and not to the display's own median, or a config that crawls the whole time would score zero stalls. |
+| `smoothness.surge_p95` | P95 |change in speed| between adjacent samples — the size of the step the plant has to absorb. This is the row that moves when the display stops being fed a once-a-second correction. |
+
+There is deliberately **no aggregate smoothness score, and none of these may be
+read alone**. A display that runs ahead of the reader at a constant speed scores
+perfectly on every row here. Only the safety and overshoot rows can say whether
+a smoothness win was paid for honestly, and they remain lexicographically first.
 
 ## Reproducibility
 

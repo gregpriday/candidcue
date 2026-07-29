@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use cc_align::AlignmentConfig;
 
-use crate::metrics::{evaluate, percentile, RecoveryKind, RunMetrics};
+use crate::metrics::{evaluate, mean, percentile, RecoveryKind, RunMetrics};
 use crate::plan::{expand, synthetic_timing};
 use crate::replay::replay;
 use crate::scenarios::build_suite;
@@ -69,6 +69,11 @@ pub fn run_tier_a(
     // word the reader has not reached is just as wrong in a retake as in a
     // straight read.
     let mut ahead: Vec<f64> = Vec::new();
+    // Smoothness pools across the clean families only. The corrupted and
+    // jump families spend their time recovering, and recovery motion is
+    // supposed to look different from reading motion — pooling it in would
+    // report a successful relocation as jerk.
+    let mut velocity: Vec<f64> = Vec::new();
     let mut scale_us: std::collections::HashMap<String, f64> = Default::default();
 
     for scenario in &suite {
@@ -98,6 +103,7 @@ pub fn run_tier_a(
         if is_clean_family(&scenario.plan.scenario) {
             clean_abs.extend_from_slice(&eval.samples.abs_err);
             clean_signed.extend_from_slice(&eval.samples.signed_err);
+            velocity.extend_from_slice(&eval.samples.velocity);
         }
         pause_lead.extend_from_slice(&eval.samples.pause_lead);
         ahead.extend_from_slice(&eval.samples.ahead);
@@ -118,6 +124,7 @@ pub fn run_tier_a(
         &mut pause_lead,
         &mut ahead,
         &mut span_abs,
+        &mut velocity,
     );
     Ok(SuiteResult {
         label: label.to_string(),
@@ -142,6 +149,7 @@ fn build_table(
     pause_lead: &mut [f64],
     ahead: &mut [f64],
     span_abs: &mut [f64],
+    velocity: &mut [f64],
 ) -> Vec<BenchEntry> {
     let mut table = Vec::new();
 
@@ -254,6 +262,61 @@ fn build_table(
         "responsiveness.first_lock_p50",
         percentile(&mut first_locks, 50.0),
         "s",
+        "lower",
+    ));
+
+    // ---- smoothness ----
+    // Everything above scores WHERE the display was. These score HOW IT GOT
+    // THERE, over the clean families while the reader is actually speaking.
+    // They are reported separately and deliberately carry no aggregate: a
+    // change that buys a steadier glide by running ahead is not an
+    // improvement, and only the safety rows can say so.
+    let clean: Vec<&RunMetrics> = runs.iter().filter(|r| is_clean_family(&r.scenario)).collect();
+    let (stationary, motion_eligible) = clean
+        .iter()
+        .fold((0usize, 0usize), |(s, e), r| (s + r.motion_stationary, e + r.motion_eligible));
+    table.push(entry(
+        "smoothness.stationary",
+        pct_of(stationary, motion_eligible),
+        "%",
+        "lower",
+    ));
+    // Mean and median together are the diagnosis. Over a run the display must
+    // average the reader's true pace or it would fall arbitrarily behind, so
+    // the MEAN is the reader. Any gap between it and the MEDIAN is time spent
+    // moving slower than the reader, repaid in steps — which is exactly the
+    // shape `surge_p95` measures.
+    table.push(entry("smoothness.vel_mean", mean(velocity), "atoms/s", "same"));
+    let vel_p50 = percentile(&mut velocity.to_vec(), 50.0);
+    table.push(entry("smoothness.vel_p10", percentile(&mut velocity.to_vec(), 10.0), "atoms/s", "higher"));
+    table.push(entry("smoothness.vel_p50", vel_p50, "atoms/s", "same"));
+    table.push(entry("smoothness.vel_p90", percentile(&mut velocity.to_vec(), 90.0), "atoms/s", "lower"));
+    // σ/μ of the pooled speed. The headline: 0 is a perfect glide, and the
+    // current surge-crawl-stall pattern is what makes it large.
+    let vel_cov = {
+        let mu = mean(velocity);
+        if mu.abs() < f64::EPSILON {
+            0.0
+        } else {
+            let var = mean(&velocity.iter().map(|v| (v - mu).powi(2)).collect::<Vec<_>>());
+            var.sqrt() / mu
+        }
+    };
+    table.push(entry("smoothness.vel_cov", vel_cov, "ratio", "lower"));
+    // Per minute of scored speaking time, so adding scenarios does not look
+    // like a regression.
+    let speaking_min = motion_eligible as f64 * 50.0 / 60_000.0;
+    let stalls: u32 = clean.iter().map(|r| r.stalls).sum();
+    table.push(entry(
+        "smoothness.stalls_per_min",
+        if speaking_min > 0.0 { stalls as f64 / speaking_min } else { 0.0 },
+        "count",
+        "lower",
+    ));
+    table.push(entry(
+        "smoothness.surge_p95",
+        mean(&clean.iter().map(|r| r.surge_p95).collect::<Vec<_>>()),
+        "atoms/s",
         "lower",
     ));
 

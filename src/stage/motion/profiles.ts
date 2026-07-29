@@ -43,6 +43,18 @@ export function stageFollowProfile(
     : DEFAULT_SMOOTH_FOLLOW_PROFILE;
 }
 
+/**
+ * How much slower ordinary following's error correction is than every other
+ * state's — see the note in `limitsForState`. 6.5 rad/s → 2.0.
+ */
+const FOLLOWING_OMEGA_SCALE = 2.0 / 6.5;
+/**
+ * And overdamped with it: an error is closed by easing onto the target, never
+ * by overshooting and coming back. The display must not oscillate around the
+ * reader at any cost.
+ */
+const FOLLOWING_ZETA_SCALE = 1.15;
+
 export interface MotionLimits {
   /** Controller natural frequency (rad/s). */
   omega: number;
@@ -358,9 +370,49 @@ export function limitsForState(
   const degradeOmega = options.degraded ? 0.85 : 1;
   const degradeDeadband = options.degraded ? 2 : 1;
 
+  /*
+   * ORDINARY FOLLOWING IS THE ONE THING THAT GOT GENTLER (§29.1).
+   *
+   * The presenter's complaint was that the document moved "in a jerk and then a
+   * jerk". At ω = 6.5 the controller has a ~150 ms time constant, so it answers
+   * every step in the reference at full authority — and the reference steps
+   * once per transcript event, about once a second. Measured on the rendered
+   * trace, that was |accel| P95 319 px/s² and jerk P95 6 623 px/s³: the plant
+   * doing violent work to track a signal that arrives in jumps.
+   *
+   * A slow controller is affordable only because the feed-forward now carries
+   * the display path's own speed, so ω governs how fast a residual ERROR is
+   * closed and nothing else. Without that, dropping ω would just mean lagging
+   * further and further behind.
+   *
+   * Applied HERE, as one factor on one state, rather than by lowering
+   * `naturalFrequency`. Lowering the base and compensating every other state
+   * and transition back up is what it looked like it should be, and it is
+   * wrong: `mul` returns the LARGER factor once both exceed 1, so pairs that
+   * used to combine a sub-unity state with a transition stopped combining at
+   * all. `holding` × `catch_up` was 0.8 × 1.15 → 5.98 rad/s and became 7.48;
+   * `ambiguous` × `rewind` went 4.55 → 6.50. Every cautious state silently
+   * became stiffer in exactly the situations it exists to be careful in.
+   *
+   * A single factor on `following` cannot do that: `mul(x, 1)` is `x`, and the
+   * combinations below are untouched because `following` carries no other
+   * multiplier. Every non-following state, and every transition — including a
+   * catch-up or a re-anchor that happens WHILE following — keeps the exact
+   * stiffness it was tuned with, which is right: each of those is a deliberate,
+   * bounded, visible move, and none of them should become sluggish because
+   * ordinary reading became calm.
+   */
+  const ordinaryFollowing =
+    state === 'following' &&
+    (options.transition === undefined || options.transition === 'none') &&
+    options.reacquire !== true &&
+    options.manualGrace !== true;
+  const followOmega = ordinaryFollowing ? FOLLOWING_OMEGA_SCALE : 1;
+  const followZeta = ordinaryFollowing ? FOLLOWING_ZETA_SCALE : 1;
+
   const limits: MotionLimits = {
-    omega: m.naturalFrequency * mul(s.omega, t.omega) * degradeOmega,
-    zeta: m.dampingRatio * mul(s.zeta, t.zeta),
+    omega: m.naturalFrequency * mul(s.omega, t.omega) * degradeOmega * followOmega,
+    zeta: m.dampingRatio * mul(s.zeta, t.zeta) * followZeta,
     vForwardMax: m.maxForwardVelocityPxS * mul(s.vForward, t.vForward),
     vBackwardMax: m.maxBackwardVelocityPxS * mul(s.vBackward, t.vBackward),
     aMax: m.maxAccelerationPxS2 * mul(s.accel, t.accel),

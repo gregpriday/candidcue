@@ -127,6 +127,7 @@ export interface AlignmentSnapshot {
    */
   rateTokensPerSecond: number;
 
+
   /** Audio-clock time `observedToken` corresponds to. */
   evidenceAudioMs: number;
   /** Audio-clock time this snapshot was produced. */
@@ -145,6 +146,27 @@ export interface AlignmentSnapshot {
   /** Hard cap on how far prediction may carry the display past
    * `observedToken`, in tokens. */
   maxLeadTokens: number;
+  /**
+   * How far behind its own estimate the display deliberately sits while the
+   * reader is flowing, in tokens.
+   *
+   * This is how caution is bought without buying jerk. `rateTokensPerSecond`
+   * cannot separate the two: the display's position is
+   * `observed + rate·age`, so a rate below the reader's pace makes the display
+   * travel slower than them AND leaves a step of exactly
+   * `(1 − gain)·pace·Δt` waiting at the next transcript event. A margin costs
+   * distance instead of speed. It fades out through the same settle as the
+   * lead, so a display at rest rests on the last word actually heard.
+   */
+  leadMarginTokens: number;
+  /**
+   * Corner-rounding widths for the lead profile. The bounds above are
+   * unchanged; these decide whether the display arrives at one by decelerating
+   * or by stopping in a single frame. Zero restores the old hard corners.
+   */
+  leadEaseMs: number;
+  leadHoldMs: number;
+  leadDecayMs: number;
   /**
    * Absolute ceiling for the display: the end of the paragraph the reader was
    * last heard in. The engine will not predict across a paragraph break — a
@@ -197,21 +219,122 @@ export interface AlignmentSnapshot {
 export function alignmentDisplayAt(snapshot: AlignmentSnapshot, tAudioMs: number): number {
   const { observedToken, rateTokensPerSecond, scriptLenTokens } = snapshot;
   const ceiling = Math.min(snapshot.displayLimitToken, scriptLenTokens);
-  if (!(rateTokensPerSecond > 0) || !Number.isFinite(tAudioMs)) {
-    return Math.min(observedToken, ceiling);
-  }
-  const age = Math.max(0, tAudioMs - snapshot.evidenceAudioMs);
+  const age = Number.isFinite(tAudioMs) ? Math.max(0, tAudioMs - snapshot.evidenceAudioMs) : 0;
   const onset = Math.min(snapshot.pauseOnsetMs, snapshot.maxPredictionMs);
+  /*
+   * How far through the settle onto a pause this snapshot is.
+   *
+   * Computed BEFORE the zero-rate branch, because the margin below depends on
+   * it and the margin applies whether or not there is a lead. Returning a bare
+   * `observedToken` when the rate is zero — which this used to do — put a step
+   * of the whole margin into the reference at every Following→Holding
+   * transition: the path below answers `observed - margin` at zero lead, so
+   * dropping the margin moved the target FORWARD by a couple of words in one
+   * frame, in the one direction that is never safe, at the exact moment the
+   * engine had decided it was no longer sure enough to extrapolate.
+   */
+  const settle = smoothstep(
+    (age - (onset + snapshot.leadHoldMs)) / Math.max(1, snapshot.leadDecayMs),
+  );
+  // Caution as a distance, not as a reduced speed — see `leadMarginTokens`.
+  // Fades out through the settle, so a display that has come to rest rests ON
+  // the last word heard rather than a word short of it.
+  const margin = snapshot.leadMarginTokens * (1 - settle);
+  if (!(rateTokensPerSecond > 0)) return clampToScript(observedToken - margin, ceiling);
+
   // While evidence is fresh the lead grows 1:1 — that is pipeline-lag
   // compensation, not a guess about the future: the words are already said,
-  // the recogniser has simply not finished saying so. Once evidence goes stale
-  // the reader has probably stopped, and the lead decays to rest exactly on
-  // the last word actually heard. Exact mirror of `Snapshot::display_at`.
-  const leadMs =
-    age <= onset ? age : Math.max(onset - (age - onset), Math.min(snapshot.leadFloorMs, onset));
-  const lead = Math.min((rateTokensPerSecond * leadMs) / 1000, snapshot.maxLeadTokens);
-  return Math.min(observedToken + lead, ceiling);
+  // the recogniser has simply not finished saying so. It eases into a plateau
+  // at `onset` rather than arriving there at full speed, holds, and then eases
+  // back so the display rests on the last word actually heard.
+  //
+  // Exact mirror of `Snapshot::display_at`; a Rust test asserts the two agree.
+  const rise = softMin(age, onset, snapshot.leadEaseMs);
+  const floorMs = Math.min(snapshot.leadFloorMs, onset);
+  const leadMs = rise * (1 - settle) + floorMs * settle;
+  const lead = softMin(
+    (rateTokensPerSecond * leadMs) / 1000,
+    snapshot.maxLeadTokens,
+    (rateTokensPerSecond * snapshot.leadEaseMs) / 1000,
+  );
+  return clampToScript(observedToken + lead - margin, ceiling);
 }
+
+/**
+ * Into the script at both ends. The margin may deliberately carry the display
+ * behind `observedToken`, but near the start of a script that can carry it
+ * behind the script itself — and a negative position reaches `lastDisplayToken`
+ * and the active-token lookup well before the plant's own bounds clamp pixels.
+ */
+function clampToScript(position: number, ceiling: number): number {
+  return Math.min(Math.max(0, position), Math.max(0, ceiling));
+}
+
+/**
+ * How fast {@link alignmentDisplayAt} is moving at `tAudioMs`, tokens/second —
+ * the stage's feed-forward velocity.
+ *
+ * The DERIVATIVE OF THE PATH, deliberately, and not the engine's rate estimate.
+ * They are equal while the reader is flowing and the extrapolation gain is 1,
+ * which is the common case; they diverge exactly where it matters, because the
+ * path stops advancing when the lead saturates, when a paragraph ceiling is
+ * reached, and while it settles onto a pause, and the rate estimate knows about
+ * none of that.
+ *
+ * Feeding the raw pace instead is unsafe rather than merely inaccurate. The
+ * §70.5 overshoot guard measures speed RELATIVE to the feed-forward — matching
+ * a moving target's speed is not overshoot — so a feed-forward larger than the
+ * target's own speed exempts the plant from the guard by exactly that much, and
+ * a target that has stopped while the feed-forward has not lets the plant sail
+ * past it indefinitely with nothing to arrest it.
+ *
+ * Numerical rather than analytic: the path is a composition of two eased
+ * limits, a settle blend and a fading margin, and a hand-differentiated copy of
+ * that is one edit away from disagreeing with the function it claims to
+ * differentiate. A forward difference over one frame cannot.
+ */
+export function alignmentDisplayRateAt(snapshot: AlignmentSnapshot, tAudioMs: number): number {
+  const H_MS = 20;
+  const here = alignmentDisplayAt(snapshot, tAudioMs);
+  const ahead = alignmentDisplayAt(snapshot, tAudioMs + H_MS);
+  if (!Number.isFinite(here) || !Number.isFinite(ahead)) return 0;
+  // Never negative: ordinary following does not move backward, and a settling
+  // path that is easing back would otherwise command a reverse cruise.
+  return Math.max(0, ((ahead - here) * 1000) / H_MS);
+}
+
+/**
+ * Hermite smoothstep, clamped: 0 below 0, 1 above 1, and zero slope at both
+ * ends so a transition through it adds no velocity step.
+ */
+function smoothstep(u: number): number {
+  const c = u < 0 ? 0 : u > 1 ? 1 : u;
+  return c * c * (3 - 2 * c);
+}
+
+/**
+ * `Math.min(a, cap)` with the corner rounded off over a knee of width `ease`.
+ *
+ * Equal to `a` well below the cap, asymptotic to the cap above it, and
+ * differentiable everywhere between — which is the whole reason it exists. A
+ * hard `min` meant the display travelled at full pace right up to a bound and
+ * then stopped in a single frame. `ease <= 0` returns the exact hard minimum.
+ */
+function softMin(a: number, cap: number, easeRaw: number): number {
+  if (!(easeRaw > 0) || !Number.isFinite(cap) || !Number.isFinite(a)) return Math.min(a, cap);
+  // The knee may never be wider than the cap it rounds, or it straddles the
+  // origin and turns a zero cap into a NEGATIVE result. Mirrors the engine.
+  const ease = Math.min(easeRaw, Math.abs(cap) * 0.5);
+  if (!(ease > 0)) return Math.min(a, cap);
+  // Exact outside `cap ± ease`, C¹ across it. Mirrors `soft_min` in the engine
+  // — see the note there on why an asymptotic softplus was wrong here.
+  const lo = cap - ease;
+  if (a <= lo) return a;
+  if (a >= cap + ease) return cap;
+  const u = (a - lo) / (2 * ease);
+  return lo + 2 * ease * (u - (u * u) / 2);
+}
+
 
 /* ---------------------------------------------------------------------------
  * Validation
@@ -238,6 +361,10 @@ const SNAPSHOT_FIELDS: Record<keyof AlignmentSnapshot, FieldKind> = {
   pauseOnsetMs: 'real',
   leadFloorMs: 'real',
   maxLeadTokens: 'real',
+  leadMarginTokens: 'real',
+  leadEaseMs: 'real',
+  leadHoldMs: 'real',
+  leadDecayMs: 'real',
   displayLimitToken: 'real',
   confidence: 'real',
   suggestionToken: 'nullableReal',

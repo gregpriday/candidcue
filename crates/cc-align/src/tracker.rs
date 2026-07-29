@@ -105,6 +105,13 @@ pub struct Snapshot {
     /// Hard cap on how far prediction may carry the display past `observed`
     /// (atoms), whatever the rate estimate says.
     pub max_lead_atoms: f64,
+    /// Distance the display deliberately sits behind its own estimate while
+    /// flowing — see `AlignmentConfig::lead_margin_atoms`.
+    pub lead_margin_atoms: f64,
+    /// Corner-rounding widths for the lead profile — see `display_at`.
+    pub lead_ease_ms: f64,
+    pub lead_hold_ms: f64,
+    pub lead_decay_ms: f64,
     /// Absolute ceiling for the display: the end of the paragraph the reader
     /// was last heard in. Prediction stops here and waits for evidence.
     pub display_limit: f64,
@@ -132,29 +139,124 @@ impl Snapshot {
     /// evidence goes stale, and that stops dead at a paragraph break.
     pub fn display_at(&self, t_audio_ms: f64) -> f64 {
         let ceiling = self.display_limit.min(self.script_len);
-        if self.rate <= 0.0 {
-            return self.observed.min(ceiling);
-        }
         let age = (t_audio_ms - self.evidence_audio_ms).max(0.0);
         let onset = self.pause_onset_ms.min(self.max_prediction_ms);
+        // How far through the settle onto a pause this snapshot is. Computed
+        // before the zero-rate branch because the MARGIN below depends on it
+        // and the margin has to be applied whether or not there is a lead.
+        let settle = smoothstep((age - (onset + self.lead_hold_ms)) / self.lead_decay_ms.max(1.0));
+        // Caution as a distance, not as a reduced speed — see
+        // `AlignmentConfig::lead_margin_atoms`. Fades out through the settle, so
+        // a display that has come to rest rests ON the last word heard rather
+        // than a word short of it.
+        let margin = self.lead_margin_atoms * (1.0 - settle);
+        if self.rate <= 0.0 {
+            // The margin still applies. Returning bare `observed` here — which
+            // is what this branch used to do — put a STEP in the reference at
+            // every Following→Holding transition: the positive-rate path below
+            // answers `observed - margin` at zero lead, so dropping the margin
+            // moved the target forward by the whole margin in one frame, in the
+            // one direction that is never safe, at the exact moment the engine
+            // had decided it was no longer sure enough to extrapolate.
+            return (self.observed - margin).clamp(0.0, ceiling.max(0.0));
+        }
         // While evidence is fresh the lead grows 1:1 — that is pipeline-lag
         // compensation, not a guess about the future: the words are already
-        // said, the recogniser has simply not finished saying so. Once evidence
-        // goes stale the reader has probably stopped, and the lead decays to
-        // rest exactly on the last word actually heard.
-        let lead_ms = if age <= onset {
-            age
-        } else {
-            (onset - (age - onset)).max(self.lead_floor_ms.min(onset))
-        };
+        // said, the recogniser has simply not finished saying so. It eases into
+        // a plateau at `onset` rather than arriving there at full speed, holds,
+        // and then eases back so the display rests on the last word actually
+        // heard.
+        //
+        // The easing is the point. The previous profile turned at `onset` with
+        // a slope that flipped from +rate to −rate in one sample: a velocity
+        // step of twice the reading pace, at a moment the reader cannot
+        // predict. Worse, the display CANNOT follow the descending limb —
+        // ordinary following never moves backward — so the whole descent was
+        // spent parked. Both halves of that read as a jerk.
+        let rise = soft_min(age, onset, self.lead_ease_ms);
+        let floor_ms = self.lead_floor_ms.min(onset);
+        let lead_ms = rise * (1.0 - settle) + floor_ms * settle;
         // The rate estimate is the weak link — it is a median of recent
         // slopes, and a reader who slows down invalidates it silently. Capping
         // the lead in ATOMS bounds the damage directly instead of trusting the
         // estimate to stay honest.
-        let lead = (self.rate * lead_ms / 1000.0).min(self.max_lead_atoms);
-        (self.observed + lead).min(ceiling)
+        //
+        // Approached softly, for the same reason: a hard `min()` here meant the
+        // display travelled at full pace right up to the cap and then stopped
+        // in a single frame. Measured, that one clip put the display at a
+        // standstill for 19.7% of speaking time as soon as the pace estimate
+        // was honest enough to reach it. The bound is unchanged — the display
+        // still never leads by more than `max_lead_atoms` — it is now arrived
+        // at by decelerating rather than by hitting a wall.
+        let lead = soft_min(
+            self.rate * lead_ms / 1000.0,
+            self.max_lead_atoms,
+            // The cap is in atoms; scale the knee into the same axis so one
+            // config value shapes both limits consistently.
+            self.rate * self.lead_ease_ms / 1000.0,
+        );
+        // Clamped into the script at BOTH ends. The margin can carry the
+        // display behind `observed`, which is safe and deliberate, but near the
+        // start of a script it can carry it behind the script itself — and a
+        // negative position still reaches `lastDisplayToken`, the active-token
+        // lookup and the benchmark before the plant's own bounds clamp the
+        // pixels.
+        (self.observed + lead - margin).clamp(0.0, ceiling.max(0.0))
     }
 }
+
+/// Hermite smoothstep, clamped: 0 below 0, 1 above 1, and zero slope at both
+/// ends so a transition through it adds no velocity step.
+pub(crate) fn smoothstep(u: f64) -> f64 {
+    let u = u.clamp(0.0, 1.0);
+    u * u * (3.0 - 2.0 * u)
+}
+
+///
+/// Equal to `a` well below the cap, asymptotic to the cap above it, and
+/// differentiable at every point between — which is the whole reason it exists.
+/// `ease <= 0` returns the exact hard minimum, so every limit in this file can
+/// be restored to its previous behaviour by zeroing one config value.
+/// `a.min(cap)`, with the corner rounded off over a knee of width `ease`.
+pub(crate) fn soft_min(a: f64, cap: f64, ease: f64) -> f64 {
+    if !(ease > 0.0) || !cap.is_finite() || !a.is_finite() {
+        return a.min(cap);
+    }
+    // The knee may never be wider than the cap it rounds. `soft_min` is exact
+    // below `cap - ease`, so an `ease` larger than `cap` puts the exact region
+    // entirely below zero and the knee straddles the origin: with
+    // `max_lead_atoms = 0` — a legitimate "no lead at all" configuration that
+    // passes every check in `config.rs` — a 1.26-atom knee returned −0.315,
+    // turning the lead OFF into a lead BACKWARD. Config sanitisation checks
+    // fields one at a time and cannot see a cross-field relationship like this,
+    // so the function defends its own domain.
+    let ease = ease.min(cap.abs() * 0.5);
+    if !(ease > 0.0) {
+        return a.min(cap);
+    }
+    // The knee is confined to `cap ± ease` and the function is EXACT outside
+    // it. That matters more than it looks: the first version of this used a
+    // softplus, which is asymptotic rather than exact and therefore wrong
+    // everywhere — at a cap-to-knee ratio of 2 it returned −12.7% of the cap
+    // where it should have returned zero, so with a 900 ms horizon and a 450 ms
+    // knee the lead came out at −57 ms at zero evidence age and the display sat
+    // a fifth of a word BEHIND the word just reported. Widening the ratio only
+    // shrank the error; it never removed it.
+    //
+    // The quadratic below matches value and slope at `cap - ease` (slope 1) and
+    // at `cap + ease` (slope 0, value `cap`), so it is C¹ across the whole
+    // range and identical to `min` outside the knee.
+    let lo = cap - ease;
+    if a <= lo {
+        return a;
+    }
+    if a >= cap + ease {
+        return cap;
+    }
+    let u = (a - lo) / (2.0 * ease);
+    lo + 2.0 * ease * (u - u * u / 2.0)
+}
+
 
 #[derive(Debug, Clone)]
 struct Candidate {
@@ -1142,16 +1244,27 @@ impl Engine {
 
     fn snapshot(&mut self, decision: DecisionCode, evidence_ms: f64, now_ms: f64) -> Snapshot {
         self.seq += 1;
-        // Speech is "flowing" only while an open utterance is producing
-        // words. A final means the provider's VAD saw silence: park the
-        // display exactly where the reader stopped. An empty just-opened
-        // item parks too — extrapolating from stale evidence the moment
-        // speechStarted fires would leap the whole horizon at once.
-        let flowing = self
-            .ledger
-            .current_item()
-            .map(|i| !i.is_final)
-            .unwrap_or(false);
+        // How stale the evidence is, which is the only honest way to ask
+        // whether the reader is still going.
+        //
+        // This replaced a binary test on the provider's endpoint flag. A final
+        // means the provider's VAD decided an utterance ended — but it says so
+        // `endpoint_lag_ms` (1.4 s by default) after the last word, and the
+        // display's speed was being set to exactly zero on arrival. So every
+        // sentence boundary produced a full stop in the motion, ordered by an
+        // event describing the past, and the display then had to be
+        // accelerated again from rest by the next partial. That is the
+        // stop-start the presenter feels most directly.
+        //
+        // Staleness answers the same question continuously: if the reader has
+        // genuinely stopped, no new evidence arrives and this grows on its own.
+        // If they are still talking, the next partial resets it and the display
+        // never noticed the endpoint at all.
+        let stale_ms = (now_ms - self.last_evidence_ms).max(0.0);
+        let decay = smoothstep(
+            (stale_ms - self.config.rate_hold_ms) / self.config.rate_decay_ms.max(1.0),
+        );
+        let flowing = decay < 1.0;
         // The gain is applied HERE, on the way out, and not to `self.rate`:
         // the engine's own forward prediction (the local search band) wants the
         // reader's true pace, while the display wants a deliberately cautious
@@ -1162,8 +1275,9 @@ impl Engine {
         let fast_mix = ((self.rate - self.config.rate_default) / gain_span).clamp(0.0, 1.0);
         let display_gain = self.config.prediction_gain
             + (self.config.prediction_gain_fast - self.config.prediction_gain) * fast_mix;
-        let rate = match self.state {
-            TrackingState::Following if flowing => self.rate * display_gain,
+        let following = matches!(self.state, TrackingState::Following);
+        let rate = match (following, flowing) {
+            (true, true) => self.rate * display_gain * (1.0 - decay),
             _ => 0.0,
         };
         Snapshot {
@@ -1179,6 +1293,10 @@ impl Engine {
             pause_onset_ms: self.config.pause_onset_ms,
             lead_floor_ms: self.config.lead_floor_ms,
             max_lead_atoms: self.config.max_lead_atoms,
+            lead_margin_atoms: self.config.lead_margin_atoms,
+            lead_ease_ms: self.config.lead_ease_ms,
+            lead_hold_ms: self.config.lead_hold_ms,
+            lead_decay_ms: self.config.lead_decay_ms,
             display_limit: self.script.prediction_ceiling(self.observed),
             confidence: self.confidence,
             suggestion: self.pending_jump.as_ref().map(|p| p.target as f64),

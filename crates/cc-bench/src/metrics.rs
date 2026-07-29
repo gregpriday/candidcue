@@ -74,6 +74,38 @@ const AHEAD_EVENT_SUSTAIN_MS: f64 = 300.0;
 /// a figure at the instant it is spoken. 1.5 s is the same window the recovery
 /// metrics use to decide a lock has held.
 const SPAN_TAIL_MS: f64 = 1_500.0;
+/// ---------------------------------------------------------------------------
+/// Smoothness: how the display MOVES, not where it ends up.
+/// ---------------------------------------------------------------------------
+/// Every knob in the engine was tuned against the accuracy and overshoot
+/// numbers above, which score the display's POSITION at each sample and say
+/// nothing at all about the path it took to get there. A display that crawls
+/// at a third of the reader's pace and then steps forward once a second scores
+/// identically to one that glides — same positions, same errors — and only one
+/// of them is watchable. These counters score the derivative.
+///
+/// Measured on the same 50 ms grid, gated on the reader actually SPEAKING and
+/// on-script: a stopped display while the reader is silent is correct, and
+/// pooling those samples in would swamp the signal with legitimate rest.
+/// Intervals spanning a display jump are excluded — a relocation is a
+/// deliberate discontinuity with its own metrics, not a symptom of jerk.
+/// Below this the display is not moving (atoms/second).
+const STATIONARY_ATOMS_S: f64 = 0.05;
+/// A stall is the display dropping below this fraction of THE READER'S pace
+/// and staying there — the "it keeps hesitating" complaint.
+///
+/// Referenced to the run's MEAN display speed, which is the reader: over a
+/// speaking stretch the display must average the reader's pace or it would
+/// fall arbitrarily behind. Referencing the median instead — the display's own
+/// typical speed — makes the row meaningless across configurations, because a
+/// config that crawls has a low median and its crawl never dips below its own
+/// floor. Measured that way a display moving at a third of reading pace scored
+/// 1.8 stalls/min and one moving *with* the reader scored 39, which is exactly
+/// backwards.
+const STALL_FRACTION: f64 = 0.2;
+/// …for at least this long. Three samples: shorter than this is a sampling
+/// artefact, longer and the eye has already noticed.
+const STALL_SUSTAIN_MS: f64 = 150.0;
 /// Recovery: locked when |err| ≤ 3, and stays ≤ 5 for the sustain window.
 const RECOVER_HIT_ATOMS: f64 = 3.0;
 const RECOVER_HOLD_ATOMS: f64 = 5.0;
@@ -158,6 +190,40 @@ pub struct RunMetrics {
     pub span_within2: usize,
     #[serde(default)]
     pub span_within5: usize,
+
+    /// ---- smoothness (see the constants) ----
+    /// Sample intervals scored for motion: on-script, speaking, no jump.
+    #[serde(default)]
+    pub motion_eligible: usize,
+    /// …of which the display was not moving at all.
+    #[serde(default)]
+    pub motion_stationary: usize,
+    /// % of speaking time the display sat still. The single most legible
+    /// smoothness number: it is the stop half of stop-start.
+    #[serde(default)]
+    pub stationary_pct: f64,
+    /// Display speed while the reader speaks (atoms/second). A system moving
+    /// WITH the reader has these three close together; the spread between
+    /// p10 and p90 is the surge-and-crawl amplitude.
+    #[serde(default)]
+    pub vel_p10: f64,
+    #[serde(default)]
+    pub vel_p50: f64,
+    #[serde(default)]
+    pub vel_p90: f64,
+    /// Coefficient of variation of that speed (σ/μ). Scale-free, so it
+    /// compares across readers and scripts; 0 is a perfectly steady glide.
+    #[serde(default)]
+    pub vel_cov: f64,
+    /// Distinct hesitations: speed under `STALL_FRACTION` of the run median,
+    /// held `STALL_SUSTAIN_MS`. "The number of times it paused on me."
+    #[serde(default)]
+    pub stalls: u32,
+    /// P95 of |change in speed| between adjacent samples (atoms/s per sample)
+    /// — the size of the steps the plant has to absorb. This is the metric
+    /// that moves when the display stops being fed a once-a-second correction.
+    #[serde(default)]
+    pub surge_p95: f64,
 }
 
 /// Raw per-sample data kept for suite-level pooling (not serialised).
@@ -172,6 +238,10 @@ pub struct RunSamples {
     pub ahead: Vec<f64>,
     /// Absolute error at samples inside a re-spelling window.
     pub span_abs: Vec<f64>,
+    /// Display speed (atoms/second) over each motion-eligible interval, so the
+    /// suite can pool a distribution across runs instead of averaging
+    /// per-run percentiles.
+    pub velocity: Vec<f64>,
 }
 
 pub struct RunEval {
@@ -372,6 +442,15 @@ pub fn evaluate(
     // Furthest word the reader has ever finished — the fade frontier's ceiling.
     let mut heard_max = f64::NEG_INFINITY;
 
+    // Motion sampling runs on its own cursor because it needs the PREVIOUS
+    // sample to have been eligible too — a velocity computed across the moment
+    // the reader started speaking measures the boundary, not the motion.
+    // (t, display) of the last motion-eligible sample; None breaks the chain.
+    let mut motion_prev: Option<(f64, f64)> = None;
+    // (t, atoms/second) per eligible interval. Stalls need the run median, so
+    // they are found in a second pass once the median exists.
+    let mut velocity_series: Vec<(f64, f64)> = Vec::new();
+
     let mut display_prev_sample: Option<(f64, f64)> = None; // (t, display)
     // (t, signed delta, |display − gold| right after the jump)
     let mut display_jumps: Vec<(f64, f64, f64)> = Vec::new();
@@ -393,6 +472,24 @@ pub fn evaluate(
             }
         }
         display_prev_sample = Some((t, display));
+
+        // ---- smoothness: the derivative of the path ----
+        if point.on_script && point.speaking && t >= accuracy_from_ms {
+            if let Some((pt, pd)) = motion_prev {
+                let dt_ms = t - pt;
+                let delta = display - pd;
+                // Adjacent grid samples only, and never across a relocation:
+                // a jump is a deliberate discontinuity that `false_jumps` and
+                // the recovery metrics already own, and folding it in here
+                // would report a 200 atoms/second "surge" as jerk.
+                if (dt_ms - SAMPLE_MS).abs() < 1.0 && delta.abs() <= JUMP_ATOMS {
+                    velocity_series.push((t, delta * 1000.0 / dt_ms));
+                }
+            }
+            motion_prev = Some((t, display));
+        } else {
+            motion_prev = None;
+        }
 
         // Inside the window after a gold discontinuity the engine is entitled
         // to be wrong: accepting a jump takes evidence and persistence rounds
@@ -526,6 +623,53 @@ pub fn evaluate(
         t += SAMPLE_MS;
     }
 
+    // ---- smoothness ----
+    // Second pass: a stall is defined relative to the run's own median pace,
+    // which does not exist until the whole series does.
+    let mut stalls = 0u32;
+    let mut motion_stationary = 0usize;
+    let mut surge_p95 = 0.0;
+    let vel_median = percentile(
+        &mut velocity_series.iter().map(|(_, v)| *v).collect::<Vec<_>>(),
+        50.0,
+    );
+    if !velocity_series.is_empty() {
+        let floor = mean(&velocity_series.iter().map(|(_, v)| *v).collect::<Vec<_>>())
+            * STALL_FRACTION;
+        let mut stall_run_ms = 0.0;
+        let mut in_stall = false;
+        let mut prev: Option<(f64, f64)> = None;
+        let mut surges: Vec<f64> = Vec::new();
+        for &(vt, v) in &velocity_series {
+            if v < STATIONARY_ATOMS_S {
+                motion_stationary += 1;
+            }
+            // A run of samples is only a sustained stall if the samples are
+            // actually adjacent; a gap means the reader stopped speaking in
+            // between, and rest is not a stall.
+            let contiguous = prev.is_some_and(|(pt, _)| (vt - pt - SAMPLE_MS).abs() < 1.0);
+            if !contiguous {
+                stall_run_ms = 0.0;
+                in_stall = false;
+            } else if let Some((_, pv)) = prev {
+                surges.push((v - pv).abs());
+            }
+            if v < floor {
+                stall_run_ms += SAMPLE_MS;
+                if stall_run_ms >= STALL_SUSTAIN_MS && !in_stall {
+                    stalls += 1;
+                    in_stall = true;
+                }
+            } else {
+                stall_run_ms = 0.0;
+                in_stall = false;
+            }
+            prev = Some((vt, v));
+        }
+        surge_p95 = percentile(&mut surges, 95.0);
+    }
+    samples.velocity = velocity_series.iter().map(|(_, v)| *v).collect();
+
     // ---- false jumps ----
     // A display jump is legitimate if (a) it lands close to where the reader
     // actually is — a LATE jump to the RIGHT place is a recovery-speed
@@ -618,6 +762,29 @@ pub fn evaluate(
     m.span_eligible = span_eligible;
     m.span_within2 = span_within2;
     m.span_within5 = span_within5;
+    m.motion_eligible = samples.velocity.len();
+    m.motion_stationary = motion_stationary;
+    m.stationary_pct = pct(motion_stationary, samples.velocity.len());
+    m.vel_p10 = percentile(&mut samples.velocity.clone(), 10.0);
+    m.vel_p50 = vel_median;
+    m.vel_p90 = percentile(&mut samples.velocity.clone(), 90.0);
+    m.vel_cov = {
+        let mu = mean(&samples.velocity);
+        if mu.abs() < f64::EPSILON {
+            0.0
+        } else {
+            let var = mean(
+                &samples
+                    .velocity
+                    .iter()
+                    .map(|v| (v - mu).powi(2))
+                    .collect::<Vec<_>>(),
+            );
+            var.sqrt() / mu
+        }
+    };
+    m.stalls = stalls;
+    m.surge_p95 = surge_p95;
     m.event_count = replay.event_us.len();
     m.mean_event_us = mean(&replay.event_us.iter().map(|v| *v as f64).collect::<Vec<_>>());
     m.p95_event_us = {
@@ -643,7 +810,7 @@ fn pct(hit: usize, total: usize) -> f64 {
     }
 }
 
-fn mean(v: &[f64]) -> f64 {
+pub fn mean(v: &[f64]) -> f64 {
     if v.is_empty() {
         0.0
     } else {

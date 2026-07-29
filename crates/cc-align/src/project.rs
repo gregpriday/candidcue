@@ -85,6 +85,12 @@ pub struct TokenSnapshot {
     pub pause_onset_ms: f64,
     pub lead_floor_ms: f64,
     pub max_lead_tokens: f64,
+    /// Distance the display sits behind its estimate while flowing, in tokens.
+    pub lead_margin_tokens: f64,
+    /// Corner-rounding widths for the lead profile — see `Snapshot::display_at`.
+    pub lead_ease_ms: f64,
+    pub lead_hold_ms: f64,
+    pub lead_decay_ms: f64,
     pub display_limit_token: f64,
     pub confidence: f64,
     pub suggestion_token: Option<f64>,
@@ -110,30 +116,33 @@ pub fn project_to_tokens(
 ) -> TokenSnapshot {
     let observed_token = script.token_at(snapshot.observed);
     let horizon_seconds = snapshot.max_prediction_ms / 1000.0;
-    let rate_tokens_per_second = if snapshot.rate > 0.0 && horizon_seconds > 0.0 {
-        /*
-         * Divide by the time the engine would ACTUALLY take to cover the
-         * distance, not by the whole horizon.
-         *
-         * Near the end of the script the far endpoint clamps to `script_len`,
-         * and dividing that shortened distance by the full horizon reports a
-         * rate far below the truth: at 2 atoms/s with one atom left and a 2 s
-         * horizon it says 0.5 tokens/s, so the display crawls the last word
-         * over four times as long as the reader takes to say it. Clamping the
-         * TIME as well keeps the endpoint and the pace honest together.
-         */
-        let unclamped_far = snapshot.observed + snapshot.rate * horizon_seconds;
+    /*
+     * Divide by the time the engine would ACTUALLY take to cover the
+     * distance, not by the whole horizon.
+     *
+     * Near the end of the script the far endpoint clamps to `script_len`,
+     * and dividing that shortened distance by the full horizon reports a
+     * rate far below the truth: at 2 atoms/s with one atom left and a 2 s
+     * horizon it says 0.5 tokens/s, so the display crawls the last word
+     * over four times as long as the reader takes to say it. Clamping the
+     * TIME as well keeps the endpoint and the pace honest together.
+     */
+    let project_rate = |rate_atoms: f64| -> f64 {
+        if !(rate_atoms > 0.0) || !(horizon_seconds > 0.0) {
+            // Already zeroed by the engine whenever extrapolating would be a
+            // guess.
+            return 0.0;
+        }
+        let unclamped_far = snapshot.observed + rate_atoms * horizon_seconds;
         let far_atom = unclamped_far.min(snapshot.script_len);
         let seconds = if unclamped_far > snapshot.script_len {
-            ((snapshot.script_len - snapshot.observed) / snapshot.rate).max(f64::EPSILON)
+            ((snapshot.script_len - snapshot.observed) / rate_atoms).max(f64::EPSILON)
         } else {
             horizon_seconds
         };
         (script.token_at(far_atom) - observed_token) / seconds
-    } else {
-        // Already zeroed by the engine whenever extrapolating would be a guess.
-        0.0
     };
+    let rate_tokens_per_second = project_rate(snapshot.rate);
 
     TokenSnapshot {
         session_generation: generation,
@@ -153,6 +162,11 @@ pub fn project_to_tokens(
         // token the engine meant even where a token expands into several atoms.
         max_lead_tokens: script.token_at(snapshot.observed + snapshot.max_lead_atoms)
             - observed_token,
+        lead_margin_tokens: script.token_at(snapshot.observed + snapshot.lead_margin_atoms)
+            - observed_token,
+        lead_ease_ms: snapshot.lead_ease_ms,
+        lead_hold_ms: snapshot.lead_hold_ms,
+        lead_decay_ms: snapshot.lead_decay_ms,
         display_limit_token: script.token_at(snapshot.display_limit),
         confidence: snapshot.confidence,
         suggestion_token: snapshot.suggestion.map(|a| script.token_at(a)),

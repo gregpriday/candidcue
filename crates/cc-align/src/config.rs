@@ -151,6 +151,63 @@ pub struct AlignmentConfig {
     /// silently grows in the one situation it exists to contain.
     pub max_lead_atoms: f64,
 
+    // ---- motion shape ----
+    // Everything above decides WHERE the display may be. These decide how it
+    // gets there. The lead profile used to be piecewise linear: a 1:1 rise, a
+    // corner at `pause_onset_ms` where the slope flipped from +rate to −rate,
+    // and a hard `min()` against `max_lead_atoms`. Position was continuous at
+    // all three, and velocity was continuous at none of them — every one is an
+    // instantaneous change of speed that the plant can only absorb by
+    // accelerating hard and then decelerating, which is what "it moves in a
+    // jerk and then a jerk" is. These widths round the corners off.
+    /// How far behind its own estimate the display deliberately sits while the
+    /// reader is flowing, in atoms.
+    ///
+    /// This is the knob that lets caution be bought WITHOUT buying jerk, and it
+    /// exists because the two were the same knob for a long time.
+    /// `prediction_gain` cannot separate them: the display's position is
+    /// `observed + gain·pace·age`, so between transcript events it travels at
+    /// `gain × pace`, and when the next event lands `observed` jumps by the
+    /// reader's real progress while `age` resets. The step that lands on the
+    /// display is therefore exactly `(1 − gain)·pace·Δt` — rigidly tied to the
+    /// gain, and zero only when the gain is 1. A conservative gain does not
+    /// make the display careful; it makes the display crawl and then jump.
+    ///
+    /// A margin is subtracted instead. At gain 1 the display travels at the
+    /// reader's pace — continuous, no step at the event boundary — and sits
+    /// this far behind where that estimate says the reader is. Same caution,
+    /// expressed as a distance rather than as a permanent reduction in speed.
+    ///
+    /// It fades out through the same settle the lead does, so the display still
+    /// comes to rest ON the last word actually heard rather than a word before
+    /// it.
+    pub lead_margin_atoms: f64,
+    /// Width of the knee where a limit is approached (ms of lead time, and
+    /// scaled for the atom cap). The display eases into a bound over this
+    /// window instead of arriving at it at full speed and stopping dead.
+    /// Zero restores the old hard corners exactly.
+    pub lead_ease_ms: f64,
+    /// How long the lead holds at its plateau past `pause_onset_ms` before it
+    /// begins easing back toward `lead_floor_ms`. The old profile began
+    /// reversing the instant it reached the onset, so an ordinary long gap
+    /// between partials read as a pause and stopped the display dead — the
+    /// descending limb cannot move the display backward (the plant refuses),
+    /// so it simply parks it.
+    pub lead_hold_ms: f64,
+    /// How long that ease back to the floor takes.
+    pub lead_decay_ms: f64,
+    /// How long the reader's pace estimate stays at full strength after the
+    /// last evidence, before decaying toward zero over `rate_decay_ms`.
+    ///
+    /// This replaced a binary gate on the provider's endpoint: the display's
+    /// speed used to become exactly zero the moment an utterance was marked
+    /// final, which is an event that — at `endpoint_lag_ms` — describes what
+    /// the reader was doing 1.4 s ago. Silence is a thing you infer from the
+    /// clock, not a thing the recogniser announces.
+    pub rate_hold_ms: f64,
+    /// Time constant of that decay.
+    pub rate_decay_ms: f64,
+
     // ---- evidence timing ----
     /// Residual lag correction applied to evidence time after the ledger's
     /// per-timestamp corrections (ms).
@@ -210,6 +267,18 @@ impl AlignmentConfig {
         self.lead_floor_ms = self.lead_floor_ms.max(0.0);
         fix(&mut self.max_lead_atoms, d.max_lead_atoms);
         self.max_lead_atoms = self.max_lead_atoms.max(0.0);
+        fix(&mut self.lead_margin_atoms, d.lead_margin_atoms);
+        self.lead_margin_atoms = self.lead_margin_atoms.max(0.0);
+        fix(&mut self.lead_ease_ms, d.lead_ease_ms);
+        self.lead_ease_ms = self.lead_ease_ms.max(0.0);
+        fix(&mut self.lead_hold_ms, d.lead_hold_ms);
+        self.lead_hold_ms = self.lead_hold_ms.max(0.0);
+        fix(&mut self.lead_decay_ms, d.lead_decay_ms);
+        self.lead_decay_ms = self.lead_decay_ms.max(0.0);
+        fix(&mut self.rate_hold_ms, d.rate_hold_ms);
+        self.rate_hold_ms = self.rate_hold_ms.max(0.0);
+        fix(&mut self.rate_decay_ms, d.rate_decay_ms);
+        self.rate_decay_ms = self.rate_decay_ms.max(0.0);
         fix(&mut self.prediction_gain, d.prediction_gain);
         self.prediction_gain = self.prediction_gain.clamp(0.0, 1.0);
         fix(&mut self.prediction_gain_fast, d.prediction_gain_fast);
@@ -296,9 +365,9 @@ impl Default for AlignmentConfig {
             rate_default: 2.8,
             rate_min: 0.5,
             rate_max: 7.0,
-            max_prediction_ms: 1800.0,
+            max_prediction_ms: 2400.0,
             coast_ms: 300.0,
-            pause_onset_ms: 1800.0,
+            pause_onset_ms: 2400.0,
             lead_floor_ms: 0.0,
             // 0.35 → 0.33 alongside custom vocabulary. A cleaner transcript
             // makes the engine more willing to extrapolate, and this is the
@@ -314,10 +383,49 @@ impl Default for AlignmentConfig {
             // it exists for pipeline delay at pace, it was tuned against its
             // own benchmarks, and four runs is not evidence enough to overrule
             // that.
-            prediction_gain: 0.33,
-            prediction_gain_fast: 0.55,
+            // 0.33 → 0.55, which is simply `prediction_gain_fast`: the slow and
+            // ordinary paths now use the gain that was already tuned and
+            // accepted for the fast one, and the interpolation between them no
+            // longer does anything until `prediction_gain_fast` is changed.
+            //
+            // The conservative gain was costing far more than it looked. It is
+            // the slope of the display's position between transcript events, so
+            // at 0.33 the display travelled at a third of reading pace and took
+            // the rest of each second's distance in a step — measured on the
+            // clean suite, a mean speed of 2.44 atoms/s (which is the reader)
+            // against a median of 0.83 (which is the reader times the gain),
+            // with a P95 step of 23 atoms/s. It was also costing accuracy, not
+            // just comfort: `clean_within2` 53.8% → 75.1%.
+            //
+            // 0.55 is the knee, and the knee is sharp. 0.65 takes
+            // `ahead_events` from 2 to 27 and 0.90 takes it to 72; 0.55 leaves
+            // it at 2 against a baseline of 1, with `ahead_p95` still NEGATIVE
+            // (−0.296) — the display still trails the reader at the 95th
+            // percentile, which is the invariant this engine exists to hold.
+            prediction_gain: 1.0,
+            prediction_gain_fast: 1.0,
             prediction_gain_fast_rate: 3.7,
-            max_lead_atoms: 2.5,
+            // 2.5 → 3.0. At the old gain the cap could not bind (2.5 atoms at
+            // 0.83 atoms/s needs 2.7 s and the profile turns over at 1.8 s), so
+            // it was inert; at an honest gain it becomes the binding constraint
+            // and the display arrives at it mid-sentence. 3.0 keeps it just
+            // clear of ordinary reading while still bounding the damage when
+            // the rate estimate is wrong.
+            max_lead_atoms: 4.5,
+
+            // Every one of these three is a SAFETY knob as much as a comfort
+            // one, which is not obvious and is worth stating: they decide how
+            // long the display holds its lead before conceding the reader has
+            // stopped. Narrowing the knee to 250 ms took `ahead_events` from 2
+            // to 30; holding the plateau for 400 ms took it from 2 to 24. Tune
+            // them against `overshoot.*` and `pause_overshoot_p95`, never
+            // against the smoothness rows alone.
+            lead_margin_atoms: 2.2,
+            lead_ease_ms: 450.0,
+            lead_hold_ms: 0.0,
+            lead_decay_ms: 1200.0,
+            rate_hold_ms: 1600.0,
+            rate_decay_ms: 900.0,
 
             emission_lag_ms: 0.0,
             partial_lag_ms: 300.0,

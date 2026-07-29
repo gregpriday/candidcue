@@ -207,15 +207,19 @@ describe('the re-grab travels at reading speed', () => {
   it('closes the gap without ever running at the following ceiling', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
-    const settled = settle(engine, 3000);
+    // 12 s, not 3: `settled` is the reference the re-grab is judged against, so
+    // it has to be the plant's true resting place. An overdamped ω=2 controller
+    // is still short of it at 3 s, and the assertion then reads as the re-grab
+    // missing by exactly that shortfall.
+    const settled = settle(engine, 12_000);
 
     // Scrolled back four lines or so — a re-read, the commonest gesture there
     // is on a prompter.
     const moved = settled - map.linePitchPx * 4;
-    engine.manualOverride(moved, 3000);
-    coast(engine, 3000, 4000);
+    engine.manualOverride(moved, 12_000);
+    coast(engine, 12_000, 13_000);
 
-    const trace = speak(engine, 4000, 8000, 12);
+    const trace = speak(engine, 13_000, 25_000, 12);
     const peak = Math.max(...trace.map((f) => Math.abs(f.velocityPxS)));
 
     /*
@@ -236,7 +240,11 @@ describe('the re-grab travels at reading speed', () => {
   it('walks backward to meet a presenter who scrolled ahead and read on', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
-    const settled = settle(engine, 3000);
+    // 12 s, not 3: `settled` is the REFERENCE the re-grab is judged against, so
+    // it has to be the plant's true resting place. An overdamped ω=2 controller
+    // is still a pixel or two short at 3 s, and the whole assertion then reads
+    // as the re-grab missing by exactly that much.
+    const settled = settle(engine, 12_000);
 
     /*
      * The mirror case, and the one ordinary following cannot answer at all:
@@ -245,10 +253,13 @@ describe('the re-grab travels at reading speed', () => {
      * own progress caught up with where they had scrolled to.
      */
     const moved = settled + map.linePitchPx * 3;
-    engine.manualOverride(moved, 3000);
-    coast(engine, 3000, 4000);
+    engine.manualOverride(moved, 12_000);
+    coast(engine, 12_000, 13_000);
 
-    speak(engine, 4000, 8000, 12);
+    // Longer than it used to need: ω dropped from 6.5 to 2.0, so the same
+    // journey is walked at the same speed but eased into and out of. What is
+    // asserted is that the re-grab ARRIVES, not how long it takes.
+    speak(engine, 13_000, 27_000, 12);
     expect(engine.controller.state.q).toBeLessThan(moved - map.linePitchPx);
     expect(Math.abs(engine.controller.state.q - settled)).toBeLessThan(map.linePitchPx * 0.5);
   });
@@ -321,15 +332,17 @@ describe('a long backward re-grab arrives', () => {
      */
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
-    const settled = settle(engine, 3000);
+    // See the note on the other re-grab: `settled` must be the true resting
+    // place, or the gap being measured includes the settle's own shortfall.
+    const settled = settle(engine, 12_000);
 
     const gapPx = 500;
     expect(gapPx).toBeGreaterThan(DEFAULT_PROFILE.motion.reverseTravelMaxPx);
 
     // Scrolled forward, so closing the gap means travelling BACKWARD.
-    engine.manualOverride(settled + gapPx, 3000);
-    coast(engine, 3000, 4000);
-    speak(engine, 4000, 12_000, 12);
+    engine.manualOverride(settled + gapPx, 12_000);
+    coast(engine, 12_000, 13_000);
+    speak(engine, 13_000, 33_000, 12);
 
     expect(Math.abs(engine.controller.state.q - settled)).toBeLessThan(map.linePitchPx * 0.5);
   });
@@ -417,13 +430,17 @@ describe('switching following off holds the document', () => {
   it('stops automatic motion without stopping the frame loop', () => {
     const { map, layout } = mapFor();
     const engine = makeEngine(map, layout.contentHeightPx);
-    settle(engine, 3000);
+    // Settled for long enough that the plant is genuinely AT REST before the
+    // pause: an overdamped ω=2 controller still carries a little velocity at
+    // 3 s, and this test is about the pause holding the document, not about
+    // residual momentum coasting a pixel or two after it.
+    settle(engine, 12_000);
 
     engine.setPaused(true);
     const parked = engine.controller.state.q;
     // The tracker carries on reporting — transcription stays connected when
     // following is switched off (§48) — and none of it moves the document.
-    const trace = speak(engine, 3000, 7000, 60);
+    const trace = speak(engine, 12_000, 16_000, 60);
     expect(engine.controller.state.q).toBeCloseTo(parked, 1);
     expect(trace.every((f) => f.controllerState.includes('manual'))).toBe(true);
   });

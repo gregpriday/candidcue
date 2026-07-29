@@ -235,7 +235,10 @@ describe('holding and degraded operation (§62, §32)', () => {
     engine.setLineMap(map);
     engine.setBounds(0, layout.contentHeightPx);
     let last = engine.frame(500);
-    for (let t = 500; t < 5000; t += 16.7) last = engine.frame(t);
+    // Long enough for an overdamped ω=2 controller to settle: the assertion is
+    // that the fallback is resumed and ARRIVES, not how fast the plant closes
+    // the last few pixels of a 2 000 px approach.
+    for (let t = 500; t < 15_000; t += 16.7) last = engine.frame(t);
     expect(last.source).toBe('fallback');
     expect(last.scrollPx).toBeCloseTo(2000, 0);
   });
@@ -305,7 +308,7 @@ describe('holding and degraded operation (§62, §32)', () => {
 
     // Past the staleness threshold the feed is treated as gone.
     let last = engine.frame(20_000);
-    for (let t = 20_000; t < 24_000; t += 16.7) last = engine.frame(t);
+    for (let t = 20_000; t < 34_000; t += 16.7) last = engine.frame(t);
     expect(last.source).toBe('fallback');
     expect(last.scrollPx).toBeCloseTo(2000, 0);
   });
@@ -539,7 +542,11 @@ describe('forward target latch (§70.5)', () => {
     // where the document sits. Forward-only following can never close that.
     let firstReanchorAtMs: number | null = null;
     let last = engine.frame(4000);
-    for (let t = 4016; t < 8000; t += 16.7) {
+    // Long enough for the overdamped plant to settle onto the re-anchored
+    // position. The assertions are that ONE re-anchor is spent, that it waits
+    // out the persistence window, and that the document ends up where the
+    // presenter is — none of which is a claim about settling time.
+    for (let t = 4016; t < 24_000; t += 16.7) {
       engine.receiveSnapshot(
         snapshotAt(trueUnit, t, { rateTokensPerSecond: 3 }),
         t,
@@ -851,7 +858,7 @@ describe('visual-block spans (§8.6)', () => {
     const engine = makeEngine(map, layout.contentHeightPx);
     const inside = ((span?.unitStart ?? 0) + (span?.unitEnd ?? 1)) / 2;
     let last = engine.frame(0);
-    for (let t = 0; t < 2500; t += 16.7) {
+    for (let t = 0; t < 8000; t += 16.7) {
       engine.receiveSnapshot(
         snapshotAt(inside, t, { rateTokensPerSecond: 0.2 }),
         t,

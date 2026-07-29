@@ -116,6 +116,15 @@ function speakingAt(
     pauseOnsetMs: 1800,
     leadFloorMs: 550,
     maxLeadTokens: 2.5,
+    // Zero, because this file measures the display's LEAD OVER ITS TARGET and
+    // the margin moves the target. A shipped 1.2-token margin puts the target
+    // 1.2 tokens further back, so the very same rendered position reads as 1.2
+    // tokens more overrun — 64 px of real lead scored as 76.8 — and a test
+    // named after the §30.3 ceiling would be failing on the margin instead.
+    leadMarginTokens: 0,
+    leadEaseMs: 450,
+    leadHoldMs: 0,
+    leadDecayMs: 1200,
     displayLimitToken: 10_000,
     confidence: 0.92,
     suggestionToken: null,
