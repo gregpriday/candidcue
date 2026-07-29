@@ -152,7 +152,7 @@ function shimBody(config: ShimConfig): void {
         blankColor: '#000000',
       },
       audio: {
-        transcriptionModel: 'streaming-zipformer-en-20M-int8',
+        transcriptionModel: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
         // A full BCP-47 tag, as the app's own default is and as Rust validates:
         // a bare 'en' here made a take that faithfully carried the setting look
         // like one that had dropped the region.
@@ -498,7 +498,7 @@ function shimBody(config: ShimConfig): void {
           config.engineStatus ?? {
             available: true,
             loaded: true,
-            model: 'streaming-zipformer-en-20M-int8',
+            model: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
           }
         );
 

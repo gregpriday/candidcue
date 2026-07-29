@@ -61,7 +61,7 @@
     "active": true,
     "targets": "all",
     "resources": [
-      "models/zipformer-en-20m/"
+      "models/x-asr-480ms/"
     ],
     "icon": [
       "icons/32x32.png",

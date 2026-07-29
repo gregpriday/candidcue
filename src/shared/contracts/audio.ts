@@ -54,7 +54,7 @@ export interface AudioLevelSnapshot {
  * that only fed the semantic filter. Neither has a consumer now.
  */
 export interface TranscriptionConfig {
-  /** The bundled recogniser's name, e.g. `streaming-zipformer-en-20M-int8`. */
+  /** The bundled recogniser's name, e.g. `x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05`. */
   model: string;
   /** BCP-47 tag, e.g. `en-US`. */
   language?: string;

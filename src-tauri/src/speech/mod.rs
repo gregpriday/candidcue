@@ -8,19 +8,19 @@
 //! of failure — a revoked key, a dropped socket, a reconnect loop — that lands
 //! in the middle of a take and cannot be recovered from on stage.
 //!
-//! A streaming Zipformer transducer runs the same job in ~43 MB of model files
-//! on the presenter's own machine, roughly 16× faster than real time on a
-//! single thread. There is no key to hold, no socket to supervise, and no
-//! reason a take can fail that is not visible on the machine it runs on.
+//! A streaming Zipformer transducer runs the same job on the presenter's own
+//! machine at a real-time factor around 0.03 — a few percent of one core. There
+//! is no key to hold, no socket to supervise, and no reason a take can fail
+//! that is not visible on the machine it runs on.
 //!
 //! ---------------------------------------------------------------------------
 //! WHAT WE GAVE UP, AND WHY IT IS AFFORDABLE
 //! ---------------------------------------------------------------------------
-//! Raw transcription accuracy. The 20M model is meaningfully worse at open
-//! dictation than a hosted large model, and it writes UPPERCASE with no
-//! punctuation.
+//! Some raw transcription accuracy: word error rate is roughly 10.9% against
+//! the hosted service's 6.3% on the benchmark corpus.
 //!
-//! Neither matters much here, because **nothing on the glass is transcribed
+//! That matters much less than it sounds, because **nothing on the glass is
+//! transcribed
 //! text**. The recogniser is a position sensor: the app already knows the
 //! script, and `cc_align` matches a noisy hypothesis against a constrained
 //! window of a document it has compiled. Case and punctuation are normalised
@@ -59,11 +59,11 @@ pub mod session;
 pub const SAMPLE_RATE_HZ: u32 = 24_000;
 
 /// Where the model lives inside the bundle, relative to the resource root.
-pub const MODEL_RESOURCE_DIR: &str = "models/zipformer-en-20m";
+pub const MODEL_RESOURCE_DIR: &str = "models/x-asr-480ms";
 
 /// The recogniser this build ships. Reported to Settings so the app can say
 /// what is doing the listening without pretending there is a choice.
-pub const MODEL_NAME: &str = "streaming-zipformer-en-20M-int8";
+pub const MODEL_NAME: &str = "x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05";
 
 /// Managed state: the loaded model, and the live session if one is running.
 ///

@@ -808,7 +808,10 @@ fn vad_sensitivity_range_accepts_the_whole_slider_and_nothing_beyond() {
 #[test]
 fn an_audio_section_without_a_sensitivity_loads_at_the_neutral_midpoint() {
     let audio: RustAudioSettings = serde_json::from_value(serde_json::json!({
-        "transcriptionModel": "streaming-zipformer-en-20M-int8",
+        // The shipping recogniser, read from the constant rather than typed
+        // out: this test is about the missing VAD field defaulting, and it
+        // should not have to be edited every time the model changes.
+        "transcriptionModel": candidcue_lib::speech::MODEL_NAME,
         "language": "en-US",
         "softPauseAutoDisconnectMinutes": 10,
     }))

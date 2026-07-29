@@ -467,6 +467,54 @@ pub async fn update_settings(
 
 #[cfg(test)]
 mod tests {
+    /// An upgrading installation must not keep claiming a recogniser this
+    /// build cannot run.
+    ///
+    /// The settings document is a JSON blob that survives a provider change,
+    /// and this field has now named three different things: a realtime
+    /// provider's model, then Inworld's, then the bundled recogniser. Twice
+    /// the stale value was forwarded to something that rejected it. It cannot
+    /// be forwarded anywhere any more, but it IS what diagnostics report, and
+    /// a bundle claiming a take was transcribed by a service the build cannot
+    /// reach sends whoever reads it after the wrong problem.
+    #[test]
+    fn a_stale_recogniser_name_is_rewritten_to_the_one_that_ships() {
+        for stale in [
+            "inworld/inworld-stt-1",
+            "gpt-realtime-whisper",
+            "streaming-zipformer-en-20M-int8",
+            "",
+        ] {
+            let mut settings = AppSettings::default();
+            settings.audio.transcription_model = stale.to_string();
+            migrate_in_place(&mut settings);
+            assert_eq!(
+                settings.audio.transcription_model,
+                crate::speech::MODEL_NAME,
+                "{stale:?} must be rewritten"
+            );
+        }
+    }
+
+    /// The bundled recogniser is English-only; earlier builds offered four
+    /// other languages against a hosted service that served them.
+    #[test]
+    fn a_language_the_recogniser_cannot_serve_is_rewritten() {
+        for stale in ["es-ES", "fr-FR", "de-DE", "pt-BR"] {
+            let mut settings = AppSettings::default();
+            settings.audio.language = stale.to_string();
+            migrate_in_place(&mut settings);
+            assert_eq!(settings.audio.language, DEFAULT_LANGUAGE, "{stale} must go");
+        }
+        // An English locale the user chose deliberately is left alone.
+        for kept in ["en-GB", "en-AU", "en-US"] {
+            let mut settings = AppSettings::default();
+            settings.audio.language = kept.to_string();
+            migrate_in_place(&mut settings);
+            assert_eq!(settings.audio.language, kept, "{kept} must survive");
+        }
+    }
+
     use super::*;
 
     #[test]

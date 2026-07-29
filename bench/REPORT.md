@@ -1017,3 +1017,87 @@ The Inworld baseline was swept over the same knobs and is already at its
 optimum — the best alternative config moved `within5` by 0.11 and left
 `first_lock` and `recovery_p95` untouched. The comparison is a tuned
 on-device recogniser against a tuned hosted one, not against a handicapped one.
+
+---
+
+## Model swap: x-asr replaces the 20M Zipformer (2026-07-29)
+
+The 20M model was the smallest streaming Zipformer available and it showed: it
+dropped roughly the first five words of every stream, which is what made
+`first_lock` and `recovery_p95` the two worst metrics of the swap.
+
+`x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05`
+replaces it. On the same 18-run corpus, each recogniser scored with the
+`partial_lag_ms` its own cadence calls for (see below), under main's motion
+model:
+
+| metric | Inworld (hosted) | 20M Zipformer | **x-asr 480 ms** |
+|---|---|---|---|
+| `within5` | 94.69% | 90.11% | **94.03%** |
+| `p95_abs` | 5.12 | 7.91 | **5.43** |
+| `first_lock_p50` | 2.40 s | 2.40 s | **2.00 s** |
+| `ahead_time` | 2.21% | 1.60% | **2.00%** |
+| `freeze` | 3.68% | 5.44% | **3.33%** |
+| `recovery_p95` | 3.40 s | 3.90 s | 3.80 s |
+| `wer` | 6.29% | 20.05% | 10.86% |
+| `false_jumps` / `catastrophic` / `recovery_failures` | 0 / 0 / 0 | 0 / 0 / 0 | **0 / 0 / 0** |
+
+**This is parity with the hosted service.** It finds the reader faster, runs
+ahead less and freezes less; it is 0.66 points behind on `within5` and 0.4 s
+behind on re-lock.
+
+The thing it fixed is visible in the captured event logs. The FIRST STREAMING
+PARTIAL of `starter__exact__gemini`, whose script opens "Hi. If you're reading
+this sentence off the screen right now…":
+
+| | first partial | at |
+|---|---|---|
+| 20M Zipformer | `'S` | 3300 ms |
+| **x-asr** | `Hi` | **1600 ms** |
+
+The 20M model had already thrown away "Hi if you're reading thi" before it
+emitted anything; x-asr has the first word of the script 1.7 s earlier. That is
+`first_lock_p50` 2.40 s -> 2.00 s, in the raw data rather than in aggregate.
+
+It also emits punctuation and true case, so the transcript is displayable for
+the first time.
+
+### Cost
+
+* **161 MB on disk** against 43 MB. The INT8 encoder alone is 148 MB.
+* **RTF 0.033** against 0.017 — still about 3% of one core.
+* Load time 1.25 s against 0.2 s, which is what `preload_speech_engine` is for.
+
+### `partial_lag_ms` is a property of the RECOGNISER
+
+The most transferable lesson of this pass. It corrects for the delay between
+audio arriving and a hypothesis covering it, so it tracks chunk size:
+
+| recogniser | measured partial interval | correct value |
+|---|---|---|
+| Inworld (hosted) | 1000 ms | 300 |
+| streaming-zipformer-en-20M | 300 ms | 0 |
+| x-asr 480 ms (shipping) | 500 ms | 400 |
+
+Leaving it at 0 for x-asr costs `first_lock` 3.80 s against 2.00 s and
+`within5` 91.81 against 94.03. Changing the model without changing this
+constant throws away most of the model.
+
+### Models measured and rejected
+
+* **`streaming-zipformer-en-2023-06-26`** (310 MB, 66M params). Bigger, but
+  trained on LibriSpeech only — the same corpus as the 20M it would replace, so
+  it buys American-English accuracy and nothing at all for the accent risk that
+  is this feature's real exposure.
+* **`streaming-zipformer-en-kroko-2025-08-06`** (57 MB). Attractive size, but
+  documented as taking ~1.5 s before it emits its first token. `first_lock` is
+  the metric this whole pass exists to protect.
+
+### A note on reading `within2` and `p95_abs` after main's motion rework
+
+`lead_margin_atoms: 2.2` parks the display 2.2 atoms behind the reader on
+purpose. That makes `accuracy.clean_within2` structurally unreachable — it
+reads 0.50% at the shipped margin and 98.63% at margin 0, with `within5`
+unmoved at 99.99% either way — and inflates every `p95_abs` by roughly the
+margin. x-asr's `p95_abs` of 5.43 is therefore about 3.2 atoms of real tracking
+error. Neither number is a regression; both are the intended trade.

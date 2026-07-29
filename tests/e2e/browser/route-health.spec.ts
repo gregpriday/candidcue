@@ -46,7 +46,7 @@ test('every control-window route renders and raises nothing', async ({ page }, t
   await installTauriShim(page, {
     welcomed: true,
     seedScripts: [SCRIPT],
-    engineStatus: { available: true, loaded: true, model: 'streaming-zipformer-en-20M-int8' },
+    engineStatus: { available: true, loaded: true, model: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05' },
   });
 
   // Library.
@@ -95,7 +95,7 @@ test('every control-window route renders and raises nothing', async ({ page }, t
 test('the welcome route renders on a first launch and hands off to the library', async ({ page }) => {
   const errors = watchPageErrors(page);
   // No `welcomed` flag: this is a genuine first launch on the production path.
-  await installTauriShim(page, { engineStatus: { available: true, loaded: false, model: 'streaming-zipformer-en-20M-int8' } });
+  await installTauriShim(page, { engineStatus: { available: true, loaded: false, model: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05' } });
   await page.goto('/control.html');
 
   await expect(

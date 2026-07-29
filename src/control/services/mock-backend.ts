@@ -279,7 +279,7 @@ export const mockSpeech = {
    * the only place this can be true or false for a real reason.
    */
   status(): { available: boolean; loaded: boolean; model: string } {
-    return { available: true, loaded: false, model: 'streaming-zipformer-en-20M-int8 (mock)' };
+    return { available: true, loaded: false, model: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05 (mock)' };
   },
 };
 

@@ -111,7 +111,7 @@ function rustSettingsDocument() {
         blankColor: '#000000',
       },
       audio: {
-        transcriptionModel: 'streaming-zipformer-en-20M-int8',
+        transcriptionModel: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
         language: 'en',
         delayProfile: 'balanced',
         softPauseAutoDisconnectMinutes: 5,

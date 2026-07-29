@@ -82,7 +82,9 @@ provider's API key, in the OS keychain — and the recogniser is now bundled, so
 the credential store went with it.
 
 Speech-to-text is `src-tauri/src/speech/`: a sherpa-onnx streaming Zipformer
-(EN 20M, INT8) over ~43 MB of ONNX graphs bundled as a Tauri resource. Renderer
+transducer (x-asr 480 ms, INT8, punctuated) over ~161 MB of ONNX graphs bundled
+as a Tauri resource. `cc_stt::local::ModelFiles::detect` works out how a bundle
+names its graphs — upstream is not consistent and there is no manifest. Renderer
 captures PCM → `push_transcription_audio` over IPC → a dedicated OS thread owns
 the decoder → frames come back as events. The thread is not optional: ONNX
 inference is blocking CPU work, and on the async runtime it would starve every

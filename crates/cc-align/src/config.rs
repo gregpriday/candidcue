@@ -215,7 +215,7 @@ pub struct AlignmentConfig {
     /// How far behind the audio clock the words of a PARTIAL are when it
     /// arrives (ms). Measured against gold word times on live captures.
     ///
-    /// **0 since speech recognition moved on-device.**
+    /// **A PROPERTY OF THE RECOGNISER, and it changes when the model does.**
     ///
     /// This constant is a property of the recogniser's pipeline: the hosted
     /// service put a network round trip and a server-side buffer between the
@@ -223,17 +223,28 @@ pub struct AlignmentConfig {
     /// call that consumed the samples, so a partial's words are current as of
     /// the audio clock and the correction should be ~0.
     ///
-    /// Measured on the Tier-B corpus (`bench/runs-local`), varying nothing
-    /// else: `ahead_time` 7.20% at 300 against 5.22% at 0, `ahead_events` 37
-    /// against 26, `within5` unmoved (92.19 / 92.26). Setting it to 0 recovers
-    /// almost the whole ahead-bias regression the swap introduced — and
-    /// `ahead_*` is the family this product is judged on, because a display
-    /// that LEADS the reader is the failure fade rendering cannot survive.
+    /// It is the observation latency of the recogniser — how far behind the
+    /// audio clock a partial's words are when it arrives. It tracks chunk size
+    /// and encoder depth, so it is NOT simply the emission cadence, and a
+    /// recogniser can perfectly well emit often while every hypothesis is
+    /// several hundred milliseconds old. Measured median partial interval,
+    /// on the same 33-minute corpus:
+    ///
+    /// | recogniser | partial interval | right value |
+    /// |---|---|---|
+    /// | Inworld (hosted) | 1000 ms | 300 |
+    /// | streaming-zipformer-en-20M | 300 ms | 0 |
+    /// | **x-asr 480 ms (shipping)** | **500 ms** | **400** |
+    ///
+    /// Getting it wrong is expensive in both directions and was measured that
+    /// way: on the x-asr corpus, 0 costs `first_lock` 3.80 s against 2.00 s at
+    /// 400 and `within5` 91.81 against 94.03; going further to 600 buys
+    /// nothing and takes `ahead_time` from 2.00% to 3.54%.
     ///
     /// This is not only the app's constant: `cc-bench`'s Tier-A simulator has
     /// a matching `PARTIAL_LAG_MS`, and the two must describe the same
     /// recogniser or Tier A scores the engine against a cadence nothing
-    /// produces. Both were re-based together; see `synthetic.rs`.
+    /// produces. Change both together; see `synthetic.rs`.
     pub partial_lag_ms: f64,
     /// How long after the last word a FINAL arrives (server VAD waits for
     /// silence before committing) (ms).
@@ -448,7 +459,7 @@ impl Default for AlignmentConfig {
             rate_decay_ms: 900.0,
 
             emission_lag_ms: 0.0,
-            partial_lag_ms: 0.0,
+            partial_lag_ms: 400.0,
             endpoint_lag_ms: 1400.0,
 
             viewport_bonus: 0.6,

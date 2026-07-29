@@ -14,11 +14,43 @@ use std::path::PathBuf;
 use cc_stt::local::{LocalRecognizer, LocalSttConfig};
 use cc_stt::SttFrame;
 
+/// Find the bundled model, whichever one this build ships.
+///
+/// Deliberately a SEARCH rather than a hard-coded path. It used to name
+/// `models/zipformer-en-20m` directly, and when the bundled model was replaced
+/// the directory stopped existing — so every test in this file started
+/// skipping and kept reporting success. The one suite that exercises the real
+/// recogniser through the real code path went dark for a whole model swap and
+/// said `ok` the entire time.
 fn model_dir() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../src-tauri/models/zipformer-en-20m");
-    LocalSttConfig::with_model_dir(&dir).validate().ok()?;
-    Some(dir)
+    let models = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/models");
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(&models)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    // Sorted so a machine holding two model bundles picks the same one twice.
+    candidates.sort();
+    candidates
+        .into_iter()
+        .find(|dir| LocalSttConfig::with_model_dir(dir).validate().is_ok())
+}
+
+/// The skip is for a clean clone that has not run `pnpm models:fetch`. On a
+/// machine that HAS fetched a model, skipping silently is the failure this
+/// whole file exists to prevent, so say so loudly enough to be noticed.
+fn require_model() -> Option<PathBuf> {
+    match model_dir() {
+        Some(dir) => Some(dir),
+        None => {
+            eprintln!(
+                "SKIPPING {}: no usable model under src-tauri/models (run `pnpm models:fetch`)",
+                module_path!()
+            );
+            None
+        }
+    }
 }
 
 /// 24 kHz mono PCM16 silence, the app's capture format.
@@ -28,10 +60,7 @@ fn silence_pcm16(ms: usize) -> Vec<u8> {
 
 #[test]
 fn the_bundled_model_loads_and_a_session_closes_cleanly() {
-    let Some(dir) = model_dir() else {
-        eprintln!("skipping: model not fetched (pnpm models:fetch)");
-        return;
-    };
+    let Some(dir) = require_model() else { return };
     let recognizer =
         LocalRecognizer::load(&LocalSttConfig::with_model_dir(dir)).expect("model loads");
 
@@ -57,10 +86,7 @@ fn the_bundled_model_loads_and_a_session_closes_cleanly() {
 
 #[test]
 fn the_audio_clock_counts_what_it_was_given_regardless_of_rate() {
-    let Some(dir) = model_dir() else {
-        eprintln!("skipping: model not fetched (pnpm models:fetch)");
-        return;
-    };
+    let Some(dir) = require_model() else { return };
     let recognizer =
         LocalRecognizer::load(&LocalSttConfig::with_model_dir(dir)).expect("model loads");
 

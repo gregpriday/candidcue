@@ -1,5 +1,6 @@
-# The speech recogniser is ~43 MB of ONNX graphs, fetched by
+# The speech recogniser is ~161 MB of ONNX graphs, fetched by
 # scripts/fetch-stt-model.sh (pnpm models:fetch) rather than committed.
 # Binaries this size are paid for by every clone and every bisect, forever.
 *.onnx
 tokens.txt
+bpe.model

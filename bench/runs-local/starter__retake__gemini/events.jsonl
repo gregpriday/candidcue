@@ -1,199 +1,178 @@
 {"kind":"itemStarted","itemId":"1-0","ordinal":0,"audioStartMs":0.0}
-{"kind":"partial","itemId":"1-0","text":"UD","audioMs":1100.0,"wallMs":1010.122625}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH","audioMs":1400.0,"wallMs":1307.899292}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF","audioMs":2100.0,"wallMs":2010.24975}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU","audioMs":2400.0,"wallMs":2307.75275}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE","audioMs":2700.0,"wallMs":2609.926625}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READ","audioMs":3000.0,"wallMs":2909.501084}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING","audioMs":3300.0,"wallMs":3207.833834}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENT","audioMs":3700.0,"wallMs":3610.46275}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE","audioMs":4000.0,"wallMs":3909.5539590000003}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE","audioMs":4300.0,"wallMs":4209.849459}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCRE","audioMs":4600.0,"wallMs":4508.459334}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT","audioMs":4900.0,"wallMs":4810.403709}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW","audioMs":5300.0,"wallMs":5210.345}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT","audioMs":6200.0,"wallMs":6110.736959}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS","audioMs":6500.0,"wallMs":6410.072459}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EX","audioMs":6900.0,"wallMs":6810.196875}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY","audioMs":7200.0,"wallMs":7109.823209}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE","audioMs":7500.0,"wallMs":7409.577959}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA","audioMs":7800.0,"wallMs":7708.701167}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GO","audioMs":8800.0,"wallMs":8707.173834000001}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING","audioMs":9100.0,"wallMs":9009.925292}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHAT","audioMs":9400.0,"wallMs":9310.250459}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER","audioMs":9700.0,"wallMs":9606.635959}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE","audioMs":10100.0,"wallMs":10007.616125}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEEL","audioMs":10400.0,"wallMs":10308.986125000001}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NA","audioMs":10700.0,"wallMs":10605.98875}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL","audioMs":11000.0,"wallMs":10910.803417000001}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU","audioMs":12000.0,"wallMs":11910.641167}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND","audioMs":13300.0,"wallMs":13209.802749999999}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WAT","audioMs":13600.0,"wallMs":13507.455792}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT","audioMs":13900.0,"wallMs":13810.458667}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TE","audioMs":14200.0,"wallMs":14110.667583999999}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT","audioMs":14500.0,"wallMs":14410.172417}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES","audioMs":14900.0,"wallMs":14807.560667}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS","audioMs":15200.0,"wallMs":15108.753125}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU","audioMs":15500.0,"wallMs":15409.924709}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK","audioMs":15800.0,"wallMs":15709.992292}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK YOU","audioMs":16800.0,"wallMs":16710.270417}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK YOU SHOULD","audioMs":17100.0,"wallMs":17008.019792}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK YOU SHOULD SEE","audioMs":17400.0,"wallMs":17307.347334}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK YOU SHOULD SEE THE LI","audioMs":17700.0,"wallMs":17609.159834}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK YOU SHOULD SEE THE LINE","audioMs":18100.0,"wallMs":18008.081417}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK YOU SHOULD SEE THE LINE YOU ARE ON","audioMs":18400.0,"wallMs":18310.065709}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK YOU SHOULD SEE THE LINE YOU ARE ON STA","audioMs":19000.0,"wallMs":18910.215834}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK YOU SHOULD SEE THE LINE YOU ARE ON STAY RO","audioMs":19300.0,"wallMs":19208.004709}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK YOU SHOULD SEE THE LINE YOU ARE ON STAY ROUGHLY","audioMs":19700.0,"wallMs":19610.369083999998}
-{"kind":"partial","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK YOU SHOULD SEE THE LINE YOU ARE ON STAY ROUGHLY IN THE","audioMs":20000.0,"wallMs":19908.224584}
-{"kind":"final","itemId":"1-0","text":"UD HIGH IF YOU ARE READING THIS SENTENCE OFF THE SCREEN RIGHT NOW THAT IS EXACTLY THE IDEA KEEP GOING AT WHATEVER PACE FEELS NATURAL TO YOU AND WATCH WHAT THE TEXT DOES AS YOU SPEAK YOU SHOULD SEE THE LINE YOU ARE ON STAY ROUGHLY IN THE","audioEndMs":20300.0,"wallMs":20209.739709}
-{"kind":"itemStarted","itemId":"1-1","ordinal":1,"audioStartMs":20300.0}
-{"kind":"partial","itemId":"1-1","text":"E","audioMs":20600.0,"wallMs":20510.229292}
-{"kind":"partial","itemId":"1-1","text":"E MIDD","audioMs":21300.0,"wallMs":21207.910417}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF","audioMs":21600.0,"wallMs":21509.517792}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCRE","audioMs":21900.0,"wallMs":21810.265459}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN","audioMs":22200.0,"wallMs":22110.032459}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORD","audioMs":22900.0,"wallMs":22810.319209}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS","audioMs":23200.0,"wallMs":23109.606667}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHI","audioMs":23500.0,"wallMs":23409.58675}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU","audioMs":23800.0,"wallMs":23710.187792}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE","audioMs":24500.0,"wallMs":24410.138625}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK","audioMs":24800.0,"wallMs":24710.541709}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND","audioMs":25400.0,"wallMs":25308.425084}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORD","audioMs":26700.0,"wallMs":26610.018292}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS","audioMs":27000.0,"wallMs":26909.727417}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD","audioMs":27300.0,"wallMs":27207.539084}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU","audioMs":27700.0,"wallMs":27609.869167}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT","audioMs":28300.0,"wallMs":28210.076334}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND","audioMs":28900.0,"wallMs":28808.190584}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND WAIT","audioMs":29300.0,"wallMs":29208.305249999998}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND WAIT YOU","audioMs":30200.0,"wallMs":30110.528417}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND WAIT YOU SHOULD","audioMs":30500.0,"wallMs":30409.642209}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND WAIT YOU SHOULD NOT","audioMs":30900.0,"wallMs":30810.478541999997}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND WAIT YOU SHOULD NOT HAVE TO","audioMs":31200.0,"wallMs":31110.368625}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND WAIT YOU SHOULD NOT HAVE TO THINK","audioMs":32500.0,"wallMs":32409.329792}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND WAIT YOU SHOULD NOT HAVE TO THINK ABOUT","audioMs":32800.0,"wallMs":32708.288709}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND WAIT YOU SHOULD NOT HAVE TO THINK ABOUT SCROLL","audioMs":33400.0,"wallMs":33307.126209}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND WAIT YOU SHOULD NOT HAVE TO THINK ABOUT SCROLLING","audioMs":33700.0,"wallMs":33607.522542}
-{"kind":"partial","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND WAIT YOU SHOULD NOT HAVE TO THINK ABOUT SCROLLING AT ALL","audioMs":34100.0,"wallMs":34009.809834}
-{"kind":"final","itemId":"1-1","text":"E MIDDLE OF THE SCREEN THE WORDS BEHIND YOU FADE BACK AND WORDS AHEAD OF YOU SIT AND WAIT YOU SHOULD NOT HAVE TO THINK ABOUT SCROLLING AT ALL","audioEndMs":35300.0,"wallMs":35207.589499999995}
-{"kind":"itemStarted","itemId":"1-2","ordinal":2,"audioStartMs":35300.0}
-{"kind":"partial","itemId":"1-2","text":"NOW","audioMs":35700.0,"wallMs":35609.049959}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY","audioMs":36600.0,"wallMs":36510.13}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY S","audioMs":37300.0,"wallMs":37209.836834}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOW","audioMs":37600.0,"wallMs":37509.976959}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING","audioMs":37900.0,"wallMs":37809.697625}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT","audioMs":38500.0,"wallMs":38409.710667}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN","audioMs":39200.0,"wallMs":39106.8905}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR","audioMs":40500.0,"wallMs":40407.706125}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENT","audioMs":40800.0,"wallMs":40710.90525}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE","audioMs":41100.0,"wallMs":41008.004834}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO","audioMs":41400.0,"wallMs":41310.334209}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND","audioMs":42700.0,"wallMs":42607.999874999994}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT","audioMs":43700.0,"wallMs":43610.480292}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A","audioMs":44900.0,"wallMs":44808.721542}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A RE","audioMs":45300.0,"wallMs":45210.27775}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL","audioMs":45600.0,"wallMs":45510.675334}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE","audioMs":45900.0,"wallMs":45805.588417000006}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE","audioMs":46500.0,"wallMs":46409.910959}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDD","audioMs":46900.0,"wallMs":46809.619458999994}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS","audioMs":47200.0,"wallMs":47110.058917}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE","audioMs":47500.0,"wallMs":47407.473750000005}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE","audioMs":48500.0,"wallMs":48406.627917}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT","audioMs":48800.0,"wallMs":48710.048375}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE","audioMs":50100.0,"wallMs":50007.244334}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE","audioMs":51000.0,"wallMs":50907.970417000004}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TE","audioMs":51300.0,"wallMs":51210.160834}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT","audioMs":51700.0,"wallMs":51610.186459}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD","audioMs":52000.0,"wallMs":51910.137}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD EASE","audioMs":52300.0,"wallMs":52209.737167}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD EASE OFF","audioMs":52600.0,"wallMs":52510.141208999994}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD EASE OFF AND","audioMs":52900.0,"wallMs":52810.141292}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD EASE OFF AND WAIT FOR","audioMs":53300.0,"wallMs":53210.146209}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD EASE OFF AND WAIT FOR YOU","audioMs":53600.0,"wallMs":53510.13525}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RA","audioMs":53900.0,"wallMs":53809.888167}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THAN","audioMs":54200.0,"wallMs":54109.603875}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THAN RUN","audioMs":54500.0,"wallMs":54409.694292}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THAN RUNNING A","audioMs":54900.0,"wallMs":54810.335416999995}
-{"kind":"partial","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THAN RUNNING AHEAD","audioMs":55200.0,"wallMs":55109.39125}
-{"kind":"final","itemId":"1-2","text":"NOW TRY SLOWING RIGHT DOWN FOR A SENTENCE OR TWO AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE LIKE THAT THE THE THE THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THAN RUNNING AHEAD","audioEndMs":55500.0,"wallMs":55409.667708999994}
-{"kind":"itemStarted","itemId":"1-3","ordinal":3,"audioStartMs":55500.0}
-{"kind":"partial","itemId":"1-3","text":"THEN","audioMs":56100.0,"wallMs":56007.840084}
-{"kind":"partial","itemId":"1-3","text":"THEN PI","audioMs":56500.0,"wallMs":56407.959209}
-{"kind":"partial","itemId":"1-3","text":"THEN PICK THE","audioMs":56800.0,"wallMs":56710.238625000005}
-{"kind":"partial","itemId":"1-3","text":"THEN PICK THE PACE","audioMs":57100.0,"wallMs":57008.159042}
-{"kind":"partial","itemId":"1-3","text":"THEN PICK THE PACE BACK UP","audioMs":57400.0,"wallMs":57306.178375}
-{"kind":"partial","itemId":"1-3","text":"THEN PICK THE PACE BACK UP AGAIN","audioMs":57700.0,"wallMs":57607.248292000004}
-{"kind":"partial","itemId":"1-3","text":"THEN PICK THE PACE BACK UP AGAIN IT","audioMs":58400.0,"wallMs":58308.410917}
-{"kind":"partial","itemId":"1-3","text":"THEN PICK THE PACE BACK UP AGAIN IT SHOULD CA","audioMs":58700.0,"wallMs":58607.842417}
-{"kind":"partial","itemId":"1-3","text":"THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP","audioMs":59000.0,"wallMs":58909.830875}
-{"kind":"partial","itemId":"1-3","text":"THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMO","audioMs":59300.0,"wallMs":59208.670208999996}
-{"kind":"partial","itemId":"1-3","text":"THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY","audioMs":59700.0,"wallMs":59610.173334}
-{"kind":"final","itemId":"1-3","text":"THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY","audioEndMs":60900.0,"wallMs":60808.915583999995}
-{"kind":"itemStarted","itemId":"1-4","ordinal":4,"audioStartMs":60900.0}
-{"kind":"partial","itemId":"1-4","text":"AND","audioMs":62200.0,"wallMs":62108.758167}
-{"kind":"partial","itemId":"1-4","text":"AND PUT","audioMs":63200.0,"wallMs":63110.024625}
-{"kind":"partial","itemId":"1-4","text":"AND PUT A","audioMs":63500.0,"wallMs":63407.575709}
-{"kind":"partial","itemId":"1-4","text":"AND PUT A RE","audioMs":63800.0,"wallMs":63710.092209}
-{"kind":"partial","itemId":"1-4","text":"AND PUT A REAL","audioMs":64100.0,"wallMs":64010.336709}
-{"kind":"partial","itemId":"1-4","text":"AND PUT A REAL PA","audioMs":64500.0,"wallMs":64406.984124999995}
-{"kind":"partial","itemId":"1-4","text":"AND PUT A REAL PAUSE","audioMs":64800.0,"wallMs":64708.766124999995}
-{"kind":"partial","itemId":"1-4","text":"AND PUT A REAL PAUSE IN THE","audioMs":65100.0,"wallMs":65010.520584000005}
-{"kind":"partial","itemId":"1-4","text":"AND PUT A REAL PAUSE IN THE MIDDLE OF","audioMs":65400.0,"wallMs":65309.27654200001}
-{"kind":"partial","itemId":"1-4","text":"AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE","audioMs":65700.0,"wallMs":65607.965709}
-{"kind":"final","itemId":"1-4","text":"AND PUT A REAL PAUSE IN THE MIDDLE OF THIS ONE","audioEndMs":67000.0,"wallMs":66906.856375}
-{"kind":"itemStarted","itemId":"1-5","ordinal":5,"audioStartMs":67000.0}
-{"kind":"partial","itemId":"1-5","text":"LIKE","audioMs":68600.0,"wallMs":68509.388459}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT","audioMs":69600.0,"wallMs":69509.93979199999}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE","audioMs":69900.0,"wallMs":69810.55012500001}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEX","audioMs":70200.0,"wallMs":70108.202209}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD","audioMs":70500.0,"wallMs":70409.590959}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OF","audioMs":71200.0,"wallMs":71110.0005}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF","audioMs":71500.0,"wallMs":71409.00962499999}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND","audioMs":71800.0,"wallMs":71709.96508400001}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT","audioMs":72100.0,"wallMs":72010.40241699999}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU","audioMs":72500.0,"wallMs":72409.738917}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RA","audioMs":73100.0,"wallMs":73007.572667}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN","audioMs":73400.0,"wallMs":73306.97050000001}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUN","audioMs":74700.0,"wallMs":74609.597459}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING","audioMs":75000.0,"wallMs":74909.600375}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHE","audioMs":75300.0,"wallMs":75207.53083399999}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD","audioMs":75700.0,"wallMs":75607.782959}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN","audioMs":76600.0,"wallMs":76510.134584}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PI","audioMs":76900.0,"wallMs":76809.913584}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE","audioMs":77300.0,"wallMs":77206.13350000001}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE","audioMs":77600.0,"wallMs":77510.193084}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP","audioMs":77900.0,"wallMs":77807.99325}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN","audioMs":78200.0,"wallMs":78109.987292}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT","audioMs":78900.0,"wallMs":78807.48425000001}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CA","audioMs":79200.0,"wallMs":79107.618375}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP","audioMs":79500.0,"wallMs":79407.31358399999}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMO","audioMs":79800.0,"wallMs":79709.891709}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY","audioMs":80100.0,"wallMs":80006.77075}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY WITHOUT","audioMs":81400.0,"wallMs":81309.582792}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY WITHOUT JU","audioMs":81700.0,"wallMs":81607.750709}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY WITHOUT JUMPING","audioMs":82100.0,"wallMs":82007.967125}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY WITHOUT JUMPING SAY","audioMs":83000.0,"wallMs":82907.172584}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY WITHOUT JUMPING SAY SOMETHING","audioMs":83700.0,"wallMs":83607.945584}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY WITHOUT JUMPING SAY SOMETHING THAT","audioMs":84000.0,"wallMs":83909.864459}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY WITHOUT JUMPING SAY SOMETHING THAT IS NOT","audioMs":84300.0,"wallMs":84207.614417}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY WITHOUT JUMPING SAY SOMETHING THAT IS NOT WRI","audioMs":84600.0,"wallMs":84507.362542}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY WITHOUT JUMPING SAY SOMETHING THAT IS NOT WRITTEN HE","audioMs":84900.0,"wallMs":84809.35875}
-{"kind":"partial","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY WITHOUT JUMPING SAY SOMETHING THAT IS NOT WRITTEN HERE AT ALL","audioMs":85300.0,"wallMs":85207.661209}
-{"kind":"final","itemId":"1-5","text":"LIKE THAT THE TEXT SHOULD EASE OFF AND WAIT FOR YOU RATHER THEN RUNNING AHEAD THEN PICK THE PACE BACK UP AGAIN IT SHOULD CATCH UP SMOOTHLY WITHOUT JUMPING SAY SOMETHING THAT IS NOT WRITTEN HERE AT ALL","audioEndMs":86500.0,"wallMs":86409.64845899999}
-{"kind":"itemStarted","itemId":"1-6","ordinal":6,"audioStartMs":86500.0}
-{"kind":"partial","itemId":"1-6","text":"TALK","audioMs":86900.0,"wallMs":86807.709084}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT","audioMs":87200.0,"wallMs":87110.21933400001}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT YOUR","audioMs":87500.0,"wallMs":87409.993959}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT YOUR DAY","audioMs":88800.0,"wallMs":88707.134125}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT YOUR DAY OR","audioMs":89700.0,"wallMs":89607.96887499999}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT YOUR DAY OR WHAT","audioMs":90100.0,"wallMs":90006.1515}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT YOUR DAY OR WHAT YOU HAD","audioMs":90400.0,"wallMs":90307.797334}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT YOUR DAY OR WHAT YOU HAD FOR","audioMs":90700.0,"wallMs":90607.477625}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT YOUR DAY OR WHAT YOU HAD FOR BREAKF","audioMs":91000.0,"wallMs":90910.018}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT YOUR DAY OR WHAT YOU HAD FOR BREAKFAST","audioMs":91300.0,"wallMs":91207.860875}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT YOUR DAY OR WHAT YOU HAD FOR BREAKFAST FOR","audioMs":92000.0,"wallMs":91908.567542}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT YOUR DAY OR WHAT YOU HAD FOR BREAKFAST FOR FI","audioMs":92300.0,"wallMs":92210.40575}
-{"kind":"partial","itemId":"1-6","text":"TALK ABOUT YOUR DAY OR WHAT YOU HAD FOR BREAKFAST FOR FIVE OR","audioMs":92600.0,"wallMs":92509.676542}
-{"kind":"final","itemId":"1-6","text":"TALK ABOUT YOUR DAY OR WHAT YOU HAD FOR BREAKFAST FOR FIVE OR","audioEndMs":93900.0,"wallMs":93809.729792}
+{"kind":"partial","itemId":"1-0","text":"Hi","audioMs":1600.0,"wallMs":1539.8833750000001}
+{"kind":"partial","itemId":"1-0","text":"Hi.","audioMs":2100.0,"wallMs":2039.465}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you","audioMs":2600.0,"wallMs":2532.667291}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are","audioMs":3100.0,"wallMs":3029.747666}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this","audioMs":3600.0,"wallMs":3539.5438750000003}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence","audioMs":4000.0,"wallMs":3941.1857499999996}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the","audioMs":4500.0,"wallMs":4442.619666}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen","audioMs":5000.0,"wallMs":4938.497625}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now","audioMs":5500.0,"wallMs":5440.542041}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now,","audioMs":6000.0,"wallMs":5940.317583}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that","audioMs":6400.0,"wallMs":6337.327041}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exac","audioMs":6900.0,"wallMs":6826.778125}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly","audioMs":7400.0,"wallMs":7337.299916}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the","audioMs":7900.0,"wallMs":7842.849833}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea","audioMs":8400.0,"wallMs":8337.310625}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Ke","audioMs":8800.0,"wallMs":8735.523625000002}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going","audioMs":9300.0,"wallMs":9217.63125}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever","audioMs":9800.0,"wallMs":9726.562416}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace","audioMs":10300.0,"wallMs":10221.885416}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels","audioMs":10800.0,"wallMs":10735.31075}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natur","audioMs":11200.0,"wallMs":11129.780583}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural","audioMs":11700.0,"wallMs":11629.274041}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To","audioMs":12200.0,"wallMs":12132.488875}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you","audioMs":12700.0,"wallMs":12633.346583}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And wa","audioMs":13600.0,"wallMs":13530.362708}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what","audioMs":14100.0,"wallMs":14039.319416}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the tex","audioMs":14600.0,"wallMs":14526.759416}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does","audioMs":15100.0,"wallMs":15030.018290999998}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you","audioMs":15600.0,"wallMs":15524.026458}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you speak","audioMs":16000.0,"wallMs":15940.584583}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you speak.","audioMs":16500.0,"wallMs":16421.46975}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you speak. You","audioMs":17000.0,"wallMs":16933.700957999998}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you speak. You should see","audioMs":17500.0,"wallMs":17429.410791}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you speak. You should see the line","audioMs":18000.0,"wallMs":17932.768708}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you speak. You should see the line you are","audioMs":18400.0,"wallMs":18321.107791}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you speak. You should see the line you are on","audioMs":18900.0,"wallMs":18832.207666}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you speak. You should see the line you are on stay","audioMs":19400.0,"wallMs":19325.544458}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you speak. You should see the line you are on stay roughly","audioMs":19900.0,"wallMs":19825.81425}
+{"kind":"partial","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you speak. You should see the line you are on stay roughly in","audioMs":20400.0,"wallMs":20342.477625}
+{"kind":"final","itemId":"1-0","text":"Hi. If you are reading this sentence off the screen right now, that is exactly the idea. Keep going at whatever pace feels natural. To you. And watch what the text does as you speak. You should see the line you are on stay roughly in","audioEndMs":20400.0,"wallMs":20342.479416}
+{"kind":"itemStarted","itemId":"1-1","ordinal":1,"audioStartMs":20400.0}
+{"kind":"partial","itemId":"1-1","text":"the","audioMs":20800.0,"wallMs":20722.261958}
+{"kind":"partial","itemId":"1-1","text":"the mid","audioMs":21300.0,"wallMs":21229.1985}
+{"kind":"partial","itemId":"1-1","text":"the middle of the","audioMs":21800.0,"wallMs":21732.9035}
+{"kind":"partial","itemId":"1-1","text":"the middle of the scre","audioMs":22300.0,"wallMs":22233.243625}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen","audioMs":22800.0,"wallMs":22733.647125}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words","audioMs":23200.0,"wallMs":23135.440625000003}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind","audioMs":23700.0,"wallMs":23632.059999999998}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you","audioMs":24200.0,"wallMs":24141.275916000002}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade","audioMs":24700.0,"wallMs":24631.3775}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back","audioMs":25200.0,"wallMs":25139.448791}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and","audioMs":26100.0,"wallMs":26034.615458}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words","audioMs":27100.0,"wallMs":27043.053041}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead","audioMs":27600.0,"wallMs":27529.925833}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you","audioMs":28000.0,"wallMs":27918.885708}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you s","audioMs":28500.0,"wallMs":28428.576}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wa","audioMs":29000.0,"wallMs":28936.301833}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait","audioMs":29500.0,"wallMs":29423.09375}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait.","audioMs":30000.0,"wallMs":29943.618333}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should","audioMs":30400.0,"wallMs":30338.224041}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have","audioMs":30900.0,"wallMs":30831.355166}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to","audioMs":31400.0,"wallMs":31347.283083000002}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to.","audioMs":31900.0,"wallMs":31833.88225}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Thi","audioMs":32400.0,"wallMs":32346.080958000002}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about","audioMs":32800.0,"wallMs":32723.513457999998}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scro","audioMs":33300.0,"wallMs":33230.019}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scrolling at","audioMs":33800.0,"wallMs":33734.922833}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scrolling at all","audioMs":34300.0,"wallMs":34235.566666}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scrolling at all.","audioMs":35200.0,"wallMs":35137.8005}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scrolling at all. Now,","audioMs":36200.0,"wallMs":36139.897041}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scrolling at all. Now, try s","audioMs":37200.0,"wallMs":37139.240791}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scrolling at all. Now, try slow","audioMs":37600.0,"wallMs":37530.716624999994}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scrolling at all. Now, try slowing","audioMs":38100.0,"wallMs":38027.042582999995}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scrolling at all. Now, try slowing right","audioMs":39100.0,"wallMs":39041.126958}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scrolling at all. Now, try slowing right down","audioMs":39600.0,"wallMs":39530.2605}
+{"kind":"partial","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scrolling at all. Now, try slowing right down for","audioMs":40500.0,"wallMs":40430.920083}
+{"kind":"final","itemId":"1-1","text":"the middle of the screen, the words behind you fade back, and words ahead of you sit and wait. You should not have to. Think about scrolling at all. Now, try slowing right down for","audioEndMs":40500.0,"wallMs":40430.921583}
+{"kind":"itemStarted","itemId":"1-2","ordinal":2,"audioStartMs":40500.0}
+{"kind":"partial","itemId":"1-2","text":"a sent","audioMs":41000.0,"wallMs":40941.794791}
+{"kind":"partial","itemId":"1-2","text":"a sentence or","audioMs":41500.0,"wallMs":41427.687083000004}
+{"kind":"partial","itemId":"1-2","text":"a sentence or two","audioMs":42000.0,"wallMs":41939.96025}
+{"kind":"final","itemId":"1-2","text":"a sentence or two","audioEndMs":42900.0,"wallMs":42843.409332999996}
+{"kind":"itemStarted","itemId":"1-3","ordinal":3,"audioStartMs":42900.0}
+{"kind":"partial","itemId":"1-3","text":". And","audioMs":43400.0,"wallMs":43347.299833000005}
+{"kind":"partial","itemId":"1-3","text":". And put","audioMs":43900.0,"wallMs":43826.051708}
+{"kind":"partial","itemId":"1-3","text":". And putt","audioMs":44400.0,"wallMs":44343.336791}
+{"kind":"partial","itemId":"1-3","text":". And putt.","audioMs":44800.0,"wallMs":44733.493833}
+{"kind":"partial","itemId":"1-3","text":". And putt. A","audioMs":45300.0,"wallMs":45226.394499999995}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pa","audioMs":45800.0,"wallMs":45736.850916}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause","audioMs":46300.0,"wallMs":46232.730083}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the mid","audioMs":46800.0,"wallMs":46730.660458000006}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this","audioMs":47200.0,"wallMs":47131.84125}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one","audioMs":47700.0,"wallMs":47642.385458}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one.","audioMs":48200.0,"wallMs":48132.248666}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that","audioMs":48700.0,"wallMs":48641.23570799999}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that.","audioMs":49600.0,"wallMs":49533.529791}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. T","audioMs":50100.0,"wallMs":50025.91}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the","audioMs":50600.0,"wallMs":50530.042208}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the.","audioMs":51100.0,"wallMs":51043.086625}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The tex","audioMs":51600.0,"wallMs":51526.186416000004}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should","audioMs":52000.0,"wallMs":51932.2805}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off","audioMs":52500.0,"wallMs":52431.084416}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and","audioMs":53000.0,"wallMs":52939.999}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for","audioMs":53500.0,"wallMs":53431.570625}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you","audioMs":54000.0,"wallMs":53933.381791}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than","audioMs":54400.0,"wallMs":54342.763583}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running","audioMs":54900.0,"wallMs":54843.546375000005}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead","audioMs":55400.0,"wallMs":55339.722541}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead.","audioMs":55900.0,"wallMs":55844.403874999996}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead. Then,","audioMs":56400.0,"wallMs":56328.252041}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead. Then, pick the","audioMs":56800.0,"wallMs":56731.231083}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead. Then, pick the pace back","audioMs":57300.0,"wallMs":57234.480458}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead. Then, pick the pace back up","audioMs":57800.0,"wallMs":57734.050875}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead. Then, pick the pace back up again.","audioMs":58300.0,"wallMs":58221.771875}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead. Then, pick the pace back up again. It should","audioMs":58800.0,"wallMs":58731.52175}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead. Then, pick the pace back up again. It should catch up","audioMs":59200.0,"wallMs":59143.533666}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead. Then, pick the pace back up again. It should catch up smooth","audioMs":59700.0,"wallMs":59624.88579099999}
+{"kind":"partial","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead. Then, pick the pace back up again. It should catch up smoothly.","audioMs":60200.0,"wallMs":60137.559375000004}
+{"kind":"final","itemId":"1-3","text":". And putt. A real pause in the middle of this one. Like that. Th the. The text should ease off and wait for you, rather than running ahead. Then, pick the pace back up again. It should catch up smoothly.","audioEndMs":61600.0,"wallMs":61539.804040999996}
+{"kind":"itemStarted","itemId":"1-4","ordinal":4,"audioStartMs":61600.0}
+{"kind":"partial","itemId":"1-4","text":"And put","audioMs":63100.0,"wallMs":63039.685833}
+{"kind":"partial","itemId":"1-4","text":"And put a","audioMs":63600.0,"wallMs":63539.773583}
+{"kind":"partial","itemId":"1-4","text":"And put a real","audioMs":64000.0,"wallMs":63940.065791}
+{"kind":"partial","itemId":"1-4","text":"And put a real paus","audioMs":64500.0,"wallMs":64428.240833}
+{"kind":"partial","itemId":"1-4","text":"And put a real pause in the","audioMs":65000.0,"wallMs":64941.00616599999}
+{"kind":"partial","itemId":"1-4","text":"And put a real pause in the middle of","audioMs":65500.0,"wallMs":65429.276333}
+{"kind":"partial","itemId":"1-4","text":"And put a real pause in the middle of this one","audioMs":66000.0,"wallMs":65940.94554100001}
+{"kind":"partial","itemId":"1-4","text":"And put a real pause in the middle of this one.","audioMs":66900.0,"wallMs":66826.94316600001}
+{"kind":"final","itemId":"1-4","text":"And put a real pause in the middle of this one.","audioEndMs":67900.0,"wallMs":67840.32725}
+{"kind":"itemStarted","itemId":"1-5","ordinal":5,"audioStartMs":67900.0}
+{"kind":"partial","itemId":"1-5","text":"Like","audioMs":69300.0,"wallMs":69235.599125}
+{"kind":"partial","itemId":"1-5","text":"Like, that","audioMs":69800.0,"wallMs":69728.741375}
+{"kind":"partial","itemId":"1-5","text":"Like, that the te","audioMs":70300.0,"wallMs":70239.02120799999}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should","audioMs":70800.0,"wallMs":70727.928125}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease","audioMs":71200.0,"wallMs":71142.241166}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off","audioMs":71700.0,"wallMs":71638.476125}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for","audioMs":72200.0,"wallMs":72140.238041}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you","audioMs":72700.0,"wallMs":72640.570833}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather","audioMs":73200.0,"wallMs":73142.608458}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than","audioMs":73600.0,"wallMs":73541.665375}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than,","audioMs":74600.0,"wallMs":74541.37870799999}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running","audioMs":75100.0,"wallMs":75042.532125}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ah","audioMs":75600.0,"wallMs":75541.169416}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead","audioMs":76000.0,"wallMs":75934.879833}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead.","audioMs":76500.0,"wallMs":76435.934708}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pi","audioMs":77000.0,"wallMs":76925.524166}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pa","audioMs":77500.0,"wallMs":77442.250541}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up","audioMs":78000.0,"wallMs":77928.33716600001}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again","audioMs":78400.0,"wallMs":78327.0705}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It","audioMs":78900.0,"wallMs":78843.374}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch","audioMs":79400.0,"wallMs":79321.969333}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly","audioMs":79900.0,"wallMs":79843.77729099999}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly.","audioMs":80800.0,"wallMs":80727.230041}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jump","audioMs":81800.0,"wallMs":81732.142916}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping","audioMs":82300.0,"wallMs":82230.717541}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping.","audioMs":82800.0,"wallMs":82732.80037499999}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping. Say","audioMs":83200.0,"wallMs":83131.709291}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping. Say something that","audioMs":83700.0,"wallMs":83641.160125}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping. Say something that is","audioMs":84200.0,"wallMs":84141.99454100001}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping. Say something that is not writ","audioMs":84700.0,"wallMs":84633.2185}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping. Say something that is not written here at","audioMs":85200.0,"wallMs":85118.437375}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping. Say something that is not written here at all","audioMs":85600.0,"wallMs":85529.297541}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping. Say something that is not written here at all.","audioMs":86600.0,"wallMs":86541.241041}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping. Say something that is not written here at all. Talk","audioMs":87100.0,"wallMs":87037.185166}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping. Say something that is not written here at all. Talk about","audioMs":87600.0,"wallMs":87534.67625}
+{"kind":"partial","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping. Say something that is not written here at all. Talk about your","audioMs":88000.0,"wallMs":87938.075375}
+{"kind":"final","itemId":"1-5","text":"Like, that the text should ease off and wait for you, rather than, running ahead. Then pick the pace back up again. It should catch up smoothly. Without jumping. Say something that is not written here at all. Talk about your","audioEndMs":88000.0,"wallMs":87938.076583}
+{"kind":"itemStarted","itemId":"1-6","ordinal":6,"audioStartMs":88000.0}
+{"kind":"partial","itemId":"1-6","text":"day","audioMs":89500.0,"wallMs":89441.72141599999}
+{"kind":"partial","itemId":"1-6","text":"day or what","audioMs":90000.0,"wallMs":89943.414416}
+{"kind":"partial","itemId":"1-6","text":"day or what you had","audioMs":90400.0,"wallMs":90334.052916}
+{"kind":"partial","itemId":"1-6","text":"day or what you had for breakfa","audioMs":90900.0,"wallMs":90842.796083}
+{"kind":"partial","itemId":"1-6","text":"day or what you had for breakfast","audioMs":91400.0,"wallMs":91326.363625}
+{"kind":"partial","itemId":"1-6","text":"day or what you had for breakfast, for five","audioMs":92400.0,"wallMs":92343.70508300001}
+{"kind":"partial","itemId":"1-6","text":"day or what you had for breakfast, for five or","audioMs":92800.0,"wallMs":92732.532958}
+{"kind":"final","itemId":"1-6","text":"day or what you had for breakfast, for five or","audioEndMs":94300.0,"wallMs":94234.940291}
 {"kind":"closed"}

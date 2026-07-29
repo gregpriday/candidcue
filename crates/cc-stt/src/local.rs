@@ -1,22 +1,26 @@
 //! On-device streaming STT: sherpa-onnx + a streaming Zipformer transducer.
 //!
 //! This is the engine the app ships. It replaces a websocket to a paid service
-//! with ~43 MB of model files on disk, and it emits the *same* [`SttFrame`]
+//! with model files on disk, and it emits the *same* [`SttFrame`]
 //! stream the Inworld client did — which is the whole point. The alignment
 //! engine, the replay harness and the evaluator are all written against that
 //! protocol, so swapping the recogniser underneath is a controlled experiment
 //! rather than a rewrite.
 //!
-//! Two things about this model are worth knowing before reading the code:
+//! Two things about the shipping model are worth knowing before reading the
+//! code:
 //!
-//! * It writes **UPPERCASE, unpunctuated** text. Nothing downstream cares —
-//!   `cc_align::normalize` folds case and strips punctuation — but it means
-//!   the raw transcript is not something to show a presenter.
+//! * It emits **punctuation and true case**. The first bundled model did not
+//!   (UPPERCASE, unpunctuated), and nothing downstream cared either way —
+//!   `cc_align::normalize` folds case and strips punctuation before matching.
 //! * It is a *streaming* transducer, not a windowed encoder-decoder. A new
 //!   hypothesis is available roughly every time enough frames have arrived,
-//!   which on this machine is far more often than the ~1 s Inworld partial
-//!   cadence. We emit on every CHANGE rather than on a timer: the engine costs
-//!   ~90 µs an event, and earlier evidence is the entire product.
+//!   which is far more often than the ~1 s Inworld partial cadence. We emit on
+//!   every CHANGE rather than on a timer: the engine costs ~90 µs an event, and
+//!   earlier evidence is the entire product.
+//!
+//! The bundle is not fixed: [`ModelFiles::detect`] works out how a given one
+//! names its graphs, because upstream is not consistent and ships no manifest.
 //!
 //! Utterance identity is minted here exactly as the Inworld client minted it —
 //! ids are `"{generation}-{ordinal}"` — so a captured log from either source is
@@ -28,18 +32,96 @@ use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
 
 use crate::SttFrame;
 
-/// The four files a streaming transducer needs. INT8 encoder and joiner with
-/// an FP32 decoder is the combination the upstream INT8 example uses; the
-/// decoder is 2 MB and quantising it buys nothing.
-pub const ENCODER_FILE: &str = "encoder-epoch-99-avg-1.int8.onnx";
-pub const DECODER_FILE: &str = "decoder-epoch-99-avg-1.onnx";
-pub const JOINER_FILE: &str = "joiner-epoch-99-avg-1.int8.onnx";
+/// The token table. Every sherpa transducer bundle names this the same.
 pub const TOKENS_FILE: &str = "tokens.txt";
 
-/// Every file the recogniser loads, in load order. Used to validate a bundle
-/// before trying to start a take — a missing file should be a clear error at
-/// the top of a session, not a null pointer from the C library.
-pub const MODEL_FILES: [&str; 4] = [ENCODER_FILE, DECODER_FILE, JOINER_FILE, TOKENS_FILE];
+/// How a bundle names its three graphs.
+///
+/// Upstream is not consistent about this and there is no manifest to ask, so
+/// the layout is DETECTED rather than assumed: the LibriSpeech-era bundles use
+/// `encoder-epoch-99-avg-1.int8.onnx`, the 2026 x-asr bundles use a plain
+/// `encoder.int8.onnx`. Hard-coding one set means the other fails to load with
+/// a null pointer and no reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelFiles {
+    pub encoder: String,
+    pub decoder: String,
+    pub joiner: String,
+    /// A SentencePiece **`.vocab`** beside the tokens, if the bundle ships one.
+    ///
+    /// Deliberately NOT `bpe.model`, which several bundles ship instead. The
+    /// two are different formats: sherpa's `bpe_vocab` wants the two-column
+    /// text vocabulary, and `bpe.model` is the binary SentencePiece model.
+    /// Handing over the binary is silently accepted under greedy decoding —
+    /// nothing reads it — and then fails to do anything useful the day someone
+    /// turns on the hotword path it exists for. A capability that is wired up
+    /// wrong is worse than one that is absent, because it looks done.
+    pub bpe_vocab: Option<String>,
+}
+
+impl ModelFiles {
+    /// Work out how this bundle names things, or say what is missing.
+    ///
+    /// INT8 is preferred where both precisions are present: it is what the
+    /// benchmark numbers were taken with, and the FP32 encoder is twice the
+    /// size for accuracy this application spends on nothing.
+    pub fn detect(dir: &std::path::Path) -> Result<Self, String> {
+        let pick = |candidates: &[&str], role: &str| -> Result<String, String> {
+            candidates
+                .iter()
+                .find(|name| dir.join(name).is_file())
+                .map(|name| (*name).to_string())
+                .ok_or_else(|| {
+                    format!(
+                        "no {role} found in {} (looked for {})",
+                        dir.display(),
+                        candidates.join(", ")
+                    )
+                })
+        };
+        let encoder = pick(
+            &[
+                "encoder.int8.onnx",
+                "encoder-epoch-99-avg-1.int8.onnx",
+                "encoder.onnx",
+                "encoder-epoch-99-avg-1.onnx",
+            ],
+            "encoder",
+        )?;
+        // The decoder stays FP32 by preference: it is small, and quantising it
+        // buys nothing measurable.
+        let decoder = pick(
+            &[
+                "decoder.onnx",
+                "decoder-epoch-99-avg-1.onnx",
+                "decoder.int8.onnx",
+                "decoder-epoch-99-avg-1.int8.onnx",
+            ],
+            "decoder",
+        )?;
+        let joiner = pick(
+            &[
+                "joiner.int8.onnx",
+                "joiner-epoch-99-avg-1.int8.onnx",
+                "joiner.onnx",
+                "joiner-epoch-99-avg-1.onnx",
+            ],
+            "joiner",
+        )?;
+        if !dir.join(TOKENS_FILE).is_file() {
+            return Err(format!("missing {TOKENS_FILE} in {}", dir.display()));
+        }
+        let bpe_vocab = Some("bpe.vocab")
+            .filter(|name| dir.join(name).is_file())
+            .map(str::to_string);
+        Ok(Self {
+            encoder,
+            decoder,
+            joiner,
+            bpe_vocab,
+        })
+    }
+}
 
 /// Tuning knobs for the local recogniser.
 ///
@@ -109,6 +191,16 @@ pub struct LocalSttConfig {
     /// position sensor, because a wrong word inside a correct run costs the
     /// tracker nothing while a missing word costs it evidence. Past 3.0 the
     /// guesses stop being anchored to anything and every metric turns.
+    ///
+    /// Re-swept when the bundled model changed, because a decoder constant
+    /// tuned against one model is not evidence about another. The shipping
+    /// x-asr model agrees, and reproduces the same inversion:
+    ///
+    /// | blank_penalty | within5 | freeze | WER   |
+    /// |---|---|---|---|
+    /// | 0.0 | 93.21 | 3.66% | 9.4%  |
+    /// | 1.5 | 93.86 | 3.67% | 10.0% |
+    /// | **3.0** | **94.03** | **3.33%** | 10.9% |
     pub blank_penalty: f32,
     /// Decoding beam width, used only by `modified_beam_search`.
     pub max_active_paths: i32,
@@ -165,13 +257,7 @@ impl LocalSttConfig {
     /// Worth calling before a take: `OnlineRecognizer::create` answers a
     /// missing file with a null pointer and no reason.
     pub fn validate(&self) -> Result<(), String> {
-        for file in MODEL_FILES {
-            let path = self.model_dir.join(file);
-            if !path.is_file() {
-                return Err(format!("missing STT model file: {}", path.display()));
-            }
-        }
-        Ok(())
+        ModelFiles::detect(&self.model_dir).map(|_| ())
     }
 }
 
@@ -183,14 +269,17 @@ pub struct LocalRecognizer {
 
 impl LocalRecognizer {
     pub fn load(config: &LocalSttConfig) -> Result<Self, String> {
-        config.validate()?;
+        let files = ModelFiles::detect(&config.model_dir)?;
         let path = |file: &str| Some(config.model_dir.join(file).to_string_lossy().into_owned());
 
         let mut sys = OnlineRecognizerConfig::default();
-        sys.model_config.transducer.encoder = path(ENCODER_FILE);
-        sys.model_config.transducer.decoder = path(DECODER_FILE);
-        sys.model_config.transducer.joiner = path(JOINER_FILE);
+        sys.model_config.transducer.encoder = path(&files.encoder);
+        sys.model_config.transducer.decoder = path(&files.decoder);
+        sys.model_config.transducer.joiner = path(&files.joiner);
         sys.model_config.tokens = path(TOKENS_FILE);
+        if let Some(bpe) = &files.bpe_vocab {
+            sys.model_config.bpe_vocab = path(bpe);
+        }
         sys.model_config.num_threads = config.num_threads;
         sys.model_config.provider = Some(config.provider.clone());
         sys.model_config.debug = false;
@@ -475,7 +564,66 @@ mod tests {
     fn a_missing_model_file_names_itself() {
         let config = LocalSttConfig::with_model_dir("/nonexistent/model/dir");
         let error = config.validate().unwrap_err();
-        assert!(error.contains(ENCODER_FILE), "{error}");
+        assert!(error.contains("encoder"), "{error}");
+        assert!(error.contains("/nonexistent/model/dir"), "{error}");
+    }
+
+    /// Both bundle layouts must be recognised.
+    ///
+    /// Upstream names its graphs two different ways with no manifest to ask —
+    /// `encoder-epoch-99-avg-1.int8.onnx` in the LibriSpeech-era bundles, a
+    /// plain `encoder.int8.onnx` in the 2026 x-asr ones. Hard-coding either set
+    /// makes the other fail with a null pointer from the C library and no
+    /// reason attached, which is the single most expensive failure mode this
+    /// crate has.
+    #[test]
+    fn either_bundle_layout_is_detected() {
+        for (encoder, decoder, joiner) in [
+            (
+                "encoder-epoch-99-avg-1.int8.onnx",
+                "decoder-epoch-99-avg-1.onnx",
+                "joiner-epoch-99-avg-1.int8.onnx",
+            ),
+            ("encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"),
+        ] {
+            let dir = std::env::temp_dir().join(format!("cc-stt-layout-{encoder}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            for name in [encoder, decoder, joiner, TOKENS_FILE] {
+                std::fs::write(dir.join(name), b"x").unwrap();
+            }
+            let found = ModelFiles::detect(&dir).expect("layout must be detected");
+            assert_eq!(found.encoder, encoder);
+            assert_eq!(found.decoder, decoder);
+            assert_eq!(found.joiner, joiner);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// INT8 wins when a bundle ships both precisions: it is what the benchmark
+    /// numbers were taken with, and the FP32 encoder is twice the size for
+    /// accuracy this application spends on nothing.
+    #[test]
+    fn int8_is_preferred_over_fp32() {
+        let dir = std::env::temp_dir().join("cc-stt-layout-precision");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "encoder.onnx",
+            "encoder.int8.onnx",
+            "decoder.onnx",
+            "joiner.onnx",
+            "joiner.int8.onnx",
+            TOKENS_FILE,
+        ] {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let found = ModelFiles::detect(&dir).unwrap();
+        assert_eq!(found.encoder, "encoder.int8.onnx");
+        assert_eq!(found.joiner, "joiner.int8.onnx");
+        // The decoder deliberately stays FP32.
+        assert_eq!(found.decoder, "decoder.onnx");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

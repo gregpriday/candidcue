@@ -62,7 +62,7 @@ export interface AppSettings {
    * diagnostics bundle has to answer about a session recorded months ago.
    */
   speech: {
-    /** The bundled recogniser's name, e.g. `streaming-zipformer-en-20M-int8`. */
+    /** The bundled recogniser's name, e.g. `x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05`. */
     transcriptionModel: string;
     /** BCP-47 tag the recogniser is told to expect, e.g. `en-US`. */
     language: string;
@@ -563,7 +563,7 @@ export function defaultAppSettings(): AppSettings {
       // it is also what the browser mock and the offline fallback show, and a
       // default that names a service the app no longer talks to is a lie in
       // the one place nothing is there to correct it.
-      transcriptionModel: 'streaming-zipformer-en-20M-int8',
+      transcriptionModel: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
       language: 'en-US',
     },
     audio: {

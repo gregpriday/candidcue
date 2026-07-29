@@ -27,7 +27,7 @@
  */
 /** Camel-cased twin of `settings::AudioSettings` in Rust. */
 export interface RustAudioSettings {
-  /** The bundled recogniser's name, e.g. `streaming-zipformer-en-20M-int8`. */
+  /** The bundled recogniser's name, e.g. `x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05`. */
   transcriptionModel: string;
   /** BCP-47 tag, e.g. `en-US`. The bundled recogniser is English-only. */
   language: string;

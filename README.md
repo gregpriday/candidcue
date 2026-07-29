@@ -10,8 +10,9 @@ Nothing about the display is generated at runtime — the model never writes wha
 you see. It transcribes, and a deterministic local engine decides where you are.
 
 Nothing leaves your machine either. Speech recognition runs on-device against a
-~43 MB streaming Zipformer, so there is no account, no API key, and no audio
-upload.
+bundled streaming Zipformer transducer, so there is no account, no API key, and
+no audio upload. On the benchmark corpus it matches the hosted service it
+replaced — see `bench/REPORT.md`.
 
 ## Running it
 
@@ -29,7 +30,7 @@ Voice following needs nothing configured — no key, no account, no model choice
 It does need the model on disk, which is not in git:
 
 ```bash
-pnpm models:fetch     # ~43 MB into src-tauri/models/
+pnpm models:fetch     # ~161 MB into src-tauri/models/
 ```
 
 The recogniser runs in Rust, on its own thread, beside the alignment engine that

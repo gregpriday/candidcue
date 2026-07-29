@@ -2,7 +2,7 @@
 #
 # Fetch the bundled speech recogniser into src-tauri/models/.
 #
-# The model is ~43 MB of ONNX graphs. It is NOT in git — binaries that large
+# The model is ~161 MB of ONNX graphs. It is NOT in git — binaries that large
 # make every clone and every bisect pay for them forever — so the build depends
 # on this script having run. `cargo build` succeeds without it and the app fails
 # at the top of a take with "the speech model is missing from this
@@ -15,22 +15,26 @@
 
 set -euo pipefail
 
-MODEL="sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
+MODEL="sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05"
 ARCHIVE="${MODEL}.tar.bz2"
 URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${ARCHIVE}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEST="${REPO_ROOT}/src-tauri/models/zipformer-en-20m"
+DEST="${REPO_ROOT}/src-tauri/models/x-asr-480ms"
 
-# INT8 encoder and joiner with an FP32 decoder — the combination upstream's own
-# INT8 example uses. The decoder is 2 MB; quantising it buys nothing. The FP32
-# encoder (85 MB), the INT8 decoder, the test WAVs and the export scripts in the
-# archive are all deliberately left behind.
+# INT8 encoder and joiner with an FP32 decoder. The test WAVs and the export
+# script in the archive are deliberately left behind.
+#
+# `bpe.model` is the binary SentencePiece model. Kept because it is 116 KB
+# against a 148 MB encoder and it is what a hotword pass would be generated
+# FROM — but note it is NOT sherpa's `bpe_vocab`, which wants the two-column
+# `.vocab` this bundle does not ship. See `ModelFiles::detect`.
 FILES=(
-  "encoder-epoch-99-avg-1.int8.onnx"
-  "decoder-epoch-99-avg-1.onnx"
-  "joiner-epoch-99-avg-1.int8.onnx"
+  "encoder.int8.onnx"
+  "decoder.onnx"
+  "joiner.int8.onnx"
   "tokens.txt"
+  "bpe.model"
 )
 
 have_all=true
@@ -45,7 +49,7 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 
-echo "Downloading ${MODEL} (~122 MB archive, ~43 MB kept)…"
+echo "Downloading ${MODEL} (~134 MB archive, ~161 MB kept)…"
 curl -fL "${URL}" -o "${TMP}/${ARCHIVE}"
 tar -xjf "${TMP}/${ARCHIVE}" -C "${TMP}"
 

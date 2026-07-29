@@ -42,7 +42,7 @@ test.beforeEach(async ({ page }) => {
   await installTauriShim(page, {
     welcomed: true,
     seedScripts: [SCRIPT],
-    engineStatus: { available: true, loaded: true, model: 'streaming-zipformer-en-20M-int8' },
+    engineStatus: { available: true, loaded: true, model: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05' },
     promptMode: 'voice',
   });
 });

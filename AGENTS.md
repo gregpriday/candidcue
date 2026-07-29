@@ -40,4 +40,4 @@ History uses subjects such as `feat(stage): ...`, `fix(audio): ...`, and `test(c
 
 ## Security & Configuration
 
-Never commit recordings containing sensitive speech, or local databases. The app holds no API keys and makes no network speech calls — speech recognition is on-device; preserve that and the frontend CSP boundary. The ~43 MB model is fetched, not committed (`pnpm models:fetch`).
+Never commit recordings containing sensitive speech, or local databases. The app holds no API keys and makes no network speech calls — speech recognition is on-device; preserve that and the frontend CSP boundary. The ~161 MB model is fetched, not committed (`pnpm models:fetch`).

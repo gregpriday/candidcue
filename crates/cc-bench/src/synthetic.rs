@@ -10,11 +10,10 @@
 //! ---------------------------------------------------------------------------
 //! RE-BASED WHEN SPEECH RECOGNITION MOVED ON-DEVICE
 //! ---------------------------------------------------------------------------
-//! These constants used to describe Inworld: partials every 900 ms, lagging
-//! the audio clock by 400 ms, because that is what the hosted service did. The
-//! on-device transducer emits more than three times as often and publishes in
-//! the same call that consumed the samples, so the old numbers modelled a
-//! cadence no recogniser in this app produces.
+//! These constants used to describe Inworld: partials every 900 ms, because
+//! that is what the hosted service did. The shipping on-device transducer emits
+//! twice as often, so the old numbers modelled a cadence no recogniser in this
+//! app produces.
 //!
 //! That mattered for more than realism. `AlignmentConfig::partial_lag_ms` is
 //! the engine's correction for exactly this delay; tuning it against real
@@ -23,9 +22,10 @@
 //! would ever have experienced. A simulator and a config that disagree about
 //! the provider produce numbers that are precise and meaningless.
 //!
-//! Measured from `bench/runs-local` (18 runs, 33 min of speech): median
-//! partial interval 300 ms, median onset delay 300 ms. Tier-A numbers from
-//! before this change are NOT comparable with numbers from after it.
+//! Measured on 18 runs / 33 min of speech, per recogniser: the hosted service
+//! emitted every 1000 ms, the 20M Zipformer every 300 ms, and the shipping
+//! x-asr 480 ms model every 500 ms. Tier-A numbers from before this change are
+//! NOT comparable with numbers from after it.
 
 use cc_stt::SttFrame;
 
@@ -35,14 +35,13 @@ use crate::plan::{Corruption, GoldTimeline, GoldWord};
 const UTTERANCE_GAP_MS: f64 = 900.0;
 /// Emission lag: a partial covers words finished this long before it arrives.
 ///
-/// ~0 for a local transducer, which publishes in the same call that consumed
-/// the samples — there is no network round trip and no server-side buffer
-/// between the audio and the hypothesis. This is the simulator's half of the
-/// same fact `AlignmentConfig::partial_lag_ms` encodes.
-const PARTIAL_LAG_MS: f64 = 0.0;
-/// Partial cadence while speech continues. Median measured on the on-device
-/// corpus; the hosted service was 900.
-const PARTIAL_EVERY_MS: f64 = 300.0;
+/// The simulator's half of `AlignmentConfig::partial_lag_ms`. The shipping
+/// recogniser decodes in 480 ms chunks, so a partial covers words that ended
+/// roughly that long before it arrives.
+const PARTIAL_LAG_MS: f64 = 400.0;
+/// Partial cadence while speech continues. Median measured on the shipping
+/// recogniser's corpus (500 ms); the hosted service was 1000.
+const PARTIAL_EVERY_MS: f64 = 500.0;
 /// Final arrives this long after the last word of the utterance ends.
 const FINAL_DELAY_MS: f64 = 1_200.0;
 /// ItemStarted fires this long after actual onset — the decoder needs acoustic
@@ -323,5 +322,47 @@ mod tests {
             serde_json::to_string(&a).unwrap(),
             serde_json::to_string(&b).unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod cadence_tests {
+    use super::*;
+
+    /// The simulator and the engine must describe the SAME recogniser.
+    ///
+    /// `PARTIAL_LAG_MS` here and `AlignmentConfig::partial_lag_ms` there are
+    /// two halves of one physical fact: how far behind the audio clock a
+    /// partial's words are. When they disagree, Tier A scores the engine
+    /// against a cadence no recogniser emits and the number looks like a
+    /// regression that nobody could ever experience — which is exactly what
+    /// happened when the on-device model landed and only one of the two was
+    /// updated. `clean_within2` read 41% against a real 99.9%.
+    ///
+    /// Both move when the bundled model does. This is the guard that makes
+    /// forgetting one of them fail here instead of in a benchmark table.
+    #[test]
+    fn the_simulator_and_the_engine_agree_about_partial_lag() {
+        assert_eq!(
+            PARTIAL_LAG_MS,
+            cc_align::AlignmentConfig::default().partial_lag_ms,
+            "synthetic.rs PARTIAL_LAG_MS and AlignmentConfig::partial_lag_ms \
+             describe the same recogniser and must be changed together"
+        );
+    }
+
+    /// The modelled timings have to be timings.
+    ///
+    /// Deliberately does NOT assert `PARTIAL_LAG_MS <= PARTIAL_EVERY_MS`. That
+    /// looks like a physical law and is not one: a recogniser is free to emit
+    /// often while every hypothesis carries more pipeline latency than the gap
+    /// between them, which is exactly what a low-latency chunked model with a
+    /// deep encoder does. The only real coupling is the one above.
+    #[test]
+    fn the_modelled_timings_are_non_negative() {
+        assert!(PARTIAL_LAG_MS >= 0.0);
+        assert!(PARTIAL_EVERY_MS > 0.0);
+        assert!(FINAL_DELAY_MS > 0.0);
+        assert!(ONSET_DELAY_MS >= 0.0);
     }
 }

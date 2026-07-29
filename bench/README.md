@@ -40,7 +40,7 @@ a real-time pass through the recogniser:
 ```bash
 cargo run --release -p cc-bench -- synth-audio --workdir /tmp/bench-work --runs ../bench/runs-local
 cargo run --release -p cc-bench -- capture-local --workdir /tmp/bench-work \
-    --runs ../bench/runs-local --model ../src-tauri/models/zipformer-en-20m
+    --runs ../bench/runs-local --model ../src-tauri/models/x-asr-480ms
 ```
 
 `--runs` on `synth-audio` names the corpus the audio is destined for; synthesis
