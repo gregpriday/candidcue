@@ -1,0 +1,10 @@
+{
+  "name": "refrain__refrain_second__qwen",
+  "script": "refrain",
+  "scenario": "refrain_second",
+  "engine": "qwen",
+  "voice_index": 10,
+  "words": 89,
+  "audio_s": 43.131875,
+  "atom_count": 278
+}

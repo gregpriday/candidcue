@@ -48,7 +48,7 @@ export const STAGE_EVENT = {
   /**
    * Rust → stage: one `AlignmentSnapshot` per transcript event (~1/s).
    *
-   * From Rust, not from control: the alignment engine runs beside the Inworld
+   * From Rust, not from control: the alignment engine runs beside the
    * socket because that is where the audio clock its predictions are timed
    * against already is. Control is not in this path — it receives the same
    * snapshot separately on `CONTROL_EVENT.alignmentSnapshot`.

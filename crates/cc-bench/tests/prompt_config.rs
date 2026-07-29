@@ -9,7 +9,8 @@
 //!
 //! Gated on `INWORLD_API_KEY`: it is skipped, loudly, when there is no key.
 
-use cc_stt::{SttFrame, TranscribeConfig, SAMPLE_RATE_HZ};
+use cc_stt::inworld::TranscribeConfig;
+use cc_stt::{SttFrame, SAMPLE_RATE_HZ};
 use tokio::sync::mpsc;
 
 /// A second and a half of silence — enough audio for the service to accept the
@@ -26,7 +27,7 @@ async fn errors_for(prompts: Vec<String>) -> Vec<String> {
         ..TranscribeConfig::default()
     };
     let pcm = silence();
-    let streamer = cc_stt::stream_pcm(&key, &config, &pcm, 100, 4.0, tx);
+    let streamer = cc_stt::inworld::stream_pcm(&key, &config, &pcm, 100, 4.0, tx);
     let collector = async {
         let mut messages = Vec::new();
         while let Some(frame) = rx.recv().await {

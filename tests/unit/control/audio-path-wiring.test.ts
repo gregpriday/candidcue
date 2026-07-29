@@ -30,7 +30,7 @@ const PIPELINE = source('../../../src/control/services/voice-session.ts');
 const CAPTURE = source('../../../src/control/services/audio/capture.ts');
 const STORE = source('../../../src/control/stores/session.ts');
 const DRIVER = source('../../../src/control/services/session.ts');
-const STT_STREAM = source('../../../src-tauri/src/inworld/stream.rs');
+const STT_STREAM = source('../../../src-tauri/src/speech/session.rs');
 
 /** Strip comments, so a mention in prose can never satisfy a call-site check. */
 function code(text: string): string {

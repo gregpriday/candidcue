@@ -66,9 +66,6 @@ pub enum AppError {
     #[error("database migration failed: {0}")]
     Migration(#[from] sqlx::migrate::MigrateError),
 
-    #[error("secret store error: {0}")]
-    SecretStore(#[from] keyring::Error),
-
     #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
 
@@ -198,7 +195,6 @@ impl AppError {
             AppError::Storage(_) => "SCRIPT_SAVE_FAILED",
             AppError::Database(_) => "DATABASE_INTEGRITY_FAILED",
             AppError::Migration(_) => "DATABASE_MIGRATION_FAILED",
-            AppError::SecretStore(_) => "AUTH_KEY_INVALID",
             AppError::Network(err) => {
                 if err.is_connect() {
                     "NETWORK_OFFLINE"
@@ -218,7 +214,6 @@ impl AppError {
             AppError::Validation(_) => ErrorCategory::Validation,
             AppError::Storage(_) => ErrorCategory::Storage,
             AppError::Database(_) | AppError::Migration(_) => ErrorCategory::Database,
-            AppError::SecretStore(_) => ErrorCategory::Auth,
             AppError::Network(_) => ErrorCategory::Network,
             AppError::Window(_) | AppError::StageDisplayMissing => ErrorCategory::Window,
             AppError::Internal(_) => ErrorCategory::Internal,

@@ -6,7 +6,7 @@
  * that needed them: `CommitReason`, `DisconnectReason`, `TransportDiagnostics`,
  * `CommitMeta`, `EphemeralCredential` and `RealtimeTranscriptionTransport` all
  * described a client that decided its own turn boundaries and minted its own
- * short-lived credentials. Inworld endpoints server-side and its socket is held
+ * short-lived credentials. The recogniser endpoints itself and is held
  * in Rust, so none of that has a caller — and a transport abstraction with no
  * implementation is exactly the kind of thing that gets reimplemented against
  * by mistake.
@@ -54,7 +54,7 @@ export interface AudioLevelSnapshot {
  * that only fed the semantic filter. Neither has a consumer now.
  */
 export interface TranscriptionConfig {
-  /** Inworld model id, e.g. `inworld/inworld-stt-1`. */
+  /** The bundled recogniser's name, e.g. `streaming-zipformer-en-20M-int8`. */
   model: string;
   /** BCP-47 tag, e.g. `en-US`. */
   language?: string;

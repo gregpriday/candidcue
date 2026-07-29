@@ -42,7 +42,7 @@ use cc_align::{project_to_tokens, AlignmentConfig, Engine, SessionEvent, TokenIn
 use serde::Deserialize;
 use tauri::{Emitter, Manager};
 
-use crate::inworld::stream::SttFrame;
+use crate::speech::session::SttFrame;
 use crate::windows::{events, CONTROL_LABEL, STAGE_LABEL};
 
 /// One spoken token, as the app's compiler produced it.

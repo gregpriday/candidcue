@@ -1,0 +1,10 @@
+{
+  "name": "brands__exact__xai",
+  "script": "brands",
+  "scenario": "exact",
+  "engine": "xai",
+  "voice_index": 16,
+  "words": 406,
+  "audio_s": 161.076,
+  "atom_count": 406
+}

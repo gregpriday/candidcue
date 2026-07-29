@@ -2,23 +2,73 @@
 
 End-to-end testing of the speech-to-script alignment system **outside the
 application**: real Markdown scripts → controlled performances → (synthetic
-events | real TTS audio streamed through the real Inworld STT endpoint) →
-the Rust alignment engine → render-time metrics against a gold timeline.
+events | real TTS audio streamed through a real recogniser) → the Rust
+alignment engine → render-time metrics against a gold timeline.
 
 The engine under test is `crates/cc-align` — a pure, deterministic core (no
-I/O, no clocks, no randomness) that the app can adopt directly. The wire
-protocol used for live capture (`crates/cc-stt`) is the exact protocol of
-`src-tauri/src/inworld/stream.rs`.
+I/O, no clocks, no randomness) that the app can adopt directly. The recogniser
+under test is `crates/cc-stt`, which is also the one the app ships.
+
+## Two recognisers, one ruler
+
+The app's speech-to-text was replaced: a hosted Inworld websocket became an
+on-device sherpa-onnx streaming Zipformer (EN 20M, INT8). Both speak the same
+`SttFrame` protocol, which is what makes the swap a measurement rather than a
+leap of faith — a captured log from either replays through the same engine and
+is scored by the same evaluator against the same gold timeline.
+
+```
+bench/runs/         frozen Inworld captures — the BASELINE
+bench/runs-local/   the same audio, heard by the bundled model
+```
+
+```bash
+# The baseline, replayed (no network, no key):
+cargo run --release -p cc-bench -- tier-b --label inworld --out ../bench/results/baseline-tier-b.json
+
+# The bundled model, on the same fixtures:
+cargo run --release -p cc-bench -- tier-b --runs ../bench/runs-local \
+    --label local --out ../bench/results/local-tier-b.json
+
+cargo run --release -p cc-bench -- compare ../bench/results/baseline-tier-b.json \
+    ../bench/results/local-tier-b.json
+```
+
+Rebuilding `runs-local` from scratch needs the fixture audio (FAL_KEY) and then
+a real-time pass through the recogniser:
+
+```bash
+cargo run --release -p cc-bench -- synth-audio --workdir /tmp/bench-work --runs ../bench/runs-local
+cargo run --release -p cc-bench -- capture-local --workdir /tmp/bench-work \
+    --runs ../bench/runs-local --model ../src-tauri/models/zipformer-en-20m
+```
+
+`--runs` on `synth-audio` names the corpus the audio is destined for; synthesis
+skips a run that corpus already holds, so pointing it at a fresh corpus is what
+makes the audio render again for a different recogniser instead of being
+skipped as "already captured".
+
+Capture runs at real-time pace by default. Scoring does not depend on it — every
+Tier-B metric is a function of the audio clock and the text, and `wall_ms` is
+recorded but never read — but the fixtures are more honest at 1.0x, and the
+model is ~16x faster than real time, so a faster pass would bake in latencies
+no presenter will ever see.
+
+The hosted client still exists, behind `cc-stt`'s non-default `inworld` feature
+which only `cc-bench` enables. It is kept for exactly one reason: a baseline you
+can no longer re-measure is a number you have to take on faith.
 
 ## Layout
 
 ```
 bench/scripts/    Markdown fixture scripts (9, from 250 to 5,000 words)
-bench/runs/       Captured live-STT event logs — immutable replay fixtures
+bench/runs/       Captured Inworld event logs — immutable replay fixtures
                   (events.jsonl + gold.json + manifest.json + performance.txt)
+bench/runs-local/ The same, heard by the bundled on-device recogniser
 bench/results/    Generated benchmark tables (local/gitignored JSON)
 crates/cc-align/  The alignment engine
-crates/cc-stt/    Tauri-free Inworld streaming client
+crates/cc-stt/    STT protocol + the on-device recogniser the app ships
+                  (+ the hosted client, behind the `inworld` feature)
 crates/cc-bench/  Harness: plans, gold, synthetic events, TTS, capture,
                   replay, metrics, suites, reports
 ```

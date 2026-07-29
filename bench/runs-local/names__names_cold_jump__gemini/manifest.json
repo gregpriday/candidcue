@@ -1,0 +1,10 @@
+{
+  "name": "names__names_cold_jump__gemini",
+  "script": "names",
+  "scenario": "names_cold_jump",
+  "engine": "gemini",
+  "voice_index": 12,
+  "words": 115,
+  "audio_s": 60.02,
+  "atom_count": 337
+}

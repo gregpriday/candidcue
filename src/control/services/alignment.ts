@@ -2,7 +2,7 @@
  * Control's half of speech-to-script alignment.
  *
  * The engine itself is in Rust (`crates/cc-align`, hosted in
- * `src-tauri/src/align`), fed directly by the Inworld socket. Control does not
+ * `src-tauri/src/align`), fed directly by the recogniser. Control does not
  * sit in that path at all — which is the point. What lives here is the small
  * remainder:
  *

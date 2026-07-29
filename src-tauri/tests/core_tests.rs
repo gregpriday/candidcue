@@ -489,7 +489,10 @@ async fn settings_defaults_patch_and_conflict() {
     assert_eq!(initial.revision, 1);
     assert_eq!(initial.value.general.words_per_minute_estimate, 130);
     assert_eq!(initial.value.general.save_transcript, "off");
-    assert_eq!(initial.value.audio.transcription_model, "inworld/inworld-stt-1");
+    assert_eq!(
+        initial.value.audio.transcription_model,
+        candidcue_lib::speech::MODEL_NAME
+    );
 
     // Patch a nested field; others survive.
     let updated = settings::update_settings(
@@ -730,103 +733,3 @@ async fn reconciliation_recovers_orphans_and_missing_files() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// §44.6 secrets — the development escape hatch from the Keychain ACL
-// ---------------------------------------------------------------------------
-
-use candidcue_lib::secrets::{
-    dev_env_key_active, KeySource, OsSecretStore, SecretStore, DEV_KEY_ENV_VAR,
-};
-
-/// Serialises the two tests that mutate `DEV_KEY_ENV_VAR`.
-///
-/// The environment is process-global and cargo runs these in threads of ONE
-/// process, so without this they interleave: the `.env` test removes the
-/// variable, reads it, and puts the original back — and when that restore lands
-/// between the override test's `set_var` and the read it does next, the store
-/// answers with the machine's REAL key and the hint assertion fails on a
-/// four-character tail nobody wrote.
-///
-/// It only ever failed on a machine that HAS a key exported, which is every
-/// development machine and no CI runner — the worst possible distribution for
-/// a flake, since the people who could fix it are the only ones who saw it.
-static ENV_KEY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Take the lock, surviving a panic in whichever test held it last. A poisoned
-/// mutex here means another test failed; it must not turn into a second,
-/// unrelated failure in this one.
-fn lock_env_key() -> std::sync::MutexGuard<'static, ()> {
-    ENV_KEY_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// The store really does prefer the environment in a debug build, and it says
-/// so — `Environment`, not a `Keychain` label over a key that never came from
-/// there.
-///
-/// This test is careful never to reach the real Keychain: the override is
-/// asserted live BEFORE the store is asked anything, so a regression fails here
-/// instead of popping the macOS login prompt in front of whoever ran the suite.
-#[tokio::test]
-async fn a_debug_build_reads_the_key_from_the_environment_and_names_that_source() {
-    let _guard = lock_env_key();
-    let restore = std::env::var(DEV_KEY_ENV_VAR).ok();
-    std::env::set_var(DEV_KEY_ENV_VAR, "core-test-override-4d7e");
-    assert!(
-        dev_env_key_active(),
-        "the override must be live before the store is touched, or this test \
-         would fall through to the real credential store"
-    );
-
-    let described = OsSecretStore
-        .describe_inworld_key()
-        .await
-        .expect("the environment path cannot fail")
-        .expect("a key is set");
-    assert_eq!(described.source, KeySource::Environment);
-    // The redacted tail, and nothing more: the value itself never leaves Rust.
-    assert_eq!(described.hint, "…4d7e");
-    assert!(!described.hint.contains("override"));
-
-    match restore {
-        Some(value) => std::env::set_var(DEV_KEY_ENV_VAR, value),
-        None => std::env::remove_var(DEV_KEY_ENV_VAR),
-    }
-}
-
-/// The `.env` fallback finds the key a developer actually put there.
-///
-/// `tauri dev` inherits the shell's environment, and a `.env` file is not part
-/// of it — Vite loads one for the frontend, Rust does not. A developer who puts
-/// their key where every other tool in this stack looks for it would otherwise
-/// get an app that cannot see it, whose only symptom is a key field that will
-/// not go away.
-///
-/// Skips rather than fails when this checkout has no `.env`: whether the file
-/// exists is a property of the machine, not of the code.
-#[test]
-fn a_dotenv_key_is_found_without_an_exported_variable() {
-    let dotenv = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("src-tauri has a parent")
-        .join(".env");
-    let Ok(contents) = std::fs::read_to_string(&dotenv) else {
-        return; // no .env in this checkout
-    };
-    if !contents.contains(DEV_KEY_ENV_VAR) {
-        return;
-    }
-
-    let _guard = lock_env_key();
-    let restore = std::env::var(DEV_KEY_ENV_VAR).ok();
-    std::env::remove_var(DEV_KEY_ENV_VAR);
-    let found = dev_env_key_active();
-    if let Some(value) = restore {
-        std::env::set_var(DEV_KEY_ENV_VAR, value);
-    }
-
-    assert!(
-        found,
-        "a key in {} must be picked up with nothing exported",
-        dotenv.display()
-    );
-}

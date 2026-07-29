@@ -40,14 +40,14 @@ export interface AppError {
 
 /** Stable application error codes (spec Appendix C.7). */
 export const APP_ERROR_CODES = [
-  'AUTH_KEY_INVALID',
-  'AUTH_MODEL_UNAVAILABLE',
-  'AUTH_REALTIME_UNAVAILABLE',
-  'QUOTA_EXHAUSTED',
-  'RATE_LIMITED',
+  // The bundled recogniser. All four mean "this installation is broken",
+  // which is why none of them are recoverable by anything the user can type.
+  'STT_MODEL_MISSING',
+  'STT_MODEL_LOAD_FAILED',
+  'STT_WORKER_FAILED',
+  'STT_ENGINE_ERROR',
   'NETWORK_OFFLINE',
   'NETWORK_TIMEOUT',
-  'PROVIDER_UNAVAILABLE',
   'MIC_PERMISSION_DENIED',
   'MIC_DEVICE_MISSING',
   'MIC_DEVICE_LOST',

@@ -1,0 +1,10 @@
+{
+  "name": "product-update__viewport_start__gemini",
+  "script": "product-update",
+  "scenario": "viewport_start",
+  "engine": "gemini",
+  "voice_index": 6,
+  "words": 75,
+  "audio_s": 37.62,
+  "atom_count": 298
+}

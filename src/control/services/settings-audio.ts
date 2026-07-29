@@ -27,9 +27,9 @@
  */
 /** Camel-cased twin of `settings::AudioSettings` in Rust. */
 export interface RustAudioSettings {
-  /** Inworld model id, e.g. `inworld/inworld-stt-1`. */
+  /** The bundled recogniser's name, e.g. `streaming-zipformer-en-20M-int8`. */
   transcriptionModel: string;
-  /** BCP-47 tag, e.g. `en-US` — Inworld wants the region, not a bare `en`. */
+  /** BCP-47 tag, e.g. `en-US`. The bundled recogniser is English-only. */
   language: string;
   softPauseAutoDisconnectMinutes: number;
   /** 0-1; 0.5 is the Appendix A.6 neutral (§28.4). */

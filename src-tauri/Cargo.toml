@@ -26,7 +26,6 @@ sqlx = { version = "0.8", default-features = false, features = [
   "migrate",
 ] }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
-keyring = { version = "3", features = ["apple-native", "windows-native"] }
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -59,9 +58,11 @@ image = { version = "0.25", default-features = false, features = [
 # that is what lets `cc-bench` replay captured takes offline and makes the
 # numbers in bench/REPORT.md mean anything.
 cc-align = { path = "../crates/cc-align" }
-tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+# The on-device recogniser and the STT event protocol. Default features only —
+# the `inworld` feature (the hosted websocket client this replaced) stays off,
+# so the shipped binary carries no network speech path at all.
+cc-stt = { path = "../crates/cc-stt" }
 base64 = "0.23.0"
-futures-util = "0.3.33"
 
 [dev-dependencies]
 tempfile = "3"

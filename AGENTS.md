@@ -6,7 +6,7 @@
 - `src/stage/` contains the presentation renderer and motion engine.
 - `src/shared/` holds pure contracts, Markdown compilation, and alignment helpers; keep it free of I/O.
 - `src/workers/` contains Web Workers; `assets/` contains bundled fonts.
-- `src-tauri/` is the desktop core: IPC commands, SQLite migrations, secrets, Inworld speech, and window management.
+- `src-tauri/` is the desktop core: IPC commands, SQLite migrations, on-device speech, and window management.
 - `crates/` is a separate Rust workspace for `cc-align` and benchmark tooling; `bench/` stores benchmark inputs and reports.
 - Tests live beside source and under `tests/{unit,dom,integration,e2e}`. Specifications live in `docs/`.
 
@@ -24,7 +24,7 @@ cd src-tauri && cargo test
 cd crates && cargo test   # standalone alignment/benchmark workspace
 ```
 
-Use the pnpm version pinned in `package.json`. Run one test with `./node_modules/.bin/vitest run path/to/file.test.ts`. Live Inworld and WebKit microphone tests require services or hardware; see `README.md`.
+Use the pnpm version pinned in `package.json`. Run one test with `./node_modules/.bin/vitest run path/to/file.test.ts`. WebKit microphone tests require hardware; see `README.md`.
 
 ## Coding Style & Naming Conventions
 
@@ -40,4 +40,4 @@ History uses subjects such as `feat(stage): ...`, `fix(audio): ...`, and `test(c
 
 ## Security & Configuration
 
-Never commit API keys, recordings containing sensitive speech, or local databases. Inworld credentials belong in Settings and the OS keychain; preserve the Rust-owned authenticated socket and the frontend CSP boundary.
+Never commit recordings containing sensitive speech, or local databases. The app holds no API keys and makes no network speech calls — speech recognition is on-device; preserve that and the frontend CSP boundary. The ~43 MB model is fetched, not committed (`pnpm models:fetch`).

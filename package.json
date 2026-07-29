@@ -6,6 +6,7 @@
   "packageManager": "pnpm@10.29.2",
   "scripts": {
     "dev": "vite",
+    "models:fetch": "./scripts/fetch-stt-model.sh",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",

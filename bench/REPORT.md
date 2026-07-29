@@ -801,3 +801,134 @@ cargo run --release -p cc-bench -- inspect starter skip_forward # decision trace
 ```
 
 See `bench/README.md` for the full command set and benchmark definitions.
+
+---
+
+# The on-device recogniser swap (2026-07-29)
+
+Inworld's hosted websocket was replaced by a bundled sherpa-onnx streaming
+Zipformer (EN 20M, INT8, ~43 MB). This section is the evidence for that change.
+
+## How the comparison was made
+
+`fal.ai` TTS **does not render the same performance twice** — re-synthesising
+the Tier-B plans produced audio differing from the frozen fixtures by up to
+9.4 s on a 65 s run, and all 15 comparable runs differed. So scoring a new
+local capture against the frozen `bench/runs/` corpus would have confounded
+"different recogniser" with "different audio".
+
+Both recognisers were therefore given the SAME freshly rendered audio:
+
+| corpus | recogniser | audio |
+|---|---|---|
+| `bench/runs/` | Inworld | frozen (historical) |
+| `bench/runs-inworld-new/` | Inworld | new |
+| `bench/runs-local/` | on-device Zipformer | new (identical to above) |
+
+33.1 minutes of speech, 18 runs, captured at 1.0x real time through the same
+`SttFrame` protocol, replayed through the same engine and scored by the same
+evaluator against each corpus's own gold timeline. **Columns 2 and 3 are the
+comparison. Column 1 is continuity with the numbers already in this file.**
+
+## Tier A is unchanged, and is not evidence here
+
+39 of 42 Tier-A metrics are byte-identical before and after; the three that
+differ are the wall-clock `perf.*` timings. That is the point: Tier A drives the
+engine with SYNTHETIC events modelling the hosted provider's cadence, so it
+measures the alignment engine — which this change does not touch — and says
+nothing about the recogniser.
+
+## Tier B
+
+| metric | unit | Inworld (frozen audio) | Inworld (same audio) | local (same audio) | delta |  |
+|---|---|---|---|---|---|---|
+| `live.within2` | % | 69.49 | 70.61 | 77.16 | +6.55 | better |
+| `live.within5` | % | 95.48 | 95.64 | 92.19 | -3.46 | worse |
+| `live.p95_abs` | atoms | 4.67 | 4.59 | 7.42 | +2.83 | worse |
+| `live.mean_signed_abs` | atoms | 3.67 | 3.13 | 3.09 | -0.03 | better |
+| `live.false_jumps` | count | 0 | 0 | 0 | 0 | = |
+| `live.catastrophic` | count | 0 | 0 | 0 | 0 | = |
+| `live.prefinal_move` | % | 100.00 | 100.00 | 100.00 | 0 | = |
+| `live.freeze` | % | 4.83 | 5.85 | 8.18 | +2.33 | worse |
+| `live.pause_overshoot_p95` | atoms | 0.69 | 0.70 | 1.21 | +0.51 | worse |
+| `live.ahead_events` | count | 14 | 19 | 37 | +18.00 | worse |
+| `live.ahead_time` | % | 4.51 | 5.12 | 7.20 | +2.08 | worse |
+| `live.ahead_p95` | atoms | 0.94 | 1.04 | 1.26 | +0.22 | worse |
+| `live.ahead_worst` | atoms | 7.45 | 6.39 | 6.58 | +0.19 | worse |
+| `live.recovery_p95` | s | 4.85 | 3.40 | 5.80 | +2.40 | worse |
+| `live.recovery_failures` | count | 0 | 0 | 0 | 0 | = |
+| `live.first_lock_p50` | s | 2.30 | 2.40 | 3.10 | +0.70 | worse |
+| `live.wer` | % | 7.34 | 6.29 | 19.27 | +12.98 | diagnostic |
+
+
+## What the recognisers actually did
+
+| | Inworld | on-device |
+|---|---|---|
+| utterances | 100 | 117 |
+| partials | 1,912 | 4,695 |
+| partials/min | 57.8 | **142.0** |
+| word error rate | 6.29% | 19.27% |
+| decode cost | network round trip | RTF 0.017 (1 thread) |
+| model on disk | — | 43 MB |
+| cost per take | billed per minute | none |
+
+## Reading the result
+
+**Word error rate tripled and following barely moved.** That is the thesis of
+this whole system holding up under measurement: the recogniser is a noisy
+position sensor, not a transcript source, and `cc_align` resolves position
+against a script it already has. Three times the lexical noise bought a 3.5
+point drop in `within5`.
+
+**Safety is intact.** `false_jumps`, `catastrophic` and `recovery_failures` are
+all 0 on both sides, and `prefinal_move` is 100% on both. By the rule this
+harness is built around — safety is lexicographically first — the swap does not
+regress.
+
+**The real costs are latency-shaped, not accuracy-shaped:**
+
+* `first_lock_p50` 2.40s -> 3.10s. The model drops roughly the first five words
+  of a stream (confirmed as the model, not the feeding: a whole-buffer decode
+  loses them too), so the first lock waits for the second phrase.
+* `recovery_p95` 3.40s -> 5.80s. Same cause after a jump — a relocation has to
+  re-acquire from a transcript that starts late.
+* `within5` 95.6% -> 92.2%, `p95_abs` 4.6 -> 7.4 atoms. A fatter tail: the
+  middle of the distribution actually tightened (`within2` +6.6), but the bad
+  moments are worse.
+
+**`ahead_*` is mostly an artefact of a stale constant, and that is measurable.**
+`partial_lag_ms` describes the RECOGNISER's pipeline delay: ~300 ms of network
+and server buffering for the hosted service, ~0 for a local transducer that
+publishes in the same call that consumed the samples. Left at 300 it pushes the
+display forward for a delay that no longer exists:
+
+| `partial_lag_ms` | `ahead_events` | `ahead_time` | `within5` |
+|---|---|---|---|
+| 300 (hosted calibration) | 37 | 7.20% | 92.19 |
+| 0 (correct for on-device) | 26 | 5.22% | 92.26 |
+| *Inworld, for reference* | *19* | *5.12%* | *95.64* |
+
+Setting it to 0 recovers nearly the whole ahead-bias regression at no cost to
+`within5`. It is **not** changed yet, because it is not only the app's constant:
+`synthetic.rs` models the hosted cadence explicitly (`PARTIAL_LAG_MS = 400`,
+`PARTIAL_EVERY_MS = 900`), so zeroing it alone drops `accuracy.clean_within2`
+from 57.1% to 41.1% — scoring the engine against a cadence no recogniser now
+produces. Correcting it properly means re-basing Tier A on the shipping
+recogniser's cadence, which invalidates every historical Tier-A number here.
+That is a deliberate decision, not a tweak.
+
+## The lever list, in the order worth pulling
+
+1. **`partial_lag_ms` -> 0**, with Tier A's simulator re-based to the on-device
+   cadence at the same time. Quantified above.
+2. **The lost opening words.** Feeding ~300 ms of silence before the first real
+   audio, or priming the decoder at session start, would attack `first_lock`
+   and `recovery` together — the two largest regressions.
+3. **Hotword biasing**, which this swap gave up: sherpa supports it, but only
+   under `modified_beam_search` with a `bpe.vocab` the 20M bundle does not
+   ship. `cc_align`'s extractor is still there and still exercised by
+   `prompt-ab`.
+4. **A larger model.** The 20M is the smallest streaming Zipformer; the same
+   integration takes a bigger one unchanged if WER turns out to matter more
+   than this corpus suggests.

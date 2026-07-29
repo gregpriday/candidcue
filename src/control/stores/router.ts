@@ -7,7 +7,7 @@ import { get, writable, type Readable } from 'svelte/store';
 
 export type SettingsSection =
   | 'general'
-  | 'inworld'
+  | 'speech'
   | 'audio'
   | 'stage'
   | 'teleprompter'

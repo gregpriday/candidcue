@@ -17,7 +17,7 @@ import {
   VoiceSessionPipeline,
   type VoicePipelineDeps,
 } from '../../../src/control/services/voice-session';
-import type { SttFrame } from '../../../src/control/services/stt/inworld';
+import type { SttFrame } from '../../../src/control/services/stt/local';
 import type { CompiledScript } from '../../../src/shared/contracts';
 
 function compiledStub(): CompiledScript {
@@ -221,12 +221,12 @@ describe('the presenter is told when transcription is not trustworthy', () => {
     h.pipeline.handleSttFrame({
       kind: 'failed',
       generation: 1,
-      code: 'AUTH_KEY_INVALID',
+      code: 'STT_MODEL_MISSING',
       message: 'API key does not exist',
       recoverable: false,
     });
     expect(h.connection).toEqual(['offline']);
-    expect(h.failures).toEqual([{ code: 'AUTH_KEY_INVALID', fatal: true }]);
+    expect(h.failures).toEqual([{ code: 'STT_MODEL_MISSING', fatal: true }]);
   });
 
   it('surfaces dropped audio instead of letting it read as silence', () => {

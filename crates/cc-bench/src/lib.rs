@@ -3,6 +3,7 @@
 //! CandidCue alignment engine.
 
 pub mod capture;
+pub mod capture_local;
 pub mod metrics;
 pub mod plan;
 pub mod prompt_ab;

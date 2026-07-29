@@ -1,8 +1,8 @@
 <!--
-  Settings (spec §18). The Inworld key field is one-shot and masked — it
-  submits through the secrets service, is stored in the OS credential store,
-  and is never displayed or returned to JavaScript (§18.2). Privacy copy is
-  Appendix F.18 verbatim.
+  Settings (spec §18). The Speech section no longer asks for anything: the
+  recogniser is bundled with the app, so there is no key to store and no
+  provider to choose. What is left is a readout of whether the model is
+  installed and warm.
 
   This screen is now the ONLY place a take is configured. There used to be a
   Preflight page that asked the same questions again, one screen before every
@@ -64,13 +64,11 @@
     type MicTestSnapshot,
   } from '../services/mic-test-session';
   import { VAD_SENSITIVITY_COPY } from '../services/settings-audio';
-  import * as secretsService from '../services/secrets';
   import * as settingsService from '../services/settings';
   import * as stageService from '../services/stage';
-  import { SPEECH_LANGUAGES } from '../services/stt/inworld';
+  import { getSpeechEngineStatus, type SpeechEngineStatus } from '../services/stt/local';
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
-  import type { InworldKeyStatus } from '../services/secrets-types';
   import {
     activeOpticalProfile,
     opticalRigsForDisplay,
@@ -130,7 +128,7 @@
 
   const sections: Array<{ id: SettingsSection; label: string }> = [
     { id: 'general', label: 'General' },
-    { id: 'inworld', label: 'Speech' },
+    { id: 'speech', label: 'Speech' },
     { id: 'audio', label: 'Audio' },
     { id: 'stage', label: 'Stage display' },
     { id: 'teleprompter', label: 'Teleprompter' },
@@ -138,10 +136,7 @@
     { id: 'privacy', label: 'Data, privacy & updates' },
   ];
 
-  let keyStatus = $state<InworldKeyStatus | null>(null);
-  let keyField = $state('');
-  let keyBusy = $state(false);
-  let keyNote = $state('');
+  let engineStatus = $state<SpeechEngineStatus | null>(null);
   let updateNote = $state('');
   let diagnostics = $state<SystemDiagnostics | null>(null);
   let diagnosticsError = $state<string | null>(null);
@@ -155,7 +150,19 @@
 
   $effect(() => {
     void loadSettings();
-    void secretsService.getInworldKeyStatus().then((status) => (keyStatus = status));
+    // A rejection here is an IPC failure rather than a broken bundle — a
+    // missing model comes back as data — but without this the readout sits on
+    // "Checking…" forever and raises an unhandled rejection behind it.
+    void getSpeechEngineStatus()
+      .then((status) => (engineStatus = status))
+      .catch(() => {
+        engineStatus = {
+          available: false,
+          loaded: false,
+          model: 'unknown',
+          detail: 'CandidCue could not ask the backend about the speech model.',
+        };
+      });
   });
 
   /** Diagnostics are only fetched for the screen that shows them (§47.10). */
@@ -1165,84 +1172,6 @@
     );
   }
 
-  async function submitKey(): Promise<void> {
-    const candidate = keyField.trim();
-    if (!candidate) return;
-    keyBusy = true;
-    keyNote = '';
-    try {
-      const validation = await secretsService.validateInworldKey(candidate);
-      if (validation.status === 'valid') {
-        keyStatus = await secretsService.saveInworldKey(candidate);
-        keyNote = 'Key saved. Voice tracking is ready.';
-      } else if (validation.status === 'quota') {
-        keyNote = 'The key is valid, but the Inworld account has no available quota.';
-      } else if (validation.status === 'network') {
-        keyNote = 'CandidCue could not reach Inworld to check the key. Check your connection and try again.';
-      } else {
-        keyNote = validation.message ?? 'Inworld rejected this key. Check that it is active.';
-      }
-    } catch (err) {
-      // Rust refuses the save outright when a development build is running with
-      // INWORLD_API_KEY set, and its message says so; showing it beats an
-      // unhandled rejection and a field that silently clears.
-      keyNote = describeError(err);
-    } finally {
-      keyField = ''; // one-shot: purge the plaintext after submission
-      keyBusy = false;
-    }
-  }
-
-  /**
-   * Ask Inworld whether the stored key still works.
-   *
-   * This used to re-read the local key STATUS, which can only say "a key is
-   * stored" — the one thing the screen was already showing. A key that has
-   * been revoked since it was saved looked identical to a working one, and the
-   * first the presenter heard of it was a take that transcribed nothing. There
-   * is no command that validates the stored key without exposing it, so this
-   * round-trips through Rust's own `validate` path using the key it holds.
-   */
-  async function testKey(): Promise<void> {
-    keyBusy = true;
-    keyNote = '';
-    try {
-      const result = await secretsService.testStoredInworldKey();
-      keyNote =
-        result.status === 'valid'
-          ? 'The key works. Inworld answered.'
-          : result.status === 'quota'
-            ? 'The key is valid, but the Inworld account has no available quota.'
-            : result.status === 'network'
-              ? 'Could not reach Inworld. Check your connection and try again.'
-              : (result.message ?? 'Inworld rejected the stored key.');
-      keyStatus = await secretsService.getInworldKeyStatus();
-    } catch (err) {
-      keyNote = describeError(err);
-    } finally {
-      keyBusy = false;
-    }
-  }
-
-  async function removeKey(): Promise<void> {
-    // Removing the stored key does not — and cannot — unset an environment
-    // override, so promising that following will stop would be false whenever
-    // one is in play.
-    const fromEnvironment = keyStatus?.source === 'environment';
-    const accepted = await requestConfirm({
-      title: 'Remove Inworld key?',
-      body: fromEnvironment
-        ? 'This clears the key stored in your credential store. The INWORLD_API_KEY environment variable is outside CandidCue’s reach, so voice tracking will keep using it. Your scripts are unaffected.'
-        : 'Voice tracking will stop until a key is added again. Your scripts are unaffected.',
-      confirmLabel: 'Remove key',
-      danger: true,
-    });
-    if (!accepted) return;
-    await secretsService.deleteInworldKey();
-    keyStatus = await secretsService.getInworldKeyStatus();
-    keyNote = '';
-  }
-
   /**
    * C6: this used to invoke the Rust `all` cache kind, which empties the
    * compiled/vocabulary/thumbnail/download caches and never touches a log
@@ -1400,85 +1329,46 @@
             onchange={(value) => void patchSettings('general', { readHeadings: value })}
           />
         </Section>
-      {:else if section === 'inworld'}
+      {:else if section === 'speech'}
         <Section
           title="Speech"
-          description="CandidCue transcribes with Inworld and is bring-your-own-key. The key is stored in your operating system's secure credential store and is read only by CandidCue's backend — it never reaches the app's interface, and the transcription connection is made from there."
+          description="CandidCue transcribes on this machine. The recogniser is part of the app — there is no account to create, no key to paste, and no audio leaves your computer."
         >
           {#snippet actions()}
-            {#if keyStatus?.present}
+            {#if engineStatus?.available}
               <StatusPill
-                tone={keyStatus.state === 'connected' ? 'success' : 'warning'}
-                label={keyStatus.state === 'connected' ? 'Connected' : 'Needs attention'}
+                tone="success"
+                label={engineStatus.loaded ? 'Ready' : 'Installed'}
               />
+            {:else if engineStatus}
+              <StatusPill tone="warning" label="Not installed" />
             {:else}
-              <StatusPill tone="neutral" label="No key stored" />
+              <StatusPill tone="neutral" label="Checking…" />
             {/if}
           {/snippet}
 
-          {#if keyStatus?.source === 'environment'}
-            <p class="hint-line">
-              This development build is using the key from the <code>INWORLD_API_KEY</code>
-              environment variable. It takes precedence over the credential store, so a key saved
-              here would have no effect until you unset it.
+          {#if engineStatus && !engineStatus.available}
+            <p class="inline-alert" role="alert">
+              The speech model is missing from this installation, so voice tracking cannot run.
+              Reinstalling CandidCue will restore it.
             </p>
+            {#if engineStatus.detail}<p class="hint-line">{engineStatus.detail}</p>{/if}
           {/if}
 
-          {#if keyStatus?.present}
-            <div class="key-row">
-              <span class="key-mask">••••••••{keyStatus.lastFour ?? '····'}</span>
-              <div class="row-actions">
-                <Button size="sm" disabled={keyBusy} onclick={() => void testKey()}>
-                  {keyBusy ? 'Checking…' : 'Test key'}
-                </Button>
-                <Button variant="danger" size="sm" onclick={() => removeKey()}>Remove</Button>
-              </div>
-            </div>
-            {#if keyStatus.source !== 'environment'}
-              <p class="hint-line">To replace the key, enter a new one below. The stored key is never displayed.</p>
-            {/if}
-          {/if}
-          <div class="key-form">
-            <TextField
-              bind:value={keyField}
-              type="password"
-              label="Inworld API key"
-              placeholder="Paste your Inworld key"
-              hint="Used for streaming speech-to-text while you present. Nothing else is sent."
-              onsubmit={() => void submitKey()}
-            />
-            <div class="row-actions">
-              <Button variant="primary" disabled={keyBusy || keyField.trim() === ''} onclick={() => submitKey()}>
-                {keyBusy ? 'Validating…' : 'Validate and save'}
-              </Button>
-              <Button variant="ghost" onclick={() => openExternal('https://platform.inworld.ai/')}>
-                Inworld dashboard
-              </Button>
-            </div>
-            {#if keyNote}<p class="hint-line">{keyNote}</p>{/if}
-          </div>
-
-          <Select
-            label="Transcription model"
-            value={$settings.inworld.transcriptionModel}
-            options={[{ value: 'inworld/inworld-stt-1', label: 'inworld-stt-1 (default)' }]}
-            onchange={(value) => void patchSettings('inworld', { transcriptionModel: value })}
-          />
-          <Select
-            label="Spoken language"
-            value={$settings.inworld.language}
-            options={SPEECH_LANGUAGES}
-            onchange={(value) => void patchSettings('inworld', { language: value })}
-          />
           <p class="hint-line">
-            Audio is streamed to Inworld only while a take is running, and only the words that come
-            back are used. Usage is billed by Inworld at their published rates.
+            Recogniser: <code>{engineStatus?.model ?? '—'}</code>. English only. It runs while a take
+            is running and uses a small fraction of one CPU core.
+          </p>
+          <p class="hint-line">
+            Your voice is never uploaded, and nothing is recorded or saved — the words are used only
+            to work out where in the script you are. They are kept only if you turn on
+            transcript saving under Data &amp; privacy.
           </p>
         </Section>
       {:else if section === 'audio'}
         <Section
           title="Microphone"
-          description="CandidCue uses your microphone only while a test or a voice-tracking take is running. During voice tracking, audio is streamed to Inworld for live transcription. Audio is not recorded or saved by CandidCue."
+          description="CandidCue uses your microphone only while a test or a voice-tracking take is running. The audio is transcribed on this machine and is not recorded, saved, or uploaded."
         >
           {#if micPermission === 'unknown'}
             <div class="row-actions">
@@ -1516,8 +1406,8 @@
             {/if}
             <MicMeter level={micLevel} />
             <!--
-              A billable Inworld session, so it says so while it is open, it can
-              always be stopped, and it closes itself if it is forgotten (see
+              Costs nothing but holds the microphone, so it can always be
+              stopped and it closes itself if it is forgotten (see
               services/mic-test-session.ts for the two deadlines).
             -->
             <div class="row-actions">
@@ -1544,8 +1434,8 @@
             </div>
             {#if micTestRunning}
               <p class="hint-line">
-                Connected to Inworld and billing your key. It stops on its own after 30 seconds with
-                nothing transcribed, and after two minutes in any case.
+                Listening on this machine. It stops on its own after 30 seconds with nothing
+                transcribed, and after two minutes in any case.
               </p>
             {:else if micTestNotice}
               <p class="hint-line">{micTestNotice}</p>
@@ -2270,27 +2160,20 @@
             </p>
             <h3 class="privacy-head">While voice tracking is active</h3>
             <p class="privacy-body">
-              Your selected microphone audio is streamed to Inworld for live transcription, and
-              only while a take or a microphone test is running. CandidCue does not save the audio.
+              Your microphone is open only while a take or a microphone test is running, and the
+              audio is transcribed on this machine by a recogniser built into CandidCue. It is not
+              uploaded, and CandidCue does not save it.
             </p>
-            <h3 class="privacy-head">Your script stays here</h3>
+            <h3 class="privacy-head">Nothing leaves this device</h3>
             <p class="privacy-body">
-              Only the audio leaves this device. The script itself is never sent anywhere — the
-              matching between what you say and what you wrote is done locally, on this machine.
+              Neither your voice nor your script is sent anywhere. The words are recognised here and
+              matched against your script here — there is no transcription account, no API key, and
+              no third party involved in following you.
             </p>
             <h3 class="privacy-head">CandidCue servers</h3>
             <p class="privacy-body">
-              CandidCue checks for software updates. Your Inworld API key and your scripts are
-              not sent to CandidCue servers.
-            </p>
-            <h3 class="privacy-head">Inworld retention</h3>
-            <p class="privacy-body">
-              Inworld's current API data controls and retention rules apply to the audio sent for
-              transcription.
-              <button type="button" class="inline-link" onclick={() => openExternal('https://inworld.ai/privacy')}>
-                Open the current policy
-              </button>
-              for details.
+              CandidCue checks for software updates. Your scripts and your audio are not sent to
+              CandidCue servers.
             </p>
           </div>
 

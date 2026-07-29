@@ -1,0 +1,10 @@
+{
+  "name": "product-update__intro_then_end__xai",
+  "script": "product-update",
+  "scenario": "intro_then_end",
+  "engine": "xai",
+  "voice_index": 5,
+  "words": 89,
+  "audio_s": 36.156,
+  "atom_count": 298
+}

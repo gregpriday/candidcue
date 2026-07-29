@@ -42,6 +42,8 @@ struct Flags {
     runs: Option<PathBuf>,
     /// `export-run`: seconds of audio to freeze. None means the whole run.
     seconds: Option<f64>,
+    /// `capture-local`: directory holding the on-device model files.
+    model: Option<PathBuf>,
 }
 
 fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags> {
@@ -54,6 +56,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         scripts: None,
         runs: None,
         seconds: None,
+        model: None,
     };
     let mut it = it.peekable();
     while let Some(arg) = it.next() {
@@ -70,6 +73,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--pace" => flags.pace = take()?.parse()?,
             "--runs" => flags.runs = Some(PathBuf::from(take()?)),
             "--seconds" => flags.seconds = Some(take()?.parse()?),
+            "--model" => flags.model = Some(PathBuf::from(take()?)),
             "--scripts" => {
                 flags.scripts = Some(take()?.split(',').map(|s| s.trim().to_string()).collect())
             }
@@ -126,6 +130,11 @@ fn main() -> anyhow::Result<()> {
             let workdir = flags
                 .workdir
                 .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
+            // `--runs` names the corpus this audio is destined for. Synthesis
+            // skips a run that corpus already holds, so pointing it at a fresh
+            // corpus is what makes the audio get rendered a second time for a
+            // different recogniser instead of being skipped as "captured".
+            let runs_dir = flags.runs.unwrap_or(runs_dir);
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(synth_audio(&scripts_dir, &runs_dir, &workdir))?;
         }
@@ -134,8 +143,31 @@ fn main() -> anyhow::Result<()> {
             let workdir = flags
                 .workdir
                 .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
+            // `--runs` writes the capture somewhere other than the frozen
+            // corpus. That is what makes a CONTROLLED A/B possible: the TTS is
+            // not deterministic (the same plan re-synthesised differs by up to
+            // 9 s), so comparing a new local capture against the old frozen
+            // Inworld one would confound the recogniser with the audio. Point
+            // both recognisers at the same freshly rendered audio instead.
+            let runs_dir = flags.runs.unwrap_or(runs_dir);
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(capture_all(&workdir, &runs_dir, flags.pace))?;
+        }
+        Some("capture-local") => {
+            // The same synthesised audio, heard by the on-device recogniser
+            // instead of the hosted one, written into its own corpus so
+            // `tier-b --runs` can score the two on one ruler.
+            let flags = parse_flags(args[1..].iter())?;
+            let workdir = flags
+                .workdir
+                .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
+            let model_dir = flags
+                .model
+                .ok_or_else(|| anyhow::anyhow!("--model <dir> required"))?;
+            let out_runs = flags
+                .runs
+                .ok_or_else(|| anyhow::anyhow!("--runs <dir> required (do not overwrite bench/runs)"))?;
+            capture_all_local(&workdir, &out_runs, &model_dir, flags.pace)?;
         }
         Some("vocab") => {
             // What would this script send? No network, no cost — the fastest
@@ -627,6 +659,90 @@ async fn synth_audio(
             serde_json::to_string_pretty(&manifest)?,
         )?;
         println!("  {:.1}s of audio", manifest.audio_s);
+    }
+    Ok(())
+}
+
+/// Stream every synthesised run through the ON-DEVICE recogniser and persist
+/// the event logs as replay fixtures, in the same shape the hosted capture
+/// wrote.
+///
+/// The model is loaded once for the whole corpus and a fresh stream is created
+/// per run, which is also how the app is meant to hold it: loading costs
+/// ~200 ms and belongs nowhere near the start of a take.
+fn capture_all_local(
+    workdir: &std::path::Path,
+    runs_dir: &std::path::Path,
+    model_dir: &std::path::Path,
+    pace: f64,
+) -> anyhow::Result<()> {
+    let config = cc_stt::LocalSttConfig::with_model_dir(model_dir);
+    config.validate().map_err(|e| anyhow::anyhow!(e))?;
+    let loading = std::time::Instant::now();
+    let recognizer = cc_stt::LocalRecognizer::load(&config).map_err(|e| anyhow::anyhow!(e))?;
+    println!(
+        "loaded {} in {:.0}ms ({} threads, {})",
+        model_dir.display(),
+        loading.elapsed().as_secs_f64() * 1000.0,
+        config.num_threads,
+        config.decoding_method,
+    );
+
+    let tts_dir = workdir.join("tts");
+    let mut dirs: Vec<_> = std::fs::read_dir(&tts_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    dirs.sort();
+
+    for dir in dirs {
+        let name = dir.file_name().unwrap().to_string_lossy().to_string();
+        let out_dir = runs_dir.join(&name);
+        if out_dir.join("events.jsonl").exists() {
+            println!("skip {name} (already captured)");
+            continue;
+        }
+        // Every file the fixture needs, not just the audio — synthesis writes
+        // them in sequence, so a run can briefly have audio and gold and not
+        // yet have its manifest. Capturing it then would abort the whole corpus
+        // on a missing file that is about to exist, which matters because this
+        // is deliberately run alongside a synthesis that is still going.
+        let required = ["audio.wav", "gold.json", "manifest.json", "performance.txt"];
+        if required.iter().any(|f| !dir.join(f).exists()) {
+            println!("skip {name} (synthesis incomplete)");
+            continue;
+        }
+        let wav = std::fs::read(dir.join("audio.wav"))?;
+        anyhow::ensure!(wav.len() > 44, "empty audio for {name}");
+        let pcm = &wav[44..]; // strip our own canonical WAV header
+        let sample_rate = cc_stt::SAMPLE_RATE_HZ;
+        let audio_s = pcm.len() as f64 / (sample_rate as f64 * 2.0);
+        println!("capturing {name}: {audio_s:.1}s at {pace}× …");
+
+        let started = std::time::Instant::now();
+        let events = cc_bench::capture_local::capture_events(&recognizer, pcm, sample_rate, pace);
+        let transcripts = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    cc_stt::SttFrame::Partial { .. } | cc_stt::SttFrame::Final { .. }
+                )
+            })
+            .count();
+        println!(
+            "  {} events ({} transcripts) in {:.1}s",
+            events.len(),
+            transcripts,
+            started.elapsed().as_secs_f64()
+        );
+        anyhow::ensure!(transcripts > 0, "capture produced no transcripts for {name}");
+        std::fs::create_dir_all(&out_dir)?;
+        cc_bench::capture_local::write_events_jsonl(&out_dir.join("events.jsonl"), &events)?;
+        for file in ["gold.json", "manifest.json", "performance.txt"] {
+            std::fs::copy(dir.join(file), out_dir.join(file))?;
+        }
     }
     Ok(())
 }

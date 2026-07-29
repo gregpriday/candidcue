@@ -1,0 +1,10 @@
+{
+  "name": "figures__pauses__gemini",
+  "script": "figures",
+  "scenario": "pauses",
+  "engine": "gemini",
+  "voice_index": 17,
+  "words": 463,
+  "audio_s": 235.44,
+  "atom_count": 463
+}

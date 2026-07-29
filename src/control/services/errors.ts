@@ -39,25 +39,29 @@ const CODE_TOKEN_ANYWHERE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
  * plain English rather than implying one that does not exist.
  */
 const ERROR_COPY: Record<string, string> = {
-  /* -- auth / billing ----------------------------------------------------- */
-  AUTH_KEY_INVALID:
-    'Inworld rejected the API key. Open Settings → Speech and enter a key that is active for your account.',
-  AUTH_MODEL_UNAVAILABLE:
-    'This Inworld account does not have access to the transcription model CandidCue asked for. Check the account, or present in manual mode.',
-  AUTH_REALTIME_UNAVAILABLE:
-    'This Inworld account cannot open a streaming transcription session. Manual and fixed-speed modes still work.',
-  QUOTA_EXHAUSTED:
-    'The Inworld account has no quota left, so transcription cannot continue. Add credit in the Inworld dashboard, or present in manual mode.',
-  RATE_LIMITED:
-    'Inworld is rate-limiting this account. Wait a moment before trying again, or present in manual mode.',
+  /* -- the bundled recogniser --------------------------------------------- */
+  //
+  // A broken installation, not a broken account. There is no key, no quota and
+  // no provider to be down, so every one of these ends the same way: reinstall,
+  // or present in manual mode. Nothing here asks the presenter to go and fix
+  // something on a website.
+  STT_MODEL_MISSING:
+    'The speech model is missing from this installation, so voice tracking cannot run. Reinstalling CandidCue will restore it. Manual and fixed-speed modes still work.',
+  STT_MODEL_LOAD_FAILED:
+    'The speech model could not be loaded on this machine. Restart CandidCue, and reinstall it if this keeps happening. Manual and fixed-speed modes still work.',
+  STT_WORKER_FAILED:
+    'The speech recogniser could not be started. Restart CandidCue, then try again. Manual and fixed-speed modes still work.',
+  STT_ENGINE_ERROR:
+    'The speech recogniser stopped unexpectedly. Stop and restart the take. Manual and fixed-speed modes still work.',
 
-  /* -- network / provider ------------------------------------------------- */
+  /* -- network ------------------------------------------------------------ */
+  //
+  // Transcription is local now, so nothing here is about speech: what is left
+  // reaches the network only to check for updates.
   NETWORK_OFFLINE:
     'CandidCue cannot reach the network. Check your internet connection, then try again.',
   NETWORK_TIMEOUT:
-    'Inworld did not respond in time. Check your internet connection, then try again.',
-  PROVIDER_UNAVAILABLE:
-    'Inworld is not responding. This is usually temporary — try again in a minute, or present in manual mode.',
+    'The server did not respond in time. Check your internet connection, then try again.',
 
   /* -- microphone --------------------------------------------------------- */
   MIC_PERMISSION_DENIED:
@@ -89,9 +93,9 @@ const ERROR_COPY: Record<string, string> = {
   REALTIME_CONNECTION_LOST:
     'The transcription connection dropped. Check your internet connection, then start voice following again.',
   REALTIME_PROVIDER_ERROR:
-    'Inworld returned an error and transcription stopped. Start the take again; if it keeps happening, check the key in Settings → Speech.',
+    'The speech recogniser reported an error and transcription stopped. Start the take again; if it keeps happening, restart CandidCue.',
   REALTIME_CONFIG_REJECTED:
-    'Inworld refused the transcription settings for this take, so retrying would fail the same way. Open Settings → Speech and check the model and language.',
+    'The speech recogniser could not be configured for this take, so retrying would fail the same way. Restart CandidCue, and reinstall it if this keeps happening.',
   REALTIME_NO_TRANSCRIPTS:
     'Audio is being sent but no transcript is coming back, so following is on hold. Stop and start the take to open a fresh connection.',
 

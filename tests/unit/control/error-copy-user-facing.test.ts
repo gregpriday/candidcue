@@ -3,11 +3,13 @@
  *
  * The defect these guard: `onSessionFailure` handed a bare code string to
  * `describeError`, which fell through `typeof err === 'string' → return err`,
- * so the toast read literally "Voice following stopped: QUOTA_EXHAUSTED".
+ * so the toast read literally "Voice following stopped: QUOTA_EXHAUSTED"
+ * (a code from the hosted-provider era; the codes have changed, the rule has
+ * not).
  *
  * These tests drive the REAL store path — `startLiveSession` → the voice
  * pipeline's `onSessionFailure` hook → `showToast` → the toast store — and
- * assert the rendered string. Asserting that `describeError('QUOTA_EXHAUSTED')`
+ * assert the rendered string. Asserting that `describeError(code)`
  * returns something would prove nothing about what the operator sees.
  *
  * The sweep at the end is the regression guard that matters most: EVERY code
@@ -180,37 +182,38 @@ afterEach(() => {
 });
 
 describe('a session-level failure toast is authored copy, not a code', () => {
-  it('renders quota exhaustion as advice, with no code anywhere in the toast', () => {
+  it('renders a broken speech model as advice, with no code anywhere in the toast', () => {
     start();
-    hooks().onSessionFailure?.('QUOTA_EXHAUSTED', true);
+    hooks().onSessionFailure?.('STT_MODEL_MISSING', true);
 
     const [message] = toastMessages();
     expect(message).toBeDefined();
-    // The literal string the operator used to see.
-    expect(message).not.toContain('QUOTA_EXHAUSTED');
+    // The shape of the literal string the operator used to see.
+    expect(message).not.toContain('STT_MODEL_MISSING');
     expect(message).not.toMatch(CODE_TOKEN);
     expect(message).toContain('Voice following stopped.');
-    // What happened, and what to do about it.
-    expect(message).toMatch(/quota|billing/i);
-    expect(message).toMatch(/Inworld dashboard|manual mode/i);
+    // What happened, and what to do about it. The recogniser is bundled, so
+    // the remedy is a reinstall — never an account, a key or a dashboard.
+    expect(message).toMatch(/speech model/i);
+    expect(message).toMatch(/reinstall|manual mode/i);
   });
 
-  it('gives an auth failure, a quota failure and a network drop different advice', () => {
+  it('gives a broken installation, a microphone refusal and a network drop different advice', () => {
     start();
-    hooks().onSessionFailure?.('AUTH_KEY_INVALID', true);
-    hooks().onSessionFailure?.('QUOTA_EXHAUSTED', true);
+    hooks().onSessionFailure?.('STT_MODEL_MISSING', true);
+    hooks().onSessionFailure?.('MIC_PERMISSION_DENIED', true);
     hooks().onSessionFailure?.('NETWORK_OFFLINE', true);
 
-    const [auth, quota, network] = toastMessages();
-    expect(new Set([auth, quota, network]).size).toBe(3);
+    const [model, mic, network] = toastMessages();
+    expect(new Set([model, mic, network]).size).toBe(3);
     // Each names the remedy that actually applies to it.
-    expect(auth).toMatch(/Settings → Speech/);
-    expect(quota).toMatch(/credit|billing/i);
+    expect(model).toMatch(/reinstall/i);
+    expect(mic).toMatch(/System Settings|Privacy/i);
     expect(network).toMatch(/internet connection/i);
-    // …and not one that does not: re-entering a key cannot fix an empty
-    // account, and adding credit cannot fix a dead Wi-Fi link.
-    expect(quota).not.toMatch(/Settings → Speech/);
-    expect(network).not.toMatch(/Settings → Speech/);
+    // …and not one that does not: reinstalling cannot grant a microphone
+    // permission, and a privacy toggle cannot restore a missing model.
+    expect(mic).not.toMatch(/reinstall/i);
+    expect(network).not.toMatch(/reinstall/i);
   });
 
   it('distinguishes a stopped session from an interrupted one', () => {
@@ -222,10 +225,10 @@ describe('a session-level failure toast is authored copy, not a code', () => {
 
   it('keeps the raw code for Settings → Diagnostics', () => {
     start();
-    hooks().onSessionFailure?.('QUOTA_EXHAUSTED', true);
+    hooks().onSessionFailure?.('STT_MODEL_MISSING', true);
 
     const entries = recentErrorDiagnostics();
-    expect(entries[0]?.code).toBe('QUOTA_EXHAUSTED');
+    expect(entries[0]?.code).toBe('STT_MODEL_MISSING');
     // The copy recorded next to it is the copy that was shown.
     expect(toastMessages()[0]).toContain(entries[0]?.shown ?? ' ');
   });

@@ -1,16 +1,14 @@
 //! Tauri builder, plugin registration, startup wiring (spec §44.1).
 
-use std::sync::Arc;
 
 use tauri::{Emitter, Listener, Manager};
 
 use crate::align::AlignmentState;
-use crate::commands::{self, inworld_cmds::Secrets};
+use crate::commands;
 use crate::coordinator::AppCoordinator;
 use crate::database::{self, Database};
-use crate::inworld::InworldClient;
+use crate::speech::SpeechEngine;
 use crate::scripts::{DataPaths, ScriptLocks};
-use crate::secrets::OsSecretStore;
 use crate::windows::{events, CONTROL_LABEL};
 
 pub fn run() {
@@ -42,12 +40,9 @@ pub fn run() {
             commands::import_remote_image,
             commands::resolve_asset_urls,
             commands::remove_asset_reference,
-            // Secrets / Inworld speech-to-text (spec §46.4)
-            commands::validate_inworld_key,
-            commands::save_inworld_key,
-            commands::get_inworld_key_status,
-            commands::delete_inworld_key,
-            commands::test_inworld_key,
+            // On-device speech-to-text
+            commands::get_speech_engine_status,
+            commands::preload_speech_engine,
             commands::start_transcription,
             commands::push_transcription_audio,
             commands::stop_transcription,
@@ -117,14 +112,16 @@ pub fn run() {
             // Cross-window authority (spec §43.4).
             handle.manage(AppCoordinator::default());
 
-            // Secrets: OS credential store only (spec §44.6).
-            handle.manage(Secrets(Arc::new(OsSecretStore)));
+            // No credential store. The OS keychain entry existed for exactly one
+            // secret — the speech provider's API key — and the recogniser is now
+            // a bundled resource. The app holds no secrets at all.
 
-            // Rust-owned Inworld client: it holds the streaming socket, because
-            // the browser cannot send the `Authorization` header it needs.
-            handle.manage(InworldClient::new());
+            // Rust-owned recogniser: it holds the loaded model and the take's
+            // streaming session. It stays in Rust because the alignment engine
+            // runs beside it and the two share an audio clock.
+            handle.manage(SpeechEngine::new());
 
-            // The alignment engine runs beside the socket that feeds it, so a
+            // The alignment engine runs beside the recogniser that feeds it, so a
             // transcript frame and the audio clock it is timed against never
             // have to cross a process boundary to meet.
             handle.manage(AlignmentState::new());

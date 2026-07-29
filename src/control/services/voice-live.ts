@@ -1,6 +1,6 @@
 /**
  * Real VoiceFacade implementation — binds the audio package (permissions,
- * device enumeration, level meter) and the Inworld speech-to-text session to
+ * device enumeration, level meter) and the on-device speech-to-text session to
  * the seam the Preflight/Live screens consume (spec §14.2 C, §28, §29).
  *
  * Bound once at control startup via `bindVoiceFacade` when the WebView exposes
@@ -31,11 +31,9 @@ import {
   pushTranscriptionAudio,
   startTranscription,
   stopTranscription,
-  sttSessionOptions,
   STT_EVENT,
   type SttFrame,
-} from './stt/inworld';
-import { getSettingsSnapshot } from '../stores/settings';
+} from './stt/local';
 import { isTauriRuntime } from './ipc';
 import { describeError } from './errors';
 import type {
@@ -284,16 +282,15 @@ export function createRealVoiceFacade(): VoiceFacade {
         });
 
         /*
-         * The SAME options a take would use, from the same settings, through
-         * the same builder.
+         * The SAME call a take makes.
          *
-         * This call used to pass nothing, so Rust applied its own defaults and
-         * the test passed unconditionally — including on an installation whose
-         * saved settings named the previous provider's model, where every real
-         * take failed. A microphone test that exercises a configuration the
-         * take will not use cannot answer the only question it is asked.
+         * There is nothing left to configure — one bundled model, no key, no
+         * language — so the test and the take are now identical by construction
+         * rather than by a shared builder. That is what this had to guarantee:
+         * a microphone test that exercises a configuration the take will not use
+         * cannot answer the only question it is asked.
          */
-        generation = await startTranscription(sttSessionOptions(getSettingsSnapshot().inworld));
+        generation = await startTranscription();
         capture = new PcmCapture({
           onFrame: (samples) => {
             const current = generation;

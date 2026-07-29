@@ -130,18 +130,23 @@ impl Default for StageBehaviorSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AudioSettings {
-    /// Inworld model id, e.g. `inworld/inworld-stt-1`.
+    /// Which recogniser is doing the listening.
+    ///
+    /// No longer a choice — the model is bundled and there is exactly one — but
+    /// still persisted and still reported, because "what heard this take?" is a
+    /// question a diagnostics bundle has to be able to answer about a session
+    /// recorded months ago on a build that may have shipped a different model.
     pub transcription_model: String,
-    /// BCP-47 tag as Inworld wants it, e.g. `en-US`.
+    /// BCP-47 tag, e.g. `en-US`. The bundled model is English-only.
     pub language: String,
     pub soft_pause_auto_disconnect_minutes: u32,
     /// Local voice-detection sensitivity, 0-1, 0.5 = the Appendix A.6 defaults
     /// (spec §28.4). Resolved into a `VadConfig` override by
     /// `vadConfigForSensitivity` in src/control/services/audio/defaults.ts.
     ///
-    /// This no longer gates what is sent: Inworld endpoints server-side, and
-    /// nothing the local detector decides can stop a word reaching the
-    /// recogniser. It drives the *meter* — the "is it hearing me" readout in
+    /// This no longer gates what is sent: the recogniser does its own
+    /// endpointing, and nothing the local detector decides can stop a word
+    /// reaching it. It drives the *meter* — the "is it hearing me" readout in
     /// Preflight and on the stage — which is why it survived the removal of
     /// client-side turn detection and why it is still worth persisting: a room's
     /// mic tuning that a cleared browser store silently returns to neutral is a
@@ -152,8 +157,8 @@ pub struct AudioSettings {
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
-            transcription_model: crate::inworld::DEFAULT_MODEL.into(),
-            language: crate::inworld::DEFAULT_LANGUAGE.into(),
+            transcription_model: crate::speech::MODEL_NAME.into(),
+            language: DEFAULT_LANGUAGE.into(),
             soft_pause_auto_disconnect_minutes: 10,
             // A.6 neutral. Never an extreme: an unreadable or absent value must
             // not silently become the most aggressive VAD on offer.
@@ -305,20 +310,39 @@ fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
     }
 }
 
+/// The only language the bundled recogniser transcribes.
+pub const DEFAULT_LANGUAGE: &str = "en-US";
+
+/// The recogniser to record, given whatever a previous build persisted.
+///
+/// Anything that is not the model this build ships is replaced rather than
+/// honoured. The value on disk has twice now named a service the app no longer
+/// talks to — first a realtime provider's model, then Inworld's — and each time
+/// the stale string was forwarded to something that rejected it.
+///
+/// It cannot be forwarded anywhere any more, because there is nothing to
+/// forward it to; but it is still reported in diagnostics and still shown in
+/// Settings, and a build that claims to be running `inworld/inworld-stt-1` while
+/// an on-device Zipformer does the listening is a lie in the one artefact whose
+/// whole job is to be believed.
+fn resolve_model(requested: &str) -> String {
+    match requested.trim() {
+        model if model == crate::speech::MODEL_NAME => model.to_string(),
+        _ => crate::speech::MODEL_NAME.to_string(),
+    }
+}
+
 /// Repair values that a previous build wrote and this one cannot honour.
 ///
 /// The settings document is a JSON blob, so an upgrade in place keeps whatever
 /// was there — which is right for every setting the user chose and wrong for
-/// one that names a service the app no longer talks to. `audio.transcriptionModel`
-/// held the previous provider's model on every upgraded installation, the take
-/// forwarded it, and Inworld answered "Unsupported model" while the microphone
-/// TEST, which sent no model at all, worked perfectly.
+/// one that names a service the app no longer talks to.
 ///
 /// Corrected on read rather than left to a caller to remember: the value is
 /// re-derived every time the document loads, so an installation that never
 /// writes settings again is still fixed.
 fn migrate_in_place(settings: &mut AppSettings) {
-    let resolved = crate::inworld::resolve_model(Some(settings.audio.transcription_model.as_str()));
+    let resolved = resolve_model(settings.audio.transcription_model.as_str());
     if resolved != settings.audio.transcription_model {
         tracing::info!(
             "settings: replacing unsupported transcription model {:?} with {:?}",
@@ -326,6 +350,27 @@ fn migrate_in_place(settings: &mut AppSettings) {
             resolved
         );
         settings.audio.transcription_model = resolved;
+    }
+
+    // Previous builds offered Spanish, French, German and Portuguese, because
+    // the hosted service transcribed them. The bundled model is English-only,
+    // so a persisted `es-ES` is a setting the app cannot honour and must not
+    // keep claiming — a diagnostics bundle that reports a take was transcribed
+    // in Spanish, by an English-only recogniser, sends whoever reads it after
+    // the wrong problem.
+    if !settings
+        .audio
+        .language
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("en")
+    {
+        tracing::info!(
+            "settings: replacing unsupported language {:?} with {:?}",
+            settings.audio.language,
+            DEFAULT_LANGUAGE
+        );
+        settings.audio.language = DEFAULT_LANGUAGE.to_string();
     }
 }
 
@@ -499,7 +544,7 @@ mod tests {
 
         migrate_in_place(&mut settings);
 
-        assert_eq!(settings.audio.transcription_model, crate::inworld::DEFAULT_MODEL);
+        assert_eq!(settings.audio.transcription_model, crate::speech::MODEL_NAME);
         // And the settings the user actually chose are untouched.
         assert_eq!(settings.audio.vad_sensitivity, 0.8);
     }
@@ -507,9 +552,9 @@ mod tests {
     #[test]
     fn a_supported_model_is_left_exactly_as_it_was() {
         let mut settings = AppSettings::default();
-        settings.audio.transcription_model = crate::inworld::DEFAULT_MODEL.into();
+        settings.audio.transcription_model = crate::speech::MODEL_NAME.into();
         migrate_in_place(&mut settings);
-        assert_eq!(settings.audio.transcription_model, crate::inworld::DEFAULT_MODEL);
+        assert_eq!(settings.audio.transcription_model, crate::speech::MODEL_NAME);
     }
 
     /// The Inworld defaults are the ones the streaming config frame is built
@@ -517,8 +562,8 @@ mod tests {
     #[test]
     fn audio_defaults_name_an_inworld_model_and_locale() {
         let audio = AppSettings::default().audio;
-        assert_eq!(audio.transcription_model, crate::inworld::DEFAULT_MODEL);
-        assert_eq!(audio.language, crate::inworld::DEFAULT_LANGUAGE);
+        assert_eq!(audio.transcription_model, crate::speech::MODEL_NAME);
+        assert_eq!(audio.language, DEFAULT_LANGUAGE);
         assert!(audio.language.contains('-'), "Inworld wants a BCP-47 tag");
     }
 

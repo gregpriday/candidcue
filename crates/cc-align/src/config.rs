@@ -214,6 +214,32 @@ pub struct AlignmentConfig {
     pub emission_lag_ms: f64,
     /// How far behind the audio clock the words of a PARTIAL are when it
     /// arrives (ms). Measured against gold word times on live captures.
+    ///
+    /// **300 describes the HOSTED provider, and is now the wrong number for
+    /// the recogniser the app ships.** Left in place deliberately, with the
+    /// measurement recorded rather than acted on.
+    ///
+    /// This constant is a property of the recogniser's pipeline: the hosted
+    /// service put a network round trip and a server-side buffer between the
+    /// audio and the hypothesis; the on-device transducer publishes in the same
+    /// call that consumed the samples, so a partial's words are current as of
+    /// the audio clock and the correction should be ~0.
+    ///
+    /// Measured on the Tier-B corpus (`bench/runs-local`), varying nothing
+    /// else: `ahead_time` 7.20% at 300 against 5.22% at 0, `ahead_events` 37
+    /// against 26, `within5` unmoved (92.19 / 92.26). Setting it to 0 recovers
+    /// almost the whole ahead-bias regression the swap introduced — and
+    /// `ahead_*` is the family this product is judged on, because a display
+    /// that LEADS the reader is the failure fade rendering cannot survive.
+    ///
+    /// It is not changed here because it is not only the app's constant:
+    /// `cc-bench`'s Tier-A simulator models the hosted cadence explicitly
+    /// (`synthetic.rs`: `PARTIAL_LAG_MS = 400`, `PARTIAL_EVERY_MS = 900`), so
+    /// zeroing this alone drops `accuracy.clean_within2` from 57.1% to 41.1% —
+    /// an artefact of scoring the engine against a cadence no recogniser now
+    /// produces, not a real regression. Correcting it properly means re-basing
+    /// Tier A on the shipping recogniser's cadence, which invalidates every
+    /// historical Tier-A number and is a deliberate decision, not a tweak.
     pub partial_lag_ms: f64,
     /// How long after the last word a FINAL arrives (server VAD waits for
     /// silence before committing) (ms).

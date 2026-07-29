@@ -1,0 +1,10 @@
+{
+  "name": "starter__exact__gemini",
+  "script": "starter",
+  "scenario": "exact",
+  "engine": "gemini",
+  "voice_index": 0,
+  "words": 248,
+  "audio_s": 126.86,
+  "atom_count": 248
+}

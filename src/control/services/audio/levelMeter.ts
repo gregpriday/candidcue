@@ -9,7 +9,7 @@
  */
 import type { AudioLevelSnapshot, Unsubscribe } from '../../../shared/contracts';
 import { DEFAULT_ANALYSIS_INTERVAL_MS, type VadConfig } from './defaults';
-import { STT_SAMPLE_RATE_HZ } from '../stt/inworld';
+import { STT_SAMPLE_RATE_HZ } from '../stt/local';
 import { computeFrameStats, LocalVad, type VadEvent } from './vad';
 import {
   defaultIntervalScheduler,

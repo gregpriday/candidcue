@@ -1,0 +1,10 @@
+{
+  "name": "figures__exact__qwen",
+  "script": "figures",
+  "scenario": "exact",
+  "engine": "qwen",
+  "voice_index": 15,
+  "words": 463,
+  "audio_s": 199.48875,
+  "atom_count": 463
+}

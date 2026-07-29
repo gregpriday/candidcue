@@ -1,0 +1,10 @@
+{
+  "name": "product-update__exact__qwen",
+  "script": "product-update",
+  "scenario": "exact",
+  "engine": "qwen",
+  "voice_index": 4,
+  "words": 298,
+  "audio_s": 119.675625,
+  "atom_count": 298
+}

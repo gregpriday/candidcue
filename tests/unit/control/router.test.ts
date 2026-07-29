@@ -14,9 +14,9 @@ describe('router', () => {
   });
 
   it('navigates between routes', async () => {
-    const moved = await navigate({ name: 'settings', section: 'inworld' });
+    const moved = await navigate({ name: 'settings', section: 'speech' });
     expect(moved).toBe(true);
-    expect(get(route)).toEqual({ name: 'settings', section: 'inworld' });
+    expect(get(route)).toEqual({ name: 'settings', section: 'speech' });
   });
 
   it('carries route params', async () => {

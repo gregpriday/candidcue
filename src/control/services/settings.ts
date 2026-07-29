@@ -183,7 +183,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       launchBehavior: rust.general.openTo === 'last_script' ? 'recent' : 'library',
       defaultSessionMode: toSessionMode(rust.stageBehavior.promptMode),
     },
-    inworld: {
+    speech: {
       transcriptionModel: rust.audio.transcriptionModel,
       language: rust.audio.language,
     },
@@ -212,10 +212,10 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
   return {
     ...mapped,
     general: mergeSection(mapped.general, overlay.general),
-    // Inworld model and locale are Rust-owned: they are what the config frame
+    // The recogniser name and locale are Rust-owned: they describe what
     // is built from, and an overlay disagreeing with the document would mean
     // the session declares one language and the settings screen shows another.
-    inworld: mapped.inworld,
+    speech: mapped.speech,
     // The device id and the three processing toggles are per-machine capture
     // state and overlay; `vadSensitivity` is Rust-owned and wins (§28.4).
     audio: {
@@ -271,9 +271,9 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
       put('audio', key, value);
     }
   }
-  if (patch.inworld) {
-    put('audio', 'transcriptionModel', patch.inworld.transcriptionModel);
-    put('audio', 'language', patch.inworld.language);
+  if (patch.speech) {
+    put('audio', 'transcriptionModel', patch.speech.transcriptionModel);
+    put('audio', 'language', patch.speech.language);
   }
   if (patch.teleprompter) {
     put('stageBehavior', 'horizontalMirror', patch.teleprompter.mirrorX);
@@ -296,7 +296,7 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
 
 /**
  * Everything in the patch persists in the overlay so the UI view sticks —
- * except `following` (§47) and `inworld` (§18.2), which are
+ * except `following` (§47) and `speech` (§18.2), which are
  * Rust-owned in both directions, and the individual Rust-owned fields inside
  * otherwise-overlaid sections (`privacy.saveTranscript` §36.2,
  * `audio.vadSensitivity` §28.4). A cached copy of a retention consent is
@@ -306,7 +306,7 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
   for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
     if (key === 'revision' || key === 'schemaVersion') continue;
-    if (key === 'following' || key === 'inworld') continue;
+    if (key === 'following' || key === 'speech') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
     // Rust-owned fields never enter the overlay (§28.4, §36.2, §47) — a cached

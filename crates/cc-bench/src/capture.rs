@@ -10,7 +10,8 @@ use std::path::Path;
 
 use tokio::sync::mpsc;
 
-use cc_stt::{stream_pcm, SttFrame, TranscribeConfig};
+use cc_stt::inworld::{stream_pcm, TranscribeConfig};
+use cc_stt::SttFrame;
 
 /// Stream `pcm` and return every frame observed, in order.
 pub async fn capture_events(pcm: &[u8], pace: f64) -> anyhow::Result<Vec<SttFrame>> {

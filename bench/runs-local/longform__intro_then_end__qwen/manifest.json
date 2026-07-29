@@ -1,0 +1,10 @@
+{
+  "name": "longform__intro_then_end__qwen",
+  "script": "longform",
+  "scenario": "intro_then_end",
+  "engine": "qwen",
+  "voice_index": 13,
+  "words": 267,
+  "audio_s": 115.761875,
+  "atom_count": 892
+}

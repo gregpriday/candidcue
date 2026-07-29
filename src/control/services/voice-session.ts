@@ -1,13 +1,13 @@
 /**
  * Voice session pipeline — microphone in, transcript events out.
  *
- *   mic → PcmCapture (24 kHz PCM16) → Rust Inworld session
+ *   mic → PcmCapture (24 kHz PCM16) → Rust on-device STT session
  *       → stt://event → transcript record + UI (alignment happens in Rust)
  *
  * This replaced a pipeline roughly four times its size, and almost everything
  * that went was machinery for deciding when a sentence had ended: a local
  * voice-activity detector, a noise-floor calibration, a speech gate, a commit
- * driver, and a manual `input_audio_buffer.commit`. Inworld endpoints
+ * driver, and a manual `input_audio_buffer.commit`. The recogniser endpoints
  * server-side, so a take now streams unconditionally and the provider says
  * where the utterances are.
  *
@@ -23,7 +23,6 @@
  * stop audio reaching the recogniser.
  */
 import type { AudioLevelSnapshot, CompiledScript } from '../../shared/contracts';
-import { alignTokensFor, type AlignToken } from './alignment';
 import { DEFAULT_SOFT_PAUSE_AUTO_DISCONNECT_MS } from './audio/defaults';
 import { isTauriRuntime } from './ipc';
 import { trace, traceBegin } from './audio-trace';
@@ -45,10 +44,9 @@ import {
   pushTranscriptionAudio,
   startTranscription,
   stopTranscription,
-  sttSessionOptions,
   STT_EVENT,
   type SttFrame,
-} from './stt/inworld';
+} from './stt/local';
 
 /** Timer seam so tests drive a virtual clock instead of waiting. */
 export interface PipelineTimers {
@@ -91,10 +89,6 @@ export interface VoicePipelineDeps {
   sessionId: string;
   sessionGeneration: number;
   compiled: CompiledScript;
-  /** BCP-47 locale for the recogniser, e.g. `en-US`. */
-  language?: string;
-  /** Inworld model id; omitted uses the backend default. */
-  modelId?: string;
   deviceId?: string;
   /**
    * §28.3 capture processing — the user's Settings → Audio toggles, applied to
@@ -341,13 +335,8 @@ export class VoiceSessionPipeline {
 
       if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
       this.audioOriginMs = this.now();
-      const options = this.sessionOptions();
-      this.transportGeneration = await startTranscription(options);
-      trace(
-        'session',
-        `transport ${this.transportGeneration} model ${options.modelId ?? 'default'} ` +
-          `lang ${options.language ?? 'default'}`,
-      );
+      this.transportGeneration = await startTranscription();
+      trace('session', `transport ${this.transportGeneration} on the bundled recogniser`);
 
       if (epoch !== this.lifecycle) throw new Error('SESSION_STOPPED');
       await this.startCapture(stream);
@@ -391,7 +380,7 @@ export class VoiceSessionPipeline {
    * Stop sending audio without closing the session.
    *
    * The socket stays open so resuming is instant, but the frames stop, which is
-   * both the cost saving and — because Inworld endpoints on silence — the thing
+   * both the CPU saving and — because the recogniser endpoints on silence — the thing
    * that finalizes whatever sentence was in progress.
    */
   softPause(): void {
@@ -470,29 +459,6 @@ export class VoiceSessionPipeline {
     if (this.transportGeneration === null) return 'no session open';
     if (this.paused) return 'paused';
     return 'stopped';
-  }
-
-  /**
-   * The take's spoken tokens, projected once.
-   *
-   * Once because the script cannot change mid-take, and because `start()` may
-   * run more than once for one script — a soft-pause disconnect and resume
-   * re-opens the session, and rebuilding a five-thousand-token list to say the
-   * same thing again is work nobody asked for. Rust's own reconnects never
-   * come back through here at all: it holds the config for the life of the
-   * session and re-sends it itself.
-   */
-  private vocabularyTokens: AlignToken[] | null = null;
-
-  private sessionOptions(): ReturnType<typeof sttSessionOptions> {
-    this.vocabularyTokens ??= alignTokensFor(this.deps.compiled);
-    return sttSessionOptions(
-      {
-        ...(this.deps.modelId !== undefined ? { transcriptionModel: this.deps.modelId } : {}),
-        ...(this.deps.language !== undefined ? { language: this.deps.language } : {}),
-      },
-      this.vocabularyTokens,
-    );
   }
 
   /* ---------------------------------------------------------------------- */
@@ -804,7 +770,7 @@ export class VoiceSessionPipeline {
      * that could have explained it said the microphone was fine.
      *
      * Whatever is wrong with the analyser path on that device, this frame is
-     * evidence that cannot be argued with: bytes on their way to Inworld.
+     * evidence that cannot be argued with: bytes on their way to the recogniser.
      */
     if (frameHasSignal(samples)) this.lastPcmSignalAtMs = Date.now();
     const generation = this.transportGeneration;

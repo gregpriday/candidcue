@@ -25,10 +25,6 @@ import type {
 } from './settings-types';
 import { defaultAppSettings } from './settings-types';
 import type {
-  KeyValidationResult,
-  InworldKeyStatus,
-} from './secrets-types';
-import type {
   DisplayDescriptor,
   IdentificationSession,
   StageOpenResult,
@@ -68,7 +64,6 @@ class MockState {
   scripts = new Map<string, MockScriptRecord>();
   settings: AppSettings = defaultAppSettings();
   /** Only redacted metadata is retained — never the key itself. */
-  keyStatus: InworldKeyStatus = { present: false, state: 'unknown', source: 'none' };
   loaded = false;
 
   load(): void {
@@ -275,37 +270,16 @@ export const mockSettings = {
   },
 };
 
-/* ---------------------------------------------------------------- secrets */
+/* ------------------------------------------------------------ speech */
 
-export const mockSecrets = {
-  async validate(candidateKey: string): Promise<KeyValidationResult> {
-    await delay(500);
-    // The browser mock has no service to ask, so it accepts anything that
-    // could plausibly be a key and rejects the empty field — which is the only
-    // distinction it can honestly make.
-    if (candidateKey.trim().length < 8) {
-      return { status: 'invalid', message: 'That does not look like an Inworld key.' };
-    }
-    return { status: 'valid' };
-  },
-  save(candidateKey: string): InworldKeyStatus {
-    // Only the redacted tail is retained, mirroring the Rust contract.
-    state.keyStatus = {
-      present: true,
-      lastFour: candidateKey.trim().slice(-4),
-      state: 'connected',
-      // The browser mock has no OS credential store and no environment
-      // override; it stands in for the packaged build's only source.
-      source: 'keychain',
-      lastValidatedAt: nowIso(),
-    };
-    return { ...state.keyStatus };
-  },
-  status(): InworldKeyStatus {
-    return { ...state.keyStatus };
-  },
-  remove(): void {
-    state.keyStatus = { present: false, state: 'unknown', source: 'none' };
+export const mockSpeech = {
+  /**
+   * Browser dev has no ONNX runtime, so it reports the shape of a healthy
+   * installation rather than pretending to transcribe. The packaged build is
+   * the only place this can be true or false for a real reason.
+   */
+  status(): { available: boolean; loaded: boolean; model: string } {
+    return { available: true, loaded: false, model: 'streaming-zipformer-en-20M-int8 (mock)' };
   },
 };
 

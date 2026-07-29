@@ -5,10 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A voice-following teleprompter. You write Markdown in the **control** window; it
-renders on a second display in the **stage** window; Inworld transcribes your
-speech; a deterministic Rust engine decides where in the script you are and
-scrolls the stage to match. Nothing on the glass is model-generated — the model
-only transcribes.
+renders on a second display in the **stage** window; a bundled on-device model
+transcribes your speech; a deterministic Rust engine decides where in the script
+you are and scrolls the stage to match. Nothing on the glass is model-generated
+— the model only transcribes, and it never leaves the machine.
 
 Tauri 2 + Svelte 5 (runes) + TypeScript frontend, Rust core, SQLite.
 
@@ -45,7 +45,8 @@ Opt-in live tests (skip cleanly without the flag + key, so the normal suite
 never hits the network):
 
 ```bash
-CANDIDCUE_LIVE_INWORLD=1 ./node_modules/.bin/vitest run tests/integration/inworld-transcription.live.test.ts
+# (The live-STT smoke test is gone: transcription is on-device, so cc-bench
+# replays real speech through the real recogniser offline instead.)
 ```
 
 Alignment benchmarks (`bench/README.md` has the full story):
@@ -72,17 +73,23 @@ created at runtime from `src-tauri/src/windows/`.
 
 ### The trust boundary is the point
 
-Rust owns secrets (OS keychain), the SQLite database, the filesystem, and the
-Inworld socket. The webviews only ever see typed IPC results, and neither
-window's CSP allows a request to any remote host.
+Rust owns the SQLite database, the filesystem, and the speech recogniser. The
+webviews only ever see typed IPC results, and neither window's CSP allows a
+request to any remote host.
 
-The Inworld socket **must** live in Rust: Inworld authenticates a stream with an
-`Authorization: Basic` *header*, and a browser `WebSocket` cannot send one (the
-query-parameter form the docs describe upgrades with a 101 and then transcribes
-nothing). So: renderer captures PCM → `push_transcription_audio` over IPC →
-`src-tauri/src/inworld/stream.rs` holds the connection → frames come back as
-events. Audio must keep flowing for the length of a take; server-side VAD needs
-the silence to decide an utterance ended.
+There are **no secrets any more**. The app used to hold one — a hosted STT
+provider's API key, in the OS keychain — and the recogniser is now bundled, so
+the credential store went with it.
+
+Speech-to-text is `src-tauri/src/speech/`: a sherpa-onnx streaming Zipformer
+(EN 20M, INT8) over ~43 MB of ONNX graphs bundled as a Tauri resource. Renderer
+captures PCM → `push_transcription_audio` over IPC → a dedicated OS thread owns
+the decoder → frames come back as events. The thread is not optional: ONNX
+inference is blocking CPU work, and on the async runtime it would starve every
+other command for the length of a take.
+
+The model is **not in git** (`pnpm models:fetch`); `LocalSttConfig::validate`
+names the missing file rather than letting the C library return a bare null.
 
 ### Alignment: pure crate, hosted by the app
 
@@ -146,10 +153,14 @@ src/control/      routes/ (Editor, Live, Settings, Calibrate, Library, Welcome),
                   services/ (ipc, voice-session, stage-envelope, audio/, stt/)
 src/stage/        StageApp/StageDock, motion/, renderer/
 src/workers/      compiler Web Worker
-src-tauri/src/    app.rs (command registry), commands/, windows/, align/, inworld/,
+src-tauri/src/    app.rs (command registry), commands/, windows/, align/, speech/,
                   coordinator/ (window generations, session, stage handshake),
-                  database/, scripts/, assets/, secrets/, sessions/, settings/
-crates/           cc-align (engine), cc-stt (Tauri-free Inworld client), cc-bench
+                  database/, scripts/, assets/, sessions/, settings/
+src-tauri/models/ the bundled recogniser (fetched, gitignored)
+crates/           cc-align (engine), cc-stt (STT protocol + on-device
+                  recogniser; the hosted client survives behind the
+                  non-default `inworld` feature, for re-capturing the
+                  benchmark baseline only), cc-bench
 bench/            fixture scripts, immutable captured replay runs, results
 docs/             specifications
 ```
@@ -190,7 +201,10 @@ rather than implying the suite covered it.
 - `docs/` specs describe an earlier design that included live coaching and an
   OpenAI semantic sidecar. Both were removed. Where a spec mentions coaching, a
   second model, or OpenAI, **the code is the authority** — see
-  `src-tauri/src/inworld/` for what actually happens now.
+  `src-tauri/src/speech/` for what actually happens now. The same applies to
+  every mention of Inworld: the app no longer talks to it, and the only code
+  that still can is `cc-stt`'s `inworld` feature, which exists so `bench/runs/`
+  can be re-captured.
 - Two known honest gaps, documented in the README: `pauseLocation` is not
   supplied to the cadence lane (choppy-delivery detection cannot fire), and the
   variety score runs in its documented degraded mode.
