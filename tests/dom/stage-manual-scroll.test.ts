@@ -37,6 +37,23 @@ beforeAll(() => {
     unobserve(): void {}
     disconnect(): void {}
   };
+  /*
+   * Give the BLOCKS a height, because jsdom will not.
+   *
+   * Every box measures zero here, so the stage's document was as tall as its
+   * own padding and nothing else — and the legacy padding table sums to 0.93
+   * of the viewport, so `maxScroll` was the handful of pixels the line-entry
+   * offset happened to add on top. A document that cannot scroll reports no
+   * gesture, so a change to a typography constant could silently empty every
+   * assertion in this file. One stubbed height is the difference between a
+   * fixture that is scrollable and one that is scrollable by luck.
+   */
+  const realRect = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function boundedRect(this: Element): DOMRect {
+    const rect = realRect.call(this) as DOMRect;
+    if (!(this as HTMLElement).dataset?.['blockId']) return rect;
+    return { ...rect.toJSON?.(), height: 120, bottom: 120, width: 800, right: 800, top: 0, left: 0, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+  };
   if (typeof window.matchMedia !== 'function') {
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,

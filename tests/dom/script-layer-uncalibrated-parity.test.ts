@@ -57,7 +57,10 @@ const ROOMY = { width: 1920, height: 1080 };
  * 0.7 fallback ratio / 2). Same rule on both panels, because both render the
  * authored 64px body.
  */
-const LINE_ENTRY_PX = 42.24 + 22.4;
+// A quarter of the 84.48px pitch, plus half the 44.8px cap — see
+// `lineEntryOffsetPx`, which moved from half a pitch to a quarter so the mark
+// reaches the next line before the reader finishes the current one.
+const LINE_ENTRY_PX = 84.48 * 0.25 + 22.4;
 
 let viewport = COMPACT;
 

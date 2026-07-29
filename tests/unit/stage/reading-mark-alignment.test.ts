@@ -121,15 +121,24 @@ describe('the reading mark and the line being read (§8.8)', () => {
     const { onCurrent, onNext } = residencyOverScript(alignedMap().map);
     /*
      * The ceiling for this fixture is 0.75: its ink box is three quarters of a
-     * pitch, so a mark centred on the traversal is outside the letters for the
-     * quarter-pitch at each end however well it is phased. Real type measures
-     * closer to 0.88 of a pitch through `Range.getClientRects`, so the stage
-     * does better than the fixture can.
+     * pitch, so a mark is outside the letters for part of each end however well
+     * it is phased. Real type measures closer to 0.88 of a pitch through
+     * `Range.getClientRects`, so the stage does better than the fixture can.
+     *
+     * The entry offset is a QUARTER pitch rather than a half (see
+     * `lineEntryOffsetPx`), which deliberately spends some of this margin: the
+     * mark hands over to the next line before the reader finishes the current
+     * one, so their eye is led into it instead of catching up to it. That trade
+     * is the difference between 0.67 and 0.60 here, and it is the presenter's
+     * to make — what must not come back is the mark spending most of a line on
+     * the WRONG one, which is what the offset exists to prevent.
      */
-    expect(onCurrent).toBeGreaterThan(0.65);
-    // And essentially never on the line below, which is the specific complaint:
-    // a mark one line ahead reads as a script that is one line behind.
-    expect(onNext).toBeLessThan(0.05);
+    expect(onCurrent).toBeGreaterThan(0.55);
+    // Still the minority by a wide margin. A mark that sat on the line below
+    // for as long as it sat on the line being read would read as a script
+    // running behind the reader, which is the original defect.
+    expect(onNext).toBeLessThan(0.3);
+    expect(onNext).toBeLessThan(onCurrent / 2);
   });
 
   it('is a large improvement on treating `R` and the mark as one number', () => {
@@ -205,13 +214,13 @@ describe('the reading mark and the line being read (§8.8)', () => {
 });
 
 describe('lineEntryOffsetPx', () => {
-  it('is half a pitch plus half a cap height', () => {
-    expect(lineEntryOffsetPx(80, 40)).toBeCloseTo(60, 9);
+  it('is a quarter of a pitch plus half a cap height', () => {
+    expect(lineEntryOffsetPx(80, 40)).toBeCloseTo(40, 9);
   });
 
   it('answers zero rather than NaN for geometry that has not resolved', () => {
     expect(lineEntryOffsetPx(0, 0)).toBe(0);
     expect(lineEntryOffsetPx(Number.NaN, 40)).toBe(20);
-    expect(lineEntryOffsetPx(80, Number.NaN)).toBe(40);
+    expect(lineEntryOffsetPx(80, Number.NaN)).toBe(20);
   });
 });

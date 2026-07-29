@@ -320,10 +320,34 @@ export function clampProvisionalTarget(
  * moved up by. Take the offset out of the padding and leave it in `R` and that
  * cancellation is what you lose.
  */
+/**
+ * How far below the mark a line ENTERS, as a fraction of the pitch.
+ *
+ * A quarter, not a half, and the difference is a presenter's sentence: "the
+ * pointer should be on the next line already by the time they get to the end of
+ * a line." Measured on the rendered map with a realistic ink box:
+ *
+ *   half a pitch  — the mark leaves the line at 83% of it and NEVER reaches the
+ *                   next one before the line ends. Residency 0.79 / 0.00.
+ *   a quarter     — it leaves at 61% and is on the next line from 79%.
+ *                   Residency 0.61 / 0.21.
+ *   none (cap/2)  — it leaves at 41% and is on the next from 59%. Residency
+ *                   0.41 / 0.41, which is a mark that spends as much of every
+ *                   line pointing at the wrong one as the right one, and is
+ *                   most of the way back to the defect described above.
+ *
+ * A quarter keeps the mark on the line being read for most of that line — which
+ * is what the offset exists for — and still hands over before the reader
+ * arrives, so their eye is led into the next line rather than catching up to
+ * it. The handoff itself was always a property of the path; this decides how
+ * early the eye is invited to it.
+ */
+const LINE_ENTRY_PITCH_FRACTION = 0.25;
+
 export function lineEntryOffsetPx(linePitchPx: number, capHeightPx: number): number {
   const pitch = isPositive(linePitchPx) ? linePitchPx : 0;
   const cap = isPositive(capHeightPx) ? capHeightPx : 0;
-  return pitch / 2 + cap / 2;
+  return pitch * LINE_ENTRY_PITCH_FRACTION + cap / 2;
 }
 
 /* ---------------------------------------------------------------------------
