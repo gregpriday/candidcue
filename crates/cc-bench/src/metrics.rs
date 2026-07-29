@@ -20,6 +20,17 @@ const FREEZE_DISPLAY_ATOMS: f64 = 0.1;
 /// …while gold advanced at least this much.
 const FREEZE_GOLD_ATOMS: f64 = 1.5;
 const FREEZE_WINDOW_MS: f64 = 700.0;
+/// A word needs at least this long after it is spoken before "the display
+/// never reached it" means anything.
+///
+/// The last word of a take is finished and then the recording stops. Asking
+/// whether the display caught up is asking whether it did so in no time at
+/// all — the answer is always no, and counting it would put a permanent 1 in
+/// `dim_never` that no amount of following could clear. Words inside this
+/// window at the end of a run still contribute their wait if they ARE reached;
+/// they simply cannot count as never reached.
+const DIM_TAIL_GRACE_MS: f64 = 1_500.0;
+
 /// A display movement this large between adjacent samples is a jump.
 const JUMP_ATOMS: f64 = 10.0;
 /// Gold discontinuity threshold.
@@ -170,6 +181,25 @@ pub struct RunMetrics {
     pub ahead_worst: Option<f64>,
     /// Raw counts so the suite pools without re-weighting percentages.
     pub ahead_samples: usize,
+    /// Milliseconds from finishing a word to the display passing it — the
+    /// "how long until the word I just said goes dim" question, which is what
+    /// a reader actually perceives. Every other accuracy row here measures a
+    /// DISTANCE (how many words behind); this measures the TIME a reader waits,
+    /// and the two are not interchangeable: the same 3-word lag is half a
+    /// second at 150 wpm and a second at 75.
+    #[serde(default)]
+    pub dim_p50_ms: Option<f64>,
+    #[serde(default)]
+    pub dim_p95_ms: Option<f64>,
+    /// Words that were never passed by the display at all before the take
+    /// ended. Kept separate from the percentiles so a run that simply stopped
+    /// following cannot look fast by contributing no samples.
+    #[serde(default)]
+    pub dim_never: usize,
+    /// The raw per-word waits, so the suite can pool a real percentile across
+    /// runs instead of averaging per-run percentiles of unequal word counts.
+    #[serde(default)]
+    pub dim_samples_ms: Vec<f64>,
     pub ahead_eligible: usize,
     /// % of ≥8-content-word items whose display moved before the final.
     pub prefinal_move_pct: Option<f64>,
@@ -236,6 +266,8 @@ pub struct RunSamples {
     /// Signed overshoot (display − last word finished) at every on-script
     /// sample, pausing or speaking. Positive means text was faded early.
     pub ahead: Vec<f64>,
+    /// Per-word time from "reader finished saying it" to "display passed it".
+    pub dim_ms: Vec<f64>,
     /// Absolute error at samples inside a re-spelling window.
     pub span_abs: Vec<f64>,
     /// Display speed (atoms/second) over each motion-eligible interval, so the
@@ -749,6 +781,57 @@ pub fn evaluate(
         Some(percentile(&mut samples.pause_lead.clone(), 95.0))
     };
     m.ahead_eligible = ahead_eligible;
+    // ---- time-to-dim ----
+    //
+    // For every on-script word: when did the reader stop saying it, and when
+    // did the display's mark pass it? The gap is what the presenter sees as
+    // the word going dim behind them.
+    //
+    // Measured from the word's END rather than its start, because a word is
+    // not "said" until it is finished, and only counted from the first lock —
+    // before that the display has no opinion and the wait is not lag, it is
+    // start-up. Words the display never reaches are counted, not dropped.
+    {
+        let from = accuracy_from_ms;
+        for w in &gold.words {
+            let Some((_, span_end)) = w.gold.span() else {
+                continue;
+            };
+            if w.end_ms < from {
+                continue;
+            }
+            // A FRESH cursor per word. `display_at` only ever advances its
+            // cursor, and gold positions are not monotonic — a retake sends the
+            // reader backwards. A cursor left parked in the future by the
+            // previous word's search would then answer from the wrong snapshot
+            // for this one, inflating the wait or reporting a word as never
+            // reached. Cheap to reset; wrong not to.
+            let mut cursor = 0usize;
+            // Walk forward from the moment the word ended until the display
+            // has passed it. The grid is the same one every other row samples.
+            let mut t = w.end_ms;
+            let mut reached: Option<f64> = None;
+            while t <= total {
+                if display_at(replay, t, &mut cursor).position >= span_end {
+                    reached = Some(t);
+                    break;
+                }
+                t += SAMPLE_MS;
+            }
+            match reached {
+                Some(at) => samples.dim_ms.push(at - w.end_ms),
+                // Only a word the take gave a fair chance to counts as missed.
+                None if w.end_ms + DIM_TAIL_GRACE_MS <= total => m.dim_never += 1,
+                None => {}
+            }
+        }
+        if !samples.dim_ms.is_empty() {
+            m.dim_p50_ms = Some(percentile(&mut samples.dim_ms.clone(), 50.0));
+            m.dim_p95_ms = Some(percentile(&mut samples.dim_ms.clone(), 95.0));
+        }
+        m.dim_samples_ms = samples.dim_ms.clone();
+    }
+
     m.ahead_samples = ahead_samples;
     m.ahead_pct = pct(ahead_samples, ahead_eligible);
     m.ahead_s = ahead_samples as f64 * SAMPLE_MS / 1000.0;

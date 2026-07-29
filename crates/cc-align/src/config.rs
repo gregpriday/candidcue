@@ -101,6 +101,20 @@ pub struct AlignmentConfig {
     pub rate_min: f64,
     pub rate_max: f64,
     /// Max forward extrapolation while confidently following (ms).
+    /// Ceiling on how far ahead of the last evidence the display may
+    /// extrapolate, in milliseconds of reader time.
+    ///
+    /// 2400 -> 1400 alongside `lead_margin_atoms`. This is the knob that
+    /// governs a PAUSE: between transcript events the display coasts at the
+    /// reader's estimated pace, and when the reader simply stops, this is what
+    /// decides how long it keeps going. Measured on the Tier-A pause scenario
+    /// at margin 1.6: 2.32 atoms of overshoot at 1800, 1.03 at 1400, 0.90 at
+    /// 1200 — against a guard that allows 2.5.
+    ///
+    /// Lowering it further keeps working (1000 gives 0.56) but starts buying
+    /// stillness: `live.freeze` runs 3.76% at 1800, 4.46% at 1400 and 5.35% at
+    /// 1000. 1400 is where the pause is comfortably safe and the display has
+    /// not yet begun waiting around.
     pub max_prediction_ms: f64,
     /// Extrapolation window after evidence stops arriving (ms).
     pub coast_ms: f64,
@@ -396,7 +410,7 @@ impl Default for AlignmentConfig {
             rate_default: 2.8,
             rate_min: 0.5,
             rate_max: 7.0,
-            max_prediction_ms: 2400.0,
+            max_prediction_ms: 1400.0,
             coast_ms: 300.0,
             pause_onset_ms: 2400.0,
             lead_floor_ms: 0.0,
@@ -451,7 +465,26 @@ impl Default for AlignmentConfig {
             // to 30; holding the plateau for 400 ms took it from 2 to 24. Tune
             // them against `overshoot.*` and `pause_overshoot_p95`, never
             // against the smoothness rows alone.
-            lead_margin_atoms: 2.2,
+            // 2.2 -> 1.6, tuned against `live.dim_p50_ms`: the time between a
+            // reader finishing a word and the display passing it. That is the
+            // thing a presenter perceives, and nothing here measured it until
+            // now — every other accuracy row is a DISTANCE, and the same
+            // 3-word lag is half a second at 150 wpm and a second at 75.
+            //
+            // The margin was also buying less than it looked. Dropping it
+            // IMPROVES `within5` (94.33 -> 95.24) and `p95_abs` (5.29 -> 4.91),
+            // because a permanent trailing offset is a position error as well
+            // as a delay.
+            //
+            // It could not be reduced on its own: the margin is not what holds
+            // the display back during a PAUSE. `pauses_do_not_run_the_display_
+            // ahead` — the guard written from the field report "if I take a
+            // pause, it just keeps rushing forward" — failed at every value
+            // below 2.2, and passed at 2.2 with almost no headroom (2.55 at
+            // 2.1 against a 2.5 limit). What actually runs the display on
+            // through a pause is `max_prediction_ms`, which is why that came
+            // down with it.
+            lead_margin_atoms: 1.6,
             lead_ease_ms: 450.0,
             lead_hold_ms: 0.0,
             lead_decay_ms: 1200.0,

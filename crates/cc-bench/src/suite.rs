@@ -824,6 +824,36 @@ pub fn run_tier_b(
         "s",
         "lower",
     ));
+    // Time-to-dim: the headline responsiveness row, and the only one denominated
+    // in what a reader waits rather than in how far behind the mark sits.
+    //
+    // Pooled over the RAW per-word samples, not averaged over per-run
+    // percentiles. The runs are 75 to 463 words, so a mean of run medians
+    // answers "the median run's median word" and silently gives a 75-word run
+    // six times the weight per word of a 463-word one. `p95_abs`, pause
+    // overshoot and ahead p95 all pool raw samples; this matches them.
+    //
+    // Empty pools report NaN rather than 0. A run that never locked contributes
+    // nothing here, and 0 ms would read as instant rather than as absent.
+    let mut dim_all: Vec<f64> = runs.iter().flat_map(|r| r.dim_samples_ms.clone()).collect();
+    table.push(entry(
+        "live.dim_p50_ms",
+        percentile(&mut dim_all.clone(), 50.0),
+        "ms",
+        "lower",
+    ));
+    table.push(entry(
+        "live.dim_p95_ms",
+        percentile(&mut dim_all, 95.0),
+        "ms",
+        "lower",
+    ));
+    table.push(entry(
+        "live.dim_never",
+        runs.iter().map(|r| r.dim_never as f64).sum::<f64>(),
+        "count",
+        "lower",
+    ));
     table.push(entry(
         "live.wer",
         if wer_words == 0 { 0.0 } else { wer_weighted / wer_words as f64 },

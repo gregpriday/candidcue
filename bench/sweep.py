@@ -31,6 +31,8 @@ from pathlib import Path
 # sometimes AHEAD of the reader is worse than one that trails consistently,
 # because the stage fades text the reader has passed.
 COLUMNS = [
+    ("live.dim_p50_ms", "dim_p50", "low"),
+    ("live.dim_p95_ms", "dim_p95", "low"),
     ("live.within5", "within5", "high"),
     ("live.ahead_time", "ahead%", "low"),
     ("live.ahead_events", "aheadN", "low"),
@@ -38,7 +40,6 @@ COLUMNS = [
     ("live.first_lock_p50", "lock", "low"),
     ("live.recovery_p95", "recov", "low"),
     ("live.freeze", "freeze", "low"),
-    ("live.within2", "within2", "high"),
 ]
 SAFETY = ["live.false_jumps", "live.catastrophic", "live.recovery_failures"]
 

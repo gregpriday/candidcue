@@ -203,6 +203,58 @@ fn the_display_never_fades_past_what_was_spoken() {
     assert_eq!(eval.metrics.catastrophic, 0);
 }
 
+/// A word must go dim soon after it is said.
+///
+/// The complaint this guards: "there's a long delay between when I speak and
+/// when the word darkens." Every other row in this harness measures a DISTANCE
+/// — how many words behind the mark sits — and a distance is not what a reader
+/// perceives. The same three-word lag is half a second at 150 wpm and a full
+/// second at 75, so responsiveness needs a metric denominated in time, and a
+/// bound of its own or nothing stops it drifting back.
+///
+/// The bound is deliberately loose. It is a REGRESSION floor, not a target:
+/// the tuned configuration measures ~0.5 s here, and this fails only if
+/// something puts the delay back where it was.
+#[test]
+fn a_word_goes_dim_soon_after_it_is_said() {
+    let script = starter_script();
+    let n = script.len() as u32;
+    let plan = PerformancePlan {
+        name: "starter_dim_latency".into(),
+        script: "starter".into(),
+        scenario: "exact".into(),
+        seed: 11,
+        ops: vec![PlanOp::Read { from: 0, to: n }],
+        corruption: Corruption::default(),
+    };
+    let performance = expand(&plan, &script);
+    let gold = synthetic_timing(&performance, 150);
+    let events = generate_events(&gold, &plan.corruption, plan.seed);
+    let result = replay(
+        script,
+        AlignmentConfig::default(),
+        &events,
+        &gold.viewport_hints,
+    );
+    let eval = evaluate("starter_dim_latency", "exact", &gold, &result, None);
+
+    let p50 = eval
+        .metrics
+        .dim_p50_ms
+        .expect("a clean read must produce dim samples");
+    assert!(
+        p50 <= 900.0,
+        "a word took {p50} ms to go dim on a clean read (limit 900)"
+    );
+    // Words the display never reaches at all are the failure this percentile
+    // cannot see: they contribute nothing rather than a large number.
+    assert_eq!(
+        eval.metrics.dim_never, 0,
+        "{} words were never passed by the display",
+        eval.metrics.dim_never
+    );
+}
+
 #[test]
 fn pauses_do_not_run_the_display_ahead() {
     // Greg's field report: "if I take a pause, it just keeps rushing
