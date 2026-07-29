@@ -10,7 +10,7 @@
  * so Rust applied its own defaults and it always worked. The take passed the
  * model from the persisted settings document, and on any installation upgraded
  * from the previous provider that document still said `gpt-realtime-whisper`.
- * Inworld answers `code 3, Unsupported model`; the take reconnected seven times
+ * The service answered `Unsupported model`; the take reconnected seven times
  * in twelve seconds and heard nothing, while the Test transcription button
  * beside it kept working perfectly.
  *
@@ -22,9 +22,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
-  SUPPORTED_MODELS,
+  SPEECH_LANGUAGES,
   sttSessionOptions,
-} from '../../../src/control/services/stt/inworld';
+} from '../../../src/control/services/stt/session';
 
 function source(relative: string): string {
   return readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
@@ -37,7 +37,7 @@ function code(text: string): string {
 
 const PIPELINE = code(source('../../../src/control/services/voice-session.ts'));
 const MIC_TEST = code(source('../../../src/control/services/voice-live.ts'));
-const RUST = source('../../../src-tauri/src/inworld/mod.rs');
+const RUST = source('../../../src-tauri/src/stt/mod.rs');
 
 describe('one builder, both callers', () => {
   it('the take builds its options through sttSessionOptions', () => {
@@ -87,20 +87,18 @@ describe('one builder, both callers', () => {
 });
 
 describe('what the builder will and will not forward', () => {
-  it('passes a supported model through', () => {
-    expect(sttSessionOptions({ transcriptionModel: 'inworld/inworld-stt-1' })).toEqual({
-      modelId: 'inworld/inworld-stt-1',
-    });
-  });
-
   /*
-   * The actual defect. A persisted value naming another provider's model must
-   * be DROPPED, not forwarded: an absent field lets Rust apply a default it
-   * knows is valid, where a stale one is a hard provider error mid-take.
+   * There is no model to forward any more, which is why the defect above
+   * cannot recur in that shape. The streaming endpoint takes no model
+   * parameter, the field is gone from the settings document, and a persisted
+   * name from any previous provider is dropped by serde before it can reach a
+   * take. What remains forwardable is the locale and the script.
    */
-  it('drops a model this provider does not serve', () => {
-    for (const stale of ['gpt-realtime-whisper', 'gpt-4o-transcribe', 'whisper-1', '']) {
-      expect(sttSessionOptions({ transcriptionModel: stale }).modelId).toBeUndefined();
+  it('ignores a model name from any previous provider entirely', () => {
+    for (const stale of ['gpt-realtime-whisper', 'inworld/inworld-stt-1', 'whisper-1']) {
+      const built = sttSessionOptions({ transcriptionModel: stale } as never);
+      expect(built).toEqual({});
+      expect('modelId' in built).toBe(false);
     }
   });
 
@@ -112,9 +110,10 @@ describe('what the builder will and will not forward', () => {
   });
 
   it('trims, because a stored value with whitespace is still a real choice', () => {
-    expect(sttSessionOptions({ transcriptionModel: '  inworld/inworld-stt-1  ' })).toEqual({
-      modelId: 'inworld/inworld-stt-1',
-    });
+    expect(sttSessionOptions({ language: '  en-GB  ' })).toEqual({ language: 'en-GB' });
+    // Whitespace-only is not a choice at all — it must fall back to Rust's
+    // default rather than open a session on an empty language parameter.
+    expect(sttSessionOptions({ language: '   ' })).toEqual({});
   });
 });
 
@@ -159,24 +158,36 @@ describe('the script vocabulary the take offers the recogniser (§26)', () => {
   });
 });
 
-describe('the two model lists agree', () => {
+describe('the locale the picker offers is one the wire will accept', () => {
   /*
-   * Rust is the authority and re-checks whatever arrives, so this duplicate
-   * only stops a bad value being offered or sent. But a list that drifts is
-   * worse than no list: the UI would offer a model the backend silently
-   * replaces, and the setting would appear to do nothing.
+   * Two forms of the same setting, in two languages, and only one of them is
+   * legal on the wire: the picker stores BCP-47 (`en-US`) because that is what
+   * a presenter recognises, and the provider takes only a primary subtag
+   * (`en`). Rust narrows it at the moment the URL is built.
+   *
+   * The failure this guards is the quiet one. An unknown query parameter is
+   * IGNORED rather than rejected, so a regional tag reaching the wire does not
+   * fail the session — it runs it on the service's own default language, and
+   * nothing anywhere reports that the choice was discarded.
    */
-  it('the TypeScript list matches SUPPORTED_MODELS in Rust', () => {
-    const declared = /pub const SUPPORTED_MODELS: &\[&str\] = &\[([^\]]*)\]/.exec(RUST);
-    expect(declared, 'SUPPORTED_MODELS must exist in src-tauri/src/inworld/mod.rs').not.toBeNull();
-    const rustModels = [...(declared?.[1] ?? '').matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-    expect(rustModels.length).toBeGreaterThan(0);
-    expect([...SUPPORTED_MODELS].sort()).toEqual([...rustModels].sort());
+  it('every language the UI offers narrows to a bare subtag', () => {
+    expect(SPEECH_LANGUAGES.length).toBeGreaterThan(0);
+    for (const { value } of SPEECH_LANGUAGES) {
+      const narrowed = value.split('-')[0];
+      expect(narrowed, `${value} must have a primary subtag`).toBeTruthy();
+      expect(narrowed).toMatch(/^[a-z]{2}$/);
+    }
   });
 
-  it('the default Rust falls back to is one the UI would accept', () => {
-    const fallback = /pub const DEFAULT_MODEL: &str = "([^"]+)"/.exec(RUST)?.[1];
-    expect(fallback).toBeTruthy();
-    expect(SUPPORTED_MODELS).toContain(fallback);
+  it('the UI default and the Rust default are the same choice', () => {
+    const tag = /pub const DEFAULT_LANGUAGE_TAG: &str = "([^"]+)"/.exec(RUST)?.[1];
+    const wire = /pub const DEFAULT_LANGUAGE: &str = "([^"]+)"/.exec(RUST)?.[1];
+    expect(tag, 'DEFAULT_LANGUAGE_TAG must exist in src-tauri/src/stt/mod.rs').toBeTruthy();
+    expect(wire, 'DEFAULT_LANGUAGE must exist in src-tauri/src/stt/mod.rs').toBeTruthy();
+    // The stored default must be offered by the picker, and must narrow to the
+    // wire default. Either half drifting is a session that silently runs on a
+    // language nobody chose.
+    expect(SPEECH_LANGUAGES.map((l) => l.value)).toContain(tag);
+    expect(tag?.split('-')[0]).toBe(wire);
   });
 });

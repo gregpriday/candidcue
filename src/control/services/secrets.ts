@@ -1,5 +1,5 @@
 /**
- * Inworld key lifecycle (spec §46.4). The candidate key crosses the boundary
+ * xAI key lifecycle (spec §46.4). The candidate key crosses the boundary
  * exactly once per validate/save call and is never retained, logged, or
  * echoed back — callers must clear their field state after submission.
  *
@@ -9,7 +9,7 @@
  */
 import { ipcInvoke, isTauriRuntime, BackendUnavailableError } from './ipc';
 import { mockSecrets } from './mock-backend';
-import type { InworldKeySource, InworldKeyStatus, KeyValidationResult } from './secrets-types';
+import type { SttKeySource, SttKeyStatus, KeyValidationResult } from './secrets-types';
 
 interface RustKeyValidationResult {
   status: string;
@@ -41,7 +41,7 @@ function mapValidation(rust: RustKeyValidationResult): KeyValidationResult {
  * guessing `environment` would put a development-only warning in front of a
  * real user.
  */
-function sourceFromRust(raw: string | undefined, present: boolean): InworldKeySource {
+function sourceFromRust(raw: string | undefined, present: boolean): SttKeySource {
   if (!present) return 'none';
   return raw === 'environment' ? 'environment' : 'keychain';
 }
@@ -50,7 +50,7 @@ function statusFromHint(
   hint: string | undefined,
   present: boolean,
   source?: string,
-): InworldKeyStatus {
+): SttKeyStatus {
   if (!present) return { present: false, state: 'unknown', source: 'none' };
   const lastFour = hint ? hint.slice(-4) : undefined;
   return {
@@ -61,10 +61,10 @@ function statusFromHint(
   };
 }
 
-export async function validateInworldKey(candidateKey: string): Promise<KeyValidationResult> {
+export async function validateSttKey(candidateKey: string): Promise<KeyValidationResult> {
   if (!isTauriRuntime()) return mockSecrets.validate(candidateKey);
   try {
-    const rust = await ipcInvoke<RustKeyValidationResult>('validate_inworld_key', { candidateKey });
+    const rust = await ipcInvoke<RustKeyValidationResult>('validate_stt_key', { candidateKey });
     return mapValidation(rust);
   } catch (err) {
     if (err instanceof BackendUnavailableError) return mockSecrets.validate(candidateKey);
@@ -72,40 +72,40 @@ export async function validateInworldKey(candidateKey: string): Promise<KeyValid
   }
 }
 
-export async function saveInworldKey(candidateKey: string): Promise<InworldKeyStatus> {
+export async function saveSttKey(candidateKey: string): Promise<SttKeyStatus> {
   if (!isTauriRuntime()) return mockSecrets.save(candidateKey);
-  const metadata = await ipcInvoke<{ hint: string; source?: string }>('save_inworld_key', {
+  const metadata = await ipcInvoke<{ hint: string; source?: string }>('save_stt_key', {
     candidateKey,
   });
   return statusFromHint(metadata.hint, true, metadata.source);
 }
 
-export async function getInworldKeyStatus(): Promise<InworldKeyStatus> {
+export async function getSttKeyStatus(): Promise<SttKeyStatus> {
   if (!isTauriRuntime()) return mockSecrets.status();
   const rust = await ipcInvoke<{ present: boolean; hint?: string; source?: string }>(
-    'get_inworld_key_status',
+    'get_stt_key_status',
   );
   return statusFromHint(rust.hint, rust.present, rust.source);
 }
 
-export async function deleteInworldKey(): Promise<void> {
+export async function deleteSttKey(): Promise<void> {
   if (!isTauriRuntime()) return mockSecrets.remove();
-  return ipcInvoke<void>('delete_inworld_key');
+  return ipcInvoke<void>('delete_stt_key');
 }
 
 /**
  * Ask the provider whether the STORED key still works.
  *
- * Distinct from `validateInworldKey`, which takes a candidate the user just
+ * Distinct from `validateSttKey`, which takes a candidate the user just
  * typed. There is no way to do this from JavaScript — the key is in the OS
  * credential store and deliberately never crosses this boundary — so Rust
  * reads it and performs the round-trip. Nothing about the key comes back;
  * only whether it worked.
  */
-export async function testStoredInworldKey(): Promise<KeyValidationResult> {
+export async function testStoredSttKey(): Promise<KeyValidationResult> {
   if (!isTauriRuntime()) return mockSecrets.validate('mock-stored-key');
   try {
-    const rust = await ipcInvoke<RustKeyValidationResult>('test_inworld_key');
+    const rust = await ipcInvoke<RustKeyValidationResult>('test_stt_key');
     return mapValidation(rust);
   } catch (err) {
     if (err instanceof BackendUnavailableError) return mockSecrets.validate('mock-stored-key');

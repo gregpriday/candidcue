@@ -3,7 +3,7 @@
  *
  * Takes the single microphone stream the session already owns and produces
  * fixed-size mono frames at the one sample rate the provider is told about.
- * Nothing here decides whether the presenter is speaking: Inworld endpoints
+ * Nothing here decides whether the presenter is speaking: xAI endpoints
  * server-side, so this pipe is unconditional for the length of a take. A frame
  * of silence is not waste — it is what tells the server the sentence ended.
  *
@@ -29,7 +29,7 @@
  *    every frame is silence and the symptom is indistinguishable from someone
  *    who never spoke. It is resumed explicitly.
  */
-import { STT_SAMPLE_RATE_HZ, STT_FRAME_MS } from '../stt/inworld';
+import { STT_SAMPLE_RATE_HZ, STT_FRAME_MS } from '../stt/session';
 import type { MediaStreamLike } from './types';
 
 /** Samples in one outbound frame. */

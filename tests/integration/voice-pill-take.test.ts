@@ -34,7 +34,7 @@
  * the audio clock and the decision clock together, exactly as production does.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { STT_SAMPLE_RATE_HZ } from '../../src/control/services/stt/inworld';
+import { STT_SAMPLE_RATE_HZ } from '../../src/control/services/stt/session';
 import type {
   CompiledScript,
   StageDirective,

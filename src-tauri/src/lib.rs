@@ -13,7 +13,7 @@ pub mod database;
 pub mod dialogs;
 pub mod diagnostics;
 pub mod errors;
-pub mod inworld;
+pub mod stt;
 pub mod scripts;
 pub mod secrets;
 pub mod sessions;

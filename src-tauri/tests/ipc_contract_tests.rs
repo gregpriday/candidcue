@@ -821,7 +821,7 @@ fn an_audio_section_without_a_sensitivity_loads_at_the_neutral_midpoint() {
 // §46.4 — which key is in play, and the release build's inability to be told
 // ---------------------------------------------------------------------------
 
-use candidcue_lib::commands::inworld_cmds::InworldKeyStatus;
+use candidcue_lib::commands::stt_cmds::SttKeyStatus;
 use candidcue_lib::secrets::{dev_env_key_active, KeySource, RedactedSecretMetadata,
     DEV_KEY_ENV_VAR};
 
@@ -831,7 +831,7 @@ fn key_status_fixture() -> serde_json::Value {
         .join("tests")
         .join("fixtures")
         .join("ipc")
-        .join("inworld-key-status.json");
+        .join("stt-key-status.json");
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("{} must exist: {e}", path.display()));
     serde_json::from_str(&raw).expect("fixture parses")
@@ -845,7 +845,7 @@ fn key_status_fixture() -> serde_json::Value {
 fn key_status_serializes_the_source_to_the_frontend_shape() {
     let f = key_status_fixture();
 
-    let keychain = InworldKeyStatus {
+    let keychain = SttKeyStatus {
         present: true,
         hint: Some("sk-…7f2a".into()),
         source: KeySource::Keychain,
@@ -855,7 +855,7 @@ fn key_status_serializes_the_source_to_the_frontend_shape() {
         f["expectedKeychainStatus"]
     );
 
-    let environment = InworldKeyStatus {
+    let environment = SttKeyStatus {
         present: true,
         hint: Some("sk-…9c41".into()),
         source: KeySource::Environment,
@@ -865,7 +865,7 @@ fn key_status_serializes_the_source_to_the_frontend_shape() {
         f["expectedEnvironmentStatus"]
     );
 
-    let absent = InworldKeyStatus {
+    let absent = SttKeyStatus {
         present: false,
         hint: None,
         source: KeySource::Absent,
@@ -1019,15 +1019,15 @@ fn save_refuses_under_the_override_before_it_validates_anything() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join("commands")
-            .join("inworld_cmds.rs"),
+            .join("stt_cmds.rs"),
     )
-    .expect("inworld_cmds.rs");
+    .expect("stt_cmds.rs");
     let body = source
-        .split_once("pub async fn save_inworld_key(")
-        .expect("save_inworld_key")
+        .split_once("pub async fn save_stt_key(")
+        .expect("save_stt_key")
         .1;
     let guard = body.find("dev_env_key_active()").expect(
-        "save_inworld_key must refuse while the debug environment override is set, \
+        "save_stt_key must refuse while the debug environment override is set, \
          or the save silently vanishes behind it",
     );
     let validate = body.find("validate_key").expect("save_openai_key validates");
@@ -1040,13 +1040,13 @@ fn save_refuses_under_the_override_before_it_validates_anything() {
     // owns, which is a real and complete effect, and the environment key that
     // survives is reported honestly as `source: \"environment\"`.
     let delete = source
-        .split_once("pub async fn delete_inworld_key(")
-        .expect("delete_inworld_key")
+        .split_once("pub async fn delete_stt_key(")
+        .expect("delete_stt_key")
         .1;
     let delete_body = delete.split_once("\n}").expect("delete body").0;
     assert!(
         !delete_body.contains("dev_env_key_active"),
-        "delete_inworld_key must still remove the stored key; refusing it would \
+        "delete_stt_key must still remove the stored key; refusing it would \
          leave the operator no way to clear the credential store at all"
     );
 }

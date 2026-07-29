@@ -1,8 +1,8 @@
-//! Secret handling (spec §44.6). The Inworld key enters Rust once through a
+//! Secret handling (spec §44.6). The xAI key enters Rust once through a
 //! one-shot masked field and never returns to JavaScript.
 //!
 //! A packaged build has exactly one source for that key: the OS credential
-//! store. A *debug* build has a second one — the `INWORLD_API_KEY` environment
+//! store. A *debug* build has a second one — the `GROK_API_KEY` environment
 //! variable — which exists solely to keep macOS from re-prompting for the login
 //! password on every `tauri dev` rebuild; see [`dev_env_key`] for the reason and
 //! for how it is kept out of release binaries. Everything else in this module is
@@ -15,12 +15,12 @@ use async_trait::async_trait;
 use crate::errors::AppError;
 
 const SERVICE_NAME: &str = "com.candidcue.app";
-const INWORLD_KEY_ENTRY: &str = "inworld-api-key";
+const STT_KEY_ENTRY: &str = "grok-api-key";
 
 /// The variable a *debug* build consults ahead of the OS credential store.
 /// Named for the ecosystem convention so a shell that already exports a key for
-/// the Inworld SDKs needs no second variable.
-pub const DEV_KEY_ENV_VAR: &str = "INWORLD_API_KEY";
+/// the xAI SDKs needs no second variable.
+pub const DEV_KEY_ENV_VAR: &str = "GROK_API_KEY";
 
 /// A secret that redacts `Debug`/`Display` output.
 pub struct SecretString(String);
@@ -57,7 +57,7 @@ impl std::fmt::Display for SecretString {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum KeySource {
-    /// The debug-only `INWORLD_API_KEY` override; impossible in a release build.
+    /// The debug-only `GROK_API_KEY` override; impossible in a release build.
     Environment,
     /// The OS credential store — the only source a packaged build has.
     Keychain,
@@ -109,7 +109,7 @@ fn dev_env_key() -> Option<SecretString> {
     override_from_raw(std::env::var(DEV_KEY_ENV_VAR).ok()).or_else(dev_dotenv_key)
 }
 
-/// Second debug-only source: `INWORLD_API_KEY` in the project's `.env`.
+/// Second debug-only source: `GROK_API_KEY` in the project's `.env`.
 ///
 /// `tauri dev` inherits the shell's environment, and a `.env` file is not part
 /// of it — Vite loads one for the frontend, Rust does not. So a developer who
@@ -180,10 +180,10 @@ fn hint_for(key: &SecretString) -> String {
 
 #[async_trait]
 pub trait SecretStore: Send + Sync {
-    async fn set_inworld_key(&self, key: SecretString) -> Result<(), AppError>;
-    async fn get_inworld_key(&self) -> Result<Option<SecretString>, AppError>;
-    async fn delete_inworld_key(&self) -> Result<(), AppError>;
-    async fn describe_inworld_key(&self) -> Result<Option<RedactedSecretMetadata>, AppError>;
+    async fn set_stt_key(&self, key: SecretString) -> Result<(), AppError>;
+    async fn get_stt_key(&self) -> Result<Option<SecretString>, AppError>;
+    async fn delete_stt_key(&self) -> Result<(), AppError>;
+    async fn describe_stt_key(&self) -> Result<Option<RedactedSecretMetadata>, AppError>;
 }
 
 /// OS credential store implementation backed by `keyring`
@@ -192,7 +192,7 @@ pub struct OsSecretStore;
 
 impl OsSecretStore {
     fn entry() -> Result<keyring::Entry, AppError> {
-        Ok(keyring::Entry::new(SERVICE_NAME, INWORLD_KEY_ENTRY)?)
+        Ok(keyring::Entry::new(SERVICE_NAME, STT_KEY_ENTRY)?)
     }
 
     /// The credential-store read on its own, with the environment override out
@@ -218,28 +218,28 @@ impl OsSecretStore {
 
 #[async_trait]
 impl SecretStore for OsSecretStore {
-    async fn set_inworld_key(&self, key: SecretString) -> Result<(), AppError> {
+    async fn set_stt_key(&self, key: SecretString) -> Result<(), AppError> {
         Self::entry()?.set_password(key.expose())?;
         Ok(())
     }
 
-    async fn get_inworld_key(&self) -> Result<Option<SecretString>, AppError> {
+    async fn get_stt_key(&self) -> Result<Option<SecretString>, AppError> {
         Ok(self.resolve()?.0)
     }
 
     /// Deletes the credential-store entry only. The environment override is not
     /// this process's to remove, so a delete performed while it is set does
-    /// exactly what it says and no more; `describe_inworld_key` then keeps
+    /// exactly what it says and no more; `describe_stt_key` then keeps
     /// reporting `Environment`, which is the honest answer rather than a
     /// pretend-empty one.
-    async fn delete_inworld_key(&self) -> Result<(), AppError> {
+    async fn delete_stt_key(&self) -> Result<(), AppError> {
         match Self::entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(err) => Err(err.into()),
         }
     }
 
-    async fn describe_inworld_key(&self) -> Result<Option<RedactedSecretMetadata>, AppError> {
+    async fn describe_stt_key(&self) -> Result<Option<RedactedSecretMetadata>, AppError> {
         let (key, source) = self.resolve()?;
         Ok(key.map(|key| RedactedSecretMetadata {
             hint: hint_for(&key),

@@ -1,4 +1,4 @@
-//! Live capture: stream synthesised fixture audio through the actual Inworld
+//! Live capture: stream synthesised fixture audio through the actual Grok
 //! endpoint via cc-stt (the same wire protocol the app uses) and persist the
 //! resulting event log as an immutable replay fixture.
 //!
@@ -10,29 +10,29 @@ use std::path::Path;
 
 use tokio::sync::mpsc;
 
-use cc_stt::{stream_pcm, SttFrame, TranscribeConfig};
+use cc_stt::{stream_pcm, SttConfig, SttFrame};
 
 /// Stream `pcm` and return every frame observed, in order.
 pub async fn capture_events(pcm: &[u8], pace: f64) -> anyhow::Result<Vec<SttFrame>> {
     capture_events_with(pcm, pace, &[]).await
 }
 
-/// Stream `pcm` with a custom vocabulary on the config frame.
+/// Stream `pcm` with a custom vocabulary (`keyterm`) on the session URL.
 ///
-/// `prompts` empty is byte-for-byte the request [`capture_events`] has always
-/// made, which is what lets a vocabulary run be compared against a frozen
-/// fixture captured before this parameter existed.
+/// `keyterms` empty is byte-for-byte the request [`capture_events`] has always
+/// made, which is what lets a vocabulary run be compared against a fixture
+/// captured before this parameter existed.
 pub async fn capture_events_with(
     pcm: &[u8],
     pace: f64,
-    prompts: &[String],
+    keyterms: &[String],
 ) -> anyhow::Result<Vec<SttFrame>> {
-    let key = std::env::var("INWORLD_API_KEY")
-        .map_err(|_| anyhow::anyhow!("INWORLD_API_KEY not set in the environment"))?;
+    let key = std::env::var("GROK_API_KEY")
+        .map_err(|_| anyhow::anyhow!("GROK_API_KEY not set in the environment"))?;
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let config = TranscribeConfig {
-        prompts: prompts.to_vec(),
-        ..TranscribeConfig::default()
+    let config = SttConfig {
+        keyterms: keyterms.to_vec(),
+        ..SttConfig::default()
     };
 
     let streamer = stream_pcm(&key, &config, pcm, 100, pace, tx);

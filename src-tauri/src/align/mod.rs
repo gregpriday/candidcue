@@ -6,7 +6,7 @@
 //! The alignment engine is a pure crate (`crates/cc-align`): no I/O, no clocks,
 //! no randomness. This module is everything the crate deliberately refuses to
 //! know — where transcript frames come from, what the audio clock reads, and
-//! who wants to hear the answer. It sits next to the Inworld socket because
+//! who wants to hear the answer. It sits next to the xAI socket because
 //! that is where the frames and the audio clock already are: feeding the engine
 //! anywhere else would mean shipping both across a process boundary and
 //! re-deriving a clock on the far side, which is precisely the arrangement the
@@ -42,7 +42,7 @@ use cc_align::{project_to_tokens, AlignmentConfig, Engine, SessionEvent, TokenIn
 use serde::Deserialize;
 use tauri::{Emitter, Manager};
 
-use crate::inworld::stream::SttFrame;
+use crate::stt::stream::SttFrame;
 use crate::windows::{events, CONTROL_LABEL, STAGE_LABEL};
 
 /// One spoken token, as the app's compiler produced it.
@@ -86,7 +86,7 @@ pub type AlignmentSnapshot = cc_align::TokenSnapshot;
 ///     another's. Nothing is filtered on it here.
 ///
 ///   * `stream_generation` is the TRANSCRIPTION generation — Rust's own count
-///     of Inworld sockets, minted by `InworldClient::start_stream`. This is
+///     of xAI sockets, minted by `SttClient::start_stream`. This is
 ///     what a frame carries, and therefore the only thing a frame may be
 ///     filtered against.
 ///
@@ -163,7 +163,7 @@ impl AlignmentState {
 
     /// Tie the armed session to the transcription socket now feeding it.
     ///
-    /// Called by `InworldClient::start_stream` at the moment a generation is
+    /// Called by `SttClient::start_stream` at the moment a generation is
     /// minted, which is the only place that number exists — asking the frontend
     /// for it would be asking it to guess, and the guess it made was the
     /// session generation.
@@ -329,7 +329,7 @@ fn publish<R: tauri::Runtime>(app: &tauri::AppHandle<R>, snapshot: &AlignmentSna
 
 /// Tie the armed alignment session to a newly minted transcription socket.
 ///
-/// Called from `InworldClient::start_stream`, which is where the generation
+/// Called from `SttClient::start_stream`, which is where the generation
 /// comes into existence. `try_state` rather than `state`: a runtime that never
 /// managed an `AlignmentState` (a Rust integration test standing up the stream
 /// alone) must not panic here — it simply has no alignment to bind.
@@ -339,7 +339,7 @@ pub fn bind_stream_generation<R: tauri::Runtime>(app: &tauri::AppHandle<R>, gene
     }
 }
 
-/// The single hook the Inworld stream calls. Called only for transcript frames,
+/// The single hook the xAI stream calls. Called only for transcript frames,
 /// with the audio clock read at arrival.
 pub fn observe_frame<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
@@ -835,7 +835,7 @@ mod starter_script_tests {
         tokens
     }
 
-    /// The two utterances Inworld returned, at the word counts the trace
+    /// The two utterances the provider returned, at the word counts the trace
     /// recorded — partials included, because a take is followed as it happens.
     const TAKE: &[(&str, &[&str], &str)] = &[
         (

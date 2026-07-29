@@ -1,7 +1,7 @@
 # CandidCue
 
 A voice-following teleprompter. You write a script in Markdown; it displays on a
-second screen behind your camera, usually through teleprompter glass; Inworld
+second screen behind your camera, usually through teleprompter glass; Grok (xAI)
 transcribes you as you speak; and a local alignment engine scrolls the script to
 keep your place. That is the whole product: it follows you, shows you where you
 are, and lets you jump forward and back.
@@ -21,11 +21,11 @@ and the **stage** window, which goes on your second display. On first run, take
 the **"Open the sample script"** button — the sample is written to be read out
 loud and tells you what to watch for while you read it.
 
-You will need an Inworld API key to do anything with voice. Add it in Settings
+You will need an xAI API key to do anything with voice. Add it in Settings
 → Speech; it is stored in the OS keychain and never reaches the frontend.
 
 The key never leaves Rust, and neither does the transcription socket. That is
-not only a precaution: Inworld authenticates a stream with an `Authorization`
+not only a precaution: xAI authenticates a stream with an `Authorization`
 header, and a browser `WebSocket` cannot send one. The renderer captures audio
 and pushes PCM frames over IPC; Rust holds the connection and emits transcript
 events back. Neither window's CSP allows a request to any remote host.
@@ -40,13 +40,13 @@ pnpm check       # typecheck (svelte-check) — authoritative
 cd src-tauri && cargo test
 ```
 
-There is also a live smoke test that streams real audio to the real Inworld API
+There is also a live smoke test that streams real audio to the real xAI API
 and asserts on the words that come back. It is opt-in and skips cleanly without
 both the flag and a key, so the normal suite never touches the network or spends
 money:
 
 ```bash
-CANDIDCUE_LIVE_INWORLD=1 pnpm vitest run tests/integration/inworld-transcription.live.test.ts
+CANDIDCUE_LIVE_GROK=1 pnpm vitest run tests/integration/grok-transcription.live.test.ts
 ```
 
 It is the only test that can tell a healthy socket apart from one that
@@ -63,7 +63,7 @@ here has repeatedly coexisted with a broken product.
 syntax; the alignment engine including section-boundary liveness; the stage
 motion controller's realized velocity, acceleration and jerk limits; the Rust
 core, its security model and the IPC boundary; and real speech through the live
-Inworld API into real transcript events.
+xAI API into real transcript events.
 
 **Verified only in a browser, not on a real device:** every frontend journey in
 `pnpm test:e2e` runs against the Vite dev server with an injected Tauri shim, so
@@ -91,7 +91,7 @@ src/shared/     compiler, alignment, contracts — no I/O, testable in node
 src/control/    the control window (routes, stores, services)
 src/stage/      the stage window (renderer, motion)
 src/workers/    compiler and tracking Web Workers
-src-tauri/      Rust core: database, scripts, assets, secrets, Inworld STT, IPC
+src-tauri/      Rust core: database, scripts, assets, secrets, Grok STT, IPC
 docs/           the three specifications this is built from
 ```
 
@@ -99,7 +99,7 @@ The specs in `docs/` describe an earlier design that included live coaching and
 an OpenAI semantic sidecar. Both have been removed; the smooth-following spec
 still governs tracking and motion, and the product spec covers everything else.
 Where they describe coaching, a second model, or OpenAI, the code is the
-authority — see `src-tauri/src/inworld/` for what actually happens now.
+authority — see `src-tauri/src/stt/` for what actually happens now.
 
 ## Conventions
 

@@ -1,15 +1,21 @@
-//! Live check that a vocabulary config frame is ACCEPTED.
+//! Live check that a custom vocabulary is ACCEPTED by the session URL.
 //!
-//! This is the cheap half of testing `transcribeConfig.prompts`, and the half
-//! that guards the expensive failure. The config frame leads the socket, so a
-//! term the gateway dislikes does not degrade a take — it returns
-//! `INVALID_ARGUMENT` and there is no take at all. Every punctuation mark
-//! `cc_align::vocab::sanitize` is willing to emit is exercised here against the
-//! real service, on a second of silence, for a fraction of a cent.
+//! This is the cheap half of testing `keyterm`, and the half that guards the
+//! expensive failure. The terms ride on the URL that OPENS the socket, so a
+//! vocabulary the gateway dislikes does not degrade a take — the upgrade is
+//! refused and there is no take at all. Every shape `cc_align::vocab::sanitize`
+//! is willing to emit is exercised here against the real service, on a second
+//! and a half of silence, for a fraction of a cent.
 //!
-//! Gated on `INWORLD_API_KEY`: it is skipped, loudly, when there is no key.
+//! The previous provider validated the term text itself, so a deliberately
+//! invalid character was a meaningful negative control. That control is gone
+//! on purpose: `SttConfig::stream_url` percent-encodes every term, so no
+//! character can reach the gateway as syntax. What can still break a session
+//! is COUNT and LENGTH, which is what the second test covers.
+//!
+//! Gated on `GROK_API_KEY`: skipped, loudly, when there is no key.
 
-use cc_stt::{SttFrame, TranscribeConfig, SAMPLE_RATE_HZ};
+use cc_stt::{SttConfig, SttFrame, MAX_KEYTERMS, SAMPLE_RATE_HZ};
 use tokio::sync::mpsc;
 
 /// A second and a half of silence — enough audio for the service to accept the
@@ -18,12 +24,17 @@ fn silence() -> Vec<u8> {
     vec![0u8; (SAMPLE_RATE_HZ as usize * 2 * 3) / 2]
 }
 
-async fn errors_for(prompts: Vec<String>) -> Vec<String> {
-    let key = std::env::var("INWORLD_API_KEY").expect("checked by the caller");
+/// Run a session carrying `keyterms` and return everything that went wrong.
+///
+/// A connect-time refusal surfaces as an `Err` from `stream_pcm`, not as an
+/// `Error` frame, because the URL is rejected before there is a socket to
+/// carry frames — so both are collected.
+async fn errors_for(keyterms: Vec<String>) -> Vec<String> {
+    let key = std::env::var("GROK_API_KEY").expect("checked by the caller");
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let config = TranscribeConfig {
-        prompts,
-        ..TranscribeConfig::default()
+    let config = SttConfig {
+        keyterms,
+        ..SttConfig::default()
     };
     let pcm = silence();
     let streamer = cc_stt::stream_pcm(&key, &config, &pcm, 100, 4.0, tx);
@@ -38,25 +49,21 @@ async fn errors_for(prompts: Vec<String>) -> Vec<String> {
         }
         messages
     };
-    let (stream, messages) = tokio::join!(streamer, collector);
-    // A transport failure is not the same as a rejected config, and reporting
-    // one as the other would turn a flaky network into a false verdict about
-    // the sanitiser.
+    let (stream, mut messages) = tokio::join!(streamer, collector);
     if let Err(err) = stream {
-        panic!("stream failed before the service could answer: {err}");
+        messages.push(err);
     }
     messages
 }
 
 #[tokio::test]
-async fn every_punctuation_mark_the_sanitiser_emits_is_accepted() {
-    if std::env::var("INWORLD_API_KEY").is_err() {
-        eprintln!("SKIP: INWORLD_API_KEY not set — live config check not run");
+async fn every_shape_the_sanitiser_emits_is_accepted() {
+    if std::env::var("GROK_API_KEY").is_err() {
+        eprintln!("SKIP: GROK_API_KEY not set — live config check not run");
         return;
     }
-    // One term per character class the allowlist permits, plus the shapes the
-    // extractor actually produces.
-    let prompts = vec![
+    // One term per character class the extractor can produce.
+    let keyterms = vec![
         "RustLight Games".to_string(),
         "twenty-seven".to_string(),
         "2.4 million dollars".to_string(),
@@ -68,31 +75,41 @@ async fn every_punctuation_mark_the_sanitiser_emits_is_accepted() {
         "Siobhán Ó Faoláin".to_string(),
         "nobody's".to_string(),
         "Anne-Marie Okonkwo, again".to_string(),
+        // Deliberately included: percent-encoding must make these inert rather
+        // than letting them terminate the query string.
+        "build v2#final".to_string(),
+        "A&B Testing".to_string(),
     ];
-    let errors = errors_for(prompts).await;
+    let errors = errors_for(keyterms).await;
     assert!(
         errors.is_empty(),
         "the service rejected a vocabulary the sanitiser considers safe: {errors:?}"
     );
 }
 
-/// The negative control.
+/// A full vocabulary must still open a socket.
 ///
-/// Without it, the test above proves only that nothing went wrong — which is
-/// also what it would print if the service ignored `prompts` entirely, the way
-/// this service is documented to ignore unknown config keys. A `#` must be
-/// REJECTED for "accepted" to carry information.
+/// This is the failure the cap exists to prevent, and the only one that can
+/// still take a take out entirely: the terms are URL parameters, so a
+/// vocabulary large enough to blow a header limit is refused at the upgrade.
+/// A script long enough to yield 100 distinct terms is entirely ordinary.
 #[tokio::test]
-async fn a_character_outside_the_allowlist_is_rejected() {
-    if std::env::var("INWORLD_API_KEY").is_err() {
-        eprintln!("SKIP: INWORLD_API_KEY not set — live config check not run");
+async fn a_full_hundred_term_vocabulary_still_opens_a_session() {
+    if std::env::var("GROK_API_KEY").is_err() {
+        eprintln!("SKIP: GROK_API_KEY not set — live config check not run");
         return;
     }
-    let errors = errors_for(vec!["build v2#final".to_string()]).await;
+    // Over the cap and over the length limit on purpose: what reaches the wire
+    // is whatever `sanitised_keyterms` allows through, and this asserts the
+    // service accepts exactly that.
+    let mut keyterms: Vec<String> = (0..MAX_KEYTERMS + 40)
+        .map(|i| format!("Keyterm Number {i}"))
+        .collect();
+    keyterms.push("x".repeat(80));
+
+    let errors = errors_for(keyterms).await;
     assert!(
-        !errors.is_empty(),
-        "the gateway accepted `#`, so it is not validating `prompts` at all — \
-         the sanitiser's allowlist may be stricter than it needs to be, and \
-         `every_punctuation_mark_the_sanitiser_emits_is_accepted` proves nothing"
+        errors.is_empty(),
+        "a capped vocabulary was still refused — the cap or the encoding is wrong: {errors:?}"
     );
 }

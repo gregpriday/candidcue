@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A voice-following teleprompter. You write Markdown in the **control** window; it
-renders on a second display in the **stage** window; Inworld transcribes your
+renders on a second display in the **stage** window; Grok (xAI) transcribes your
 speech; a deterministic Rust engine decides where in the script you are and
 scrolls the stage to match. Nothing on the glass is model-generated — the model
 only transcribes.
@@ -45,7 +45,7 @@ Opt-in live tests (skip cleanly without the flag + key, so the normal suite
 never hits the network):
 
 ```bash
-CANDIDCUE_LIVE_INWORLD=1 ./node_modules/.bin/vitest run tests/integration/inworld-transcription.live.test.ts
+CANDIDCUE_LIVE_GROK=1 ./node_modules/.bin/vitest run tests/integration/grok-transcription.live.test.ts
 ```
 
 Alignment benchmarks (`bench/README.md` has the full story):
@@ -73,16 +73,23 @@ created at runtime from `src-tauri/src/windows/`.
 ### The trust boundary is the point
 
 Rust owns secrets (OS keychain), the SQLite database, the filesystem, and the
-Inworld socket. The webviews only ever see typed IPC results, and neither
+xAI socket. The webviews only ever see typed IPC results, and neither
 window's CSP allows a request to any remote host.
 
-The Inworld socket **must** live in Rust: Inworld authenticates a stream with an
-`Authorization: Basic` *header*, and a browser `WebSocket` cannot send one (the
-query-parameter form the docs describe upgrades with a 101 and then transcribes
-nothing). So: renderer captures PCM → `push_transcription_audio` over IPC →
-`src-tauri/src/inworld/stream.rs` holds the connection → frames come back as
-events. Audio must keep flowing for the length of a take; server-side VAD needs
-the silence to decide an utterance ended.
+The STT socket **must** live in Rust: Grok authenticates a stream with an
+`Authorization: Bearer` *header*, a browser `WebSocket` cannot send one, and
+xAI's own docs say the key must never reach client-side code. So: renderer
+captures PCM → `push_transcription_audio` over IPC → `src-tauri/src/stt/stream.rs`
+holds the connection → frames come back as events. Audio must keep flowing for
+the length of a take; server-side VAD needs the silence to decide an utterance
+ended.
+
+The session is configured entirely by URL query — there is no config frame — and
+audio goes out as raw binary. Finality arrives in two flags: `is_final` locks a
+~3 s chunk, `speech_final` closes the utterance. The docs never say whether the
+utterance-final repeats the locked chunks, so `Utterances::finish` checks rather
+than guesses; see the module header. There is deliberately **no model setting** —
+the streaming endpoint takes no model parameter.
 
 ### Alignment: pure crate, hosted by the app
 
@@ -146,10 +153,10 @@ src/control/      routes/ (Editor, Live, Settings, Calibrate, Library, Welcome),
                   services/ (ipc, voice-session, stage-envelope, audio/, stt/)
 src/stage/        StageApp/StageDock, motion/, renderer/
 src/workers/      compiler Web Worker
-src-tauri/src/    app.rs (command registry), commands/, windows/, align/, inworld/,
+src-tauri/src/    app.rs (command registry), commands/, windows/, align/, stt/,
                   coordinator/ (window generations, session, stage handshake),
                   database/, scripts/, assets/, secrets/, sessions/, settings/
-crates/           cc-align (engine), cc-stt (Tauri-free Inworld client), cc-bench
+crates/           cc-align (engine), cc-stt (Tauri-free Grok client), cc-bench
 bench/            fixture scripts, immutable captured replay runs, results
 docs/             specifications
 ```
@@ -190,7 +197,7 @@ rather than implying the suite covered it.
 - `docs/` specs describe an earlier design that included live coaching and an
   OpenAI semantic sidecar. Both were removed. Where a spec mentions coaching, a
   second model, or OpenAI, **the code is the authority** — see
-  `src-tauri/src/inworld/` for what actually happens now.
+  `src-tauri/src/stt/` for what actually happens now.
 - Two known honest gaps, documented in the README: `pauseLocation` is not
   supplied to the cadence lane (choppy-delivery detection cannot fire), and the
   variety score runs in its documented degraded mode.

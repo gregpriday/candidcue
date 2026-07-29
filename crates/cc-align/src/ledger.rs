@@ -1,8 +1,17 @@
 //! Transcript ledger: items, replacement partials, stability, and the
 //! alignment tail.
 //!
-//! Inworld sends full-restatement partials — each `Partial` for an item
-//! replaces the previous text for that item, and the text can shrink. The
+//! Partials are FULL RESTATEMENTS — each `Partial` for an item replaces the
+//! previous text for that item, and the text can shrink.
+//!
+//! That property is now supplied rather than inherited. The previous provider
+//! restated the whole utterance on every partial; Grok emits an interim that
+//! covers only the current ~3 s chunk, and `Utterances::extend` in
+//! `src-tauri/src/stt/stream.rs` prepends the chunk-finals already locked
+//! before the frame is emitted. So what reaches this ledger is still a full
+//! restatement of the utterance so far, and everything below is unchanged. If
+//! that assembly is ever removed, this file's stability model breaks silently
+//! — a partial that only carries the tail reads as a catastrophic shrink. The
 //! ledger reconciles each revision against the previous one so that atoms
 //! which survive revisions accumulate *stability*, and freshly changed
 //! suffixes are treated as provisional. Stability is what lets the tracker

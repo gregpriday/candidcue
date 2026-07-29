@@ -13,7 +13,7 @@
  * then not passed.
  *
  * What this no longer asserts: that the sensitivity gates what is SENT. It
- * does not. Inworld endpoints server-side, so the local detector drives the
+ * does not. xAI endpoints server-side, so the local detector drives the
  * meter and the dead-input check only — a threshold that could silence a word
  * on its way to the recogniser is the thing this app removed.
  */

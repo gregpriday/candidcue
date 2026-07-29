@@ -3,7 +3,7 @@
  * (`crates/cc-align`, hosted in `src-tauri/src/align`) and everything that
  * renders or reports on where the presenter is.
  *
- *   Inworld socket ──SttFrame──▶ cc_align::Engine ──▶ AlignmentSnapshot
+ *   xAI socket ──SttFrame──▶ cc_align::Engine ──▶ AlignmentSnapshot
  *        (Rust)                       (Rust)                │
  *                                                           ├──▶ stage: 60 Hz
  *                                                           │    motion from

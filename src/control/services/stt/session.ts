@@ -1,26 +1,33 @@
 /**
- * Inworld speech-to-text, as the control window sees it.
+ * Grok (xAI) speech-to-text, as the control window sees it.
  *
- * The socket itself is not here — it is in Rust (`src-tauri/src/inworld/`),
- * because Inworld authenticates with an `Authorization: Basic` header and a
- * browser `WebSocket` cannot send one. What lives here is the thin half: start
- * a session, push captured PCM at it, and turn the frames Rust emits back into
- * the `TranscriptEvent` shape the tracking ledger already consumes.
+ * The socket itself is not here — it is in Rust (`src-tauri/src/stt/`), because
+ * Grok authenticates with an `Authorization: Bearer` header, a browser
+ * `WebSocket` cannot send one, and xAI's own documentation says the key must
+ * never reach client-side code. What lives here is the thin half: start a
+ * session, push captured PCM at it, and hand the frames Rust emits to the
+ * transcript bar and the retained record.
  *
- * Frames are NOT translated here any more. The alignment engine lives in Rust
- * and consumes `SttFrame` directly from the socket, so the mapping layer this
- * file used to own — a provider-agnostic transcript event model — had exactly
- * one consumer left and no longer has any. What crosses into JavaScript is the
- * wire shape, for the transcript bar and the retained record.
+ * Frames are NOT translated here. The alignment engine lives in Rust and
+ * consumes `SttFrame` directly from the socket, so the mapping layer this file
+ * used to own — a provider-agnostic transcript event model — had exactly one
+ * consumer left and no longer has any. What crosses into JavaScript is the wire
+ * shape.
  *
  * WHAT IS DELIBERATELY ABSENT
  * ---------------------------
- * No commit driver, no local speech gate, no noise-floor calibration. Inworld
- * endpoints server-side: it decides where an utterance ends and sends a final
- * transcript for it. The previous provider left that decision to the client,
- * and every mechanism that implemented it was a way to hold a perfectly healthy
- * connection open and transcribe nothing — which is what it did. There is
- * nothing to configure here because there is nothing to get wrong.
+ * No commit driver, no local speech gate, no noise-floor calibration. Grok
+ * endpoints server-side: it decides where an utterance ends from the audio and
+ * sends a final transcript for it. The provider before last left that decision
+ * to the client, and every mechanism that implemented it was a way to hold a
+ * perfectly healthy connection open and transcribe nothing — which is what it
+ * did. There is nothing to configure here because there is nothing to get
+ * wrong.
+ *
+ * No model, either. The streaming endpoint takes no model parameter, so there
+ * is no list to keep in step with Rust and no persisted name that can go stale.
+ * The setting that used to exist here took takes down after a provider change;
+ * see `src-tauri/src/stt/mod.rs`.
  */
 import type { AlignToken } from '../alignment';
 import { ipcInvoke } from '../ipc';
@@ -56,10 +63,11 @@ export const STT_EVENT = 'stt://event';
 /**
  * The one sample rate the app captures and streams at.
  *
- * Declared in the Rust config frame and used there to convert byte counts into
- * an audio clock, so all three must agree. Inworld resamples internally, but a
- * mismatch between what we *say* we are sending and what we send is heard as
- * a chipmunk and transcribed as nonsense.
+ * Declared on the Rust session URL and used there to convert byte counts into
+ * an audio clock, so all three must agree. 24 kHz is one of the six rates the
+ * provider accepts natively, so nothing resamples on the way in — but a
+ * mismatch between what we *say* we are sending and what we send is still heard
+ * as a chipmunk and transcribed as nonsense.
  */
 export const STT_SAMPLE_RATE_HZ = 24_000;
 
@@ -67,9 +75,8 @@ export const STT_SAMPLE_RATE_HZ = 24_000;
 export const STT_FRAME_MS = 100;
 
 export interface SttSessionOptions {
-  /** BCP-47, e.g. `en-US`. Omitted uses the Rust default. */
+  /** BCP-47, e.g. `en-US`. Rust narrows it to a primary subtag for the wire. */
   language?: string;
-  modelId?: string;
   /**
    * The take's spoken tokens, for the recogniser's custom vocabulary (§26).
    *
@@ -89,9 +96,9 @@ export interface SttSessionOptions {
  * take — and that is the entire point. They used to build their own: the test
  * passed nothing, so Rust applied its defaults and it worked perfectly; the
  * take passed the model from the persisted settings document, which on an
- * upgraded install still named the PREVIOUS provider's model. Inworld answered
- * "Unsupported model" and the take reconnected seven times in twelve seconds
- * while the test button beside it kept working.
+ * upgraded install still named the PREVIOUS provider's model. The service
+ * answered "Unsupported model" and the take reconnected seven times in twelve
+ * seconds while the test button beside it kept working.
  *
  * A diagnostic that exercises a different configuration from the thing it is
  * diagnosing is worse than no diagnostic, because it is believed. If this
@@ -100,15 +107,12 @@ export interface SttSessionOptions {
  *
  * Unknown values are dropped rather than forwarded: an absent field lets Rust
  * apply a default it knows is valid, where a stale one is an error mid-take.
- * Rust re-checks the model as well; this is the near side of the same rule.
  */
 export function sttSessionOptions(
-  settings: { transcriptionModel?: string | null; language?: string | null } | null | undefined,
+  settings: { language?: string | null } | null | undefined,
   vocabulary?: AlignToken[] | null,
 ): SttSessionOptions {
   const options: SttSessionOptions = {};
-  const model = settings?.transcriptionModel?.trim();
-  if (model && SUPPORTED_MODELS.includes(model)) options.modelId = model;
   const language = settings?.language?.trim();
   if (language) options.language = language;
   if (vocabulary && vocabulary.length > 0) options.vocabulary = vocabulary;
@@ -116,21 +120,16 @@ export function sttSessionOptions(
 }
 
 /**
- * Model ids this build knows Inworld serves.
- *
- * Duplicated from `SUPPORTED_MODELS` in `src-tauri/src/inworld/mod.rs` on
- * purpose — Rust is the authority and re-checks whatever arrives, so this copy
- * only stops a bad value being offered in the UI or sent at all. A test asserts
- * the two lists agree.
- */
-export const SUPPORTED_MODELS = ['inworld/inworld-stt-1'];
-
-/**
  * The languages the app offers, in one list.
  *
  * Preflight and Settings each had their own picker, over different values, and
  * only Preflight's reached a take — so the Settings choice was written,
  * displayed, and ignored. One list, one stored value, both screens.
+ *
+ * Stored in the regional form because that is what a presenter recognises. The
+ * provider takes only a primary subtag, so `en-US`, `en-GB` and `en-AU` all
+ * narrow to `en` at the wire; the distinction survives here because it costs
+ * nothing and the picker reads better for it.
  */
 export const SPEECH_LANGUAGES: Array<{ value: string; label: string }> = [
   { value: 'en-US', label: 'English (United States)' },
@@ -142,9 +141,12 @@ export const SPEECH_LANGUAGES: Array<{ value: string; label: string }> = [
   { value: 'pt-BR', label: 'Portuguese (Brazil)' },
 ];
 
-
 /**
- * Encode Float32 mono samples as base64 PCM16, which is what the wire wants.
+ * Encode Float32 mono samples as base64 PCM16, which is what the IPC bridge
+ * wants.
+ *
+ * Base64 is the IPC hop only — Rust decodes it and hands raw bytes to the
+ * socket, because the provider takes binary frames.
  *
  * Clamped before scaling: a sample outside [-1, 1] wraps rather than clips when
  * it is cast, so a loud passage would arrive as a burst of white noise instead
@@ -174,7 +176,6 @@ export async function startTranscription(options: SttSessionOptions = {}): Promi
   return ipcInvoke<number>('start_transcription', {
     options: {
       ...(options.language !== undefined ? { language: options.language } : {}),
-      ...(options.modelId !== undefined ? { modelId: options.modelId } : {}),
     },
   });
 }

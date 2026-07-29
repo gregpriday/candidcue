@@ -1,7 +1,7 @@
 /**
  * The microphone / transcription test lifecycle (spec §14.2 C).
  *
- * This is a **billable** Inworld transcription session. The screen used to open one
+ * This is a **billable** xAI transcription session. The screen used to open one
  * and then hold it until the component unmounted: there was no Stop control
  * and no timeout, so starting the test and then reading something else on the
  * page left a realtime connection streaming the owner's microphone — and their
@@ -17,7 +17,7 @@
  *   • restart/unmount — a second press, or leaving the screen.
  *
  * Choosing the numbers. The test exists to answer one question — is the
- * microphone open and is Inworld returning text — and one spoken sentence
+ * microphone open and is xAI returning text — and one spoken sentence
  * answers it in about five seconds. Everything past that is money spent on
  * nothing.
  *
@@ -255,7 +255,7 @@ export class MicTestSession {
 export function micTestStopNotice(reason: MicTestStopReason | null): string | null {
   switch (reason) {
     case 'idle_timeout':
-      return 'The test stopped itself after 30 seconds with nothing transcribed, so it is not left connected to Inworld.';
+      return 'The test stopped itself after 30 seconds with nothing transcribed, so it is not left connected to xAI.';
     case 'max_duration':
       return 'The test stopped itself after two minutes. Start it again if you need another look.';
     default:

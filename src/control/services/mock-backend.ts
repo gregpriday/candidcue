@@ -26,7 +26,7 @@ import type {
 import { defaultAppSettings } from './settings-types';
 import type {
   KeyValidationResult,
-  InworldKeyStatus,
+  SttKeyStatus,
 } from './secrets-types';
 import type {
   DisplayDescriptor,
@@ -68,7 +68,7 @@ class MockState {
   scripts = new Map<string, MockScriptRecord>();
   settings: AppSettings = defaultAppSettings();
   /** Only redacted metadata is retained — never the key itself. */
-  keyStatus: InworldKeyStatus = { present: false, state: 'unknown', source: 'none' };
+  keyStatus: SttKeyStatus = { present: false, state: 'unknown', source: 'none' };
   loaded = false;
 
   load(): void {
@@ -284,11 +284,11 @@ export const mockSecrets = {
     // could plausibly be a key and rejects the empty field — which is the only
     // distinction it can honestly make.
     if (candidateKey.trim().length < 8) {
-      return { status: 'invalid', message: 'That does not look like an Inworld key.' };
+      return { status: 'invalid', message: 'That does not look like an xAI key.' };
     }
     return { status: 'valid' };
   },
-  save(candidateKey: string): InworldKeyStatus {
+  save(candidateKey: string): SttKeyStatus {
     // Only the redacted tail is retained, mirroring the Rust contract.
     state.keyStatus = {
       present: true,
@@ -301,7 +301,7 @@ export const mockSecrets = {
     };
     return { ...state.keyStatus };
   },
-  status(): InworldKeyStatus {
+  status(): SttKeyStatus {
     return { ...state.keyStatus };
   },
   remove(): void {

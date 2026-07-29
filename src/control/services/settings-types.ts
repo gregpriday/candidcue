@@ -56,14 +56,12 @@ export interface AppSettings {
     fullscreen: boolean;
   };
   /**
-   * Inworld speech-to-text (spec §18.2). The API key is not here and never
+   * xAI speech-to-text (spec §18.2). The API key is not here and never
    * crosses into JavaScript: it lives in the OS credential store and is read
    * only by Rust, which owns the socket. What the UI holds is the choice of
    * model and locale.
    */
-  inworld: {
-    /** Inworld model id, e.g. `inworld/inworld-stt-1`. */
-    transcriptionModel: string;
+  speech: {
     /** BCP-47 tag the recogniser is told to expect, e.g. `en-US`. */
     language: string;
   };
@@ -88,7 +86,7 @@ export interface AppSettings {
     autoGainControl: boolean;
     /**
      * §28.4, 0-1, 0.5 = the A.6 defaults. The one Rust-owned field in this
-     * section. It no longer gates what is sent — Inworld endpoints server-side
+     * section. It no longer gates what is sent — xAI endpoints server-side
      * — but it decides where the meter says the microphone can hear you and
      * when the dead-input detector gives up, which is room tuning worth
      * outliving a cleared browser store. Everything else here is per-machine
@@ -557,8 +555,7 @@ export function defaultAppSettings(): AppSettings {
       displayFingerprint: null,
       fullscreen: true,
     },
-    inworld: {
-      transcriptionModel: 'inworld/inworld-stt-1',
+    speech: {
       language: 'en-US',
     },
     audio: {

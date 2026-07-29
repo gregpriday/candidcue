@@ -68,10 +68,10 @@ interface RustSettings {
   };
   /**
    * §28.3/§28.4. `vadSensitivity` is the only field here the UI owns a slider
-   * for; the model and locale are what the Rust session's config frame is
-   * built from. See settings-audio.ts.
+   * for; the locale is what the Rust session's URL is built from. See
+   * settings-audio.ts.
    */
-  audio: Partial<RustAudioSettings> & { transcriptionModel: string; language: string };
+  audio: Partial<RustAudioSettings> & { language: string };
   /** Companion §47 — absent in documents written before the section existed. */
   following?: Partial<RustFollowingSettings>;
 }
@@ -183,8 +183,7 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
       launchBehavior: rust.general.openTo === 'last_script' ? 'recent' : 'library',
       defaultSessionMode: toSessionMode(rust.stageBehavior.promptMode),
     },
-    inworld: {
-      transcriptionModel: rust.audio.transcriptionModel,
+    speech: {
       language: rust.audio.language,
     },
     // §28.4. Rust-owned like `following`: it is room tuning that must outlive
@@ -212,10 +211,10 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
   return {
     ...mapped,
     general: mergeSection(mapped.general, overlay.general),
-    // Inworld model and locale are Rust-owned: they are what the config frame
+    // xAI model and locale are Rust-owned: they are what the config frame
     // is built from, and an overlay disagreeing with the document would mean
     // the session declares one language and the settings screen shows another.
-    inworld: mapped.inworld,
+    speech: mapped.speech,
     // The device id and the three processing toggles are per-machine capture
     // state and overlay; `vadSensitivity` is Rust-owned and wins (§28.4).
     audio: {
@@ -271,9 +270,8 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
       put('audio', key, value);
     }
   }
-  if (patch.inworld) {
-    put('audio', 'transcriptionModel', patch.inworld.transcriptionModel);
-    put('audio', 'language', patch.inworld.language);
+  if (patch.speech) {
+    put('audio', 'language', patch.speech.language);
   }
   if (patch.teleprompter) {
     put('stageBehavior', 'horizontalMirror', patch.teleprompter.mirrorX);
@@ -296,7 +294,7 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
 
 /**
  * Everything in the patch persists in the overlay so the UI view sticks —
- * except `following` (§47) and `inworld` (§18.2), which are
+ * except `following` (§47) and `speech` (§18.2), which are
  * Rust-owned in both directions, and the individual Rust-owned fields inside
  * otherwise-overlaid sections (`privacy.saveTranscript` §36.2,
  * `audio.vadSensitivity` §28.4). A cached copy of a retention consent is
@@ -306,7 +304,7 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
   const overlay = loadOverlay();
   for (const key of Object.keys(patch) as Array<keyof AppSettings>) {
     if (key === 'revision' || key === 'schemaVersion') continue;
-    if (key === 'following' || key === 'inworld') continue;
+    if (key === 'following' || key === 'speech') continue;
     const section = patch[key];
     if (typeof section !== 'object' || section === null) continue;
     // Rust-owned fields never enter the overlay (§28.4, §36.2, §47) — a cached

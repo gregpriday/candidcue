@@ -1,7 +1,7 @@
 [package]
 name = "cc-bench"
 version = "0.1.0"
-description = "CandidCue alignment benchmark harness: fixtures, fal.ai TTS, live Inworld capture, offline replay, metrics"
+description = "CandidCue alignment benchmark harness: fixtures, fal.ai TTS, live Grok capture, offline replay, metrics"
 edition.workspace = true
 rust-version.workspace = true
 

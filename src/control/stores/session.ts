@@ -790,7 +790,6 @@ export function startLiveSession(input: StartSessionInput): string {
       ...(input.transcription?.language !== undefined
         ? { language: input.transcription.language }
         : {}),
-      ...(input.transcription?.model !== undefined ? { modelId: input.transcription.model } : {}),
       deviceId: input.micDeviceId,
       audioProcessing: input.audioProcessing,
       // §28.4: the slider had no reader at all. The saved value is the default

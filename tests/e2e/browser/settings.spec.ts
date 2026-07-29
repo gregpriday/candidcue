@@ -69,7 +69,7 @@ test('moving the sensitivity slider writes audio.vadSensitivity to update_settin
   /*
    * The bound is in the copy: what the slider does NOT move is why it is safe
    * to offer. It used to be "the pause that ends a sentence", which was the
-   * honest limit when a local detector decided turn boundaries. Inworld
+   * honest limit when a local detector decided turn boundaries. xAI
    * endpoints server-side, so this slider cannot gate a single byte — and a
    * user who believes it can will turn it up and be no better off.
    */

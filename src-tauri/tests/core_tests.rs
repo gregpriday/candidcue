@@ -489,7 +489,7 @@ async fn settings_defaults_patch_and_conflict() {
     assert_eq!(initial.revision, 1);
     assert_eq!(initial.value.general.words_per_minute_estimate, 130);
     assert_eq!(initial.value.general.save_transcript, "off");
-    assert_eq!(initial.value.audio.transcription_model, "inworld/inworld-stt-1");
+    assert_eq!(initial.value.audio.language, "en-US");
 
     // Patch a nested field; others survive.
     let updated = settings::update_settings(
@@ -778,7 +778,7 @@ async fn a_debug_build_reads_the_key_from_the_environment_and_names_that_source(
     );
 
     let described = OsSecretStore
-        .describe_inworld_key()
+        .describe_stt_key()
         .await
         .expect("the environment path cannot fail")
         .expect("a key is set");

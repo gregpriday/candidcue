@@ -3,7 +3,7 @@
  *
  * This is the join the whole provider migration rests on. The tracking engine,
  * the ledger and the worker protocol were written against a provider-neutral
- * `TranscriptEvent` model, so swapping OpenAI for Inworld is a change of
+ * `TranscriptEvent` model, so swapping OpenAI for xAI is a change of
  * producer and nothing else — provided the producer produces the right shape.
  * If it does not, the failure is silent in the worst possible way: a session
  * connects, frames arrive, and the cursor never moves.
@@ -16,7 +16,7 @@ import {
   encodePcm16,
   STT_FRAME_MS,
   STT_SAMPLE_RATE_HZ,
-} from '../../../src/control/services/stt/inworld';
+} from '../../../src/control/services/stt/session';
 import { FRAME_SAMPLES, FrameAccumulator, resampleLinear } from '../../../src/control/services/audio/capture';
 
 describe('PCM16 encoding', () => {

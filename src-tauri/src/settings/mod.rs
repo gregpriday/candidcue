@@ -130,16 +130,23 @@ impl Default for StageBehaviorSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AudioSettings {
-    /// Inworld model id, e.g. `inworld/inworld-stt-1`.
-    pub transcription_model: String,
-    /// BCP-47 tag as Inworld wants it, e.g. `en-US`.
+    /// BCP-47 tag as the picker offers it, e.g. `en-US`.
+    ///
+    /// Stored in the regional form because that is what a presenter recognises.
+    /// The provider takes only a primary subtag, and `crate::stt::primary_subtag`
+    /// narrows it at the moment the session URL is built — deliberately the one
+    /// place, so this value never has to be kept in step with a wire format.
+    ///
+    /// There is no companion model setting. The streaming endpoint takes no
+    /// model parameter, and the previous one caused a real outage by persisting
+    /// a name from a provider two generations back; see `crate::stt`.
     pub language: String,
     pub soft_pause_auto_disconnect_minutes: u32,
     /// Local voice-detection sensitivity, 0-1, 0.5 = the Appendix A.6 defaults
     /// (spec §28.4). Resolved into a `VadConfig` override by
     /// `vadConfigForSensitivity` in src/control/services/audio/defaults.ts.
     ///
-    /// This no longer gates what is sent: Inworld endpoints server-side, and
+    /// This no longer gates what is sent: the provider endpoints server-side, and
     /// nothing the local detector decides can stop a word reaching the
     /// recogniser. It drives the *meter* — the "is it hearing me" readout in
     /// Preflight and on the stage — which is why it survived the removal of
@@ -152,8 +159,7 @@ pub struct AudioSettings {
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
-            transcription_model: crate::inworld::DEFAULT_MODEL.into(),
-            language: crate::inworld::DEFAULT_LANGUAGE.into(),
+            language: crate::stt::DEFAULT_LANGUAGE_TAG.into(),
             soft_pause_auto_disconnect_minutes: 10,
             // A.6 neutral. Never an extreme: an unreadable or absent value must
             // not silently become the most aggressive VAD on offer.
@@ -305,29 +311,22 @@ fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
     }
 }
 
-/// Repair values that a previous build wrote and this one cannot honour.
-///
-/// The settings document is a JSON blob, so an upgrade in place keeps whatever
-/// was there — which is right for every setting the user chose and wrong for
-/// one that names a service the app no longer talks to. `audio.transcriptionModel`
-/// held the previous provider's model on every upgraded installation, the take
-/// forwarded it, and Inworld answered "Unsupported model" while the microphone
-/// TEST, which sent no model at all, worked perfectly.
-///
-/// Corrected on read rather than left to a caller to remember: the value is
-/// re-derived every time the document loads, so an installation that never
-/// writes settings again is still fixed.
-fn migrate_in_place(settings: &mut AppSettings) {
-    let resolved = crate::inworld::resolve_model(Some(settings.audio.transcription_model.as_str()));
-    if resolved != settings.audio.transcription_model {
-        tracing::info!(
-            "settings: replacing unsupported transcription model {:?} with {:?}",
-            settings.audio.transcription_model,
-            resolved
-        );
-        settings.audio.transcription_model = resolved;
-    }
-}
+/*
+ * There is deliberately no `migrate_in_place` any more.
+ *
+ * It existed to repair `audio.transcriptionModel`, which every upgraded
+ * installation carried from a provider the app no longer talks to: the take
+ * forwarded it, the service answered "Unsupported model", and the microphone
+ * TEST — which sent no model at all — worked perfectly, so the app appeared
+ * healthy exactly where it was being checked.
+ *
+ * The field is now gone from `AudioSettings` rather than repaired, which is
+ * strictly stronger: serde drops an unknown key, so a stale model name cannot
+ * be read, cannot be forwarded, and cannot come back by someone re-adding a
+ * default. A value that can only ever be wrong is better deleted than
+ * corrected on every load. `a_document_from_a_previous_provider_still_loads`
+ * is the guard that the rest of such a document survives.
+ */
 
 pub async fn get_settings(pool: &SqlitePool) -> Result<RevisionedSettings, AppError> {
     let row: Option<(String, i64)> =
@@ -337,8 +336,7 @@ pub async fn get_settings(pool: &SqlitePool) -> Result<RevisionedSettings, AppEr
             .await?;
     match row {
         Some((json, revision)) => {
-            let mut value: AppSettings = serde_json::from_str(&json).unwrap_or_default();
-            migrate_in_place(&mut value);
+            let value: AppSettings = serde_json::from_str(&json).unwrap_or_default();
             Ok(RevisionedSettings { revision, value })
         }
         None => {
@@ -451,17 +449,25 @@ mod tests {
         assert_eq!(settings.following, FollowingSettings::default());
     }
 
-    /// A settings document written before the switch to Inworld still carries
-    /// `coaching`, `commands`, `audio.delayProfile` and the three `following`
-    /// keys that went with the semantic sidecar. Serde ignores unknown fields,
-    /// so those documents must still load — the alternative is
-    /// `unwrap_or_default()` in `get_settings` silently resetting *every*
-    /// setting the user has ever chosen because one dead key is still on disk.
+    /// A settings document from any previous provider still carries
+    /// `coaching`, `commands`, `audio.delayProfile`, `audio.transcriptionModel`
+    /// and the three `following` keys that went with the semantic sidecar.
+    /// Serde ignores unknown fields, so those documents must still load — the
+    /// alternative is `unwrap_or_default()` in `get_settings` silently
+    /// resetting *every* setting the user has ever chosen because one dead key
+    /// is still on disk.
     #[test]
-    fn a_document_from_the_openai_build_still_loads() {
+    fn a_document_from_a_previous_provider_still_loads() {
         let legacy = serde_json::json!({
             "schemaVersion": 1,
-            "audio": { "language": "en", "delayProfile": "low", "vadSensitivity": 0.8 },
+            "audio": {
+                "language": "en",
+                "delayProfile": "low",
+                "vadSensitivity": 0.8,
+                // Named a model from two providers back. It must be dropped on
+                // read, not carried: it is the value that took takes down.
+                "transcriptionModel": "gpt-realtime-whisper",
+            },
             "commands": { "wakePhrase": "CandidCue", "lunaFallback": true },
             "coaching": { "mode": "studio", "targetWpmLow": 115 },
             "following": {
@@ -475,51 +481,39 @@ mod tests {
 
         assert_eq!(settings.following.feel, "calm", "surviving keys are kept");
         assert_eq!(settings.audio.vad_sensitivity, 0.8);
-        // The retired `language: "en"` is carried through as-is rather than
-        // corrected; Inworld wants "en-US" and the UI offers only valid choices,
-        // so this is a value the user re-picks, not one to silently rewrite.
+        // A bare `language: "en"` is carried through as-is rather than widened
+        // back to a regional tag. The provider narrows to a primary subtag
+        // anyway, so this value is already exactly what the wire wants.
         assert_eq!(settings.audio.language, "en");
+        // And the model name is simply not representable any more.
+        let round_tripped = serde_json::to_value(&settings).expect("serializes");
+        assert!(
+            round_tripped["audio"].get("transcriptionModel").is_none(),
+            "a retired model name must not survive a load/save cycle"
+        );
         assert!(validate(&settings).is_ok());
     }
 
-    /// The one setting an upgrade must NOT preserve.
+    /// The default locale is what the session URL is built from, so a typo
+    /// here is a session that connects and transcribes nothing.
     ///
-    /// Every other value the user chose survives a provider change; this one
-    /// names the service itself. Left alone it produced the worst possible
-    /// shape of failure: the microphone test worked (it sent no model) and
-    /// every real take failed with "Unsupported model", so the app appeared
-    /// healthy exactly where it was being checked.
+    /// Asserted in BOTH forms on purpose. The stored value is regional because
+    /// that is what the picker offers; the wire wants a bare subtag. Those are
+    /// two different constants that must stay related, and the narrowing is the
+    /// only thing that relates them.
     #[test]
-    fn a_transcription_model_from_the_previous_provider_is_repaired_on_read() {
-        let mut settings: AppSettings = serde_json::from_value(serde_json::json!({
-            "audio": { "transcriptionModel": "gpt-realtime-whisper", "vadSensitivity": 0.8 },
-        }))
-        .expect("legacy document loads");
-        assert_eq!(settings.audio.transcription_model, "gpt-realtime-whisper");
-
-        migrate_in_place(&mut settings);
-
-        assert_eq!(settings.audio.transcription_model, crate::inworld::DEFAULT_MODEL);
-        // And the settings the user actually chose are untouched.
-        assert_eq!(settings.audio.vad_sensitivity, 0.8);
-    }
-
-    #[test]
-    fn a_supported_model_is_left_exactly_as_it_was() {
-        let mut settings = AppSettings::default();
-        settings.audio.transcription_model = crate::inworld::DEFAULT_MODEL.into();
-        migrate_in_place(&mut settings);
-        assert_eq!(settings.audio.transcription_model, crate::inworld::DEFAULT_MODEL);
-    }
-
-    /// The Inworld defaults are the ones the streaming config frame is built
-    /// from, so a typo here is a session that connects and transcribes nothing.
-    #[test]
-    fn audio_defaults_name_an_inworld_model_and_locale() {
+    fn audio_defaults_name_a_locale_the_provider_will_accept() {
         let audio = AppSettings::default().audio;
-        assert_eq!(audio.transcription_model, crate::inworld::DEFAULT_MODEL);
-        assert_eq!(audio.language, crate::inworld::DEFAULT_LANGUAGE);
-        assert!(audio.language.contains('-'), "Inworld wants a BCP-47 tag");
+        assert_eq!(audio.language, crate::stt::DEFAULT_LANGUAGE_TAG);
+        assert!(
+            audio.language.contains('-'),
+            "the picker stores a BCP-47 tag"
+        );
+        assert_eq!(
+            crate::stt::primary_subtag(&audio.language),
+            crate::stt::DEFAULT_LANGUAGE,
+            "the stored default must narrow to the wire default"
+        );
     }
 
     /// A null patch value resets a field to its default. `merge_json` removes

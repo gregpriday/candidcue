@@ -1,5 +1,5 @@
 <!--
-  Settings (spec §18). The Inworld key field is one-shot and masked — it
+  Settings (spec §18). The xAI key field is one-shot and masked — it
   submits through the secrets service, is stored in the OS credential store,
   and is never displayed or returned to JavaScript (§18.2). Privacy copy is
   Appendix F.18 verbatim.
@@ -67,10 +67,10 @@
   import * as secretsService from '../services/secrets';
   import * as settingsService from '../services/settings';
   import * as stageService from '../services/stage';
-  import { SPEECH_LANGUAGES } from '../services/stt/inworld';
+  import { SPEECH_LANGUAGES } from '../services/stt/session';
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
-  import type { InworldKeyStatus } from '../services/secrets-types';
+  import type { SttKeyStatus } from '../services/secrets-types';
   import {
     activeOpticalProfile,
     opticalRigsForDisplay,
@@ -130,7 +130,7 @@
 
   const sections: Array<{ id: SettingsSection; label: string }> = [
     { id: 'general', label: 'General' },
-    { id: 'inworld', label: 'Speech' },
+    { id: 'speech', label: 'Speech' },
     { id: 'audio', label: 'Audio' },
     { id: 'stage', label: 'Stage display' },
     { id: 'teleprompter', label: 'Teleprompter' },
@@ -138,7 +138,7 @@
     { id: 'privacy', label: 'Data, privacy & updates' },
   ];
 
-  let keyStatus = $state<InworldKeyStatus | null>(null);
+  let keyStatus = $state<SttKeyStatus | null>(null);
   let keyField = $state('');
   let keyBusy = $state(false);
   let keyNote = $state('');
@@ -155,7 +155,7 @@
 
   $effect(() => {
     void loadSettings();
-    void secretsService.getInworldKeyStatus().then((status) => (keyStatus = status));
+    void secretsService.getSttKeyStatus().then((status) => (keyStatus = status));
   });
 
   /** Diagnostics are only fetched for the screen that shows them (§47.10). */
@@ -1171,20 +1171,20 @@
     keyBusy = true;
     keyNote = '';
     try {
-      const validation = await secretsService.validateInworldKey(candidate);
+      const validation = await secretsService.validateSttKey(candidate);
       if (validation.status === 'valid') {
-        keyStatus = await secretsService.saveInworldKey(candidate);
+        keyStatus = await secretsService.saveSttKey(candidate);
         keyNote = 'Key saved. Voice tracking is ready.';
       } else if (validation.status === 'quota') {
-        keyNote = 'The key is valid, but the Inworld account has no available quota.';
+        keyNote = 'The key is valid, but the xAI account has no available quota.';
       } else if (validation.status === 'network') {
-        keyNote = 'CandidCue could not reach Inworld to check the key. Check your connection and try again.';
+        keyNote = 'CandidCue could not reach xAI to check the key. Check your connection and try again.';
       } else {
-        keyNote = validation.message ?? 'Inworld rejected this key. Check that it is active.';
+        keyNote = validation.message ?? 'xAI rejected this key. Check that it is active.';
       }
     } catch (err) {
       // Rust refuses the save outright when a development build is running with
-      // INWORLD_API_KEY set, and its message says so; showing it beats an
+      // GROK_API_KEY set, and its message says so; showing it beats an
       // unhandled rejection and a field that silently clears.
       keyNote = describeError(err);
     } finally {
@@ -1194,7 +1194,7 @@
   }
 
   /**
-   * Ask Inworld whether the stored key still works.
+   * Ask xAI whether the stored key still works.
    *
    * This used to re-read the local key STATUS, which can only say "a key is
    * stored" — the one thing the screen was already showing. A key that has
@@ -1207,16 +1207,16 @@
     keyBusy = true;
     keyNote = '';
     try {
-      const result = await secretsService.testStoredInworldKey();
+      const result = await secretsService.testStoredSttKey();
       keyNote =
         result.status === 'valid'
-          ? 'The key works. Inworld answered.'
+          ? 'The key works. xAI answered.'
           : result.status === 'quota'
-            ? 'The key is valid, but the Inworld account has no available quota.'
+            ? 'The key is valid, but the xAI account has no available quota.'
             : result.status === 'network'
-              ? 'Could not reach Inworld. Check your connection and try again.'
-              : (result.message ?? 'Inworld rejected the stored key.');
-      keyStatus = await secretsService.getInworldKeyStatus();
+              ? 'Could not reach xAI. Check your connection and try again.'
+              : (result.message ?? 'xAI rejected the stored key.');
+      keyStatus = await secretsService.getSttKeyStatus();
     } catch (err) {
       keyNote = describeError(err);
     } finally {
@@ -1230,16 +1230,16 @@
     // one is in play.
     const fromEnvironment = keyStatus?.source === 'environment';
     const accepted = await requestConfirm({
-      title: 'Remove Inworld key?',
+      title: 'Remove xAI key?',
       body: fromEnvironment
-        ? 'This clears the key stored in your credential store. The INWORLD_API_KEY environment variable is outside CandidCue’s reach, so voice tracking will keep using it. Your scripts are unaffected.'
+        ? 'This clears the key stored in your credential store. The GROK_API_KEY environment variable is outside CandidCue’s reach, so voice tracking will keep using it. Your scripts are unaffected.'
         : 'Voice tracking will stop until a key is added again. Your scripts are unaffected.',
       confirmLabel: 'Remove key',
       danger: true,
     });
     if (!accepted) return;
-    await secretsService.deleteInworldKey();
-    keyStatus = await secretsService.getInworldKeyStatus();
+    await secretsService.deleteSttKey();
+    keyStatus = await secretsService.getSttKeyStatus();
     keyNote = '';
   }
 
@@ -1400,10 +1400,10 @@
             onchange={(value) => void patchSettings('general', { readHeadings: value })}
           />
         </Section>
-      {:else if section === 'inworld'}
+      {:else if section === 'speech'}
         <Section
           title="Speech"
-          description="CandidCue transcribes with Inworld and is bring-your-own-key. The key is stored in your operating system's secure credential store and is read only by CandidCue's backend — it never reaches the app's interface, and the transcription connection is made from there."
+          description="CandidCue transcribes with xAI and is bring-your-own-key. The key is stored in your operating system's secure credential store and is read only by CandidCue's backend — it never reaches the app's interface, and the transcription connection is made from there."
         >
           {#snippet actions()}
             {#if keyStatus?.present}
@@ -1418,7 +1418,7 @@
 
           {#if keyStatus?.source === 'environment'}
             <p class="hint-line">
-              This development build is using the key from the <code>INWORLD_API_KEY</code>
+              This development build is using the key from the <code>GROK_API_KEY</code>
               environment variable. It takes precedence over the credential store, so a key saved
               here would have no effect until you unset it.
             </p>
@@ -1442,8 +1442,8 @@
             <TextField
               bind:value={keyField}
               type="password"
-              label="Inworld API key"
-              placeholder="Paste your Inworld key"
+              label="xAI API key"
+              placeholder="Paste your xAI key"
               hint="Used for streaming speech-to-text while you present. Nothing else is sent."
               onsubmit={() => void submitKey()}
             />
@@ -1451,34 +1451,34 @@
               <Button variant="primary" disabled={keyBusy || keyField.trim() === ''} onclick={() => submitKey()}>
                 {keyBusy ? 'Validating…' : 'Validate and save'}
               </Button>
-              <Button variant="ghost" onclick={() => openExternal('https://platform.inworld.ai/')}>
-                Inworld dashboard
+              <Button variant="ghost" onclick={() => openExternal('https://console.x.ai/')}>
+                xAI console
               </Button>
             </div>
             {#if keyNote}<p class="hint-line">{keyNote}</p>{/if}
           </div>
 
-          <Select
-            label="Transcription model"
-            value={$settings.inworld.transcriptionModel}
-            options={[{ value: 'inworld/inworld-stt-1', label: 'inworld-stt-1 (default)' }]}
-            onchange={(value) => void patchSettings('inworld', { transcriptionModel: value })}
-          />
+          <!--
+            No model picker. The streaming endpoint takes no model parameter,
+            so a control here could only ever write a value nothing reads — and
+            the last one did exactly that across a provider change, taking every
+            take down while the microphone test beside it kept passing.
+          -->
           <Select
             label="Spoken language"
-            value={$settings.inworld.language}
+            value={$settings.speech.language}
             options={SPEECH_LANGUAGES}
-            onchange={(value) => void patchSettings('inworld', { language: value })}
+            onchange={(value) => void patchSettings('speech', { language: value })}
           />
           <p class="hint-line">
-            Audio is streamed to Inworld only while a take is running, and only the words that come
-            back are used. Usage is billed by Inworld at their published rates.
+            Audio is streamed to xAI only while a take is running, and only the words that come
+            back are used. Usage is billed by xAI at their published rates.
           </p>
         </Section>
       {:else if section === 'audio'}
         <Section
           title="Microphone"
-          description="CandidCue uses your microphone only while a test or a voice-tracking take is running. During voice tracking, audio is streamed to Inworld for live transcription. Audio is not recorded or saved by CandidCue."
+          description="CandidCue uses your microphone only while a test or a voice-tracking take is running. During voice tracking, audio is streamed to xAI for live transcription. Audio is not recorded or saved by CandidCue."
         >
           {#if micPermission === 'unknown'}
             <div class="row-actions">
@@ -1516,7 +1516,7 @@
             {/if}
             <MicMeter level={micLevel} />
             <!--
-              A billable Inworld session, so it says so while it is open, it can
+              A billable xAI session, so it says so while it is open, it can
               always be stopped, and it closes itself if it is forgotten (see
               services/mic-test-session.ts for the two deadlines).
             -->
@@ -1544,7 +1544,7 @@
             </div>
             {#if micTestRunning}
               <p class="hint-line">
-                Connected to Inworld and billing your key. It stops on its own after 30 seconds with
+                Connected to xAI and billing your key. It stops on its own after 30 seconds with
                 nothing transcribed, and after two minutes in any case.
               </p>
             {:else if micTestNotice}
@@ -2270,7 +2270,7 @@
             </p>
             <h3 class="privacy-head">While voice tracking is active</h3>
             <p class="privacy-body">
-              Your selected microphone audio is streamed to Inworld for live transcription, and
+              Your selected microphone audio is streamed to xAI for live transcription, and
               only while a take or a microphone test is running. CandidCue does not save the audio.
             </p>
             <h3 class="privacy-head">Your script stays here</h3>
@@ -2280,14 +2280,14 @@
             </p>
             <h3 class="privacy-head">CandidCue servers</h3>
             <p class="privacy-body">
-              CandidCue checks for software updates. Your Inworld API key and your scripts are
+              CandidCue checks for software updates. Your xAI API key and your scripts are
               not sent to CandidCue servers.
             </p>
-            <h3 class="privacy-head">Inworld retention</h3>
+            <h3 class="privacy-head">xAI retention</h3>
             <p class="privacy-body">
-              Inworld's current API data controls and retention rules apply to the audio sent for
+              xAI's current API data controls and retention rules apply to the audio sent for
               transcription.
-              <button type="button" class="inline-link" onclick={() => openExternal('https://inworld.ai/privacy')}>
+              <button type="button" class="inline-link" onclick={() => openExternal('https://x.ai/legal/privacy-policy')}>
                 Open the current policy
               </button>
               for details.

@@ -110,7 +110,6 @@ function rustSettingsDocument() {
         blankColor: '#000000',
       },
       audio: {
-        transcriptionModel: 'inworld/inworld-stt-1',
         language: 'en',
         delayProfile: 'balanced',
         softPauseAutoDisconnectMinutes: 5,
@@ -251,7 +250,7 @@ describe('captured IPC payloads (production services → wire)', () => {
       settings.updateSettings(3, {
         privacy: { saveTranscript: '7d' } as never,
         teleprompter: { mirrorX: true, fixedSpeedWpm: 155 } as never,
-        inworld: { language: 'en-GB' } as never,
+        speech: { language: 'en-GB' } as never,
       }),
     );
     await capture('clear_cache_logs', () => settings.clearCache('logs'));

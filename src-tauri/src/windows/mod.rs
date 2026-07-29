@@ -1512,7 +1512,7 @@ mod tests {
     /// its own policy; CSP composes restrictively, so the stage gets the
     /// intersection.
     ///
-    /// Neither window needs an external origin now: the Inworld socket is held
+    /// Neither window needs an external origin now: the xAI socket is held
     /// in Rust (it needs an `Authorization` header the browser cannot send), so
     /// the global policy dropped the provider host too. This test asserts both
     /// halves, because the interesting failure is a future change re-opening
@@ -1538,7 +1538,7 @@ mod tests {
             .find(|d| d.starts_with("connect-src"))
             .expect("the stage CSP must pin connect-src explicitly");
         assert!(
-            !connect.contains("api.inworld.ai"),
+            !connect.contains("api.x.ai"),
             "the stage must have no route to the provider: {connect}"
         );
         assert!(
@@ -1572,7 +1572,7 @@ mod tests {
             .map(str::trim)
             .find(|d| d.starts_with("connect-src"))
             .expect("the global CSP must pin connect-src explicitly");
-        for host in ["api.inworld.ai", "api.openai.com", "https:", "wss:"] {
+        for host in ["api.x.ai", "api.openai.com", "https:", "wss:"] {
             assert!(
                 !global_connect.contains(host),
                 "no window may reach {host} from JavaScript: {global_connect}"

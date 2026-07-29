@@ -1,10 +1,17 @@
-//! Does `transcribeConfig.prompts` actually do anything?
+//! Does `keyterm` actually do anything?
 //!
-//! The question is not rhetorical. `src-tauri/src/inworld/mod.rs` records that
-//! this service ignores unknown config keys in silence — a deliberately bogus
-//! config block once produced timings identical to a correct one — so a field
-//! being accepted proves nothing at all about it being read. The only evidence
-//! that counts is the same audio, streamed twice, differing in one field.
+//! The question is not rhetorical, and it survived the provider change. A
+//! parameter being ACCEPTED proves nothing about it being read — the previous
+//! service ignored unknown config keys in silence, and a deliberately bogus
+//! config block once produced timings identical to a correct one. Grok's
+//! keyterms at least have a documented cap, which means they are parsed; it
+//! does not mean they move the transcript. The only evidence that counts is
+//! the same audio, streamed twice, differing in one field.
+//!
+//! Worth knowing before reading a result as a mandate to send more: on the
+//! previous provider a 17-term vocabulary measured WORSE than none and an
+//! 8-term one measured better. Over-biasing is the failure mode here, so the
+//! useful output of this command is a term COUNT, not a yes/no.
 //!
 //! That is what this does: for each script, synthesise its performance once
 //! (the TTS clip cache means the second stream costs nothing extra), stream it
@@ -219,12 +226,12 @@ pub async fn run(
 async fn stream_side(
     pcm: &[u8],
     pace: f64,
-    prompts: &[String],
+    keyterms: &[String],
     spoken: &str,
     authored: &str,
     terms: &[String],
 ) -> anyhow::Result<(Side, Vec<SttFrame>)> {
-    let events = crate::capture::capture_events_with(pcm, pace, prompts).await?;
+    let events = crate::capture::capture_events_with(pcm, pace, keyterms).await?;
     let transcript = finals(&events);
     anyhow::ensure!(
         !transcript.trim().is_empty(),

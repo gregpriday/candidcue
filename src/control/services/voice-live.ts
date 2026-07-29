@@ -1,6 +1,6 @@
 /**
  * Real VoiceFacade implementation — binds the audio package (permissions,
- * device enumeration, level meter) and the Inworld speech-to-text session to
+ * device enumeration, level meter) and the xAI speech-to-text session to
  * the seam the Preflight/Live screens consume (spec §14.2 C, §28, §29).
  *
  * Bound once at control startup via `bindVoiceFacade` when the WebView exposes
@@ -34,7 +34,7 @@ import {
   sttSessionOptions,
   STT_EVENT,
   type SttFrame,
-} from './stt/inworld';
+} from './stt/session';
 import { getSettingsSnapshot } from '../stores/settings';
 import { isTauriRuntime } from './ipc';
 import { describeError } from './errors';
@@ -293,7 +293,7 @@ export function createRealVoiceFacade(): VoiceFacade {
          * take failed. A microphone test that exercises a configuration the
          * take will not use cannot answer the only question it is asked.
          */
-        generation = await startTranscription(sttSessionOptions(getSettingsSnapshot().inworld));
+        generation = await startTranscription(sttSessionOptions(getSettingsSnapshot().speech));
         capture = new PcmCapture({
           onFrame: (samples) => {
             const current = generation;

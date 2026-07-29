@@ -1,13 +1,13 @@
 /**
  * Voice session pipeline — microphone in, transcript events out.
  *
- *   mic → PcmCapture (24 kHz PCM16) → Rust Inworld session
+ *   mic → PcmCapture (24 kHz PCM16) → Rust xAI session
  *       → stt://event → transcript record + UI (alignment happens in Rust)
  *
  * This replaced a pipeline roughly four times its size, and almost everything
  * that went was machinery for deciding when a sentence had ended: a local
  * voice-activity detector, a noise-floor calibration, a speech gate, a commit
- * driver, and a manual `input_audio_buffer.commit`. Inworld endpoints
+ * driver, and a manual `input_audio_buffer.commit`. xAI endpoints
  * server-side, so a take now streams unconditionally and the provider says
  * where the utterances are.
  *
@@ -48,7 +48,7 @@ import {
   sttSessionOptions,
   STT_EVENT,
   type SttFrame,
-} from './stt/inworld';
+} from './stt/session';
 
 /** Timer seam so tests drive a virtual clock instead of waiting. */
 export interface PipelineTimers {
@@ -93,8 +93,6 @@ export interface VoicePipelineDeps {
   compiled: CompiledScript;
   /** BCP-47 locale for the recogniser, e.g. `en-US`. */
   language?: string;
-  /** Inworld model id; omitted uses the backend default. */
-  modelId?: string;
   deviceId?: string;
   /**
    * §28.3 capture processing — the user's Settings → Audio toggles, applied to
@@ -345,7 +343,7 @@ export class VoiceSessionPipeline {
       this.transportGeneration = await startTranscription(options);
       trace(
         'session',
-        `transport ${this.transportGeneration} model ${options.modelId ?? 'default'} ` +
+        `transport ${this.transportGeneration} ` +
           `lang ${options.language ?? 'default'}`,
       );
 
@@ -391,7 +389,7 @@ export class VoiceSessionPipeline {
    * Stop sending audio without closing the session.
    *
    * The socket stays open so resuming is instant, but the frames stop, which is
-   * both the cost saving and — because Inworld endpoints on silence — the thing
+   * both the cost saving and — because xAI endpoints on silence — the thing
    * that finalizes whatever sentence was in progress.
    */
   softPause(): void {
@@ -488,7 +486,6 @@ export class VoiceSessionPipeline {
     this.vocabularyTokens ??= alignTokensFor(this.deps.compiled);
     return sttSessionOptions(
       {
-        ...(this.deps.modelId !== undefined ? { transcriptionModel: this.deps.modelId } : {}),
         ...(this.deps.language !== undefined ? { language: this.deps.language } : {}),
       },
       this.vocabularyTokens,
@@ -804,7 +801,7 @@ export class VoiceSessionPipeline {
      * that could have explained it said the microphone was fine.
      *
      * Whatever is wrong with the analyser path on that device, this frame is
-     * evidence that cannot be argued with: bytes on their way to Inworld.
+     * evidence that cannot be argued with: bytes on their way to xAI.
      */
     if (frameHasSignal(samples)) this.lastPcmSignalAtMs = Date.now();
     const generation = this.transportGeneration;

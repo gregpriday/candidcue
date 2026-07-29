@@ -5,10 +5,10 @@ use std::sync::Arc;
 use tauri::{Emitter, Listener, Manager};
 
 use crate::align::AlignmentState;
-use crate::commands::{self, inworld_cmds::Secrets};
+use crate::commands::{self, stt_cmds::Secrets};
 use crate::coordinator::AppCoordinator;
 use crate::database::{self, Database};
-use crate::inworld::InworldClient;
+use crate::stt::SttClient;
 use crate::scripts::{DataPaths, ScriptLocks};
 use crate::secrets::OsSecretStore;
 use crate::windows::{events, CONTROL_LABEL};
@@ -42,12 +42,12 @@ pub fn run() {
             commands::import_remote_image,
             commands::resolve_asset_urls,
             commands::remove_asset_reference,
-            // Secrets / Inworld speech-to-text (spec §46.4)
-            commands::validate_inworld_key,
-            commands::save_inworld_key,
-            commands::get_inworld_key_status,
-            commands::delete_inworld_key,
-            commands::test_inworld_key,
+            // Secrets / xAI speech-to-text (spec §46.4)
+            commands::validate_stt_key,
+            commands::save_stt_key,
+            commands::get_stt_key_status,
+            commands::delete_stt_key,
+            commands::test_stt_key,
             commands::start_transcription,
             commands::push_transcription_audio,
             commands::stop_transcription,
@@ -119,9 +119,9 @@ pub fn run() {
             // Secrets: OS credential store only (spec §44.6).
             handle.manage(Secrets(Arc::new(OsSecretStore)));
 
-            // Rust-owned Inworld client: it holds the streaming socket, because
+            // Rust-owned xAI client: it holds the streaming socket, because
             // the browser cannot send the `Authorization` header it needs.
-            handle.manage(InworldClient::new());
+            handle.manage(SttClient::new());
 
             // The alignment engine runs beside the socket that feeds it, so a
             // transcript frame and the audio clock it is timed against never

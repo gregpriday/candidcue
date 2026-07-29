@@ -41,23 +41,23 @@ const CODE_TOKEN_ANYWHERE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
 const ERROR_COPY: Record<string, string> = {
   /* -- auth / billing ----------------------------------------------------- */
   AUTH_KEY_INVALID:
-    'Inworld rejected the API key. Open Settings → Speech and enter a key that is active for your account.',
+    'xAI rejected the API key. Open Settings → Speech and enter a key that is active for your account.',
   AUTH_MODEL_UNAVAILABLE:
-    'This Inworld account does not have access to the transcription model CandidCue asked for. Check the account, or present in manual mode.',
+    'This xAI account does not have access to the transcription model CandidCue asked for. Check the account, or present in manual mode.',
   AUTH_REALTIME_UNAVAILABLE:
-    'This Inworld account cannot open a streaming transcription session. Manual and fixed-speed modes still work.',
+    'This xAI account cannot open a streaming transcription session. Manual and fixed-speed modes still work.',
   QUOTA_EXHAUSTED:
-    'The Inworld account has no quota left, so transcription cannot continue. Add credit in the Inworld dashboard, or present in manual mode.',
+    'The xAI account has no quota left, so transcription cannot continue. Add credit in the xAI console, or present in manual mode.',
   RATE_LIMITED:
-    'Inworld is rate-limiting this account. Wait a moment before trying again, or present in manual mode.',
+    'xAI is rate-limiting this account. Wait a moment before trying again, or present in manual mode.',
 
   /* -- network / provider ------------------------------------------------- */
   NETWORK_OFFLINE:
     'CandidCue cannot reach the network. Check your internet connection, then try again.',
   NETWORK_TIMEOUT:
-    'Inworld did not respond in time. Check your internet connection, then try again.',
+    'xAI did not respond in time. Check your internet connection, then try again.',
   PROVIDER_UNAVAILABLE:
-    'Inworld is not responding. This is usually temporary — try again in a minute, or present in manual mode.',
+    'xAI is not responding. This is usually temporary — try again in a minute, or present in manual mode.',
 
   /* -- microphone --------------------------------------------------------- */
   MIC_PERMISSION_DENIED:
@@ -89,9 +89,9 @@ const ERROR_COPY: Record<string, string> = {
   REALTIME_CONNECTION_LOST:
     'The transcription connection dropped. Check your internet connection, then start voice following again.',
   REALTIME_PROVIDER_ERROR:
-    'Inworld returned an error and transcription stopped. Start the take again; if it keeps happening, check the key in Settings → Speech.',
+    'xAI returned an error and transcription stopped. Start the take again; if it keeps happening, check the key in Settings → Speech.',
   REALTIME_CONFIG_REJECTED:
-    'Inworld refused the transcription settings for this take, so retrying would fail the same way. Open Settings → Speech and check the model and language.',
+    'xAI refused the transcription settings for this take, so retrying would fail the same way. Open Settings → Speech and check the model and language.',
   REALTIME_NO_TRANSCRIPTS:
     'Audio is being sent but no transcript is coming back, so following is on hold. Stop and start the take to open a fresh connection.',
 

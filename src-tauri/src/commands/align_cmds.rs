@@ -9,7 +9,7 @@
 
 use crate::align::{AlignToken, AlignmentState};
 use crate::errors::AppError;
-use crate::inworld::InworldClient;
+use crate::stt::SttClient;
 
 /// Begin aligning against a compiled script.
 ///
@@ -18,7 +18,7 @@ use crate::inworld::InworldClient;
 #[tauri::command]
 pub async fn start_alignment(
     state: tauri::State<'_, AlignmentState>,
-    inworld: tauri::State<'_, InworldClient>,
+    stt: tauri::State<'_, SttClient>,
     generation: u64,
     tokens: Vec<AlignToken>,
 ) -> Result<(), AppError> {
@@ -31,7 +31,7 @@ pub async fn start_alignment(
     // every snapshot. What the engine FILTERS frames on is the socket, which
     // Rust owns; seeding it here covers the case where the stream started
     // first, and `bind_stream` covers the case where it starts second.
-    state.start_bound(generation, inworld.current_generation(), &tokens);
+    state.start_bound(generation, stt.current_generation(), &tokens);
     Ok(())
 }
 

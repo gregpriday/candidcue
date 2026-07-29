@@ -4,7 +4,7 @@
  * ---------------------------------------------------------------------------
  * THE DEFECT THIS FILE EXISTS FOR
  * ---------------------------------------------------------------------------
- * CandidCue taps one microphone twice. `PcmCapture` encodes the frames Inworld
+ * CandidCue taps one microphone twice. `PcmCapture` encodes the frames xAI
  * actually transcribes. A separate `MicrophoneMonitor` — an AnalyserNode graph —
  * drives the level meter and the §28.6 dead-input detector.
  *
@@ -24,7 +24,7 @@
  *
  * The rule now: a dead input is a real fault worth holding for, but only the
  * tap that feeds the recogniser may declare it. If bytes are on their way to
- * Inworld, the input is not dead, whatever the analyser believes.
+ * xAI, the input is not dead, whatever the analyser believes.
  */
 import { describe, expect, it } from 'vitest';
 import { frameHasSignal } from '../../../src/control/services/audio/levelMeter';

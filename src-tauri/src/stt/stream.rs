@@ -1,30 +1,61 @@
-//! One live Inworld transcription session, supervised across reconnects.
+//! One live Grok transcription session, supervised across reconnects.
 //!
-//! The renderer never sees this socket. It calls `stt_start`, pushes PCM16
-//! frames with `stt_audio`, and receives [`SttFrame`] events on `stt://event`;
-//! everything between — the `Authorization` header, the config handshake, the
-//! `result` envelope, dropped connections and the backoff — is this file's
-//! problem.
+//! The renderer never sees this socket. It calls `start_transcription`, pushes
+//! PCM16 frames with `push_transcription_audio`, and receives [`SttFrame`]
+//! events on `stt://event`; everything between — the `Authorization` header,
+//! the readiness handshake, the finality tiers, dropped connections and the
+//! backoff — is this file's problem.
 //!
 //! ---------------------------------------------------------------------------
 //! UTTERANCE IDENTITY
 //! ---------------------------------------------------------------------------
-//! Inworld does not name its utterances: it sends interim transcripts and then
-//! one with `isFinal`, and the next interim after that belongs to a new
-//! utterance. The transcript ledger downstream is keyed by item id, so the ids
-//! are minted here — `"{generation}-{ordinal}"` — and an item opens at the
-//! first frame that mentions it and closes on its final. Minting them at the
-//! only place that can observe the boundary is what stops two lanes inventing
-//! two different schemes for the same utterance.
+//! Grok does not name its utterances: it sends interim transcripts, then
+//! chunk-finals, then one with `speech_final`, and the next frame after that
+//! belongs to a new utterance. The transcript ledger downstream is keyed by
+//! item id, so the ids are minted here — `"{generation}-{ordinal}"` — and an
+//! item opens at the first frame that carries words and closes on
+//! `speech_final`. Minting them at the only place that can observe the boundary
+//! is what stops two lanes inventing two different schemes for the same
+//! utterance.
+//!
+//! An item is one UTTERANCE, not one chunk. Chunk-finals do not open new items;
+//! they make the open item's text stop being revisable, which is the actual win
+//! over a provider that only firms up at the end of a sentence.
+//!
+//! ---------------------------------------------------------------------------
+//! HOW AN UTTERANCE IS ASSEMBLED
+//! ---------------------------------------------------------------------------
+//! Interims carry only the CURRENT chunk, not the whole utterance, so
+//! [`Utterances::extend`] prepends the chunk-finals already locked. That is
+//! what makes every `Partial` a full restatement of the utterance so far —
+//! the property `cc_align`'s ledger is built on, and one this provider does
+//! not supply on its own.
+//!
+//! The utterance-final then REPLACES all of it. It is the service's own
+//! complete stitched utterance and it is authoritative.
+//!
+//! This was first written the other way, appending the locked text unless the
+//! final already appeared to contain it, because the documentation left the
+//! question open. An 18-run live capture settled it: the final is a RE-DECODE
+//! of the audio rather than a join of the chunk texts, and it routinely
+//! disagrees with the chunks about wording — one run had chunks reading "You
+//! Should Not Have To" against a final reading "you shouldn't have to". No
+//! textual prefix test can recognise that as a repeat, so the append branch
+//! fired and every utterance came back doubled: 1.32× the spoken text, and a
+//! WER of 44 % where the previous provider measured 7 %. The lesson is the
+//! shape of the evidence, not the arithmetic — a guard that cannot fail
+//! loudly will fail quietly, and this one was only visible in a metric nobody
+//! would have run without a benchmark.
 //!
 //! ---------------------------------------------------------------------------
 //! THE AUDIO CLOCK
 //! ---------------------------------------------------------------------------
-//! Alignment needs to know *when* words were spoken, and there is no timestamp
-//! on the wire we can trust for that. What we do know exactly is how many bytes
-//! of audio have been handed to the socket, which at a pinned sample rate and
-//! width is a duration. So the clock is the byte count: monotonic, immune to
-//! event-loop jitter, and it does not advance while the microphone is closed.
+//! Alignment needs to know *when* words were spoken. Grok does supply word-level
+//! `start`/`end` times, but the engine's lag model was calibrated against the
+//! bytes-sent clock on live captures, and swapping the timing model is a change
+//! that has to be measured on its own rather than smuggled into a provider
+//! swap. So the clock remains the byte count: monotonic, immune to event-loop
+//! jitter, and it does not advance while the microphone is closed.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -41,19 +72,28 @@ use crate::errors::AppError;
 use crate::secrets::SecretString;
 use crate::windows::CONTROL_LABEL;
 
-use super::{encode_base64, TranscribeConfig, SAMPLE_RATE_HZ, STREAM_URL};
+use super::{provider_message, SttConfig, SAMPLE_RATE_HZ};
 
 /// The event channel the renderer listens on.
 pub const STT_EVENT: &str = "stt://event";
 
-/// How long to keep the socket open after `endTurn`, waiting for the final
+/// How long to keep the socket open after `Finalize`, waiting for the final
 /// transcript of the last utterance.
 ///
-/// End-of-turn latency measured against the live service is ~1.7 s and did not
-/// respond to any config we could find, so this is that plus headroom. Closing
-/// sooner strands the last sentence of a take — which is exactly the sentence
-/// somebody just finished saying when they pressed stop.
-const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2_500);
+/// `Finalize` finalizes the open utterance immediately rather than waiting out
+/// the endpointing window, so this only has to cover a round-trip plus the
+/// `transcript.done` that follows `audio.done` — far less than the 2.5 s the
+/// previous provider's end-of-turn latency forced. Closing sooner strands the
+/// last sentence of a take, which is exactly the sentence somebody just
+/// finished saying when they pressed stop.
+const DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1_500);
+
+/// How long to wait for `transcript.created` before giving up on a socket that
+/// upgraded and then said nothing.
+///
+/// Audio sent before this arrives is discarded by the service, so a session
+/// that streams anyway would bill for a take that transcribes nothing.
+const READY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5_000);
 
 /// Reconnect backoff. Five attempts over ~8 s; past that the take is not going
 /// to recover on its own and the presenter needs to be told rather than watched
@@ -138,7 +178,7 @@ impl SessionHandle {
         app: tauri::AppHandle<R>,
         generation: u64,
         key: SecretString,
-        config: TranscribeConfig,
+        config: SttConfig,
     ) -> Self {
         let (tx, rx) = mpsc::channel(AUDIO_QUEUE_FRAMES);
         let audio_ms = Arc::new(AtomicU64::new(0));
@@ -171,7 +211,7 @@ impl SessionHandle {
     /// The drop is COUNTED here, which is the whole point. Audio discarded
     /// silently is indistinguishable downstream from a presenter who said
     /// nothing, and "words heard: 0" with no explanation is the failure this
-    /// rewrite exists to make diagnosable. The supervisor drains this counter
+    /// design exists to make diagnosable. The supervisor drains this counter
     /// into an `AudioDropped` event.
     ///
     /// A closed channel is NOT counted: the session is over, and every frame
@@ -187,7 +227,7 @@ impl SessionHandle {
         }
     }
 
-    /// Finish cleanly: `endTurn`, wait out [`DRAIN_TIMEOUT`] for the final
+    /// Finish cleanly: `Finalize`, wait out [`DRAIN_TIMEOUT`] for the final
     /// transcript, then close.
     pub fn stop(self) {
         let tx = self.tx;
@@ -209,6 +249,8 @@ struct Utterances {
     generation: u64,
     ordinal: AtomicU64,
     open: std::sync::Mutex<Option<String>>,
+    /// Text from chunk-finals of the open utterance. Never revised.
+    locked: std::sync::Mutex<String>,
     audio_ms: Arc<AtomicU64>,
     /// Set once this connection has delivered a transcript of any kind.
     ///
@@ -243,9 +285,47 @@ impl Utterances {
         id
     }
 
+    /// The text to report for an interim or chunk-final carrying `text`.
+    fn extend(&self, text: &str, is_chunk_final: bool) -> String {
+        let mut locked = self.locked.lock().expect("utterance state poisoned");
+        let combined = join(&locked, text);
+        if is_chunk_final {
+            *locked = combined.clone();
+        }
+        combined
+    }
+
+    /// The text to report for the utterance-final carrying `text`.
+    ///
+    /// The final REPLACES everything locked so far — it is the service's own
+    /// complete stitched utterance, and it is authoritative. See the module
+    /// header for the capture that settled this.
+    fn finish(&self, text: &str) -> String {
+        self.locked
+            .lock()
+            .expect("utterance state poisoned")
+            .clear();
+        text.trim().to_string()
+    }
+
     fn close(&self) {
         *self.open.lock().expect("utterance state poisoned") = None;
+        self.locked
+            .lock()
+            .expect("utterance state poisoned")
+            .clear();
     }
+}
+
+fn join(left: &str, right: &str) -> String {
+    let (left, right) = (left.trim(), right.trim());
+    if left.is_empty() {
+        return right.to_string();
+    }
+    if right.is_empty() {
+        return left.to_string();
+    }
+    format!("{left} {right}")
 }
 
 fn emit<R: tauri::Runtime>(app: &tauri::AppHandle<R>, frame: SttFrame) {
@@ -285,12 +365,93 @@ enum ConnectionEnd {
     Finished,
 }
 
+/// Why a connection could not be established, and whether retrying could help.
+pub struct ConnectError {
+    pub message: String,
+    pub recoverable: bool,
+    pub status: Option<u16>,
+}
+
+type Socket = tokio_tungstenite::WebSocketStream<
+    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+>;
+
+/// Open the socket with the key in an `Authorization: Bearer` header.
+///
+/// The header is the whole reason this code is in Rust; see the module docs.
+/// The key is never interpolated into an error — `HeaderValue::from_str`
+/// failures report the shape of the problem, not the value.
+///
+/// A refusal arrives as an HTTP status on the **upgrade**, not as a WebSocket
+/// error frame, so this is the only place it is visible. A live 403 read
+/// `{"code":"The caller does not have permission…","error":"Your newly created
+/// team doesn't have any credits or licenses yet…"}` — an account-funding
+/// problem that no amount of reconnecting fixes, and which must not be
+/// reported to the presenter as a network blip.
+async fn connect(key: &SecretString, config: &SttConfig) -> Result<Socket, ConnectError> {
+    let mut request = config
+        .stream_url()
+        .into_client_request()
+        .map_err(|err| ConnectError {
+            message: err.to_string(),
+            recoverable: false,
+            status: None,
+        })?;
+    let mut header = HeaderValue::from_str(&format!("Bearer {}", key.expose())).map_err(|_| {
+        ConnectError {
+            message: "The stored xAI key contains characters that cannot be sent as a header."
+                .to_string(),
+            recoverable: false,
+            status: None,
+        }
+    })?;
+    header.set_sensitive(true);
+    request.headers_mut().insert(AUTHORIZATION, header);
+
+    match tokio_tungstenite::connect_async(request).await {
+        Ok((socket, _response)) => Ok(socket),
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            let status = response.status().as_u16();
+            let body = response
+                .body()
+                .as_ref()
+                .and_then(|bytes| String::from_utf8(bytes.clone()).ok())
+                .unwrap_or_default();
+            Err(ConnectError {
+                message: provider_message(&body)
+                    .unwrap_or_else(|| format!("xAI refused the connection (HTTP {status})")),
+                // 429 is a rate limit a backoff can genuinely ride out; the
+                // 4xx family below is a key, a permission or a malformed
+                // request, and reconnecting gets the same answer every time.
+                recoverable: !matches!(status, 400 | 401 | 403 | 404),
+                status: Some(status),
+            })
+        }
+        Err(err) => Err(ConnectError {
+            message: err.to_string(),
+            recoverable: true,
+            status: None,
+        }),
+    }
+}
+
+/// Open a session and close it immediately, to learn whether the key works.
+///
+/// Used by key validation. No audio is sent, so this costs nothing but the
+/// upgrade — and it exercises the exact endpoint, auth scheme and permissions a
+/// real take uses, which a call to the batch endpoint would not.
+pub async fn probe(key: &SecretString, config: &SttConfig) -> Result<(), ConnectError> {
+    let mut socket = connect(key, config).await?;
+    let _ = socket.close(None).await;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn supervise<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     generation: u64,
     key: SecretString,
-    config: TranscribeConfig,
+    config: SttConfig,
     mut rx: mpsc::Receiver<Outbound>,
     audio_ms: Arc<AtomicU64>,
     dropped: Arc<AtomicU64>,
@@ -299,6 +460,7 @@ async fn supervise<R: tauri::Runtime>(
         generation,
         ordinal: AtomicU64::new(0),
         open: std::sync::Mutex::new(None),
+        locked: std::sync::Mutex::new(String::new()),
         audio_ms: Arc::clone(&audio_ms),
         productive: std::sync::atomic::AtomicBool::new(false),
     });
@@ -314,16 +476,36 @@ async fn supervise<R: tauri::Runtime>(
             },
         );
 
-        let socket = match connect(&key).await {
+        let socket = match connect(&key, &config).await {
             Ok(socket) => socket,
-            Err(reason) => {
+            Err(err) => {
+                // A refusal is not a retry candidate, however early it lands.
+                // Reconnecting against a revoked key or an unfunded account
+                // bills for every attempt and reports "reconnecting — your
+                // position is held" while nothing can possibly recover.
+                if !err.recoverable {
+                    emit(
+                        &app,
+                        SttFrame::Failed {
+                            generation,
+                            code: if matches!(err.status, Some(401) | Some(403)) {
+                                "AUTH_KEY_INVALID".into()
+                            } else {
+                                "REALTIME_CONFIG_REJECTED".into()
+                            },
+                            message: err.message,
+                            recoverable: false,
+                        },
+                    );
+                    break;
+                }
                 if attempt >= BACKOFF_MS.len() {
                     emit(
                         &app,
                         SttFrame::Failed {
                             generation,
                             code: "REALTIME_CONNECT_FAILED".into(),
-                            message: reason,
+                            message: err.message,
                             recoverable: true,
                         },
                     );
@@ -334,7 +516,7 @@ async fn supervise<R: tauri::Runtime>(
                     SttFrame::Transport {
                         generation,
                         state: "degraded",
-                        detail: Some(reason),
+                        detail: Some(err.message),
                     },
                 );
                 tokio::time::sleep(std::time::Duration::from_millis(BACKOFF_MS[attempt])).await;
@@ -346,7 +528,6 @@ async fn supervise<R: tauri::Runtime>(
         match run_connection(
             &app,
             generation,
-            &config,
             socket,
             &mut rx,
             &audio_ms,
@@ -362,14 +543,14 @@ async fn supervise<R: tauri::Runtime>(
                  * Counted against the SAME budget as an upgrade failure.
                  *
                  * `attempt` used to reset on every successful 101, so a
-                 * provider that accepts the socket and then errors on the
-                 * config frame — which is exactly what a revoked key or a bad
-                 * model id does — produced an infinite 250 ms reconnect loop
-                 * that billed for every attempt and transcribed nothing. The
-                 * only connection worth resetting the budget for is one that
-                 * actually delivered a transcript — otherwise a long, healthy
-                 * take with five scattered network blips would exhaust the
-                 * budget and give up for good.
+                 * provider that accepts the socket and then errors — which is
+                 * exactly what a revoked key or a rejected configuration does —
+                 * produced an infinite 250 ms reconnect loop that billed for
+                 * every attempt and transcribed nothing. The only connection
+                 * worth resetting the budget for is one that actually delivered
+                 * a transcript — otherwise a long, healthy take with five
+                 * scattered network blips would exhaust the budget and give up
+                 * for good.
                  */
                 if utterances.productive.swap(false, Ordering::SeqCst) {
                     attempt = 0;
@@ -426,35 +607,10 @@ async fn supervise<R: tauri::Runtime>(
     );
 }
 
-type Socket = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
-
-/// Open the socket with the key in an `Authorization` header.
-///
-/// The header is the whole reason this code is in Rust; see the module docs.
-/// The key is never interpolated into an error — `HeaderValue::from_str`
-/// failures report the shape of the problem, not the value.
-async fn connect(key: &SecretString) -> Result<Socket, String> {
-    let mut request = STREAM_URL
-        .into_client_request()
-        .map_err(|err| err.to_string())?;
-    let mut header = HeaderValue::from_str(&format!("Basic {}", key.expose()))
-        .map_err(|_| "The stored Inworld key contains characters that cannot be sent as a header.".to_string())?;
-    header.set_sensitive(true);
-    request.headers_mut().insert(AUTHORIZATION, header);
-
-    let (socket, _response) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|err| err.to_string())?;
-    Ok(socket)
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn run_connection<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     generation: u64,
-    config: &TranscribeConfig,
     socket: Socket,
     rx: &mut mpsc::Receiver<Outbound>,
     audio_ms: &Arc<AtomicU64>,
@@ -463,11 +619,27 @@ async fn run_connection<R: tauri::Runtime>(
 ) -> ConnectionEnd {
     let (mut sink, source) = socket.split();
 
-    // The config frame must lead; audio sent before it is discarded by the
-    // service without complaint.
-    let opening = serde_json::json!({ "transcribeConfig": config });
-    if let Err(err) = sink.send(Message::Text(opening.to_string().into())).await {
-        return ConnectionEnd::Dropped(Some(err.to_string()));
+    // There is no config frame — the session was configured by the URL. What
+    // does have to happen first is the readiness handshake: audio sent before
+    // `transcript.created` is discarded by the service without complaint, so a
+    // session that streamed straight away would bill for a take that
+    // transcribed nothing.
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let mut reader = tauri::async_runtime::spawn(read_loop(
+        app.clone(),
+        generation,
+        source,
+        Arc::clone(utterances),
+        ready_tx,
+    ));
+
+    if tokio::time::timeout(READY_TIMEOUT, ready_rx).await.is_err() {
+        reader.abort();
+        let _ = sink.close().await;
+        return ConnectionEnd::Dropped(Some(
+            "the transcription service accepted the connection but never became ready".into(),
+        ));
     }
 
     emit(
@@ -479,17 +651,10 @@ async fn run_connection<R: tauri::Runtime>(
         },
     );
 
-    let mut reader = tauri::async_runtime::spawn(read_loop(
-        app.clone(),
-        generation,
-        source,
-        Arc::clone(utterances),
-    ));
-
     let mut draining_until: Option<tokio::time::Instant> = None;
 
     loop {
-        // Once `endTurn` is sent we stop pulling from the queue entirely and
+        // Once `Finalize` is sent we stop pulling from the queue entirely and
         // only wait for the final, so a renderer still pushing frames cannot
         // extend the drain indefinitely.
         let deadline = draining_until;
@@ -520,15 +685,14 @@ async fn run_connection<R: tauri::Runtime>(
             outbound = rx.recv(), if draining_until.is_none() => {
                 match outbound {
                     Some(Outbound::Audio(pcm)) => {
-                        let frame = serde_json::json!({
-                            "audioChunk": { "content": encode_base64(&pcm) }
-                        });
-                        if sink.send(Message::Text(frame.to_string().into())).await.is_err() {
+                        // Raw binary — no base64, no JSON envelope. A third
+                        // less bandwidth than the provider this replaced.
+                        let ms = (pcm.len() as u64 * 1_000) / (SAMPLE_RATE_HZ as u64 * 2);
+                        if sink.send(Message::Binary(pcm.into())).await.is_err() {
                             reader.abort();
                             return ConnectionEnd::Dropped(Some("audio frame could not be sent".into()));
                         }
                         // Two bytes per sample, one channel.
-                        let ms = (pcm.len() as u64 * 1_000) / (SAMPLE_RATE_HZ as u64 * 2);
                         audio_ms.fetch_add(ms, Ordering::Relaxed);
                         // Reported on the first frame that gets through after a
                         // run of drops, so one gap produces one event rather
@@ -542,7 +706,11 @@ async fn run_connection<R: tauri::Runtime>(
                         // Ask for the boundary explicitly. Server VAD would get
                         // there on its own given trailing silence, but a
                         // microphone that has just been closed supplies none.
-                        let _ = sink.send(Message::Text(r#"{"endTurn":{}}"#.into())).await;
+                        // `Finalize` finishes the open utterance; `audio.done`
+                        // ends the stream so the service closes cleanly rather
+                        // than waiting out its own idle timeout.
+                        let _ = sink.send(Message::Text(r#"{"type":"Finalize"}"#.into())).await;
+                        let _ = sink.send(Message::Text(r#"{"type":"audio.done"}"#.into())).await;
                         draining_until = Some(tokio::time::Instant::now() + DRAIN_TIMEOUT);
                     }
                     // Every sender dropped: the session was abandoned.
@@ -559,16 +727,20 @@ async fn run_connection<R: tauri::Runtime>(
 
 /// Read inbound frames and turn them into [`SttFrame`] events.
 ///
-/// The envelope is the trap: every normal frame is wrapped in `result`, and
-/// errors are **not** — they arrive flat as `{"error":{…}}`. Code reading
-/// `result.error` finds nothing and reports silence instead of a bad key, which
-/// is the failure mode that cost a day on the previous provider.
+/// Everything arrives at the TOP LEVEL discriminated by `type` — there is no
+/// `result` envelope, and errors are `{"type":"error","message":…}` with no
+/// status code, so permanence cannot be judged from an error frame the way it
+/// could from a gRPC status. That judgement moved to [`connect`], where the
+/// HTTP status on the upgrade actually says.
 async fn read_loop<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     generation: u64,
     mut source: futures_util::stream::SplitStream<Socket>,
     utterances: Arc<Utterances>,
+    ready: tokio::sync::oneshot::Sender<()>,
 ) -> ConnectionEnd {
+    let mut ready = Some(ready);
+
     while let Some(message) = source.next().await {
         let text = match message {
             Ok(Message::Text(text)) => text.to_string(),
@@ -587,85 +759,85 @@ async fn read_loop<R: tauri::Runtime>(
             continue;
         };
 
-        if let Some(error) = parsed.get("error") {
-            let message = error
-                .get("message")
-                .and_then(|value| value.as_str())
-                .unwrap_or("Inworld reported an error")
-                .to_string();
-            /*
-             * Retry only what retrying could possibly fix.
-             *
-             * These are gRPC status codes. `7` PERMISSION_DENIED is a bad or
-             * deleted key; `3` INVALID_ARGUMENT is a config the service will
-             * never accept, and `12` UNIMPLEMENTED likewise. Reconnecting with
-             * the same key and the same config gets the same answer every time,
-             * so retrying is not resilience — it is a billed loop that hides the
-             * cause. Only `3` had to be learned the hard way: a settings
-             * document written by the previous build still named that
-             * provider's model, the take forwarded it, and the session
-             * reconnected seven times in twelve seconds while reporting
-             * "reconnecting — your position is held".
-             */
-            let status = error.get("code").and_then(|value| value.as_u64());
-            let permanent = matches!(status, Some(3) | Some(7) | Some(12))
-                || message.to_lowercase().contains("api key");
-            let auth = status == Some(7) || message.to_lowercase().contains("api key");
-            emit(
-                &app,
-                SttFrame::Failed {
-                    generation,
-                    code: if auth {
-                        "AUTH_KEY_INVALID".into()
-                    } else if permanent {
-                        "REALTIME_CONFIG_REJECTED".into()
-                    } else {
-                        "REALTIME_PROVIDER_ERROR".into()
+        match parsed.get("type").and_then(|value| value.as_str()) {
+            Some("transcript.created") => {
+                if let Some(tx) = ready.take() {
+                    let _ = tx.send(());
+                }
+                continue;
+            }
+            Some("error") => {
+                let message = parsed
+                    .get("message")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("xAI reported an error")
+                    .to_string();
+                /*
+                 * An in-session error carries no code, so the only signal about
+                 * permanence is the text. A key revoked mid-take is the case
+                 * worth catching: reconnecting would be refused at the upgrade
+                 * anyway, where `connect` classifies it properly, so this
+                 * reports and lets the supervisor's budget handle the rest.
+                 */
+                let lowered = message.to_lowercase();
+                let permanent = lowered.contains("api key")
+                    || lowered.contains("permission")
+                    || lowered.contains("credits");
+                emit(
+                    &app,
+                    SttFrame::Failed {
+                        generation,
+                        code: if permanent {
+                            "AUTH_KEY_INVALID".into()
+                        } else {
+                            "REALTIME_PROVIDER_ERROR".into()
+                        },
+                        message,
+                        recoverable: !permanent,
                     },
-                    message,
-                    recoverable: !permanent,
-                },
-            );
-            return if permanent {
-                ConnectionEnd::Fatal
-            } else {
-                ConnectionEnd::Dropped(None)
-            };
+                );
+                return if permanent {
+                    ConnectionEnd::Fatal
+                } else {
+                    ConnectionEnd::Dropped(None)
+                };
+            }
+            // The post-`audio.done` summary. Everything it carries has already
+            // been reported by the utterance-finals, and it is followed by the
+            // service closing the socket.
+            Some("transcript.done") => return ConnectionEnd::Dropped(None),
+            Some("transcript.partial") => {}
+            _ => continue,
         }
 
-        let Some(result) = parsed.get("result") else {
+        let Some(body) = parsed.get("text").and_then(|value| value.as_str()) else {
             continue;
         };
-
-        // Opens the utterance if this is its first frame, so a transcript is
-        // never attributed to an item the ledger has not been told about.
-        if result.get("speechStarted").is_some() {
-            let _ = utterances.current(&app);
+        if body.trim().is_empty() {
+            continue;
         }
-
-        let Some(transcription) = result.get("transcription") else {
-            continue;
-        };
-        let Some(transcript) = transcription.get("transcript").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        let is_final = transcription
-            .get("isFinal")
+        let is_final = parsed
+            .get("is_final")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let speech_final = parsed
+            .get("speech_final")
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
 
-        utterances
-            .productive
-            .store(true, Ordering::SeqCst);
+        utterances.productive.store(true, Ordering::SeqCst);
+        // Grok has no speech-start event, so the item opens at the first frame
+        // that carries words — the earliest evidence there is.
         let item_id = utterances.current(&app);
         let audio_ms = utterances.audio_ms.load(Ordering::Relaxed) as f64;
-        if is_final {
+
+        if speech_final {
             emit_transcript(
                 &app,
                 SttFrame::Final {
                     generation,
                     item_id,
-                    text: transcript.to_string(),
+                    text: utterances.finish(body),
                     audio_end_ms: audio_ms,
                 },
                 audio_ms,
@@ -677,7 +849,7 @@ async fn read_loop<R: tauri::Runtime>(
                 SttFrame::Partial {
                     generation,
                     item_id,
-                    text: transcript.to_string(),
+                    text: utterances.extend(body, is_final),
                 },
                 audio_ms,
             );
@@ -734,10 +906,81 @@ mod tests {
         let fatal = serde_json::to_value(SttFrame::Failed {
             generation: 1,
             code: "AUTH_KEY_INVALID".into(),
-            message: "API key does not exist".into(),
+            message: "Your team doesn't have any credits".into(),
             recoverable: false,
         })
         .unwrap();
         assert_eq!(fatal["recoverable"], false);
+    }
+
+    fn utterances() -> Utterances {
+        Utterances {
+            generation: 1,
+            ordinal: AtomicU64::new(0),
+            open: std::sync::Mutex::new(Some("1-0".into())),
+            locked: std::sync::Mutex::new(String::new()),
+            audio_ms: Arc::new(AtomicU64::new(0)),
+            productive: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// The utterance-final replaces the locked chunks rather than extending
+    /// them: it is the service's own complete stitched utterance.
+    #[test]
+    fn a_stitched_utterance_final_replaces_the_locked_chunks() {
+        let state = utterances();
+        assert_eq!(state.extend("hello there", false), "hello there");
+        assert_eq!(state.extend("hello there", true), "hello there");
+        assert_eq!(
+            state.finish("Hello there, my name is Greg."),
+            "Hello there, my name is Greg."
+        );
+    }
+
+    /// The regression a live capture caught and no unit test predicted.
+    ///
+    /// The final re-decodes the audio rather than joining the chunk texts, so
+    /// it disagrees with them about wording. An implementation that appends
+    /// unless it recognises the chunks as a prefix cannot see this as a repeat,
+    /// appends, and doubles every utterance in the take.
+    #[test]
+    fn a_final_that_rewords_the_locked_chunks_still_replaces_them() {
+        let state = utterances();
+        state.extend("It and Wait: You Should Not Have To", true);
+        state.extend("Think about scrolling at all.", true);
+        let finished = state.finish("And wait, you shouldn't have to think about scrolling at all.");
+        assert_eq!(
+            finished,
+            "And wait, you shouldn't have to think about scrolling at all."
+        );
+        assert!(
+            !finished.to_lowercase().contains("should not have to"),
+            "the chunk wording must not survive alongside the final's: {finished}"
+        );
+    }
+
+    #[test]
+    fn chunk_finals_lock_text_that_later_interims_cannot_revise() {
+        let state = utterances();
+        state.extend("the first part", true);
+        assert_eq!(
+            state.extend("and the rest", false),
+            "the first part and the rest"
+        );
+        // An interim that revises itself does not disturb the locked prefix.
+        assert_eq!(
+            state.extend("and the rest of it", false),
+            "the first part and the rest of it"
+        );
+    }
+
+    /// A reconnect mid-utterance must not carry the half-sentence into the new
+    /// connection's first item.
+    #[test]
+    fn closing_an_utterance_clears_the_locked_text() {
+        let state = utterances();
+        state.extend("stranded half sentence", true);
+        state.close();
+        assert_eq!(state.finish("a fresh start"), "a fresh start");
     }
 }

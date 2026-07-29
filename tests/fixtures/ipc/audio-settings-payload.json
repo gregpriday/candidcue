@@ -20,12 +20,16 @@
     "one side maps and the other does not comes back as its default, and 0.5",
     "would hide exactly that.",
     "",
-    "The other three fields are the rest of Rust's audio section. They are here",
+    "The other two fields are the rest of Rust's audio section. They are here",
     "so the round trip is asserted on the WHOLE document rather than on one key",
-    "— a patch that silently dropped `language` would otherwise pass."
+    "— a patch that silently dropped `language` would otherwise pass.",
+    "",
+    "There is deliberately no `transcriptionModel`. The streaming endpoint takes",
+    "no model parameter, and the field is gone from AudioSettings rather than",
+    "retained-and-ignored; this document is the assertion that neither side",
+    "still writes it."
   ],
   "settings": {
-    "transcriptionModel": "inworld/inworld-stt-1",
     "language": "en-GB",
     "softPauseAutoDisconnectMinutes": 15,
     "vadSensitivity": 0.72

@@ -1,11 +1,26 @@
 //! Tier A: deterministic synthetic transcript events.
 //!
-//! Simulates the observed Inworld cadence without audio or network: server
-//! VAD opens an item at speech onset, full-restatement partials arrive on a
-//! ~900 ms cadence lagging the audio clock, a final restates the utterance
-//! ~1.2 s after the closing pause. Corruption is seeded and reproducible, so
-//! a Tier-A suite is a pure function of (plan, seed) and runs in
-//! milliseconds — this is what CI regression numbers come from.
+//! Simulates a provider cadence without audio or network: server VAD opens an
+//! item at speech onset, full-restatement partials arrive on a ~900 ms cadence
+//! lagging the audio clock, a final restates the utterance ~1.2 s after the
+//! closing pause. Corruption is seeded and reproducible, so a Tier-A suite is a
+//! pure function of (plan, seed) and runs in milliseconds — this is what CI
+//! regression numbers come from.
+//!
+//! ---------------------------------------------------------------------------
+//! WHY THESE CONSTANTS DID NOT MOVE WITH THE PROVIDER
+//! ---------------------------------------------------------------------------
+//! They were measured against the PREVIOUS provider (`bench/runs`), and they
+//! stayed that way through the switch to Grok on purpose. Tier A does not
+//! measure a provider — it measures the ENGINE, and it can only do that if
+//! its input is held still. Left frozen, a Tier-A number that moves across a
+//! provider change means the engine changed, which is exactly the alarm worth
+//! having; re-tuned at the same time, it would have measured two things at once
+//! and reported neither.
+//!
+//! Tier B is where the provider is actually measured. Once enough live Grok
+//! captures exist to derive a p50 the way [`PARTIAL_LAG_MS`] was derived, these
+//! can be recalibrated — as their own change, with its own before/after.
 
 use cc_stt::SttFrame;
 

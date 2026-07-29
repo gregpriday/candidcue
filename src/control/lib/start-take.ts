@@ -274,8 +274,7 @@ export async function startTake(scriptId: string): Promise<boolean> {
       teleprompter: s.teleprompter,
       stageDisplay: display,
       transcription: {
-        model: s.inworld.transcriptionModel,
-        language: s.inworld.language,
+        language: s.speech.language,
       },
       following: s.following,
       // "Follow system default" means exactly that: no pinned device id, so the

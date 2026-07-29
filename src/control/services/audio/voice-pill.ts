@@ -61,7 +61,7 @@ export const VOICE_PILL_TRACE_SAMPLES = STAGE_VOICE_PILL_TRACE_SAMPLES;
  *
  * Measured in speech, not in elapsed time, so a presenter collecting their
  * thoughts is never accused of anything: the clock only runs while they are
- * talking. Four seconds is far longer than the ~1.2–1.7 s Inworld takes to
+ * talking. Four seconds is far longer than the ~1.2–1.7 s xAI takes to
  * finalise an utterance and longer than the ~1 s its first partial takes, so a
  * healthy session confirms itself several times over before this can trip.
  */

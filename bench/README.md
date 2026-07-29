@@ -2,13 +2,13 @@
 
 End-to-end testing of the speech-to-script alignment system **outside the
 application**: real Markdown scripts → controlled performances → (synthetic
-events | real TTS audio streamed through the real Inworld STT endpoint) →
+events | real TTS audio streamed through the real Grok STT endpoint) →
 the Rust alignment engine → render-time metrics against a gold timeline.
 
 The engine under test is `crates/cc-align` — a pure, deterministic core (no
 I/O, no clocks, no randomness) that the app can adopt directly. The wire
 protocol used for live capture (`crates/cc-stt`) is the exact protocol of
-`src-tauri/src/inworld/stream.rs`.
+`src-tauri/src/stt/stream.rs`.
 
 ## Layout
 
@@ -16,19 +16,34 @@ protocol used for live capture (`crates/cc-stt`) is the exact protocol of
 bench/scripts/    Markdown fixture scripts (9, from 250 to 5,000 words)
 bench/runs/       Captured live-STT event logs — immutable replay fixtures
                   (events.jsonl + gold.json + manifest.json + performance.txt)
+                  Append-only: a scenario already holding an events.jsonl is
+                  SKIPPED by both synth-audio and capture. That is what makes
+                  resuming an interrupted capture safe, and it is why comparing
+                  two providers needs `--runs` pointing at a second corpus
+                  rather than a re-run over this one.
 bench/results/    Generated benchmark tables (local/gitignored JSON)
 crates/cc-align/  The alignment engine
-crates/cc-stt/    Tauri-free Inworld streaming client
+crates/cc-stt/    Tauri-free Grok streaming client
 crates/cc-bench/  Harness: plans, gold, synthetic events, TTS, capture,
                   replay, metrics, suites, reports
 ```
 
-## Custom vocabulary (`transcribeConfig.prompts`)
+## Custom vocabulary (`keyterm`)
 
-`inworld/inworld-stt-1` accepts a soft vocabulary bias, and
+Grok accepts a soft vocabulary bias of up to 100 terms of 50 characters, sent
+as repeated `keyterm` parameters on the URL that opens the socket, and
 `crates/cc-align/src/vocab.rs` builds one from a script: compound brands,
 initialisms, non-ASCII names, capitalised runs away from a sentence start, and
 figures in the notation the script wrote them in. Two commands drive it.
+
+Because the terms ride on the OPENING URL rather than on a frame, a vocabulary
+the gateway dislikes does not weaken a take — it prevents one. That is what
+`crates/cc-bench/tests/prompt_config.rs` guards, for a fraction of a cent.
+
+Worth knowing before reading an A/B as a mandate to send more: on the previous
+provider a 17-term vocabulary measured WORSE than none and an 8-term one
+measured better. Over-biasing is the failure mode, so the useful output here is
+a term COUNT, not a yes/no.
 
 ```bash
 # What would this script send? No network, no cost.
@@ -83,7 +98,7 @@ of the spelling disagreement with everything else held constant.
 
 **Tier A — deterministic synthetic.** Performance plans (read / pause / skip /
 retake / ad-lib / substitute / viewport ops) are expanded against the compiled
-script into a gold timeline; a simulator produces Inworld-cadence transcript
+script into a gold timeline; a simulator produces provider-cadence transcript
 events (full-restatement partials ~0.9 s, finals ~1.2 s after silence,
 seeded ASR-style corruption). Runs in seconds, byte-for-byte reproducible;
 this is what CI regression numbers come from.
@@ -91,7 +106,7 @@ this is what CI regression numbers come from.
 **Tier B — live end-to-end.** The same performances are rendered by three
 independent fal.ai TTS engines (`gemini-3.1-flash-tts`, `qwen-3-tts` 1.7 B,
 `xai/tts/v1`), stitched at 24 kHz mono PCM16 with real silence for pauses,
-streamed at real-time pace in 100 ms frames to the live Inworld endpoint,
+streamed at real-time pace in 100 ms frames to the live Grok endpoint,
 and the resulting event logs are captured as replay fixtures. Gold word
 timing comes from per-segment clip boundaries (segments ≤ 12 words, so
 linear interpolation stays within ±1 word).
@@ -113,11 +128,18 @@ CC_ALIGN_DEBUG=1 cargo run --release -p cc-bench -- inspect starter retake
 # Regenerate Tier B fixture audio (needs FAL_KEY; cached by content hash)
 cargo run --release -p cc-bench -- synth-audio --workdir /tmp/bench-work
 
-# Stream fixtures through live Inworld STT (needs INWORLD_API_KEY; ~real time)
+# Stream fixtures through live Grok STT (needs GROK_API_KEY; ~real time)
 cargo run --release -p cc-bench -- capture --workdir /tmp/bench-work
 
 # Replay captured runs (offline, no network)
 cargo run --release -p cc-bench -- tier-b --label mine --out ../bench/results/mine-live.json
+
+# Re-record the same scenarios against a DIFFERENT provider, without
+# overwriting the frozen corpus. `--runs` is accepted by all three commands
+# that touch a corpus and defaults to bench/runs.
+cargo run --release -p cc-bench -- synth-audio --workdir /tmp/w --runs /tmp/new
+cargo run --release -p cc-bench -- capture     --workdir /tmp/w --runs /tmp/new
+cargo run --release -p cc-bench -- tier-b --label after --runs /tmp/new --out ../bench/results/after.json
 
 # Compare two saved results / build the report table
 cargo run --release -p cc-bench -- compare ../bench/results/a.json ../bench/results/b.json

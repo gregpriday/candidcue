@@ -355,7 +355,7 @@ fn client_for(hop: &Hop) -> Result<reqwest::Client, AppError> {
 // ---------------------------------------------------------------------------
 
 /// Download and validate a remote image. Never reuses the app's shared
-/// provider client, which follows redirects and carries the Inworld key.
+/// provider client, which follows redirects and carries the xAI key.
 pub async fn fetch_remote_image(
     url: &str,
     policy: &FetchPolicy,

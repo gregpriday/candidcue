@@ -2,12 +2,30 @@
 //!
 //! ```text
 //! cc-bench tier-a  --label L [--config cfg.json] [--out results.json]
-//! cc-bench synth-audio --workdir DIR            # fal.ai TTS → fixture audio
-//! cc-bench capture --workdir DIR [--pace 1.0]   # stream → bench/runs/
+//! cc-bench synth-audio --workdir DIR [--runs D]  # fal.ai TTS → fixture audio
+//! cc-bench capture --workdir DIR [--pace 1.0] [--runs D]  # stream → corpus
 //! cc-bench vocab [SCRIPT ...]                   # show extracted bias terms
-//! cc-bench prompt-ab --workdir DIR [--scripts a,b]  # live A/B of `prompts`
-//! cc-bench tier-b  --label L [--config C] [--out F]
+//! cc-bench prompt-ab --workdir DIR [--scripts a,b]  # live A/B of `keyterm`
+//! cc-bench tier-b  --label L [--config C] [--out F] [--runs D]
 //! cc-bench compare baseline.json candidate.json
+//! ```
+//!
+//! `--runs` selects the fixture corpus, and all three commands that touch one
+//! accept it. It defaults to `bench/runs`, the frozen set under git.
+//!
+//! Pointing it elsewhere is how one PROVIDER is compared with another. Captures
+//! are append-only — a scenario whose `events.jsonl` exists is skipped, which is
+//! right for resuming an interrupted capture and fatal for re-recording the same
+//! scenarios against a different service. A separate corpus leaves the previous
+//! provider's fixtures intact so both replay through the same engine and the
+//! same evaluator:
+//!
+//! ```text
+//! cc-bench synth-audio --workdir /tmp/w --runs /tmp/new
+//! cc-bench capture     --workdir /tmp/w --runs /tmp/new
+//! cc-bench tier-b --label before --out before.json          # frozen corpus
+//! cc-bench tier-b --label after  --out after.json --runs /tmp/new
+//! cc-bench compare before.json after.json
 //! ```
 
 use std::path::PathBuf;
@@ -126,6 +144,11 @@ fn main() -> anyhow::Result<()> {
             let workdir = flags
                 .workdir
                 .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
+            // `--runs` names the corpus this synthesis is FOR, and both of the
+            // skip rules below key off it. Pointing it at an empty directory is
+            // how a second provider's fixtures get built without the frozen
+            // corpus making every scenario look already-done.
+            let runs_dir = flags.runs.unwrap_or(runs_dir);
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(synth_audio(&scripts_dir, &runs_dir, &workdir))?;
         }
@@ -134,6 +157,18 @@ fn main() -> anyhow::Result<()> {
             let workdir = flags
                 .workdir
                 .ok_or_else(|| anyhow::anyhow!("--workdir required"))?;
+            /*
+             * `--runs` is what makes a provider comparison possible at all.
+             *
+             * Captures are append-only against a corpus: a run whose
+             * `events.jsonl` already exists is skipped, which is right for
+             * resuming an interrupted capture and fatal for re-capturing the
+             * same scenarios against a different service. Writing into a fresh
+             * directory keeps the previous provider's fixtures INTACT, so the
+             * two are replayed through the same engine and evaluator rather
+             * than one overwriting the evidence for the other.
+             */
+            let runs_dir = flags.runs.unwrap_or(runs_dir);
             let runtime = tokio::runtime::Runtime::new()?;
             runtime.block_on(capture_all(&workdir, &runs_dir, flags.pace))?;
         }

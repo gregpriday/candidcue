@@ -24,7 +24,7 @@ export function watchPageErrors(page: Page): ErrorWatch {
   const seen: string[] = [];
 
   page.on('pageerror', (error) => {
-    seen.push(`uncaught ${error.name}: ${error.message}`);
+    seen.push(`uncaught ${error.name}: ${error.message}\n${error.stack ?? '(no stack)'}`);
   });
   page.on('console', (message) => {
     if (message.type() !== 'error') return;

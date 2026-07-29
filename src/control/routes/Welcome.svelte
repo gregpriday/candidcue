@@ -10,7 +10,7 @@
   import { navigate } from '../stores/router';
 
   const readiness = [
-    { icon: 'link' as const, text: 'Add your Inworld API key for voice tracking.' },
+    { icon: 'link' as const, text: 'Add your xAI API key for voice tracking.' },
     { icon: 'mic' as const, text: 'Choose and test a microphone.' },
     { icon: 'monitor' as const, text: 'Select the screen used by your teleprompter.' },
   ];
@@ -59,7 +59,7 @@
 
     <div class="footer-links">
       <button type="button" class="link" onclick={openPrivacy}>
-        What CandidCue sends to Inworld
+        What CandidCue sends to xAI
       </button>
       <button type="button" class="link quiet" onclick={skipToLibrary}>Go to the library</button>
     </div>

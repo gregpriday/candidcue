@@ -34,7 +34,7 @@ export interface ShimConfig {
   /** Mark the welcome screen as already seen so boot lands on the Library. */
   welcomed?: boolean;
   seedScripts?: ShimScriptSeed[];
-  /** Inworld key status returned by get_inworld_key_status. */
+  /** xAI key status returned by get_stt_key_status. */
   keyStatus?: Record<string, unknown>;
   /** When true, list_displays rejects (degraded enumeration path). */
   failListDisplays?: boolean;
@@ -152,7 +152,6 @@ function shimBody(config: ShimConfig): void {
         blankColor: '#000000',
       },
       audio: {
-        transcriptionModel: 'inworld/inworld-stt-1',
         // A full BCP-47 tag, as the app's own default is and as Rust validates:
         // a bare 'en' here made a take that faithfully carried the setting look
         // like one that had dropped the region.
@@ -468,9 +467,9 @@ function shimBody(config: ShimConfig): void {
         store.delete(args?.['scriptId'] as string);
         return null;
 
-      case 'get_inworld_key_status':
+      case 'get_stt_key_status':
         // Rust's real shape: `{ present, hint?, source }` — `source` is what
-        // tells Settings whether a debug build's INWORLD_API_KEY is in play.
+        // tells Settings whether a debug build's GROK_API_KEY is in play.
         return config.keyStatus ?? { present: false, source: 'none' };
 
       case 'list_displays':
