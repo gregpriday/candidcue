@@ -8,6 +8,8 @@ declare global {
   interface Window {
     __E2E__: {
       calls: Array<{ command: string; args: unknown }>;
+      /** Commands that have ANSWERED, in order — `calls` records only the ask. */
+      settled: string[];
       fail: Record<string, unknown>;
       stageGeneration: number;
       sessionGeneration: number;
@@ -27,5 +29,14 @@ declare global {
       emit(event: string, payload: unknown): number;
       reset(): void;
     };
+    /**
+     * Microphone-API call counters installed by welcome.spec.ts.
+     *
+     * Chromium implements the Permissions API and this suite grants the
+     * microphone globally, so a screen that wrongly asked the browser instead
+     * of reading the persisted grant would still answer correctly here and look
+     * fine. Counting the calls is the only way to see that difference.
+     */
+    __MIC_PROBES__?: { query: number; getUserMedia: number; enumerateDevices: number };
   }
 }
