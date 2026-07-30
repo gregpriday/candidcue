@@ -21,7 +21,9 @@
     ['Present current script', `${mod}Enter`],
     ['Start / Pause / Resume', 'Space (when not typing)'],
     ['Hard pause', `${mod}Shift+Space`],
-    ['Stop session', `${mod}.`],
+    // §115: one verb. This key raises "End the session?" — the help calling the
+    // same action "Stop session" is the vocabulary split the issue names.
+    ['End session', `${mod}.`],
     ['Back / forward one sentence', 'Alt+← / Alt+→'],
     ['Previous / next chapter', 'Alt+↑ / Alt+↓'],
     ['Increase / decrease stage text', `${mod}= / ${mod}-`],

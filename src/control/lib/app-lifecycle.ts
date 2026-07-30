@@ -49,9 +49,23 @@ const FATAL_BOOT_CODES: ReadonlySet<string> = new Set([
  * closing" — a network that stopped existing when transcription moved
  * on-device. Neither says "full screen" any more either, because reader-window
  * mode is not full screen.
+ *
+ * "Ending", not "stopping". §115 settled the vocabulary on one verb for one
+ * action: the transport button, the stage dock, the shortcut help and both
+ * confirmations all say "end" now, because three names for one action read as
+ * three actions and the presenter reaches for whichever they happen to see.
+ *
+ * It deliberately stops short of promising the take summary, which is the one
+ * sentence Live's own dialog would like to add. Live's exit does show a summary
+ * — that is what §115 fixed — but the other caller is App's navigation guard,
+ * which clears the session on its way to somewhere that is not Live. A shared
+ * body that promised a summary would therefore be false on exactly one of the
+ * two paths this constant exists to keep honest, which is the class of defect
+ * it was extracted to prevent rather than a wording preference.
  */
 export const STOP_SESSION_CONFIRM_BODY =
-  'Stopping ends the session and leaves presentation mode. Your script is unchanged.';
+  'Ending the session leaves presentation mode. Your script is unchanged, and ' +
+  'presenting again starts a new take from the beginning.';
 
 /** Is this the kind of startup failure that must not be papered over? */
 export function isFatalBootCode(code: string | null): boolean {

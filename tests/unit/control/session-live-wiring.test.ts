@@ -16,6 +16,7 @@
  *     either nothing is ever kept, or words are kept when the user said no.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { get } from 'svelte/store';
 import { STAGE_EVENT } from '../../../src/shared/contracts';
 import type { CompiledScript } from '../../../src/shared/contracts';
 
@@ -45,11 +46,17 @@ const records = vi.hoisted(() => ({
  * real WebRTC transport cannot be stood up in node.
  */
 const pipeline = vi.hoisted(() => {
-  const captured: { deps: Record<string, (...args: never[]) => unknown> | null } = { deps: null };
+  const captured: {
+    deps: Record<string, (...args: never[]) => unknown> | null;
+    /** The live instance, so a test can make one of its methods misbehave. */
+    instance: unknown;
+  } = { deps: null, instance: null };
   class FakePipeline {
     constructor(deps: Record<string, (...args: never[]) => unknown>) {
       captured.deps = deps;
+      captured.instance = this;
     }
+    async switchMicrophone(): Promise<void> {}
     async start(): Promise<void> {}
     async stop(): Promise<void> {}
     startListening(): void {}
@@ -133,8 +140,15 @@ vi.mock('../../../src/control/services/stage-acks', async (orig) => {
 });
 
 const { setInvokeForTesting } = await import('../../../src/control/services/ipc');
-const { clearSession, setStageEmitterForTesting, startLiveSession, startPrompting, stopSession } =
-  await import('../../../src/control/stores/session');
+const {
+  clearSession,
+  session,
+  setStageEmitterForTesting,
+  startLiveSession,
+  startPrompting,
+  stopSession,
+} = await import('../../../src/control/stores/session');
+const { toasts } = await import('../../../src/control/stores/toasts');
 
 /** Enough of a CompiledScript for the store and for the alignment handshake. */
 function compiledStub(): CompiledScript {
@@ -156,6 +170,15 @@ interface StartOverrides {
   sessionGeneration?: number;
   transcriptRetained?: boolean;
   mode?: 'voice' | 'manual';
+  /** 0 is single-window presentation: no separate stage window, no bridge. */
+  stageGeneration?: number;
+  sentences?: Array<{
+    id: string;
+    blockId: string;
+    startTokenIndex: number;
+    endTokenIndex: number;
+    normalizedText: string;
+  }>;
 }
 
 function start(overrides: StartOverrides = {}): string {
@@ -165,11 +188,11 @@ function start(overrides: StartOverrides = {}): string {
     mode: overrides.mode ?? 'voice',
     displayLabel: 'Stage',
     outline: [],
-    sentences: [],
+    sentences: (overrides.sentences ?? []) as never,
     totalTokens: 200,
     sessionId: 'session-uuid-1',
     compiled: compiledStub(),
-    stageGeneration: 4,
+    stageGeneration: overrides.stageGeneration ?? 4,
     sessionGeneration: overrides.sessionGeneration ?? 7,
     transcriptRetained: overrides.transcriptRetained ?? false,
   });
@@ -188,6 +211,7 @@ beforeEach(() => {
   records.appendSessionTranscript.mockClear();
   records.endSessionRecord.mockClear();
   pipeline.captured.deps = null;
+  pipeline.captured.instance = null;
   setStageEmitterForTesting(async (target, event, payload) => {
     emitted.push({ target, event, payload });
   });
@@ -345,5 +369,235 @@ describe('C11 — transcript retention follows the setting Rust decided (§36.2)
     expect(sessionId).toBe('session-uuid-1');
     expect(typeof summary.endTokenIndex).toBe('number');
     expect(summary.metrics?.sectionsReached).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * §115 — the summary has to know whether silence on the stage bridge was
+ * EXPECTED.
+ *
+ * Stage updates, document travel and the transcript relay are all measured
+ * across the control→stage window boundary, and `startStageBridge` returns
+ * immediately at generation 0 — single-window presentation, which is the
+ * configuration most takes run in. Every one of those counters therefore reads
+ * empty on a perfectly healthy embedded take, and the summary reported all
+ * three as faults. On revert, this flag goes back to being unavailable and the
+ * dialog resumes accusing the app of three failures per take.
+ */
+describe('§115 — stage telemetry is only expected when a stage window exists', () => {
+  it('does not expect telemetry in single-window presentation (generation 0)', () => {
+    start({ stageGeneration: 0 });
+    startPrompting();
+    const summary = stopSession();
+    expect(summary.stageTelemetryExpected).toBe(false);
+    /*
+     * And the counters really are empty — this is the state that used to read
+     * as three separate faults, so it is worth pinning that the flag is
+     * describing the real situation rather than papering over a live bridge.
+     */
+    expect(summary.stageApplied).toBeNull();
+    expect(summary.documentTravelPx).toBeNull();
+  });
+
+  it('expects telemetry when the stage has its own window', () => {
+    start({ stageGeneration: 4 });
+    startPrompting();
+    const summary = stopSession();
+    expect(summary.stageTelemetryExpected).toBe(true);
+  });
+
+  it('reports no telemetry for a stop that had no session to stop', () => {
+    // `emptySummary` — the shape-complete zero. A missing field here would make
+    // the summary render the separate-window rows against zeroed counters.
+    const summary = stopSession();
+    expect(summary.stageTelemetryExpected).toBe(false);
+  });
+
+  // The "a separate stage that DIED mid-take still expects telemetry" case
+  // needs the bridge's real `stage://closed` listener, so it lives in
+  // `session-stage-bridge.test.ts` where that harness already exists.
+});
+
+/**
+ * §115 — the ending location is presenter-facing copy, so it may not be in
+ * engine units.
+ *
+ * `Token 417` is a measured span index. It is not a word count, it appears
+ * nowhere else the presenter can see, and nobody reading the summary can
+ * convert it into anything. The heading is used when there is one; this covers
+ * the fallback, which is what a script with no headings always hit.
+ */
+describe('§115 — the ending location never reports a raw token index', () => {
+  const sentences = [
+    { id: 's-1', blockId: 'b-1', startTokenIndex: 0, endTokenIndex: 3, normalizedText: 'Hello there.' },
+    { id: 's-2', blockId: 'b-1', startTokenIndex: 4, endTokenIndex: 9, normalizedText: 'Second one.' },
+  ];
+
+  function pushSnapshot(confirmedToken: number): void {
+    alignmentFeed.push?.({
+      sessionGeneration: 7,
+      seq: 1,
+      state: 'following',
+      decision: 'localConfirmed',
+      confirmedToken,
+      observedToken: confirmedToken + 1,
+      rateTokensPerSecond: 2.5,
+      evidenceAudioMs: 1000,
+      atAudioMs: 1000,
+      maxPredictionMs: 900,
+      confidence: 0.9,
+      suggestionToken: null,
+      scriptLenTokens: 200,
+      observedAtom: confirmedToken + 1,
+      confirmedAtom: confirmedToken,
+    });
+  }
+
+  it('locates the ending by sentence when the script has no headings', () => {
+    start({ sentences });
+    startPrompting();
+    pushSnapshot(5);
+    const summary = stopSession();
+
+    expect(summary.endingLocation).not.toMatch(/token/i);
+    expect(summary.endingLocation).toBe('Sentence 2 of 2');
+  });
+
+  it('still says Beginning before anything has been followed', () => {
+    start({ sentences });
+    startPrompting();
+    const summary = stopSession();
+    expect(summary.endingLocation).toBe('Beginning');
+  });
+
+  it('says Beginning when the take never reached the first sentence', () => {
+    /*
+     * The `reached === 0` branch, which needs a SNAPSHOT to get to — the test
+     * above returns at `!snapshot` and never exercises it. Degraded input (a
+     * first sentence that does not start at token 0) is what reaches this, and
+     * flooring it to "Sentence 1 of 2" would name a sentence never begun.
+     */
+    start({ sentences: [{ ...sentences[0]!, startTokenIndex: 40, endTokenIndex: 48 }] });
+    startPrompting();
+    pushSnapshot(3);
+    expect(stopSession().endingLocation).toBe('Beginning');
+  });
+
+  it('says the location is unavailable rather than inventing one', () => {
+    // Degraded input: a snapshot arrived but there is no sentence metadata to
+    // locate it against. "Beginning" would be a claim; this is not.
+    start({ sentences: [] });
+    startPrompting();
+    pushSnapshot(5);
+    expect(stopSession().endingLocation).toBe('Location unavailable');
+  });
+});
+
+/**
+ * §115 — an instruction the operator can actually carry out.
+ *
+ * The busy-device fallback notice says "pick another input in the take
+ * controls". Two things had to be true for that to mean anything, and neither
+ * was: the notice had to outlive the four-second `info` default (it is an
+ * instruction, and the take runs for minutes), and the picker it names had to
+ * render — which it did not, because the picker was gated on `inputDeviceLost`
+ * and a fallback loses nothing.
+ */
+describe('§115 — the fallback-input notice is followable', () => {
+  function fellBackToDefault(): void {
+    const deps = pipeline.captured.deps as unknown as {
+      onInputFellBackToDefault?: () => void;
+    };
+    deps.onInputFellBackToDefault?.();
+  }
+
+  it('offers the picker without claiming the microphone failed', () => {
+    start();
+    startPrompting();
+    fellBackToDefault();
+
+    const s = get(session);
+    // The flag the picker reads...
+    expect(s.usingFallbackInput).toBe(true);
+    // ...and NOT the one that means "this is broken". Nothing failed: audio is
+    // being captured, just not from the chosen device.
+    expect(s.inputDeviceLost).toBe(false);
+    expect(s.micState).toBe('live');
+  });
+
+  it('does not expire while the take is still running', () => {
+    start();
+    startPrompting();
+    fellBackToDefault();
+    expect(get(toasts)).toHaveLength(1);
+
+    // Well past the 4000 ms `info` default that used to retire it.
+    vi.advanceTimersByTime(30_000);
+    expect(get(toasts)).toHaveLength(1);
+  });
+
+  it('reports the condition once rather than stacking', () => {
+    start();
+    startPrompting();
+    fellBackToDefault();
+    fellBackToDefault();
+    expect(get(toasts)).toHaveLength(1);
+  });
+
+  it('is retired with the take', () => {
+    start();
+    startPrompting();
+    fellBackToDefault();
+    stopSession();
+    expect(get(toasts)).toHaveLength(0);
+  });
+
+  it('ignores a fallback reported by a superseded pipeline', () => {
+    start();
+    startPrompting();
+    const deps = pipeline.captured.deps as unknown as {
+      onInputFellBackToDefault?: () => void;
+    };
+    stopSession();
+    clearSession();
+
+    // The old take's pipeline, reporting late. Nothing it says belongs to what
+    // is on screen now.
+    deps.onInputFellBackToDefault?.();
+    expect(get(toasts)).toHaveLength(0);
+    expect(get(session).usingFallbackInput).toBe(false);
+  });
+
+  /**
+   * A resolved switch is not necessarily the device that was asked for.
+   *
+   * The pipeline falls back to the system default when the REPLACEMENT is also
+   * busy, and reports that by callback rather than by rejecting. Treating it as
+   * success took the picker away and announced that following had resumed, for
+   * a device the operator had chosen and silently not been given.
+   */
+  it('does not claim success when the replacement input also fell back', async () => {
+    start();
+    startPrompting();
+
+    const deps = pipeline.captured.deps as unknown as {
+      onInputFellBackToDefault?: () => void;
+    };
+    const { switchMicrophone } = await import('../../../src/control/stores/session');
+
+    // The fake pipeline's `switchMicrophone` falls back while switching.
+    const live = pipeline.captured.instance as unknown as {
+      switchMicrophone: (deviceId: string) => Promise<void>;
+    };
+    live.switchMicrophone = async () => {
+      deps.onInputFellBackToDefault?.();
+    };
+
+    const ok = await switchMicrophone('device-b', 'Interface B');
+    expect(ok).toBe(false);
+    // Still offering the remedy, still saying why, still capturing.
+    expect(get(session).usingFallbackInput).toBe(true);
+    expect(get(session).micState).toBe('live');
+    expect(get(toasts)).toHaveLength(1);
   });
 });

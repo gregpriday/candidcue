@@ -151,10 +151,15 @@ import { rememberReaderFrame } from './lib/reader-frame';
     /* Leaving an active live session requires an explicit stop (spec §45.1). */
     const unregisterLiveGuard = registerNavigationGuard(async (to, from) => {
       if (from.name === 'live' && to.name !== 'live' && $session.active) {
+        /*
+         * "End", not "stop", and the same body as Live's own dialog. §115's
+         * complaint was one action wearing several names; this guard is the
+         * fourth way out of a take and would have kept the old word alive.
+         */
         const accepted = await requestConfirm({
-          title: 'Stop the session?',
+          title: 'End the session?',
           body: STOP_SESSION_CONFIRM_BODY,
-          confirmLabel: 'Stop session',
+          confirmLabel: 'End session',
           danger: true,
         });
         if (!accepted) return false;

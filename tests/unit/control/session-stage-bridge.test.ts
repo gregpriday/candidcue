@@ -346,6 +346,25 @@ describe('stage closed (§62)', () => {
     expect(get(session).stageAlive).toBe(true);
   });
 
+  /**
+   * §115 — a stage that DIED is not a stage that never existed.
+   *
+   * The summary suppresses its three bridge-measured rows when no separate
+   * stage window was ever expected, because at generation 0 their empty
+   * counters are normal. `handleStageClosed` sets the live `stageGeneration`
+   * back to 0, so deriving that flag at stop time would classify a take whose
+   * stage CRASHED as a single-window take — hiding the accumulated telemetry
+   * and saying "the stage shared this window" on the one take where those rows
+   * are the whole story. The flag is latched when the take starts.
+   */
+  it('still expects stage telemetry after the stage window dies mid-take', async () => {
+    await startWithLiveBridge();
+    find(CONTROL_EVENT.stageClosed).at(-1)?.handler({ payload: { stageGeneration: 7 } });
+    expect(get(session).stageAlive).toBe(false);
+
+    expect(stopSession().stageTelemetryExpected).toBe(true);
+  });
+
   it('resets stageAlive for the next session', async () => {
     await startWithLiveBridge();
     find(CONTROL_EVENT.stageClosed).at(-1)?.handler({ payload: { stageGeneration: 7 } });
