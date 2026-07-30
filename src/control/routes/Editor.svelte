@@ -121,7 +121,7 @@ import type { PresentationMode } from '../services/settings-types';
   });
 
   /*
-   * Gated on `result` for the same reason `compileFailed` below exists: a
+   * Gated on `result` for the same reason `compileFailed` above exists: a
    * script the compiler has not finished with is not a script with nothing in
    * it. `openScript` clears the compile store and only THEN awaits the fetch,
    * so an 800-word script would announce "0 words" for the whole of that
