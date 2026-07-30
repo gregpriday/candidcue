@@ -643,7 +643,14 @@ test('the first Escape prompts and the second ends the take, un-presents, and sh
   // The DESTINATION, not just the dialog's absence — clearing the summary
   // without going anywhere would have satisfied that on its own.
   await expect(page.locator('aside.sidebar')).toBeVisible();
-  await expect(page.getByText('Thank you for joining me today.')).toBeVisible();
+  // And it is THIS script, scoped to the source pane: Split mode renders the
+  // words twice — once in CodeMirror, once in the preview beside it — so an
+  // unscoped match is ambiguous. What "Return to editor" owes a presenter is
+  // the take's script back under the cursor, ready to be changed for another
+  // run, which is the editor pane specifically.
+  await expect(
+    page.locator('.cm-content').getByText('Thank you for joining me today.'),
+  ).toBeVisible();
 
   errors.expectClean();
 });
