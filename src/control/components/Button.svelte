@@ -7,7 +7,12 @@
   import type { Snippet } from 'svelte';
 
   interface Props {
-    variant?: 'default' | 'primary' | 'ghost' | 'danger';
+    /**
+     * `danger` is the low-emphasis destructive TRIGGER (a toolbar's "Empty
+     * Trash", a transport's "Stop"); `danger-primary` is the filled CONFIRM,
+     * and belongs only where the click cannot be taken back.
+     */
+    variant?: 'default' | 'primary' | 'ghost' | 'danger' | 'danger-primary';
     size?: 'md' | 'sm';
     disabled?: boolean;
     type?: 'button' | 'submit';
@@ -125,35 +130,54 @@
     color: var(--text-primary);
   }
 
-  /*
-   * Danger — the same solid recipe as primary, in red.
-   *
-   * It used to be a borderless text button, which read at exactly the weight of
-   * the Cancel beside it. Every caller is the confirming half of a destructive
-   * pair (empty trash, stop the take, the confirm sheet), so the one action that
-   * cannot be undone was the only one on screen with no visually primary
-   * button. Filled, it is unmistakably the thing being asked about.
-   */
+  /* Danger — the low-emphasis TRIGGER. Recedes into a toolbar or a transport,
+     where it sits for the whole session and must not compete with the primary
+     action beside it. */
   .danger {
+    background: transparent;
+    border-color: transparent;
+    color: var(--danger);
+    box-shadow: none;
+  }
+  .danger:hover:not(:disabled) {
+    background: var(--danger-soft);
+    border-color: transparent;
+  }
+
+  /*
+   * Danger-primary — the same solid recipe as primary, in red.
+   *
+   * A destructive confirm used to be a borderless text button reading at
+   * exactly the weight of the Cancel beside it, so the one action that cannot
+   * be taken back was the only one on screen with no visually primary button.
+   * Filled, it is unmistakably the thing being asked about.
+   *
+   * Deliberately NOT what `danger` became. The persistent triggers (Stop
+   * session, Stop test, Empty Trash) are not confirmations: filling those would
+   * put a permanent red block beside the real primary and give the screen two
+   * competing hero actions. This variant belongs on the confirming half of a
+   * destructive pair and nowhere else.
+   */
+  .danger-primary {
     background: var(--danger);
     border-color: var(--danger-strong);
     color: var(--danger-contrast);
     font-size: var(--text-base);
   }
-  .danger:hover:not(:disabled) {
+  .danger-primary:hover:not(:disabled) {
     background: var(--danger-strong);
     border-color: var(--danger-strong);
   }
   /* Neutral when disabled, like primary — dimming a red fill reads as a
      softer warning rather than an unavailable control. */
-  .danger:disabled {
+  .danger-primary:disabled {
     opacity: 1;
     background: var(--bg-secondary);
     border-color: var(--border);
     color: var(--text-muted);
     box-shadow: none;
   }
-  .danger.sm {
+  .danger-primary.sm {
     font-size: var(--text-sm);
   }
 </style>

@@ -34,20 +34,46 @@ async function tabTo(
   page: import('@playwright/test').Page,
   selector: string,
 ): Promise<{ color: string; style: string; offset: string; quiet: string; ring: string }> {
-  for (let i = 0; i < 40; i++) {
-    const found = await page.evaluate((sel) => document.activeElement?.matches(sel) ?? false, selector);
-    if (found) break;
-    await page.keyboard.press('Tab');
+  let reached = false;
+  for (let i = 0; i < 40 && !reached; i++) {
+    reached = await page.evaluate((sel) => document.activeElement?.matches(sel) ?? false, selector);
+    if (!reached) await page.keyboard.press('Tab');
   }
+
+  /*
+   * Assert we ARRIVED. Without this the loop simply runs out and every
+   * assertion below is made against whatever element focus happened to land
+   * on — and since the page is full of both controls and rows, a run that
+   * never reached its target could still find the ring it was looking for and
+   * pass. A guard that can report success without having tested anything is
+   * worse than no guard.
+   */
+  const landed = await page.evaluate(() => {
+    const el = document.activeElement as HTMLElement | null;
+    return el ? `${el.tagName.toLowerCase()}.${el.className}` : 'nothing';
+  });
+  expect(reached, `Tab never reached "${selector}" — focus stopped on ${landed}`).toBe(true);
 
   return page.evaluate(() => {
     const el = document.activeElement as HTMLElement;
     const style = getComputedStyle(el);
-    // Resolved from the element itself so it picks up the theme actually in
-    // force on this route rather than the un-themed :root default.
+    /*
+     * Resolved through a probe rather than parsed. A custom property's computed
+     * value is whatever was authored — `#fff`, `rgb(...)`, another `var()` —
+     * and hand-parsing six-digit hex turns any of those into a wrong colour
+     * (or NaN, which normalises to black and could mask a real mismatch).
+     * Letting the engine resolve `color` gives the same `rgb()` form the
+     * outline is reported in, whatever the token is written as.
+     */
     const asRgb = (name: string): string => {
-      const n = parseInt(style.getPropertyValue(name).trim().replace('#', ''), 16);
-      return `rgb(${(n >> 16) & 0xff}, ${(n >> 8) & 0xff}, ${n & 0xff})`;
+      const probe = document.createElement('span');
+      probe.style.color = `var(${name})`;
+      probe.style.display = 'none';
+      // Appended INSIDE the focused element so it inherits the same theme.
+      el.appendChild(probe);
+      const resolved = getComputedStyle(probe).color;
+      probe.remove();
+      return resolved;
     };
     return {
       color: style.outlineColor,

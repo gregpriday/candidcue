@@ -63,6 +63,20 @@ function button(name: string): HTMLButtonElement {
   return match as HTMLButtonElement;
 }
 
+/**
+ * The confirming half of the pair — the filled danger button.
+ *
+ * Found by variant rather than by label because both halves of the confirm step
+ * read "Restore this version": the one that asks, and the one that does it.
+ */
+function confirmButton(): HTMLButtonElement {
+  const match = [...document.querySelectorAll('button')].find((el) =>
+    el.classList.contains('danger-primary'),
+  );
+  expect(match, 'the confirming action must be the filled danger button').toBeDefined();
+  return match as HTMLButtonElement;
+}
+
 /** Wait until the preview has landed and Restore is live. */
 async function ready(): Promise<void> {
   await vi.waitFor(() => {
@@ -135,33 +149,31 @@ describe('RevisionHistory — the restore confirmation', () => {
     await ready();
 
     button('Restore this version').click();
-    await tick();
-    // The confirming half is the filled danger button; Cancel is the ghost.
-    const confirm = [...document.querySelectorAll('button')].find((el) =>
-      el.classList.contains('danger'),
-    );
-    expect(confirm, 'the confirming action must be the danger button').toBeDefined();
-    confirm!.click();
+    await focusSettlesOn('Cancel');
+    confirmButton().click();
 
     await vi.waitFor(() => expect(onrestored).toHaveBeenCalledTimes(1));
     expect(restoreRevision).toHaveBeenCalledWith('script-1', 'rev-1', 4);
   });
 
-  it('a failed restore lands focus somewhere usable rather than on the body', async () => {
+  it('a failed restore says so, and lands focus somewhere usable', async () => {
+    const onrestored = vi.fn();
     restoreRevision.mockRejectedValue(new Error('the script changed underneath'));
-    renderPanel();
+    renderPanel({ onrestored });
     await ready();
 
     button('Restore this version').click();
-    await tick();
-    const confirm = [...document.querySelectorAll('button')].find((el) =>
-      el.classList.contains('danger'),
-    );
-    confirm!.click();
+    await focusSettlesOn('Cancel');
+    confirmButton().click();
 
     await focusSettlesOn('Restore this version');
     // Back to asking, not stuck mid-question.
     expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(onrestored, 'a failed restore must not report success').not.toHaveBeenCalled();
+    // And the operator is told WHY — a destructive action that silently does
+    // nothing is worse than one that fails loudly.
+    expect(document.body.textContent).toContain('the script changed underneath');
+    expect((button('Restore this version') as HTMLButtonElement).disabled).toBe(false);
   });
 
   it('does not reopen still holding a half-answered question', async () => {
@@ -174,7 +186,17 @@ describe('RevisionHistory — the restore confirmation', () => {
 
     await rerender({ open: false });
     await rerender({ open: true });
-    await tick();
+
+    /*
+     * Wait for the SECOND load to finish before judging.
+     *
+     * While `loading` is true the confirm paragraph is not rendered at all, so
+     * an immediate check finds no alert whether or not the reset happened —
+     * removing `confirming = false` would leave this green. Waiting until the
+     * panel is ready again is what makes the assertion mean something.
+     */
+    await vi.waitFor(() => expect(listRevisions).toHaveBeenCalledTimes(2));
+    await ready();
 
     expect(
       document.querySelector('[role="alert"]'),

@@ -23,6 +23,13 @@ import SplitButton from '../../src/control/components/SplitButton.svelte';
 
 type Props = ComponentProps<typeof SplitButton>;
 
+/* Both halves are compact controls, so both opt into the accent focus ring —
+   tokens.css gives an unmarked button the quiet surface edge meant for rows. */
+function assertFocusOptIn(main: HTMLElement, caret: HTMLElement): void {
+  expect(main.getAttribute('data-focus')).toBe('control');
+  expect(caret.getAttribute('data-focus')).toBe('control');
+}
+
 function renderSplit(overrides: Partial<Props> = {}) {
   const onclick = vi.fn();
   const chooseFullScreen = vi.fn();
@@ -62,6 +69,11 @@ function keyboardClick(el: HTMLElement): void {
 }
 
 describe('the two halves', () => {
+  it('both halves opt into the small-control focus ring', () => {
+    const { main, caret } = renderSplit();
+    assertFocusOptIn(main, caret);
+  });
+
   it('runs the primary action without opening anything', () => {
     const { main, onclick, menu } = renderSplit();
     pointerClick(main);

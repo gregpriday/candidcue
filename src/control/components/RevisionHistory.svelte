@@ -215,7 +215,7 @@
       <Button bind:element={cancelButton} variant="ghost" onclick={() => void cancelRestore()}>
         Cancel
       </Button>
-      <Button variant="danger" disabled={restoring} onclick={() => void restore()}>
+      <Button variant="danger-primary" disabled={restoring} onclick={() => void restore()}>
         {restoring ? 'Restoring…' : 'Restore this version'}
       </Button>
     {:else}

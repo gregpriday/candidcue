@@ -449,14 +449,20 @@ html[data-presenting='true'] body {
    it sits on so the state clears SC 1.4.11 by itself.
    ============================================================================ */
 
+/* Every native branch below is `:not([data-focus])`, so an element is claimed
+   EITHER by its tag (when it carries no marker) or by its marker — never by
+   both. All three rules have equal specificity, and equal specificity is
+   settled by source order; keeping the sets disjoint means order never gets a
+   say, so a future reshuffle of this block cannot silently change behaviour. */
+
 /* The quiet default. Checkboxes and radios are excluded because they are small
    controls in their own right; the range input is excluded because its focus
    lives on the thumb, below. */
 :where(
-  button:not([data-focus='control']):not([data-focus='delegate']),
-  input:not([type='checkbox']):not([type='radio']):not([type='range']),
-  textarea,
-  select,
+  button:not([data-focus]),
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([data-focus]),
+  textarea:not([data-focus]),
+  select:not([data-focus]),
   [data-focus='surface']
 ):focus-visible {
   outline: 2px solid var(--focus-quiet);
@@ -464,7 +470,12 @@ html[data-presenting='true'] body {
 }
 
 /* The accent ring, by declaration only. */
-:where(a, [data-focus='control'], input[type='checkbox'], input[type='radio']):focus-visible {
+:where(
+  a:not([data-focus]),
+  input[type='checkbox']:not([data-focus]),
+  input[type='radio']:not([data-focus]),
+  [data-focus='control']
+):focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }

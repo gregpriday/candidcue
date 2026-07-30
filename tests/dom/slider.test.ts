@@ -71,6 +71,19 @@ describe('Slider', () => {
     expect(renderSlider().getByRole('slider').getAttribute('aria-describedby')).toBeNull();
   });
 
+  it('two described sliders point at their own description, not each other’s', () => {
+    // A hard-coded description id would satisfy every single-instance test here
+    // and collide on the settings screens that stack several of these.
+    const a = renderSlider({ label: 'One', description: 'First' });
+    const b = renderSlider({ label: 'Two', description: 'Second' });
+
+    const idA = a.getByRole('slider', { name: 'One' }).getAttribute('aria-describedby');
+    const idB = b.getByRole('slider', { name: 'Two' }).getAttribute('aria-describedby');
+    expect(idA).not.toBe(idB);
+    expect(document.getElementById(idA!)?.textContent).toBe('First');
+    expect(document.getElementById(idB!)?.textContent).toBe('Second');
+  });
+
   it('reports the new number upward on input', async () => {
     const onchange = vi.fn();
     const { getByRole } = renderSlider({ onchange });

@@ -239,18 +239,31 @@ describe('Dialog — scrim', () => {
     return el!;
   };
 
+  /** Nearest common ancestor — where a browser targets a click that moved. */
+  function commonAncestor(a: HTMLElement, b: HTMLElement): HTMLElement {
+    let node: HTMLElement | null = a;
+    while (node && !node.contains(b)) node = node.parentElement;
+    return node ?? document.body;
+  }
+
   /**
-   * A pointer gesture, in the two parts the browser actually reports.
+   * A pointer gesture, in the three parts a browser actually reports.
    *
-   * `click` is dispatched at the element the pointer went UP over, which is the
-   * whole reason the original handler could not tell a dismissal from the end
-   * of a drag. jsdom has no `PointerEvent` constructor, but the handler only
-   * reads `target`/`currentTarget`, so a `MouseEvent` of the right type reaches
-   * the same listener and proves the same thing.
+   * The click target is the subtle bit, and getting it wrong is what let the
+   * original bug through this suite: a browser does NOT target `click` at the
+   * element the pointer came up over. When press and release land on different
+   * elements it targets their nearest common ancestor — which, for anything
+   * inside this dialog, is the scrim itself. An earlier version of this helper
+   * dispatched the click at the release element, so a scrim-to-panel drag
+   * looked harmless here while the real handler dismissed the dialog.
+   *
+   * jsdom has no `PointerEvent` constructor; a `MouseEvent` of the right type
+   * reaches the same listener, and `button: 0` matches the primary-press check.
    */
   function gesture(down: HTMLElement, up: HTMLElement): void {
-    down.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
-    up.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    down.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    up.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, button: 0 }));
+    commonAncestor(down, up).dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
     flushSync();
   }
 
@@ -298,9 +311,32 @@ describe('Dialog — scrim', () => {
     // Pointer goes down on the scrim, then the gesture is cancelled (a system
     // gesture takes over, the pointer leaves the window). A later stray click
     // must not cash in the recorded origin.
-    scrim().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    scrim().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
     scrim().dispatchEvent(new MouseEvent('pointercancel', { bubbles: true }));
-    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    flushSync();
+    expect(onclose).not.toHaveBeenCalled();
+  });
+
+  it('a press released outside the window does not authorise a later click', () => {
+    const onclose = vi.fn();
+    renderDialog({ body: '<button id="a">A</button>', onclose });
+
+    // No pointerup and no pointercancel — the release happened off-document.
+    scrim().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    // A keyboard-synthesised click later has no press of its own to lean on.
+    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    flushSync();
+    expect(onclose, 'a press with no release must not arm a dismissal').not.toHaveBeenCalled();
+  });
+
+  it('a right-click on the scrim does not dismiss', () => {
+    const onclose = vi.fn();
+    renderDialog({ body: '<button id="a">A</button>', onclose });
+
+    scrim().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 2 }));
+    scrim().dispatchEvent(new MouseEvent('pointerup', { bubbles: true, button: 2 }));
+    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
     flushSync();
     expect(onclose).not.toHaveBeenCalled();
   });
@@ -309,9 +345,10 @@ describe('Dialog — scrim', () => {
     const onclose = vi.fn();
     renderDialog({ body: '<button id="a">A</button>', onclose });
 
-    scrim().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
-    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    scrim().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    scrim().dispatchEvent(new MouseEvent('pointerup', { bubbles: true, button: 0 }));
+    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
     flushSync();
     expect(onclose).toHaveBeenCalledTimes(1);
   });

@@ -30,6 +30,13 @@
    * from either. `$derived` re-seeds the draft whenever the saved title
    * changes underneath us — a rename from elsewhere, or a different script
    * loading into the same header.
+   *
+   * This makes the header a CONTROLLED input: it assumes `ontitlechange` leads
+   * to a new `title` coming back. The one caller does that synchronously before
+   * its first await (`stores/editor.ts`, `setTitle`). A caller that never
+   * updated the prop would leave the committed draft on screen with the heading
+   * still named after the old title, so keep that contract if another one
+   * appears.
    */
   let draft = $derived(title);
 
@@ -51,9 +58,15 @@
       return;
     }
     if (event.key === 'Escape') {
-      // Abandon the edit. Stopped as well as prevented: an editable header can
-      // sit inside a Dialog, whose window-level handler would read the same
-      // key as "close the dialog".
+      // Abandon the edit.
+      //
+      // `stopPropagation` keeps the key from reaching an ancestor that would
+      // read it as "close me". It does NOT currently rescue an editable header
+      // placed inside a `Dialog`: that component listens on the window in the
+      // CAPTURE phase, so it sees Escape before this handler runs and would
+      // close before the edit could be cancelled. No caller nests the two today
+      // — if one ever does, Dialog needs to learn that an inner control can own
+      // the key, and stopping it here is not enough on its own.
       event.preventDefault();
       event.stopPropagation();
       draft = title;

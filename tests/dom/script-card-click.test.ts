@@ -131,4 +131,15 @@ describe('what a script card exposes', () => {
     expect(card.querySelector('.excerpt')).toBeNull();
     expect(card.querySelector('.meta')).toBeNull();
   });
+
+  /*
+   * The card draws focus on its own edge, so the button inside it must draw
+   * nothing. Without the marker the button falls back to the quiet default and
+   * the card wears TWO indicators — an inset edge on the button and another on
+   * the card around it.
+   */
+  it('hands its focus treatment to the card surface around it', () => {
+    const { button } = row();
+    expect(button.getAttribute('data-focus')).toBe('delegate');
+  });
 });

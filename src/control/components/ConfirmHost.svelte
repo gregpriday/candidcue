@@ -17,7 +17,12 @@
         {request.cancelLabel ?? 'Cancel'}
       </Button>
       {#if request.danger}
-        <Button variant="danger" onclick={() => settleConfirm(true)}>{request.confirmLabel}</Button>
+        <!-- The confirming half of a destructive pair, so it is filled: this is
+             the click that cannot be taken back, and it used to carry exactly
+             the weight of the Cancel beside it. -->
+        <Button variant="danger-primary" onclick={() => settleConfirm(true)}>
+          {request.confirmLabel}
+        </Button>
       {:else}
         <Button variant="primary" onclick={() => settleConfirm(true)}>{request.confirmLabel}</Button>
       {/if}

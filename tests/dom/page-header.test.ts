@@ -45,20 +45,35 @@ function press(input: HTMLInputElement, key: string): KeyboardEvent {
 
 describe('PageHeader — the heading', () => {
   it('renders exactly one level-one heading when the title is static', () => {
-    const { container } = renderHeader();
+    const { container, getByRole } = renderHeader();
     expect(headings(container)).toHaveLength(1);
-    expect(headings(container)[0]?.textContent?.trim()).toBe('Panel talk');
+    // By ROLE, not by tag: an h1 that is aria-hidden or role="presentation" is
+    // not a heading, and a tag-only assertion cannot tell the difference.
+    expect(getByRole('heading', { level: 1, name: 'Panel talk' })).toBeDefined();
   });
 
-  it('still renders a level-one heading when the title is editable', () => {
-    const { container } = renderHeader({ editableTitle: true });
+  it('still exposes a level-one heading when the title is editable', () => {
+    const { container, getByRole } = renderHeader({ editableTitle: true });
     // This is the defect: the editable branch used to render no h1 whatsoever.
     expect(headings(container), 'an editable title must not cost the page its h1').toHaveLength(1);
+    expect(
+      getByRole('heading', { level: 1 }),
+      'the heading must still be reachable as a heading',
+    ).toBeDefined();
   });
 
   it('names the editable heading after the SAVED title, not the draft', () => {
-    const { container } = renderHeader({ editableTitle: true });
+    const { container, getByRole } = renderHeader({ editableTitle: true });
+
+    // Dirty the draft first — with an untouched input the two are identical and
+    // naming the heading after either would pass.
+    const input = titleInput(container);
+    input.value = 'Half-typed nonsen';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
     expect(headings(container)[0]?.getAttribute('aria-label')).toBe('Panel talk');
+    expect(getByRole('heading', { level: 1, name: 'Panel talk' })).toBeDefined();
   });
 
   it('keeps the input reachable and labelled inside the heading', () => {
@@ -146,8 +161,16 @@ describe('PageHeader — abandoning an edit', () => {
     ).toBe('Panel talk');
   });
 
-  it('a rename from elsewhere re-seeds the field', async () => {
+  it('a rename from elsewhere overwrites even a dirty draft', async () => {
     const { container, rerender } = renderHeader({ editableTitle: true });
+
+    // Dirty the input first. Against a clean one the old `value={title}` markup
+    // passes too, so this is what actually exercises the derived re-seeding.
+    const input = titleInput(container);
+    input.value = 'Half-typed nonsen';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+
     await rerender({ title: 'Renamed on disk', editableTitle: true });
     await tick();
     expect(titleInput(container).value).toBe('Renamed on disk');

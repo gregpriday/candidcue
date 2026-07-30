@@ -76,30 +76,48 @@
   });
 
   /*
-   * Dismiss on a click of the scrim — but only a click that BEGAN on the scrim.
+   * Dismiss on a click of the scrim — but only a gesture that both BEGAN and
+   * ENDED on the scrim.
    *
-   * A `click` event's target is where the pointer went UP, not where it went
-   * down, so `e.target === e.currentTarget` alone cannot tell a dismissing tap
-   * apart from the end of a drag. Selecting a line of the take summary and
-   * overshooting the panel released on the scrim and threw the dialog away,
-   * taking the selection with it. The same is true in reverse: a drag that
-   * starts on the scrim and ends inside the panel is not a dismissal either.
+   * `click` alone cannot tell a dismissing tap from the end of a drag, and
+   * checking `event.target` does not rescue it: when a press and a release land
+   * on different elements the browser targets the click at their nearest common
+   * ancestor, and for anything inside this dialog that ancestor IS the scrim.
+   * So `e.target === e.currentTarget` is true for BOTH directions of drag —
+   * selecting a line of the take summary and overshooting the panel, and
+   * pressing on the backdrop and releasing inside it. Neither is a dismissal,
+   * and the first one used to throw the dialog away with the selection still in
+   * hand.
    *
-   * So the origin is recorded on `pointerdown` and consulted on `click`. This
-   * is what Radix, React Aria and Ark all do, for the same reason.
+   * Both ends of the gesture are therefore recorded from the pointer events,
+   * which fire at the real element under the pointer, and the click only
+   * consults them. This is what Radix, React Aria and Ark all do.
    */
-  let pointerDownOnScrim = false;
+  let pressedScrim = false;
+  let releasedScrim = false;
 
   function onScrimPointerDown(event: PointerEvent): void {
-    pointerDownOnScrim = event.target === event.currentTarget;
+    // Primary button / primary contact only: a right- or middle-press is not a
+    // dismissal, and it must not arm one either.
+    pressedScrim = event.isPrimary !== false && event.button === 0 && event.target === event.currentTarget;
+    releasedScrim = false;
+  }
+
+  function onScrimPointerUp(event: PointerEvent): void {
+    releasedScrim = event.target === event.currentTarget;
+  }
+
+  function forgetGesture(): void {
+    pressedScrim = false;
+    releasedScrim = false;
   }
 
   function onScrimClick(event: MouseEvent): void {
-    const beganOnScrim = pointerDownOnScrim;
-    // One gesture, one verdict: a stale `true` must not authorise the next
-    // click (a keyboard-synthesised one, say, which fires no pointerdown).
-    pointerDownOnScrim = false;
-    if (beganOnScrim && event.target === event.currentTarget) onclose?.();
+    const dismissing = pressedScrim && releasedScrim;
+    // One press, one verdict: a stale `true` must never authorise a later click
+    // that had no press of its own (a keyboard-synthesised one, say).
+    forgetGesture();
+    if (dismissing && event.target === event.currentTarget) onclose?.();
   }
 </script>
 
@@ -109,7 +127,8 @@
     class="scrim"
     role="presentation"
     onpointerdown={onScrimPointerDown}
-    onpointercancel={() => (pointerDownOnScrim = false)}
+    onpointerup={onScrimPointerUp}
+    onpointercancel={forgetGesture}
     onclick={onScrimClick}
   >
     <div
