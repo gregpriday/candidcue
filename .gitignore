@@ -45,8 +45,14 @@ src-tauri/gen/schemas/
 .tmp/
 *.tmp
 
-# Generated benchmark outputs (fixtures under bench/runs remain tracked)
+# Generated benchmark outputs (fixtures under bench/runs remain tracked — in
+# LFS; see .gitattributes)
 bench/results/
+# Tier-C frame traces. A 60 Hz perceptual trace carries per-token opacity for
+# every frame of a take, so one 30-minute run is tens of megabytes and it is
+# derived output — regenerable from the tracked fixtures by `cc-bench tier-c`.
+# LFS would be the wrong home for a file nothing needs to keep.
+bench/traces/
 
 # Claude Code local state (worktrees, etc.)
 .claude/
