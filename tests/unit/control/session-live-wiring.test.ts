@@ -46,11 +46,17 @@ const records = vi.hoisted(() => ({
  * real WebRTC transport cannot be stood up in node.
  */
 const pipeline = vi.hoisted(() => {
-  const captured: { deps: Record<string, (...args: never[]) => unknown> | null } = { deps: null };
+  const captured: {
+    deps: Record<string, (...args: never[]) => unknown> | null;
+    /** The live instance, so a test can make one of its methods misbehave. */
+    instance: unknown;
+  } = { deps: null, instance: null };
   class FakePipeline {
     constructor(deps: Record<string, (...args: never[]) => unknown>) {
       captured.deps = deps;
+      captured.instance = this;
     }
+    async switchMicrophone(): Promise<void> {}
     async start(): Promise<void> {}
     async stop(): Promise<void> {}
     startListening(): void {}
@@ -205,6 +211,7 @@ beforeEach(() => {
   records.appendSessionTranscript.mockClear();
   records.endSessionRecord.mockClear();
   pipeline.captured.deps = null;
+  pipeline.captured.instance = null;
   setStageEmitterForTesting(async (target, event, payload) => {
     emitted.push({ target, event, payload });
   });
@@ -463,6 +470,19 @@ describe('§115 — the ending location never reports a raw token index', () => 
     expect(summary.endingLocation).toBe('Beginning');
   });
 
+  it('says Beginning when the take never reached the first sentence', () => {
+    /*
+     * The `reached === 0` branch, which needs a SNAPSHOT to get to — the test
+     * above returns at `!snapshot` and never exercises it. Degraded input (a
+     * first sentence that does not start at token 0) is what reaches this, and
+     * flooring it to "Sentence 1 of 2" would name a sentence never begun.
+     */
+    start({ sentences: [{ ...sentences[0]!, startTokenIndex: 40, endTokenIndex: 48 }] });
+    startPrompting();
+    pushSnapshot(3);
+    expect(stopSession().endingLocation).toBe('Beginning');
+  });
+
   it('says the location is unavailable rather than inventing one', () => {
     // Degraded input: a snapshot arrived but there is no sentence metadata to
     // locate it against. "Beginning" would be a claim; this is not.
@@ -530,5 +550,54 @@ describe('§115 — the fallback-input notice is followable', () => {
     fellBackToDefault();
     stopSession();
     expect(get(toasts)).toHaveLength(0);
+  });
+
+  it('ignores a fallback reported by a superseded pipeline', () => {
+    start();
+    startPrompting();
+    const deps = pipeline.captured.deps as unknown as {
+      onInputFellBackToDefault?: () => void;
+    };
+    stopSession();
+    clearSession();
+
+    // The old take's pipeline, reporting late. Nothing it says belongs to what
+    // is on screen now.
+    deps.onInputFellBackToDefault?.();
+    expect(get(toasts)).toHaveLength(0);
+    expect(get(session).usingFallbackInput).toBe(false);
+  });
+
+  /**
+   * A resolved switch is not necessarily the device that was asked for.
+   *
+   * The pipeline falls back to the system default when the REPLACEMENT is also
+   * busy, and reports that by callback rather than by rejecting. Treating it as
+   * success took the picker away and announced that following had resumed, for
+   * a device the operator had chosen and silently not been given.
+   */
+  it('does not claim success when the replacement input also fell back', async () => {
+    start();
+    startPrompting();
+
+    const deps = pipeline.captured.deps as unknown as {
+      onInputFellBackToDefault?: () => void;
+    };
+    const { switchMicrophone } = await import('../../../src/control/stores/session');
+
+    // The fake pipeline's `switchMicrophone` falls back while switching.
+    const live = pipeline.captured.instance as unknown as {
+      switchMicrophone: (deviceId: string) => Promise<void>;
+    };
+    live.switchMicrophone = async () => {
+      deps.onInputFellBackToDefault?.();
+    };
+
+    const ok = await switchMicrophone('device-b', 'Interface B');
+    expect(ok).toBe(false);
+    // Still offering the remedy, still saying why, still capturing.
+    expect(get(session).usingFallbackInput).toBe(true);
+    expect(get(session).micState).toBe('live');
+    expect(get(toasts)).toHaveLength(1);
   });
 });

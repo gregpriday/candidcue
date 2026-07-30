@@ -27,7 +27,7 @@
   import { formatClock } from '../lib/format';
   import { rememberReaderFrame } from '../lib/reader-frame';
 import { onShortcut } from '../lib/shortcuts';
-  import { resolveLandedDisplay, startTake } from '../lib/start-take';
+  import { resolveLandedDisplay, startTake, takeStarting } from '../lib/start-take';
   import {
     awaitViewportSettled,
     exitPresentation,
@@ -205,13 +205,22 @@ import { onShortcut } from '../lib/shortcuts';
 
   async function useMicrophone(): Promise<void> {
     if (micChoice === '' || micSwitching) return;
+    /*
+     * Tokened for the same reason the listing is. `micSwitching` disables both
+     * recovery buttons, and an unconditional `finally` meant a switch left over
+     * from a previous take could re-enable them in the middle of THIS take's
+     * switch — two concurrent recoveries, and a spinner that stops on the wrong
+     * one. Only the operation that is still current may clear the flag.
+     */
+    const request = (micRequest += 1);
+    const forSession = $session.sessionId;
     micSwitching = true;
     try {
       // The label travels with the id: it is what identifies this microphone
       // again next launch, when the id may have been re-salted.
       await switchMicrophone(micChoice, micInputs.find((d) => d.deviceId === micChoice)?.label);
     } finally {
-      micSwitching = false;
+      if (micRequest === request && $session.sessionId === forSession) micSwitching = false;
     }
   }
 
@@ -457,7 +466,23 @@ import { onShortcut } from '../lib/shortcuts';
    * `leavePresentation`.
    */
   async function endTake(): Promise<void> {
-    if (endingTake) return;
+    /*
+     * NOT WHILE A TAKE IS OPENING, and this is reachable.
+     *
+     * "Present again" awaits `startTake`, which is a long sequence that raises
+     * the cover for its OPENING before `startLiveSession` marks the session
+     * active. Escape is not delegated to the stage during that window (there is
+     * no stage yet), so it reaches this handler — and `endingTake` does not
+     * help, because no teardown is running: a brand new one would start. That
+     * puts `leavePresentation`'s un-present concurrently with `startTake`'s
+     * present, and both end in a `finally` that sets the cover phase, so
+     * whichever loses leaves the app either permanently covered or presenting
+     * with no cover at all.
+     *
+     * `takeStarting` is the store `startTake` already keeps for exactly this
+     * class of double-entry; the Present buttons read it for the same reason.
+     */
+    if (endingTake || $takeStarting) return;
     endingTake = true;
     try {
       stopSession();

@@ -438,6 +438,14 @@ let stageGeneration = 0;
  */
 let stageTelemetryExpected = false;
 /**
+ * How many times this take has been told its chosen input was busy.
+ *
+ * A counter and not a boolean because `switchMicrophone` needs to know whether
+ * a fallback happened DURING its own attempt, which a flag it also has to clear
+ * cannot express.
+ */
+let inputFallbackCount = 0;
+/**
  * The Rust coordinator's session generation for this take.
  *
  * C1: this used to default to a hard-coded 1 while nothing ever invoked
@@ -771,6 +779,7 @@ export function startLiveSession(input: StartSessionInput): string {
    * fact about how the take was configured, so it is recorded when the take is.
    */
   stageTelemetryExpected = (input.stageGeneration ?? 0) !== 0;
+  inputFallbackCount = 0;
   sessionGeneration = input.sessionGeneration ?? 0;
   // Nothing is known about the new stage window's layout until it acks.
   stageLayoutGeneration = 0;
@@ -1116,6 +1125,17 @@ export function startLiveSession(input: StartSessionInput): string {
        * where they change it.
        */
       onInputFellBackToDefault: () => {
+        /*
+         * The epoch guard its neighbours already have. A pipeline that has been
+         * superseded can still report a fallback it was in the middle of when
+         * the take ended — and this callback both toasts (unexpiring) and writes
+         * state, so an unguarded one hangs the previous take's notice over the
+         * summary, or over the next take's opening.
+         */
+        if (pillEpoch !== voicePillEpoch) return;
+        // Counted so an in-flight `switchMicrophone` can tell whether the
+        // device IT asked for was the one that fell back — see below.
+        inputFallbackCount += 1;
         /*
          * Keyed and unexpiring. This notice's whole body is an instruction, and
          * on the `info` default it removed itself after four seconds — long
@@ -2715,6 +2735,9 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
    */
   const forPipeline = pipeline;
   const forSession = get(state).sessionId;
+  // Where the fallback counter stood before this attempt. If it moves, THIS
+  // switch is what fell back.
+  const fallbacksBefore = inputFallbackCount;
   try {
     await pipeline.switchMicrophone(deviceId);
   } catch (err) {
@@ -2724,13 +2747,29 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
     return false;
   }
   if (pipeline !== forPipeline || get(state).sessionId !== forSession) return false;
+  /*
+   * A RESOLVED SWITCH IS NOT NECESSARILY THE DEVICE THAT WAS ASKED FOR.
+   *
+   * The pipeline falls back to the system default when the chosen input is
+   * busy, and reports it through `onInputFellBackToDefault` rather than by
+   * rejecting. Treating that as success was the same unfollowable-instruction
+   * defect one level up: it cleared the fallback flag, took the picker away and
+   * announced that following had resumed — for a device the operator had
+   * chosen, been refused, and not been told about. Worse, it would then persist
+   * that device as the remembered preference for every future take.
+   *
+   * So the audio state is updated either way (capture IS live, and the take was
+   * held on a dead input a moment ago), but a fallback keeps its notice, keeps
+   * the picker, and is not remembered or celebrated.
+   */
+  const fellBack = inputFallbackCount !== fallbacksBefore;
   state.update((s) => ({
     ...s,
     micState: 'live',
     inputDeviceLost: false,
-    // The input is the operator's choice again by definition.
-    usingFallbackInput: false,
+    usingFallbackInput: fellBack,
   }));
+  if (fellBack) return false;
   // The input is the operator's choice again, so the "we picked one for you"
   // notice has nothing left to report.
   dismissToastByKey(TOAST_INPUT_FELL_BACK);
