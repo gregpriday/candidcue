@@ -215,22 +215,17 @@ export function opticalProfileFieldsForPreset(preset: OpticalRigPreset): Optical
   };
 }
 
-/**
- * The `teleprompter` settings write a preset's flips imply.
+/*
+ * There is deliberately no `teleprompterMirrorForPreset` here any more.
  *
- * A flip is recorded in two places — the profile, and the settings a real
- * take actually renders mirroring from (`stage-envelope.ts`) — and this is the
- * SECOND of the two, always both axes in one object. Never split this into two
- * separate settings writes: two `patchSettings` calls fired back to back would
- * both capture the same starting revision and race for it, and the backend
- * rejects whichever loses, silently dropping one axis.
+ * A preset used to write `teleprompter.mirrorX/mirrorY` the instant it was
+ * clicked, and this module built that pair. Calibrate no longer does: a preset
+ * patches the working profile only, and `finish()` is the one place a flip
+ * becomes permanent — reading `profile.flips` directly, because by then the
+ * orientation step may have corrected whatever the preset proposed. A helper
+ * that turned a PRESET into a settings write would only invite that eager write
+ * back, so it went with the code path it existed for.
  */
-export function teleprompterMirrorForPreset(preset: OpticalRigPreset): {
-  mirrorX: boolean;
-  mirrorY: boolean;
-} {
-  return { mirrorX: preset.patch.flips.horizontal, mirrorY: preset.patch.flips.vertical };
-}
 
 /**
  * Whether a profile's preset-owned fields already match this preset exactly.

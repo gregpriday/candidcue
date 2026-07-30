@@ -11,6 +11,10 @@ import { installTauriShim } from './fixtures/tauri-shim';
  * and Discard reverted nothing. Somebody who tried a rig and backed out had
  * silently changed how every future take rendered, and found out mid-shoot.
  *
+ * The specs below cover that claim in both directions: a mirror tried out in
+ * here must not escape the wizard, and a mirror set OUTSIDE it must not be
+ * quietly cancelled by a rig that never asked about orientation.
+ *
  * This is a browser test rather than a component one on purpose. The bug is not
  * in Calibrate's markup; it is in which store gets written and when. A jsdom
  * render would have to substitute the settings store, the router guard and the
@@ -189,6 +193,76 @@ test('a mirror tried out in the wizard reaches the glass but not the settings, a
   await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'false');
   await expect(toggle(page, 'Vertical mirror')).toHaveAttribute('aria-checked', 'false');
   expect(await settingsWrites(page)).toEqual([]);
+});
+
+/*
+ * The same defect pointed the other way, and the reason `hydrate()` seeds the
+ * working profile's flips from the mirroring already in force.
+ *
+ * `finish()` writes BOTH axes unconditionally — that is what keeps the rig's
+ * record and `teleprompter.mirrorX/mirrorY` from drifting apart. Left alone,
+ * that turns a skipped orientation step into a silent global change: a fresh
+ * rig comes from `defaultOpticalProfile()` unflipped, orientation is the one
+ * step `discoverProfile` can never answer, and so Apply would clear a mirror
+ * the operator set in Settings and was never even shown in here. On main this
+ * path wrote nothing at all, so it would have been a regression introduced by
+ * the fix above.
+ *
+ * The horizontal axis is the one under test because it is the axis that
+ * actually reaches Rust, so the write can be read two ways: off the Settings
+ * switch the operator sees, and off the `update_settings` payload.
+ */
+test('Apply cannot clear a mirror set in Settings when the orientation step was skipped', async ({
+  page,
+}) => {
+  // Ten steps skipped one at a time does not fit the default budget.
+  test.slow();
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
+  await page.goto('/control.html');
+
+  await openStageDisplay(page);
+
+  // The operator mirrors this display from Settings, well before any wizard.
+  await toggle(page, 'Horizontal mirror').click();
+  await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'true');
+
+  // Now calibrate a NEW rig: nothing stored for this panel, so the profile is
+  // the all-defaults one and no orientation answer exists to inherit.
+  await enterWizard(page);
+
+  /*
+   * Walk as far as the orientation step and read the glass there, WITHOUT
+   * touching either toggle.
+   *
+   * The card is already drawn mirrored, which is the seed doing its job and is
+   * also what makes the question honest: unseeded, the wizard would draw square
+   * glass and ask whether it reads the right way round while a real take
+   * rendered flipped. Asserted here rather than on arrival because
+   * `enterWizard` clears the directive log once hydration settles, and the
+   * working profile has to change for the effect to publish again — advancing
+   * the step is the first thing that does so without editing the rig.
+   */
+  await skipTo(page, ORIENTATION_STEP);
+  await expect.poll(() => previewMirror(page)).toEqual({ mirrorX: true, mirrorY: false });
+
+  // Straight past it to the end, so orientation is never answered.
+  await applyRig(page);
+  await expect(page.getByRole('button', { name: 'Calibrate…' })).toBeVisible();
+
+  // The mirror survived a rig the operator calibrated around it.
+  await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'true');
+  await expect(toggle(page, 'Vertical mirror')).toHaveAttribute('aria-checked', 'false');
+
+  /*
+   * And it survived by being WRITTEN BACK, not by never being written: the log
+   * was cleared at the end of hydration, so this is finish's own patch, and it
+   * carries the mirror on. Asserting the switch alone would pass just as well
+   * if the write had gone out as `false` and the store had somehow not caught
+   * up yet.
+   */
+  const writes = await settingsWrites(page);
+  expect(writes).toHaveLength(1);
+  expect((writes[0]?.['stageBehavior'] as Record<string, unknown>)?.['horizontalMirror']).toBe(true);
 });
 
 /*

@@ -402,8 +402,38 @@
         : null,
       existing,
     );
-    profile = { ...found.profile, rigName };
-    answered = existing?.completedSteps ?? [];
+    const completed = existing?.completedSteps ?? [];
+    profile = {
+      ...found.profile,
+      rigName,
+      /*
+       * Mirroring starts from whatever is ALREADY in force, unless this rig has
+       * an answer of its own.
+       *
+       * `finish()` writes both axes every time — that is what stops the
+       * profile's record and `teleprompter.mirrorX/mirrorY` drifting apart — so
+       * the working profile has to arrive holding the truth, or Apply would
+       * switch OFF a mirror the operator set on the Stage display screen and
+       * never revisited in here. That is this screen's original defect pointed
+       * the other way: the wizard changing a global nobody touched in it.
+       *
+       * `defaultOpticalProfile()` starts unflipped and `discoverProfile` always
+       * lists orientation outstanding — it is the one fact no code can derive —
+       * so square glass on a fresh rig is an ABSENCE of an answer, not an
+       * answer, which is exactly the ambiguity `completedSteps` exists to
+       * settle. A rig that HAS answered orientation keeps its own record; one
+       * that has not adopts the display's current mirroring, which also makes
+       * the orientation card an honest question: it is drawn the way a real
+       * take would draw it rather than from an assumed-square start.
+       */
+      flips: completed.includes('orientation')
+        ? found.profile.flips
+        : {
+            horizontal: $settings.teleprompter.mirrorX,
+            vertical: $settings.teleprompter.mirrorY,
+          },
+    };
+    answered = completed;
     // Discovery filling fields in is not the user having answered anything, so
     // the sequence still starts clean and nothing here counts as dirty yet.
     dirty = false;
@@ -1024,6 +1054,13 @@
    * not enough to survive a Discard — so the axes are copied into the
    * `teleprompter` settings a real take renders from here, at the one moment the
    * operator has actually said to keep this rig.
+   *
+   * Both axes go every time, including for a rig whose orientation step was
+   * never opened. That is safe only because `hydrate()` seeds `profile.flips`
+   * from the mirroring already in force when the rig has no orientation answer
+   * of its own, so "wrote it unchanged" and "never asked" produce the same
+   * value here. Take that seed away and this line starts CLEARING mirrors the
+   * wizard was never shown.
    *
    * The two writes are awaited one after the other, never together. Optical
    * goes first because it is the calibration itself: if it cannot be stored
