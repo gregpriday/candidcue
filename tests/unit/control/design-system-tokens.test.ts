@@ -16,7 +16,7 @@
  * Only OPAQUE surfaces take part. The `-soft`/`-wash` fills are alpha over an
  * unknown backdrop, so a ratio against them would be a fiction.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -118,7 +118,14 @@ describe('the contrast maths', () => {
   });
 });
 
-/** The opaque painted surfaces of a theme — the things text can land on. */
+/**
+ * The opaque painted surfaces of a theme — the things text can land on.
+ *
+ * Not every surface is named `--bg-*`: `--empty-bg` is the invitation panel on
+ * an empty Library, and it carries real text. The parity test below catches a
+ * NEW `--bg-*` going unchecked; this list is what carries the ones that would
+ * never be found by prefix.
+ */
 const SURFACE_TOKENS = [
   '--bg-app',
   '--bg-canvas',
@@ -131,6 +138,7 @@ const SURFACE_TOKENS = [
   '--bg-hover',
   '--bg-hover-chrome',
   '--bg-hover-surface',
+  '--empty-bg',
 ];
 
 const THEMES = [
@@ -140,7 +148,12 @@ const THEMES = [
 
 describe.each(THEMES)('$name tokens', ({ selector }) => {
   const block = themeBlock(selector);
-  const surfaces = SURFACE_TOKENS.map((name) => ({ name, hex: resolve(block, name) }));
+  // Alpha fills are skipped rather than composited: a ratio against a colour
+  // whose backdrop is unknown would be a fiction. (`--empty-bg` is opaque in
+  // the light theme and a wash in the dark one, so it takes part in one.)
+  const surfaces = SURFACE_TOKENS.map((name) => ({ name, value: resolve(block, name) }))
+    .filter((s) => /^#[0-9a-f]{6}$/i.test(s.value))
+    .map((s) => ({ name: s.name, hex: s.value }));
 
   // 1.4.3 Contrast (Minimum), AA: 4.5:1 for text below 18.66px bold / 24px.
   // Every one of these labels real information at --text-2xs..--text-sm.
@@ -213,10 +226,15 @@ describe.each(THEMES)('$name tokens', ({ selector }) => {
    * omission is invisible — every existing assertion goes on passing.
    */
   it('checks every opaque surface the theme declares', () => {
-    const declared = [...block.keys()].filter(
-      (name) => name.startsWith('--bg-') && /^#[0-9a-f]{6}$/i.test(resolve(block, name)),
+    const unchecked = [...block.keys()].filter(
+      (name) =>
+        name.startsWith('--bg-') &&
+        /^#[0-9a-f]{6}$/i.test(resolve(block, name)) &&
+        !SURFACE_TOKENS.includes(name),
     );
-    expect([...declared].sort()).toEqual([...SURFACE_TOKENS].sort());
+    expect(unchecked, 'these surfaces exist but nothing is ever checked against them').toEqual([]);
+    // And the inventory must not have gone hollow.
+    expect(surfaces.length).toBeGreaterThan(8);
   });
 
   it('keeps muted quieter than faint is loud — the steps stay in order', () => {
@@ -249,21 +267,17 @@ describe('focus policy', () => {
       selectors: m[1]!.split(',').map((s) => s.trim()).filter(Boolean),
       body: m[2]!,
     }))
-    .filter((r) => r.selectors.length > 0);
+    // At-rule preludes (`@media …`) are not selectors. The rules nested inside
+    // one still get matched on their own, which is what we want.
+    .filter((r) => r.selectors.length > 0 && !r.selectors.some((s) => s.startsWith('@')));
 
+  // `outline-color:` counts too — assigning the ring through the longhand is
+  // the same bug written differently, and a rule that only matched `outline:`
+  // would wave it through.
   const assigning = (token: string): Rule[] =>
-    rules.filter((r) => new RegExp(`outline:[^;]*var\\(${token}\\)`).test(r.body));
+    rules.filter((r) => new RegExp(`outline(-color)?:[^;]*var\\(${token}\\)`).test(r.body));
 
-  /** Does this selector catch a plain <button> that carries no data-focus? */
-  const catchesBareButton = (selector: string): boolean =>
-    selector
-      .replace(/^:where\(/, '')
-      .replace(/\)?:focus-visible.*$/, '')
-      .split(',')
-      .map((s) => s.trim())
-      .some((s) => s === 'button' || /^button(?!:not\(\[data-focus)/.test(s));
-
-  it('never hands the accent ring to an unmarked button, in any rule', () => {
+  it('never hands the accent ring to a button through its tag, in any rule', () => {
     const accentRules = assigning('--focus-ring');
     expect(accentRules.length, 'some rule must still draw the accent ring').toBeGreaterThan(0);
 
@@ -272,9 +286,18 @@ describe('focus policy', () => {
         // The range thumb is exempt: it is a pseudo-element on a control, not a
         // surface, and it is the part that actually moves.
         if (selector.includes('slider-thumb')) continue;
+        /*
+         * Any mention of the `button` TAG is disqualifying, however it is
+         * qualified. Checking for a "bare" button was not enough: an accent
+         * rule reading `button:not([data-focus])` matches precisely the
+         * unmarked buttons this policy exists to protect — it IS the original
+         * bug — and a narrower test called it safe. `:is(button)` is caught for
+         * the same reason. The accent ring must be reached through
+         * `[data-focus='control']` and nothing else.
+         */
         expect(
-          catchesBareButton(selector),
-          `"${selector}" would give an unmarked button the accent ring`,
+          /(^|[\s,(>+~])button\b/.test(selector),
+          `"${selector}" reaches buttons by tag; the accent ring must be opt-in via data-focus="control"`,
         ).toBe(false);
       }
     }
@@ -321,6 +344,69 @@ describe('focus policy', () => {
         }
       }
     }
+  });
+});
+
+describe('the data-focus vocabulary', () => {
+  /*
+   * Only three values mean anything, and an unrecognised one is SILENT.
+   *
+   * The policy's rules are mutually exclusive by construction — every native
+   * branch is `:not([data-focus])` — which is what stops a tag and a marker
+   * both claiming an element. The cost of that precision is that a misspelled
+   * marker (`data-focus="controls"`, say) is excluded from its element's own
+   * branch and matches no marker rule either, so the element ends up with NO
+   * focus indicator at all: a WCAG 2.4.7 failure produced by a typo, visible
+   * only to someone tabbing through that exact control.
+   *
+   * CSS cannot warn about this. A test over the source can, and it catches the
+   * typo where it was made rather than on the glass.
+   */
+  const KNOWN = new Set(['control', 'surface', 'delegate']);
+
+  /** Every .svelte file under src/, so a marker outside components/ counts too. */
+  function svelteFiles(dir: URL): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const child = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, dir);
+      if (entry.isDirectory()) return svelteFiles(child);
+      return entry.name.endsWith('.svelte') ? [fileURLToPath(child)] : [];
+    });
+  }
+
+  it('only ever spells a marker one of the three ways the policy understands', () => {
+    const seen: string[] = [];
+    for (const path of svelteFiles(new URL('../../../src/', import.meta.url))) {
+      const source = readFileSync(path, 'utf8');
+      const name = path.split('/').pop();
+      /*
+       * Matches the whole attribute value, quoted or braced, then pulls every
+       * string literal out of it — `data-focus="control"` and the dynamic
+       * `data-focus={cond ? 'surface' : undefined}` that RenderBlocks uses are
+       * both real spellings, and reading only the first form would leave the
+       * dynamic ones unchecked.
+       */
+      for (const attr of source.matchAll(/data-focus=(?:"([^"]*)"|'([^']*)'|\{([^}]*)\})/g)) {
+        const raw = attr[1] ?? attr[2] ?? attr[3] ?? '';
+        const literals = raw.includes("'") || raw.includes('"')
+          ? [...raw.matchAll(/['"]([^'"]*)['"]/g)].map((m) => m[1]!)
+          : [raw];
+        for (const literal of literals) {
+          const value = literal.trim();
+          // `undefined` is the deliberate "no marker" branch, not a typo.
+          if (value === '' || value === 'undefined') continue;
+          expect(
+            KNOWN.has(value),
+            `${name} uses data-focus="${value}", which matches no rule — that element would show no focus indicator at all`,
+          ).toBe(true);
+          seen.push(value);
+        }
+      }
+    }
+    // Guard the guard: if the attribute stopped being used entirely, every
+    // assertion above would vacuously pass.
+    expect(seen.length, 'no data-focus markers found — has the policy been removed?').toBeGreaterThan(
+      0,
+    );
   });
 });
 

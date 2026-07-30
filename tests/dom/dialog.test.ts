@@ -247,6 +247,21 @@ describe('Dialog — scrim', () => {
   }
 
   /**
+   * jsdom has no `PointerEvent`, so pointer fields ride on a `MouseEvent`.
+   * `pointerId` and `isPrimary` are read by the handler, so they have to be
+   * present or the multi-pointer and touch paths are not really under test.
+   */
+  function pointer(
+    type: string,
+    init: { button?: number; pointerId?: number; isPrimary?: boolean } = {},
+  ): MouseEvent {
+    const event = new MouseEvent(type, { bubbles: true, button: init.button ?? 0 });
+    Object.defineProperty(event, 'pointerId', { value: init.pointerId ?? 1 });
+    Object.defineProperty(event, 'isPrimary', { value: init.isPrimary ?? true });
+    return event;
+  }
+
+  /**
    * A pointer gesture, in the three parts a browser actually reports.
    *
    * The click target is the subtle bit, and getting it wrong is what let the
@@ -261,9 +276,9 @@ describe('Dialog — scrim', () => {
    * reaches the same listener, and `button: 0` matches the primary-press check.
    */
   function gesture(down: HTMLElement, up: HTMLElement): void {
-    down.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
-    up.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, button: 0 }));
-    commonAncestor(down, up).dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    down.dispatchEvent(pointer('pointerdown'));
+    up.dispatchEvent(pointer('pointerup'));
+    commonAncestor(down, up).dispatchEvent(pointer('click'));
     flushSync();
   }
 
@@ -311,9 +326,9 @@ describe('Dialog — scrim', () => {
     // Pointer goes down on the scrim, then the gesture is cancelled (a system
     // gesture takes over, the pointer leaves the window). A later stray click
     // must not cash in the recorded origin.
-    scrim().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
-    scrim().dispatchEvent(new MouseEvent('pointercancel', { bubbles: true }));
-    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    scrim().dispatchEvent(pointer('pointerdown'));
+    scrim().dispatchEvent(pointer('pointercancel'));
+    scrim().dispatchEvent(pointer('click'));
     flushSync();
     expect(onclose).not.toHaveBeenCalled();
   });
@@ -323,9 +338,9 @@ describe('Dialog — scrim', () => {
     renderDialog({ body: '<button id="a">A</button>', onclose });
 
     // No pointerup and no pointercancel — the release happened off-document.
-    scrim().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    scrim().dispatchEvent(pointer('pointerdown'));
     // A keyboard-synthesised click later has no press of its own to lean on.
-    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    scrim().dispatchEvent(pointer('click'));
     flushSync();
     expect(onclose, 'a press with no release must not arm a dismissal').not.toHaveBeenCalled();
   });
@@ -334,9 +349,49 @@ describe('Dialog — scrim', () => {
     const onclose = vi.fn();
     renderDialog({ body: '<button id="a">A</button>', onclose });
 
-    scrim().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 2 }));
-    scrim().dispatchEvent(new MouseEvent('pointerup', { bubbles: true, button: 2 }));
-    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    scrim().dispatchEvent(pointer('pointerdown', { button: 2 }));
+    scrim().dispatchEvent(pointer('pointerup', { button: 2 }));
+    scrim().dispatchEvent(pointer('click'));
+    flushSync();
+    expect(onclose).not.toHaveBeenCalled();
+  });
+
+  /*
+   * Touch and pen implicitly capture the pointer on press, which retargets
+   * every later pointer event at the pressed element. Left alone that makes a
+   * scrim-to-panel drag report a release on the scrim — the exact reverse
+   * gesture the handler is supposed to refuse — so the handler releases the
+   * capture and this is what says it still does.
+   */
+  it('a touch drag from the scrim into the panel stays open', () => {
+    const onclose = vi.fn();
+    renderDialog({ body: '<p id="summary">Take summary</p>', onclose });
+
+    const captured: number[] = [];
+    scrim().hasPointerCapture = (id: number) => !captured.includes(id);
+    scrim().releasePointerCapture = (id: number) => captured.push(id);
+
+    scrim().dispatchEvent(pointer('pointerdown', { pointerId: 7 }));
+    expect(captured, 'the implicit capture must be released').toContain(7);
+
+    // With the capture released the release reports the panel, as it should.
+    document.getElementById('summary')!.dispatchEvent(pointer('pointerup', { pointerId: 7 }));
+    scrim().dispatchEvent(pointer('click', { pointerId: 7 }));
+    flushSync();
+    expect(onclose).not.toHaveBeenCalled();
+  });
+
+  it('a second finger cannot complete the first one’s gesture', () => {
+    const onclose = vi.fn();
+    renderDialog({ body: '<p id="summary">Take summary</p>', onclose });
+
+    // Finger 1 presses the panel — not a dismissal.
+    document.getElementById('summary')!.dispatchEvent(pointer('pointerdown', { pointerId: 1 }));
+    // Finger 2 presses and releases the scrim. It must not borrow finger 1's
+    // gesture, nor overwrite it into one that dismisses.
+    scrim().dispatchEvent(pointer('pointerdown', { pointerId: 2, isPrimary: false }));
+    scrim().dispatchEvent(pointer('pointerup', { pointerId: 2, isPrimary: false }));
+    scrim().dispatchEvent(pointer('click', { pointerId: 2 }));
     flushSync();
     expect(onclose).not.toHaveBeenCalled();
   });
@@ -345,10 +400,10 @@ describe('Dialog — scrim', () => {
     const onclose = vi.fn();
     renderDialog({ body: '<button id="a">A</button>', onclose });
 
-    scrim().dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 0 }));
-    scrim().dispatchEvent(new MouseEvent('pointerup', { bubbles: true, button: 0 }));
-    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
-    scrim().dispatchEvent(new MouseEvent('click', { bubbles: true, button: 0 }));
+    scrim().dispatchEvent(pointer('pointerdown'));
+    scrim().dispatchEvent(pointer('pointerup'));
+    scrim().dispatchEvent(pointer('click'));
+    scrim().dispatchEvent(pointer('click'));
     flushSync();
     expect(onclose).toHaveBeenCalledTimes(1);
   });

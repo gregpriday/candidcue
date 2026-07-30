@@ -153,6 +153,8 @@ describe('RevisionHistory — the restore confirmation', () => {
     confirmButton().click();
 
     await vi.waitFor(() => expect(onrestored).toHaveBeenCalledTimes(1));
+    // Once, not once-per-render: this is the call that rewrites the script.
+    expect(restoreRevision).toHaveBeenCalledTimes(1);
     expect(restoreRevision).toHaveBeenCalledWith('script-1', 'rev-1', 4);
   });
 

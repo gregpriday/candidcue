@@ -34,10 +34,16 @@ async function tabTo(
   page: import('@playwright/test').Page,
   selector: string,
 ): Promise<{ color: string; style: string; offset: string; quiet: string; ring: string }> {
-  let reached = false;
+  const matches = (): Promise<boolean> =>
+    page.evaluate((sel) => document.activeElement?.matches(sel) ?? false, selector);
+
+  // Checked after the LAST press too: exiting the loop on a press whose result
+  // was never read would report "never reached" while focus was in fact on the
+  // right element.
+  let reached = await matches();
   for (let i = 0; i < 40 && !reached; i++) {
-    reached = await page.evaluate((sel) => document.activeElement?.matches(sel) ?? false, selector);
-    if (!reached) await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    reached = await matches();
   }
 
   /*

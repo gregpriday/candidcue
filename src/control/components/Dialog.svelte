@@ -89,25 +89,44 @@
    * and the first one used to throw the dialog away with the selection still in
    * hand.
    *
-   * Both ends of the gesture are therefore recorded from the pointer events,
-   * which fire at the real element under the pointer, and the click only
-   * consults them. This is what Radix, React Aria and Ark all do.
+   * Both ends of the gesture are therefore recorded from the pointer events and
+   * the click only consults them. This is what Radix, React Aria and Ark all
+   * do. Two details that are easy to get wrong and silently lose the fix:
+   *
+   *   - touch and pen IMPLICITLY capture the pointer on the element that was
+   *     pressed, so without releasing that capture every `pointerup` would be
+   *     reported against the scrim no matter where the finger actually lifted,
+   *     and the reverse drag would dismiss again on exactly the devices where
+   *     dragging is most likely;
+   *   - the gesture is tied to one `pointerId`, so a second finger cannot
+   *     overwrite the first one's press, and one pointer's release can never
+   *     complete another's.
    */
+  let gesturePointer: number | null = null;
   let pressedScrim = false;
   let releasedScrim = false;
 
   function onScrimPointerDown(event: PointerEvent): void {
-    // Primary button / primary contact only: a right- or middle-press is not a
-    // dismissal, and it must not arm one either.
-    pressedScrim = event.isPrimary !== false && event.button === 0 && event.target === event.currentTarget;
+    // Primary contact only: a right- or middle-press is not a dismissal, and it
+    // must not arm one either. A second finger mid-gesture is ignored.
+    if (event.button !== 0 || event.isPrimary === false) return;
+    if (gesturePointer !== null && gesturePointer !== event.pointerId) return;
+
+    const scrim = event.currentTarget as Element;
+    if (scrim.hasPointerCapture?.(event.pointerId)) scrim.releasePointerCapture(event.pointerId);
+
+    gesturePointer = event.pointerId;
+    pressedScrim = event.target === event.currentTarget;
     releasedScrim = false;
   }
 
   function onScrimPointerUp(event: PointerEvent): void {
+    if (event.pointerId !== gesturePointer) return;
     releasedScrim = event.target === event.currentTarget;
   }
 
   function forgetGesture(): void {
+    gesturePointer = null;
     pressedScrim = false;
     releasedScrim = false;
   }

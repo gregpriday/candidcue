@@ -529,8 +529,12 @@ input[type='range']:hover::-webkit-slider-thumb {
   background: var(--accent-strong);
 }
 /* The range input is excluded from the policy above so the ring lands on the
-   thumb — the part that actually moves — rather than around the whole track. */
-input[type='range']:focus-visible::-webkit-slider-thumb {
+   thumb — the part that actually moves — rather than around the whole track.
+   `:not([data-focus])` for the same reason every branch up there has it: a
+   marked range would otherwise be rung twice, once by its marker and once
+   here. A range should not carry a marker at all, and now nothing happens if
+   one does. */
+input[type='range']:not([data-focus]):focus-visible::-webkit-slider-thumb {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
