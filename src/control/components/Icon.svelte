@@ -12,6 +12,7 @@
   import type { LucideIcon } from '@lucide/svelte';
   import { ICON_STROKE_WIDTH, type IconName } from './icon-names';
 
+  import BookOpen from '@lucide/svelte/icons/book-open';
   import Check from '@lucide/svelte/icons/check';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
   import ChevronLeft from '@lucide/svelte/icons/chevron-left';
@@ -72,6 +73,7 @@
     stop: Square,
     mic: Mic,
     monitor: Monitor,
+  'book-open': BookOpen,
     check: Check,
     alert: TriangleAlert,
     info: Info,

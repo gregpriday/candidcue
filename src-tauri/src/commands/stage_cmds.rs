@@ -57,16 +57,27 @@ pub fn set_stage_fullscreen<R: Runtime>(
 /// Turn the control window into the teleprompter, and back (§52.7).
 ///
 /// This is single-window presentation's counterpart to `set_stage_fullscreen`,
-/// and it presents the same way for the same reasons: borderless at the
-/// monitor's exact bounds, always-on-top, no OS fullscreen. The renderer used
-/// to call `core:window:set_fullscreen` directly, which on macOS animates into
-/// a new Space and shows a white bar over the half-painted webview for the
+/// and `prompter` mode presents the same way for the same reasons: borderless at
+/// the monitor's exact bounds, always-on-top, no OS fullscreen. The renderer
+/// used to call `core:window:set_fullscreen` directly, which on macOS animates
+/// into a new Space and shows a white bar over the half-painted webview for the
 /// length of the animation — see `windows::present` for the full account.
+///
+/// `mode` chooses the shape and is optional for the same reason `native` is on
+/// the command above: an `{ enabled: true }` payload from before reader mode
+/// existed must keep doing exactly what it did, which is present as a prompter.
+/// `enabled: false` ignores it — there is one way to stop.
 pub fn set_control_presenting<R: Runtime>(
     app: AppHandle<R>,
     enabled: bool,
+    mode: Option<windows::PresentMode>,
 ) -> Result<ControlPresentationState, AppError> {
-    windows::set_control_presenting(&app, enabled)
+    let requested = if enabled {
+        Some(mode.unwrap_or(windows::PresentMode::Prompter))
+    } else {
+        None
+    };
+    windows::set_control_presenting(&app, requested)
 }
 
 #[tauri::command]

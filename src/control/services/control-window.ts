@@ -23,6 +23,7 @@
  * size" things a caller can await rather than things it hopes have happened.
  */
 import { invokeOrMock } from './ipc';
+import type { PresentationMode } from './settings-types';
 
 /**
  * Where the window ended up, in the CSS pixels the renderer measures in.
@@ -34,21 +35,39 @@ import { invokeOrMock } from './ipc';
  */
 export interface ControlPresentationState {
   presenting: boolean;
+  /**
+   * The mode the WINDOW is in, absent when it is not presenting.
+   *
+   * Read back rather than assumed. The mid-take toggle means a caller's idea of
+   * the mode and the window's can come apart — a switch that failed halfway
+   * leaves one believing the other — and adopting this answer is what keeps the
+   * dock's toggle describing the window somebody is actually looking at.
+   */
+  mode?: PresentationMode;
   width: number;
   height: number;
 }
 
 /**
- * Fill the current monitor with this window: borderless, above the menu bar,
- * black behind the webview.
+ * Present this window as the teleprompter, in the mode asked for.
  *
- * The monitor is whichever one the window is already on — the operator drags it
- * to the panel they want and presses Present, and moving it somewhere else on
- * their behalf would be taking the window away from the person driving it.
+ * `prompter` fills the current monitor: borderless, above the menu bar, black
+ * behind the webview. The monitor is whichever one the window is already on —
+ * the operator drags it to the panel they want and presses Present, and moving
+ * it somewhere else on their behalf would be taking the window away from the
+ * person driving it.
+ *
+ * `reader` presents in place and moves no geometry at all, so the viewport is
+ * already the size it is going to be and `awaitViewportSettled` matches on its
+ * first check. See `windows/present.rs` for what each mode does to the window.
  */
-export async function enterPresentation(): Promise<ControlPresentationState> {
-  return invokeOrMock<ControlPresentationState>('set_control_presenting', { enabled: true }, () =>
-    browserViewport(true),
+export async function enterPresentation(
+  mode: PresentationMode = 'prompter',
+): Promise<ControlPresentationState> {
+  return invokeOrMock<ControlPresentationState>(
+    'set_control_presenting',
+    { enabled: true, mode },
+    () => browserViewport(true, mode),
   );
 }
 
@@ -66,13 +85,32 @@ export async function exitPresentation(): Promise<ControlPresentationState> {
 }
 
 /**
+ * Change mode without ending the take.
+ *
+ * The same command, and deliberately so: Rust plans this as a `Switch`, which
+ * re-applies one mode over the other WITHOUT re-saving the resting frame. A
+ * caller that tried to express this as un-present-then-present would lose that
+ * frame to the intermediate state and hand the operator a window it could not
+ * put back. There is one owner of the latch and this is how you ask it.
+ */
+export async function switchPresentationMode(
+  mode: PresentationMode,
+): Promise<ControlPresentationState> {
+  return enterPresentation(mode);
+}
+
+/**
  * Plain-browser dev has one viewport and no window management, so the honest
  * answer is "you are already the size you are going to be" — which makes the
  * settle wait below resolve on its first check instead of burning its ceiling.
  */
-function browserViewport(presenting: boolean): ControlPresentationState {
+function browserViewport(
+  presenting: boolean,
+  mode?: PresentationMode,
+): ControlPresentationState {
   return {
     presenting,
+    ...(presenting && mode ? { mode } : {}),
     width: typeof window === 'undefined' ? 0 : window.innerWidth,
     height: typeof window === 'undefined' ? 0 : window.innerHeight,
   };

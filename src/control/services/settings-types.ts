@@ -10,11 +10,16 @@ import {
   type OpticalCalibrationStep,
   type OpticalHardwareKind,
   type OpticalOverrides,
+  type PresentationMode,
   type ReadingCueStyle,
   type StageMode,
   type OpticalProfile,
   type TextIntensity,
 } from '../../shared/contracts';
+import {
+  RIG_PRESETS,
+  opticalProfileFieldsForPreset,
+} from '../../shared/optical-rig-presets';
 import { defaultFollowingSettings, type FollowingSettings } from '../lib/follow-profiles';
 
 export type { FidelityMode, FollowFeel, FollowingSettings } from '../lib/follow-profiles';
@@ -22,6 +27,33 @@ export type { FidelityMode, FollowFeel, FollowingSettings } from '../lib/follow-
 export type LaunchBehavior = 'library' | 'recent';
 export type SessionMode = 'voice' | 'manual' | 'fixed';
 export type UpdateChannel = 'stable' | 'beta';
+
+/**
+ * Re-exported from the contracts, where it lives because `StageSettings` and the
+ * stage's own dock both need it and neither may import from control services.
+ */
+export type { PresentationMode };
+
+/**
+ * Read a stored `stage` section that may predate `presentationMode`.
+ *
+ * The retired `fullscreen` boolean never affected a take, so nobody's habits
+ * were built on it — but somebody who deliberately turned it OFF was expressing
+ * the preference reader mode now actually delivers, and honouring that is
+ * cheaper than explaining why it was ignored. An absent or unrecognised value
+ * takes `prompter`, which is what every take has always done.
+ *
+ * Exported and pure so the migration is testable without a settings store.
+ */
+export function migrateStageMode(stored: unknown): PresentationMode {
+  if (typeof stored !== 'object' || stored === null) return 'prompter';
+  const section = stored as { presentationMode?: unknown; fullscreen?: unknown };
+  if (section.presentationMode === 'reader' || section.presentationMode === 'prompter') {
+    return section.presentationMode;
+  }
+  if (section.fullscreen === false) return 'reader';
+  return 'prompter';
+}
 
 export interface AppSettings {
   schemaVersion: 1;
@@ -54,7 +86,25 @@ export interface AppSettings {
      * otherwise the only display there is.
      */
     displayFingerprint: string | null;
-    fullscreen: boolean;
+    /**
+     * The shape a take presents in (§ reader-mode spec).
+     *
+     * ----------------------------------------------------------------------
+     * THIS REPLACED A BOOLEAN THAT DID NOTHING
+     * ----------------------------------------------------------------------
+     * There used to be `fullscreen: boolean` here, with a switch in Settings
+     * labelled "Full screen". It was read in exactly three places — the stage
+     * preview, the display test, and its own toggle — and `lib/start-take.ts`
+     * never looked at it once. A real take called `enterPresentation()`
+     * unconditionally, so the switch had no effect on any take anybody has ever
+     * run.
+     *
+     * `prompter` is what every take did regardless: borderless, filling the
+     * monitor, above the menu bar. `reader` is the mode that boolean looked like
+     * it offered — an ordinary window, at desk distance, no mirror and no hood.
+     * See `migrateStageMode` for how the old field is read on the way in.
+     */
+    presentationMode: PresentationMode;
   };
   /**
    * On-device speech-to-text (spec §18.2). There is no API key and no
@@ -276,6 +326,133 @@ export function activeOpticalProfile(
 }
 
 /**
+ * The rig name a reading window uses on every panel.
+ *
+ * A reserved name rather than a separate map, so a reader profile is stored,
+ * listed, normalized, edited and deleted by exactly the machinery every other
+ * rig already goes through — `opticalRigKey` keys it, `normalizeOpticalProfile`
+ * validates it, the rig picker can show it. The alternative was a second
+ * `Record<string, OpticalProfile>` beside `profiles` with its own copy of all of
+ * that, which is how the two would eventually disagree about what a valid
+ * profile is.
+ *
+ * It is only reserved by convention: somebody could name a prompter rig this and
+ * have it adopted as their reading profile. That is a strange thing to do and a
+ * harmless outcome — the profile they get is the one they calibrated.
+ */
+export const READER_RIG_NAME = 'Reading window';
+
+/**
+ * The reading rig for a panel: the stored one if it has been calibrated,
+ * otherwise one derived on the spot.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS SYNTHESISES AND `activeOpticalProfile` REFUSES TO
+ * ---------------------------------------------------------------------------
+ * Its prompter sibling returns null rather than adopting the only profile it can
+ * find, and the reason is stated there: "a rig has to be chosen before it is
+ * used, because adopting a stale arrangement is how the stage ends up sized for a
+ * distance the presenter is no longer standing at." Every word of that is about
+ * a physical arrangement that CandidCue cannot see — a hood, a mirror, where the
+ * camera ended up, how far back the presenter stands.
+ *
+ * A reading window has none of those. It is a person at their own screen, and the
+ * one number that matters — millimetres per CSS pixel — is a property of the
+ * display rather than of anything somebody set up. So there is no stale
+ * arrangement to inherit and nothing to confirm, and refusing to answer would
+ * mean reader mode could not size text until somebody had walked a calibration
+ * wizard for a rig that does not exist.
+ *
+ * The physical scale is borrowed from the panel's PROMPTER profile when there is
+ * one, because a ruler held against the glass measured this display and that
+ * measurement is better than any model lookup. Everything else comes from the
+ * `desk-reading` preset.
+ */
+/**
+ * The physical scale a reading window may borrow from a prompter rig, or null.
+ *
+ * Exported so the rule is testable on its own: it is a one-line policy about
+ * provenance, and provenance is exactly the kind of thing that is easy to get
+ * right once and lose in a later refactor. See the call site for why `'ruler'`
+ * is excluded.
+ */
+export function inheritableReaderScale(
+  profile: OpticalProfile | null,
+): OpticalProfile['scale'] {
+  const scale = profile?.scale ?? null;
+  if (scale === null) return null;
+  return scale.source === 'ruler' ? null : scale;
+}
+
+export function readerOpticalProfile(
+  optical: OpticalSettings,
+  displayFingerprint: string | null,
+): OpticalProfile {
+  const stored =
+    displayFingerprint === null || displayFingerprint === ''
+      ? null
+      : normalizeOpticalProfile(
+          optical.profiles[opticalRigKey(displayFingerprint, READER_RIG_NAME)],
+        );
+  /*
+   * A stored profile is adopted only if it is actually a READING rig.
+   *
+   * `READER_RIG_NAME` is reserved by convention, and the convention is not
+   * enforceable: somebody can name a prompter rig "Reading window" in the
+   * calibration wizard and land it on this key. The earlier note here called that
+   * "a strange thing to do and a harmless outcome", which was wrong — the profile
+   * would arrive with its hood crop, its mirror and its 2.5 m distance, and every
+   * one of those is wrong for a window on a desk.
+   *
+   * `lensPlacement === 'none'` is the discriminator because it is the one field
+   * only a reading rig has, and nothing but this function writes it. A collision
+   * now falls through to the derived profile, which is the right answer for a
+   * reading window whether or not the collision was deliberate.
+   */
+  if (stored !== null && stored.lensPlacement === 'none') return stored;
+
+  const preset = RIG_PRESETS.find((candidate) => candidate.id === 'desk-reading');
+  const base = defaultOpticalProfile();
+  return {
+    ...base,
+    rigName: READER_RIG_NAME,
+    ...(preset ? opticalProfileFieldsForPreset(preset) : {}),
+    /*
+     * The panel's scale, from whatever rig this display has — but only when that
+     * scale describes the PANEL rather than an optical path.
+     *
+     * Only the scale to begin with: `viewingDistanceMm`, `safeArea`, `flips` and
+     * the lens are all facts about a hood and a camera, and inheriting any of them
+     * would put a beamsplitter's mirror and a hood's crop on a reading window.
+     *
+     * And not every scale, either. `OpticalScale.source` distinguishes where the
+     * number came from, and `'ruler'` is the one that cannot be carried across:
+     * its own contract says a ruler measurement describes "the finished optical
+     * path" and "silently corrects for anything the hardware table cannot know — a
+     * magnifying beamsplitter, an overscanning panel". A reading window has no
+     * beamsplitter, so a scale that includes one is wrong by exactly the
+     * magnification — a rig measured at 0.25 mm/px through glass whose bare panel
+     * is 0.20 would render a reading window about 20% small, confidently, with the
+     * profile reporting itself calibrated.
+     *
+     * `'model'` and `'diagonal'` are both panel-derived (a hardware table and a
+     * typed-in diagonal), so both describe the glass a reader is actually looking
+     * at and both are safe. A ruler-only rig falls through to the uncalibrated
+     * reader default, which is a guess that says it is one.
+     */
+    scale: inheritableReaderScale(activeOpticalProfile(optical, displayFingerprint)) ?? base.scale,
+    /*
+     * No `completedSteps`, deliberately.
+     *
+     * The list records what a person actually confirmed, and nobody has
+     * confirmed anything about this profile — it was derived. Claiming otherwise
+     * would make the calibration screen show a reading rig as further along than
+     * it is, and the whole point of that list is that it does not lie.
+     */
+  };
+}
+
+/**
  * Store a rig against a panel and make it the one that panel runs with.
  *
  * The name is trimmed here, once, because everything that reads this store
@@ -324,7 +501,7 @@ const FRAMING_PRESETS: readonly FramingPreset[] = [
   'full-body',
 ];
 const TEXT_INTENSITIES: readonly TextIntensity[] = ['soft', 'standard', 'strong'];
-const LENS_PLACEMENTS: readonly LensPlacement[] = ['in-panel', 'above', 'below'];
+const LENS_PLACEMENTS: readonly LensPlacement[] = ['in-panel', 'above', 'below', 'none'];
 const READING_CUES: readonly ReadingCueStyle[] = ['ticks', 'wash', 'none'];
 const SCALE_SOURCES = ['model', 'diagonal', 'ruler'] as const;
 const CALIBRATION_STEPS: readonly OpticalCalibrationStep[] = [
@@ -438,6 +615,7 @@ const OVERRIDE_KEYS: readonly (keyof OpticalOverrides)[] = [
   'pastOpacity',
   'futureOpacity',
   'secondaryMinPx',
+  'readingBandY',
   'lensOffsetDegrees',
 ];
 
@@ -559,7 +737,11 @@ export function defaultAppSettings(): AppSettings {
       // Automatic. Pinning a fingerprint on first run would pin whichever
       // panel happened to be attached at install time.
       displayFingerprint: null,
-      fullscreen: true,
+      // What every take has always done. Reader mode is a deliberate choice, not
+      // something a first run should discover by surprise on a laptop with one
+      // display — and the calibration a good prompter take needs is the same
+      // calibration the Welcome flow already walks somebody through.
+      presentationMode: 'prompter',
     },
     speech: {
       // Must match `crate::speech::MODEL_NAME`. Rust re-derives this on every

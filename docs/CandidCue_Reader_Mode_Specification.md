@@ -1,6 +1,8 @@
 # Reader mode: presenting without taking the display
 
-Status: design. Nothing here is implemented.
+Status: **phases 1–4 built; phase 5 deliberately not.** §11 records what was
+built differently from what §1–10 proposed. §12 records what a separate audit of
+§1–10 against the code found that building it did not already settle.
 
 This document is written against the code as of 2026-07-30, not against the
 older specs in this directory. Where it disagrees with them, the code was
@@ -573,140 +575,229 @@ Tier A/B/C to prove the geometry did not move. Deliberately last, and
 deliberately behind a benchmark: it is a cleanup, and it touches the one path
 that is currently working.
 
----
+## 11. As built
 
-## 11. Review corrections (2026-07-30)
+Phases 1–4 are implemented. Phase 5 is not, for the reason given above.
 
-Everything above was audited against the tree at `eb406b8`. Most of it held —
-the optical formulas, the arithmetic, and nearly every citation. What follows is
-what did not, kept here rather than edited into the body so the original
-reasoning stays legible. **Read this section before implementing any of the
-above.**
+Four things came out differently from the plan, and one of them corrects it.
 
-### Blocking: the reader preset cannot produce the reading experience §4.2 designs
+**The plan was wrong about the angular ladder — twice, in opposite directions.**
+An earlier draft of §4.2 proposed a `READER_PRESET_ARCMIN` on the grounds that
+24′ at desk distance would be too small. That was a factor-of-two arithmetic
+slip: `featureHeightMm` is `2 · D · tan(θ/2)`, and running it correctly gives 24′
+at the preset's 550 mm = 3.84 mm of cap height = **27.4 CSS px** on a 0.2 mm/px
+display, which is large, comfortable reading type. No reader ladder was added,
+and `reader-mode-optics.test.ts` pins the two contexts to the same one. The
+measure finding survived the correction; the size finding did not.
 
-§4.3's preset sets `hardwareKind: 'generic'`, and a generic panel resolves to
-`diagonalInches: null` (`optical-discovery.ts:111`). With no physical scale
-`mmPerCssPx` is null, `hardwareFitCheck` returns `'uncalibrated'`
-(`optics.ts:535`), and the resolver falls back to `UNCALIBRATED_FONT_SIZE_PX = 64`
-(`optical-resolve.ts:90`, used at `:258`) with a 68%-wide column.
+(§4.2's own worked example says 600 mm and ≈30 px, because it was written against
+the `desk-webcam` preset before `desk-reading` existed at 550 mm. Both figures are
+right for their own distance; 550 mm / 27.4 px is the one reader mode ships.)
 
-So Phase 2 as written lands on 64px uncalibrated type, not the ~30px and 55–75
-characters §4.2 derives. The 30px figure assumes a *measured* `mmPerCssPx`, and
-nothing in this design provides one: the calibration wizard is hood-, lens- and
-glass-oriented, and it now refuses to open its stage on the control panel or on
-a single-display machine (`Calibrate.svelte`). The reader profile also cannot
-simply borrow the prompter's scale — a ruler-calibrated scale may include
-beamsplitter magnification, so it describes the finished optical path rather
-than the bare panel (`contracts/optical.ts:45`).
+**`UNCALIBRATED_READER_FONT_SIZE_PX` (30) was not in the plan and is needed.**
+`scaleForDisplay` can only answer for hardware it recognises by its panel, and
+the ordinary Mac display somebody reads on is `generic` — so the uncalibrated
+path is the *common* case for reader mode, not the edge case it is for a
+prompter. 64 px in a reading window is about a dozen characters a line. 30 px is
+the same arithmetic as the paragraph above, run for the uncalibrated case.
 
-**Reader mode needs a direct-display calibration path of its own** — panel model
-or diagonal, an on-screen ruler, reading distance, band preference — and it is a
-prerequisite for Phase 2, not a follow-up.
+**`overrides.readingBandY` is new.** The plan said the reader's band position
+was "a preference" without saying where the preference lived, and there was no
+override that could hold it — `lensOffsetDegrees` is an angle measured *from a
+lens*, which is exactly what a `'none'` rig does not have. The new override wins
+over `lensOffsetDegrees` when both are set, rather than composing with it, so the
+number somebody typed is the number they get.
 
-### §7.1's defect does not exist as described
+**Two frames, not one.** §5.2 proposed re-capturing the resting frame on the way
+out of reader mode. That is unsafe: reader mode lowers the window's minimum size,
+so those bounds can be smaller than the editor's own minimum, and a `Restore`
+replaying them would hand back an editor at 520×360. `PresentState` therefore
+holds `resting` (written once by `Enter`, never overwritten — the original
+latch-not-a-stack rule verbatim) and `reader` (the reading window's own bounds, so
+a `Switch` round trip preserves them). Neither has to know about the other.
 
-`rebuildLineMap` is synchronous with no awaits (`ScriptLayer.svelte:1414`), so
-nothing can interleave between its viewport read and the `finally` that clears
-`lineMapPending`. The **drop** is real (`:1400`, no dirty bit) but self-correcting:
-the build reads live `vw`/`vh` whenever it runs, and a resize arriving after the
-synchronous rebuild finds the flag clear and schedules another.
+Smaller notes:
 
-A trailing-edge flag may still be worth having for latency, but the permanently
-stale map offered as its justification is not reachable.
+- `PresentationMode` and `ReadingContext` are separate types with the same two
+  members, mapped once in `stageSettingsFromSettings`. One is a fact about the
+  window; the other is an input to the optical model. The types say so.
+- The reading rig is stored under a reserved rig name (`READER_RIG_NAME`) inside
+  the existing `profiles` map, so it is keyed, normalized, listed and validated by
+  the machinery every other rig already goes through.
+- `set_control_presenting` kept its `enabled: bool` and gained an optional
+  `mode`, matching how `set_stage_fullscreen` handles `native`. An
+  `{ enabled: true }` payload from before reader mode still presents as a
+  prompter.
+- The viewport settle debounce (§7.3) is applied to `vw`/`vh` themselves rather
+  than to a second "settled" pair beside them. A split viewport means the band,
+  the padding and the fades track a window whose line map describes a different
+  width — a document that is wrong about itself, rather than one that lags a drag
+  by a tenth of a second.
 
-### §7's premise is false: live resize is already exercised
+### Found in review, and fixed
 
-"The whole motion path has only ever been asked to handle a viewport that changes
-once, before the stage mounts" is wrong. Browser journeys resize a running take
-repeatedly — `single-window-presentation.spec.ts:206`, `:281`, `:317`, `:388`,
-`:467`, `:500`, `:638`, and `auto-scroll.spec.ts:176`. Coverage-only rebuilds are
-also already throttled at 250 ms (`ScriptLayer.svelte:914`).
+An adversarial pass over the built code turned up seven things. They are recorded
+because most of them are the kind of defect that would only have shown up on a
+real rig, and two of them were the code's own comments claiming more than the
+code did.
 
-The real §7 risks are the ones this section understates: mixed geometry during a
-drag. Safe rect, reading band, padding, column, `maxScroll` and `engine.setBounds`
-all react to `vw`/`vh` immediately while the line map still describes the old
-viewport; virtualized off-window block heights stay cached across wrapping
-changes; and the transport advances on an uncapped wall-clock delta. The unit that
-fixes this is a **committed geometry generation** — suspend follower, transport and
-viewport hints, resolve and rebuild once, then commit optics, map, bounds and band
-together and run one `layoutRecovery` — not two point repairs plus a debounce.
+1. **The mode was committed before the window changed.** `set_control_presenting`
+   wrote `state.mode` and then ran the window mutations, every one of which
+   `?`-propagates. A `Switch` that failed partway left the latch claiming the new
+   mode while control still believed the old one — so the retry planned
+   `Reassert`, and `apply_reader` (which moves no geometry, by design) could not
+   undo the prompter's pinning or chrome. The window stayed borderless and above
+   the menu bar while control composed a reading window's geometry for it. Fixed
+   in two halves, because either alone leaves the other reachable: the mode is
+   committed only after the apply succeeds, AND `apply_reader` now un-pins and
+   restores chrome idempotently so a mis-planned `Reassert` also recovers.
+   `a_failed_switch_retries_as_a_switch` pins the first half.
+2. **Reader optics were measured against the wrong display.**
+   `chooseStageDisplay` deliberately prefers a NON-primary panel, which is right
+   for a prompter and exactly backwards for a window that never moved. A reader
+   working at their laptop with a calibrated external prompter attached had their
+   type sized from the external panel's `mmPerCssPx` — the entire basis of the
+   angular model — so the text came out confidently the wrong physical size. It
+   now takes the mode and prefers the primary display, and ignores a pinned
+   prompter fingerprint (which names a panel a prompter presents on, and says
+   nothing about where a reading window is). **Residual gap, filed not fixed:**
+   dragging a reading window to another display mid-take keeps the first panel's
+   scale. The complete answer is for `set_control_presenting` to report the
+   monitor the window actually landed on — `windows::window_monitor_fingerprint`
+   already computes it for the separate stage — and rebuild the envelope from it.
+3. **A ruler scale is not safe to inherit.** `readerOpticalProfile` borrowed the
+   panel's `scale` unconditionally, and `OpticalScale`'s own contract says a
+   ruler measurement describes "the finished optical path" including "a
+   magnifying beamsplitter". A rig measured at 0.25 mm/px through glass whose
+   bare panel is 0.20 would render a reading window ~20% small while reporting
+   itself calibrated. `inheritableReaderScale` now accepts only the
+   panel-derived sources (`model`, `diagonal`); a ruler-only rig falls through to
+   the uncalibrated reader default, which is a guess that says it is one.
+4. **The reserved rig name could be hijacked destructively.** The comment called
+   a collision "a strange thing to do and a harmless outcome". It was not
+   harmless: a prompter rig a user happened to name "Reading window" was adopted
+   wholesale, hood crop, mirror, 2.5 m distance and all. A stored profile is now
+   adopted only when `lensPlacement === 'none'`, which is the one field only a
+   reading rig has.
+5. **The chord repeated.** Held, ⌃⌘F flipped the window between shapes at the
+   key-repeat rate — an OS window operation and a full relayout per repeat. It
+   now stands down on `event.repeat`, like the `a` transport toggle. The in-flight
+   guard alone was not enough: it only suppressed repeats *during* a switch.
+6. **The toggle raced the stage's own settle, and its comment denied it.**
+   `awaitViewportSettled` watches the RAW viewport (~33 ms at 60 Hz), but reader
+   geometry resolves from a viewport deliberately trailed by 120 ms — so
+   recomposing on the raw settle produced precisely the double relayout the
+   comment claimed the ordering avoided. The switch now waits both out, and
+   `VIEWPORT_REFLOW_SETTLE_MS` moved to `geometry.ts` so the two cannot drift.
+7. **A stale switch could mutate a later take.** The sequence spans two waits and
+   `adoptPresentationMode` guards only on `active`, which a *fresh* take also
+   satisfies. It now captures the session id before awaiting.
 
-### §5.2's one latch loses the editor frame
+Also fixed: `declared_min_size` returned `None` unless BOTH axes were declared,
+and `set_min_size(None)` clears the floor rather than leaving it — so a future
+config that dropped `minHeight` would have left the editor with no width floor
+either, permanently, the first time anybody used reader mode.
 
-The stated recapture invariant makes the final restore depend on toggle history:
-`Enter(Reader)` saves the editor frame `E`; the reader resizes to `R`;
-`Switch(Reader → Prompter)` recaptures `R`; ending the take restores `R`. But
-`Reader → Restore` without ever toggling restores `E`. Identical intent, different
-geometry.
+Three review notes were considered and not acted on. A failed `exitPresentation`
+can still leak the sleep assertion and leave presentation chrome behind, because
+`Live.svelte` suppresses the error and navigates anyway — pre-existing, and
+untouched by this change. `adoptPresentationMode`'s no-display guard records a
+mode it does not compose into the document, which is deliberate: the window has
+already changed by then, so a truthful dock beats a consistent envelope, and the
+case is unreachable in production for the reason its sibling guard states. And
+the second review request — the optics and renderer half — timed out rather than
+returning; that half was reviewed by hand instead, which is what turned up the
+550/600 mm error above.
 
-Recapturing after `Enter(Reader)` has lowered the minimum size also records the
-*lowered* minimum, so one undifferentiated snapshot cannot restore the original
-980×680. Use `PresentationState { mode, editorFrame, readerFrame }` and treat the
-minimum as app-owned state.
+### Verified, and not
 
-Also missing from §5: maximize, minimize, OS-native fullscreen, titlebar close
-(there is no control-window `CloseRequested` policy), monitor move/disconnect
-(the topology watcher at `windows/mod.rs:877` has no control subscriber), and
-sleep-assertion ownership — `sleep.rs` is one global latch that closing a
-separate stage releases unconditionally (`windows/mod.rs:757`), which would drop
-it out from under a live reader take.
+Green: `pnpm check` (0 errors), 1766 node vitest tests including 55 new ones
+across `src/shared/reader-mode-optics.test.ts` and
+`tests/unit/control/presentation-mode.test.ts`, the jsdom suite file-by-file
+including a new `tests/dom/script-layer-viewport-settle.test.ts`, 202 `cargo
+test` tests including 6 new `present::plan` pairings, and `pnpm build`.
 
-### Smaller factual corrections
+The jsdom suite is the only place the resize path is exercised at all, and it is
+worth knowing what it does and does not reach. It pins that the opening is not
+delayed by the debounce, that a burst of resizes coalesces, that the document does
+NOT re-wrap mid-drag, and that the sequence converges rather than rescheduling
+forever. It does **not** pin the `lineMapDirty` trailing rebuild directly: that
+fixes a two-frame race, and nothing in jsdom can schedule an observation into that
+window reliably. The file says so at the top rather than letting its name imply
+otherwise.
 
-- **`set_min_inner_size` does not exist** anywhere in `src-tauri/`. The Tauri
-  commands are `set_min_size` / `set_size_constraints`.
-- **§3's history is wrong.** The *current* dead-setting conclusion is right —
-  `Settings.svelte:299`, `:480`, `:1554` are the only reads and `start-take.ts`
-  never reads it, all verified exactly as cited. But "it never did anything" is
-  false: `start-take.ts` called `setStageFullscreen(sessionId, s.stage.fullscreen)`
-  from `8177f0f` until `60c5361` removed it. The migration also needs an explicit
-  overlay migration — `settings.ts`'s `mergeSection` will not drop the old field.
-  And replacing `fullscreen` outright breaks the two Settings callers, which
-  contradicts §8's claim that the separate-stage path is untouched.
-- **§4.3 undercounts the context plumbing.** `READING_MEASURE` is read directly in
-  override warnings and clamping (`optical-resolve.ts:477`, `:514`, `:517`), the
-  uncalibrated fallback (`:547`), and several fit branches (`optics.ts:575`, `591`,
-  `599`). Threading a context through three functions leaves reader mode on
-  prompter thresholds elsewhere. Pass a measure *policy* object instead. Fit advice
-  is also prompter-worded ("larger prompter", "closer to the glass") and needs
-  mode-aware text.
-- **`lensPlacement` is a string union, not an enum** (`contracts/optical.ts:110`),
-  and adding an arm requires the normalization allowlist at
-  `settings-types.ts:327`. `'none'` is numerically safe — `isOffPanel` tests only
-  `above`/`below` — but semantically it overloads a field that means where a
-  physical lens sits, and `derivedBandY` still derives horizontal centre from
-  `profile.lens.x`. A band-anchor policy with a real reader preference field is the
-  cleaner shape; §4.3 names 0.42 without adding anywhere to put it.
-- **Presets do not zero `safeArea`** — they own four fields
-  (`optical-rig-presets.ts:69`) and leave `safeArea` alone. The zeroes come from
-  `defaultOpticalProfile`, which §4.3 must state as an invariant.
-- **§8's Rust-twin claim is wrong.** Rust treats `stage_settings` as opaque
-  `serde_json::Value` and unknown envelope fields survive via flattened `rest`
-  (`windows/mod.rs:992`, `:998`), so `presentationMode` needs no Rust field unless
-  Rust inspects it. Routing the dock toggle the existing way *would* need a new
-  `StageIntent` variant.
-- **Tier A/B/C cannot prove the Phase 5 geometry unchanged.** A/B stop at engine
-  position; Tier C explicitly does not model real text measurement or WebKit
-  layout (`bench/README.md:231`). The acceptance evidence has to be resolver
-  fixtures, DOM layout tests and a packaged-app pass.
-- **Line drift.** `StageApp.svelte:1239` → `:1271` and `:1192` → `:1221` (moved by
-  `eb406b8`). The `dtMs` cap is `controller.ts:409`, not `:385`. The eye-movement
-  rationale and `FRAMING_MEASURE_SCALE` are in `optical-resolve.ts:163`/`:170`, not
-  `optics.ts`. Mirrors are read at `stage-envelope.ts:299`, not `:242`. The dock
-  already has an End button, so a mode control is its fourth, not third.
-  `awaitViewportSettled` needs two identical frames (`control-window.ts:139`), so
-  it does not resolve on the first check.
-- **§2's "0.6–3 m" is the preset range, not the model's** — `optics.ts:242` accepts
-  150–15,000 mm.
+**Not verified, and §9 still applies in full.** Nothing here has been run in the
+packaged app. In particular: no reader window has been dragged, no `Switch` has
+been watched on real glass, and the resize-hardening in §7 is asserted as logic
+rather than observed as behaviour. The two defects it fixes were found by reading
+the code, and their absence is unproven on a real window.
 
-### Confirmed correct, since it was checked
+## 12. Audit of §1–10 (2026-07-30)
 
-The arithmetic is right, including the part that looks inconsistent: characters →
-px uses `FALLBACK_AVG_CHAR_WIDTH_RATIO = 0.5` while the CSS `ch` unit uses
-`FALLBACK_ZERO_ADVANCE_RATIO = 0.55`, and this document uses each in its place.
-Also verified: 0.200 mm/CSS px and ~30px body size for a 16" panel at 600mm and
-24′; `READING_MEASURE` 32–38 with the field names §4.3 mirrors; `minWidth`
-980×680; `TARGET_VISIBLE_LINES` = 5; `maxColumnFraction` 0.92; `geometry.ts:221`
-and `:202`; the `presenting_twice_does_not_resave_the_frame` quote; and the
-`stage-envelope.ts:274` font-metrics quote, character-for-character.
+§1–10 were audited against the tree independently of the work in §11, which had
+not landed at the time. Most of the audit is now moot — building it settled the
+same questions, usually better. Two findings corroborate §11 and are worth
+recording as independent arrivals at the same place: the uncalibrated font size
+(§11's `UNCALIBRATED_READER_FONT_SIZE_PX`) was reached from the other direction by
+noticing that a `generic` panel yields `diagonalInches: null`, so `mmPerCssPx` is
+null, `hardwareFitCheck` returns `'uncalibrated'` and the resolver falls through
+to 64px; and the wrong-display defect (§11 review item 2) and the ruler-scale
+defect (item 3) were both independently predicted from `chooseStageDisplay`'s
+non-primary preference and `OpticalScale`'s own contract.
+
+What the audit found that §11 does not cover:
+
+**§7.1's stated race is not reachable, and §11's comment restates it.** Both the
+original §7.1 and the `WHY DROPPING IT WAS SAFE AND IS NOT ANY MORE` comment now
+in `ScriptLayer.svelte` describe a change landing "after `rebuildLineMap()` has
+read its inputs but before the `finally` clears the flag". `rebuildLineMap` is a
+synchronous function with no awaits, and the `finally` runs in the same
+synchronous turn as the call — so no browser event and no Svelte effect can be
+delivered into that gap. The window is zero-width, not "a couple of frames".
+
+`lineMapDirty` is still defensible, for a different reason the comment does not
+give: a request arriving during the two *awaits* (`awaitLayoutStable`, then rAF)
+was previously dropped outright, and the trailing reschedule now catches it. Note
+the cost, though — `lineMapDirty` is cleared inside the `try` before those awaits,
+so any request landing in that window sets it, and the in-flight build already
+reads current inputs when it runs. The trailing rebuild is therefore redundant
+work in exactly the case it fires. Worth measuring before treating it as free.
+
+**"The viewport changed once per take" is false, in §7 and again in §11.** §7
+opens with it, §11's *Verified, and not* repeats it as "the jsdom suite is the only
+place the resize path is exercised at all", and the comment quoted above states it
+a third time. Playwright resizes a running take in
+`single-window-presentation.spec.ts:206`, `:281`, `:317`, `:388`, `:467`, `:500`
+and `:638`, and in `auto-scroll.spec.ts:176`. Coverage-only rebuilds were also
+already throttled at 250 ms before this change. The resize path was *thinner* than
+reader mode needs, not unexercised — which makes the browser suite the place to
+add the reader cases §11 correctly says jsdom cannot reach.
+
+**§3's history is wrong, though its conclusion is right.** "No effect on any take
+anybody has ever run" is false: `start-take.ts` called
+`setStageFullscreen(sessionId, s.stage.fullscreen)` from `8177f0f` until `60c5361`
+removed it. The three read sites cited (`Settings.svelte:299`, `:480`, `:1554`)
+and "`start-take.ts` never reads it" are exactly right for the current tree.
+
+**Phase 5's acceptance criterion does not exist.** §10 proposes re-running Tier
+A/B/C to prove a unified resolver did not move the geometry. Tier A/B stop at
+engine position, and Tier C explicitly does not model real text measurement or
+WebKit layout (`bench/README.md`). Geometry equivalence needs resolver fixtures,
+DOM layout assertions and a packaged pass — not benchmark scores. Worth settling
+before Phase 5 is picked up, since it is the stated gate.
+
+**Smaller.** §5.4 names `set_min_inner_size`, which does not exist in Tauri; the
+implementation correctly used `set_min_size` / `declared_min_size`. §2's table
+gives the prompter viewing distance as 0.6–3 m, which is the preset range — the
+model accepts 150–15,000 mm (`optics.ts`). §4.2's eye-movement rationale and
+`FRAMING_MEASURE_SCALE` are in `optical-resolve.ts`, not `optics.ts`; mirrors are
+read at `stage-envelope.ts:299`, not `:242`; and the `dtMs` cap is
+`controller.ts:409`.
+
+**Verified as correct, since it was checked.** The arithmetic holds, including the
+part that reads as inconsistent: characters → px uses
+`FALLBACK_AVG_CHAR_WIDTH_RATIO` (0.5) while the CSS `ch` unit uses
+`FALLBACK_ZERO_ADVANCE_RATIO` (0.55), and §4 uses each in its place. Also checked
+against the code: `READING_MEASURE` 32–38 with the field names §4.3 mirrors,
+`minWidth` 980×680, `TARGET_VISIBLE_LINES` = 5, `maxColumnFraction` 0.92,
+`geometry.ts:221` and `:202`, and both long quotations character-for-character.

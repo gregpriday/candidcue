@@ -42,6 +42,7 @@
     ESCAPE_DOUBLE_PRESS_MS,
     STAGE_EVENT,
     STAGE_HEARTBEAT_GRACE_MS,
+    type PresentationMode,
     type StageAutoScrollPayload,
     type StageEscapePayload,
     type StageHeartbeatAckPayload,
@@ -128,6 +129,25 @@
      * understands, so every consumer stays on one value.
      */
     blanked?: boolean;
+    /**
+     * Whether the host is presenting on the whole display or in a window.
+     *
+     * Direct, like `followPaused` and `blanked`, and for the same generation-0
+     * reason: single-window presentation is where this control exists at all, and
+     * that is exactly the configuration the directive bus does not reach.
+     */
+    presentationMode?: PresentationMode;
+    /**
+     * The presentation-mode control was pressed. Omitted means "do not offer
+     * it" — see the button in `StageDock`.
+     *
+     * A callback rather than a `StageIntent`, because switching mode is a WINDOW
+     * operation the host performs against Rust, not a request about the script.
+     * Every member of `StageIntent` is something the stage could in principle ask
+     * a separate-window host for over the event bus; this one is meaningless
+     * there, since the command acts on the control window.
+     */
+    onpresentationtoggle?: () => void;
     onexit: () => void;
     onintent?: (intent: StageIntent) => void;
     /**
@@ -2138,6 +2158,8 @@
           revealed={dockVisible}
           {followPaused}
           onfollowtoggle={() => sendIntent({ kind: 'toggle_follow' })}
+          presentationMode={embedded?.presentationMode ?? 'prompter'}
+          onpresentationtoggle={embedded?.onpresentationtoggle}
           appearancePanel={embedded?.appearancePanel ?? null}
           appearanceOpen={embedded?.appearanceOpen ?? false}
           onappearanceopen={() => embedded?.onappearanceopen?.()}

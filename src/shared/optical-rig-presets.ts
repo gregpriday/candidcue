@@ -95,7 +95,41 @@ const DESK_AND_WEBCAM_DISTANCE_MM = 600;
  */
 const STUDIO_GLASS_DISTANCE_MM = 3000;
 
+/**
+ * Sitting at your own screen, reading — not being filmed.
+ *
+ * Closer than `desk-webcam`'s 600 mm even though both are "at a desk", because
+ * that preset describes somebody sitting BACK far enough to be in frame, and
+ * this one describes somebody reading. 550 mm is the middle of the range the
+ * ergonomics literature gives for a display you are reading continuously.
+ */
+const DESK_READING_DISTANCE_MM = 550;
+
 export const RIG_PRESETS: readonly OpticalRigPreset[] = [
+  {
+    /*
+     * The only preset with no camera in it, which is what makes it the only one
+     * whose `lensPlacement` is `'none'`.
+     *
+     * Everything else in this catalog describes a rig somebody is being FILMED
+     * on, and every one of them therefore has an opinion about where the lens is
+     * — behind the glass, or above the panel. This one is a person reading a
+     * script off a window on their own screen. There is no lens, so the reading
+     * band is a preference rather than a derivation, `lensOffsetDegrees` has
+     * nothing to measure from, and mirroring must stay off for the same reason
+     * `desk-webcam` says so: backwards text on a bare monitor reads as a bug.
+     */
+    id: 'desk-reading',
+    label: 'Reading at a desk',
+    description:
+      'A window on your own screen, read directly. No camera and no glass, so nothing is mirrored.',
+    patch: {
+      hardwareKind: 'generic',
+      viewingDistanceMm: DESK_READING_DISTANCE_MM,
+      flips: { horizontal: false, vertical: false },
+      lensPlacement: 'none',
+    },
+  },
   {
     id: 'desk-webcam',
     label: 'Desk and webcam',

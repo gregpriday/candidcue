@@ -31,6 +31,7 @@ const MAPPING: Record<IconName, string> = {
   stop: 'square',
   mic: 'mic',
   monitor: 'monitor',
+  'book-open': 'book-open',
   check: 'check',
   alert: 'triangle-alert',
   info: 'info',

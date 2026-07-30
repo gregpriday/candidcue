@@ -50,6 +50,33 @@ import {
  * ------------------------------------------------------------------------- */
 
 /** The visible rectangle, in viewport CSS pixels. */
+/**
+ * How long the viewport has to hold still before the document re-wraps.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS LIVES HERE AND NOT IN `ScriptLayer`, WHICH IS ITS ONLY CONSUMER
+ * ---------------------------------------------------------------------------
+ * It has a second reader, and the second reader is why the number matters.
+ *
+ * `ScriptLayer` trails its `vw`/`vh` by this interval so that dragging a reading
+ * window's edge coalesces into one relayout instead of sixty. But the mid-take
+ * mode switch (`Live.svelte::togglePresentationMode`) also changes the viewport,
+ * and it recomposes the document geometry as soon as `awaitViewportSettled`
+ * reports the RAW viewport has stopped moving — which at 60 Hz is about 33 ms.
+ * Reader geometry is resolved from the trailed value, so recomposing then
+ * measures the whole document at the OLD size and has it invalidated ~90 ms
+ * later: exactly the two-measurement waste `startTake`'s opening sequence is
+ * ordered to avoid, in the middle of a live take and with no cover over it.
+ *
+ * So the switch waits this out too, and the two have to agree. Duplicating the
+ * literal in `Live.svelte` is the version of that which silently stops agreeing.
+ *
+ * 120 ms is short enough that letting go of an edge and seeing the text re-wrap
+ * reads as immediate, and long enough that no frame of a drag gets its own
+ * rebuild.
+ */
+export const VIEWPORT_REFLOW_SETTLE_MS = 120;
+
 export interface SafeRect {
   x: number;
   y: number;

@@ -29,6 +29,7 @@ import {
 } from './settings-following';
 import {
   defaultAppSettings,
+  migrateStageMode,
   normalizeOpticalProfile,
   opticalRigKey,
   type AppSettings,
@@ -227,7 +228,17 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     // document for them. A merge that is missing here does not fail loudly —
     // the setting simply reverts on every read, which is how a control ends up
     // looking live and being inert.
-    stage: mergeSection(mapped.stage, overlay.stage),
+    stage: {
+      ...mergeSection(mapped.stage, overlay.stage),
+      /*
+       * The mode is migrated rather than merged, because the stored section may
+       * still be carrying the retired `fullscreen` boolean and nothing else.
+       * `mergeSection` would spread that straight through — leaving a dead key on
+       * the section and `presentationMode` silently on its default — so the one
+       * field that has a predecessor reads it explicitly. See `migrateStageMode`.
+       */
+      presentationMode: migrateStageMode(overlay.stage ?? mapped.stage),
+    },
     optical: opticalFromOverlay(defaults.optical, overlay.optical),
     // `saveTranscript` is Rust-owned (§36.2): a stale local overlay must never
     // be able to claim retention is on when the persisted document says off.

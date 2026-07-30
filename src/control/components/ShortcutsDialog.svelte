@@ -4,7 +4,7 @@
 <script lang="ts">
   import Dialog from './Dialog.svelte';
   import Button from './Button.svelte';
-  import { isMacPlatform } from '../lib/shortcuts';
+  import { isMacPlatform, presentationModeShortcutLabel } from '../lib/shortcuts';
 
   interface Props {
     open: boolean;
@@ -30,6 +30,10 @@
     ['Add take marker', 'T (during Live)'],
     ['Auto-scroll on / off', 'A (during Live)'],
     ['Auto-scroll slower / faster', '[ / ] (during Live)'],
+    // The label comes from `shortcuts.ts` rather than being written out here,
+    // because this is the one chord whose shape differs between platforms by more
+    // than the modifier `mod` stands in for.
+    ['Full display / reading window', presentationModeShortcutLabel()],
     // Twice, and from either window — the stage answers it when the presenter
     // is in front of it, this window when the operator is at the desk.
     ['End the take and close the stage', 'Esc Esc'],

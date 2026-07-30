@@ -40,7 +40,7 @@
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import type { StageVoicePillPayload } from '../shared/contracts';
+  import type { PresentationMode, StageVoicePillPayload } from '../shared/contracts';
   import VoicePill from './VoicePill.svelte';
 
   interface Props {
@@ -69,6 +69,20 @@
     onappearanceopen?: () => void;
     /** Escape, a click outside, or the settings button again. Means "cancel". */
     onappearanceclose?: () => void;
+    /**
+     * Whether the take is filling its display or sitting in a window.
+     *
+     * Given rather than inferred: the stage renders inside whatever window it is
+     * handed and has no way to tell a borderless monitor-sized one from a
+     * maximised ordinary one. Only the host knows, because only the host asked
+     * for it.
+     */
+    presentationMode?: PresentationMode;
+    /**
+     * The presentation-mode control was activated. Absent means "do not offer
+     * it" — see the note at the button.
+     */
+    onpresentationtoggle?: () => void;
     /** §48. Voice following is off; the presenter is driving the script. */
     followPaused?: boolean;
     /** The follow control was activated. The host owns the decision (§16.9). */
@@ -95,6 +109,8 @@
   let {
     pill,
     revealed,
+    presentationMode = 'prompter',
+    onpresentationtoggle,
     followPaused = false,
     onfollowtoggle,
     appearancePanel = null,
@@ -317,6 +333,48 @@
         {/if}
       </svg>
     </button>
+
+    <!--
+      Full display, or a window.
+
+      Present in the dock rather than only on the keyboard because of the fault
+      the dock exists for (see the note on `revealed`): a prompter filling a
+      display with no visible way out reads as a hang, and "give me my window
+      back" is the most literal instance of that there is. Somebody who pressed
+      Present without realising it would take the screen needs to be able to
+      point at the way back, not know a chord.
+
+      Only rendered when the host supplies the handler — the standalone stage
+      window is a separate window on a second display, and there is no
+      presentation mode to toggle for it.
+    -->
+    {#if onpresentationtoggle}
+      <button
+        type="button"
+        class="dock-button present-mode"
+        data-hidden={!buttonsVisible}
+        aria-pressed={presentationMode === 'prompter'}
+        aria-label={presentationMode === 'prompter'
+          ? 'Filling the display — show in a window instead'
+          : 'Showing in a window — fill the display instead'}
+        title={presentationMode === 'prompter' ? 'Show in a window' : 'Fill the display'}
+        onclick={() => onpresentationtoggle?.()}
+      >
+        <!-- The two states drawn as what they ARE rather than as an arrow: a
+             frame filling its bounds, or a smaller frame inside them. An
+             enter/exit chevron pair would need the presenter to know which
+             direction they are currently in to read it. -->
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          {#if presentationMode === 'prompter'}
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <rect x="8" y="9" width="8" height="6" rx="1" />
+          {:else}
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M8 9h8M8 12h8M8 15h5" stroke-linecap="round" />
+          {/if}
+        </svg>
+      </button>
+    {/if}
 
     {#if appearancePanel}
       <button

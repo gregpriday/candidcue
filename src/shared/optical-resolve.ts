@@ -28,9 +28,11 @@ import {
   isPlausibleViewingDistanceMm,
   MIN_RENDERABLE_FONT_SIZE_PX,
   normalizeFontMetrics,
+  readingMeasureFor,
   secondaryTextFloorPx,
   type AngularContext,
   type FontMetrics,
+  type ReadingContext,
 } from './optics';
 import type {
   FramingPreset,
@@ -89,6 +91,37 @@ export const DEFAULT_SENTENCE_MICROGAP_LINES = 0.2;
  */
 export const UNCALIBRATED_FONT_SIZE_PX = 64;
 
+/**
+ * The same guess, for a reading window.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE 64 ABOVE IS NOT REUSED
+ * ---------------------------------------------------------------------------
+ * Every reason the constant above exists is a reason it is wrong here: it is
+ * "roughly 25 arcminutes at 1.2 m on a 9-inch Prompter", and reader mode is
+ * neither of those distances nor that panel. 64 px in a 900 px reading window is
+ * about a dozen characters a line.
+ *
+ * 30 px is the same arithmetic run for the reading case: on a display around 0.2
+ * mm per CSS pixel (a 16" MacBook Pro at default scaling measures 0.200), 30 px
+ * of body text subtends about 26 arcminutes of cap height at the desk preset's
+ * 550 mm. That sits between the `standard` (24') and `comfort` (28') rungs of
+ * `ANGULAR_PRESET_ARCMIN`, which is the right side of the ladder to guess on:
+ * text read continuously for twenty minutes should err generous, and a guess that
+ * came out under the standard rung would be betting on a display being no smaller
+ * than assumed.
+ *
+ * So an uncalibrated reading window lands within a rung of where a calibrated one
+ * would, which is the most a guess can honestly do. For the record, a CALIBRATED
+ * 550 mm rig at the standard 24' resolves to 27.4 px on the same display — this
+ * constant is deliberately a little above that, not equal to it.
+ *
+ * It matters more than the prompter default does, because it is reached more
+ * often: `scaleForDisplay` can only answer for hardware it recognises by its
+ * panel, and the ordinary Mac display somebody reads on is `generic`.
+ */
+export const UNCALIBRATED_READER_FONT_SIZE_PX = 30;
+
 /** The column measure used when nothing has been calibrated, as a fraction. */
 export const UNCALIBRATED_COLUMN_FRACTION = 0.68;
 
@@ -102,6 +135,23 @@ export const UNCALIBRATED_COLUMN_FRACTION = 0.68;
  * rig's pin survives that clamp unchanged rather than landing on its edge.
  */
 export const OFF_PANEL_READING_BAND_EDGE_FRACTION = 0.05;
+
+/**
+ * Where the reading line sits when there is no camera to derive it from.
+ *
+ * A little above centre. Dead centre wastes the asymmetry that reading actually
+ * has — the line being read matters, the lines after it matter nearly as much,
+ * and the lines already read matter not at all — so lifting the band leaves more
+ * room below it for the text coming up. `DEFAULT_FUTURE_RESERVE_LINES` is 3
+ * against `TARGET_LINES_ABOVE_BAND`'s 1, which is the same asymmetry stated in
+ * line units, and 0.42 is roughly where that ratio puts the band.
+ *
+ * Deliberately NOT the off-panel edge pin. That number exists because a lens
+ * ABOVE the glass wants the reader's eyeline as close to it as possible, and
+ * pinning a reader's text to the top 5% of their window for the sake of a camera
+ * that is not there would be inheriting a constraint along with its remedy.
+ */
+export const NO_LENS_READING_BAND_FRACTION = 0.42;
 
 /* ---------------------------------------------------------------------------
  * Typography defaults
@@ -188,6 +238,16 @@ export interface ResolveInput {
   /** Measured font proportions; falls back to DIN ratios when unusable. */
   metrics?: Partial<FontMetrics> | null;
   viewport: ViewportInfo;
+  /**
+   * Whether this geometry is for a prompter or for somebody reading off their
+   * own screen. Defaults to `prompter`, which is what every existing caller
+   * meant.
+   *
+   * It changes exactly two things — the character band the width solver aims at,
+   * and whether the framing multiplier applies — and nothing else. See
+   * `READER_READING_MEASURE` for why those two and no others.
+   */
+  readingContext?: ReadingContext;
 }
 
 export interface ResolveResult {
@@ -230,8 +290,9 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
     mmPerCssPx > 0 &&
     isPlausibleViewingDistanceMm(distanceMm);
 
+  const readingContext = input.readingContext ?? 'prompter';
   const targetArcmin = resolveTargetArcminutes(profile);
-  const targetCharacters = resolveTargetCharacters(profile);
+  const targetCharacters = resolveTargetCharacters(profile, readingContext);
 
   const fit = hardwareFitCheck({
     safeWidthPx,
@@ -241,6 +302,7 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
     targetArcmin,
     targetCharacters,
     metrics,
+    readingContext,
   });
 
   /*
@@ -255,7 +317,9 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
   const bodyFontSizePx =
     fit.fontSizePx !== null && fit.fontSizePx >= MIN_RENDERABLE_FONT_SIZE_PX
       ? fit.fontSizePx
-      : UNCALIBRATED_FONT_SIZE_PX;
+      : readingContext === 'reader'
+        ? UNCALIBRATED_READER_FONT_SIZE_PX
+        : UNCALIBRATED_FONT_SIZE_PX;
 
   const columnCh =
     fit.columnCh !== null && fit.columnCh > 0
@@ -279,7 +343,9 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
   /* ---- warnings the operator can act on ---- */
   if (!calibrated) {
     warnings.push(
-      'This rig has not been calibrated. Text size is a desk-distance guess (about 1.2 m) rather than a measurement.',
+      readingContext === 'reader'
+        ? 'This display has not been calibrated, so the text size is a reading-distance guess (about 55 cm) rather than a measurement.'
+        : 'This rig has not been calibrated. Text size is a desk-distance guess (about 1.2 m) rather than a measurement.',
     );
   }
   if (!metrics.measured) {
@@ -374,9 +440,36 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
       ? OFF_PANEL_READING_BAND_EDGE_FRACTION
       : profile.lensPlacement === 'below'
         ? 1 - OFF_PANEL_READING_BAND_EDGE_FRACTION
-        : clamp(profile.lens.y, 0.1, 0.9);
+        : profile.lensPlacement === 'none'
+          ? /*
+             * No camera, so `lens.y` describes nothing.
+             *
+             * Deliberately not read even though it is present and finite: the
+             * crosshair is a MEASUREMENT of where one camera ended up in one
+             * hood, and a rig with no camera has never had that measurement
+             * taken. Using whatever value the field happens to be carrying would
+             * be the same unearned confidence the module's header rejects
+             * elsewhere. An operator who wants the band somewhere else says so
+             * through `overrides.readingBandY`, which is a stated preference.
+             */
+            NO_LENS_READING_BAND_FRACTION
+          : clamp(profile.lens.y, 0.1, 0.9);
   let finalBandY = derivedBandY;
-  if (
+  /*
+   * A stated position wins over a derived one, and short-circuits the offset.
+   *
+   * `readingBandY` and `lensOffsetDegrees` both move the band, and composing them
+   * would mean the number the operator typed is not the number they get. So this
+   * one is checked first and the offset arm below is skipped when it applies —
+   * which is also why it is `else if` rather than two independent branches.
+   */
+  if (usable(o.readingBandY)) {
+    const stated = clamp(o.readingBandY, 0.1, 0.9);
+    if (stated !== derivedBandY) {
+      overriddenFields.push('readingBandY');
+      finalBandY = stated;
+    }
+  } else if (
     profile.lensPlacement === 'in-panel' &&
     usableSigned(o.lensOffsetDegrees) &&
     o.lensOffsetDegrees !== 0 &&
@@ -474,11 +567,15 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
    * and nothing says so.
    */
   if (overriddenFields.includes('fontSizePx') || overriddenFields.includes('columnCh')) {
-    if (finalCharactersPerLine < READING_MEASURE.hardFloor) {
+    // The same band the fit check judged against, or the two would disagree
+    // about the same column: 40 characters is narrow for a reader and roomy for
+    // a prompter, and only one of those sentences can be true at a time.
+    const measure = readingMeasureFor(readingContext);
+    if (finalCharactersPerLine < measure.hardFloor) {
       warnings.push(
         `At the size you have set, a line holds about ${Math.round(finalCharactersPerLine)} characters — too few to carry a phrase. Reduce the text size or widen the column.`,
       );
-    } else if (finalCharactersPerLine < READING_MEASURE.bandMin) {
+    } else if (finalCharactersPerLine < measure.bandMin) {
       warnings.push(
         `At the size you have set, a line holds about ${Math.round(finalCharactersPerLine)} characters, which is narrower than ideal.`,
       );
@@ -508,13 +605,28 @@ export function resolveTargetArcminutes(profile: OpticalProfile): number {
  * something sensible for a headshot"; once somebody has named a number, silently
  * multiplying it by 0.75 would make the control lie about its own value.
  */
-export function resolveTargetCharacters(profile: OpticalProfile): number {
+export function resolveTargetCharacters(
+  profile: OpticalProfile,
+  context: ReadingContext = 'prompter',
+): number {
+  const measure = readingMeasureFor(context);
   const override = profile.overrides?.characters;
   if (usable(override)) {
-    return clamp(override, READING_MEASURE.hardFloor, READING_MEASURE.bandMax);
+    return clamp(override, measure.hardFloor, measure.bandMax);
   }
-  const scaled = charactersForBias(profile.bias) * (FRAMING_MEASURE_SCALE[profile.framing] ?? 1);
-  return clamp(scaled, READING_MEASURE.hardFloor, READING_MEASURE.bandMax);
+  /*
+   * Framing is skipped entirely in reader mode, not merely neutralised.
+   *
+   * The multiplier answers "how much eye travel will the camera see?", and in
+   * reader mode there is no camera — so a profile that still says `close-up`
+   * from some earlier life would otherwise quietly cut a reader's line by a
+   * quarter for the sake of a shot nobody is taking. `head-and-shoulders`
+   * happens to be 1.0, which is exactly why relying on the default here would
+   * be a bug waiting for somebody to change one field.
+   */
+  const framing = context === 'reader' ? 1 : FRAMING_MEASURE_SCALE[profile.framing] ?? 1;
+  const scaled = charactersForBias(profile.bias, context) * framing;
+  return clamp(scaled, measure.hardFloor, measure.bandMax);
 }
 
 /** A supplied override is only an override if it is a usable positive number. */

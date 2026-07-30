@@ -20,11 +20,18 @@
     stageAppearanceEquals,
     type StageAppearance,
   } from '../lib/stage-appearance';
+  import type { PresentationMode } from '../../shared/contracts';
   import { AUTO_SCROLL_WPM_STEP } from '../../stage/renderer/autoscroll';
+  import { VIEWPORT_REFLOW_SETTLE_MS } from '../../stage/renderer/geometry';
   import { formatClock } from '../lib/format';
   import { onShortcut } from '../lib/shortcuts';
   import { startTake } from '../lib/start-take';
-  import { awaitViewportSettled, exitPresentation, painted } from '../services/control-window';
+  import {
+    awaitViewportSettled,
+    exitPresentation,
+    painted,
+    switchPresentationMode,
+  } from '../services/control-window';
   import { describeError } from '../services/errors';
   import { preloadSpeechEngine } from '../services/stt/local';
   import { getVoiceFacade } from '../services/voice-facade';
@@ -34,6 +41,7 @@
   import {
     addTakeMarker,
     adjustStageFontSize,
+    adoptPresentationMode,
     anchorManualScroll,
     applyStageAppearance,
     autoScrollLive,
@@ -323,6 +331,103 @@
     });
   }
 
+  /**
+   * Pop the take out to the whole display, or back into a window.
+   *
+   * ---------------------------------------------------------------------------
+   * NOT `leavePresentation`, AND NOT COVERED
+   * ---------------------------------------------------------------------------
+   * The two exits above raise the black cover because they are going somewhere
+   * else: the window changes shape AND the screen behind it changes to the
+   * editor, and the cover spans both. This goes nowhere. The same take keeps
+   * running, the same script stays on the glass, and the only thing that moves is
+   * the window around it — so a cover would be a deliberate half-second of black
+   * inserted into a live read, which is the one thing a prompter must not do.
+   *
+   * `set_control_presenting` sets the window's backing to black before it moves
+   * for exactly this case (see `apply_reader`), so the strip the layout has not
+   * reached yet is the stage's own colour rather than a flash of paper.
+   *
+   * ---------------------------------------------------------------------------
+   * WINDOW FIRST, THEN GEOMETRY
+   * ---------------------------------------------------------------------------
+   * `adoptPresentationMode` recomposes the stage settings, and in reader mode the
+   * geometry resolves against the window's own viewport. Recomposing before the
+   * window has finished changing size would measure the whole document at the old
+   * size and have it invalidated a frame later — the two-measurement waste
+   * `startTake` is ordered to avoid, in the middle of a take. So: switch, wait
+   * for the viewport, then recompose.
+   *
+   * "Wait for the viewport" is TWO waits, and the second is easy to miss.
+   * `awaitViewportSettled` watches the raw `window.innerWidth/innerHeight`, which
+   * at 60 Hz agrees within about 33 ms. But the stage resolves reader geometry
+   * from a viewport deliberately trailed by `VIEWPORT_REFLOW_SETTLE_MS`, so
+   * recomposing on the raw settle alone lands the new mode against the old size
+   * and produces exactly the double relayout this ordering exists to prevent.
+   * Hence the second wait — and hence the constant being shared with the renderer
+   * rather than written out twice.
+   */
+  /**
+   * A switch is in flight.
+   *
+   * The same guard `startTake` keeps in its `takeStarting` store, for the same
+   * reason: the sequence below spans two awaits and is reachable from a key that
+   * repeats. Without it, holding ⌃⌘F interleaves several switches — each one
+   * moving the window while another is waiting for the viewport to settle, so the
+   * settle waits resolve against sizes their own switch did not ask for and the
+   * last recompose to land wins arbitrarily.
+   *
+   * Rust is unharmed either way (`plan` is idempotent and the latch is behind a
+   * mutex); it is control's view of the mode that would end up disagreeing with
+   * the window.
+   */
+  let switchingPresentation = false;
+
+  async function togglePresentationMode(): Promise<void> {
+    if (!$session.active || switchingPresentation) return;
+    const next: PresentationMode =
+      $session.stagePresentationMode === 'reader' ? 'prompter' : 'reader';
+    switchingPresentation = true;
+    /*
+     * The take this switch belongs to.
+     *
+     * The sequence below spans two waits, and both of them can outlive the take
+     * that started it: end the session while a settle is pending and start
+     * another, and the continuation would recompose the NEW take's geometry for a
+     * window operation the old one requested. `adoptPresentationMode` guards on
+     * `active`, which a fresh take satisfies — so the id is what actually
+     * distinguishes them.
+     */
+    const forSession = $session.sessionId;
+    try {
+      const switched = await switchPresentationMode(next);
+      await awaitViewportSettled(switched);
+      // The stage's own trailed viewport, not just the raw one — see above.
+      await new Promise((resolve) => setTimeout(resolve, VIEWPORT_REFLOW_SETTLE_MS));
+      if (!$session.active || $session.sessionId !== forSession) return;
+      /*
+       * The mode the WINDOW reports, not the one that was asked for.
+       *
+       * Rust answers from its own latch, and it commits that latch only once the
+       * window operation has actually succeeded — so a switch that failed halfway
+       * propagates as an error rather than reporting a mode the window is not in.
+       * Adopting the answer is what keeps the document from being composed for a
+       * shape the window does not have: a reader's measure on a full display, or
+       * worse, a prompter's mirror on a bare monitor.
+       */
+      adoptPresentationMode(switched.mode ?? next);
+    } catch (err) {
+      // Recoverable and worth saying: the take is unharmed, the window simply did
+      // not change. Silence would read as a dead key.
+      showToast(`Could not change how this take is presented. ${describeError(err)}`, 'danger');
+    } finally {
+      // `finally`, so a failed switch does not latch the key dead for the rest of
+      // the take — the same reasoning `abandonTake` gives for dropping the cover
+      // in a `finally`.
+      switchingPresentation = false;
+    }
+  }
+
   /*
    * The embedded stage's intents, handled here rather than on the event bus.
    *
@@ -438,6 +543,9 @@
         case 'take-marker':
           addTakeMarker();
           showToast('Take marker added', 'info', { durationMs: 1600 });
+          break;
+        case 'toggle-presentation-mode':
+          void togglePresentationMode();
           break;
         /*
          * The transport keys are NOT in the delegate-to-the-stage list above.
@@ -683,6 +791,8 @@
         followPaused: $session.followPausedByUser,
         autoScroll: $autoScrollLive,
         blanked: $session.stageBlanked,
+        presentationMode: $session.stagePresentationMode,
+        onpresentationtoggle: () => void togglePresentationMode(),
         onexit: onEscape,
         onintent: handleEmbeddedStageIntent,
         chromeOpen: stageChromeOpen,

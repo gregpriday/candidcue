@@ -40,7 +40,7 @@ import {
   stageSettingsFromSettings,
 } from '../services/stage-envelope';
 import type { DisplayDescriptor } from '../services/stage-types';
-import type { AppSettings } from '../services/settings-types';
+import type { AppSettings, PresentationMode } from '../services/settings-types';
 import { editor, saveNow } from '../stores/editor';
 import { navigate } from '../stores/router';
 import {
@@ -64,18 +64,46 @@ const startingStore = writable(false);
 export const takeStarting = { subscribe: startingStore.subscribe };
 
 /**
- * The display the stage opens on.
+ * The display the take's geometry is resolved against.
  *
- * A pinned fingerprint wins while that panel is connected. Otherwise: any
- * display that is not the primary one, because on the rig this app is for the
- * primary display is the one with the operator's face pointed at the control
- * window, and putting the prompt window on top of it is not presenting. With
- * one display there is nothing to choose and it goes there.
+ * ---------------------------------------------------------------------------
+ * A PROMPTER CHOOSES A PANEL; A READING WINDOW IS ALREADY ON ONE
+ * ---------------------------------------------------------------------------
+ * For a prompter: a pinned fingerprint wins while that panel is connected.
+ * Otherwise any display that is not the primary one, because on the rig this app
+ * is for the primary display is the one with the operator's face pointed at the
+ * control window, and putting the prompt window on top of it is not presenting.
+ * With one display there is nothing to choose and it goes there.
+ *
+ * For a reading window every clause of that is wrong, and wrongly by default.
+ * Reader mode presents THIS window where it already is (`windows/present.rs`
+ * moves no geometry), so the panel that matters is the one the window is on —
+ * and the prompter rule actively steers away from it, because a reader working
+ * at their laptop with a calibrated external prompter attached would have their
+ * type sized from the external panel's millimetres-per-pixel. That is not a
+ * cosmetic mismatch: `mmPerCssPx` is the whole basis of the angular model, so
+ * the text comes out confidently the wrong physical size.
+ *
+ * The primary display is the honest guess, and a much better one: it is where an
+ * ordinary window sits unless somebody moved it. A pinned prompter fingerprint is
+ * deliberately NOT consulted — it names the panel a prompter presents on, which
+ * says nothing about where a reading window happens to be.
+ *
+ * KNOWN GAP: a reader who drags their window to another display mid-take keeps
+ * the first panel's scale, because nothing re-resolves. The complete fix is for
+ * `set_control_presenting` to report the monitor the window actually landed on
+ * (`windows::window_monitor_fingerprint` already computes exactly that for the
+ * separate stage) and for the envelope to be rebuilt from it. That is a wire
+ * change on the take-opening path and is filed rather than smuggled in here.
  */
 export function chooseStageDisplay(
   displays: DisplayDescriptor[],
   pinned: string | null,
+  mode: PresentationMode = 'prompter',
 ): DisplayDescriptor | null {
+  if (mode === 'reader') {
+    return displays.find((d) => d.primary) ?? displays[0] ?? null;
+  }
   if (pinned !== null) {
     const match = displays.find((d) => d.fingerprint === pinned);
     if (match) return match;
@@ -233,7 +261,11 @@ export async function startTake(scriptId: string): Promise<boolean> {
     // though it no longer opens a window there. Enumeration is read-only; the
     // user moves this window to that panel before pressing Present.
     const displays = await stageService.listDisplays().catch(() => []);
-    const display = chooseStageDisplay(displays, s.stage.displayFingerprint);
+    const display = chooseStageDisplay(
+      displays,
+      s.stage.displayFingerprint,
+      s.stage.presentationMode,
+    );
     const stageSettings = stageSettingsFromSettings(s, display);
     const assets = await resolveDocumentAssets(compiled.script);
     const stageEnvelope = buildStageEnvelope({
@@ -279,7 +311,14 @@ export async function startTake(scriptId: string): Promise<boolean> {
      */
     setPresentingPhase('opening');
     await painted();
-    const presentation = await enterPresentation();
+    /*
+     * In reader mode this moves no geometry at all, so the two waits around it
+     * cost a handful of frames rather than a window animation — and the ordering
+     * argument above still holds for the parts that DO change: the background
+     * colour, the chrome, and the line map being measured at the size it will be
+     * read at rather than at whatever the editor left behind.
+     */
+    const presentation = await enterPresentation(s.stage.presentationMode);
     await awaitViewportSettled(presentation);
 
     // There is no stage window. Alignment, transcription and rendering all
@@ -313,6 +352,7 @@ export async function startTake(scriptId: string): Promise<boolean> {
        * against type that is no longer there.
        */
       teleprompter: s.teleprompter,
+      presentationMode: s.stage.presentationMode,
       stageDisplay: display,
       transcription: {
         model: s.speech.transcriptionModel,
