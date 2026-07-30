@@ -501,6 +501,27 @@
     settings?.optics ? `${settings.optics.secondaryMinPx}px` : null,
   );
 
+  /**
+   * That same floor as a NUMBER, floored again, for the overlays that set their
+   * own type size.
+   *
+   * The custom property above is only bound when `settings.optics` exists. When
+   * it does not, everything reading `var(--stage-secondary-min, …)` falls
+   * through to the `0.67em` declared on `.stage-root` — which is em-relative,
+   * resolves at roughly 11px against the root font size, and is therefore
+   * SMALLER than the fixed sizes the optical work replaced. An uncalibrated rig
+   * is exactly the one where nobody has told us how far away the presenter is,
+   * so it is the last place that should silently get the smallest type on the
+   * glass.
+   *
+   * Identical rule to `HoldStatus`, deliberately: 14px hard floor for a value
+   * that resolved absurdly small, 18px when there is no optical profile at all.
+   */
+  const secondaryMinPx = $derived(settings?.optics?.secondaryMinPx ?? 0);
+  const overlayFontSizePx = $derived(
+    Number.isFinite(secondaryMinPx) && secondaryMinPx > 0 ? Math.max(14, secondaryMinPx) : 18,
+  );
+
   const reducedMotion = $derived(
     (settings?.reducedMotion ?? false) ||
       (typeof window !== 'undefined' &&
@@ -530,7 +551,28 @@
    * not mistake "healthy" here for a measurement.
    */
   let mediaHealthy = $state(true);
-  let lastInboundAt = 0;
+  /**
+   * When control last proved it was alive, and NOTHING ELSE.
+   *
+   * -------------------------------------------------------------------------
+   * THIS USED TO BE `lastInboundAt`, AND THAT MEASURED THE WRONG THING
+   * -------------------------------------------------------------------------
+   * Every inbound event refreshed it — directives, the transcript tap, the
+   * voice pill, live sync, and alignment. Alignment is the one that breaks it:
+   * Rust publishes snapshots DIRECTLY to this window, with control out of the
+   * motion path entirely (that is the whole point of the design). So a control
+   * window that had crashed or wedged went on being reported as alive for as
+   * long as the aligner kept publishing — which, mid-take with the recogniser
+   * running, is indefinitely. The watchdog could not fire in precisely the
+   * situation it exists for, and the freeze that this file's whole control-loss
+   * disclosure hangs off never happened.
+   *
+   * The heartbeat is the only inbound event that control alone can produce, so
+   * it is the only one that can answer "is control alive". Generation-checked
+   * on the same rule the reducer uses, so a heartbeat from a superseded start
+   * attempt cannot hold the watchdog off a take it does not belong to.
+   */
+  let lastHeartbeatAt = 0;
   /**
    * The last words the recogniser returned, shown along the bottom.
    *
@@ -630,6 +672,14 @@
 
   const alignmentState = $derived(app.alignment?.state ?? null);
   /**
+   * The watchdog has frozen the stage because control stopped answering.
+   *
+   * Narrowed to the watchdog's own reason rather than reading `app.frozen`,
+   * because a directive-ordered freeze is somebody deciding the glass should
+   * hold — reporting that as a failure would announce an intention as a fault.
+   */
+  const controlLost = $derived(app.frozen && app.frozenReason === 'control_lost');
+  /**
    * A named hardware condition, taken from the voice pill.
    *
    * The pill is the only thing on the stage that knows the input chain is
@@ -672,6 +722,9 @@
         // exactly the take that never produces a snapshot at all.
         alignmentState: state ?? 'following',
         holdingForMs: holdSinceMs === null ? 0 : now - holdSinceMs,
+        // Above the fault, and above the ladder. See `resolveHoldStatus`: once
+        // control is gone every other input here is a stale measurement.
+        controlLost,
         hasFault: voiceFaultLabel !== null,
         faultLabel: voiceFaultLabel,
         followPaused,
@@ -706,6 +759,10 @@
     // And the fourth: starting the transport withdraws the recovery hint while
     // the fault that earned it is still true.
     void autoScroll?.running;
+    // The fifth. Control dying is a state change with no snapshot behind it and
+    // no hold to time, so nothing else in this effect would prompt the
+    // crossing — and the recovery heartbeat is equally silent on the way back.
+    void controlLost;
     refreshHoldStatus();
     if (!holding) return;
     const timer = window.setInterval(refreshHoldStatus, HOLD_TICK_MS);
@@ -738,7 +795,9 @@
   }
 
   function applyAlignment(snapshot: StageAlignmentPayload) {
-    lastInboundAt = performance.now();
+    // Deliberately does NOT touch the control-liveness clock. These arrive from
+    // Rust with control out of the path, so they say nothing about whether the
+    // control window is still answering. See `lastHeartbeatAt`.
     alignmentArrived += 1;
     const accepted = scriptLayer?.pushAlignmentSnapshot(snapshot) ?? false;
     const stats = scriptLayer?.alignmentFeedStats();
@@ -768,7 +827,6 @@
     let disposed = false;
 
     const onDirective = (payload: StageStatePayload) => {
-      lastInboundAt = performance.now();
       // The generation this stage belongs to, when no envelope will ever say.
       // See `inboundGeneration`. Recording it cannot widen what the stage is
       // allowed to do: every stamp it produces is still checked by Rust.
@@ -836,8 +894,45 @@
       void (async () => {
         const subs = await Promise.all([
         subscribeStageEvent<StageSnapshotPayload>(STAGE_EVENT.loadSession, (envelope) => {
-          lastInboundAt = performance.now();
           dispatch({ type: 'snapshot', envelope });
+          /*
+           * A TAKE's envelope STARTS the liveness deadline, and it is the only
+           * other thing allowed to touch it.
+           *
+           * Two holes close here, and both are the watchdog failing to fire at
+           * all rather than firing wrongly:
+           *
+           *   • control begins its heartbeat on a ~1 s `setInterval`, so the
+           *     first beat is a second away. Arming only on a beat meant that a
+           *     control window which died inside that window could never set
+           *     `heartbeatSeen`, and the stage would sit there forever with no
+           *     deadline running — the exact silence this whole change exists
+           *     to break, at the most likely moment for a start to go wrong;
+           *   • a NEW generation inherited the previous one's timestamp. Once
+           *     its handshake completed, a deadline measured from a take that
+           *     had already ended could fire against a take that was perfectly
+           *     healthy.
+           *
+           * Seeding here is honest about what it proves: control published this
+           * envelope, so control was alive when it did. A real beat refreshes it
+           * about a second later, and if none comes the deadline expires on
+           * schedule.
+           *
+           * `sessionGeneration` is the discriminator, and it is not incidental:
+           * `buildStageEnvelope` omits it exactly when the payload belongs to no
+           * take, and the Settings appearance preview is the only caller that
+           * does so. That preview opens a REAL stage window and publishes a REAL
+           * envelope, but nothing ever heartbeats it — `startStageBridge` is a
+           * take-only path the preview never enters. Arming on any envelope
+           * therefore put "Control stopped responding" on the glass five seconds
+           * into a preview that control was alive and actively driving, which is
+           * the stage lying to the presenter: the one failure this disclosure
+           * exists to prevent, committed by the disclosure itself.
+           */
+          if (envelope.sessionGeneration !== undefined) {
+            lastHeartbeatAt = performance.now();
+            heartbeatSeen = true;
+          }
           // Handshake step 1 (§43.3): confirm hydration to Rust.
           emitStageEvent<StageHydratedPayload>(STAGE_EVENT.hydrated, {
             stageGeneration: envelope.stageGeneration,
@@ -873,7 +968,6 @@
          * whole value is being true when the things that do are wrong.
          */
         subscribeStageEvent<StageTranscriptTapPayload>(STAGE_EVENT.transcriptTap, (payload) => {
-          lastInboundAt = performance.now();
           /*
            * Counted, because "control sent 6 of 6" and an empty bar cannot both
            * be true and neither side could see the other. Control counts what
@@ -891,7 +985,6 @@
          * things that do go through the reducer are wrong.
          */
         subscribeStageEvent<StageVoicePillPayload>(STAGE_EVENT.voicePill, (payload) => {
-          lastInboundAt = performance.now();
           /*
            * Generation-checked, like every other directive: a payload from a
            * superseded start attempt must not be able to put a fault on the
@@ -911,8 +1004,27 @@
         }),
         subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
         subscribeStageEvent<StageHeartbeatPayload>(STAGE_EVENT.heartbeat, (payload) => {
-          lastInboundAt = performance.now();
-          heartbeatSeen = true;
+          /*
+           * The liveness clock refreshed, and only for a beat this take owns.
+           *
+           * Stricter than the reducer's own rule, deliberately, and this is the
+           * one place the two are allowed to differ. The reducer accepts a beat
+           * that arrives before any envelope, because it has nothing to check it
+           * against; for a DEADLINE that is the wrong call. This file already
+           * documents that a previous generation's payloads are still in flight
+           * during exactly that window, so an outgoing take's last beat could
+           * seed the clock and then be inherited by whatever envelope arrived
+           * next — a deadline measured from a take that had already ended.
+           *
+           * There is no gap left by refusing it: the envelope handler above
+           * starts the deadline itself, so the clock is always running by the
+           * time the phase leaves `handshake` and the watchdog is armed.
+           */
+          const generation = app.envelope?.stageGeneration ?? null;
+          if (generation !== null && payload.stageGeneration === generation) {
+            lastHeartbeatAt = performance.now();
+            heartbeatSeen = true;
+          }
           dispatch({ type: 'heartbeat', payload, receivedAtMs: Date.now() });
           emitStageEvent<StageHeartbeatAckPayload>(STAGE_EVENT.heartbeatAck, {
             stageGeneration: payload.stageGeneration,
@@ -977,11 +1089,12 @@
     );
 
     // Watchdog (§43.5): if control's heartbeat stops while live, freeze
-    // locally and wait. Only armed once a heartbeat has actually been seen,
-    // and only under Tauri — the preview bus has no liveness contract.
+    // locally and wait. Only armed by a take — a take's envelope or a beat it
+    // owns — and only under Tauri; neither the preview bus nor the Settings
+    // appearance preview has a liveness contract to hold control to.
     const watchdog = window.setInterval(() => {
       if (!isTauri || !heartbeatSeen || app.phase === 'handshake') return;
-      if (performance.now() - lastInboundAt > STAGE_HEARTBEAT_GRACE_MS) {
+      if (performance.now() - lastHeartbeatAt > STAGE_HEARTBEAT_GRACE_MS) {
         dispatch({ type: 'control_lost' });
       }
     }, 1000);
@@ -1734,11 +1847,60 @@
    * `StageVoicePillReading`. A tick held for the length of a take is reporting
    * an event nobody can still act on.
    *
-   * There is therefore nothing left here to decide, which is why this is a
-   * plain alias: control resolves the reading, the dock draws it, and the trace
-   * runs for the whole take.
+   * Control resolves the reading, the dock draws it, and the trace runs for the
+   * whole take. There is exactly ONE thing left for this window to decide, and
+   * it is below.
+   *
+   * -------------------------------------------------------------------------
+   * THE ONE EXCEPTION: THE STAGE OWNS THE FRESHNESS OF WHAT REACHES IT
+   * -------------------------------------------------------------------------
+   * This was a plain alias, on the principle that control resolves every part
+   * of the reading together so the mark and the waveform can never be from
+   * different frames. That principle is right and is preserved: nothing here
+   * edits a field of a payload control sent.
+   *
+   * But it answers the wrong question when control is the thing that broke. A
+   * payload is a claim about the moment it was published, and once the watchdog
+   * has proved nobody is publishing any more, the last one is not a reading —
+   * it is a photograph of one. Left alone it draws a settled solid dot, which
+   * is the mark this instrument uses to say "and it is still fine": the single
+   * most reassuring thing on the glass, asserting the opposite of the truth, at
+   * the exact moment the presenter is trying to work out why the script stopped.
+   *
+   * So control loss REPLACES the view wholesale rather than editing it. The
+   * stored payload is untouched, so recovery is a matter of this derived
+   * falling back to it.
    */
-  const presenterVoicePill = $derived(voicePill);
+  const presenterVoicePill = $derived.by(() => {
+    if (!controlLost) return voicePill;
+    return {
+      stageGeneration: voicePill?.stageGeneration ?? app.envelope?.stageGeneration ?? 0,
+      /*
+       * Carried from the last real payload rather than stamped with `now`.
+       * It means "when control sent this", and control sent nothing: writing a
+       * fresh timestamp would date a stage-authored view as though it had come
+       * down the wire, which is the one claim this whole projection exists to
+       * stop the readout making.
+       */
+      sentAtMs: voicePill?.sentAtMs ?? 0,
+      /*
+       * Synthesised even when no payload ever arrived. A take where control
+       * died before its first pill frame is precisely the one where the dock
+       * would otherwise show its placeholder — an empty slot, indistinguishable
+       * from a take that simply has not started reporting yet.
+       */
+      reading: 'fault' as const,
+      label: 'Control lost',
+      visible: true,
+      /*
+       * The bars are cleared rather than frozen mid-trace. A waveform is the
+       * one element here that means "this is happening now", and holding the
+       * last few levels on the glass would keep drawing evidence of a
+       * microphone nobody is listening to. Flat is the honest shape.
+       */
+      levels: [],
+    } satisfies StageVoicePillPayload;
+  });
 </script>
 
 <svelte:window onkeydown={onKeyDown} bind:innerWidth={windowVw} bind:innerHeight={windowVh} />
@@ -1844,7 +2006,7 @@
       >
         <!-- Layer 7: transient command acknowledgement (§33.10). -->
         {#if (settings?.stageAcknowledgements ?? true) && !app.blanked}
-          <AckChip ack={app.ack} />
+          <AckChip ack={app.ack} secondaryMinPx={settings?.optics?.secondaryMinPx ?? 0} />
         {/if}
 
         <!--
@@ -1884,7 +2046,9 @@
           Escape.
         -->
         {#if escapeHintVisible}
-          <div class="escape-hint" role="status">Press Escape again to end</div>
+          <div class="escape-hint" role="status" style:font-size="{overlayFontSizePx}px">
+            Press Escape again to end
+          </div>
         {/if}
 
         <!--
@@ -1938,7 +2102,9 @@
                  passage; the name of the step belongs to whoever is stepping
                  through it, and without this the operator is comparing
                  unlabelled samples. -->
-            <div class="sample-label">{app.calibration.sampleLabel}</div>
+            <div class="sample-label" style:font-size="{overlayFontSizePx}px">
+              {app.calibration.sampleLabel}
+            </div>
           {/if}
         {/if}
       {/if}
@@ -1955,114 +2121,6 @@
     be unreadable in the reflection.
   -->
   <div class="stage-operator-plane">
-    <!-- Layer 8: the diagnostics readout. Diagnostic Take, or an explicit
-         request from the operator mid-take. -->
-    {#if showDiagnostics}
-      <div class="diagnostics">
-        <div>phase: {phase}</div>
-        <div>gen: {app.envelope?.stageGeneration ?? '—'}</div>
-        <div>tracking rev: {app.lastTrackingRevision ?? '—'}</div>
-        <div>
-          token: {app.alignment ? app.alignment.confirmedToken.toFixed(1) : '—'}
-          ({app.alignment?.state ?? 'n/a'})
-        </div>
-        <!--
-          The alignment feed, which is the first question to ask of a stage that
-          is not following and the one the instruments could not previously
-          answer. Three distinguishable readings:
-
-            feed: 0 arrived            — nothing is reaching this window
-            feed: 12 arrived, no layer — arriving before there was a receiver
-            feed: 12 ok / 9 dropped …  — arriving and being thrown away, with why
-
-          The third is the one worth the line: `session_generation` means the
-          take and the envelope disagree about which session this is, `malformed`
-          names the offending field, and `stale` means seq is not advancing.
-        -->
-        <div class:diag-fault={alignmentArrived > 0 && (alignmentFeed?.accepted ?? 0) === 0}>
-          feed:
-          {#if alignmentArrived === 0}
-            0 arrived
-          {:else if alignmentFeed === null}
-            <!--
-              Phrased as history, not as a current state. This branch only means
-              no snapshot has yet been sampled from a mounted ScriptLayer — the
-              layer is gated on the fonts settling, so early snapshots can land
-              before there is a receiver. Saying "no layer" would claim the
-              layer is absent NOW, which this cannot know and which stops being
-              true the moment the next snapshot arrives.
-            -->
-            {alignmentArrived} arrived, none reached the script layer
-          {:else}
-            {alignmentFeed.accepted} ok / {alignmentFeed.rejected} dropped
-            {#if alignmentFeed.rejected > 0 && alignmentFeed.reason !== null}
-              ({alignmentFeed.reason}{alignmentFeed.reason === 'malformed' && alignmentFeed.field
-                ? `: ${alignmentFeed.field}`
-                : ''})
-            {/if}
-          {/if}
-        </div>
-        <!-- Control emits these; Rust emits the snapshots. If this stays 0
-             while the summary reports taps sent, the control -> stage channel
-             is the fault and the snapshots are arriving by a different road. -->
-        <div class:diag-fault={transcriptTapsArrived === 0 && alignmentArrived > 0}>
-          taps: {transcriptTapsArrived} arrived
-        </div>
-        <div>viewport: {vw}×{vh}</div>
-        {#if budget}
-          <!-- The number that used to be a `compact` flag, said properly: what
-               the presenter can actually see. Short is worth knowing about
-               BEFORE a take, which is why it is stated rather than corrected. -->
-          <div>
-            lines: {budget.above}↑ / {budget.below}↓ ({budget.total}){budget.sufficient
-              ? ''
-              : ' SHORT'}
-          </div>
-        {/if}
-        {#if settings?.optics}
-          <!--
-            What the optical model concluded about this rig, on the rig.
-
-            The same sentence reaches the operator in Settings as a warning, but
-            that is the control window on a different desk. When somebody is
-            standing at the glass wondering why the type is the size it is, the
-            answer belongs where they are — and a verdict of `width_limited` on
-            a 9-inch panel is the expected answer, not a fault, so it is stated
-            plainly rather than styled as one.
-          -->
-          <div>fit: {settings.optics.fitVerdict}</div>
-          {#if settings.optics.fitAdvice}
-            <div class="diag-advice">{settings.optics.fitAdvice}</div>
-          {/if}
-        {/if}
-        {#if layoutMeasurement}
-          <!-- What the stage measured off the face it is drawing, which is the
-               only place those numbers exist: control resolves geometry against
-               DIN fallbacks because control does not render the font. -->
-          <div>
-            pitch: {layoutMeasurement.linePitchPx.toFixed(1)}px{layoutMeasurement.linePitchMeasured
-              ? ''
-              : ' (est)'}
-          </div>
-          <div>
-            cap/em: {layoutMeasurement.fontMetrics.capHeightRatio.toFixed(3)}{layoutMeasurement
-              .fontMetrics.measured
-              ? ''
-              : ' (est)'}
-          </div>
-          <div>chars/line: {layoutMeasurement.charactersPerLine ?? '—'}</div>
-        {/if}
-        <div>fonts: {fontsResolved ? 'resolved' : 'timed out'}</div>
-        <div>layout gen: {layoutGeneration}</div>
-        {#if layoutIssues.length > 0}
-          <div>layout: HELD ({layoutIssues.join(', ')})</div>
-        {/if}
-        <div>profile: {followProfile.id} (v{followProfile.version})</div>
-        <div>frames: {motionDegraded ? 'degraded' : 'ok'}</div>
-        <div>media: {mediaHealthy ? 'healthy' : 'degraded'}</div>
-      </div>
-    {/if}
-
     <!--
       Layer 9: the transcript bar, in Diagnostic Take only.
 
@@ -2102,6 +2160,114 @@
         ? null
         : `${dockPopoverMaxPx}px`}
     >
+      <!-- Layer 8: the diagnostics readout. Diagnostic Take, or an explicit
+           request from the operator mid-take. -->
+      {#if showDiagnostics}
+        <div class="diagnostics">
+          <div>phase: {phase}</div>
+          <div>gen: {app.envelope?.stageGeneration ?? '—'}</div>
+          <div>tracking rev: {app.lastTrackingRevision ?? '—'}</div>
+          <div>
+            token: {app.alignment ? app.alignment.confirmedToken.toFixed(1) : '—'}
+            ({app.alignment?.state ?? 'n/a'})
+          </div>
+          <!--
+            The alignment feed, which is the first question to ask of a stage that
+            is not following and the one the instruments could not previously
+            answer. Three distinguishable readings:
+
+              feed: 0 arrived            — nothing is reaching this window
+              feed: 12 arrived, no layer — arriving before there was a receiver
+              feed: 12 ok / 9 dropped …  — arriving and being thrown away, with why
+
+            The third is the one worth the line: `session_generation` means the
+            take and the envelope disagree about which session this is, `malformed`
+            names the offending field, and `stale` means seq is not advancing.
+          -->
+          <div class:diag-fault={alignmentArrived > 0 && (alignmentFeed?.accepted ?? 0) === 0}>
+            feed:
+            {#if alignmentArrived === 0}
+              0 arrived
+            {:else if alignmentFeed === null}
+              <!--
+                Phrased as history, not as a current state. This branch only means
+                no snapshot has yet been sampled from a mounted ScriptLayer — the
+                layer is gated on the fonts settling, so early snapshots can land
+                before there is a receiver. Saying "no layer" would claim the
+                layer is absent NOW, which this cannot know and which stops being
+                true the moment the next snapshot arrives.
+              -->
+              {alignmentArrived} arrived, none reached the script layer
+            {:else}
+              {alignmentFeed.accepted} ok / {alignmentFeed.rejected} dropped
+              {#if alignmentFeed.rejected > 0 && alignmentFeed.reason !== null}
+                ({alignmentFeed.reason}{alignmentFeed.reason === 'malformed' && alignmentFeed.field
+                  ? `: ${alignmentFeed.field}`
+                  : ''})
+              {/if}
+            {/if}
+          </div>
+          <!-- Control emits these; Rust emits the snapshots. If this stays 0
+               while the summary reports taps sent, the control -> stage channel
+               is the fault and the snapshots are arriving by a different road. -->
+          <div class:diag-fault={transcriptTapsArrived === 0 && alignmentArrived > 0}>
+            taps: {transcriptTapsArrived} arrived
+          </div>
+          <div>viewport: {vw}×{vh}</div>
+          {#if budget}
+            <!-- The number that used to be a `compact` flag, said properly: what
+                 the presenter can actually see. Short is worth knowing about
+                 BEFORE a take, which is why it is stated rather than corrected. -->
+            <div>
+              lines: {budget.above}↑ / {budget.below}↓ ({budget.total}){budget.sufficient
+                ? ''
+                : ' SHORT'}
+            </div>
+          {/if}
+          {#if settings?.optics}
+            <!--
+              What the optical model concluded about this rig, on the rig.
+
+              The same sentence reaches the operator in Settings as a warning, but
+              that is the control window on a different desk. When somebody is
+              standing at the glass wondering why the type is the size it is, the
+              answer belongs where they are — and a verdict of `width_limited` on
+              a 9-inch panel is the expected answer, not a fault, so it is stated
+              plainly rather than styled as one.
+            -->
+            <div>fit: {settings.optics.fitVerdict}</div>
+            {#if settings.optics.fitAdvice}
+              <div class="diag-advice">{settings.optics.fitAdvice}</div>
+            {/if}
+          {/if}
+          {#if layoutMeasurement}
+            <!-- What the stage measured off the face it is drawing, which is the
+                 only place those numbers exist: control resolves geometry against
+                 DIN fallbacks because control does not render the font. -->
+            <div>
+              pitch: {layoutMeasurement.linePitchPx.toFixed(1)}px{layoutMeasurement.linePitchMeasured
+                ? ''
+                : ' (est)'}
+            </div>
+            <div>
+              cap/em: {layoutMeasurement.fontMetrics.capHeightRatio.toFixed(3)}{layoutMeasurement
+                .fontMetrics.measured
+                ? ''
+                : ' (est)'}
+            </div>
+            <div>chars/line: {layoutMeasurement.charactersPerLine ?? '—'}</div>
+          {/if}
+          <div>fonts: {fontsResolved ? 'resolved' : 'timed out'}</div>
+          <div>layout gen: {layoutGeneration}</div>
+          {#if layoutIssues.length > 0}
+            <div>layout: HELD ({layoutIssues.join(', ')})</div>
+          {/if}
+          <div>profile: {followProfile.id} (v{followProfile.version})</div>
+          <div>frames: {motionDegraded ? 'degraded' : 'ok'}</div>
+          <div>media: {mediaHealthy ? 'healthy' : 'degraded'}</div>
+        </div>
+      {/if}
+
       <!--
         The raw transcript, in Diagnostic Take only.
 
@@ -2343,6 +2509,14 @@
    * Escape confirmation. Top centre, clear of the reading band and of the
    * reserved strip at the bottom of the glass — a prompt about stopping must
    * not sit on top of the words the presenter is still speaking.
+   *
+   * The type size arrives inline, from the optical profile (`overlayFontSizePx`).
+   * It was `clamp(15px, 1.6vw, 22px)`, which is the exact rule `AckChip` records
+   * having removed for being a control-window size: the window's width is not
+   * how far away the presenter is standing, and 22px through glass at 1.5 m is
+   * the upper bound on legible rather than a comfortable maximum. These are six
+   * words about how to stop a take that is going wrong, which makes them the
+   * last thing on the stage that can afford to be sized by a viewport fraction.
    */
   .escape-hint {
     position: absolute;
@@ -2353,7 +2527,6 @@
     border-radius: 999px;
     background: var(--stage-overlay);
     color: var(--stage-text);
-    font-size: clamp(15px, 1.6vw, 22px);
     font-weight: 550;
     white-space: nowrap;
     pointer-events: none;
@@ -2377,6 +2550,13 @@
    *
    * Sized at the secondary floor like every other presenter-readable label, and
    * placed at the top of the card where the sample's own passage is not.
+   *
+   * The floor arrives inline (`overlayFontSizePx`) rather than through
+   * `var(--stage-secondary-min, 0.67em)`. That property is only bound when an
+   * optical profile exists, and this label is drawn during CALIBRATION — which
+   * is, by definition, the moment before there is one. It was resolving to the
+   * em fallback, at roughly 11px, on the one surface whose entire job is to let
+   * somebody judge type sizes from where they will be standing.
    */
   .sample-label {
     position: absolute;
@@ -2387,7 +2567,6 @@
     border-radius: var(--radius-pill, 999px);
     background: var(--stage-overlay);
     color: var(--stage-text);
-    font-size: var(--stage-secondary-min, 0.67em);
     font-weight: 650;
     letter-spacing: 0.06em;
     white-space: nowrap;
@@ -2452,8 +2631,20 @@
 
   .diagnostics {
     position: absolute;
-    /* The one thing left in the top-right corner, and only in Diagnostic Take.
-       Same inset and radius as everything else that floats over the script. */
+    /*
+     * The one thing left in the top-right corner, and only in Diagnostic Take.
+     * Same inset and radius as everything else that floats over the script.
+     *
+     * The inset was always right; what was wrong was what it was measured FROM.
+     * This block sat as a direct child of the full-bleed operator plane, so
+     * these offsets ran from the raw window corner while the dock beside it —
+     * the other thing in this plane — was inset from the operator's safe
+     * rectangle. On a hooded rig that is the difference between a readout you
+     * can see and one under the bezel, and a readout nobody can see is the
+     * whole point of a diagnostic thrown away. It is now a child of
+     * `.stage-operator-safe`, like the dock, so the two agree about where the
+     * panel's usable corner is.
+     */
     top: var(--stage-chrome-inset);
     right: var(--stage-chrome-inset);
     padding: 10px 12px;

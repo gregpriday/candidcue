@@ -72,6 +72,8 @@ function mount(overrides: Record<string, unknown> = {}) {
 const endButton = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.dock-button.end')!;
 const followButton = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.dock-button.follow')!;
 const adjustButton = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.dock-button.adjust');
+const presentButton = (c: HTMLElement) =>
+  c.querySelector<HTMLButtonElement>('.dock-button.present-mode');
 const confirmEnd = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.confirm-end');
 const confirmCancel = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.confirm-cancel');
 
@@ -307,6 +309,56 @@ describe('never two panes of glass over one dock', () => {
     flushSync();
     expect(confirmEnd(container)).toBeNull();
     expect(onend).not.toHaveBeenCalled();
+  });
+
+  it('stands the follow and presentation controls down for the same reason', () => {
+    /*
+     * These two were left live behind the modal, which made the promise a
+     * half-truth rather than a lie only about End. Follow is the worst of the
+     * three to leave reachable: it sets a MODE, so a stray click does not
+     * merely cancel the appearance transaction, it stops the script following
+     * the presenter's voice and leaves them to work out from a stationary
+     * script that something they never meant to touch is now off.
+     */
+    const onpresentationtoggle = vi.fn();
+    const { container, onfollowtoggle } = mount({
+      appearancePanel: PANEL,
+      appearanceOpen: true,
+      onpresentationtoggle,
+      presentationMode: 'prompter',
+    });
+
+    const present = presentButton(container);
+    expect(followButton(container).disabled).toBe(true);
+    expect(present).not.toBeNull();
+    expect(present!.disabled).toBe(true);
+
+    followButton(container).click();
+    present!.click();
+    flushSync();
+    expect(onfollowtoggle).not.toHaveBeenCalled();
+    expect(onpresentationtoggle).not.toHaveBeenCalled();
+  });
+
+  it('hands both back the moment the panel closes', () => {
+    // The stand-down is scoped to the modal being up, and nothing else — a
+    // control that stayed dead afterwards would be a worse bug than the one
+    // this fixes.
+    const onpresentationtoggle = vi.fn();
+    const { container, onfollowtoggle } = mount({
+      appearancePanel: PANEL,
+      onpresentationtoggle,
+      presentationMode: 'prompter',
+    });
+
+    expect(followButton(container).disabled).toBe(false);
+    expect(presentButton(container)!.disabled).toBe(false);
+
+    followButton(container).click();
+    presentButton(container)!.click();
+    flushSync();
+    expect(onfollowtoggle).toHaveBeenCalled();
+    expect(onpresentationtoggle).toHaveBeenCalled();
   });
 
   it('closes the end confirmation when the appearance panel opens', () => {

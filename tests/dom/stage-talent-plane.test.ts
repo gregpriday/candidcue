@@ -318,7 +318,15 @@ describe('the operator plane', () => {
     const container = await mountStage('diagnostic', hoodedOptics());
     await settleLayout();
 
-    for (const selector of ['.stage-dock', '.transcript-tap']) {
+    /*
+     * `.diagnostics` is in this list because it used to be the one thing in the
+     * operator plane that was NOT: it sat as a direct child of the full-bleed
+     * plane, so its `--stage-chrome-inset` offsets ran from the raw window
+     * corner while the dock beside it measured from the safe rectangle. On a
+     * hooded rig that is a readout under the bezel — a diagnostic nobody can
+     * see, which is the whole point of one thrown away.
+     */
+    for (const selector of ['.stage-dock', '.transcript-tap', '.diagnostics']) {
       expect(
         container.querySelector(selector)?.closest('.stage-operator-safe'),
         `${selector} is outside the operator safe plane`,

@@ -207,6 +207,23 @@ describe('stage state machine (spec §45.6, §43.5)', () => {
     expect(displayPhase(s)).toBe('live');
   });
 
+  it('does not let a heartbeat from another generation lift a control-loss freeze', () => {
+    // A superseded start attempt must not be able to tell a take that is not
+    // its own that control is back — the window it would be speaking for is a
+    // different one from the one that went quiet.
+    let s = hydrated();
+    s = stageReducer(s, { type: 'alignment', snapshot: makeTracking(1) });
+    s = stageReducer(s, { type: 'control_lost' });
+    expect(displayPhase(s)).toBe('frozen');
+    s = stageReducer(s, {
+      type: 'heartbeat',
+      payload: { stageGeneration: 99, revision: 2, sentAtMs: 0 },
+      receivedAtMs: 100,
+    });
+    expect(displayPhase(s)).toBe('frozen');
+    expect(s.frozenReason).toBe('control_lost');
+  });
+
   it('does not let a heartbeat lift a directive-ordered freeze', () => {
     let s = hydrated();
     s = stageReducer(s, {

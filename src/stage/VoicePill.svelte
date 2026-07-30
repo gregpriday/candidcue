@@ -138,23 +138,48 @@
     {/if}
   </span>
 
-  <!-- §20: state is never colour alone. The words ride along silently while
-       things are fine and take up room only when they are not — a fault the
-       presenter cannot name is a fault they cannot fix. -->
-  {#if pill.reading === 'fault'}
-    <span class="label">{pill.label}</span>
-  {/if}
+  <!--
+    §20: state is never colour alone. A fault the presenter cannot name is a
+    fault they cannot fix.
+
+    -------------------------------------------------------------------------
+    THE SLOT IS ALWAYS HERE, AND THAT IS THE POINT
+    -------------------------------------------------------------------------
+    This used to be an `{#if}`, so the label existed only during a fault. The
+    pill is a flex item in the dock's flex row, so the word appearing widened
+    the pill and shoved every button beside it sideways — at the exact moment
+    something had gone wrong, which is when somebody is most likely to be
+    reaching for one of those buttons. A control that moves out from under a
+    hand as it arrives is worse than a control that is merely late.
+
+    So the space is RESERVED, the same way `.audio-placeholder` in the dock
+    reserves this whole pill's width before the first payload arrives. The slot
+    is laid out in every reading and only its contents change, so the dock's
+    geometry is a constant for the whole take.
+
+    `aria-hidden` while there is nothing to say, so a screen reader is not
+    handed an empty element on every reading change; the pill's own `aria-label`
+    carries the reading the rest of the time.
+  -->
+  <span class="label" data-visible={pill.reading === 'fault'} aria-hidden={pill.reading !== 'fault'}
+    >{pill.reading === 'fault' ? pill.label : ''}</span
+  >
 </div>
 
 <style>
   /*
-   * Dock geometry: 40px tall, ~104px wide, on the same material and radius as
-   * the two buttons beside it. It is laid out in the dock's row rather than
-   * positioned against a corner, which is the whole reason the three read as
-   * one instrument instead of three chips that happen to be near each other.
+   * Dock geometry: 40px tall, on the same material and radius as the two
+   * buttons beside it. It is laid out in the dock's row rather than positioned
+   * against a corner, which is the whole reason the three read as one
+   * instrument instead of three chips that happen to be near each other.
+   *
+   * The WIDTH comes from `.dock-audio`, which reserves one fixed slot for this
+   * readout at its widest. It used to be content-sized, so the fault label
+   * appearing made the pill grow and pushed the whole button row along with it.
    */
   .voice-pill {
     flex: 0 0 auto;
+    width: 100%;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -273,13 +298,33 @@
    * So this one is sized for the person standing at the panel, like every other
    * string in the dock.
    */
+  /*
+   * Takes whatever the fixed slot has left over after the trace and the mark,
+   * so no width is stated twice: `.dock-audio` reserves the room, this consumes
+   * it. `min-width: 0` is what lets it actually shrink inside a flex row rather
+   * than forcing the pill wider — which is the failure this whole arrangement
+   * exists to prevent.
+   *
+   * `visibility` rather than `display`, because a `display: none` would take
+   * the slot out of the flex row and give back exactly the reflow it prevents.
+   * The ellipsis is a guard, not a plan: every label control ships today fits.
+   */
   .label {
+    flex: 1 1 auto;
+    min-width: 0;
     padding-right: 2px;
     font-size: 12px;
     letter-spacing: 0.01em;
     font-weight: 600;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--stage-cue, #d8b46a);
+    visibility: hidden;
+  }
+
+  .label[data-visible='true'] {
+    visibility: visible;
   }
 
   @media (prefers-reduced-motion: reduce) {

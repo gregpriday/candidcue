@@ -88,6 +88,14 @@ export interface HoldStatusInput {
   alignmentState: AlignmentState;
   /** How long the display has been held, milliseconds. */
   holdingForMs: number;
+  /**
+   * The control window has stopped answering and the stage has frozen itself.
+   *
+   * Deliberately NOT "frozen": a freeze ordered by a directive is somebody
+   * deciding the glass should hold, and announcing that as a failure would
+   * report an intention as a fault. This is only the watchdog's reason.
+   */
+  controlLost?: boolean;
   /** A named hardware condition the presenter can act on. */
   hasFault: boolean;
   /** The name of that condition. Never a code, never "something went wrong". */
@@ -145,6 +153,44 @@ export interface HoldStatus {
 export const HOLD_FAULT_HINT = 'Press A to scroll at a set pace';
 
 /**
+ * The control window has stopped answering.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS SAID AT ALL, WHEN NOTHING ELSE ON THE GLASS CHANGED
+ * ---------------------------------------------------------------------------
+ * The watchdog freezes the stage and the script stops moving — and that is the
+ * whole of what the presenter could previously see. A stopped script is also
+ * what an ordinary hold looks like, what a dead microphone looks like, and what
+ * a lost alignment looks like: the three-faults-one-symptom ambiguity the rest
+ * of this file exists to resolve. Leaving the one failure that is not the
+ * presenter's fault, and that their next sentence cannot clear, as the single
+ * unlabelled member of that set is how somebody ends up performing a full take
+ * to a prompter that stopped listening five seconds in.
+ *
+ * "Stopped responding" rather than "disconnected": it is true of a control
+ * window that crashed AND of one that is merely wedged, and it does not send
+ * anybody hunting for a cable or a network that was never involved.
+ */
+export const CONTROL_LOST_MESSAGE = 'Control stopped responding';
+
+/**
+ * The one recovery that still works with control gone.
+ *
+ * NOT `HOLD_FAULT_HINT`. That names the A key, and A is `auto_scroll_toggle` —
+ * an INTENT, sent to control, which is the component that has stopped
+ * answering. Printing it here would be advice that cannot work, on the one
+ * surface a presenter has been taught is worth reading mid-take, at the one
+ * moment they most need it to be true.
+ *
+ * The arrows are local: they call the script layer's `manualScrollBy` directly,
+ * which writes the position synchronously rather than through the frame loop
+ * the freeze has stopped. So the script still moves by hand while frozen, and
+ * this is the only sentence on the glass that stays honest through a control
+ * loss.
+ */
+export const CONTROL_LOST_HINT = 'Use ↑/↓ to move the script';
+
+/**
  * The sentence each state earns once it has held long enough to earn one.
  *
  * `following` has none because there is nothing to disclose: the text is
@@ -179,6 +225,39 @@ export function resolveHoldStatus(
   input: HoldStatusInput,
   previous: HoldRung | null = null,
 ): HoldStatus {
+  /*
+   * Control loss outranks everything below, including a named fault.
+   *
+   * Not a judgement about which is worse to live through — it is about which
+   * report is still TRUE. Every other input to this function is something
+   * control measured and sent: the fault label, the follow switch, the
+   * transport's running flag. Once control stops answering, none of them are
+   * being refreshed any more, and the most recent values are simply the last
+   * thing that was true before the window died. Ranking a stale measurement
+   * above the fact that measurement has stopped would put the glass in the
+   * position of naming a microphone problem it can no longer observe, while
+   * withholding the one condition it can.
+   *
+   * It is also the only one of them that the presenter cannot clear by
+   * speaking, adjusting a setting, or waiting.
+   */
+  if (input.controlLost === true) {
+    return {
+      rung: 'message',
+      message: CONTROL_LOST_MESSAGE,
+      tone: 'fault',
+      /*
+       * Never suppressed by `autoScrollRunning`, unlike the fault hint below.
+       * That suppression exists to avoid advising somebody to start a transport
+       * that is already carrying the script — but the flag saying it is running
+       * came from control, the freeze has stopped the frame loop that ran it,
+       * and the script is demonstrably not moving. Withholding the only working
+       * recovery on the strength of a stale flag is the worst available trade.
+       */
+      hint: CONTROL_LOST_HINT,
+    };
+  }
+
   /*
    * A named fault outranks the ladder and skips it entirely.
    *

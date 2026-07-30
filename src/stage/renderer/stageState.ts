@@ -260,6 +260,23 @@ export function stageReducer(state: StageAppState, action: StageAction): StageAp
     }
 
     case 'control_lost': {
+      /*
+       * KNOWN GAP, and the reason it is left alone.
+       *
+       * A stage that is ALREADY frozen keeps the reason it has, so a directive
+       * freeze in force when control dies hides the control loss — the stage
+       * stays still and says nothing, which is the very symptom the disclosure
+       * exists to remove.
+       *
+       * Representing both at once needs two independent flags rather than one
+       * `frozenReason`, because they recover differently: a heartbeat must lift
+       * a control loss and must NOT lift a freeze somebody asked for. That is a
+       * state-model change, and today it would buy nothing — the only producer
+       * of a `freeze` directive in the tree is the preview driver
+       * (`src/stage/preview.ts`), a dev tool with no control window to lose.
+       * Control never sends one. If control ever does, split the flags here
+       * rather than widening `frozenReason`.
+       */
       if (state.phase === 'handshake' || state.frozen) return state;
       return { ...state, frozen: true, frozenReason: 'control_lost' };
     }

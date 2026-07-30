@@ -85,9 +85,39 @@ describe('VoicePill', () => {
       props: { pill: pill({ reading: 'fault', label: 'No audio' }) },
     });
     expect(faulted.container.querySelector('.label')?.textContent).toBe('No audio');
-    // ...and the healthy states do not, so the pill stays a pill.
-    expect(listening.container.querySelector('.label')).toBeNull();
-    expect(confirmed.container.querySelector('.label')).toBeNull();
+    expect(faulted.container.querySelector('.label')?.getAttribute('data-visible')).toBe('true');
+    // ...and the healthy states say nothing, so the pill still reads as a pill.
+    for (const healthy of [listening, confirmed]) {
+      const label = healthy.container.querySelector('.label');
+      expect(label?.textContent).toBe('');
+      expect(label?.getAttribute('data-visible')).toBe('false');
+      // Hidden from the accessibility tree too, so a screen reader is not
+      // handed an empty element on every reading change — the pill's own
+      // `aria-label` is what carries the reading while things are fine.
+      expect(label?.getAttribute('aria-hidden')).toBe('true');
+    }
+  });
+
+  it('keeps the label slot laid out in every reading, so the dock cannot shift', () => {
+    /*
+     * THE SLOT IS THE FIX, NOT THE TEXT.
+     *
+     * The label used to be an `{#if}`, so a fault brought a new flex item into
+     * a row that is itself a flex item of the dock — the pill grew and shoved
+     * every button beside it sideways, at the precise moment something had gone
+     * wrong and somebody was most likely already reaching for one of them.
+     *
+     * jsdom does no real layout, so what is provable here is the STRUCTURE the
+     * fix depends on: the element is present and occupying its slot in every
+     * reading, hidden by `visibility` rather than removed. A `display: none` or
+     * a removal would give back exactly the reflow this prevents.
+     */
+    for (const reading of ['listening', 'confirmed', 'steady', 'fault'] as const) {
+      const { container } = render(VoicePill, { props: { pill: pill({ reading }) } });
+      const label = container.querySelector('.label');
+      expect(label, `${reading} must keep its label slot`).not.toBeNull();
+      expect(label?.parentElement?.classList.contains('voice-pill')).toBe(true);
+    }
   });
 
   /*

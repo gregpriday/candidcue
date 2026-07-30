@@ -542,8 +542,18 @@ export const STAGE_VOICE_PILL_TRACE_SAMPLES = 24;
 export const ESCAPE_DOUBLE_PRESS_MS = 1500;
 
 /**
- * If no heartbeat/snapshot/tracking arrives for this long while live, the
- * stage freezes locally (control is presumed gone; it owns recovery).
+ * If no HEARTBEAT arrives for this long while live, the stage freezes locally
+ * and says so on the glass (control is presumed gone; it owns recovery).
+ *
+ * Heartbeats only, and generation-scoped. This used to read "heartbeat/snapshot
+ * /tracking", and the stage implemented exactly that — which made the watchdog
+ * unable to fire in the one situation it exists for. Alignment snapshots come
+ * from RUST, with control out of the motion path by design, so they say nothing
+ * whatever about whether the control window is still answering: a control window
+ * that had crashed went on being counted as alive for as long as the aligner
+ * kept publishing, which mid-take is indefinitely. The heartbeat is the only
+ * inbound event control alone can produce, so it is the only one that can
+ * answer the question. Do not widen this back.
  */
 export const STAGE_HEARTBEAT_GRACE_MS = 5000;
 
