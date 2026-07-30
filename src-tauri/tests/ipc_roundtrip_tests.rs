@@ -702,11 +702,12 @@ fn typescript_interface_fields(file: &str, interface: &str) -> BTreeSet<String> 
 
 /// `PageRequest.page` is ZERO-based: `repo::list_scripts` computes
 /// `offset = page * page_size`. Both IPC fixtures carry `page: 1` for what a UI
-/// would call the first page, and `PageRequest::default()` is page 0 — so the
-/// day something actually paginates, a 1-based caller silently skips the first
-/// screenful. Nothing in the frontend passes a page today (see
-/// `no_typescript_caller_paginates_yet`), which is the only reason this has not
-/// shipped as a bug.
+/// would call the first page, and `PageRequest::default()` is page 0 — so a
+/// 1-based caller silently skips the first screenful.
+///
+/// The frontend does paginate now: the library store reads the script list a
+/// page at a time and walks the trash to enumerate it. It reads zero-based, and
+/// `typescript_callers_page_from_zero` is what keeps it that way.
 #[test]
 fn the_first_page_is_page_zero() {
     let h = harness();
@@ -740,19 +741,30 @@ fn the_first_page_is_page_zero() {
     assert_eq!(defaulted["items"][0]["title"], json!("Alpha"));
 }
 
-/// The other half of the pagination guard: no TypeScript caller passes a page
-/// yet. When one appears, this fails and whoever wrote it has to decide which
-/// base they meant — which is the moment the ambiguity above becomes a bug.
+/// The other half of the pagination guard.
+///
+/// This used to assert that NOTHING in the frontend paged, because the base was
+/// ambiguous and a 1-based caller would have shipped a silent bug. A caller has
+/// since arrived — the library store reads the script list a page at a time and
+/// walks the trash to enumerate it — and it was checked: it counts from zero,
+/// matching `PageRequest::default()` and the offset maths in `repo.rs`.
+///
+/// So the question changed. It is no longer "does anything paginate" but "does
+/// any caller think page 1 is the first page". That caller sees an empty
+/// library until the collection outgrows one screenful, and the symptom points
+/// nowhere near the cause, which is exactly why it is worth a guard.
 #[test]
-fn no_typescript_caller_paginates_yet() {
+fn typescript_callers_page_from_zero() {
     // A constructed `ScriptPageRequest` is the only way to reach the paged
     // path, and `pageSize:` is the token that betrays one.
     let mut declaring = Vec::new();
     let mut constructing = Vec::new();
+    let mut one_based = Vec::new();
     for path in walk_sources(&repo_root().join("src")) {
         let source = std::fs::read_to_string(&path).expect("source");
         let is_type_declaration = path.ends_with("services/scripts-types.ts");
-        for (index, line) in source.lines().enumerate() {
+        let lines: Vec<&str> = source.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
             if trimmed.starts_with("//") || trimmed.starts_with('*') {
                 continue;
@@ -763,8 +775,21 @@ fn no_typescript_caller_paginates_yet() {
             let site = format!("{}:{}", path.display(), index + 1);
             if is_type_declaration {
                 declaring.push(site);
-            } else {
-                constructing.push(site);
+                continue;
+            }
+            constructing.push(site.clone());
+
+            // The `page:` field sits on the same line as `pageSize:` or just
+            // above it in every style this codebase writes. Tokenise rather
+            // than substring-match, so `page: 10` is not read as `page: 1`.
+            let start = index.saturating_sub(2);
+            let window = lines[start..=index].join(" ");
+            let tokens: Vec<&str> = window.split_whitespace().collect();
+            for pair in tokens.windows(2) {
+                let value = pair[1].trim_end_matches([',', '}']);
+                if pair[0] == "page:" && value == "1" {
+                    one_based.push(site.clone());
+                }
             }
         }
     }
@@ -777,11 +802,17 @@ fn no_typescript_caller_paginates_yet() {
          the paged DTO was renamed and this guard has gone vacuous"
     );
     assert!(
-        constructing.is_empty(),
-        "a caller now builds a page request: {constructing:?}. `PageRequest.page` \
-         is ZERO-based in Rust (repo.rs: offset = page * page_size) while both IPC \
-         fixtures use `page: 1` for the first page. Confirm which base the new \
-         caller means before this ships."
+        !constructing.is_empty(),
+        "no TypeScript caller builds a page request any more. If pagination was \
+         removed, delete this guard; if it moved, teach the scan where it went — \
+         either way it is passing without checking anything"
+    );
+    assert!(
+        one_based.is_empty(),
+        "a caller builds a page request with `page: 1`: {one_based:?}. \
+         `PageRequest.page` is ZERO-based (repo.rs: offset = page * page_size), \
+         so `page: 1` is the SECOND page — the first is `page: 0`. See \
+         `the_first_page_is_page_zero`."
     );
 }
 
