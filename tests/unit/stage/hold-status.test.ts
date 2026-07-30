@@ -22,6 +22,8 @@ import { describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
 import HoldStatus from '../../../src/stage/renderer/HoldStatus.svelte';
 import {
+  CONTROL_LOST_HINT,
+  CONTROL_LOST_MESSAGE,
   HOLD_FAULT_HINT,
   HOLD_HOLLOW_MS,
   HOLD_HYSTERESIS_MS,
@@ -50,6 +52,90 @@ function walk(durations: number[], over: Partial<HoldStatusInput> = {}): HoldRun
     return status.rung;
   });
 }
+
+describe('control loss is said at once, and outranks everything', () => {
+  /*
+   * The whole point of this block is the PRECEDENCE, not the copy. Control loss
+   * and a named hardware fault can be true at the same moment, and both skip
+   * the ladder — so which one reaches the glass was previously decided by the
+   * order two `if`s happened to be written in. That is exactly the kind of
+   * accident that survives a refactor and is only noticed on a live take.
+   */
+  it('reports immediately, with no ladder delay to serve', () => {
+    // Zero elapsed, and an alignment state that is not holding at all: nothing
+    // about the ladder should be able to keep this quiet.
+    const status = resolveHoldStatus(
+      held(0, { alignmentState: 'following', controlLost: true }),
+    );
+    expect(status.rung).toBe('message');
+    expect(status.message).toBe(CONTROL_LOST_MESSAGE);
+    expect(status.tone).toBe('fault');
+    expect(status.hint).toBe(CONTROL_LOST_HINT);
+  });
+
+  it('beats a named hardware fault, because that reading has gone stale', () => {
+    const status = resolveHoldStatus(
+      held(0, {
+        controlLost: true,
+        hasFault: true,
+        faultLabel: 'No audio',
+      }),
+    );
+    expect(status.message).toBe(CONTROL_LOST_MESSAGE);
+    // The microphone reading came from control, and control is what stopped
+    // answering — so it is a photograph, not a measurement.
+    expect(status.message).not.toBe('No audio');
+    expect(status.hint).toBe(CONTROL_LOST_HINT);
+  });
+
+  it('beats following-off and a long ordinary hold', () => {
+    for (const over of [
+      { followPaused: true },
+      { alignmentState: 'ambiguous' as const },
+      { alignmentState: 'searching' as const },
+    ]) {
+      const status = resolveHoldStatus(held(HOLD_MESSAGE_MS * 4, { controlLost: true, ...over }));
+      expect(status.message, JSON.stringify(over)).toBe(CONTROL_LOST_MESSAGE);
+      expect(status.tone).toBe('fault');
+    }
+  });
+
+  it('never names the A key, which is an intent sent to the window that died', () => {
+    const status = resolveHoldStatus(held(0, { controlLost: true }));
+    expect(status.hint).not.toBe(HOLD_FAULT_HINT);
+    expect(status.hint).not.toContain('Press A');
+  });
+
+  it('keeps its hint even when the last transport flag said it was running', () => {
+    /*
+     * `autoScrollRunning` suppresses the FAULT hint, to avoid advising somebody
+     * to start a transport already carrying the script. It must not suppress
+     * this one: that flag came from control, the freeze has stopped the frame
+     * loop that ran the transport, and the script is demonstrably still. This
+     * is the only working recovery left, so a stale flag must not withhold it.
+     */
+    const status = resolveHoldStatus(held(0, { controlLost: true, autoScrollRunning: true }));
+    expect(status.hint).toBe(CONTROL_LOST_HINT);
+  });
+
+  it('says nothing extra once control is back', () => {
+    // The flag going false must return the ordinary ladder, not latch.
+    const status = resolveHoldStatus(held(0, { alignmentState: 'following', controlLost: false }));
+    expect(status.rung).toBe('none');
+    expect(status.message).toBeNull();
+  });
+
+  it('leaves a directive-ordered freeze alone', () => {
+    /*
+     * A freeze somebody ASKED for is not a failure, and this function is only
+     * ever handed the watchdog's own reason. Guarded here because the tempting
+     * simplification at the call site — passing `app.frozen` — would announce
+     * every authored hold as a fault.
+     */
+    const status = resolveHoldStatus(held(0, { alignmentState: 'following' }));
+    expect(status.message).toBeNull();
+  });
+});
 
 describe('the bottom of the ladder is silence', () => {
   it('says nothing at all for the first 1.5 seconds of a hold', () => {

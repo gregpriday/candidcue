@@ -333,11 +333,24 @@
       presenter-sized type (`resolveHoldStatus`). This is the half somebody can
       click.
     -->
+    <!--
+      Stood down while the appearance panel is up, for the reason set out in
+      full above the end button below: that panel says `aria-modal`, and a live
+      control beside a modal is a promise the modal does not keep.
+
+      This one had been left out of that stand-down, which made it the worst of
+      the three to leave live: it is a MODE switch, so a stray click while the
+      panel is open does not merely cancel the appearance transaction, it also
+      stops the script following the presenter's voice — and leaves them to work
+      out from a stationary script that something they did not intend to touch
+      is now off.
+    -->
     <button
       type="button"
       class="dock-button follow"
       class:paused={followPaused}
       data-hidden={!buttonsVisible && !followPaused}
+      disabled={appearanceOpen}
       aria-pressed={!followPaused}
       aria-label={followPaused
         ? 'Voice following is off — switch it on'
@@ -373,10 +386,14 @@
       presentation mode to toggle for it.
     -->
     {#if onpresentationtoggle}
+      <!-- Stood down with the panel open, like the follow and end buttons
+           beside it: taking the display over or handing it back underneath an
+           open modal is the largest thing this dock can do by accident. -->
       <button
         type="button"
         class="dock-button present-mode"
         data-hidden={!buttonsVisible}
+        disabled={appearanceOpen}
         aria-pressed={presentationMode === 'prompter'}
         aria-label={presentationMode === 'prompter'
           ? 'Filling the display — show in a window instead'
@@ -512,10 +529,26 @@
    * rest it is the only thing left in the corner. The gap is what stops it
    * reading as the first item of a toolbar during the moments the toolbar is up.
    */
+  /*
+   * THE AUDIO SLOT IS A FIXED WIDTH, AND IT IS THE ONLY PLACE THAT WIDTH LIVES.
+   *
+   * Wide enough for the readout carrying its longest reading — the fault labels
+   * are `No audio`, `Not connected`, `Not hearing you`, and the stage's own
+   * `Control lost` — so a fault can arrive without the pill growing and shoving
+   * every button in this row sideways. That shove landed at the precise moment
+   * something had gone wrong, which is when somebody is most likely to already
+   * be reaching for one of those buttons.
+   *
+   * Both the pill and the placeholder below are sized to 100% of this, so there
+   * is one number rather than two that have to be kept in agreement — the old
+   * pair (a 106px placeholder against a content-sized pill) already disagreed
+   * by a couple of pixels, which is a small version of the same bug.
+   */
   .dock-audio {
     flex: 0 0 auto;
     display: flex;
     align-items: center;
+    width: 214px;
     margin-right: 4px;
   }
 
@@ -663,7 +696,7 @@
    * was written for.
    */
   .audio-placeholder {
-    width: 106px;
+    width: 100%;
     height: 40px;
   }
 
