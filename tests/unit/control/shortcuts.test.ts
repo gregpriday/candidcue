@@ -75,8 +75,35 @@ beforeAll(() => {
   };
 });
 
-const { installShortcuts, isModalOpen, isSelfActivatingTarget, onShortcut, resolveShortcut } =
-  await import('../../../src/control/lib/shortcuts');
+const {
+  installShortcuts,
+  isModalOpen,
+  isSelfActivatingTarget,
+  onShortcut,
+  resolveShortcut,
+  shortcutAppliesToRoute,
+  SHORTCUT_OWNERSHIP,
+} = await import('../../../src/control/lib/shortcuts');
+const { setInitialRoute } = await import('../../../src/control/stores/router');
+
+/**
+ * Put the window on a screen.
+ *
+ * The installed listener asks the router which screen is mounted before it
+ * claims a key, so these tests have to say where they are. They used to inherit
+ * the router's Library default and still assert that Space reached play/pause —
+ * which passed only because the listener claimed every key on every screen, the
+ * defect this file now guards.
+ */
+function onScreen(name: 'welcome' | 'library' | 'editor' | 'live' | 'settings' | 'calibrate') {
+  if (name === 'library') setInitialRoute({ name: 'library', view: 'all' });
+  else if (name === 'editor') setInitialRoute({ name: 'editor', scriptId: 's1' });
+  else if (name === 'live') setInitialRoute({ name: 'live', sessionId: 'x1', scriptId: 's1' });
+  else if (name === 'settings') setInitialRoute({ name: 'settings', section: 'general' });
+  else if (name === 'calibrate')
+    setInitialRoute({ name: 'calibrate', displayFingerprint: 'd1', rigName: 'rig' });
+  else setInitialRoute({ name: 'welcome' });
+}
 
 interface Fired {
   action: string | null;
@@ -124,6 +151,13 @@ function installWithSubscriber(): void {
 beforeEach(() => {
   lastAction = null;
   modalElement = null;
+  /*
+   * Live by default, because that is where most of the keyboard lives and where
+   * the questions this half of the file asks — does Space reach the transport,
+   * does a focused button keep it — are actually asked. Tests about another
+   * screen's keys say so themselves.
+   */
+  onScreen('live');
 });
 
 afterEach(() => {
@@ -233,6 +267,7 @@ describe('installShortcuts — what actually reaches the focused control', () =>
   });
 
   it('still delivers modifier shortcuts while a button has focus', () => {
+    onScreen('editor'); // Cmd+S is the Editor's key.
     installWithSubscriber();
     const fired = press('s', { metaKey: true, target: new FakeHTMLElement('button') });
     expect(fired.action).toBe('save');
@@ -250,6 +285,70 @@ describe('installShortcuts — what actually reaches the focused control', () =>
     teardown?.();
     teardown = null;
     expect(press(' ', { target: new FakeHTMLElement('div') }).action).toBeNull();
+  });
+
+  /*
+   * The defect this gate exists for.
+   *
+   * `emit` stood down only when NOTHING was subscribed, and App's help
+   * subscriber is mounted for the life of the window — so `handlers.size` was
+   * never zero. Cmd+N during a take resolved `new-script`, reached every
+   * handler, was ignored by all of them, and was swallowed anyway: the key did
+   * nothing AND stopped doing whatever it would otherwise have done. Both
+   * halves are asserted, because taking the key is the part users feel.
+   */
+  it('does not claim a key the mounted screen will not act on', () => {
+    installWithSubscriber();
+    const newScript = press('n', { metaKey: true, target: new FakeHTMLElement('div') });
+    expect(newScript.action).toBeNull();
+    expect(newScript.defaultPrevented).toBe(false);
+
+    // Cmd+S belongs to the Editor, and is just as dead here.
+    const save = press('s', { metaKey: true, target: new FakeHTMLElement('div') });
+    expect(save.action).toBeNull();
+    expect(save.defaultPrevented).toBe(false);
+  });
+
+  it('leaves the take transport alone on the screens that cannot answer it', () => {
+    onScreen('library');
+    installWithSubscriber();
+    for (const key of [' ', 'b', 't', 'a', '[', ']', 'Escape']) {
+      const fired = press(key, { target: new FakeHTMLElement('div') });
+      expect(fired.action).toBeNull();
+      expect(fired.defaultPrevented).toBe(false);
+    }
+  });
+
+  it('answers command help on every screen, including the ones that own no keys', () => {
+    installWithSubscriber();
+    for (const screen of ['welcome', 'library', 'editor', 'live', 'settings', 'calibrate'] as const) {
+      onScreen(screen);
+      lastAction = null;
+      const fired = press('/', { metaKey: true, target: new FakeHTMLElement('div') });
+      expect(fired.action).toBe('command-help');
+      expect(fired.defaultPrevented).toBe(true);
+    }
+  });
+
+  it('delivers each screen its own keys', () => {
+    installWithSubscriber();
+    onScreen('library');
+    expect(press('n', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBe(
+      'new-script',
+    );
+    expect(press('k', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBe(
+      'quick-search',
+    );
+    onScreen('editor');
+    expect(press('s', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBe('save');
+    // Present is the one key two screens answer.
+    expect(press('Enter', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBe(
+      'present',
+    );
+    onScreen('library');
+    expect(press('Enter', { metaKey: true, target: new FakeHTMLElement('div') }).action).toBe(
+      'present',
+    );
   });
 });
 
@@ -366,5 +465,82 @@ describe('resolveShortcut (spec §19)', () => {
   it('ignores unmapped keys', () => {
     expect(resolveShortcut(event({ key: 'q' }))).toBeNull();
     expect(resolveShortcut(event({ key: 'z', metaKey: true }))).toBeNull();
+  });
+
+  /*
+   * `resolveShortcut` still answers "which command is this chord?" and nothing
+   * else — no route reaches it. Ownership is a property of the window's current
+   * state rather than of the keystroke, so it is asked separately, and callers
+   * that only want to name a key (the presentation-mode tests, the shortcuts
+   * dialog) do not have to invent a screen to ask.
+   */
+  it('names the chord regardless of which screen is mounted', () => {
+    onScreen('settings');
+    expect(resolveShortcut(event({ key: 'n', metaKey: true }))).toBe('new-script');
+    expect(resolveShortcut(event({ key: ' ' }))).toBe('play-pause');
+  });
+});
+
+describe('shortcut ownership (issue #128)', () => {
+  const ALL_ROUTES = ['welcome', 'library', 'editor', 'live', 'settings', 'calibrate'] as const;
+
+  it('gives command help to every screen and nothing else to the idle ones', () => {
+    for (const routeName of ALL_ROUTES) {
+      expect(shortcutAppliesToRoute('command-help', routeName)).toBe(true);
+    }
+    // Welcome, Settings and Calibrate subscribe to no shortcuts at all, so no
+    // key but help may be taken from the browser there.
+    for (const routeName of ['welcome', 'settings', 'calibrate'] as const) {
+      for (const action of Object.keys(SHORTCUT_OWNERSHIP) as Array<
+        keyof typeof SHORTCUT_OWNERSHIP
+      >) {
+        expect(shortcutAppliesToRoute(action, routeName)).toBe(action === 'command-help');
+      }
+    }
+  });
+
+  it('scopes each screen to the keys its handler actually answers', () => {
+    expect(shortcutAppliesToRoute('new-script', 'library')).toBe(true);
+    expect(shortcutAppliesToRoute('new-script', 'live')).toBe(false);
+    expect(shortcutAppliesToRoute('save', 'editor')).toBe(true);
+    expect(shortcutAppliesToRoute('save', 'library')).toBe(false);
+    // Present is the only command with two owners.
+    expect(shortcutAppliesToRoute('present', 'library')).toBe(true);
+    expect(shortcutAppliesToRoute('present', 'editor')).toBe(true);
+    expect(shortcutAppliesToRoute('present', 'live')).toBe(false);
+  });
+
+  /*
+   * The whole transport, asserted as a set rather than a sample: these are the
+   * keys the dialog groups under "During a take", and a command that quietly
+   * loses its Live entry would otherwise still be advertised there.
+   */
+  it('keeps the take transport to the take', () => {
+    const liveOnly = [
+      'play-pause',
+      'hard-pause',
+      'stop-session',
+      'back-sentence',
+      'forward-sentence',
+      'prev-chapter',
+      'next-chapter',
+      'stage-text-up',
+      'stage-text-down',
+      'toggle-mirror',
+      'blank-stage',
+      'take-marker',
+      'toggle-presentation-mode',
+      'toggle-auto-scroll',
+      'auto-scroll-faster',
+      'auto-scroll-slower',
+      'escape',
+    ] as const;
+    for (const action of liveOnly) {
+      expect(shortcutAppliesToRoute(action, 'live')).toBe(true);
+      for (const routeName of ALL_ROUTES) {
+        if (routeName === 'live') continue;
+        expect(shortcutAppliesToRoute(action, routeName)).toBe(false);
+      }
+    }
   });
 });

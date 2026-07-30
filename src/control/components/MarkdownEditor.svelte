@@ -12,6 +12,40 @@
   import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
   import { searchKeymap } from '@codemirror/search';
   import { editorTheme } from './cm-theme';
+  import { insertBold, insertItalic } from '../lib/markdown-insert';
+
+  /**
+   * Bold and italic on the keys every editor on the machine uses for them.
+   *
+   * They were toolbar-only, in a Markdown editor — the one place a writer
+   * reaches for Cmd+B without looking. The commands themselves already existed
+   * and are the same ones the toolbar buttons call, so this adds a way in
+   * rather than a second behaviour to keep in step.
+   *
+   * These sit BEFORE `...defaultKeymap` in the SAME `keymap.of` array, which is
+   * what makes them win. `Mod-i` is not free: CodeMirror's defaults bind it to
+   * `selectParentSyntax`. Bindings for one key at one precedence are merged
+   * into a single ordered list and tried until one returns true, so being first
+   * in the array IS the override — and returning true is what stops the default
+   * from also running. Raising the precedence of the whole keymap instead would
+   * claim far more of the editor's keyboard than these two keys need.
+   */
+  const markdownFormatKeymap = [
+    {
+      key: 'Mod-b',
+      run: (view: EditorView) => {
+        insertBold(view);
+        return true;
+      },
+    },
+    {
+      key: 'Mod-i',
+      run: (view: EditorView) => {
+        insertItalic(view);
+        return true;
+      },
+    },
+  ];
 
   interface Props {
     value: string;
@@ -43,7 +77,12 @@
         doc: value,
         extensions: [
           history(),
-          keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+          keymap.of([
+            ...markdownFormatKeymap,
+            ...defaultKeymap,
+            ...historyKeymap,
+            ...searchKeymap,
+          ]),
           markdown({ base: markdownLanguage }),
           EditorView.lineWrapping,
           cmPlaceholder(placeholder),

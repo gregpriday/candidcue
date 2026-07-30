@@ -5,6 +5,7 @@
  * suppressed while the user is typing and while the focused control activates
  * itself on the same key; nothing fires behind a modal dialog.
  */
+import { currentRoute, type Route } from '../stores/router';
 
 export type ShortcutAction =
   | 'new-script'
@@ -46,6 +47,96 @@ export type ShortcutAction =
   | 'auto-scroll-slower'
   /** §16.9. Escape — twice ends the take; the screen owns the two-press rule. */
   | 'escape';
+
+/** The screens a command can belong to, plus the one scope that is every screen. */
+export type ShortcutScope = 'global' | Route['name'];
+
+/** Where a command works: every screen, or a non-empty list of the ones that answer it. */
+export type ShortcutOwnership = 'global' | readonly [Route['name'], ...Route['name'][]];
+
+/**
+ * Which screen answers each command.
+ *
+ * This is not a description of the screen handlers written down a second time.
+ * It is the policy the window listener consults BEFORE it claims a key, and the
+ * shortcuts dialog groups its rows by the very same entries — so a command
+ * cannot become live on one screen while the help still promises it on another.
+ * It is the `presentationModeShortcutLabel` doctrine applied to the other
+ * eighteen rows: derived in one place, so a label can never describe a key
+ * `resolveShortcut` does not answer to.
+ *
+ * The listener used to claim every chord on every screen. `emit` stood down
+ * only when NOTHING at all was subscribed, and App's help subscriber is mounted
+ * for the life of the window — so `handlers.size` was never zero, and pressing
+ * Cmd+N during a take resolved `new-script`, reached four handlers that all
+ * ignored it, and was swallowed anyway. The key did nothing AND stopped doing
+ * whatever it would otherwise have done.
+ *
+ * Route is the right question to ask because route IS the mount condition:
+ * `App.svelte` renders exactly one screen per `$route.name`, so a command whose
+ * owning screen is not the current route has no subscriber that will act on it.
+ * Asking the handlers instead — "did anyone consume this?" — reads plausible
+ * and is wrong: Live deliberately returns without acting on the keys the
+ * embedded stage answers, and those still need the keypress taken.
+ *
+ * `'global'` is spelled out rather than represented by a missing entry, and the
+ * record is exhaustive over `ShortcutAction`. A command added without an owner
+ * is then a type error rather than a silently app-wide key — which is the
+ * defect this table exists to prevent, and it would be a poor joke to leave the
+ * door open for the next one.
+ */
+export const SHORTCUT_OWNERSHIP = {
+  /* The one genuinely app-wide command: App owns it, mounted window-lifetime. */
+  'command-help': 'global',
+
+  'new-script': ['library'],
+  'quick-search': ['library'],
+  /* Both screens that can hold a script to present: the one listing them and
+     the one editing one. */
+  present: ['library', 'editor'],
+  save: ['editor'],
+
+  'play-pause': ['live'],
+  'hard-pause': ['live'],
+  'stop-session': ['live'],
+  'back-sentence': ['live'],
+  'forward-sentence': ['live'],
+  'prev-chapter': ['live'],
+  'next-chapter': ['live'],
+  'stage-text-up': ['live'],
+  'stage-text-down': ['live'],
+  'toggle-mirror': ['live'],
+  'blank-stage': ['live'],
+  'take-marker': ['live'],
+  'toggle-presentation-mode': ['live'],
+  'toggle-auto-scroll': ['live'],
+  'auto-scroll-faster': ['live'],
+  'auto-scroll-slower': ['live'],
+  /*
+   * Escape is Live-only IN THIS WINDOW, which is not the same as saying the key
+   * is idle elsewhere: a modal owns it (Dialog's own capture-phase handler, and
+   * `isModalOpen` below), and off a take it goes back to meaning whatever the
+   * focused control means by it. What it must not do is end a take that is not
+   * running.
+   */
+  escape: ['live'],
+} as const satisfies Readonly<Record<ShortcutAction, ShortcutOwnership>>;
+
+/**
+ * Does the screen currently on the glass answer this command?
+ *
+ * Deliberately NOT folded into `resolveShortcut` as another `ShortcutQuery`
+ * field. That function answers one question — "which command is this chord?" —
+ * and callers that only want the chord (the presentation-mode tests, anything
+ * describing a key rather than dispatching one) should not have to invent a
+ * route to ask it. Ownership is a property of the window's current state rather
+ * than of the keystroke, so it is the installed listener's question, asked
+ * where `preventDefault` is decided.
+ */
+export function shortcutAppliesToRoute(action: ShortcutAction, routeName: Route['name']): boolean {
+  const ownership: ShortcutOwnership = SHORTCUT_OWNERSHIP[action];
+  return ownership === 'global' || ownership.includes(routeName);
+}
 
 type Handler = (action: ShortcutAction) => void;
 const handlers = new Set<Handler>();
@@ -304,7 +395,13 @@ export function installShortcuts(): () => void {
       modal: isModalOpen(),
       repeat: event.repeat,
     });
-    if (action) emit(action, event);
+    /*
+     * The chord resolved — but only the screen that owns the command may have
+     * the key. `currentRoute()` is read here, per event, rather than captured
+     * when the listener is installed: this listener outlives every screen, and
+     * a route read once at startup would pin the whole window to the Library.
+     */
+    if (action && shortcutAppliesToRoute(action, currentRoute().name)) emit(action, event);
   };
   window.addEventListener('keydown', listener);
   return () => window.removeEventListener('keydown', listener);
