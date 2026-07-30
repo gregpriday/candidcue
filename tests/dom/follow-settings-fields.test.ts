@@ -46,8 +46,16 @@ describe('the dead Script fidelity control', () => {
   it('takes its removed-feature copy with it', () => {
     // The three option descriptions all promised tips, and the hint said
     // "Fidelity changes what gets a tip". Nothing gives tips any more.
+    //
+    // Matched on the phrases rather than the bare substring "tip": ordinary
+    // words contain it ("multiple", "multiplier"), so a substring assertion
+    // would fail on innocent future copy and teach the next person to delete it.
     const { view } = mount();
-    expect(view.container.textContent).not.toContain('tip');
+    const text = view.container.textContent ?? '';
+    expect(text).not.toContain('gets a tip');
+    expect(text).not.toContain('tips');
+    expect(text).not.toContain('Conversational');
+    expect(text).not.toContain('omission');
   });
 
   it('leaves the stored value alone — nothing here writes fidelityMode', () => {

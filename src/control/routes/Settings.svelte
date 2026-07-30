@@ -737,13 +737,38 @@
   };
 
   /**
-   * Send somebody to the rig that owns the geometry they just tried to change.
+   * Who decides the four geometry fields right now — or null for nobody.
    *
-   * The disabled sliders name the rig, which answers "why can I not move this";
-   * this answers "then where do I". It lands on Stage display, where the applied
-   * rig sorts first and carries its own Re-calibrate.
+   * Read from the same two facts `stageSettingsFromSettings` branches on, and
+   * in the same order, because anything else is a second opinion about a
+   * question the stage has already answered.
+   *
+   * TWO OWNERS, NOT ONE. Gating on `appliedRig` alone was the obvious reading
+   * and it is wrong in a way nobody would notice from the prompter path:
+   * a READING WINDOW always runs its own rig. `readerOpticalProfile`
+   * synthesises one when nothing is stored — deliberately, so a reader never
+   * falls through to the uncalibrated layout — so in reader mode these four
+   * fields are overridden whether or not a prompter rig was ever measured.
+   * A presenter in reader mode with no calibration would otherwise have been
+   * left with exactly the defect this change exists to remove.
    */
-  function openAppliedRig(): void {
+  const geometryOwner = $derived.by((): { label: string; toRig: boolean } | null => {
+    if ($settings.stage.presentationMode === 'reader') {
+      return { label: 'the reading window', toRig: false };
+    }
+    if (appliedRig !== null) return { label: `${appliedRig.rigName} calibration`, toRig: true };
+    return null;
+  });
+
+  /**
+   * Send somebody to whatever owns the geometry they just tried to change.
+   *
+   * The disabled sliders name the owner, which answers "why can I not move
+   * this"; this answers "then where do I". Both destinations are the Stage
+   * display section — where the applied rig sorts first and carries its own
+   * Re-calibrate, and where the prompter/reader switch lives.
+   */
+  function openGeometryOwner(): void {
     void navigate({ name: 'settings', section: 'stage' });
   }
 
@@ -1395,11 +1420,38 @@
             exists and where to find it, instead of learning only that they
             cannot have what they came for.
           -->
-          <SettingReadout
-            label="Session mode"
-            value="Voice follow"
-            description="Every take opens listening. Auto-scroll can roll the script at a set pace from inside any take (see the pace below), but there is no mode that starts one without a microphone — so manual and fixed-speed modes are not offered rather than shipped as something that silently behaves like this one."
-          />
+          <!--
+            READ, not asserted. `defaultSessionMode` is still a real stored
+            field: `fromRustDocument` accepts a persisted 'manual' or 'fixed',
+            and `startTake` passes whatever it finds straight into the session.
+            A readout hardcoded to "Voice follow" would therefore have been the
+            same defect one layer along — a screen describing a state the app is
+            not in — for anybody carrying such a document. So if an unsupported
+            mode is stored, this says so and offers the way back that removing
+            the Select would otherwise have taken away.
+          -->
+          {#if $settings.general.defaultSessionMode === 'voice'}
+            <SettingReadout
+              label="Session mode"
+              value="Voice follow"
+              description="Every take opens listening. Auto-scroll can roll the script at a set pace from inside any take (see the pace below), but there is no mode that starts one without a microphone — so manual and fixed-speed modes are not offered rather than shipped as something that silently behaves like this one."
+            />
+          {:else}
+            <SettingReadout
+              label="Session mode"
+              value={$settings.general.defaultSessionMode === 'manual' ? 'Manual' : 'Fixed speed'}
+              description="This setting was stored by an earlier version and takes no longer open in it. Switch back to voice follow to prompt normally; auto-scroll still rolls the script at a set pace from inside any take."
+            />
+            <p class="hint-line">
+              <button
+                type="button"
+                class="inline-link"
+                onclick={() => void patchSettings('general', { defaultSessionMode: 'voice' })}
+              >
+                Switch to voice follow
+              </button>
+            </p>
+          {/if}
           <Slider
             label="Revision retention"
             value={$settings.general.revisionRetentionDays}
@@ -2145,7 +2197,8 @@
         )}
           {@const value = $settings.teleprompter[key]}
           {@const defaultValue = APPEARANCE_DEFAULTS[key]}
-          {@const owned = rigOwned && appliedRig !== null}
+          {@const owner = rigOwned ? geometryOwner : null}
+          {@const owned = owner !== null}
           {@const atDefault = value === defaultValue}
           <div class="override">
             <Slider
@@ -2156,7 +2209,9 @@
               {step}
               {format}
               disabled={owned}
-              description={owned ? `Controlled by ${appliedRig?.rigName} calibration.` : undefined}
+              description={owner
+                ? `Controlled by ${owner.label} — the number here is the fallback for an uncalibrated display, not what a take prompts at.`
+                : undefined}
               onchange={(next) => void patchSettings('teleprompter', { [key]: next })}
             />
             {#if !owned}
@@ -2200,10 +2255,10 @@
               the exact moment the preview was running to be believed.
             -->
             <p class="hint-line preview-note">
-              {#if stagePreview && appliedRig}
+              {#if stagePreview && geometryOwner}
                 Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
                 Size, line height, column width and reading band come from
-                <strong>{appliedRig.rigName}</strong>; the rest updates as you drag.
+                <strong>{geometryOwner.label}</strong>; the rest updates as you drag.
               {:else if stagePreview}
                 Sample text is on <strong>{effectiveDisplay?.name ?? 'the stage display'}</strong>.
                 Everything below updates it as you drag.
@@ -2320,15 +2375,15 @@
             (v) => `${v}%`,
             true,
           )}
-          {#if appliedRig}
+          {#if geometryOwner}
             <!--
-              One route, once, under the four controls the rig owns — rather
-              than a link repeated in every description. The rig is named in
-              each slider's own hint; this is where somebody goes to change it.
+              One route, once, under the four controls somebody else owns —
+              rather than a link repeated in every description. The owner is
+              named in each slider's own hint; this is where you go to change it.
             -->
             <p class="hint-line">
-              <button type="button" class="inline-link" onclick={() => void openAppliedRig()}>
-                Open {appliedRig.rigName} calibration
+              <button type="button" class="inline-link" onclick={() => void openGeometryOwner()}>
+                {geometryOwner.toRig ? `Open ${geometryOwner.label}` : 'Open Stage display'}
               </button>
             </p>
           {/if}
@@ -2344,14 +2399,14 @@
             Both notes are for the uncalibrated path only now.
 
             The band instruction ("drag until the marks sit over your lens") is
-            an instruction for a control that, with a rig applied, cannot be
-            dragged — and the paragraph below it explained an override that the
-            sliders themselves now state, each naming the rig that owns it.
+            an instruction for a control that, once something else owns it,
+            cannot be dragged — and the paragraph below it explained an override
+            that the sliders themselves now state, each naming its owner.
             Leaving either in place would put the explanation back beside a
             control that has already made it, which is how the screen ended up
             arguing with itself in the first place.
           -->
-          {#if appliedRig === null}
+          {#if geometryOwner === null}
             <p class="hint-line">
               The marks at the sides of the stage are the band. With the preview running, drag this
               until they sit over your camera lens — that is where your eyes rest, so it is where the

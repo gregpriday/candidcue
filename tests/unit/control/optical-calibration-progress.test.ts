@@ -37,8 +37,15 @@ const ALL_TOKENS: CountedCalibrationStep[] = [
 
 const MEASURED_SCALE: OpticalScale = { mmPerCssPx: 0.25, source: 'ruler' };
 
+/**
+ * A finished rig: every token, a measured scale, AND a usable distance.
+ *
+ * The distance matters as much as the other two and is easy to leave out of a
+ * fixture, which is exactly how the wizard leaves it out of a real profile —
+ * see the "distance token without a distance" case below.
+ */
 function profile(patch: Partial<OpticalProfile> = {}): OpticalProfile {
-  return { ...defaultOpticalProfile(), ...patch };
+  return { ...defaultOpticalProfile(), viewingDistanceMm: 1200, ...patch };
 }
 
 describe('calibration progress', () => {
@@ -135,5 +142,44 @@ describe('calibration progress', () => {
     expect(describeCalibrationProgress(profile({ completedSteps: ['hardware'], scale: null }))).toBe(
       'Scale not measured · 1 of 9 calibration checks',
     );
+  });
+
+  /**
+   * THE SECOND WAY A RIG CLAIMED TO BE FINISHED WITHOUT BEING.
+   *
+   * The wizard's `markAnswered` writes the step's token whenever Next is
+   * pressed, and the distance step's Next stays enabled with the field blank.
+   * So the token records that the screen was passed through, not that a
+   * distance is known — and the row could read "No distance measured" and
+   * "Fully calibrated" on the same line.
+   *
+   * `resolveStageGeometry` requires a plausible distance before it treats a rig
+   * as calibrated, so a profile in this state is one the resolver ignores.
+   */
+  it('does not count the distance token when no distance was given', () => {
+    const p = calibrationProgress(
+      profile({ completedSteps: [...ALL_TOKENS], scale: MEASURED_SCALE, viewingDistanceMm: null }),
+    );
+    expect(p.distanceMeasured).toBe(false);
+    expect(p.completed).toBe(8);
+    expect(p.complete).toBe(false);
+  });
+
+  it('does not count a distance the resolver would refuse', () => {
+    // An out-of-range value normalises fine but is treated as no calibration at
+    // all downstream, so counting it would put the row and the stage at odds.
+    const p = calibrationProgress(
+      profile({ completedSteps: [...ALL_TOKENS], scale: MEASURED_SCALE, viewingDistanceMm: 3 }),
+    );
+    expect(p.distanceMeasured).toBe(false);
+    expect(p.complete).toBe(false);
+  });
+
+  it('counts the distance once a plausible one is given', () => {
+    const p = calibrationProgress(
+      profile({ completedSteps: [...ALL_TOKENS], scale: MEASURED_SCALE, viewingDistanceMm: 1200 }),
+    );
+    expect(p.distanceMeasured).toBe(true);
+    expect(p.complete).toBe(true);
   });
 });

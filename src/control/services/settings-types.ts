@@ -770,24 +770,32 @@ export const DEFAULT_STAGE_APPEARANCE = {
 /**
  * The auto-scroll pace a take falls back to when nobody has set one.
  *
- * Named rather than left inline because Settings now shows it and offers a way
- * back to it, and a "Reset to default" that carries its own copy of the number
- * is a reset that can disagree with the default it claims to restore.
+ * 130, because that is what RUST hands out, and Rust is what a real install
+ * actually loads: `fixed_speed_wpm: 130` in `src-tauri/src/settings/mod.rs`, and
+ * `fromRustDocument` maps `stageBehavior.fixedSpeedWpm` straight over whatever
+ * this file said. The literal here used to be 150 — a number no packaged build
+ * has ever started at, because Rust's value always overwrote it before anybody
+ * saw it.
  *
- * Deliberately NOT one of the two similarly-named constants already in the
- * tree, both of which mean something else:
+ * That was harmless while nothing read it, and stops being harmless the moment
+ * Settings offers to restore it: a fresh install would open on Rust's 130,
+ * label it "Set by you", and offer to "reset" it to a 150 the user never chose.
+ * That is precisely the defect #124 exists to remove — a control describing a
+ * state the app is not in — so the two sides are made to agree rather than the
+ * disagreement being papered over in the UI.
  *
- *   - `lib/format.ts`'s `DEFAULT_WPM` is a SPEAKING rate, used to estimate how
- *     long a script takes to read aloud. It is 150 too, and that is a
- *     coincidence of two reasonable numbers rather than one shared fact.
- *   - `stage/renderer/autoscroll.ts`'s `AUTO_SCROLL_DEFAULT_WPM` is 130, and is
- *     the renderer's fallback for a value that arrived missing or invalid —
- *     a repair, not a preference.
+ * Still deliberately NOT the two similarly-named constants elsewhere:
  *
- * Collapsing any of the three into the others would tie a user-facing default
- * to an unrelated number and let a change to one silently move the other.
+ *   - `lib/format.ts`'s `DEFAULT_WPM` (150) is a SPEAKING rate, for estimating
+ *     how long a script takes to read aloud. Different question entirely.
+ *   - `stage/renderer/autoscroll.ts`'s `AUTO_SCROLL_DEFAULT_WPM` is the
+ *     renderer's repair for a value that arrived missing or invalid, not a
+ *     preference. It agrees at 130 today, and does not have to.
+ *
+ * If Rust's default moves, this must move with it — `stage-appearance.test.ts`
+ * pins them together so the disagreement cannot come back silently.
  */
-export const DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM = 150;
+export const DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM = 130;
 
 export function defaultAppSettings(): AppSettings {
   return {

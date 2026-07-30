@@ -46,6 +46,7 @@
  */
 
 import type { OpticalCalibrationStep, OpticalProfile } from '../../shared/contracts';
+import { isPlausibleViewingDistanceMm } from '../../shared/optics';
 
 /**
  * The steps whose completion this module has an opinion about.
@@ -93,6 +94,8 @@ export interface CalibrationProgress {
   total: number;
   /** Whether the physical scale has been established. */
   scaleMeasured: boolean;
+  /** Whether a distance the resolver would accept has been given. */
+  distanceMeasured: boolean;
   /** True when every check including scale is answered. */
   complete: boolean;
 }
@@ -107,12 +110,32 @@ export interface CalibrationProgress {
 export function calibrationProgress(profile: OpticalProfile): CalibrationProgress {
   const recorded = new Set(Array.isArray(profile.completedSteps) ? profile.completedSteps : []);
   const scaleMeasured = profile.scale !== null && profile.scale !== undefined;
-  const tokensAnswered = TOKEN_CHECKS.filter((step) => recorded.has(step)).length;
+  const distanceMeasured = isPlausibleViewingDistanceMm(profile.viewingDistanceMm);
+  const tokensAnswered = TOKEN_CHECKS.filter((step) => {
+    /*
+     * Distance is the one token that can be recorded without an answer.
+     *
+     * `markAnswered` in the wizard writes `step.records` whenever Next is
+     * pressed, and the distance step's Next stays enabled with the field blank.
+     * So the token means "this screen was passed through", not "a distance is
+     * known" — and a rig could carry every token, a measured scale, and no
+     * distance at all, which rendered as "No distance measured · Fully
+     * calibrated" on one line of the same row.
+     *
+     * `resolveStageGeometry` agrees with the reading taken here rather than
+     * with the token: it requires a plausible distance before it will call a
+     * rig calibrated, and treats an out-of-range value as no calibration at
+     * all. A profile this says is finished is one the resolver will act on.
+     */
+    if (step === 'distance') return recorded.has(step) && distanceMeasured;
+    return recorded.has(step);
+  }).length;
   const completed = tokensAnswered + (scaleMeasured ? 1 : 0);
   return {
     completed,
     total: TOTAL_CALIBRATION_CHECKS,
     scaleMeasured,
+    distanceMeasured,
     complete: completed === TOTAL_CALIBRATION_CHECKS,
   };
 }

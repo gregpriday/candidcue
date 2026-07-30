@@ -7,6 +7,7 @@
  * silently rewrites that value the first time it is touched, and the operator
  * has no way to see that it did.
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   ADVANCED_FONT_SIZE_CEILING_PX,
@@ -182,13 +183,27 @@ describe('the defaults Settings offers to restore', () => {
   });
 
   /*
-   * Two other constants in the tree are also about words per minute and mean
-   * different things: `lib/format.ts`'s DEFAULT_WPM is a speaking rate for
-   * duration estimates, and the renderer's AUTO_SCROLL_DEFAULT_WPM is a repair
-   * for a missing value. Naming this one keeps a change to either of those from
-   * silently moving what Settings calls the default.
+   * THE ONE THAT IS NOT TAUTOLOGICAL, and the reason this block exists.
+   *
+   * `defaultAppSettings()` is built FROM these constants, so asserting the two
+   * agree proves nothing on its own. The real question is whether the number
+   * Settings calls "the default" is the number a real install actually opens
+   * on — and that number comes from Rust: `fromRustDocument` maps
+   * `stageBehavior.fixedSpeedWpm` straight over the TypeScript value.
+   *
+   * This read the Rust source rather than a copy of it, because a copy is how
+   * the two drifted in the first place. They disagreed (TS 150, Rust 130) for
+   * as long as nothing displayed the default; the day Settings offered to
+   * restore it, a fresh install would have opened on 130, been told it was
+   * "Set by you", and been offered a reset to a 150 nobody chose.
    */
-  it('names the auto-scroll default rather than leaving it inline', () => {
-    expect(DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM).toBe(150);
+  it('agrees with the default Rust actually hands a fresh install', () => {
+    const rustSource = readFileSync(
+      new URL('../../../src-tauri/src/settings/mod.rs', import.meta.url),
+      'utf8',
+    );
+    const match = rustSource.match(/fixed_speed_wpm:\s*(\d+)/);
+    expect(match, 'fixed_speed_wpm no longer parses out of the Rust defaults').not.toBeNull();
+    expect(Number(match![1])).toBe(DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM);
   });
 });

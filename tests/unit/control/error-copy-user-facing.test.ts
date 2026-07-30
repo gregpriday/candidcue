@@ -337,15 +337,40 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
     'utf8',
   );
 
-  /** The `options={[ … ]}` array of the "Default session mode" Select. */
+  /**
+   * The session-mode CHOOSER, if Settings still offers one.
+   *
+   * It did until #124. Two of its three options were permanently
+   * `disabled: true`, which is a dropdown that answers "there was never
+   * anything to decide" — so it became a static readout, and this parse had to
+   * follow it.
+   *
+   * Both shapes are still read, and that is the point rather than tidiness:
+   * the day a mode genuinely ships, the natural change is a Select coming back
+   * with it enabled, and this guard must retire itself then WITHOUT anybody
+   * remembering that a test in another directory encodes the rule.
+   */
   const selectMatch = settingsSource.match(
-    /label="Default session mode"[\s\S]*?options=\{\[([\s\S]*?)\]\}/,
+    /label="(?:Default session mode|Session mode)"[\s\S]*?options=\{\[([\s\S]*?)\]\}/,
   );
 
   /** Each `{ value: 'manual' … }` / `{ value: 'fixed' … }` object, body included. */
-  const modeOptions = [
+  const selectOptions = [
     ...(selectMatch?.[1] ?? '').matchAll(/\{([^{}]*\bvalue:\s*'(manual|fixed)'[^{}]*)\}/g),
   ].map((m) => ({ body: m[1] ?? '', mode: m[2] ?? '' }));
+
+  /**
+   * The readout that replaced it, and the sentence carrying the same fact.
+   *
+   * Anchored on the sentence rather than on the component name because the
+   * sentence is the claim: while Settings tells the reader these modes are not
+   * offered, error copy must not send them looking for one.
+   */
+  const readoutSaysUnavailable =
+    /manual and fixed-speed modes are not offered/i.test(settingsSource);
+
+  /** Each mode, and whether Settings currently marks it unavailable. */
+  const modeOptions = selectOptions.length > 0 ? selectOptions : [{ body: '', mode: 'manual' }, { body: '', mode: 'fixed' }];
 
   /**
    * A phrase per mode, deliberately broader than the label.
@@ -395,6 +420,16 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
    * ships, and its ban lifts on its own with no test to edit.
    */
   const availability = modeOptions.map((o) => {
+    /*
+     * With no Select on the screen, the readout's sentence IS the statement of
+     * availability, and it speaks for both modes at once. `readable` still
+     * means "we could tell either way": if neither a parseable Select nor that
+     * sentence is present, we cannot, and the self-check below fails rather
+     * than letting a ban lapse silently.
+     */
+    if (selectOptions.length === 0) {
+      return { mode: o.mode, disabled: readoutSaysUnavailable, readable: readoutSaysUnavailable };
+    }
     // `\s*(?=,|$)` is the load-bearing part: the boolean has to BE the value,
     // not merely start it.
     const literal = o.body.match(/\bdisabled:\s*(true|false)\s*(?=,|$)/);
@@ -427,7 +462,12 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
   });
 
   it('can still read both session modes out of Settings', () => {
-    expect(selectMatch, 'the "Default session mode" options array no longer parses').not.toBeNull();
+    // Either shape is fine; being unable to read EITHER is not, because then
+    // the ban below stops applying without anybody deciding that it should.
+    expect(
+      selectMatch !== null || readoutSaysUnavailable,
+      'Settings no longer states session-mode availability in a shape this can read',
+    ).toBe(true);
     expect(modeOptions.map((o) => o.mode).sort()).toEqual(['fixed', 'manual']);
     // Not "both are disabled" — that would have to be edited the day one ships.
     // Only "we could tell either way", which stays true forever.

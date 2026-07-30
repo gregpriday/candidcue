@@ -281,11 +281,36 @@ test('a calibrated rig disables the four sliders it owns and names itself', asyn
     await expect(page.getByRole('slider', { name: label })).toBeDisabled();
   }
 
-  // And each says whose value it is showing, by name — not "a calibrated rig".
-  await expect(page.getByText('Controlled by Desk hood calibration.').first()).toBeVisible();
+  // And EACH says whose value it is showing, by name — not "a calibrated rig",
+  // and not one shared paragraph underneath. Counted rather than `.first()`:
+  // three of the four could lose the attribution and a first-match assertion
+  // would never notice.
+  await expect(page.getByText(/Controlled by Desk hood calibration/)).toHaveCount(4);
 
   // With a route to the thing that owns it.
   await expect(page.getByRole('button', { name: 'Open Desk hood calibration' })).toBeVisible();
+});
+
+test('a reading window owns the same four fields, with no rig measured at all', async ({ page }) => {
+  // The near-miss in this fix: gating on the applied prompter rig alone.
+  // `stageSettingsFromSettings` branches on presentation mode FIRST, and
+  // `readerOpticalProfile` synthesises a profile when nothing is stored — so a
+  // reading window overrides these four whether or not anybody has calibrated.
+  // No rig is seeded here on purpose; that is the case the obvious gate missed.
+  await installTauriShim(page, { welcomed: true, presentationMode: 'reader' });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'Teleprompter');
+
+  for (const label of [
+    'Default font size',
+    'Line height',
+    'Text column width',
+    'Reading band position',
+  ]) {
+    await expect(page.getByRole('slider', { name: label })).toBeDisabled();
+  }
+  // And it names the reading window rather than a rig it does not have.
+  await expect(page.getByText(/Controlled by the reading window/)).toHaveCount(4);
 });
 
 test('auto-scroll pace stays live under a rig, because a rig does not own pace', async ({ page }) => {
@@ -308,9 +333,20 @@ test('with no rig applied the sliders are live and show what the default is', as
   await expect(fontSize).toBeEnabled();
   // A fresh install sits on every default, and each one now says so rather
   // than leaving the number unexplained.
-  await expect(page.getByText('Default · 64 px')).toBeVisible();
-  await expect(page.getByText('Default · 1.32')).toBeVisible();
-  await expect(page.getByText('Default · 150 wpm')).toBeVisible();
+  //
+  // `exact: true` matters more than it looks: Playwright's default string
+  // matching is a case-insensitive SUBSTRING, so a loose 'Default · 130 wpm'
+  // also matches the reset button's 'Reset to default · 130 wpm' — which is
+  // how the first version of this test passed while the pace was showing
+  // "Set by you" against a default it disagreed with.
+  await expect(page.getByText('Default · 64 px', { exact: true })).toBeVisible();
+  await expect(page.getByText('Default · 1.32', { exact: true })).toBeVisible();
+
+  // The shim's document carries 140 wpm, which is NOT the default — so the
+  // pace must report itself as chosen rather than defaulted, and name the
+  // number a reset would restore.
+  await expect(page.getByRole('slider', { name: 'Auto-scroll pace' })).toHaveValue('140');
+  await expect(page.getByRole('button', { name: 'Reset to default · 130 wpm' })).toBeVisible();
 });
 
 test('a changed slider offers its way back to the default', async ({ page }) => {
@@ -360,6 +396,44 @@ test('the prominent calibrate action re-measures the applied rig instead of star
   // Measuring a second arrangement stays reachable — one panel legitimately
   // holds several rigs, so this must not simply replace the old behaviour.
   await expect(page.getByRole('button', { name: 'Measure another rig…' })).toBeVisible();
+
+  // The LABEL is not the fix; where the button goes is. Rewiring this back to
+  // calibrate() would restore the original defect with the copy still correct,
+  // so the wizard's own rig name is what gets asserted. It lives on the second
+  // step — the first is the optional preset shortcut.
+  await page.getByRole('button', { name: 'Re-calibrate Desk hood…' }).click();
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByLabel('Rig name')).toHaveValue('Desk hood');
+});
+
+test('measuring another rig opens the wizard on a new name, not the applied one', async ({ page }) => {
+  await installTauriShim(page, { welcomed: true });
+  await seedAppliedRig(page, { scale: true });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'Stage display');
+
+  // The other half of the same rule: the store keys on (panel, name), so this
+  // path must NOT reuse "Desk hood" — that would silently replace the
+  // measurements of an arrangement somebody believes is saved.
+  await page.getByRole('button', { name: 'Measure another rig…' }).click();
+  await page.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByLabel('Rig name')).not.toHaveValue('Desk hood');
+});
+
+test('a session mode stored by an older build is admitted, not papered over', async ({ page }) => {
+  // `fromRustDocument` still accepts a persisted 'manual', and startTake passes
+  // it straight into the session — so a readout hardcoded to "Voice follow"
+  // would be the same defect one layer along, and removing the Select would
+  // have taken away the only way back.
+  await installTauriShim(page, { welcomed: true, promptMode: 'manual' });
+  await page.goto('/control.html');
+  await openSettingsSection(page, 'General');
+
+  await expect(page.getByText('Manual', { exact: true })).toBeVisible();
+  await expect(page.getByText(/takes no longer open in it/)).toBeVisible();
+
+  await page.getByRole('button', { name: 'Switch to voice follow' }).click();
+  await expect(page.getByText('Voice follow', { exact: true })).toBeVisible();
 });
 
 test('Session mode states its one value instead of offering two dead options', async ({ page }) => {
