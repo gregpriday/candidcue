@@ -117,8 +117,10 @@
   }
 
   async function exportScript(script: ScriptSummary): Promise<void> {
+    // No success toast here: `exportScriptToFile` owns every outcome, including
+    // its own 'Script exported'. A second one here fired unconditionally — so a
+    // cancelled or failed export still claimed the export was ready.
     await exportScriptToFile(script.id, script.title, 'markdown');
-    showToast('Export ready', 'success');
   }
 
   /** Metadata as discrete parts — the card sets the separators, not this. */
