@@ -250,30 +250,31 @@ test('a hidden dock button cannot be clicked through', async ({ page }) => {
 });
 
 /**
- * The reading cue's band, measured — the one claim jsdom cannot make.
+ * The wash plateau, measured — the one claim jsdom cannot make.
  *
  * ---------------------------------------------------------------------------
  * WHY THIS HAS TO BE HERE
  * ---------------------------------------------------------------------------
  * The mark is fixed and the document advances a line pitch per line, so the mark
  * travels one pitch relative to the line being read and only the PHASE is
- * tunable. The phase puts it on the middle of the capitals at line entry; the
- * band covers where the line goes from there, which is one pitch UPWARD.
+ * tunable. The phase puts the tick on the middle of the capitals at line entry;
+ * `wash` marks where the line goes from there, which is one pitch UPWARD — so its
+ * lit plateau must be exactly a pitch tall and must END on the mark, not straddle
+ * it. Centred is the version that is lit half a pitch below every line for the
+ * whole take.
  *
- * That band's defining property is where its lower edge lands: on the tick's
- * apex, expressed as `bottom: 50%` inside a tick that is itself
- * `translateY(-50%)` on the band centre. Every part of that is layout, and the
- * jsdom suite (`tests/dom/script-layer-reading-cue.test.ts`) can only read the
- * inline heights back — it would pass with `bottom: 50%` changed to `top: 50%`,
- * with the parent transform removed, or with the rules growing downward, all of
- * which put the band over the line the presenter has already read.
+ * All of that is layout. The jsdom suite can read the inline `top`/`height` and
+ * the plateau custom properties back, but it cannot say where a browser paints
+ * the gradient, and it would pass with the centring transform removed.
  *
- * `?calibrated=0` on purpose: the flat branch fixes the pitch at 64 x 1.32 and a
- * 78% column, so there is a real gutter for the band and a pitch this test can
- * predict. A calibrated rig whose resolved column fills the safe width has no
- * gutter, and the band is deliberately absent there.
+ * A hairline version of the same band was drawn in the ticks' gutter and removed
+ * — it did not read as an instrument at any weight. `ticks` therefore has no
+ * geometry beyond the tick itself, which is why this test covers only `wash`.
+ *
+ * `?calibrated=0` on purpose: the flat branch fixes the pitch at 64 x 1.32, so
+ * this test can predict it rather than recompute it from the resolved optics.
  */
-test('the reading cue marks one line pitch above the mark, in both styles', async ({ page }) => {
+test('the wash lights exactly one line pitch, ending on the mark', async ({ page }) => {
   await page.goto('/stage.html?preview=1&calibrated=0');
 
   const root = page.locator('.stage-root');
@@ -285,48 +286,14 @@ test('the reading cue marks one line pitch above the mark, in both styles', asyn
     .evaluate((el) => Number.parseFloat(getComputedStyle(el).lineHeight));
   expect(linePitchPx, 'the flat branch renders 64px at 1.32').toBeCloseTo(64 * 1.32, 1);
 
-  // Both sides, because a band on one tick and not the other reads as breakage.
-  const ticks = page.locator('.cue.ticks .tick');
-  await expect(ticks).toHaveCount(2);
-  await expect(page.locator('.cue.ticks .travel')).toHaveCount(2);
+  // The mark, off the tick actually drawn: its apex is its own vertical centre.
+  const tickBox = (await page.locator('.cue.ticks .tick').first().boundingBox())!;
+  const apex = tickBox.y + tickBox.height / 2;
 
-  const apexes: number[] = [];
-  for (let i = 0; i < 2; i++) {
-    const tick = ticks.nth(i);
-    const tickBox = (await tick.boundingBox())!;
-    const bandBox = (await tick.locator('.travel').boundingBox())!;
-    const apex = tickBox.y + tickBox.height / 2;
-    apexes.push(apex);
+  // `ticks` draws nothing else. Pinned so the removed hairline cannot return by
+  // accident, and so a future band has to come back with its own assertion.
+  await expect(page.locator('.cue.ticks .travel')).toHaveCount(0);
 
-    /*
-     * The band REACHES one pitch from the mark: its upper edge is the position
-     * the line will have reached by the end of itself. This is the assertion the
-     * whole change rests on, and it is stated on the top edge because that is
-     * the end the tick does not already mark.
-     */
-    expect(bandBox.y, `band ${i} upper edge`).toBeCloseTo(apex - linePitchPx, 0);
-
-    /*
-     * ...and it stops SHORT of the apex by half a cap, so the rule never runs
-     * onto the triangle. Both are translucent, so an overlap composites brighter
-     * than either and puts a pale notch exactly where the eye goes. The tick's
-     * own box height is one cap, which is where the half comes from.
-     */
-    const gap = tickBox.height * 0.5;
-    expect(bandBox.y + bandBox.height, `band ${i} lower edge`).toBeCloseTo(apex - gap, 0);
-    expect(bandBox.y + bandBox.height, `band ${i} runs onto the tick`).toBeLessThan(apex);
-
-    // A hairline, not a slab: a quarter of the tick's 2.2/18 stroke weight. The
-    // first version matched the stroke and read as the louder of the two marks.
-    expect(bandBox.width, `band ${i} width`).toBeLessThan(tickBox.height * 0.05);
-  }
-
-  /*
-   * The wash is the same band, lit rather than ruled. Its element carries the
-   * plateau edges as percentages of its own height (they follow from the skirt
-   * ratio rather than from chosen stops), so the plateau is measured from the
-   * real box and the real custom properties.
-   */
   await root.press('r');
   const wash = page.locator('.cue.wash .wash-band');
   await expect(wash).toHaveCount(1);
@@ -342,8 +309,9 @@ test('the reading cue marks one line pitch above the mark, in both styles', asyn
   });
 
   expect(plateau.bottom - plateau.top, 'lit plateau height').toBeCloseTo(linePitchPx, 0);
-  // The mark has not moved, so the plateau ends where the hairline did.
-  expect(plateau.bottom, 'lit plateau lower edge').toBeCloseTo(apexes[0]!, 0);
+  // Ending ON the mark, so the band is one-sided rather than centred on it.
+  expect(plateau.bottom, 'lit plateau lower edge').toBeCloseTo(apex, 0);
+  expect(plateau.top, 'lit plateau upper edge').toBeCloseTo(apex - linePitchPx, 0);
 });
 
 /*

@@ -27,73 +27,26 @@
   ---------------------------------------------------------------------------
   A POINT CANNOT MARK A LINE, SO IT MARKS THE START OF ONE
   ---------------------------------------------------------------------------
-  The document advances exactly one line pitch per line and the mark is fixed,
-  so the mark's position relative to the line being read travels one full pitch
-  every line — and only the PHASE of that travel is available to tune. The phase
-  is set (`lineEntryOffsetPx`) so the tick is exactly on the middle of the
-  capitals at the instant a line begins, measured at 1.4px on a 1440x900 panel
-  at 64px/1.32. By the last word of that line the same tick is a whole pitch
-  lower, which is to say it is on the line BELOW — correct as handoff, and it
-  reads as the mark pointing under the words.
+  The document advances one line pitch per line and the mark is fixed, so the
+  mark's position relative to the line being read travels a full pitch over that
+  line — and only the PHASE of that travel can be tuned. The phase
+  (`lineEntryOffsetPx`) puts the tick on the middle of the capitals at the instant
+  a line begins. By the last word of that line the same tick is a pitch lower,
+  which is to say it is on the line below: correct as handoff, and it reads as the
+  mark pointing under the words.
 
-  Both ends of that cannot be bought with a phase offset; a quarter pitch was
-  tried and it moved the error to line entry, where the eye is closest to the
-  tick and notices most.
+  No phase fixes both ends. A quarter pitch was tried and moved the error to line
+  entry, where the eye is closest to the tick and notices most.
 
-  What is available is the ASYMMETRY. The reading position does not go below the
-  tick: it starts there and rises. So the pitch of glass immediately ABOVE the
-  tick is where the line lives while it is being read — for all of an ordinary
-  line, and for most of the exceptions below — and marking it beats a phase
-  offset, which is wrong at both ends of every line rather than at one end of
-  some —
-
-      M - pitch  ─┬─  the line is here at the END of it
-                  │
-                  │   `.travel`: this pitch, quietly
-                  │
-      M          ─▶─  the line is here at the START
-
-  — which is why the tick keeps the position it has and the band is one-sided.
-  Under `wash` the same band is the plateau; under `ticks` it is a hairline on
-  the tick's outer edge, so tick and band read as one corner rather than as two
-  marks.
-
-  ONE PITCH IS THE ORDINARY LINE'S TRAVEL, NOT EVERY LINE'S. This is a fixed
-  typographic band, not a containment guarantee, and it is worth being exact
-  about where it falls short. Knots are placed at each line's BASELINE
-  (`lineMap.ts` §4), so the travel over a line is the distance to the NEXT
-  line's baseline:
-
-    inside a paragraph   one pitch. The band is exact.
-    last line of one     a pitch plus the paragraph gap. At the shipped 0.7 em
-                         against a 1.32 line height that is 1.53 pitches, so the
-                         line rises past the top of the band for roughly its
-                         final third.
-    before a visual      further still, and unbounded: classifying a knot as
-    block                `visual_block` clamps its TANGENT, not the displacement
-                         it has to cover. Past `maxVisualSecantPxPerUnit` the
-                         engine stops interpolating and re-anchors instead, which
-                         is safe but is also not one pitch.
-    a knot clamped at    the line does not enter at the mark in the first place.
-    `maxScrollPx`        The closing lines of a script come to rest below it, by
-                         design, and the band does not reach them.
-
-  The band stays one pitch through all of that, because every alternative is
-  worse. Sizing it per line would mean this component knowing which line the
-  reader is on, and the whole argument above for a fixed mark is that it says
-  NOTHING about the script and therefore cannot be wrong about it. A constant
-  that is exact on every ordinary line and short on the last line of a paragraph
-  — where the reader is changing paragraph and is not hunting for the line
-  anyway — is the right way round for the error to fall.
-
-  It is also clipped rather than shortened when the mark sits high: `readingBandY`
-  goes down to 0.1 of the safe rectangle, and a band that then runs off the top of
-  the glass is drawn against a rig `lineBudget` already reports as having no room
-  above the reading band. The default top fade is 1.25 pitches deep and paints
-  over the cue (it is a later sibling in `ScriptLayer`), so on such a rig the band
-  is faded away along with the script above the mark. That is consistent — the
-  tick has always been dimmed by the same fade at the same band positions — and
-  the fix for it is the band position, not the cue.
+  A HAIRLINE MARKING THAT PITCH WAS TRIED HERE AND REMOVED. The geometry was
+  sound — the reading position rises from the tick, so the pitch above it is where
+  the line lives — but it did not work on glass at any weight. At the tick's own
+  stroke it was the loudest thing on the display; cut to a quarter of that at 0.10
+  it was a 4%-grey sliver that read as an artefact rather than an instrument.
+  Between "competing with the mark" and "looks broken" there was no useful middle,
+  which is the answer: a rule in the gutter is the wrong object for this. The
+  `wash` style still marks the same one-pitch band, as a plateau over the text,
+  and that is the place to reach for if the drift needs answering again.
 
   ---------------------------------------------------------------------------
   SHAPE, NOT OPACITY
@@ -136,25 +89,17 @@
      */
     sizePx?: number;
     /**
-     * One line pitch, CSS px — the distance the reading position travels while
-     * a single line is being read, and therefore the exact height of the band
-     * above the mark.
+     * One line pitch, CSS px — the distance the reading position travels while a
+     * single line is being read, and therefore the height of the `wash` plateau.
      *
-     * Pass the same pitch the line-entry offset and the padding are derived
-     * from (the TYPOGRAPHIC one, `fontSizePx * lineHeight`), not the measured
-     * median: the band is a statement about where the mark's phase puts the
-     * line, so it has to be the number that phase was computed with. Zero or
+     * Used by `wash` only; `ticks` draws nothing that depends on it. Pass the
+     * TYPOGRAPHIC pitch (`fontSizePx * lineHeight`), not the measured median: the
+     * plateau is a statement about where the mark's phase puts the line, so it
+     * has to be the number that phase was computed with, and inside a paragraph
+     * the CSS line box IS the baseline-to-baseline distance exactly. Zero or
      * missing falls back to {@link TRAVEL_FALLBACK_CAPS}.
      */
     linePitchPx?: number;
-    /**
-     * Full width of the layer the cue is drawn in, CSS px.
-     *
-     * Only the band needs it, and only to decide whether there is a gutter to
-     * draw in — see `bandFitsLeft`. Zero or missing means "not told", and the
-     * right-hand side then takes the left's answer rather than guessing.
-     */
-    viewportWidthPx?: number;
   }
 
   let {
@@ -165,7 +110,6 @@
     hollow = false,
     sizePx = 24,
     linePitchPx = 0,
-    viewportWidthPx = 0,
   }: Props = $props();
 
   /** Props cross a process boundary; a NaN here would take the layout out. */
@@ -246,68 +190,6 @@
   const plateauTopPercent = (WASH_SKIRT_FRACTION / (1 + 2 * WASH_SKIRT_FRACTION)) * 100;
   const plateauBottomPercent = 100 - plateauTopPercent;
 
-  /**
-   * Thickness of the hairline — a QUARTER of the tick's own stroke weight.
-   *
-   * It was drawn at the full stroke (`stroke-width: 2.2` of an 18-unit viewBox,
-   * so 0.122 of a cap) on the theory that matching weights would read as one
-   * instrument. On glass it read as the LOUDER of the two, and that is backwards:
-   * the tick is the mark you are meant to find, and opacity is not weight. A rule
-   * one pitch long has many times the area of the triangle, so equal ink per pixel
-   * is much more ink. Quartering the width and halving the opacity puts the two
-   * back in the intended order.
-   *
-   * Still type-relative rather than a flat 1px: a hairline has to stay a hairline
-   * on a 9-inch panel calibrated for two metres, where a device pixel is a
-   * different fraction of a letter. The floor keeps it from vanishing entirely.
-   */
-  const travelRuleWidthPx = $derived(Math.max(1, unitPx * 0.03));
-
-  /**
-   * How far short of the mark the rule stops.
-   *
-   * The drawn path spans 2..16 of an 18-unit box, so the triangle reaches 0.389
-   * of a cap either side of the apex. Half a cap clears that with air. Without
-   * the gap the rule ran onto the triangle's back edge and, both being
-   * translucent, the overlap composited BRIGHTER than either — a pale notch at
-   * exactly the place the eye goes.
-   *
-   * The band still MEANS one pitch from the mark: the top edge is unchanged, and
-   * the bottom end of the band is where the tick already is, so the rule does not
-   * have to draw it.
-   */
-  const travelRuleGapPx = $derived(unitPx * 0.5);
-  const travelRuleHeightPx = $derived(Math.max(0, travelPx - travelRuleGapPx));
-
-  /**
-   * Whether there is a gutter for the band at all.
-   *
-   * `columnWidthPercent` goes to 100 (`APPEARANCE_LIMITS`), and a 100% column
-   * leaves no gutter: `leftTickPx` goes negative, the `max(0px, …)` below pulls
-   * the tick back on screen, and its contents land INSIDE the text. A triangle
-   * doing that crowds the first glyph of the line it marks and always has. A
-   * one-pitch rule doing it draws a vertical bar through the opening characters
-   * of every line on the glass, which is a different order of wrong.
-   *
-   * So the band is drawn only where the tick is not clamped — the same predicate
-   * the CSS clamp fires on, evaluated here because CSS cannot answer it. The tick
-   * keeps marking the position either way; the band is the part that needs room,
-   * and the honest degradation is to omit it rather than to put it over the
-   * words. Per side, because a lens-offset column can have room on one side and
-   * none on the other.
-   */
-  const bandFitsLeft = $derived(leftTickPx >= 0);
-  /*
-   * The right-hand clamp is `min(rightTickPx, calc(100% - tickWidthPx))`, so
-   * answering it needs the layer's width. Untold, it takes the left's answer:
-   * an inference from a centred column, and a great deal better than dropping
-   * one tick's band while keeping the other's for a reason nobody can see.
-   */
-  const bandFitsRight = $derived(
-    Number.isFinite(viewportWidthPx) && viewportWidthPx > 0
-      ? rightTickPx + tickWidthPx <= viewportWidthPx
-      : bandFitsLeft,
-  );
 </script>
 
 {#if style === 'ticks'}
@@ -322,17 +204,6 @@
       style:width="{tickWidthPx}px"
       style:height="{unitPx}px"
     >
-      <!-- The band, a child of the tick so it inherits the same clamped `left`
-           and there is one horizontal source of truth per side. Omitted where
-           there is no gutter to draw it in — see `bandFitsLeft`. -->
-      {#if bandFitsLeft}
-        <i
-          class="travel travel-outer-left"
-          style:width="{travelRuleWidthPx}px"
-          style:height="{travelRuleHeightPx}px"
-          style:bottom="calc(50% + {travelRuleGapPx}px)"
-        ></i>
-      {/if}
       <svg viewBox="0 0 16 18">
         <!-- Stroked in BOTH states and filled in only one, so the silhouette
              is identical either way. A fill that also changed the outline would
@@ -353,14 +224,6 @@
       style:width="{tickWidthPx}px"
       style:height="{unitPx}px"
     >
-      {#if bandFitsRight}
-        <i
-          class="travel travel-outer-right"
-          style:width="{travelRuleWidthPx}px"
-          style:height="{travelRuleHeightPx}px"
-          style:bottom="calc(50% + {travelRuleGapPx}px)"
-        ></i>
-      {/if}
       <svg viewBox="0 0 16 18">
         <path
           d="M13 2 L2 9 L13 16 Z"
@@ -443,39 +306,6 @@
 
   .ticks[data-hollow='true'] .tick svg path {
     fill-opacity: 0;
-  }
-
-  /*
-   * The band, as a hairline rising from the tick.
-   *
-   * `bottom` is set inline as `calc(50% + gap)` — 50% of a tick that is itself
-   * `translateY(-50%)` on the band centre IS the apex row, so the offset is
-   * measured from the mark rather than from anything that could drift out of
-   * agreement with where the tick is drawn. The gap is why it is not simply
-   * `bottom: 50%`; see `travelRuleGapPx`.
-   *
-   * 0.10 against the triangle's 0.5, and the tick is still the louder of the two
-   * by area at that ratio rather than in spite of it — the first attempt matched
-   * the stroke weight and inverted the hierarchy on real glass. This does NOT
-   * take part in the hold ladder either: the ladder reports what the aligner
-   * believes, and the band is a fact about the rig.
-   */
-  .travel {
-    position: absolute;
-    display: block;
-    background: currentColor;
-    opacity: 0.1;
-  }
-  /* Centred on the triangle's flat back edge — 3/16 and 13/16 of the viewBox —
-     which is the OUTER side on both ticks, so the band never crowds the column
-     and a descender cannot touch it. */
-  .travel-outer-left {
-    left: 18.75%;
-    transform: translateX(-50%);
-  }
-  .travel-outer-right {
-    left: 81.25%;
-    transform: translateX(-50%);
   }
 
   .wash-band {
