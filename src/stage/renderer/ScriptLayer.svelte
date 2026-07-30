@@ -3018,6 +3018,19 @@
     Sized in cap heights off the measured face, positioned from the same
     resolved column and band every other layer here reads, and told when the
     hold ladder wants it hollow. It draws nothing at all on `none`.
+
+    `linePitchPx` is the TYPOGRAPHIC pitch, `linePx` — and specifically NOT the
+    measured median the line map runs on. The band has to equal the distance a
+    line's baseline sits from the next one's, and inside a paragraph that IS the
+    CSS line box, exactly: `fontSizePx * lineHeight`. The measured median is an
+    estimate of the same quantity taken from token rects, and it is the one that
+    can be dragged off by paragraph gaps. It is also the number the padding and
+    the fades are already solved against, so the cue cannot end up describing a
+    pitch the rest of the vertical layout does not use.
+
+    `viewportWidthPx` is only for deciding whether there is a gutter to draw the
+    band in; a 100% column leaves none, and the band is omitted rather than laid
+    over the words.
   -->
   <ReadingCue
     style={settings.readingCue ?? 'ticks'}
@@ -3026,6 +3039,8 @@
     {columnWidthPx}
     hollow={cueHollow}
     sizePx={capHeightPx}
+    linePitchPx={linePx}
+    viewportWidthPx={vw}
   />
 
   <!-- Focus fades (layer 6): quiet ramps into the background at both edges. -->

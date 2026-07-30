@@ -368,19 +368,25 @@ export function clampProvisionalTarget(
  * that much the moment the aligner took over from the opening. That
  * discontinuity is gone rather than hidden.
  *
- * WHAT THIS GIVES UP, AND WHERE TO GO IF IT MATTERS. The quarter pitch was
- * bought with a real complaint — the script feeling permanently one line behind
- * the reader. At zero the mark leaves the line being read at ~41% and is on the
- * line below from ~59%, so that perception can return. If it does, the fix is
- * the mark's SHAPE and not its phase. A point has to sweep: the document must
- * advance exactly one pitch per line and the mark is fixed, so the mark's
- * position relative to the line being read sweeps one full pitch every line and
- * only the phase is free. A band does not have to sweep — it can contain. The
- * tick is currently one cap tall against an ink box of ~0.88 of a pitch; sizing
- * the mark to span a line answers "which line" by overlap at any phase, and
- * `readingCue: 'wash'` already does exactly that. Reach for that before
- * reaching back for a phase offset, because the phase offset can only buy the
- * middle of a line by selling both of its ends.
+ * WHAT THIS GIVES UP, AND WHAT PAYS FOR IT. The quarter pitch was bought with a
+ * real complaint — the script feeling permanently one line behind the reader. At
+ * zero the mark leaves the line being read at ~41% and is on the line below from
+ * ~59%, and that duly came back as "from the start it points below the line".
+ *
+ * It is not answered by moving this constant, and cannot be: a point has to
+ * sweep. The document must advance exactly one pitch per line and the mark is
+ * fixed, so the mark's position relative to the line being read travels one full
+ * pitch every line and only the PHASE of that travel is available. Every phase
+ * buys the middle of a line by selling both of its ends.
+ *
+ * What answers it is the mark's SHAPE, and `ReadingCue` now carries it: the
+ * reading position does not go BELOW the mark — it starts there and rises — so
+ * the cue marks the pitch of glass above itself, as a hairline under `ticks` and
+ * as the plateau under `wash`. Exact on an ordinary line at every phase of it,
+ * where a phase offset is a compromise at all of them; `ReadingCue`'s header
+ * enumerates the lines it is short on (paragraph-final, before a visual block,
+ * and anything whose knot clamped). So this constant stays at zero and line entry
+ * stays exact; if the perception returns, the band is the thing to make louder.
  */
 const LINE_ENTRY_PITCH_FRACTION = 0;
 

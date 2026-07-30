@@ -249,6 +249,89 @@ test('a hidden dock button cannot be clicked through', async ({ page }) => {
   expect(hit, 'a hidden button must not be the element under the pointer').toBe(true);
 });
 
+/**
+ * The reading cue's band, measured — the one claim jsdom cannot make.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS HAS TO BE HERE
+ * ---------------------------------------------------------------------------
+ * The mark is fixed and the document advances a line pitch per line, so the mark
+ * travels one pitch relative to the line being read and only the PHASE is
+ * tunable. The phase puts it on the middle of the capitals at line entry; the
+ * band covers where the line goes from there, which is one pitch UPWARD.
+ *
+ * That band's defining property is where its lower edge lands: on the tick's
+ * apex, expressed as `bottom: 50%` inside a tick that is itself
+ * `translateY(-50%)` on the band centre. Every part of that is layout, and the
+ * jsdom suite (`tests/dom/script-layer-reading-cue.test.ts`) can only read the
+ * inline heights back — it would pass with `bottom: 50%` changed to `top: 50%`,
+ * with the parent transform removed, or with the rules growing downward, all of
+ * which put the band over the line the presenter has already read.
+ *
+ * `?calibrated=0` on purpose: the flat branch fixes the pitch at 64 x 1.32 and a
+ * 78% column, so there is a real gutter for the band and a pitch this test can
+ * predict. A calibrated rig whose resolved column fills the safe width has no
+ * gutter, and the band is deliberately absent there.
+ */
+test('the reading cue marks one line pitch above the mark, in both styles', async ({ page }) => {
+  await page.goto('/stage.html?preview=1&calibrated=0');
+
+  const root = page.locator('.stage-root');
+  await expect(root).toHaveAttribute('data-phase', 'live');
+  await expect(page.locator('.cue.ticks')).toHaveCount(1);
+
+  const linePitchPx = await page
+    .locator('.column')
+    .evaluate((el) => Number.parseFloat(getComputedStyle(el).lineHeight));
+  expect(linePitchPx, 'the flat branch renders 64px at 1.32').toBeCloseTo(64 * 1.32, 1);
+
+  // Both sides, because a band on one tick and not the other reads as breakage.
+  const ticks = page.locator('.cue.ticks .tick');
+  await expect(ticks).toHaveCount(2);
+  await expect(page.locator('.cue.ticks .travel')).toHaveCount(2);
+
+  const apexes: number[] = [];
+  for (let i = 0; i < 2; i++) {
+    const tick = ticks.nth(i);
+    const tickBox = (await tick.boundingBox())!;
+    const bandBox = (await tick.locator('.travel').boundingBox())!;
+    const apex = tickBox.y + tickBox.height / 2;
+    apexes.push(apex);
+
+    // ONE PITCH, measured — not "about a line".
+    expect(bandBox.height, `band ${i} height`).toBeCloseTo(linePitchPx, 0);
+    // ...ending ON the apex. This is the assertion the whole change rests on.
+    expect(bandBox.y + bandBox.height, `band ${i} lower edge`).toBeCloseTo(apex, 0);
+    // ...and reaching UP from it, never down. Stated separately so a band of the
+    // right height hung the wrong way fails on its own line.
+    expect(bandBox.y, `band ${i} upper edge`).toBeCloseTo(apex - linePitchPx, 0);
+  }
+
+  /*
+   * The wash is the same band, lit rather than ruled. Its element carries the
+   * plateau edges as percentages of its own height (they follow from the skirt
+   * ratio rather than from chosen stops), so the plateau is measured from the
+   * real box and the real custom properties.
+   */
+  await root.press('r');
+  const wash = page.locator('.cue.wash .wash-band');
+  await expect(wash).toHaveCount(1);
+
+  const plateau = await wash.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const read = (name: string): number =>
+      Number.parseFloat(getComputedStyle(el).getPropertyValue(name));
+    return {
+      top: box.top + box.height * (read('--plateau-top') / 100),
+      bottom: box.top + box.height * (read('--plateau-bottom') / 100),
+    };
+  });
+
+  expect(plateau.bottom - plateau.top, 'lit plateau height').toBeCloseTo(linePitchPx, 0);
+  // The mark has not moved, so the plateau ends where the hairline did.
+  expect(plateau.bottom, 'lit plateau lower edge').toBeCloseTo(apexes[0]!, 0);
+});
+
 /*
  * ---------------------------------------------------------------------------
  * REMOVED: "the rail does not reflow when the delivery score changes (§7.1)"
