@@ -92,12 +92,12 @@ describe('a script card opens on a single click', () => {
  * find a script with `getByRole('button', { name: /Launch keynote/ })`, and so
  * does anybody driving this screen with a screen reader.
  *
- * Selection is asserted through `aria-current` rather than the class that paints
- * it. The visual half of the old bug — a 5%-alpha wash REPLACING the card's
- * opaque surface, so a selected card turned into a muddy patch of page canvas —
- * is not something jsdom can see, since it resolves no stylesheets and computes
- * no colours. `aria-current` is the part of "selected" that is actually
- * observable here, and it is the part assistive tech consumes.
+ * It says nothing at all about selection, and that is the contract now. The
+ * store still remembers `selectedId` for the Present shortcut, but no card is
+ * ever drawn or announced as the chosen one — there is no multi-select, no list
+ * navigation and no action that reads a selection, so `aria-current` would
+ * promise assistive tech a state that means nothing here. See the note in
+ * `ScriptCard`.
  */
 describe('what a script card exposes', () => {
   it('puts the title in the accessible name', () => {
@@ -105,16 +105,10 @@ describe('what a script card exposes', () => {
     expect(button.textContent).toContain('Launch keynote');
   });
 
-  it('says nothing about selection when it is not selected', () => {
+  it('never claims to be the current one', () => {
     const { button, card } = row();
     expect(button.getAttribute('aria-current')).toBeNull();
     expect(card.classList.contains('selected')).toBe(false);
-  });
-
-  it('marks itself current when selected', () => {
-    const { button, card } = row({ selected: true });
-    expect(button.getAttribute('aria-current')).toBe('true');
-    expect(card.classList.contains('selected')).toBe(true);
   });
 
   it('renders the excerpt and each metadata part', () => {

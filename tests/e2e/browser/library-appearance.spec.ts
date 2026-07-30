@@ -134,56 +134,40 @@ test('Enter on the trigger opens the menu with a visible highlight', async ({ pa
   expect(ring).toBe('none');
 });
 
-test('a selected card keeps its opaque surface and gains a leading bar', async ({ page }) => {
+test('a card is never painted as the chosen one, before or after opening it', async ({ page }) => {
   await page.goto('/control.html');
   const list = page.getByRole('list', { name: 'Scripts' });
   await list.locator('.title').first().waitFor();
-
-  // The store falls back to the first script so the Present shortcut has a target
-  // on boot. That is a default, not a choice, so nothing may be drawn as chosen.
-  await expect(list.locator('[aria-current="true"]')).toHaveCount(0);
 
   const cardBackground = (title: string) =>
     list
       .locator('.card', { hasText: title })
       .evaluate((el) => getComputedStyle(el).backgroundColor);
   const restingBackground = await cardBackground('Launch keynote');
-  // The card is a white panel, not a tint over the canvas.
+  // The card is a white panel, not a tint over the canvas — the ancestor of this
+  // component replaced the surface with a 5%-alpha wash on selection, and what
+  // showed through was clay over the page canvas.
   expect(restingBackground).toBe('rgb(255, 255, 255)');
 
-  // Choose one for real, then come back to the list.
+  // Open one for real, then come back to the list. The store remembers it as the
+  // Present shortcut's target; the screen must show no sign of that.
   await list.getByRole('button', { name: /Weekly product update/ }).click();
   await page.getByRole('textbox', { name: 'Script Markdown' }).waitFor();
   await page.getByRole('button', { name: 'All scripts' }).click();
   await list.locator('.title').first().waitFor();
 
-  // Exactly the chosen card is current now.
-  const current = list.locator('[aria-current="true"]');
-  await expect(current).toHaveCount(1);
-  await expect(current).toContainText('Weekly product update');
-
-  // THE REGRESSION: selection must not swap the surface for a 5% wash. The
-  // selected card is the same white as an unselected one.
+  // Nothing announces itself as current...
+  await expect(list.locator('[aria-current="true"]')).toHaveCount(0);
+  // ...the surface is untouched...
   expect(await cardBackground('Weekly product update')).toBe(restingBackground);
 
-  // What selection actually adds is an inset accent bar, drawn as a pseudo-element
-  // so a rounded box never wears a half-painted one-sided border.
-  const bar = await list
-    .locator('.card', { hasText: 'Weekly product update' })
-    .evaluate((el) => {
-      const s = getComputedStyle(el, '::before');
-      return { content: s.content, width: s.width, bg: s.backgroundColor };
-    });
-  expect(bar.content).not.toBe('none');
-  expect(bar.width).toBe('3px');
-  // Terracotta, and opaque — an alpha fill here would be the old mistake again.
-  expect(bar.bg).toBe('rgb(179, 90, 56)');
-
-  // The unselected card has no bar at all.
-  const noBar = await list
-    .locator('.card', { hasText: 'Launch keynote' })
-    .evaluate((el) => getComputedStyle(el, '::before').content);
-  expect(noBar).toBe('none');
+  // ...and there is no leading accent bar. This is the assertion that guards the
+  // removal: the bar was a `::before` on the card, so a `content` other than
+  // `none` on the script that was last opened means it has come back.
+  const marks = await list.locator('.card').evaluateAll((cards) =>
+    cards.map((el) => getComputedStyle(el, '::before').content),
+  );
+  expect(marks.every((content) => content === 'none')).toBe(true);
 });
 
 test('the overflow menu opens upward rather than off the bottom of the list', async ({ page }) => {

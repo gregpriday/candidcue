@@ -13,18 +13,16 @@ export interface LibraryState {
   view: LibraryView;
   query: string;
   sort: ScriptSort;
-  selectedId: string | null;
   /**
-   * Whether `selectedId` came from the operator rather than from the fallback in
-   * `loadLibrary`.
+   * The Present shortcut's target, and nothing else.
    *
-   * The fallback exists so the Present shortcut has a target the moment the
-   * library finishes loading, which is worth keeping — but it is a default, not a
-   * choice, and drawing it as a chosen card says the operator picked the top
-   * script when they have not touched anything yet. Cards read the flag; the
-   * shortcut keeps reading `selectedId` and is unaffected.
+   * `loadLibrary` falls back to the first script so the shortcut resolves the
+   * moment the library has loaded, with no clicking required. Nothing draws
+   * this: there used to be a `selectionIsExplicit` companion whose whole job was
+   * to keep that fallback from painting the top card as chosen, and it went with
+   * the treatment it was guarding (see `ScriptCard`).
    */
-  selectionIsExplicit: boolean;
+  selectedId: string | null;
   error: string | null;
 }
 
@@ -35,7 +33,6 @@ const state = writable<LibraryState>({
   query: '',
   sort: 'recently_edited',
   selectedId: null,
-  selectionIsExplicit: false,
   error: null,
 });
 
@@ -59,11 +56,9 @@ export async function loadLibrary(): Promise<void> {
         ...s,
         loading: false,
         scripts: page.items,
+        // A choice survives a reload as long as the script is still in the list;
+        // otherwise the fallback picks up the top of whatever is there now.
         selectedId: kept ? s.selectedId : page.items[0]?.id ?? null,
-        // An explicit choice survives a reload as long as the script is still in
-        // the list. Falling back to the first item is not a choice, so it must
-        // not inherit the flag from the selection it replaced.
-        selectionIsExplicit: kept ? s.selectionIsExplicit : false,
       };
     });
   } catch (err) {
@@ -87,7 +82,7 @@ export function setLibrarySort(sort: ScriptSort): void {
 }
 
 export function selectScript(id: string | null): void {
-  state.update((s) => ({ ...s, selectedId: id, selectionIsExplicit: id !== null }));
+  state.update((s) => ({ ...s, selectedId: id }));
 }
 
 export async function duplicateScript(id: string): Promise<void> {

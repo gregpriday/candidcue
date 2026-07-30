@@ -1,19 +1,32 @@
 <!--
   A script in the library list.
 
-  Replaces the generic `ListRow`, which only this screen ever used and which was
-  wrong for it in one specific way: SELECTION REPLACED THE SURFACE. The rule was
-  `background: var(--accent-wash)`, and `--accent-wash` is a 5%-alpha tint — so
-  the card's white `--bg-panel` was not tinted, it was removed, and what showed
-  through was 5% clay over the page canvas. Paired with `--border-strong`
-  (a cold grey), a selected card became precisely the muddy-grey-plus-peachy-wash
-  combination the design language forbids, and it looked like a disabled row
-  rather than the chosen one.
+  ---------------------------------------------------------------------------
+  THE CARD DOES NOT DRAW SELECTION, BECAUSE THIS LIST HAS NO SELECTION TO DRAW
+  ---------------------------------------------------------------------------
+  It used to. The library store remembers `selectedId` — set by opening a
+  script, read by the Present shortcut so it has a target — and the card wore a
+  terracotta leading bar to show it.
 
-  So here the surface is white in EVERY state and selection is additive: an inset
-  leading bar (never a one-sided border on a rounded box) plus a firmer edge.
-  Hover firms the border along a warm ramp — `--border` → `--border-control` —
-  and never reaches `--border-strong`, which on a white card reads as grime.
+  That mark could not be earned. Nothing on this screen acts on "the selected
+  script": there is no multi-select, no keyboard list navigation, no bulk
+  action, and every card carries its own Present button and its own menu. A
+  click selects and opens in the same gesture, so the bar was only ever a
+  record of which script you were last inside — shown on return from the
+  editor, on a screen where that fact changes nothing you can do. An accent
+  mark that names a state with no consequences is decoration reading as
+  meaning, and it made the top card look singled out for no reason.
+
+  `selectedId` is untouched: the shortcut still resolves, and the flag that
+  used to exist purely to keep the boot-time fallback from wearing the bar went
+  with the bar.
+
+  The surface itself is white in EVERY state — the ancestor of this component
+  set `background: var(--accent-wash)` on selection, a 5%-alpha tint, which did
+  not tint the white panel so much as remove it and let 5% clay over the page
+  canvas show through. Hover firms the border along a warm ramp
+  (`--border` → `--border-control`) and never reaches `--border-strong`, which
+  on a white card reads as grime.
 
   A single click selects AND opens; see the click handler for why the row does
   not wait for a second one.
@@ -26,7 +39,6 @@
     /** First plain-text line or so of the script — the thing that identifies it. */
     excerpt?: string;
     meta?: string[];
-    selected?: boolean;
     /** Status capsule, rendered beside the title where it describes the script. */
     status?: Snippet;
     /** Present / Restore and the overflow menu. */
@@ -39,7 +51,6 @@
     title,
     excerpt,
     meta = [],
-    selected = false,
     status,
     actions,
     onopen,
@@ -47,7 +58,7 @@
   }: Props = $props();
 </script>
 
-<div class="card" class:selected class:interactive={Boolean(onopen ?? onselect)}>
+<div class="card" class:interactive={Boolean(onopen ?? onselect)}>
   <button
     type="button"
     class="main"
@@ -57,7 +68,6 @@
       onselect?.();
       onopen?.();
     }}
-    aria-current={selected ? 'true' : undefined}
   >
     <span class="heading">
       <span class="title">{title}</span>
@@ -101,27 +111,6 @@
   .interactive:hover {
     border-color: var(--border-control);
     box-shadow: var(--shadow-hover);
-  }
-
-  /*
-   * Selection is a leading bar INSIDE the card, inset from both ends.
-   *
-   * Not a left border: a 3px edge on one side of a 12px-radius box leaves the
-   * rounded corners half-painted, which is the crescent the design language
-   * rules out. An inset `::before` sits clear of the corners entirely.
-   */
-  .selected {
-    border-color: var(--border-control);
-  }
-  .selected::before {
-    content: '';
-    position: absolute;
-    left: -1px;
-    top: var(--space-4);
-    bottom: var(--space-4);
-    width: 3px;
-    border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
-    background: var(--accent);
   }
 
   .main {

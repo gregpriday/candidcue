@@ -1,19 +1,17 @@
 /**
- * Library selection: what the store remembers vs what the screen is allowed to
- * claim.
+ * Library selection: what the store remembers, and who it is for.
  *
  * `loadLibrary` falls back to the first script when nothing is selected, and that
- * fallback is worth keeping — it is what gives the Present shortcut a target the
- * moment the library finishes loading, with no clicking required.
+ * fallback is the whole point of the field — it is what gives the Present
+ * shortcut a target the moment the library finishes loading, with no clicking
+ * required.
  *
- * What it must not do is LOOK like a choice. Before `selectionIsExplicit` the top
- * card came up wearing the selected treatment on every boot, so the one script in
- * a new library was permanently drawn as picked; and because the old selected rule
- * replaced the card's white surface with a 5%-alpha wash, "picked" is exactly what
- * made it look broken.
- *
- * So these pin both halves: `selectedId` still resolves for the shortcut, and the
- * flag the cards read stays false until somebody actually chooses something.
+ * Nothing DRAWS it. The cards used to wear a leading accent bar for the chosen
+ * script, which needed a `selectionIsExplicit` companion so the boot-time
+ * fallback would not come up looking picked; both are gone, because no action on
+ * that screen reads a selection (see the note in `ScriptCard`). So these pin the
+ * one behaviour left: that `selectedId` always resolves to something sensible for
+ * the shortcut.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setInvokeForTesting } from '../../../src/control/services/ipc';
@@ -55,45 +53,34 @@ describe('library selection', () => {
     expect(get(library).selectedId).toBe('a');
   });
 
-  it('does not call that fallback an explicit choice', async () => {
-    await loadLibrary();
-    // The cards read this flag, not `selectedId` — nothing may be drawn as
-    // chosen when the operator has not touched the list.
-    expect(get(library).selectionIsExplicit).toBe(false);
-  });
-
-  it('marks a real selection as explicit', async () => {
+  it('records a real selection', async () => {
     await loadLibrary();
     selectScript('b');
     expect(get(library).selectedId).toBe('b');
-    expect(get(library).selectionIsExplicit).toBe(true);
   });
 
-  it('keeps an explicit selection across a reload while the script survives', async () => {
+  it('keeps a selection across a reload while the script survives', async () => {
     await loadLibrary();
     selectScript('b');
     await loadLibrary();
     expect(get(library).selectedId).toBe('b');
-    expect(get(library).selectionIsExplicit).toBe(true);
   });
 
-  it('drops back to implicit when the chosen script leaves the list', async () => {
+  it('drops back to the fallback when the chosen script leaves the list', async () => {
     await loadLibrary();
     selectScript('b');
     // Bravo is trashed, renamed out of the filter, whatever — it is simply gone.
     items = [summary('a', 'Alpha')];
     await loadLibrary();
+    // A dangling id would leave the shortcut aiming at nothing, which is the one
+    // way this field can actually fail somebody.
     expect(get(library).selectedId).toBe('a');
-    // Inheriting the flag here would draw Alpha as chosen purely because a
-    // DIFFERENT script had been chosen before it.
-    expect(get(library).selectionIsExplicit).toBe(false);
   });
 
-  it('clearing the selection clears the claim with it', async () => {
+  it('can be cleared', async () => {
     await loadLibrary();
     selectScript('b');
     selectScript(null);
     expect(get(library).selectedId).toBeNull();
-    expect(get(library).selectionIsExplicit).toBe(false);
   });
 });

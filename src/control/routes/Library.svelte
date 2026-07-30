@@ -234,11 +234,15 @@
       <ul class="list" aria-label={pageTitle}>
         {#each $library.scripts as script (script.id)}
           <li>
+            <!--
+              Selection is recorded, not drawn: `selectedId` is the Present
+              shortcut's target and nothing else on this screen acts on it, so
+              the card has no selected treatment. See the note in ScriptCard.
+            -->
             <ScriptCard
               title={script.title}
               excerpt={script.previewText || undefined}
               meta={rowMeta(script)}
-              selected={$library.selectionIsExplicit && $library.selectedId === script.id}
               onselect={() => selectScript(script.id)}
               onopen={() => (inTrash ? undefined : openScript(script))}
             >
