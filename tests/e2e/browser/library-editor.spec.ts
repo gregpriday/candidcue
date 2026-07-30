@@ -87,7 +87,11 @@ test('the count line is already there on a blank script, and typing does not mov
   // Present, and reporting zero rather than staying silent.
   const meta = page.locator('.header .meta');
   await expect(meta).toHaveText('0 words · — · 0 cues');
+
+  // Measured, not merely absent: two null boxes would compare equal below and
+  // the height assertion would prove nothing at all.
   const before = await page.locator('.header').boundingBox();
+  expect(before?.height).toBeGreaterThan(0);
 
   await editorSurface.click();
   await page.keyboard.type('Hello');
