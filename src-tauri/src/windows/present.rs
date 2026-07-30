@@ -56,6 +56,18 @@ use super::{sleep, CONTROL_LABEL};
 /// window would grow by the height of its own chrome on EVERY present/restore
 /// cycle. Position is the opposite pairing and is already consistent:
 /// `outer_position()` in, `SetPosition` → `set_outer_position` out.
+///
+/// One caveat on the paragraph above, now that [`chrome`] exists: under
+/// `FullSizeContentView` the inner and outer HEIGHTS coincide, so on macOS today
+/// the outer/inner mix-up it warns about would not actually show. The 32pt-per-
+/// cycle growth that WAS observed came from the mask instead — snapshotting the
+/// inner size under one mask and restoring it under another. The warning stands
+/// as written for any window without that bit; it is simply not the whole story.
+///
+/// `decorations` is a bool because that is all tao's flag can say, and on macOS
+/// that is not enough to describe the chrome — see [`chrome`], which snapshots
+/// the real `NSWindowStyleMask` instead and leaves this field to the platforms
+/// where the bool IS the whole state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ControlFrame {
     position: PhysicalPosition<i32>,
@@ -272,7 +284,7 @@ fn apply_presentation<R: Runtime>(
         .ok_or_else(|| presentation_failed("no monitor to present on"))?;
 
     let bounds = *monitor.size();
-    window.set_decorations(false).map_err(presentation_failed)?;
+    chrome::strip(app, window)?;
     pin::above_everything(app, window)?;
     window
         .set_position(tauri::Position::Physical(*monitor.position()))
@@ -336,8 +348,11 @@ mod pin {
     /// the system furniture, not to outrank screen savers and alert panels.
     const PROMPTER_WINDOW_LEVEL: isize = 26;
 
+    // `C-unwind` for the reason the same block in `chrome` spells out: an
+    // Objective-C method can raise, and an exception crossing a boundary declared
+    // non-unwinding aborts instead of unwinding.
     #[link(name = "objc", kind = "dylib")]
-    extern "C" {
+    extern "C-unwind" {
         fn sel_registerName(name: *const c_char) -> *const c_void;
         fn objc_msgSend();
     }
@@ -371,7 +386,7 @@ mod pin {
                 return;
             }
             unsafe {
-                let set_level: extern "C" fn(*mut c_void, *const c_void, isize) =
+                let set_level: extern "C-unwind" fn(*mut c_void, *const c_void, isize) =
                     std::mem::transmute(objc_msgSend as *const ());
                 set_level(
                     ns_window,
@@ -384,6 +399,410 @@ mod pin {
     }
 }
 
+/// Taking the window's chrome off for a take, and putting back EXACTLY what was
+/// there before.
+///
+/// ---------------------------------------------------------------------------
+/// WHY macOS DOES NOT CALL `set_decorations`
+/// ---------------------------------------------------------------------------
+/// It did, and that is what left the titlebar dark for the rest of the run.
+///
+/// Tauri gives every macOS window built with the DEFAULT `titleBarStyle`
+/// (`TitleBarStyle::Visible`) `NSWindowStyleMaskFullSizeContentView`, which it
+/// sets unconditionally to work around a devtools resize artifact. That covers
+/// every window this app opens, since none of them set `titleBarStyle` — but it
+/// is a property of the style, not of macOS, which is why the restore below reads
+/// the real mask instead of assuming this one. It is not cosmetic. With the content
+/// view running the full height of the window, the webview is underneath the
+/// titlebar, and macOS draws the titlebar over it — so the bar reads as the
+/// app's own warm paper and the window looks like one surface. Drop that single
+/// bit and the same window gets ordinary opaque system chrome instead: dark, on
+/// a machine in Dark Mode, sitting above a light editor. That is the whole
+/// symptom, and nothing about it is recoverable from inside the page.
+///
+/// tao's `set_decorations(true)` rebuilds the mask from a fixed set —
+/// `Closable | Miniaturizable | Resizable | Titled` — so it cannot put back a
+/// bit it does not model. Re-adding the bit afterwards does not work either, for
+/// the same reason `pin` does not stack two writers: `set_decorations` applies
+/// its mask through tao's `set_style_mask_ASYNC` (a block on the GCD main
+/// queue), while `set_fullsize_content_view` applies its own through
+/// `set_style_mask_SYNC` (inline, when it is already on the main thread). The
+/// inline write lands first and the queued rebuild overwrites it, so the
+/// titlebar comes back dark anyway with nothing in the logs.
+///
+/// One writer, therefore. This module owns the style mask outright and reads the
+/// resting value off the window rather than reconstructing it, which means a
+/// future `titleBarStyle` change in `tauri.conf.json` is restored correctly
+/// without anybody remembering this file exists.
+///
+/// The cost is that tao's own `decorations` flag is never updated, so
+/// `is_decorated()` keeps reporting the resting state (decorated) for the length
+/// of a take. Harmless: tao reads that flag nowhere but `set_decorations`'s
+/// early-out and the getter, and the only caller in this app is the frame
+/// snapshot, which wants the resting value.
+#[cfg(target_os = "macos")]
+mod chrome {
+    use std::ffi::c_void;
+    use std::os::raw::c_char;
+
+    use tauri::{AppHandle, Runtime, WebviewWindow};
+
+    use crate::errors::AppError;
+
+    /// The presenting mask: no titlebar, still resizable.
+    ///
+    /// `NSWindowStyleMaskBorderless` is zero, so this is only the resizable bit
+    /// — which is what tao's own `set_decorations(false)` reduces to for a
+    /// resizable window, and the control window is one.
+    const BORDERLESS_RESIZABLE: usize = 1 << 3;
+
+    /// `NSWindowStyleMaskFullScreen`, which must never be latched.
+    ///
+    /// `apply_presentation` asks a natively-fullscreen window to leave fullscreen
+    /// just above the call into this module, and `set_fullscreen(false)` is
+    /// asynchronous — AppKit animates out over about half a second. So the mask
+    /// read here can still carry this bit, and writing it back on restore would
+    /// hand AppKit a window claiming to be fullscreen when it is not. Setting the
+    /// bit by hand is not how a window enters fullscreen and AppKit does not treat
+    /// it as such.
+    ///
+    /// KNOWN GAP, and it is the reason this constant exists rather than a wait:
+    /// tao's `set_decorations` returns early while fullscreen and re-applies from
+    /// `windowDidExitFullScreen`, which is the correct shape and needs a delegate
+    /// this module does not have. Presenting DURING the exit animation can
+    /// therefore still lose the borderless mask to AppKit's own restoration when
+    /// the transition completes, leaving a titlebar on the glass until `Reassert`
+    /// or the next Present. Normalising the latch bounds the damage to that take:
+    /// what gets put back afterwards is always a legitimate resting mask.
+    const FULLSCREEN: usize = 1 << 14;
+
+    /// The mask worth remembering, given the one AppKit read.
+    ///
+    /// Separated from [`remember`] because it is a different question — "is this
+    /// value even a resting mask?" rather than "have we already got one?" — and
+    /// because it is the half that is testable.
+    fn resting(mask: usize) -> usize {
+        mask & !FULLSCREEN
+    }
+
+    // `extern "C-unwind"`, not `extern "C"`, because an Objective-C method can
+    // raise — `objc2` declares the whole message-send family this way for that
+    // reason. `makeFirstResponder:` runs arbitrary responder hooks and
+    // `setStyleMask:` runs AppKit's frame-view rebuild, so an exception crossing a
+    // boundary declared non-unwinding is reachable rather than theoretical, and it
+    // would abort instead of unwinding.
+    #[link(name = "objc", kind = "dylib")]
+    extern "C-unwind" {
+        fn sel_registerName(name: *const c_char) -> *const c_void;
+        fn objc_msgSend();
+    }
+
+    /// `objc_msgSend` as a typed call. One transmute helper per shape, so the
+    /// signatures sit next to each other and can be read against the selectors.
+    ///
+    /// `id`-returning and `void`-returning are separate types on purpose: the
+    /// return type is part of the ABI contract, and getting it from the wrong
+    /// shape is exactly the class of mistake that only shows up as corruption.
+    unsafe fn msg_id(receiver: *mut c_void, selector: *const c_void) -> *mut c_void {
+        let send: extern "C-unwind" fn(*mut c_void, *const c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        send(receiver, selector)
+    }
+
+    unsafe fn msg_void(receiver: *mut c_void, selector: *const c_void) {
+        let send: extern "C-unwind" fn(*mut c_void, *const c_void) =
+            std::mem::transmute(objc_msgSend as *const ());
+        send(receiver, selector)
+    }
+
+    /// `NSUInteger` is `usize`, matching `pin`'s `NSInteger`/`isize` for
+    /// `setLevel:`.
+    unsafe fn msg_uint(receiver: *mut c_void, selector: *const c_void) -> usize {
+        let send: extern "C-unwind" fn(*mut c_void, *const c_void) -> usize =
+            std::mem::transmute(objc_msgSend as *const ());
+        send(receiver, selector)
+    }
+
+    unsafe fn msg_with_uint(receiver: *mut c_void, selector: *const c_void, value: usize) {
+        let send: extern "C-unwind" fn(*mut c_void, *const c_void, usize) =
+            std::mem::transmute(objc_msgSend as *const ());
+        send(receiver, selector, value)
+    }
+
+    /// Returns `i8` rather than `bool` deliberately. Objective-C `BOOL` is C
+    /// `_Bool` on arm64 but `signed char` on Intel, and a `signed char` holding
+    /// anything but 0 or 1 read as a Rust `bool` is undefined behaviour. `i8`
+    /// compared against zero is correct on both, which matters the day this is
+    /// built as a universal binary.
+    unsafe fn msg_with_id_returning_bool(
+        receiver: *mut c_void,
+        selector: *const c_void,
+        argument: *mut c_void,
+    ) -> i8 {
+        let send: extern "C-unwind" fn(*mut c_void, *const c_void, *mut c_void) -> i8 =
+            std::mem::transmute(objc_msgSend as *const ());
+        send(receiver, selector, argument)
+    }
+
+    /// The resting style mask, or `None` when the window is not presenting.
+    ///
+    /// Deliberately separate from the saved frame rather than a field on it. The
+    /// mask has to be READ from the window, `styleMask` is main-thread-only, and
+    /// `run_on_main_thread` cannot hand a value back — so the read and the write
+    /// both happen inside the closure, which needs somewhere of its own to put
+    /// the answer.
+    fn saved_mask() -> &'static std::sync::Mutex<Option<usize>> {
+        static STATE: std::sync::OnceLock<std::sync::Mutex<Option<usize>>> =
+            std::sync::OnceLock::new();
+        STATE.get_or_init(|| std::sync::Mutex::new(None))
+    }
+
+    fn lock() -> std::sync::MutexGuard<'static, Option<usize>> {
+        match saved_mask().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// What to latch when stripping the chrome.
+    ///
+    /// Pure and separated for the same reason [`super::plan`] is: it is the one
+    /// piece of judgement in this module that can be wrong in a way no type
+    /// catches, and it cannot be exercised at all through `setStyleMask:`
+    /// without a window server.
+    fn remember(saved: Option<usize>, resting: usize) -> Option<usize> {
+        saved.or(Some(resting))
+    }
+
+    unsafe fn style_mask(ns_window: *mut c_void) -> usize {
+        msg_uint(ns_window, sel_registerName(c"styleMask".as_ptr()))
+    }
+
+    /// Set the mask, and keep the keyboard.
+    ///
+    /// AppKit rebuilds the window's frame view whenever the mask gains or loses
+    /// `Titled`, and the first responder does not survive it — tao's own helper
+    /// re-points it at the content view for exactly this reason, with the comment
+    /// "if we don't do this, key handling will break". It matters more here than
+    /// it does there: the keyboard is how a presenter gets OUT of a take, so a
+    /// dropped responder means Escape does nothing.
+    ///
+    /// ---------------------------------------------------------------------------
+    /// WHY THE PREVIOUS RESPONDER IS RETAINED, AND WHY THERE IS A FLOOR
+    /// ---------------------------------------------------------------------------
+    /// Handing the keyboard back to whatever had it is better than naming a view —
+    /// it preserves focus rather than resetting it — but the pointer needs care in
+    /// both directions.
+    ///
+    /// `NSWindow.firstResponder` is declared `weak` and comes back `+0`, and the
+    /// frame view AppKit is about to rebuild may be the responder's last owner. So
+    /// the read is retained ACROSS `setStyleMask:`; without that,
+    /// `makeFirstResponder:` can be messaging freed memory.
+    ///
+    /// And it can legitimately refuse: a responder that WAS part of the rebuilt
+    /// frame view is no longer in the window, so it answers `NO`. `content_view`
+    /// is the floor for that case — the window owns it, so it is always there to
+    /// take the keyboard. It is second rather than first because it is a reset,
+    /// not a restore.
+    unsafe fn set_style_mask(ns_window: *mut c_void, content_view: *mut c_void, mask: usize) {
+        let previous = msg_id(ns_window, sel_registerName(c"firstResponder".as_ptr()));
+        if !previous.is_null() {
+            msg_id(previous, sel_registerName(c"retain".as_ptr()));
+        }
+
+        msg_with_uint(
+            ns_window,
+            sel_registerName(c"setStyleMask:".as_ptr()),
+            mask,
+        );
+
+        let make_first_responder = sel_registerName(c"makeFirstResponder:".as_ptr());
+        let restored = !previous.is_null()
+            && msg_with_id_returning_bool(ns_window, make_first_responder, previous) != 0;
+        if !previous.is_null() {
+            msg_void(previous, sel_registerName(c"release".as_ptr()));
+        }
+
+        if !restored && !content_view.is_null() {
+            msg_with_id_returning_bool(ns_window, make_first_responder, content_view);
+        }
+    }
+
+    /// Run `apply` against this window's `NSWindow` and content view, on the main
+    /// thread.
+    ///
+    /// The dispatch failure propagates; what happens INSIDE the closure cannot,
+    /// because it may run after this function has returned. Same honesty as
+    /// `pin::above_everything`: a success here means the change was scheduled. In
+    /// practice it means more than that — `set_control_presenting` is reached from
+    /// the IPC handler on the main thread, where Tauri runs the closure INLINE —
+    /// but the weaker claim is the one the signature can actually keep.
+    ///
+    /// Neither pointer escapes: both are read inside the closure and consumed
+    /// inside it, so nothing raw crosses a thread and the `Send` bound applies
+    /// only to whatever `apply` captures.
+    fn on_ns_window<R, F>(
+        app: &AppHandle<R>,
+        window: &WebviewWindow<R>,
+        what: &'static str,
+        apply: F,
+    ) -> Result<(), AppError>
+    where
+        R: Runtime,
+        F: FnOnce(*mut c_void, *mut c_void) + Send + 'static,
+    {
+        let window = window.clone();
+        app.run_on_main_thread(move || {
+            let ns_window = match window.ns_window() {
+                Ok(ptr) => ptr,
+                Err(error) => {
+                    tracing::warn!(%error, "no NSWindow to {what}");
+                    return;
+                }
+            };
+            if ns_window.is_null() {
+                tracing::warn!("NSWindow handle was null; could not {what}");
+                return;
+            }
+            // Only the keyboard floor, so a window that cannot report one still
+            // gets its mask changed — `set_style_mask` treats null as "no floor".
+            let content_view = window.ns_view().unwrap_or(std::ptr::null_mut());
+            apply(ns_window, content_view);
+        })
+        .map_err(super::presentation_failed)
+    }
+
+    /// Borderless, remembering what to put back.
+    pub fn strip<R: Runtime>(
+        app: &AppHandle<R>,
+        window: &WebviewWindow<R>,
+    ) -> Result<(), AppError> {
+        on_ns_window(
+            app,
+            window,
+            "take the titlebar off",
+            |ns_window, content_view| unsafe {
+                let mut saved = lock();
+                // A LATCH, not a stack, for the same reason the frame is one:
+                // `Reassert` re-applies the presentation mid-take, and saving then
+                // would record the BORDERLESS mask as the thing to restore — so
+                // un-presenting would hand back a window with no titlebar to grab.
+                *saved = remember(*saved, resting(style_mask(ns_window)));
+                set_style_mask(ns_window, content_view, BORDERLESS_RESIZABLE);
+            },
+        )
+    }
+
+    /// The resting chrome, exactly as it was.
+    ///
+    /// `decorations` is the non-macOS path's business: here the saved mask
+    /// already describes the titlebar, the traffic lights and the full-size
+    /// content view in one value.
+    pub fn restore<R: Runtime>(
+        app: &AppHandle<R>,
+        window: &WebviewWindow<R>,
+        _decorations: bool,
+    ) -> Result<(), AppError> {
+        on_ns_window(
+            app,
+            window,
+            "put the titlebar back",
+            |ns_window, content_view| unsafe {
+                // Nothing latched means nothing is left to put back — either no
+                // strip ever happened (`startTake`'s failure paths un-present
+                // without knowing how far the open got) or an earlier restore
+                // already consumed it. Both are ordinary rather than a defect,
+                // which is why this is silent.
+                if let Some(mask) = lock().take() {
+                    set_style_mask(ns_window, content_view, mask);
+                }
+            },
+        )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// `NSWindowStyleMaskFullSizeContentView`. Not a constant this module
+        /// sets — it is named here only so the test can say what the bug was.
+        const FULL_SIZE_CONTENT_VIEW: usize = 1 << 15;
+
+        /// The four bits tao's `set_decorations(true)` rebuilds a mask from.
+        const TAO_DECORATED: usize = 0b1111;
+
+        /// The whole defect, as an assertion: bits this module does not model
+        /// have to survive the round trip.
+        ///
+        /// `FullSizeContentView` is the one that mattered — it is what puts the
+        /// webview under the titlebar and makes the bar read as the app's own
+        /// paper — but the assertion is deliberately about ANY unmodelled bit,
+        /// because the failure was not "we forgot bit 15", it was "we rebuilt the
+        /// mask from a list". A restore that reconstructs rather than replays
+        /// fails this for whatever the next such bit turns out to be.
+        #[test]
+        fn latching_replays_unmodelled_bits_rather_than_rebuilding_them() {
+            let exotic = 1 << 20;
+            let resting_mask = FULL_SIZE_CONTENT_VIEW | exotic | TAO_DECORATED;
+            let latched = remember(None, resting(resting_mask)).expect("first strip latches");
+            assert_eq!(latched, resting_mask);
+            // What `set_decorations(true)` would have produced instead.
+            assert_ne!(latched, TAO_DECORATED);
+        }
+
+        /// Presenting twice must not re-latch: the second strip reads the
+        /// BORDERLESS mask off the window, and remembering that would leave
+        /// un-presenting with no titlebar to hand back.
+        #[test]
+        fn stripping_twice_does_not_relatch_the_mask() {
+            let resting_mask = FULL_SIZE_CONTENT_VIEW | TAO_DECORATED;
+            let once = remember(None, resting_mask);
+            assert_eq!(remember(once, BORDERLESS_RESIZABLE), Some(resting_mask));
+        }
+
+        /// A window asked to leave NATIVE fullscreen a moment ago can still read
+        /// back as fullscreen, because `set_fullscreen(false)` is asynchronous.
+        /// Latching that bit would mean handing it back on restore, telling AppKit
+        /// the window is fullscreen when it is not.
+        #[test]
+        fn a_fullscreen_mask_is_never_latched_as_resting() {
+            let mid_transition = FULLSCREEN | FULL_SIZE_CONTENT_VIEW | TAO_DECORATED;
+            let latched = remember(None, resting(mid_transition)).expect("first strip latches");
+            assert_eq!(latched & FULLSCREEN, 0);
+            // Everything else about the window is still the thing to put back.
+            assert_eq!(latched, FULL_SIZE_CONTENT_VIEW | TAO_DECORATED);
+        }
+    }
+}
+
+/// Everywhere else the decorations flag is the whole story, and tao's own
+/// bookkeeping is the right owner of it.
+#[cfg(not(target_os = "macos"))]
+mod chrome {
+    use tauri::{AppHandle, Runtime, WebviewWindow};
+
+    use crate::errors::AppError;
+
+    use super::presentation_failed;
+
+    pub fn strip<R: Runtime>(
+        _app: &AppHandle<R>,
+        window: &WebviewWindow<R>,
+    ) -> Result<(), AppError> {
+        window.set_decorations(false).map_err(presentation_failed)
+    }
+
+    pub fn restore<R: Runtime>(
+        _app: &AppHandle<R>,
+        window: &WebviewWindow<R>,
+        decorations: bool,
+    ) -> Result<(), AppError> {
+        window
+            .set_decorations(decorations)
+            .map_err(presentation_failed)
+    }
+}
+
 /// Everywhere else, always-on-top is the whole answer: Windows' `HWND_TOPMOST`
 /// already sits above the taskbar, and X11/Wayland have no equivalent of the
 /// macOS layering problem above.
@@ -392,6 +811,12 @@ mod pin {
     use tauri::{AppHandle, Runtime, WebviewWindow};
 
     use crate::errors::AppError;
+
+    // A child module does not inherit the parent's names, and without this the
+    // whole arm is an unresolved-name error — so no non-macOS target has ever
+    // compiled this file. Fixed in passing while adding the sibling `chrome` arm,
+    // which would otherwise have been written to match something broken.
+    use super::presentation_failed;
 
     pub fn above_everything<R: Runtime>(
         _app: &AppHandle<R>,
@@ -459,9 +884,7 @@ pub fn set_control_presenting<R: Runtime>(
              * all try it again with the same numbers.
              */
             window.set_always_on_top(false).map_err(presentation_failed)?;
-            window
-                .set_decorations(frame.decorations)
-                .map_err(presentation_failed)?;
+            chrome::restore(app, &window, frame.decorations)?;
             window
                 .set_position(tauri::Position::Physical(restore_position(app, &frame)))
                 .map_err(presentation_failed)?;
@@ -473,9 +896,21 @@ pub fn set_control_presenting<R: Runtime>(
             if frame.maximized {
                 let _ = window.maximize();
             }
-            // Back to the OS default, so a resize of the EDITOR shows the
-            // workspace theme's own light canvas rather than a black frame
-            // around a light app.
+            /*
+             * Back to the OS default, so the take's black is not left behind the
+             * editor.
+             *
+             * The comment here used to say this restores "the workspace theme's
+             * own light canvas". It does not: `None` gives back the dynamic
+             * `windowBackgroundColor`, which resolves DARK on a machine in Dark
+             * Mode — measured, not assumed. It is close to invisible in practice
+             * because the webview covers the whole window (full-size content
+             * view), so the backing only shows in the instant a resize outruns
+             * the paint. Left as the OS default rather than pinned to a
+             * hard-coded paper colour, which would be wrong the moment the
+             * workspace palette moves; noted here so the next person does not
+             * read the old promise and trust it.
+             */
             let _ = window.set_background_color(None);
             target = frame.inner_size;
         }
@@ -484,6 +919,20 @@ pub fn set_control_presenting<R: Runtime>(
             // the separate-stage path, and a leaked one keeps the display awake
             // for the rest of the run.
             sleep::release(app);
+            /*
+             * And the chrome is still drained, for the same "shared latch can
+             * outlive the thing that set it" reason.
+             *
+             * `Nothing` is planned from the FRAME latch, and the two latches can
+             * come apart: a restore whose closure could not reach the `NSWindow`
+             * leaves the mask latched while the frame is cleared below it, and
+             * every later un-present would then plan `Nothing` and never look at
+             * the mask again — a window left borderless until the app quits. A
+             * drain here is a no-op in the overwhelmingly common case (nothing
+             * latched, which is every ordinary launch) and the only path back in
+             * the case that matters.
+             */
+            chrome::restore(app, &window, true)?;
             target = window.inner_size().unwrap_or(PhysicalSize { width: 0, height: 0 });
         }
     }
