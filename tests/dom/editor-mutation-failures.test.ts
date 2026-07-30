@@ -69,24 +69,30 @@ vi.mock('../../src/control/lib/start-take', () => ({
   takeStarting: { subscribe: (run: (v: boolean) => void) => (run(false), () => {}) },
 }));
 
+const SCRIPT_ID = 'a';
+
 /*
  * The compile path is a Web Worker behind a service, and none of it is under
- * test here. Stubbing the store keeps the route mountable in jsdom without
- * pretending a compile happened: `result` stays null, which is the idle state.
+ * test here. Stubbing the store keeps the route mountable in jsdom.
+ *
+ * It reports a compile that has SETTLED for this script, carrying nothing:
+ * `result` stays null, so every derived value falls back to empty exactly as
+ * before and no compile is pretended to have produced anything. The status has
+ * to settle because the editor waits for its first compile before it draws
+ * (§13, issue #140) — and a permanently idle store is not a state the real app
+ * can be in anyway, since adopting a document always requests a compile.
  */
 vi.mock('../../src/control/stores/compiled', () => ({
   compiled: readable({
-    status: 'idle' as const,
-    editorRevision: -1,
+    status: 'ready' as const,
+    editorRevision: 0,
     result: null,
     error: null,
-    scriptId: null,
+    scriptId: 'a',
   }),
   requestCompile: vi.fn(async () => {}),
   resetCompiled: vi.fn(),
 }));
-
-const SCRIPT_ID = 'a';
 
 const toast = vi.mocked(showToast);
 const navigated = vi.mocked(navigate);
