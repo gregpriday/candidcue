@@ -13,7 +13,7 @@ use crate::util::{new_uuid, now_iso};
 pub mod present;
 pub mod sleep;
 
-pub use present::{set_control_presenting, ControlPresentationState};
+pub use present::{set_control_presenting, ControlPresentationState, PresentMode};
 
 pub const STAGE_LABEL: &str = "stage";
 pub const CONTROL_LABEL: &str = "control";

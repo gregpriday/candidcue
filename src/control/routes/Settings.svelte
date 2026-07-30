@@ -87,6 +87,7 @@
     type StageEscapePayload,
     type TextIntensity,
   } from '../../shared/contracts';
+  import { presentationModeShortcutLabel } from '../lib/shortcuts';
   import { discoverProfile } from '../../shared/optical-discovery';
   import {
     DEFAULT_BOTTOM_FADE_LINES,
@@ -99,6 +100,7 @@
     DEFAULT_PAST_OPACITY,
     DEFAULT_SENTENCE_MICROGAP_LINES,
     DEFAULT_TOP_FADE_LINES,
+    NO_LENS_READING_BAND_FRACTION,
     resolveStageGeometry,
     resolveTargetArcminutes,
     resolveTargetCharacters,
@@ -296,7 +298,17 @@
       const handle = await openStagePreview({
         displayFingerprint: fingerprint,
         settings: previewStageSettings,
-        fullscreen: $settings.stage.fullscreen,
+        /*
+         * Always full-screen, and this is not the presentation mode.
+         *
+         * `openStagePreview`'s `fullscreen` is the SEPARATE stage window's flag —
+         * "show this window on that panel, filling it" — and a preview exists to
+         * answer "what will this rig look like on that display?". Sizing it to
+         * whatever shape a reader-mode take would use would answer a different
+         * question about a different window. Reader mode never opens a stage
+         * window at all; it presents this one in place.
+         */
+        fullscreen: true,
       });
       if (epoch !== previewEpoch) {
         void handle.close().catch(() => {});
@@ -477,7 +489,11 @@
     const testSessionId = `display-test-${Date.now().toString(36)}`;
     try {
       await stageService.openStage({ displayFingerprint: fingerprint, sessionId: testSessionId });
-      await stageService.setStageFullscreen(testSessionId, $settings.stage.fullscreen);
+      // Filling the panel, always. The whole question this button answers is
+      // "which physical display is this?", and a window that did not cover the
+      // panel would be a worse answer to it — see the note in `openStagePreview`
+      // above about why this flag is not the presentation mode.
+      await stageService.setStageFullscreen(testSessionId, true);
       window.setTimeout(() => {
         void stageService.closeStage(testSessionId).catch(() => {});
       }, 4000);
@@ -762,6 +778,12 @@
         return o?.futureOpacity ?? DEFAULT_FUTURE_OPACITY;
       case 'secondaryMinPx':
         return o?.secondaryMinPx ?? 28;
+      case 'readingBandY':
+        // Where the band actually resolved to, which on a lens rig is derived
+        // from the crosshair and on a reader rig is the no-lens default — so the
+        // constant is the fallback rather than the answer, same as every case
+        // above it.
+        return o?.readingBandY ?? NO_LENS_READING_BAND_FRACTION;
       case 'lensOffsetDegrees':
         // Zero, and the default is zero: the evidence supports OFFERING a small
         // downward shift, not applying one.
@@ -1549,20 +1571,63 @@
           {#if displaysError}
             <p class="inline-alert" role="alert">{displaysError}</p>
           {/if}
+          <!--
+            How a take presents.
+
+            This replaced a "Full screen" switch that had no effect on any take:
+            it was read by the preview and the display test and by nothing on the
+            path `Present` actually takes. These two do something, and they are
+            tiles rather than a toggle because they are not more-and-less of one
+            thing — a prompter and a reading window differ in the viewing
+            distance, the mirror, the hood and where the reading line sits.
+          -->
+          <div class="display-grid">
+            <button
+              type="button"
+              class="monitor-tile"
+              class:selected={$settings.stage.presentationMode === 'prompter'}
+              aria-pressed={$settings.stage.presentationMode === 'prompter'}
+              onclick={() => void patchSettings('stage', { presentationMode: 'prompter' })}
+            >
+              <span class="monitor-glyph"><Icon name="monitor" size={22} /></span>
+              <span class="monitor-name">Teleprompter</span>
+              <span class="monitor-meta">
+                Fills the display it is on, above everything, for reading off glass at a distance.
+              </span>
+            </button>
+            <button
+              type="button"
+              class="monitor-tile"
+              class:selected={$settings.stage.presentationMode === 'reader'}
+              aria-pressed={$settings.stage.presentationMode === 'reader'}
+              onclick={() => void patchSettings('stage', { presentationMode: 'reader' })}
+            >
+              <span class="monitor-glyph"><Icon name="book-open" size={22} /></span>
+              <span class="monitor-name">Reading window</span>
+              <span class="monitor-meta">
+                Stays a window you can size and move. Wider lines, desk distance, never mirrored.
+              </span>
+            </button>
+          </div>
+          <p class="hint-line">
+            Either way, {presentationModeShortcutLabel()} switches between them during a take.
+          </p>
           <div class="toggle-grid">
-            <Toggle
-              checked={$settings.stage.fullscreen}
-              label="Full screen"
-              onchange={(value) => void patchSettings('stage', { fullscreen: value })}
-            />
             <!-- The stage window is created always-on-top and re-asserts it on
                  every show (§52.7); there is no command to turn that off, so it
-                 is shown as the fixed behaviour it is rather than as a lie. -->
+                 is shown as the fixed behaviour it is rather than as a lie.
+
+                 True of the teleprompter only: a reading window is an ordinary
+                 window and is deliberately not pinned, because a script that
+                 floated over every other application would be unusable beside
+                 the one thing people read scripts next to. -->
             <Toggle
-              checked={true}
+              checked={$settings.stage.presentationMode === 'prompter'}
               disabled
               label="Always on top"
-              description="Always on in this release — the stage must sit above other windows"
+              description={$settings.stage.presentationMode === 'prompter'
+                ? 'Always on in this release — the teleprompter must sit above other windows'
+                : 'Off for a reading window, so you can work beside it'}
             />
             <Toggle
               checked={$settings.teleprompter.mirrorX}

@@ -52,6 +52,7 @@
   import type {
     AlignmentSnapshot,
     RenderedLine,
+    ResolvedOptics,
     SafeRenderNode,
     SmoothFollowProfile,
     StageAutoScrollPayload,
@@ -61,6 +62,7 @@
     StageViewportHintPayload,
   } from '../../shared/contracts';
   import { STAGE_EVENT, VIEWPORT_HINT_INTERVAL_MS } from '../../shared/contracts';
+  import { resolveStageGeometry } from '../../shared/optical-resolve';
   import { emitStageEvent } from '../events';
   import {
     computeReadingBand,
@@ -72,6 +74,7 @@
     fadeDepthPx,
     columnLeftPx,
     imageMaxHeightVh,
+    VIEWPORT_REFLOW_SETTLE_MS,
     clamp,
   } from './geometry';
   import { classifyTransition, provisionalMaxCorrectionPx } from './motion';
@@ -268,8 +271,66 @@
   let measuredVh = $state(0);
   let windowVw = $state(0);
   let windowVh = $state(0);
-  const vw = $derived(measuredVw || windowVw);
-  const vh = $derived(measuredVh || windowVh);
+  const rawVw = $derived(measuredVw || windowVw);
+  const rawVh = $derived(measuredVh || windowVh);
+
+  /*
+   * The settle interval is `VIEWPORT_REFLOW_SETTLE_MS`, imported rather than
+   * declared, because the mid-take mode switch has to wait out the same interval
+   * before it recomposes. See the note at its definition in `geometry.ts`.
+   *
+   * Why it exists at all, having not been needed for three years: until reader
+   * mode the viewport changed exactly ONCE per take — `startTake` presents the
+   * window and waits for it to settle BEFORE the stage mounts, precisely so the
+   * line map is measured once at the size it will be read at. There was nothing
+   * to coalesce. A reading window has an edge somebody can drag, and a drag
+   * delivers a resize per frame; each one is a layout input, so each one asks for
+   * a `document.fonts.ready` wait, a full re-measure of every block, and a §33
+   * semantic re-anchor.
+   */
+
+  /**
+   * The viewport the LAYOUT is computed against: the real one, once it has
+   * stopped moving.
+   *
+   * Deliberately the value everything downstream reads, rather than a second
+   * viewport beside the live one. A split — live geometry, settled wrapping —
+   * means the band, the padding and the fades track a window whose line map
+   * describes a different width, and every one of those disagreements is a real
+   * pixel offset in where the reading position is. One viewport, slightly late,
+   * is a document that lags a drag by a tenth of a second; two viewports is a
+   * document that is wrong about itself.
+   */
+  let vw = $state(0);
+  let vh = $state(0);
+
+  $effect(() => {
+    const width = rawVw;
+    const height = rawVh;
+    if (width === 0 || height === 0) return;
+    /*
+     * The FIRST measurement lands immediately, with no debounce.
+     *
+     * Everything about the opening is a wait already — the font settle, the
+     * measurement pass, the plant reaching the opening — and all of it is behind
+     * the plate. Spending another 120 ms before the layout can even begin would
+     * add that delay to every take to coalesce a resize sequence that, at open,
+     * has exactly one member.
+     */
+    if (vw === 0 || vh === 0) {
+      vw = width;
+      vh = height;
+      return;
+    }
+    if (width === vw && height === vh) return;
+    // Trailing edge: the cleanup below cancels this the moment the raw viewport
+    // moves again, so a continuous drag schedules once and fires once.
+    const timer = setTimeout(() => {
+      vw = width;
+      vh = height;
+    }, VIEWPORT_REFLOW_SETTLE_MS);
+    return () => clearTimeout(timer);
+  });
 
   /**
    * The resolved optical geometry, or null on a rig that has never been
@@ -281,7 +342,75 @@
    * when it exists and falls back to the historical expression when it does
    * not — which is what keeps this change additive.
    */
-  const optics = $derived(settings.optics ?? null);
+  const envelopeOptics = $derived(settings.optics ?? null);
+
+  /**
+   * Reader mode resolves its own geometry, here, against the window it is
+   * actually in.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY CONTROL'S ANSWER IS NOT USABLE FOR A READING WINDOW
+   * ---------------------------------------------------------------------------
+   * `stageSettingsFromSettings` resolves against `display.logicalSize` — the
+   * whole panel. For a prompter that is exactly right, because the window IS the
+   * panel. A reading window is some fraction of it, and the fraction changes
+   * whenever somebody drags an edge.
+   *
+   * Type SIZE survives that (it is angular, and `mmPerCssPx` is a property of the
+   * display rather than of the window), which is why reader mode works at all
+   * without this. What does not survive is the MEASURE: the character target was
+   * chosen against a width the reader does not have, and `columnWidthPx` below
+   * clamps the resulting column to `safeRect.width` — silently, without running
+   * the fit check's narrowing pass. So a reading window could sit under the
+   * character floor with no warning, and `hardwareFitCheck` — described in
+   * `optics.ts` as "the primary mechanism of the width system" — would never run.
+   *
+   * Resolving here also gets the MEASURED font metrics rather than the DIN
+   * fallbacks, which control's own note says it cannot supply: "Control cannot
+   * measure a font it does not render... which the stage improves on once it has
+   * painted its own text."
+   *
+   * ---------------------------------------------------------------------------
+   * AND WHY PROMPTER MODE STILL DOES NOT
+   * ---------------------------------------------------------------------------
+   * Because it works, and this is the one path in the app that a benchmark
+   * describes. Prompter geometry is what every Tier A/B/C number was measured
+   * against, and moving its resolve — even to a place that would produce the same
+   * answer for a window that fills its panel, plus better font metrics — is a
+   * change that has to be PROVEN not to move the numbers rather than argued not
+   * to. It is phase 5 of the reader-mode spec for that reason, and it is
+   * deliberately last.
+   *
+   * The fork is temporary and it is the kind this codebase warns about (see
+   * `bench/README.md` on Tier C drifting from `src/stage/motion/`). What keeps it
+   * honest meanwhile is that both arms call the SAME `resolveStageGeometry` with
+   * the same profile — the difference is which viewport and whose metrics, not
+   * which model.
+   */
+  const readerOptics = $derived.by((): ResolvedOptics | null => {
+    if (settings.readingContext !== 'reader') return null;
+    const profile = settings.opticalProfile;
+    if (!profile) return null;
+    if (vw <= 0 || vh <= 0) return null;
+    return resolveStageGeometry({
+      profile,
+      metrics: fontMetrics,
+      viewport: { widthPx: vw, heightPx: vh },
+      readingContext: 'reader',
+    }).optics;
+  });
+
+  /**
+   * The resolved optical geometry, or null on a rig that has never been
+   * calibrated.
+   *
+   * Null is a first-class case, not a failure: an uncalibrated stage still has
+   * to prompt, and it does so from the percentage and line-height fields that
+   * have always been there. Every derivation below therefore reads `optics`
+   * when it exists and falls back to the historical expression when it does
+   * not — which is what keeps this change additive.
+   */
+  const optics = $derived(readerOptics ?? envelopeOptics);
 
   /**
    * Take mode reads; rehearsal mode reads AND shows the working.
@@ -435,8 +564,21 @@
    */
   const fontMetrics = $derived.by((): FontMetrics => {
     void fontEpoch;
+    /*
+     * `envelopeOptics`, NOT `optics` — and this is load-bearing, not tidiness.
+     *
+     * `readerOptics` resolves FROM these metrics, so reading the merged `optics`
+     * here would be a derivation cycle: metrics → resolve → weight → metrics.
+     * Svelte 5 detects that and throws rather than settling on a value.
+     *
+     * Breaking it on the envelope side is correct as well as convenient. The
+     * weight is the one input to the measurement that the viewport cannot change
+     * — `resolveStageGeometry` reads it off the profile's overrides or a constant,
+     * never off the panel — so control's answer and the stage's are the same
+     * answer, and taking the one that does not close the loop costs nothing.
+     */
     return measureFontMetrics(stageFontStack(settings.fontFamilyId), {
-      fontWeight: optics?.fontWeight ?? settings.fontWeight ?? 500,
+      fontWeight: envelopeOptics?.fontWeight ?? settings.fontWeight ?? 500,
     });
   });
 
@@ -1396,11 +1538,40 @@
     scheduleLineMapBuild();
   });
 
+  /**
+   * A rebuild was asked for while one was already running.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY DROPPING IT WAS SAFE AND IS NOT ANY MORE
+   * ---------------------------------------------------------------------------
+   * The guard below used to be a bare `if (lineMapPending) return`, and the
+   * dropped request was almost always harmless: `rebuildLineMap` reads the
+   * CURRENT inputs when it eventually runs, so a request that arrives mid-build
+   * is usually satisfied by the build already in flight.
+   *
+   * Almost. A change landing after `rebuildLineMap()` has read its inputs but
+   * before the `finally` clears the flag is dropped by a build that did not see
+   * it — and nothing reschedules, because the reactive effect that would have
+   * has already run. The map then describes a layout that no longer exists until
+   * the next unrelated input moves.
+   *
+   * That window is a couple of frames wide, and until reader mode nothing could
+   * fire into it: the viewport changed once per take, before the stage mounted.
+   * A window with a draggable edge fires into it repeatedly, and the settle
+   * debounce on the viewport does not help — it makes each request arrive alone,
+   * which is exactly the case with nothing following it to paper over the drop.
+   */
+  let lineMapDirty = false;
+
   function scheduleLineMapBuild() {
-    if (lineMapPending) return;
+    if (lineMapPending) {
+      lineMapDirty = true;
+      return;
+    }
     lineMapPending = true;
     void (async () => {
       try {
+        lineMapDirty = false;
         // §7.1: measure only once fonts and layout-affecting assets are final.
         if (planeEl) await awaitLayoutStable(planeEl);
         await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -1408,6 +1579,14 @@
       } finally {
         lineMapPending = false;
       }
+      /*
+       * Outside the `try`, and after the flag is clear, so the follow-up is a
+       * fresh scheduling rather than recursion inside a build that is still
+       * marked as running. A rebuild that threw still gets its retry: the
+       * `finally` above releases the flag either way, and a dirty map is worth
+       * another attempt more than a clean one is.
+       */
+      if (lineMapDirty) scheduleLineMapBuild();
     })();
   }
 
@@ -2632,6 +2811,10 @@
     if (loopRunning) return;
     loopRunning = true;
     engine.visibilityRestored(scrollY, performance.now());
+    // Seeded so the first frame after a deliberate start is not ALSO read as a
+    // gap: `startLoop` has just re-anchored, and doing it twice would reset the
+    // fade a second time on the frame after it was already cleared.
+    lastFrameSeenAtMs = performance.now();
     rafId = requestAnimationFrame(frame);
   }
 
@@ -2641,8 +2824,53 @@
     rafId = 0;
   }
 
+  /**
+   * A gap between frames long enough to mean the loop was not running.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY `visibilitychange` IS NOT THE WHOLE STORY
+   * ---------------------------------------------------------------------------
+   * §32.4's handling is right and is not enough. A window can stop receiving
+   * `requestAnimationFrame` callbacks without `document.hidden` ever becoming
+   * true: fully occluded by another application's window is the ordinary case,
+   * and the browser stops rendering a surface nobody can see.
+   *
+   * A borderless always-on-top prompter filling a monitor is never in that state,
+   * which is why this has never mattered. A reading window is in it constantly —
+   * that is the whole point of a window you can work beside.
+   *
+   * What happens without this: frames stop, the plant stops integrating,
+   * alignment snapshots keep arriving over IPC because they do not depend on
+   * rendering, and on return `visibilityRestored` is never called. `dtMs` is
+   * capped by the controller (§32.2) so there is no runaway step, but the plant
+   * resumes from a position minutes out of date and catches up by scrolling the
+   * whole distance. The reader sees the script race.
+   *
+   * One second. Well past any hitch a real frame loop produces — the controller's
+   * own frame-interval sampler discards anything over 1000 ms as not a frame time
+   * at all — and well under the shortest occlusion anybody would notice.
+   */
+  const FRAME_GAP_RESTORE_MS = 1000;
+  let lastFrameSeenAtMs = Number.NEGATIVE_INFINITY;
+
   function frame(now: number) {
     if (!loopRunning) return;
+    /*
+     * The same re-anchor `visibilitychange` would have asked for, from the other
+     * direction: the evidence here is the gap itself rather than an event.
+     *
+     * Deliberately `engine.visibilityRestored` and not a new entry point. It is
+     * already exactly the right behaviour — re-anchor to what is on screen, never
+     * replay missed motion, and reset the fade because no frames ran to unwind it
+     * — and the note on the visibility handler above asks for one decision with
+     * one owner. This is the second way of noticing the same thing, not a second
+     * thing to do about it.
+     */
+    const gap = now - lastFrameSeenAtMs;
+    lastFrameSeenAtMs = now;
+    if (gap > FRAME_GAP_RESTORE_MS && Number.isFinite(gap)) {
+      engine.visibilityRestored(scrollY, now);
+    }
     driveAutoScroll(now);
     const result = engine.frame(now);
     setScroll(restingSnap(result.scrollPx, result.velocityPxS));

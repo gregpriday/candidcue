@@ -34,12 +34,60 @@
 //! that teleported the window to whichever display a pinned fingerprint named
 //! would be moving the window out from under the person driving it.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
 
 use crate::errors::AppError;
 
 use super::{sleep, CONTROL_LABEL};
+
+/// The two shapes a take can present in.
+///
+/// ---------------------------------------------------------------------------
+/// WHY THIS IS A MODE AND NOT "FULL SCREEN, OFF"
+/// ---------------------------------------------------------------------------
+/// A window is not a smaller monitor. `Prompter` is the rig this module was
+/// written for — borderless, monitor-sized, above the menu bar, read off glass
+/// at a distance. `Reader` is somebody sitting down and reading a script off
+/// their own screen: an ordinary window, at ordinary desk distance, with no
+/// camera and no beamsplitter in the optical path.
+///
+/// Those differ in the viewing distance, in whether the picture is mirrored, in
+/// whether a hood crops the glass, and in where the reading band belongs — all
+/// of which the optical model reads from the rig profile rather than from here.
+/// What THIS module owns is the four window facts: chrome, layering, geometry
+/// and the minimum size. See `docs/CandidCue_Reader_Mode_Specification.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PresentMode {
+    Prompter,
+    Reader,
+}
+
+/// The reader window's floor, in logical pixels.
+///
+/// The control window's resting minimum is sized for the EDITOR (980x680 in
+/// `tauri.conf.json`), and a reader may reasonably want something narrower — a
+/// tall strip beside a video call.
+///
+/// Derived rather than picked, and worked at the SIZE READER MODE ACTUALLY USES
+/// when it has no calibration, which is `UNCALIBRATED_READER_FONT_SIZE_PX` (30
+/// CSS px) rather than whatever a calibrated rig resolves to. That is the
+/// conservative direction: 30 px is larger than the 27.4 px a calibrated
+/// 550 mm rig produces at the standard 24', so a floor that fits 30 px type also
+/// fits anything a calibrated reading window will ask for.
+///
+/// Width: the 30-character reader floor at 30 px is 30 x 0.5 x 30 = 450 px of
+/// column, and `MAX_COLUMN_FRACTION` (0.92) turns that into ~489 px. 520 leaves
+/// a little over.
+///
+/// Height: `TARGET_VISIBLE_LINES` (5) at a 30 px x 1.38 = 41.4 px pitch is 207
+/// px, and the rest is the fades and the band's own padding.
+///
+/// Applied on the way into `Reader` and taken away again on the way out, so the
+/// editor never inherits it.
+const READER_MIN_WIDTH_PX: f64 = 520.0;
+const READER_MIN_HEIGHT_PX: f64 = 360.0;
 
 /// Everything un-presenting has to put back.
 ///
@@ -81,16 +129,19 @@ struct ControlFrame {
 /// Pure and separated for the same reason [`sleep::plan`] is: the interesting
 /// part is the pairing, and the pairing is what leaks or double-applies when it
 /// is wrong — but it cannot be exercised at all through the real API without a
-/// display server. Both idempotent cases are named rather than folded into the
+/// display server. Every idempotent case is named rather than folded into the
 /// others, because they do genuinely different things.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresentAction {
-    /// Not presenting, asked to present: save the frame, then apply.
-    Enter,
-    /// Already presenting, asked again: re-apply the bounds (the display may
-    /// have been rearranged mid-take) WITHOUT overwriting the saved frame.
-    Reassert,
-    /// Presenting, asked to stop: restore the saved frame and drop it.
+    /// Not presenting, asked to present: save the resting frame, then apply.
+    Enter(PresentMode),
+    /// Already presenting in this mode, asked again: re-apply it (the display
+    /// may have been rearranged mid-take) WITHOUT touching the resting frame.
+    Reassert(PresentMode),
+    /// Presenting, asked for the OTHER mode. Mid-take, on the presenter's
+    /// command — see [`set_control_presenting`] for what each direction moves.
+    Switch(PresentMode),
+    /// Presenting, asked to stop: restore the resting frame and drop it.
     Restore,
     /// Not presenting, asked to stop. `startTake`'s failure paths un-present
     /// unconditionally without knowing how far the open got, so this is the
@@ -98,32 +149,80 @@ pub enum PresentAction {
     Nothing,
 }
 
-pub fn plan(currently_presenting: bool, want_presenting: bool) -> PresentAction {
-    match (currently_presenting, want_presenting) {
-        (false, true) => PresentAction::Enter,
-        (true, true) => PresentAction::Reassert,
-        (true, false) => PresentAction::Restore,
-        (false, false) => PresentAction::Nothing,
+/// `None` means "not presenting" on both sides.
+pub fn plan(current: Option<PresentMode>, want: Option<PresentMode>) -> PresentAction {
+    match (current, want) {
+        (None, Some(mode)) => PresentAction::Enter(mode),
+        (Some(from), Some(to)) if from == to => PresentAction::Reassert(to),
+        (Some(_), Some(to)) => PresentAction::Switch(to),
+        (Some(_), None) => PresentAction::Restore,
+        (None, None) => PresentAction::Nothing,
     }
 }
 
-/// The pre-presentation frame, or `None` when the window is not presenting.
+/// Everything a presenting window has to remember.
+///
+/// ---------------------------------------------------------------------------
+/// TWO FRAMES, AND WHY THEY ARE NOT ONE
+/// ---------------------------------------------------------------------------
+/// `resting` is the pre-take frame. It is written ONCE, by `Enter`, and no
+/// later transition may overwrite it — that is the latch-not-a-stack rule this
+/// module already had, and `presenting_twice_does_not_resave_the_frame` is its
+/// test. A `Restore` always replays it, so un-presenting always gives back a
+/// legitimate resting window.
+///
+/// `reader` is separate because [`PresentMode::Reader`] made the rule ambiguous
+/// for the first time. Reader mode is itself a RESTING shape — chrome on,
+/// ordinary bounds — so a reader who drags their window somewhere and then pops
+/// out to `Prompter` and back expects to land where they left it. The naive fix
+/// is to re-capture `resting` on the way out of reader mode, and it is wrong:
+/// reader mode lowers the window's minimum size (see [`READER_MIN_WIDTH_PX`]),
+/// so those bounds can be smaller than the editor's own minimum, and a
+/// `Restore` replaying them would hand the editor a window the OS then clamps
+/// — or, worse, an editor at 520x360.
+///
+/// So the reader's bounds get their own home, `resting` keeps its original
+/// promise verbatim, and neither has to know about the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PresentState {
+    resting: ControlFrame,
+    /// Which mode is applied over `resting` right now.
+    mode: PresentMode,
+    /// The reader window's own bounds, once it has had any.
+    reader: Option<ControlFrame>,
+}
+
+/// The presentation state, or `None` when the window is not presenting.
 ///
 /// A module-level static rather than coordinator state, for the same reason
 /// [`sleep`] uses one: it is a property of the OS window, it has to survive
 /// every path that can end a take (including a renderer that reloads
 /// mid-session), and nothing else in the app has any business reading it.
-fn saved_frame() -> &'static std::sync::Mutex<Option<ControlFrame>> {
-    static STATE: std::sync::OnceLock<std::sync::Mutex<Option<ControlFrame>>> =
+fn saved_frame() -> &'static std::sync::Mutex<Option<PresentState>> {
+    static STATE: std::sync::OnceLock<std::sync::Mutex<Option<PresentState>>> =
         std::sync::OnceLock::new();
     STATE.get_or_init(|| std::sync::Mutex::new(None))
 }
 
-fn lock() -> std::sync::MutexGuard<'static, Option<ControlFrame>> {
+fn lock() -> std::sync::MutexGuard<'static, Option<PresentState>> {
     match saved_frame().lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
+}
+
+/// The window's frame as it stands right now.
+///
+/// Every read here is a plain getter with no setter in front of it, so unlike
+/// the intended-geometry note on [`logical_size`] these values are current
+/// rather than pending.
+fn measure_frame<R: Runtime>(window: &WebviewWindow<R>) -> Result<ControlFrame, AppError> {
+    Ok(ControlFrame {
+        position: window.outer_position().map_err(presentation_failed)?,
+        inner_size: window.inner_size().map_err(presentation_failed)?,
+        decorations: window.is_decorated().unwrap_or(true),
+        maximized: window.is_maximized().unwrap_or(false),
+    })
 }
 
 /// What the control window is doing now, and the size the renderer should
@@ -138,6 +237,15 @@ fn lock() -> std::sync::MutexGuard<'static, Option<ControlFrame>> {
 #[serde(rename_all = "camelCase")]
 pub struct ControlPresentationState {
     pub presenting: bool,
+    /// The mode now applied, or `None` when the window is not presenting.
+    ///
+    /// Reported rather than assumed, because the mid-take toggle means the
+    /// renderer's idea of the mode and the window's can come apart — a `Switch`
+    /// that failed halfway leaves the window in one mode while the store still
+    /// believes the other, and the store adopting the answer is what keeps the
+    /// dock's toggle telling the truth.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<PresentMode>,
     pub width: f64,
     pub height: f64,
 }
@@ -225,6 +333,153 @@ fn restore_position<R: Runtime>(
         .unwrap_or(frame.position)
 }
 
+/// The minimum size the control window was DECLARED with, in logical pixels.
+///
+/// Read out of the app config rather than named as a constant here, because that
+/// is where the window actually got it (`tauri.conf.json`) and because Tauri
+/// exposes no `min_inner_size()` getter to snapshot it from — so the alternative
+/// is a literal in this file that silently stops matching the day somebody
+/// resizes the editor's floor. `None` when the config declares no minimum, which
+/// is also the correct thing to hand `set_min_size`.
+fn declared_min_size<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::LogicalSize<f64>> {
+    let window = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|candidate| candidate.label == CONTROL_LABEL)?;
+    /*
+     * Each axis independently, because the config can declare one without the
+     * other.
+     *
+     * This used to require BOTH and answer `None` otherwise, which is a quiet
+     * trap rather than a conservative default: `set_min_size(None)` does not mean
+     * "leave the floor alone", it CLEARS it. So a future `tauri.conf.json` that
+     * dropped `minHeight` — a perfectly ordinary thing to do — would have left the
+     * editor with no width floor either, permanently, the first time anybody used
+     * reader mode. A missing axis takes 0, which is what "no constraint on this
+     * axis" actually is.
+     */
+    match (window.min_width, window.min_height) {
+        (None, None) => None,
+        (width, height) => Some(tauri::LogicalSize {
+            width: width.unwrap_or(0.0),
+            height: height.unwrap_or(0.0),
+        }),
+    }
+}
+
+fn set_min_size<R: Runtime>(window: &WebviewWindow<R>, size: Option<tauri::LogicalSize<f64>>) {
+    // Never fatal. A floor that did not apply is a window that can be dragged
+    // smaller than is comfortable — which is a cosmetic disappointment, not a
+    // reason to refuse to present.
+    let _ = window.set_min_size(size.map(tauri::Size::Logical));
+}
+
+/// Present in place: this window, where it is, at the size it is.
+///
+/// ---------------------------------------------------------------------------
+/// WHY THIS MOVES NO GEOMETRY AT ALL
+/// ---------------------------------------------------------------------------
+/// The operator put this window somewhere and made it a size. That IS the
+/// gesture — the same argument the module header makes about not teleporting the
+/// window to a pinned display fingerprint, and it applies twice as hard here,
+/// because a reader chose their window's shape on purpose and a prompter merely
+/// chose its panel.
+///
+/// So this sets everything about a reading window EXCEPT where it is: the black
+/// backing, the lowered floor, an ordinary titlebar, and not being pinned above
+/// other applications (a reading window that floated over everything would be
+/// unusable for the one thing people read scripts beside).
+///
+/// ---------------------------------------------------------------------------
+/// AND WHY IT UNDOES THE PROMPTER'S CHROME AND PINNING EVERY TIME
+/// ---------------------------------------------------------------------------
+/// It would be enough, for `Enter(Reader)`, to do nothing about either: a window
+/// that has never presented is already decorated and already unpinned.
+///
+/// `Reassert` is why it does them anyway. Its whole purpose is "re-apply the
+/// current mode, because the world may have moved under it", and the prompter's
+/// `apply_presentation` does that completely — it re-strips, re-pins and
+/// re-bounds. A reader equivalent that only set a colour and a floor could not
+/// recover from a `Switch` that failed halfway, and that is a reachable state:
+/// every mutation below `?`-propagates, so a `Switch(→Reader)` whose
+/// `set_always_on_top(false)` failed would leave a pinned, borderless window that
+/// no later `Reassert` would ever un-pin.
+///
+/// Both calls are idempotent, which is what makes this free: `set_always_on_top`
+/// is an unconditional level write, and `chrome::restore` silently does nothing
+/// once the mask latch is empty.
+fn apply_reader<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    decorations: bool,
+) -> Result<PhysicalSize<u32>, AppError> {
+    /*
+     * Black, for the same reason the prompter path sets it — and it is NOT
+     * redundant here just because nothing below moves the window.
+     *
+     * A reader resizes by dragging an edge, which is a geometry change the
+     * webview repaints asynchronously exactly like the prompter's one-off move.
+     * Left at the OS default the strip the layout has not reached yet is white,
+     * and it would flash on every drag rather than once per take.
+     */
+    let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 255)));
+    window.set_always_on_top(false).map_err(presentation_failed)?;
+    chrome::restore(app, window, decorations)?;
+    set_min_size(
+        window,
+        Some(tauri::LogicalSize {
+            width: READER_MIN_WIDTH_PX,
+            height: READER_MIN_HEIGHT_PX,
+        }),
+    );
+    /*
+     * The CURRENT inner size, and this is the one place in this module where
+     * reading it back is correct.
+     *
+     * `logical_size`'s note warns that a size read straight after `set_size`
+     * describes the window the setter has not moved yet. Nothing above is a
+     * geometry setter — `set_min_size` cannot enlarge a window that already
+     * satisfies the editor's larger floor, which every window reaching here
+     * does — so there is no pending change to be stale about. And this is
+     * precisely the number `awaitViewportSettled` should match on its first
+     * check, which is what makes entering reader mode instant.
+     */
+    window.inner_size().map_err(presentation_failed)
+}
+
+/// Put the window back into an ordinary decorated frame at a known rectangle.
+///
+/// Shared by `Restore` and by the `Prompter → Reader` half of a `Switch`, which
+/// do the same four things to the window and differ only in which frame they
+/// replay, which floor they leave behind, and whether the latch survives.
+///
+/// The floor is applied BEFORE the size, and the ordering is load-bearing: a
+/// reader may have dragged their window below the editor's declared minimum (the
+/// whole point of [`READER_MIN_WIDTH_PX`]), so restoring those bounds under the
+/// editor's floor would have the OS clamp them straight back up.
+fn apply_windowed<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    frame: &ControlFrame,
+    min_size: Option<tauri::LogicalSize<f64>>,
+) -> Result<PhysicalSize<u32>, AppError> {
+    window.set_always_on_top(false).map_err(presentation_failed)?;
+    chrome::restore(app, window, frame.decorations)?;
+    set_min_size(window, min_size);
+    window
+        .set_position(tauri::Position::Physical(restore_position(app, frame)))
+        .map_err(presentation_failed)?;
+    window
+        .set_size(tauri::Size::Physical(frame.inner_size))
+        .map_err(presentation_failed)?;
+    if frame.maximized {
+        let _ = window.maximize();
+    }
+    Ok(frame.inner_size)
+}
+
 /// Move the window onto the whole of the monitor it is currently on, without
 /// decorations and above the menu bar. Answers with the size it is heading for.
 fn apply_presentation<R: Runtime>(
@@ -284,6 +539,16 @@ fn apply_presentation<R: Runtime>(
         .ok_or_else(|| presentation_failed("no monitor to present on"))?;
 
     let bounds = *monitor.size();
+    /*
+     * Give the declared floor back, in case we are arriving from reader mode.
+     *
+     * A monitor-sized window is never near any minimum, so this changes nothing
+     * about what the presenter sees. It exists so the lowered reader floor
+     * cannot outlive the mode that wanted it: `Restore` from prompter would
+     * otherwise leave the editor draggable down to 520x360, which is a state
+     * nothing in this app is laid out for and which nothing would ever put back.
+     */
+    set_min_size(window, declared_min_size(app));
     chrome::strip(app, window)?;
     pin::above_everything(app, window)?;
     window
@@ -829,23 +1094,23 @@ mod pin {
 
 /// Present (or un-present) the control window as the teleprompter.
 ///
-/// Idempotent in both directions — see [`PresentAction`] for what each of the
-/// four combinations means.
+/// `mode` is the shape to present in and `None` means "stop". Idempotent in
+/// every direction — see [`PresentAction`] for what each of the five
+/// combinations means, and [`PresentState`] for why there are two frames.
 pub fn set_control_presenting<R: Runtime>(
     app: &AppHandle<R>,
-    enabled: bool,
+    mode: Option<PresentMode>,
 ) -> Result<ControlPresentationState, AppError> {
     let window = control_window(app)?;
     let mut saved = lock();
     let target;
 
-    match plan(saved.is_some(), enabled) {
-        PresentAction::Enter => {
-            *saved = Some(ControlFrame {
-                position: window.outer_position().map_err(presentation_failed)?,
-                inner_size: window.inner_size().map_err(presentation_failed)?,
-                decorations: window.is_decorated().unwrap_or(true),
-                maximized: window.is_maximized().unwrap_or(false),
+    match plan(saved.map(|state| state.mode), mode) {
+        PresentAction::Enter(entering) => {
+            *saved = Some(PresentState {
+                resting: measure_frame(&window)?,
+                mode: entering,
+                reader: None,
             });
             /*
              * The frame is saved BEFORE this can fail, on purpose. A partial
@@ -855,17 +1120,98 @@ pub fn set_control_presenting<R: Runtime>(
              * without quitting, so the failure exits with the latch set and the
              * un-present that follows undoes whatever landed.
              */
-            target = apply_presentation(app, &window)?;
-            // The operator deliberately stops touching the keyboard for the
-            // length of a take, which is exactly when the OS blanks the display
-            // (§52.7).
+            let decorations = saved.as_ref().expect("just written").resting.decorations;
+            target = match entering {
+                PresentMode::Prompter => apply_presentation(app, &window)?,
+                PresentMode::Reader => apply_reader(app, &window, decorations)?,
+            };
+            /*
+             * The operator deliberately stops touching the keyboard for the
+             * length of a take, which is exactly when the OS blanks the display
+             * (§52.7).
+             *
+             * Held in READER mode too, and deliberately. The argument in
+             * `sleep.rs` is about somebody who stops touching the keyboard for
+             * twenty minutes, and that is MORE true of reading than of
+             * presenting, not less — a reader's hands are nowhere near the
+             * trackpad while the script follows their voice.
+             */
             sleep::acquire(app);
         }
-        PresentAction::Reassert => {
-            target = apply_presentation(app, &window)?;
+        PresentAction::Reassert(current) => {
+            let decorations = saved.as_ref().expect("Reassert is only planned while presenting").resting.decorations;
+            target = match current {
+                PresentMode::Prompter => apply_presentation(app, &window)?,
+                PresentMode::Reader => apply_reader(app, &window, decorations)?,
+            };
+        }
+        PresentAction::Switch(to) => {
+            /*
+             * ------------------------------------------------------------------
+             * THE MODE IS COMMITTED ONLY ONCE THE WINDOW HAS ACTUALLY CHANGED
+             * ------------------------------------------------------------------
+             * Writing `state.mode` before the apply reads as harmless and is not.
+             * Every mutation below `?`-propagates, so a `Switch` can fail partway
+             * — and a latch that already says the new mode turns the retry into a
+             * `Reassert` of a mode the window is not in.
+             *
+             * That is survivable for the prompter direction, because
+             * `apply_presentation` re-does everything unconditionally. It was NOT
+             * survivable for the reader direction until `apply_reader` learned to
+             * un-pin and restore the chrome as well: the frontend still believed
+             * `prompter`, so pressing the chord again asked for reader, Rust
+             * planned `Reassert(Reader)`, and the window stayed borderless and
+             * pinned while control composed a reading window's geometry for it.
+             *
+             * Both halves of that are fixed — the ordering here and the
+             * idempotence there — because either alone leaves the other's failure
+             * mode reachable.
+             */
+            let existing = *saved.as_ref().expect("Switch is only planned while presenting");
+            match to {
+                PresentMode::Prompter => {
+                    /*
+                     * Record where the reader had their window before it goes.
+                     *
+                     * Into `reader`, never into `resting` — see [`PresentState`].
+                     * Measured before anything moves, because after
+                     * `apply_presentation` the window IS the monitor and there
+                     * would be nothing left to remember. Saved to the latch
+                     * immediately too: losing the reader's bounds to a failed
+                     * apply would strand them at the resting frame on the way
+                     * back, and remembering a rectangle costs nothing if the
+                     * switch then fails.
+                     */
+                    let reader_frame = measure_frame(&window)?;
+                    if let Some(state) = saved.as_mut() {
+                        state.reader = Some(reader_frame);
+                    }
+                    target = apply_presentation(app, &window)?;
+                }
+                PresentMode::Reader => {
+                    /*
+                     * Back to the reader's own bounds, or — the first time, when
+                     * the take opened straight into prompter mode and the reader
+                     * has never had a window — to the resting frame, which is the
+                     * only rectangle anybody has expressed a preference about.
+                     */
+                    let frame = existing.reader.unwrap_or(existing.resting);
+                    let reader_min = tauri::LogicalSize {
+                        width: READER_MIN_WIDTH_PX,
+                        height: READER_MIN_HEIGHT_PX,
+                    };
+                    target = apply_windowed(app, &window, &frame, Some(reader_min))?;
+                    // The backing stays black across the switch (the take is
+                    // still running), so there is nothing to set here that
+                    // `Enter` has not already set.
+                }
+            }
+            if let Some(state) = saved.as_mut() {
+                state.mode = to;
+            }
         }
         PresentAction::Restore => {
-            let frame = *saved.as_ref().expect("Restore is only planned with a frame saved");
+            let frame = saved.as_ref().expect("Restore is only planned while presenting").resting;
             /*
              * RESTORE, THEN FORGET — never the other way round.
              *
@@ -883,19 +1229,9 @@ pub fn set_control_presenting<R: Runtime>(
              * pressing Escape again, ending the next take, or navigating away
              * all try it again with the same numbers.
              */
-            window.set_always_on_top(false).map_err(presentation_failed)?;
-            chrome::restore(app, &window, frame.decorations)?;
-            window
-                .set_position(tauri::Position::Physical(restore_position(app, &frame)))
-                .map_err(presentation_failed)?;
-            window
-                .set_size(tauri::Size::Physical(frame.inner_size))
-                .map_err(presentation_failed)?;
+            target = apply_windowed(app, &window, &frame, declared_min_size(app))?;
             *saved = None;
             sleep::release(app);
-            if frame.maximized {
-                let _ = window.maximize();
-            }
             /*
              * Back to the OS default, so the take's black is not left behind the
              * editor.
@@ -912,7 +1248,6 @@ pub fn set_control_presenting<R: Runtime>(
              * read the old promise and trust it.
              */
             let _ = window.set_background_color(None);
-            target = frame.inner_size;
         }
         PresentAction::Nothing => {
             // Idempotent, but the assertion is still released: it is shared with
@@ -931,14 +1266,34 @@ pub fn set_control_presenting<R: Runtime>(
              * drain here is a no-op in the overwhelmingly common case (nothing
              * latched, which is every ordinary launch) and the only path back in
              * the case that matters.
+             *
+             * The lowered reader floor is drained here for exactly the same
+             * reason: it is a latch this module sets and nothing else clears.
              */
             chrome::restore(app, &window, true)?;
+            set_min_size(&window, declared_min_size(app));
             target = window.inner_size().unwrap_or(PhysicalSize { width: 0, height: 0 });
         }
     }
 
+    /*
+     * Answered from the LATCH, not from the request.
+     *
+     * They agree on every path that reaches here — a failure `?`-propagates
+     * instead of returning — and reading the latch is still the right shape,
+     * because it is what the renderer's comment on `ControlPresentationState.mode`
+     * promises: the mode the window is in, not the mode that was asked for. A
+     * future arm that declines a request, or applies a different one, would then
+     * report the truth without anybody having to remember to update this.
+     */
+    let applied = saved.map(|state| state.mode);
     let (width, height) = logical_size(&window, target);
-    Ok(ControlPresentationState { presenting: enabled, width, height })
+    Ok(ControlPresentationState {
+        presenting: applied.is_some(),
+        mode: applied,
+        width,
+        height,
+    })
 }
 
 /*
@@ -954,6 +1309,9 @@ pub fn set_control_presenting<R: Runtime>(
 mod tests {
     use super::*;
 
+    const PROMPTER: Option<PresentMode> = Some(PresentMode::Prompter);
+    const READER: Option<PresentMode> = Some(PresentMode::Reader);
+
     /// The saved frame is a LATCH, not a stack.
     ///
     /// If a second present overwrote it, the frame saved would be the
@@ -962,8 +1320,11 @@ mod tests {
     /// operator's only way back would be to quit the app.
     #[test]
     fn presenting_twice_does_not_resave_the_frame() {
-        assert_eq!(plan(false, true), PresentAction::Enter);
-        assert_eq!(plan(true, true), PresentAction::Reassert);
+        assert_eq!(plan(None, PROMPTER), PresentAction::Enter(PresentMode::Prompter));
+        assert_eq!(
+            plan(PROMPTER, PROMPTER),
+            PresentAction::Reassert(PresentMode::Prompter)
+        );
     }
 
     /// Un-presenting a window that never presented is the ordinary shape of
@@ -972,7 +1333,73 @@ mod tests {
     /// never captured.
     #[test]
     fn un_presenting_twice_is_a_no_op_the_second_time() {
-        assert_eq!(plan(true, false), PresentAction::Restore);
-        assert_eq!(plan(false, false), PresentAction::Nothing);
+        assert_eq!(plan(PROMPTER, None), PresentAction::Restore);
+        assert_eq!(plan(None, None), PresentAction::Nothing);
+    }
+
+    /// Reader mode is a first-class way to present, not a way to not present.
+    ///
+    /// The distinction is the whole reason `plan` takes an `Option<PresentMode>`
+    /// rather than the old bool: `Some(Reader)` must save a frame, acquire the
+    /// sleep assertion and be `Restore`-able, all of which `None` must not do.
+    #[test]
+    fn entering_reader_mode_is_presenting() {
+        assert_eq!(plan(None, READER), PresentAction::Enter(PresentMode::Reader));
+        assert_eq!(plan(READER, None), PresentAction::Restore);
+    }
+
+    /// A repeated request in the SAME mode reasserts; a request in the other
+    /// mode switches. Never the other way round — a `Switch` planned as an
+    /// `Enter` would re-save the frame from a presenting window, which is the
+    /// unrecoverable case `presenting_twice_does_not_resave_the_frame` names.
+    #[test]
+    fn the_mid_take_toggle_switches_rather_than_re_entering() {
+        assert_eq!(plan(READER, PROMPTER), PresentAction::Switch(PresentMode::Prompter));
+        assert_eq!(plan(PROMPTER, READER), PresentAction::Switch(PresentMode::Reader));
+        assert_eq!(plan(READER, READER), PresentAction::Reassert(PresentMode::Reader));
+    }
+
+    /// A `Switch` that failed must plan another `Switch`, never a `Reassert`.
+    ///
+    /// This is the state-machine half of a real defect. `set_control_presenting`
+    /// used to write `state.mode` BEFORE the window mutations, every one of which
+    /// `?`-propagates — so a switch that failed partway left the latch claiming
+    /// the new mode while the frontend still believed the old one. Pressing the
+    /// chord again then asked for the new mode, `plan` answered `Reassert`, and
+    /// `apply_reader` (which deliberately moves no geometry) could not undo the
+    /// prompter's pinning or chrome. The window stayed borderless and above the
+    /// menu bar while control composed a reading window's geometry for it.
+    ///
+    /// The fix has two halves and this asserts the first: the mode is committed
+    /// only after the apply succeeds, so a failed switch leaves `plan` seeing the
+    /// OLD mode and planning a full `Switch` on the retry. The second half —
+    /// `apply_reader` being idempotently able to un-pin and restore chrome — is
+    /// what makes even a mis-planned `Reassert` recover, and is asserted by
+    /// reading that function rather than by this table.
+    #[test]
+    fn a_failed_switch_retries_as_a_switch() {
+        // The latch still says Reader, because the Prompter apply never landed.
+        assert_eq!(plan(READER, PROMPTER), PresentAction::Switch(PresentMode::Prompter));
+        // And the other direction, which was the unrecoverable one.
+        assert_eq!(plan(PROMPTER, READER), PresentAction::Switch(PresentMode::Reader));
+    }
+
+    /// Whatever a take does in the middle, it ends by restoring — once.
+    ///
+    /// Walked as a sequence rather than asserted pairwise, because the defect
+    /// this guards against is a `Switch` that leaves the state machine believing
+    /// it is not presenting: every step below would still pass on its own, and
+    /// the run would end with a borderless window and a `Nothing` plan.
+    #[test]
+    fn a_take_that_toggles_modes_still_ends_in_exactly_one_restore() {
+        let mut current = None;
+        for step in [READER, PROMPTER, READER, PROMPTER] {
+            let action = plan(current, step);
+            assert_ne!(action, PresentAction::Nothing, "a mode request never plans Nothing");
+            assert_ne!(action, PresentAction::Restore, "a mode request never plans Restore");
+            current = step;
+        }
+        assert_eq!(plan(current, None), PresentAction::Restore);
+        assert_eq!(plan(None, None), PresentAction::Nothing);
     }
 }

@@ -45,6 +45,7 @@ import {
 import {
   DEFAULT_STAGE_APPEARANCE,
   type FollowingSettings,
+  type PresentationMode,
   type SessionMode,
 } from '../services/settings-types';
 import type { DisplayDescriptor } from '../services/stage-types';
@@ -305,6 +306,15 @@ export interface SessionState {
    * in-session sheet's to set — see `isRigResolvedStage`.
    */
   stageRigResolved: boolean;
+  /**
+   * Whether this take is on the full display or in a reading window.
+   *
+   * On the state rather than read from Settings at each use site, because the
+   * mid-take toggle means those two answers differ — see `takePresentationMode`
+   * — and a dock button reading the saved value would offer to switch to the
+   * mode it is already in.
+   */
+  stagePresentationMode: PresentationMode;
   /** The take's size ceiling, fixed at its opening size — see `takeFontCeilingPx`. */
   stageFontCeilingPx: number;
   /**
@@ -359,6 +369,9 @@ const initial: SessionState = {
     readingBandCenterPercent: DEFAULT_STAGE_APPEARANCE.readingBandCenterPercent,
   },
   stageRigResolved: false,
+  // Matches `defaultAppSettings`, and matches what every take did before reader
+  // mode existed. A take overwrites it at `startLiveSession`.
+  stagePresentationMode: 'prompter',
   stageFontCeilingPx: typeCeilingPx(DEFAULT_STAGE_APPEARANCE.fontSizePx),
   autoScroll: { running: false, wordsPerMinute: AUTO_SCROLL_DEFAULT_WPM },
 };
@@ -394,6 +407,24 @@ let stageSettings: StageSettings | null = null;
  * them into tomorrow's take. Null outside a take.
  */
 let takeTeleprompter: TeleprompterSettings | null = null;
+/**
+ * The presentation mode THIS take is running, which is not always the saved one.
+ *
+ * Held per-take for exactly the reason `takeTeleprompter` is: the mid-take
+ * toggle (⌃⌘F) is a decision about the take in front of you, not a change to
+ * what tomorrow's take opens as. Somebody who pops out to the full display to
+ * read one difficult paragraph must not find every future take opening
+ * full-screen because of it.
+ *
+ * It has to be its own field rather than read back off the settings store on
+ * every rebuild, because `applyStageAppearance` recomposes through
+ * `getSettingsSnapshot()` — so a take toggled to reader mode would have the
+ * SAVED mode reapplied by the next nudge of any unrelated slider, quietly
+ * putting the prompter's narrow measure and its mirror back mid-sentence.
+ *
+ * Null outside a take.
+ */
+let takePresentationMode: PresentationMode | null = null;
 /**
  * The panel this take's geometry was resolved against (§52), or null when the
  * displays could not be enumerated. Kept because a rebuild without it silently
@@ -638,6 +669,15 @@ export interface StartSessionInput {
    * back to the settings snapshot, which is what the caller would have used.
    */
   teleprompter?: TeleprompterSettings;
+  /**
+   * The mode `startTake` actually presented the window in.
+   *
+   * Passed rather than read back off Settings so the store records what happened
+   * instead of re-deriving it: the two can differ by the width of one `await` if
+   * somebody changes the setting while a take is opening, and the window is the
+   * thing that is right.
+   */
+  presentationMode?: PresentationMode;
   /** The panel the geometry was resolved against; see `stageDisplay`. */
   stageDisplay?: DisplayDescriptor | null;
   transcription?: TranscriptionConfig;
@@ -684,6 +724,10 @@ export function startLiveSession(input: StartSessionInput): string {
   stageSettings = input.stageSettings ?? null;
   stageDisplay = input.stageDisplay ?? null;
   takeTeleprompter = input.teleprompter ?? currentTeleprompterSettings();
+  // The take adopts the saved mode at its opening and owns it from then on.
+  // `startTake` has already presented the window in this mode, so this is
+  // recording what happened rather than deciding it.
+  takePresentationMode = input.presentationMode ?? getSettingsSnapshot().stage.presentationMode;
   takeFontCeilingPx = typeCeilingPx(
     stageSettings?.fontSizePx ?? takeTeleprompter.fontSizePx,
   );
@@ -721,6 +765,7 @@ export function startLiveSession(input: StartSessionInput): string {
     stageEnvelope: input.stageEnvelope ?? null,
     stageAppearance: liveStageAppearance(),
     stageRigResolved: isRigResolvedStage(stageSettings),
+    stagePresentationMode: takePresentationMode ?? 'prompter',
     stageFontCeilingPx: takeFontCeilingPx,
     /*
      * The saved pace, and finally something that reads it.
@@ -3041,8 +3086,39 @@ export function applyStageAppearance(patch: Partial<TeleprompterSettings>): Stag
    */
   const merged = { ...base, ...patch };
   takeTeleprompter = { ...merged, ...clampStageAppearance(merged, takeFontCeilingPx) };
+  return recomposeStageSettings();
+}
+
+/**
+ * Rebuild the live `StageSettings` from this take's own overrides.
+ *
+ * Factored out of `applyStageAppearance` when the presentation mode became the
+ * second thing a take can hold against the saved settings. Both callers have to
+ * compose the SAME way — that is the whole reason a mid-take change and the next
+ * take's opening frame agree — and two copies of this is how they stop agreeing.
+ */
+function recomposeStageSettings(): StageAppearance {
   const rebuilt = stageSettingsFromSettings(
-    { ...getSettingsSnapshot(), teleprompter: takeTeleprompter },
+    {
+      ...getSettingsSnapshot(),
+      ...(takeTeleprompter ? { teleprompter: takeTeleprompter } : {}),
+      /*
+       * The TAKE's mode, over the saved one.
+       *
+       * Without this every rebuild would reapply whatever Settings says, so a
+       * take toggled to a reading window would snap back to the prompter's
+       * measure and mirror the first time somebody touched a slider — see the
+       * note on `takePresentationMode`.
+       */
+      ...(takePresentationMode
+        ? {
+            stage: {
+              ...getSettingsSnapshot().stage,
+              presentationMode: takePresentationMode,
+            },
+          }
+        : {}),
+    },
     stageDisplay,
   );
   stageSettings = rebuilt;
@@ -3053,10 +3129,67 @@ export function applyStageAppearance(patch: Partial<TeleprompterSettings>): Stag
     stageFontSizePx: rebuilt.fontSizePx,
     stageAppearance: appearance,
     stageRigResolved: isRigResolvedStage(rebuilt),
+    stagePresentationMode: takePresentationMode ?? s.stagePresentationMode,
     stageEnvelope:
       s.stageEnvelope === null ? null : { ...s.stageEnvelope, stageSettings: rebuilt },
   }));
   return appearance;
+}
+
+/**
+ * Switch this take between the prompter and a reading window.
+ *
+ * ---------------------------------------------------------------------------
+ * THE WINDOW MOVES FIRST, THEN THE GEOMETRY
+ * ---------------------------------------------------------------------------
+ * Rust owns the window and this owns the document, and the order between them is
+ * not arbitrary. Reader mode's geometry is resolved against the window's own
+ * viewport (`ScriptLayer`'s `readerOptics`), so recomposing before the window
+ * has changed shape resolves the new mode against the old size — one wrong
+ * layout, measured, mapped, and then invalidated a frame later by the resize
+ * that was always coming. Exactly the two-measurement waste `startTake`'s
+ * opening sequence exists to avoid, in the middle of a take instead of at its
+ * start.
+ *
+ * The caller does the window half, because it also owns the cover; this is the
+ * document half and it is called after `awaitViewportSettled`.
+ *
+ * Returns the mode now in force, which is the one asked for unless there is no
+ * take to change.
+ */
+export function adoptPresentationMode(mode: PresentationMode): PresentationMode {
+  // Not `mode`: nothing was adopted, so answering with the request would report a
+  // state the store is not in.
+  if (!get(state).active) return livePresentationMode();
+  if (takePresentationMode === mode) return mode;
+  takePresentationMode = mode;
+  /*
+   * The mode is recorded even when the geometry cannot be recomposed.
+   *
+   * `applyStageAppearance` refuses outright in this case, and it is right to:
+   * nothing asked it to change, so declining leaves the take exactly as it was.
+   * This is not that — the WINDOW has already changed shape by the time control
+   * gets here, so refusing would leave the dock's toggle and `stagePresentationMode`
+   * describing a window that no longer exists.
+   *
+   * So the mode is adopted and only the recompose is skipped. The reason to skip
+   * it is the one stated on the sibling guard: a rebuild with no panel silently
+   * produces the UNCALIBRATED layout, which would demote a measured rig to a
+   * guess mid-take with nothing on the glass to say so. Unreachable in production
+   * for the same reason it is there — a take with optics necessarily had a
+   * display, because calibration is keyed by the panel's fingerprint.
+   */
+  if (stageSettings?.optics && stageDisplay === null) {
+    state.update((s) => ({ ...s, stagePresentationMode: mode }));
+    return mode;
+  }
+  recomposeStageSettings();
+  return mode;
+}
+
+/** The mode this take is running, for the dock's toggle and the shortcut. */
+export function livePresentationMode(): PresentationMode {
+  return takePresentationMode ?? getSettingsSnapshot().stage.presentationMode;
 }
 
 /**
@@ -3263,6 +3396,7 @@ function stopInternals(): void {
    * settings again, which is where OK put anything worth keeping.
    */
   takeTeleprompter = null;
+  takePresentationMode = null;
   stageDisplay = null;
   driver?.dispose();
   driver = null;

@@ -585,7 +585,17 @@ function shimBody(config: ShimConfig): void {
       case 'set_control_presenting': {
         const enabled = args?.['enabled'] === true;
         control.presenting = enabled;
-        return { presenting: enabled, width: window.innerWidth, height: window.innerHeight };
+        // Echoed back the way Rust does, so a caller that adopts the answer —
+        // `togglePresentationMode` does — sees the mode it asked for rather than
+        // falling back to its own guess and hiding a mismatch the real command
+        // would have surfaced.
+        const mode = enabled ? (args?.['mode'] ?? 'prompter') : undefined;
+        return {
+          presenting: enabled,
+          ...(mode === undefined ? {} : { mode }),
+          width: window.innerWidth,
+          height: window.innerHeight,
+        };
       }
 
       case 'publish_stage_command': {

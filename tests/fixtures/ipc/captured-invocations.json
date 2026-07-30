@@ -242,7 +242,8 @@
     "set_control_presenting_on": {
       "command": "set_control_presenting",
       "args": {
-        "enabled": true
+        "enabled": true,
+        "mode": "prompter"
       }
     },
     "set_stage_fullscreen": {

@@ -25,6 +25,16 @@ export type ShortcutAction =
   | 'take-marker'
   | 'command-help'
   /**
+   * Pop the take out to the whole display, or back into a window (§ reader mode).
+   *
+   * The platform's own full-screen chord, deliberately: somebody reading in a
+   * window who wants the whole screen reaches for the key their OS taught them,
+   * and a teleprompter is not the place to teach a new one. It is a MODIFIED key
+   * rather than a plain one because it fires mid-take, where every unmodified key
+   * already belongs to the transport.
+   */
+  | 'toggle-presentation-mode'
+  /**
    * The fixed-pace transport: start/stop, and the pace itself.
    *
    * Keys rather than a control, because during a take there is no control
@@ -105,6 +115,18 @@ export function isMacPlatform(): boolean {
   return /Mac|iPhone|iPad/.test(navigator.platform ?? navigator.userAgent);
 }
 
+/**
+ * How to write the presentation-mode chord for the platform it will be pressed
+ * on.
+ *
+ * Derived here rather than spelled out at the two places that show it (Settings
+ * and the shortcuts dialog), so a label can never describe a key
+ * `resolveShortcut` does not answer to.
+ */
+export function presentationModeShortcutLabel(isMac = isMacPlatform()): string {
+  return isMac ? '⌃⌘F' : 'Ctrl+Alt+F';
+}
+
 export interface ShortcutQuery {
   key: string;
   metaKey: boolean;
@@ -155,6 +177,35 @@ export function resolveShortcut(event: ShortcutQuery): ShortcutAction | null {
    */
   if (key === 'Escape' && !primary && !event.altKey && !event.shiftKey && !event.typing) {
     return 'escape';
+  }
+
+  /*
+   * The presentation-mode toggle, before the `primary && !altKey` block.
+   *
+   * On macOS the platform chord is Control+Command+F, so BOTH `ctrlKey` and
+   * `metaKey` are down — and `primary` is `metaKey` there, which means the block
+   * below would happily read it as a plain Cmd+F and fall through to `null`.
+   * Elsewhere the convention is Ctrl+Alt+F, where `altKey` is down and the same
+   * block excludes it. Neither shape fits the blocks after this one, which is
+   * why it is tested on its own rather than folded into them.
+   */
+  if (key.toLowerCase() === 'f' && !event.shiftKey) {
+    const macChord = event.isMac && event.ctrlKey && event.metaKey && !event.altKey;
+    const otherChord = !event.isMac && event.ctrlKey && event.altKey && !event.metaKey;
+    /*
+     * Held, this would flip the window between shapes at the key-repeat rate —
+     * the same objection the `a` transport toggle makes about itself further
+     * down, and worse here, because each flip is an OS window operation and a
+     * full document relayout rather than a flag.
+     *
+     * Deliberately NOT gated on `typing`, unlike the plain-key block at the
+     * bottom: every other modified chord in this function ignores it, because a
+     * modifier already says "this is an app command, not text". Cmd+S saves from
+     * inside the editor and this is the same kind of key.
+     */
+    if (macChord || otherChord) {
+      return event.repeat === true ? null : 'toggle-presentation-mode';
+    }
   }
 
   if (primary && !event.altKey) {

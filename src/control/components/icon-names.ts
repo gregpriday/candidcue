@@ -32,6 +32,7 @@ export type IconName =
   | 'stop'
   | 'mic'
   | 'monitor'
+  | 'book-open'
   | 'check'
   | 'alert'
   | 'info'

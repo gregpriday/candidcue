@@ -7,11 +7,35 @@ import type { CompiledBlock } from './compiler';
 import type { SmoothFollowProfile } from './smooth-follow';
 import type {
   OpticalProfile,
+  ReadingContext,
   ReadingCueStyle,
   ResolvedOptics,
   StageMode,
   TextIntensity,
 } from './optical';
+
+/**
+ * The shape a take presents in. Twin of Rust's `windows::PresentMode`.
+ *
+ * `prompter` takes the display: borderless, monitor-sized, above the menu bar,
+ * read off glass at a distance. `reader` presents in place, in an ordinary
+ * window somebody can size and work beside.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS IS NOT `ReadingContext`, WHICH HAS THE SAME TWO MEMBERS
+ * ---------------------------------------------------------------------------
+ * They describe different things and are equal only because one decides the
+ * other. This is a fact about the WINDOW — chrome, layering, geometry, the
+ * minimum size — and it is what `set_control_presenting` acts on.
+ * `ReadingContext` is an input to the optical model, and it is what selects the
+ * character band the width solver aims at.
+ *
+ * The mapping between them happens once, in `stageSettingsFromSettings`. Making
+ * them one type would save a line there and would mean any future asymmetry —
+ * a third window shape that reads like a prompter, say — could not be expressed
+ * without unpicking every use of both.
+ */
+export type PresentationMode = 'prompter' | 'reader';
 
 export interface StageSettings {
   schemaVersion: 1;
@@ -59,6 +83,20 @@ export interface StageSettings {
   readingCue?: ReadingCueStyle;
   /** Text luminance over the unchanging black field. */
   textIntensity?: TextIntensity;
+  /**
+   * Whether this is a prompter or a reading window. Absent means prompter.
+   *
+   * On the wire because the STAGE re-resolves the geometry against its own
+   * viewport, and the resolve needs to know which character band to aim at — the
+   * prompter's 32–38, sized for what a camera can see, or the reader's 55–75,
+   * sized for reading. Without it a reading window would open at control's
+   * resolution and then re-resolve itself into a narrow prompter column on its
+   * first measurement pass, which is the worst of both.
+   *
+   * It rides beside `optics` rather than inside it because it is an INPUT to the
+   * resolve rather than a result of it, and `ResolvedOptics` is the results.
+   */
+  readingContext?: ReadingContext;
 }
 
 export interface DisplayProfile {

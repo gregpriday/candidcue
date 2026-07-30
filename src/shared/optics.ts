@@ -21,6 +21,7 @@
  * defensive about zero/negative/non-finite inputs, because the inputs come from
  * a user typing a distance into a box and from a font that may not have loaded.
  */
+import type { ReadingContext } from './contracts/optical';
 
 /* ---------------------------------------------------------------------------
  * Constants
@@ -123,6 +124,68 @@ export const READING_MEASURE = {
   /** Below this, lines are too short to carry context; refuse. */
   hardFloor: 13,
 } as const;
+
+/**
+ * The same measure, for somebody reading off their own screen.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THE PROMPTER FIGURE IS THE WRONG ONE HERE
+ * ---------------------------------------------------------------------------
+ * Every number in `READING_MEASURE` is justified by a CAMERA. A narrow column
+ * exists to keep the reader's eyes still, because "a sideways eye movement that
+ * is invisible in a waist-up shot is obvious in a tight headshot" — which is
+ * also what `FRAMING_MEASURE_SCALE` is scaling. In reader mode there is no shot,
+ * no lens and nobody watching the eyes, so the entire justification is absent
+ * and what is left is ordinary continuous reading, where the established
+ * comfortable measure is in the fifties to seventies with 66 the classic figure.
+ *
+ * It matters more than it sounds. At the desk-reading preset's 550 mm a 24' cap
+ * height resolves to roughly 27 CSS px of body text on an ordinary Mac display
+ * (0.2 mm per CSS pixel), and 35 characters of that is a ~480 px column — a
+ * narrow ribbon down the middle of a 1400 px window with 460 px of black either
+ * side. The same window at 65 characters is full.
+ *
+ * The ANGULAR ladder is deliberately NOT duplicated. 24' at 600 mm is large,
+ * comfortable type for reading aloud, and the floors below still hold: a reader
+ * who drags the bias all the way down lands at 20', about 25 px. One ladder, two
+ * measures — because it is the measure, not the size, that the camera was
+ * dictating.
+ *
+ * Starting position, not a finding — the same status `FRAMING_MEASURE_SCALE`
+ * gives its own multipliers. It comes from typographic practice for continuous
+ * reading, not from measuring anybody read a script aloud off a window.
+ */
+export const READER_READING_MEASURE = {
+  idealMin: 55,
+  idealMax: 75,
+  bandMin: 45,
+  bandMax: 90,
+  /**
+   * Higher than the prompter floor, and not by oversight.
+   *
+   * 13 characters is defensible on a 9-inch panel at 1.2 m, where it is all the
+   * hardware has. A window is not out of room — it is a window, and it can be
+   * dragged wider. So the reader floor is set where a line stops being readable
+   * prose rather than where the glass runs out, and the fit advice says to widen
+   * the window instead of quietly rendering something nobody can read.
+   */
+  hardFloor: 30,
+} as const;
+
+/**
+ * Which of the two measure tables applies.
+ *
+ * The type itself lives in `contracts/optical.ts`, because `StageSettings`
+ * carries it — see the note there. Re-exported here so a caller reaching for the
+ * measure and a caller reaching for the type do not have to know that.
+ */
+export type { ReadingContext };
+
+export function readingMeasureFor(
+  context: ReadingContext = 'prompter',
+): typeof READING_MEASURE | typeof READER_READING_MEASURE {
+  return context === 'reader' ? READER_READING_MEASURE : READING_MEASURE;
+}
 
 /* ---------------------------------------------------------------------------
  * Font metrics
@@ -452,11 +515,12 @@ export function arcminutesForBias(bias: number): number {
 }
 
 /** The reading measure the same bias asks for, before the panel has its say. */
-export function charactersForBias(bias: number): number {
+export function charactersForBias(bias: number, context: ReadingContext = 'prompter'): number {
   const t = clamp01(bias);
+  const measure = readingMeasureFor(context);
   // Inverted: more text on screen means MORE characters per line, and larger
   // text means fewer. The panel may refuse both; that is the fit check's job.
-  return READING_MEASURE.idealMax - (READING_MEASURE.idealMax - READING_MEASURE.idealMin) * t;
+  return measure.idealMax - (measure.idealMax - measure.idealMin) * t;
 }
 
 /* ---------------------------------------------------------------------------
@@ -501,6 +565,11 @@ export interface HardwareFitInput {
   /** Requested prose measure, characters. */
   targetCharacters: number;
   metrics: FontMetrics;
+  /**
+   * Which measure band applies. Defaults to `prompter`, which is what every
+   * caller meant before reader mode existed.
+   */
+  readingContext?: ReadingContext;
 }
 
 /**
@@ -531,6 +600,17 @@ export function hardwareFitCheck(input: HardwareFitInput): HardwareFit {
   } = input;
   const maxColumnFraction = clamp(input.maxColumnFraction ?? 0.92, 0.1, 1);
   const usableWidthPx = safeWidthPx * maxColumnFraction;
+  const measure = readingMeasureFor(input.readingContext);
+  /*
+   * The advice a narrowed line gets, and it differs between the two contexts
+   * because the REMEDY differs. A prompter's width is a fact about the hardware
+   * — move closer or buy a bigger panel — and a reader's is a window edge they
+   * can drag right now, which is the one piece of advice worth leading with.
+   */
+  const widen =
+    input.readingContext === 'reader'
+      ? 'Making the window wider would give you more of each sentence at a time.'
+      : 'Moving closer, or a larger prompter, would give you more of each sentence at a time.';
 
   if (mmPerCssPx === null || distanceMm === null || !isPositive(mmPerCssPx) || !isPositive(distanceMm)) {
     return {
@@ -572,8 +652,8 @@ export function hardwareFitCheck(input: HardwareFitInput): HardwareFit {
   }
 
   // Case 2: hold the type size, let the line narrow — as far as the floor.
-  if (charsAtIdeal >= READING_MEASURE.hardFloor) {
-    const narrow = charsAtIdeal < READING_MEASURE.bandMin;
+  if (charsAtIdeal >= measure.hardFloor) {
+    const narrow = charsAtIdeal < measure.bandMin;
     return {
       verdict: 'width_limited',
       fontSizePx: idealFontPx,
@@ -581,14 +661,14 @@ export function hardwareFitCheck(input: HardwareFitInput): HardwareFit {
       achievableCharacters: charsAtIdeal,
       columnCh: chForCharacters(charsAtIdeal, metrics),
       advice: narrow
-        ? `At this distance this display fits about ${Math.round(charsAtIdeal)} characters per line, which is narrower than ideal. Moving closer, or a larger prompter, would give you more of each sentence at a time.`
+        ? `At this distance this display fits about ${Math.round(charsAtIdeal)} characters per line, which is narrower than ideal. ${widen}`
         : '',
     };
   }
 
   // Case 3: the line cannot reach the floor at the requested size. Shrink type
   // toward the soft angular floor and see whether that rescues it.
-  const fontForFloorPx = usableWidthPx / (READING_MEASURE.hardFloor * metrics.avgCharWidthRatio);
+  const fontForFloorPx = usableWidthPx / (measure.hardFloor * metrics.avgCharWidthRatio);
   const arcminAtFloor = arcminutesForFontSizePx(fontForFloorPx, context) ?? 0;
 
   if (arcminAtFloor >= ANGULAR_SOFT_FLOOR_ARCMIN) {
@@ -596,9 +676,12 @@ export function hardwareFitCheck(input: HardwareFitInput): HardwareFit {
       verdict: 'angle_limited',
       fontSizePx: fontForFloorPx,
       arcminutes: arcminAtFloor,
-      achievableCharacters: READING_MEASURE.hardFloor,
-      columnCh: chForCharacters(READING_MEASURE.hardFloor, metrics),
-      advice: `To fit a readable line, the text is smaller than your chosen size — about ${arcminAtFloor.toFixed(0)}' rather than ${targetArcmin.toFixed(0)}'. Moving closer to the glass would let it be larger.`,
+      achievableCharacters: measure.hardFloor,
+      columnCh: chForCharacters(measure.hardFloor, metrics),
+      advice:
+        input.readingContext === 'reader'
+          ? `To fit a readable line in this window, the text is smaller than your chosen size — about ${arcminAtFloor.toFixed(0)}' rather than ${targetArcmin.toFixed(0)}'. A wider window would let it be larger.`
+          : `To fit a readable line, the text is smaller than your chosen size — about ${arcminAtFloor.toFixed(0)}' rather than ${targetArcmin.toFixed(0)}'. Moving closer to the glass would let it be larger.`,
     };
   }
 
@@ -629,7 +712,9 @@ export function hardwareFitCheck(input: HardwareFitInput): HardwareFit {
     achievableCharacters: charactersAtFloor,
     columnCh: chForCharacters(Math.max(1, charactersAtFloor), metrics),
     advice:
-      'This display is too small for the distance you are standing at. Move closer, or use a larger prompter — CandidCue cannot make this comfortable to read.',
+      input.readingContext === 'reader'
+        ? 'This window is too small to read a script in. Make it wider — CandidCue cannot make it comfortable at this size.'
+        : 'This display is too small for the distance you are standing at. Move closer, or use a larger prompter — CandidCue cannot make this comfortable to read.',
   };
 }
 

@@ -12,10 +12,10 @@ import {
 const byId = Object.fromEntries(RIG_PRESETS.map((p) => [p.id, p]));
 
 describe('RIG_PRESETS', () => {
-  it('has exactly five presets with unique ids and labels', () => {
-    expect(RIG_PRESETS).toHaveLength(5);
-    expect(new Set(RIG_PRESETS.map((p) => p.id)).size).toBe(5);
-    expect(new Set(RIG_PRESETS.map((p) => p.label)).size).toBe(5);
+  it('has exactly six presets with unique ids and labels', () => {
+    expect(RIG_PRESETS).toHaveLength(6);
+    expect(new Set(RIG_PRESETS.map((p) => p.id)).size).toBe(6);
+    expect(new Set(RIG_PRESETS.map((p) => p.label)).size).toBe(6);
   });
 
   it('only patches the four fields a preset owns', () => {
@@ -36,6 +36,7 @@ describe('RIG_PRESETS', () => {
   // the iPad and an Elgato kind by accident would still pass the looser check.
   it('maps each preset id to the exact hardware kind it names', () => {
     const expected: Record<string, OpticalHardwareKind> = {
+      'desk-reading': 'generic',
       'desk-webcam': 'generic',
       'elgato-prompter': 'elgato-prompter',
       'elgato-prompter-xl': 'elgato-prompter-xl',
@@ -57,10 +58,22 @@ describe('RIG_PRESETS', () => {
     expect(byId['ipad-rig']!.patch.viewingDistanceMm).toBe(defaultDistanceMm('ipad-sidecar'));
   });
 
-  it('gives the two generic presets their own distances, further apart than the two Elgato units', () => {
+  it('gives the generic presets their own distances, further apart than the two Elgato units', () => {
     expect(byId['desk-webcam']!.patch.viewingDistanceMm).toBe(600);
     expect(byId['studio-glass']!.patch.viewingDistanceMm).toBeGreaterThan(
       byId['elgato-prompter-xl']!.patch.viewingDistanceMm,
+    );
+    /*
+     * Reading is CLOSER than being filmed at a desk, and the ordering is the
+     * assertion rather than the literal.
+     *
+     * Both presets are "at a desk" and it would be easy to give them the same
+     * number and call it tidy — but `desk-webcam` describes somebody sitting back
+     * far enough to be in frame, and this one describes somebody reading. If they
+     * ever converge, the reading preset has stopped saying anything.
+     */
+    expect(byId['desk-reading']!.patch.viewingDistanceMm).toBeLessThan(
+      byId['desk-webcam']!.patch.viewingDistanceMm,
     );
   });
 
@@ -71,6 +84,7 @@ describe('RIG_PRESETS', () => {
   });
 
   it('flips horizontal for glass/beamsplitter rigs, and leaves it off for direct-view rigs', () => {
+    expect(byId['desk-reading']!.patch.flips).toEqual({ horizontal: false, vertical: false });
     expect(byId['desk-webcam']!.patch.flips).toEqual({ horizontal: false, vertical: false });
     expect(byId['elgato-prompter']!.patch.flips).toEqual({ horizontal: true, vertical: false });
     expect(byId['elgato-prompter-xl']!.patch.flips).toEqual({ horizontal: true, vertical: false });
@@ -84,6 +98,16 @@ describe('RIG_PRESETS', () => {
   // the default 'in-panel' on those two would resolve their reading band from a
   // `lens.y` that describes nothing.
   it('places the lens by physical shape, off-panel for the two direct-view rigs', () => {
+    /*
+     * `'none'`, and it must not be `'above'`.
+     *
+     * The reading preset is the only one with no camera anywhere, and the two
+     * answers are not interchangeable: `'above'` pins the reading band to the top
+     * 5% of the glass so the reader's eyeline sits near a lens clipped to the
+     * monitor. Inheriting that for a rig with no lens would push a reader's text
+     * to the top edge of their window for the sake of a camera that is not there.
+     */
+    expect(byId['desk-reading']!.patch.lensPlacement).toBe('none');
     expect(byId['desk-webcam']!.patch.lensPlacement).toBe('above');
     expect(byId['ipad-rig']!.patch.lensPlacement).toBe('above');
     expect(byId['elgato-prompter']!.patch.lensPlacement).toBe('in-panel');

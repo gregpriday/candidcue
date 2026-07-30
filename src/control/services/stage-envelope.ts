@@ -24,10 +24,16 @@ import {
   columnWidthPxForCh,
   normalizeFontMetrics,
   type FontMetrics,
+  type ReadingContext,
 } from '../../shared/optics';
 import { resolveFollowProfile, type FollowingSettings } from '../lib/follow-profiles';
 import { invokeOrMock } from './ipc';
-import { activeOpticalProfile, DEFAULT_STAGE_APPEARANCE, type AppSettings } from './settings-types';
+import {
+  activeOpticalProfile,
+  DEFAULT_STAGE_APPEARANCE,
+  readerOpticalProfile,
+  type AppSettings,
+} from './settings-types';
 import type { DisplayDescriptor } from './stage-types';
 
 /* ---------------------------------------------------------------------------
@@ -77,6 +83,14 @@ export interface StageSettingsOverrides {
   /** What marks the reading position. Fixed side ticks by default. */
   readingCue?: ReadingCueStyle;
   optical?: OpticalOverride;
+  /**
+   * Prompter or reading window. Defaults to `prompter`.
+   *
+   * Passed on to `resolveStageGeometry` AND written into the built settings, so
+   * the stage — which re-resolves against its own viewport — asks for the same
+   * measure band control did rather than reverting to the prompter's.
+   */
+  readingContext?: ReadingContext;
 }
 
 /**
@@ -174,6 +188,7 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
         profile: optical.profile,
         metrics: optical.metrics ?? null,
         viewport: optical.viewport,
+        ...(overrides.readingContext ? { readingContext: overrides.readingContext } : {}),
       }).optics
     : null;
 
@@ -257,6 +272,16 @@ export function buildStageSettings(overrides: StageSettingsOverrides = {}): Stag
     // A calibrated profile carries the cue style it was calibrated with, so it
     // wins over a loose setting for the same reason its geometry does.
     readingCue: optical ? optical.profile.readingCue : (overrides.readingCue ?? 'ticks'),
+    /*
+     * Written even when there is no `optics` block to go with it.
+     *
+     * An uncalibrated reading window still needs the stage to know it is one:
+     * that is what picks `UNCALIBRATED_READER_FONT_SIZE_PX` over the prompter's
+     * 64 when the stage re-resolves, and 64 px in a reading window is about a
+     * dozen characters a line. Tying this to `optics` would make the mode
+     * invisible in exactly the case where its default matters most.
+     */
+    ...(overrides.readingContext ? { readingContext: overrides.readingContext } : {}),
     ...(optics && optical ? { optics, opticalProfile: optical.profile } : {}),
   };
 }
@@ -289,24 +314,62 @@ export function stageSettingsFromSettings(
   display?: DisplayDescriptor | null,
 ): StageSettings {
   const t = s.teleprompter;
-  const profile = activeOpticalProfile(s.optical, display?.fingerprint ?? null);
+  const reader = s.stage.presentationMode === 'reader';
+  /*
+   * A reading window runs its own rig, and always has one.
+   *
+   * `readerOpticalProfile` synthesises when nothing is stored — see the note
+   * there for why that is safe for a reader and not for a prompter — so this
+   * branch never falls through to the uncalibrated percentage layout for want of
+   * a calibration wizard nobody should have to run to read a script.
+   */
+  const profile = reader
+    ? readerOpticalProfile(s.optical, display?.fingerprint ?? null)
+    : activeOpticalProfile(s.optical, display?.fingerprint ?? null);
   return buildStageSettings({
     fontFamilyId: t.fontFamilyId,
     fontSizePx: t.fontSizePx,
     lineHeight: t.lineHeight,
     columnWidthPercent: t.columnWidthPercent,
     readingBandCenterPercent: t.readingBandCenterPercent,
-    mirrorX: t.mirrorX,
-    mirrorY: t.mirrorY,
+    /*
+     * Never mirrored in a reading window, whatever Settings says.
+     *
+     * The mirror toggles describe a BEAMSPLITTER — the note below on
+     * `buildStageSettings`'s own `mirrorX` explains why they live in Settings
+     * rather than being read off `profile.flips` — and a reading window has no
+     * glass in the optical path. Carrying a glass rig's mirror into it gives
+     * somebody backwards text on a bare monitor, which the `desk-webcam` preset
+     * already calls "the classic first-run confusion".
+     *
+     * Forced rather than defaulted: the operator's prompter rig legitimately
+     * wants these on, and switching modes must not make them turn a setting off
+     * and back on again around it.
+     */
+    mirrorX: reader ? false : t.mirrorX,
+    mirrorY: reader ? false : t.mirrorY,
     pastDimming: t.pastDimming,
     phraseHighlight: t.phraseHighlight,
     textIntensity: t.textIntensity,
     stageMode: t.stageMode,
     readingCue: t.readingCue,
+    ...(reader ? { readingContext: 'reader' as const } : {}),
     ...(profile && display
       ? {
           optical: {
             profile,
+            /*
+             * The PANEL, even in reader mode, and only as a starting estimate.
+             *
+             * Control cannot know how large the reading window is — it is the
+             * window this code is running in, but the geometry is resolved before
+             * the stage mounts and the operator can drag an edge at any moment
+             * afterwards. So this resolves against the display and the stage
+             * re-resolves against its own viewport once it has painted, which is
+             * the same division of labour the note on font metrics below
+             * describes. What arrives here is a defensible opening frame; what
+             * the reader actually reads is the stage's own answer.
+             */
             viewport: {
               widthPx: display.logicalSize.width,
               heightPx: display.logicalSize.height,

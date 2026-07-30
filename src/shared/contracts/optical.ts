@@ -106,8 +106,17 @@ export interface LensPosition {
  * the discriminator that tells `resolveStageGeometry` which of those two
  * situations it is looking at, so it can stop asking `lens.y` a question that
  * only makes sense for the first.
+ *
+ * `'none'` is the fourth answer and it is a different KIND of answer: there is
+ * no camera at all. It is what a reader-mode rig has — somebody reading a script
+ * in a window on their own screen, not being filmed — and it is not the same as
+ * `'in-panel'` with the crosshair left in the middle. `'in-panel'` means "the
+ * lens is behind the glass and here is where", so the reading band is derived
+ * from it and `lensOffsetDegrees` is an angle measured from it. `'none'` means
+ * there is nothing to derive from and nothing to measure from: the band is the
+ * reader's own preference and the offset control does not apply.
  */
-export type LensPlacement = 'in-panel' | 'above' | 'below';
+export type LensPlacement = 'in-panel' | 'above' | 'below' | 'none';
 
 /** How the presenter is framed, which changes how much eye travel is visible. */
 export type FramingPreset = 'close-up' | 'head-and-shoulders' | 'waist-up' | 'full-body';
@@ -120,6 +129,21 @@ export type ReadingCueStyle = 'ticks' | 'wash' | 'none';
 
 /** How much instrumentation the presenter's glass carries. */
 export type StageMode = 'clean' | 'diagnostic';
+
+/**
+ * Whether geometry is being resolved for a prompter or for a reading window.
+ *
+ * It selects which character band the width solver aims at, and whether the
+ * framing multiplier applies — and nothing else. The angular ladder, the
+ * legibility floors and the resolution order are identical in both. See
+ * `READER_READING_MEASURE` in `shared/optics.ts` for the reasoning, and the
+ * reader-mode spec for why the measure is the only thing a camera was dictating.
+ *
+ * A contract type rather than a private one because `StageSettings` carries it:
+ * the stage re-resolves against its own viewport, so it has to be told which
+ * band control was aiming at.
+ */
+export type ReadingContext = 'prompter' | 'reader';
 
 /**
  * Every derived value, made explicit.
@@ -180,6 +204,20 @@ export interface OpticalOverrides {
   futureOpacity?: number;
   /** Floor for presenter-readable secondary text, CSS px. */
   secondaryMinPx?: number;
+
+  /**
+   * The reading band's position outright, as a fraction of the safe rectangle.
+   *
+   * The sibling `lensOffsetDegrees` below is an angle measured FROM the lens, so
+   * it can only exist on a rig that has one. This is the direct statement, and it
+   * is what a reader-mode rig (`lensPlacement: 'none'`) has instead: there is no
+   * camera to offset from, so where the line sits is simply a preference.
+   *
+   * It wins over `lensOffsetDegrees` when both are set, because one is a stated
+   * position and the other is a correction to a derivation — composing them would
+   * mean the operator's own number is not the number they get.
+   */
+  readingBandY?: number;
 
   /**
    * Vertical shift of the reading band away from the lens, in DEGREES below it.
