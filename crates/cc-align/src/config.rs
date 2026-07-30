@@ -490,7 +490,12 @@ impl Default for AlignmentConfig {
             // and the display arrives at it mid-sentence. 3.0 keeps it just
             // clear of ordinary reading while still bounding the damage when
             // the rate estimate is wrong.
-            max_lead_atoms: 4.5,
+            // 4.5 -> 3.2. Tightened in step with `lead_margin_atoms` so the
+            // NET worst-case lead over `observed` is held near where it was
+            // while the constant offset comes off. Sweeping the two together
+            // showed the cap has a sharp knee: at margin 0.6 the suite's
+            // `ahead_events` ran 71 at a cap of 3.0 and 5 at 2.6.
+            max_lead_atoms: 3.2,
 
             // Every one of these three is a SAFETY knob as much as a comfort
             // one, which is not obvious and is worth stating: they decide how
@@ -518,7 +523,31 @@ impl Default for AlignmentConfig {
             // 2.1 against a 2.5 limit). What actually runs the display on
             // through a pause is `max_prediction_ms`, which is why that came
             // down with it.
-            lead_margin_atoms: 1.6,
+            // 1.6 -> 1.0, together with `max_lead_atoms` 4.5 -> 3.2, once Tier C
+            // could see what the margin actually bought.
+            //
+            // The margin is a CONSTANT trailing offset, so it costs dim latency
+            // on every word of every take, and it buys overshoot protection only
+            // in the minority of moments when the reader slows down or stops.
+            // `max_lead_atoms` is the opposite: inert during steady reading,
+            // binding exactly when the rate estimate over-runs. Trading one for
+            // the other keeps the protection and stops paying for it constantly.
+            //
+            // On the captured corpus (real recogniser output, `bench/runs-local`):
+            // `dim_p50_ms` 700 -> 500, `dim_p95_ms` 1750 -> 1550, `within2`
+            // 59.3 -> 74.0, `p95_abs` 4.91 -> 4.71, and Tier C's gaze-weighted
+            // never-spoken gate 3.47 -> 2.89 word·s.
+            //
+            // The cost is real and is in the ENGINE's overshoot counters:
+            // `ahead_events` 11 -> 30 and `ahead_time` 3.59% -> 6.95%. Depth,
+            // which is what actually erases a line someone is reading, barely
+            // moves — `ahead_worst` 6.70 -> 6.98 — and `within5` improves. The
+            // reason the count can rise while the ink metric falls is that the
+            // rendered dim frontier now FLOORS the estimate instead of rounding
+            // it, so a half-token of overshoot no longer reaches the glass; see
+            // `cc_bench::stage`. Judge this pair on `ahead_worst` and on the ink
+            // gate, not on the event count.
+            lead_margin_atoms: 1.0,
             lead_ease_ms: 450.0,
             lead_hold_ms: 0.0,
             lead_decay_ms: 1200.0,

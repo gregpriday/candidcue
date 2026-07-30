@@ -18,7 +18,64 @@ use cc_bench::scenarios::{build_suite, tier_b_selection};
 use cc_bench::suite::{
     compare_tables, print_table, run_tier_a, run_tier_b, RunManifest, SuiteResult,
 };
+use cc_bench::tierc::TierCResult;
 use cc_bench::tts::{synthesize, wav_bytes, Synthesizer};
+
+/// Render the Tier-C table, then the per-layout headline.
+///
+/// The per-layout block is not decoration: the whole claim of the jerk-limited
+/// controller is that it behaves the same at every refresh rate, and one averaged
+/// number cannot check a claim about seven rigs.
+fn print_tier_c(result: &TierCResult, verbose: bool) {
+    println!("== {} (tier C: rendered stage) ==", result.label);
+    let mut section = String::new();
+    for e in &result.table {
+        let prefix = e.name.split('.').next().unwrap_or("").to_string();
+        if prefix != section {
+            println!();
+            section = prefix;
+        }
+        println!(
+            "{:38} {:>10.3} {:<9} ({} is better)",
+            e.name, e.value, e.unit, e.better
+        );
+    }
+    println!("\n-- by layout --");
+    let names: Vec<&String> = result.by_layout.keys().collect();
+    if let Some(first) = result.by_layout.values().next() {
+        print!("{:26}", "metric");
+        for n in &names {
+            print!(" {:>13}", n);
+        }
+        println!();
+        for (i, row) in first.iter().enumerate() {
+            print!("{:26}", row.name);
+            for n in &names {
+                let v = result.by_layout[*n]
+                    .get(i)
+                    .map(|e| e.value)
+                    .unwrap_or(f64::NAN);
+                print!(" {:>13.3}", v);
+            }
+            println!();
+        }
+    }
+    if verbose {
+        println!("\n-- per run (headline layout) --");
+        for r in result.runs.iter().filter(|r| r.layout == "60hz") {
+            println!(
+                "{:34} readable {:>6.2}%  half-dim p50 {:>7.1}ms  unread {:>7.4}  \
+                 band {:>6.2}%  disruptions {:>3}",
+                r.run,
+                r.readable_availability,
+                r.half_dim_p50,
+                r.uie_mean,
+                r.band_occupancy_pct,
+                r.disruptions,
+            );
+        }
+    }
+}
 
 fn repo_root() -> PathBuf {
     let mut dir = std::env::current_dir().expect("cwd");
@@ -52,6 +109,14 @@ struct Flags {
     blank_penalty: Option<f32>,
     /// `capture-local`: `greedy_search` | `modified_beam_search`.
     decoding: Option<String>,
+    /// `tier-c`: which rendered layouts to score. None means the whole sweep.
+    layouts: Option<Vec<String>>,
+    /// `robustness`: perturbations to evaluate per scenario.
+    budget: usize,
+    /// `tier-c`: aim the reading corridor this many atoms ahead of the tracked
+    /// position. See `Layout::focus_lead_atoms`.
+    focus_lead: Option<f64>,
+    verbose: bool,
 }
 
 fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags> {
@@ -68,6 +133,10 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         prime_ms: 0,
         blank_penalty: None,
         decoding: None,
+        layouts: None,
+        budget: 240,
+        focus_lead: None,
+        verbose: false,
     };
     let mut it = it.peekable();
     while let Some(arg) = it.next() {
@@ -88,6 +157,13 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--prime-ms" => flags.prime_ms = take()?.parse()?,
             "--blank-penalty" => flags.blank_penalty = Some(take()?.parse()?),
             "--decoding" => flags.decoding = Some(take()?),
+            "--budget" => flags.budget = take()?.parse()?,
+            "--focus-lead" => flags.focus_lead = Some(take()?.parse()?),
+            "--verbose" => flags.verbose = true,
+            "--layouts" => {
+                flags.layouts =
+                    Some(take()?.split(',').map(|s| s.trim().to_string()).collect())
+            }
             "--scripts" => {
                 flags.scripts = Some(take()?.split(',').map(|s| s.trim().to_string()).collect())
             }
@@ -138,6 +214,194 @@ fn main() -> anyhow::Result<()> {
             let result = run_tier_b(&runs_dir, &scripts_dir, &config, &flags.label)?;
             print_table(&result);
             save_result(&result, &flags.out)?;
+        }
+        Some("tier-c") => {
+            // Tier C: the same engine output, driven through the stage model —
+            // line map, jerk-limited plant, per-word opacity ramp — and scored on
+            // what the presenter would have seen rather than on a scalar.
+            let flags = parse_flags(args[1..].iter())?;
+            let config = load_config(&flags.config)?;
+            let mut layouts = cc_bench::tierc::layouts_for(flags.layouts.as_deref());
+            anyhow::ensure!(!layouts.is_empty(), "no layouts matched --layouts");
+            if let Some(lead) = flags.focus_lead {
+                for l in layouts.iter_mut() {
+                    l.focus_lead_atoms = lead;
+                }
+            }
+            let result = match &flags.runs {
+                // `--runs` scores captured recogniser output through the stage
+                // model: the closest thing to a real take anything automated on
+                // this machine can reach.
+                Some(dir) => cc_bench::tierc::run_tier_c_captured(
+                    dir,
+                    &scripts_dir,
+                    &config,
+                    &flags.label,
+                    &layouts,
+                )?,
+                None => cc_bench::tierc::run_tier_c(&scripts_dir, &config, &flags.label, &layouts)?,
+            };
+            print_tier_c(&result, flags.verbose);
+            if let Some(out) = &flags.out {
+                if let Some(parent) = out.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(out, serde_json::to_string_pretty(&result)?)?;
+                println!("wrote {}", out.display());
+            }
+        }
+        Some("compare-c") => {
+            anyhow::ensure!(args.len() >= 3, "usage: compare-c baseline.json candidate.json");
+            // Only the table is needed, and reading only the table is
+            // deliberate: `runs` carries ninety-odd per-run metrics, any of which
+            // can legitimately be NaN, and a comparison must not fail because a
+            // metric it is not printing had an empty sample set.
+            #[derive(serde::Deserialize)]
+            struct Comparable {
+                label: String,
+                table: Vec<cc_bench::suite::BenchEntry>,
+            }
+            let read = |p: &str| -> anyhow::Result<Comparable> {
+                Ok(serde_json::from_str(&std::fs::read_to_string(p)?)?)
+            };
+            let base = read(&args[1])?;
+            let cand = read(&args[2])?;
+            print!(
+                "{}",
+                cc_bench::suite::compare_entry_tables(
+                    &base.label,
+                    &base.table,
+                    &cand.label,
+                    &cand.table
+                )
+            );
+        }
+        Some("difficulty") => {
+            // What the corpus is actually like. A benchmark can look excellent
+            // simply because its scripts are easy to locate in.
+            for stem in cc_bench::scenarios::corpus_scripts() {
+                let path = scripts_dir.join(format!("{stem}.md"));
+                let Ok(source) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let script = cc_align::compile(&source, cc_align::CompileOptions::default());
+                let d = cc_bench::difficulty::analyse(stem, &script);
+                println!(
+                    "{:16} {:>5} atoms  U50={:.0} U90={:.0}  ambiguous={:>5.1}%  \
+                     anchors={:.2} (floor {:.2})  stopwords={:>4.1}%  paras={:>3} (max {})",
+                    d.script,
+                    d.atoms,
+                    d.uniqueness_p50,
+                    d.uniqueness_p90,
+                    d.ambiguous_pct,
+                    d.anchor_density,
+                    d.min_window_anchor_density,
+                    d.stopword_pct,
+                    d.paragraphs,
+                    d.longest_paragraph,
+                );
+            }
+        }
+        Some("metamorphic") => {
+            // Invariants that need no gold timeline: the transformation IS the
+            // oracle. Cheap enough to run over the whole corpus.
+            let flags = parse_flags(args[1..].iter())?;
+            let config = load_config(&flags.config)?;
+            let suite = build_suite(&scripts_dir)?;
+            let mut failures = 0usize;
+            let mut total = 0usize;
+            for scenario in suite.iter().filter(|s| s.plan.scenario == "exact") {
+                let path = scripts_dir.join(format!("{}.md", scenario.plan.script));
+                let source = std::fs::read_to_string(&path)?;
+                let performance = expand(&scenario.plan, &scenario.script);
+                let gold = cc_bench::plan::synthetic_timing(&performance, scenario.wpm);
+                let events = cc_bench::synthetic::generate_events(
+                    &gold,
+                    &scenario.plan.corruption,
+                    scenario.plan.seed,
+                );
+                for r in cc_bench::robustness::metamorphic_battery(
+                    &scenario.plan.script,
+                    &source,
+                    &config,
+                    &events,
+                ) {
+                    total += 1;
+                    if !r.passed {
+                        failures += 1;
+                        println!(
+                            "FAIL {:34} {:16} divergence {:.3} — {}",
+                            r.name, r.script, r.worst_divergence, r.detail
+                        );
+                    } else if flags.verbose {
+                        println!("ok   {:34} {:16} divergence {:.6}", r.name, r.script, r.worst_divergence);
+                    }
+                }
+            }
+            println!("\nmetamorphic: {}/{} invariants held", total - failures, total);
+            anyhow::ensure!(failures == 0, "{failures} metamorphic invariant(s) violated");
+        }
+        Some("robustness") => {
+            // How much recogniser corruption does unsafe behaviour actually
+            // require? A radius, not a pass/fail: the objective is to push the
+            // cost of a false jump beyond anything a real recogniser produces.
+            let flags = parse_flags(args[1..].iter())?;
+            let config = load_config(&flags.config)?;
+            let suite = build_suite(&scripts_dir)?;
+            let mut radii: Vec<f64> = Vec::new();
+            let mut unbroken = 0usize;
+            for scenario in suite.iter().filter(|s| {
+                matches!(s.plan.scenario.as_str(), "exact" | "skip_forward" | "retake")
+            }) {
+                let path = scripts_dir.join(format!("{}.md", scenario.plan.script));
+                let source = std::fs::read_to_string(&path)?;
+                let performance = expand(&scenario.plan, &scenario.script);
+                let gold = cc_bench::plan::synthetic_timing(&performance, scenario.wpm);
+                let events = cc_bench::synthetic::generate_events(
+                    &gold,
+                    &scenario.plan.corruption,
+                    scenario.plan.seed,
+                );
+                let pass = cc_bench::passgold::PassGold::derive(&gold);
+                let r = cc_bench::robustness::adversarial_search(
+                    &scenario.plan.script,
+                    &scenario.plan.scenario,
+                    &source,
+                    &config,
+                    &events,
+                    &pass,
+                    flags.budget,
+                    scenario.plan.seed,
+                );
+                match r.radius() {
+                    Some(rad) => {
+                        radii.push(rad);
+                        println!(
+                            "{:16} {:18} radius {:>6.2}  (jump {:?} conf {:?} ink {:?}) {} evaluated",
+                            r.script,
+                            r.scenario,
+                            rad,
+                            r.false_jump_radius.map(|v| (v * 100.0).round() / 100.0),
+                            r.false_confidence_radius.map(|v| (v * 100.0).round() / 100.0),
+                            r.unread_ink_radius.map(|v| (v * 100.0).round() / 100.0),
+                            r.evaluated,
+                        );
+                    }
+                    None => {
+                        unbroken += 1;
+                        println!(
+                            "{:16} {:18} UNBROKEN in {} perturbations",
+                            r.script, r.scenario, r.evaluated
+                        );
+                    }
+                }
+            }
+            radii.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            println!(
+                "\nrobustness: {unbroken} unbroken; radius p05 {:.2}, p50 {:.2}",
+                cc_bench::perceptual::pctl(&radii, 5.0),
+                cc_bench::perceptual::pctl(&radii, 50.0),
+            );
         }
         Some("synth-audio") => {
             let flags = parse_flags(args[1..].iter())?;

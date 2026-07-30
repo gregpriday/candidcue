@@ -1,0 +1,23 @@
+# Captured benchmark fixtures live in Git LFS.
+#
+# `bench/runs*/` holds frozen recogniser captures — the baselines every
+# before/after comparison is measured against. They cannot be regenerated
+# byte-for-byte (`bench-tts-not-deterministic`: re-synthesising the same
+# fixture drifts by seconds), so gitignoring them would destroy the only
+# reference the suite has. They are also the two files in the tree that grow
+# without bound: one event log is ~46 KB per minute of speech and one gold
+# timeline ~32 KB, and the corpus expansion in this branch multiplies both.
+#
+# Only the two BULK files go to LFS. `manifest.json` and `performance.txt` are
+# a few hundred bytes each and are the files a human actually reads in a diff
+# when a fixture changes — a pointer there would cost review clarity and save
+# nothing.
+bench/runs/**/events.jsonl filter=lfs diff=lfs merge=lfs -text
+bench/runs/**/gold.json filter=lfs diff=lfs merge=lfs -text
+bench/runs-local/**/events.jsonl filter=lfs diff=lfs merge=lfs -text
+bench/runs-local/**/gold.json filter=lfs diff=lfs merge=lfs -text
+bench/runs-inworld-new/**/events.jsonl filter=lfs diff=lfs merge=lfs -text
+bench/runs-inworld-new/**/gold.json filter=lfs diff=lfs merge=lfs -text
+
+# Fixture audio: regenerable from a TTS key, but 440 KB and binary.
+tests/fixtures/audio/*.wav filter=lfs diff=lfs merge=lfs -text

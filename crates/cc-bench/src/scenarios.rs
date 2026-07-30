@@ -65,6 +65,24 @@ fn adlib_words(n: usize) -> Vec<String> {
     BANK.iter().cycle().take(n).map(|s| s.to_string()).collect()
 }
 
+/// Every script the corpus draws on, in the order the difficulty report prints
+/// them. Named once here rather than repeated at each call site: a script added
+/// to the suite and forgotten in the difficulty sweep is a corpus whose reported
+/// difficulty no longer describes the corpus being scored.
+pub fn corpus_scripts() -> &'static [&'static str] {
+    &[
+        "starter",
+        "product-update",
+        "technical",
+        "longform",
+        "figures",
+        "brands",
+        "names",
+        "refrain",
+        "huge",
+    ]
+}
+
 pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario>> {
     let mut suite = Vec::new();
     let load = |stem: &str| -> anyhow::Result<(String, CompiledScript)> {
@@ -400,6 +418,212 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
         ));
 
         // 12. Rate extremes.
+        // ---------------------------------------------------------------
+        // The scenario cells the corpus was missing (§11).
+        //
+        // Balanced by CELL, not by duration: a clean read is the easiest thing
+        // the engine does and it was most of the wall-clock in the suite, so
+        // every hard case was a rounding error in any pooled average. These add
+        // the families where the perceptual metrics actually have something to
+        // say — pace extremes, the moment after a pause, disfluency, and the
+        // shapes of retake and skip the old suite only sampled once each.
+        // ---------------------------------------------------------------
+
+        // Pace extremes. 75 wpm is a deliberate, weighty delivery; 240 is a
+        // fast read-through. Both break the rate estimator in opposite
+        // directions, and the ONE thing a pace metric must not do is report the
+        // 150 wpm case twice.
+        for (wpm, label) in [(75u32, "rate_75"), (240u32, "rate_240")] {
+            suite.push(scenario(
+                &name,
+                label,
+                &script,
+                wpm,
+                vec![PlanOp::Read { from: 0, to: frac(n, 45) }],
+                Corruption::default(),
+            ));
+        }
+
+        // An abrupt pace change mid-read: the presenter decides to pick it up.
+        // The rate estimate is a median of recent slopes, so this is the case
+        // where it is most confidently wrong.
+        suite.push(scenario(
+            &name,
+            "pace_jump",
+            &script,
+            120,
+            vec![
+                PlanOp::Read { from: 0, to: frac(n, 25) },
+                PlanOp::Rate { wpm: 210 },
+                PlanOp::Read { from: frac(n, 25), to: frac(n, 50) },
+                PlanOp::Rate { wpm: 95 },
+                PlanOp::Read { from: frac(n, 50), to: frac(n, 70) },
+            ],
+            Corruption::default(),
+        ));
+
+        // Breath pauses: the 200–700 ms gaps that punctuate every real read.
+        // Short enough that they must NOT read as a pause — a display that
+        // stops for each one is the "it keeps hesitating" complaint.
+        {
+            let mut ops = Vec::new();
+            let step = frac(n, 6).max(6);
+            let mut at = 0u32;
+            let mut breath = 0usize;
+            while at < frac(n, 60) {
+                let to = (at + step).min(frac(n, 60));
+                ops.push(PlanOp::Read { from: at, to });
+                ops.push(PlanOp::Pause {
+                    ms: [220, 380, 520, 680][breath % 4],
+                });
+                breath += 1;
+                at = to;
+            }
+            suite.push(scenario(&name, "breath_pauses", &script, 150, ops, Corruption::default()));
+        }
+
+        // Cold open: the first word lands with no lead-in at all. The opening
+        // slice of every latency metric is scored here.
+        suite.push(scenario(
+            &name,
+            "cold_open",
+            &script,
+            165,
+            vec![PlanOp::Read { from: 0, to: frac(n, 20) }],
+            Corruption::default(),
+        ));
+
+        // Disfluency: fillers between phrases. The engine has explicit filler
+        // costs, and nothing in the suite exercised them at density.
+        {
+            let mut ops = Vec::new();
+            let step = frac(n, 8).max(5);
+            let mut at = 0u32;
+            let mut i = 0usize;
+            while at < frac(n, 55) {
+                let to = (at + step).min(frac(n, 55));
+                ops.push(PlanOp::Read { from: at, to });
+                ops.push(PlanOp::Say {
+                    words: match i % 3 {
+                        0 => vec!["um".into()],
+                        1 => vec!["uh".into(), "you".into(), "know".into()],
+                        _ => vec!["so".into()],
+                    },
+                });
+                i += 1;
+                at = to;
+            }
+            suite.push(scenario(&name, "fillers", &script, 150, ops, Corruption::default()));
+        }
+
+        // Self-correction: say the wrong thing, notice, back up two words and
+        // say it right. This is a pass boundary in miniature, and it is the
+        // shape `retake_legibility_loss` was built for.
+        if n > 60 {
+            let a = frac(n, 30);
+            suite.push(scenario(
+                &name,
+                "self_correct",
+                &script,
+                150,
+                vec![
+                    PlanOp::Read { from: 0, to: a },
+                    PlanOp::Say { words: vec!["no".into(), "sorry".into()] },
+                    PlanOp::Read { from: a.saturating_sub(3), to: frac(n, 55) },
+                ],
+                Corruption::default(),
+            ));
+
+            // False start: begin a phrase, abandon it, begin the same phrase
+            // again. The engine must not read the repetition as a skip.
+            suite.push(scenario(
+                &name,
+                "false_start",
+                &script,
+                150,
+                vec![
+                    PlanOp::Read { from: 0, to: a },
+                    PlanOp::Read { from: a, to: a + 4 },
+                    PlanOp::Pause { ms: 900 },
+                    PlanOp::Read { from: a, to: frac(n, 55) },
+                ],
+                Corruption::default(),
+            ));
+
+            // Two retakes before any forward progress: the case that spends the
+            // reverse-travel budget and then asks for more.
+            suite.push(scenario(
+                &name,
+                "double_retake",
+                &script,
+                150,
+                vec![
+                    PlanOp::Read { from: 0, to: frac(n, 40) },
+                    PlanOp::Pause { ms: 1_200 },
+                    PlanOp::Read { from: frac(n, 30), to: frac(n, 38) },
+                    PlanOp::Pause { ms: 1_200 },
+                    PlanOp::Read { from: frac(n, 28), to: frac(n, 60) },
+                ],
+                Corruption::default(),
+            ));
+
+            // Small skips. The suite had one 100-atom skip; the ones a
+            // presenter actually makes are two or six words — dropping a
+            // clause, skipping a parenthetical — and those are HARDER, because
+            // the evidence for them is weaker than for a distant jump.
+            for (gap, label) in [(2u32, "micro_skip"), (6u32, "small_skip")] {
+                suite.push(scenario(
+                    &name,
+                    label,
+                    &script,
+                    150,
+                    vec![
+                        PlanOp::Read { from: 0, to: a },
+                        PlanOp::Read { from: a + gap, to: frac(n, 55) },
+                    ],
+                    Corruption::default(),
+                ));
+            }
+
+            // Content-word deletions: the reader swallows words. Distinct from
+            // `corrupt15`, where the RECOGNISER drops them — here the acoustics
+            // genuinely lack them, so gold advances and the evidence never
+            // arrives.
+            {
+                let mut ops = Vec::new();
+                let mut at = 0u32;
+                while at + 9 < frac(n, 55) {
+                    ops.push(PlanOp::Read { from: at, to: at + 7 });
+                    ops.push(PlanOp::Substitute {
+                        from: at + 7,
+                        to: at + 9,
+                        say: vec![script.atoms[(at + 8) as usize].surface.clone()],
+                        respelled: false,
+                    });
+                    at += 9;
+                }
+                if !ops.is_empty() {
+                    suite.push(scenario(&name, "word_drops", &script, 150, ops, Corruption::default()));
+                }
+            }
+
+            // A long aside — thirty seconds of off-script speech, some of it
+            // drawn from words that appear elsewhere in the script. The engine
+            // must hold, not wander, and then come back.
+            suite.push(scenario(
+                &name,
+                "long_adlib",
+                &script,
+                150,
+                vec![
+                    PlanOp::Read { from: 0, to: a },
+                    PlanOp::Say { words: adlib_words(75) },
+                    PlanOp::Read { from: a, to: frac(n, 55) },
+                ],
+                Corruption::default(),
+            ));
+        }
+
         suite.push(scenario(
             &name,
             "rate_fast",
