@@ -1044,9 +1044,44 @@
         ? (blockIndexForToken(alignment.confirmedToken) ?? -1)
         : -1,
   );
-  const cursorTokenIndex = $derived(
-    activeTokenIndex ?? (alignment ? Math.round(alignment.confirmedToken) : null),
-  );
+  /*
+   * When exact evidence commits a provisional frontier, the motion plant may
+   * still be physically behind it. Dropping straight back to
+   * `activeTokenIndex` would briefly brighten the very words just confirmed.
+   * Latch the old provisional frontier until the plant catches it. An explicit
+   * retraction clears the latch instead — that is the one transition that is
+   * supposed to brighten words.
+   */
+  let previousProvisionalToken = $state<number | null>(null);
+  let committedDimFloor = $state<number | null>(null);
+  $effect(() => {
+    const provisional = alignment?.provisionalToken ?? null;
+    const retracted = alignment?.provisionalRetracted === true;
+    const active = activeTokenIndex;
+    const previous = untrack(() => previousProvisionalToken);
+    let floor = untrack(() => committedDimFloor);
+
+    if (retracted) {
+      floor = null;
+    } else if (previous !== null && provisional === null) {
+      floor = Math.max(floor ?? 0, previous);
+    }
+    if (floor !== null && active !== null && active >= floor) floor = null;
+
+    previousProvisionalToken = provisional;
+    committedDimFloor = floor;
+  });
+  const cursorTokenIndex = $derived.by(() => {
+    if (alignment?.provisionalToken !== null && alignment?.provisionalToken !== undefined) {
+      return alignment.provisionalToken;
+    }
+    const committed = alignment?.provisionalRetracted ? null : committedDimFloor;
+    const ordinary =
+      activeTokenIndex ?? (alignment ? Math.round(alignment.confirmedToken) : null);
+    if (committed === null) return ordinary;
+    return ordinary === null ? committed : Math.max(ordinary, committed);
+  });
+  const dimRollback = $derived(alignment?.provisionalRetracted === true);
 
   function zoneFor(index: number): 'past' | 'current' | 'future' {
     if (currentBlockIndex < 0) return 'future';
@@ -2993,6 +3028,7 @@
         <BlockView
           {block}
           {dimFrozen}
+          {dimRollback}
           {performanceMode}
           zone={zoneFor(renderWindow.startIndex + i)}
           cursor={renderWindow.startIndex + i === currentBlockIndex ? cursorTokenIndex : null}

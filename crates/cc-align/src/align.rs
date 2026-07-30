@@ -52,6 +52,10 @@ pub struct Evidence {
     pub deletions: u32,
     /// Exact-matched *content* (non-stopword) query atoms.
     pub content_matches: u32,
+    /// Fuzzy/phonetic content matches. Kept separate from exact content
+    /// because they may support a tightly bounded local continuation but must
+    /// never acquire or relocate the reader on their own.
+    pub approximate_content_matches: u32,
     /// Content matches among stable/final query atoms.
     pub stable_content_matches: u32,
     /// Script boundary position AFTER the last aligned atom (atoms, integer).
@@ -372,6 +376,9 @@ pub fn align(
                     if q.stability.is_stable() {
                         ev.matched_stable_weight += weight * stab_mult * 0.5;
                     }
+                    if !crate::normalize::is_stopword(&q.surface) && !q.filler {
+                        ev.approximate_content_matches += 1;
+                    }
                     if ev.last_match_query_index.is_none() {
                         ev.last_match_query_index = Some(i - 1);
                         ev.last_match_audio_ms = q.audio_ms;
@@ -382,6 +389,9 @@ pub fn align(
                     run = 0;
                     prev_exact_qi = None;
                     ev.matched_weight += weight * stab_mult * 0.4;
+                    if !crate::normalize::is_stopword(&q.surface) && !q.filler {
+                        ev.approximate_content_matches += 1;
+                    }
                     if ev.last_match_query_index.is_none() {
                         ev.last_match_query_index = Some(i - 1);
                         ev.last_match_audio_ms = q.audio_ms;

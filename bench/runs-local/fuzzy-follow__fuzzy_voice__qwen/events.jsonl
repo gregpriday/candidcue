@@ -1,0 +1,32 @@
+{"kind":"itemStarted","itemId":"1-0","ordinal":0,"audioStartMs":0.0}
+{"kind":"partial","itemId":"1-0","text":"Alp","audioMs":1600.0,"wallMs":1517.706792}
+{"kind":"partial","itemId":"1-0","text":"Alpha bra","audioMs":2100.0,"wallMs":2020.5309169999998}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's","audioMs":2600.0,"wallMs":2521.0881670000003}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's steady","audioMs":3100.0,"wallMs":3019.6297919999997}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's steady context","audioMs":3600.0,"wallMs":3520.493875}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's steady context.","audioMs":4000.0,"wallMs":3917.3486669999998}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's steady context. Present","audioMs":5500.0,"wallMs":5418.897875}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's steady context. Presenter tel","audioMs":6000.0,"wallMs":5917.62175}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's steady context. Presenter telepromp","audioMs":6400.0,"wallMs":6319.461959}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's steady context. Presenter teleprompter,","audioMs":6900.0,"wallMs":6817.295709}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's steady context. Presenter teleprompter, Harb","audioMs":7400.0,"wallMs":7319.462542}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's steady context. Presenter teleprompter, Harbor nar","audioMs":7900.0,"wallMs":7820.075209}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's steady context. Presenter teleprompter, Harbor narration","audioMs":8400.0,"wallMs":8317.581625}
+{"kind":"partial","itemId":"1-0","text":"Alpha bravo's steady context. Presenter teleprompter, Harbor narration.","audioMs":8800.0,"wallMs":8718.25925}
+{"kind":"final","itemId":"1-0","text":"Alpha bravo's steady context. Presenter teleprompter, Harbor narration.","audioEndMs":9800.0,"wallMs":9717.107542000002}
+{"kind":"itemStarted","itemId":"1-1","ordinal":1,"audioStartMs":9800.0}
+{"kind":"partial","itemId":"1-1","text":"Sairs","audioMs":10300.0,"wallMs":10216.923708999999}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Sours","audioMs":10800.0,"wallMs":10718.456209}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Soursby ver","audioMs":11200.0,"wallMs":11117.036667}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Soursby versus Ster","audioMs":11700.0,"wallMs":11616.713792}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Soursby versus Stertier","audioMs":12200.0,"wallMs":12119.817167000001}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Soursby versus Stertier Cuba","audioMs":12700.0,"wallMs":12616.642375}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Soursby versus Stertier Cubarunettes","audioMs":13200.0,"wallMs":13121.490209}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Soursby versus Stertier Cubarunettes.","audioMs":13600.0,"wallMs":13520.064584}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Soursby versus Stertier Cubarunettes. Camer","audioMs":15100.0,"wallMs":15021.153542}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Soursby versus Stertier Cubarunettes. Camera clos","audioMs":15600.0,"wallMs":15520.223875}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Soursby versus Stertier Cubarunettes. Camera closing sign","audioMs":16000.0,"wallMs":15919.102834000001}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Soursby versus Stertier Cubarunettes. Camera closing signal comple","audioMs":16500.0,"wallMs":16417.932167}
+{"kind":"partial","itemId":"1-1","text":"Sairs, Soursby versus Stertier Cubarunettes. Camera closing signal complete.","audioMs":17000.0,"wallMs":16920.904917}
+{"kind":"final","itemId":"1-1","text":"Sairs, Soursby versus Stertier Cubarunettes. Camera closing signal complete.","audioEndMs":17927.5,"wallMs":18005.098625}
+{"kind":"closed"}

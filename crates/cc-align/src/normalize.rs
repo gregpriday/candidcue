@@ -88,10 +88,23 @@ impl PhoneticKey {
         if self.is_empty() || other.is_empty() {
             return false;
         }
+        let prefix3 = |a: &[u8; 4], b: &[u8; 4]| {
+            a[2] != 0 && b[2] != 0 && a[..3] == b[..3]
+        };
         self.primary == other.primary
             || self.primary == other.alternate
             || self.alternate == other.primary
             || self.alternate == other.alternate
+            // Long unusual words frequently agree on the leading consonant
+            // skeleton but diverge in the fourth slot because the recogniser
+            // compresses a middle syllable ("Worcestershire" →
+            // "Worstushier"). Phonetic evidence is already restricted to
+            // rare anchor-grade words and cannot relocate on its own, so a
+            // three-slot prefix is an appropriate recall-oriented fallback.
+            || prefix3(&self.primary, &other.primary)
+            || prefix3(&self.primary, &other.alternate)
+            || prefix3(&self.alternate, &other.primary)
+            || prefix3(&self.alternate, &other.alternate)
     }
 }
 

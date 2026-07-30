@@ -1,0 +1,10 @@
+{
+  "name": "fuzzy-follow__fuzzy_voice__qwen",
+  "script": "fuzzy-follow",
+  "scenario": "fuzzy_voice",
+  "engine": "qwen",
+  "voice_index": 19,
+  "words": 16,
+  "audio_s": 17.9275,
+  "atom_count": 16
+}

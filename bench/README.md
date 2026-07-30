@@ -73,6 +73,14 @@ crates/cc-bench/  Harness: plans, gold, synthetic events, TTS, capture,
                   replay, metrics, suites, reports
 ```
 
+The files under `bench/runs*` are intentionally tracked replay fixtures, not
+generated reports or audio. They contain only compact transcript events, gold
+timing, a manifest, and the spoken text; together the three checked-in corpora
+are about 4 MB. Keeping them in Git makes a benchmark result reproducible
+without a TTS key, microphone, model download, or a fresh non-deterministic
+recognition pass. WAV files remain in the temporary synthesis work directory,
+and result JSON belongs under ignored `bench/results/`.
+
 ## Custom vocabulary (`transcribeConfig.prompts`)
 
 `inworld/inworld-stt-1` accepts a soft vocabulary bias, and

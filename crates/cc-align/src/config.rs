@@ -51,6 +51,18 @@ pub struct AlignmentConfig {
     // ---- observed-position gate ----
     pub observe_min_fidelity: f64,
     pub observe_min_coverage: f64,
+    /// A single fuzzy/phonetic content word may bridge an otherwise empty
+    /// local update only while an existing lock is at least this confident.
+    pub local_approx_min_confidence: f64,
+    /// Maximum forward movement (atoms) granted by one provisional word.
+    pub local_approx_max_step: f64,
+    /// Maximum total speculative advance beyond `observed`.
+    pub local_approx_max_advance: f64,
+    /// Maximum distance from the pace-predicted frontier for the bridge.
+    pub local_approx_prediction_slack: f64,
+    /// Consecutive approximate-only bridges allowed before exact evidence must
+    /// re-establish the path. The total-distance cap remains authoritative.
+    pub local_approx_max_consecutive: u8,
 
     // ---- confirmed-position gate ----
     pub confirm_min_fidelity: f64,
@@ -342,6 +354,23 @@ impl AlignmentConfig {
             self.viewport_sigma = d.viewport_sigma;
         }
         fix(&mut self.viewport_bonus, d.viewport_bonus);
+        fix(
+            &mut self.local_approx_min_confidence,
+            d.local_approx_min_confidence,
+        );
+        self.local_approx_min_confidence = self.local_approx_min_confidence.clamp(0.0, 1.0);
+        fix(&mut self.local_approx_max_step, d.local_approx_max_step);
+        self.local_approx_max_step = self.local_approx_max_step.max(0.0);
+        fix(
+            &mut self.local_approx_max_advance,
+            d.local_approx_max_advance,
+        );
+        self.local_approx_max_advance = self.local_approx_max_advance.max(0.0);
+        fix(
+            &mut self.local_approx_prediction_slack,
+            d.local_approx_prediction_slack,
+        );
+        self.local_approx_prediction_slack = self.local_approx_prediction_slack.max(0.0);
         for cost in [
             &mut self.cost_fuzzy,
             &mut self.cost_substitution,
@@ -386,6 +415,11 @@ impl Default for AlignmentConfig {
 
             observe_min_fidelity: 0.50,
             observe_min_coverage: 0.35,
+            local_approx_min_confidence: 0.60,
+            local_approx_max_step: 1.25,
+            local_approx_max_advance: 3.0,
+            local_approx_prediction_slack: 1.5,
+            local_approx_max_consecutive: 3,
 
             confirm_min_fidelity: 0.70,
             confirm_min_stable_content: 3,

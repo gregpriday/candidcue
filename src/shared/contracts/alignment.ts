@@ -186,6 +186,16 @@ export interface AlignmentSnapshot {
    * quiet affordance. It must never be auto-scrolled to.
    */
   suggestionToken: number | null;
+  /**
+   * A bounded, reversible dimming frontier inferred from close local
+   * spelling/phonetic evidence. It never drives scrolling or progress.
+   *
+   * Optional for replay fixtures recorded before this field existed; live
+   * Rust snapshots always include it.
+   */
+  provisionalToken?: number | null;
+  /** One-shot permission for the renderer to brighten withdrawn speculation. */
+  provisionalRetracted?: boolean;
   /** Total spoken tokens — the ceiling for any display position. */
   scriptLenTokens: number;
 
@@ -340,7 +350,14 @@ function softMin(a: number, cap: number, easeRaw: number): number {
  * Validation
  * ------------------------------------------------------------------------- */
 
-type FieldKind = 'real' | 'integer' | 'state' | 'decision' | 'nullableReal';
+type FieldKind =
+  | 'real'
+  | 'integer'
+  | 'state'
+  | 'decision'
+  | 'nullableReal'
+  | 'optionalNullableReal'
+  | 'optionalBoolean';
 
 /**
  * Typed `Record<keyof AlignmentSnapshot, FieldKind>`, so a field added to the
@@ -368,6 +385,8 @@ const SNAPSHOT_FIELDS: Record<keyof AlignmentSnapshot, FieldKind> = {
   displayLimitToken: 'real',
   confidence: 'real',
   suggestionToken: 'nullableReal',
+  provisionalToken: 'optionalNullableReal',
+  provisionalRetracted: 'optionalBoolean',
   scriptLenTokens: 'real',
   observedAtom: 'real',
   confirmedAtom: 'real',
@@ -406,6 +425,18 @@ export function validateAlignmentSnapshot(value: unknown): string | null {
         break;
       case 'nullableReal':
         if (field !== null && (typeof field !== 'number' || !Number.isFinite(field))) return key;
+        break;
+      case 'optionalNullableReal':
+        if (
+          field !== undefined &&
+          field !== null &&
+          (typeof field !== 'number' || !Number.isFinite(field))
+        ) {
+          return key;
+        }
+        break;
+      case 'optionalBoolean':
+        if (field !== undefined && typeof field !== 'boolean') return key;
         break;
       case 'state':
         if (typeof field !== 'string' || !STATE_SET.has(field)) return key;
