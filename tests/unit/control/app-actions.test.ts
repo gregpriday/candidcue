@@ -60,7 +60,9 @@ function appError(code: string, userMessage: string): AppError {
 function dangerToast(): string {
   const danger = calls.showToast.mock.calls.filter(([, tone]) => tone === 'danger');
   expect(danger).toHaveLength(1);
-  return danger[0][0] as string;
+  const [first] = danger;
+  if (first === undefined) throw new Error('expected exactly one danger toast');
+  return first[0] as string;
 }
 
 beforeEach(() => {
@@ -284,13 +286,14 @@ describe('the [object Object] regression', () => {
 
       await act();
 
-      const entries = recentErrorDiagnostics();
-      expect(entries).toHaveLength(1);
-      expect(entries[0].code).toBe(code);
-      expect(entries[0].shown).not.toBe('');
+      const [entry, ...rest] = recentErrorDiagnostics();
+      expect(rest).toHaveLength(0);
+      if (entry === undefined) throw new Error('expected one diagnostics entry');
+      expect(entry.code).toBe(code);
+      expect(entry.shown).not.toBe('');
       // The lead sentence belongs to the toast; Diagnostics records only the
       // resolved copy `describeError` returned.
-      expect(dangerToast()).toContain(entries[0].shown);
+      expect(dangerToast()).toContain(entry.shown);
     });
   }
 });
