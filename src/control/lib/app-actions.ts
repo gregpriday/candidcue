@@ -2,6 +2,7 @@
  * Cross-screen actions shared by the sidebar, welcome screen, library, and
  * keyboard shortcuts.
  */
+import { describeError } from '../services/errors';
 import * as scriptsService from '../services/scripts';
 import { markWelcomed } from '../stores/app-status';
 import { loadLibrary } from '../stores/library';
@@ -16,16 +17,28 @@ import {
 import { isTauriRuntime } from '../services/ipc';
 import type { ExportFormat } from '../services/scripts-types';
 
-/** Create a script (blank example or sample) and open the editor. */
+/**
+ * Create a script (blank example or sample) and open the editor.
+ *
+ * This is the welcome screen's primary call to action, so a failure here is the
+ * first thing a new operator can hit. It used to reject out of the click
+ * handler as an unhandled rejection — no toast, no navigation, nothing to read.
+ * The failure is reported here rather than rethrown because no caller inspects
+ * the result; every one of them fires this and forgets it.
+ */
 export async function createAndOpenScript(kind: 'new' | 'sample' = 'new'): Promise<void> {
-  const doc = await scriptsService.createScript(
-    kind === 'sample'
-      ? { title: SAMPLE_SCRIPT_TITLE, source: SAMPLE_SCRIPT_SOURCE }
-      : { title: NEW_SCRIPT_TITLE, source: NEW_SCRIPT_SOURCE },
-  );
-  markWelcomed();
-  await loadLibrary();
-  await navigate({ name: 'editor', scriptId: doc.id });
+  try {
+    const doc = await scriptsService.createScript(
+      kind === 'sample'
+        ? { title: SAMPLE_SCRIPT_TITLE, source: SAMPLE_SCRIPT_SOURCE }
+        : { title: NEW_SCRIPT_TITLE, source: NEW_SCRIPT_SOURCE },
+    );
+    markWelcomed();
+    await loadLibrary();
+    await navigate({ name: 'editor', scriptId: doc.id });
+  } catch (err) {
+    showToast(`Could not create that script. ${describeError(err)}`, 'danger');
+  }
 }
 
 /**
@@ -44,7 +57,7 @@ export async function importMarkdown(): Promise<void> {
     for (const warning of result.warnings) showToast(warning, 'info');
     await navigate({ name: 'editor', scriptId: result.script.id });
   } catch (err) {
-    showToast(`Import failed: ${String(err)}`, 'danger');
+    showToast(`Could not import that file. ${describeError(err)}`, 'danger');
   }
 }
 
@@ -86,6 +99,6 @@ export async function exportScriptToFile(
     for (const warning of result.warnings) showToast(warning, 'info');
     showToast('Script exported', 'success');
   } catch (err) {
-    showToast(`Export failed: ${String(err)}`, 'danger');
+    showToast(`Could not export that script. ${describeError(err)}`, 'danger');
   }
 }
