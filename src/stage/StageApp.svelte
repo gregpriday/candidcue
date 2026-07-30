@@ -896,8 +896,8 @@
         subscribeStageEvent<StageSnapshotPayload>(STAGE_EVENT.loadSession, (envelope) => {
           dispatch({ type: 'snapshot', envelope });
           /*
-           * The envelope STARTS the liveness deadline, and it is the only other
-           * thing allowed to touch it.
+           * A TAKE's envelope STARTS the liveness deadline, and it is the only
+           * other thing allowed to touch it.
            *
            * Two holes close here, and both are the watchdog failing to fire at
            * all rather than firing wrongly:
@@ -917,9 +917,22 @@
            * envelope, so control was alive when it did. A real beat refreshes it
            * about a second later, and if none comes the deadline expires on
            * schedule.
+           *
+           * `sessionGeneration` is the discriminator, and it is not incidental:
+           * `buildStageEnvelope` omits it exactly when the payload belongs to no
+           * take, and the Settings appearance preview is the only caller that
+           * does so. That preview opens a REAL stage window and publishes a REAL
+           * envelope, but nothing ever heartbeats it — `startStageBridge` is a
+           * take-only path the preview never enters. Arming on any envelope
+           * therefore put "Control stopped responding" on the glass five seconds
+           * into a preview that control was alive and actively driving, which is
+           * the stage lying to the presenter: the one failure this disclosure
+           * exists to prevent, committed by the disclosure itself.
            */
-          lastHeartbeatAt = performance.now();
-          heartbeatSeen = true;
+          if (envelope.sessionGeneration !== undefined) {
+            lastHeartbeatAt = performance.now();
+            heartbeatSeen = true;
+          }
           // Handshake step 1 (§43.3): confirm hydration to Rust.
           emitStageEvent<StageHydratedPayload>(STAGE_EVENT.hydrated, {
             stageGeneration: envelope.stageGeneration,
@@ -1076,8 +1089,9 @@
     );
 
     // Watchdog (§43.5): if control's heartbeat stops while live, freeze
-    // locally and wait. Only armed once a heartbeat has actually been seen,
-    // and only under Tauri — the preview bus has no liveness contract.
+    // locally and wait. Only armed by a take — a take's envelope or a beat it
+    // owns — and only under Tauri; neither the preview bus nor the Settings
+    // appearance preview has a liveness contract to hold control to.
     const watchdog = window.setInterval(() => {
       if (!isTauri || !heartbeatSeen || app.phase === 'handshake') return;
       if (performance.now() - lastHeartbeatAt > STAGE_HEARTBEAT_GRACE_MS) {

@@ -342,6 +342,36 @@ describe('the liveness clock measures control, and only control', () => {
     expect(chip(container)?.textContent).toContain(CONTROL_LOST_MESSAGE);
   }, 20_000);
 
+  it('never arms on a payload that belongs to no take, so a preview is not accused', async () => {
+    /*
+     * The Settings appearance preview opens a REAL stage window and publishes a
+     * REAL envelope — and nothing ever heartbeats it, because the heartbeat is
+     * part of a take and a preview is not one. Arming on any envelope therefore
+     * put "Control stopped responding" on that window five seconds in, while
+     * control was alive and pushing settings directives at it.
+     *
+     * `sessionGeneration` is what tells the two apart: `buildStageEnvelope`
+     * omits it precisely when the payload does not belong to a take, and the
+     * preview is its only caller that does.
+     */
+    const preview = envelope();
+    delete (preview as { sessionGeneration?: number }).sessionGeneration;
+
+    const { container } = render(StageApp);
+    await settle();
+    dispatchLocalStageEvent(STAGE_EVENT.loadSession, preview);
+    await settle();
+    await wait(420);
+    await settle();
+
+    await wait(PAST_THE_DEADLINE);
+    await settle();
+
+    expect(root(container)?.getAttribute('data-phase')).not.toBe('frozen');
+    expect(chip(container)?.getAttribute('data-visible')).toBe('false');
+    expect(chip(container)?.textContent ?? '').not.toContain(CONTROL_LOST_MESSAGE);
+  }, 20_000);
+
   it('is not held open by a heartbeat belonging to another generation', async () => {
     // A superseded start attempt must not be able to keep a take alive that it
     // no longer owns.
