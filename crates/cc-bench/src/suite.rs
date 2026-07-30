@@ -879,16 +879,30 @@ pub fn print_table(result: &SuiteResult) {
 
 /// Comparison table between two suite results (same benchmark set).
 pub fn compare_tables(baseline: &SuiteResult, candidate: &SuiteResult) -> String {
+    compare_entry_tables(
+        &baseline.label,
+        &baseline.table,
+        &candidate.label,
+        &candidate.table,
+    )
+}
+
+/// The same comparison over bare entry lists, so Tier C — whose result type
+/// carries a per-layout block the tracking table has no equivalent for — reuses
+/// one renderer instead of growing a second one that formats differently.
+pub fn compare_entry_tables(
+    baseline_label: &str,
+    baseline: &[BenchEntry],
+    candidate_label: &str,
+    candidate: &[BenchEntry],
+) -> String {
     let mut out = String::new();
     out.push_str(&format!(
         "{:<38} {:>12} {:>12} {:>10}\n",
-        "benchmark",
-        baseline.label.as_str(),
-        candidate.label.as_str(),
-        "delta"
+        "benchmark", baseline_label, candidate_label, "delta"
     ));
-    for b in &baseline.table {
-        let Some(c) = candidate.table.iter().find(|e| e.name == b.name) else {
+    for b in baseline {
+        let Some(c) = candidate.iter().find(|e| e.name == b.name) else {
             continue;
         };
         let improved = match b.better.as_str() {
