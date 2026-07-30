@@ -8,6 +8,8 @@ declare global {
   interface Window {
     __E2E__: {
       calls: Array<{ command: string; args: unknown }>;
+      /** Commands that have ANSWERED, in order — `calls` records only the ask. */
+      settled: string[];
       fail: Record<string, unknown>;
       stageGeneration: number;
       sessionGeneration: number;

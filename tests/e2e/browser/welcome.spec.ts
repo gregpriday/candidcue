@@ -93,19 +93,26 @@ test('a first launch reports the microphone as setup, not as a fault, and resolv
 });
 
 /**
- * The in-flight state, and the guard that has to survive it.
+ * The in-flight state, and leaving the screen while it is still in flight.
  *
  * Held open from before boot, because `__E2E__.setDelay` is only reachable
- * after navigation — by which point Welcome has already asked. Leaving the
- * screen mid-probe is the case the effect's cleanup exists for: the reply
- * lands after the component is gone, and writing state there is the classic
- * way this pattern throws into the console.
+ * after navigation — by which point Welcome has already asked.
+ *
+ * WHAT THIS DOES NOT PROVE. The effect's `live` flag exists so a reply landing
+ * after unmount cannot write to a dead component, and this test does NOT
+ * demonstrate that flag working: Svelte 5 accepts a late assignment to an
+ * orphaned `$state` source without a warning, let alone a console error, so
+ * deleting the guard leaves this test green. The guard is correct by
+ * inspection and unproven by the suite. What IS asserted here is the narrower
+ * thing this can actually see — that the in-flight state renders as a calm
+ * "Checking…", and that navigating away mid-probe and outliving the reply
+ * leaves the app clean and usable.
  */
-test('the display row shows a checking state and survives leaving while it is in flight', async ({
+test('the display row shows a checking state and leaving mid-probe leaves the app clean', async ({
   page,
 }) => {
   const errors = watchPageErrors(page);
-  await installTauriShim(page, { listDisplaysDelayMs: 3000 });
+  await installTauriShim(page, { listDisplaysDelayMs: 1500 });
   await page.goto('/control.html');
 
   await expect(page.getByRole('heading', heading)).toBeVisible();
@@ -113,15 +120,23 @@ test('the display row shows a checking state and survives leaving while it is in
   // An unanswered check is not a fault and must not be dressed as one.
   await expect(displayRow(page)).not.toHaveClass(hasToken('attention'));
 
-  // Leave before the reply arrives, then outlive it.
+  // Leave before the reply arrives...
   await micRow(page).getByRole('button', { name: 'Set up microphone' }).click();
   await expect(
     page
       .getByRole('navigation', { name: 'Settings sections' })
       .getByRole('button', { name: 'Audio', exact: true }),
   ).toHaveAttribute('aria-current', 'page');
-  await page.waitForTimeout(3500);
 
+  // ...then outlive it. Waiting on the shim's own completion record rather
+  // than on a sleep longer than the delay, which is the same assertion with a
+  // slow machine's flake built in.
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__.settled.filter((c) => c === 'list_displays').length))
+    .toBe(1);
+
+  // The screen the probe returned to is still the one the user asked for.
+  await expect(page.getByLabel('Input device')).toBeVisible();
   errors.expectClean();
 });
 
@@ -199,12 +214,13 @@ test('a remembered grant and a connected pinned display both read quiet', async 
 
   await expect(page.getByRole('heading', heading)).toBeVisible();
 
-  await expect(pill(micRow(page))).toHaveText('Access allowed');
+  // The claim is narrow on purpose, and narrow IN THE PILL — that is the copy
+  // people actually read. The flag is never cleared when a grant is revoked in
+  // System Settings, so nothing here may promise in the present tense that the
+  // app can hear you; only that access was allowed here once.
+  await expect(pill(micRow(page))).toHaveText('Previously allowed');
   await expect(pill(micRow(page))).toHaveClass(hasToken('neutral'));
   await expect(micRow(page)).not.toHaveClass(hasToken('setup'));
-  // The claim is narrow on purpose. The flag is never cleared when a grant is
-  // revoked in System Settings, so it cannot support a present-tense promise
-  // that the app can hear you — only that access was allowed here once.
   await expect(micRow(page)).toContainText('Access was allowed on this Mac');
   await expect(micRow(page)).not.toContainText('Ready');
 
@@ -370,8 +386,11 @@ test('reader mode reports the current window instead of asking for a second scre
   ).toBeVisible();
 
   // Still true once enumeration has come back — a display list must not pull a
-  // reader-mode user back into a prompter-shaped readiness item.
-  await page.waitForTimeout(1600);
+  // reader-mode user back into a prompter-shaped readiness item. Gated on the
+  // shim's completion record, so "after" genuinely means after.
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__.settled.includes('list_displays')))
+    .toBe(true);
   await expect(pill(displayRow(page))).toHaveText('This window');
   await expect(displayRow(page)).not.toHaveClass(hasToken('attention'));
   await expect(displayRow(page)).not.toHaveClass(hasToken('setup'));

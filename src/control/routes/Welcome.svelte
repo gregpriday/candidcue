@@ -119,13 +119,16 @@
     micGranted
       ? {
           tone: 'neutral',
-          // Deliberately past tense. The flag records that a grant was made on
-          // this machine; it is not cleared when the grant is revoked in System
-          // Settings or when the device is unplugged, so it cannot support a
-          // claim about right now. "CandidCue can hear you" was exactly that
-          // claim, and it would have been the confident wrong answer in the two
-          // cases somebody most needs a true one.
-          pill: 'Access allowed',
+          // Deliberately past tense, in the PILL as much as the sentence. The
+          // flag records that a grant was made on this machine; it is not
+          // cleared when the grant is revoked in System Settings or when the
+          // device is unplugged, so it cannot support a claim about right now.
+          // A status capsule reads as current state, so "Access allowed" was
+          // the same overclaim as "CandidCue can hear you" in the more
+          // prominent of the two places — and both would have been the
+          // confident wrong answer in exactly the cases somebody most needs a
+          // true one.
+          pill: 'Previously allowed',
           detail: 'Access was allowed on this Mac. Test the level before a real take.',
           emphasis: 'quiet',
           action: 'Test microphone',

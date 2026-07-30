@@ -49,11 +49,15 @@ export interface ShimConfig {
    */
   emptyDisplays?: boolean;
   /**
-   * Hold list_displays open for this long, from BEFORE the app boots.
+   * Hold a SUCCESSFUL list_displays open for this long, from BEFORE the app
+   * boots.
    *
    * `__E2E__.setDelay` cannot reach this: it is only callable after navigation,
    * by which time the welcome screen has already asked. This is what makes the
    * in-flight state observable rather than a frame nobody can catch.
+   *
+   * Combining it with `failListDisplays` does NOT produce a delayed rejection —
+   * the failure is thrown before the timer is armed, so it rejects at once.
    */
   listDisplaysDelayMs?: number;
   /**
@@ -313,6 +317,14 @@ function shimBody(config: ShimConfig): void {
       else this.delay[command] = ms;
     },
     delay: {} as Record<string, number>,
+    /**
+     * Commands that have ANSWERED, in order — `calls` only records that one was
+     * asked. A spec waiting on a held command has no other way to know the
+     * reply landed, and the alternative is sleeping for longer than the delay
+     * and hoping, which fails on a slow machine in the direction that looks
+     * like a real bug.
+     */
+    settled: [] as string[],
     lastCall(command: string) {
       for (let i = this.calls.length - 1; i >= 0; i--) if (this.calls[i]?.command === command) return this.calls[i];
       return null;
@@ -341,6 +353,7 @@ function shimBody(config: ShimConfig): void {
     },
     reset() {
       this.calls = [];
+      this.settled = [];
       this.fail = {};
       this.directives = [];
     },
@@ -765,15 +778,24 @@ function shimBody(config: ShimConfig): void {
     invoke(command: string, args: Record<string, unknown> | undefined) {
       control.calls.push({ command, args: args ?? null });
       if (control.fail[command] && command !== 'list_displays') {
+        control.settled.push(command);
         return Promise.reject(control.fail[command]);
       }
       const held = control.delay[command];
       try {
         const answer = handle(command, args);
-        return held === undefined
-          ? Promise.resolve(answer)
-          : new Promise((resolve) => setTimeout(() => resolve(answer), held));
+        if (held === undefined) {
+          control.settled.push(command);
+          return Promise.resolve(answer);
+        }
+        return new Promise((resolve) =>
+          setTimeout(() => {
+            control.settled.push(command);
+            resolve(answer);
+          }, held),
+        );
       } catch (err) {
+        control.settled.push(command);
         return Promise.reject(err);
       }
     },
