@@ -373,6 +373,27 @@ and those are Tier B rows on captured audio. Keep the distinction when quoting
 numbers: the corridor is a proposal with evidence behind it, and moving the
 motion path is the one change nothing on this machine can verify.
 
+`--focus-lead 0` scores the stage as it actually ships, which is how to price the
+proposal. On `runs-local` at the `60hz` layout:
+
+| | as shipped | + 3-atom corridor |
+|---|---|---|
+| `band.occupancy` | 52.1% | **74.3%** |
+| `band.out_episodes` | 121 | **54** |
+| `outcome.readable_availability` | 71.2% | 75.8% |
+| `outcome.disruptions_per_10min` | 77.1 | 69.5 |
+| `outcome.longest_clean_s` | 29.6 | 37.8 |
+| `gate.unread_never_spoken` (safety) | 2.903 | **2.483** |
+| `time.lag_p50` | 697 ms | 697 ms |
+| `recover.readable_p50` | 2738 ms | 2738 ms |
+
+The two rows that do not move are the point: aiming the corridor ahead changes
+where the same text is drawn and nothing about when a word goes dim. And the
+safety gate gets BETTER rather than worse — the same words are dimmed, but they
+sit nearer the reading line, so the gaze weighting counts less of the darkness
+against text nobody has read. That is the opposite of the usual trade and is the
+strongest argument for shipping it.
+
 | Benchmark | Meaning |
 |---|---|
 | `gate.unread_never_spoken` | **The safety gate.** Gaze-weighted word-seconds of darkness applied to text that has never been spoken in ANY pass. Weighted by a Gaussian on the distance from the reading line, because a word erased under the presenter's eye and the same thing at the bottom of the glass are not one event. |

@@ -55,7 +55,16 @@ Alignment benchmarks (`bench/README.md` has the full story):
 cd crates
 cargo run --release -p cc-bench -- tier-a --label mine --out ../bench/results/mine.json
 cargo run --release -p cc-bench -- inspect starter skip_forward   # per-event decision trace
+
+# Tier C: the RENDERED stage — opacity and placement, not engine position.
+cargo run --release -p cc-bench -- tier-c --runs ../bench/runs-local --layouts 60hz --label mine
+cargo run --release -p cc-bench -- tier-c --runs ../bench/runs-local --focus-lead 0   # as shipped
+cargo run --release -p cc-bench -- difficulty | metamorphic | robustness --budget 2000
 ```
+
+`bench/runs*/` `events.jsonl` and `gold.json` are in **Git LFS**. Without a fetch
+they are ~130-byte pointers and a Tier B/C run simply finds no events rather than
+failing loudly — check `git lfs ls-files` first if a corpus looks empty.
 
 There is no lint script and no ESLint/Prettier config in the tree. Conventions:
 single quotes, no Prettier. Do **not** run `cargo fmt` — the tree predates it
@@ -196,6 +205,13 @@ docs/             specifications
   persistence security, session lifecycle, stage handshake.
 - **cc-bench** — Tier A deterministic synthetic scenarios; Tier B replays
   captured live-STT fixtures. Both replay through the same engine and evaluator.
+  **Tier C** scores the RENDERED stage: it ports the shipping TypeScript follower
+  and dim ramp into Rust and simulates frames, so it can see what the glass shows
+  rather than what the engine estimated — which is how the floored frontier and
+  the retreat chatter were found. Being a port, it is a second implementation
+  that can drift from `src/stage/motion/`; treat a Tier C number as evidence about
+  the model until the behaviour is also asserted in the TypeScript suite. Its
+  `focus_lead_atoms` corridor aim is NOT in the product (see `bench/README.md`).
 
 **Not verified at all:** a complete take with a real microphone, a real second
 monitor and real teleprompter glass. macOS ships WKWebView, for which Apple
