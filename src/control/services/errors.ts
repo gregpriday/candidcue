@@ -42,17 +42,61 @@ const ERROR_COPY: Record<string, string> = {
   /* -- the bundled recogniser --------------------------------------------- */
   //
   // A broken installation, not a broken account. There is no key, no quota and
-  // no provider to be down, so every one of these ends the same way: reinstall,
-  // or present in manual mode. Nothing here asks the presenter to go and fix
+  // no provider to be down, so nothing here asks the presenter to go and fix
   // something on a website.
+  //
+  // Each one also names the fallback that EXISTS. These used to end "Manual and
+  // fixed-speed modes still work", which they no longer do: Settings shows both
+  // as unavailable in this release, so that sentence sent a presenter whose
+  // recogniser had just died hunting for a greyed-out menu item. Auto-scroll is
+  // the real answer.
+  //
+  // The rescue is scoped — "In a take, …" — because these four strings have TWO
+  // surfaces, and only one of them has a transport to press. In a take they
+  // reach the failure toast, where `A` really does work. But `voice-live.ts`
+  // hands the same `describeError` output to `events.onError` on both the
+  // `startTranscription()` rejection and every `failed` frame, `MicTestSession`
+  // stores it as `snapshot.error`, and Settings → Audio renders it verbatim as
+  // `micError`. `startTranscription()` → `ensure_loaded()` is exactly where
+  // `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` are raised, and the failed
+  // frames carry `STT_WORKER_FAILED` / `STT_ENGINE_ERROR`, so all four land on
+  // that screen. There is no take there: `toggleAutoScroll()` returns early
+  // while `state.active` is false, and the shortcut layer only binds `A` inside
+  // a session, so a bare "Press A" is the old defect in new words. A conditional
+  // is true on both surfaces; an imperative is true on neither more than one.
+  //
+  // For the same reason nothing here says "after the take" any more: the reader
+  // in Settings has no take to be after. Every repair clause is phrased so it
+  // holds with or without one, and any clause that cannot be is folded into the
+  // "In a take" sentence (`STT_ENGINE_ERROR`'s stop-and-start).
+  //
+  // The rescue comes BEFORE the repair in all four. Reinstalling and restarting
+  // both mean leaving CandidCue, which is not a thing anyone does mid-take; the
+  // keystroke that keeps the script moving is what the presenter needs in the
+  // second they are reading this, and the repair keeps until they are off
+  // camera.
+  //
+  // All four say "start or stop", because `A` is a TOGGLE and none of these
+  // can promise which way it will move.
+  //
+  // `STT_ENGINE_ERROR` is the obvious case: it fires arbitrarily deep into a
+  // take, and auto-scroll pauses following without pausing transcription, so
+  // the recogniser can die with the transport already running. The other three
+  // look like cold-start failures where `startLiveSession` has just set
+  // `running: false` — but `resume()` re-enters `start()` after a hard pause
+  // released the capture, and `autoScroll.running` deliberately survives a
+  // pause. A → hard pause → resume is enough to reach any of them with the
+  // transport armed, and telling that presenter to "start" auto-scroll would
+  // stop their script. "Start or stop" is also the wording Settings and Live
+  // already use for this key.
   STT_MODEL_MISSING:
-    'The speech model is missing from this installation, so voice tracking cannot run. Reinstalling CandidCue will restore it. Manual and fixed-speed modes still work.',
+    'The speech model is missing from this installation. In a take, press A to start or stop auto-scroll. Reinstall CandidCue to restore voice following.',
   STT_MODEL_LOAD_FAILED:
-    'The speech model could not be loaded on this machine. Restart CandidCue, and reinstall it if this keeps happening. Manual and fixed-speed modes still work.',
+    'The speech model could not be loaded. In a take, press A to start or stop auto-scroll. Restart CandidCue, and reinstall it if this keeps happening.',
   STT_WORKER_FAILED:
-    'The speech recogniser could not be started. Restart CandidCue, then try again. Manual and fixed-speed modes still work.',
+    'The speech recogniser is unavailable. In a take, press A to start or stop auto-scroll. Restart CandidCue to bring it back.',
   STT_ENGINE_ERROR:
-    'The speech recogniser stopped unexpectedly. Stop and restart the take. Manual and fixed-speed modes still work.',
+    'The speech recogniser failed unexpectedly. In a take, press A to start or stop auto-scroll, then stop and start the take to retry voice following.',
 
   /* -- network ------------------------------------------------------------ */
   //
