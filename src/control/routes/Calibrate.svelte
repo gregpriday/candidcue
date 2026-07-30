@@ -44,6 +44,7 @@
   import TextField from '../components/TextField.svelte';
   import Toggle from '../components/Toggle.svelte';
   import { describeError } from '../services/errors';
+  import { isTauriRuntime } from '../services/ipc';
   import * as stageService from '../services/stage';
   import { buildStageSettings } from '../services/stage-envelope';
   import { opticalRigKey, withOpticalProfile } from '../services/settings-types';
@@ -51,6 +52,7 @@
   import SidecarChecklist from '../components/SidecarChecklist.svelte';
   import {
     OPTICAL_HARDWARE,
+    STAGE_EVENT,
     defaultOpticalProfile,
     type OpticalCalibrationStep,
     type OpticalHardwareKind,
@@ -58,6 +60,7 @@
     type ReadingCueStyle,
     type StageCalibrationMode,
     type StageDirective,
+    type StageEscapePayload,
     type StageSettings,
     type TextIntensity,
   } from '../../shared/contracts';
@@ -355,11 +358,15 @@
       });
     });
 
-    void hydrate();
-    const teardown = openCalibrationStage();
+    // The stage open waits on this: it may only put a window on the prompter
+    // once the display list says there IS a prompter. See `openCalibrationStage`.
+    const hydration = hydrate();
+    const teardown = openCalibrationStage(hydration);
+    const unwatchEscape = watchStageEscape();
 
     return () => {
       unregister();
+      unwatchEscape();
       void teardown();
     };
   });
@@ -412,11 +419,63 @@
   let stageGeneration = $state(0);
   let stageLive = $state(false);
   let stageError = $state<string | null>(null);
+  /**
+   * A window EXISTS on the panel — which is not the same question as `stageLive`.
+   *
+   * `stageLive` means the stage is loaded and taking cards. Between `openStage`
+   * resolving and that point there is already a borderless, always-on-top window
+   * covering the display, and the load can also fail outright and leave one
+   * there. Anything whose job is to take that window down has to ask this
+   * question rather than `stageLive`, or the very state that needs rescuing is
+   * the one it refuses to act on. Not `$state`: nothing renders it.
+   */
+  let stageOpened = false;
 
-  function openCalibrationStage(): () => Promise<void> {
+  function openCalibrationStage(hydration: Promise<void>): () => Promise<void> {
     let closed = false;
 
     void (async () => {
+      // The display list decides whether a window may be opened at all, so the
+      // open waits for it rather than racing it.
+      await hydration.catch(() => {});
+      if (closed) return;
+
+      /*
+       * A CALIBRATION STAGE MUST NOT OPEN ON THE PANEL DRIVING THE WIZARD
+       * ----------------------------------------------------------------------
+       * `open_stage` builds a borderless window sized to the whole monitor and
+       * marks it `always_on_top` (`windows/mod.rs`) — correct for a prompter
+       * sitting behind glass, and a trap anywhere else.
+       *
+       * With one display connected `chooseStageDisplay` has nothing to choose
+       * and hands back the panel the control window is on (`lib/start-take.ts`
+       * documents that fallback), so Settings offered Calibrate for it and this
+       * function covered the wizard with an opaque window that could not be
+       * dismissed: the stage holds no command permissions (`capabilities/stage.json`),
+       * its dock buttons emit events this route never listened for, and its
+       * Escape was stamped with generation 0 and dropped in Rust. Quitting the
+       * app was the only way out, which is how it was reported.
+       *
+       * So the window is not opened. Every step still WRITES correctly without
+       * a stage — that is what `stageError` below already exists to say — and on
+       * a single-panel machine it is the honest answer anyway: a rig is a
+       * measurement of a physical viewing arrangement, and there is no second
+       * panel here to measure one on.
+       */
+      if (loadError !== null) {
+        // `hydrate` could not enumerate the displays and has already said so.
+        // Reading a display COUNT off the empty list it left behind would add a
+        // second, more confident-sounding diagnosis of a fact nobody knows.
+        stageError =
+          'The prompt window was not opened, because CandidCue could not tell which displays are connected.';
+        return;
+      }
+      if (displays.length <= 1 || (await targetIsControlPanel())) {
+        stageError =
+          'Calibration needs a second display: the prompt window has to open on the panel you read from, and opening it on the panel showing this wizard would cover it up. Connect the prompter display, make it the one this window is NOT on, and open this screen again — every measurement here still saves without it, you just cannot judge it by eye.';
+        return;
+      }
+
       try {
         const opened = await stageService.openStage({ displayFingerprint, sessionId: stageSessionId });
         if (closed) {
@@ -424,12 +483,31 @@
           return;
         }
         stageGeneration = opened.stageGeneration;
+        stageOpened = true;
         await stageService.setStageFullscreen(stageSessionId, true);
-        const listening = await awaitStageListening(opened.stageGeneration);
+        const listening = await awaitStageListening(opened.stageGeneration, () => closed);
         if (closed) return;
         if (!listening) {
-          stageError =
-            'The prompt window opened but never finished loading, so the calibration cards cannot be shown on it.';
+          /*
+           * Close it again rather than leaving it there.
+           *
+           * A stage whose bundle never ran cannot show a calibration card, and
+           * it cannot be dismissed from the glass either — Escape is emitted by
+           * that bundle, so there is nothing on the panel to press. What is left
+           * is a black, borderless, always-on-top rectangle over the display
+           * with no owner, which is the exact shape of the fault this whole
+           * function was rewritten for.
+           */
+          const gone = await stageService
+            .closeStage(stageSessionId)
+            .then(() => true)
+            .catch(() => false);
+          // Same rule as `dismissStage`: only give up ownership once the window
+          // is actually gone, so a close that failed can still be retried.
+          if (gone) stageOpened = false;
+          stageError = gone
+            ? 'The prompt window opened but never finished loading, so it was closed again. Every measurement here still saves — you just cannot judge it by eye.'
+            : 'The prompt window opened but never finished loading, and would not close either. Leave this screen to take it down.';
           return;
         }
         stageLive = true;
@@ -443,6 +521,7 @@
     return async () => {
       closed = true;
       stageLive = false;
+      stageOpened = false;
       await stageService
         .publishStageDirective(stageSessionId, stageGeneration, {
           kind: 'calibration',
@@ -450,6 +529,116 @@
         })
         .catch(() => {});
       await stageService.closeStage(stageSessionId).catch(() => {});
+    };
+  }
+
+  /**
+   * Is the panel being calibrated the one this window is sitting on?
+   *
+   * A display COUNT is not the real question — it is a proxy that happens to be
+   * right on a one-panel machine. The real one is whether the borderless
+   * always-on-top window is about to land on top of the wizard driving it, and
+   * with two displays that can still happen: a pinned fingerprint wins in
+   * `chooseStageDisplay` (`lib/start-take.ts`), so an operator who pinned their
+   * primary panel and then dragged the control window onto it gets exactly the
+   * fault this guard exists to prevent.
+   *
+   * Matched on position and physical size, which is the same rule Rust uses to
+   * line a monitor up with its descriptor (`windows/mod.rs`).
+   *
+   * FAILS OPEN, deliberately, and this is a considered disagreement with review
+   * feedback that wanted the opposite. A false NO costs a covered wizard that
+   * Escape and leaving the route can both now recover from. A false YES refuses
+   * to calibrate at all — on the two-display rig that is the entire point of the
+   * feature, for anyone whose monitor CandidCue cannot line up against its own
+   * enumeration. The recoverable failure is the one to take.
+   */
+  async function targetIsControlPanel(): Promise<boolean> {
+    if (!isTauriRuntime()) return false;
+    try {
+      const { currentMonitor } = await import('@tauri-apps/api/window');
+      const monitor = await currentMonitor();
+      if (!monitor) return false;
+      const here = displays.find(
+        (d) =>
+          d.physicalPosition.x === monitor.position.x &&
+          d.physicalPosition.y === monitor.position.y &&
+          d.physicalSize.width === monitor.size.width &&
+          d.physicalSize.height === monitor.size.height,
+      );
+      return here !== undefined && here.fingerprint === displayFingerprint;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Close the prompt window and say so, leaving the measurements untouched. */
+  async function dismissStage(): Promise<void> {
+    // `stageOpened`, not `stageLive`: a window that came up and never went live
+    // is the one most in need of being taken down. See `stageOpened`.
+    if (!stageOpened) return;
+    stageLive = false;
+    await stageService
+      .publishStageDirective(stageSessionId, stageGeneration, {
+        kind: 'calibration',
+        active: false,
+      })
+      .catch(() => {});
+    try {
+      await stageService.closeStage(stageSessionId);
+    } catch (err) {
+      /*
+       * Ownership is NOT surrendered on a failed close.
+       *
+       * Clearing `stageOpened` here would make the next Escape return at the
+       * guard above, so the window would still be covering the panel and the
+       * one key that could take it down would have been quietly disarmed —
+       * with a message on screen claiming it had been closed. Keeping
+       * ownership means a second press tries again.
+       */
+      stageError = `The prompt window would not close. ${describeError(err)} Press Escape on the prompter again, or leave this screen to take it down.`;
+      return;
+    }
+    stageOpened = false;
+    stageError =
+      'The prompt window was closed from the prompter. Everything measured here is still here — leave this screen and open Calibrate again to put the window back.';
+  }
+
+  /**
+   * Escape on the glass closes the prompt window.
+   *
+   * The window this route opens is borderless, covers a whole panel and sits
+   * above everything (`windows/mod.rs`). A presenter who wants out of it presses
+   * Escape, and until now this route was not listening: the press reached
+   * control as `escapeRequested` and no handler anywhere owned a CALIBRATION
+   * stage, so the only exit was quitting the app. The Settings preview has had
+   * this listener for the same reason and its comment says the same thing.
+   *
+   * Two presses, not one, because that is the rule the stage itself shows a
+   * prompt for (`StageApp.sendEscape`) — the same key means the same thing on
+   * every screen. Generation-checked, so a take running beside this wizard can
+   * never be ended by it.
+   */
+  function watchStageEscape(): () => void {
+    if (!isTauriRuntime()) return () => {};
+    let stop: (() => void) | null = null;
+    let cancelled = false;
+    void (async () => {
+      const { listen } = await import('@tauri-apps/api/event');
+      const unlisten = await listen<StageEscapePayload>(STAGE_EVENT.escapeRequested, (event) => {
+        if (event.payload.stageGeneration !== stageGeneration) return;
+        if (event.payload.presses < 2) return;
+        void dismissStage();
+      });
+      if (cancelled) unlisten();
+      else stop = unlisten;
+    })().catch(() => {
+      // Without the listener the glass cannot dismiss itself, but leaving this
+      // route still tears the window down — so it is never unclosable.
+    });
+    return () => {
+      cancelled = true;
+      stop?.();
     };
   }
 
@@ -463,10 +652,20 @@
    * appears. `waitForStageReady` cannot be reused here: it waits for a document
    * handshake, and a calibration stage deliberately has no document.
    */
-  async function awaitStageListening(generation: number, deadlineMs = 20000): Promise<boolean> {
+  async function awaitStageListening(
+    generation: number,
+    // Checked every iteration, not just at the end: leaving the route while a
+    // stage is still coming up otherwise left this loop polling `getStageStatus`
+    // every 200ms for the rest of its 20s deadline — a hundred IPC round trips
+    // asking after a window the teardown had already closed.
+    isCancelled: () => boolean = () => false,
+    deadlineMs = 20000,
+  ): Promise<boolean> {
     const until = Date.now() + deadlineMs;
     for (;;) {
+      if (isCancelled()) return false;
       const status = await stageService.getStageStatus().catch(() => null);
+      if (isCancelled()) return false;
       if (status && status.stageGeneration === generation && status.listening) return true;
       if (Date.now() >= until) return false;
       await new Promise((resolve) => setTimeout(resolve, 200));

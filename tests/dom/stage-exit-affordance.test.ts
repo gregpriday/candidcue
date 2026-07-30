@@ -364,6 +364,57 @@ describe('the stage exit affordance', () => {
   });
 
   /**
+   * A stage with NO DOCUMENT can still be escaped.
+   *
+   * The calibration wizard opens a bare stage and drives it with directives —
+   * no envelope, ever, on purpose (`control/routes/Calibrate.svelte`). Escape
+   * used to be stamped `app.envelope?.stageGeneration ?? 0`, so from that window
+   * it always carried generation 0. Rust relays the press through
+   * `coordinator.stage_event`, which drops anything whose generation is not the
+   * live one (`src-tauri/src/app.rs`) — so the press died in Rust, control never
+   * heard it, and a borderless always-on-top window covering a monitor had no
+   * way out at all. Force-quitting the app was the only exit, and that is how it
+   * was reported.
+   *
+   * Directives carry the real generation, so the stage learns it from them. This
+   * asserts the stamp that makes the relay accept the press: get it wrong and
+   * the fix is silently undone, with every other test in this file still green
+   * because they all have an envelope.
+   */
+  it('stamps Escape with a generation learned from directives when it has no document', async () => {
+    const CALIBRATION_GENERATION = 11;
+    render(StageApp);
+    await settle();
+
+    // No `loadSession` — this is the documentless case, exactly as the wizard
+    // drives it.
+    dispatchLocalStageEvent(STAGE_EVENT.applyCommand, {
+      stageGeneration: CALIBRATION_GENERATION,
+      directive: { kind: 'calibration', active: true, mode: 'safe_area' },
+    });
+    await settle();
+
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+    await settle();
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+    await settle();
+
+    const escapes = emitted
+      .filter(([name]) => name === STAGE_EVENT.escapePressed)
+      .map(([, payload]) => payload as StageEscapePayload);
+
+    expect(escapes.map((e) => e.presses)).toEqual([1, 2]);
+    // The whole point: NOT 0, which is what Rust would have thrown away.
+    for (const escape of escapes) {
+      expect(escape.stageGeneration).toBe(CALIBRATION_GENERATION);
+    }
+  });
+
+  /**
    * The alignment-feed readout accumulates across a take.
    *
    * `app` is `$state.raw` and is reassigned on every dispatch — once a second,

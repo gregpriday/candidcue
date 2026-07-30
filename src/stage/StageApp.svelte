@@ -749,6 +749,10 @@
 
     const onDirective = (payload: StageStatePayload) => {
       lastInboundAt = performance.now();
+      // The generation this stage belongs to, when no envelope will ever say.
+      // See `inboundGeneration`. Recording it cannot widen what the stage is
+      // allowed to do: every stamp it produces is still checked by Rust.
+      if (payload.stageGeneration > 0) inboundGeneration = payload.stageGeneration;
       if (payload.directive.kind === 'transcript') {
         /*
          * Generation-checked here rather than in the reducer, because the bar
@@ -1112,7 +1116,7 @@
     if (embedded) return;
     emitStageEvent<StageMotionAckPayload>(STAGE_EVENT.motionReport, {
       ...ack,
-      stageGeneration: app.envelope?.stageGeneration ?? 0,
+      stageGeneration: app.envelope?.stageGeneration ?? inboundGeneration,
     });
   }
 
@@ -1125,7 +1129,7 @@
     // stage's OWN name, never the one control listens for (see S1 above).
     if (embedded) return;
     emitStageEvent<StageLayoutErrorPayload>(STAGE_EVENT.layoutError, {
-      stageGeneration: app.envelope?.stageGeneration ?? 0,
+      stageGeneration: app.envelope?.stageGeneration ?? inboundGeneration,
       issues,
       layoutGeneration,
       atMs: Date.now(),
@@ -1139,7 +1143,7 @@
       return;
     }
     emitStageEvent<StageIntentPayload>(STAGE_EVENT.intent, {
-      stageGeneration: app.envelope?.stageGeneration ?? 0,
+      stageGeneration: app.envelope?.stageGeneration ?? inboundGeneration,
       intent,
       atMs: Date.now(),
     });
@@ -1170,6 +1174,29 @@
    */
   let escapeHintVisible = $state(false);
   let escapeHintTimer = 0;
+
+  /**
+   * The stage generation the host is addressing, learned from inbound payloads.
+   *
+   * A stage that carries a document knows its generation from the envelope. A
+   * CALIBRATION stage deliberately carries none — `control/routes/Calibrate.svelte`
+   * opens a bare stage and drives it with directives — so `app.envelope` stays
+   * null for that window's whole life and every generation read in this file
+   * falls back to 0, including the one that stamps Escape.
+   *
+   * That stamp is not cosmetic. Rust relays the press through
+   * `coordinator.stage_event` (`app.rs`), which compares it against the live
+   * stage generation and DROPS anything that does not match. So Escape from a
+   * calibration stage was discarded in Rust before control could ever see it:
+   * the window covered the display, the presenter pressed the one key that is
+   * supposed to get them out, and nothing anywhere was listening. Quitting the
+   * app was the only exit.
+   *
+   * Directives carry the real generation, so remembering the last one is enough
+   * to make Escape work in a documentless stage without giving this window any
+   * authority it did not have — a wrong stamp is still dropped, exactly as now.
+   */
+  let inboundGeneration = $state(0);
 
   function showEscapeHint() {
     escapeHintVisible = true;
@@ -1211,7 +1238,7 @@
     // Escape travels on its own event so the Rust bridge can relay it (§46.9),
     // under a name control does NOT listen for — see S1 on motionReport above.
     emitStageEvent<StageEscapePayload>(STAGE_EVENT.escapePressed, {
-      stageGeneration: app.envelope?.stageGeneration ?? 0,
+      stageGeneration: app.envelope?.stageGeneration ?? inboundGeneration,
       presses,
       atMs: Date.now(),
     });
@@ -1602,7 +1629,7 @@
     if (next === null) return null;
     const label = next === 'listening' ? 'Listening' : next === 'fault' ? 'No audio' : 'Hearing you';
     return {
-      stageGeneration: app.envelope?.stageGeneration ?? 0,
+      stageGeneration: app.envelope?.stageGeneration ?? inboundGeneration,
       reading: next,
       // A plausible voice rather than a flat line: the shape is the thing being
       // judged, and every bar at the same height is not one.
