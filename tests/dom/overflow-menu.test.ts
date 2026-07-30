@@ -21,6 +21,7 @@ interface Item {
   label: string;
   danger?: boolean;
   disabled?: boolean;
+  separated?: boolean;
   onselect: () => void;
 }
 
@@ -52,8 +53,25 @@ async function pressOn(node: Element, key: string, init: KeyboardEventInit = {})
   await tick();
 }
 
+/**
+ * Open the way a MOUSE does.
+ *
+ * `HTMLElement.click()` dispatches a click with `detail: 0`, which is what the
+ * browser produces for Enter/Space on a button — not for a pointer. The component
+ * reads exactly that field to decide whether to show the highlight, so a test
+ * using the bare `.click()` would be asserting the keyboard path while claiming to
+ * test the mouse. A click count of one is what a real press carries.
+ */
 async function openByClick() {
-  trigger().click();
+  trigger().dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+  flushSync();
+  await tick();
+  await tick();
+}
+
+/** Open the way Enter or Space does — the browser synthesises a detail-0 click. */
+async function openByActivationKey() {
+  trigger().dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 0 }));
   flushSync();
   await tick();
   await tick();
@@ -225,6 +243,199 @@ describe('OverflowMenu — closing', () => {
     expect(() =>
       document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })),
     ).not.toThrow();
+  });
+});
+
+/**
+ * The highlight is a separate claim from focus.
+ *
+ * `tokens.css` rings every focusable control, and this menu moves focus onto an
+ * item as soon as it opens — so a mouse-opened menu arrived with its first action
+ * wearing a heavy accent box that consumed the popover's padding and overhung its
+ * neighbour. Hovering the next item then lit a second highlight under the first
+ * one's ring, and the menu read as broken.
+ *
+ * Focus still has to move (the menu-button pattern requires it, and those tests
+ * are above). What must NOT happen is the menu asserting a choice nobody made.
+ */
+describe('OverflowMenu — the highlight follows the operator, not the focus', () => {
+  const active = () => menuItems().filter((el) => el.classList.contains('active'));
+
+  it('a mouse-opened menu highlights nothing, even though focus has moved', async () => {
+    renderMenu(items({ label: 'Open' }, { label: 'Duplicate' }));
+    await openByClick();
+    // Focus is on the first item — that part of the pattern is intact.
+    expect(document.activeElement?.textContent?.trim()).toBe('Open');
+    // But nothing is painted as chosen.
+    expect(active()).toHaveLength(0);
+  });
+
+  it('an arrow-opened menu DOES highlight, because a key chose it', async () => {
+    renderMenu(items({ label: 'Open' }, { label: 'Duplicate' }));
+    await pressOn(trigger(), 'ArrowDown');
+    expect(active().map((el) => el.textContent?.trim())).toEqual(['Open']);
+  });
+
+  it('arrowing after a mouse open starts painting the highlight', async () => {
+    renderMenu(items({ label: 'Open' }, { label: 'Duplicate' }));
+    await openByClick();
+    expect(active()).toHaveLength(0);
+    await pressOn(document.activeElement as Element, 'ArrowDown');
+    expect(active().map((el) => el.textContent?.trim())).toEqual(['Duplicate']);
+  });
+
+  it('hover moves the one highlight rather than adding a second', async () => {
+    renderMenu(items({ label: 'Open' }, { label: 'Duplicate' }, { label: 'Delete' }));
+    await pressOn(trigger(), 'ArrowDown');
+    expect(active().map((el) => el.textContent?.trim())).toEqual(['Open']);
+
+    menuItems()[2]?.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false }));
+    flushSync();
+    // Exactly one — the bug was two lit rows at once.
+    expect(active().map((el) => el.textContent?.trim())).toEqual(['Delete']);
+  });
+
+  it('hovering a disabled item highlights nothing', async () => {
+    renderMenu(items({ label: 'Open' }, { label: 'Restore', disabled: true }));
+    await pressOn(trigger(), 'ArrowDown');
+    menuItems()[1]?.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false }));
+    flushSync();
+    expect(active().map((el) => el.textContent?.trim())).toEqual(['Open']);
+  });
+
+  it('Enter or Space on the trigger highlights, because focus has nothing else to show it', async () => {
+    // Both keys reach a button as a click, so the component cannot tell them
+    // apart from a press by name — only by click count. Getting this wrong left a
+    // keyboard user with focus inside the menu and nothing drawn to say where,
+    // since the outline that used to do that job is suppressed. On the Live
+    // transport this menu is the only route to "Hard pause — mic off".
+    renderMenu(items({ label: 'Open' }, { label: 'Duplicate' }));
+    await openByActivationKey();
+    expect(document.activeElement?.textContent?.trim()).toBe('Open');
+    expect(active().map((el) => el.textContent?.trim())).toEqual(['Open']);
+  });
+
+  it('a click carrying a real click count still highlights nothing', async () => {
+    // The other side of the same discriminator — this is the pointer path.
+    renderMenu(items({ label: 'Open' }, { label: 'Duplicate' }));
+    await openByClick();
+    expect(document.activeElement?.textContent?.trim()).toBe('Open');
+    expect(active()).toHaveLength(0);
+  });
+
+  it('reopening after a keyboard open does not remember the highlight', async () => {
+    renderMenu(items({ label: 'Open' }, { label: 'Duplicate' }));
+    await pressOn(trigger(), 'ArrowDown');
+    expect(active()).toHaveLength(1);
+    await pressOn(document.activeElement as Element, 'Escape');
+    await openByClick();
+    expect(active()).toHaveLength(0);
+  });
+});
+
+/**
+ * Which way the popover opens.
+ *
+ * The menu is absolutely positioned, so it is clipped by the nearest scrolling
+ * ancestor — in the library that is `.page`, which scrolls — and the menu on the
+ * last visible card was cut off rather than merely running past the window.
+ *
+ * jsdom reports every rect as zero, so the trigger's is stubbed. That is the
+ * whole input to the decision, which is what makes this testable at all: the
+ * height is COMPUTED from the item count rather than measured, precisely so the
+ * menu does not have to render downwards first and correct itself on the next
+ * frame.
+ */
+describe('OverflowMenu — opening direction', () => {
+  /** jsdom's viewport is 768 tall; place the trigger within it. */
+  function stubTriggerRect(top: number, bottom: number): void {
+    const wrap = document.querySelector('.wrap');
+    if (!(wrap instanceof HTMLElement)) throw new Error('no menu wrapper rendered');
+    wrap.getBoundingClientRect = () =>
+      ({ top, bottom, left: 0, right: 32, width: 32, height: bottom - top, x: 0, y: top }) as DOMRect;
+  }
+
+  function menuEl(): HTMLElement {
+    const found = document.querySelector<HTMLElement>('[role="menu"]');
+    if (!found) throw new Error('menu is not open');
+    return found;
+  }
+
+  it('opens downward when there is room', async () => {
+    renderMenu(items({ label: 'Open' }, { label: 'Duplicate' }));
+    stubTriggerRect(60, 92);
+    await openByClick();
+    expect(menuEl().classList.contains('up')).toBe(false);
+  });
+
+  it('opens upward when the space below cannot hold it', async () => {
+    renderMenu(items({ label: 'Open' }, { label: 'Duplicate' }));
+    // 8px of padding either side plus two 32px items is 80; four pixels of room
+    // below is not enough, and there are 720 above.
+    stubTriggerRect(728, 760);
+    await openByClick();
+    expect(menuEl().classList.contains('up')).toBe(true);
+  });
+
+  it('stays downward when up is no better', async () => {
+    // Taller than the window either way: flipping would swap one clipped edge
+    // for another, so the menu keeps the direction that matches the trigger.
+    const many = items(...Array.from({ length: 24 }, (_, i) => ({ label: `Item ${i}` })));
+    renderMenu(many);
+    stubTriggerRect(20, 52);
+    await openByClick();
+    expect(menuEl().classList.contains('up')).toBe(false);
+  });
+
+  it('re-decides on every open rather than remembering', async () => {
+    // The row can be scrolled somewhere else entirely between two openings.
+    renderMenu(items({ label: 'Open' }, { label: 'Duplicate' }));
+    stubTriggerRect(728, 760);
+    await openByClick();
+    expect(menuEl().classList.contains('up')).toBe(true);
+
+    await pressOn(document.activeElement as Element, 'Escape');
+    stubTriggerRect(60, 92);
+    await openByClick();
+    expect(menuEl().classList.contains('up')).toBe(false);
+  });
+
+  it('counts separators in the height it needs', async () => {
+    // Four items (128) plus padding (16) is 144, which fits in 150. The ruled-off
+    // item adds 9 more and it no longer does — so a menu that ignored separators
+    // would open downward here and be clipped.
+    const list = items(
+      { label: 'Open' },
+      { label: 'Present' },
+      { label: 'Duplicate' },
+      { label: 'Move to Trash', danger: true, separated: true },
+    );
+    renderMenu(list);
+    stubTriggerRect(580, 610);
+    await openByClick();
+    expect(menuEl().classList.contains('up')).toBe(true);
+  });
+});
+
+describe('OverflowMenu — separators', () => {
+  it('rules off a flagged item without joining the focusable set', async () => {
+    renderMenu(
+      items({ label: 'Open' }, { label: 'Move to Trash', danger: true, separated: true }),
+    );
+    await openByClick();
+
+    expect(document.querySelectorAll('[role="separator"]')).toHaveLength(1);
+    // The arrows must still see exactly two stops: `menu-nav` indexes `items`,
+    // so a separator that counted as an entry would desynchronise all of it.
+    expect(menuItems()).toHaveLength(2);
+    await pressOn(document.activeElement as Element, 'ArrowDown');
+    expect(document.activeElement?.textContent?.trim()).toBe('Move to Trash');
+  });
+
+  it('draws no separator when nothing asks for one', async () => {
+    renderMenu(items({ label: 'Open' }, { label: 'Duplicate' }));
+    await openByClick();
+    expect(document.querySelectorAll('[role="separator"]')).toHaveLength(0);
   });
 });
 

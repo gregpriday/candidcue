@@ -259,12 +259,40 @@
 {/if}
 
 <style>
+  /*
+   * The seam under the native titlebar.
+   *
+   * Tauri gives every macOS window `NSWindowStyleMaskFullSizeContentView` (see
+   * `windows/present.rs`), so the titlebar is transparent and what shows through
+   * it is this app's own `--bg-app`. macOS insets the PAGE CONTENT below the
+   * titlebar while the canvas keeps painting the full window height — so the
+   * strip above `.shell` is warm paper, `.shell` starts at the titlebar's bottom
+   * edge, and the window reads as one undivided surface with the traffic lights
+   * floating in it and nothing to say where the chrome ends.
+   *
+   * A border on `.shell` therefore lands exactly on that boundary without
+   * anybody having to know the titlebar's height — which is just as well,
+   * because it is not a number the page can read and it is not the same number
+   * on every macOS release (32px on this one, 28px on older ones). If a future
+   * webview stops applying the inset, the line degrades to a hairline along the
+   * top of the window rather than to a misplaced rule.
+   */
   .shell {
     display: flex;
     height: 100%;
+    border-top: 1px solid var(--border-seam);
     background: var(--bg-app);
     color: var(--text-primary);
     transition: background var(--dur-slow) var(--ease-out);
+  }
+
+  /*
+   * No seam during a take: the window has no titlebar then (the style mask is
+   * rewritten for the length of the take), so the line would have nothing to
+   * separate — it would just be a grey hairline across the top of the glass.
+   */
+  :global(html[data-presenting='true']) .shell {
+    border-top-color: transparent;
   }
 
   .content {
