@@ -186,9 +186,15 @@ export function teleprompterMirrorForPreset(preset: OpticalRigPreset): {
  * preset id: a profile a person built by hand, or one auto-discovered for a
  * recognised panel, that happens to land on the same seven values IS that
  * preset's configuration, not a coincidence pretending to be one.
+ *
+ * Takes the wider `OpticalProfile['viewingDistanceMm']` type (`number | null`)
+ * rather than `OpticalRigPresetFields` itself, so a full `OpticalProfile` —
+ * whose distance is null until asked — can be passed directly without a cast;
+ * `null === number` is simply never a match, which is the correct answer for
+ * an uncalibrated rig.
  */
 export function profileMatchesPreset(
-  fields: OpticalRigPresetFields,
+  fields: Omit<OpticalRigPresetFields, 'viewingDistanceMm'> & { viewingDistanceMm: number | null },
   preset: OpticalRigPreset,
 ): boolean {
   return (
