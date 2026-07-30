@@ -104,7 +104,7 @@ const doc: StageRenderDocument = {
 };
 
 /** Settings with NO `optics` — the shape every pre-optical document has. */
-function uncalibrated(): StageSettings {
+function uncalibrated(overrides: Partial<StageSettings> = {}): StageSettings {
   return {
     schemaVersion: 1,
     themeId: 'stage-dark',
@@ -126,6 +126,7 @@ function uncalibrated(): StageSettings {
     stageAcknowledgements: true,
     reducedMotion: false,
     paragraphSpacingEm: 0.7,
+    ...overrides,
   };
 }
 
@@ -202,6 +203,55 @@ describe('the roomy panel, 1920x1080', () => {
     const { container, px } = mount(uncalibrated());
     expect(px(container.querySelector('.fade-top'), 'height')).toBeCloseTo(172.8, 1);
     expect(px(container.querySelector('.fade-bottom'), 'height')).toBeCloseTo(172.8, 1);
+  });
+
+  it('gives the first line enough paper to reach a band the presenter moved', () => {
+    /*
+     * The table is a fixed 38 `vh` and knows nothing about
+     * `readingBandCenterPercent`, which goes to 70. The MARK moved with that
+     * setting and the paper above the first line did not, so past about 45% the
+     * opening wanted a negative scroll: it clamped to 0, the first line came to
+     * rest above the mark, and no gesture could bring it down because 0 is the
+     * floor for manual scrolling too. Measured before the fix on 1440x900 at
+     * 64px/1.32: 42px above the mark at a 50% band, 132px at 60%, 222px at 70%.
+     *
+     * The requirement is the calibrated solver's own: at scroll 0 the first
+     * line's centre sits at `padTop + pitch/2`, and that has to be able to reach
+     * the band centre.
+     */
+    viewport = ROOMY;
+    const pitch = 64 * 1.32;
+    for (const percent of [50, 60, 70]) {
+      const { container, px } = mount(uncalibrated({ readingBandCenterPercent: percent }));
+      const padTop = px(container.querySelector('.scroll-plane'), 'padding-top');
+      const bandCentre = ROOMY.height * (percent / 100);
+      expect(
+        padTop + pitch / 2,
+        `a ${percent}% band cannot reach the first line`,
+      ).toBeGreaterThanOrEqual(bandCentre);
+    }
+  });
+
+  it('leaves the table alone for a band it can already reach', () => {
+    /*
+     * The floor only ever ADDS paper, so a rig whose band the table already
+     * reaches must render exactly as it did — which is what every literal in
+     * this file asserts.
+     *
+     * The crossover is `0.38 + (pitch/2) / vh`, so it moves with the panel and
+     * the type: 41.9% on this 1080 panel at 64px/1.32, and 45.2% on a 900px one.
+     * These bands are inside it on both. 42% is deliberately NOT in the list —
+     * it is 0.96px past the crossover here, which is the fix working, not drift.
+     */
+    viewport = ROOMY;
+    const table = 0.38 * ROOMY.height + LINE_ENTRY_PX;
+    for (const percent of [20, 30, 38, 40]) {
+      const { container, px } = mount(uncalibrated({ readingBandCenterPercent: percent }));
+      expect(
+        px(container.querySelector('.scroll-plane'), 'padding-top'),
+        `a ${percent}% band moved the top padding`,
+      ).toBeCloseTo(table, 1);
+    }
   });
 
   it('still selects the table by the old breakpoint, not by line pitch', () => {

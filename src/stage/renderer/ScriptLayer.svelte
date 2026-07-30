@@ -590,14 +590,84 @@
    * Both branches, calibrated and legacy: the mark points at the wrong line on
    * every rig, so the correction belongs to every rig.
    */
+  /**
+   * The legacy table cannot be allowed to strand an END of the script.
+   *
+   * ---------------------------------------------------------------------------
+   * THE DEFECT
+   * ---------------------------------------------------------------------------
+   * `legacyStagePaddingPx` is a fixed 38/55 (or 34/60) `vh` and knows nothing
+   * about `readingBandCenterPercent`, which the presenter may set anywhere in
+   * 20..70 (`APPEARANCE_LIMITS`). The MARK moves with that setting and the paper
+   * above the first line did not, so past about 45% the opening wanted a NEGATIVE
+   * scroll: `placeOpeningPosition` clamps to 0, the first line came to rest above
+   * the mark, and no gesture could bring it down because 0 is also the floor for
+   * manual scrolling. Measured on a 1440x900 panel at 64px/1.32, the first line
+   * sat 42px above the mark at a 50% band, 132px at 60% and 222px at 70% — and
+   * the presenter could only watch it.
+   *
+   * The same hole exists at the other end. The closing line needs
+   * `vh - centre - pitch/2` of paper beneath it to reach the mark; the legacy 55
+   * `vh` is short of that for any band below ~24%, so a high band stranded the
+   * LAST line instead of the first.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY THE TWO EDGES ARE TREATED DIFFERENTLY
+   * ---------------------------------------------------------------------------
+   * Both only ever ADD paper, and only when the band asks for it, so a rig that
+   * has never moved its reading band renders byte-identically and the literals
+   * pinned in `tests/dom/script-layer-uncalibrated-parity.test.ts` still hold.
+   * They reach that promise by different routes, and the difference is not
+   * arbitrary:
+   *
+   *   TOP — the requirement is computed directly (`centre - pitch/2`, which is
+   *   exactly what the calibrated solver uses). At a 38% band the table is
+   *   already the larger number on BOTH the roomy and the compact panel, so this
+   *   changes nothing at the default and simply becomes correct once the band
+   *   moves down.
+   *
+   *   BOTTOM — the same computation would change the default, because the legacy
+   *   55 `vh` is genuinely ~33px short of what the closing line needs even at 38%.
+   *   That shortfall is the KNOWN defect the parity file preserves on purpose:
+   *   it fell inside the old dead zone, and correcting it belongs to rigs that
+   *   opted into the optical model rather than to everyone's stage on upgrade. So
+   *   the bottom is compensated only for how far the band has MOVED from the 38%
+   *   the tables were tuned beside. The documented defect survives; the unbounded
+   *   version of it — 228px, nearly three lines, at a 20% band — does not.
+   *
+   * `maxScrollPx` is `totalHeight - vh` and the padding is part of `totalHeight`,
+   * so raising either edge raises the ceiling with it: the tail stays reachable.
+   */
+  /** The band the legacy `vh` tables were hand-tuned beside (`APPEARANCE_LIMITS`). */
+  const LEGACY_TUNED_BAND_FRACTION = 0.38;
+
+  function reachableTopPx(tablePx: number, needPx: number): number {
+    // A non-finite or negative need is not a claim about geometry, so it cannot
+    // be allowed to become the padding. The table stands on its own.
+    if (!Number.isFinite(needPx) || needPx <= 0) return tablePx;
+    return Math.max(tablePx, needPx);
+  }
+
+  function reachableBottomPx(tablePx: number, bandCentre: number, heightPx: number): number {
+    if (!Number.isFinite(bandCentre) || !Number.isFinite(heightPx) || heightPx <= 0) {
+      return tablePx;
+    }
+    const movedUpPx = LEGACY_TUNED_BAND_FRACTION * heightPx - bandCentre;
+    return movedUpPx > 0 ? tablePx + movedUpPx : tablePx;
+  }
+
   const padTopPx = $derived(
-    (optics ? stagePaddingPx(bandGeometry).topPx : legacyPad.topPx) + lineEntryPx,
+    (optics
+      ? stagePaddingPx(bandGeometry).topPx
+      : reachableTopPx(legacyPad.topPx, bandCenterPx - linePx / 2)) + lineEntryPx,
   );
   // §7.1: the rail's reserved band is folded into the bottom padding, so the
   // reading band, the total document height, and the fallback target all keep
   // the script clear of the rail with no separate bookkeeping.
   const padBottomPx = $derived(
-    (optics ? stagePaddingPx(bandGeometry).bottomPx : legacyPad.bottomPx) + bottomInsetPx,
+    (optics
+      ? stagePaddingPx(bandGeometry).bottomPx
+      : reachableBottomPx(legacyPad.bottomPx, bandCenterPx, vh)) + bottomInsetPx,
   );
 
   const gapPx = $derived(
