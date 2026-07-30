@@ -1,22 +1,19 @@
 /**
- * Starter documents. The new-script example demonstrates a heading, a
- * paragraph, and a cue, and is selected so the user can immediately replace
- * it (spec §9.1.3).
+ * Creation defaults: the title a blank new script opens under, and the
+ * separate read-aloud sample document.
+ *
+ * A new script has no body constant because it has no body. It used to open on
+ * a heading, a paragraph and a cue, which the user then had to delete before
+ * writing anything — the editor's own placeholder says the same thing without
+ * leaving text on the page to clear.
  */
 
 export const NEW_SCRIPT_TITLE = 'Untitled script';
 
-export const NEW_SCRIPT_SOURCE = `# Your first section
-
-Write the words you plan to say, exactly the way you would say them. When you present, the stage follows your voice and keeps your place.
-
-[Cue: smile and hold eye contact]
-`;
-
 export const SAMPLE_SCRIPT_TITLE = 'Sample: read this aloud';
 
 /**
- * The starter script, written to be *read out loud* rather than skimmed.
+ * The sample script, written to be *read out loud* rather than skimmed.
  *
  * Three deliberate choices:
  *

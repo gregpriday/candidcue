@@ -1,5 +1,5 @@
 /**
- * The starter content a first-run user opens.
+ * The sample script a first-run user opens.
  *
  * This is the only script most people will read aloud before deciding whether
  * the app works, so it has to compile cleanly and exercise the structures that
@@ -7,28 +7,21 @@
  * a `#` part whose first child is a `##` scene is exactly the nesting that
  * once wedged the section-eligibility gate, because a presenter reading
  * straight through never says the parent heading out loud.
+ *
+ * The other creation path has no body to compile — a new script starts empty,
+ * and `compile('')` is covered directly in `src/shared/markdown/compile.test.ts`.
  */
 import { describe, expect, it } from 'vitest';
 import { compile } from '../../src/shared/markdown/compile';
-import {
-  NEW_SCRIPT_SOURCE,
-  SAMPLE_SCRIPT_SOURCE,
-  SAMPLE_SCRIPT_TITLE,
-} from '../../src/control/lib/sample-script';
+import { SAMPLE_SCRIPT_SOURCE, SAMPLE_SCRIPT_TITLE } from '../../src/control/lib/sample-script';
 
 function compileSource(source: string) {
   return compile(source, { scriptId: 'sample' });
 }
 
-describe('starter scripts', () => {
+describe('sample script', () => {
   it('compiles the sample without diagnostics', () => {
     const result = compileSource(SAMPLE_SCRIPT_SOURCE);
-    expect(result.diagnostics ?? []).toEqual([]);
-    expect(result.spokenTokens.length).toBeGreaterThan(0);
-  });
-
-  it('compiles the blank-script starter without diagnostics', () => {
-    const result = compileSource(NEW_SCRIPT_SOURCE);
     expect(result.diagnostics ?? []).toEqual([]);
     expect(result.spokenTokens.length).toBeGreaterThan(0);
   });

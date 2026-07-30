@@ -248,8 +248,8 @@
       The sample script leads. It is the only one of these three that hands back
       something written to be read ALOUD — it exercises pauses, going off script
       and restarting — and reading aloud is the only way to see what this app
-      actually does. A blank three-line stub cannot demonstrate following, so
-      offering it first asked new users to supply the demo themselves.
+      actually does. An empty script cannot demonstrate following, so offering
+      it first asked new users to supply the demo themselves.
     -->
     <div class="actions">
       <Button variant="primary" onclick={() => createAndOpenScript('sample')}>
