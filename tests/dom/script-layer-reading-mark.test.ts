@@ -67,11 +67,14 @@ const ScriptLayer = (await import('../../src/stage/renderer/ScriptLayer.svelte')
 const VIEWPORT = { width: 1920, height: 1080 };
 /** The uncalibrated 38 vh top padding this panel selects, before the offset. */
 const LEGACY_TOP_PX = 0.38 * VIEWPORT.height;
-/** Half a pitch (64 x 1.32) plus half a cap height (64 x the 0.7 fallback). */
-// A quarter of the 84.48px pitch, plus half the 44.8px cap — see
-// `lineEntryOffsetPx`, which moved from half a pitch to a quarter so the mark
-// reaches the next line before the reader finishes the current one.
-const LINE_ENTRY_PX = 84.48 * 0.25 + 22.4;
+/**
+ * Half a cap height: 64px body x the 0.7 fallback cap ratio, halved.
+ *
+ * There is no pitch term. `lineEntryOffsetPx` carried a quarter of the 84.48px
+ * pitch for a while; it cancelled this correction almost exactly and pointed the
+ * mark at the top of the letters rather than at them.
+ */
+const LINE_ENTRY_PX = 22.4;
 
 beforeAll(() => {
   (globalThis as { ResizeObserver: unknown }).ResizeObserver = class {

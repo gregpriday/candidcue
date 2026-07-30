@@ -53,14 +53,14 @@ const ROOMY = { width: 1920, height: 1080 };
 
 /**
  * The line-entry offset at this fixture's type, transcribed rather than
- * imported: half a pitch (64px x 1.32 / 2) plus half a cap height (64px x the
- * 0.7 fallback ratio / 2). Same rule on both panels, because both render the
- * authored 64px body.
+ * imported: half a cap height, 64px x the 0.7 fallback ratio / 2. Same rule on
+ * both panels, because both render the authored 64px body.
+ *
+ * No pitch term — `lineEntryOffsetPx` briefly carried a quarter of one, which
+ * cancelled the cap correction and put the mark on the cap line instead of the
+ * middle of the capital.
  */
-// A quarter of the 84.48px pitch, plus half the 44.8px cap — see
-// `lineEntryOffsetPx`, which moved from half a pitch to a quarter so the mark
-// reaches the next line before the reader finishes the current one.
-const LINE_ENTRY_PX = 84.48 * 0.25 + 22.4;
+const LINE_ENTRY_PX = 22.4;
 
 let viewport = COMPACT;
 

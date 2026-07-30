@@ -14,6 +14,13 @@
  * permanently one line behind them.
  *
  * `lineEntryOffsetPx` is the correction, and this file is the guard on it.
+ *
+ * The correction is half a cap height — the amount that puts the middle of a
+ * capital on the mark at the instant a line is entered. It briefly also carried a
+ * quarter of a pitch, chosen to raise the mark's residency on the line being
+ * read; that term is gone because it cancelled the cap correction and pointed the
+ * apex at the top of the letters instead of at them. The residency table it was
+ * chosen from is recorded inline below, so the trade stays visible.
  */
 import { describe, it, expect } from 'vitest';
 import { buildRenderedLineMap, type StageRenderedLineMap } from '../../../src/stage/motion';
@@ -96,14 +103,19 @@ function markResidency(map: StageRenderedLineMap, lineIndex: number, steps = 40)
   if (!line || !next) throw new Error('fixture needs two more lines');
   let onCurrent = 0;
   let onNext = 0;
+  /** How far through the line the mark first reaches the NEXT one — the handover. */
+  let firstNextAt: number | null = null;
   for (let i = 0; i < steps; i++) {
     const p = i / steps;
     const unit = line.spokenUnitStart + p * (line.spokenUnitEnd - line.spokenUnitStart);
     const scrollPx = map.sampleMotionPath(unit)?.scrollPx ?? 0;
     if (MARK_PX >= line.topY - scrollPx && MARK_PX <= line.bottomY - scrollPx) onCurrent++;
-    if (MARK_PX >= next.topY - scrollPx && MARK_PX <= next.bottomY - scrollPx) onNext++;
+    if (MARK_PX >= next.topY - scrollPx && MARK_PX <= next.bottomY - scrollPx) {
+      onNext++;
+      if (firstNextAt === null) firstNextAt = p;
+    }
   }
-  return { onCurrent: onCurrent / steps, onNext: onNext / steps };
+  return { onCurrent: onCurrent / steps, onNext: onNext / steps, firstNextAt };
 }
 
 /** Averaged over lines, so one lucky line break cannot carry the result. */
@@ -117,38 +129,90 @@ function residencyOverScript(map: StageRenderedLineMap) {
 }
 
 describe('the reading mark and the line being read (§8.8)', () => {
-  it('sits on the line being read for most of that line', () => {
+  /*
+   * THE PROPERTY THIS FILE IS ACTUALLY FOR.
+   *
+   * The offset is `cap / 2` and nothing else, so at the instant a line begins
+   * its baseline sits exactly half a cap height below the mark — which is to say
+   * the middle of a capital is ON the mark. The tick is drawn one cap high with
+   * its apex at its own centre, so at line entry the triangle spans precisely
+   * the capital: same centre, same extent.
+   *
+   * This is the assertion a presenter would recognise. It replaced an average
+   * over the whole line (see below), which was satisfied by a phase that put the
+   * apex on the CAP LINE at line entry — pointing at the top of the letters
+   * rather than at them — and that is what a presenter actually noticed.
+   */
+  it('shares a centre with the capital at the instant a line begins', () => {
+    const { map } = alignedMap();
+    const line = map.lines[8];
+    expect(line).toBeDefined();
+    if (!line) return;
+    const scrollPx = map.sampleMotionPath(line.spokenUnitStart)?.scrollPx;
+    expect(scrollPx).toBeDefined();
+    if (scrollPx === undefined) return;
+    // Where the foot of the letters lands on the glass as the line is entered.
+    const baselineOnGlass = line.baselineY - scrollPx;
+    expect(baselineOnGlass).toBeCloseTo(MARK_PX + CAP_PX / 2, 6);
+  });
+
+  /*
+   * Residency — the mark's phase across a whole line — measured on this fixture
+   * for every candidate offset, so the trade is recorded rather than argued:
+   *
+   *   offset            onCurrent  onNext  leaves at  on next from
+   *   R == mark (0)        0.179    0.508     17.5%        40%
+   *   cap/2  (shipped)     0.388    0.313     40%          65%
+   *   cap/2 + pitch/8      0.492    0.213     52.5%        77.5%
+   *   cap/2 + pitch/4      0.596    0.113     65%          90%
+   *
+   * The quarter pitch shipped for a while on the strength of `onCurrent`. Two
+   * things in this table argue against it. It costs the centring asserted above,
+   * because `pitch / 4` and `cap / 2` are within 6% of each other at the default
+   * line height and cancel. And the sentence it was justified by — "the pointer
+   * should be on the next line already by the time they get to the end of a
+   * line" — is something it makes WORSE: at a quarter pitch handover happens at
+   * 90% of the line, barely before it ends, where the shipped offset hands over
+   * at 65% and genuinely leads the eye into the next line.
+   *
+   * `cap/2 + pitch/8` is the fallback if the script ever feels one line behind
+   * again, but reach for the mark's SHAPE first — see `lineEntryOffsetPx`.
+   */
+  it('is on the line being read more than it is on the next one', () => {
     const { onCurrent, onNext } = residencyOverScript(alignedMap().map);
-    /*
-     * The ceiling for this fixture is 0.75: its ink box is three quarters of a
-     * pitch, so a mark is outside the letters for part of each end however well
-     * it is phased. Real type measures closer to 0.88 of a pitch through
-     * `Range.getClientRects`, so the stage does better than the fixture can.
-     *
-     * The entry offset is a QUARTER pitch rather than a half (see
-     * `lineEntryOffsetPx`), which deliberately spends some of this margin: the
-     * mark hands over to the next line before the reader finishes the current
-     * one, so their eye is led into it instead of catching up to it. That trade
-     * is the difference between 0.67 and 0.60 here, and it is the presenter's
-     * to make — what must not come back is the mark spending most of a line on
-     * the WRONG one, which is what the offset exists to prevent.
-     */
-    expect(onCurrent).toBeGreaterThan(0.55);
-    // Still the minority by a wide margin. A mark that sat on the line below
-    // for as long as it sat on the line being read would read as a script
-    // running behind the reader, which is the original defect.
-    expect(onNext).toBeLessThan(0.3);
-    expect(onNext).toBeLessThan(onCurrent / 2);
+    expect(onCurrent).toBeGreaterThan(0.35);
+    expect(onNext).toBeLessThan(0.35);
+    // The margin is narrower than it was at a quarter pitch, deliberately. What
+    // must never come back is the INVERSION below.
+    expect(onNext).toBeLessThan(onCurrent);
+  });
+
+  it('hands the eye to the next line before the reader arrives there', () => {
+    const { map } = alignedMap();
+    const { firstNextAt } = markResidency(map, 8);
+    // Somewhere in the back half, and not at the very last step: the eye should
+    // be invited to the next line, not shown it as it gets there.
+    expect(firstNextAt).not.toBeNull();
+    if (firstNextAt === null) return;
+    expect(firstNextAt).toBeGreaterThan(0.5);
+    expect(firstNextAt).toBeLessThan(0.8);
   });
 
   it('is a large improvement on treating `R` and the mark as one number', () => {
     const before = residencyOverScript(unalignedMap().map);
     const after = residencyOverScript(alignedMap().map);
-    // The measurement that motivated the offset: the mark spent most of every
-    // line on the NEXT line.
+    /*
+     * The measurement that motivated the offset existing at all: with `R` and
+     * the mark as one number the mark spent most of every line on the NEXT line
+     * — an inversion, not a margin, and a presenter reads it as the script
+     * sitting permanently one line behind them.
+     */
     expect(before.onNext).toBeGreaterThan(0.5);
     expect(before.onCurrent).toBeLessThan(0.2);
-    expect(after.onCurrent).toBeGreaterThan(before.onCurrent * 3);
+    expect(before.onNext).toBeGreaterThan(before.onCurrent * 2);
+    // Corrected: the right line now wins, where it used to lose badly.
+    expect(after.onCurrent).toBeGreaterThan(after.onNext);
+    expect(after.onCurrent).toBeGreaterThan(before.onCurrent * 2);
   });
 
   it('leaves the motion path itself untouched — it is a phase shift, not a retune', () => {
@@ -214,13 +278,23 @@ describe('the reading mark and the line being read (§8.8)', () => {
 });
 
 describe('lineEntryOffsetPx', () => {
-  it('is a quarter of a pitch plus half a cap height', () => {
-    expect(lineEntryOffsetPx(80, 40)).toBeCloseTo(40, 9);
+  /*
+   * Half a cap height, and no pitch term. Pinned as an equality rather than a
+   * bound because the centring assertion above depends on this being EXACTLY
+   * `cap / 2`: any pitch term at all moves the apex off the middle of the
+   * capital, and at the default 1.32 line height a quarter of a pitch moves it
+   * a whole half-cap — onto the cap line.
+   */
+  it('is half a cap height, with no pitch term', () => {
+    expect(lineEntryOffsetPx(80, 40)).toBeCloseTo(20, 9);
+    // Independent of the pitch, which is the whole point.
+    expect(lineEntryOffsetPx(200, 40)).toBeCloseTo(20, 9);
   });
 
   it('answers zero rather than NaN for geometry that has not resolved', () => {
     expect(lineEntryOffsetPx(0, 0)).toBe(0);
     expect(lineEntryOffsetPx(Number.NaN, 40)).toBe(20);
-    expect(lineEntryOffsetPx(80, Number.NaN)).toBe(20);
+    // No cap height means no correction to make — not a pitch-derived guess.
+    expect(lineEntryOffsetPx(80, Number.NaN)).toBe(0);
   });
 });

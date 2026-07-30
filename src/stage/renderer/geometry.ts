@@ -294,17 +294,21 @@ export function clampProvisionalTarget(
  * reader, which reads exactly as the script running behind them.
  *
  * The mark cannot move — it is the lens, calibrated to where the presenter's eye
- * rests — so `R` does. Placing line entry half a pitch below the mark centres
- * the line's whole traversal on it: the line arrives just under the mark, passes
- * through it at the middle of the line, and leaves just above as the next one
- * arrives. It is on the mark for most of every line, and its error is symmetric
- * rather than a standing bias in the direction that makes a presenter feel late.
+ * rests — so `R` does.
  *
- * The cap-height half is the second, smaller correction. Knots are placed by
- * BASELINE, which is the foot of the letters, so a mark level with the baseline
- * points at the gap under the text rather than at the text. Half a cap height
- * above the baseline is the middle of a capital — and the mark is drawn one cap
- * high, so this is the statement that the mark and the letters share a centre.
+ * What it moves by is one correction, not two. Knots are placed by BASELINE,
+ * which is the foot of the letters, so a mark level with the baseline points at
+ * the gap under the text rather than at the text. Half a cap height above the
+ * baseline is the middle of a capital — and the mark is drawn one cap high with
+ * its apex at its own centre, so this is the statement that the mark and the
+ * letters share a centre, and share their extent: at line entry the triangle
+ * spans exactly the capital.
+ *
+ * A second term used to sit beside it — a quarter of a pitch, phasing line entry
+ * lower so the mark stayed on the line being read for more of that line's
+ * traversal. It is gone, and `LINE_ENTRY_PITCH_FRACTION` below records why at
+ * length: it cancelled this correction almost exactly, and the average it
+ * optimised is not the thing the presenter looks at.
  *
  * The whole document shifts down by this, padding included, so the path itself
  * is untouched: every knot is `baselineY - R` and both terms grow together, so
@@ -323,26 +327,62 @@ export function clampProvisionalTarget(
 /**
  * How far below the mark a line ENTERS, as a fraction of the pitch.
  *
- * A quarter, not a half, and the difference is a presenter's sentence: "the
- * pointer should be on the next line already by the time they get to the end of
- * a line." Measured on the rendered map with a realistic ink box:
+ * ZERO, and that is a reversal — it was a quarter. The history is worth keeping
+ * because the quarter was not arbitrary, it was measured, and it was still
+ * wrong.
+ *
+ * The measurements it was chosen on, on the rendered map with a realistic ink
+ * box, as residency (on the line being read / on the next line) averaged over
+ * the traversal of a line:
  *
  *   half a pitch  — the mark leaves the line at 83% of it and NEVER reaches the
  *                   next one before the line ends. Residency 0.79 / 0.00.
  *   a quarter     — it leaves at 61% and is on the next line from 79%.
  *                   Residency 0.61 / 0.21.
- *   none (cap/2)  — it leaves at 41% and is on the next from 59%. Residency
- *                   0.41 / 0.41, which is a mark that spends as much of every
- *                   line pointing at the wrong one as the right one, and is
- *                   most of the way back to the defect described above.
+ *   none (cap/2)  — it leaves at 41% and is on the next from 59%.
+ *                   Residency 0.41 / 0.41.
  *
- * A quarter keeps the mark on the line being read for most of that line — which
- * is what the offset exists for — and still hands over before the reader
- * arrives, so their eye is led into the next line rather than catching up to
- * it. The handoff itself was always a property of the path; this decides how
- * early the eye is invited to it.
+ * Read as an average over the line, a quarter is plainly the best of the three.
+ * Two things are wrong with reading it that way.
+ *
+ * THE AVERAGE WEIGHTS THE LINE UNIFORMLY AND THE EYE DOES NOT. The ticks sit
+ * just outside the column, at the far left and far right. The presenter's eye is
+ * next to the left tick at exactly two moments: when they start a line, and when
+ * they sweep back to find the next one. In between they are reading words
+ * rightward and the mark is peripheral — which is to say the residency average
+ * spends most of its weight on the part of the line where nobody is looking at
+ * the thing being measured.
+ *
+ * AND IT UNDID THE CORRECTION ABOVE. `cap / 2` exists to make the mark and the
+ * letters share a centre: the tick is drawn one cap high with its apex at its
+ * own centre, so at a zero pitch fraction the triangle spans PRECISELY the
+ * capital — same centre, same extent. At the shipped 1.32 line height and a 0.7
+ * cap ratio, `pitch / 4` is 0.33em and `cap / 2` is 0.35em. The quarter pitch
+ * therefore cancelled the cap correction almost exactly and landed the apex on
+ * the CAP LINE, pointing at the top of the letters rather than at them. Two
+ * corrections, each individually reasoned, silently annihilating each other.
+ *
+ * At zero the two agree again, and so does one more thing: the opening position
+ * (`placeOpeningPosition`) puts the first row's MEASURED ink centre on the mark
+ * with no offset at all, so any non-zero fraction here meant the text dropped by
+ * that much the moment the aligner took over from the opening. That
+ * discontinuity is gone rather than hidden.
+ *
+ * WHAT THIS GIVES UP, AND WHERE TO GO IF IT MATTERS. The quarter pitch was
+ * bought with a real complaint — the script feeling permanently one line behind
+ * the reader. At zero the mark leaves the line being read at ~41% and is on the
+ * line below from ~59%, so that perception can return. If it does, the fix is
+ * the mark's SHAPE and not its phase. A point has to sweep: the document must
+ * advance exactly one pitch per line and the mark is fixed, so the mark's
+ * position relative to the line being read sweeps one full pitch every line and
+ * only the phase is free. A band does not have to sweep — it can contain. The
+ * tick is currently one cap tall against an ink box of ~0.88 of a pitch; sizing
+ * the mark to span a line answers "which line" by overlap at any phase, and
+ * `readingCue: 'wash'` already does exactly that. Reach for that before
+ * reaching back for a phase offset, because the phase offset can only buy the
+ * middle of a line by selling both of its ends.
  */
-const LINE_ENTRY_PITCH_FRACTION = 0.25;
+const LINE_ENTRY_PITCH_FRACTION = 0;
 
 export function lineEntryOffsetPx(linePitchPx: number, capHeightPx: number): number {
   const pitch = isPositive(linePitchPx) ? linePitchPx : 0;

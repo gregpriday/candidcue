@@ -529,9 +529,9 @@
    * `R` — where a line ENTERS, which is not where the mark is.
    *
    * See `lineEntryOffsetPx`. The document (padding included) sits this far below
-   * the mark so that the line being read passes THROUGH the mark instead of
-   * arriving on it and immediately climbing away, which is what made the script
-   * feel permanently one line behind the reader.
+   * the mark — half a cap height, the baseline-to-cap-centre correction — so that
+   * the mark and the letters share a centre at the instant a line is entered,
+   * rather than the mark pointing at the gap under the text.
    *
    * Derived from the typographic pitch rather than the measured one on purpose:
    * the same number has to reach the top padding and the line map, and those are
@@ -1391,8 +1391,10 @@
             fingerprint,
             tokens: measurement.tokens,
             blocks: measurement.blocks,
-            // Line ENTRY, half a pitch below the mark — see `lineEntryPx`. The
-            // top padding carries the same offset, so the knots are unchanged.
+            // Line ENTRY, half a cap height below the mark — which puts the
+            // middle of a capital ON the mark as a line is entered. See
+            // `lineEntryOffsetPx`. The top padding carries the same offset, so
+            // the knots are unchanged.
             readingLineStartY: band.centerPx + lineEntryPx,
             // The corridor half-height as measured on the glass — the computed
             // band, including its clamps, not the raw setting.
@@ -1569,24 +1571,23 @@
    * skip.
    *
    * ---------------------------------------------------------------------------
-   * ...PLUS HALF A LINE, WHICH IS NOT A FUDGE
+   * ...FROM MEASURED INK, NOT FROM THE PATH
    * ---------------------------------------------------------------------------
-   * `R` is where a line ENTERS, not where the mark is (see `lineEntryPx`): the
-   * document sits an offset below the mark so the line being read passes
-   * THROUGH it rather than arriving on it. So the path's own position for unit
-   * 0 — a line nobody has started — puts the mark on that line's top edge, half
-   * a pitch above its middle. Measured on the glass at 1280x720, pitch 85: the
-   * mark sits 39px above the first line's centre at unit 0, dead on its centre
-   * two words in, and 37px below it four words in. It sweeps the line.
+   * The path is how the first spoken LINE is chosen. It is not how the position
+   * is computed: `placeOpeningPosition` puts the measured centre of that line's
+   * ink on the mark directly (`firstSpokenRowCentre`), because every term in a
+   * path-derived answer is a different approximation of where the letters are.
+   * The long note on that function has the derivation.
    *
-   * A presenter looking at a stopped stage is not reading a line's entry, they
-   * are looking for the line. Half a pitch is exactly the difference between
-   * the entry phase and the middle of that sweep, which is where the mark sits
-   * for the whole middle of every line they will read — including two words
-   * into this one, which is where the first transcript partial lands. So the
-   * opening is not a different rule from following; it is the SAME phase, read
-   * at the moment following will actually pick it up. That is why the first
-   * words no longer move the document: there is nothing left to correct.
+   * The two rules agree, and only because `lineEntryOffsetPx` carries no pitch
+   * term. `R` sits half a cap height below the mark, which is exactly the
+   * baseline-to-cap-centre correction, so following places a line's capitals on
+   * the mark at the instant it is entered — the same place the opening put them.
+   * A pitch term here would mean the text stepped down by that much the moment
+   * the aligner took over from the opening, which is a jump the presenter causes
+   * by saying their first word and cannot possibly read as anything but the
+   * tracking being wrong. That is why the two are kept in agreement rather than
+   * tuned separately.
    *
    * ---------------------------------------------------------------------------
    * WHY IT IS RE-ASSERTED, NOT PLACED ONCE
