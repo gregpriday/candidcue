@@ -665,19 +665,48 @@ fn resolve_monitor<R: Runtime>(
         .ok_or(AppError::StageDisplayMissing)
 }
 
-/// The fingerprint of the monitor a live window actually landed on, if it can
-/// be determined. Used to verify the stage opened where it was asked to.
-fn window_monitor_fingerprint<R: Runtime>(
+/// The fingerprint of a monitor already in hand.
+///
+/// A lone `Monitor` cannot be fingerprinted on its own, which is why this takes
+/// the app handle and goes looking. [`monitor_fingerprints`] derives the whole
+/// list together because the ordinal that disambiguates two identical panels
+/// only means anything relative to the rest of them — so the only way to name
+/// one monitor the way `list_displays` would is to find it again among its
+/// peers.
+pub(super) fn monitor_fingerprint<R: Runtime>(
     app: &AppHandle<R>,
-    window: &tauri::WebviewWindow<R>,
+    monitor: &Monitor,
 ) -> Option<String> {
-    let current = window.current_monitor().ok().flatten()?;
     let monitors = app.available_monitors().ok()?;
     let fingerprints = monitor_fingerprints(&monitors);
     monitors
         .iter()
-        .position(|m| same_monitor(m, &current))
+        .position(|m| same_monitor(m, monitor))
         .and_then(|index| fingerprints.get(index).cloned())
+}
+
+/// The fingerprint of the monitor at `index` in `available_monitors()` order.
+///
+/// For a caller that has already chosen a monitor BY INDEX out of that same
+/// enumeration — `windows::present`'s reader placement does, when it fits a
+/// remembered frame back onto a panel — and so has no `Monitor` left to match
+/// against. Re-enumerating here rather than threading the list through keeps
+/// that ordering the single source of both answers.
+pub(super) fn monitor_fingerprint_at<R: Runtime>(
+    app: &AppHandle<R>,
+    index: usize,
+) -> Option<String> {
+    let monitors = app.available_monitors().ok()?;
+    monitor_fingerprints(&monitors).get(index).cloned()
+}
+
+/// The fingerprint of the monitor a live window actually landed on, if it can
+/// be determined. Used to verify the stage opened where it was asked to.
+pub(super) fn window_monitor_fingerprint<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &tauri::WebviewWindow<R>,
+) -> Option<String> {
+    monitor_fingerprint(app, &window.current_monitor().ok().flatten()?)
 }
 
 /// Everything a stage command needs from the coordinator, read ONCE.

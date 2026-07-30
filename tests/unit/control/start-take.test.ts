@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompileOutput } from '../../../src/control/services/compiler';
 import type { AppSettings } from '../../../src/control/services/settings-types';
+import type { DisplayDescriptor } from '../../../src/control/services/stage-types';
 
 const calls = vi.hoisted(() => ({
   saveNow: vi.fn(),
@@ -106,10 +107,19 @@ vi.mock('../../../src/control/services/display-profiles', async (original) => {
   };
 });
 
-const { defaultAppSettings } = await import('../../../src/control/services/settings-types');
+const { defaultAppSettings, opticalRigKey, READER_RIG_NAME } = await import(
+  '../../../src/control/services/settings-types'
+);
+const { defaultOpticalProfile } = await import('../../../src/shared/contracts/optical');
 const { startTake } = await import('../../../src/control/lib/start-take');
 
-type PresentationState = { presenting: boolean; width: number; height: number };
+type PresentationState = {
+  presenting: boolean;
+  width: number;
+  height: number;
+  /** The panel presenting landed on; absent when it could not be named. */
+  displayFingerprint?: string;
+};
 
 /** A promise plus its resolver, for holding one step of `startTake` open. */
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
@@ -524,5 +534,192 @@ describe('single-window Present', () => {
     release();
     await expect(first).resolves.toBe(true);
     expect(calls.startSessionRecord).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* ------------------------------------------ the panel the take is measured on */
+
+describe('the display a take is calibrated against', () => {
+  /*
+   * The defect: Present fills whichever monitor this window is already on and
+   * deliberately not the pinned one (`windows/present.rs` argues why), but the
+   * take used to be SIZED from the pin. An operator with an external prompter
+   * pinned who pressed Present at their laptop therefore read type laid out in
+   * the external panel's millimetres-per-pixel — and `mmPerCssPx` is the whole
+   * basis of the angular model, so that is a confidently wrong physical size
+   * rather than a near miss.
+   *
+   * Asserted through `fontSizePx`, which is the number the presenter actually
+   * sees. Two panels with different millimetres-per-pixel and the same rig
+   * settings must not produce the same type.
+   */
+  const LAPTOP: DisplayDescriptor = {
+    id: 'display-1',
+    name: 'Built-in Display',
+    primary: true,
+    physicalPosition: { x: 0, y: 0 },
+    physicalSize: { width: 3456, height: 2234 },
+    logicalSize: { width: 1728, height: 1117 },
+    scaleFactor: 2,
+    fingerprint: 'panel-laptop',
+    topologyHash: 'topology-1',
+  };
+  const PROMPTER: DisplayDescriptor = {
+    ...LAPTOP,
+    id: 'display-2',
+    name: 'Elgato Prompter',
+    primary: false,
+    fingerprint: 'panel-prompter',
+  };
+
+  /** A calibrated rig, distinguishable only by the panel scale it was measured at. */
+  function rig(rigName: string, mmPerCssPx: number) {
+    return {
+      ...defaultOpticalProfile(),
+      rigName,
+      scale: { mmPerCssPx, source: 'ruler' as const },
+      viewingDistanceMm: 900,
+    };
+  }
+
+  /** Both panels calibrated, under `rigName`, at scales that cannot be confused. */
+  function calibrateBoth(rigName: string): void {
+    settingsState.value!.optical = {
+      activeRig: { [LAPTOP.fingerprint]: rigName, [PROMPTER.fingerprint]: rigName },
+      profiles: {
+        [opticalRigKey(LAPTOP.fingerprint, rigName)]: rig(rigName, 0.12),
+        [opticalRigKey(PROMPTER.fingerprint, rigName)]: rig(rigName, 0.48),
+      },
+    };
+  }
+
+  /** The `StageSettings` the session was actually opened with. */
+  function opened(): {
+    stageSettings: { fontSizePx: number };
+    stageEnvelope: { stageSettings: { fontSizePx: number } };
+    stageDisplay: DisplayDescriptor | null;
+  } {
+    return calls.startLiveSession.mock.calls[0]![0] as never;
+  }
+
+  beforeEach(() => {
+    stageCalls.listDisplays.mockResolvedValue([LAPTOP, PROMPTER]);
+  });
+
+  it('sizes a prompter from the panel it landed on, not the pinned one', async () => {
+    // The issue's exact rig: the external prompter is pinned, and the window is
+    // sitting on the laptop when Present is pressed.
+    settingsState.value!.stage.presentationMode = 'prompter';
+    settingsState.value!.stage.displayFingerprint = PROMPTER.fingerprint;
+    calibrateBoth('Studio hood');
+    calls.enterPresentation.mockResolvedValue({
+      presenting: true,
+      width: 1728,
+      height: 1117,
+      displayFingerprint: LAPTOP.fingerprint,
+    });
+
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+
+    expect(opened().stageDisplay?.fingerprint).toBe(LAPTOP.fingerprint);
+    const onLaptop = opened().stageSettings.fontSizePx;
+    // The envelope is what actually reaches the renderer; it must not disagree.
+    expect(opened().stageEnvelope.stageSettings.fontSizePx).toBe(onLaptop);
+
+    /*
+     * And the two panels must genuinely size differently, or every assertion
+     * above would pass just as well on a pin that happened to be harmless.
+     * This is the number the presenter reads off the glass.
+     */
+    calls.startLiveSession.mockClear();
+    calls.enterPresentation.mockResolvedValue({
+      presenting: true,
+      width: 1728,
+      height: 1117,
+      displayFingerprint: PROMPTER.fingerprint,
+    });
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(opened().stageSettings.fontSizePx).not.toBe(onLaptop);
+  });
+
+  it('sizes a reading window from the panel it landed on', async () => {
+    /*
+     * The same exposure in reader mode. `chooseStageDisplay` guessed the PRIMARY
+     * display here, which is the honest guess and still wrong for a reader who
+     * dragged their window to the external panel before pressing Present.
+     */
+    settingsState.value!.stage.presentationMode = 'reader';
+    calibrateBoth(READER_RIG_NAME);
+    calls.enterPresentation.mockResolvedValue({
+      presenting: true,
+      width: 1200,
+      height: 800,
+      displayFingerprint: PROMPTER.fingerprint,
+    });
+
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+
+    expect(opened().stageDisplay?.fingerprint).toBe(PROMPTER.fingerprint);
+  });
+
+  it('falls back to the guess when Rust names no display', async () => {
+    /*
+     * Plain-browser dev has no monitors to name, and a rig whose monitor cannot
+     * be identified reports nothing rather than guessing. Neither may take the
+     * take down with it: the pre-present guess is what shipped before this
+     * reporting existed, so falling back to it is never a regression.
+     */
+    settingsState.value!.stage.presentationMode = 'prompter';
+    settingsState.value!.stage.displayFingerprint = PROMPTER.fingerprint;
+    calibrateBoth('Studio hood');
+    calls.enterPresentation.mockResolvedValue({ presenting: true, width: 1728, height: 1117 });
+
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+
+    expect(opened().stageDisplay?.fingerprint).toBe(PROMPTER.fingerprint);
+  });
+
+  it('falls back rather than inventing a panel nobody enumerated', async () => {
+    // A fingerprint naming a display this enumeration does not have is the same
+    // "we do not know" — and a profile keyed to a display nobody can see is not
+    // calibration.
+    settingsState.value!.stage.presentationMode = 'prompter';
+    settingsState.value!.stage.displayFingerprint = LAPTOP.fingerprint;
+    calibrateBoth('Studio hood');
+    calls.enterPresentation.mockResolvedValue({
+      presenting: true,
+      width: 1728,
+      height: 1117,
+      displayFingerprint: 'panel-that-went-away',
+    });
+
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+
+    expect(opened().stageDisplay?.fingerprint).toBe(LAPTOP.fingerprint);
+  });
+
+  it('does not compose the stage until the window has actually presented', async () => {
+    /*
+     * The ordering this fix depends on. The panel is not known until
+     * `enterPresentation` resolves, so a stage composed before that could only
+     * have been composed from a guess.
+     */
+    settingsState.value!.stage.presentationMode = 'prompter';
+    calibrateBoth('Studio hood');
+    const held = deferred<PresentationState>();
+    calls.enterPresentation.mockReturnValue(held.promise);
+
+    const take = startTake(SCRIPT.id);
+    await settle();
+    expect(calls.startLiveSession).not.toHaveBeenCalled();
+
+    held.resolve({
+      presenting: true,
+      width: 1728,
+      height: 1117,
+      displayFingerprint: PROMPTER.fingerprint,
+    } as PresentationState);
+    await expect(take).resolves.toBe(true);
+    expect(opened().stageDisplay?.fingerprint).toBe(PROMPTER.fingerprint);
   });
 });

@@ -64,7 +64,20 @@ const startingStore = writable(false);
 export const takeStarting = { subscribe: startingStore.subscribe };
 
 /**
- * The display the take's geometry is resolved against.
+ * The best GUESS at the display a take will be measured against, for the moment
+ * before it is presented and the answer is known.
+ *
+ * ---------------------------------------------------------------------------
+ * A GUESS, BECAUSE THE REAL ANSWER ARRIVES FROM RUST
+ * ---------------------------------------------------------------------------
+ * `set_control_presenting` reports the panel the window actually landed on
+ * (`ControlPresentationState.displayFingerprint`), and `startTake` composes the
+ * take's optics from THAT. This function is what stands in when there is no
+ * such answer: plain-browser dev, where there are no monitors to name, and the
+ * rig where the monitor cannot be identified.
+ *
+ * It is still worth getting right for those cases, and the rules below are the
+ * ones that were correct when it was the only answer there was.
  *
  * ---------------------------------------------------------------------------
  * A PROMPTER CHOOSES A PANEL; A READING WINDOW IS ALREADY ON ONE
@@ -89,12 +102,10 @@ export const takeStarting = { subscribe: startingStore.subscribe };
  * deliberately NOT consulted — it names the panel a prompter presents on, which
  * says nothing about where a reading window happens to be.
  *
- * KNOWN GAP: a reader who drags their window to another display mid-take keeps
- * the first panel's scale, because nothing re-resolves. The complete fix is for
- * `set_control_presenting` to report the monitor the window actually landed on
- * (`windows::window_monitor_fingerprint` already computes exactly that for the
- * separate stage) and for the envelope to be rebuilt from it. That is a wire
- * change on the take-opening path and is filed rather than smuggled in here.
+ * KNOWN GAP: a reader who drags their window to another display MID-TAKE still
+ * keeps the opening panel's scale. The opening itself is now resolved from where
+ * the window actually landed, but nothing re-resolves afterwards, and doing so
+ * needs a display/window event this app does not yet listen for.
  */
 export function chooseStageDisplay(
   displays: DisplayDescriptor[],
@@ -346,22 +357,11 @@ export async function startTake(
     });
     sessionId = record.id;
 
-    // The renderer still needs the selected panel's calibrated geometry even
-    // though it no longer opens a window there. Enumeration is read-only; the
-    // user moves this window to that panel before pressing Present.
+    // The renderer still needs a panel's calibrated geometry even though it no
+    // longer opens a window there. Enumeration is read-only; which of these the
+    // take is measured against is settled below, once the window has moved.
     const displays = await stageService.listDisplays().catch(() => []);
-    const display = chooseStageDisplay(displays, s.stage.displayFingerprint, presentationMode);
-    const stageSettings = stageSettingsFromSettings(s, display);
     const assets = await resolveDocumentAssets(compiled.script);
-    const stageEnvelope = buildStageEnvelope({
-      script: compiled.script,
-      sessionId,
-      sessionGeneration: record.sessionGeneration,
-      stageGeneration: 0,
-      stageSettings,
-      assets,
-      following: s.following,
-    });
     const micDeviceId = await resolvePinnedMicrophone(s);
 
     /*
@@ -409,6 +409,45 @@ export async function startTake(
     );
     await awaitViewportSettled(presentation);
 
+    /*
+     * ------------------------------------------------------------------------
+     * THE TAKE IS MEASURED AGAINST THE PANEL IT IS ACTUALLY ON
+     * ------------------------------------------------------------------------
+     * Composed HERE, after presenting, because that is the first moment anybody
+     * knows which panel that is. Presenting fills whichever monitor this window
+     * was already on and deliberately not the pinned one (`windows/present.rs`
+     * argues the case), so a take composed before the move was sized from a
+     * fingerprint that named a different, possibly disconnected, panel. That is
+     * not cosmetic: `mmPerCssPx` is the whole basis of the angular model, so an
+     * operator with an external prompter pinned who pressed Present at their
+     * laptop read type laid out for the external panel's millimetres.
+     *
+     * This costs nothing to do late. `buildStageEnvelope` assembles data; the
+     * stage has not mounted, `startLiveSession` has not run, and no line map
+     * exists to invalidate — so the ordering argument above, which is about
+     * measuring the DOCUMENT twice, is untouched.
+     *
+     * `chooseStageDisplay` is the fallback rather than the rule now: Rust omits
+     * the fingerprint in plain-browser dev and on a rig whose monitor cannot be
+     * identified. A fingerprint that names a panel this enumeration does not
+     * have is the same "we do not know" — and it falls back rather than
+     * inventing a descriptor, because a profile keyed to a display nobody can
+     * see is not calibration.
+     */
+    const landed =
+      displays.find((d) => d.fingerprint === presentation.displayFingerprint) ??
+      chooseStageDisplay(displays, s.stage.displayFingerprint, presentationMode);
+    const stageSettings = stageSettingsFromSettings(s, landed);
+    const stageEnvelope = buildStageEnvelope({
+      script: compiled.script,
+      sessionId,
+      sessionGeneration: record.sessionGeneration,
+      stageGeneration: 0,
+      stageSettings,
+      assets,
+      following: s.following,
+    });
+
     // There is no stage window. Alignment, transcription and rendering all
     // live in this one webview, so generation zero deliberately disables every
     // cross-window bridge in the session store.
@@ -441,7 +480,9 @@ export async function startTake(
        */
       teleprompter: s.teleprompter,
       presentationMode,
-      stageDisplay: display,
+      // The panel the take was measured against, so the mid-take appearance
+      // sheet recomposes against the same one it opened with.
+      stageDisplay: landed,
       transcription: {
         model: s.speech.transcriptionModel,
         language: s.speech.language,

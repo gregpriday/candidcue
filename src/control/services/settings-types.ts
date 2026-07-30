@@ -97,9 +97,17 @@ export interface AppSettings {
    */
   stage: {
     /**
-     * The panel the stage opens on, by `DisplayDescriptor.fingerprint`.
+     * The panel Settings works against, by `DisplayDescriptor.fingerprint`.
      * `null` means "choose one": an external display when one is connected,
      * otherwise the only display there is.
+     *
+     * NOT where a take opens, however much the name suggests it. Single-window
+     * presentation fills whichever monitor the control window is already on and
+     * consults this for nothing (`windows/present.rs` argues why), and the take
+     * is calibrated against the panel Rust reports it landed on. What this
+     * actually selects is which panel the preview, the display test and the
+     * optical rigs belong to — which is why it is per-machine, a fingerprint
+     * meaning nothing on another Mac.
      */
     displayFingerprint: string | null;
     /**
