@@ -36,7 +36,7 @@
  *
  * Pure logic — all units are logical (CSS) pixels unless noted.
  */
-import type { SafeAreaInsets } from '../../shared/contracts/optical';
+import type { LensPlacement, SafeAreaInsets } from '../../shared/contracts/optical';
 import {
   DEFAULT_BOTTOM_FADE_LINES,
   DEFAULT_DEAD_ZONE_LINES,
@@ -124,6 +124,13 @@ export interface ReadingBandSettings {
   deadZoneLines?: number;
   /** The visible rectangle the centre fraction is measured against. */
   safeRect?: SafeRect;
+  /**
+   * Where the lens sits relative to the glass. `'above'`/`'below'` widen the
+   * safe-rectangle clamp so a band `resolveStageGeometry` pinned near the true
+   * edge is not narrowed back to the in-panel 10–90% range. Absent or
+   * `'in-panel'` keeps today's behaviour.
+   */
+  lensPlacement?: LensPlacement;
 }
 
 export interface ReadingBand {
@@ -141,9 +148,16 @@ export interface ReadingBand {
  * calibrated rig that number is not a taste setting — it is where the camera
  * physically is. Narrowing it back to 20% would move the text off the lens,
  * which is the exact fault the optical model exists to remove.
+ *
+ * An off-panel lens (`lensPlacement` `'above'`/`'below'`) is where the same
+ * argument reaches its edge: `resolveStageGeometry` pins the band at 5%/95%
+ * precisely because there IS no lens inside the rectangle to centre on, and
+ * re-narrowing that pin to 10–90% here would undo the one thing the pin was
+ * for. `OFF_PANEL_CENTER_RANGE` is that rig's version of the same rule.
  */
 const VIEWPORT_CENTER_RANGE = { min: 0.2, max: 0.7 } as const;
 const SAFE_RECT_CENTER_RANGE = { min: 0.1, max: 0.9 } as const;
+const OFF_PANEL_CENTER_RANGE = { min: 0, max: 1 } as const;
 
 /**
  * Where the band sits when the caller has not said usefully.
@@ -178,7 +192,12 @@ export function computeReadingBand(
   // NaN band, which is the one thing this function promises not to produce.
   const safeTop = usingSafeRect && isPositive(safeRect.y) ? safeRect.y : 0;
 
-  const range = usingSafeRect ? SAFE_RECT_CENTER_RANGE : VIEWPORT_CENTER_RANGE;
+  const isOffPanel = settings.lensPlacement === 'above' || settings.lensPlacement === 'below';
+  const range = usingSafeRect
+    ? isOffPanel
+      ? OFF_PANEL_CENTER_RANGE
+      : SAFE_RECT_CENTER_RANGE
+    : VIEWPORT_CENTER_RANGE;
   const centerFraction = clamp(
     Number.isFinite(settings.centerPercent)
       ? settings.centerPercent / 100
@@ -216,10 +235,13 @@ export function computeReadingBand(
   // either way, so a narrowed edge cannot make the follow oscillate.
   //
   // The centre is at least a tenth of the way inside whichever bound is in
-  // force, so the clamp can never close the corridor to nothing. The one case
-  // with no bound at all is a window that has not painted yet (the stage
-  // completes its whole handshake hidden); clamping to a zero height there would
-  // collapse the corridor and snap on every frame.
+  // force — or, for an off-panel lens, pinned near the edge but never exactly
+  // on it — so the clamp can never close the corridor to nothing: `halfPx` is
+  // floored above, and the rect it is measured against is finite, so the
+  // narrowed edge stays strictly inside the opposite one. The one case with no
+  // bound at all is a window that has not painted yet (the stage completes its
+  // whole handshake hidden); clamping to a zero height there would collapse the
+  // corridor and snap on every frame.
   const limitTop = usingSafeRect ? safeTop : 0;
   const limitBottom = usingSafeRect ? safeTop + safeRect.height : height;
   const bounded = limitBottom > limitTop;

@@ -279,6 +279,19 @@ describe('the reading cue', () => {
     expect(topOf(hooded)).toBeCloseTo(120 + 420 * 0.38, 3);
   });
 
+  it('honours an off-panel lens pin near the top instead of re-clamping to 10%', () => {
+    // A desk/lid webcam sits above the glass entirely: `resolveStageGeometry`
+    // pins `readingBandY` at 0.05 rather than the in-panel 0.1 floor, and the
+    // renderer must draw the cue there too, not narrow it back.
+    const topOf = (c: HTMLElement): number =>
+      parseFloat(c.querySelector<HTMLElement>('.tick')?.style.top ?? 'NaN');
+
+    const { container } = mount(
+      settingsWith({ optics: optics({ readingBandY: 0.05, lensPlacement: 'above' }) }),
+    );
+    expect(topOf(container)).toBeCloseTo(600 * 0.05, 3);
+  });
+
   it('takes the pitch from flat settings on a rig that has never been calibrated', () => {
     // The other half of `linePx`'s `??`: 64px at 1.32, not the resolved optics'
     // 62 at 1.38. A cue that only ever got the calibrated pitch would light a

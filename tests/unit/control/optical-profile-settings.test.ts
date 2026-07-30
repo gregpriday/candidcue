@@ -201,6 +201,38 @@ describe('a stored profile is validated before the resolver walks it', () => {
     expect(normalized!.lens).toEqual(defaultOpticalProfile().lens);
     expect(normalized!.safeArea).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
     expect(normalized!.framing).toBe('head-and-shoulders');
+    // A profile stored before `lensPlacement` existed reads as in-panel, which
+    // is the only placement a beamsplitter/hood rig has ever meant.
+    expect(normalized!.lensPlacement).toBe('in-panel');
+  });
+
+  /**
+   * A desk/lid webcam sits outside the safe rectangle entirely, so `lens.y`
+   * cannot describe it — `lensPlacement` is the additive discriminator that
+   * says so. Anything the store did not recognise falls back to the in-panel
+   * default rather than being guessed at, same as every other enum here.
+   */
+  it('accepts a valid off-panel placement and rejects a bogus one', () => {
+    const above = normalizeOpticalProfile({
+      schemaVersion: 1,
+      rigName: 'Desk webcam',
+      lensPlacement: 'above',
+    });
+    expect(above!.lensPlacement).toBe('above');
+
+    const below = normalizeOpticalProfile({
+      schemaVersion: 1,
+      rigName: 'Desk webcam',
+      lensPlacement: 'below',
+    });
+    expect(below!.lensPlacement).toBe('below');
+
+    const bogus = normalizeOpticalProfile({
+      schemaVersion: 1,
+      rigName: 'Desk webcam',
+      lensPlacement: 'sideways',
+    });
+    expect(bogus!.lensPlacement).toBe('in-panel');
   });
 
   it('refuses a document that is not a v1 profile at all', () => {

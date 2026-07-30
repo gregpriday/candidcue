@@ -6,6 +6,7 @@ import {
   OPTICAL_HARDWARE,
   defaultOpticalProfile,
   type FramingPreset,
+  type LensPlacement,
   type OpticalCalibrationStep,
   type OpticalHardwareKind,
   type OpticalOverrides,
@@ -323,6 +324,7 @@ const FRAMING_PRESETS: readonly FramingPreset[] = [
   'full-body',
 ];
 const TEXT_INTENSITIES: readonly TextIntensity[] = ['soft', 'standard', 'strong'];
+const LENS_PLACEMENTS: readonly LensPlacement[] = ['in-panel', 'above', 'below'];
 const READING_CUES: readonly ReadingCueStyle[] = ['ticks', 'wash', 'none'];
 const SCALE_SOURCES = ['model', 'diagonal', 'ruler'] as const;
 const CALIBRATION_STEPS: readonly OpticalCalibrationStep[] = [
@@ -391,6 +393,8 @@ export function normalizeOpticalProfile(candidate: unknown): OpticalProfile | nu
       left: finite(safeArea['left'], base.safeArea.left),
     },
     lens: { x: finite(lens['x'], base.lens.x), y: finite(lens['y'], base.lens.y) },
+    lensPlacement:
+      LENS_PLACEMENTS.find((p) => p === candidate['lensPlacement']) ?? base.lensPlacement,
     flips: { horizontal: flips['horizontal'] === true, vertical: flips['vertical'] === true },
     framing: FRAMING_PRESETS.find((f) => f === candidate['framing']) ?? base.framing,
     bias: finite(candidate['bias'], base.bias),

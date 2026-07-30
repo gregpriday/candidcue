@@ -288,7 +288,14 @@
       // budget is counted in lines above and below the band, so a band measured
       // against the raw window on a hooded rig reports a count for a line that
       // is not where the presenter's is.
-      ...(optics ? { linePitchPx, deadZoneLines: optics.deadZoneLines, safeRect } : {}),
+      ...(optics
+        ? {
+            linePitchPx,
+            deadZoneLines: optics.deadZoneLines,
+            safeRect,
+            lensPlacement: optics.lensPlacement,
+          }
+        : {}),
     });
     return lineBudget({
       safeRect,

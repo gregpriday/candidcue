@@ -92,6 +92,17 @@ export const UNCALIBRATED_FONT_SIZE_PX = 64;
 /** The column measure used when nothing has been calibrated, as a fraction. */
 export const UNCALIBRATED_COLUMN_FRACTION = 0.68;
 
+/**
+ * How close to the true top/bottom edge the band sits for an off-panel lens.
+ *
+ * Not 0 or 1: those pin the reading line exactly on the clipping edge, which is
+ * hostile regardless of what the font measures out to. 5% matches the bound
+ * `bandCenterPercentFor` already clamps the legacy flattened center to (spec's
+ * 5–95% floor for a settings document Rust stores opaquely), so an off-panel
+ * rig's pin survives that clamp unchanged rather than landing on its edge.
+ */
+export const OFF_PANEL_READING_BAND_EDGE_FRACTION = 0.05;
+
 /* ---------------------------------------------------------------------------
  * Typography defaults
  *
@@ -350,10 +361,27 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
    * degrees, because everything downstream works in the safe rectangle. The
    * conversion needs the physical scale, so an uncalibrated rig simply cannot
    * honour this control — and says nothing rather than applying a wrong number.
+   *
+   * All of that assumes the lens is IN the rectangle. A desk/lid webcam is not:
+   * there is no fraction of the safe area that describes a camera sitting above
+   * or below the glass, so `lens.y` is not read at all for those rigs — the
+   * band is pinned as close to the true edge as the fold-back guard allows, and
+   * `lensOffsetDegrees` (an angle measured from the lens) is skipped entirely
+   * rather than shifting a position that was never derived from the lens.
    */
-  const derivedBandY = clamp(profile.lens.y, 0.1, 0.9);
+  const derivedBandY =
+    profile.lensPlacement === 'above'
+      ? OFF_PANEL_READING_BAND_EDGE_FRACTION
+      : profile.lensPlacement === 'below'
+        ? 1 - OFF_PANEL_READING_BAND_EDGE_FRACTION
+        : clamp(profile.lens.y, 0.1, 0.9);
   let finalBandY = derivedBandY;
-  if (usableSigned(o.lensOffsetDegrees) && o.lensOffsetDegrees !== 0 && calibrated) {
+  if (
+    profile.lensPlacement === 'in-panel' &&
+    usableSigned(o.lensOffsetDegrees) &&
+    o.lensOffsetDegrees !== 0 &&
+    calibrated
+  ) {
     const offsetMm =
       (distanceMm as number) * Math.tan((o.lensOffsetDegrees * Math.PI) / 180);
     const offsetPx = offsetMm / (mmPerCssPx as number);
@@ -379,6 +407,7 @@ export function resolveStageGeometry(input: ResolveInput): ResolveResult {
     safeArea,
     opticalCenterX: clamp(profile.lens.x, 0, 1),
     readingBandY: finalBandY,
+    lensPlacement: profile.lensPlacement,
     deadZoneLines: usable(o.deadZoneLines)
       ? take('deadZoneLines', clamp(o.deadZoneLines, 0.3, 2), DEFAULT_DEAD_ZONE_LINES)
       : DEFAULT_DEAD_ZONE_LINES,

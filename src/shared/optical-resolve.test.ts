@@ -183,6 +183,73 @@ describe('lens position', () => {
     expect(optics.readingBandY).toBeGreaterThanOrEqual(0.1);
     expect(optics.readingBandY).toBeLessThanOrEqual(0.9);
   });
+
+  it('defaults an unspecified rig to in-panel', () => {
+    const { optics } = resolveStageGeometry({ profile: calibrated(), viewport: PROMPTER_9 });
+    expect(optics.lensPlacement).toBe('in-panel');
+  });
+
+  describe('an off-panel lens', () => {
+    it('pins the band near the top for a lens above the display, ignoring lens.y', () => {
+      const { optics } = resolveStageGeometry({
+        profile: calibrated({ lensPlacement: 'above', lens: { x: 0.5, y: 0.7 } }),
+        viewport: PROMPTER_9,
+      });
+      expect(optics.readingBandY).toBeCloseTo(0.05, 6);
+      expect(optics.lensPlacement).toBe('above');
+    });
+
+    it('pins the band near the bottom for a lens below the display, ignoring lens.y', () => {
+      const { optics } = resolveStageGeometry({
+        profile: calibrated({ lensPlacement: 'below', lens: { x: 0.5, y: 0.1 } }),
+        viewport: PROMPTER_9,
+      });
+      expect(optics.readingBandY).toBeCloseTo(0.95, 6);
+      expect(optics.lensPlacement).toBe('below');
+    });
+
+    it('still carries the x-axis lens position through as the optical centre', () => {
+      const { optics } = resolveStageGeometry({
+        profile: calibrated({ lensPlacement: 'above', lens: { x: 0.3, y: 0.5 } }),
+        viewport: PROMPTER_9,
+      });
+      expect(optics.opticalCenterX).toBeCloseTo(0.3, 6);
+    });
+
+    it('does not honour lensOffsetDegrees, and does not record it as overridden', () => {
+      const { optics } = resolveStageGeometry({
+        profile: calibrated({
+          lensPlacement: 'above',
+          overrides: { lensOffsetDegrees: 3 },
+        }),
+        viewport: PROMPTER_9,
+      });
+      expect(optics.readingBandY).toBeCloseTo(0.05, 6);
+      expect(optics.overriddenFields).not.toContain('lensOffsetDegrees');
+    });
+
+    it('works without physical calibration', () => {
+      const { optics } = resolveStageGeometry({
+        profile: { ...defaultOpticalProfile(), lensPlacement: 'above' },
+        viewport: PROMPTER_9,
+      });
+      expect(optics.calibrated).toBe(false);
+      expect(optics.readingBandY).toBeCloseTo(0.05, 6);
+    });
+
+    it('is unaffected by OpticalFlips', () => {
+      const mirrored = resolveStageGeometry({
+        profile: calibrated({ lensPlacement: 'above', flips: { horizontal: true, vertical: true } }),
+        viewport: PROMPTER_9,
+      }).optics;
+      const plain = resolveStageGeometry({
+        profile: calibrated({ lensPlacement: 'above' }),
+        viewport: PROMPTER_9,
+      }).optics;
+      expect(mirrored.readingBandY).toBe(plain.readingBandY);
+      expect(mirrored.opticalCenterX).toBe(plain.opticalCenterX);
+    });
+  });
 });
 
 describe('targets', () => {

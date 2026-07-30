@@ -135,6 +135,46 @@ describe('the reading corridor', () => {
     );
   });
 
+  it('honours a pin near the edge for an off-panel lens instead of re-clamping to 10–90%', () => {
+    const safeRect: SafeRect = { x: 0, y: 0, width: 1024, height: 1000 };
+    const settings = { halfHeightPercent: 4, linePitchPx: PITCH, safeRect };
+    expect(
+      computeReadingBand(1000, { ...settings, centerPercent: 5, lensPlacement: 'above' }).centerPx,
+    ).toBeCloseTo(50, 9);
+    expect(
+      computeReadingBand(1000, { ...settings, centerPercent: 95, lensPlacement: 'below' }).centerPx,
+    ).toBeCloseTo(950, 9);
+    // The in-panel clamp still applies when placement is absent or 'in-panel'.
+    expect(computeReadingBand(1000, { ...settings, centerPercent: 5 }).centerPx).toBeCloseTo(100, 9);
+    expect(
+      computeReadingBand(1000, { ...settings, centerPercent: 5, lensPlacement: 'in-panel' })
+        .centerPx,
+    ).toBeCloseTo(100, 9);
+  });
+
+  it('never returns a degenerate band for an off-panel lens pinned at the extreme edges', () => {
+    const safeRect: SafeRect = { x: 0, y: 0, width: 1024, height: 1000 };
+    const above = computeReadingBand(1000, {
+      centerPercent: 0,
+      halfHeightPercent: 4,
+      linePitchPx: PITCH,
+      safeRect,
+      lensPlacement: 'above',
+    });
+    expect(above.bottomPx).toBeGreaterThan(above.topPx);
+    expect(above.topPx).toBeGreaterThanOrEqual(safeRect.y);
+
+    const below = computeReadingBand(1000, {
+      centerPercent: 100,
+      halfHeightPercent: 4,
+      linePitchPx: PITCH,
+      safeRect,
+      lensPlacement: 'below',
+    });
+    expect(below.bottomPx).toBeGreaterThan(below.topPx);
+    expect(below.bottomPx).toBeLessThanOrEqual(safeRect.y + safeRect.height);
+  });
+
   /*
    * A band centre nobody supplied has to land where the app says it lands. The
    * settings document is stored opaquely and validated only for its schema
