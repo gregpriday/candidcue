@@ -23,6 +23,7 @@
   import type { PresentationMode } from '../../shared/contracts';
   import { AUTO_SCROLL_WPM_STEP } from '../../stage/renderer/autoscroll';
   import { VIEWPORT_REFLOW_SETTLE_MS } from '../../stage/renderer/geometry';
+  import { STOP_SESSION_CONFIRM_BODY } from '../lib/app-lifecycle';
   import { formatClock } from '../lib/format';
   import { rememberReaderFrame } from '../lib/reader-frame';
 import { onShortcut } from '../lib/shortcuts';
@@ -278,7 +279,7 @@ import { onShortcut } from '../lib/shortcuts';
       try {
         accepted = await requestConfirm({
           title: 'Stop the session?',
-          body: 'The realtime connection closes and presentation leaves full screen. Your script keeps its place.',
+          body: STOP_SESSION_CONFIRM_BODY,
           confirmLabel: 'Stop session',
           danger: true,
         });
