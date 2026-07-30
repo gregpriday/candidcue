@@ -73,6 +73,11 @@ pub const DIM_STEPS: [f64; 4] = [1.0, 0.78, 0.64, 0.52];
 /// `--stage-past-opacity` default — the far past.
 pub const PAST_OPACITY: f64 = 0.42;
 /// `--stage-fx-ms`: the CSS opacity transition on every rendered word.
+///
+/// Ported from `InlineNodes.svelte`, which is the authority; `tests/tween_parity.rs`
+/// reads that file and fails if the two drift apart. Being a port rather than a
+/// shared definition, drift is the standing risk of this whole module — a Tier-C
+/// number is a statement about the model until the model is pinned to the product.
 pub const DIM_TWEEN_MS: f64 = 240.0;
 
 /// How long the dim frontier must be behind its own latch before it retreats.

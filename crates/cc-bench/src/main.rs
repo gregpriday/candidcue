@@ -19,7 +19,7 @@ use cc_bench::suite::{
     compare_tables, print_table, run_tier_a, run_tier_b, RunManifest, SuiteResult,
 };
 use cc_bench::tierc::TierCResult;
-use cc_bench::tts::{synthesize, wav_bytes, Synthesizer};
+use cc_bench::tts::{shared_rendered_dir, synthesize, wav_bytes, Synthesizer};
 
 /// Render the Tier-C table, then the per-layout headline.
 ///
@@ -896,14 +896,16 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Render every Tier-B run's audio via fal.ai into the work directory.
+/// Render every Tier-B run's audio into the machine-wide shared directory.
 async fn synth_audio(
     scripts_dir: &std::path::Path,
     runs_dir: &std::path::Path,
-    workdir: &std::path::Path,
+    _workdir: &std::path::Path,
 ) -> anyhow::Result<()> {
     let suite = build_suite(scripts_dir)?;
-    let synth = Synthesizer::new(workdir.join("tts-cache"))?;
+    let synth = Synthesizer::new()?;
+    let tts_dir = shared_rendered_dir();
+    std::fs::create_dir_all(&tts_dir)?;
 
     for live in tier_b_selection() {
         let (script, scenario, engine, voice_index) =
@@ -915,15 +917,15 @@ async fn synth_audio(
             anyhow::bail!("no scenario {script}/{scenario} in the suite");
         };
         let name = format!("{}__{}__{}", script, scenario, engine.slug());
-        let run_dir = workdir.join("tts").join(&name);
+        let run_dir = tts_dir.join(&name);
         if run_dir.join("gold.json").exists() {
             println!("skip {name} (already synthesised)");
             continue;
         }
         // A run that is already a frozen fixture will never be captured again,
-        // so rendering its audio into a fresh work directory is a TTS bill for
-        // bytes nothing will read. The clip cache only helps within a workdir;
-        // this is what makes a clean workdir cheap.
+        // so rendering it again is a TTS bill for bytes nothing will read. The
+        // shared completed-run directory makes this check consistent across
+        // every worktree.
         if runs_dir.join(&name).join("events.jsonl").exists() {
             println!("skip {name} (already captured in bench/runs)");
             continue;
@@ -973,7 +975,7 @@ async fn synth_audio(
 /// ~200 ms and belongs nowhere near the start of a take.
 #[allow(clippy::too_many_arguments)]
 fn capture_all_local(
-    workdir: &std::path::Path,
+    _workdir: &std::path::Path,
     runs_dir: &std::path::Path,
     model_dir: &std::path::Path,
     pace: f64,
@@ -1002,7 +1004,7 @@ fn capture_all_local(
         config.blank_penalty,
     );
 
-    let tts_dir = workdir.join("tts");
+    let tts_dir = shared_rendered_dir();
     let mut dirs: Vec<_> = std::fs::read_dir(&tts_dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -1065,11 +1067,11 @@ fn capture_all_local(
 /// Stream every synthesised run through the live recogniser and persist the
 /// event logs as replay fixtures.
 async fn capture_all(
-    workdir: &std::path::Path,
+    _workdir: &std::path::Path,
     runs_dir: &std::path::Path,
     pace: f64,
 ) -> anyhow::Result<()> {
-    let tts_dir = workdir.join("tts");
+    let tts_dir = shared_rendered_dir();
     let mut dirs: Vec<_> = std::fs::read_dir(&tts_dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())

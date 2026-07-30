@@ -34,19 +34,25 @@ cargo run --release -p cc-bench -- compare ../bench/results/baseline-tier-b.json
     ../bench/results/local-tier-b.json
 ```
 
-Rebuilding `runs-local` from scratch needs the fixture audio (FAL_KEY) and then
-a real-time pass through the recogniser:
+Rebuilding `runs-local` from scratch needs the fixture audio and then a
+real-time pass through the recogniser. TTS clips live in the private,
+machine-wide `/private/tmp/candidcue-bench`: individual clips are in
+`tts-cache/`, while completed WAVs and their timing metadata are in `tts/`.
+Every checkout and worktree shares both. A cache miss does **not** call fal.ai
+by default; new spending must be approved explicitly with
+`CANDIDCUE_ALLOW_TTS_GENERATION=1`:
 
 ```bash
-cargo run --release -p cc-bench -- synth-audio --workdir /tmp/bench-work --runs ../bench/runs-local
+cargo run --release -p cc-bench -- synth-audio \
+    --workdir /tmp/bench-work --runs ../bench/runs-local
 cargo run --release -p cc-bench -- capture-local --workdir /tmp/bench-work \
     --runs ../bench/runs-local --model ../src-tauri/models/x-asr-480ms
 ```
 
-`--runs` on `synth-audio` names the corpus the audio is destined for; synthesis
-skips a run that corpus already holds, so pointing it at a fresh corpus is what
-makes the audio render again for a different recogniser instead of being
-skipped as "already captured".
+`--runs` on `synth-audio` names the corpus the audio is destined for. Synthesis
+skips a run already present either in that corpus or in the shared completed-run
+directory. Pointing at a fresh corpus therefore reuses the same paid audio; it
+does not render it again.
 
 Capture runs at real-time pace by default. Scoring does not depend on it — every
 Tier-B metric is a function of the audio clock and the text, and `wall_ms` is
@@ -77,8 +83,9 @@ The files under `bench/runs*` are intentionally tracked replay fixtures, not
 generated reports or audio. They contain only compact transcript events, gold
 timing, a manifest, and the spoken text. Keeping them makes a benchmark result
 reproducible without a TTS key, microphone, model download, or a fresh
-non-deterministic recognition pass. WAV files remain in the temporary synthesis
-work directory, and result JSON belongs under ignored `bench/results/`.
+non-deterministic recognition pass. WAV files remain in the private shared
+`/private/tmp/candidcue-bench/tts` directory, and result JSON belongs under
+ignored `bench/results/`.
 
 **The two bulk files per run are in Git LFS** (`.gitattributes`): `events.jsonl`
 and `gold.json`, 115 files and ~4 MB. `manifest.json` and `performance.txt` stay
@@ -299,8 +306,9 @@ cargo run --release -p cc-bench -- tier-a --label mine --out ../bench/results/mi
 cargo run --release -p cc-bench -- inspect starter skip_forward
 CC_ALIGN_DEBUG=1 cargo run --release -p cc-bench -- inspect starter retake
 
-# Regenerate Tier B fixture audio (needs FAL_KEY; cached by content hash)
-cargo run --release -p cc-bench -- synth-audio --workdir /tmp/bench-work
+# Regenerate missing Tier B fixture audio (explicit fal.ai spend approval)
+CANDIDCUE_ALLOW_TTS_GENERATION=1 cargo run --release -p cc-bench -- \
+    synth-audio --workdir /tmp/bench-work
 
 # Stream fixtures through live Inworld STT (needs INWORLD_API_KEY; ~real time)
 cargo run --release -p cc-bench -- capture --workdir /tmp/bench-work
@@ -416,8 +424,42 @@ The two rows that do not move are the point: aiming the corridor ahead changes
 where the same text is drawn and nothing about when a word goes dim. And the
 safety gate gets BETTER rather than worse — the same words are dimmed, but they
 sit nearer the reading line, so the gaze weighting counts less of the darkness
-against text nobody has read. That is the opposite of the usual trade and is the
-strongest argument for shipping it.
+against text nobody has read. That is the opposite of the usual trade.
+
+### …and why it is still not shipped
+
+Two findings, both of which arrived after the table above was written.
+
+**Most of the 3 atoms is the model's own assumption.** `PassGold::focus` is
+`spoken_frontier + DEFAULT_EYE_VOICE_LEAD_ATOMS`, and that constant is **2.0** —
+labelled in its own doc comment as "a MODEL, not a measurement", pending Tier D.
+The tracker separately trails the spoken frontier by `lead_margin_atoms`, now
+**1.0**. So `focus_lead_atoms = 3.0` is exactly `2.0 + 1.0`: the knob set to the
+value the reader model already assumes. That is not circular — the focus comes
+from gold, not from the display — but it is an identity, and you cannot learn the
+right lead from a benchmark whose reader you chose. Only the 1.0 is a fact about
+this system; the 2.0 is a bet on a population average, and published guidance
+plus every shipping voice-scrolling prompter pins the SPOKEN word to the reading
+line, not the read one, precisely so the upcoming words stay visible below it for
+the eye to forage into.
+
+**The product cannot separate placement from opacity, and has measured what
+happens when you try.** Tier C leads the corridor while keeping the opacity
+frontier keyed to the tracked position. In the renderer they are one number:
+`engine.ts` computes `displayToken` once, hands it to `planner.target(...)` AND
+derives `activeTokenIndex` from it, which is what drives the dim ramp. A lead
+applied there leads the DIMMING too — and that experiment has already been run.
+The comment at that seam records a "voice lead" of 0.38 s that was removed
+because, on live captures, the display ran ahead of the reader 3.8% of the time
+at zero lead, 6.5% at the old default and 9.6% at the maximum: "the same lead is
+spent erasing words before they have been spoken".
+
+So shipping the corridor is not a one-constant change. The prerequisite is
+splitting the two frontiers — a placement position that may lead, and an opacity
+position that may not — and only then is `focus_lead_atoms` a question about
+placement. If that split happens, `1.0` is the defensible value (undo our own
+trailing, put the spoken word on the line) and it is worth 52.1% → 66.2% of the
+occupancy on its own, with the safety gate improving 2.903 → 2.779.
 
 | Benchmark | Meaning |
 |---|---|

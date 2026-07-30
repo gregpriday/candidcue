@@ -267,6 +267,33 @@
      advance where the old step moved one, but it is the same property on the
      same elements, so the one degraded rule still takes all of them off at
      once. */
+  /*
+   * 240ms, and it was MEASURED down to 150 and put back.
+   *
+   * The reasoning for shortening it was sound as far as it went: the perceived
+   * moment of an opacity change sits near the onset rather than the completion,
+   * an ease-out puts its largest delta first, and published guidance for a
+   * subtle state change that must feel immediate lands at 100-150ms. Tier C
+   * agreed about the benefit — at 150ms `ink.first_response_p50` fell 697 -> 617
+   * and `ink.half_dim_p50` 1091 -> 986, so roughly 90ms of real dim latency.
+   *
+   * It also showed what the number is actually FOR, which the guidance could not
+   * know: the tween absorbs the frontier's residual chatter. A word that dims and
+   * is then corrected travels less far before the correction lands, so a longer
+   * fade hides a wobble that a shorter one completes. At 150ms
+   * `ink.corrections_per_1k` went 294 -> 427 and the gaze-weighted never-spoken
+   * safety gate 2.903 -> 3.278 word-seconds — 45% more words flickering back, and
+   * a 13% worse safety gate, for 90ms.
+   *
+   * Safety is lexicographically first here, and 45% more flicker also undoes over
+   * half of what `DIM_RETREAT_DEBOUNCE_MS` had just bought (315 -> 227). So this
+   * stays at 240: it is not decoration, it is part of the anti-flicker mechanism.
+   * Latency is bought from `lead_margin_atoms`, where it is a tracking choice
+   * rather than a legibility one.
+   *
+   * `cc_bench::stage::DIM_TWEEN_MS` is the Tier-C port of this number, and
+   * `crates/cc-bench/tests/tween_parity.rs` fails if the two drift apart.
+   */
   .w {
     transition-property: opacity;
     transition-duration: var(--stage-fx-ms, 240ms);

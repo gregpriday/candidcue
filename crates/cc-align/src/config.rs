@@ -272,8 +272,58 @@ pub struct AlignmentConfig {
     /// recogniser or Tier A scores the engine against a cadence nothing
     /// produces. Change both together; see `synthetic.rs`.
     pub partial_lag_ms: f64,
-    /// How long after the last word a FINAL arrives (server VAD waits for
-    /// silence before committing) (ms).
+    /// How long after the last word a FINAL arrives (the recogniser waits for
+    /// trailing silence before committing) (ms).
+    ///
+    /// **A CONSTANT IS THE WRONG SHAPE FOR THIS, and 1400 is inherited from a
+    /// provider the app no longer uses.** Not changed here because it cannot be
+    /// validated on the frozen corpus — the fixtures carry the `audioEndMs` they
+    /// were captured with, so re-dating finals needs a re-capture to measure.
+    /// Written down instead, with the recipe, because the arithmetic is now known
+    /// rather than guessed.
+    ///
+    /// The shipping recogniser is sherpa-onnx, whose endpointing is Kaldi's three
+    /// rules, configured in `cc_stt::local` as 2.4 / 1.2 / 20.0:
+    ///
+    /// | rule | fires on | our value |
+    /// |---|---|---|
+    /// | 1 | trailing silence with NO symbol decoded yet | 2.4 s |
+    /// | 2 | trailing silence AFTER a symbol | 1.2 s |
+    /// | 3 | utterance length cap, no silence PREREQUISITE | 20 s |
+    ///
+    /// So one constant cannot be right, because the lag depends on which rule
+    /// fired:
+    ///
+    ///   - rule 2 — the endpoint is declared 1.2 s of audio after the trailing
+    ///     silence began, so a final timestamped at "now" is about 1.2 s late.
+    ///     We subtract 1.4, over-correcting by ~200 ms.
+    ///   - rule 3 — the cap expired. There is no silence REQUIREMENT, so the
+    ///     final may be dated while speech is still running, and subtracting 1.4
+    ///     then dates it too EARLY. (Note this is a weaker claim than "there is
+    ///     no trailing silence": rule 3 can also fire during a pause. What is
+    ///     certain is only that the 1.2 s is not implied.) A presenter reading
+    ///     aloud rarely leaves 1.2 s of silence, which is why the tracking
+    ///     report expected rule 3 to be the common case in a take.
+    ///   - `finish()` also calls `close_item`, so the last final of a take fires
+    ///     no rule at all and has no endpoint lag to correct for.
+    ///
+    /// A CANDIDATE FIX, NOT A KNOWN ONE. `cc_stt::local::close_item` dates the
+    /// final at `self.audio_ms()` — the current audio clock. The recogniser
+    /// carries better information: `start_time` and per-token `timestamps`, from
+    /// which `start_time + timestamps.last()` is *approximately* the acoustic
+    /// time of the last decoded token. Three things would have to be established
+    /// before that could replace this constant:
+    ///
+    ///   - whether `timestamps` is segment-relative or stream-relative, and
+    ///     whether it stays so across a segment boundary. Upstream documentation
+    ///     is contradictory and a probe here never reached a second segment.
+    ///   - that `timestamps.last()` is the END of the last token rather than its
+    ///     ONSET. No token duration is exposed, so it is likely the onset, which
+    ///     would leave a residual worth measuring rather than assuming.
+    ///   - that the result is better than 1400 on a re-captured corpus. The
+    ///     frozen fixtures carry the `audioEndMs` they were captured with, so
+    ///     this is not measurable without a fresh capture — which is the reason
+    ///     the constant has not simply been changed.
     pub endpoint_lag_ms: f64,
 
     // ---- viewport prior ----
