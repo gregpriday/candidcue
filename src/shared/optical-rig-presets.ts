@@ -5,13 +5,16 @@
  * ---------------------------------------------------------------------------
  * WHY THESE FIVE FIELDS AND NO OTHERS
  * ---------------------------------------------------------------------------
- * A preset writes exactly the fields `optical-discovery.ts` cannot discover on
- * its own — `hardwareKind`, `viewingDistanceMm`, `flips`, `lens` — plus `bias`,
- * because `OpticalProfile.bias`'s own doc comment is explicit that presets
- * write a value there "rather than living beside it". Nothing here invents a
- * second home for a fact the profile already has one for: `rigName`, `scale`,
- * `safeArea`, `framing`, `overrides`, `intensity` and `readingCue` are left
- * alone, same as discovery leaves them alone.
+ * A preset writes `hardwareKind`, `viewingDistanceMm`, `flips` and `lens` — the
+ * facts a named rig actually implies — plus `bias`, because `OpticalProfile
+ * .bias`'s own doc comment is explicit that presets write a value there
+ * "rather than living beside it". `flips` and `lens` are worth calling out
+ * specifically: `optical-discovery.ts` always leaves both `outstanding`, on the
+ * grounds that only a person looking through the glass can supply them, so a
+ * preset is the first place in this codebase either gets a starting value at
+ * all. Nothing here invents a second home for a fact the profile already has
+ * one for: `rigName`, `scale`, `safeArea`, `framing`, `overrides`, `intensity`
+ * and `readingCue` are left alone, same as discovery leaves them alone.
  *
  * Known hardware distances are pulled from `defaultDistanceMm()` rather than
  * repeated here as literals, so a preset pick and CandidCue's own auto-discovery
@@ -136,3 +139,65 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
     },
   },
 ] as const;
+
+/** The profile fields a preset owns, together — what `matchesPreset` compares. */
+export type OpticalRigPresetFields = OpticalRigPreset['patch'];
+
+/**
+ * The profile patch a preset applies, as fresh objects.
+ *
+ * Every preset's `flips` and `lens` share one literal (`NEUTRAL_LENS`, and the
+ * two hard-coded flip pairs above are themselves reused nowhere, but the
+ * defensive copy here is what stops a caller who mutates the profile's `lens`
+ * or `flips` in place from reaching back into the catalog and changing what
+ * every OTHER preset — and every future application of this one — hands out.
+ */
+export function opticalProfileFieldsForPreset(preset: OpticalRigPreset): OpticalRigPresetFields {
+  return {
+    hardwareKind: preset.patch.hardwareKind,
+    viewingDistanceMm: preset.patch.viewingDistanceMm,
+    flips: { ...preset.patch.flips },
+    lens: { ...preset.patch.lens },
+    bias: preset.patch.bias,
+  };
+}
+
+/**
+ * The `teleprompter` settings write a preset's flips imply.
+ *
+ * A flip is recorded in two places — the profile, and the settings a real
+ * take actually renders mirroring from (`stage-envelope.ts`) — and this is the
+ * SECOND of the two, always both axes in one object. Never split this into two
+ * separate settings writes: two `patchSettings` calls fired back to back would
+ * both capture the same starting revision and race for it, and the backend
+ * rejects whichever loses, silently dropping one axis.
+ */
+export function teleprompterMirrorForPreset(preset: OpticalRigPreset): {
+  mirrorX: boolean;
+  mirrorY: boolean;
+} {
+  return { mirrorX: preset.patch.flips.horizontal, mirrorY: preset.patch.flips.vertical };
+}
+
+/**
+ * Whether a profile's preset-owned fields already match this preset exactly.
+ *
+ * Deliberately value-based rather than an identity check against a persisted
+ * preset id: a profile a person built by hand, or one auto-discovered for a
+ * recognised panel, that happens to land on the same seven values IS that
+ * preset's configuration, not a coincidence pretending to be one.
+ */
+export function profileMatchesPreset(
+  fields: OpticalRigPresetFields,
+  preset: OpticalRigPreset,
+): boolean {
+  return (
+    fields.hardwareKind === preset.patch.hardwareKind &&
+    fields.viewingDistanceMm === preset.patch.viewingDistanceMm &&
+    fields.flips.horizontal === preset.patch.flips.horizontal &&
+    fields.flips.vertical === preset.patch.flips.vertical &&
+    fields.lens.x === preset.patch.lens.x &&
+    fields.lens.y === preset.patch.lens.y &&
+    fields.bias === preset.patch.bias
+  );
+}

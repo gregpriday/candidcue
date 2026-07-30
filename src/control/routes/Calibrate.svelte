@@ -63,7 +63,13 @@
   } from '../../shared/contracts';
   import { discoverProfile, identifyHardware } from '../../shared/optical-discovery';
   import { resolveStageGeometry } from '../../shared/optical-resolve';
-  import { RIG_PRESETS, type OpticalRigPreset } from '../../shared/optical-rig-presets';
+  import {
+    opticalProfileFieldsForPreset,
+    profileMatchesPreset,
+    RIG_PRESETS,
+    teleprompterMirrorForPreset,
+    type OpticalRigPreset,
+  } from '../../shared/optical-rig-presets';
   import {
     inchesToMm,
     isPlausibleDiagonalMm,
@@ -126,6 +132,11 @@
      * other eight all have answers that look identical whether they were given
      * or defaulted (all-zero insets, a centred lens, unflipped glass), which is
      * exactly what the token list exists to disambiguate.
+     *
+     * `preset` has none for the same reason as `scale`: which preset, if any,
+     * is already evident from the profile's own fields — `matchesPreset` reads
+     * it off directly — so a token would only be a second, unsynchronised place
+     * for a fact the profile already states.
      */
     records: OpticalCalibrationStep | null;
     /** What the stage draws while this step is open. */
@@ -303,35 +314,27 @@
   /**
    * Apply a named rig's starting values in one move.
    *
-   * The flip axes are set through `setFlip()` rather than folded into the
-   * `patchProfile()` call below, because a flip is recorded in two places —
-   * `profile.flips` and the `teleprompter` mirror settings a real take
-   * actually renders from (see `setFlip()`) — and `setFlip()` is the one
-   * function allowed to write both. Patching `flips` here directly would give
-   * the desk preset's "mirroring off" a correct profile and a stale take.
+   * Deliberately not two calls to `setFlip()`: a flip is recorded in two
+   * places — `profile.flips` and the `teleprompter` mirror settings a real
+   * take actually renders from — and `setFlip()`'s own `patchSettings` write
+   * is a read-then-write against the settings store's revision. Two of those
+   * fired back to back, before either's backend round trip resolves, both
+   * capture the SAME starting revision; the backend accepts whichever lands
+   * first and rejects the other as stale, and the rejected call's `catch`
+   * then reverts the store to a snapshot that predates the accepted write —
+   * silently dropping one axis and leaving an unhandled rejection. A preset
+   * always sets both axes at once, so `teleprompterMirrorForPreset` builds
+   * both into the single object below rather than this calling `setFlip`
+   * twice.
    */
   function applyPreset(preset: OpticalRigPreset): void {
-    patchProfile({
-      hardwareKind: preset.patch.hardwareKind,
-      viewingDistanceMm: preset.patch.viewingDistanceMm,
-      lens: { ...preset.patch.lens },
-      bias: preset.patch.bias,
-    });
-    setFlip('horizontal', preset.patch.flips.horizontal);
-    setFlip('vertical', preset.patch.flips.vertical);
+    patchProfile(opticalProfileFieldsForPreset(preset));
+    void patchSettings('teleprompter', teleprompterMirrorForPreset(preset));
   }
 
   /** Whether every field a preset owns already matches it — for the selected card, not for persistence. */
   function matchesPreset(preset: OpticalRigPreset): boolean {
-    return (
-      profile.hardwareKind === preset.patch.hardwareKind &&
-      profile.viewingDistanceMm === preset.patch.viewingDistanceMm &&
-      profile.flips.horizontal === preset.patch.flips.horizontal &&
-      profile.flips.vertical === preset.patch.flips.vertical &&
-      profile.lens.x === preset.patch.lens.x &&
-      profile.lens.y === preset.patch.lens.y &&
-      profile.bias === preset.patch.bias
-    );
+    return profileMatchesPreset(profile, preset);
   }
 
   /* -------------------------------------------------------------- arrival */
@@ -684,8 +687,15 @@
 
   /* ------------------------------------------------------- step: distance */
 
-  /** Metres, because that is the unit somebody pacing out a studio thinks in. */
-  const DISTANCE_PRESETS_M = [0.8, 1.0, 1.2, 1.5, 1.8];
+  /**
+   * Metres, because that is the unit somebody pacing out a studio thinks in.
+   *
+   * Includes every distance a rig preset can set (0.6, 2.5, 3.0), so choosing
+   * one on the preset step and then reaching this step later shows a chip
+   * already selected rather than a blank field describing a value that is, in
+   * fact, already in force.
+   */
+  const DISTANCE_PRESETS_M = [0.6, 0.8, 1.0, 1.2, 1.5, 1.8, 2.5, 3.0];
   let distanceField = $state('');
 
   function setDistanceMm(mm: number): void {
