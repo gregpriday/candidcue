@@ -2001,13 +2001,42 @@ const followActions = {
     sendDirective({ kind: 'follow', paused });
   },
   /**
-   * §62 recovery. Re-publishing the current stage settings forces the stage to
-   * re-run layout and rebuild its line map.
-   * TODO(integration, Agent B): replace with an explicit rebuild directive once
-   * the stage exposes one.
+   * §62 recovery. Re-publishing the current stage settings ASKS the stage to
+   * measure its line map again. It does not force a relayout, and the two
+   * limits below are why.
+   *
+   * The directive alone reaches nothing in single-window presentation — same
+   * generation-0 dead end as everywhere else — so this also re-issues
+   * `stageEnvelope` at the SAME stage generation, the identity kick
+   * `applyStageAppearance` already uses to wake the embedded stage's own
+   * envelope-diff effect. Minted from the CURRENT settings rather than a
+   * patch: recovery is "run this again", not a change of values.
+   *
+   * Which is exactly what caps it. Unchanged values produce an identical
+   * fingerprint, so `sameLayout()` in src/stage/renderer/ScriptLayer.svelte
+   * classifies the rebuild coverage-only: `layoutGeneration` does not bump, the
+   * §33 semantic re-anchor never runs, and `MAP_REBUILD_THROTTLE_MS` (250 ms)
+   * returns before measuring at all if a windowed-render coverage build
+   * happened inside the last 250 ms. A stuck map that layout has since settled
+   * under is still recovered, because the pass re-measures; a map the declared
+   * inputs say is fine gets no stronger answer than that.
+   *
+   * And the only caller cannot be reached during a take. It is
+   * `smoothFollow.requestLayoutRebuild()`, raised from the `rebuild_layout`
+   * action on the §62 `invalid_line_map` notice, which `FollowStatePanel`
+   * renders — and that panel sits in the `{:else}` arm of
+   * `{#if $session.active}` in src/control/routes/Live.svelte, i.e. the arm
+   * that is NOT shown while a session is running. So this half of the recovery
+   * is pre-positioned for when the panel becomes reachable, not something a
+   * presenter can press mid-take today.
    */
   rebuildStageLayout(): void {
     pushSettings();
+    state.update((s) =>
+      s.stageEnvelope === null || !stageSettings
+        ? s
+        : { ...s, stageEnvelope: { ...s.stageEnvelope, stageSettings: { ...stageSettings } } },
+    );
     showToast('Asked the stage to rebuild its layout', 'info');
   },
 };
