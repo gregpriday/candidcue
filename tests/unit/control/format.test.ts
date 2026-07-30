@@ -3,6 +3,7 @@ import {
   countWords,
   estimateDurationSeconds,
   formatClock,
+  formatScriptMeta,
   formatSpeakingDuration,
   hashSource,
   plainExcerpt,
@@ -37,6 +38,47 @@ describe('durations', () => {
     expect(formatClock(0)).toBe('0:00');
     expect(formatClock(724)).toBe('12:04');
     expect(formatClock(3723)).toBe('1:02:03');
+  });
+});
+
+describe('formatScriptMeta', () => {
+  // Counts stay under 1000 throughout: `toLocaleString` groups thousands with a
+  // separator that depends on the host locale, so a four-digit assertion here
+  // would pass on one machine and fail on the next.
+
+  it('still says something when the script is empty', () => {
+    // The line was omitted entirely at zero words, so it appeared on the first
+    // keystroke and pushed the editor body down 20px. Reserving the row costs
+    // nothing; every script is blank before it is written.
+    expect(formatScriptMeta(0, 0, 0)).toBe('0 words · — · 0 cues');
+  });
+
+  it('never returns an empty string, whatever the counts', () => {
+    // The header renders this line only when it has text — an empty return here
+    // is the same as hiding the row.
+    for (const [words, seconds, cues] of [
+      [0, 0, 0],
+      [1, 0, 1],
+      [150, 60, 3],
+    ]) {
+      expect(formatScriptMeta(words, seconds, cues)).not.toBe('');
+    }
+  });
+
+  it('speaks of one word and one cue in the singular', () => {
+    expect(formatScriptMeta(1, 0, 1)).toBe('1 word · — · 1 cue');
+  });
+
+  it('speaks of everything else in the plural', () => {
+    expect(formatScriptMeta(150, 60, 2)).toBe('150 words · ≈ 1 min · 2 cues');
+    expect(formatScriptMeta(0, 0, 2)).toBe('0 words · — · 2 cues');
+  });
+
+  it('carries the duration through unchanged', () => {
+    // The segment is `formatSpeakingDuration`'s output verbatim — the em dash at
+    // zero is that function's "nothing to estimate" branch, not new zero copy.
+    expect(formatScriptMeta(40, 40, 0)).toContain(formatSpeakingDuration(40));
+    expect(formatScriptMeta(0, 0, 0)).toContain(formatSpeakingDuration(0));
   });
 });
 

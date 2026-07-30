@@ -25,7 +25,7 @@ import SplitButton from '../components/SplitButton.svelte';
   import { presentMenuItems } from '../lib/present-menu';
 import { startTake, takeStarting } from '../lib/start-take';
 import type { PresentationMode } from '../services/settings-types';
-  import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
+  import { estimateDurationSeconds, formatScriptMeta, formatSpeakingDuration } from '../lib/format';
   import * as inserts from '../lib/markdown-insert';
   import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
   import { onShortcut } from '../lib/shortcuts';
@@ -120,11 +120,7 @@ import type { PresentationMode } from '../services/settings-types';
     return message === '' ? '' : describeError(message);
   });
 
-  const meta = $derived(
-    wordCount > 0
-      ? `${wordCount.toLocaleString()} words · ${formatSpeakingDuration(durationSeconds)} · ${cueCount} ${cueCount === 1 ? 'cue' : 'cues'}`
-      : '',
-  );
+  const meta = $derived(formatScriptMeta(wordCount, durationSeconds, cueCount));
 
   /*
    * Script lint (lib/script-lint.ts), run on the compile's cadence.
@@ -560,7 +556,7 @@ import type { PresentationMode } from '../services/settings-types';
 <div class="page">
   <PageHeader
     title={$editor.title || 'Untitled script'}
-    meta={meta || undefined}
+    {meta}
     backLabel="Library"
     onback={() => goBack()}
     editableTitle
