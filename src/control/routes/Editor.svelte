@@ -1,6 +1,6 @@
 <!--
   Editor screen (spec §13): header with editable title, truthful save state
-  (F.8), Edit/Split/Preview modes, minimal insert toolbar (§13.6), CodeMirror
+  (F.8), Edit/Preview modes, minimal insert toolbar (§13.6), CodeMirror
   Markdown editor full-bleed on its panel, outline panel
   (§13.3/§13.4), readiness messages (F.9).
 -->
@@ -63,44 +63,8 @@ import type { PresentationMode } from '../services/settings-types';
   let conflictOpen = $state(false);
   let conflictResolving = $state(false);
   let revisionsOpen = $state(false);
-  let splitRatio = $state(readSplitRatio());
   let previewScroller: HTMLElement | null = $state(null);
   let toolbarEl: HTMLElement | null = $state(null);
-
-  const SPLIT_KEY = 'candidcue.editor.split.v1';
-
-  /*
-   * The divider's travel, as one set of numbers.
-   *
-   * The pointer drag, the keyboard steps and the `aria-value*` the splitter
-   * announces all have to agree about where the ends are, or the control says
-   * one thing and does another.
-   */
-  const SPLIT_MIN = 0.25;
-  const SPLIT_MAX = 0.75;
-  const SPLIT_STEP = 0.05;
-
-  function clampSplit(ratio: number): number {
-    return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, ratio));
-  }
-
-  function readSplitRatio(): number {
-    try {
-      const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(SPLIT_KEY) : null;
-      const parsed = raw ? Number(raw) : NaN;
-      return Number.isFinite(parsed) ? clampSplit(parsed) : 0.5;
-    } catch {
-      return 0.5;
-    }
-  }
-
-  function persistSplitRatio(): void {
-    try {
-      localStorage.setItem(SPLIT_KEY, String(splitRatio));
-    } catch {
-      /* non-fatal */
-    }
-  }
 
   $effect(() => {
     void openScript(scriptId).catch((err) => {
@@ -188,7 +152,7 @@ import type { PresentationMode } from '../services/settings-types';
    * whether the text changed since the last one. `$editor` also updates for
    * save state, title and mode, so without this a single typing pause bought
    * three full passes over the document — compile ready, then `saving`, then
-   * `saved` — and every Edit/Split/Preview switch bought another. A pass is not
+   * `saved` — and every Edit/Preview switch bought another. A pass is not
    * free: `lintScriptSource` masks the source character by character and
    * re-tokenises every paragraph and every sentence in it, on the main thread,
    * in the editor the author is still typing in.
@@ -299,37 +263,31 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /**
-   * Change mode without destroying what the author has typed.
+   * Bring the editing surface back when the caller came from Preview, without
+   * destroying what the author has typed.
    *
-   * Edit and Split used to render a `MarkdownEditor` from two different `{#if}`
-   * branches, and Preview rendered none. Svelte reconciles branches, not
-   * positions, so every switch between the three destroyed the component — and
-   * with it the `EditorView` that owns the undo stack and the selection. Moving
-   * Edit → Split to compare a paragraph against its rendering, and moving back,
-   * silently threw away the history for the whole session.
+   * Edit and Preview used to render a `MarkdownEditor` from different `{#if}`
+   * branches. Svelte reconciles branches, not positions, so every switch
+   * destroyed the component — and with it the `EditorView` that owns the undo
+   * stack and the selection. Moving to Preview to read a paragraph as it will
+   * be rendered, and moving back, silently threw away the history for the
+   * whole session.
    *
-   * There is now one instance for all three modes and the panes are shown and
+   * There is now one instance for both modes and the panes are shown and
    * hidden with CSS, so this only has to bring the surface back into view:
    * `tick()` for the class change to land, `requestMeasure()` because a
    * CodeMirror that was `display: none` has stale geometry, and `focus()`
    * because WebKit can otherwise leave the caret un-blinking in a pane the
    * user just asked for.
    */
-  async function showEditingSurface(mode: 'edit' | 'split' = 'edit'): Promise<void> {
-    const wasHidden = $editor.mode === 'preview';
-    if (wasHidden) setEditorMode(mode);
+  async function ensureEditingSurface(): Promise<void> {
+    if ($editor.mode !== 'preview') return;
+    setEditorMode('edit');
     await tick();
-    if (!wasHidden) return;
     withView((view) => {
       view.requestMeasure();
       view.focus();
     });
-  }
-
-  /** Bring the editing surface back when the click came from Preview. */
-  async function ensureEditingSurface(): Promise<void> {
-    if ($editor.mode !== 'preview') return;
-    await showEditingSurface('edit');
   }
 
   /**
@@ -338,18 +296,18 @@ import type { PresentationMode } from '../services/settings-types';
    * CodeMirror measured itself at zero.
    *
    * It remeasures and does NOT focus, which is the difference between this and
-   * `showEditingSurface`. The mode control is a radiogroup: arrow keys move
+   * `ensureEditingSurface`. The mode control is a radiogroup: arrow keys move
    * the selection through it, so pulling focus into the editor on the way out
    * of Preview meant the next arrow key moved the caret instead of reaching
    * Edit, and the group could not be operated the way its role promises.
    * Focus belongs to the actions that ask for the editor by name — a preview
    * block, a lint finding.
    */
-  async function changeMode(mode: 'edit' | 'split' | 'preview'): Promise<void> {
-    const wasHidden = $editor.mode === 'preview';
+  async function changeMode(mode: 'edit' | 'preview'): Promise<void> {
+    const editorWasHidden = $editor.mode === 'preview';
     setEditorMode(mode);
     await tick();
-    if (!wasHidden || mode === 'preview') return;
+    if (!editorWasHidden || mode === 'preview') return;
     withView((view) => view.requestMeasure());
   }
 
@@ -411,7 +369,7 @@ import type { PresentationMode } from '../services/settings-types';
    * It only switched modes before. `goToOffset` ran against an `editorRef` that
    * Preview had already unmounted, so the one thing the handler exists to do —
    * land the caret on the block you clicked — never happened in the one mode it
-   * was written for. Split worked, because there the editor is on screen.
+   * was written for.
    */
   async function previewBlockClick(block: CompiledBlock): Promise<void> {
     await ensureEditingSurface();
@@ -538,54 +496,6 @@ import type { PresentationMode } from '../services/settings-types';
     { label: 'Move to Trash', danger: true, onselect: () => void trashFromEditor() },
   ]);
 
-  function startDividerDrag(event: PointerEvent): void {
-    const container = (event.currentTarget as HTMLElement).parentElement;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const move = (e: PointerEvent) => {
-      splitRatio = clampSplit((e.clientX - rect.left) / rect.width);
-    };
-    const up = () => {
-      window.removeEventListener('pointermove', move);
-      window.removeEventListener('pointerup', up);
-      persistSplitRatio();
-    };
-    window.addEventListener('pointermove', move);
-    window.addEventListener('pointerup', up);
-  }
-
-  /**
-   * The splitter from the keyboard (WAI-ARIA window splitter).
-   *
-   * It carried `role="separator"` and an `aria-label` and nothing else, so it
-   * announced itself as a resize control that could not be reached, moved or
-   * read — the one combination worse than not claiming the role at all.
-   * Arrow keys step, Home and End go to the ends of the SAME travel the drag
-   * is clamped to, and a keyboard move persists exactly like a drag does.
-   */
-  function onDividerKeydown(event: KeyboardEvent): void {
-    const next = (() => {
-      switch (event.key) {
-        case 'ArrowLeft':
-          return splitRatio - SPLIT_STEP;
-        case 'ArrowRight':
-          return splitRatio + SPLIT_STEP;
-        case 'Home':
-          return SPLIT_MIN;
-        case 'End':
-          return SPLIT_MAX;
-        default:
-          return null;
-      }
-    })();
-    if (next === null) return;
-    event.preventDefault();
-    splitRatio = clampSplit(next);
-    persistSplitRatio();
-  }
-
-  const splitPercent = $derived(Math.round(splitRatio * 100));
-
   /*
    * Roving tabindex for the insert toolbar (WAI-ARIA toolbar).
    *
@@ -674,11 +584,10 @@ import type { PresentationMode } from '../services/settings-types';
         label="Editor mode"
         options={[
           { value: 'edit', label: 'Edit' },
-          { value: 'split', label: 'Split' },
           { value: 'preview', label: 'Preview' },
         ]}
         value={$editor.mode}
-        onchange={(mode) => void changeMode(mode as 'edit' | 'split' | 'preview')}
+        onchange={(mode) => void changeMode(mode as 'edit' | 'preview')}
       />
       <IconButton
         icon="doc"
@@ -736,18 +645,13 @@ import type { PresentationMode } from '../services/settings-types';
         <p class="loading">Opening script…</p>
       {:else}
         <!--
-          ONE editor and ONE preview for all three modes, shown and hidden with
+          ONE editor and ONE preview for both modes, shown and hidden with
           CSS. Rendering them from separate `{#if}` branches per mode is what
           destroyed the CodeMirror instance — and the undo history with it — on
-          every Edit/Split/Preview switch.
+          every Edit/Preview switch.
         -->
-        <div class="split" class:preview-only={$editor.mode === 'preview'}>
-          <div
-            class="split-editor"
-            id="editor-pane"
-            hidden={$editor.mode === 'preview'}
-            style={$editor.mode === 'split' ? `flex-basis: ${splitRatio * 100}%` : undefined}
-          >
+        <div class="panes">
+          <div class="editor-pane" hidden={$editor.mode === 'preview'}>
             <MarkdownEditor
               bind:this={editorRef}
               value={$editor.source}
@@ -755,21 +659,6 @@ import type { PresentationMode } from '../services/settings-types';
               onchange={setSource}
             />
           </div>
-          <div
-            class="divider"
-            role="separator"
-            tabindex="0"
-            aria-orientation="vertical"
-            aria-label="Resize editor and preview"
-            aria-controls="editor-pane"
-            aria-valuenow={splitPercent}
-            aria-valuemin={SPLIT_MIN * 100}
-            aria-valuemax={SPLIT_MAX * 100}
-            aria-valuetext="Editor {splitPercent}% of the width"
-            hidden={$editor.mode !== 'split'}
-            onpointerdown={startDividerDrag}
-            onkeydown={onDividerKeydown}
-          ></div>
           <div class="preview" hidden={$editor.mode === 'edit'} bind:this={previewScroller}>
             {#if compileFailed}
               <div class="preview-failed" role="status">
@@ -1028,50 +917,30 @@ import type { PresentationMode } from '../services/settings-types';
     font-size: var(--text-sm);
   }
 
-  .split {
+  .panes {
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
     min-width: 0;
   }
   /* The panes are hidden rather than unmounted, so the editor keeps its undo
-     history across mode switches. `display` is set on all three below, which
+     history across mode switches. `display` is set on both below, which
      beats the UA's `[hidden]` rule — so it has to be restated here or a
      "hidden" pane stays on screen. */
-  .split > [hidden] {
+  .panes > [hidden] {
     display: none;
   }
-  .split-editor {
+  .editor-pane {
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-    flex-grow: 0;
+    flex-grow: 1;
     flex-shrink: 0;
   }
-  /* Edit and Preview give the visible pane the whole width; only Split reads
-     the stored ratio, which the inline flex-basis supplies. */
-  .split-editor:not([style]) {
-    flex-grow: 1;
-  }
-  .divider {
-    flex: 0 0 auto;
-    width: 7px;
-    cursor: col-resize;
-    background: transparent;
-    border-left: 1px solid var(--border);
-    transition: background var(--dur-fast) var(--ease-out);
-  }
-  .divider:hover {
-    background: var(--bg-hover-surface);
-  }
-  /* A small control, so it keeps the standard ring — the house rule against
-     accent focus treatment is about editors, panels and rows. */
-  .divider:focus-visible {
-    outline: var(--focus-ring);
-    outline-offset: -2px;
-  }
 
+  /* Only ever on screen in Preview, where it is the sole pane — so the
+     centred column that used to be conditional is simply what it is. */
   .preview {
     flex: 1 1 auto;
     min-width: 0;
@@ -1079,8 +948,6 @@ import type { PresentationMode } from '../services/settings-types';
     overflow-y: auto;
     padding: var(--space-6) var(--page-x);
     background: var(--bg-panel);
-  }
-  .preview-only .preview {
     display: flex;
     flex-direction: column;
     align-items: center;

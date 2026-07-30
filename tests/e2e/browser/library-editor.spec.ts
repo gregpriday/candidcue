@@ -135,17 +135,20 @@ test('choosing the disk version writes the unsaved text to a new script first', 
 /**
  * Switching modes must not throw away the undo history (issue #118).
  *
- * Edit and Split rendered a MarkdownEditor from two different `{#if}` branches
- * and Preview rendered none, so Svelte destroyed the CodeMirror instance — and
- * the history it owns — on every switch. Undo then could not reach anything
- * typed before the switch.
+ * Edit and Preview rendered a MarkdownEditor from different `{#if}` branches,
+ * so Svelte destroyed the CodeMirror instance — and the history it owns — on
+ * every switch. Undo then could not reach anything typed before the switch.
  */
-test('the undo history survives an Edit/Split/Preview round trip', async ({ page }) => {
+test('the undo history survives an Edit/Preview round trip', async ({ page }) => {
   await page.goto('/control.html');
   const list = page.getByRole('list', { name: 'Scripts' });
   await list.getByRole('button', { name: /Launch keynote/ }).click();
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
+
+  // Two modes, and only two: Split was removed (issue #141).
+  const modes = page.getByRole('radiogroup', { name: 'Editor mode' });
+  await expect(modes.getByRole('radio')).toHaveText(['Edit', 'Preview']);
 
   // The document before the edit, so "undo" can be proved to have restored it
   // rather than merely to have removed something.
@@ -160,9 +163,9 @@ test('the undo history survives an Edit/Split/Preview round trip', async ({ page
   expect(edited).toContain(typed);
   expect(edited).not.toBe(baseline);
 
-  // Round trip through every mode.
-  for (const mode of ['Split', 'Preview', 'Edit']) {
-    await page.getByRole('radio', { name: mode }).click();
+  // Round trip through every mode, ending back where the typing happened.
+  for (const mode of ['Preview', 'Edit']) {
+    await modes.getByRole('radio', { name: mode }).click();
   }
 
   // The switches themselves changed nothing.
