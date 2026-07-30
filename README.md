@@ -78,6 +78,16 @@ automated layer on this machine can drive the packaged app. The motion engine's
 actual pixels, the mirror through glass, and the live follow loop are unproven
 outside unit tests and need someone in front of a camera.
 
+The reversible fuzzy dim frontier is a third: the engine can shade a word ahead
+on close spelling or phonetic evidence, and the mechanism is proven correct in
+`cc-bench`'s own harness (100% recall on respellings and proper nouns, 100%
+rollback, no false bridge on unrelated speech). It has never fired on a recorded
+take. Real streaming partials arrive several words at a time, carrying exact
+matches and recogniser word splits alongside the near-miss, and the coherence
+gate requires neither — so the gate stays shut on every fixture in the corpus.
+That is why it is safe to ship and why it is not yet a win; `bench/README.md`
+has the measurement.
+
 Two smaller known gaps: `pauseLocation` is not supplied to the cadence lane, so
 choppy-delivery detection cannot fire (the orchestrator deliberately offers no
 pauses rather than defaulting to a value that would manufacture false

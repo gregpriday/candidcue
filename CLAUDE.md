@@ -111,6 +111,17 @@ engine.
 `crates/` is a **separate cargo workspace** from `src-tauri/` on purpose, so the
 alignment core and benchmark tooling build without Tauri or a WebView.
 
+One snapshot field is **dim-only and must stay that way**: `provisionalToken` is
+a reversible frontier fed by fuzzy/phonetic evidence, and it is allowed to lead
+precisely because shading can be taken back and scroll cannot. In the renderer it
+reaches `cursorTokenIndex` and nothing else; wiring it into motion, `observed` or
+`confirmed` would let a spelling guess move the document. `provisionalRetracted`
+is a **one-shot** — the engine clears it after the snapshot that carries it, so
+treat it as an event, not a state. As of 2026-07-30 the gate never opens on the
+recorded corpus (`bench/README.md`, "The reversible dim frontier") — the
+mechanism is proven only in `cc-bench`'s own harness, so do not describe it as
+working on real takes.
+
 ### The motion path skips control
 
 Rust publishes alignment snapshots **directly to the stage window**. Control is

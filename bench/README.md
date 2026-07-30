@@ -137,6 +137,47 @@ Each of those scripts runs `exact` as well, with the same words in the script's
 own spelling. The gap between `exact` and `asr_forms` on one script is the cost
 of the spelling disagreement with everything else held constant.
 
+## The reversible dim frontier (`fuzzy.*`)
+
+Close-but-wrong spellings are the one case where the display can lead safely.
+The engine keeps a **provisional** frontier fed only by fuzzy and phonetic
+evidence: it shades words and reaches nothing else — not `observed`, not
+`confirmed`, not acquisition or discontinuity authority — so it cannot move the
+sheet. Scroll is irreversible and dimming is not, which is the whole argument for
+letting one of them speculate and not the other. When contradicted, the engine
+emits `provisional_retracted` once and the words brighten again.
+
+The `fuzzy.*` rows come from `crates/cc-bench/src/dimming.rs`, which drives the
+engine directly rather than replaying a fixture, **and that distinction is the
+point of this section.** It builds the precondition the mechanism needs — a
+confident manual lock, then one recogniser item containing a single misspelled
+word — because no replay fixture produces it. Read the 100% recall rows as "the
+mechanism is correct under that precondition", not as "this fires on takes".
+
+Measured on this corpus (2026-07-30), it does not fire on takes at all:
+`provisional_advances` is **0** on all 87 Tier A scenarios and all 21 Tier B
+fixtures, including the three `fuzzy-follow__fuzzy_voice__*` ones added to
+exercise it. Real streaming partials are the reason. Against
+`Presenter teleprompter harbour narration` the recogniser returns
+`Present a teleprompter, harbor narration`: `harbour`→`harbor` is exactly the
+near-miss the bridge is for, but it arrives in an item that also carries exact
+content matches and an insertion from the word split, and
+`is_coherent_approx_chain` requires `content_matches == 0` and `insertions == 0`.
+Those three fixtures also hold the corpus's worst dim latency (`dim_p50`
+1.75–2.45 s against ~750 ms elsewhere), so the problem they were cut to
+demonstrate is still open.
+
+That inertness is why the merge is safe — the 87 Tier A scenarios are
+bit-identical with the feature present, and the 18 original Tier B fixtures keep
+`ahead_worst` 6.700, `ahead_events` 11 and `dim_never` 1 exactly. It is also why
+the `fuzzy.*` rows should not be read as a win yet. `bench/configs/fuzzy-disabled.json`
+(`local_approx_max_consecutive: 0`) shuts the gate for an A/B.
+
+`fuzzy.near_word_false_bridge` sits at 100% by construction and is instrumented
+rather than fixed: `desert`/`dessert` and `affect`/`effect` are one edit apart,
+and no single-word matcher can separate a real near word from a mistranscription.
+The cost is one reversibly-dimmed word that never moves the document.
+
 ## Two evidence tiers
 
 **Tier A — deterministic synthetic.** Performance plans (read / pause / skip /
