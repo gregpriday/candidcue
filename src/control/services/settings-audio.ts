@@ -16,14 +16,17 @@
  * frontend's local storage rather than quietly returning to neutral the first
  * time that store is cleared.
  *
- * ONE SLIDER, AND THE TAKE RUNS ON IT. Settings → Audio is where the setting
+ * ONE SLIDER, AND BOTH METERS READ IT. Settings → Audio is where the setting
  * lives, because it is a property of a room and a microphone rather than of a
  * take. It sits next to the mic meter, which is how anyone discovers they have
  * a problem worth fixing — the meter observes at this same sensitivity, so a
  * change is visible immediately instead of being felt mid-session. Preflight
  * used to carry a second copy of the control; it is gone, and the invariant
- * that outlived it is that the value the meter is read at is the value the take
- * runs at.
+ * that outlived it is that the meter in Settings and the monitor during a take
+ * both read this saved value, so the one you tune against is the one you get.
+ *
+ * It decides what the METER calls speech, and nothing else. Audio streams to
+ * the recogniser unconditionally at every position — see the description below.
  */
 /** Camel-cased twin of `settings::AudioSettings` in Rust. */
 export interface RustAudioSettings {
@@ -91,15 +94,22 @@ export const RUST_OWNED_AUDIO_KEYS = ['vadSensitivity'] as const;
  * be will move it for the wrong reason and get a worse result.
  *
  * And it is stated as symptoms, not decibels. Nobody knows what their noise
- * floor is; everybody knows whether the app keeps cutting them off. Note which
- * way that particular symptom points: higher is MORE sensitive, so speech has
- * to clear a lower bar to keep a turn open — being cut off mid-sentence is
- * fixed by raising this, not lowering it.
+ * floor is; everybody knows whether the meter says it can hear them. Both
+ * symptoms are meter symptoms, which is the honest scope: the recogniser gets
+ * the audio either way, so what this rescues is a readout that disagrees with
+ * the room, not a transcript.
+ *
+ * Note which way those symptoms point, because the shipped string had it
+ * backwards once (#120) while this comment did not. Higher is MORE sensitive —
+ * speech clears a lower bar — so quiet speech that never registers is fixed by
+ * RAISING this, and a room that holds the meter open is fixed by LOWERING it.
+ * The pairing is pinned in audio-settings-ipc-contract.test.ts against the
+ * bounds themselves; keep them in step.
  */
 export const VAD_SENSITIVITY_COPY = {
   label: 'Voice-detection sensitivity',
   description:
-    'How loud a sound has to be before the meter counts it as speech. Lower it if a fan or people nearby keep the indicator lit after you have stopped; raise it if quiet speech does not register. This does not gate what is transcribed — the recogniser hears everything the microphone does, at every position on this slider.',
+    'How easily the meter counts a sound as speech. Lower it if a fan or people nearby keep the indicator lit after you have stopped; raise it if quiet speech does not register. This does not gate what is transcribed — the recogniser hears everything the microphone does, at every position on this slider.',
   /** 50% is the tuned default, and the readout says so rather than hiding it. */
   format(percent: number): string {
     return percent === VAD_SENSITIVITY_RANGE.neutral * 100 ? 'Default' : `${percent}%`;

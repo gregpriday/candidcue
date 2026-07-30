@@ -115,29 +115,6 @@ describe('§28.4 audio settings adapter', () => {
  * One setting, two screens
  * ------------------------------------------------------------------------- */
 
-/**
- * Which way the copy sends a user who reports `symptom`.
- *
- * Reads the direction out of the SAME clause as the symptom, which is the
- * whole point \u2014 a description that names both symptoms and both directions can
- * still pair them the wrong way round, and matching them independently cannot
- * tell the difference. Clauses are the sentence and semicolon boundaries the
- * copy already uses; requiring exactly two of them carry a direction is what
- * stops a third being bolted on unnoticed.
- */
-function directionFor(symptom: RegExp): 'raise' | 'lower' {
-  const clauses = VAD_SENSITIVITY_COPY.description
-    .toLowerCase()
-    .split(/[.;]\s*/)
-    .filter((clause) => /\b(?:raise|lower) it\b/.test(clause));
-  expect(clauses, 'the copy offers exactly two troubleshooting directions').toHaveLength(2);
-
-  const clause = clauses.find((candidate) => symptom.test(candidate));
-  expect(clause, `the copy must still name the symptom /${symptom.source}/`).toBeDefined();
-
-  return /\braise it\b/.test(clause as string) ? 'raise' : 'lower';
-}
-
 describe('\u00a728.4 one value, and the take runs on it', () => {
   const source = (path: string): string => readFileSync(resolve(process.cwd(), path), 'utf8');
   const settingsScreen = source('src/control/routes/Settings.svelte');
@@ -195,7 +172,7 @@ describe('\u00a728.4 one value, and the take runs on it', () => {
    * what gets transcribed. A user who believes this control can make the app
    * hear them better will turn it up and be no better off.
    */
-  it('says what stays fixed, in symptoms rather than decibels', () => {
+  it('says what stays fixed, and in no units anyone has to look up', () => {
     const text = VAD_SENSITIVITY_COPY.description.toLowerCase();
     expect(text).toMatch(/does not gate|not gate what/);
     expect(text).toContain('recogniser hears everything');
@@ -203,47 +180,49 @@ describe('\u00a728.4 one value, and the take runs on it', () => {
   });
 
   /**
-   * …and points each symptom at the end of the slider that actually cures it.
+   * …and sends each symptom to the end of the slider that actually cures it.
    *
-   * This is the assertion the loose one it replaced could not make. That test
-   * checked only that the words "raise it if" and "lower it if" both appeared
-   * somewhere, which is true of the correct copy and of its exact inverse — so
-   * the copy shipped for a while telling a user with a noisy room to turn the
-   * sensitivity UP, and a user whose quiet speech was being missed to turn it
-   * DOWN. Both make the reported symptom worse. Prose and mapping had already
-   * drifted apart once here: the doc comment above the string in
-   * settings-audio.ts stated the direction correctly the whole time.
+   * The assertion this replaced checked only that the words "raise it if" and
+   * "lower it if" both appeared somewhere. That is true of the correct copy and
+   * of its exact inverse alike, so it stayed green while the shipped string
+   * told a user with a noisy room to turn the sensitivity UP and a user whose
+   * quiet speech was being missed to turn it DOWN — both of which make the
+   * reported symptom worse (#120). The doc comment above the string had stated
+   * the direction correctly the whole time; prose and mapping simply drifted.
    *
-   * So the direction is not written down here either. It is derived from
-   * `vadConfigForSensitivity` at runtime — a smaller `noiseFloorMargin` is an
-   * easier trigger — and the copy is checked against that. Invert the bounds
-   * and the copy together and this still passes, which is correct: what is
-   * being pinned is that the sentence agrees with the code, not that either one
-   * says any particular thing.
+   * The pairing is asserted on the literal phrases rather than parsed out of
+   * the sentence. Splitting English into clauses and reading the nearest verb
+   * looks more general, but it cannot see negation or a direction mentioned
+   * twice — "do not lower it if a fan…; do not raise it if quiet speech…"
+   * parses as correct advice. A reworded description SHOULD have to come back
+   * through this test, which is the lesson of #120 rather than an obstacle to it.
+   *
+   * What is derived at runtime is which phrase belongs where: `noiseFloorMargin`
+   * falls as sensitivity rises, so the high end is the easier trigger. Flip the
+   * bounds and this fails, pointing at the copy that now lies about them.
    */
-  it('points each symptom at the end of the slider that cures it', () => {
+  it('sends each symptom to the end of the slider that cures it', () => {
     const marginAt = (sensitivity: number): number => {
       const margin = vadConfigForSensitivity(sensitivity).noiseFloorMargin;
-      // Never coerce: a renamed field would make both ends `undefined`, and
-      // `undefined > undefined` is false — a direction picked out of nothing.
-      expect(margin, `vadConfigForSensitivity(${sensitivity}) must set a margin`).toBeTypeOf(
-        'number',
-      );
+      // A renamed field would leave both ends undefined, and `undefined >
+      // undefined` is false — a direction picked out of nothing.
+      expect(
+        Number.isFinite(margin),
+        `vadConfigForSensitivity(${sensitivity}) must set a finite margin`,
+      ).toBe(true);
       return margin as number;
     };
 
-    // The slider's own semantics, read off the mapping rather than assumed.
-    const higherIsMoreSensitive = marginAt(0) > marginAt(1);
-    expect(higherIsMoreSensitive, 'sensitivity 1 must be the easier trigger').toBe(true);
+    // Read off the mapping rather than assumed: a smaller margin triggers sooner.
+    expect(marginAt(0), 'sensitivity 1 must be the easier trigger').toBeGreaterThan(marginAt(1));
 
-    // False triggering wants a harder trigger; missed speech wants an easier one.
-    const curesFalseTriggering = higherIsMoreSensitive ? 'lower' : 'raise';
-    const curesMissedSpeech = higherIsMoreSensitive ? 'raise' : 'lower';
-
-    expect(directionFor(/indicator lit/), 'a room that keeps the indicator lit').toBe(
-      curesFalseTriggering,
+    // So false triggering is cured at the LOW end, missed speech at the HIGH end.
+    expect(VAD_SENSITIVITY_COPY.description).toContain(
+      'Lower it if a fan or people nearby keep the indicator lit',
     );
-    expect(directionFor(/quiet speech/), 'speech too quiet to register').toBe(curesMissedSpeech);
+    expect(VAD_SENSITIVITY_COPY.description).toContain(
+      'raise it if quiet speech does not register',
+    );
   });
 
   it('names the midpoint in the readout so the default is findable', () => {
