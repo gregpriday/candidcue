@@ -65,11 +65,27 @@ function engineWithMap(): { engine: StageMotionEngine; maxScrollPx: number; line
  */
 function roll(
   engine: StageMotionEngine,
-  options: { pxPerSecond: number; durationMs: number; maxScrollPx: number; startPx?: number },
+  options: {
+    pxPerSecond: number;
+    durationMs: number;
+    maxScrollPx: number;
+    startPx?: number;
+    /** Wall clock the run starts at, for a second leg after an interruption. */
+    startMs?: number;
+    /**
+     * The renderer always stamps the transport's target as the operator's, so
+     * that is the default here too — the point of this file is fidelity to
+     * `driveAutoScroll`. Passed as `null` to model a target that is the
+     * renderer's own guess instead.
+     */
+    mandate?: 'operator' | null;
+  },
 ) {
   let targetPx = options.startPx ?? 0;
+  const mandate = options.mandate === undefined ? 'operator' : options.mandate;
+  const startMs = options.startMs ?? 0;
   const trace: ReturnType<StageMotionEngine['frame']>[] = [];
-  for (let t = 0; t <= options.durationMs; t += FRAME_MS) {
+  for (let t = startMs; t <= startMs + options.durationMs; t += FRAME_MS) {
     targetPx = advanceAutoScrollTarget({
       targetPx,
       pxPerSecond: options.pxPerSecond,
@@ -81,6 +97,7 @@ function roll(
       disposition: 'follow',
       atMs: t,
       feedForwardVelocityPxS: options.pxPerSecond,
+      ...(mandate === null ? {} : { mandate }),
     });
     trace.push(engine.frame(t));
   }
@@ -272,6 +289,112 @@ describe('the target carries its own rate, and has to', () => {
       last = bare.engine.frame(t).velocityPxS;
     }
     expect(last).toBe(0);
+  });
+});
+
+describe('the transport outranks the pause it takes', () => {
+  /*
+   * THE BUG THIS PINS, AND WHY EVERY OTHER TEST IN THIS FILE MISSED IT.
+   *
+   * Starting the transport PAUSES voice following — control's rule, and the
+   * right one: two things moving the same document with different ideas about
+   * where the presenter is would be worse than either alone. But the engine's
+   * pause is `manualGrace`, and manual grace zeroes `vForwardMax` and
+   * `feedForwardScale` outright, so the transport was suppressed by its own
+   * precondition.
+   *
+   * It did not look broken, which is the interesting part. With the
+   * feed-forward zeroed, §29.3's rest deadband snapped the plant onto a goal
+   * that never got a whole pixel ahead of it, and at a conversational pace the
+   * document rolled — on the deadband, not on the controller, with the velocity
+   * reported as zero on every frame. Wind the pace up until the per-frame creep
+   * clears the deadband and the roll stopped dead while the goal ran away down
+   * the script.
+   *
+   * Every test above this line drives a stage that was never paused, which is
+   * the one arrangement in which the whole failure is invisible.
+   */
+  it('rolls at the pace it was given while voice following is paused', () => {
+    const { engine, maxScrollPx } = engineWithMap();
+    engine.setPaused(true, 0);
+    // Fast enough that the per-frame creep clears the rest deadband — the pace a
+    // presenter reaches by winding the bracket keys to the top of the range.
+    const pxPerSecond = 85;
+    const { trace } = roll(engine, { pxPerSecond, durationMs: 6000, maxScrollPx });
+
+    const travelled = trace[trace.length - 1]!.scrollPx;
+    expect(travelled).toBeGreaterThan(pxPerSecond * 6 * 0.9);
+    expect(travelled).toBeLessThan(pxPerSecond * 6 * 1.1);
+    // And on the controller rather than on the deadband, which is what makes the
+    // painted offset fractional instead of a 1 px step twenty times a second.
+    const settled = trace.slice(-60);
+    for (const frame of settled) {
+      expect(frame.velocityPxS).toBeGreaterThan(pxPerSecond * 0.9);
+      expect(frame.velocityPxS).toBeLessThan(pxPerSecond * 1.1);
+    }
+  });
+
+  it('still holds a paused document against a target that is only a guess', () => {
+    /*
+     * The other half, and the reason the mandate rides on the target rather than
+     * being a mode on the engine. §48 is a promise about automatic motion: with
+     * following switched off, the renderer's own geometry-derived corrections
+     * must not reach the glass. Exempting the transport must not exempt those.
+     */
+    const { engine, maxScrollPx } = engineWithMap();
+    engine.setPaused(true, 0);
+    const { trace } = roll(engine, {
+      pxPerSecond: 85,
+      durationMs: 4000,
+      maxScrollPx,
+      mandate: null,
+    });
+
+    expect(trace[trace.length - 1]!.scrollPx).toBeLessThan(2);
+  });
+
+  it('waits out a manual step and then carries on', () => {
+    /*
+     * The boundary the exemption stops at. A presenter who steps the script by
+     * hand has said something more recent than the pace key, so the TIMED grace
+     * still binds — but it is timed, and the roll has to come back afterwards.
+     * The open-ended holds (`paused`, "moved it and has not spoken since") would
+     * both outlast the take, which is why only the interval survives.
+     */
+    const { engine, maxScrollPx } = engineWithMap();
+    engine.setPaused(true, 0);
+    const pxPerSecond = 85;
+    const opening = roll(engine, { pxPerSecond, durationMs: 2000, maxScrollPx });
+    const steppedFrom = opening.trace[opening.trace.length - 1]!.scrollPx;
+
+    // Exactly what an arrow key does: reposition, and take authority for the
+    // grace interval (§30.6). It also arms `manualAwaitingEvidence`, and no
+    // recogniser is running to clear it — a transport-only take never will.
+    engine.manualOverride(steppedFrom + 120, 2000);
+
+    const duringGrace = roll(engine, {
+      pxPerSecond,
+      durationMs: 1000,
+      maxScrollPx,
+      startPx: opening.targetPx,
+      startMs: 2016,
+    });
+    const held = duringGrace.trace[duringGrace.trace.length - 1]!.scrollPx;
+    // The step landed and nothing chased it back.
+    expect(held).toBeGreaterThan(steppedFrom + 100);
+    expect(held).toBeLessThan(steppedFrom + 140);
+
+    const after = roll(engine, {
+      pxPerSecond,
+      durationMs: 3000,
+      maxScrollPx,
+      // Re-seeded from the document, which is what `driveAutoScroll` does on the
+      // frame it finds the plant somewhere it did not put it.
+      startPx: held,
+      startMs: 5000,
+    });
+    const resumed = after.trace[after.trace.length - 1]!.scrollPx;
+    expect(resumed).toBeGreaterThan(held + pxPerSecond * 3 * 0.8);
   });
 });
 

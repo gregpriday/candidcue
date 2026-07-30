@@ -117,6 +117,37 @@ export interface FallbackTarget {
    * is what the renderer needs to leave the fractional offset alone.
    */
   feedForwardVelocityPxS?: number;
+  /**
+   * Somebody asked for this motion in as many words.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY A TARGET HAS TO BE ABLE TO SAY THIS
+   * ---------------------------------------------------------------------------
+   * Absent, a fallback target is the RENDERER'S GUESS — a correction worked out
+   * from block offsets and estimated heights when the aligner's own path cannot
+   * be resolved. Every hold in this engine is aimed at exactly that: while
+   * following is switched off (§48) nothing automatic may move the document, so
+   * `paused` zeroes the forward velocity budget and the feed-forward with it.
+   *
+   * The fixed-pace transport is the one target that is not a guess. It exists
+   * for the takes voice following cannot carry, and starting it PAUSES
+   * following by design — which meant the transport was gated off by its own
+   * precondition. Its only travel came from §29.3's rest deadband snapping the
+   * plant onto a goal that never got more than a fraction of a pixel ahead: it
+   * looked like a roll at a conversational pace, and at any pace whose per-frame
+   * creep cleared the deadband the document simply stopped dead while the goal
+   * ran away down the script.
+   *
+   * So the mandate travels with the target. `paused` means "the aligner may not
+   * move the document", which is not a reason to refuse the operator's own
+   * instruction — and it is still every reason to refuse a guess, which is why
+   * this is a property of the target rather than a mode on the engine.
+   *
+   * NOT an exemption from the manual grace (§30.6). A presenter who steps the
+   * script by hand mid-roll has said something more recent than the pace key,
+   * and the transport waits that interval out with everything else.
+   */
+  mandate?: 'operator';
 }
 
 export type MotionSource = 'alignment' | 'fallback' | 'hold';
@@ -1683,6 +1714,16 @@ export function createStageMotionEngine(
       let activeTokenIndex: number | null = null;
       let visualSpanHold = false;
       let suggestionToken: number | null = null;
+      /**
+       * The operator's own instruction is driving the document this frame.
+       *
+       * Scoped to the frames where their target is the one actually selected —
+       * see `FallbackTarget.mandate`. A mode on the engine would also exempt the
+       * frames where an alignment target won, which is the one case the pause
+       * has to keep holding: guessed geometry reaching the glass while following
+       * is off is exactly what §48 forbids.
+       */
+      let operatorMandate = false;
 
       if (aligned) {
         source = 'alignment';
@@ -1717,6 +1758,7 @@ export function createStageMotionEngine(
       } else if (fallbackUsable && fallback) {
         source = 'fallback';
         targetPx = fallback.scrollPx;
+        operatorMandate = fallback.mandate === 'operator';
         // Zero unless the caller knows better — see `FallbackTarget`.
         feedForward =
           typeof fallback.feedForwardVelocityPxS === 'number' &&
@@ -1760,7 +1802,16 @@ export function createStageMotionEngine(
       abortFadeIfOrphaned(nowMs, fadeHold);
       const documentOpacity = opacityAt(nowMs);
 
-      if (paused) state = 'paused';
+      /*
+       * `paused` describes VOICE FOLLOWING, so it only names the state while
+       * the aligner is what the document would otherwise be following. Under an
+       * operator-mandated target it is the wrong description twice over: the
+       * multiplier table zeroes the feed-forward for `paused`, which hands the
+       * transport's crawling goal straight back to §29.3's rest deadband — the
+       * snap the target's own rate exists to prevent — and the document is
+       * genuinely following something, which is what `following` means here.
+       */
+      if (paused && !operatorMandate) state = 'paused';
 
       const activeTransition = transitions.active;
 
@@ -1840,7 +1891,19 @@ export function createStageMotionEngine(
         reducedMotion,
         degraded: diagnostics.degraded,
         transition: activeTransition?.directive.type,
-        manualGrace,
+        /*
+         * The open-ended halves of manual authority — following switched off,
+         * and "they moved it and have not spoken since" — are about automatic
+         * correction, and they zero the velocity budget outright. An
+         * operator-mandated target is not automatic correction, and neither hold
+         * has an end this take: the transport would be held for the whole of it
+         * (see `FallbackTarget.mandate`).
+         *
+         * The TIMED grace survives. That one has an end, the renderer parks the
+         * transport's goal for its duration anyway, and it is what keeps a
+         * manual step from being immediately undone by a goal that outlived it.
+         */
+        manualGrace: operatorMandate ? nowMs < manualUntilMs : manualGrace,
         /*
          * §30. The three POSITION bounds are resolved against the pitch this
          * layout actually measured, so what the presenter is promised — five
@@ -2143,6 +2206,10 @@ export function createStageMotionEngine(
         activeTransition ? activeTransition.directive.type : null,
         diagnostics.degraded ? 'degraded' : null,
         manualGrace ? 'manual' : null,
+        // Why a frame moved while `manual` is also on the record: the operator
+        // asked for it. Without it an ack from a transport roll is
+        // indistinguishable from one describing a document that is held.
+        operatorMandate ? 'operator' : null,
         reacquiring ? 'reacquire' : null,
         mapUnresolved ? 'map_unresolved' : null,
         visualSpanHold ? 'visual_block' : null,
