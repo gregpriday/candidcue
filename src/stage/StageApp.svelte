@@ -114,6 +114,20 @@
      * the same instruction as a stopped one and is what an older host sends.
      */
     autoScroll?: StageAutoScrollPayload | null;
+    /**
+     * "Show nothing", the host's own switch, mirrored the same way
+     * `followPaused` is — directly, not through a directive, for the same
+     * generation-0 reason.
+     *
+     * Unlike `followPaused` this cannot become a second local `$derived`: the
+     * reducer's `blanked` gates six separate surfaces (script visibility, the
+     * motion/render loop, the ack chip, hold status, the transcript tap and
+     * the dock), and a read site added here for only one of them would leave
+     * the other five visibly wrong during a blank. The bridge effect below
+     * instead dispatches the same `blank` directive the reducer already
+     * understands, so every consumer stays on one value.
+     */
+    blanked?: boolean;
     onexit: () => void;
     onintent?: (intent: StageIntent) => void;
     /**
@@ -549,6 +563,19 @@
     transcriptTap = bridge.transcript;
     voicePill = bridge.voicePill;
     autoScroll = bridge.autoScroll ?? null;
+    /*
+     * Guarded on the reducer's own value, not a second local flag: this
+     * effect reruns on every transcript/voice-pill tick, and re-dispatching
+     * an unchanged blank would be pure churn rather than a real transition.
+     */
+    const wantsBlanked = bridge.blanked ?? false;
+    if (wantsBlanked !== app.blanked) {
+      dispatch({
+        type: 'directive',
+        stageGeneration: bridge.envelope.stageGeneration,
+        directive: { kind: 'blank', blanked: wantsBlanked },
+      });
+    }
   });
 
   /**

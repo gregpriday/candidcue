@@ -389,6 +389,26 @@ describe('the blank directive (§16.6)', () => {
       { kind: 'blank', blanked: false },
     ]);
   });
+
+  /*
+   * §108: single-window presentation runs at stage generation 0, where
+   * `sendDirective` intentionally no-ops (there is no separate stage window's
+   * IPC to reach). `toggleBlankStage` must still flip `stageBlanked`
+   * unconditionally — the embedded `StageApp` reads it off this store value
+   * as a bridge prop instead of waiting for a directive that will never
+   * arrive.
+   */
+  it('still flips stageBlanked at generation 0, where no directive can be sent', () => {
+    start(0);
+    stage.publishStageDirective.mockClear();
+
+    toggleBlankStage();
+    expect(get(session).stageBlanked).toBe(true);
+    toggleBlankStage();
+    expect(get(session).stageBlanked).toBe(false);
+
+    expect(stage.publishStageDirective).not.toHaveBeenCalled();
+  });
 });
 
 /*

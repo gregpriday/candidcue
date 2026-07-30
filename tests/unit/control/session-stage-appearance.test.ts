@@ -30,6 +30,7 @@ import {
   takeTeleprompterSettings,
   toggleStageMirror,
 } from '../../../src/control/stores/session';
+import { smoothFollow } from '../../../src/control/stores/smooth-follow';
 import {
   buildStageEnvelope,
   buildStageSettings,
@@ -188,6 +189,44 @@ describe('adjusting the prompter mid-take', () => {
     expect(rendered()).toEqual(
       envelopeFor(stageSettingsFromSettings(SETTINGS)).stageSettings,
     );
+  });
+});
+
+/*
+ * §108/§62: `rebuildStageLayout` used to only publish a directive, which
+ * reaches nothing in single-window presentation — the same generation-0 dead
+ * end as everywhere else in this file. It needs the identical envelope kick
+ * `applyStageAppearance` already uses, minted from the CURRENT settings
+ * rather than a patch, since recovery is "run this again" and must not
+ * change what the take looks like.
+ */
+describe('§62 layout recovery, which used to reach nothing either', () => {
+  it('re-issues a fresh envelope and settings identity, unchanged in value', () => {
+    start();
+    const before = get(session).stageEnvelope!;
+    const beforeSettings = before.stageSettings;
+
+    smoothFollow.requestLayoutRebuild();
+
+    const after = get(session).stageEnvelope!;
+    // New identities, so the embedded stage's `envelope !== bridge.envelope`
+    // effect fires and `ScriptLayer`'s settings-keyed layout recomputes.
+    expect(after).not.toBe(before);
+    expect(after.stageSettings).not.toBe(beforeSettings);
+    // Same values: this is a re-run, not a change of appearance.
+    expect(after.stageSettings).toEqual(beforeSettings);
+  });
+
+  it('keeps the document and the generation, so the take does not restart', () => {
+    start();
+    const before = get(session).stageEnvelope!;
+
+    smoothFollow.requestLayoutRebuild();
+
+    const after = get(session).stageEnvelope!;
+    expect(after.stageGeneration).toBe(before.stageGeneration);
+    expect(after.sessionId).toBe(before.sessionId);
+    expect(after.renderDocument).toBe(before.renderDocument);
   });
 });
 

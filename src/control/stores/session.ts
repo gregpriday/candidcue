@@ -2003,11 +2003,21 @@ const followActions = {
   /**
    * §62 recovery. Re-publishing the current stage settings forces the stage to
    * re-run layout and rebuild its line map.
-   * TODO(integration, Agent B): replace with an explicit rebuild directive once
-   * the stage exposes one.
+   *
+   * The directive alone reaches nothing in single-window presentation — same
+   * generation-0 dead end as everywhere else — so this also re-issues
+   * `stageEnvelope` at the SAME stage generation, the identity kick
+   * `applyStageAppearance` already uses to wake the embedded stage's own
+   * envelope-diff effect. Minted from the CURRENT settings rather than a
+   * patch: recovery is "run this again", not a change of values.
    */
   rebuildStageLayout(): void {
     pushSettings();
+    state.update((s) =>
+      s.stageEnvelope === null || !stageSettings
+        ? s
+        : { ...s, stageEnvelope: { ...s.stageEnvelope, stageSettings: { ...stageSettings } } },
+    );
     showToast('Asked the stage to rebuild its layout', 'info');
   },
 };

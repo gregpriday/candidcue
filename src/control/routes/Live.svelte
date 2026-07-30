@@ -682,6 +682,7 @@
         // and the stage words that one as the fault it is (§48).
         followPaused: $session.followPausedByUser,
         autoScroll: $autoScrollLive,
+        blanked: $session.stageBlanked,
         onexit: onEscape,
         onintent: handleEmbeddedStageIntent,
         chromeOpen: stageChromeOpen,
