@@ -2387,6 +2387,16 @@
       disposition: 'follow',
       atMs: now,
       feedForwardVelocityPxS: targetMoving ? pxPerSecond : 0,
+      /*
+       * The operator pressed a key. Starting the transport pauses voice
+       * following (that is control's rule, and the right one), and the engine's
+       * pause zeroes the forward velocity budget for everything automatic — so
+       * without this the transport was suppressed by its own precondition, and
+       * what looked like a roll at a conversational pace was §29.3's rest
+       * deadband snapping the plant onto a goal it never let get a whole pixel
+       * ahead. See `FallbackTarget.mandate`.
+       */
+      mandate: 'operator',
     });
 
     /*
