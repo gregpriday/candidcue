@@ -1136,7 +1136,7 @@
     if (embedded) return;
     emitStageEvent<StageMotionAckPayload>(STAGE_EVENT.motionReport, {
       ...ack,
-      stageGeneration: app.envelope?.stageGeneration ?? inboundGeneration,
+      stageGeneration: app.envelope?.stageGeneration ?? 0,
     });
   }
 
@@ -1149,7 +1149,7 @@
     // stage's OWN name, never the one control listens for (see S1 above).
     if (embedded) return;
     emitStageEvent<StageLayoutErrorPayload>(STAGE_EVENT.layoutError, {
-      stageGeneration: app.envelope?.stageGeneration ?? inboundGeneration,
+      stageGeneration: app.envelope?.stageGeneration ?? 0,
       issues,
       layoutGeneration,
       atMs: Date.now(),
@@ -1163,7 +1163,7 @@
       return;
     }
     emitStageEvent<StageIntentPayload>(STAGE_EVENT.intent, {
-      stageGeneration: app.envelope?.stageGeneration ?? inboundGeneration,
+      stageGeneration: app.envelope?.stageGeneration ?? 0,
       intent,
       atMs: Date.now(),
     });
@@ -1649,7 +1649,7 @@
     if (next === null) return null;
     const label = next === 'listening' ? 'Listening' : next === 'fault' ? 'No audio' : 'Hearing you';
     return {
-      stageGeneration: app.envelope?.stageGeneration ?? inboundGeneration,
+      stageGeneration: app.envelope?.stageGeneration ?? 0,
       reading: next,
       // A plausible voice rather than a flat line: the shape is the thing being
       // judged, and every bar at the same height is not one.
