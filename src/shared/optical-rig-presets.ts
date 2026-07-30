@@ -3,18 +3,16 @@
  * wizard's optional first step.
  *
  * ---------------------------------------------------------------------------
- * WHY THESE FIVE FIELDS AND NO OTHERS
+ * WHY THESE THREE FIELDS AND NO OTHERS
  * ---------------------------------------------------------------------------
- * A preset writes `hardwareKind`, `viewingDistanceMm`, `flips` and `lens` — the
- * facts a named rig actually implies — plus `bias`, because `OpticalProfile
- * .bias`'s own doc comment is explicit that presets write a value there
- * "rather than living beside it". `flips` and `lens` are worth calling out
- * specifically: `optical-discovery.ts` always leaves both `outstanding`, on the
- * grounds that only a person looking through the glass can supply them, so a
- * preset is the first place in this codebase either gets a starting value at
- * all. Nothing here invents a second home for a fact the profile already has
- * one for: `rigName`, `scale`, `safeArea`, `framing`, `overrides`, `intensity`
- * and `readingCue` are left alone, same as discovery leaves them alone.
+ * A preset writes `hardwareKind`, `viewingDistanceMm` and `flips` — the facts a
+ * named rig actually implies. `flips` is worth calling out specifically:
+ * `optical-discovery.ts` always leaves it `outstanding`, on the grounds that
+ * only a person looking through the glass can supply it, so a preset is the
+ * first place in this codebase it gets a starting value at all. Nothing here
+ * invents a second home for a fact the profile already has one for: `rigName`,
+ * `scale`, `safeArea`, `framing`, `overrides`, `intensity` and `readingCue` are
+ * left alone, same as discovery leaves them alone.
  *
  * Known hardware distances are pulled from `defaultDistanceMm()` rather than
  * repeated here as literals, so a preset pick and CandidCue's own auto-discovery
@@ -22,26 +20,25 @@
  * `generic` presets — desk and studio — need genuinely new numbers, because
  * `generic` has no discoverable default at all.
  *
- * `lens` and `bias` are left at `defaultOpticalProfile()`'s own neutral values
- * for every preset. Lens placement is a fact about where a specific camera
- * sits in a specific hood — `discoverProfile()` already treats it as something
- * "only a person looking through the glass can supply", and a preset guessing
- * a hardware-typical position would be exactly the kind of unearned confidence
- * this codebase's angular model goes out of its way to avoid elsewhere. Bias is
- * a presenter's taste for size versus measure, not a hardware fact — nothing
- * about standing further from a panel changes what size someone finds
- * comfortable, so every preset leaves it at the evidence-backed neutral point
- * and lets the text-size step personalise it.
+ * `lens` and `bias` are NOT in a preset's patch at all — not even as the
+ * neutral defaults. Presets are the wizard's first step, so a returning
+ * presenter clicking their own rig's card would otherwise overwrite the lens
+ * crosshair they physically sighted through the glass and the text size they
+ * settled on, without being asked. Lens placement is a fact about where a
+ * specific camera sits in a specific hood — `discoverProfile()` already treats
+ * it as something "only a person looking through the glass can supply", and a
+ * preset writing ANY value there, neutral included, is exactly the kind of
+ * unearned confidence this codebase's angular model goes out of its way to
+ * avoid elsewhere. Bias is a presenter's taste for size versus measure, not a
+ * hardware fact — nothing about standing further from a panel changes what size
+ * someone finds comfortable, so it is left to the text-size step. An
+ * uncalibrated profile already arrives at both neutral values from
+ * `defaultOpticalProfile()`, so leaving them out costs a first-run rig nothing.
  *
  * Pure data, no I/O — lives in `shared/` so both the wizard and its tests can
  * import the same catalog.
  */
-import {
-  defaultOpticalProfile,
-  type OpticalFlips,
-  type OpticalHardwareKind,
-  type LensPosition,
-} from './contracts/optical';
+import { type OpticalFlips, type OpticalHardwareKind } from './contracts/optical';
 import { defaultDistanceMm } from './optical-discovery';
 
 export interface OpticalRigPreset {
@@ -54,13 +51,8 @@ export interface OpticalRigPreset {
     hardwareKind: OpticalHardwareKind;
     viewingDistanceMm: number;
     flips: OpticalFlips;
-    lens: LensPosition;
-    bias: number;
   };
 }
-
-const NEUTRAL_LENS: LensPosition = { ...defaultOpticalProfile().lens };
-const NEUTRAL_BIAS = defaultOpticalProfile().bias;
 
 /**
  * A monitor on the desk with a webcam mounted separately — no glass in the
@@ -86,8 +78,6 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
       hardwareKind: 'generic',
       viewingDistanceMm: DESK_AND_WEBCAM_DISTANCE_MM,
       flips: { horizontal: false, vertical: false },
-      lens: NEUTRAL_LENS,
-      bias: NEUTRAL_BIAS,
     },
   },
   {
@@ -98,8 +88,6 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
       hardwareKind: 'elgato-prompter',
       viewingDistanceMm: defaultDistanceMm('elgato-prompter')!,
       flips: { horizontal: true, vertical: false },
-      lens: NEUTRAL_LENS,
-      bias: NEUTRAL_BIAS,
     },
   },
   {
@@ -110,8 +98,6 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
       hardwareKind: 'elgato-prompter-xl',
       viewingDistanceMm: defaultDistanceMm('elgato-prompter-xl')!,
       flips: { horizontal: true, vertical: false },
-      lens: NEUTRAL_LENS,
-      bias: NEUTRAL_BIAS,
     },
   },
   {
@@ -122,8 +108,6 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
       hardwareKind: 'generic',
       viewingDistanceMm: STUDIO_GLASS_DISTANCE_MM,
       flips: { horizontal: true, vertical: false },
-      lens: NEUTRAL_LENS,
-      bias: NEUTRAL_BIAS,
     },
   },
   {
@@ -134,8 +118,6 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
       hardwareKind: 'ipad-sidecar',
       viewingDistanceMm: defaultDistanceMm('ipad-sidecar')!,
       flips: { horizontal: false, vertical: false },
-      lens: NEUTRAL_LENS,
-      bias: NEUTRAL_BIAS,
     },
   },
 ] as const;
@@ -146,19 +128,17 @@ export type OpticalRigPresetFields = OpticalRigPreset['patch'];
 /**
  * The profile patch a preset applies, as fresh objects.
  *
- * Every preset's `flips` and `lens` share one literal (`NEUTRAL_LENS`, and the
- * two hard-coded flip pairs above are themselves reused nowhere, but the
- * defensive copy here is what stops a caller who mutates the profile's `lens`
- * or `flips` in place from reaching back into the catalog and changing what
- * every OTHER preset — and every future application of this one — hands out.
+ * `flips` is the one field here that is an object rather than a value, and each
+ * preset's pair is its own inline literal in the catalog above, shared with
+ * nothing. The defensive copy is still what stops a caller who mutates the
+ * profile's `flips` in place from reaching back into the catalog and changing
+ * what every future application of that preset hands out.
  */
 export function opticalProfileFieldsForPreset(preset: OpticalRigPreset): OpticalRigPresetFields {
   return {
     hardwareKind: preset.patch.hardwareKind,
     viewingDistanceMm: preset.patch.viewingDistanceMm,
     flips: { ...preset.patch.flips },
-    lens: { ...preset.patch.lens },
-    bias: preset.patch.bias,
   };
 }
 
@@ -184,7 +164,7 @@ export function teleprompterMirrorForPreset(preset: OpticalRigPreset): {
  *
  * Deliberately value-based rather than an identity check against a persisted
  * preset id: a profile a person built by hand, or one auto-discovered for a
- * recognised panel, that happens to land on the same seven values IS that
+ * recognised panel, that happens to land on the same four values IS that
  * preset's configuration, not a coincidence pretending to be one.
  *
  * Takes the wider `OpticalProfile['viewingDistanceMm']` type (`number | null`)
@@ -201,9 +181,6 @@ export function profileMatchesPreset(
     fields.hardwareKind === preset.patch.hardwareKind &&
     fields.viewingDistanceMm === preset.patch.viewingDistanceMm &&
     fields.flips.horizontal === preset.patch.flips.horizontal &&
-    fields.flips.vertical === preset.patch.flips.vertical &&
-    fields.lens.x === preset.patch.lens.x &&
-    fields.lens.y === preset.patch.lens.y &&
-    fields.bias === preset.patch.bias
+    fields.flips.vertical === preset.patch.flips.vertical
   );
 }
