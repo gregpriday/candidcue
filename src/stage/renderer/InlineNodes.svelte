@@ -82,11 +82,59 @@
    * memory rather than an input — tracked, every latch would invalidate the
    * effect that wrote it and run the whole thing twice per token.
    */
+  /**
+   * How long the frontier must sit behind its own latch before it retreats.
+   *
+   * The cursor is a whole token taken from a CONTINUOUS position, so it chatters
+   * across every token boundary: the tracker's lead margin fades in and out at
+   * each Following↔Holding edge, and the plant's approach is not monotone at
+   * sub-token scale. Every chatter re-BRIGHTENED a word that had already gone
+   * grey behind the presenter, and Tier C measured it at 213 corrections per
+   * thousand words — a word flickering back roughly every fifth word spoken.
+   *
+   * Two cheaper fixes were measured and rejected. A monotone ratchet removed the
+   * flicker and made an overshoot PERMANENT: never-spoken unread exposure went
+   * 0.55 → 2.78 word-seconds, because the engine came back and the glass did
+   * not. A one-token spatial deadband halved that and still carried it, because
+   * a deadband wide enough to reject the noise is wide enough to hold a real
+   * one-token overshoot.
+   *
+   * The property that separates noise from a real retreat is DURATION, not
+   * distance: chatter is frames long, and a reader backing up to re-read takes
+   * the better part of a second. So a retreat is honoured at any distance once it
+   * has lasted this long. 80 ms is comfortably more than a frame at 30 Hz (33 ms)
+   * and far less than any retreat a person can produce.
+   */
+  const DIM_RETREAT_DEBOUNCE_MS = 80;
+
   let heldCursor = $state<number | null>(null);
+  /** When the live cursor first fell behind `heldCursor`; null while it has not. */
+  let retreatSince: number | null = null;
   $effect(() => {
     const live = cursor;
     if (dimFrozen && live !== null && untrack(() => heldCursor) !== null) return;
-    heldCursor = live;
+    const held = untrack(() => heldCursor);
+    if (live === null || held === null) {
+      retreatSince = null;
+      heldCursor = live;
+      return;
+    }
+    const liveToken = wholeToken(live);
+    const heldToken = wholeToken(held);
+    if (liveToken === null || heldToken === null || liveToken >= heldToken) {
+      retreatSince = null;
+      heldCursor = live;
+      return;
+    }
+    // Behind the latch. Hold the old frontier until the retreat has persisted;
+    // `performance.now` rather than a frame count so the window means the same
+    // thing at 30 and 120 Hz.
+    const now = performance.now();
+    retreatSince ??= now;
+    if (now - retreatSince >= DIM_RETREAT_DEBOUNCE_MS) {
+      retreatSince = null;
+      heldCursor = live;
+    }
   });
 
   /**
@@ -100,7 +148,25 @@
    */
   function wholeToken(at: number | null): number | null {
     if (at === null || !Number.isFinite(at)) return null;
-    return Math.round(at);
+    /*
+     * FLOOR, not round.
+     *
+     * `Math.round` is symmetric, so for half of every token the frontier claimed
+     * a word the estimate had not actually passed. That half-token was invisible
+     * in every benchmark that scored the engine's position — it is created here,
+     * in the renderer — and Tier C found it while sweeping the tracker's lead
+     * margin: the gaze-weighted "never spoken at all" exposure refused to come
+     * down at ANY margin, because shrinking the trailing distance simply moved
+     * more of the distribution into the half where rounding overshoots. The
+     * margin was paying for the rounding.
+     *
+     * Flooring makes the claim conservative by construction: a word is marked
+     * passed only once the estimate is wholly beyond it. It costs up to half a
+     * token of dimming latency and let the tracker give back three times that
+     * (`lead_margin_atoms` 1.6 → 1.0), so the trade is strongly positive in both
+     * directions at once — less unread ink AND faster dimming.
+     */
+    return Math.floor(at);
   }
   const dimCursor = $derived(wholeToken(dimFrozen && heldCursor !== null ? heldCursor : cursor));
 

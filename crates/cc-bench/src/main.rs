@@ -113,6 +113,9 @@ struct Flags {
     layouts: Option<Vec<String>>,
     /// `robustness`: perturbations to evaluate per scenario.
     budget: usize,
+    /// `tier-c`: aim the reading corridor this many atoms ahead of the tracked
+    /// position. See `Layout::focus_lead_atoms`.
+    focus_lead: Option<f64>,
     verbose: bool,
 }
 
@@ -132,6 +135,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         decoding: None,
         layouts: None,
         budget: 240,
+        focus_lead: None,
         verbose: false,
     };
     let mut it = it.peekable();
@@ -154,6 +158,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--blank-penalty" => flags.blank_penalty = Some(take()?.parse()?),
             "--decoding" => flags.decoding = Some(take()?),
             "--budget" => flags.budget = take()?.parse()?,
+            "--focus-lead" => flags.focus_lead = Some(take()?.parse()?),
             "--verbose" => flags.verbose = true,
             "--layouts" => {
                 flags.layouts =
@@ -216,8 +221,13 @@ fn main() -> anyhow::Result<()> {
             // what the presenter would have seen rather than on a scalar.
             let flags = parse_flags(args[1..].iter())?;
             let config = load_config(&flags.config)?;
-            let layouts = cc_bench::tierc::layouts_for(flags.layouts.as_deref());
+            let mut layouts = cc_bench::tierc::layouts_for(flags.layouts.as_deref());
             anyhow::ensure!(!layouts.is_empty(), "no layouts matched --layouts");
+            if let Some(lead) = flags.focus_lead {
+                for l in layouts.iter_mut() {
+                    l.focus_lead_atoms = lead;
+                }
+            }
             let result = match &flags.runs {
                 // `--runs` scores captured recogniser output through the stage
                 // model: the closest thing to a real take anything automated on
@@ -242,7 +252,16 @@ fn main() -> anyhow::Result<()> {
         }
         Some("compare-c") => {
             anyhow::ensure!(args.len() >= 3, "usage: compare-c baseline.json candidate.json");
-            let read = |p: &str| -> anyhow::Result<cc_bench::tierc::TierCResult> {
+            // Only the table is needed, and reading only the table is
+            // deliberate: `runs` carries ninety-odd per-run metrics, any of which
+            // can legitimately be NaN, and a comparison must not fail because a
+            // metric it is not printing had an empty sample set.
+            #[derive(serde::Deserialize)]
+            struct Comparable {
+                label: String,
+                table: Vec<cc_bench::suite::BenchEntry>,
+            }
+            let read = |p: &str| -> anyhow::Result<Comparable> {
                 Ok(serde_json::from_str(&std::fs::read_to_string(p)?)?)
             };
             let base = read(&args[1])?;

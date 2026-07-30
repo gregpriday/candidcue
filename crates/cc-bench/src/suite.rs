@@ -21,10 +21,37 @@ use crate::synthetic::generate_events;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchEntry {
     pub name: String,
+    /// The measured value, which may be NaN.
+    ///
+    /// NaN is a legitimate value here and always has been: `percentile` returns
+    /// it for an empty sample set rather than 0.0, because 0.0 would read as a
+    /// perfect score on every lower-is-better row. But `serde_json` writes NaN as
+    /// `null` and then REFUSES to read `null` back into an `f64`, so a saved
+    /// result containing one empty percentile could be written and never
+    /// compared — the failure surfaced as `invalid type: null, expected f64`
+    /// from `compare`, on a file this program had just produced itself.
+    #[serde(with = "nan_as_null")]
     pub value: f64,
     pub unit: String,
     /// "higher" or "lower" — which direction is an improvement.
     pub better: String,
+}
+
+/// Round-trip a possibly-NaN `f64` through JSON's `null`.
+mod nan_as_null {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
+        if v.is_finite() {
+            s.serialize_f64(*v)
+        } else {
+            s.serialize_none()
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+        Ok(Option::<f64>::deserialize(d)?.unwrap_or(f64::NAN))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

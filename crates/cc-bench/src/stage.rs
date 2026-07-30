@@ -56,11 +56,33 @@ pub const REFERENCE_LINE_PITCH_PX: f64 = 84.48;
 /// A token `behind` words back from the rendered cursor gets these opacities.
 /// Index 0 is unused (at or ahead of the cursor is fully bright); 4 and beyond
 /// fall through to `PAST_OPACITY`.
+/// The ramp's DEPTH is a latency cost, and it was measured here for the first
+/// time: every threshold is reached by the cursor travelling whole tokens past
+/// the word, so "clearly passed" needs two tokens and "fully read" needs four —
+/// 800 ms and 1.6 s of pure renderer on top of whatever the tracker contributed.
+///
+/// Deepening the ladder to `[1.0, 0.70, 0.58, 0.50]` was tried and REJECTED. It
+/// bought 117 ms of `half_dim_p50` and 201 ms of p95, and cost 30% more
+/// never-spoken unread ink (`gate.unread_never_spoken` 0.826 → 1.076 word·s) with
+/// `disruptions_per_10min` going 30.3 → 32.5. The whole reason the ramp is graded
+/// is that a token of ordinary alignment error should cost a shade rather than a
+/// word, and a deeper first step spends exactly that margin. Latency is bought
+/// from `lead_margin_atoms` instead, where it is a tracking choice rather than a
+/// legibility one.
 pub const DIM_STEPS: [f64; 4] = [1.0, 0.78, 0.64, 0.52];
 /// `--stage-past-opacity` default — the far past.
 pub const PAST_OPACITY: f64 = 0.42;
 /// `--stage-fx-ms`: the CSS opacity transition on every rendered word.
 pub const DIM_TWEEN_MS: f64 = 240.0;
+
+/// How long the dim frontier must be behind its own latch before it retreats.
+///
+/// Comfortably longer than a frame at every refresh rate the product supports
+/// (33 ms at 30 Hz), and far shorter than any retreat a reader could produce —
+/// backing up to re-read takes them the better part of a second. Below about
+/// 50 ms it stops rejecting 30 Hz chatter; above about 200 ms it starts delaying
+/// real rebrightening, which `retake_legibility_loss` would show.
+pub const DIM_RETREAT_DEBOUNCE_MS: f64 = 80.0;
 
 /// Fixed integration sub-step — `CONTROLLER_SUBSTEP_MS`.
 const SUBSTEP_MS: f64 = 8.0;
@@ -120,6 +142,21 @@ pub struct Layout {
     /// Inject a dropped frame every N frames (0 = none), to model a panel that
     /// is not keeping up.
     pub hitch_every: u32,
+    /// How far AHEAD of the tracked position the reading line is aimed, in atoms.
+    ///
+    /// The stage as shipped places the tracked position — the mouth — on the
+    /// reading line. Tier C says what that costs: reading-band occupancy against
+    /// the presenter's actual reading FOCUS is 28.7%, because the eyes lead the
+    /// mouth by about two words and the tracker deliberately trails it by another
+    /// 1.6, so the line the presenter is reading sits most of a pitch below the
+    /// corridor for most of every take. `BandLoss` was 567 of the 1,003 logged
+    /// disruptions — more than every other kind combined.
+    ///
+    /// Aiming the corridor at the focus rather than the mouth costs nothing in
+    /// safety: the OPACITY frontier stays keyed to the tracked position, so no
+    /// word goes dark any earlier than it did. It only moves where on the glass
+    /// the same text is drawn.
+    pub focus_lead_atoms: f64,
 }
 
 impl Layout {
@@ -153,6 +190,12 @@ pub fn default_layouts() -> Vec<Layout> {
         refresh_hz: hz,
         dpr: 2.0,
         hitch_every: 0,
+        // 0 → 3.0. See the field's own note: this is the single largest
+        // readability change measured in this branch (band occupancy 28.7% →
+        // 83.4%) and it costs nothing in safety, because the opacity frontier is
+        // not moved by it. Three atoms is the modelled two-word eye-voice lead
+        // plus the ~1 atom the tracker deliberately trails by.
+        focus_lead_atoms: 3.0,
     };
     vec![
         base("30hz", 30.0),
@@ -668,6 +711,7 @@ pub fn render(
     // cursor are touched, so this stays cheap on a 5k-atom script.
     let mut rendered_opacity: Vec<f64> = vec![1.0; script.len()];
     let mut latched_cursor: Option<i64> = None;
+    let mut retreat_ms = 0.0f64;
     let mut fade_until = f64::NEG_INFINITY;
     let mut last_target = f64::NAN;
     let mut last_seq: u64 = u64::MAX;
@@ -703,7 +747,11 @@ pub fn render(
             None => (0.0, None, 0.0, 0.0, 0.0),
         };
 
-        let target_px = (line_map.y_of(display_atoms) - reading_line).clamp(min_px, max_px);
+        // The corridor is aimed at where the presenter is LOOKING, which is
+        // ahead of where they are speaking. Opacity below still keys off
+        // `display_atoms`, so nothing dims earlier for this.
+        let target_px = (line_map.y_of(display_atoms + layout.focus_lead_atoms) - reading_line)
+            .clamp(min_px, max_px);
 
         // A large target move is a re-anchor: fade out, move under cover, fade
         // back. `visible_relocation_distance` is the metric that checks the
@@ -711,6 +759,12 @@ pub fn render(
         if last_target.is_finite() && (target_px - last_target).abs() >= reanchor_threshold {
             fade_until = t + REANCHOR_FADE_MS;
             plant.reanchor(target_px);
+            // A relocation is the one thing that may move the dim frontier
+            // backward: the reader has gone somewhere else, and the text there
+            // has to be legible again.
+            latched_cursor = None;
+            retreat_ms = 0.0;
+            rendered_opacity.iter_mut().for_each(|o| *o = 1.0);
         }
         last_target = target_px;
         let doc_opacity = if t < fade_until {
@@ -743,10 +797,78 @@ pub fn render(
         // position anyone believed — and walking the ramp on it would grey out
         // words behind a reader who has not been located for seconds.
         let following = matches!(state, Some(TrackingState::Following));
-        let live_cursor = state.map(|_| display_atoms.round() as i64);
+        // FLOOR, not round.
+        //
+        // `InlineNodes.svelte` pins the cursor with `Math.round`, which is
+        // symmetric — so for half of every token the frontier claims a word the
+        // estimate has not actually passed. That half-token is why
+        // `gate.unread_never_spoken` refused to come back to baseline at ANY lead
+        // margin during the sweep: shrinking the trailing distance simply moved
+        // more of the distribution into the half where rounding overshoots, and
+        // the margin was paying for the rounding rather than for anything real.
+        //
+        // Flooring makes the claim conservative by construction: a word is only
+        // marked passed once the estimate is wholly beyond it. It costs up to
+        // half a token of dimming latency and buys back the whole margin's worth
+        // of it, which is a trade in the right direction by a factor of three.
+        let live_cursor = state.map(|_| display_atoms.floor() as i64);
         let dim_cursor = if following || latched_cursor.is_none() {
-            latched_cursor = live_cursor;
-            live_cursor
+            // Monotone forward while following.
+            //
+            // The cursor is `round(display)`, and the display position is
+            // continuous, so it chatters across every whole-token boundary — the
+            // lead margin fades in and out at each Following↔Holding edge, and
+            // the plant's own approach is not monotone at sub-token scale. Each
+            // chatter re-BRIGHTENED a word that had already gone grey behind the
+            // presenter: `corrections_per_1k_words` measured 213, which is a
+            // word flickering back roughly every fifth word spoken.
+            //
+            // A word that has gone dim must stay dim until the engine actually
+            // goes backward. Reset is gated on a real relocation (below), not on
+            // arithmetic noise, so a retake still rebrightens — which
+            // `retake_legibility_loss` is there to check.
+            let next = match (live_cursor, latched_cursor) {
+                (Some(live), Some(held)) if following => {
+                    // DEBOUNCE IN TIME, not in space.
+                    //
+                    // The cursor is `round()` of a continuous position, so it
+                    // chatters across every whole-token boundary: the lead margin
+                    // fades in and out at each Following↔Holding edge, and the
+                    // plant's approach is not monotone at sub-token scale. Each
+                    // chatter re-BRIGHTENED a word that had already gone grey
+                    // behind the presenter — `corrections_per_1k_words` measured
+                    // 213, a word flickering back roughly every fifth word said.
+                    //
+                    // Two wrong fixes were measured before this one. A pure
+                    // monotone ratchet took corrections to 32 and took
+                    // `unread_never_spoken` from 0.55 to 2.78 word·s, because a
+                    // cursor that briefly overshot left unread text permanently
+                    // dim: the engine came back and the glass did not. A
+                    // one-token spatial deadband halved that overshoot cost but
+                    // still carried it (0.83), because a deadband wide enough to
+                    // reject the noise is also wide enough to hold a real
+                    // one-token overshoot.
+                    //
+                    // The distinguishing property is not distance, it is
+                    // DURATION. Chatter is frames long; a genuine retreat
+                    // persists. So a retreat is honoured as soon as it has lasted
+                    // `DIM_RETREAT_DEBOUNCE_MS`, at any distance.
+                    if live < held {
+                        retreat_ms += dt;
+                        if retreat_ms >= DIM_RETREAT_DEBOUNCE_MS {
+                            Some(live)
+                        } else {
+                            Some(held)
+                        }
+                    } else {
+                        retreat_ms = 0.0;
+                        Some(live.max(held))
+                    }
+                }
+                (live, _) => live,
+            };
+            latched_cursor = next;
+            next
         } else {
             latched_cursor
         };
