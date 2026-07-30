@@ -24,7 +24,7 @@
   import { AUTO_SCROLL_WPM_STEP } from '../../stage/renderer/autoscroll';
   import { VIEWPORT_REFLOW_SETTLE_MS } from '../../stage/renderer/geometry';
   import { STOP_SESSION_CONFIRM_BODY } from '../lib/app-lifecycle';
-import { formatClock } from '../lib/format';
+  import { formatClock } from '../lib/format';
   import { rememberReaderFrame } from '../lib/reader-frame';
 import { onShortcut } from '../lib/shortcuts';
   import { startTake } from '../lib/start-take';

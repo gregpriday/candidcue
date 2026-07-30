@@ -126,34 +126,6 @@ describe('editor autosave', () => {
     expect(editorHasUnsavedWork()).toBe(false);
     vi.useRealTimers();
   });
-});
-
-/*
- * The save-state axis on its own.
- *
- * These cases cannot be reached through the store: every failure path leaves
- * `dirty` true as well, so a store-driven test is satisfied by `dirty` alone
- * and would keep passing if the save states were deleted from the predicate
- * outright. Holding `dirty` false is the only way to assert that each save
- * state carries the decision by itself.
- */
-describe('editorStateHasUnsavedWork', () => {
-  it('lets a clean, settled editor go', () => {
-    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'idle' })).toBe(false);
-    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'saved' })).toBe(false);
-  });
-
-  it('holds on to a save that has not landed, with nothing else outstanding', () => {
-    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'saving' })).toBe(true);
-    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'error' })).toBe(true);
-    // The state the predicate used to miss entirely.
-    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'conflict' })).toBe(true);
-  });
-
-  it('treats unsaved typing as outstanding whatever the last save did', () => {
-    expect(editorStateHasUnsavedWork({ dirty: true, saveState: 'idle' })).toBe(true);
-    expect(editorStateHasUnsavedWork({ dirty: true, saveState: 'saved' })).toBe(true);
-  });
 
   it('debounces autosave ~500 ms after typing stops', async () => {
     vi.useFakeTimers();
@@ -203,6 +175,34 @@ describe('editorStateHasUnsavedWork', () => {
     setSource('# Start\n\nA.\n');
     setSource('# Start\n\nA. B.\n');
     expect(get(editor).editorRevision).toBe(before + 2);
+  });
+});
+
+/*
+ * The save-state axis on its own.
+ *
+ * These cases cannot be reached through the store: every failure path leaves
+ * `dirty` true as well, so a store-driven test is satisfied by `dirty` alone
+ * and would keep passing if the save states were deleted from the predicate
+ * outright. Holding `dirty` false is the only way to assert that each save
+ * state carries the decision by itself.
+ */
+describe('editorStateHasUnsavedWork', () => {
+  it('lets a clean, settled editor go', () => {
+    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'idle' })).toBe(false);
+    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'saved' })).toBe(false);
+  });
+
+  it('holds on to a save that has not landed, with nothing else outstanding', () => {
+    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'saving' })).toBe(true);
+    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'error' })).toBe(true);
+    // The state the predicate used to miss entirely.
+    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'conflict' })).toBe(true);
+  });
+
+  it('treats unsaved typing as outstanding whatever the last save did', () => {
+    expect(editorStateHasUnsavedWork({ dirty: true, saveState: 'idle' })).toBe(true);
+    expect(editorStateHasUnsavedWork({ dirty: true, saveState: 'saved' })).toBe(true);
   });
 });
 
