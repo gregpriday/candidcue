@@ -237,3 +237,108 @@ test('the undo history survives an Edit/Preview round trip', async ({ page }) =>
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(() => editorSurface.textContent()).toBe(baseline);
 });
+
+/**
+ * The editor arrives in one piece (issue #140).
+ *
+ * The loading state used to be one line inside the work area, so the header and
+ * the insert toolbar assembled around it on their own schedule — and the
+ * header's metadata line, which comes from the COMPILE rather than from the
+ * document, landed last of all and shoved the toolbar down as it appeared.
+ *
+ * `get_script` is held open so the covered state is a state a spec can actually
+ * look at, rather than something that flickers past between two assertions.
+ */
+test('covers the whole editor while a script opens, then reveals it complete', async ({ page }) => {
+  await page.goto('/control.html');
+  await page.evaluate(() => window.__E2E__.setDelay('get_script', 600));
+
+  const list = page.getByRole('list', { name: 'Scripts' });
+  await list.getByRole('button', { name: /Launch keynote/ }).click();
+
+  // Covered: the panel is up and NOTHING else of the editor is on screen —
+  // not the title, not the insert toolbar, not the text, not the outline.
+  const panel = page.getByRole('status').filter({ hasText: 'Opening script…' });
+  await expect(panel).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Script title' })).toHaveCount(0);
+  await expect(page.getByRole('toolbar', { name: 'Insert' })).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toHaveCount(0);
+  await expect(page.getByRole('complementary', { name: 'Outline' })).toHaveCount(0);
+
+  // Revealed: all of it at once, and the compile-derived metadata is ALREADY
+  // there. That last clause is the point — it is what used to arrive late.
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByRole('textbox', { name: 'Script title' })).toBeVisible();
+  await expect(page.getByRole('toolbar', { name: 'Insert' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
+  await expect(page.locator('.meta')).toContainText('words');
+});
+
+/**
+ * Typing must not put the panel back.
+ *
+ * Every keystroke re-runs the compile, which returns the compile store to
+ * `compiling`. If the panel read that status live instead of latching it once
+ * per open, it would raise over a working editor and take the CodeMirror
+ * instance — and the undo history with it — down with it.
+ */
+test('a compile during editing neither re-covers the editor nor moves the toolbar', async ({ page }) => {
+  await page.goto('/control.html');
+  const list = page.getByRole('list', { name: 'Scripts' });
+  await list.getByRole('button', { name: /Launch keynote/ }).click();
+
+  const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
+  await expect(editorSurface).toBeVisible();
+  await expect(page.locator('.meta')).toContainText('words');
+
+  // Mark the live CodeMirror node so a remount is detectable as such: a
+  // rebuilt editor is a fresh node and does not carry the mark.
+  await page.evaluate(() => {
+    document.querySelector('.cm-editor')?.setAttribute('data-e2e-original', 'yes');
+  });
+
+  const toolbar = page.getByRole('toolbar', { name: 'Insert' });
+  const before = await toolbar.boundingBox();
+  const metaBefore = await page.locator('.meta').textContent();
+
+  await editorSurface.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' Several more spoken words for the counter to find.');
+
+  // The word count moved, so a compile really did run and land.
+  await expect.poll(() => page.locator('.meta').textContent()).not.toBe(metaBefore);
+
+  // The panel never came back, and the editor is the SAME instance.
+  await expect(page.getByRole('status').filter({ hasText: 'Opening script…' })).toHaveCount(0);
+  expect(await page.locator('.cm-editor').getAttribute('data-e2e-original')).toBe('yes');
+
+  // And the toolbar has not moved a pixel: the metadata row holds its height
+  // whether or not there is metadata to put in it.
+  expect((await toolbar.boundingBox())?.y).toBe(before?.y);
+});
+
+/**
+ * Emptying the script takes the metadata away again — and that must not move
+ * the toolbar either. This is the direction the reserved row exists for that
+ * waiting on the first compile cannot cover on its own.
+ */
+test('emptying the script drops the metadata without moving the toolbar', async ({ page }) => {
+  await page.goto('/control.html');
+  const list = page.getByRole('list', { name: 'Scripts' });
+  await list.getByRole('button', { name: /Launch keynote/ }).click();
+
+  const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
+  await expect(editorSurface).toBeVisible();
+  await expect(page.locator('.meta')).toContainText('words');
+
+  const toolbar = page.getByRole('toolbar', { name: 'Insert' });
+  const before = await toolbar.boundingBox();
+
+  await editorSurface.click();
+  await page.keyboard.press('ControlOrMeta+a');
+  await page.keyboard.press('Backspace');
+
+  // No spoken words left, so the metadata has nothing to report.
+  await expect.poll(() => page.locator('.meta').textContent()).toBe('');
+  expect((await toolbar.boundingBox())?.y).toBe(before?.y);
+});

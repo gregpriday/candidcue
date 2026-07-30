@@ -1,7 +1,8 @@
 /**
- * PageHeader.svelte — the heading, and the edit that has to be abandonable.
+ * PageHeader.svelte — the heading, the edit that has to be abandonable, and the
+ * metadata row that has to hold its height.
  *
- * Three defects met in this component and none of them is visible from the
+ * Three defects met in the heading and none of them is visible from the
  * outside: with `editableTitle` set, the `<h1>` was REPLACED by an `<input>`,
  * so the Editor — the screen an operator lives in — had no level-one heading
  * at all and heading navigation skipped straight over it. The edit could not be
@@ -10,6 +11,15 @@
  *
  * All three are structural rather than visual, which is why they survived: the
  * header looked right in every screenshot.
+ *
+ * The metadata row is the fourth. The editor's metadata line is derived from
+ * the COMPILE, not from the document, so it lands after the text does and
+ * leaves again the moment a script is emptied. While the row was conditional,
+ * each of those was a ~20px change in the header's height — and the insert
+ * toolbar sits directly beneath it, which is why the jump was most visible
+ * there (issue #140). Reserving the row is opt-in, so the cases below also pin
+ * the default: a header that never gains or loses metadata does not carry an
+ * empty row it will never use.
  */
 import { render } from '@testing-library/svelte';
 import { flushSync, tick } from 'svelte';
@@ -187,5 +197,66 @@ describe('PageHeader — focus treatment', () => {
     const { container } = renderHeader({ editableTitle: true });
     // No opt-in marker: tokens.css gives an unmarked input the quiet treatment.
     expect(titleInput(container).getAttribute('data-focus')).toBeNull();
+  });
+});
+
+describe('the page header metadata row', () => {
+  it('renders no row at all when there is no metadata and none is expected', () => {
+    const { container } = render(PageHeader, { props: { title: 'Settings' } });
+    expect(container.querySelector('.meta')).toBeNull();
+  });
+
+  it('renders the metadata when it has some, without being asked to reserve space', () => {
+    const { container } = render(PageHeader, {
+      props: { title: 'Calibrate this display', meta: 'Studio Display' },
+    });
+    expect(container.querySelector('.meta')?.textContent).toBe('Studio Display');
+  });
+
+  it('holds an empty row when space is reserved and there is nothing to say yet', () => {
+    const { container } = render(PageHeader, {
+      props: { title: 'Launch keynote', reserveMetaSpace: true },
+    });
+    const row = container.querySelector('.meta');
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toBe('');
+  });
+
+  it('keeps the reserved empty row out of the accessibility tree', () => {
+    // Height is a layout concern. A blank line is not something to announce.
+    const { container } = render(PageHeader, {
+      props: { title: 'Launch keynote', reserveMetaSpace: true },
+    });
+    expect(container.querySelector('.meta')?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('announces the metadata once it arrives', () => {
+    const { container } = render(PageHeader, {
+      props: { title: 'Launch keynote', meta: '412 words · 2m 45s · 3 cues', reserveMetaSpace: true },
+    });
+    const row = container.querySelector('.meta');
+    expect(row?.textContent).toBe('412 words · 2m 45s · 3 cues');
+    expect(row?.getAttribute('aria-hidden')).toBeNull();
+  });
+
+  it('reserves the same row height whether or not the metadata has landed', async () => {
+    /*
+     * The actual invariant. jsdom does not lay out, so this asserts the two
+     * states resolve to the same CSS-declared height rather than measuring —
+     * both take `min-height` from the one `.meta` rule, and the empty row
+     * exists so that rule applies to it.
+     */
+    const empty = render(PageHeader, {
+      props: { title: 'Launch keynote', reserveMetaSpace: true },
+    });
+    const filled = render(PageHeader, {
+      props: { title: 'Launch keynote', meta: '412 words', reserveMetaSpace: true },
+    });
+    const emptyRow = empty.container.querySelector('.meta');
+    const filledRow = filled.container.querySelector('.meta');
+    expect(emptyRow).not.toBeNull();
+    expect(filledRow).not.toBeNull();
+    expect(emptyRow?.tagName).toBe(filledRow?.tagName);
+    expect(emptyRow?.className).toBe(filledRow?.className);
   });
 });
