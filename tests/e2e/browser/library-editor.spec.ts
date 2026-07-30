@@ -163,10 +163,19 @@ test('the undo history survives an Edit/Preview round trip', async ({ page }) =>
   expect(edited).toContain(typed);
   expect(edited).not.toBe(baseline);
 
-  // Round trip through every mode, ending back where the typing happened.
-  for (const mode of ['Preview', 'Edit']) {
-    await modes.getByRole('radio', { name: mode }).click();
-  }
+  /*
+   * The round trip, ending back where the typing happened.
+   *
+   * The visibility assertions are the point. Clicking the radios proves
+   * nothing on its own: a switch that had quietly stopped changing the mode
+   * would still leave the editor on screen the whole time, and the undo below
+   * would pass against a CodeMirror that was never hidden — which is the one
+   * thing this test exists to rule out.
+   */
+  await modes.getByRole('radio', { name: 'Preview' }).click();
+  await expect(editorSurface).toBeHidden();
+  await modes.getByRole('radio', { name: 'Edit' }).click();
+  await expect(editorSurface).toBeVisible();
 
   // The switches themselves changed nothing.
   await expect.poll(() => editorSurface.textContent()).toBe(edited);
