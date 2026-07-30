@@ -3,10 +3,11 @@
  * wizard's optional first step.
  *
  * ---------------------------------------------------------------------------
- * WHY THESE THREE FIELDS AND NO OTHERS
+ * WHY THESE FOUR FIELDS AND NO OTHERS
  * ---------------------------------------------------------------------------
- * A preset writes `hardwareKind`, `viewingDistanceMm` and `flips` — the facts a
- * named rig actually implies. `flips` is worth calling out specifically:
+ * A preset writes `hardwareKind`, `viewingDistanceMm`, `flips` and
+ * `lensPlacement` — the facts a named rig actually implies. `flips` is worth
+ * calling out specifically:
  * `optical-discovery.ts` always leaves it `outstanding`, on the grounds that
  * only a person looking through the glass can supply it, so a preset is the
  * first place in this codebase it gets a starting value at all. Nothing here
@@ -20,25 +21,49 @@
  * `generic` presets — desk and studio — need genuinely new numbers, because
  * `generic` has no discoverable default at all.
  *
+ * ---------------------------------------------------------------------------
+ * PLACEMENT IS IMPLIED BY A RIG'S NAME; THE CROSSHAIR IS NOT
+ * ---------------------------------------------------------------------------
+ * `lensPlacement` IS in the patch and `lens` is NOT, which is worth spelling
+ * out because both have the word "lens" in them. Placement is a fact about the
+ * rig's SHAPE: a beamsplitter hood puts the camera behind the glass, and a desk
+ * webcam or an iPad puts it at the top edge of the device, outside the picture
+ * altogether. Naming the rig settles that — nobody has to look through anything
+ * to find out which of the two arrangements they own. The crosshair is the
+ * opposite kind of thing: `lens.x` and `lens.y` are where one particular camera
+ * ended up in one particular hood, a MEASUREMENT that `discoverProfile()` lists
+ * as something "only a person looking through the glass can supply". So the
+ * patch carries the shape and leaves the measurement alone.
+ *
+ * Writing `'in-panel'` on the three beamsplitter presets is not a no-op just
+ * because it equals `defaultOpticalProfile()`'s value: it is what lets clicking
+ * "Elgato Prompter" CORRECT a profile someone had left on `'above'` from a
+ * webcam rig, instead of leaving the reading band pinned to the top edge of
+ * glass the camera actually sits behind. It is also what keeps every preset
+ * comparable — `profileMatchesPreset` cannot decide which card is selected on a
+ * field some presets decline to state.
+ *
  * `lens` and `bias` are NOT in a preset's patch at all — not even as the
  * neutral defaults. Presets are the wizard's first step, so a returning
  * presenter clicking their own rig's card would otherwise overwrite the lens
  * crosshair they physically sighted through the glass and the text size they
- * settled on, without being asked. Lens placement is a fact about where a
- * specific camera sits in a specific hood — `discoverProfile()` already treats
- * it as something "only a person looking through the glass can supply", and a
- * preset writing ANY value there, neutral included, is exactly the kind of
- * unearned confidence this codebase's angular model goes out of its way to
- * avoid elsewhere. Bias is a presenter's taste for size versus measure, not a
- * hardware fact — nothing about standing further from a panel changes what size
- * someone finds comfortable, so it is left to the text-size step. An
- * uncalibrated profile already arrives at both neutral values from
- * `defaultOpticalProfile()`, so leaving them out costs a first-run rig nothing.
+ * settled on, without being asked. A preset writing ANY crosshair, neutral
+ * included, is exactly the kind of unearned confidence this codebase's angular
+ * model goes out of its way to avoid elsewhere. Bias is a presenter's taste for
+ * size versus measure, not a hardware fact — nothing about standing further from
+ * a panel changes what size someone finds comfortable, so it is left to the
+ * text-size step. An uncalibrated profile already arrives at both neutral values
+ * from `defaultOpticalProfile()`, so leaving them out costs a first-run rig
+ * nothing.
  *
  * Pure data, no I/O — lives in `shared/` so both the wizard and its tests can
  * import the same catalog.
  */
-import { type OpticalFlips, type OpticalHardwareKind } from './contracts/optical';
+import {
+  type LensPlacement,
+  type OpticalFlips,
+  type OpticalHardwareKind,
+} from './contracts/optical';
 import { defaultDistanceMm } from './optical-discovery';
 
 export interface OpticalRigPreset {
@@ -51,6 +76,7 @@ export interface OpticalRigPreset {
     hardwareKind: OpticalHardwareKind;
     viewingDistanceMm: number;
     flips: OpticalFlips;
+    lensPlacement: LensPlacement;
   };
 }
 
@@ -78,6 +104,10 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
       hardwareKind: 'generic',
       viewingDistanceMm: DESK_AND_WEBCAM_DISTANCE_MM,
       flips: { horizontal: false, vertical: false },
+      // The camera is clipped to the top of the monitor or built into the lid;
+      // either way it is outside the picture, so the band pins to the top edge
+      // rather than being derived from a crosshair inside it.
+      lensPlacement: 'above',
     },
   },
   {
@@ -88,6 +118,7 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
       hardwareKind: 'elgato-prompter',
       viewingDistanceMm: defaultDistanceMm('elgato-prompter')!,
       flips: { horizontal: true, vertical: false },
+      lensPlacement: 'in-panel',
     },
   },
   {
@@ -98,6 +129,7 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
       hardwareKind: 'elgato-prompter-xl',
       viewingDistanceMm: defaultDistanceMm('elgato-prompter-xl')!,
       flips: { horizontal: true, vertical: false },
+      lensPlacement: 'in-panel',
     },
   },
   {
@@ -108,6 +140,7 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
       hardwareKind: 'generic',
       viewingDistanceMm: STUDIO_GLASS_DISTANCE_MM,
       flips: { horizontal: true, vertical: false },
+      lensPlacement: 'in-panel',
     },
   },
   {
@@ -118,6 +151,11 @@ export const RIG_PRESETS: readonly OpticalRigPreset[] = [
       hardwareKind: 'ipad-sidecar',
       viewingDistanceMm: defaultDistanceMm('ipad-sidecar')!,
       flips: { horizontal: false, vertical: false },
+      // An iPad's front camera sits on an edge of the housing, never inside the
+      // display, so `lens.y` has nothing to describe. `'above'` is the closest
+      // truthful answer for a tablet stood the way a prompter is stood — the
+      // long-edge camera of a recent iPad in landscape, or any iPad in portrait.
+      lensPlacement: 'above',
     },
   },
 ] as const;
@@ -139,6 +177,7 @@ export function opticalProfileFieldsForPreset(preset: OpticalRigPreset): Optical
     hardwareKind: preset.patch.hardwareKind,
     viewingDistanceMm: preset.patch.viewingDistanceMm,
     flips: { ...preset.patch.flips },
+    lensPlacement: preset.patch.lensPlacement,
   };
 }
 
@@ -164,7 +203,7 @@ export function teleprompterMirrorForPreset(preset: OpticalRigPreset): {
  *
  * Deliberately value-based rather than an identity check against a persisted
  * preset id: a profile a person built by hand, or one auto-discovered for a
- * recognised panel, that happens to land on the same four values IS that
+ * recognised panel, that happens to land on the same five values IS that
  * preset's configuration, not a coincidence pretending to be one.
  *
  * Takes the wider `OpticalProfile['viewingDistanceMm']` type (`number | null`)
@@ -181,6 +220,7 @@ export function profileMatchesPreset(
     fields.hardwareKind === preset.patch.hardwareKind &&
     fields.viewingDistanceMm === preset.patch.viewingDistanceMm &&
     fields.flips.horizontal === preset.patch.flips.horizontal &&
-    fields.flips.vertical === preset.patch.flips.vertical
+    fields.flips.vertical === preset.patch.flips.vertical &&
+    fields.lensPlacement === preset.patch.lensPlacement
   );
 }

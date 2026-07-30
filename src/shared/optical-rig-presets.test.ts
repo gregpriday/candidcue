@@ -18,10 +18,10 @@ describe('RIG_PRESETS', () => {
     expect(new Set(RIG_PRESETS.map((p) => p.label)).size).toBe(5);
   });
 
-  it('only patches the three fields a preset owns', () => {
+  it('only patches the four fields a preset owns', () => {
     for (const preset of RIG_PRESETS) {
       expect(Object.keys(preset.patch).sort()).toEqual(
-        ['flips', 'hardwareKind', 'viewingDistanceMm'].sort(),
+        ['flips', 'hardwareKind', 'lensPlacement', 'viewingDistanceMm'].sort(),
       );
     }
   });
@@ -78,10 +78,24 @@ describe('RIG_PRESETS', () => {
     expect(byId['ipad-rig']!.patch.flips).toEqual({ horizontal: false, vertical: false });
   });
 
+  // Placement, not the crosshair: where the camera sits relative to the glass
+  // follows from the rig's shape, so a beamsplitter hood is 'in-panel' and the
+  // two direct-view rigs put the camera above the picture entirely. Inheriting
+  // the default 'in-panel' on those two would resolve their reading band from a
+  // `lens.y` that describes nothing.
+  it('places the lens by physical shape, off-panel for the two direct-view rigs', () => {
+    expect(byId['desk-webcam']!.patch.lensPlacement).toBe('above');
+    expect(byId['ipad-rig']!.patch.lensPlacement).toBe('above');
+    expect(byId['elgato-prompter']!.patch.lensPlacement).toBe('in-panel');
+    expect(byId['elgato-prompter-xl']!.patch.lensPlacement).toBe('in-panel');
+    expect(byId['studio-glass']!.patch.lensPlacement).toBe('in-panel');
+  });
+
   // A preset must not touch the lens crosshair or the text-size bias at all:
   // it is the wizard's FIRST step, so writing even the neutral default there
   // would wipe a returning presenter's measured values the moment they click
-  // their own rig's card.
+  // their own rig's card. `lensPlacement` is not an exception to this — it is a
+  // fact about the rig's shape rather than a measurement taken through it.
   it('never claims a lens position or a text-size bias', () => {
     for (const preset of RIG_PRESETS) {
       expect(preset.patch).not.toHaveProperty('lens');
@@ -89,16 +103,21 @@ describe('RIG_PRESETS', () => {
     }
   });
 
-  it('gives no two presets the exact same four-field signature, so at most one card can ever show as selected', () => {
+  it('gives no two presets the exact same five-field signature, so at most one card can ever show as selected', () => {
     const signatures = RIG_PRESETS.map((p) =>
-      JSON.stringify([p.patch.hardwareKind, p.patch.viewingDistanceMm, p.patch.flips]),
+      JSON.stringify([
+        p.patch.hardwareKind,
+        p.patch.viewingDistanceMm,
+        p.patch.flips,
+        p.patch.lensPlacement,
+      ]),
     );
     expect(new Set(signatures).size).toBe(signatures.length);
   });
 });
 
 describe('opticalProfileFieldsForPreset', () => {
-  it('returns the exact three owned fields, matching the preset', () => {
+  it('returns the exact four owned fields, matching the preset', () => {
     for (const preset of RIG_PRESETS) {
       expect(opticalProfileFieldsForPreset(preset)).toEqual(preset.patch);
     }
@@ -158,6 +177,7 @@ describe('profileMatchesPreset', () => {
         preset,
       ),
     ).toBe(false);
+    expect(profileMatchesPreset({ ...fields, lensPlacement: 'above' }, preset)).toBe(false);
   });
 
   // The whole reason the parameter's distance is `number | null` is that a real
