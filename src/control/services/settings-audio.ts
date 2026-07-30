@@ -16,14 +16,14 @@
  * frontend's local storage rather than quietly returning to neutral the first
  * time that store is cleared.
  *
- * TWO SCREENS, ONE VALUE. Settings → Audio is where the setting lives, because
- * it is a property of a room and a microphone rather than of a take. Preflight
- * shows the same control because that is where the mic meter is, and the meter
- * is how anyone discovers they have a problem worth fixing — it observes levels
- * at this same sensitivity, so a change is visible immediately instead of being
- * felt mid-session. Both screens read `settings.audio.vadSensitivity` and both
- * write it with `patchSettings('audio', …)`; the copy below is shared so they
- * cannot drift into describing one value two ways.
+ * ONE SLIDER, AND THE TAKE RUNS ON IT. Settings → Audio is where the setting
+ * lives, because it is a property of a room and a microphone rather than of a
+ * take. It sits next to the mic meter, which is how anyone discovers they have
+ * a problem worth fixing — the meter observes at this same sensitivity, so a
+ * change is visible immediately instead of being felt mid-session. Preflight
+ * used to carry a second copy of the control; it is gone, and the invariant
+ * that outlived it is that the value the meter is read at is the value the take
+ * runs at.
  */
 /** Camel-cased twin of `settings::AudioSettings` in Rust. */
 export interface RustAudioSettings {
@@ -81,7 +81,7 @@ export function audioToRustPatch(
 export const RUST_OWNED_AUDIO_KEYS = ['vadSensitivity'] as const;
 
 /**
- * The one description of this control, shared by Settings and Preflight.
+ * The one description of this control, used by Settings → Audio.
  *
  * WHAT THE COPY HAS TO SAY. The slider moves the speech THRESHOLD and nothing
  * else: the 420 ms end-of-turn silence, the 5 s forced commit and the 2 s
@@ -99,7 +99,7 @@ export const RUST_OWNED_AUDIO_KEYS = ['vadSensitivity'] as const;
 export const VAD_SENSITIVITY_COPY = {
   label: 'Voice-detection sensitivity',
   description:
-    'How loud a sound has to be before the meter counts it as speech. Raise it if a fan or people nearby keep the indicator lit after you have stopped; lower it if quiet speech does not register. This does not gate what is transcribed — the recogniser hears everything the microphone does, at every position on this slider.',
+    'How loud a sound has to be before the meter counts it as speech. Lower it if a fan or people nearby keep the indicator lit after you have stopped; raise it if quiet speech does not register. This does not gate what is transcribed — the recogniser hears everything the microphone does, at every position on this slider.',
   /** 50% is the tuned default, and the readout says so rather than hiding it. */
   format(percent: number): string {
     return percent === VAD_SENSITIVITY_RANGE.neutral * 100 ? 'Default' : `${percent}%`;
