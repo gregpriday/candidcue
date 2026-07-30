@@ -47,7 +47,7 @@ import type { PresentationMode } from '../services/settings-types';
     useDiskVersion,
     type ConflictOutcome,
   } from '../stores/editor';
-  import { loadLibrary, moveScriptToTrash } from '../stores/library';
+  import { duplicateScript, loadLibrary, moveScriptToTrash } from '../stores/library';
   import { navigate } from '../stores/router';
   import { showToast } from '../stores/toasts';
   import type { CompiledBlock, OutlineNode } from '../../shared/contracts';
@@ -499,7 +499,11 @@ import type { PresentationMode } from '../services/settings-types';
       danger: true,
     });
     if (!accepted) return;
-    await moveScriptToTrash(scriptId);
+    // Leave the document only if it actually moved. The store reports the
+    // failure itself; navigating away regardless would add a second wrong thing
+    // on top of the first — the script still here, and the author no longer in
+    // it. That is what the mutator's boolean is for.
+    if (!(await moveScriptToTrash(scriptId))) return;
     await navigate({ name: 'library', view: 'all' });
   }
 
@@ -521,7 +525,10 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   const overflowItems = $derived([
-    { label: 'Duplicate', onselect: () => void scriptsService.duplicateScript(scriptId).then(loadLibrary) },
+    // Through the store, not the service: the store is where a duplicate that
+    // fails gets said out loud, and it reloads the library either way. Calling
+    // the service directly from here had no catch and no notice at all.
+    { label: 'Duplicate', onselect: () => void duplicateScript(scriptId) },
     { label: 'Revision history…', onselect: () => void openRevisions() },
     {
       label: 'Export Markdown',
