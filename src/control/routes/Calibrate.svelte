@@ -64,6 +64,13 @@
   import { discoverProfile, identifyHardware } from '../../shared/optical-discovery';
   import { resolveStageGeometry } from '../../shared/optical-resolve';
   import {
+    opticalProfileFieldsForPreset,
+    profileMatchesPreset,
+    RIG_PRESETS,
+    teleprompterMirrorForPreset,
+    type OpticalRigPreset,
+  } from '../../shared/optical-rig-presets';
+  import {
     inchesToMm,
     isPlausibleDiagonalMm,
     isPlausibleViewingDistanceMm,
@@ -88,15 +95,19 @@
   /* --------------------------------------------------------------- steps */
 
   /**
-   * The nine questions, in the order they can be answered.
+   * The ten questions, in the order they can be answered.
    *
-   * The order is not cosmetic. Scale has to precede distance because the two
-   * multiply into every angular result, and both have to precede text size or
-   * the sample on the glass is a guess being judged as a measurement. Safe area
-   * precedes lens because the lens is expressed as a fraction of the safe
-   * rectangle, so moving the frame afterwards would silently move the crosshair.
+   * The order is not cosmetic. Preset comes first because it is a shortcut for
+   * several of the answers that follow, not a replacement for any of them —
+   * every field it writes is still open to correction on its own step. Scale
+   * has to precede distance because the two multiply into every angular
+   * result, and both have to precede text size or the sample on the glass is a
+   * guess being judged as a measurement. Safe area precedes lens because the
+   * lens is expressed as a fraction of the safe rectangle, so moving the frame
+   * afterwards would silently move the crosshair.
    */
   type WizardStepId =
+    | 'preset'
     | 'hardware'
     | 'scale'
     | 'safe-area'
@@ -121,6 +132,11 @@
      * other eight all have answers that look identical whether they were given
      * or defaulted (all-zero insets, a centred lens, unflipped glass), which is
      * exactly what the token list exists to disambiguate.
+     *
+     * `preset` has none for the same reason as `scale`: which preset, if any,
+     * is already evident from the profile's own fields — `matchesPreset` reads
+     * it off directly — so a token would only be a second, unsynchronised place
+     * for a fact the profile already states.
      */
     records: OpticalCalibrationStep | null;
     /** What the stage draws while this step is open. */
@@ -128,6 +144,13 @@
   }
 
   const STEPS: WizardStep[] = [
+    {
+      id: 'preset',
+      title: 'Start from a preset?',
+      lead: 'Pick the arrangement closest to yours to fill in the obvious answers. Every one of them stays open to correction on the steps ahead.',
+      records: null,
+      card: null,
+    },
     {
       id: 'hardware',
       title: 'Which prompter is this?',
@@ -212,6 +235,16 @@
     return { ...defaultOpticalProfile(), rigName };
   }
   let profile = $state<OpticalProfile>(seedProfile());
+  /**
+   * True once `hydrate()` has installed the stored or discovered profile.
+   *
+   * `onMount` fires `hydrate()` without awaiting it, so the wizard's first
+   * paint happens before that IPC round trip settles. A preset applied in that
+   * gap would patch the seeded default and then be silently overwritten the
+   * moment `hydrate()` replaces `profile` wholesale — so the preset step
+   * withholds its cards until this is true.
+   */
+  let hydrated = $state(false);
   /** Steps answered in THIS sitting, plus whatever the stored rig already had. */
   let answered = $state<OpticalCalibrationStep[]>([]);
   /** True once anything has been touched, so leaving can warn rather than lose it. */
@@ -276,6 +309,34 @@
     dirty = true;
   }
 
+  /* ---------------------------------------------------------- step: preset */
+
+  /**
+   * Apply a named rig's starting values in one move.
+   *
+   * Deliberately not two calls to `setFlip()`: a flip is recorded in two
+   * places — `profile.flips` and the `teleprompter` mirror settings a real
+   * take actually renders from — and `setFlip()`'s own `patchSettings` write
+   * is a read-then-write against the settings store's revision. Two of those
+   * fired back to back, before either's backend round trip resolves, both
+   * capture the SAME starting revision; the backend accepts whichever lands
+   * first and rejects the other as stale, and the rejected call's `catch`
+   * then reverts the store to a snapshot that predates the accepted write —
+   * silently dropping one axis and leaving an unhandled rejection. A preset
+   * always sets both axes at once, so `teleprompterMirrorForPreset` builds
+   * both into the single object below rather than this calling `setFlip`
+   * twice.
+   */
+  function applyPreset(preset: OpticalRigPreset): void {
+    patchProfile(opticalProfileFieldsForPreset(preset));
+    void patchSettings('teleprompter', teleprompterMirrorForPreset(preset));
+  }
+
+  /** Whether every field a preset owns already matches it — for the selected card, not for persistence. */
+  function matchesPreset(preset: OpticalRigPreset): boolean {
+    return profileMatchesPreset(profile, preset);
+  }
+
   /* -------------------------------------------------------------- arrival */
 
   onMount(() => {
@@ -334,6 +395,7 @@
     // Discovery filling fields in is not the user having answered anything, so
     // the sequence still starts clean and nothing here counts as dirty yet.
     dirty = false;
+    hydrated = true;
   }
 
   /* ---------------------------------------------------------- the stage */
@@ -625,8 +687,15 @@
 
   /* ------------------------------------------------------- step: distance */
 
-  /** Metres, because that is the unit somebody pacing out a studio thinks in. */
-  const DISTANCE_PRESETS_M = [0.8, 1.0, 1.2, 1.5, 1.8];
+  /**
+   * Metres, because that is the unit somebody pacing out a studio thinks in.
+   *
+   * Includes every distance a rig preset can set (0.6, 2.5, 3.0), so choosing
+   * one on the preset step and then reaching this step later shows a chip
+   * already selected rather than a blank field describing a value that is, in
+   * fact, already in force.
+   */
+  const DISTANCE_PRESETS_M = [0.6, 0.8, 1.0, 1.2, 1.5, 1.8, 2.5, 3.0];
   let distanceField = $state('');
 
   function setDistanceMm(mm: number): void {
@@ -734,7 +803,9 @@
     const name = profile.rigName.trim();
     if (name === '') {
       showToast('Give this rig a name so you can tell it from the others on this panel.', 'danger');
-      stepIndex = 0;
+      // Not necessarily step 0: the preset step precedes 'hardware', which is
+      // the step that actually owns the rig-name field.
+      stepIndex = STEPS.findIndex((s) => s.id === 'hardware');
       return;
     }
     const next: OpticalProfile = { ...profile, rigName: name, completedSteps: answered };
@@ -813,7 +884,30 @@
         <p class="step-lead">{step.lead}</p>
       </div>
 
-      {#if step.id === 'hardware'}
+      {#if step.id === 'preset'}
+        {#if !hydrated}
+          <p class="hint-line">Loading what CandidCue already knows about this display…</p>
+        {:else}
+          <div class="preset-grid" role="group" aria-label="Rig presets">
+            {#each RIG_PRESETS as preset (preset.id)}
+              <button
+                type="button"
+                class="preset-card"
+                class:selected={matchesPreset(preset)}
+                aria-pressed={matchesPreset(preset)}
+                onclick={() => applyPreset(preset)}
+              >
+                <span class="preset-name">{preset.label}</span>
+                <span class="preset-description">{preset.description}</span>
+              </button>
+            {/each}
+          </div>
+          <p class="hint-line">
+            Not sure, or using something else entirely? Skip this — CandidCue will start from what
+            it already knows about this display, and every field below stays open to correction.
+          </p>
+        {/if}
+      {:else if step.id === 'hardware'}
         <TextField
           label="Rig name"
           value={profile.rigName}
@@ -1256,6 +1350,43 @@
   .chip.selected:hover {
     background: var(--accent-wash);
     border-color: var(--border-strong);
+  }
+
+  .preset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--space-2);
+  }
+  .preset-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-control);
+    background: var(--bg-elevated);
+    text-align: left;
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out);
+  }
+  .preset-card:hover {
+    background: var(--bg-hover-surface);
+  }
+  .preset-card.selected,
+  .preset-card.selected:hover {
+    background: var(--accent-wash);
+    border-color: var(--border-strong);
+  }
+  .preset-name {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .preset-description {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
   }
 
   .readout {
