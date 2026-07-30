@@ -135,6 +135,65 @@ describe('the reading corridor', () => {
     );
   });
 
+  it('honours a pin near the edge for an off-panel lens instead of re-clamping to 10–90%', () => {
+    const safeRect: SafeRect = { x: 0, y: 0, width: 1024, height: 1000 };
+    const settings = { halfHeightPercent: 4, linePitchPx: PITCH, safeRect };
+    expect(
+      computeReadingBand(1000, { ...settings, centerPercent: 5, lensPlacement: 'above' }).centerPx,
+    ).toBeCloseTo(50, 9);
+    expect(
+      computeReadingBand(1000, { ...settings, centerPercent: 95, lensPlacement: 'below' }).centerPx,
+    ).toBeCloseTo(950, 9);
+    // The in-panel clamp still applies when placement is absent or 'in-panel'.
+    expect(computeReadingBand(1000, { ...settings, centerPercent: 5 }).centerPx).toBeCloseTo(100, 9);
+    expect(
+      computeReadingBand(1000, { ...settings, centerPercent: 5, lensPlacement: 'in-panel' })
+        .centerPx,
+    ).toBeCloseTo(100, 9);
+  });
+
+  it('clamps an out-of-range off-panel centerPercent to the same 5–95% the resolver pins to', () => {
+    // The off-panel range shares its bound with the resolver's own pin rather
+    // than opening to a raw 0–100%: a centre allowed to land exactly on the
+    // edge would give the corridor a zero margin on that side.
+    const safeRect: SafeRect = { x: 0, y: 0, width: 1024, height: 1000 };
+    const settings = { halfHeightPercent: 4, linePitchPx: PITCH, safeRect };
+    const above = computeReadingBand(1000, {
+      ...settings,
+      centerPercent: 0,
+      lensPlacement: 'above',
+    });
+    expect(above.centerPx).toBeCloseTo(50, 9);
+    expect(above.bottomPx).toBeGreaterThan(above.topPx);
+    expect(above.topPx).toBeGreaterThan(safeRect.y);
+
+    const below = computeReadingBand(1000, {
+      ...settings,
+      centerPercent: 100,
+      lensPlacement: 'below',
+    });
+    expect(below.centerPx).toBeCloseTo(950, 9);
+    expect(below.bottomPx).toBeGreaterThan(below.topPx);
+    expect(below.bottomPx).toBeLessThan(safeRect.y + safeRect.height);
+  });
+
+  it('ignores lensPlacement on the uncalibrated viewport path, which has no safe rect', () => {
+    // Only a resolved, calibrated rig ever carries `lensPlacement`, and it
+    // always arrives with a safe rect alongside it — but the function itself
+    // should not honour an off-panel placement it has no rectangle to widen.
+    expect(
+      computeReadingBand(1000, { centerPercent: 5, halfHeightPercent: 4, lensPlacement: 'above' })
+        .centerPx,
+    ).toBe(200);
+    expect(
+      computeReadingBand(1000, {
+        centerPercent: 95,
+        halfHeightPercent: 4,
+        lensPlacement: 'below',
+      }).centerPx,
+    ).toBe(700);
+  });
+
   /*
    * A band centre nobody supplied has to land where the app says it lands. The
    * settings document is stored opaquely and validated only for its schema

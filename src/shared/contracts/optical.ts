@@ -85,11 +85,29 @@ export interface OpticalFlips {
  * camera sits off-centre in the hood otherwise pulls the presenter's gaze
  * sideways by exactly the offset nobody compensated for. `y` is the reading
  * band — the height the presenter's eyeline rests at for the whole take.
+ *
+ * Meaningful only when `OpticalProfile.lensPlacement` is `'in-panel'` — a lens
+ * that sits above or below the glass entirely is not a fraction of it, and
+ * `resolveStageGeometry` ignores `y` rather than clamping a coordinate that
+ * was never inside the rectangle to begin with.
  */
 export interface LensPosition {
   x: number;
   y: number;
 }
+
+/**
+ * Where the lens sits relative to the visible glass, not within it.
+ *
+ * A beamsplitter/hood rig puts the lens behind the panel, so `LensPosition`'s
+ * fractions describe it correctly. A desk webcam — built into a laptop lid, or
+ * clipped above or below an external monitor — sits outside the safe rectangle
+ * altogether, and no fraction of that rectangle can say where it is. This is
+ * the discriminator that tells `resolveStageGeometry` which of those two
+ * situations it is looking at, so it can stop asking `lens.y` a question that
+ * only makes sense for the first.
+ */
+export type LensPlacement = 'in-panel' | 'above' | 'below';
 
 /** How the presenter is framed, which changes how much eye travel is visible. */
 export type FramingPreset = 'close-up' | 'head-and-shoulders' | 'waist-up' | 'full-body';
@@ -191,6 +209,8 @@ export interface OpticalProfile {
   viewingDistanceMm: number | null;
   safeArea: SafeAreaInsets;
   lens: LensPosition;
+  /** Where the lens sits relative to the glass. Defaults to `'in-panel'`. */
+  lensPlacement: LensPlacement;
   flips: OpticalFlips;
   framing: FramingPreset;
   /** Explicit values that shadow what the optical model would derive. */
@@ -232,6 +252,12 @@ export interface ResolvedOptics {
   /** Lens position, as fractions of the SAFE rectangle. */
   opticalCenterX: number;
   readingBandY: number;
+  /**
+   * Carried through so the stage can pick the corridor's clamp range without
+   * re-deriving it. Optional because older cached resolutions predate this
+   * field; absence means the same thing an explicit `'in-panel'` would.
+   */
+  lensPlacement?: LensPlacement;
 
   /* ---- geometry in line pitches ----
    * Expressed as multiples of the MEASURED line pitch rather than in `vh` or
@@ -299,6 +325,7 @@ export function defaultOpticalProfile(): OpticalProfile {
     viewingDistanceMm: null,
     safeArea: { top: 0, right: 0, bottom: 0, left: 0 },
     lens: { x: 0.5, y: 0.38 },
+    lensPlacement: 'in-panel',
     flips: { horizontal: false, vertical: false },
     framing: 'head-and-shoulders',
     /*

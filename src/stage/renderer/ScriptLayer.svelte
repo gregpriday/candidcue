@@ -519,7 +519,12 @@
       centerPercent: optics ? optics.readingBandY * 100 : settings.readingBandCenterPercent,
       halfHeightPercent: settings.readingBandHalfHeightPercent,
       ...(optics
-        ? { linePitchPx: linePx, deadZoneLines: optics.deadZoneLines, safeRect }
+        ? {
+            linePitchPx: linePx,
+            deadZoneLines: optics.deadZoneLines,
+            safeRect,
+            lensPlacement: optics.lensPlacement,
+          }
         : {}),
     }),
   );

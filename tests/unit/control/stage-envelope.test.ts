@@ -232,6 +232,16 @@ describe('a calibrated rig reaches the stage as geometry (shared/optical-resolve
       .readingBandCenterPercent).toBe(52);
   });
 
+  it('carries an off-panel lens placement through to the resolved optics', () => {
+    const desk = rig({ lensPlacement: 'above' });
+    const settings = buildStageSettings({ optical: { profile: desk, viewport: VIEWPORT } });
+
+    expect(settings.optics!.lensPlacement).toBe('above');
+    // The legacy flattened center already clamps to 5–95%, so an off-panel
+    // rig's pin near the true edge survives it rather than landing on 10%.
+    expect(settings.readingBandCenterPercent).toBe(5);
+  });
+
   it('lets the rig decide its own brightness and reading cue', () => {
     // Both were chosen by somebody standing at that glass looking at that
     // reflection; the global Settings control is what an UNcalibrated rig gets,
