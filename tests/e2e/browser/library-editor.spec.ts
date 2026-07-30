@@ -79,11 +79,91 @@ test('a SCRIPT_CONFLICT rejection drives the F.8 external-change resolution shee
   const conflictButton = page.getByRole('button', { name: /Changed outside CandidCue/ });
   await expect(conflictButton).toBeVisible();
 
-  // Opening it reveals the three-way resolution sheet — the whole point of F.8.
+  // Opening it reveals the resolution sheet — the whole point of F.8.
   await conflictButton.click();
   const sheet = page.getByRole('dialog', { name: 'This script changed on disk' });
   await expect(sheet).toBeVisible();
-  await expect(sheet.getByRole('button', { name: 'Keep CandidCue version' })).toBeVisible();
-  await expect(sheet.getByRole('button', { name: 'Load disk version' })).toBeVisible();
-  await expect(sheet.getByRole('button', { name: 'Save both' })).toBeVisible();
+  await expect(sheet.getByRole('button', { name: 'Keep my edits' })).toBeVisible();
+  await expect(sheet.getByRole('button', { name: 'Use disk version' })).toBeVisible();
+});
+
+/**
+ * The data-loss path (issue #118).
+ *
+ * By the time this sheet is open every autosave has been refused, so the text
+ * typed since the file changed exists only in the editor. "Use disk version"
+ * replaces it — and used to do so without writing it anywhere, while the
+ * dialog told the user the other version would be kept. This asserts the text
+ * reaches the backend BEFORE it leaves the screen.
+ */
+test('choosing the disk version writes the unsaved text to a new script first', async ({ page }) => {
+  await page.goto('/control.html');
+  const list = page.getByRole('list', { name: 'Scripts' });
+  await list.getByRole('button', { name: /Launch keynote/ }).click();
+  const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
+  await expect(editorSurface).toBeVisible();
+
+  await page.evaluate((err) => window.__E2E__.setFail('save_script', err), SCRIPT_CONFLICT_ERROR);
+
+  const onlyCopy = ' Ten minutes of work that is only in memory.';
+  await editorSurface.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(onlyCopy);
+
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__.calls.filter((c) => c.command === 'save_script').length))
+    .toBeGreaterThan(0);
+
+  await page.getByRole('button', { name: /Changed outside CandidCue/ }).click();
+  const sheet = page.getByRole('dialog', { name: 'This script changed on disk' });
+  await sheet.getByRole('button', { name: 'Use disk version' }).click();
+
+  // The text was handed to create_script, verbatim, before anything replaced it.
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__.calls.filter((c) => c.command === 'create_script').length))
+    .toBe(1);
+  const created = await page.evaluate(
+    () => window.__E2E__.calls.find((c) => c.command === 'create_script')?.args,
+  );
+  const input = (created as Record<string, unknown>)['input'] as Record<string, unknown>;
+  expect(String(input['source'])).toContain(onlyCopy.trim());
+  expect(String(input['title'])).toContain('conflict copy');
+
+  await expect(sheet).toBeHidden();
+});
+
+/**
+ * Switching modes must not throw away the undo history (issue #118).
+ *
+ * Edit and Split rendered a MarkdownEditor from two different `{#if}` branches
+ * and Preview rendered none, so Svelte destroyed the CodeMirror instance — and
+ * the history it owns — on every switch. Undo then could not reach anything
+ * typed before the switch.
+ */
+test('the undo history survives an Edit/Split/Preview round trip', async ({ page }) => {
+  await page.goto('/control.html');
+  const list = page.getByRole('list', { name: 'Scripts' });
+  await list.getByRole('button', { name: /Launch keynote/ }).click();
+  const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
+  await expect(editorSurface).toBeVisible();
+
+  const typed = 'A line typed before the mode changed.';
+  await editorSurface.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(typed);
+  await expect(editorSurface).toContainText(typed);
+
+  // Round trip through every mode.
+  for (const mode of ['Split', 'Preview', 'Edit']) {
+    await page.getByRole('radio', { name: mode }).click();
+  }
+
+  // Undo must still reach the edit made before the first switch.
+  await editorSurface.click();
+  const undo = process.platform === 'darwin' ? 'Meta+z' : 'Control+z';
+  for (let i = 0; i < 25; i++) {
+    await page.keyboard.press(undo);
+    if (!(await editorSurface.textContent())?.includes(typed)) break;
+  }
+  await expect(editorSurface).not.toContainText(typed);
 });

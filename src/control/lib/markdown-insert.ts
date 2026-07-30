@@ -33,17 +33,43 @@ function insertBlock(view: EditorView, block: string): void {
   view.focus();
 }
 
-export function insertHeading(view: EditorView): void {
+const HEADING_MARKER = /^(#{1,6})\s+/;
+
+/** The largest heading Markdown has; the cycle wraps back to plain after it. */
+const MAX_HEADING_LEVEL = 6;
+
+/**
+ * Cycle the current line's heading level: plain → H1 → H2 → … → H6 → plain.
+ *
+ * This used to be `insertHeading`, and it could only ever produce an H1: on a
+ * line that already began with `#` it focused the editor and returned, so the
+ * button did nothing at all and said nothing about why. Every heading below
+ * the top level had to be typed by hand, and pressing the button on one was
+ * indistinguishable from the button being broken.
+ *
+ * The caret keeps its place in the TEXT rather than its offset in the line —
+ * the marker in front of it changes width, and holding the offset would slide
+ * the caret through the first word every time the level changed.
+ */
+export function cycleHeading(view: EditorView): void {
   const { state } = view;
   const range = state.selection.main;
   const line = state.doc.lineAt(range.from);
-  if (/^#{1,6}\s/.test(line.text)) {
-    view.focus();
-    return;
-  }
+  const current = HEADING_MARKER.exec(line.text);
+
+  const marker = current?.[0] ?? '';
+  const level = current?.[1]?.length ?? 0;
+  const next = level >= MAX_HEADING_LEVEL ? '' : `${'#'.repeat(level + 1)} `;
+  const shift = next.length - marker.length;
+
+  /* Clamped to the line's start so a caret sitting inside the marker being
+     removed lands on the text rather than before the line. */
+  const move = (pos: number): number =>
+    pos < line.from + marker.length ? line.from + next.length : pos + shift;
+
   view.dispatch({
-    changes: { from: line.from, to: line.from, insert: '# ' },
-    selection: { anchor: range.anchor + 2, head: range.head + 2 },
+    changes: { from: line.from, to: line.from + marker.length, insert: next },
+    selection: { anchor: move(range.anchor), head: move(range.head) },
   });
   view.focus();
 }
