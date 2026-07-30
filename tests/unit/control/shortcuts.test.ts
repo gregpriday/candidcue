@@ -325,6 +325,21 @@ describe('resolveShortcut (spec §19)', () => {
     expect(resolveShortcut(event({ key: 'b', typing: true }))).toBeNull();
   });
 
+  /*
+   * The recogniser-failure copy in `services/errors.ts` tells a presenter whose
+   * speech model just died to press A. That copy is only true while this
+   * mapping holds, and it had no test — so the promise and the key are asserted
+   * together here (`error-copy-user-facing.test.ts` asserts the copy end).
+   */
+  it('maps the auto-scroll transport keys the error copy promises', () => {
+    expect(resolveShortcut(event({ key: 'a' }))).toBe('toggle-auto-scroll');
+    expect(resolveShortcut(event({ key: ']' }))).toBe('auto-scroll-faster');
+    expect(resolveShortcut(event({ key: '[' }))).toBe('auto-scroll-slower');
+    // Held, A would flip the transport at the key-repeat rate.
+    expect(resolveShortcut(event({ key: 'a', repeat: true }))).toBeNull();
+    expect(resolveShortcut(event({ key: 'a', typing: true }))).toBeNull();
+  });
+
   it('plain keys stand down for a self-activating control', () => {
     expect(resolveShortcut(event({ key: ' ', selfActivating: true }))).toBeNull();
     expect(resolveShortcut(event({ key: 'b', selfActivating: true }))).toBeNull();

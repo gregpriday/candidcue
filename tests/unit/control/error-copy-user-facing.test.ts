@@ -342,46 +342,86 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
    * `manual` is matched as a bare word on purpose: the sentence this test
    * exists to forbid read "Manual **and** fixed-speed modes", where "manual"
    * is never followed by "mode" at all — a narrower /manual mode/ would have
-   * sailed straight past the actual bug.
+   * sailed straight past the actual bug. It does not match "manually", which
+   * has no word boundary after the l.
+   *
+   * `fixed` tolerates any run of spaces or dashes, U+2010–U+2015 included, so
+   * the phrase cannot slip through on an en dash a word processor introduced.
+   * It is deliberately NOT broadened to "fixed pace" or "constant speed": the
+   * auto-scroll transport genuinely IS a fixed pace, and banning that would
+   * forbid the copy from describing the very fallback this issue added.
    */
-  const BANNED: Record<string, RegExp> = {
+  const BANNED = {
     manual: /\bmanual\b/i,
-    fixed: /\bfixed[-\s]speed\b/i,
-  };
+    // The class is \s, the range U+2010–U+2015, and a trailing ASCII hyphen.
+    // Those dashes are indistinguishable by eye, so the range is asserted
+    // directly below rather than trusted to survive a reformat.
+    fixed: /\bfixed[\s‐-―-]+speed\b/iu,
+  } satisfies Record<string, RegExp>;
 
-  /*
-   * Self-checks. Regex over markup is only safe while it is loud: if somebody
-   * restructures that Select, these fail and ask for a look, rather than
-   * matching nothing and reporting a green sweep over zero modes.
+  /**
+   * Availability, read rather than assumed.
+   *
+   * `readable` is the anti-vacuity check. A ban that quietly stops applying is
+   * worse than no ban, so the only states this test accepts are the two it can
+   * actually interpret: an explicit `disabled: true`/`false`, or no `disabled`
+   * key at all (which means enabled). Anything else — `disabled: !someFlag`,
+   * the shorthand `disabled`, a computed value — is a state we cannot read,
+   * and the self-check below fails rather than guessing.
+   *
+   * That keeps the guard self-retiring in the way the issue asked for: flip
+   * either option to `disabled: false`, or drop the key when the mode really
+   * ships, and its ban lifts on its own with no test to edit.
    */
-  const unavailable = modeOptions.filter((o) => /\bdisabled:\s*true\b/.test(o.body));
+  const availability = modeOptions.map((o) => {
+    const explicit = o.body.match(/\bdisabled:\s*(true|false)\b/);
+    return {
+      mode: o.mode,
+      disabled: explicit?.[1] === 'true',
+      readable: explicit !== null || !/\bdisabled\b/.test(o.body),
+    };
+  });
 
-  it('can still find both session modes in Settings', () => {
+  it('bans every spelling of the mode names, and nothing legitimate', () => {
+    // The bans are the whole guard, so they get asserted rather than assumed.
+    for (const spelling of [
+      'Manual and fixed-speed modes still work.',
+      'manual mode still works',
+      'Use Manual instead.',
+    ]) {
+      expect(spelling, `'${spelling}' should trip the manual ban`).toMatch(BANNED.manual);
+    }
+    for (const spelling of ['fixed-speed', 'fixed speed', 'Fixed Speed', 'fixed‑speed', 'fixed–speed']) {
+      expect(spelling, `'${spelling}' should trip the fixed ban`).toMatch(BANNED.fixed);
+    }
+    // Auto-scroll IS a fixed pace, and "manually" is a different word. Banning
+    // either would forbid copy that is true.
+    expect('rolls the script at a fixed pace').not.toMatch(BANNED.fixed);
+    expect('scroll the script manually').not.toMatch(BANNED.manual);
+  });
+
+  it('can still read both session modes out of Settings', () => {
     expect(selectMatch, 'the "Default session mode" options array no longer parses').not.toBeNull();
     expect(modeOptions.map((o) => o.mode).sort()).toEqual(['fixed', 'manual']);
-    /*
-     * Without this the suite could go quietly vacuous: if `disabled: true`
-     * stopped matching, the sweep below would iterate nothing and report green
-     * over zero modes — the exact false confidence it was written to prevent.
-     * As of this release both are disabled. When one genuinely ships, drop it
-     * from this list and its ban retires on its own.
-     */
-    expect(unavailable.map((o) => o.mode).sort()).toEqual(['fixed', 'manual']);
+    // Not "both are disabled" — that would have to be edited the day one ships.
+    // Only "we could tell either way", which stays true forever.
+    expect(
+      availability.filter((a) => !a.readable).map((a) => a.mode),
+      'a session-mode option no longer states its availability as a literal',
+    ).toEqual([]);
   });
 
   it('does not name a mode that cannot start a take', () => {
-    // While this release ships both as disabled, both bans are live. If that
-    // ever drops to none, the assertion below is vacuous by design — the modes
-    // shipped, and the copy is free to name them again.
-    for (const { mode } of unavailable) {
-      const banned = BANNED[mode];
-      expect(banned, `no banned phrase defined for mode '${mode}'`).toBeDefined();
+    // Vacuous by design once both modes ship — at which point the copy is free
+    // to name them again, which is the whole point of reading Settings.
+    for (const { mode, disabled } of availability) {
+      if (!disabled) continue;
       for (const code of KNOWN_ERROR_CODES) {
         const copy = copyForErrorCode(code);
         expect(
           copy,
           `${code} offers '${mode}', which Settings marks unavailable: ${copy}`,
-        ).not.toMatch(banned!);
+        ).not.toMatch(BANNED[mode as keyof typeof BANNED]);
       }
     }
   });
@@ -397,7 +437,11 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
     ]) {
       const copy = copyForErrorCode(code);
       expect(copy, `${code} does not name auto-scroll`).toMatch(/auto-scroll/i);
-      expect(copy, `${code} does not name the key that starts it`).toMatch(/\bPress A\b/);
+      // Loose enough not to police the sentence around it; `shortcuts.test.ts`
+      // asserts that this key still reaches the transport.
+      expect(copy, `${code} does not name the key that works it`).toMatch(
+        /\bpress (?:the )?A\b/i,
+      );
     }
   });
 });

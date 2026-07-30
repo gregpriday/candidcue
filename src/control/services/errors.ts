@@ -52,14 +52,27 @@ const ERROR_COPY: Record<string, string> = {
   // the real answer, and every one of these codes surfaces with the take
   // already open — `state.active` is set before the pipeline starts — so `A` is
   // a key the presenter can actually press at the moment they read this.
+  //
+  // The rescue comes BEFORE the repair in all four. Reinstalling and restarting
+  // both mean leaving CandidCue, which is not a thing anyone does mid-take; the
+  // keystroke that keeps the script moving is what the presenter needs in the
+  // second they are reading this, and the repair keeps until they are off
+  // camera.
+  //
+  // Only `STT_ENGINE_ERROR` says "start or stop". `A` is a TOGGLE, and that is
+  // the one code that fires arbitrarily deep into a take — auto-scroll pauses
+  // following but not transcription, so the recogniser can die while the
+  // transport is already running, and telling that presenter to "start"
+  // auto-scroll would stop their script. The other three fire moments after
+  // `startLiveSession` set `running: false`, so "start" is accurate there.
   STT_MODEL_MISSING:
-    'The speech model is missing from this installation, so voice tracking cannot run. Reinstalling CandidCue will restore it. Press A during this take to roll the script with auto-scroll instead.',
+    'The speech model is missing from this installation. Press A to start auto-scroll instead. Reinstall CandidCue after the take.',
   STT_MODEL_LOAD_FAILED:
-    'The speech model could not be loaded on this machine. Restart CandidCue, and reinstall it if this keeps happening. Press A during this take to roll the script with auto-scroll instead.',
+    'The speech model could not be loaded. Press A to start auto-scroll instead. Restart CandidCue after the take, and reinstall it if this keeps happening.',
   STT_WORKER_FAILED:
-    'The speech recogniser could not be started. Restart CandidCue, then try again. Press A during this take to roll the script with auto-scroll instead.',
+    'The speech recogniser is unavailable. Press A to start auto-scroll instead. Restart CandidCue after the take.',
   STT_ENGINE_ERROR:
-    'The speech recogniser stopped unexpectedly. Press A to roll the script with auto-scroll, or stop and restart the take.',
+    'The speech recogniser failed unexpectedly. Press A to start or stop auto-scroll. To retry voice following, stop and restart the take.',
 
   /* -- network ------------------------------------------------------------ */
   //
