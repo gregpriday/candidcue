@@ -17,7 +17,11 @@ import {
   typeCeilingPx,
   type StageAppearance,
 } from '../../../src/control/lib/stage-appearance';
-import { defaultAppSettings } from '../../../src/control/services/settings-types';
+import {
+  DEFAULT_STAGE_APPEARANCE,
+  DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM,
+  defaultAppSettings,
+} from '../../../src/control/services/settings-types';
 
 const BASE: StageAppearance = {
   textIntensity: 'standard',
@@ -158,5 +162,33 @@ describe('reading an appearance off the saved settings', () => {
       columnWidthPercent: t.columnWidthPercent,
       readingBandCenterPercent: t.readingBandCenterPercent,
     });
+  });
+});
+
+describe('the defaults Settings offers to restore', () => {
+  /*
+   * Settings now shows what each appearance slider's default is and offers a
+   * way back to it. That is only true if the number it restores is the number a
+   * fresh install actually starts at — a "Reset to default" reading from its own
+   * copy of the value is the kind of control this whole change exists to remove.
+   */
+  it('restores the same numbers a fresh install starts at', () => {
+    const t = defaultAppSettings().teleprompter;
+    expect(t.fontSizePx).toBe(DEFAULT_STAGE_APPEARANCE.fontSizePx);
+    expect(t.lineHeight).toBe(DEFAULT_STAGE_APPEARANCE.lineHeight);
+    expect(t.columnWidthPercent).toBe(DEFAULT_STAGE_APPEARANCE.columnWidthPercent);
+    expect(t.readingBandCenterPercent).toBe(DEFAULT_STAGE_APPEARANCE.readingBandCenterPercent);
+    expect(t.fixedSpeedWpm).toBe(DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM);
+  });
+
+  /*
+   * Two other constants in the tree are also about words per minute and mean
+   * different things: `lib/format.ts`'s DEFAULT_WPM is a speaking rate for
+   * duration estimates, and the renderer's AUTO_SCROLL_DEFAULT_WPM is a repair
+   * for a missing value. Naming this one keeps a change to either of those from
+   * silently moving what Settings calls the default.
+   */
+  it('names the auto-scroll default rather than leaving it inline', () => {
+    expect(DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM).toBe(150);
   });
 });

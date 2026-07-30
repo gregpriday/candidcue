@@ -767,6 +767,28 @@ export const DEFAULT_STAGE_APPEARANCE = {
   readingBandCenterPercent: 38,
 } as const;
 
+/**
+ * The auto-scroll pace a take falls back to when nobody has set one.
+ *
+ * Named rather than left inline because Settings now shows it and offers a way
+ * back to it, and a "Reset to default" that carries its own copy of the number
+ * is a reset that can disagree with the default it claims to restore.
+ *
+ * Deliberately NOT one of the two similarly-named constants already in the
+ * tree, both of which mean something else:
+ *
+ *   - `lib/format.ts`'s `DEFAULT_WPM` is a SPEAKING rate, used to estimate how
+ *     long a script takes to read aloud. It is 150 too, and that is a
+ *     coincidence of two reasonable numbers rather than one shared fact.
+ *   - `stage/renderer/autoscroll.ts`'s `AUTO_SCROLL_DEFAULT_WPM` is 130, and is
+ *     the renderer's fallback for a value that arrived missing or invalid —
+ *     a repair, not a preference.
+ *
+ * Collapsing any of the three into the others would tie a user-facing default
+ * to an unrelated number and let a change to one silently move the other.
+ */
+export const DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM = 150;
+
 export function defaultAppSettings(): AppSettings {
   return {
     schemaVersion: 1,
@@ -822,7 +844,7 @@ export function defaultAppSettings(): AppSettings {
       phraseHighlight: true,
       pastDimming: true,
       textIntensity: 'standard',
-      fixedSpeedWpm: 150,
+      fixedSpeedWpm: DEFAULT_TELEPROMPTER_FIXED_SPEED_WPM,
       stageEndBehavior: 'close',
       hidePointer: true,
       /*

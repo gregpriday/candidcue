@@ -90,23 +90,24 @@ export const FOLLOW_FEEL_OPTIONS: Array<FollowOption<FollowFeel>> = [
   },
 ];
 
-export const FIDELITY_MODE_OPTIONS: Array<FollowOption<FidelityMode>> = [
-  {
-    value: 'conversational',
-    label: 'Conversational',
-    description: 'Paraphrasing is expected. Tips only for numbers, negations, names, and large meaning changes.',
-  },
-  {
-    value: 'balanced',
-    label: 'Balanced',
-    description: 'Normal variation is fine. Tips on likely critical changes and meaningful omissions.',
-  },
-  {
-    value: 'exact',
-    label: 'Exact',
-    description: 'Stricter wording coverage and more omission tips. Tracking stays just as tolerant.',
-  },
-];
+/*
+ * `FIDELITY_MODE_OPTIONS` used to live here, and Settings rendered it.
+ *
+ * All three of its descriptions were written against live coaching — which
+ * words earn a tip, how many omissions are worth mentioning. That feature was
+ * removed, and nothing replaced it: `resolveFollowProfile` below builds a take's
+ * motion from `family` and `feel`, and `fidelityMode` reaches the settings
+ * document and Rust's validator without ever being read to decide anything.
+ *
+ * So the copy promised behaviour that could not happen, attached to a control
+ * that changed nothing. The option list is gone with the control (#124).
+ *
+ * `FidelityMode`, `FIDELITY_MODES` and the clamp in `normalizeFollowing` all
+ * stay. The field is still written by older builds and still validated by
+ * `src-tauri/src/settings/mod.rs` against a closed vocabulary — dropping it
+ * would turn every settings document that carries it into a load failure, at no
+ * benefit. It is compatibility vocabulary now, with no behavioural consumer.
+ */
 
 /* ---------------------------------------------------------------------------
  * Motion profile families (§55)
