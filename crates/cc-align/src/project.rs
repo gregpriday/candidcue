@@ -94,6 +94,10 @@ pub struct TokenSnapshot {
     pub display_limit_token: f64,
     pub confidence: f64,
     pub suggestion_token: Option<f64>,
+    /// Reversible dim-only frontier; never a scroll/progress position.
+    pub provisional_token: Option<f64>,
+    /// One-shot instruction allowing the stage to brighten provisional words.
+    pub provisional_retracted: bool,
     pub script_len_tokens: f64,
     /// Atom-space originals. Diagnostics and benchmark parity only.
     pub observed_atom: f64,
@@ -170,6 +174,8 @@ pub fn project_to_tokens(
         display_limit_token: script.token_at(snapshot.display_limit),
         confidence: snapshot.confidence,
         suggestion_token: snapshot.suggestion.map(|a| script.token_at(a)),
+        provisional_token: snapshot.provisional.map(|a| script.token_at(a)),
+        provisional_retracted: snapshot.provisional_retracted,
         script_len_tokens: script.token_count as f64,
         observed_atom: snapshot.observed,
         confirmed_atom: snapshot.confirmed,

@@ -28,7 +28,11 @@ const nodes: SafeRenderNode[] = [
   },
 ];
 
-function mount(props: { cursor: number | null; dimFrozen?: boolean }) {
+function mount(props: {
+  cursor: number | null;
+  dimFrozen?: boolean;
+  dimRollback?: boolean;
+}) {
   const result = render(InlineNodes, { props: { nodes, ...props } });
   /** The ramp step drawn on `token`, or null where nothing is claimed. */
   const dimAt = (token: number): string | null =>
@@ -70,6 +74,27 @@ describe('the ramp while the engine is not following', () => {
     const { container, rerender } = mount({ cursor: 6 });
     await rerender({ nodes, cursor: 6, dimFrozen: true });
     expect(container.querySelectorAll('.past').length).toBe(6);
+  });
+
+  it('brightens withdrawn provisional words only on an explicit rollback', async () => {
+    const { dimAt, rerender } = mount({ cursor: 5 });
+    await rerender({ nodes, cursor: 8 });
+    expect(dimAt(7)).toBe('1');
+    expect(dimAt(5)).toBe('3');
+
+    // A low-evidence hold normally latches at eight. This one carries the
+    // engine's explicit withdrawal signal, so the reversible three-word
+    // frontier is allowed to unwind to the last committed boundary.
+    await rerender({
+      nodes,
+      cursor: 5,
+      dimFrozen: true,
+      dimRollback: true,
+    });
+    expect(dimAt(4)).toBe('1');
+    for (const token of [5, 6, 7]) {
+      expect(dimAt(token), `token ${token} stayed dim after rollback`).toBeNull();
+    }
   });
 
   it('resumes from the live cursor the moment following returns', async () => {

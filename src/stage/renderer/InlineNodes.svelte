@@ -15,6 +15,7 @@
     assets = {},
     showCues = true,
     dimFrozen = false,
+    dimRollback = false,
   }: {
     nodes: SafeRenderNode[];
     /**
@@ -37,6 +38,8 @@
      * nobody knew where they were).
      */
     dimFrozen?: boolean;
+    /** Explicit engine withdrawal of a reversible provisional frontier. */
+    dimRollback?: boolean;
   } = $props();
 
   /**
@@ -85,6 +88,10 @@
   let heldCursor = $state<number | null>(null);
   $effect(() => {
     const live = cursor;
+    if (dimRollback) {
+      heldCursor = live;
+      return;
+    }
     if (dimFrozen && live !== null && untrack(() => heldCursor) !== null) return;
     heldCursor = live;
   });
@@ -141,7 +148,7 @@
     <br />
   {:else if node.type === 'link'}
     <!-- Links are inert on stage: label only, never navigable. -->
-    <span class="link"><Self nodes={node.label} {cursor} {assets} {showCues} {dimFrozen} /></span>
+    <span class="link"><Self nodes={node.label} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} /></span>
   {:else if node.type === 'image'}
     {#if assets[node.assetId]}
       <img class="inline-img" src={assets[node.assetId]?.url} alt={node.alt} draggable="false" />

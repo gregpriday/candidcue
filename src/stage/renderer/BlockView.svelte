@@ -17,6 +17,7 @@
     showCues = true,
     gapPx = 0,
     dimFrozen = false,
+    dimRollback = false,
     performanceMode = 'rehearsal',
   }: {
     block: CompiledBlock;
@@ -32,6 +33,8 @@
      * reader in, which is a claim it still stands behind while it searches.
      */
     dimFrozen?: boolean;
+    /** Allows an explicitly withdrawn provisional ramp to brighten again. */
+    dimRollback?: boolean;
     /**
      * Which view of the script this is (`shared/performance-view.ts`).
      *
@@ -101,15 +104,15 @@
            cue vocabulary: the same chip an authored [Beat] draws, so it reads as
            direction rather than as a card that lost its contents. -->
       <div class="perf-cue" data-performance-cue={perfCue}>
-        <InlineNodes nodes={block.renderNodes} {assets} showCues={true} {dimFrozen} />
+        <InlineNodes nodes={block.renderNodes} {assets} showCues={true} {dimFrozen} {dimRollback} />
       </div>
     {:else if block.kind === 'heading'}
       <div class="heading" data-level={headingLevel} class:compact={compactHeading}>
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} />
       </div>
     {:else if block.kind === 'cue'}
       <div class="cue-row">
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} showCues={true} {dimFrozen} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} showCues={true} {dimFrozen} {dimRollback} />
       </div>
     {:else if block.kind === 'divider'}
       <div class="divider" aria-hidden="true"></div>
@@ -129,15 +132,15 @@
         {/each}
       </div>
     {:else if block.kind === 'code'}
-      <pre class="code"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></pre>
+      <pre class="code"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} /></pre>
     {:else if block.kind === 'blockquote'}
       <div class="quote">
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} />
       </div>
     {:else if block.kind === 'list_item'}
       <div class="list-item">
         <span class="bullet" aria-hidden="true"></span>
-        <span class="list-body"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></span>
+        <span class="list-body"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} /></span>
       </div>
     {:else if block.kind === 'table'}
       <!-- Tables are structured reference cards on stage (§24.6): real rows,
@@ -178,17 +181,17 @@
       </div>
     {:else if block.kind === 'diagram'}
       <div class="visual-fallback">
-        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} />
+        <InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} />
       </div>
     {:else if block.kind === 'silent' || block.kind === 'stage_only'}
       <!-- Not a `<p>`. `:::silent` and `:::stage` keep whatever they wrapped
            (`innerKind`), so a table can land here — and an HTML parser closes an
            open `<p>` before a `<table>`, which leaves the stage measuring a
            shape the browser then takes apart underneath it. -->
-      <div class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></div>
+      <div class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} /></div>
     {:else}
       <!-- paragraph -->
-      <p class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} /></p>
+      <p class="para"><InlineNodes nodes={block.renderNodes} {cursor} {assets} {showCues} {dimFrozen} {dimRollback} /></p>
     {/if}
   </div>
 {/if}

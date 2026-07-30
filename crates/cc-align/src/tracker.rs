@@ -121,6 +121,12 @@ pub struct Snapshot {
     /// interaction state): the UI may offer "possible match below — resume
     /// here?" instead of teleporting. None while following normally.
     pub suggestion: Option<f64>,
+    /// A bounded, reversible dimming frontier supported only by close local
+    /// spelling/phonetic evidence. It never drives scrolling or progress.
+    pub provisional: Option<f64>,
+    /// True for the snapshot that explicitly withdraws a provisional frontier.
+    /// The stage uses this one-shot signal to permit words to brighten again.
+    pub provisional_retracted: bool,
     /// Total spoken atoms in the script — the hard ceiling for `display_at`.
     pub script_len: f64,
 }
@@ -312,6 +318,16 @@ pub struct Engine {
     /// Consecutive events with weak local evidence — the trigger for global
     /// search (spec §9.5: global proposals only when local evidence fails).
     weak_streak: u32,
+    /// Approximate-only local continuations since the last exact-content
+    /// update. This is deliberately not inferred from `weak_streak`: a valid
+    /// one-word bridge is healthy enough to keep motion alive, but not strong
+    /// enough to authorize another guess.
+    approximate_streak: u8,
+    /// Reversible dim-only frontier. Kept out of `observed` and `confirmed` so
+    /// a mistaken spelling inference can be withdrawn without rewinding the
+    /// semantic tracker or the document.
+    provisional: Option<f64>,
+    provisional_retracted: bool,
     /// Evidence older than this is dead: it was spoken before the last
     /// accepted discontinuity (or manual move) and would otherwise keep
     /// out-voting the new location in the full-tail alignment — the failure
@@ -341,6 +357,9 @@ impl Engine {
             pending_jump: None,
             viewport: None,
             weak_streak: 0,
+            approximate_streak: 0,
+            provisional: None,
+            provisional_retracted: false,
             tail_horizon_ms: f64::MIN,
             regions: Vec::new(),
         }
@@ -367,6 +386,9 @@ impl Engine {
         self.rate = self.config.rate_default;
         self.pending_jump = None;
         self.weak_streak = 0;
+        self.approximate_streak = 0;
+        self.provisional = None;
+        self.provisional_retracted = false;
         self.confidence = 0.9;
         self.last_evidence_ms = at_audio_ms;
         // Speech from before the manual move must not drag the cursor back.
@@ -471,7 +493,11 @@ impl Engine {
         let local_candidate: Option<Candidate> = local_region.and_then(|(start, end)| {
             align(&self.script, &query, start, end, &self.config, &mut self.scratch).and_then(
                 |evidence| {
-                    if evidence.exact_matches + evidence.fuzzy_matches == 0 {
+                    if evidence.exact_matches
+                        + evidence.fuzzy_matches
+                        + evidence.phonetic_matches
+                        == 0
+                    {
                         return None;
                     }
                     let distance = (evidence.end_position as f64 - observed).abs();
@@ -514,7 +540,7 @@ impl Engine {
             .filter(|q| !q.filler && !crate::normalize::is_stopword(&q.surface))
             .count();
 
-        let local_ok = local_candidate
+        let ordinary_local_ok = local_candidate
             .as_ref()
             .map(|c| {
                 c.evidence.fidelity >= self.config.observe_min_fidelity
@@ -522,6 +548,10 @@ impl Engine {
                     && c.evidence.content_matches >= self.config.observe_min_content
             })
             .unwrap_or(false);
+        let approximate_local_ok = local_candidate
+            .as_ref()
+            .is_some_and(|candidate| self.can_bridge_local_approx(candidate, predicted));
+        let local_ok = ordinary_local_ok || approximate_local_ok;
         // Weakness: gates failed, OR enough content went unexplained, OR a
         // long ordered run of anything (stopword-heavy scripts would starve
         // the content counter for seconds otherwise).
@@ -809,7 +839,7 @@ impl Engine {
                 {
                     self.hold(DecisionCode::HoldLowEvidence, now_ms)
                 } else {
-                    self.decide_local(local, f64::INFINITY, now_ms)
+                    self.decide_local(local, f64::INFINITY, predicted, now_ms)
                 }
             }
             _ => self.hold(DecisionCode::HoldLowEvidence, now_ms),
@@ -850,7 +880,13 @@ impl Engine {
         self.snapshot(DecisionCode::RelocationAccepted, evidence_ms, now_ms)
     }
 
-    fn decide_local(&mut self, best: Candidate, margin: f64, now_ms: f64) -> Snapshot {
+    fn decide_local(
+        &mut self,
+        best: Candidate,
+        margin: f64,
+        predicted: f64,
+        now_ms: f64,
+    ) -> Snapshot {
         let c = self.config.clone();
         let ev = &best.evidence;
         let ambiguous = margin < c.ambiguity_margin;
@@ -859,10 +895,18 @@ impl Engine {
             self.confidence = (self.confidence * 0.7).max(0.05);
             return self.snapshot(DecisionCode::HoldAmbiguous, self.last_evidence_ms, now_ms);
         }
-        let passes = ev.fidelity >= c.observe_min_fidelity
+        let ordinary_passes = ev.fidelity >= c.observe_min_fidelity
             && ev.coverage >= c.observe_min_coverage
             && ev.content_matches >= c.observe_min_content;
-        if !passes {
+        let approximate_bridge = !ordinary_passes && self.can_bridge_local_approx(&best, predicted);
+        if !ordinary_passes && !approximate_bridge {
+            if self.provisional.is_some() && self.is_coherent_approx_chain(&best) {
+                // The spelling evidence still points forward in order, but the
+                // speculative budget is exhausted. Hold the existing dim
+                // frontier; reaching the cap is not evidence that the earlier
+                // provisional words were wrong.
+                return self.hold_preserving_provisional(DecisionCode::HoldLowEvidence, now_ms);
+            }
             // Off-script speech looks exactly like this: insertions dominate.
             let code = if ev.insertions > ev.exact_matches {
                 DecisionCode::HoldOffScript
@@ -873,9 +917,24 @@ impl Engine {
         }
 
         let evidence_ms = self.evidence_time(ev, now_ms);
-        self.accept(ev.end_position as f64, evidence_ms, false);
-        self.state = TrackingState::Following;
-        self.confidence = confidence_of(ev, margin);
+        if approximate_bridge {
+            self.provisional = Some(ev.end_position as f64);
+            self.approximate_streak = self.approximate_streak.saturating_add(1);
+            self.state = TrackingState::Following;
+            // A provisional spelling/phonetic bridge may shade the next word,
+            // but it neither moves the sheet nor improves semantic confidence.
+            self.confidence = (self.confidence * 0.92).max(0.2);
+        } else {
+            let target = ev.end_position as f64;
+            if self.provisional.is_some_and(|p| target < p) {
+                self.provisional_retracted = true;
+            }
+            self.provisional = None;
+            self.approximate_streak = 0;
+            self.accept(target, evidence_ms, false);
+            self.state = TrackingState::Following;
+            self.confidence = confidence_of(ev, margin);
+        }
 
         // Confirmed advancement: finals confirm outright; partials confirm
         // when enough *stable* content matched, and only up to the stable
@@ -886,7 +945,7 @@ impl Engine {
             .map(|i| i.is_final)
             .unwrap_or(false);
         let mut decision = DecisionCode::LocalObserved;
-        if ev.fidelity >= c.confirm_min_fidelity {
+        if !approximate_bridge && ev.fidelity >= c.confirm_min_fidelity {
             let target = if is_final_evidence {
                 Some(ev.end_position as f64)
             } else if ev.stable_content_matches >= c.confirm_min_stable_content {
@@ -902,6 +961,46 @@ impl Engine {
             }
         }
         self.snapshot(decision, evidence_ms, now_ms)
+    }
+
+    /// May one close spelling/sound stand in for the immediately expected
+    /// script word?
+    ///
+    /// This is intentionally much narrower than ordinary local alignment:
+    /// one new approximate content relation per step, no unexplained transcript
+    /// or skipped script material, forward by about one word, near the pace
+    /// prediction, and only from an already-confident Following lock. It
+    /// updates only the reversible dim frontier; never `observed`, `confirmed`,
+    /// cold acquisition, or discontinuity authority.
+    fn can_bridge_local_approx(&self, candidate: &Candidate, predicted: f64) -> bool {
+        let ev = &candidate.evidence;
+        let c = &self.config;
+        let frontier = self.provisional.unwrap_or(self.observed);
+        self.is_coherent_approx_chain(candidate)
+            && matches!(self.state, TrackingState::Following)
+            && self.confidence >= c.local_approx_min_confidence
+            && self.approximate_streak < c.local_approx_max_consecutive
+            && !candidate.backward
+            && ev.end_position as f64 > frontier
+            && ev.end_position as f64 - frontier <= c.local_approx_max_step
+            && ev.end_position as f64 - self.observed <= c.local_approx_max_advance
+            && ev.end_position as f64 <= self.script.prediction_ceiling(self.observed)
+            && (ev.end_position as f64 - predicted).abs() <= c.local_approx_prediction_slack
+            && ev.fidelity >= c.observe_min_fidelity
+            && ev.coverage >= c.observe_min_coverage
+            && ev.content_matches == 0
+            && ev.approximate_content_matches == u32::from(self.approximate_streak) + 1
+    }
+
+    fn is_coherent_approx_chain(&self, candidate: &Candidate) -> bool {
+        let ev = &candidate.evidence;
+        !candidate.from_global
+            && ev.content_matches == 0
+            && ev.approximate_content_matches > 0
+            && ev.approximate_content_matches == ev.fuzzy_matches + ev.phonetic_matches
+            && ev.substitutions == 0
+            && ev.insertions == 0
+            && ev.deletions == 0
     }
 
     /// Evaluate a distant candidate scored on the unexplained suffix.
@@ -1235,6 +1334,22 @@ impl Engine {
     }
 
     fn hold(&mut self, code: DecisionCode, now_ms: f64) -> Snapshot {
+        if self.provisional.take().is_some() {
+            self.provisional_retracted = true;
+            self.approximate_streak = 0;
+        }
+        if !matches!(self.state, TrackingState::Searching) {
+            self.state = TrackingState::Holding;
+        }
+        self.confidence = (self.confidence * 0.8).max(0.05);
+        self.snapshot(code, self.last_evidence_ms, now_ms)
+    }
+
+    fn hold_preserving_provisional(
+        &mut self,
+        code: DecisionCode,
+        now_ms: f64,
+    ) -> Snapshot {
         if !matches!(self.state, TrackingState::Searching) {
             self.state = TrackingState::Holding;
         }
@@ -1280,7 +1395,7 @@ impl Engine {
             (true, true) => self.rate * display_gain * (1.0 - decay),
             _ => 0.0,
         };
-        Snapshot {
+        let snapshot = Snapshot {
             seq: self.seq,
             state: self.state,
             decision,
@@ -1300,8 +1415,12 @@ impl Engine {
             display_limit: self.script.prediction_ceiling(self.observed),
             confidence: self.confidence,
             suggestion: self.pending_jump.as_ref().map(|p| p.target as f64),
+            provisional: self.provisional,
+            provisional_retracted: self.provisional_retracted,
             script_len: self.script.len() as f64,
-        }
+        };
+        self.provisional_retracted = false;
+        snapshot
     }
 }
 
@@ -1311,4 +1430,119 @@ fn confidence_of(ev: &Evidence, margin: f64) -> f64 {
         + 0.2 * (ev.stable_content_matches.min(5) as f64 / 5.0);
     let margin_factor = (margin / 2.0).clamp(0.5, 1.0);
     (base * margin_factor).clamp(0.0, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::script::{compile, CompileOptions};
+
+    fn final_item(engine: &mut Engine, ordinal: u32, text: &str, at_ms: f64) -> Snapshot {
+        engine.handle(SessionEvent::Final {
+            item_id: format!("item-{ordinal}"),
+            text: text.to_string(),
+            audio_end_ms: at_ms,
+        })
+    }
+
+    fn approximate_script() -> CompiledScript {
+        compile(
+            "alpha bravo presenter teleprompter harbour narration delta echo foxtrot golf",
+            CompileOptions::default(),
+        )
+    }
+
+    #[test]
+    fn one_close_local_word_advances_only_the_reversible_frontier() {
+        let mut engine = Engine::new(approximate_script(), AlignmentConfig::default());
+        engine.set_manual_position(2, 0.0);
+
+        let snapshot = final_item(&mut engine, 1, "presentor", 350.0);
+
+        assert_eq!(snapshot.state, TrackingState::Following);
+        assert_eq!(snapshot.provisional, Some(3.0));
+        assert_eq!(snapshot.observed, 2.0);
+        assert_eq!(snapshot.confirmed, 2.0);
+        assert!(!snapshot.provisional_retracted);
+    }
+
+    #[test]
+    fn approximate_frontier_is_capped_and_does_not_move_the_document() {
+        let mut engine = Engine::new(approximate_script(), AlignmentConfig::default());
+        engine.set_manual_position(2, 0.0);
+
+        assert_eq!(final_item(&mut engine, 1, "presentor", 350.0).provisional, Some(3.0));
+        assert_eq!(
+            final_item(&mut engine, 2, "teleprompters", 700.0).provisional,
+            Some(4.0),
+        );
+        assert_eq!(final_item(&mut engine, 3, "harbor", 1_050.0).provisional, Some(5.0));
+
+        // The fourth close spelling is coherent, but the three-word budget is
+        // exhausted. Keep the existing frontier and hold rather than drifting.
+        let capped = final_item(&mut engine, 4, "naration", 1_400.0);
+        assert_eq!(capped.state, TrackingState::Holding);
+        assert_eq!(capped.provisional, Some(5.0));
+        assert_eq!(capped.observed, 2.0);
+        assert_eq!(capped.confirmed, 2.0);
+    }
+
+    #[test]
+    fn contradictory_text_retracts_the_provisional_frontier() {
+        let mut engine = Engine::new(approximate_script(), AlignmentConfig::default());
+        engine.set_manual_position(2, 0.0);
+        assert_eq!(final_item(&mut engine, 1, "presentor", 350.0).provisional, Some(3.0));
+
+        let retracted = final_item(&mut engine, 2, "banana", 700.0);
+        assert_eq!(retracted.provisional, None);
+        assert!(retracted.provisional_retracted);
+        assert_eq!(retracted.observed, 2.0);
+        assert_eq!(retracted.confirmed, 2.0);
+
+        // Retraction is a one-shot rendering instruction.
+        let after = engine.handle(SessionEvent::ItemStarted {
+            item_id: "item-3".to_string(),
+            audio_start_ms: 800.0,
+        });
+        assert!(!after.provisional_retracted);
+    }
+
+    #[test]
+    fn exact_followup_commits_past_the_provisional_frontier() {
+        let mut engine = Engine::new(approximate_script(), AlignmentConfig::default());
+        engine.set_manual_position(2, 0.0);
+        assert_eq!(final_item(&mut engine, 1, "presentor", 350.0).provisional, Some(3.0));
+
+        let committed = final_item(&mut engine, 2, "teleprompter harbour", 800.0);
+        assert_eq!(committed.provisional, None);
+        assert!(!committed.provisional_retracted);
+        assert!(committed.observed >= 5.0);
+        assert!(committed.confirmed >= 5.0);
+    }
+
+    #[test]
+    fn one_close_word_cannot_acquire_a_cold_lock() {
+        let mut engine = Engine::new(approximate_script(), AlignmentConfig::default());
+        let snapshot = final_item(&mut engine, 1, "presentor", 350.0);
+
+        assert_ne!(snapshot.state, TrackingState::Following);
+        assert_eq!(snapshot.provisional, None);
+        assert_eq!(snapshot.observed, 0.0);
+        assert_eq!(snapshot.confirmed, 0.0);
+    }
+
+    #[test]
+    fn expected_proper_noun_can_use_phonetic_evidence_locally() {
+        let script = compile(
+            "alpha bravo Saoirse delta echo",
+            CompileOptions::default(),
+        );
+        let mut engine = Engine::new(script, AlignmentConfig::default());
+        engine.set_manual_position(2, 0.0);
+
+        let snapshot = final_item(&mut engine, 1, "Sawersi", 350.0);
+        assert_eq!(snapshot.provisional, Some(3.0));
+        assert_eq!(snapshot.observed, 2.0);
+        assert_eq!(snapshot.confirmed, 2.0);
+    }
 }
