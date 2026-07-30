@@ -6,7 +6,6 @@ import {
   opticalProfileFieldsForPreset,
   profileMatchesPreset,
   RIG_PRESETS,
-  teleprompterMirrorForPreset,
 } from './optical-rig-presets';
 
 const byId = Object.fromEntries(RIG_PRESETS.map((p) => [p.id, p]));
@@ -158,19 +157,6 @@ describe('opticalProfileFieldsForPreset', () => {
       first.flips.horizontal = !first.flips.horizontal;
       expect(opticalProfileFieldsForPreset(preset).flips).toEqual(preset.patch.flips);
     }
-  });
-});
-
-describe('teleprompterMirrorForPreset', () => {
-  it('builds both mirror axes into one object, never two', () => {
-    expect(teleprompterMirrorForPreset(byId['desk-webcam']!)).toEqual({
-      mirrorX: false,
-      mirrorY: false,
-    });
-    expect(teleprompterMirrorForPreset(byId['elgato-prompter']!)).toEqual({
-      mirrorX: true,
-      mirrorY: false,
-    });
   });
 });
 

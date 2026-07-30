@@ -70,7 +70,6 @@
     opticalProfileFieldsForPreset,
     profileMatchesPreset,
     RIG_PRESETS,
-    teleprompterMirrorForPreset,
     type OpticalRigPreset,
   } from '../../shared/optical-rig-presets';
   import {
@@ -254,6 +253,16 @@
   let dirty = $state(false);
   /** Set just before the wizard navigates away itself, so its own exit is clean. */
   let finished = $state(false);
+  /**
+   * True while `finish()` is mid-save, so a second press cannot start a second one.
+   *
+   * Finishing is two settings writes in a row, and `patchSettings` reads the
+   * store's revision when it is CALLED, not when it lands. Two overlapping
+   * finishes therefore both start from the same revision, and the later write
+   * is rejected as stale — which would drop the mirror axes exactly the way
+   * this screen used to drop them. One at a time is the whole guarantee.
+   */
+  let finishing = $state(false);
 
   let displays = $state<DisplayDescriptor[]>([]);
   let loadError = $state<string | null>(null);
@@ -315,24 +324,20 @@
   /* ---------------------------------------------------------- step: preset */
 
   /**
-   * Apply a named rig's starting values in one move.
+   * Apply a named rig's starting values to the WORKING profile, and nowhere else.
    *
-   * Deliberately not two calls to `setFlip()`: a flip is recorded in two
-   * places — `profile.flips` and the `teleprompter` mirror settings a real
-   * take actually renders from — and `setFlip()`'s own `patchSettings` write
-   * is a read-then-write against the settings store's revision. Two of those
-   * fired back to back, before either's backend round trip resolves, both
-   * capture the SAME starting revision; the backend accepts whichever lands
-   * first and rejects the other as stale, and the rejected call's `catch`
-   * then reverts the store to a snapshot that predates the accepted write —
-   * silently dropping one axis and leaving an unhandled rejection. A preset
-   * always sets both axes at once, so `teleprompterMirrorForPreset` builds
-   * both into the single object below rather than this calling `setFlip`
-   * twice.
+   * A preset sets both mirror axes, and it used to write them straight into the
+   * `teleprompter` settings a real take renders from, so that the glass could
+   * redraw. It does not need to: `calibrationStageSettings()` builds the live
+   * preview out of `profile.flips`, so `patchProfile` alone is already enough
+   * to turn the glass around. Writing settings here made the leave-without-
+   * saving prompt a lie — the mirror change outlived the Discard it claimed to
+   * have dropped, and the next take opened flipped with nothing on screen to
+   * explain it. Within this wizard, `finish()` is now the only place that puts
+   * a flip anywhere permanent.
    */
   function applyPreset(preset: OpticalRigPreset): void {
     patchProfile(opticalProfileFieldsForPreset(preset));
-    void patchSettings('teleprompter', teleprompterMirrorForPreset(preset));
   }
 
   /** Whether every field a preset owns already matches it — for the selected card, not for persistence. */
@@ -397,8 +402,38 @@
         : null,
       existing,
     );
-    profile = { ...found.profile, rigName };
-    answered = existing?.completedSteps ?? [];
+    const completed = existing?.completedSteps ?? [];
+    profile = {
+      ...found.profile,
+      rigName,
+      /*
+       * Mirroring starts from whatever is ALREADY in force, unless this rig has
+       * an answer of its own.
+       *
+       * `finish()` writes both axes every time — that is what stops the
+       * profile's record and `teleprompter.mirrorX/mirrorY` drifting apart — so
+       * the working profile has to arrive holding the truth, or Apply would
+       * switch OFF a mirror the operator set on the Stage display screen and
+       * never revisited in here. That is this screen's original defect pointed
+       * the other way: the wizard changing a global nobody touched in it.
+       *
+       * `defaultOpticalProfile()` starts unflipped and `discoverProfile` always
+       * lists orientation outstanding — it is the one fact no code can derive —
+       * so square glass on a fresh rig is an ABSENCE of an answer, not an
+       * answer, which is exactly the ambiguity `completedSteps` exists to
+       * settle. A rig that HAS answered orientation keeps its own record; one
+       * that has not adopts the display's current mirroring, which also makes
+       * the orientation card an honest question: it is drawn the way a real
+       * take would draw it rather than from an assumed-square start.
+       */
+      flips: completed.includes('orientation')
+        ? found.profile.flips
+        : {
+            horizontal: $settings.teleprompter.mirrorX,
+            vertical: $settings.teleprompter.mirrorY,
+          },
+    };
+    answered = completed;
     // Discovery filling fields in is not the user having answered anything, so
     // the sequence still starts clean and nothing here counts as dirty yet.
     dirty = false;
@@ -600,8 +635,17 @@
       return;
     }
     stageOpened = false;
+    /*
+     * Deliberately does NOT say "leave this screen".
+     *
+     * Leaving is what the navigation guard catches, and the only button on
+     * that prompt that actually leaves is Discard — so the old wording sent an
+     * operator who had lost the preview to the one action that throws away
+     * every measurement in the sentence before it. Finishing keeps the work
+     * AND is the thing that lets the window come back.
+     */
     stageError =
-      'The prompt window was closed from the prompter. Everything measured here is still here — leave this screen and open Calibrate again to put the window back.';
+      'The prompt window was closed from the prompter. Everything measured here is still here — carry on and apply the rig when you are ready. Opening Calibrate again after it is saved puts the window back.';
   }
 
   /**
@@ -713,6 +757,11 @@
    * judged: it is drawn unmirrored, so a presenter who says "that reads
    * backwards" and flips the toggle needs the glass to redraw before they can
    * confirm they fixed it rather than doubled it.
+   *
+   * Note where the mirror axes come from: the WORKING profile, not
+   * `$settings.teleprompter`. That is what lets the preview be live while the
+   * settings stay untouched until Finish — the whole reason a flip can be tried
+   * and abandoned here without following the operator into their next take.
    */
   function calibrationStageSettings(): StageSettings {
     return buildStageSettings({
@@ -778,22 +827,24 @@
    * either of them.
    *
    * `profile.flips` is the RECORD — what this rig's glass does — and
-   * `teleprompter.mirrorX/mirrorY` is what actually reaches the render, because
-   * `buildStageSettings` deliberately takes mirroring from the Settings toggles
-   * rather than from the profile (honouring both would double-flip a rig, and
-   * preferring the profile would quietly un-mirror somebody the first time they
-   * calibrated). Two homes for one physical fact can only stay consistent if
-   * one place writes both, so this writes both — and it is why the wizard, not
-   * the profile, is what makes the toggles on the Stage display screen correct.
+   * `teleprompter.mirrorX/mirrorY` is what a real take actually renders from.
+   * `buildStageSettings` takes mirroring as explicit arguments rather than
+   * choosing a source: a take passes the Settings values, and this screen
+   * passes `profile.flips` (honouring both at once would double-flip a rig).
+   * Two homes for one physical fact can only stay consistent if one place
+   * writes both, and within this wizard that place is `finish()` — the Stage
+   * display screen still owns its own toggles.
    *
-   * The settings write is immediate rather than deferred to Finish: it is the
-   * only way the glass can redraw flipped, and judging this step by eye is the
-   * entire point of it. A flip is also trivially reversible by looking at the
-   * card again, which is not true of a distance nobody re-measures.
+   * This writes only the record. Judging the step by eye still works, because
+   * the preview does not come from the settings — `calibrationStageSettings()`
+   * reads `profile.flips` and the effect below republishes it the moment
+   * `patchProfile` reassigns `profile`, so the glass turns around on the same
+   * frame it always did. Deferring the settings write is what makes the
+   * leave-without-saving prompt honest: a flip tried out and abandoned no
+   * longer follows the operator into their next take.
    */
   function setFlip(axis: 'horizontal' | 'vertical', value: boolean): void {
     patchProfile({ flips: { ...profile.flips, [axis]: value } });
-    void patchSettings('teleprompter', axis === 'horizontal' ? { mirrorX: value } : { mirrorY: value });
   }
 
   /* ---------------------------------------------------------- step: scale */
@@ -997,8 +1048,32 @@
    * is not chosen changes nothing, and a panel pointed at a rig that was never
    * stored resolves to nothing. Splitting them is how a calibration ends up
    * saved and inert.
+   *
+   * This is also the ONLY place a flip becomes permanent. The orientation step
+   * and the presets move `profile.flips` alone — enough for the glass to redraw,
+   * not enough to survive a Discard — so the axes are copied into the
+   * `teleprompter` settings a real take renders from here, at the one moment the
+   * operator has actually said to keep this rig.
+   *
+   * Both axes go every time, including for a rig whose orientation step was
+   * never opened. That is safe only because `hydrate()` seeds `profile.flips`
+   * from the mirroring already in force when the rig has no orientation answer
+   * of its own, so "wrote it unchanged" and "never asked" produce the same
+   * value here. Take that seed away and this line starts CLEARING mirrors the
+   * wizard was never shown.
+   *
+   * The two writes are awaited one after the other, never together. Optical
+   * goes first because it is the calibration itself: if it cannot be stored
+   * there is no rig to be mirrored for, and a global flip written against a
+   * profile that failed to save is the orphaned state this change is about.
+   *
+   * They are sequential rather than concurrent for ordering, not for the
+   * revision race — `toRustPatch` has no optical branch, so only the mirror
+   * write reaches the backend and the two cannot collide over a revision. Two
+   * overlapping FINISHES still could, which is what `finishing` is for.
    */
   async function finish(): Promise<void> {
+    if (finishing) return;
     const name = profile.rigName.trim();
     if (name === '') {
       showToast('Give this rig a name so you can tell it from the others on this panel.', 'danger');
@@ -1008,18 +1083,34 @@
       return;
     }
     const next: OpticalProfile = { ...profile, rigName: name, completedSteps: answered };
+    finishing = true;
     try {
       await patchSettings(
         'optical',
         withOpticalProfile($settings.optical, displayFingerprint, next),
       );
+      // `next.flips`, not `profile.flips`: the awaits above are suspension
+      // points, and the saved rig is the one that should reach the glass.
+      await patchSettings('teleprompter', {
+        mirrorX: next.flips.horizontal,
+        mirrorY: next.flips.vertical,
+      });
       finished = true;
       showToast(`${name} is now the rig this display runs with.`, 'success');
       await navigate({ name: 'settings', section: 'stage' });
     } catch {
-      // patchSettings has already reverted and toasted; staying put is what
-      // keeps the measurements on screen rather than losing them to a failed
-      // write nobody could have anticipated.
+      /*
+       * patchSettings has already reverted and toasted; staying put is what
+       * keeps the measurements on screen rather than losing them to a failed
+       * write nobody could have anticipated.
+       *
+       * Note what a mirror-write failure leaves behind: the optical write ran
+       * first and `withOpticalProfile` sets `activeRig`, so the rig is stored
+       * AND already the one this panel runs with — only its mirroring did not
+       * land. Pressing Apply again is the retry, and it is idempotent.
+       */
+    } finally {
+      finishing = false;
     }
   }
 
@@ -1377,10 +1468,10 @@
 
       <div class="footer-actions">
         <Button disabled={stepIndex === 0} onclick={() => goBack()}>Back</Button>
-        <Button variant="ghost" onclick={() => goSkip()}>
+        <Button variant="ghost" disabled={finishing} onclick={() => goSkip()}>
           {isLastStep ? 'Finish without this' : 'Skip'}
         </Button>
-        <Button variant="primary" onclick={() => goNext()}>
+        <Button variant="primary" disabled={finishing} onclick={() => goNext()}>
           {isLastStep ? 'Apply this rig' : 'Next'}
         </Button>
       </div>
