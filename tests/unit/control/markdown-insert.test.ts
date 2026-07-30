@@ -101,4 +101,66 @@ describe('cycleHeading', () => {
     cycleHeading(view);
     expect(text()).toBe('# #hashtag');
   });
+
+  /* A bare run of hashes is a valid EMPTY ATX heading in CommonMark, so it has
+     to wrap to plain like any other H6 rather than gain another hash. */
+  it('wraps a bare ###### to plain instead of adding a hash', () => {
+    const { view, text } = fakeView('######', 6);
+    cycleHeading(view);
+    expect(text()).toBe('');
+  });
+
+  it('treats a bare # as an H1 and cycles it onward', () => {
+    const { view, text } = fakeView('#', 1);
+    cycleHeading(view);
+    expect(text()).toBe('## ');
+  });
+
+  /* Up to three spaces of indent is still a heading to CommonMark. */
+  it('cycles a heading indented by up to three spaces', () => {
+    const { view, text } = fakeView('  ## Title', 6);
+    cycleHeading(view);
+    expect(text()).toBe('  ### Title');
+  });
+
+  it('keeps a plain line’s indentation when it becomes a heading', () => {
+    const { view, text } = fakeView('   Indented text', 8);
+    cycleHeading(view);
+    expect(text()).toBe('   # Indented text');
+  });
+
+  it('keeps the indentation when a heading returns to plain', () => {
+    const { view, text } = fakeView('  ###### Deep', 12);
+    cycleHeading(view);
+    expect(text()).toBe('  Deep');
+  });
+
+  /* Four spaces is an indented code block, not a heading. */
+  it('does not read a four-space-indented line as a heading', () => {
+    const { view, text } = fakeView('    ## Not a heading', 10);
+    cycleHeading(view);
+    expect(text()).toBe('    # ## Not a heading');
+  });
+
+  it('accepts a tab after the hashes', () => {
+    const { view, text } = fakeView('##\tTabbed', 5);
+    cycleHeading(view);
+    expect(text()).toBe('### Tabbed');
+  });
+
+  it('turns an empty line into an empty heading', () => {
+    const { view, text } = fakeView('', 0);
+    cycleHeading(view);
+    expect(text()).toBe('# ');
+  });
+
+  /* Documented behaviour rather than an accident: the control acts on the line
+     the caret is on, and a selection spanning several lines changes only that
+     one. The far end of the selection still has to survive intact. */
+  it('acts on the caret’s line only and keeps the far end of a selection', () => {
+    const { view, text, selection } = fakeView('First\nSecond\nThird', 2, 14);
+    cycleHeading(view);
+    expect(text()).toBe('# First\nSecond\nThird');
+    expect(text().slice(selection().head)).toBe('hird');
+  });
 });

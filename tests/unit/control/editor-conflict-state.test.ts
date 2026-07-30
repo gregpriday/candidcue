@@ -45,13 +45,31 @@ let createBehaviour: (input: { title: string; source: string }) => Promise<unkno
 ) => ({ ...structuredClone(scriptDocument), id: 'created', ...input });
 
 const createCalls: Array<{ title: string; source: string }> = [];
-const saveCalls: Array<{ expectedRevision: number; source: string }> = [];
+const saveCalls: Array<{ expectedRevision: number; source: string; title?: string }> = [];
+
+/** Overrides `getScript` for the call that follows a save, when set. */
+let getBehaviour: (() => Promise<unknown>) | null = null;
 
 vi.mock('../../../src/control/services/scripts', () => ({
-  getScript: async () => structuredClone(diskDocument),
-  saveScript: async (_id: string, expectedRevision: number, source: string) => {
-    saveCalls.push({ expectedRevision, source });
-    return saveBehaviour();
+  getScript: async () => (getBehaviour ? getBehaviour() : structuredClone(diskDocument)),
+  saveScript: async (
+    _id: string,
+    expectedRevision: number,
+    source: string,
+    metadataPatch?: { title?: string },
+  ) => {
+    saveCalls.push({ expectedRevision, source, title: metadataPatch?.title });
+    const result = await saveBehaviour();
+    // A successful save makes that text canonical, so the fake disk has to
+    // move with it — otherwise a reload silently "restores" the old text and
+    // a test asserting only call arguments never notices.
+    diskDocument = {
+      ...diskDocument,
+      source,
+      title: metadataPatch?.title ?? diskDocument.title,
+      scriptRevision: (result as { scriptRevision: number }).scriptRevision,
+    };
+    return result;
   },
   renameScript: async () => ({ scriptRevision: 8 }),
   createScript: async (input: { title: string; source: string }) => {
@@ -145,6 +163,9 @@ describe('resolving an external conflict never drops the editor text', () => {
   const unsaved = '# Keynote\n\nTen minutes of work that is only in memory.\n';
 
   beforeEach(async () => {
+    // Before anything reads a script: a leftover override from the previous
+    // test would otherwise reject this block's own `openScript`.
+    getBehaviour = null;
     saveBehaviour = async () => ({ scriptRevision: 8 });
     createBehaviour = async (input) => ({
       ...structuredClone(scriptDocument),
@@ -174,6 +195,42 @@ describe('resolving an external conflict never drops the editor text', () => {
     // The refused autosave above is setup, not part of what each test asserts.
     createCalls.length = 0;
     saveCalls.length = 0;
+  });
+
+  /*
+   * The ordering guarantee, observed WHILE the durable write is in flight.
+   *
+   * Every other test here inspects state after the arm has settled, and an
+   * implementation that adopted the disk document first and rolled back on
+   * rejection would satisfy all of them. This one holds `createScript` open
+   * and looks at the editor in that window, where such an implementation has
+   * already replaced the text.
+   */
+  it('still holds the unsaved text while the copy is being written', async () => {
+    let releaseCreate = (): void => {};
+    const created = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    createBehaviour = async (input) => {
+      await created;
+      return { ...structuredClone(scriptDocument), id: 'created', ...input };
+    };
+
+    const arm = useDiskVersion();
+    // Let the fetch and the createScript call happen, but not resolve.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(createCalls).toHaveLength(1);
+    const midFlight = get(editor);
+    expect(midFlight.source).toBe(unsaved);
+    expect(midFlight.saveState).toBe('conflict');
+    expect(midFlight.dirty).toBe(true);
+
+    releaseCreate();
+    await arm;
+    expect(get(editor).source).toBe(diskDocument.source);
   });
 
   it('writes the in-memory text to a new script before loading the disk version', async () => {
@@ -252,5 +309,88 @@ describe('resolving an external conflict never drops the editor text', () => {
     const state = get(editor);
     expect(state.source).toBe(unsaved);
     expect(state.saveState).toBe('conflict');
+  });
+
+  /*
+   * Keeping the edits must not leave a BLANK editor behind.
+   *
+   * The arm used to reopen the script after saving, and `openScript` clears
+   * the buffer before it awaits its fetch. A transient failure on that second
+   * read therefore emptied the editor of the text the save had just rescued,
+   * cleared the conflict, and left the sheet offering "keep my edits" over an
+   * empty buffer — so pressing it again wrote the blank over the rescue.
+   */
+  it('does not blank the editor when a post-save reload would fail', async () => {
+    let gets = 0;
+    getBehaviour = async () => {
+      gets += 1;
+      // The first read is the arm's own; anything after it is a reload.
+      if (gets > 1) throw appError('SCRIPT_NOT_FOUND', 'The script could not be read.');
+      return structuredClone(diskDocument);
+    };
+
+    await keepEditorVersion();
+
+    const state = get(editor);
+    expect(state.source).toBe(unsaved);
+    expect(state.title).toBe(scriptDocument.title);
+    expect(state.saveState).toBe('saved');
+    expect(state.dirty).toBe(false);
+  });
+
+  it('adopts the revision the save returned rather than re-reading it', async () => {
+    saveBehaviour = async () => ({ scriptRevision: 11 });
+    await keepEditorVersion();
+    expect(get(editor).scriptRevision).toBe(11);
+  });
+
+  /* The mock backend answers a conflict by value rather than by rejection. */
+  it('treats a by-value conflict from the save as a failure', async () => {
+    saveBehaviour = async () => ({ status: 'conflict', scriptRevision: 9 });
+    await expect(keepEditorVersion()).rejects.toBeTruthy();
+    expect(get(editor).source).toBe(unsaved);
+  });
+
+  /*
+   * A slow arm must not reach across a navigation.
+   *
+   * The sheet can be dismissed and another script opened while an arm is in
+   * flight; adopting unconditionally then replaced THAT script's editor state
+   * and cancelled its pending autosave — the same data loss, arriving from the
+   * other direction.
+   */
+  it('does not replace the editor when another script was opened meanwhile', async () => {
+    let releaseCreate = (): void => {};
+    const created = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    createBehaviour = async (input) => {
+      await created;
+      return { ...structuredClone(scriptDocument), id: 'created', ...input };
+    };
+
+    const arm = useDiskVersion();
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The user leaves for another script while the copy is still being written.
+    const other = {
+      ...structuredClone(scriptDocument),
+      id: '9f8e7d6c-5b4a-4392-8281-706f5e4d3c2b',
+      title: 'Another script',
+      source: '# Another script\n\nTyped here instead.\n',
+    };
+    diskDocument = other;
+    await openScript(other.id);
+
+    releaseCreate();
+    await arm;
+
+    // The durable copy still happened; the other script's editor is untouched.
+    expect(createCalls).toHaveLength(1);
+    const state = get(editor);
+    expect(state.scriptId).toBe(other.id);
+    expect(state.source).toBe(other.source);
   });
 });

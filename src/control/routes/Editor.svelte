@@ -45,6 +45,7 @@ import type { PresentationMode } from '../services/settings-types';
     setSource,
     setTitle,
     useDiskVersion,
+    type ConflictOutcome,
   } from '../stores/editor';
   import { loadLibrary, moveScriptToTrash } from '../stores/library';
   import { navigate } from '../stores/router';
@@ -145,11 +146,15 @@ import type { PresentationMode } from '../services/settings-types';
   /*
    * `compiled.ts` stores its failure as `String(err)`, and the compiler
    * service rejects with a real `Error`, so the string arrives carrying a
-   * bare "Error:" that means nothing to the person reading it.
+   * bare "Error:" that means nothing to the person reading it. An error with
+   * no message stringifies to just "Error", which is why the colon is
+   * optional and why an empty remainder yields no detail line at all rather
+   * than a generic apology under a heading that already apologised.
    */
-  const compileErrorDetail = $derived(
-    describeError(($compiled.error ?? '').replace(/^Error:\s*/, '')),
-  );
+  const compileErrorDetail = $derived.by(() => {
+    const message = ($compiled.error ?? '').replace(/^Error:?\s*/, '').trim();
+    return message === '' ? '' : describeError(message);
+  });
 
   const meta = $derived(
     wordCount > 0
@@ -331,16 +336,21 @@ import type { PresentationMode } from '../services/settings-types';
    * The mode switch itself. Going back to a pane that was hidden needs the
    * same remeasure a Preview click does — nothing was unmounted, but a hidden
    * CodeMirror measured itself at zero.
+   *
+   * It remeasures and does NOT focus, which is the difference between this and
+   * `showEditingSurface`. The mode control is a radiogroup: arrow keys move
+   * the selection through it, so pulling focus into the editor on the way out
+   * of Preview meant the next arrow key moved the caret instead of reaching
+   * Edit, and the group could not be operated the way its role promises.
+   * Focus belongs to the actions that ask for the editor by name — a preview
+   * block, a lint finding.
    */
   async function changeMode(mode: 'edit' | 'split' | 'preview'): Promise<void> {
     const wasHidden = $editor.mode === 'preview';
     setEditorMode(mode);
     await tick();
     if (!wasHidden || mode === 'preview') return;
-    withView((view) => {
-      view.requestMeasure();
-      view.focus();
-    });
+    withView((view) => view.requestMeasure());
   }
 
   /**
@@ -447,13 +457,19 @@ import type { PresentationMode } from '../services/settings-types';
    * the editor's text still behind it, so the user can pick the other arm or
    * try the same one again.
    */
-  async function resolveConflict(run: () => Promise<void>, done: string): Promise<void> {
+  async function resolveConflict(
+    run: () => Promise<ConflictOutcome>,
+    done: (outcome: ConflictOutcome, copyName: string) => string,
+  ): Promise<void> {
     if (conflictResolving) return;
     conflictResolving = true;
+    // Read before the await: a successful arm replaces the title with the
+    // disk one, and the toast has to name the copy that was actually made.
+    const copyName = conflictCopyName;
     try {
-      await run();
+      const outcome = await run();
       conflictOpen = false;
-      showToast(done, 'success');
+      showToast(done(outcome, copyName), 'success');
     } catch (err) {
       showToast(`Nothing was changed. ${describeError(err)}`, 'danger');
     } finally {
@@ -462,6 +478,18 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   const conflictCopyName = $derived(conflictCopyTitle($editor.title));
+
+  /**
+   * Escape and the scrim are refused while an arm is in flight.
+   *
+   * Dismissing mid-operation is what let a slow resolution finish against a
+   * script the user had already left, and it would also drop the only sheet
+   * offering the choice at the moment it is most needed.
+   */
+  function closeConflict(): void {
+    if (conflictResolving) return;
+    conflictOpen = false;
+  }
 
   async function trashFromEditor(): Promise<void> {
     const accepted = await requestConfirm({
@@ -709,6 +737,7 @@ import type { PresentationMode } from '../services/settings-types';
         <div class="split" class:preview-only={$editor.mode === 'preview'}>
           <div
             class="split-editor"
+            id="editor-pane"
             hidden={$editor.mode === 'preview'}
             style={$editor.mode === 'split' ? `flex-basis: ${splitRatio * 100}%` : undefined}
           >
@@ -725,6 +754,7 @@ import type { PresentationMode } from '../services/settings-types';
             tabindex="0"
             aria-orientation="vertical"
             aria-label="Resize editor and preview"
+            aria-controls="editor-pane"
             aria-valuenow={splitPercent}
             aria-valuemin={SPLIT_MIN * 100}
             aria-valuemax={SPLIT_MAX * 100}
@@ -875,7 +905,11 @@ import type { PresentationMode } from '../services/settings-types';
   "Save both" did the same thing, and two buttons with one outcome is a worse
   choice than one honest button.
 -->
-<Dialog open={conflictOpen} title="This script changed on disk" onclose={() => (conflictOpen = false)}>
+<Dialog
+  open={conflictOpen}
+  title="This script changed on disk"
+  onclose={closeConflict}
+>
   <p class="dialog-body">
     Choose which version stays in this script. Nothing is discarded either way.
   </p>
@@ -888,9 +922,10 @@ import type { PresentationMode } from '../services/settings-types';
     <Button
       disabled={conflictResolving}
       onclick={() =>
-        void resolveConflict(
-          useDiskVersion,
-          `Loaded the disk version. Your edits were saved as “${conflictCopyName}”.`,
+        void resolveConflict(useDiskVersion, (outcome, copyName) =>
+          outcome.copied
+            ? `Loaded the disk version. Your edits were saved as “${copyName}”.`
+            : 'Loaded the disk version. It already matched your text, so no copy was needed.',
         )}
     >
       Use disk version
@@ -901,7 +936,7 @@ import type { PresentationMode } from '../services/settings-types';
       onclick={() =>
         void resolveConflict(
           keepEditorVersion,
-          'Kept your edits. The disk version is in this script’s revision history.',
+          () => 'Kept your edits. The disk version is in this script’s revision history.',
         )}
     >
       Keep my edits

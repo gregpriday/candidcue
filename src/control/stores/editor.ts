@@ -203,6 +203,27 @@ export function conflictCopyTitle(title: string): string {
   return `${title} (conflict copy)`;
 }
 
+/** What an arm actually did, so the toast can say it rather than assume it. */
+export interface ConflictOutcome {
+  /** Whether the editor's text was filed as a separate script. */
+  copied: boolean;
+}
+
+/**
+ * Is the editor still on the document this operation started against?
+ *
+ * Both arms await IPC, and the sheet can be dismissed and another script
+ * opened while they are in flight. Adopting unconditionally then replaced a
+ * DIFFERENT script's editor state — cancelling its pending autosave and
+ * dropping whatever had been typed into it, which is the same data loss this
+ * change exists to end, arriving from the other direction. The durable write
+ * still stands; only the state replacement is abandoned.
+ */
+function isStillCurrent(started: EditorState): boolean {
+  const now = get(state);
+  return now.scriptId === started.scriptId && now.source === started.source;
+}
+
 /**
  * Take the disk version, keeping the editor's text as a separate script.
  *
@@ -229,17 +250,26 @@ export function conflictCopyTitle(title: string): string {
  * version, which is why the text lands in the Library rather than in this
  * script's history.
  */
-export async function useDiskVersion(): Promise<void> {
+export async function useDiskVersion(): Promise<ConflictOutcome> {
   const s = get(state);
-  if (s.scriptId === null) return;
+  if (s.scriptId === null) throw new Error('No script is open.');
   const disk = await scriptsService.getScript(s.scriptId);
-  if (s.source !== disk.source) {
+
+  /*
+   * Title as well as body: `setTitle` writes the new name into the store
+   * before its rename settles, so a rename that lost the race to the external
+   * change is unsaved work too, and comparing only the source would drop it.
+   */
+  const copied = s.source !== disk.source || s.title !== disk.title;
+  if (copied) {
     await scriptsService.createScript({
       title: conflictCopyTitle(s.title),
       source: s.source,
     });
   }
+  if (!isStillCurrent(s)) return { copied };
   adoptDocument(disk);
+  return { copied };
 }
 
 /**
@@ -250,15 +280,35 @@ export async function useDiskVersion(): Promise<void> {
  * that opened this sheet, so it is already in this script's history. The save
  * goes out against the revision the disk currently holds, which is what makes
  * it succeed where the autosave was refused.
+ *
+ * It does NOT reload afterwards, and that is deliberate. Reopening would send
+ * the editor back through `openScript`, which blanks the buffer before it
+ * awaits its fetch — so a transient failure on that second read left an EMPTY
+ * editor holding no copy of the text, no longer marked as a conflict, behind a
+ * sheet still offering "keep my edits". Pressing it again saved that blank
+ * over the text the first press had just rescued. The editor already holds
+ * exactly what was written, so the revision the save returns is all it needs.
  */
-export async function keepEditorVersion(): Promise<void> {
+export async function keepEditorVersion(): Promise<ConflictOutcome> {
   const s = get(state);
-  if (s.scriptId === null) return;
+  if (s.scriptId === null) throw new Error('No script is open.');
   const disk = await scriptsService.getScript(s.scriptId);
-  await scriptsService.saveScript(s.scriptId, disk.scriptRevision, s.source, {
+  const result = await scriptsService.saveScript(s.scriptId, disk.scriptRevision, s.source, {
     title: s.title,
   });
-  await openScript(s.scriptId);
+  // Only the mock backend answers a conflict by value; see `saveNow`.
+  if (result.status === 'conflict') {
+    throw new Error('This script changed on disk again. Review the versions once more.');
+  }
+  if (!isStillCurrent(s)) return { copied: false };
+  state.update((prev) => ({
+    ...prev,
+    scriptRevision: result.scriptRevision,
+    dirty: false,
+    saveState: 'saved',
+    lastError: null,
+  }));
+  return { copied: false };
 }
 
 export function editorHasUnsavedWork(): boolean {

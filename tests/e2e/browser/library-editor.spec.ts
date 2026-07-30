@@ -147,23 +147,34 @@ test('the undo history survives an Edit/Split/Preview round trip', async ({ page
   const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
   await expect(editorSurface).toBeVisible();
 
+  // The document before the edit, so "undo" can be proved to have restored it
+  // rather than merely to have removed something.
+  const baseline = (await editorSurface.textContent()) ?? '';
+  expect(baseline).not.toBe('');
+
   const typed = 'A line typed before the mode changed.';
   await editorSurface.click();
   await page.keyboard.press('End');
   await page.keyboard.type(typed);
-  await expect(editorSurface).toContainText(typed);
+  const edited = (await editorSurface.textContent()) ?? '';
+  expect(edited).toContain(typed);
+  expect(edited).not.toBe(baseline);
 
   // Round trip through every mode.
   for (const mode of ['Split', 'Preview', 'Edit']) {
     await page.getByRole('radio', { name: mode }).click();
   }
 
-  // Undo must still reach the edit made before the first switch.
+  // The switches themselves changed nothing.
+  await expect.poll(() => editorSurface.textContent()).toBe(edited);
+
+  /*
+   * ONE undo, and it has to land exactly on the baseline. Undoing in a loop
+   * until the text disappears would also pass if the mode switch had reset the
+   * document, or if a single undo had emptied it — which is precisely the
+   * regression this exists to catch.
+   */
   await editorSurface.click();
-  const undo = process.platform === 'darwin' ? 'Meta+z' : 'Control+z';
-  for (let i = 0; i < 25; i++) {
-    await page.keyboard.press(undo);
-    if (!(await editorSurface.textContent())?.includes(typed)) break;
-  }
-  await expect(editorSurface).not.toContainText(typed);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(() => editorSurface.textContent()).toBe(baseline);
 });
