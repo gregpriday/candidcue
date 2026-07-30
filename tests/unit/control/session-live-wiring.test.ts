@@ -16,6 +16,7 @@
  *     either nothing is ever kept, or words are kept when the user said no.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { get } from 'svelte/store';
 import { STAGE_EVENT } from '../../../src/shared/contracts';
 import type { CompiledScript } from '../../../src/shared/contracts';
 
@@ -133,8 +134,15 @@ vi.mock('../../../src/control/services/stage-acks', async (orig) => {
 });
 
 const { setInvokeForTesting } = await import('../../../src/control/services/ipc');
-const { clearSession, setStageEmitterForTesting, startLiveSession, startPrompting, stopSession } =
-  await import('../../../src/control/stores/session');
+const {
+  clearSession,
+  session,
+  setStageEmitterForTesting,
+  startLiveSession,
+  startPrompting,
+  stopSession,
+} = await import('../../../src/control/stores/session');
+const { toasts } = await import('../../../src/control/stores/toasts');
 
 /** Enough of a CompiledScript for the store and for the alignment handshake. */
 function compiledStub(): CompiledScript {
@@ -397,6 +405,10 @@ describe('§115 — stage telemetry is only expected when a stage window exists'
     const summary = stopSession();
     expect(summary.stageTelemetryExpected).toBe(false);
   });
+
+  // The "a separate stage that DIED mid-take still expects telemetry" case
+  // needs the bridge's real `stage://closed` listener, so it lives in
+  // `session-stage-bridge.test.ts` where that harness already exists.
 });
 
 /**
@@ -449,5 +461,74 @@ describe('§115 — the ending location never reports a raw token index', () => 
     startPrompting();
     const summary = stopSession();
     expect(summary.endingLocation).toBe('Beginning');
+  });
+
+  it('says the location is unavailable rather than inventing one', () => {
+    // Degraded input: a snapshot arrived but there is no sentence metadata to
+    // locate it against. "Beginning" would be a claim; this is not.
+    start({ sentences: [] });
+    startPrompting();
+    pushSnapshot(5);
+    expect(stopSession().endingLocation).toBe('Location unavailable');
+  });
+});
+
+/**
+ * §115 — an instruction the operator can actually carry out.
+ *
+ * The busy-device fallback notice says "pick another input in the take
+ * controls". Two things had to be true for that to mean anything, and neither
+ * was: the notice had to outlive the four-second `info` default (it is an
+ * instruction, and the take runs for minutes), and the picker it names had to
+ * render — which it did not, because the picker was gated on `inputDeviceLost`
+ * and a fallback loses nothing.
+ */
+describe('§115 — the fallback-input notice is followable', () => {
+  function fellBackToDefault(): void {
+    const deps = pipeline.captured.deps as unknown as {
+      onInputFellBackToDefault?: () => void;
+    };
+    deps.onInputFellBackToDefault?.();
+  }
+
+  it('offers the picker without claiming the microphone failed', () => {
+    start();
+    startPrompting();
+    fellBackToDefault();
+
+    const s = get(session);
+    // The flag the picker reads...
+    expect(s.usingFallbackInput).toBe(true);
+    // ...and NOT the one that means "this is broken". Nothing failed: audio is
+    // being captured, just not from the chosen device.
+    expect(s.inputDeviceLost).toBe(false);
+    expect(s.micState).toBe('live');
+  });
+
+  it('does not expire while the take is still running', () => {
+    start();
+    startPrompting();
+    fellBackToDefault();
+    expect(get(toasts)).toHaveLength(1);
+
+    // Well past the 4000 ms `info` default that used to retire it.
+    vi.advanceTimersByTime(30_000);
+    expect(get(toasts)).toHaveLength(1);
+  });
+
+  it('reports the condition once rather than stacking', () => {
+    start();
+    startPrompting();
+    fellBackToDefault();
+    fellBackToDefault();
+    expect(get(toasts)).toHaveLength(1);
+  });
+
+  it('is retired with the take', () => {
+    start();
+    startPrompting();
+    fellBackToDefault();
+    stopSession();
+    expect(get(toasts)).toHaveLength(0);
   });
 });

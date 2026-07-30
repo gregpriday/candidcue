@@ -38,7 +38,7 @@ import { onShortcut } from '../lib/shortcuts';
   import { preloadSpeechEngine } from '../services/stt/local';
   import { getVoiceFacade } from '../services/voice-facade';
   import { requestConfirm } from '../stores/confirm';
-  import { setPresentingPhase } from '../stores/presenting';
+  import { coverIsUp, presentingPhase, setPresentingPhase } from '../stores/presenting';
   import { navigate } from '../stores/router';
   import {
     addTakeMarker,
@@ -136,7 +136,12 @@ import { onShortcut } from '../lib/shortcuts';
    * now. See the §115 block further down.
    */
   const micRecoveryOffered = $derived(
-    hasVoiceTransport && $session.inputDeviceLost && canSwitchMicrophone(),
+    hasVoiceTransport &&
+      // Two conditions, one control. A LOST input is a fault; a FALLBACK input
+      // is merely the wrong one. Both are answered by choosing a device, and
+      // the second used to be told to do exactly that with no picker rendered.
+      ($session.inputDeviceLost || $session.usingFallbackInput) &&
+      canSwitchMicrophone(),
   );
 
   /**
@@ -166,15 +171,33 @@ import { onShortcut } from '../lib/shortcuts';
     void preloadSpeechEngine().catch(() => {});
   });
 
+  /**
+   * The enumeration this component is currently willing to believe.
+   *
+   * Listing devices is a round trip, and two of them can be in flight at once —
+   * Rescan is a button, and the `$effect` above fires on its own. Worse, one can
+   * outlive its take entirely: end a take with a listing pending, press "Present
+   * again", and the old result would land in the new take's picker offering the
+   * previous take's device ids, or raise a permanent danger toast about a
+   * listing nobody asked for. Only the latest request, belonging to the take
+   * that is still running, is allowed to write.
+   */
+  let micRequest = 0;
+
   async function refreshMicInputs(): Promise<void> {
+    const request = (micRequest += 1);
+    const forSession = $session.sessionId;
+    const stale = (): boolean => micRequest !== request || $session.sessionId !== forSession;
     try {
       const found = await getVoiceFacade().listMicrophones();
+      if (stale()) return;
       micInputs = found.filter((device) => device.available !== false);
       if (!micInputs.some((device) => device.deviceId === micChoice)) {
         micChoice =
           micInputs.find((device) => device.isDefault)?.deviceId ?? micInputs[0]?.deviceId ?? '';
       }
     } catch (err) {
+      if (stale()) return;
       micInputs = [];
       showToast(`Could not list microphones. ${describeError(err)}`, 'danger');
     }
@@ -326,6 +349,11 @@ import { onShortcut } from '../lib/shortcuts';
            *
            * It stops short of promising the summary even though this path does
            * show one, because the guard's path does not — see the constant.
+           *
+           * Its last clause is conditional on purpose ("presenting again starts
+           * a new take"). Ending does not start anything; presenting again is a
+           * separate choice made from the summary, and phrasing it as "a new
+           * take starts" implied one would begin on its own.
            */
           body: STOP_SESSION_CONFIRM_BODY,
           confirmLabel: 'End session',
@@ -708,7 +736,23 @@ import { onShortcut } from '../lib/shortcuts';
    */
   async function presentAgain(): Promise<void> {
     clearSession();
-    await startTake(scriptId);
+    /*
+     * `startTake` REPORTS FAILURE, and this used to drop the answer.
+     *
+     * It catches ordinary failures — the script will not load, the compile
+     * fails, the session cannot be created, the window will not present — toasts
+     * them, and returns false without changing the route. The summary has
+     * already been cleared by then, and Live in its inactive state has no
+     * sidebar and nothing to press, so a failed retake left the operator on a
+     * dead screen with no way out but the keyboard.
+     *
+     * It was survivable while the summary was unreachable, because this button
+     * could not be pressed. Making the retake loop work is what makes its
+     * failure path reachable, so it needs somewhere to land: the editor is
+     * where every other exit from a finished take goes.
+     */
+    const started = await startTake(scriptId);
+    if (!started) await navigate({ name: 'editor', scriptId });
   }
 
   /*
@@ -734,13 +778,15 @@ import { onShortcut } from '../lib/shortcuts';
    * running. (That guard's own silent clear is §119's, not this one's.)
    */
   async function returnToEditor(): Promise<void> {
-    await navigate({ name: 'editor', scriptId });
-    clearSession();
+    // `navigate` resolves false when a guard refuses. Clearing anyway would
+    // destroy the summary and leave the presenter on the screen they were not
+    // allowed to leave, with nothing on it — which is the exact failure the
+    // ordering above exists to prevent, so the answer has to be read.
+    if (await navigate({ name: 'editor', scriptId })) clearSession();
   }
 
   async function returnToLibrary(): Promise<void> {
-    await navigate({ name: 'library', view: 'all' });
-    clearSession();
+    if (await navigate({ name: 'library', view: 'all' })) clearSession();
   }
 
   /* ------------------------------------------------ the appearance panel (§14.2)
@@ -973,8 +1019,21 @@ import { onShortcut } from '../lib/shortcuts';
    * propagation here is what keeps "close this panel" and "end this take" from
    * being the same key.
    */
+  /**
+   * A dialog raised FROM the drawer is on top of it, and owns dismissal.
+   *
+   * The End-session confirmation is opened by a button inside this panel. Both
+   * layers capture Escape on `window`, and `stopPropagation` does not stop
+   * another listener on the SAME node — so Escape closed the confirmation AND
+   * the drawer underneath it. Cancel-by-click was worse: the dialog's own
+   * surface is "outside" the drawer, so clicking Cancel dismissed the drawer on
+   * the way past. Either way, backing out of a question left the panel that
+   * asked it gone.
+   */
+  const dismissalSuspended = $derived(confirmingStop || appearanceOpen);
+
   $effect(() => {
-    if (!takeControlsOpen) return;
+    if (!takeControlsOpen || dismissalSuspended) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
@@ -987,7 +1046,7 @@ import { onShortcut } from '../lib/shortcuts';
 
   /** A click on the script behind it means "get out of the way". */
   $effect(() => {
-    if (!takeControlsOpen) return;
+    if (!takeControlsOpen || dismissalSuspended) return;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (target && (takeControlsPanel?.contains(target) || takeControlsTab?.contains(target))) {
@@ -1013,6 +1072,14 @@ import { onShortcut } from '../lib/shortcuts';
     takeControlsOpen = false;
     micInputs = [];
     micChoice = '';
+    /*
+     * `micSwitching` too, and it is the one that would actually strand somebody:
+     * it disables both recovery buttons, so a switch still in flight when the
+     * take ended would leave the NEXT take's picker permanently greyed out. The
+     * bump retires any listing that is still coming.
+     */
+    micSwitching = false;
+    micRequest += 1;
   });
 </script>
 
@@ -1298,8 +1365,8 @@ import { onShortcut } from '../lib/shortcuts';
       </div>
       {#if !stageAlive}
         <p class="region-empty" role="status">
-          The stage window closed. Stop and restart the session to reopen it — until then these
-          controls have nothing to talk to.
+          The stage window closed. End the session and present again to reopen it — until then
+          these controls have nothing to talk to.
         </p>
       {/if}
 
@@ -1503,8 +1570,21 @@ import { onShortcut } from '../lib/shortcuts';
 </div>
 
 <!-- End-of-session summary (F.17) -->
+<!--
+  NOT while the cover is up.
+
+  `stopSession()` populates `summary` and clears `active` synchronously, so this
+  condition becomes true the instant `endTake` starts — several awaits before
+  `leavePresentation` finishes and the cover comes down. The cover is opaque and
+  `pointer-events: none`, so a dialog mounted underneath it is invisible AND
+  fully live: it traps focus, it answers Escape, and clicks land on its scrim.
+  An Escape during the closing transition would have run `returnToEditor` — a
+  navigation, under a black plate, that the presenter neither saw nor asked for.
+
+  So the summary waits for the transition it is the destination of.
+-->
 <Dialog
-  open={!$session.active && $session.summary !== null}
+  open={!$session.active && $session.summary !== null && !coverIsUp($presentingPhase)}
   title="Session complete"
   onclose={() => void returnToEditor()}
 >

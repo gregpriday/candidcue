@@ -296,6 +296,22 @@ export interface SessionState {
    */
   inputDeviceLost: boolean;
   /**
+   * §28.2 — the take is capturing, but not from the input that was asked for.
+   *
+   * Distinct from `inputDeviceLost`, and the distinction is the point: nothing
+   * failed here. The chosen device was busy, the system default was opened
+   * instead, and the take is running normally on audio the operator did not
+   * choose. `micState` stays 'live' because it IS live — flagging this as a
+   * fault would be the false accusation §28.6 exists to avoid.
+   *
+   * It is a separate flag because it must still OFFER THE PICKER. The notice
+   * for this condition says "pick another input", and until this existed the
+   * picker was gated on `inputDeviceLost` alone — so the one instruction the
+   * app gave had no control behind it, which is the same unfollowable-
+   * instruction defect §115 was filed about.
+   */
+  usingFallbackInput: boolean;
+  /**
    * False once the stage window is gone (§62). Everything that publishes to the
    * stage stands down; the UI must say so rather than keep offering controls
    * that write into the void.
@@ -378,6 +394,7 @@ const initial: SessionState = {
   connection: 'connected',
   micState: 'live',
   inputDeviceLost: false,
+  usingFallbackInput: false,
   stageAlive: true,
   stageWindowFault: null,
   snapshot: null,
@@ -413,6 +430,13 @@ let clock: ReturnType<typeof setInterval> | null = null;
 let pipeline: VoiceSessionPipeline | null = null;
 let compiledScript: CompiledScript | null = null;
 let stageGeneration = 0;
+/**
+ * Did THIS take have a separate stage window to hear back from?
+ *
+ * Separate from `stageGeneration` because that one is reset to 0 when the stage
+ * closes; see where this is latched in `startLiveSession`.
+ */
+let stageTelemetryExpected = false;
 /**
  * The Rust coordinator's session generation for this take.
  *
@@ -736,6 +760,17 @@ export function startLiveSession(input: StartSessionInput): string {
   const sessionId = input.sessionId ?? newSessionId();
   compiledScript = input.compiled ?? null;
   stageGeneration = input.stageGeneration ?? 0;
+  /*
+   * Latched at the START of the take, and deliberately never updated.
+   *
+   * `stageGeneration` is mutable: `handleStageClosed` resets it to 0 when the
+   * stage window goes away. Reading it at stop time would therefore say "the
+   * stage shared this window" about a take that had a separate stage and LOST
+   * it — hiding the very telemetry that would explain what happened, on the one
+   * take where those rows are worth reading. Whether a bridge was expected is a
+   * fact about how the take was configured, so it is recorded when the take is.
+   */
+  stageTelemetryExpected = (input.stageGeneration ?? 0) !== 0;
   sessionGeneration = input.sessionGeneration ?? 0;
   // Nothing is known about the new stage window's layout until it acks.
   stageLayoutGeneration = 0;
@@ -1098,6 +1133,10 @@ export function startLiveSession(input: StartSessionInput): string {
           'info',
           { key: TOAST_INPUT_FELL_BACK, durationMs: 0 },
         );
+        // And the control that answers it. Without this the notice names a
+        // picker that the take-controls drawer would not render, because the
+        // picker's condition is `inputDeviceLost` and nothing was lost.
+        state.update((s) => ({ ...s, usingFallbackInput: true }));
       },
       onInputRestored: () => {
         if (pillEpoch === voicePillEpoch) voicePillDeviceLost = false;
@@ -2460,7 +2499,7 @@ function handleStageClosed(): void {
   if (!s.stageAlive) return;
   state.update((prev) => ({ ...prev, stageAlive: false }));
   if (s.active) {
-    showToast('The stage window closed. Stop and restart the session to reopen it.', 'danger');
+    showToast('The stage window closed. End the session and present again to reopen it.', 'danger');
   }
 }
 
@@ -2685,7 +2724,13 @@ export async function switchMicrophone(deviceId: string, label?: string): Promis
     return false;
   }
   if (pipeline !== forPipeline || get(state).sessionId !== forSession) return false;
-  state.update((s) => ({ ...s, micState: 'live', inputDeviceLost: false }));
+  state.update((s) => ({
+    ...s,
+    micState: 'live',
+    inputDeviceLost: false,
+    // The input is the operator's choice again by definition.
+    usingFallbackInput: false,
+  }));
   // The input is the operator's choice again, so the "we picked one for you"
   // notice has nothing left to report.
   dismissToastByKey(TOAST_INPUT_FELL_BACK);
@@ -3376,8 +3421,7 @@ export function stopSession(): SessionSummary {
     transcriptTapsSeen,
     transcriptTapsEmitted,
     transcriptTapFault: transcriptTapFault(),
-    // Read BEFORE `stopInternals`, which is where the generation is released.
-    stageTelemetryExpected: stageGeneration !== 0,
+    stageTelemetryExpected,
   };
   // §36.2 + §36.1: write the retained tail and close the record BEFORE the
   // teardown resets `transcriptRetained`. `stopInternals` is what runs on every
@@ -3486,9 +3530,16 @@ function locateEnding(s: SessionState): string {
    * steps by sentences).
    */
   const sentences = s.sentences;
-  if (sentences.length === 0) return 'Beginning';
+  // No headings AND no sentence metadata: say so rather than invent a position.
+  // "Beginning" would be a claim about where the take ended, and this is the
+  // one case where nothing is known about that.
+  if (sentences.length === 0) return 'Location unavailable';
   const reached = sentences.filter((unit) => unit.startTokenIndex <= snapshot.confirmedToken).length;
-  return `Sentence ${Math.max(1, reached)} of ${sentences.length}`;
+  // Before the first sentence starts. Ordinary compiler output opens at token 0
+  // so this needs degraded input to reach, but flooring it to "Sentence 1"
+  // would report a sentence that had not been begun.
+  if (reached === 0) return 'Beginning';
+  return `Sentence ${reached} of ${sentences.length}`;
 }
 
 function stopInternals(): void {
