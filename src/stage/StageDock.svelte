@@ -530,34 +530,27 @@
    * reading as the first item of a toolbar during the moments the toolbar is up.
    */
   /*
-   * THE AUDIO SLOT IS A FIXED WIDTH, AND IT IS THE ONLY PLACE THAT WIDTH LIVES.
+   * THE AUDIO SLOT IS SIZED BY ITS CONTENTS.
    *
-   * Wide enough for the readout carrying its longest reading — the fault labels
-   * are `No audio`, `Not connected`, `Not hearing you`, and the stage's own
-   * `Control lost` — so a fault can arrive without the pill growing and shoving
-   * every button in this row sideways. That shove landed at the precise moment
-   * something had gone wrong, which is when somebody is most likely to already
-   * be reaching for one of those buttons.
+   * This was briefly a fixed 232px, wide enough to hold the readout carrying
+   * its longest fault label (`No audio`, `Not connected`, `Not hearing you`,
+   * and the stage's own `Control lost`) so that a fault could not widen the
+   * pill and shove the button row sideways.
    *
-   * WHERE 232 COMES FROM. `box-sizing` is border-box globally, so this figure
-   * includes the pill's 1px borders and its 10px of horizontal padding. What is
-   * left for the label is 232 - 2 - 20 - 60 (the trace) - 16 (the mark) - 16
-   * (two 8px gaps) - 2 (the label's own padding) = 116px. `Not hearing you` at
-   * 12px/600 measures about 88px in the UI face, so there is roughly a quarter
-   * of the string in headroom — enough that a platform substituting a wider
-   * face than SF Pro does not start truncating a fault name, which is the one
-   * string here nobody can afford to read half of.
+   * It is not worth it. An 88px word cannot share a 106px pill with a 60px
+   * trace and a 16px mark, so buying that stability meant carrying 126px of
+   * empty glass in every take for a shove that almost never happens. The pill
+   * now grows by one short word on a fault and the row settles; see the note
+   * on `.label` in `VoicePill.svelte`.
    *
-   * Both the pill and the placeholder below are sized to 100% of this, so there
-   * is one number rather than two that have to be kept in agreement — the old
-   * pair (a 106px placeholder against a content-sized pill) already disagreed
-   * by a couple of pixels, which is a small version of the same bug.
+   * The placeholder below therefore states the resting width once, in the one
+   * place that needs a number: 60 (trace) + 8 (gap) + 16 (mark) + 20 (padding)
+   * + 2 (borders) = 106px, which is what the pill measures with no label.
    */
   .dock-audio {
     flex: 0 0 auto;
     display: flex;
     align-items: center;
-    width: 232px;
     margin-right: 4px;
   }
 
@@ -704,8 +697,10 @@
    * movement this placeholder exists to prevent, just smaller than the one it
    * was written for.
    */
+  /* The resting pill's own measurement, so the dock does not jump when the
+     first payload swaps this out for the real readout. See `.dock-audio`. */
   .audio-placeholder {
-    width: 100%;
+    width: 106px;
     height: 40px;
   }
 

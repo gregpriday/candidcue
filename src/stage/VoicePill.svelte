@@ -143,19 +143,15 @@
     fault they cannot fix.
 
     -------------------------------------------------------------------------
-    THE SLOT IS ALWAYS HERE, AND THAT IS THE POINT
+    THE SLOT IS NOT RESERVED, AND THAT IS DELIBERATE
     -------------------------------------------------------------------------
-    This used to be an `{#if}`, so the label existed only during a fault. The
-    pill is a flex item in the dock's flex row, so the word appearing widened
-    the pill and shoved every button beside it sideways — at the exact moment
-    something had gone wrong, which is when somebody is most likely to be
-    reaching for one of those buttons. A control that moves out from under a
-    hand as it arrives is worse than a control that is merely late.
+    This briefly reserved its width in every reading, so that a fault arriving
+    could not widen the pill and shove the button row sideways. The trade was
+    bad: the shove is rare and momentary, the reserved slot was 126px of empty
+    glass in every take. Faults are the exception, so the exception pays.
 
-    So the space is RESERVED, the same way `.audio-placeholder` in the dock
-    reserves this whole pill's width before the first payload arrives. The slot
-    is laid out in every reading and only its contents change, so the dock's
-    geometry is a constant for the whole take.
+    The element stays in the markup in both states and only `display` changes,
+    so there is one place to look for the label rather than two branches.
 
     `aria-hidden` while there is nothing to say, so a screen reader is not
     handed an empty element on every reading change; the pill's own `aria-label`
@@ -173,13 +169,15 @@
    * against a corner, which is the whole reason the three read as one
    * instrument instead of three chips that happen to be near each other.
    *
-   * The WIDTH comes from `.dock-audio`, which reserves one fixed slot for this
-   * readout at its widest. It used to be content-sized, so the fault label
-   * appearing made the pill grow and pushed the whole button row along with it.
+   * The width is the CONTENT's: trace + mark + padding, 106px at rest. It was
+   * briefly a fixed 232px slot sized for the longest fault label, so that a
+   * fault could arrive without shoving the button row. That bought a rare,
+   * momentary stability with 126px of dead space on the glass for the whole of
+   * every take, which is the wrong way round — the empty slot is on screen
+   * always and the shove almost never.
    */
   .voice-pill {
     flex: 0 0 auto;
-    width: 100%;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -299,32 +297,31 @@
    * string in the dock.
    */
   /*
-   * Takes whatever the fixed slot has left over after the trace and the mark,
-   * so no width is stated twice: `.dock-audio` reserves the room, this consumes
-   * it. `min-width: 0` is what lets it actually shrink inside a flex row rather
-   * than forcing the pill wider — which is the failure this whole arrangement
-   * exists to prevent.
+   * Out of the flow entirely until there is a fault to name, so the resting
+   * pill is trace + mark and nothing else. `display: none` rather than
+   * `visibility: hidden` is the point: a hidden-but-laid-out slot is exactly
+   * the 126px of permanent dead space this replaced.
    *
-   * `visibility` rather than `display`, because a `display: none` would take
-   * the slot out of the flex row and give back exactly the reflow it prevents.
-   * The ellipsis is a guard, not a plan: every label control ships today fits.
+   * The cost is honest and bounded: when a fault does arrive the pill grows by
+   * the width of one short word and the buttons beside it shift once. All four
+   * labels are short (`No audio`, `Not connected`, `Not hearing you`,
+   * `Control lost`) and a fault is rare, so the row settles immediately and
+   * stays put. `white-space: nowrap` keeps the name on one line; there is no
+   * ellipsis because nothing truncates when the pill sizes to its content.
    */
   .label {
-    flex: 1 1 auto;
-    min-width: 0;
+    flex: 0 0 auto;
     padding-right: 2px;
     font-size: 12px;
     letter-spacing: 0.01em;
     font-weight: 600;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     color: var(--stage-cue, #d8b46a);
-    visibility: hidden;
+    display: none;
   }
 
   .label[data-visible='true'] {
-    visibility: visible;
+    display: block;
   }
 
   @media (prefers-reduced-motion: reduce) {
