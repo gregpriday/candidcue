@@ -12,6 +12,11 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppError } from '../../../src/shared/contracts/errors';
+import { looksLikeCode } from '../../../src/control/services/errors';
+import {
+  NEW_SCRIPT_SOURCE,
+  SAMPLE_SCRIPT_SOURCE,
+} from '../../../src/control/lib/sample-script';
 
 const calls = vi.hoisted(() => ({
   createScript: vi.fn(),
@@ -61,7 +66,8 @@ function dangerToast(): string {
 beforeEach(() => {
   for (const spy of Object.values(calls)) spy.mockReset();
   calls.loadLibrary.mockResolvedValue(undefined);
-  calls.navigate.mockResolvedValue(undefined);
+  // `navigate` resolves a boolean — true when the transition happened.
+  calls.navigate.mockResolvedValue(true);
   clearErrorDiagnostics();
 });
 
@@ -96,8 +102,34 @@ describe('createAndOpenScript', () => {
     await createAndOpenScript('new');
 
     expect(calls.markWelcomed).toHaveBeenCalledOnce();
+    expect(calls.loadLibrary).toHaveBeenCalledOnce();
     expect(calls.navigate).toHaveBeenCalledWith({ name: 'editor', scriptId: 'script-1' });
     expect(calls.showToast).not.toHaveBeenCalled();
+  });
+
+  it('sends the sample body for the sample kind and the blank body for the new kind', async () => {
+    calls.createScript.mockResolvedValue({ id: 'script-1' });
+
+    await createAndOpenScript('sample');
+    await createAndOpenScript('new');
+
+    const [sample] = calls.createScript.mock.calls[0] as [{ title: string; source: string }];
+    const [blank] = calls.createScript.mock.calls[1] as [{ title: string; source: string }];
+    // Guards the branch itself: swapping the two arms would otherwise pass.
+    expect(sample).not.toEqual(blank);
+    expect(sample.source).toContain(SAMPLE_SCRIPT_SOURCE);
+    expect(blank.source).toContain(NEW_SCRIPT_SOURCE);
+  });
+
+  it('reports a non-AppError rejection without leaking its shape', async () => {
+    // Not everything that reaches this catch came over IPC — a real Error is
+    // the other shape `describeError` has to handle.
+    calls.createScript.mockRejectedValueOnce(new Error('Disk went away'));
+
+    await createAndOpenScript('new');
+
+    expect(dangerToast()).toBe('Could not create that script. Disk went away');
+    expect(dangerToast()).not.toContain('[object Object]');
   });
 });
 
@@ -121,7 +153,26 @@ describe('importMarkdown', () => {
 
     expect(calls.showToast).not.toHaveBeenCalled();
     expect(calls.markWelcomed).not.toHaveBeenCalled();
+    expect(calls.loadLibrary).not.toHaveBeenCalled();
     expect(calls.navigate).not.toHaveBeenCalled();
+  });
+
+  it('opens the imported script and relays its warnings', async () => {
+    calls.importScript.mockResolvedValueOnce({
+      script: { id: 'imported-1' },
+      warnings: ['One image was skipped.', 'A heading was reflowed.'],
+    });
+
+    await importMarkdown();
+
+    expect(calls.markWelcomed).toHaveBeenCalledOnce();
+    expect(calls.loadLibrary).toHaveBeenCalledOnce();
+    expect(calls.navigate).toHaveBeenCalledWith({ name: 'editor', scriptId: 'imported-1' });
+    // Warnings are information about a SUCCESSFUL import, so they stay 'info'.
+    expect(calls.showToast.mock.calls).toEqual([
+      ['One image was skipped.', 'info'],
+      ['A heading was reflowed.', 'info'],
+    ]);
   });
 });
 
@@ -173,30 +224,48 @@ describe('exportScriptToFile', () => {
 
     await exportScriptToFile('script-1', 'My script');
 
+    // Exactly one: the caller-side 'Export ready' toast that used to double up
+    // here (and fire on failure and cancellation too) is gone.
     expect(calls.showToast.mock.calls).toEqual([['Script exported', 'success']]);
+  });
+
+  it('relays export warnings ahead of the success toast', async () => {
+    calls.exportScript.mockResolvedValueOnce({
+      warnings: ['A local image was not copied.'],
+    });
+
+    await exportScriptToFile('script-1', 'My script');
+
+    expect(calls.showToast.mock.calls).toEqual([
+      ['A local image was not copied.', 'info'],
+      ['Script exported', 'success'],
+    ]);
   });
 });
 
 describe('the [object Object] regression', () => {
-  const cases: Array<[string, () => void, () => Promise<void>]> = [
+  const cases: Array<[string, string, () => void, () => Promise<void>]> = [
     [
       'createAndOpenScript',
+      'SCRIPT_SAVE_FAILED',
       () => calls.createScript.mockRejectedValueOnce(appError('SCRIPT_SAVE_FAILED', 'x')),
       () => createAndOpenScript('new'),
     ],
     [
       'importMarkdown',
+      'IMPORT_INVALID_FORMAT',
       () => calls.importScript.mockRejectedValueOnce(appError('IMPORT_INVALID_FORMAT', 'x')),
       () => importMarkdown(),
     ],
     [
       'exportScriptToFile',
+      'SCRIPT_FILE_MISSING',
       () => calls.exportScript.mockRejectedValueOnce(appError('SCRIPT_FILE_MISSING', 'x')),
       () => exportScriptToFile('script-1', 'My script'),
     ],
   ];
 
-  for (const [name, arrange, act] of cases) {
+  for (const [name, code, arrange, act] of cases) {
     it(`${name} never stringifies the raw AppError`, async () => {
       arrange();
 
@@ -204,8 +273,10 @@ describe('the [object Object] regression', () => {
 
       const message = dangerToast();
       expect(message).not.toContain('[object Object]');
-      // The stable code is for Diagnostics, not for the operator to read.
-      expect(message).not.toMatch(/[A-Z]{2,}_[A-Z_]+/);
+      // Two independent guards: the project's own policy helper, and a literal
+      // check for this case's code, so a bug in the helper cannot hide a leak.
+      expect(looksLikeCode(message)).toBe(false);
+      expect(message).not.toContain(code);
     });
 
     it(`${name} records the raw code for Diagnostics`, async () => {
@@ -215,7 +286,8 @@ describe('the [object Object] regression', () => {
 
       const entries = recentErrorDiagnostics();
       expect(entries).toHaveLength(1);
-      expect(entries[0].code).not.toBeNull();
+      expect(entries[0].code).toBe(code);
+      expect(entries[0].shown).not.toBe('');
       // The lead sentence belongs to the toast; Diagnostics records only the
       // resolved copy `describeError` returned.
       expect(dangerToast()).toContain(entries[0].shown);
