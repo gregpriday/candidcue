@@ -539,6 +539,15 @@
    * something had gone wrong, which is when somebody is most likely to already
    * be reaching for one of those buttons.
    *
+   * WHERE 232 COMES FROM. `box-sizing` is border-box globally, so this figure
+   * includes the pill's 1px borders and its 10px of horizontal padding. What is
+   * left for the label is 232 - 2 - 20 - 60 (the trace) - 16 (the mark) - 16
+   * (two 8px gaps) - 2 (the label's own padding) = 116px. `Not hearing you` at
+   * 12px/600 measures about 88px in the UI face, so there is roughly a quarter
+   * of the string in headroom — enough that a platform substituting a wider
+   * face than SF Pro does not start truncating a fault name, which is the one
+   * string here nobody can afford to read half of.
+   *
    * Both the pill and the placeholder below are sized to 100% of this, so there
    * is one number rather than two that have to be kept in agreement — the old
    * pair (a 106px placeholder against a content-sized pill) already disagreed
@@ -548,7 +557,7 @@
     flex: 0 0 auto;
     display: flex;
     align-items: center;
-    width: 214px;
+    width: 232px;
     margin-right: 4px;
   }
 

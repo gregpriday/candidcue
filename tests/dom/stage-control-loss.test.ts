@@ -317,6 +317,31 @@ describe('the liveness clock measures control, and only control', () => {
     expect(chip(container)?.textContent).toContain(CONTROL_LOST_MESSAGE);
   }, 20_000);
 
+  it('starts running at the envelope, so a control that never beats is still caught', async () => {
+    /*
+     * Control begins its heartbeat on a ~1 s `setInterval`, so the first beat is
+     * a second away. While the watchdog armed only on a beat, a control window
+     * that died inside that window could never set `heartbeatSeen` — and the
+     * stage sat there with no deadline running at all, silent forever, at the
+     * most likely moment for a start to go wrong.
+     *
+     * So this mounts a stage that receives an envelope and then NEVER a single
+     * heartbeat, which is the shape of that failure.
+     */
+    const { container } = render(StageApp);
+    await settle();
+    dispatchLocalStageEvent(STAGE_EVENT.loadSession, envelope());
+    await settle();
+    await wait(420);
+    await settle();
+
+    await wait(PAST_THE_DEADLINE);
+    await settle();
+
+    expect(root(container)?.getAttribute('data-phase')).toBe('frozen');
+    expect(chip(container)?.textContent).toContain(CONTROL_LOST_MESSAGE);
+  }, 20_000);
+
   it('is not held open by a heartbeat belonging to another generation', async () => {
     // A superseded start attempt must not be able to keep a take alive that it
     // no longer owns.

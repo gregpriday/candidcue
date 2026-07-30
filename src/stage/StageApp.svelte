@@ -895,6 +895,31 @@
         const subs = await Promise.all([
         subscribeStageEvent<StageSnapshotPayload>(STAGE_EVENT.loadSession, (envelope) => {
           dispatch({ type: 'snapshot', envelope });
+          /*
+           * The envelope STARTS the liveness deadline, and it is the only other
+           * thing allowed to touch it.
+           *
+           * Two holes close here, and both are the watchdog failing to fire at
+           * all rather than firing wrongly:
+           *
+           *   • control begins its heartbeat on a ~1 s `setInterval`, so the
+           *     first beat is a second away. Arming only on a beat meant that a
+           *     control window which died inside that window could never set
+           *     `heartbeatSeen`, and the stage would sit there forever with no
+           *     deadline running — the exact silence this whole change exists
+           *     to break, at the most likely moment for a start to go wrong;
+           *   • a NEW generation inherited the previous one's timestamp. Once
+           *     its handshake completed, a deadline measured from a take that
+           *     had already ended could fire against a take that was perfectly
+           *     healthy.
+           *
+           * Seeding here is honest about what it proves: control published this
+           * envelope, so control was alive when it did. A real beat refreshes it
+           * about a second later, and if none comes the deadline expires on
+           * schedule.
+           */
+          lastHeartbeatAt = performance.now();
+          heartbeatSeen = true;
           // Handshake step 1 (§43.3): confirm hydration to Rust.
           emitStageEvent<StageHydratedPayload>(STAGE_EVENT.hydrated, {
             stageGeneration: envelope.stageGeneration,
@@ -967,17 +992,23 @@
         subscribeStageEvent<StageStatePayload>(STAGE_EVENT.applyCommand, onDirective),
         subscribeStageEvent<StageHeartbeatPayload>(STAGE_EVENT.heartbeat, (payload) => {
           /*
-           * The liveness clock, and the only thing that may set it.
+           * The liveness clock refreshed, and only for a beat this take owns.
            *
-           * Generation-checked on the SAME rule the reducer applies below
-           * (`stageState.ts`, case 'heartbeat'): matched against the envelope
-           * where there is one, accepted where there is not. The two must agree
-           * — a heartbeat the reducer throws away as stale but that still held
-           * the watchdog off would leave a superseded control window able to
-           * keep a take alive that it no longer owns.
+           * Stricter than the reducer's own rule, deliberately, and this is the
+           * one place the two are allowed to differ. The reducer accepts a beat
+           * that arrives before any envelope, because it has nothing to check it
+           * against; for a DEADLINE that is the wrong call. This file already
+           * documents that a previous generation's payloads are still in flight
+           * during exactly that window, so an outgoing take's last beat could
+           * seed the clock and then be inherited by whatever envelope arrived
+           * next — a deadline measured from a take that had already ended.
+           *
+           * There is no gap left by refusing it: the envelope handler above
+           * starts the deadline itself, so the clock is always running by the
+           * time the phase leaves `handshake` and the watchdog is armed.
            */
           const generation = app.envelope?.stageGeneration ?? null;
-          if (generation === null || payload.stageGeneration === generation) {
+          if (generation !== null && payload.stageGeneration === generation) {
             lastHeartbeatAt = performance.now();
             heartbeatSeen = true;
           }
