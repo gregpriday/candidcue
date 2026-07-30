@@ -49,9 +49,26 @@ const ERROR_COPY: Record<string, string> = {
   // fixed-speed modes still work", which they no longer do: Settings shows both
   // as unavailable in this release, so that sentence sent a presenter whose
   // recogniser had just died hunting for a greyed-out menu item. Auto-scroll is
-  // the real answer, and every one of these codes surfaces with the take
-  // already open — `state.active` is set before the pipeline starts — so `A` is
-  // a key the presenter can actually press at the moment they read this.
+  // the real answer.
+  //
+  // The rescue is scoped — "In a take, …" — because these four strings have TWO
+  // surfaces, and only one of them has a transport to press. In a take they
+  // reach the failure toast, where `A` really does work. But `voice-live.ts`
+  // hands the same `describeError` output to `events.onError` on both the
+  // `startTranscription()` rejection and every `failed` frame, `MicTestSession`
+  // stores it as `snapshot.error`, and Settings → Audio renders it verbatim as
+  // `micError`. `startTranscription()` → `ensure_loaded()` is exactly where
+  // `STT_MODEL_MISSING` and `STT_MODEL_LOAD_FAILED` are raised, and the failed
+  // frames carry `STT_WORKER_FAILED` / `STT_ENGINE_ERROR`, so all four land on
+  // that screen. There is no take there: `toggleAutoScroll()` returns early
+  // while `state.active` is false, and the shortcut layer only binds `A` inside
+  // a session, so a bare "Press A" is the old defect in new words. A conditional
+  // is true on both surfaces; an imperative is true on neither more than one.
+  //
+  // For the same reason nothing here says "after the take" any more: the reader
+  // in Settings has no take to be after. Every repair clause is phrased so it
+  // holds with or without one, and any clause that cannot be is folded into the
+  // "In a take" sentence (`STT_ENGINE_ERROR`'s stop-and-start).
   //
   // The rescue comes BEFORE the repair in all four. Reinstalling and restarting
   // both mean leaving CandidCue, which is not a thing anyone does mid-take; the
@@ -73,13 +90,13 @@ const ERROR_COPY: Record<string, string> = {
   // stop their script. "Start or stop" is also the wording Settings and Live
   // already use for this key.
   STT_MODEL_MISSING:
-    'The speech model is missing from this installation. Press A to start or stop auto-scroll. Reinstall CandidCue after the take.',
+    'The speech model is missing from this installation. In a take, press A to start or stop auto-scroll. Reinstall CandidCue to restore voice following.',
   STT_MODEL_LOAD_FAILED:
-    'The speech model could not be loaded. Press A to start or stop auto-scroll. Restart CandidCue after the take, and reinstall it if this keeps happening.',
+    'The speech model could not be loaded. In a take, press A to start or stop auto-scroll. Restart CandidCue, and reinstall it if this keeps happening.',
   STT_WORKER_FAILED:
-    'The speech recogniser is unavailable. Press A to start or stop auto-scroll. Restart CandidCue after the take.',
+    'The speech recogniser is unavailable. In a take, press A to start or stop auto-scroll. Restart CandidCue to bring it back.',
   STT_ENGINE_ERROR:
-    'The speech recogniser failed unexpectedly. Press A to start or stop auto-scroll. To retry voice following, stop and restart the take.',
+    'The speech recogniser failed unexpectedly. In a take, press A to start or stop auto-scroll, then stop and start the take to retry voice following.',
 
   /* -- network ------------------------------------------------------------ */
   //

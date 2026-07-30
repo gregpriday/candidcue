@@ -129,6 +129,17 @@ const {
  */
 const CODE_TOKEN = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/;
 
+/**
+ * The four the bundled recogniser can raise. They share one property no other
+ * copy in the file has: two surfaces, only one of which has a take open.
+ */
+const RECOGNISER_CODES = [
+  'STT_MODEL_MISSING',
+  'STT_MODEL_LOAD_FAILED',
+  'STT_WORKER_FAILED',
+  'STT_ENGINE_ERROR',
+] as const;
+
 function compiledStub(): CompiledScript {
   return {
     sourceHash: 'hash-abc',
@@ -444,12 +455,7 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
   it('points the recogniser failures at auto-scroll, which does exist', () => {
     // The replacement is only an improvement if it names the real fallback and
     // the key that starts it (`a` → 'toggle-auto-scroll' in lib/shortcuts.ts).
-    for (const code of [
-      'STT_MODEL_MISSING',
-      'STT_MODEL_LOAD_FAILED',
-      'STT_WORKER_FAILED',
-      'STT_ENGINE_ERROR',
-    ]) {
+    for (const code of RECOGNISER_CODES) {
       const copy = copyForErrorCode(code);
       expect(copy, `${code} does not name auto-scroll`).toMatch(/auto-scroll/i);
       // Loose enough not to police the sentence around it; `shortcuts.test.ts`
@@ -457,6 +463,110 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
       expect(copy, `${code} does not name the key that works it`).toMatch(
         /\bpress (?:the )?A\b/i,
       );
+    }
+  });
+});
+
+/**
+ * The same rule again, one surface further out: copy must not imply an action
+ * that does not exist WHERE IT IS READ.
+ *
+ * Pointing the recogniser failures at auto-scroll is only true with a take
+ * open, and these four strings have a second reader who has none.
+ * `voice-live.ts` hands `describeError(...)` to `events.onError` on both the
+ * `startTranscription()` rejection and every `failed` frame; `MicTestSession`
+ * keeps it as `snapshot.error`; Settings → Audio renders it verbatim. That is
+ * the microphone test, where `toggleAutoScroll()` returns early on
+ * `!state.active` and `A` is just a letter — so "Press A to start or stop
+ * auto-scroll. Reinstall CandidCue after the take." is exactly the defect
+ * gregpriday/candidcue#121 is about, relocated rather than fixed.
+ *
+ * The fix is a conditional: a sentence that names a take-only affordance has to
+ * SAY it is about a take. Then it is true in the toast and true in Settings.
+ */
+describe('recogniser copy stays true on the surface with no take', () => {
+  const settingsSource = readFileSync(
+    new URL('../../../src/control/routes/Settings.svelte', import.meta.url),
+    'utf8',
+  );
+  const voiceLiveSource = readFileSync(
+    new URL('../../../src/control/services/voice-live.ts', import.meta.url),
+    'utf8',
+  );
+
+  /** Affordances that only exist while a take is running. */
+  const TAKE_ONLY = /\bauto-scroll\b|\bpress (?:the )?A\b|\b(?:the|a|your) take\b/i;
+  /** The scope that makes naming one of them honest anywhere. */
+  const SCOPED = /^In a take[,:]/;
+
+  const sentences = (copy: string): string[] =>
+    copy
+      .split(/(?<=\.)\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s !== '');
+
+  const unscoped = (copy: string): string[] =>
+    sentences(copy).filter((s) => TAKE_ONLY.test(s) && !SCOPED.test(s));
+
+  it('still has a reader with no take — the Settings → Audio microphone test', () => {
+    /*
+     * Anti-vacuity, in the spirit of the availability check above: this ban
+     * only earns its keep while that second surface exists. Asserting the wiring
+     * means the day the mic test stops rendering `describeError` output, this
+     * fails loudly and someone decides whether the scope is still needed —
+     * rather than the ban quietly guarding nothing.
+     */
+    expect(voiceLiveSource, 'the mic test no longer routes failures through describeError').toMatch(
+      /events\.onError\(describeError\(/,
+    );
+    expect(settingsSource, 'Settings no longer describes mic-test errors with describeError').toMatch(
+      /describe:\s*describeError/,
+    );
+    expect(settingsSource, 'Settings no longer renders the mic-test error').toMatch(/\{micError\}/);
+  });
+
+  it('detects an unscoped take-only promise, and leaves honest copy alone', () => {
+    // The detector is the whole guard, so it is asserted rather than assumed.
+    // Left column: every clause this fix removed.
+    for (const bad of [
+      'Press A to start or stop auto-scroll.',
+      'Reinstall CandidCue after the take.',
+      'To retry voice following, stop and restart the take.',
+      'Use auto-scroll instead.',
+    ]) {
+      expect(unscoped(bad), `'${bad}' should read as an unscoped take-only promise`).toEqual([bad]);
+    }
+    for (const good of [
+      'In a take, press A to start or stop auto-scroll.',
+      'In a take, press A to start or stop auto-scroll, then stop and start the take to retry.',
+      'Restart CandidCue, and reinstall it if this keeps happening.',
+      'The speech model is missing from this installation.',
+    ]) {
+      expect(unscoped(good), `'${good}' is true on both surfaces and should pass`).toEqual([]);
+    }
+  });
+
+  it('never promises a take-only action unconditionally', () => {
+    for (const code of RECOGNISER_CODES) {
+      const copy = copyForErrorCode(code);
+      expect(
+        unscoped(copy),
+        `${code} names a take-only action to a reader who may have no take: ${copy}`,
+      ).toEqual([]);
+      // The specific phrasing that was wrong on this surface: "after the take"
+      // has no referent in Settings, whichever sentence it lands in.
+      expect(copy, `${code} still frames its repair around a take`).not.toMatch(/after the take/i);
+    }
+  });
+
+  it('leaves the conditional off the sentence that says what happened', () => {
+    // Scoping is for the remedy, not the diagnosis: a missing model is missing
+    // in Settings too, and hedging that would be its own small lie.
+    for (const code of RECOGNISER_CODES) {
+      const [first] = sentences(copyForErrorCode(code));
+      expect(first, `${code} has no leading statement of what happened`).toBeDefined();
+      expect(first, `${code} opens with a condition instead of the fault`).not.toMatch(SCOPED);
+      expect(first).toMatch(/^The speech (?:model|recogniser)\b/);
     }
   });
 });
