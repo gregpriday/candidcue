@@ -298,13 +298,27 @@ test('the reading cue marks one line pitch above the mark, in both styles', asyn
     const apex = tickBox.y + tickBox.height / 2;
     apexes.push(apex);
 
-    // ONE PITCH, measured — not "about a line".
-    expect(bandBox.height, `band ${i} height`).toBeCloseTo(linePitchPx, 0);
-    // ...ending ON the apex. This is the assertion the whole change rests on.
-    expect(bandBox.y + bandBox.height, `band ${i} lower edge`).toBeCloseTo(apex, 0);
-    // ...and reaching UP from it, never down. Stated separately so a band of the
-    // right height hung the wrong way fails on its own line.
+    /*
+     * The band REACHES one pitch from the mark: its upper edge is the position
+     * the line will have reached by the end of itself. This is the assertion the
+     * whole change rests on, and it is stated on the top edge because that is
+     * the end the tick does not already mark.
+     */
     expect(bandBox.y, `band ${i} upper edge`).toBeCloseTo(apex - linePitchPx, 0);
+
+    /*
+     * ...and it stops SHORT of the apex by half a cap, so the rule never runs
+     * onto the triangle. Both are translucent, so an overlap composites brighter
+     * than either and puts a pale notch exactly where the eye goes. The tick's
+     * own box height is one cap, which is where the half comes from.
+     */
+    const gap = tickBox.height * 0.5;
+    expect(bandBox.y + bandBox.height, `band ${i} lower edge`).toBeCloseTo(apex - gap, 0);
+    expect(bandBox.y + bandBox.height, `band ${i} runs onto the tick`).toBeLessThan(apex);
+
+    // A hairline, not a slab: a quarter of the tick's 2.2/18 stroke weight. The
+    // first version matched the stroke and read as the louder of the two marks.
+    expect(bandBox.width, `band ${i} width`).toBeLessThan(tickBox.height * 0.05);
   }
 
   /*

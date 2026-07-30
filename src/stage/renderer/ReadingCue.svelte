@@ -247,13 +247,37 @@
   const plateauBottomPercent = 100 - plateauTopPercent;
 
   /**
-   * Thickness of the hairline, matched to the tick's own stroke.
+   * Thickness of the hairline — a QUARTER of the tick's own stroke weight.
    *
-   * `stroke-width: 2.2` in an 18-unit-tall viewBox, so the tick's outline is
-   * this thick at every size; the band drawn at the same weight reads as the
-   * same instrument rather than as a second mark that happens to be nearby.
+   * It was drawn at the full stroke (`stroke-width: 2.2` of an 18-unit viewBox,
+   * so 0.122 of a cap) on the theory that matching weights would read as one
+   * instrument. On glass it read as the LOUDER of the two, and that is backwards:
+   * the tick is the mark you are meant to find, and opacity is not weight. A rule
+   * one pitch long has many times the area of the triangle, so equal ink per pixel
+   * is much more ink. Quartering the width and halving the opacity puts the two
+   * back in the intended order.
+   *
+   * Still type-relative rather than a flat 1px: a hairline has to stay a hairline
+   * on a 9-inch panel calibrated for two metres, where a device pixel is a
+   * different fraction of a letter. The floor keeps it from vanishing entirely.
    */
-  const travelRuleWidthPx = $derived(Math.max(1, (unitPx * 2.2) / 18));
+  const travelRuleWidthPx = $derived(Math.max(1, unitPx * 0.03));
+
+  /**
+   * How far short of the mark the rule stops.
+   *
+   * The drawn path spans 2..16 of an 18-unit box, so the triangle reaches 0.389
+   * of a cap either side of the apex. Half a cap clears that with air. Without
+   * the gap the rule ran onto the triangle's back edge and, both being
+   * translucent, the overlap composited BRIGHTER than either — a pale notch at
+   * exactly the place the eye goes.
+   *
+   * The band still MEANS one pitch from the mark: the top edge is unchanged, and
+   * the bottom end of the band is where the tick already is, so the rule does not
+   * have to draw it.
+   */
+  const travelRuleGapPx = $derived(unitPx * 0.5);
+  const travelRuleHeightPx = $derived(Math.max(0, travelPx - travelRuleGapPx));
 
   /**
    * Whether there is a gutter for the band at all.
@@ -305,7 +329,8 @@
         <i
           class="travel travel-outer-left"
           style:width="{travelRuleWidthPx}px"
-          style:height="{travelPx}px"
+          style:height="{travelRuleHeightPx}px"
+          style:bottom="calc(50% + {travelRuleGapPx}px)"
         ></i>
       {/if}
       <svg viewBox="0 0 16 18">
@@ -332,7 +357,8 @@
         <i
           class="travel travel-outer-right"
           style:width="{travelRuleWidthPx}px"
-          style:height="{travelPx}px"
+          style:height="{travelRuleHeightPx}px"
+          style:bottom="calc(50% + {travelRuleGapPx}px)"
         ></i>
       {/if}
       <svg viewBox="0 0 16 18">
@@ -422,23 +448,23 @@
   /*
    * The band, as a hairline rising from the tick.
    *
-   * `bottom: 50%` inside a tick that is `translateY(-50%)` on the band centre,
-   * so the rule STOPS at the apex row and grows upward from it — the one
-   * expression of "the line is never below the mark" that cannot drift out of
-   * agreement with where the tick is actually drawn.
+   * `bottom` is set inline as `calc(50% + gap)` — 50% of a tick that is itself
+   * `translateY(-50%)` on the band centre IS the apex row, so the offset is
+   * measured from the mark rather than from anything that could drift out of
+   * agreement with where the tick is drawn. The gap is why it is not simply
+   * `bottom: 50%`; see `travelRuleGapPx`.
    *
-   * Quieter than the triangle at 0.5, and deliberately much quieter: the tick is
-   * the thing that says "start here" and has to stay the louder of the two, and
-   * a rule is long where a tick is compact, so equal opacity would not read as
-   * equal weight. It also does NOT take part in the hold ladder — the ladder
-   * reports what the aligner believes, and this is a fact about the rig.
+   * 0.10 against the triangle's 0.5, and the tick is still the louder of the two
+   * by area at that ratio rather than in spite of it — the first attempt matched
+   * the stroke weight and inverted the hierarchy on real glass. This does NOT
+   * take part in the hold ladder either: the ladder reports what the aligner
+   * believes, and the band is a fact about the rig.
    */
   .travel {
     position: absolute;
-    bottom: 50%;
     display: block;
     background: currentColor;
-    opacity: 0.2;
+    opacity: 0.1;
   }
   /* Centred on the triangle's flat back edge — 3/16 and 13/16 of the viewBox —
      which is the OUTER side on both ticks, so the band never crowds the column

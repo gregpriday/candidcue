@@ -317,10 +317,21 @@ describe('the reading cue', () => {
     const travels = container.querySelectorAll<HTMLElement>('.travel');
     expect(travels, 'nothing marks the band the line travels through').toHaveLength(2);
 
-    // The resolved optics render 62px at 1.38, and the cue is handed that pitch
-    // rather than a measured median — see the note at the mount site.
+    /*
+     * The resolved optics render 62px at 1.38, and the cue is handed that pitch
+     * rather than a measured median — see the note at the mount site.
+     *
+     * The DRAWN rule is that pitch less the gap that keeps it off the triangle,
+     * and the gap is half a cap. Taken off the tick's own rendered height rather
+     * than recomputed from the fallback cap ratio, so this stays true if the
+     * measured face changes.
+     */
+    const capPx = Number.parseFloat(
+      container.querySelector<HTMLElement>('.tick')?.style.height ?? 'NaN',
+    );
+    expect(capPx).toBeGreaterThan(0);
     for (const travel of travels) {
-      expect(Number.parseFloat(travel.style.height)).toBeCloseTo(62 * 1.38, 3);
+      expect(Number.parseFloat(travel.style.height)).toBeCloseTo(62 * 1.38 - capPx / 2, 3);
     }
     // One per side, on the OUTER edge of each tick, so neither crowds the column.
     expect(container.querySelector('.travel-outer-left')).not.toBeNull();
@@ -400,7 +411,14 @@ describe('the reading cue', () => {
     // band of the wrong height on every uncalibrated rig, which is most of them.
     const { container } = mount(settingsWith({ optics: undefined }));
     const travel = container.querySelector<HTMLElement>('.travel');
-    expect(Number.parseFloat(travel?.style.height ?? 'NaN')).toBeCloseTo(64 * 1.32, 3);
+    const capPx = Number.parseFloat(
+      container.querySelector<HTMLElement>('.tick')?.style.height ?? 'NaN',
+    );
+    // Less the half-cap gap that keeps the rule off the triangle, as above.
+    expect(Number.parseFloat(travel?.style.height ?? 'NaN')).toBeCloseTo(
+      64 * 1.32 - capPx / 2,
+      3,
+    );
   });
 
   it('lights the wash over that same band, not centred on the mark', () => {
