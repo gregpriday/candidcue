@@ -39,6 +39,32 @@ export interface ShimConfig {
   /** When true, list_displays rejects (degraded enumeration path). */
   failListDisplays?: boolean;
   /**
+   * When true, list_displays SUCCEEDS and returns nothing.
+   *
+   * A different state from `failListDisplays`, and one Rust can genuinely
+   * produce: `available_monitors()` answering `Ok([])` is a successful call
+   * about a machine with no enumerable panel. A screen that only handles the
+   * rejection treats an empty list as a normal answer and confidently reports
+   * where the take will land, having been told nothing.
+   */
+  emptyDisplays?: boolean;
+  /**
+   * Hold list_displays open for this long, from BEFORE the app boots.
+   *
+   * `__E2E__.setDelay` cannot reach this: it is only callable after navigation,
+   * by which time the welcome screen has already asked. This is what makes the
+   * in-flight state observable rather than a frame nobody can catch.
+   */
+  listDisplaysDelayMs?: number;
+  /**
+   * The presentation mode the Rust document reports (§ reader-mode spec).
+   *
+   * Set on `stageBehavior` — the field that actually owns the mode now — so a
+   * spec exercises the persisted path rather than the localStorage fallback
+   * that only exists to migrate documents written before it moved.
+   */
+  presentationMode?: 'prompter' | 'reader';
+  /**
    * Session mode a take opens in. Rust stores it as
    * `stageBehavior.promptMode`; the settings service maps it to
    * `general.defaultSessionMode` (§14.2 G).
@@ -141,6 +167,10 @@ function shimBody(config: ShimConfig): void {
       },
       editor: {},
       stageBehavior: {
+        // Written only when a spec asks for one: an absent field is what sends
+        // the settings adapter to the overlay-migration path, and some specs
+        // are about that path.
+        ...(config.presentationMode ? { presentationMode: config.presentationMode } : {}),
         promptMode: config.promptMode ?? 'voice',
         manualWheelMultiplier: 1,
         fixedSpeedWpm: 140,
@@ -317,6 +347,9 @@ function shimBody(config: ShimConfig): void {
   };
   if (config.failListDisplays) {
     control.fail['list_displays'] = { code: 'HARDWARE_ERROR', userMessage: 'Could not enumerate displays.' };
+  }
+  if (config.listDisplaysDelayMs !== undefined) {
+    control.delay['list_displays'] = config.listDisplaysDelayMs;
   }
   (window as unknown as { __E2E__: typeof control }).__E2E__ = control;
 
@@ -507,7 +540,7 @@ function shimBody(config: ShimConfig): void {
 
       case 'list_displays':
         if (control.fail['list_displays']) throw control.fail['list_displays'];
-        return displays();
+        return config.emptyDisplays ? [] : displays();
 
       case 'identify_displays':
         return {

@@ -100,6 +100,7 @@
    */
   const pinnedMissing = $derived(
     probe.kind === 'loaded' &&
+      connectedDisplays.length > 0 &&
       chosenFingerprint !== null &&
       !connectedDisplays.some((d) => d.fingerprint === chosenFingerprint),
   );
@@ -110,21 +111,31 @@
     detail: string;
     /** Only 'attention' tints the row; expected setup is accent, faults warn. */
     emphasis: 'quiet' | 'setup' | 'attention';
+    /** The fix control's label; the row always links somewhere useful. */
+    action: string;
   }
 
   const micState = $derived<RowState>(
     micGranted
       ? {
           tone: 'neutral',
+          // Deliberately past tense. The flag records that a grant was made on
+          // this machine; it is not cleared when the grant is revoked in System
+          // Settings or when the device is unplugged, so it cannot support a
+          // claim about right now. "CandidCue can hear you" was exactly that
+          // claim, and it would have been the confident wrong answer in the two
+          // cases somebody most needs a true one.
           pill: 'Access allowed',
-          detail: 'CandidCue can hear you. Test the level before a real take.',
+          detail: 'Access was allowed on this Mac. Test the level before a real take.',
           emphasis: 'quiet',
+          action: 'Test microphone',
         }
       : {
           tone: 'accent',
           pill: 'Set up',
           detail: 'Choose a microphone and check the level. Nothing is recorded.',
           emphasis: 'setup',
+          action: 'Set up microphone',
         },
   );
 
@@ -133,12 +144,15 @@
   function resolveDisplayState(): RowState {
     if (readerMode) {
       // Reader mode presents in an ordinary window at desk distance, so there
-      // is no second panel to choose and nothing here to be wrong.
+      // is no second panel to choose and nothing here to be wrong. The action
+      // must not say "Choose display" either: `chooseStageDisplay` ignores the
+      // pin entirely in this mode, so it would offer a choice nothing reads.
       return {
         tone: 'neutral',
         pill: 'This window',
         detail: 'Reader mode presents in this window. No second screen needed.',
         emphasis: 'quiet',
+        action: 'Stage settings',
       };
     }
     if (probe.kind === 'checking') {
@@ -147,6 +161,7 @@
         pill: 'Checking…',
         detail: 'Looking for connected displays.',
         emphasis: 'quiet',
+        action: 'Choose display',
       };
     }
     // A failed enumeration and an empty one are one state on this screen: both
@@ -158,6 +173,7 @@
         pill: 'Couldn’t check',
         detail: 'CandidCue could not list the connected displays. Takes still open.',
         emphasis: 'quiet',
+        action: 'Choose display',
       };
     }
     if (pinnedMissing) {
@@ -168,6 +184,7 @@
           effectiveDisplay?.name ?? 'another display'
         } until it is back.`,
         emphasis: 'attention',
+        action: 'Fix display',
       };
     }
     if (chosenFingerprint !== null) {
@@ -176,6 +193,7 @@
         pill: 'Connected',
         detail: `Takes open on ${effectiveDisplay?.name ?? 'the display you chose'}.`,
         emphasis: 'quiet',
+        action: 'Choose display',
       };
     }
     return {
@@ -183,6 +201,7 @@
       pill: 'Automatic',
       detail: `Takes open on ${effectiveDisplay?.name ?? 'the best available display'}.`,
       emphasis: 'quiet',
+      action: 'Choose display',
     };
   }
 
@@ -247,25 +266,32 @@
         <span class="readiness-status">
           <StatusPill tone={micState.tone} label={micState.pill} />
           <button type="button" class="link" onclick={openMicrophoneSettings}>
-            {micGranted ? 'Test microphone' : 'Set up microphone'}
+            {micState.action}
           </button>
         </span>
       </li>
 
-      <li
-        class="readiness-item"
-        class:setup={displayState.emphasis === 'setup'}
-        class:attention={displayState.emphasis === 'attention'}
-      >
+      <!--
+        This row's state ARRIVES: it starts at "Checking…" and changes when the
+        display probe answers. A sighted reader sees that happen; without a
+        polite live region a screen reader is under no obligation to revisit a
+        span it already passed, so the only readiness state on this screen that
+        moves would be the one state never announced. Polite, not assertive —
+        it must wait for a pause rather than interrupt the heading and CTAs
+        somebody is still hearing for the first time.
+      -->
+      <li class="readiness-item" class:attention={displayState.emphasis === 'attention'}>
         <span class="readiness-icon"><Icon name="monitor" size={16} /></span>
         <span class="readiness-text">
           <span class="readiness-title">Teleprompter screen</span>
-          <span class="readiness-detail">{displayState.detail}</span>
+          <span class="readiness-detail" role="status" aria-live="polite">
+            {displayState.detail}
+          </span>
         </span>
         <span class="readiness-status">
           <StatusPill tone={displayState.tone} label={displayState.pill} />
           <button type="button" class="link" onclick={openDisplaySettings}>
-            {displayState.emphasis === 'attention' ? 'Fix display' : 'Choose display'}
+            {displayState.action}
           </button>
         </span>
       </li>
