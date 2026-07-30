@@ -61,6 +61,21 @@ export async function openScript(scriptId: string): Promise<ScriptDocument> {
   state.set({ ...initial, scriptId, loading: true });
   resetCompiled();
   const doc = await scriptsService.getScript(scriptId);
+  adoptDocument(doc);
+  return doc;
+}
+
+/**
+ * Make an already-fetched document the editor's contents.
+ *
+ * Split out of `openScript` for the conflict arms, which must have the disk
+ * document IN HAND before they are allowed to touch editor state at all —
+ * `openScript` clears the buffer and only THEN awaits the fetch, which is
+ * exactly the window that lost the user's text (see `useDiskVersion`).
+ */
+function adoptDocument(doc: ScriptDocument): void {
+  cancelTimers();
+  resetCompiled();
   state.set({
     ...initial,
     scriptId: doc.id,
@@ -71,7 +86,6 @@ export async function openScript(scriptId: string): Promise<ScriptDocument> {
     saveState: 'saved',
   });
   void requestCompile(doc.id, doc.source, 0);
-  return doc;
 }
 
 export function closeScript(): void {
@@ -113,7 +127,7 @@ export async function setTitle(title: string): Promise<void> {
     const renamed = await scriptsService.renameScript(s.scriptId, title, s.scriptRevision);
     state.update((prev) => ({ ...prev, scriptRevision: renamed.scriptRevision }));
   } catch (err) {
-    state.update((prev) => ({ ...prev, saveState: 'error', lastError: String(err) }));
+    state.update((prev) => ({ ...prev, saveState: 'error', lastError: describeError(err) }));
   }
 }
 
@@ -174,6 +188,127 @@ export async function saveNow(): Promise<void> {
     }
     state.update((prev) => ({ ...prev, saveState: 'error', lastError: describeError(err) }));
   }
+}
+
+/* --- F.8 external-conflict resolution --------------------------------- */
+
+/**
+ * The name the editor's text is filed under when the disk version wins.
+ *
+ * Exported so the dialog can promise the user the same name the store will
+ * actually use — the copy and the behaviour drifting apart is the bug this
+ * whole section exists to fix.
+ */
+export function conflictCopyTitle(title: string): string {
+  return `${title} (conflict copy)`;
+}
+
+/** What an arm actually did, so the toast can say it rather than assume it. */
+export interface ConflictOutcome {
+  /** Whether the editor's text was filed as a separate script. */
+  copied: boolean;
+}
+
+/**
+ * Is the editor still on the document this operation started against?
+ *
+ * Both arms await IPC, and the sheet can be dismissed and another script
+ * opened while they are in flight. Adopting unconditionally then replaced a
+ * DIFFERENT script's editor state — cancelling its pending autosave and
+ * dropping whatever had been typed into it, which is the same data loss this
+ * change exists to end, arriving from the other direction. The durable write
+ * still stands; only the state replacement is abandoned.
+ */
+function isStillCurrent(started: EditorState): boolean {
+  const now = get(state);
+  return now.scriptId === started.scriptId && now.source === started.source;
+}
+
+/**
+ * Take the disk version, keeping the editor's text as a separate script.
+ *
+ * The order here is the entire point. By the time a conflict sheet is open,
+ * every autosave since the external change has been refused, so `source` is
+ * the ONLY copy of everything typed since then — and `openScript` clears the
+ * editor before it awaits the fetch, so the old implementation (`openScript`
+ * plus a toast) dropped that text before it even knew the disk read would
+ * succeed. Nothing is discarded until the text is durably somewhere else:
+ *
+ *   1. fetch the disk document — a failure here changes nothing,
+ *   2. write the editor's text to a new script — a failure here changes
+ *      nothing either,
+ *   3. and only now adopt the document fetched in step 1.
+ *
+ * A throw therefore always leaves `source`, `dirty` and `saveState:
+ * 'conflict'` exactly as they were, so the sheet can stay open and the user
+ * can try again with their text still in front of them.
+ *
+ * There is no IPC primitive for "keep this text as a revision without making
+ * it live": `save_script` snapshots the canonical preimage and then makes the
+ * supplied source current, which is the opposite of what this arm wants.
+ * `create_script` is the only durable write that does not replace the disk
+ * version, which is why the text lands in the Library rather than in this
+ * script's history.
+ */
+export async function useDiskVersion(): Promise<ConflictOutcome> {
+  const s = get(state);
+  if (s.scriptId === null) throw new Error('No script is open.');
+  const disk = await scriptsService.getScript(s.scriptId);
+
+  /*
+   * Title as well as body: `setTitle` writes the new name into the store
+   * before its rename settles, so a rename that lost the race to the external
+   * change is unsaved work too, and comparing only the source would drop it.
+   */
+  const copied = s.source !== disk.source || s.title !== disk.title;
+  if (copied) {
+    await scriptsService.createScript({
+      title: conflictCopyTitle(s.title),
+      source: s.source,
+    });
+  }
+  if (!isStillCurrent(s)) return { copied };
+  adoptDocument(disk);
+  return { copied };
+}
+
+/**
+ * Keep the editor's text, writing it over the disk version.
+ *
+ * The disk side needs no rescue here: Rust snapshots the externally changed
+ * file as a revision (`external_change_preserved`) before it refuses the save
+ * that opened this sheet, so it is already in this script's history. The save
+ * goes out against the revision the disk currently holds, which is what makes
+ * it succeed where the autosave was refused.
+ *
+ * It does NOT reload afterwards, and that is deliberate. Reopening would send
+ * the editor back through `openScript`, which blanks the buffer before it
+ * awaits its fetch — so a transient failure on that second read left an EMPTY
+ * editor holding no copy of the text, no longer marked as a conflict, behind a
+ * sheet still offering "keep my edits". Pressing it again saved that blank
+ * over the text the first press had just rescued. The editor already holds
+ * exactly what was written, so the revision the save returns is all it needs.
+ */
+export async function keepEditorVersion(): Promise<ConflictOutcome> {
+  const s = get(state);
+  if (s.scriptId === null) throw new Error('No script is open.');
+  const disk = await scriptsService.getScript(s.scriptId);
+  const result = await scriptsService.saveScript(s.scriptId, disk.scriptRevision, s.source, {
+    title: s.title,
+  });
+  // Only the mock backend answers a conflict by value; see `saveNow`.
+  if (result.status === 'conflict') {
+    throw new Error('This script changed on disk again. Review the versions once more.');
+  }
+  if (!isStillCurrent(s)) return { copied: false };
+  state.update((prev) => ({
+    ...prev,
+    scriptRevision: result.scriptRevision,
+    dirty: false,
+    saveState: 'saved',
+    lastError: null,
+  }));
+  return { copied: false };
 }
 
 export function editorHasUnsavedWork(): boolean {

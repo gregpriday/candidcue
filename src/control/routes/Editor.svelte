@@ -36,12 +36,16 @@ import type { PresentationMode } from '../services/settings-types';
   import { compiled } from '../stores/compiled';
   import { requestConfirm } from '../stores/confirm';
   import {
+    conflictCopyTitle,
     editor,
+    keepEditorVersion,
     openScript,
     saveNow,
     setEditorMode,
     setSource,
     setTitle,
+    useDiskVersion,
+    type ConflictOutcome,
   } from '../stores/editor';
   import { loadLibrary, moveScriptToTrash } from '../stores/library';
   import { navigate } from '../stores/router';
@@ -57,25 +61,50 @@ import type { PresentationMode } from '../services/settings-types';
   let panelOpen = $state(true);
   let saveIssueOpen = $state(false);
   let conflictOpen = $state(false);
+  let conflictResolving = $state(false);
   let revisionsOpen = $state(false);
   let splitRatio = $state(readSplitRatio());
   let previewScroller: HTMLElement | null = $state(null);
+  let toolbarEl: HTMLElement | null = $state(null);
 
   const SPLIT_KEY = 'candidcue.editor.split.v1';
+
+  /*
+   * The divider's travel, as one set of numbers.
+   *
+   * The pointer drag, the keyboard steps and the `aria-value*` the splitter
+   * announces all have to agree about where the ends are, or the control says
+   * one thing and does another.
+   */
+  const SPLIT_MIN = 0.25;
+  const SPLIT_MAX = 0.75;
+  const SPLIT_STEP = 0.05;
+
+  function clampSplit(ratio: number): number {
+    return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, ratio));
+  }
 
   function readSplitRatio(): number {
     try {
       const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(SPLIT_KEY) : null;
       const parsed = raw ? Number(raw) : NaN;
-      return Number.isFinite(parsed) ? Math.min(0.75, Math.max(0.25, parsed)) : 0.5;
+      return Number.isFinite(parsed) ? clampSplit(parsed) : 0.5;
     } catch {
       return 0.5;
     }
   }
 
+  function persistSplitRatio(): void {
+    try {
+      localStorage.setItem(SPLIT_KEY, String(splitRatio));
+    } catch {
+      /* non-fatal */
+    }
+  }
+
   $effect(() => {
     void openScript(scriptId).catch((err) => {
-      showToast(`Could not open script: ${String(err)}`, 'danger');
+      showToast(`Could not open script: ${describeError(err)}`, 'danger');
       void navigate({ name: 'library', view: 'all' });
     });
   });
@@ -98,6 +127,34 @@ import type { PresentationMode } from '../services/settings-types';
   );
   const wordCount = $derived(result?.spokenWordCount ?? 0);
   const durationSeconds = $derived(estimateDurationSeconds(wordCount));
+
+  /*
+   * A compile that FAILED, as opposed to a document with nothing in it.
+   *
+   * Both leave `blocks` empty, and the preview branched on that alone — so a
+   * script the compiler choked on rendered as "Your rendered script will
+   * appear here.", the same sentence a blank document shows. The one state
+   * where the author most needs to be told something was the state that said
+   * nothing.
+   *
+   * Gated on `scriptId` for the reason the compiled store keeps that field at
+   * all: a failure belonging to the script you just left must not be reported
+   * against the one you just opened.
+   */
+  const compileFailed = $derived($compiled.status === 'error' && $compiled.scriptId === scriptId);
+
+  /*
+   * `compiled.ts` stores its failure as `String(err)`, and the compiler
+   * service rejects with a real `Error`, so the string arrives carrying a
+   * bare "Error:" that means nothing to the person reading it. An error with
+   * no message stringifies to just "Error", which is why the colon is
+   * optional and why an empty remainder yields no detail line at all rather
+   * than a generic apology under a heading that already apologised.
+   */
+  const compileErrorDetail = $derived.by(() => {
+    const message = ($compiled.error ?? '').replace(/^Error:?\s*/, '').trim();
+    return message === '' ? '' : describeError(message);
+  });
 
   const meta = $derived(
     wordCount > 0
@@ -242,18 +299,58 @@ import type { PresentationMode } from '../services/settings-types';
   }
 
   /**
-   * Bring the editing surface back when the click came from Preview.
+   * Change mode without destroying what the author has typed.
    *
-   * In Preview the CodeMirror instance is unmounted and `editorRef` is null, so
-   * anything wanting to move a cursor has to flush the mode change and wait for
-   * the remount before there is a view to move it in. The `await` is
-   * load-bearing: switching mode and calling `withView` in the same tick finds
-   * nothing there and silently does nothing.
+   * Edit and Split used to render a `MarkdownEditor` from two different `{#if}`
+   * branches, and Preview rendered none. Svelte reconciles branches, not
+   * positions, so every switch between the three destroyed the component — and
+   * with it the `EditorView` that owns the undo stack and the selection. Moving
+   * Edit → Split to compare a paragraph against its rendering, and moving back,
+   * silently threw away the history for the whole session.
+   *
+   * There is now one instance for all three modes and the panes are shown and
+   * hidden with CSS, so this only has to bring the surface back into view:
+   * `tick()` for the class change to land, `requestMeasure()` because a
+   * CodeMirror that was `display: none` has stale geometry, and `focus()`
+   * because WebKit can otherwise leave the caret un-blinking in a pane the
+   * user just asked for.
    */
+  async function showEditingSurface(mode: 'edit' | 'split' = 'edit'): Promise<void> {
+    const wasHidden = $editor.mode === 'preview';
+    if (wasHidden) setEditorMode(mode);
+    await tick();
+    if (!wasHidden) return;
+    withView((view) => {
+      view.requestMeasure();
+      view.focus();
+    });
+  }
+
+  /** Bring the editing surface back when the click came from Preview. */
   async function ensureEditingSurface(): Promise<void> {
     if ($editor.mode !== 'preview') return;
-    setEditorMode('edit');
+    await showEditingSurface('edit');
+  }
+
+  /**
+   * The mode switch itself. Going back to a pane that was hidden needs the
+   * same remeasure a Preview click does — nothing was unmounted, but a hidden
+   * CodeMirror measured itself at zero.
+   *
+   * It remeasures and does NOT focus, which is the difference between this and
+   * `showEditingSurface`. The mode control is a radiogroup: arrow keys move
+   * the selection through it, so pulling focus into the editor on the way out
+   * of Preview meant the next arrow key moved the caret instead of reaching
+   * Edit, and the group could not be operated the way its role promises.
+   * Focus belongs to the actions that ask for the editor by name — a preview
+   * block, a lint finding.
+   */
+  async function changeMode(mode: 'edit' | 'split' | 'preview'): Promise<void> {
+    const wasHidden = $editor.mode === 'preview';
+    setEditorMode(mode);
     await tick();
+    if (!wasHidden || mode === 'preview') return;
+    withView((view) => view.requestMeasure());
   }
 
   /**
@@ -350,30 +447,48 @@ import type { PresentationMode } from '../services/settings-types';
 
   /* --- F.8 external-conflict resolution ------------------------------- */
 
-  async function keepCandidCueVersion(): Promise<void> {
-    conflictOpen = false;
-    const disk = await scriptsService.getScript(scriptId);
-    await scriptsService.saveScript(scriptId, disk.scriptRevision, $editor.source, {
-      title: $editor.title,
-    });
-    await openScript(scriptId);
-    showToast('Kept the CandidCue version. The disk version was saved as a revision.', 'success');
+  /**
+   * Run one arm of the conflict sheet.
+   *
+   * The sheet closes only once the operation has SUCCEEDED. Both arms move
+   * text that exists in exactly one place, and closing first — which is what
+   * the previous implementation did — takes the choice away at the moment it
+   * is most likely to be needed again. On a failure the sheet stays up with
+   * the editor's text still behind it, so the user can pick the other arm or
+   * try the same one again.
+   */
+  async function resolveConflict(
+    run: () => Promise<ConflictOutcome>,
+    done: (outcome: ConflictOutcome, copyName: string) => string,
+  ): Promise<void> {
+    if (conflictResolving) return;
+    conflictResolving = true;
+    // Read before the await: a successful arm replaces the title with the
+    // disk one, and the toast has to name the copy that was actually made.
+    const copyName = conflictCopyName;
+    try {
+      const outcome = await run();
+      conflictOpen = false;
+      showToast(done(outcome, copyName), 'success');
+    } catch (err) {
+      showToast(`Nothing was changed. ${describeError(err)}`, 'danger');
+    } finally {
+      conflictResolving = false;
+    }
   }
 
-  async function loadDiskVersion(): Promise<void> {
-    conflictOpen = false;
-    await openScript(scriptId);
-    showToast('Loaded the disk version', 'info');
-  }
+  const conflictCopyName = $derived(conflictCopyTitle($editor.title));
 
-  async function saveBothVersions(): Promise<void> {
+  /**
+   * Escape and the scrim are refused while an arm is in flight.
+   *
+   * Dismissing mid-operation is what let a slow resolution finish against a
+   * script the user had already left, and it would also drop the only sheet
+   * offering the choice at the moment it is most needed.
+   */
+  function closeConflict(): void {
+    if (conflictResolving) return;
     conflictOpen = false;
-    await scriptsService.createScript({
-      title: `${$editor.title} (conflict copy)`,
-      source: $editor.source,
-    });
-    await openScript(scriptId);
-    showToast('Saved your text as a separate script and loaded the disk version.', 'success');
   }
 
   async function trashFromEditor(): Promise<void> {
@@ -421,19 +536,107 @@ import type { PresentationMode } from '../services/settings-types';
     if (!container) return;
     const rect = container.getBoundingClientRect();
     const move = (e: PointerEvent) => {
-      splitRatio = Math.min(0.75, Math.max(0.25, (e.clientX - rect.left) / rect.width));
+      splitRatio = clampSplit((e.clientX - rect.left) / rect.width);
     };
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      try {
-        localStorage.setItem(SPLIT_KEY, String(splitRatio));
-      } catch {
-        /* non-fatal */
-      }
+      persistSplitRatio();
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+  }
+
+  /**
+   * The splitter from the keyboard (WAI-ARIA window splitter).
+   *
+   * It carried `role="separator"` and an `aria-label` and nothing else, so it
+   * announced itself as a resize control that could not be reached, moved or
+   * read — the one combination worse than not claiming the role at all.
+   * Arrow keys step, Home and End go to the ends of the SAME travel the drag
+   * is clamped to, and a keyboard move persists exactly like a drag does.
+   */
+  function onDividerKeydown(event: KeyboardEvent): void {
+    const next = (() => {
+      switch (event.key) {
+        case 'ArrowLeft':
+          return splitRatio - SPLIT_STEP;
+        case 'ArrowRight':
+          return splitRatio + SPLIT_STEP;
+        case 'Home':
+          return SPLIT_MIN;
+        case 'End':
+          return SPLIT_MAX;
+        default:
+          return null;
+      }
+    })();
+    if (next === null) return;
+    event.preventDefault();
+    splitRatio = clampSplit(next);
+    persistSplitRatio();
+  }
+
+  const splitPercent = $derived(Math.round(splitRatio * 100));
+
+  /*
+   * Roving tabindex for the insert toolbar (WAI-ARIA toolbar).
+   *
+   * The container claimed `role="toolbar"` while every button inside it stayed
+   * a tab stop of its own, so the pattern the role promises — one stop for the
+   * group, arrows to move within it — was announced and not implemented, and
+   * eight buttons sat between the editor and everything after it.
+   *
+   * The buttons are heterogeneous (IconButton components and plain glyph
+   * buttons), so the tab stop is managed on the live DOM nodes rather than
+   * threaded through each child as a prop, which would mean editing shared
+   * components that another change owns.
+   */
+  let toolbarIndex = $state(0);
+
+  function toolbarButtons(): HTMLButtonElement[] {
+    return toolbarEl ? Array.from(toolbarEl.querySelectorAll('button:not([disabled])')) : [];
+  }
+
+  $effect(() => {
+    // Re-read on mode changes: the toolbar is not rendered in Preview.
+    void $editor.mode;
+    const buttons = toolbarButtons();
+    if (buttons.length === 0) return;
+    const active = Math.min(toolbarIndex, buttons.length - 1);
+    buttons.forEach((button, i) => {
+      button.tabIndex = i === active ? 0 : -1;
+    });
+  });
+
+  function onToolbarKeydown(event: KeyboardEvent): void {
+    const buttons = toolbarButtons();
+    if (buttons.length === 0) return;
+    const from = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next = (() => {
+      switch (event.key) {
+        case 'ArrowRight':
+          return (Math.max(0, from) + 1) % buttons.length;
+        case 'ArrowLeft':
+          return (Math.max(0, from) - 1 + buttons.length) % buttons.length;
+        case 'Home':
+          return 0;
+        case 'End':
+          return buttons.length - 1;
+        default:
+          return null;
+      }
+    })();
+    if (next === null) return;
+    event.preventDefault();
+    toolbarIndex = next;
+    buttons[next]?.focus();
+  }
+
+  /** A button reached with the pointer becomes the group's tab stop. */
+  function onToolbarFocusIn(event: FocusEvent): void {
+    const index = toolbarButtons().indexOf(event.target as HTMLButtonElement);
+    if (index >= 0) toolbarIndex = index;
   }
 </script>
 
@@ -468,7 +671,7 @@ import type { PresentationMode } from '../services/settings-types';
           { value: 'preview', label: 'Preview' },
         ]}
         value={$editor.mode}
-        onchange={(mode) => setEditorMode(mode as 'edit' | 'split' | 'preview')}
+        onchange={(mode) => void changeMode(mode as 'edit' | 'split' | 'preview')}
       />
       <IconButton
         icon="doc"
@@ -489,16 +692,34 @@ import type { PresentationMode } from '../services/settings-types';
   </PageHeader>
 
   {#if $editor.mode !== 'preview'}
-    <div class="toolbar" role="toolbar" aria-label="Insert">
-      <IconButton icon="chevron-right" label="Insert heading" onclick={() => withView(inserts.insertHeading)} />
+    <!--
+      Heading is a typographic glyph rather than an icon, like Bold and Italic
+      beside it: the icon set has no heading mark, and it is owned by another
+      change. It wore a chevron, which means "go forward" everywhere else in
+      the product.
+
+      "Insert cue" gives up `flag` to the take marker, which was wearing the
+      undo arrow. The compiler models take markers as navigation targets — a
+      flag is exactly that — and a cue is an aside to the presenter.
+    -->
+    <div
+      class="toolbar"
+      role="toolbar"
+      aria-label="Insert"
+      aria-orientation="horizontal"
+      bind:this={toolbarEl}
+      onkeydown={onToolbarKeydown}
+      onfocusin={onToolbarFocusIn}
+    >
+      <button type="button" class="glyph" aria-label="Cycle heading level" title="Cycle heading level" onclick={() => withView(inserts.cycleHeading)}><strong>H</strong></button>
       <button type="button" class="glyph" aria-label="Bold" title="Bold" onclick={() => withView(inserts.insertBold)}><strong>B</strong></button>
       <button type="button" class="glyph" aria-label="Italic" title="Italic" onclick={() => withView(inserts.insertItalic)}><em>I</em></button>
       <IconButton icon="link" label="Insert link" onclick={() => withView(inserts.insertLink)} />
       <span class="toolbar-rule" aria-hidden="true"></span>
-      <IconButton icon="flag" label="Insert cue" onclick={() => withView(inserts.insertCue)} />
+      <IconButton icon="info" label="Insert cue" onclick={() => withView(inserts.insertCue)} />
       <IconButton icon="image" label="Insert image" onclick={() => void insertImage()} />
       <IconButton icon="diagram" label="Insert diagram block" onclick={() => withView(inserts.insertDiagram)} />
-      <IconButton icon="restore" label="Insert take marker" onclick={() => withView(inserts.insertTakeMarker)} />
+      <IconButton icon="flag" label="Insert take marker" onclick={() => withView(inserts.insertTakeMarker)} />
     </div>
   {/if}
 
@@ -506,17 +727,20 @@ import type { PresentationMode } from '../services/settings-types';
     <div class="work">
       {#if $editor.loading}
         <p class="loading">Opening script…</p>
-      {:else if $editor.mode === 'preview'}
-        <div class="preview only" bind:this={previewScroller}>
-          {#if blocks.length > 0}
-            <RenderBlocks {blocks} onblockclick={(b) => void previewBlockClick(b)} />
-          {:else}
-            <p class="preview-empty">Your rendered script will appear here.</p>
-          {/if}
-        </div>
-      {:else if $editor.mode === 'split'}
-        <div class="split">
-          <div class="split-editor" style="flex-basis: {splitRatio * 100}%">
+      {:else}
+        <!--
+          ONE editor and ONE preview for all three modes, shown and hidden with
+          CSS. Rendering them from separate `{#if}` branches per mode is what
+          destroyed the CodeMirror instance — and the undo history with it — on
+          every Edit/Split/Preview switch.
+        -->
+        <div class="split" class:preview-only={$editor.mode === 'preview'}>
+          <div
+            class="split-editor"
+            id="editor-pane"
+            hidden={$editor.mode === 'preview'}
+            style={$editor.mode === 'split' ? `flex-basis: ${splitRatio * 100}%` : undefined}
+          >
             <MarkdownEditor
               bind:this={editorRef}
               value={$editor.source}
@@ -527,25 +751,37 @@ import type { PresentationMode } from '../services/settings-types';
           <div
             class="divider"
             role="separator"
+            tabindex="0"
             aria-orientation="vertical"
             aria-label="Resize editor and preview"
+            aria-controls="editor-pane"
+            aria-valuenow={splitPercent}
+            aria-valuemin={SPLIT_MIN * 100}
+            aria-valuemax={SPLIT_MAX * 100}
+            aria-valuetext="Editor {splitPercent}% of the width"
+            hidden={$editor.mode !== 'split'}
             onpointerdown={startDividerDrag}
+            onkeydown={onDividerKeydown}
           ></div>
-          <div class="preview" bind:this={previewScroller}>
-            {#if blocks.length > 0}
+          <div class="preview" hidden={$editor.mode === 'edit'} bind:this={previewScroller}>
+            {#if compileFailed}
+              <div class="preview-failed" role="status">
+                <p class="preview-failed-title">This script could not be rendered.</p>
+                <p class="preview-failed-body">
+                  Your text is safe and still in the editor. Fix the problem below, and the
+                  preview comes back on its own.
+                </p>
+                {#if compileErrorDetail}
+                  <p class="preview-failed-detail">{compileErrorDetail}</p>
+                {/if}
+              </div>
+            {:else if blocks.length > 0}
               <RenderBlocks {blocks} onblockclick={(b) => void previewBlockClick(b)} />
             {:else}
               <p class="preview-empty">Your rendered script will appear here.</p>
             {/if}
           </div>
         </div>
-      {:else}
-        <MarkdownEditor
-          bind:this={editorRef}
-          value={$editor.source}
-          placeholder="Start writing, paste a script, or import Markdown…"
-          onchange={setSource}
-        />
       {/if}
     </div>
 
@@ -591,7 +827,14 @@ import type { PresentationMode } from '../services/settings-types';
         <ScriptLintPanel findings={lintFindings} ongoto={(f) => void goToFinding(f)} />
 
         <div class="panel-foot" aria-live="polite">
-          {#if $compiled.status === 'compiling'}
+          {#if compileFailed}
+            <!-- Without this the rail went silent on the one status that
+                 stops a script rendering at all. -->
+            <span class="foot-line bad">
+              <Icon name="alert" size={14} />
+              Could not render this script.
+            </span>
+          {:else if $compiled.status === 'compiling'}
             <span class="foot-line neutral">Reading the script…</span>
           {:else if $compiled.status === 'ready' && blockingCount === 0 && diagnostics.length === 0}
             <span class="foot-line good">
@@ -651,15 +894,53 @@ import type { PresentationMode } from '../services/settings-types';
   {/snippet}
 </Dialog>
 
-<!-- F.8 external-change conflict sheet -->
-<Dialog open={conflictOpen} title="This script changed on disk" onclose={() => (conflictOpen = false)}>
+<!--
+  F.8 external-change conflict sheet.
+
+  The copy now names where each version actually goes. It promised a revision
+  for "the other version" while the disk arm wrote nothing at all, which was
+  the one promise the user had to trust with text that existed nowhere else.
+
+  "Save both" is gone: once the disk arm preserves the editor's text, it and
+  "Save both" did the same thing, and two buttons with one outcome is a worse
+  choice than one honest button.
+-->
+<Dialog
+  open={conflictOpen}
+  title="This script changed on disk"
+  onclose={closeConflict}
+>
   <p class="dialog-body">
-    Choose which version to keep. CandidCue will save the other version as a revision.
+    Choose which version stays in this script. Nothing is discarded either way.
+  </p>
+  <p class="dialog-detail">
+    Use the disk version and your current edits are saved to the Library as
+    “{conflictCopyName}”. Keep your edits and the disk version stays in this
+    script's revision history.
   </p>
   {#snippet footer()}
-    <Button variant="ghost" onclick={() => void saveBothVersions()}>Save both</Button>
-    <Button onclick={() => void loadDiskVersion()}>Load disk version</Button>
-    <Button variant="primary" onclick={() => void keepCandidCueVersion()}>Keep CandidCue version</Button>
+    <Button
+      disabled={conflictResolving}
+      onclick={() =>
+        void resolveConflict(useDiskVersion, (outcome, copyName) =>
+          outcome.copied
+            ? `Loaded the disk version. Your edits were saved as “${copyName}”.`
+            : 'Loaded the disk version. It already matched your text, so no copy was needed.',
+        )}
+    >
+      Use disk version
+    </Button>
+    <Button
+      variant="primary"
+      disabled={conflictResolving}
+      onclick={() =>
+        void resolveConflict(
+          keepEditorVersion,
+          () => 'Kept your edits. The disk version is in this script’s revision history.',
+        )}
+    >
+      Keep my edits
+    </Button>
   {/snippet}
 </Dialog>
 
@@ -746,6 +1027,13 @@ import type { PresentationMode } from '../services/settings-types';
     display: flex;
     min-width: 0;
   }
+  /* The panes are hidden rather than unmounted, so the editor keeps its undo
+     history across mode switches. `display` is set on all three below, which
+     beats the UA's `[hidden]` rule — so it has to be restated here or a
+     "hidden" pane stays on screen. */
+  .split > [hidden] {
+    display: none;
+  }
   .split-editor {
     display: flex;
     flex-direction: column;
@@ -753,6 +1041,11 @@ import type { PresentationMode } from '../services/settings-types';
     min-height: 0;
     flex-grow: 0;
     flex-shrink: 0;
+  }
+  /* Edit and Preview give the visible pane the whole width; only Split reads
+     the stored ratio, which the inline flex-basis supplies. */
+  .split-editor:not([style]) {
+    flex-grow: 1;
   }
   .divider {
     flex: 0 0 auto;
@@ -765,6 +1058,12 @@ import type { PresentationMode } from '../services/settings-types';
   .divider:hover {
     background: var(--bg-hover-surface);
   }
+  /* A small control, so it keeps the standard ring — the house rule against
+     accent focus treatment is about editors, panels and rows. */
+  .divider:focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: -2px;
+  }
 
   .preview {
     flex: 1 1 auto;
@@ -774,7 +1073,7 @@ import type { PresentationMode } from '../services/settings-types';
     padding: var(--space-6) var(--page-x);
     background: var(--bg-panel);
   }
-  .preview.only {
+  .preview-only .preview {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -783,6 +1082,35 @@ import type { PresentationMode } from '../services/settings-types';
     margin: var(--space-6) 0;
     color: var(--text-muted);
     font-size: var(--text-sm);
+  }
+
+  /* A failed compile, which used to be indistinguishable from a blank
+     document because both render no blocks. */
+  .preview-failed {
+    margin: var(--space-6) 0;
+    max-width: 52ch;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+  .preview-failed-title {
+    margin: 0;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--danger);
+  }
+  .preview-failed-body {
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--lh-label);
+    color: var(--text-secondary);
+  }
+  .preview-failed-detail {
+    margin: 0;
+    font-size: var(--text-meta);
+    line-height: var(--lh-meta);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
   }
 
   /* Outline / vocabulary rail — warm chrome, seam on the left via border on
@@ -960,6 +1288,9 @@ import type { PresentationMode } from '../services/settings-types';
   }
   .foot-line.neutral {
     color: var(--text-muted);
+  }
+  .foot-line.bad {
+    color: var(--danger);
   }
 
   .diagnostics {

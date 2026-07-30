@@ -131,7 +131,15 @@ export default defineConfig({
       : []),
   ],
   webServer: {
-    command: `pnpm dev -- --port ${e2ePort}`,
+    /*
+     * `pnpm dev --port N`, NOT `pnpm dev -- --port N`: the extra separator
+     * reaches Vite as a literal `--` argument and the port after it is dropped,
+     * so `CANDIDCUE_E2E_PORT` was silently ignored and every run tried to bind
+     * 1420. With a dev server already on that port — which is the normal state
+     * when the suite runs from a worktree — the server failed to start and the
+     * whole suite failed on connection-refused instead.
+     */
+    command: `pnpm dev --port ${e2ePort}`,
     url: `http://localhost:${e2ePort}/control.html`,
     reuseExistingServer: !process.env['CI'],
     timeout: 60_000,
