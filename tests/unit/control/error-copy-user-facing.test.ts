@@ -17,6 +17,7 @@
  * string is allowed to contain a SCREAMING_SNAKE_CASE token. A code added
  * tomorrow without copy fails here rather than in front of a camera.
  */
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import type { CompiledScript } from '../../../src/shared/contracts';
@@ -114,8 +115,13 @@ const { clearSession, setStageEmitterForTesting, startLiveSession } = await impo
   '../../../src/control/stores/session'
 );
 const { toasts, clearToasts } = await import('../../../src/control/stores/toasts');
-const { KNOWN_ERROR_CODES, recentErrorDiagnostics, clearErrorDiagnostics, describeError } =
-  await import('../../../src/control/services/errors');
+const {
+  KNOWN_ERROR_CODES,
+  recentErrorDiagnostics,
+  clearErrorDiagnostics,
+  describeError,
+  copyForErrorCode,
+} = await import('../../../src/control/services/errors');
 
 /**
  * The shape a user must never see. Deliberately the same rule the production
@@ -195,7 +201,12 @@ describe('a session-level failure toast is authored copy, not a code', () => {
     // What happened, and what to do about it. The recogniser is bundled, so
     // the remedy is a reinstall — never an account, a key or a dashboard.
     expect(message).toMatch(/speech model/i);
-    expect(message).toMatch(/reinstall|manual mode/i);
+    // Not `/reinstall|manual mode/`: "manual mode" is a banned phrase now (see
+    // the Settings-guarded sweep below), so accepting it as an alternative here
+    // would have let the very copy that test forbids satisfy this one.
+    expect(message).toMatch(/reinstall/i);
+    // The fallback it points at has to be one that exists.
+    expect(message).toMatch(/auto-scroll/i);
   });
 
   it('gives a broken installation, a microphone refusal and a network drop different advice', () => {
@@ -293,5 +304,100 @@ describe('no code can reach a user-visible string', () => {
     expect(shown).not.toMatch(CODE_TOKEN);
     expect(shown).not.toBe('No live audio track');
     expect(shown).toMatch(/No microphone was found/);
+  });
+});
+
+/**
+ * The other half of the rule in `errors.ts`'s header: copy must not imply an
+ * action that does not exist.
+ *
+ * All four recogniser errors used to end "Manual and fixed-speed modes still
+ * work." Settings renders both of those as disabled — "not available in this
+ * release" — so a presenter whose recogniser had just died was sent hunting
+ * for a greyed-out menu item and left with nothing.
+ *
+ * This reads Settings as the source of truth rather than hard-coding the ban,
+ * so the day either mode actually ships, its `disabled: true` goes away and
+ * the ban retires itself instead of blocking the copy that would then be true.
+ */
+describe('error copy never offers a session mode Settings marks unavailable', () => {
+  const settingsSource = readFileSync(
+    new URL('../../../src/control/routes/Settings.svelte', import.meta.url),
+    'utf8',
+  );
+
+  /** The `options={[ … ]}` array of the "Default session mode" Select. */
+  const selectMatch = settingsSource.match(
+    /label="Default session mode"[\s\S]*?options=\{\[([\s\S]*?)\]\}/,
+  );
+
+  /** Each `{ value: 'manual' … }` / `{ value: 'fixed' … }` object, body included. */
+  const modeOptions = [
+    ...(selectMatch?.[1] ?? '').matchAll(/\{([^{}]*\bvalue:\s*'(manual|fixed)'[^{}]*)\}/g),
+  ].map((m) => ({ body: m[1] ?? '', mode: m[2] ?? '' }));
+
+  /**
+   * A phrase per mode, deliberately broader than the label.
+   *
+   * `manual` is matched as a bare word on purpose: the sentence this test
+   * exists to forbid read "Manual **and** fixed-speed modes", where "manual"
+   * is never followed by "mode" at all — a narrower /manual mode/ would have
+   * sailed straight past the actual bug.
+   */
+  const BANNED: Record<string, RegExp> = {
+    manual: /\bmanual\b/i,
+    fixed: /\bfixed[-\s]speed\b/i,
+  };
+
+  /*
+   * Self-checks. Regex over markup is only safe while it is loud: if somebody
+   * restructures that Select, these fail and ask for a look, rather than
+   * matching nothing and reporting a green sweep over zero modes.
+   */
+  const unavailable = modeOptions.filter((o) => /\bdisabled:\s*true\b/.test(o.body));
+
+  it('can still find both session modes in Settings', () => {
+    expect(selectMatch, 'the "Default session mode" options array no longer parses').not.toBeNull();
+    expect(modeOptions.map((o) => o.mode).sort()).toEqual(['fixed', 'manual']);
+    /*
+     * Without this the suite could go quietly vacuous: if `disabled: true`
+     * stopped matching, the sweep below would iterate nothing and report green
+     * over zero modes — the exact false confidence it was written to prevent.
+     * As of this release both are disabled. When one genuinely ships, drop it
+     * from this list and its ban retires on its own.
+     */
+    expect(unavailable.map((o) => o.mode).sort()).toEqual(['fixed', 'manual']);
+  });
+
+  it('does not name a mode that cannot start a take', () => {
+    // While this release ships both as disabled, both bans are live. If that
+    // ever drops to none, the assertion below is vacuous by design — the modes
+    // shipped, and the copy is free to name them again.
+    for (const { mode } of unavailable) {
+      const banned = BANNED[mode];
+      expect(banned, `no banned phrase defined for mode '${mode}'`).toBeDefined();
+      for (const code of KNOWN_ERROR_CODES) {
+        const copy = copyForErrorCode(code);
+        expect(
+          copy,
+          `${code} offers '${mode}', which Settings marks unavailable: ${copy}`,
+        ).not.toMatch(banned!);
+      }
+    }
+  });
+
+  it('points the recogniser failures at auto-scroll, which does exist', () => {
+    // The replacement is only an improvement if it names the real fallback and
+    // the key that starts it (`a` → 'toggle-auto-scroll' in lib/shortcuts.ts).
+    for (const code of [
+      'STT_MODEL_MISSING',
+      'STT_MODEL_LOAD_FAILED',
+      'STT_WORKER_FAILED',
+      'STT_ENGINE_ERROR',
+    ]) {
+      const copy = copyForErrorCode(code);
+      expect(copy, `${code} does not name auto-scroll`).toMatch(/auto-scroll/i);
+      expect(copy, `${code} does not name the key that starts it`).toMatch(/\bPress A\b/);
+    }
   });
 });

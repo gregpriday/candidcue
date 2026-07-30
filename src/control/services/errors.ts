@@ -42,17 +42,24 @@ const ERROR_COPY: Record<string, string> = {
   /* -- the bundled recogniser --------------------------------------------- */
   //
   // A broken installation, not a broken account. There is no key, no quota and
-  // no provider to be down, so every one of these ends the same way: reinstall,
-  // or present in manual mode. Nothing here asks the presenter to go and fix
+  // no provider to be down, so nothing here asks the presenter to go and fix
   // something on a website.
+  //
+  // Each one also names the fallback that EXISTS. These used to end "Manual and
+  // fixed-speed modes still work", which they no longer do: Settings shows both
+  // as unavailable in this release, so that sentence sent a presenter whose
+  // recogniser had just died hunting for a greyed-out menu item. Auto-scroll is
+  // the real answer, and every one of these codes surfaces with the take
+  // already open — `state.active` is set before the pipeline starts — so `A` is
+  // a key the presenter can actually press at the moment they read this.
   STT_MODEL_MISSING:
-    'The speech model is missing from this installation, so voice tracking cannot run. Reinstalling CandidCue will restore it. Manual and fixed-speed modes still work.',
+    'The speech model is missing from this installation, so voice tracking cannot run. Reinstalling CandidCue will restore it. Press A during this take to roll the script with auto-scroll instead.',
   STT_MODEL_LOAD_FAILED:
-    'The speech model could not be loaded on this machine. Restart CandidCue, and reinstall it if this keeps happening. Manual and fixed-speed modes still work.',
+    'The speech model could not be loaded on this machine. Restart CandidCue, and reinstall it if this keeps happening. Press A during this take to roll the script with auto-scroll instead.',
   STT_WORKER_FAILED:
-    'The speech recogniser could not be started. Restart CandidCue, then try again. Manual and fixed-speed modes still work.',
+    'The speech recogniser could not be started. Restart CandidCue, then try again. Press A during this take to roll the script with auto-scroll instead.',
   STT_ENGINE_ERROR:
-    'The speech recogniser stopped unexpectedly. Stop and restart the take. Manual and fixed-speed modes still work.',
+    'The speech recogniser stopped unexpectedly. Press A to roll the script with auto-scroll, or stop and restart the take.',
 
   /* -- network ------------------------------------------------------------ */
   //
