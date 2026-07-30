@@ -118,6 +118,7 @@ pub fn run_tier_a(
 
     let table = build_table(
         &runs,
+        config,
         &mut clean_abs,
         &clean_signed,
         &scale_us,
@@ -143,6 +144,7 @@ fn is_clean_family(scenario: &str) -> bool {
 
 fn build_table(
     runs: &[RunMetrics],
+    config: &AlignmentConfig,
     clean_abs: &mut [f64],
     clean_signed: &[f64],
     scale_us: &std::collections::HashMap<String, f64>,
@@ -345,6 +347,11 @@ fn build_table(
         "%",
         "higher",
     ));
+    table.extend(
+        crate::dimming::benchmark(config)
+            .into_iter()
+            .map(|metric| entry(metric.name, metric.value, metric.unit, metric.better)),
+    );
     // Repetitions: within ±5, because a repeated phrase legitimately puts
     // the reader a few atoms behind the monotonic cursor for its duration —
     // the failure this family catches is losing the lock, not the ±2 wobble.
@@ -860,6 +867,11 @@ pub fn run_tier_b(
         "%",
         "higher_is_worse_diagnostic",
     ));
+    table.extend(
+        crate::dimming::benchmark(config)
+            .into_iter()
+            .map(|metric| entry(metric.name, metric.value, metric.unit, metric.better)),
+    );
 
     Ok(SuiteResult {
         label: label.to_string(),

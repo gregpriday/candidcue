@@ -1,0 +1,51 @@
+{"kind":"itemStarted","itemId":"1-0","ordinal":0,"audioStartMs":0.0}
+{"kind":"partial","itemId":"1-0","text":"Al","audioMs":1600.0,"wallMs":1515.871083}
+{"kind":"partial","itemId":"1-0","text":"Alp","audioMs":2100.0,"wallMs":2020.557292}
+{"kind":"partial","itemId":"1-0","text":"Alpha,","audioMs":2600.0,"wallMs":2517.067458}
+{"kind":"partial","itemId":"1-0","text":"Alpha, Brav","audioMs":3100.0,"wallMs":3020.329583}
+{"kind":"partial","itemId":"1-0","text":"Alpha, Bravo","audioMs":3600.0,"wallMs":3518.1225}
+{"kind":"partial","itemId":"1-0","text":"Alpha, Bravo, ste","audioMs":4000.0,"wallMs":3920.659083}
+{"kind":"partial","itemId":"1-0","text":"Alpha, Bravo, steady","audioMs":4500.0,"wallMs":4417.955333}
+{"kind":"partial","itemId":"1-0","text":"Alpha, Bravo, steady, con","audioMs":5000.0,"wallMs":4916.51375}
+{"kind":"partial","itemId":"1-0","text":"Alpha, Bravo, steady, context","audioMs":5500.0,"wallMs":5420.447582999999}
+{"kind":"partial","itemId":"1-0","text":"Alpha, Bravo, steady, context.","audioMs":6000.0,"wallMs":5921.12025}
+{"kind":"final","itemId":"1-0","text":"Alpha, Bravo, steady, context.","audioEndMs":7400.0,"wallMs":7317.659208}
+{"kind":"itemStarted","itemId":"1-1","ordinal":1,"audioStartMs":7400.0}
+{"kind":"partial","itemId":"1-1","text":"Pres","audioMs":7900.0,"wallMs":7817.85025}
+{"kind":"partial","itemId":"1-1","text":"Presenter","audioMs":8400.0,"wallMs":8320.318583}
+{"kind":"partial","itemId":"1-1","text":"Presenter,","audioMs":8800.0,"wallMs":8720.962375}
+{"kind":"partial","itemId":"1-1","text":"Presenter, telepro","audioMs":9300.0,"wallMs":9218.897332999999}
+{"kind":"partial","itemId":"1-1","text":"Presenter, teleprompter.","audioMs":9800.0,"wallMs":9720.390583}
+{"kind":"partial","itemId":"1-1","text":"Presenter, teleprompter. H","audioMs":10300.0,"wallMs":10221.337833}
+{"kind":"partial","itemId":"1-1","text":"Presenter, teleprompter. Harbor","audioMs":10800.0,"wallMs":10718.976792}
+{"kind":"partial","itemId":"1-1","text":"Presenter, teleprompter. Harbor.","audioMs":11200.0,"wallMs":11119.294625}
+{"kind":"partial","itemId":"1-1","text":"Presenter, teleprompter. Harbor. Nar","audioMs":11700.0,"wallMs":11619.417333}
+{"kind":"partial","itemId":"1-1","text":"Presenter, teleprompter. Harbor. Narration","audioMs":12200.0,"wallMs":12116.177375}
+{"kind":"partial","itemId":"1-1","text":"Presenter, teleprompter. Harbor. Narration.","audioMs":12700.0,"wallMs":12620.474417000001}
+{"kind":"final","itemId":"1-1","text":"Presenter, teleprompter. Harbor. Narration.","audioEndMs":13600.0,"wallMs":13519.087958}
+{"kind":"itemStarted","itemId":"1-2","ordinal":2,"audioStartMs":13600.0}
+{"kind":"partial","itemId":"1-2","text":"Sears","audioMs":14600.0,"wallMs":14519.661125}
+{"kind":"partial","itemId":"1-2","text":"Searsha","audioMs":15100.0,"wallMs":15017.052125}
+{"kind":"partial","itemId":"1-2","text":"Searsha,","audioMs":15600.0,"wallMs":15518.905083}
+{"kind":"partial","itemId":"1-2","text":"Searsha, Sowers","audioMs":16000.0,"wallMs":15917.160208000001}
+{"kind":"partial","itemId":"1-2","text":"Searsha, Sowersby","audioMs":16500.0,"wallMs":16416.944667}
+{"kind":"partial","itemId":"1-2","text":"Searsha, Sowersby.","audioMs":17000.0,"wallMs":16917.286957999997}
+{"kind":"partial","itemId":"1-2","text":"Searsha, Sowersby. Wor","audioMs":17500.0,"wallMs":17420.3075}
+{"kind":"partial","itemId":"1-2","text":"Searsha, Sowersby. Worstus","audioMs":18000.0,"wallMs":17918.573625}
+{"kind":"partial","itemId":"1-2","text":"Searsha, Sowersby. Worstushier","audioMs":18400.0,"wallMs":18318.826042}
+{"kind":"partial","itemId":"1-2","text":"Searsha, Sowersby. Worstushier.","audioMs":18900.0,"wallMs":18819.027375}
+{"kind":"partial","itemId":"1-2","text":"Searsha, Sowersby. Worstushier. Kuberne","audioMs":19900.0,"wallMs":19816.271833}
+{"kind":"partial","itemId":"1-2","text":"Searsha, Sowersby. Worstushier. Kubernetes","audioMs":20400.0,"wallMs":20317.371000000003}
+{"kind":"partial","itemId":"1-2","text":"Searsha, Sowersby. Worstushier. Kubernetes.","audioMs":20800.0,"wallMs":20720.108125}
+{"kind":"final","itemId":"1-2","text":"Searsha, Sowersby. Worstushier. Kubernetes.","audioEndMs":21800.0,"wallMs":21719.537042}
+{"kind":"itemStarted","itemId":"1-3","ordinal":3,"audioStartMs":21800.0}
+{"kind":"partial","itemId":"1-3","text":"C","audioMs":22300.0,"wallMs":22217.902}
+{"kind":"partial","itemId":"1-3","text":"Camera","audioMs":22800.0,"wallMs":22720.376625}
+{"kind":"partial","itemId":"1-3","text":"Camera clo","audioMs":23200.0,"wallMs":23120.494375}
+{"kind":"partial","itemId":"1-3","text":"Camera closing sign","audioMs":23700.0,"wallMs":23620.649417}
+{"kind":"partial","itemId":"1-3","text":"Camera closing signal","audioMs":24200.0,"wallMs":24117.307208}
+{"kind":"partial","itemId":"1-3","text":"Camera closing signal. Co","audioMs":24700.0,"wallMs":24620.257917}
+{"kind":"partial","itemId":"1-3","text":"Camera closing signal. Complete","audioMs":25200.0,"wallMs":25120.581208}
+{"kind":"partial","itemId":"1-3","text":"Camera closing signal. Complete.","audioMs":25600.0,"wallMs":25516.429292}
+{"kind":"final","itemId":"1-3","text":"Camera closing signal. Complete.","audioEndMs":26660.0,"wallMs":26705.069375}
+{"kind":"closed"}

@@ -200,6 +200,25 @@ pub struct RunMetrics {
     /// runs instead of averaging per-run percentiles of unequal word counts.
     #[serde(default)]
     pub dim_samples_ms: Vec<f64>,
+    /// Time-to-dim for only the words deliberately re-spelled by a benchmark
+    /// plan. This isolates fuzzy/proper-noun behaviour from surrounding exact
+    /// prose used to establish and verify the lock.
+    #[serde(default)]
+    pub respelled_dim_samples_ms: Vec<f64>,
+    #[serde(default)]
+    pub respelled_dim_never: usize,
+    /// Distinct forward changes to the reversible dim frontier.
+    #[serde(default)]
+    pub provisional_advances: usize,
+    /// Explicit withdrawals of that frontier.
+    #[serde(default)]
+    pub provisional_retractions: usize,
+    /// Furthest reversible shading beyond the semantic observed cursor.
+    #[serde(default)]
+    pub provisional_max_depth: f64,
+    /// Time a provisional frontier remained visible before contradiction.
+    #[serde(default)]
+    pub provisional_rollback_ms: Vec<f64>,
     pub ahead_eligible: usize,
     /// % of ≥8-content-word items whose display moved before the final.
     pub prefinal_move_pct: Option<f64>,
@@ -319,6 +338,52 @@ fn display_at(replay: &ReplayResult, t: f64, cursor: &mut usize) -> DisplaySampl
     }
 }
 
+/// The renderer latches a provisional frontier when exact evidence commits it
+/// until ordinary motion catches up. Precompute that latch at every snapshot
+/// so evaluation scores what is visibly dimmed, not only the semantic cursor
+/// that drives scrolling.
+fn provisional_floors(replay: &ReplayResult) -> Vec<Option<f64>> {
+    let mut floors = Vec::with_capacity(replay.snapshots.len());
+    let mut previous = None;
+    let mut floor: Option<f64> = None;
+    for snapshot in &replay.snapshots {
+        if snapshot.provisional_retracted {
+            floor = None;
+        } else if previous.is_some() && snapshot.provisional.is_none() {
+            floor = Some(floor.unwrap_or(0.0).max(previous.unwrap_or(0.0)));
+        }
+        if floor.is_some_and(|f| snapshot.display_at(snapshot.at_audio_ms) >= f) {
+            floor = None;
+        }
+        floors.push(floor);
+        previous = snapshot.provisional;
+    }
+    floors
+}
+
+fn dim_at(
+    replay: &ReplayResult,
+    floors: &[Option<f64>],
+    t: f64,
+    cursor: &mut usize,
+) -> DisplaySample {
+    let ordinary = display_at(replay, t, cursor);
+    let Some(snapshot) = replay.snapshots.get(*cursor).filter(|s| s.at_audio_ms <= t) else {
+        return ordinary;
+    };
+    let position = if let Some(provisional) = snapshot.provisional {
+        provisional
+    } else if snapshot.provisional_retracted {
+        ordinary.position
+    } else {
+        floors
+            .get(*cursor)
+            .and_then(|f| *f)
+            .map_or(ordinary.position, |f| ordinary.position.max(f))
+    };
+    DisplaySample { position, ..ordinary }
+}
+
 pub fn evaluate(
     run: &str,
     scenario: &str,
@@ -332,6 +397,34 @@ pub fn evaluate(
         ..Default::default()
     };
     let mut samples = RunSamples::default();
+    let dim_floors = provisional_floors(replay);
+
+    // Count frontier changes rather than snapshots: a partial and final that
+    // repeat one spelling are one visual advance, not two successes.
+    let mut last_provisional = None;
+    let mut provisional_started_at = None;
+    for snapshot in &replay.snapshots {
+        if let Some(frontier) = snapshot.provisional {
+            if last_provisional.is_none_or(|last| frontier > last + f64::EPSILON) {
+                m.provisional_advances += 1;
+                provisional_started_at.get_or_insert(snapshot.at_audio_ms);
+            }
+            m.provisional_max_depth = m
+                .provisional_max_depth
+                .max((frontier - snapshot.observed).max(0.0));
+        }
+        if snapshot.provisional_retracted {
+            m.provisional_retractions += 1;
+            if let Some(started) = provisional_started_at.take() {
+                m.provisional_rollback_ms
+                    .push((snapshot.at_audio_ms - started).max(0.0));
+            }
+        } else if last_provisional.is_some() && snapshot.provisional.is_none() {
+            // Exact evidence committed the speculative frontier.
+            provisional_started_at = None;
+        }
+        last_provisional = snapshot.provisional;
+    }
 
     // ---- gold discontinuities & recovery events ----
     let mut recovery_targets: Vec<(RecoveryKind, f64)> = Vec::new();
@@ -455,6 +548,7 @@ pub fn evaluate(
 
     // ---- uniform sampling ----
     let mut cursor = 0usize;
+    let mut dim_cursor = 0usize;
     let mut freeze_cursor = 0usize;
     let mut eligible = 0usize;
     let mut within2 = 0usize;
@@ -495,6 +589,7 @@ pub fn evaluate(
         };
         let sample = display_at(replay, t, &mut cursor);
         let display = sample.position;
+        let dim_display = dim_at(replay, &dim_floors, t, &mut dim_cursor).position;
 
         // Display jump detection runs on every sample.
         if let Some((_pt, pd)) = display_prev_sample {
@@ -570,7 +665,7 @@ pub fn evaluate(
             heard_max = heard_max.max(point.position.floor());
         }
         if point.on_script && t >= accuracy_from_ms {
-            let over = display - heard_max;
+            let over = dim_display - heard_max;
             samples.ahead.push(over);
             ahead_eligible += 1;
             ahead_worst = ahead_worst.max(over);
@@ -812,16 +907,27 @@ pub fn evaluate(
             let mut t = w.end_ms;
             let mut reached: Option<f64> = None;
             while t <= total {
-                if display_at(replay, t, &mut cursor).position >= span_end {
+                if dim_at(replay, &dim_floors, t, &mut cursor).position >= span_end {
                     reached = Some(t);
                     break;
                 }
                 t += SAMPLE_MS;
             }
             match reached {
-                Some(at) => samples.dim_ms.push(at - w.end_ms),
+                Some(at) => {
+                    let wait = at - w.end_ms;
+                    samples.dim_ms.push(wait);
+                    if w.respelled {
+                        m.respelled_dim_samples_ms.push(wait);
+                    }
+                }
                 // Only a word the take gave a fair chance to counts as missed.
-                None if w.end_ms + DIM_TAIL_GRACE_MS <= total => m.dim_never += 1,
+                None if w.end_ms + DIM_TAIL_GRACE_MS <= total => {
+                    m.dim_never += 1;
+                    if w.respelled {
+                        m.respelled_dim_never += 1;
+                    }
+                }
                 None => {}
             }
         }
@@ -925,4 +1031,40 @@ pub fn token_edit_distance(a: &[String], b: &[String]) -> usize {
         std::mem::swap(&mut prev, &mut cur);
     }
     prev[b.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cc_align::{compile, AlignmentConfig, CompileOptions, Engine, SessionEvent};
+
+    #[test]
+    fn visible_dim_trajectory_advances_and_brightens_on_retraction() {
+        let script = compile(
+            "alpha bravo presenter delta echo",
+            CompileOptions::default(),
+        );
+        let mut engine = Engine::new(script, AlignmentConfig::default());
+        let anchored = engine.set_manual_position(2, 0.0);
+        let provisional = engine.handle(SessionEvent::Final {
+            item_id: "one".into(),
+            text: "presentor".into(),
+            audio_end_ms: 350.0,
+        });
+        let retracted = engine.handle(SessionEvent::Final {
+            item_id: "two".into(),
+            text: "banana".into(),
+            audio_end_ms: 700.0,
+        });
+        let replay = ReplayResult {
+            snapshots: vec![anchored, provisional, retracted],
+            items: Vec::new(),
+            event_us: Vec::new(),
+            final_text: String::new(),
+        };
+        let floors = provisional_floors(&replay);
+        let mut cursor = 0;
+        assert_eq!(dim_at(&replay, &floors, 400.0, &mut cursor).position, 3.0);
+        assert!(dim_at(&replay, &floors, 700.0, &mut cursor).position < 3.0);
+    }
 }

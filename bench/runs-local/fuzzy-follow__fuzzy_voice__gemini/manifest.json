@@ -1,0 +1,10 @@
+{
+  "name": "fuzzy-follow__fuzzy_voice__gemini",
+  "script": "fuzzy-follow",
+  "scenario": "fuzzy_voice",
+  "engine": "gemini",
+  "voice_index": 18,
+  "words": 16,
+  "audio_s": 26.66,
+  "atom_count": 16
+}

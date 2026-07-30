@@ -496,6 +496,33 @@ pub fn build_suite(scripts_dir: &std::path::Path) -> anyhow::Result<Vec<Scenario
         ));
     }
 
+    // Voice fixture for challenging spellings and proper nouns. Tier A's
+    // deterministic reversible-dimming cases live in `dimming.rs`, where a
+    // manual anchor can be represented faithfully. This scenario exists for
+    // fal.ai synthesis and replay through the real on-device recogniser.
+    {
+        let (name, script) = load("fuzzy-follow")?;
+        suite.push(scenario(
+            &name,
+            "fuzzy_voice",
+            &script,
+            150,
+            vec![
+                PlanOp::Read { from: 0, to: 4 },
+                PlanOp::Pause { ms: 1_200 },
+                PlanOp::Read { from: 4, to: 8 },
+                PlanOp::Pause { ms: 1_200 },
+                PlanOp::Read { from: 8, to: 12 },
+                PlanOp::Pause { ms: 1_200 },
+                PlanOp::Read {
+                    from: 12,
+                    to: script.len() as u32,
+                },
+            ],
+            Corruption::default(),
+        ));
+    }
+
     // Spoken-form scripts: the two sides of the page disagree about how to
     // SPELL what was said, without disagreeing about what was said.
     //
@@ -700,6 +727,11 @@ pub fn tier_b_selection() -> Vec<LiveRun> {
         run("figures", "exact", Qwen, 15),
         run("brands", "exact", Xai, 16),
         run("figures", "pauses", Gemini, 17),
+        // Short held-out voices focused on the isolated spelling/name cases
+        // used by the reversible dim frontier benchmarks.
+        run("fuzzy-follow", "fuzzy_voice", Gemini, 18),
+        run("fuzzy-follow", "fuzzy_voice", Qwen, 19),
+        run("fuzzy-follow", "fuzzy_voice", Xai, 20),
     ]
 }
 

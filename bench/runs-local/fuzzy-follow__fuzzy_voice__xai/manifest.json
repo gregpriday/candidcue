@@ -1,0 +1,10 @@
+{
+  "name": "fuzzy-follow__fuzzy_voice__xai",
+  "script": "fuzzy-follow",
+  "scenario": "fuzzy_voice",
+  "engine": "xai",
+  "voice_index": 20,
+  "words": 16,
+  "audio_s": 16.308,
+  "atom_count": 16
+}

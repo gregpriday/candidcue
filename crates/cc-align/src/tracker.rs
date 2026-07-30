@@ -976,11 +976,11 @@ impl Engine {
         let ev = &candidate.evidence;
         let c = &self.config;
         let frontier = self.provisional.unwrap_or(self.observed);
-        self.is_coherent_approx_chain(candidate)
-            && matches!(self.state, TrackingState::Following)
+        matches!(self.state, TrackingState::Following)
             && self.confidence >= c.local_approx_min_confidence
             && self.approximate_streak < c.local_approx_max_consecutive
             && !candidate.backward
+            && self.is_coherent_approx_chain(candidate)
             && ev.end_position as f64 > frontier
             && ev.end_position as f64 - frontier <= c.local_approx_max_step
             && ev.end_position as f64 - self.observed <= c.local_approx_max_advance
