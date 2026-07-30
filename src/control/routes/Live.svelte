@@ -126,9 +126,27 @@ import { onShortcut } from '../lib/shortcuts';
   let micInputs = $state<AudioDeviceInfo[]>([]);
   let micChoice = $state('');
   let micSwitching = $state(false);
+  /**
+   * Unchanged, and it was never the part that was wrong.
+   *
+   * This condition is exactly right: offer a swap when there is a voice
+   * transport to swap on and the INPUT is what failed. What was wrong was where
+   * it rendered — inside the "no take is running" arm, which made the whole
+   * expression `active && !active`. It is the take-controls drawer that reads it
+   * now. See the §115 block further down.
+   */
   const micRecoveryOffered = $derived(
     hasVoiceTransport && $session.inputDeviceLost && canSwitchMicrophone(),
   );
+
+  /**
+   * The take-controls drawer (§115). Declared here, beside the microphone state
+   * it exists to make reachable; its reasoning and lifecycle are at the bottom
+   * of this script, and `stageChromeOpen` reads `takeControlsOpen` above.
+   */
+  let takeControlsOpen = $state(false);
+  let takeControlsTab = $state<HTMLButtonElement | null>(null);
+  let takeControlsPanel = $state<HTMLElement | null>(null);
 
   $effect(() => {
     if (!micRecoveryOffered) return;
@@ -264,23 +282,53 @@ import { onShortcut } from '../lib/shortcuts';
     showToast(node.title, 'info');
   }
 
-  async function requestStop(): Promise<void> {
+  /**
+   * End the session, having asked first if the setting says to.
+   *
+   * ONE VOCABULARY. There used to be three ways to finish a take on this
+   * screen wearing three different words — "Stop the session?" in this dialog,
+   * "Stop session" on the transport, "End session" on the stage's dock — and
+   * two different confirmation policies, because the dock's exit ran straight
+   * to teardown while this one asked. Three names for one action reads as three
+   * actions, and the one the presenter reaches for at the end of a take is
+   * whichever they happen to see.
+   *
+   * It is "end" everywhere now, and every path lands in `endTake` below.
+   */
+  async function requestEndSession(): Promise<void> {
     if ($settings.general.confirmEndSession) {
       /*
        * Chrome, for the same reason the menu and the sheet are.
        *
        * The stage answers Escape on its own window listener, and a confirm
        * sheet's Escape means "no, don't". Without standing the stage down for
-       * the length of the question, backing out of "Stop the session?" ended
+       * the length of the question, backing out of "End the session?" ended
        * the session — the one answer the dialog exists to make avoidable.
        */
       confirmingStop = true;
       let accepted = false;
       try {
         accepted = await requestConfirm({
-          title: 'Stop the session?',
+          title: 'End the session?',
+          /*
+           * The SHARED body, not one written out here.
+           *
+           * Both ways out of a running take ask this question — this dialog and
+           * App's navigation guard — and the copy lives in `app-lifecycle.ts`
+           * precisely so the two cannot drift apart again, which they had.
+           *
+           * What it must never say is "your script keeps its place". There is no
+           * resume-at-position anywhere: the store's `snapshot` starts null, and
+           * `presentAgain` clears the session and calls `startTake` for a brand
+           * new one — which opens at the beginning. That promise mattered
+           * because it is the exact fear the dialog is asked about, so answering
+           * it wrongly is worse than not answering it.
+           *
+           * It stops short of promising the summary even though this path does
+           * show one, because the guard's path does not — see the constant.
+           */
           body: STOP_SESSION_CONFIRM_BODY,
-          confirmLabel: 'Stop session',
+          confirmLabel: 'End session',
           danger: true,
         });
       } finally {
@@ -288,7 +336,7 @@ import { onShortcut } from '../lib/shortcuts';
       }
       if (!accepted) return;
     }
-    await onEscape();
+    await endTake();
   }
 
   /**
@@ -308,11 +356,30 @@ import { onShortcut } from '../lib/shortcuts';
    * `finally`, and it is not ceremony. The cover is opaque, full-window and
    * above everything, so a phase left at `closing` is not a cosmetic loose end —
    * it is an app the operator can no longer see or use, with no way back but
-   * quitting. `destination` is a navigation, navigation runs guards, and a guard
-   * is arbitrary app code that can throw. The cover must come down whether or
-   * not it does.
+   * quitting. Everything inside is I/O that can throw. The cover must come down
+   * whether or not it does.
+   *
+   * ---------------------------------------------------------------------------
+   * IT NO LONGER TAKES A DESTINATION, AND THAT IS THE FIX FOR §115
+   * ---------------------------------------------------------------------------
+   * It used to run a `destination` callback between the un-present and the
+   * cover coming down, and all three callers passed the same two statements:
+   * `clearSession()` then navigate away. `clearSession()` resets the store, and
+   * the store's `summary` is what the F.17 dialog opens on — so the summary
+   * this take had just produced was destroyed UNDER THE COVER, one step before
+   * the screen it would have appeared on was replaced. The dialog's condition
+   * was true for a handful of frames, every one of them behind an opaque black
+   * plate. Nobody had ever seen an end-of-session summary.
+   *
+   * The cover cannot be rendered under — App's `.present-cover` sits at
+   * z-index 9999, deliberately above the dialog host — so the summary has to be
+   * shown after the cover falls, on a screen that is still mounted. Hence: this
+   * restores the window and nothing else. The take ends where it started, on
+   * Live, and the summary is simply visible there. Where to go next is the
+   * presenter's decision, made from the summary's own three buttons, and it is
+   * only then that anything is cleared.
    */
-  async function leavePresentation(destination: () => Promise<unknown>): Promise<void> {
+  async function leavePresentation(): Promise<void> {
     setPresentingPhase('closing');
     try {
       await painted();
@@ -330,19 +397,49 @@ import { onShortcut } from '../lib/shortcuts';
        */
       await rememberReaderFrame(restored);
       if (restored) await awaitViewportSettled(restored);
-      await destination();
       await painted();
     } finally {
       setPresentingPhase('off');
     }
   }
 
-  async function onEscape(): Promise<void> {
-    stopSession();
-    await leavePresentation(async () => {
-      clearSession();
-      await navigate({ name: 'editor', scriptId });
-    });
+  /**
+   * A teardown is already running.
+   *
+   * `endTake` is reachable from four places at once — the dock's End button,
+   * the stage's double-Escape, Cmd+. and the drawer — and two of them are keys
+   * that repeat. Without this, a second call would `stopSession()` a session
+   * that has already stopped (harmless) and then run a SECOND concurrent
+   * un-present whose `finally` drops the cover while the first is still using
+   * it, which is the black-plate-vanishing-mid-transition artifact the cover
+   * exists to prevent.
+   */
+  let endingTake = false;
+
+  /**
+   * End the take and show the presenter what happened.
+   *
+   * Already confirmed by the time it is called: the dock asks on its own, the
+   * stage's Escape asks by requiring a second press, and `requestEndSession`
+   * asks with a dialog. This is the one teardown they all share.
+   *
+   * It deliberately does NOT navigate. `stopSession` is what produces the
+   * summary, and the summary's dialog is a sibling of this route's markup — so
+   * leaving the presenter on Live is what makes it appear at all. See
+   * `leavePresentation`.
+   */
+  async function endTake(): Promise<void> {
+    if (endingTake) return;
+    endingTake = true;
+    try {
+      stopSession();
+      // The drawer belongs to a running take, and the summary is about to open
+      // over the top of where it was.
+      takeControlsOpen = false;
+      await leavePresentation();
+    } finally {
+      endingTake = false;
+    }
   }
 
   /**
@@ -546,10 +643,10 @@ import { onShortcut } from '../lib/shortcuts';
           hardPause();
           break;
         case 'stop-session':
-          void requestStop();
+          void requestEndSession();
           break;
         case 'escape':
-          void onEscape();
+          void endTake();
           break;
         case 'back-sentence':
           moveSentences(-1);
@@ -615,30 +712,35 @@ import { onShortcut } from '../lib/shortcuts';
   }
 
   /*
-   * Both summary exits un-present, and one of them did not used to.
+   * The summary's two exits: navigate, THEN clear.
    *
-   * `returnToEditor` navigated straight out with the window still borderless
-   * and monitor-sized — full screen, in the old implementation — so the operator
-   * landed back in the editor with no titlebar and no obvious way to get one.
-   * It was survivable when the summary was usually reached through Escape
-   * (which did un-present), and invisible in every test, because nothing that
-   * runs headlessly has a window to leave behind.
+   * NEITHER UN-PRESENTS ANY MORE, and that is not a regression. They used to,
+   * because the summary was (in theory) reachable from a still-presenting
+   * window and landing in the editor borderless and monitor-sized was the bug
+   * that put the un-present here. `endTake` now restores the window before the
+   * summary is ever shown, so by the time either of these runs the titlebar is
+   * already back and a second `exitPresentation` would be a no-op wrapped in a
+   * half-second of black.
    *
-   * Rust plans an un-present with nothing saved as a no-op, so calling it on a
-   * path that may not have been presenting is correct rather than merely safe.
+   * ORDER MATTERS, AND IT IS THE OPPOSITE OF WHAT IT WAS. Clearing first
+   * destroys `summary`, which closes the dialog — so a navigation that a guard
+   * then VETOES used to leave the presenter on a bare Live screen with the
+   * summary gone and nothing to press. Navigating first means a refused
+   * navigation simply leaves the summary standing, which is the only state the
+   * presenter can act on.
+   *
+   * Neither trips App's navigation guard: `stopSession` has already set
+   * `active` false, and the guard only stops-and-clears a session that is still
+   * running. (That guard's own silent clear is §119's, not this one's.)
    */
   async function returnToEditor(): Promise<void> {
-    await leavePresentation(async () => {
-      clearSession();
-      await navigate({ name: 'editor', scriptId });
-    });
+    await navigate({ name: 'editor', scriptId });
+    clearSession();
   }
 
-  async function finishAndReturnToLibrary(): Promise<void> {
-    await leavePresentation(async () => {
-      clearSession();
-      await navigate({ name: 'library', view: 'all' });
-    });
+  async function returnToLibrary(): Promise<void> {
+    await navigate({ name: 'library', view: 'all' });
+    clearSession();
   }
 
   /* ------------------------------------------------ the appearance panel (§14.2)
@@ -662,13 +764,13 @@ import { onShortcut } from '../lib/shortcuts';
    *
    * The duplicate "End session" went with the menu. There were three ways to end
    * a take on one screen (the menu item, the stage's exit affordance, Escape)
-   * and two of them ran different code — one through `requestStop`'s confirm
-   * dialog, one straight to teardown. Now there is one control, one anchored
-   * confirmation, and one teardown path.
+   * and two of them ran different code — one through `requestEndSession`'s
+   * confirm dialog, one straight to teardown. Now there is one control, one
+   * anchored confirmation, and one teardown path (`endTake`).
    */
 
   let appearanceOpen = $state(false);
-  /** `requestStop`'s confirm dialog is up over the take. */
+  /** `requestEndSession`'s confirm dialog is up over the take. */
   let confirmingStop = $state(false);
   /**
    * The appearance the panel was opened on, so Cancel is exact.
@@ -691,10 +793,15 @@ import { onShortcut } from '../lib/shortcuts';
    *
    * `confirmingStop` is still in here even though the dock's End button no
    * longer goes through it: Cmd+. is not one of the shortcuts Live delegates to
-   * the embedded stage, so it still reaches `requestStop` and can still raise
-   * the confirm dialog over a running take.
+   * the embedded stage, so it still reaches `requestEndSession` and can still
+   * raise the confirm dialog over a running take.
+   *
+   * `takeControlsOpen` is in here for the same reason both of the others are:
+   * the drawer contains a `<select>` and several buttons, and a stage still
+   * answering Space and Escape underneath a focused control is a prompter that
+   * pauses itself when somebody types.
    */
-  const stageChromeOpen = $derived(appearanceOpen || confirmingStop);
+  const stageChromeOpen = $derived(appearanceOpen || confirmingStop || takeControlsOpen);
 
   /**
    * Open once. A second open must not re-capture the baseline.
@@ -791,6 +898,122 @@ import { onShortcut } from '../lib/shortcuts';
     if ($session.active) return;
     closeAppearanceSheet();
   });
+
+  /* ------------------------------------------------- §115 the take controls
+   *
+   * THE SCREEN'S CONTROLS FOR A TAKE ONLY EXISTED WHEN THERE WAS NO TAKE.
+   *
+   * Everything below `{#if $session.active}` — the status bar, the tracking
+   * panel and its recovery actions, the microphone picker — sat in the `{:else}`
+   * arm, because single-window presentation gives the whole window to the
+   * stage. So the surface built to be watched DURING a read rendered only
+   * before and after one. The microphone picker was the sharpest case: its
+   * condition required an active voice take AND it rendered only when no take
+   * was active, so it was not merely hidden, it was unsatisfiable — and
+   * `onInputDeviceLost` had been written to stay silent precisely BECAUSE this
+   * picker was supposed to be the remedy.
+   *
+   * ---------------------------------------------------------------------------
+   * A SIBLING LAYER, NOT A RESTRUCTURED `{#if}`
+   * ---------------------------------------------------------------------------
+   * The obvious fix — move these controls inside the active arm alongside
+   * `StageApp` — is the one that must not be taken. Svelte 5 has no reparenting:
+   * changing the template path a component sits on destroys and recreates it.
+   * `StageApp` holds the jerk-limited motion controller's state, the measured
+   * line map and the opening plate's progress, so remounting it mid-take
+   * restarts the read from its opening animation with the follower's history
+   * gone. `StageApp`'s conditional is therefore left exactly as it was and this
+   * layer is a SIBLING of it, mounted once for the life of the route.
+   *
+   * ---------------------------------------------------------------------------
+   * PERIPHERAL BY DEFAULT
+   * ---------------------------------------------------------------------------
+   * The glass is what the presenter is reading and this must not cover it
+   * uninvited, so it is a tab in the corner that opens a drawer, and nothing
+   * opens it automatically — not even a dead microphone. A panel that appears
+   * over the script by itself is a worse failure than the one it reports. The
+   * tab carries the attention instead, and the drawer puts the remedy first.
+   *
+   * What is in here is what the issue named and what has nowhere else to go:
+   * the status readout, microphone recovery, and the following panel with its
+   * degraded-state actions. The transport is deliberately NOT duplicated — every
+   * one of its actions already has both a keyboard shortcut that fires during a
+   * take and a control on the stage's own dock, so a second copy would be a
+   * surface to keep in sync for no new capability.
+   *
+   * (`takeControlsOpen`, `takeControlsTab` and `takeControlsPanel` are declared
+   * at the top of this script, next to the microphone state.)
+   */
+
+  /** Something needs the operator, and the drawer is the only place it shows. */
+  const takeControlsAttention = $derived(
+    micRecoveryOffered ||
+      $session.stageWindowFault !== null ||
+      $smoothFollow.notices.some((notice) => notice.action),
+  );
+
+  function closeTakeControls(restoreFocus = true): void {
+    if (!takeControlsOpen) return;
+    takeControlsOpen = false;
+    // Only back to a trigger that is still there. Closing because the take
+    // ended takes the whole layer with it, and focusing a hidden button strands
+    // the keyboard on an element the user cannot see.
+    if (restoreFocus && $session.active) takeControlsTab?.focus();
+  }
+
+  /**
+   * Escape closes the drawer, and must not reach the stage.
+   *
+   * CAPTURE PHASE, and that is the whole point. `StageApp` listens for Escape
+   * on `<svelte:window onkeydown>` — bubble phase — and counts presses towards
+   * the double-press that ends the take. A drawer that closed on Escape while
+   * letting the event through would arm the teardown every time somebody
+   * dismissed a panel, and dismissing twice would end the take outright.
+   * Capturing on `window` runs before any bubble listener, so stopping
+   * propagation here is what keeps "close this panel" and "end this take" from
+   * being the same key.
+   */
+  $effect(() => {
+    if (!takeControlsOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeTakeControls();
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  });
+
+  /** A click on the script behind it means "get out of the way". */
+  $effect(() => {
+    if (!takeControlsOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && (takeControlsPanel?.contains(target) || takeControlsTab?.contains(target))) {
+        return;
+      }
+      // No focus restore: the operator is pointing at something else.
+      closeTakeControls(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+  });
+
+  /**
+   * The drawer belongs to the take, exactly as the appearance panel does.
+   *
+   * Live survives the end of a session — it stays mounted for the summary, and
+   * "Present again" builds a fresh take inside it — so anything left open here
+   * would reappear over the next take, and a stale device list would offer the
+   * previous take's microphones as the cure for this one's.
+   */
+  $effect(() => {
+    if ($session.active) return;
+    takeControlsOpen = false;
+    micInputs = [];
+    micChoice = '';
+  });
 </script>
 
 <!--
@@ -814,6 +1037,96 @@ import { onShortcut } from '../lib/shortcuts';
   />
 {/snippet}
 
+<!--
+  §115. The three blocks below are rendered in TWO places — the `.live` screen
+  that shows before and after a take, and the take-controls drawer that shows
+  during one — so they are snippets rather than copies. The duplication they
+  replace is the kind that rots: a pill added to one status bar and not the
+  other reads as a pill that works sometimes.
+-->
+{#snippet statusPills()}
+  <StatusPill tone="accent" label={modeLabel} dot={false} />
+  <!--
+    Only a voice take has a realtime connection and an open microphone to
+    report. Anything else says so plainly instead of showing the
+    `initial` optimism of "Connected · Mic live".
+  -->
+  {#if hasVoiceTransport}
+    <StatusPill tone={connection.tone} label={connection.label} />
+  {/if}
+  {#if !stageAlive}
+    <StatusPill tone="danger" label="Stage closed" />
+  {/if}
+  {#if hasVoiceTransport}
+    <StatusPill
+      tone={$session.micState === 'live' ? 'success' : $session.micState === 'muted' ? 'neutral' : 'danger'}
+      label={$session.micState === 'live' ? 'Mic live' : $session.micState === 'muted' ? 'Mic off' : 'Mic lost'}
+    />
+  {:else}
+    <StatusPill tone="neutral" label="No microphone" />
+  {/if}
+{/snippet}
+
+<!--
+  §28.2. Losing a microphone mid-take used to be a dead end: the toast
+  said "choose an input" and there was nowhere to choose one. The
+  transport can replace its sender track without renegotiating, so the
+  recovery is a picker right where the failure is reported.
+-->
+{#snippet micRecovery()}
+  {#if micRecoveryOffered}
+    <div class="mic-recovery">
+      <select
+        class="mic-picker"
+        aria-label="Input device"
+        disabled={micSwitching || micInputs.length === 0}
+        bind:value={micChoice}
+      >
+        {#each micInputs as input (input.deviceId)}
+          <option value={input.deviceId}>{input.label}</option>
+        {/each}
+      </select>
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={micSwitching || micChoice === ''}
+        onclick={() => useMicrophone()}
+      >
+        {micSwitching ? 'Switching…' : 'Use this input'}
+      </Button>
+      <Button size="sm" variant="ghost" disabled={micSwitching} onclick={() => refreshMicInputs()}>
+        Rescan
+      </Button>
+    </div>
+  {/if}
+{/snippet}
+
+<!--
+  §52.7. The window layer verified which monitor the stage actually opened
+  on and it was not the one that was picked. Nothing is broken — the
+  script is prompting correctly, at the wrong wall — so this is a notice
+  with the one affordance that answers "which panel is which": numbered
+  cards on every display (identify.html, §52.4). The picker itself lives
+  in Preflight and labels its tiles with the same numbers.
+-->
+{#snippet stageFaultNotice()}
+  {#if $session.stageWindowFault}
+    {@const fault = $session.stageWindowFault}
+    <div class="stage-window-fault" role="alert">
+      <p class="lf-title">
+        {fault.code === 'STAGE_DISPLAY_MISMATCH'
+          ? 'The stage is on the wrong display'
+          : 'The stage window reported a problem'}
+      </p>
+      <p class="lf-note">{fault.message}</p>
+      <div class="lf-actions">
+        <Button size="sm" onclick={() => void identifyStageDisplays()}>Number the displays</Button>
+        <Button size="sm" onclick={() => dismissStageWindowFault()}>Dismiss</Button>
+      </div>
+    </div>
+  {/if}
+{/snippet}
+
 {#if $session.active}
   {#if $session.stageEnvelope}
     <StageApp
@@ -829,7 +1142,14 @@ import { onShortcut } from '../lib/shortcuts';
         blanked: $session.stageBlanked,
         presentationMode: $session.stagePresentationMode,
         onpresentationtoggle: () => void togglePresentationMode(),
-        onexit: onEscape,
+        /*
+         * Already confirmed, so it does not go through `requestEndSession`.
+         * The stage raises this from two gestures and both have asked: the
+         * dock's End button puts its own confirmation up first, and Escape
+         * requires a second press within the double-press window. Routing them
+         * through the settings-gated dialog would ask twice for one decision.
+         */
+        onexit: endTake,
         onintent: handleEmbeddedStageIntent,
         chromeOpen: stageChromeOpen,
         appearancePanel,
@@ -862,57 +1182,8 @@ import { onShortcut } from '../lib/shortcuts';
       <span class="session-status" role="status" aria-live="polite">{$liveStatusLabel}</span>
     </div>
     <div class="status-right">
-      <StatusPill tone="accent" label={modeLabel} dot={false} />
-      <!--
-        Only a voice take has a realtime connection and an open microphone to
-        report. Anything else says so plainly instead of showing the
-        `initial` optimism of "Connected · Mic live".
-      -->
-      {#if hasVoiceTransport}
-        <StatusPill tone={connection.tone} label={connection.label} />
-      {/if}
-      {#if !stageAlive}
-        <StatusPill tone="danger" label="Stage closed" />
-      {/if}
-      {#if hasVoiceTransport}
-        <StatusPill
-          tone={$session.micState === 'live' ? 'success' : $session.micState === 'muted' ? 'neutral' : 'danger'}
-          label={$session.micState === 'live' ? 'Mic live' : $session.micState === 'muted' ? 'Mic off' : 'Mic lost'}
-        />
-        <!--
-          §28.2. Losing a microphone mid-take used to be a dead end: the toast
-          said "choose an input" and there was nowhere to choose one. The
-          transport can replace its sender track without renegotiating, so the
-          recovery is a picker right where the failure is reported.
-        -->
-        {#if micRecoveryOffered}
-          <div class="mic-recovery">
-            <select
-              class="mic-picker"
-              aria-label="Input device"
-              disabled={micSwitching || micInputs.length === 0}
-              bind:value={micChoice}
-            >
-              {#each micInputs as input (input.deviceId)}
-                <option value={input.deviceId}>{input.label}</option>
-              {/each}
-            </select>
-            <Button
-              size="sm"
-              variant="primary"
-              disabled={micSwitching || micChoice === ''}
-              onclick={() => useMicrophone()}
-            >
-              {micSwitching ? 'Switching…' : 'Use this input'}
-            </Button>
-            <Button size="sm" variant="ghost" disabled={micSwitching} onclick={() => refreshMicInputs()}>
-              Rescan
-            </Button>
-          </div>
-        {/if}
-      {:else}
-        <StatusPill tone="neutral" label="No microphone" />
-      {/if}
+      {@render statusPills()}
+      {@render micRecovery()}
       <span class="display-name">{$session.displayLabel}</span>
     </div>
   </header>
@@ -963,9 +1234,15 @@ import { onShortcut } from '../lib/shortcuts';
       {:else}
         <div class="preview-placeholder">
           <p class="ph-title">Stage preview</p>
+          <!--
+            "Cursor at token 417" is gone. A token is the engine's own unit — a
+            measured span on the glass — and it is not a word index, not a
+            character offset and not convertible into either by anybody reading
+            this. It leaked an implementation detail into the one line here
+            addressed to the presenter, and said nothing they could use.
+          -->
           <p class="ph-note">
             The scaled stage view appears here once the compiled script is available.
-            {#if snapshot}Cursor at token {Math.round(snapshot.confirmedToken)}.{/if}
           </p>
         </div>
       {/if}
@@ -1000,29 +1277,7 @@ import { onShortcut } from '../lib/shortcuts';
       {/if}
 
       <p class="region-label">Stage</p>
-      <!--
-        §52.7. The window layer verified which monitor the stage actually opened
-        on and it was not the one that was picked. Nothing is broken — the
-        script is prompting correctly, at the wrong wall — so this is a notice
-        with the one affordance that answers "which panel is which": numbered
-        cards on every display (identify.html, §52.4). The picker itself lives
-        in Preflight and labels its tiles with the same numbers.
-      -->
-      {#if $session.stageWindowFault}
-        {@const fault = $session.stageWindowFault}
-        <div class="stage-window-fault" role="alert">
-          <p class="lf-title">
-            {fault.code === 'STAGE_DISPLAY_MISMATCH'
-              ? 'The stage is on the wrong display'
-              : 'The stage window reported a problem'}
-          </p>
-          <p class="lf-note">{fault.message}</p>
-          <div class="lf-actions">
-            <Button size="sm" onclick={() => void identifyStageDisplays()}>Number the displays</Button>
-            <Button size="sm" onclick={() => dismissStageWindowFault()}>Dismiss</Button>
-          </div>
-        </div>
-      {/if}
+      {@render stageFaultNotice()}
       <div class="quick-controls">
         <div class="font-row">
           <IconButton
@@ -1107,9 +1362,9 @@ import { onShortcut } from '../lib/shortcuts';
           Resume
         </Button>
       {/if}
-      <Button variant="danger" onclick={() => requestStop()}>
+      <Button variant="danger" onclick={() => requestEndSession()}>
         <Icon name="stop" size={14} />
-        Stop session
+        End session
       </Button>
     </div>
 
@@ -1152,6 +1407,101 @@ import { onShortcut } from '../lib/shortcuts';
 </div>
 {/if}
 
+<!--
+  §115 take controls — a SIBLING of the block above, never inside it.
+
+  Placed here so `StageApp`'s template path never changes: Svelte 5 does not
+  reparent, and moving that component would remount it, throwing away the motion
+  controller's state and restarting the read from the opening plate. This layer
+  mounts once for the life of the route and shows or hides itself with CSS.
+
+  `pointer-events: none` on the layer with `auto` only on the tab and the panel,
+  so the ~90% of the screen this covers stays click-through to the stage
+  underneath. `inert` when closed (and whenever no take is running) keeps a
+  hidden drawer out of the tab order and away from screen readers — the reason
+  it is `inert` rather than `display: none` is that the drawer holds a `<select>`
+  and its scroll position, and destroying that markup on every close would reset
+  the operator's device choice mid-recovery.
+
+  NOT `aria-modal`. The page behind it is deliberately still live and still
+  clickable; claiming a modal would tell assistive technology the opposite of
+  what the layer actually does.
+-->
+<div class="take-controls" class:presenting={$session.active} inert={!$session.active}>
+  <button
+    type="button"
+    class="tc-tab"
+    class:attention={takeControlsAttention}
+    class:open={takeControlsOpen}
+    aria-expanded={takeControlsOpen}
+    aria-controls="take-controls-panel"
+    aria-label={takeControlsAttention ? 'Take controls — needs attention' : 'Take controls'}
+    bind:this={takeControlsTab}
+    onclick={() => (takeControlsOpen ? closeTakeControls() : (takeControlsOpen = true))}
+  >
+    <Icon name={takeControlsOpen ? 'chevron-right' : 'chevron-left'} size={14} />
+    <span class="tc-tab-label">Take controls</span>
+    <!--
+      The attention marker is on the TAB, and nothing auto-opens the drawer.
+      A panel that appears over the script by itself is a worse interruption
+      than the fault it reports, so this points at the remedy instead of
+      performing it.
+
+      Decorative: the same fact is already in the button's accessible name, and
+      a bare dot announced separately would say nothing a screen reader could
+      use.
+    -->
+    {#if takeControlsAttention}
+      <span class="tc-dot" aria-hidden="true"></span>
+    {/if}
+  </button>
+
+  <section
+    class="tc-panel"
+    class:open={takeControlsOpen}
+    id="take-controls-panel"
+    aria-label="Take controls"
+    aria-hidden={!takeControlsOpen}
+    inert={!takeControlsOpen}
+    bind:this={takeControlsPanel}
+  >
+    <header class="tc-head">
+      <span class="tc-elapsed">{formatClock($session.elapsedSeconds)}</span>
+      <span class="tc-status" role="status" aria-live="polite">{$liveStatusLabel}</span>
+      <IconButton icon="x" label="Close take controls" onclick={() => closeTakeControls()} />
+    </header>
+
+    <div class="tc-pills">{@render statusPills()}</div>
+
+    <!--
+      FIRST, and that is deliberate. When this drawer is opened during a take it
+      is usually because the tab was showing attention, and a dead microphone is
+      the fault with the shortest fuse and the only one whose remedy lives here.
+    -->
+    {@render micRecovery()}
+
+    <p class="region-label">Tracking</p>
+    <FollowStatePanel
+      follow={$smoothFollow}
+      sectionTitle={currentSectionTitle}
+      voiceInput={hasVoiceTransport}
+      onnoticeaction={handleNoticeAction}
+    />
+
+    <p class="region-label">Following</p>
+    <FollowControls follow={$smoothFollow} />
+
+    {@render stageFaultNotice()}
+
+    <div class="tc-end">
+      <Button variant="danger" onclick={() => void requestEndSession()}>
+        <Icon name="stop" size={14} />
+        End session
+      </Button>
+    </div>
+  </section>
+</div>
+
 <!-- End-of-session summary (F.17) -->
 <Dialog
   open={!$session.active && $session.summary !== null}
@@ -1190,56 +1540,80 @@ import { onShortcut } from '../lib/shortcuts';
         {/if}
       </dd>
       <!--
-        The row that tells a lost aligner apart from a stage that ignored it.
-        Both of the rows above are measured on the control side and agreed
-        perfectly through a take where the script never moved.
+        THE NEXT THREE ROWS ONLY MEAN ANYTHING ACROSS A WINDOW BOUNDARY.
+        ---------------------------------------------------------------------
+        Stage updates, document travel and the transcript relay are all measured
+        over the control→stage bridge, and that bridge is only built when the
+        stage has its own window. Single-window presentation runs at stage
+        generation 0, where `startStageBridge` returns immediately: directives
+        are a documented no-op, no motion acks come back, no transcript taps are
+        emitted. So on the configuration most takes actually run in, all three
+        read empty — and the summary accused the app of three separate failures
+        ("the stage did not report back", "the stage did not report a position",
+        "words were heard but never offered to the stage") on every single
+        healthy embedded take.
+
+        Standing false alarms are worse than no diagnostic: they train the
+        presenter to ignore the rows that would matter on the rig where these
+        numbers are real. One honest line instead, and the real rows are kept
+        intact for the case they were written for.
       -->
-      <dt>Stage updates</dt>
-      <dd>
-        {#if summary.stageApplied === null}
-          {summary.updatesSent} sent — the stage did not report back
-        {:else}
-          {summary.stageApplied} of {summary.updatesSent} applied
-          {#if summary.updatesSent - summary.stageApplied >= 4}
-            <span class="summary-warn">— the stage was not following control</span>
+      {#if !summary.stageTelemetryExpected}
+        <dt>Stage diagnostics</dt>
+        <dd>Not applicable — the stage shared this window</dd>
+      {:else}
+        <!--
+          The row that tells a lost aligner apart from a stage that ignored it.
+          Both of the rows above are measured on the control side and agreed
+          perfectly through a take where the script never moved.
+        -->
+        <dt>Stage updates</dt>
+        <dd>
+          {#if summary.stageApplied === null}
+            {summary.updatesSent} sent — the stage did not report back
+          {:else}
+            {summary.stageApplied} of {summary.updatesSent} applied
+            {#if summary.updatesSent - summary.stageApplied >= 4}
+              <span class="summary-warn">— the stage was not following control</span>
+            {/if}
           {/if}
-        {/if}
-      </dd>
-      <!--
-        The only row measured on the GLASS. Everything above it is control's own
-        bookkeeping, which is how a take reported words heard, words followed
-        and snapshots applied — all healthy — while the script never moved.
-      -->
-      <dt>Script moved</dt>
-      <dd>
-        {#if summary.documentTravelPx === null}
-          the stage did not report a position
-        {:else}
-          {Math.round(summary.documentTravelPx)} px
-          {#if summary.targetTravelPx !== null}
-            (aimed at {Math.round(summary.targetTravelPx)} px)
+        </dd>
+        <!--
+          The only row measured on the GLASS. Everything above it is control's own
+          bookkeeping, which is how a take reported words heard, words followed
+          and snapshots applied — all healthy — while the script never moved.
+        -->
+        <dt>Script moved</dt>
+        <dd>
+          {#if summary.documentTravelPx === null}
+            the stage did not report a position
+          {:else}
+            {Math.round(summary.documentTravelPx)} px
+            {#if summary.targetTravelPx !== null}
+              (aimed at {Math.round(summary.targetTravelPx)} px)
+            {/if}
+            {#if summary.documentTravelPx < 20 && (summary.targetTravelPx ?? 0) >= 20}
+              <span class="summary-warn">— the document never followed its target</span>
+            {:else if summary.documentTravelPx < 20 && summary.wordsFollowed > 5}
+              <span class="summary-warn">— the script did not move</span>
+            {/if}
           {/if}
-          {#if summary.documentTravelPx < 20 && (summary.targetTravelPx ?? 0) >= 20}
-            <span class="summary-warn">— the document never followed its target</span>
-          {:else if summary.documentTravelPx < 20 && summary.wordsFollowed > 5}
-            <span class="summary-warn">— the script did not move</span>
+        </dd>
+        <!--
+          Whether the recogniser's own words reached the stage's transcript bar.
+          The bar read "listening — no words yet" through a take that heard
+          eleven, and nothing anywhere said which side dropped them.
+        -->
+        <dt>Transcript to stage</dt>
+        <dd>
+          {summary.transcriptTapsEmitted} of {summary.transcriptTapsSeen} sent
+          {#if summary.transcriptTapFault !== null}
+            <span class="summary-warn">— dropped: {summary.transcriptTapFault}</span>
+          {:else if summary.transcriptTapsSeen === 0 && summary.wordsHeard > 0}
+            <span class="summary-warn">— words were heard but never offered to the stage</span>
           {/if}
-        {/if}
-      </dd>
-      <!--
-        Whether the recogniser's own words reached the stage's transcript bar.
-        The bar read "listening — no words yet" through a take that heard
-        eleven, and nothing anywhere said which side dropped them.
-      -->
-      <dt>Transcript to stage</dt>
-      <dd>
-        {summary.transcriptTapsEmitted} of {summary.transcriptTapsSeen} sent
-        {#if summary.transcriptTapFault !== null}
-          <span class="summary-warn">— dropped: {summary.transcriptTapFault}</span>
-        {:else if summary.transcriptTapsSeen === 0 && summary.wordsHeard > 0}
-          <span class="summary-warn">— words were heard but never offered to the stage</span>
-        {/if}
-      </dd>
+        </dd>
+      {/if}
       <!--
         How hard following actually worked.
 
@@ -1271,11 +1645,23 @@ import { onShortcut } from '../lib/shortcuts';
       <dt>Ending location</dt>
       <dd>{summary.endingLocation}</dd>
       <dt>Transcript</dt>
-      <dd>Not saved</dd>
+      <!--
+        Read from the take, not hard-coded. `transcriptSaved` has been on the
+        summary and correctly computed from the retention setting since the
+        session record was wired up; this row simply never asked for it, so a
+        presenter who had deliberately turned transcript saving ON was still
+        told every take that nothing had been kept.
+      -->
+      <dd>{summary.transcriptSaved ? 'Saved' : 'Not saved'}</dd>
     </dl>
   {/if}
   {#snippet footer()}
-    <Button variant="ghost" onclick={() => void finishAndReturnToLibrary()}>Finish</Button>
+    <!--
+      "Finish" said nothing about where it went. The other two buttons name
+      their destination and this one named a mood, which made the only
+      irreversible-looking choice on the dialog the least clear one.
+    -->
+    <Button variant="ghost" onclick={() => void returnToLibrary()}>Return to library</Button>
     <Button onclick={() => void returnToEditor()}>Return to editor</Button>
     <Button variant="primary" onclick={() => void presentAgain()}>Present again</Button>
   {/snippet}
@@ -1498,6 +1884,142 @@ import { onShortcut } from '../lib/shortcuts';
     width: 3px;
     border-radius: var(--radius-pill);
     background: var(--danger);
+  }
+
+  /* ------------------------------------------------- §115 the take controls
+   *
+   * Layered at 40: above the stage it floats over, and deliberately BELOW the
+   * dialog host (100) and the toast region (120), so the end-of-session summary
+   * and any notice still land on top of it rather than behind it. The present
+   * cover at 9999 clears all of them, which is why the summary is shown after
+   * the cover falls rather than under it.
+   */
+  .take-controls {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    /*
+     * The layer spans the window but must not intercept it: the stage
+     * underneath owns wheel, drag and click, and a full-window sheet of
+     * invisible `pointer-events` over a running prompter would swallow every
+     * one of them. Only the tab and the panel take input back.
+     */
+    pointer-events: none;
+    /*
+     * Hidden outside a take rather than unmounted, so the panel's `<select>`
+     * keeps its value and scroll position across an open/close cycle. The
+     * `inert` attribute in the markup is what removes it from the tab order
+     * and the accessibility tree; this is only the paint.
+     */
+    visibility: hidden;
+  }
+  .take-controls.presenting {
+    visibility: visible;
+  }
+
+  .tc-tab {
+    position: absolute;
+    top: var(--space-4);
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--border);
+    /* No crescent: the tab is flush to the right edge, so it is genuinely
+       three-sided rather than a rounded box missing a border. */
+    border-right: none;
+    border-radius: var(--radius-md) 0 0 var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+    pointer-events: auto;
+    /* Quiet over a running read: it is legible when looked for and does not
+       compete with the script the rest of the time. */
+    opacity: 0.55;
+    transition: opacity 120ms ease;
+  }
+  .tc-tab:hover,
+  .tc-tab:focus-visible,
+  .tc-tab.open {
+    opacity: 1;
+  }
+  /* Quiet focus: a background/border shift, never an accent ring. */
+  .tc-tab:focus-visible {
+    outline: none;
+    background: var(--bg-sunken);
+    border-color: var(--border-strong);
+  }
+  .tc-tab.attention {
+    opacity: 1;
+    color: var(--text-primary);
+  }
+  .tc-tab-label {
+    white-space: nowrap;
+  }
+  .tc-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-pill);
+    background: var(--danger);
+  }
+
+  .tc-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(340px, 92vw);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    overflow-y: auto;
+    border-left: 1px solid var(--border);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-card);
+    pointer-events: auto;
+    /* Off-canvas rather than removed — see `.take-controls`. */
+    transform: translateX(100%);
+    transition: transform 140ms ease;
+  }
+  .tc-panel.open {
+    transform: translateX(0);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .tc-panel {
+      transition: none;
+    }
+  }
+
+  .tc-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .tc-elapsed {
+    font-variant-numeric: tabular-nums;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .tc-status {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: var(--text-xs);
+    color: var(--text-muted);
+  }
+  .tc-pills {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+  }
+  .tc-end {
+    margin-top: auto;
+    padding-top: var(--space-3);
   }
 
   /* --- main regions --- */
@@ -1740,7 +2262,15 @@ import { onShortcut } from '../lib/shortcuts';
   /* "Nothing was transcribed" is the one line here that is a problem rather
      than a statistic, so it reads as one. */
   .summary-warn {
-    color: var(--text-danger, var(--accent-strong));
+    /*
+     * `--text-danger` has never existed. Every one of the five warning spans on
+     * this summary therefore fell through to the fallback and rendered in the
+     * brand accent — the same warm terracotta the mode pill and the primary
+     * button use — so the app's way of saying "this take did not work" was
+     * visually indistinguishable from its way of saying "this is CandidCue".
+     * `--danger` is the real token and is defined in both themes.
+     */
+    color: var(--danger);
     font-weight: 550;
   }
 

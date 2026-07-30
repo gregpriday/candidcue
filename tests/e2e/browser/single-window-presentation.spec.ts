@@ -567,7 +567,7 @@ test('the opening position survives a relayout that happens before the first wor
  * that matters is a presenter hitting Escape by reflex when a full-screen
  * window takes over their display.
  */
-test('the first Escape prompts and the second ends the take, un-presents, and returns to the editor', async ({
+test('the first Escape prompts and the second ends the take, un-presents, and shows the summary', async ({
   page,
 }) => {
   const errors = watchPageErrors(page);
@@ -579,7 +579,19 @@ test('the first Escape prompts and the second ends the take, un-presents, and re
 
   await page.keyboard.press('Escape');
   await expect(page.getByRole('region', { name: 'Teleprompter' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Present', exact: true })).toBeVisible();
+
+  /*
+   * §115. This test used to assert the Library's Present button here, because
+   * ending a take navigated straight back out — and on the way past, under the
+   * still-raised black cover, it called `clearSession()`. That reset the store,
+   * `summary` with it, so the F.17 dialog's condition held for a few frames
+   * behind an opaque plate and no presenter had ever seen an end-of-session
+   * summary. The take now ends where it ran and the summary is simply there.
+   */
+  await expect(page.getByRole('dialog', { name: 'Session complete' })).toBeVisible();
+  // The cover must be DOWN: it sits above the dialog host at z-index 9999, so a
+  // summary shown while it is up is a summary nobody can see.
+  await expect(page.locator('.present-cover')).toHaveCount(0);
 
   const result = await page.evaluate(() => ({
     commands: window.__E2E__.calls.map((call) => call.command),
@@ -607,6 +619,61 @@ test('the first Escape prompts and the second ends the take, un-presents, and re
   expect(result.commands).not.toContain('plugin:window|set_fullscreen');
   expect(result.commands).toContain('end_session');
   expect(result.presenting).toBe(false);
+
+  // And the retake loop the summary exists for actually goes somewhere. This is
+  // the other half of §115: the three buttons were unreachable, so "Return to
+  // editor" had never been pressed by anyone.
+  await page.getByRole('button', { name: 'Return to editor' }).click();
+  await expect(page.getByRole('dialog', { name: 'Session complete' })).toHaveCount(0);
+
+  errors.expectClean();
+});
+
+/*
+ * §115 — the controls for a take only existed when there was no take.
+ *
+ * The status readout, the tracking panel and — worst of all — the microphone
+ * recovery picker all lived in the `{:else}` arm of `{#if $session.active}`, so
+ * the surface built to be used DURING a read rendered only before and after
+ * one. The picker's own condition required an active voice take, which made it
+ * `active && !active`: not hidden, unsatisfiable.
+ */
+test('the take controls are reachable during a take and do not remount the stage', async ({
+  page,
+}) => {
+  const errors = watchPageErrors(page);
+  await present(page);
+
+  const tab = page.getByRole('button', { name: /Take controls/ });
+  await expect(tab).toBeVisible();
+
+  /*
+   * The stage must SURVIVE the drawer. Svelte 5 does not reparent, so a fix
+   * that moved StageApp to a different template path would destroy it and
+   * restart the read from its opening plate with the follower's state gone.
+   * Stamping the live node and re-reading it afterwards is what proves the
+   * element is the same one rather than a fresh mount that merely looks alike.
+   */
+  await page.locator('.stage-root').evaluate((node) => {
+    (node as HTMLElement).dataset.e2eStageInstance = 'original';
+  });
+
+  await tab.click();
+  const panel = page.getByRole('region', { name: 'Take controls' });
+  await expect(panel).toBeVisible();
+  // The script is still on the glass behind it — this layer never replaces it.
+  await expect(page.locator('.script-layer')).toBeVisible();
+
+  // Escape closes the drawer and must NOT reach the stage's double-Escape
+  // counter, or dismissing a panel would arm the teardown.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.escape-hint')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible();
+
+  await expect(page.locator('.stage-root')).toHaveAttribute(
+    'data-e2e-stage-instance',
+    'original',
+  );
 
   errors.expectClean();
 });

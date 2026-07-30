@@ -82,7 +82,7 @@ import {
 import { defaultFollowingSettings } from '../lib/follow-profiles';
 import { configureFollowActions, smoothFollow } from './smooth-follow';
 import { getSettingsSnapshot, patchSettings } from './settings';
-import { clearConditionToasts, showToast } from './toasts';
+import { clearConditionToasts, dismissToastByKey, showToast } from './toasts';
 
 /**
  * Lost audio is worth interrupting for — words were said and will never be
@@ -93,6 +93,16 @@ import { clearConditionToasts, showToast } from './toasts';
 const TOAST_AUDIO_DROPPED = 'audio-dropped';
 /** §64: the stage is receiving snapshots and not applying them. */
 const TOAST_STAGE_NOT_APPLYING = 'stage-not-applying';
+/**
+ * §28.2: the take is running on an input the operator did not choose.
+ *
+ * A CONDITION, not an event, so it is keyed: it stands until the operator
+ * picks a different input or the take ends. It used to be an ordinary `info`
+ * toast, which meant it expired on the four-second default — a notice whose
+ * entire body is an instruction ("pick another input") that removed itself
+ * before the instruction could be carried out.
+ */
+const TOAST_INPUT_FELL_BACK = 'input-fell-back';
 import { compiled as compiledStore } from './compiled';
 import { saveNow } from './editor';
 
@@ -220,6 +230,25 @@ export interface SessionSummary {
   transcriptTapsSeen: number;
   transcriptTapsEmitted: number;
   transcriptTapFault: string | null;
+  /**
+   * Was there a separate stage WINDOW to hear back from at all?
+   *
+   * Three rows above — stage updates, document travel and the transcript relay
+   * — are measured across the control→stage window bridge, and that bridge only
+   * exists when the stage has its own window. Single-window presentation runs
+   * at stage generation 0, where `startStageBridge` returns immediately:
+   * directives are a deliberate no-op, no motion acks arrive, and no transcript
+   * taps are emitted. Every one of those counters therefore reads zero or null
+   * on a perfectly healthy embedded take, and the summary presented all three
+   * as faults — "the stage did not report back", "the stage did not report a
+   * position", "words were heard but never offered to the stage" — on the
+   * configuration most takes actually run in.
+   *
+   * So the summary needs to know whether silence on that bridge was expected.
+   * The generation number itself stays private: what the summary is entitled to
+   * ask is "should there have been telemetry", not "which window was it".
+   */
+  stageTelemetryExpected: boolean;
 }
 
 export interface SessionState {
@@ -1023,12 +1052,20 @@ export function startLiveSession(input: StartSessionInput): string {
         }
         // §28.2/§28.6: the remedy named here is one the Live screen can
         // actually perform — `switchMicrophone` below drives the transport's
-        // track replacement, and the status bar grows an input picker while
+        // track replacement, and the take controls grow an input picker while
         // `micState` is 'disconnected'.
         /*
-         * No toast: `micState: 'disconnected'` is what the status bar renders,
-         * and it grows the input picker that fixes it. The toast said the same
-         * thing in a form that expired never and appeared behind the stage.
+         * No toast: `micState: 'disconnected'` is what the take controls
+         * render, and they grow the input picker that fixes it. The toast said
+         * the same thing in a form that expired never and appeared behind the
+         * stage.
+         *
+         * §115: that used to be a promise nothing kept. The picker lived in the
+         * Live status bar, which renders only when NO take is running, so the
+         * one state it exists for — a microphone dying mid-take — was the one
+         * state it could not be reached in. It is now in the take-controls
+         * drawer, which is mounted for the duration of the take, and the
+         * attention dot on its tab is what points at it.
          */
       },
       /*
@@ -1044,10 +1081,22 @@ export function startLiveSession(input: StartSessionInput): string {
        * where they change it.
        */
       onInputFellBackToDefault: () => {
+        /*
+         * Keyed and unexpiring. This notice's whole body is an instruction, and
+         * on the `info` default it removed itself after four seconds — long
+         * enough to be seen, nowhere near long enough to be acted on, and the
+         * take it describes runs for minutes. Keyed rather than `danger`
+         * because nothing is broken: audio is being captured and the take is
+         * fine, it is simply not the input that was asked for. `danger` would
+         * be the accusation the product is careful not to make (§28.6), so this
+         * stays calm and stays put. `clearConditionToasts` retires it with the
+         * take; a successful switch retires it immediately.
+         */
         showToast(
           'The microphone you chose was busy, so CandidCue is using the system default input. ' +
-            'Pick another input in the status bar if that is wrong.',
+            'Pick another input in the take controls if that is wrong.',
           'info',
+          { key: TOAST_INPUT_FELL_BACK, durationMs: 0 },
         );
       },
       onInputRestored: () => {
@@ -2615,13 +2664,31 @@ export function canSwitchMicrophone(): boolean {
  */
 export async function switchMicrophone(deviceId: string, label?: string): Promise<boolean> {
   if (!pipeline || deviceId === '') return false;
+  /*
+   * The take this switch belongs to, for the same reason `togglePresentationMode`
+   * captures one: replacing a sender track is a round trip, and the take can end
+   * — or be replaced by "Present again" — while it is in flight. Reporting
+   * "voice following has resumed" onto a session that has since stopped, or
+   * worse, clearing the NEW take's `inputDeviceLost` because the OLD take's
+   * switch finally landed, would be a health claim about a microphone nobody is
+   * using. Both the pipeline identity and the session id are checked: a fresh
+   * take builds a new pipeline, and a stopped one has none.
+   */
+  const forPipeline = pipeline;
+  const forSession = get(state).sessionId;
   try {
     await pipeline.switchMicrophone(deviceId);
   } catch (err) {
-    showToast(`Could not switch to that microphone. ${describeError(err)}`, 'danger');
+    if (pipeline === forPipeline) {
+      showToast(`Could not switch to that microphone. ${describeError(err)}`, 'danger');
+    }
     return false;
   }
+  if (pipeline !== forPipeline || get(state).sessionId !== forSession) return false;
   state.update((s) => ({ ...s, micState: 'live', inputDeviceLost: false }));
+  // The input is the operator's choice again, so the "we picked one for you"
+  // notice has nothing left to report.
+  dismissToastByKey(TOAST_INPUT_FELL_BACK);
   // §28.1: remember the choice, so the next take opens the input that worked
   // rather than the one that just vanished. The label goes with it — the id
   // alone does not survive a restart (see `matchRememberedMicrophone`).
@@ -3309,6 +3376,8 @@ export function stopSession(): SessionSummary {
     transcriptTapsSeen,
     transcriptTapsEmitted,
     transcriptTapFault: transcriptTapFault(),
+    // Read BEFORE `stopInternals`, which is where the generation is released.
+    stageTelemetryExpected: stageGeneration !== 0,
   };
   // §36.2 + §36.1: write the retained tail and close the record BEFORE the
   // teardown resets `transcriptRetained`. `stopInternals` is what runs on every
@@ -3388,6 +3457,7 @@ function emptySummary(s: SessionState): SessionSummary {
     transcriptTapsSeen: 0,
     transcriptTapsEmitted: 0,
     transcriptTapFault: null,
+    stageTelemetryExpected: false,
   };
 }
 
@@ -3405,7 +3475,20 @@ function locateEnding(s: SessionState): string {
   const section = [...flat]
     .reverse()
     .find((n) => n.startTokenIndex <= snapshot.confirmedToken);
-  return section ? section.title : `Token ${Math.round(snapshot.confirmedToken)}`;
+  if (section) return section.title;
+  /*
+   * A script with no headings still ended SOMEWHERE, and it used to be told in
+   * the engine's units: "Token 417". A token is an internal measured span — it
+   * is not a word count, it does not appear anywhere else the presenter can
+   * see, and it cannot be converted into one by anybody reading the summary.
+   * The sentence the take ended on is the same fact in the document's own
+   * terms, and it is the only unit this screen already speaks (the transport
+   * steps by sentences).
+   */
+  const sentences = s.sentences;
+  if (sentences.length === 0) return 'Beginning';
+  const reached = sentences.filter((unit) => unit.startTokenIndex <= snapshot.confirmedToken).length;
+  return `Sentence ${Math.max(1, reached)} of ${sentences.length}`;
 }
 
 function stopInternals(): void {
