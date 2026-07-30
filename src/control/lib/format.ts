@@ -32,25 +32,33 @@ export function formatSpeakingDuration(seconds: number): string {
   return `≈ ${minutes} min`;
 }
 
+/** Compiled statistics behind the editor's metadata line. */
+export interface ScriptMetaCounts {
+  wordCount: number;
+  durationSeconds: number;
+  cueCount: number;
+}
+
 /**
  * "0 words · — · 0 cues" statistics line under the editor title (spec §21.8).
  *
- * Returns a populated string at every count, including zero, and that is the
- * whole point: the header renders this line only when it has text, so a version
- * that went empty at zero words vanished from a blank script and reappeared on
- * the first keystroke — shoving the editor body down 20px exactly as the author
- * started typing. Every script passes through zero on its way to being written,
- * so this is the one state worth reserving room for.
+ * Never returns an empty string, and that is the whole point: the header
+ * renders this line only when it has text, so a version that went empty at zero
+ * words vanished from a blank script and reappeared on the first keystroke —
+ * shoving the editor body down 20px exactly as the author started typing. Every
+ * script passes through zero on its way to being written, so this is the one
+ * state worth reserving room for.
  *
- * The em dash comes from `formatSpeakingDuration`'s own "nothing to estimate"
- * branch rather than new zero copy, so the segment reads the same here as it
- * does anywhere else a duration is unknown.
+ * `null` means no compile to report yet, which is NOT the same as a script with
+ * nothing in it: opening a script clears the store and then awaits the fetch,
+ * and a failed compile clears it too, so a count printed through either window
+ * would state as fact something nobody has worked out. Those get the em dash —
+ * the same one `formatSpeakingDuration` already uses for a duration it cannot
+ * estimate — which keeps the row, and so the header's height, either way.
  */
-export function formatScriptMeta(
-  wordCount: number,
-  durationSeconds: number,
-  cueCount: number,
-): string {
+export function formatScriptMeta(counts: ScriptMetaCounts | null): string {
+  if (counts === null) return '—';
+  const { wordCount, durationSeconds, cueCount } = counts;
   const words = `${wordCount.toLocaleString()} ${wordCount === 1 ? 'word' : 'words'}`;
   const cues = `${cueCount} ${cueCount === 1 ? 'cue' : 'cues'}`;
   return `${words} · ${formatSpeakingDuration(durationSeconds)} · ${cues}`;

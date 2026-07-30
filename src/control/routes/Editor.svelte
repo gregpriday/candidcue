@@ -120,7 +120,17 @@ import type { PresentationMode } from '../services/settings-types';
     return message === '' ? '' : describeError(message);
   });
 
-  const meta = $derived(formatScriptMeta(wordCount, durationSeconds, cueCount));
+  /*
+   * Gated on `result` for the same reason `compileFailed` below exists: a
+   * script the compiler has not finished with is not a script with nothing in
+   * it. `openScript` clears the compile store and only THEN awaits the fetch,
+   * so an 800-word script would announce "0 words" for the whole of that
+   * window, and a failed compile — which nulls the result — would go on saying
+   * it underneath the banner explaining that the compile failed.
+   */
+  const meta = $derived(
+    formatScriptMeta(result ? { wordCount, durationSeconds, cueCount } : null),
+  );
 
   /*
    * Script lint (lib/script-lint.ts), run on the compile's cadence.

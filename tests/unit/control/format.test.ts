@@ -42,43 +42,72 @@ describe('durations', () => {
 });
 
 describe('formatScriptMeta', () => {
-  // Counts stay under 1000 throughout: `toLocaleString` groups thousands with a
-  // separator that depends on the host locale, so a four-digit assertion here
-  // would pass on one machine and fail on the next.
+  /*
+   * These spell the counts as ASCII digits, which is what `toLocaleString`
+   * yields under a Latin-digit locale — the assumption this English-only copy
+   * already makes everywhere else. It is the digits that are at stake, not just
+   * the grouping: under `ar-EG` even 150 comes back as ١٥٠. Counts also stay
+   * under 1000, above which a grouping separator appears whose character varies
+   * by locale as well.
+   */
 
   it('still says something when the script is empty', () => {
     // The line was omitted entirely at zero words, so it appeared on the first
     // keystroke and pushed the editor body down 20px. Reserving the row costs
     // nothing; every script is blank before it is written.
-    expect(formatScriptMeta(0, 0, 0)).toBe('0 words · — · 0 cues');
+    expect(formatScriptMeta({ wordCount: 0, durationSeconds: 0, cueCount: 0 })).toBe(
+      '0 words · — · 0 cues',
+    );
   });
 
-  it('never returns an empty string, whatever the counts', () => {
-    // The header renders this line only when it has text — an empty return here
-    // is the same as hiding the row.
-    for (const [words, seconds, cues] of [
-      [0, 0, 0],
-      [1, 0, 1],
-      [150, 60, 3],
-    ]) {
-      expect(formatScriptMeta(words, seconds, cues)).not.toBe('');
+  it('keeps the row populated right across the count boundaries', () => {
+    // The header renders this line only when it has text, so an empty return
+    // here hides the row again — the bug this function exists to prevent.
+    for (let wordCount = 0; wordCount <= 3; wordCount += 1) {
+      for (let cueCount = 0; cueCount <= 3; cueCount += 1) {
+        const durationSeconds = estimateDurationSeconds(wordCount);
+        expect(formatScriptMeta({ wordCount, durationSeconds, cueCount })).not.toBe('');
+      }
     }
   });
 
   it('speaks of one word and one cue in the singular', () => {
-    expect(formatScriptMeta(1, 0, 1)).toBe('1 word · — · 1 cue');
+    expect(formatScriptMeta({ wordCount: 1, durationSeconds: 0, cueCount: 1 })).toBe(
+      '1 word · — · 1 cue',
+    );
   });
 
-  it('speaks of everything else in the plural', () => {
-    expect(formatScriptMeta(150, 60, 2)).toBe('150 words · ≈ 1 min · 2 cues');
-    expect(formatScriptMeta(0, 0, 2)).toBe('0 words · — · 2 cues');
+  it('returns to the plural on the far side of one', () => {
+    expect(formatScriptMeta({ wordCount: 2, durationSeconds: 0, cueCount: 2 })).toBe(
+      '2 words · — · 2 cues',
+    );
+    expect(formatScriptMeta({ wordCount: 150, durationSeconds: 60, cueCount: 3 })).toBe(
+      '150 words · ≈ 1 min · 3 cues',
+    );
   });
 
-  it('carries the duration through unchanged', () => {
-    // The segment is `formatSpeakingDuration`'s output verbatim — the em dash at
-    // zero is that function's "nothing to estimate" branch, not new zero copy.
-    expect(formatScriptMeta(40, 40, 0)).toContain(formatSpeakingDuration(40));
-    expect(formatScriptMeta(0, 0, 0)).toContain(formatSpeakingDuration(0));
+  it('pluralizes the two counts independently of each other', () => {
+    // One word beside several cues, and the reverse — a shared branch would
+    // read "1 word · … · 2 cue".
+    expect(formatScriptMeta({ wordCount: 1, durationSeconds: 40, cueCount: 2 })).toBe(
+      '1 word · ≈ 40 sec · 2 cues',
+    );
+    expect(formatScriptMeta({ wordCount: 2, durationSeconds: 0, cueCount: 1 })).toBe(
+      '2 words · — · 1 cue',
+    );
+  });
+
+  it('claims no counts at all when there is no compile to report', () => {
+    // A script mid-fetch or one the compiler failed on has no statistics, and
+    // that is not the same as a script with nothing in it — printing "0 words"
+    // through either window states as fact something nobody has worked out.
+    expect(formatScriptMeta(null)).toBe('—');
+  });
+
+  it('still reserves the row when there is no compile to report', () => {
+    // Same reason as the zero case: an empty string here would collapse the
+    // header again the moment a compile failed.
+    expect(formatScriptMeta(null)).not.toBe('');
   });
 });
 
