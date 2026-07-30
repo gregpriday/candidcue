@@ -112,7 +112,7 @@ const { defaultAppSettings, opticalRigKey, READER_RIG_NAME } = await import(
   '../../../src/control/services/settings-types'
 );
 const { defaultOpticalProfile } = await import('../../../src/shared/contracts/optical');
-const { startTake } = await import('../../../src/control/lib/start-take');
+const { resolveLandedDisplay, startTake } = await import('../../../src/control/lib/start-take');
 
 type PresentationState = {
   presenting: boolean;
@@ -754,5 +754,36 @@ describe('the display a take is calibrated against', () => {
     } as PresentationState);
     await expect(take).resolves.toBe(true);
     expect(opened().stageDisplay?.fingerprint).toBe(PROMPTER.fingerprint);
+  });
+
+  /*
+   * The same answer, read at the other moment it arrives. Every arm of
+   * `set_control_presenting` reports the panel it applied geometry to, and the
+   * mid-take ⌃⌘F switch goes through that command too — `Live.svelte` resolves
+   * the reply through this and hands it to `adoptPresentationMode`, which is
+   * what stops a switch onto another monitor keeping the opening panel's scale.
+   */
+  describe('resolving the panel a switch landed on', () => {
+    it('names the display the fingerprint belongs to', async () => {
+      await expect(resolveLandedDisplay(PROMPTER.fingerprint)).resolves.toEqual(PROMPTER);
+    });
+
+    it('answers null rather than guessing when Rust names nothing', async () => {
+      // Null is "no answer", not "the wrong panel": the caller keeps the panel
+      // the take is already measured against, which is better than a guess.
+      await expect(resolveLandedDisplay(undefined)).resolves.toBeNull();
+      expect(stageCalls.listDisplays).not.toHaveBeenCalled();
+    });
+
+    it('answers null for a panel this enumeration does not have', async () => {
+      await expect(resolveLandedDisplay('panel-that-went-away')).resolves.toBeNull();
+    });
+
+    it('answers null rather than throwing when the displays cannot be enumerated', async () => {
+      // A failed enumeration must not take down a switch the window has already
+      // made — the mode still has to be adopted.
+      stageCalls.listDisplays.mockRejectedValue(new Error('no display server'));
+      await expect(resolveLandedDisplay(PROMPTER.fingerprint)).resolves.toBeNull();
+    });
   });
 });

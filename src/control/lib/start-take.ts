@@ -102,10 +102,12 @@ export const takeStarting = { subscribe: startingStore.subscribe };
  * deliberately NOT consulted — it names the panel a prompter presents on, which
  * says nothing about where a reading window happens to be.
  *
- * KNOWN GAP: a reader who drags their window to another display MID-TAKE still
- * keeps the opening panel's scale. The opening itself is now resolved from where
- * the window actually landed, but nothing re-resolves afterwards, and doing so
- * needs a display/window event this app does not yet listen for.
+ * KNOWN GAP: a reader who drags their window to another display MID-TAKE and
+ * changes nothing else still keeps the opening panel's scale. Noticing a bare
+ * drag needs a display/window event this app does not yet listen for. The two
+ * moments Rust DOES answer are both covered — the opening, from
+ * `enterPresentation`, and the ⌃⌘F switch, through `resolveLandedDisplay`
+ * below.
  */
 export function chooseStageDisplay(
   displays: DisplayDescriptor[],
@@ -120,6 +122,41 @@ export function chooseStageDisplay(
     if (match) return match;
   }
   return displays.find((d) => !d.primary) ?? displays[0] ?? null;
+}
+
+/**
+ * The panel a presentation reports it landed on, as a descriptor — or null when
+ * nobody can name it.
+ *
+ * ---------------------------------------------------------------------------
+ * FOR THE MID-TAKE SWITCH, WHICH GETS THE SAME ANSWER AND USED TO DROP IT
+ * ---------------------------------------------------------------------------
+ * Every arm of `set_control_presenting` reports the panel it applied its
+ * geometry to, not just the opening one, and ⌃⌘F goes through that same
+ * command. Both directions can change panels: switching to the prompter fills
+ * whichever monitor the reading window had been dragged onto, and switching
+ * back to a reader restores a frame that may live on a different panel again
+ * (`windows/present.rs` says exactly that at the arm). Dropping the answer left
+ * the take composed against the panel it OPENED on — for a reader who moved to
+ * an external prompter that is `mmPerCssPx` from the wrong glass, which is
+ * issue #116 in the middle of a take instead of at the start of one.
+ *
+ * Null means "no answer", never a guess. `chooseStageDisplay` is the right
+ * fallback at the opening because there is nothing better to compose from;
+ * mid-take there IS something better — the panel the take is already measured
+ * against — so the caller keeps that rather than re-deriving a guess that can
+ * be worse than the answer it already had.
+ *
+ * The enumeration happens here, at the moment the answer is matched, for the
+ * reason `startTake` gives for enumerating late: a list taken earlier is a
+ * topology from before the window moved.
+ */
+export async function resolveLandedDisplay(
+  fingerprint: string | undefined,
+): Promise<DisplayDescriptor | null> {
+  if (fingerprint === undefined) return null;
+  const displays = await stageService.listDisplays().catch(() => []);
+  return displays.find((d) => d.fingerprint === fingerprint) ?? null;
 }
 
 /**

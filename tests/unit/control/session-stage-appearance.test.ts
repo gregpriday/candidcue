@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import {
   adjustStageFontSize,
+  adoptPresentationMode,
   applyStageAppearance,
   clearSession,
   session,
@@ -39,6 +40,7 @@ import {
 import { defaultAppSettings } from '../../../src/control/services/settings-types';
 import { defaultOpticalProfile, type OpticalProfile } from '../../../src/shared/contracts';
 import type { CompiledScript, StageSessionEnvelope } from '../../../src/shared/contracts';
+import type { DisplayDescriptor } from '../../../src/control/services/stage-types';
 
 const SETTINGS = defaultAppSettings();
 
@@ -436,5 +438,94 @@ describe('a rig-resolved take', () => {
 
     expect(rendered()).toEqual(settings);
     expect(get(session).stageRigResolved).toBe(true);
+  });
+});
+
+/**
+ * Issue #116, in the middle of a take rather than at the start of one.
+ *
+ * `set_control_presenting` names the panel it applied the new shape to on EVERY
+ * arm, not just the opening one, and ⌃⌘F goes through the same command. Reading
+ * only `mode` out of that reply rebuilt the geometry against the panel the take
+ * opened on — so a reader who popped out onto an external prompter read type
+ * sized in the laptop's millimetres, which `mmPerCssPx` makes a confidently
+ * wrong physical size rather than a near miss.
+ */
+describe('switching presentation mode mid-take', () => {
+  const LAPTOP: DisplayDescriptor = {
+    id: 'display-1',
+    name: 'Built-in Retina Display',
+    primary: true,
+    physicalPosition: { x: 0, y: 0 },
+    physicalSize: { width: 3456, height: 2234 },
+    logicalSize: { width: 1728, height: 1117 },
+    scaleFactor: 2,
+    fingerprint: 'panel-laptop',
+    topologyHash: 'topology-1',
+  };
+  const PROMPTER: DisplayDescriptor = {
+    ...LAPTOP,
+    id: 'display-2',
+    name: 'Elgato Prompter',
+    primary: false,
+    physicalSize: { width: 2560, height: 1440 },
+    logicalSize: { width: 2560, height: 1440 },
+    scaleFactor: 1,
+    fingerprint: 'panel-prompter',
+  };
+
+  /** The settings the take would run if it were composed against `display`. */
+  const composedFor = (mode: 'prompter' | 'reader', display: DisplayDescriptor) =>
+    stageSettingsFromSettings(
+      { ...SETTINGS, stage: { ...SETTINGS.stage, presentationMode: mode } },
+      display,
+    );
+
+  /** A prompter take, open and filling the laptop panel. */
+  function startOnLaptop(): void {
+    const opening = composedFor('prompter', LAPTOP);
+    startLiveSession({
+      scriptId: 'script-1',
+      scriptTitle: 'Launch video',
+      mode: 'manual',
+      displayLabel: 'This window',
+      outline: [],
+      sentences: [],
+      totalTokens: 200,
+      stageSettings: opening,
+      stageEnvelope: envelopeFor(opening),
+      teleprompter: SETTINGS.teleprompter,
+      presentationMode: 'prompter',
+      stageDisplay: LAPTOP,
+    });
+  }
+
+  it('re-resolves the optics against the panel the switch landed on', () => {
+    startOnLaptop();
+
+    // Rust restores the reading window onto the external panel — "the frame
+    // being restored, not the monitor being left", as the Switch arm puts it.
+    adoptPresentationMode('reader', PROMPTER);
+
+    expect(rendered()).toEqual(composedFor('reader', PROMPTER));
+    /*
+     * And the two panels must genuinely compose differently, or the assertion
+     * above would pass just as well on the code that ignored the answer. This is
+     * the layout the reader is looking at.
+     */
+    expect(rendered()).not.toEqual(composedFor('reader', LAPTOP));
+  });
+
+  it('keeps the panel it already had when nobody can name the new one', () => {
+    /*
+     * Plain-browser dev and an unidentifiable monitor both report no
+     * fingerprint. The panel the take is already measured against is an answer
+     * that was once true, so it beats re-deriving a guess.
+     */
+    startOnLaptop();
+
+    adoptPresentationMode('reader');
+
+    expect(rendered()).toEqual(composedFor('reader', LAPTOP));
   });
 });

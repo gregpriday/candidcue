@@ -188,7 +188,17 @@
    */
   const automaticDisplay = $derived(chooseStageDisplay(displays, null));
   const chosenFingerprint = $derived($settings.stage.displayFingerprint);
-  /** The panel a take would open on, pinned or not. */
+  /**
+   * The panel Settings previews, tests and calibrates against, pinned or not.
+   *
+   * Deliberately NOT "the panel a take opens on" — it used to say that and it
+   * was never true of single-window presentation. Present fills whichever
+   * monitor this window is already on (`windows/present.rs`), and the take is
+   * measured against the panel it actually landed on, which Rust reports back
+   * as `ControlPresentationState.displayFingerprint`. This choice reaches the
+   * preview, the display test and calibration and nothing else, which is what
+   * the section's own copy and the `pinnedMissing` alert now say.
+   */
   const effectiveDisplay = $derived(chooseStageDisplay(displays, chosenFingerprint));
   /** A pinned display that is not currently connected (§52 fingerprints). */
   const pinnedMissing = $derived(
