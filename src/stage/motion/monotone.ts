@@ -34,6 +34,16 @@ export interface MonotoneSlopeOptions {
   /** Absolute clamp for every knot slope, in Y units per X unit. */
   maxSlope?: number;
   /**
+   * Preferred slope at selected knots, applied before the monotonicity limiter.
+   *
+   * A target is a request, not an exemption: the limiter and the explicit
+   * clamps below may reduce it whenever the adjacent secants cannot carry it
+   * without overshoot. This is used at the start of a short closing line so
+   * its required pace can be established on the preceding line instead of
+   * arriving as a late acceleration at the end of the script.
+   */
+  knotSlopeTarget?: readonly (number | undefined)[];
+  /**
    * Per-knot slope clamp (index aligned). Used to keep paragraph, media, and
    * section gaps from producing an unbounded spline slope (§8.5, §8.6).
    */
@@ -80,6 +90,19 @@ export function computeMonotoneSlopes(
     const w1 = 2 * hNext + hPrev;
     const w2 = hNext + 2 * hPrev;
     m[i] = (w1 + w2) / (w1 / dPrev + w2 / dNext);
+  }
+
+  /*
+   * Apply authored targets BEFORE the monotonicity pass. A target that is too
+   * large for either adjacent interval is therefore reduced together with its
+   * neighbour, preserving the same no-overshoot proof as an inferred slope.
+   */
+  const { knotSlopeTarget } = options;
+  for (let i = 0; i < n; i++) {
+    const target = knotSlopeTarget?.[i];
+    if (target !== undefined && Number.isFinite(target)) {
+      m[i] = Math.max(0, target);
+    }
   }
 
   // Monotonicity limiter: keep every slope inside 3× the adjacent secants so

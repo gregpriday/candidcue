@@ -610,6 +610,12 @@ Never crawl through a full-screen image merely because one semantic unit advance
 
 Use a clamped one-sided tangent for the first knot. For the final spoken line, create a virtual next knot from ordinary line pitch plus end padding, then clamp document-end exposure so the final line can complete in the reading area without revealing an empty screen.
 
+The tangent at the start of the final spoken line should prefer the final
+interval's secant, subject to the ordinary monotonicity and slope limits. This
+makes a short closing line traverse at a steady pace and moves the necessary
+acceleration into the preceding line, instead of reaching peak speed as the
+script ends.
+
 ### 8.8 Reading-area customization
 
 The user-facing reading-position setting controls `R`, not a point to which each transcript event snaps. Default `R` should be calibrated around the existing reading band, approximately the upper-middle portion of the safe viewport.

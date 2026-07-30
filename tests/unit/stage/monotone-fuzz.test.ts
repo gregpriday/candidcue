@@ -42,9 +42,11 @@ describe('spline monotonicity fuzz', () => {
       }
       const clamp = random() < 0.5 ? undefined : random() * 500;
       const perKnot = xs.map(() => (random() < 0.3 ? random() * 200 : undefined));
+      const targets = xs.map(() => (random() < 0.2 ? random() * 2000 : undefined));
       const spline = createMonotoneSpline(xs, ys, {
         ...(clamp !== undefined ? { maxSlope: clamp } : {}),
         knotSlopeClamp: perKnot,
+        knotSlopeTarget: targets,
       });
       if (!spline) continue;
       const x0 = xs[0] ?? 0;

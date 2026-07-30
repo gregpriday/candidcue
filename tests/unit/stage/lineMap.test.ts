@@ -368,6 +368,47 @@ describe('line-handoff path (§8, §70.1, §70.2)', () => {
     expect(start?.lineId).toBe(line?.lineId);
     expect(mid?.lineProgress ?? 0).toBeGreaterThan(start?.lineProgress ?? 0);
   });
+
+  it('establishes a short closing line’s faster pace before the line begins', () => {
+    // Seven words fit on each ordinary line; the closing line has only three.
+    // It must still traverse one pitch before the script ends, so its semantic
+    // slope is necessarily steeper. The transition belongs on the preceding
+    // line, where the bounded plant has time to accelerate, not in these last
+    // three words.
+    const shortClosing = syntheticLayout({
+      blocks: [{ kind: 'paragraph', tokens: 17 }],
+      columnWidthPx: 800,
+      wordWidthPx: 90,
+      lineHeightPx: 64,
+      paragraphGapPx: 0,
+      startY: 600,
+    });
+    const shortMap = buildFromFixture(shortClosing);
+    const last = shortMap.lines[shortMap.lines.length - 1];
+    const previous = shortMap.lines[shortMap.lines.length - 2];
+    expect(last?.tokenStops).toHaveLength(3);
+    expect(previous).toBeDefined();
+    if (!last || !previous) return;
+
+    const start = shortMap.sampleMotionPath(last.spokenUnitStart);
+    const middle = shortMap.sampleMotionPath(
+      (last.spokenUnitStart + last.spokenUnitEnd) / 2,
+    );
+    const finalKnot = shortMap.motionKnots[shortMap.motionKnots.length - 1];
+    const requiredSlope =
+      ((finalKnot?.scrollPx ?? 0) - (start?.scrollPx ?? 0)) /
+      ((finalKnot?.spokenUnit ?? 1) - last.spokenUnitStart);
+
+    expect(start?.derivativePxPerUnit ?? 0).toBeCloseTo(requiredSlope, 6);
+    expect(middle?.derivativePxPerUnit ?? 0).toBeCloseTo(requiredSlope, 6);
+
+    // The speed-up has already begun before the reader enters the closing line.
+    const previousStart = shortMap.sampleMotionPath(previous.spokenUnitStart);
+    const beforeHandoff = shortMap.sampleMotionPath(last.spokenUnitStart - 0.5);
+    expect(beforeHandoff?.derivativePxPerUnit ?? 0).toBeGreaterThan(
+      previousStart?.derivativePxPerUnit ?? 0,
+    );
+  });
 });
 
 describe('visual blocks and large gaps (§7.3, §8.6)', () => {

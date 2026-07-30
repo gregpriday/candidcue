@@ -395,6 +395,7 @@ export function buildRenderedLineMap(options: LineMapBuildOptions): StageRendere
   const knotLineIndex: number[] = [];
   const knotBoundary: LineMotionKnot['boundaryKind'][] = [];
   const slopeClamp: (number | undefined)[] = [];
+  const slopeTarget: (number | undefined)[] = [];
   const boundaryClamp = options.boundarySlopeClampPxPerUnit;
 
   let lastY = -Infinity;
@@ -425,6 +426,7 @@ export function buildRenderedLineMap(options: LineMapBuildOptions): StageRendere
     const kind = boundaryKinds[i] ?? 'ordinary';
     knotBoundary.push(kind);
     slopeClamp.push(kind === 'ordinary' ? undefined : boundaryClamp);
+    slopeTarget.push(undefined);
   }
 
   /* ---- 5. virtual final knot (§8.7) ---- */
@@ -442,6 +444,29 @@ export function buildRenderedLineMap(options: LineMapBuildOptions): StageRendere
     knotLineIndex.push(lines.length - 1);
     knotBoundary.push('ordinary');
     slopeClamp.push(undefined);
+    slopeTarget.push(undefined);
+
+    /*
+     * The virtual interval has to travel one ordinary pitch by the time the
+     * final spoken line is complete. On a three-word closing line its secant
+     * can be two or three times the preceding line's, and the default harmonic
+     * knot slope leaves much of that acceleration inside those final words.
+     * The jerk-limited plant then reaches its fastest motion as the reader
+     * finishes — the most conspicuous possible place for a speed-up.
+     *
+     * Ask for the final interval's secant at the line-entry knot instead. The
+     * monotonicity limiter may reduce it when the preceding interval cannot
+     * safely carry that slope, but otherwise the closing line is traversed at
+     * a steady rate and the necessary acceleration is distributed over the
+     * line before it. Equal-length lines are unchanged because their secants
+     * already agree.
+     */
+    const finalKnotIndex = knotXs.length - 2;
+    const finalDx = (knotXs[finalKnotIndex + 1] ?? 0) - (knotXs[finalKnotIndex] ?? 0);
+    const finalDy = (knotYs[finalKnotIndex + 1] ?? 0) - (knotYs[finalKnotIndex] ?? 0);
+    if (finalDx > 0 && finalDy > 0) {
+      slopeTarget[finalKnotIndex] = finalDy / finalDx;
+    }
   }
 
   /* ---- 5b. secant check (§8.6) ----
@@ -480,6 +505,7 @@ export function buildRenderedLineMap(options: LineMapBuildOptions): StageRendere
       ? createMonotoneSpline(knotXs, knotYs, {
           maxSlope: options.maxSlopePxPerUnit,
           knotSlopeClamp: slopeClamp,
+          knotSlopeTarget: slopeTarget,
         })
       : null;
 
