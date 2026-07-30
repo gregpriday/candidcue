@@ -431,6 +431,10 @@ let takePresentationMode: PresentationMode | null = null;
  * demotes a calibrated rig to the uncalibrated layout — the type would jump the
  * first time somebody touched a slider, on the one screen where a jump is most
  * expensive.
+ *
+ * Not frozen at the opening: `adoptPresentationMode` moves it when a mid-take
+ * mode switch lands the window on a different monitor, which is the one moment
+ * besides the opening that Rust can name the panel.
  */
 let stageDisplay: DisplayDescriptor | null = null;
 /**
@@ -3154,15 +3158,41 @@ function recomposeStageSettings(): StageAppearance {
  * The caller does the window half, because it also owns the cover; this is the
  * document half and it is called after `awaitViewportSettled`.
  *
+ * ---------------------------------------------------------------------------
+ * AND THE PANEL, BECAUSE A SWITCH CAN CHANGE IT
+ * ---------------------------------------------------------------------------
+ * `landed` is the display `set_control_presenting` reports the new shape was
+ * applied to, resolved by the caller through `resolveLandedDisplay`. It is not
+ * decoration on the mode: switching to the prompter fills whichever monitor the
+ * reading window had been dragged onto, and switching back to a reader restores
+ * a frame that may live on a different panel again — so recomposing against the
+ * panel the take OPENED on is issue #116 all over again, in the middle of a
+ * take. `mmPerCssPx` is the whole basis of the angular model, so that is type at
+ * a confidently wrong physical size rather than a near miss.
+ *
+ * Omitted or null means "nobody could name it" — plain-browser dev, or a monitor
+ * that cannot be identified — and the take keeps the panel it already has. That
+ * is strictly better than re-guessing: the existing panel is an answer that was
+ * once true, and a guess is not.
+ *
  * Returns the mode now in force, which is the one asked for unless there is no
  * take to change.
  */
-export function adoptPresentationMode(mode: PresentationMode): PresentationMode {
+export function adoptPresentationMode(
+  mode: PresentationMode,
+  landed?: DisplayDescriptor | null,
+): PresentationMode {
   // Not `mode`: nothing was adopted, so answering with the request would report a
   // state the store is not in.
   if (!get(state).active) return livePresentationMode();
-  if (takePresentationMode === mode) return mode;
+  const nextDisplay = landed ?? stageDisplay;
+  // The panel is half of what the geometry is composed from, so "nothing
+  // changed" has to account for it — a switch that lands on another monitor
+  // still has to recompose even if the mode somehow came back the same.
+  const movedPanel = nextDisplay?.fingerprint !== stageDisplay?.fingerprint;
+  if (takePresentationMode === mode && !movedPanel) return mode;
   takePresentationMode = mode;
+  stageDisplay = nextDisplay;
   /*
    * The mode is recorded even when the geometry cannot be recomposed.
    *

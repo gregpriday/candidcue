@@ -59,6 +59,27 @@ export interface ControlPresentationState {
    * monitor it was already on.
    */
   readerFrame?: ReaderFrame;
+  /**
+   * The panel this presentation is on, fingerprinted the way `list_displays`
+   * fingerprints it — so it is a key the optical profiles can be looked up
+   * under.
+   *
+   * This is what a take should be calibrated against, and the reason is that
+   * `mmPerCssPx` is the whole basis of the angular model. Presenting has always
+   * used whichever monitor this window was already on rather than the pinned
+   * one, and until Rust reported which that was, `startTake` sized its type
+   * from the PIN — so an operator with an external prompter pinned who pressed
+   * Present at their laptop got a take measured in the external panel's
+   * millimetres, which is a confidently wrong physical size rather than a near
+   * miss.
+   *
+   * Absent when the window is not presenting, when the monitor could not be
+   * identified, and in plain-browser dev, where there are no monitors to name.
+   * A caller that gets nothing falls back to its own guess, which may well name
+   * a panel this answer did not — that is what a guess is, and it is the one
+   * takes were composed from before this field existed.
+   */
+  displayFingerprint?: string;
 }
 
 /**

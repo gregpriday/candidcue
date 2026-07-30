@@ -33,6 +33,15 @@
 //! what `start-take.ts` documents at its display-enumeration step. A present
 //! that teleported the window to whichever display a pinned fingerprint named
 //! would be moving the window out from under the person driving it.
+//!
+//! The other half of that bargain is that this module has to SAY which monitor
+//! it chose. Ignoring the pin for placement while the renderer still sized its
+//! type from the pinned panel is how an operator with an external prompter
+//! pinned could press Present at their laptop and get a take laid out in the
+//! external panel's millimetres-per-pixel — the wrong physical size, stated
+//! confidently. So every arm reports the panel it is landing on, from the
+//! geometry it is about to apply rather than from a read taken afterwards, and
+//! `startTake` composes the take's optics from that answer.
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
@@ -200,19 +209,72 @@ fn reader_placement<R: Runtime>(
     frame: ReaderFrame,
     decorations: bool,
 ) -> ControlFrame {
-    let monitors: Vec<MonitorRect> = app
-        .available_monitors()
-        .unwrap_or_default()
-        .iter()
-        .map(MonitorRect::of)
-        .collect();
-    let (position, inner_size) = fit_reader_frame(frame, &monitors);
+    let (position, inner_size) = fit_reader_frame(frame, &monitor_rects(app));
     ControlFrame {
         position,
         inner_size,
         decorations,
         maximized: false,
     }
+}
+
+/// The panel a windowed frame is about to land on, named the way
+/// `list_displays` names it.
+///
+/// A reading window is the one presentation that can cross monitors — a frame
+/// saved on the external panel last night is replayed onto it this morning — so
+/// unlike the prompter, "whichever monitor the window is on right now" is not
+/// the answer here.
+///
+/// ---------------------------------------------------------------------------
+/// ASKED OF `restore_position`, NOT OF THE STORED RECTANGLE
+/// ---------------------------------------------------------------------------
+/// The stored origin is not where the window goes. [`apply_windowed`] passes
+/// every frame through [`restore_position`] first, which rescues a rectangle no
+/// live display covers — a take saved on a panel since unplugged — onto the
+/// PRIMARY monitor, not onto the first one. Naming the panel from the raw frame
+/// instead would report the display it was rescued FROM, which is unplugged, so
+/// the take would be measured against a panel nobody is looking at.
+///
+/// Asking the same function the placement asks is what keeps the two in step.
+/// It is not a proof: `apply_windowed` calls `restore_position` again, and the
+/// monitors can in principle be re-enumerated between the two. What it does buy
+/// is that the two now implement ONE fallback policy instead of two different
+/// ones — which is the way they actually disagreed, rather than a topology that
+/// changed inside a single synchronous command.
+fn control_frame_display<R: Runtime>(app: &AppHandle<R>, frame: &ControlFrame) -> Option<String> {
+    let placed = restore_position(app, frame);
+    let monitors = app.available_monitors().ok()?;
+    let rects: Vec<MonitorRect> = monitors.iter().map(MonitorRect::of).collect();
+    let index = monitor_index_at(placed, &rects)?;
+    super::monitor_fingerprints(&monitors).get(index).cloned()
+}
+
+/// Which monitor a physical point falls on, by the same
+/// first-monitor-if-nothing-contains-it rule [`fit_reader_monitor_index`] uses.
+fn monitor_index_at(point: PhysicalPosition<i32>, monitors: &[MonitorRect]) -> Option<usize> {
+    monitors
+        .iter()
+        .position(|monitor| {
+            let (_, _, logical_width, logical_height) = monitor.logical;
+            let width = (logical_width * monitor.scale).round() as i32;
+            let height = (logical_height * monitor.scale).round() as i32;
+            point.x >= monitor.origin.x
+                && point.y >= monitor.origin.y
+                && point.x < monitor.origin.x + width
+                && point.y < monitor.origin.y + height
+        })
+        .or_else(|| (!monitors.is_empty()).then_some(0))
+}
+
+/// Every connected monitor in `available_monitors()` order, which is the order
+/// `monitor_fingerprints` names them in — so an index here is an index there.
+fn monitor_rects<R: Runtime>(app: &AppHandle<R>) -> Vec<MonitorRect> {
+    app.available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(MonitorRect::of)
+        .collect()
 }
 
 /// One monitor, in both of the spaces this calculation needs it in.
@@ -251,6 +313,32 @@ impl MonitorRect {
     }
 }
 
+/// Which monitor a remembered reading window comes back to.
+///
+/// Split out of [`fit_reader_frame`] and USED by it, rather than copied beside
+/// it, so the choice of panel and the arithmetic done against that panel cannot
+/// come from two different rules.
+///
+/// Placement only. The panel a take is CALIBRATED against is named by
+/// [`control_frame_display`], which asks [`restore_position`] instead — the
+/// rectangle this produces has still to go through that, and it is the last
+/// word on where the window lands.
+fn fit_reader_monitor_index(frame: ReaderFrame, monitors: &[MonitorRect]) -> Option<usize> {
+    monitors
+        .iter()
+        .position(|monitor| {
+            let (mx, my, mw, mh) = monitor.logical;
+            frame.x >= mx && frame.y >= my && frame.x < mx + mw && frame.y < my + mh
+        })
+        /* The panel it was saved on is gone. The first monitor is visible by
+           definition, which is the only property that has to hold. Not the same
+           fallback `restore_position` makes — that one prefers the PRIMARY —
+           and it does not need to be: whatever this fits the frame onto,
+           `restore_position` sees a rectangle already on a live display and
+           passes it straight through. */
+        .or_else(|| (!monitors.is_empty()).then_some(0))
+}
+
 /// The placement policy, with no window and no app handle in sight.
 ///
 /// Split out from [`reader_placement`] so it can be tested on a machine with no
@@ -261,16 +349,7 @@ fn fit_reader_frame(
     frame: ReaderFrame,
     monitors: &[MonitorRect],
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
-    let target = monitors
-        .iter()
-        .find(|monitor| {
-            let (mx, my, mw, mh) = monitor.logical;
-            frame.x >= mx && frame.y >= my && frame.x < mx + mw && frame.y < my + mh
-        })
-        /* The panel it was saved on is gone. The first monitor is visible by
-           definition, which is the only property that has to hold — the same
-           fallback `restore_position` makes for the resting frame. */
-        .or_else(|| monitors.first());
+    let target = fit_reader_monitor_index(frame, monitors).and_then(|index| monitors.get(index));
 
     let Some(monitor) = target else {
         /* No monitors at all. Nothing sensible to compute against, so the frame
@@ -435,7 +514,10 @@ fn measure_frame<R: Runtime>(window: &WebviewWindow<R>) -> Result<ControlFrame, 
 /// against `window.innerWidth`/`innerHeight`. Handing back physical pixels
 /// would make every caller repeat the scale-factor division, and one of them
 /// would eventually get it wrong on a mixed-DPI rig.
-#[derive(Debug, Clone, Copy, Serialize)]
+/// Not `Copy`, unlike every other geometry type in this file: the fingerprint
+/// below is an owned `String`. Nothing copied this — it is built once at the
+/// bottom of `set_control_presenting` and handed straight to serde.
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControlPresentationState {
     pub presenting: bool,
@@ -462,6 +544,33 @@ pub struct ControlPresentationState {
     /// fills whichever monitor it was already on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reader_frame: Option<ReaderFrame>,
+    /// The panel this presentation is on, named the way `list_displays` names
+    /// it — which is what makes it a key the optical profiles can be looked up
+    /// under.
+    ///
+    /// -----------------------------------------------------------------------
+    /// THE TAKE IS CALIBRATED AGAINST THE PANEL IT IS ACTUALLY ON
+    /// -----------------------------------------------------------------------
+    /// This module fills whichever monitor the window was already on, and
+    /// deliberately not `settings.stage.displayFingerprint` (see the note at
+    /// the top of the file). Until this field existed, the renderer had no way
+    /// to find out which one that was, so it sized the type from the PINNED
+    /// panel instead — and an operator with an external prompter pinned who
+    /// pressed Present at their laptop got a take measured in the external
+    /// panel's millimetres-per-pixel. `mmPerCssPx` is the whole basis of the
+    /// angular model, so that is not a near miss: the text comes out
+    /// confidently the wrong physical size.
+    ///
+    /// Every arm names it from the geometry it is ABOUT to apply, never by
+    /// asking the window afterwards — the setters are asynchronous, and
+    /// [`logical_size`] exists because of exactly that.
+    ///
+    /// `None` when the window is not presenting (there is no take to
+    /// calibrate), and when the monitor simply cannot be identified — a caller
+    /// that gets nothing here falls back to its own guess rather than to a
+    /// panel this one invented.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_fingerprint: Option<String>,
 }
 
 fn control_window<R: Runtime>(app: &AppHandle<R>) -> Result<WebviewWindow<R>, AppError> {
@@ -773,11 +882,17 @@ fn apply_windowed<R: Runtime>(
 }
 
 /// Move the window onto the whole of the monitor it is currently on, without
-/// decorations and above the menu bar. Answers with the size it is heading for.
+/// decorations and above the menu bar. Answers with the size it is heading for,
+/// and with the name of the panel it is heading onto.
+///
+/// The fingerprint comes from the very `Monitor` this function fills, taken
+/// while it still has it. That is the only honest moment: the setters below are
+/// delivered asynchronously (see [`logical_size`]), so a caller that asked the
+/// window afterwards could be told about the monitor it has not left yet.
 fn apply_presentation<R: Runtime>(
     app: &AppHandle<R>,
     window: &WebviewWindow<R>,
-) -> Result<PhysicalSize<u32>, AppError> {
+) -> Result<(PhysicalSize<u32>, Option<String>), AppError> {
     /*
      * Black BEFORE the geometry moves, not after.
      *
@@ -832,6 +947,26 @@ fn apply_presentation<R: Runtime>(
 
     let bounds = *monitor.size();
     /*
+     * Named before the setters run, for the reason in the doc comment above —
+     * and named from the SAME `monitor` whose bounds are applied below, so the
+     * panel reported and the rectangle applied can only ever describe the same
+     * display.
+     *
+     * That is the guarantee worth having, because it is the one that survives
+     * the case above it. A window left in NATIVE fullscreen has just been asked
+     * to leave it, and `set_fullscreen(false)` is delivered asynchronously like
+     * everything else here: AppKit can finish its exit animation after the
+     * geometry below has been queued, and restore the pre-fullscreen frame over
+     * the top of it. If that happens the window ends up somewhere this function
+     * did not put it — but the size it reports is derived from this same
+     * monitor, so the report and the geometry are wrong together rather than
+     * separately, and the renderer is never calibrated for one panel while laid
+     * out for another. Untestable here (no WebDriver for WKWebView) and reached
+     * only by a window the PREVIOUS implementation left in fullscreen, so it is
+     * recorded rather than worked around.
+     */
+    let display = super::monitor_fingerprint(app, &monitor);
+    /*
      * Give the declared floor back, in case we are arriving from reader mode.
      *
      * A monitor-sized window is never near any minimum, so this changes nothing
@@ -852,7 +987,7 @@ fn apply_presentation<R: Runtime>(
     window
         .set_size(tauri::Size::Physical(bounds))
         .map_err(presentation_failed)?;
-    Ok(bounds)
+    Ok((bounds, display))
 }
 
 /// Putting the prompter above everything, and taking it back down.
@@ -1406,6 +1541,18 @@ pub fn set_control_presenting<R: Runtime>(
      * from the live window at the bottom of this function.
      */
     let mut departing_reader: Option<ReaderFrame> = None;
+    /*
+     * The panel this presentation is landing on, for the renderer to calibrate
+     * against. See [`ControlPresentationState::display_fingerprint`].
+     *
+     * Filled in per arm, from the geometry that arm is about to APPLY, and
+     * never by asking the window at the bottom of this function. That last part
+     * is the whole discipline: `logical_size` and the `departing_reader` note
+     * below both exist because a getter read after one of these setters
+     * describes the window they have not moved yet, and a stale monitor here
+     * would be a take measured against the panel it just left.
+     */
+    let mut landed_display: Option<String> = None;
 
     match plan(saved.map(|state| state.mode), mode) {
         PresentAction::Enter(entering) => {
@@ -1429,8 +1576,29 @@ pub fn set_control_presenting<R: Runtime>(
                  * prompter arm ignores it entirely — it has a monitor to fill,
                  * and a stored rectangle would be describing the wrong thing.
                  */
-                PresentMode::Prompter => apply_presentation(app, &window)?,
-                PresentMode::Reader => apply_reader(app, &window, decorations, reader_frame)?,
+                PresentMode::Prompter => {
+                    let (bounds, display) = apply_presentation(app, &window)?;
+                    landed_display = display;
+                    bounds
+                }
+                PresentMode::Reader => {
+                    /*
+                     * Named before the apply, because a restored frame is the
+                     * one case in this file where presenting MOVES the window
+                     * across monitors — a reading window saved on the external
+                     * panel is replayed onto it. Without a frame nothing moves,
+                     * so the monitor it is on is the monitor it stays on.
+                     */
+                    landed_display = match reader_frame {
+                        // Through the same `reader_placement` the apply below
+                        // runs, so the panel reported is the panel fitted to.
+                        Some(frame) => {
+                            control_frame_display(app, &reader_placement(app, frame, decorations))
+                        }
+                        None => super::window_monitor_fingerprint(app, &window),
+                    };
+                    apply_reader(app, &window, decorations, reader_frame)?
+                }
             };
             /*
              * The operator deliberately stops touching the keyboard for the
@@ -1448,12 +1616,20 @@ pub fn set_control_presenting<R: Runtime>(
         PresentAction::Reassert(current) => {
             let decorations = saved.as_ref().expect("Reassert is only planned while presenting").resting.decorations;
             target = match current {
-                PresentMode::Prompter => apply_presentation(app, &window)?,
+                PresentMode::Prompter => {
+                    let (bounds, display) = apply_presentation(app, &window)?;
+                    landed_display = display;
+                    bounds
+                }
                 // Never `reader_frame`: a reassert re-applies the mode the
                 // window is ALREADY in, so the live window is the authority on
                 // its own bounds and a stored rectangle would yank a reader's
                 // window back to where it sat this morning.
-                PresentMode::Reader => apply_reader_in_place(app, &window, decorations)?,
+                PresentMode::Reader => {
+                    // In place, so the current monitor is also the landing one.
+                    landed_display = super::window_monitor_fingerprint(app, &window);
+                    apply_reader_in_place(app, &window, decorations)?
+                }
             };
         }
         PresentAction::Switch(to) => {
@@ -1507,7 +1683,9 @@ pub fn set_control_presenting<R: Runtime>(
                      * and no second chance to fail.
                      */
                     departing_reader = Some(logical_frame(&window, &departing));
-                    target = apply_presentation(app, &window)?;
+                    let (bounds, display) = apply_presentation(app, &window)?;
+                    landed_display = display;
+                    target = bounds;
                 }
                 PresentMode::Reader => {
                     /*
@@ -1521,6 +1699,10 @@ pub fn set_control_presenting<R: Runtime>(
                         width: READER_MIN_WIDTH_PX,
                         height: READER_MIN_HEIGHT_PX,
                     };
+                    // The frame being restored, not the monitor being left:
+                    // popping back to a reading window that lives on another
+                    // panel changes which panel the take is measured against.
+                    landed_display = control_frame_display(app, &frame);
                     target = apply_windowed(app, &window, &frame, Some(reader_min))?;
                     // The backing stays black across the switch (the take is
                     // still running), so there is nothing to set here that
@@ -1661,7 +1843,28 @@ pub fn set_control_presenting<R: Runtime>(
         width,
         height,
         reader_frame: departing_reader,
+        /*
+         * Cleared when the window is not presenting, rather than reporting the
+         * panel it happens to be sitting on.
+         *
+         * `Restore` and `Nothing` never set it, so this only re-states what the
+         * arms already do — but it states it where the invariant is read from,
+         * because the field means "the panel this TAKE is calibrated against"
+         * and there is no take. A future arm that filled it in on the way out
+         * would otherwise hand the renderer a display to measure nothing
+         * against.
+         */
+        display_fingerprint: reported_display(applied, landed_display),
     })
+}
+
+/// The panel to report, given what was applied and what was named.
+///
+/// A one-line rule with a real invariant in it, so it is named and tested
+/// rather than inlined: a window that is not presenting has no take to
+/// calibrate, and must report no panel however confidently an arm named one.
+fn reported_display(applied: Option<PresentMode>, landed: Option<String>) -> Option<String> {
+    applied.and(landed)
 }
 
 /*
@@ -1693,6 +1896,117 @@ mod tests {
 
     fn frame(x: f64, y: f64, width: f64, height: f64) -> ReaderFrame {
         ReaderFrame { x, y, width, height }
+    }
+
+    /* ------------------------------------- naming the panel a take lands on */
+
+    /// A remembered reading window goes back to the panel it was saved on.
+    ///
+    /// The placement half of the defect in reader clothing: `Enter(Reader)`
+    /// with a stored frame reports through `control_frame_display` on the
+    /// rectangle this produces, so a frame fitted to the wrong panel would be
+    /// MEASURED against the wrong panel too, however right the reporting is.
+    #[test]
+    fn a_remembered_reader_is_measured_against_the_panel_it_returns_to() {
+        let screens = [
+            monitor(0, 0, 1512.0, 982.0, 2.0),     // the editor's retina panel
+            monitor(3024, 0, 1920.0, 1080.0, 1.0), // where the reader lives
+        ];
+        let saved = frame(3100.0, 120.0, 800.0, 600.0);
+
+        assert_eq!(fit_reader_monitor_index(saved, &screens), Some(1));
+        // And it agrees with where the geometry actually goes: the 1x panel.
+        let (position, _) = fit_reader_frame(saved, &screens);
+        assert!(position.x >= 3024, "placed on the panel it was named for");
+    }
+
+    /// A frame whose panel is gone is still fitted onto a live one, never left
+    /// unplaced — and because `fit_reader_frame` CLAMPS it into that monitor,
+    /// the rectangle handed on is already on a live display, so
+    /// `restore_position` passes it through and the reported panel agrees.
+    #[test]
+    fn a_reader_whose_panel_is_gone_is_measured_against_where_it_actually_lands() {
+        let screens = [monitor(0, 0, 1440.0, 900.0, 2.0)];
+        assert_eq!(
+            fit_reader_monitor_index(frame(4000.0, 300.0, 700.0, 500.0), &screens),
+            Some(0),
+        );
+    }
+
+    #[test]
+    fn no_monitors_means_no_panel_to_name() {
+        assert_eq!(fit_reader_monitor_index(frame(0.0, 0.0, 800.0, 600.0), &[]), None);
+        assert_eq!(monitor_index_at(PhysicalPosition { x: 0, y: 0 }, &[]), None);
+    }
+
+    /// `Switch(→Reader)` restores a PHYSICAL frame, so the panel is found from
+    /// physical coordinates.
+    ///
+    /// Converting that frame to logical first — through `logical_frame`, which
+    /// divides by the scale of the monitor the window is on NOW — is the wrong
+    /// divisor whenever the switch crosses panels on a mixed-DPI rig, and it
+    /// names the wrong monitor. These origins are chosen so a 2x mistake would
+    /// land on the other screen.
+    #[test]
+    fn a_physical_frame_finds_its_panel_without_a_scale_conversion() {
+        let screens = [
+            monitor(0, 0, 1512.0, 982.0, 2.0),     // 3024 physical wide
+            monitor(3024, 0, 1920.0, 1080.0, 1.0), // 1920 physical wide
+        ];
+        assert_eq!(monitor_index_at(PhysicalPosition { x: 3100, y: 120 }, &screens), Some(1));
+        assert_eq!(monitor_index_at(PhysicalPosition { x: 100, y: 120 }, &screens), Some(0));
+        // Off every panel: the first one, which is visible by definition.
+        assert_eq!(monitor_index_at(PhysicalPosition { x: 9000, y: 0 }, &screens), Some(0));
+    }
+
+    /* ------------------------------------------ what the renderer is handed */
+
+    /// Built the way `set_control_presenting` builds it — through
+    /// [`reported_display`] rather than around it, so a test cannot assert a
+    /// combination production forbids.
+    fn presentation_state(
+        applied: Option<PresentMode>,
+        landed: Option<&str>,
+    ) -> ControlPresentationState {
+        ControlPresentationState {
+            presenting: applied.is_some(),
+            mode: applied,
+            width: 1728.0,
+            height: 1117.0,
+            reader_frame: None,
+            display_fingerprint: reported_display(applied, landed.map(str::to_owned)),
+        }
+    }
+
+    /// The renderer looks the optical profile up under this key, so the wire
+    /// name has to be the camelCase one `control-window.ts` declares.
+    #[test]
+    fn the_panel_reaches_the_renderer_under_the_name_it_reads() {
+        let json =
+            serde_json::to_value(presentation_state(PROMPTER, Some("panel-2"))).unwrap();
+        assert_eq!(json["displayFingerprint"], "panel-2");
+    }
+
+    /// Omitted rather than null, so the renderer's "fall back to your own
+    /// guess" branch is reached by an ABSENT key.
+    ///
+    /// The third case is the invariant worth having: an un-present that somehow
+    /// named a panel still reports none, because there is no take to calibrate
+    /// against it. That combination is unreachable through the arms today, and
+    /// asserting it here is what keeps it unreachable.
+    #[test]
+    fn a_panel_that_cannot_be_named_is_left_out_entirely() {
+        for state in [
+            presentation_state(None, None),
+            presentation_state(PROMPTER, None),
+            presentation_state(None, Some("panel-2")),
+        ] {
+            let json = serde_json::to_value(state).unwrap();
+            assert!(
+                json.get("displayFingerprint").is_none(),
+                "an unnamed panel must be absent, not null",
+            );
+        }
     }
 
     #[test]

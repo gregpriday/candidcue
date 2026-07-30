@@ -27,7 +27,7 @@
   import { formatClock } from '../lib/format';
   import { rememberReaderFrame } from '../lib/reader-frame';
 import { onShortcut } from '../lib/shortcuts';
-  import { startTake } from '../lib/start-take';
+  import { resolveLandedDisplay, startTake } from '../lib/start-take';
   import {
     awaitViewportSettled,
     exitPresentation,
@@ -426,6 +426,20 @@ import { onShortcut } from '../lib/shortcuts';
       await awaitViewportSettled(switched);
       // The stage's own trailed viewport, not just the raw one — see above.
       await new Promise((resolve) => setTimeout(resolve, VIEWPORT_REFLOW_SETTLE_MS));
+      /*
+       * The PANEL the new shape landed on, resolved before the guard below so the
+       * guard stays the last thing that happens before the store is touched.
+       *
+       * A switch can change monitors, and Rust answers for both directions: to
+       * the prompter it is whichever monitor the reading window had been dragged
+       * onto, and back to a reader it is wherever the restored frame lives. Only
+       * the mode used to be read out of this reply, so the geometry was rebuilt
+       * against the panel the take OPENED on — which for the reader who dragged
+       * their window to an external prompter is the laptop's millimetres on the
+       * prompter's glass. Null when nobody could name it; the take then keeps the
+       * panel it already had.
+       */
+      const landed = await resolveLandedDisplay(switched.displayFingerprint);
       if (!$session.active || $session.sessionId !== forSession) return;
       /*
        * The mode the WINDOW reports, not the one that was asked for.
@@ -437,7 +451,7 @@ import { onShortcut } from '../lib/shortcuts';
        * shape the window does not have: a reader's measure on a full display, or
        * worse, a prompter's mirror on a bare monitor.
        */
-      adoptPresentationMode(switched.mode ?? next);
+      adoptPresentationMode(switched.mode ?? next, landed);
     } catch (err) {
       // Recoverable and worth saying: the take is unharmed, the window simply did
       // not change. Silence would read as a dead key.

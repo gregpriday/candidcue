@@ -64,7 +64,20 @@ const startingStore = writable(false);
 export const takeStarting = { subscribe: startingStore.subscribe };
 
 /**
- * The display the take's geometry is resolved against.
+ * The best GUESS at the display a take will be measured against, for the moment
+ * before it is presented and the answer is known.
+ *
+ * ---------------------------------------------------------------------------
+ * A GUESS, BECAUSE THE REAL ANSWER ARRIVES FROM RUST
+ * ---------------------------------------------------------------------------
+ * `set_control_presenting` reports the panel the window actually landed on
+ * (`ControlPresentationState.displayFingerprint`), and `startTake` composes the
+ * take's optics from THAT. This function is what stands in when there is no
+ * such answer: plain-browser dev, where there are no monitors to name, and the
+ * rig where the monitor cannot be identified.
+ *
+ * It is still worth getting right for those cases, and the rules below are the
+ * ones that were correct when it was the only answer there was.
  *
  * ---------------------------------------------------------------------------
  * A PROMPTER CHOOSES A PANEL; A READING WINDOW IS ALREADY ON ONE
@@ -89,12 +102,12 @@ export const takeStarting = { subscribe: startingStore.subscribe };
  * deliberately NOT consulted — it names the panel a prompter presents on, which
  * says nothing about where a reading window happens to be.
  *
- * KNOWN GAP: a reader who drags their window to another display mid-take keeps
- * the first panel's scale, because nothing re-resolves. The complete fix is for
- * `set_control_presenting` to report the monitor the window actually landed on
- * (`windows::window_monitor_fingerprint` already computes exactly that for the
- * separate stage) and for the envelope to be rebuilt from it. That is a wire
- * change on the take-opening path and is filed rather than smuggled in here.
+ * KNOWN GAP: a reader who drags their window to another display MID-TAKE and
+ * changes nothing else still keeps the opening panel's scale. Noticing a bare
+ * drag needs a display/window event this app does not yet listen for. The two
+ * moments Rust DOES answer are both covered — the opening, from
+ * `enterPresentation`, and the ⌃⌘F switch, through `resolveLandedDisplay`
+ * below.
  */
 export function chooseStageDisplay(
   displays: DisplayDescriptor[],
@@ -109,6 +122,41 @@ export function chooseStageDisplay(
     if (match) return match;
   }
   return displays.find((d) => !d.primary) ?? displays[0] ?? null;
+}
+
+/**
+ * The panel a presentation reports it landed on, as a descriptor — or null when
+ * nobody can name it.
+ *
+ * ---------------------------------------------------------------------------
+ * FOR THE MID-TAKE SWITCH, WHICH GETS THE SAME ANSWER AND USED TO DROP IT
+ * ---------------------------------------------------------------------------
+ * Every arm of `set_control_presenting` reports the panel it applied its
+ * geometry to, not just the opening one, and ⌃⌘F goes through that same
+ * command. Both directions can change panels: switching to the prompter fills
+ * whichever monitor the reading window had been dragged onto, and switching
+ * back to a reader restores a frame that may live on a different panel again
+ * (`windows/present.rs` says exactly that at the arm). Dropping the answer left
+ * the take composed against the panel it OPENED on — for a reader who moved to
+ * an external prompter that is `mmPerCssPx` from the wrong glass, which is
+ * issue #116 in the middle of a take instead of at the start of one.
+ *
+ * Null means "no answer", never a guess. `chooseStageDisplay` is the right
+ * fallback at the opening because there is nothing better to compose from;
+ * mid-take there IS something better — the panel the take is already measured
+ * against — so the caller keeps that rather than re-deriving a guess that can
+ * be worse than the answer it already had.
+ *
+ * The enumeration happens here, at the moment the answer is matched, for the
+ * reason `startTake` gives for enumerating late: a list taken earlier is a
+ * topology from before the window moved.
+ */
+export async function resolveLandedDisplay(
+  fingerprint: string | undefined,
+): Promise<DisplayDescriptor | null> {
+  if (fingerprint === undefined) return null;
+  const displays = await stageService.listDisplays().catch(() => []);
+  return displays.find((d) => d.fingerprint === fingerprint) ?? null;
 }
 
 /**
@@ -346,22 +394,7 @@ export async function startTake(
     });
     sessionId = record.id;
 
-    // The renderer still needs the selected panel's calibrated geometry even
-    // though it no longer opens a window there. Enumeration is read-only; the
-    // user moves this window to that panel before pressing Present.
-    const displays = await stageService.listDisplays().catch(() => []);
-    const display = chooseStageDisplay(displays, s.stage.displayFingerprint, presentationMode);
-    const stageSettings = stageSettingsFromSettings(s, display);
     const assets = await resolveDocumentAssets(compiled.script);
-    const stageEnvelope = buildStageEnvelope({
-      script: compiled.script,
-      sessionId,
-      sessionGeneration: record.sessionGeneration,
-      stageGeneration: 0,
-      stageSettings,
-      assets,
-      following: s.following,
-    });
     const micDeviceId = await resolvePinnedMicrophone(s);
 
     /*
@@ -409,6 +442,54 @@ export async function startTake(
     );
     await awaitViewportSettled(presentation);
 
+    /*
+     * ------------------------------------------------------------------------
+     * THE TAKE IS MEASURED AGAINST THE PANEL IT IS ACTUALLY ON
+     * ------------------------------------------------------------------------
+     * Composed HERE, after presenting, because that is the first moment anybody
+     * knows which panel that is. Presenting fills whichever monitor this window
+     * was already on and deliberately not the pinned one (`windows/present.rs`
+     * argues the case), so a take composed before the move was sized from a
+     * fingerprint that named a different, possibly disconnected, panel. That is
+     * not cosmetic: `mmPerCssPx` is the whole basis of the angular model, so an
+     * operator with an external prompter pinned who pressed Present at their
+     * laptop read type laid out for the external panel's millimetres.
+     *
+     * Doing this late costs no LAYOUT work, which is what the ordering argument
+     * above is about: `buildStageEnvelope` assembles data, the stage has not
+     * mounted, `startLiveSession` has not run, and there is no line map to
+     * invalidate. It is not literally free — building the render document is
+     * proportional to the script — but that work now happens behind the cover
+     * rather than over the editor, which is the right side of the seam for it.
+     *
+     * The enumeration is here rather than beside the compile FOR THIS REASON:
+     * it is the panel list the answer is matched against, so taking it any
+     * earlier would be matching a fingerprint resolved now against a topology
+     * read before the assets, the microphone, the cover and the window move. A
+     * display unplugged across that gap would drop the take back to the guess
+     * for no reason other than when the list was taken.
+     *
+     * `chooseStageDisplay` is the fallback rather than the rule now: Rust omits
+     * the fingerprint in plain-browser dev and on a rig whose monitor cannot be
+     * identified. Falling back to it is a GUESS and can be the wrong panel —
+     * but it is the guess that shipped before any of this existed, so it is
+     * never worse than what it replaced.
+     */
+    const displays = await stageService.listDisplays().catch(() => []);
+    const landed =
+      displays.find((d) => d.fingerprint === presentation.displayFingerprint) ??
+      chooseStageDisplay(displays, s.stage.displayFingerprint, presentationMode);
+    const stageSettings = stageSettingsFromSettings(s, landed);
+    const stageEnvelope = buildStageEnvelope({
+      script: compiled.script,
+      sessionId,
+      sessionGeneration: record.sessionGeneration,
+      stageGeneration: 0,
+      stageSettings,
+      assets,
+      following: s.following,
+    });
+
     // There is no stage window. Alignment, transcription and rendering all
     // live in this one webview, so generation zero deliberately disables every
     // cross-window bridge in the session store.
@@ -441,7 +522,9 @@ export async function startTake(
        */
       teleprompter: s.teleprompter,
       presentationMode,
-      stageDisplay: display,
+      // The panel the take was measured against, so the mid-take appearance
+      // sheet recomposes against the same one it opened with.
+      stageDisplay: landed,
       transcription: {
         model: s.speech.transcriptionModel,
         language: s.speech.language,

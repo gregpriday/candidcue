@@ -188,7 +188,17 @@
    */
   const automaticDisplay = $derived(chooseStageDisplay(displays, null));
   const chosenFingerprint = $derived($settings.stage.displayFingerprint);
-  /** The panel a take would open on, pinned or not. */
+  /**
+   * The panel Settings previews, tests and calibrates against, pinned or not.
+   *
+   * Deliberately NOT "the panel a take opens on" — it used to say that and it
+   * was never true of single-window presentation. Present fills whichever
+   * monitor this window is already on (`windows/present.rs`), and the take is
+   * measured against the panel it actually landed on, which Rust reports back
+   * as `ControlPresentationState.displayFingerprint`. This choice reaches the
+   * preview, the display test and calibration and nothing else, which is what
+   * the section's own copy and the `pinnedMissing` alert now say.
+   */
   const effectiveDisplay = $derived(chooseStageDisplay(displays, chosenFingerprint));
   /** A pinned display that is not currently connected (§52 fingerprints). */
   const pinnedMissing = $derived(
@@ -1538,9 +1548,21 @@
           />
         </Section>
       {:else if section === 'stage'}
+        <!--
+          What this section does and does NOT control.
+
+          It used to say "Present goes straight here", and that was never true
+          of single-window presentation: `windows/present.rs` fills whichever
+          monitor this window is already on, deliberately, because teleporting
+          the window would take it away from the person driving it. The chosen
+          panel is what preview, the display test and calibration run against —
+          and the take is now measured against the panel it actually lands on,
+          which Rust reports back. Naming both keeps the operator from moving a
+          window that was never going to move on its own.
+        -->
         <Section
           title="Stage display"
-          description="Where the prompt window opens. Present goes straight here — this is set once, not before every take."
+          description="The panel you calibrate, preview and test against. Present stays on whichever display this window is already on — drag it there first."
         >
           {#snippet actions()}
             <Button size="sm" disabled={displaysLoading} onclick={() => void loadDisplays()}>
@@ -1583,11 +1605,12 @@
             {/each}
           </div>
           {#if pinnedMissing}
-            <!-- Said here rather than discovered at Present: the fingerprint is
-                 panel identity, so a display that is unplugged simply stops
-                 matching and the take quietly lands somewhere else. -->
+            <!-- Said here rather than discovered halfway through calibrating:
+                 the fingerprint is panel identity, so a display that is
+                 unplugged simply stops matching. It no longer claims anything
+                 about where a take opens, because it never decided that. -->
             <p class="inline-alert" role="alert">
-              The display you chose is not connected. Takes will open on
+              The display you chose is not connected. Previews, tests and calibration will use
               {effectiveDisplay?.name ?? 'another display'} until it is back.
             </p>
           {/if}
