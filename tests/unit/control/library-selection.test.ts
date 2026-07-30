@@ -15,7 +15,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setInvokeForTesting } from '../../../src/control/services/ipc';
-import { library, loadLibrary, selectScript } from '../../../src/control/stores/library';
+import {
+  library,
+  loadLibrary,
+  selectScript,
+  setLibraryView,
+} from '../../../src/control/stores/library';
 import type { ScriptSummary } from '../../../src/shared/contracts';
 import { get } from 'svelte/store';
 
@@ -41,7 +46,11 @@ beforeEach(() => {
   setInvokeForTesting(async <T>() => ({ items, total: items.length }) as T);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // The store is a module singleton and `view` outlives a test, so put it back
+  // before the fake IPC layer goes away.
+  setLibraryView('all');
+  await loadLibrary();
   setInvokeForTesting(null);
   selectScript(null);
   vi.restoreAllMocks();
@@ -81,6 +90,34 @@ describe('library selection', () => {
     await loadLibrary();
     selectScript('b');
     selectScript(null);
+    expect(get(library).selectedId).toBeNull();
+  });
+});
+
+/**
+ * Trash is the one view the fallback must not run in.
+ *
+ * The fallback exists so ⌘⏎ has a target the moment the library loads. In Trash
+ * that target was the first deleted script, and nothing drew it — so the
+ * shortcut, in the view whose whole subject is scripts you have removed, sent
+ * one of them to the stage.
+ */
+describe('the Present target in Trash', () => {
+  it('never falls back to a trashed script', async () => {
+    setLibraryView('trash');
+    await loadLibrary();
+    expect(get(library).scripts).toHaveLength(2);
+    expect(get(library).selectedId).toBeNull();
+  });
+
+  it('drops a live target on the way in rather than carrying it', async () => {
+    await loadLibrary();
+    expect(get(library).selectedId).toBe('a');
+    setLibraryView('trash');
+    // Cleared at the moment of the switch, not a load later: the rows go with
+    // the view, and so does the thing that pointed at one of them.
+    expect(get(library).selectedId).toBeNull();
+    await loadLibrary();
     expect(get(library).selectedId).toBeNull();
   });
 });
