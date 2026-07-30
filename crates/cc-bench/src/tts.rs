@@ -11,14 +11,19 @@
 //! the spec's held-out-voice requirement. Clips are cached by content hash so
 //! reruns don't re-bill.
 
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::plan::{GoldTimeline, GoldWord, Performance};
 
 pub const SAMPLE_RATE: u32 = 24_000;
+pub const CACHE_DIR_ENV: &str = "CANDIDCUE_TTS_CACHE_DIR";
+pub const ALLOW_GENERATION_ENV: &str = "CANDIDCUE_ALLOW_TTS_GENERATION";
 const BYTES_PER_MS: f64 = (SAMPLE_RATE as f64 * 2.0) / 1000.0;
 /// Silence stitched between segments (natural inter-phrase gap).
 const SEGMENT_GAP_MS: u32 = 120;
@@ -80,15 +85,16 @@ impl TtsEngine {
 
 pub struct Synthesizer {
     http: reqwest::Client,
-    key: String,
+    key: Option<String>,
     cache_dir: PathBuf,
 }
 
 impl Synthesizer {
-    pub fn new(cache_dir: PathBuf) -> anyhow::Result<Self> {
-        let key = std::env::var("FAL_KEY")
-            .map_err(|_| anyhow::anyhow!("FAL_KEY not set in the environment"))?;
+    pub fn new() -> anyhow::Result<Self> {
+        let key = std::env::var("FAL_KEY").ok();
+        let cache_dir = shared_cache_dir();
         std::fs::create_dir_all(&cache_dir)?;
+        make_private(&cache_dir)?;
         Ok(Self {
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(180))
@@ -105,22 +111,50 @@ impl Synthesizer {
         text: &str,
         voice_index: usize,
     ) -> anyhow::Result<Vec<u8>> {
-        let cache_key = {
+        let cache_key = stable_cache_key(engine, text, voice_index);
+        let cache_path = self.cache_dir.join(&cache_key);
+        if let Ok(cached) = std::fs::read(&cache_path) {
+            return Ok(cached);
+        }
+
+        // The cache originally used DefaultHasher. Keep reading those names so
+        // the already-paid-for corpus can be moved into the shared cache
+        // without regenerating it. Promote a legacy hit to the stable name.
+        let legacy_key = {
             use std::collections::hash_map::DefaultHasher;
             use std::hash::{Hash, Hasher};
             let mut h = DefaultHasher::new();
             (engine.slug(), voice_index, text).hash(&mut h);
             format!("{}-{:016x}.pcm", engine.slug(), h.finish())
         };
-        let cache_path = self.cache_dir.join(&cache_key);
+        if let Ok(cached) = std::fs::read(self.cache_dir.join(legacy_key)) {
+            write_new_cache_entry(&cache_path, &cached)?;
+            return Ok(cached);
+        }
+
+        anyhow::ensure!(
+            generation_allowed(),
+            "TTS clip is not in the shared cache ({}). Refusing to call fal.ai. \
+             Set {ALLOW_GENERATION_ENV}=1 only when you intentionally approve new TTS spend.",
+            self.cache_dir.display(),
+        );
+
+        // All worktrees use the same cache. Serialize each cache miss across
+        // processes, then check again after taking the lock: another benchmark
+        // may have paid for and written the clip while this one was waiting.
+        let _lock = CacheLock::acquire(&cache_path).await?;
         if let Ok(cached) = std::fs::read(&cache_path) {
             return Ok(cached);
         }
+        let key = self
+            .key
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("FAL_KEY not set in the environment"))?;
 
         let response = self
             .http
             .post(engine.endpoint())
-            .header("Authorization", format!("Key {}", self.key))
+            .header("Authorization", format!("Key {key}"))
             .json(&engine.body(text, voice_index))
             .send()
             .await?;
@@ -164,8 +198,162 @@ impl Synthesizer {
         let pcm = std::fs::read(&tmp_out)?;
         let _ = std::fs::remove_file(&tmp_in);
         let _ = std::fs::remove_file(&tmp_out);
-        std::fs::write(&cache_path, &pcm)?;
+        write_new_cache_entry(&cache_path, &pcm)?;
         Ok(pcm)
+    }
+}
+
+/// One private, machine-wide cache shared by every checkout and worktree.
+///
+/// The override is useful on non-macOS hosts and in CI, but it must name the
+/// cache itself rather than a benchmark work directory.
+pub fn shared_cache_dir() -> PathBuf {
+    std::env::var_os(CACHE_DIR_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/private/tmp/candidcue-bench/tts-cache"))
+}
+
+pub fn shared_rendered_dir() -> PathBuf {
+    shared_cache_dir()
+        .parent()
+        .expect("shared TTS cache has a parent directory")
+        .join("tts")
+}
+
+fn generation_allowed() -> bool {
+    std::env::var(ALLOW_GENERATION_ENV)
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
+fn stable_cache_key(engine: TtsEngine, text: &str, voice_index: usize) -> String {
+    // FNV-1a is deliberately specified here instead of DefaultHasher, whose
+    // output Rust does not promise to preserve between toolchains.
+    let mut hash = 0xcbf29ce484222325u64;
+    let voice = (voice_index as u64).to_le_bytes();
+    for bytes in [
+        engine.slug().as_bytes(),
+        &voice,
+        text.as_bytes(),
+    ] {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        // Length-independent field separator.
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{}-v2-{hash:016x}.pcm", engine.slug())
+}
+
+/// Publish a clip so that it is never visible half-written.
+///
+/// `create_new` on the FINAL name excludes a second writer, but it also makes
+/// the name visible the instant it is opened — before `write_all`, let alone
+/// `sync_all`. A reader taking the unlocked fast path can then read a truncated
+/// clip, and a writer killed mid-write leaves a short file that every future run
+/// accepts as a hit forever, because `create_new` then refuses to repair it. A
+/// truncated clip is not a loud failure either: it is a shorter clip, which
+/// silently moves the gold timing every benchmark is scored against.
+///
+/// So the bytes go to a unique temporary name in the SAME directory (rename is
+/// only atomic within a filesystem), are synced, and are then published with a
+/// rename. A crash at any point leaves either nothing or a complete file, and a
+/// loser of the race simply overwrites with identical content.
+fn write_new_cache_entry(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("cache path {} has no parent", path.display()))?;
+    // Unique per process and per call: two writers must not share a temp name,
+    // or one can rename the other's half-written file into place.
+    let unique = format!(
+        "{}.{}.{:p}.part",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("clip"),
+        std::process::id(),
+        bytes.as_ptr(),
+    );
+    let temporary = directory.join(unique);
+
+    let write = || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    };
+    if let Err(error) = write() {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(anyhow::Error::from(error)
+            .context(format!("writing TTS clip to {}", temporary.display())));
+    }
+    if let Err(error) = std::fs::rename(&temporary, path) {
+        let _ = std::fs::remove_file(&temporary);
+        // An existing destination is a race we lost, not a failure: the other
+        // writer produced the same bytes for the same key.
+        if error.kind() != ErrorKind::AlreadyExists {
+            return Err(anyhow::Error::from(error)
+                .context(format!("publishing TTS clip to {}", path.display())));
+        }
+    }
+    Ok(())
+}
+
+fn make_private(path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+        if let Some(parent) = path.parent() {
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Ok(())
+}
+
+struct CacheLock {
+    path: PathBuf,
+}
+
+impl CacheLock {
+    async fn acquire(cache_path: &Path) -> anyhow::Result<Self> {
+        let path = cache_path.with_extension("lock");
+        let started = std::time::Instant::now();
+        loop {
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(_) => return Ok(Self { path }),
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                    // fal requests have a 180 s timeout. A ten-minute-old lock
+                    // can only be debris from a killed benchmark.
+                    let stale = std::fs::metadata(&path)
+                        .and_then(|metadata| metadata.modified())
+                        .and_then(|modified| modified.elapsed().map_err(std::io::Error::other))
+                        .map(|age| age > Duration::from_secs(600))
+                        .unwrap_or(false);
+                    if stale {
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    anyhow::ensure!(
+                        started.elapsed() < Duration::from_secs(600),
+                        "timed out waiting for shared TTS cache lock {}",
+                        path.display(),
+                    );
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+}
+
+impl Drop for CacheLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
     }
 }
 
@@ -192,16 +380,12 @@ pub async fn synthesize(
 
     for &(seg_start, seg_end) in &performance.segments {
         // Pauses and viewport hints scheduled before this segment.
-        while pause_idx < performance.pauses.len()
-            && performance.pauses[pause_idx].0 <= seg_start
-        {
+        while pause_idx < performance.pauses.len() && performance.pauses[pause_idx].0 <= seg_start {
             push_silence(&mut pcm, performance.pauses[pause_idx].1);
             pause_idx += 1;
         }
         let clip_start_ms = pcm.len() as f64 / BYTES_PER_MS;
-        while vp_idx < performance.viewports.len()
-            && performance.viewports[vp_idx].0 <= seg_start
-        {
+        while vp_idx < performance.viewports.len() && performance.viewports[vp_idx].0 <= seg_start {
             let (_, first, last) = performance.viewports[vp_idx];
             gold.viewport_hints.push((clip_start_ms, first, last));
             vp_idx += 1;
@@ -245,6 +429,47 @@ pub async fn synthesize(
 fn push_silence(pcm: &mut Vec<u8>, ms: u32) {
     let bytes = (ms as f64 * BYTES_PER_MS) as usize & !1;
     pcm.resize(pcm.len() + bytes, 0);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{
+        shared_cache_dir, shared_rendered_dir, stable_cache_key, TtsEngine, CACHE_DIR_ENV,
+    };
+
+    #[test]
+    fn cache_key_is_stable_and_covers_every_input() {
+        assert_eq!(
+            stable_cache_key(TtsEngine::Gemini, "hello.", 0),
+            "gemini-v2-9ed14a01851b0233.pcm",
+        );
+        assert_ne!(
+            stable_cache_key(TtsEngine::Gemini, "hello.", 0),
+            stable_cache_key(TtsEngine::Gemini, "hello!", 0),
+        );
+        assert_ne!(
+            stable_cache_key(TtsEngine::Gemini, "hello.", 0),
+            stable_cache_key(TtsEngine::Gemini, "hello.", 1),
+        );
+        assert_ne!(
+            stable_cache_key(TtsEngine::Gemini, "hello.", 0),
+            stable_cache_key(TtsEngine::Qwen, "hello.", 0),
+        );
+    }
+
+    #[test]
+    fn cache_directory_is_machine_wide() {
+        let expected = std::env::var_os(CACHE_DIR_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/private/tmp/candidcue-bench/tts-cache"));
+        assert_eq!(shared_cache_dir(), expected);
+        assert_eq!(
+            shared_rendered_dir(),
+            expected.parent().unwrap().join("tts"),
+        );
+    }
 }
 
 /// Wrap raw PCM in a WAV container (for listening/debugging in the temp dir).

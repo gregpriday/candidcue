@@ -43,7 +43,7 @@ use crate::metrics::token_edit_distance;
 use crate::plan::expand;
 use crate::scenarios::{build_suite, tier_b_selection};
 use crate::suite::RunManifest;
-use crate::tts::{synthesize, wav_bytes, Synthesizer};
+use crate::tts::{shared_rendered_dir, synthesize, wav_bytes, Synthesizer};
 
 /// One side of the comparison.
 #[derive(Debug, Clone)]
@@ -87,7 +87,7 @@ pub async fn run(
     let runs_without = workdir.join("runs-without");
     let runs_with = workdir.join("runs-with");
     let suite = build_suite(scripts_dir)?;
-    let synth = Synthesizer::new(workdir.join("tts-cache"))?;
+    let synth = Synthesizer::new()?;
     let selection = tier_b_selection();
     let mut out = Vec::new();
 
@@ -117,7 +117,7 @@ pub async fn run(
         };
 
         let name = format!("{}__{}__{}", script, scenario, live.engine.slug());
-        let run_dir = workdir.join("tts").join(&name);
+        let run_dir = shared_rendered_dir().join(&name);
         std::fs::create_dir_all(&run_dir)?;
         let audio_path = run_dir.join("audio.wav");
         let spoken_path = run_dir.join("performance.txt");
