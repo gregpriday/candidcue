@@ -218,16 +218,13 @@ fn reader_placement<R: Runtime>(
     }
 }
 
-/// The panel a remembered reading window is about to come back to, named the
-/// way `list_displays` names it.
-///
-/// Read from the SAME index [`fit_reader_frame`] places against, and read
-/// BEFORE `apply_windowed` runs. A reading window is the one presentation that
-/// can cross monitors — a frame saved on the external panel last night is
-/// replayed onto it this morning — so unlike the prompter, "whichever monitor
-/// the window is on right now" is not the answer here.
 /// The panel a windowed frame is about to land on, named the way
 /// `list_displays` names it.
+///
+/// A reading window is the one presentation that can cross monitors — a frame
+/// saved on the external panel last night is replayed onto it this morning — so
+/// unlike the prompter, "whichever monitor the window is on right now" is not
+/// the answer here.
 ///
 /// ---------------------------------------------------------------------------
 /// ASKED OF `restore_position`, NOT OF THE STORED RECTANGLE
@@ -235,16 +232,16 @@ fn reader_placement<R: Runtime>(
 /// The stored origin is not where the window goes. [`apply_windowed`] passes
 /// every frame through [`restore_position`] first, which rescues a rectangle no
 /// live display covers — a take saved on a panel since unplugged — onto the
-/// PRIMARY monitor. Naming the panel from the raw frame instead would report
-/// the display it was rescued FROM, which is unplugged, so the take would be
-/// measured against a panel nobody is looking at.
+/// PRIMARY monitor, not onto the first one. Naming the panel from the raw frame
+/// instead would report the display it was rescued FROM, which is unplugged, so
+/// the take would be measured against a panel nobody is looking at.
 ///
-/// Reporting the placed position rather than re-deriving the rule is what keeps
-/// the two in step: this cannot disagree with the placement, because it is
-/// asking the placement.
-///
-/// Enumerated ONCE, so the index that selects the monitor and the index that
-/// names it are indices into the same list.
+/// Asking the same function the placement asks is what keeps the two in step.
+/// It is not a proof: `apply_windowed` calls `restore_position` again, and the
+/// monitors can in principle be re-enumerated between the two. What it does buy
+/// is that the two now implement ONE fallback policy instead of two different
+/// ones — which is the way they actually disagreed, rather than a topology that
+/// changed inside a single synchronous command.
 fn control_frame_display<R: Runtime>(app: &AppHandle<R>, frame: &ControlFrame) -> Option<String> {
     let placed = restore_position(app, frame);
     let monitors = app.available_monitors().ok()?;
@@ -316,20 +313,16 @@ impl MonitorRect {
     }
 }
 
-/// The placement policy, with no window and no app handle in sight.
-///
-/// Split out from [`reader_placement`] so it can be tested on a machine with no
-/// display server, which is every machine that runs this suite. The interesting
-/// behaviour is entirely arithmetic — which monitor, whose scale, and what the
-/// clamps do — and none of it needs a real window to exercise.
 /// Which monitor a remembered reading window comes back to.
 ///
 /// Split out of [`fit_reader_frame`] and USED by it, rather than copied beside
-/// it. `set_control_presenting` names the display a take is calibrated against
-/// from this index, so a second implementation of the same rule would be two
-/// answers that agree today and stop agreeing the first time either is edited —
-/// and the way that failure presents is type sized from the wrong panel, which
-/// is the whole defect this reporting exists to close.
+/// it, so the choice of panel and the arithmetic done against that panel cannot
+/// come from two different rules.
+///
+/// Placement only. The panel a take is CALIBRATED against is named by
+/// [`control_frame_display`], which asks [`restore_position`] instead — the
+/// rectangle this produces has still to go through that, and it is the last
+/// word on where the window lands.
 fn fit_reader_monitor_index(frame: ReaderFrame, monitors: &[MonitorRect]) -> Option<usize> {
     monitors
         .iter()
@@ -338,11 +331,20 @@ fn fit_reader_monitor_index(frame: ReaderFrame, monitors: &[MonitorRect]) -> Opt
             frame.x >= mx && frame.y >= my && frame.x < mx + mw && frame.y < my + mh
         })
         /* The panel it was saved on is gone. The first monitor is visible by
-           definition, which is the only property that has to hold — the same
-           fallback `restore_position` makes for the resting frame. */
+           definition, which is the only property that has to hold. Not the same
+           fallback `restore_position` makes — that one prefers the PRIMARY —
+           and it does not need to be: whatever this fits the frame onto,
+           `restore_position` sees a rectangle already on a live display and
+           passes it straight through. */
         .or_else(|| (!monitors.is_empty()).then_some(0))
 }
 
+/// The placement policy, with no window and no app handle in sight.
+///
+/// Split out from [`reader_placement`] so it can be tested on a machine with no
+/// display server, which is every machine that runs this suite. The interesting
+/// behaviour is entirely arithmetic — which monitor, whose scale, and what the
+/// clamps do — and none of it needs a real window to exercise.
 fn fit_reader_frame(
     frame: ReaderFrame,
     monitors: &[MonitorRect],
@@ -1898,13 +1900,12 @@ mod tests {
 
     /* ------------------------------------- naming the panel a take lands on */
 
-    /// The reported panel and the placed panel are the same panel.
+    /// A remembered reading window goes back to the panel it was saved on.
     ///
-    /// `set_control_presenting` names the display a take is calibrated against
-    /// from this index, and `fit_reader_frame` places the window from it too —
-    /// the point of the shared helper. A reading window remembered on the
-    /// external panel must therefore be MEASURED against the external panel,
-    /// which is the whole defect in reader clothing.
+    /// The placement half of the defect in reader clothing: `Enter(Reader)`
+    /// with a stored frame reports through `control_frame_display` on the
+    /// rectangle this produces, so a frame fitted to the wrong panel would be
+    /// MEASURED against the wrong panel too, however right the reporting is.
     #[test]
     fn a_remembered_reader_is_measured_against_the_panel_it_returns_to() {
         let screens = [

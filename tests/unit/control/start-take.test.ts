@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompileOutput } from '../../../src/control/services/compiler';
 import type { AppSettings } from '../../../src/control/services/settings-types';
 import type { DisplayDescriptor } from '../../../src/control/services/stage-types';
+import type { LensPlacement } from '../../../src/shared/contracts/optical';
 
 const calls = vi.hoisted(() => ({
   saveNow: vi.fn(),
@@ -573,7 +574,7 @@ describe('the display a take is calibrated against', () => {
   };
 
   /** A calibrated rig, distinguishable only by the panel scale it was measured at. */
-  function rig(rigName: string, mmPerCssPx: number, lensPlacement: string) {
+  function rig(rigName: string, mmPerCssPx: number, lensPlacement: LensPlacement) {
     return {
       ...defaultOpticalProfile(),
       rigName,
@@ -594,14 +595,14 @@ describe('the display a take is calibrated against', () => {
    * identically, and a test asserting only the panel's name would pass while
    * the type came out the same either way.
    */
-  function calibrateBoth(rigName: string, lensPlacement: string): void {
+  function calibrateBoth(rigName: string, lensPlacement: LensPlacement): void {
     settingsState.value!.optical = {
       activeRig: { [LAPTOP.fingerprint]: rigName, [PROMPTER.fingerprint]: rigName },
       profiles: {
         [opticalRigKey(LAPTOP.fingerprint, rigName)]: rig(rigName, 0.12, lensPlacement),
         [opticalRigKey(PROMPTER.fingerprint, rigName)]: rig(rigName, 0.48, lensPlacement),
       },
-    } as never;
+    };
   }
 
   /** The `StageSettings` the session was actually opened with. */
