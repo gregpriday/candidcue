@@ -87,17 +87,24 @@ import type { PresentationMode } from '../services/settings-types';
    * would now cost the whole editor, which is a far worse trade than the one
    * this change set out to make. Generous enough never to fire on a real
    * compile, and the reserved metadata row means firing early costs no jump.
+   *
+   * It is time given to the COMPILE, so the clock starts when the document
+   * lands rather than when the open begins — armed at the open, a slow read
+   * would spend the whole allowance before the compile had been asked for.
    */
   const FIRST_COMPILE_SETTLE_TIMEOUT_MS = 2000;
+
+  function clearSettleTimer(): void {
+    if (settleTimer !== null) {
+      clearTimeout(settleTimer);
+      settleTimer = null;
+    }
+  }
 
   function beginOpen(id: string): Promise<unknown> {
     openStarted = true;
     firstCompileSettled = false;
-    if (settleTimer !== null) clearTimeout(settleTimer);
-    settleTimer = setTimeout(() => {
-      settleTimer = null;
-      firstCompileSettled = true;
-    }, FIRST_COMPILE_SETTLE_TIMEOUT_MS);
+    clearSettleTimer();
     return openScript(id).catch((err) => {
       showToast(`Could not open script: ${describeError(err)}`, 'danger');
       void navigate({ name: 'library', view: 'all' });
@@ -106,25 +113,26 @@ import type { PresentationMode } from '../services/settings-types';
 
   $effect(() => {
     void beginOpen(scriptId);
-    return () => {
-      if (settleTimer !== null) {
-        clearTimeout(settleTimer);
-        settleTimer = null;
-      }
-    };
+    return clearSettleTimer;
   });
 
-  // Latch, never a live reading — a later compile must not raise the panel back
-  // over a working editor. Declared after the open effect so a remount onto
-  // still-settled stores cannot settle this before that open has reset it.
+  // A latch, never a live reading: a later compile must not raise the panel
+  // back over a working editor. Order against the open effect above does not
+  // matter — until that effect has run, `openStarted` is false and this bails.
   $effect(() => {
-    if (!openStarted) return;
-    if (!isCompileSettledForScript(scriptId, $editor, $compiled)) return;
-    if (settleTimer !== null) {
-      clearTimeout(settleTimer);
-      settleTimer = null;
+    if (!openStarted || firstCompileSettled) return;
+    if (isCompileSettledForScript(scriptId, $editor, $compiled)) {
+      clearSettleTimer();
+      firstCompileSettled = true;
+      return;
     }
-    firstCompileSettled = true;
+    // The document is here and its compile has not answered. Start the clock.
+    if ($editor.scriptId === scriptId && !$editor.loading && settleTimer === null) {
+      settleTimer = setTimeout(() => {
+        settleTimer = null;
+        firstCompileSettled = true;
+      }, FIRST_COMPILE_SETTLE_TIMEOUT_MS);
+    }
   });
 
   const opening = $derived(

@@ -265,13 +265,47 @@ test('covers the whole editor while a script opens, then reveals it complete', a
   await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toHaveCount(0);
   await expect(page.getByRole('complementary', { name: 'Outline' })).toHaveCount(0);
 
-  // Revealed: all of it at once, and the compile-derived metadata is ALREADY
-  // there. That last clause is the point — it is what used to arrive late.
+  /*
+   * Revealed — and the assertion has to be about the FIRST frame that shows
+   * the editor, not about the settled end state. Asserting each piece with
+   * Playwright's auto-waiting would pass just as happily against the old
+   * behaviour, which also got there eventually; the bug was never that the
+   * pieces failed to arrive, only that they arrived one at a time.
+   *
+   * So: watch for the moment the title first exists and record, in that same
+   * callback, what else was on screen with it.
+   */
+  const firstFrame = await page.evaluate(
+    () =>
+      new Promise<{ toolbar: boolean; editor: boolean; outline: boolean; meta: string }>(
+        (resolve) => {
+          const look = () => {
+            if (!document.querySelector('.title-input')) return false;
+            resolve({
+              toolbar: !!document.querySelector('[role="toolbar"][aria-label="Insert"]'),
+              editor: !!document.querySelector('.cm-content'),
+              outline: !!document.querySelector('aside[aria-label="Outline"]'),
+              meta: document.querySelector('.meta')?.textContent ?? '',
+            });
+            return true;
+          };
+          if (look()) return;
+          const observer = new MutationObserver(() => {
+            if (look()) observer.disconnect();
+          });
+          observer.observe(document.body, { childList: true, subtree: true });
+        },
+      ),
+  );
+
+  expect(firstFrame.toolbar).toBe(true);
+  expect(firstFrame.editor).toBe(true);
+  expect(firstFrame.outline).toBe(true);
+  // The clause that matters most: the metadata is compile-derived, and it is
+  // already populated in the very frame the header first appears in.
+  expect(firstFrame.meta).toContain('words');
+
   await expect(panel).toHaveCount(0);
-  await expect(page.getByRole('textbox', { name: 'Script title' })).toBeVisible();
-  await expect(page.getByRole('toolbar', { name: 'Insert' })).toBeVisible();
-  await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
-  await expect(page.locator('.meta')).toContainText('words');
 });
 
 /**
@@ -298,7 +332,9 @@ test('a compile during editing neither re-covers the editor nor moves the toolba
   });
 
   const toolbar = page.getByRole('toolbar', { name: 'Insert' });
+  await expect(toolbar).toBeVisible();
   const before = await toolbar.boundingBox();
+  expect(before).not.toBeNull();
   const metaBefore = await page.locator('.meta').textContent();
 
   await editorSurface.click();
@@ -312,9 +348,12 @@ test('a compile during editing neither re-covers the editor nor moves the toolba
   await expect(page.getByRole('status').filter({ hasText: 'Opening script…' })).toHaveCount(0);
   expect(await page.locator('.cm-editor').getAttribute('data-e2e-original')).toBe('yes');
 
-  // And the toolbar has not moved a pixel: the metadata row holds its height
-  // whether or not there is metadata to put in it.
-  expect((await toolbar.boundingBox())?.y).toBe(before?.y);
+  // The toolbar has not moved: one metadata string replaced another of the
+  // same height. Losing the metadata entirely is the harder direction, and
+  // the next test covers that one.
+  const after = await toolbar.boundingBox();
+  expect(after).not.toBeNull();
+  expect(after?.y).toBe(before?.y);
 });
 
 /**
@@ -332,13 +371,60 @@ test('emptying the script drops the metadata without moving the toolbar', async 
   await expect(page.locator('.meta')).toContainText('words');
 
   const toolbar = page.getByRole('toolbar', { name: 'Insert' });
+  await expect(toolbar).toBeVisible();
   const before = await toolbar.boundingBox();
+  expect(before).not.toBeNull();
 
   await editorSurface.click();
   await page.keyboard.press('ControlOrMeta+a');
   await page.keyboard.press('Backspace');
 
-  // No spoken words left, so the metadata has nothing to report.
+  // No spoken words left, so the metadata has nothing to report — and the row
+  // it vacated stays exactly where it was.
   await expect.poll(() => page.locator('.meta').textContent()).toBe('');
-  expect((await toolbar.boundingBox())?.y).toBe(before?.y);
+  const after = await toolbar.boundingBox();
+  expect(after).not.toBeNull();
+  expect(after?.y).toBe(before?.y);
+});
+
+/**
+ * The safety net, exercised.
+ *
+ * `compileScript` settles only when the compile worker answers — it has no
+ * timeout and no `error` listener — so a worker that fails to construct leaves
+ * the compile pending forever. That already cost the preview; once the loading
+ * panel started waiting for the first compile it would have cost the whole
+ * editor, which is a far worse failure than the one this change set out to fix.
+ *
+ * Here the worker is replaced with one that never replies, which is what a
+ * worker that failed to construct looks like from the editor's side.
+ */
+test('reveals the editor anyway when the compile worker never answers', async ({ page }) => {
+  await page.addInitScript(() => {
+    class SilentWorker {
+      addEventListener(): void {}
+      removeEventListener(): void {}
+      postMessage(): void {}
+      terminate(): void {}
+      onmessage: unknown = null;
+      onerror: unknown = null;
+    }
+    (window as unknown as { Worker: unknown }).Worker = SilentWorker;
+  });
+
+  await page.goto('/control.html');
+  const list = page.getByRole('list', { name: 'Scripts' });
+  await list.getByRole('button', { name: /Launch keynote/ }).click();
+
+  // The editor arrives regardless — the text is reachable and editable, which
+  // is the thing that must never be locked away behind a compile.
+  const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
+  await expect(editorSurface).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator('.cm-content')).toContainText('Welcome everyone to the show');
+  await expect(page.getByRole('status').filter({ hasText: 'Opening script…' })).toHaveCount(0);
+
+  // Nothing compile-derived can be there, and the metadata row it would have
+  // filled is holding its space empty rather than collapsing.
+  await expect(page.locator('.meta')).toHaveText('');
+  await expect(page.locator('.meta')).toHaveCount(1);
 });

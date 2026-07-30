@@ -239,24 +239,30 @@ describe('the page header metadata row', () => {
     expect(row?.getAttribute('aria-hidden')).toBeNull();
   });
 
-  it('reserves the same row height whether or not the metadata has landed', async () => {
+  it('keeps the row across metadata arriving and leaving again', async () => {
     /*
-     * The actual invariant. jsdom does not lay out, so this asserts the two
-     * states resolve to the same CSS-declared height rather than measuring —
-     * both take `min-height` from the one `.meta` rule, and the empty row
-     * exists so that rule applies to it.
+     * The transition, which is where the height was lost. The row has to be
+     * there before the compile answers and still be there after a script is
+     * emptied back to no spoken words — that second direction is the one
+     * waiting for the first compile cannot cover on its own.
+     *
+     * jsdom does not lay out, so this pins the row's PRESENCE and its
+     * announcement; that the present row has a height is the `min-height` on
+     * the single `.meta` rule, and the browser geometry test covers it.
      */
-    const empty = render(PageHeader, {
+    const { container, rerender } = render(PageHeader, {
       props: { title: 'Launch keynote', reserveMetaSpace: true },
     });
-    const filled = render(PageHeader, {
-      props: { title: 'Launch keynote', meta: '412 words', reserveMetaSpace: true },
-    });
-    const emptyRow = empty.container.querySelector('.meta');
-    const filledRow = filled.container.querySelector('.meta');
-    expect(emptyRow).not.toBeNull();
-    expect(filledRow).not.toBeNull();
-    expect(emptyRow?.tagName).toBe(filledRow?.tagName);
-    expect(emptyRow?.className).toBe(filledRow?.className);
+    expect(container.querySelector('.meta')?.getAttribute('aria-hidden')).toBe('true');
+
+    await rerender({ title: 'Launch keynote', meta: '412 words', reserveMetaSpace: true });
+    expect(container.querySelector('.meta')?.textContent).toBe('412 words');
+    expect(container.querySelector('.meta')?.getAttribute('aria-hidden')).toBeNull();
+
+    await rerender({ title: 'Launch keynote', meta: '', reserveMetaSpace: true });
+    const emptied = container.querySelector('.meta');
+    expect(emptied).not.toBeNull();
+    expect(emptied?.textContent).toBe('');
+    expect(emptied?.getAttribute('aria-hidden')).toBe('true');
   });
 });

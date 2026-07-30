@@ -56,11 +56,29 @@ let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let savedBadgeTimer: ReturnType<typeof setTimeout> | null = null;
 let compileTimer: ReturnType<typeof setTimeout> | null = null;
 
+/**
+ * Which open the editor is on, so a slow one cannot land on top of a later one.
+ *
+ * The conflict arms already refuse to adopt a document the editor has moved on
+ * from (`isStillCurrent`); `openScript` was the one path that adopted whatever
+ * came back. A slow read of script A followed by opening script B ended with
+ * A's document in the store while the route was showing B — cancelling B's
+ * pending autosave and dropping what had been typed into it.
+ *
+ * A counter rather than a script id, because opening A, leaving, and opening A
+ * again is two opens of the same id and the first one's result is just as stale.
+ */
+let openGeneration = 0;
+
 export async function openScript(scriptId: string): Promise<ScriptDocument> {
   cancelTimers();
+  const generation = ++openGeneration;
   state.set({ ...initial, scriptId, loading: true });
   resetCompiled();
   const doc = await scriptsService.getScript(scriptId);
+  // Superseded: the document is returned to the caller that asked for it, but
+  // it is no longer what the editor is showing and must not replace it.
+  if (generation !== openGeneration) return doc;
   adoptDocument(doc);
   return doc;
 }
@@ -90,6 +108,9 @@ function adoptDocument(doc: ScriptDocument): void {
 
 export function closeScript(): void {
   cancelTimers();
+  // Closing supersedes an open in flight too, or its document would arrive
+  // into a closed editor and reopen it.
+  openGeneration += 1;
   state.set({ ...initial });
   resetCompiled();
 }
