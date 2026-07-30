@@ -369,23 +369,31 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
    * the shorthand `disabled`, a computed value — is a state we cannot read,
    * and the self-check below fails rather than guessing.
    *
-   * Mentions are COUNTED, not just tested. `.match` returns the first hit, so
-   * a second mention of the word — an explanatory comment reading "disabled:
-   * false once it ships", sitting ahead of the real `disabled: true` — would
-   * otherwise be taken as the answer and quietly lift the ban while the option
-   * stayed greyed out on screen.
+   * Two ways this could have lapsed silently, both closed here:
+   *
+   *  - Mentions are COUNTED, not just tested. `.match` returns the first hit,
+   *    so a second mention of the word — an explanatory comment reading
+   *    "disabled: false once it ships", sitting ahead of the real
+   *    `disabled: true` — would otherwise be taken as the answer.
+   *  - The literal must run to the property delimiter. Without that,
+   *    `disabled: false || !modesShipped` reads as a literal `false` and lifts
+   *    the ban while the option is disabled at runtime.
    *
    * That keeps the guard self-retiring in the way the issue asked for: flip
    * either option to `disabled: false`, or drop the key when the mode really
    * ships, and its ban lifts on its own with no test to edit.
    */
   const availability = modeOptions.map((o) => {
-    const explicit = o.body.match(/\bdisabled:\s*(true|false)\b/);
+    // `\s*(?=,|$)` is the load-bearing part: the boolean has to BE the value,
+    // not merely start it.
+    const literal = o.body.match(/\bdisabled:\s*(true|false)\s*(?=,|$)/);
     const mentions = o.body.match(/\bdisabled\b/g)?.length ?? 0;
+    // A spread could carry a `disabled` this never sees.
+    const spread = o.body.includes('...');
     return {
       mode: o.mode,
-      disabled: explicit?.[1] === 'true',
-      readable: mentions === 0 || (mentions === 1 && explicit !== null),
+      disabled: literal?.[1] === 'true',
+      readable: !spread && (mentions === 0 || (mentions === 1 && literal !== null)),
     };
   });
 
