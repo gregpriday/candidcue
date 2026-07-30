@@ -32,11 +32,19 @@
   take. "Adjust the prompter" and "end the session" are things somebody reaches
   for with a mouse, and a take is exactly when nobody is touching the mouse.
 
-  So the two buttons fade out and the audio display does not — and they keep
-  their space in the layout while invisible, because an audio readout that slid
-  sideways every time the mouse moved would be movement in the corner of a
-  script somebody is reading, which is the one thing this whole surface is
-  built to avoid.
+  So the buttons fade out and the audio display does not — and the audio display
+  is FIRST in the row, hard against the corner, with every fading control after
+  it. Nothing that disappears is allowed to sit between the readout and the edge
+  of the screen.
+
+  It used to be third, behind three buttons that kept their space while
+  invisible. That was stable — the readout never moved — but at rest it left the
+  one permanently visible instrument floating a hundred and fifty pixels in from
+  the corner with nothing around it, which reads as misplaced rather than as
+  parked, and reads worst in a small presentation window where that gap is a
+  large fraction of the width. Putting it first costs nothing: the buttons still
+  hold their space so they do not shuffle among themselves, and now the thing
+  that never hides is the thing in the corner.
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
@@ -291,6 +299,22 @@
 >
   <div class="dock-row">
     <!--
+      The audio readout, in the corner, first in the row. See the note above:
+      the one control that never hides is the one nothing that hides may sit
+      outside of.
+    -->
+    <div class="dock-audio">
+      {#if pill}
+        <VoicePill {pill} />
+      {:else}
+        <!-- The audio display's space, held before control has said anything.
+             Without it the buttons would start the take against the corner and
+             then step sideways the moment the first level frame arrived. -->
+        <div class="audio-placeholder" aria-hidden="true"></div>
+      {/if}
+    </div>
+
+    <!--
       THE FOLLOW SWITCH, AND WHY IT DOES NOT FADE WHEN IT IS OFF.
 
       Every other control in this dock is a verb somebody reaches for and then
@@ -397,15 +421,6 @@
       </button>
     {/if}
 
-    {#if pill}
-      <VoicePill {pill} />
-    {:else}
-      <!-- The audio display's space, held before control has said anything.
-           Without it the two buttons would sit together at the start of a take
-           and then step apart the moment the first level frame arrived. -->
-      <div class="audio-placeholder" aria-hidden="true"></div>
-    {/if}
-
     <!-- The destructive control is deliberately further away. It is the one
          thing in this dock nobody wants to hit while reaching for something
          else. -->
@@ -484,9 +499,24 @@
   .dock-row {
     display: flex;
     align-items: center;
-    /* Settings sits against the audio display; the end button is pushed out by
-       the larger gap below. */
+    /* The buttons sit together as one cluster; the audio readout and the end
+       button are pushed clear of it by the larger gaps below. */
     gap: 6px;
+  }
+
+  /*
+   * A little more air after the readout than between the buttons (6 + 4).
+   *
+   * It is a different KIND of thing from what follows it — an instrument that
+   * runs for the whole take, against a group of verbs that come and go — and at
+   * rest it is the only thing left in the corner. The gap is what stops it
+   * reading as the first item of a toolbar during the moments the toolbar is up.
+   */
+  .dock-audio {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    margin-right: 4px;
   }
 
   /*
@@ -600,8 +630,11 @@
    * Both halves matter. `opacity: 0` alone leaves an invisible button that
    * still takes a click, which is a trap in the exact corner a pointer is
    * likely to be resting; `display: none` would take it out of the tab order
-   * and collapse the row, so the audio display would jump sideways every time
-   * the mouse moved.
+   * and collapse the row, so the buttons would shuffle sideways against each
+   * other every time one of them changed state.
+   *
+   * The audio readout is no longer downstream of any of this — it is first in
+   * the row — but the rule stands for the cluster itself.
    */
   .dock-button[data-hidden='true'] {
     opacity: 0;
@@ -624,10 +657,10 @@
   /*
    * The pill's OUTER width, borders included: 1 + 10 + 60 + 8 + 16 + 10 + 1.
    *
-   * It was 104, which is the content box, and the two pixels showed: the End
-   * button stepped sideways the instant the first level frame arrived — the
-   * exact movement this placeholder exists to prevent, just smaller than the
-   * one it was written for.
+   * It was 104, which is the content box, and the two pixels showed: the row
+   * stepped sideways the instant the first level frame arrived — the exact
+   * movement this placeholder exists to prevent, just smaller than the one it
+   * was written for.
    */
   .audio-placeholder {
     width: 106px;
