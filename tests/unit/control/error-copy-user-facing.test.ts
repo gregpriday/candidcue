@@ -364,10 +364,16 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
    *
    * `readable` is the anti-vacuity check. A ban that quietly stops applying is
    * worse than no ban, so the only states this test accepts are the two it can
-   * actually interpret: an explicit `disabled: true`/`false`, or no `disabled`
+   * actually interpret: exactly one `disabled: true`/`false`, or no `disabled`
    * key at all (which means enabled). Anything else — `disabled: !someFlag`,
    * the shorthand `disabled`, a computed value — is a state we cannot read,
    * and the self-check below fails rather than guessing.
+   *
+   * Mentions are COUNTED, not just tested. `.match` returns the first hit, so
+   * a second mention of the word — an explanatory comment reading "disabled:
+   * false once it ships", sitting ahead of the real `disabled: true` — would
+   * otherwise be taken as the answer and quietly lift the ban while the option
+   * stayed greyed out on screen.
    *
    * That keeps the guard self-retiring in the way the issue asked for: flip
    * either option to `disabled: false`, or drop the key when the mode really
@@ -375,10 +381,11 @@ describe('error copy never offers a session mode Settings marks unavailable', ()
    */
   const availability = modeOptions.map((o) => {
     const explicit = o.body.match(/\bdisabled:\s*(true|false)\b/);
+    const mentions = o.body.match(/\bdisabled\b/g)?.length ?? 0;
     return {
       mode: o.mode,
       disabled: explicit?.[1] === 'true',
-      readable: explicit !== null || !/\bdisabled\b/.test(o.body),
+      readable: mentions === 0 || (mentions === 1 && explicit !== null),
     };
   });
 
