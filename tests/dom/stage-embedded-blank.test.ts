@@ -97,13 +97,13 @@ function envelope(): StageSessionEnvelope {
 }
 
 /** Mount and WAIT for the script layer, the same way stage-manual-scroll.test.ts does. */
-async function mount(blanked: boolean) {
+async function mount(blanked: boolean, env: StageSessionEnvelope = envelope()) {
   const onexit = vi.fn();
   const onintent = vi.fn<(intent: StageIntent) => void>();
   const result = render(StageApp, {
     props: {
       embedded: {
-        envelope: envelope(),
+        envelope: env,
         alignment: null,
         transcript: '',
         voicePill: null,
@@ -115,7 +115,10 @@ async function mount(blanked: boolean) {
   });
   await vi.advanceTimersByTimeAsync(20);
   flushSync();
-  return result;
+  if (!result.container.querySelector('.script-layer')) {
+    throw new Error('the script layer never mounted; this test would prove nothing');
+  }
+  return { ...result, env };
 }
 
 function phaseOf(container: HTMLElement): string | null {
@@ -128,6 +131,7 @@ function scriptHolderBlanked(container: HTMLElement): boolean {
 
 afterEach(() => {
   document.body.innerHTML = '';
+  vi.clearAllTimers();
 });
 
 describe('mounting embedded, blanked from the start', () => {
@@ -154,12 +158,14 @@ describe('mounting embedded, not blanked', () => {
 
 describe('the switch flipping mid-take', () => {
   it('hides every gated surface together, and restores them together', async () => {
-    const { container, rerender } = await mount(false);
+    // The SAME envelope object throughout: each step below changes exactly
+    // one thing, so an assertion failure points at the field that moved it.
+    const { container, rerender, env } = await mount(false);
     expect(phaseOf(container)).not.toBe('blank');
 
     await rerender({
       embedded: {
-        envelope: envelope(),
+        envelope: env,
         alignment: null,
         transcript: '',
         voicePill: null,
@@ -177,14 +183,12 @@ describe('the switch flipping mid-take', () => {
     expect(container.querySelector('.stage-dock')).toBeNull();
 
     /*
-     * An unrelated bridge tick — a transcript word arriving — must not
-     * re-dispatch the blank directive or otherwise disturb it: the guard in
-     * `StageApp`'s bridge effect compares against the reducer's own value, not
-     * a second local flag, precisely so this stays inert.
+     * An unrelated bridge tick — a transcript word arriving, envelope
+     * identity unchanged — must not disturb the blank state.
      */
     await rerender({
       embedded: {
-        envelope: envelope(),
+        envelope: env,
         alignment: null,
         transcript: 'hello',
         voicePill: null,
@@ -196,11 +200,12 @@ describe('the switch flipping mid-take', () => {
     await vi.advanceTimersByTimeAsync(20);
     flushSync();
     expect(phaseOf(container)).toBe('blank');
+    expect(scriptHolderBlanked(container)).toBe(true);
     expect(container.querySelector('.stage-dock')).toBeNull();
 
     await rerender({
       embedded: {
-        envelope: envelope(),
+        envelope: env,
         alignment: null,
         transcript: 'hello',
         voicePill: null,

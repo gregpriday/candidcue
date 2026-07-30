@@ -228,6 +228,35 @@ describe('§62 layout recovery, which used to reach nothing either', () => {
     expect(after.sessionId).toBe(before.sessionId);
     expect(after.renderDocument).toBe(before.renderDocument);
   });
+
+  /*
+   * The guard this exercises: `rebuildStageLayout` only rewrites the envelope
+   * when one is already there to rewrite. Without it, a recovery request
+   * arriving with no take running (or after one just ended) would invent a
+   * `stageEnvelope` out of nothing, which is a session the store never
+   * actually started.
+   */
+  it('invents nothing when there is no take to recover', () => {
+    expect(get(session).stageEnvelope).toBeNull();
+
+    smoothFollow.requestLayoutRebuild();
+
+    expect(get(session).stageEnvelope).toBeNull();
+  });
+
+  it('leaves a just-ended take alone', () => {
+    start();
+    smoothFollow.requestLayoutRebuild();
+    const before = get(session).stageEnvelope!;
+
+    clearSession();
+    smoothFollow.requestLayoutRebuild();
+
+    expect(get(session).stageEnvelope).toBeNull();
+    // And the take's own envelope, had anything kept a reference to it, was
+    // never mutated in place to produce that null.
+    expect(before).not.toBeNull();
+  });
 });
 
 describe('the quick-controls, which used to reach nothing', () => {
