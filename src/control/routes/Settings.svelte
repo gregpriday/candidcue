@@ -456,6 +456,27 @@
     await patchSettings('stage', { displayFingerprint: fingerprint });
   }
 
+  /**
+   * "Remember the reading window", and the frame it governs.
+   *
+   * Turning it OFF forgets the stored rectangle rather than merely declining to
+   * use it. The toggle is a statement about whether this app keeps a note of
+   * where the operator's windows sit, so leaving the note on disk — unused,
+   * un-shown, and ready to be honoured again the moment the switch flips back —
+   * would be keeping exactly the thing they asked us not to keep.
+   *
+   * Two writes because they are two sections, and ordered so the switch lands
+   * first: if the second fails, the app has stopped remembering (which is what
+   * was asked) and holds a stale frame it will never read (which is inert).
+   * The other order could leave remembering ON with the frame already gone.
+   */
+  async function setRememberReadingWindow(enabled: boolean): Promise<void> {
+    await patchSettings('general', { restoreWindows: enabled });
+    if (!enabled && $settings.stage.readerFrame !== null) {
+      await patchSettings('stage', { readerFrame: null });
+    }
+  }
+
   async function identifyDisplays(): Promise<void> {
     try {
       // Rust puts the numbered card on each physical panel; the toast only
@@ -1332,10 +1353,18 @@
             format={(v) => `${v} days`}
             onchange={(value) => void patchSettings('general', { revisionRetentionDays: value })}
           />
+          <!--
+            This shipped with no reader anywhere in the tree — the same defect
+            the retired "Full screen" switch was culled for. It governs the
+            reading window's remembered position now, so the label says that
+            rather than making a broader promise nothing keeps: nothing else in
+            this app restores a window across launches.
+          -->
           <Toggle
             checked={$settings.general.restoreWindows}
-            label="Restore open windows"
-            onchange={(value) => void patchSettings('general', { restoreWindows: value })}
+            label="Remember the reading window"
+            description="A take presented in a window reopens at the size and position you last left it."
+            onchange={(value) => void setRememberReadingWindow(value)}
           />
           <Toggle
             checked={$settings.general.confirmEndSession}

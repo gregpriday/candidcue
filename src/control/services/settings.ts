@@ -35,6 +35,8 @@ import {
   type AppSettings,
   type ClearResult,
   type OpticalSettings,
+  type PresentationMode,
+  type ReaderFrame,
   type SessionMode,
   type TranscriptRetention,
   type UpdateCheckResult,
@@ -66,6 +68,18 @@ interface RustSettings {
     horizontalMirror: boolean;
     keepScreenAwake: boolean;
     blankColor: string;
+    /**
+     * The shape a take opens in — `null`/absent when it has never been chosen.
+     *
+     * The nullability is the whole migration. This setting used to live only in
+     * the localStorage overlay, so every document written before the move has no
+     * value here, and a plain default of `'prompter'` would read as a positive
+     * claim and overwrite the preference somebody already expressed. Absent
+     * instead means "ask the overlay" — see `presentationModeFromRust`.
+     */
+    presentationMode?: string | null;
+    /** Where a reading window was last left; absent until one has been. */
+    readerFrame?: unknown;
   };
   /**
    * §28.3/§28.4. `vadSensitivity` is the only field here the UI owns a slider
@@ -169,6 +183,89 @@ function opticalFromOverlay(
   return { profiles, activeRig };
 }
 
+/**
+ * The mode the persisted document holds, or the overlay's answer while it has
+ * never held one.
+ *
+ * This is the whole of the move out of localStorage. Rust is the authority the
+ * moment it has anything to say; until then the local overlay is read exactly as
+ * it was before — including its own migration off the retired `fullscreen`
+ * boolean — so somebody who chose reader mode last week still opens in reader
+ * mode after the upgrade, and the first explicit choice pins it in Rust for
+ * good.
+ *
+ * A value Rust holds but this build does not recognise falls through to the
+ * overlay rather than to a hard-coded default: it means the document was written
+ * by a newer build, and the local answer is a better guess than 'prompter'.
+ */
+function presentationModeFromRust(
+  stageBehavior: RustSettings['stageBehavior'],
+  storedStage: unknown,
+): PresentationMode {
+  const persisted = stageBehavior.presentationMode;
+  if (persisted === 'prompter' || persisted === 'reader') return persisted;
+  return migrateStageMode(storedStage);
+}
+
+/**
+ * Did the local overlay actually express a preference, as opposed to simply
+ * having nothing to say?
+ *
+ * `migrateStageMode` answers `prompter` for both, because it has to return a
+ * mode. This is the question the migration needs instead: there is only
+ * something to carry into Rust if somebody once chose something.
+ */
+function overlayStatedAMode(stored: unknown): boolean {
+  if (!isPlainObject(stored)) return false;
+  const mode = stored['presentationMode'];
+  return mode === 'reader' || mode === 'prompter' || typeof stored['fullscreen'] === 'boolean';
+}
+
+/**
+ * The mode that is still only in localStorage, waiting to be written to Rust.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS EXISTS AT ALL
+ * ---------------------------------------------------------------------------
+ * Reading the overlay as a fallback is only half a migration, and the missing
+ * half is the half the move was FOR. A reader who upgrades, presents happily
+ * for a month and never opens the split menu leaves Rust holding `None` the
+ * whole time — so the day their browser store is cleared they are silently back
+ * to prompter, which is the exact failure this change set out to end.
+ *
+ * So the read records what it found, and `loadSettings` writes it through once.
+ * Module state rather than a field on `AppSettings`, because it is a fact about
+ * the DOCUMENT that was just read and not a setting anybody can set: putting it
+ * in the settings view would invite a screen to render it.
+ */
+let stageModeAwaitingAdoption: PresentationMode | null = null;
+
+export function pendingStageModeAdoption(): PresentationMode | null {
+  return stageModeAwaitingAdoption;
+}
+
+/**
+ * A stored reading-window frame, or null if it is not one.
+ *
+ * Validated field-by-field rather than cast, which `loadOverlay`'s note argues
+ * for in general and which matters more here than anywhere else in this file:
+ * these four numbers are handed to `set_position`/`set_size`, so a corrupt or
+ * half-written frame is not a wrong-looking setting, it is a window somebody
+ * cannot see or click. A zero or negative extent is rejected for the same
+ * reason. Everything else — a frame on a display that is no longer attached —
+ * is Rust's off-screen clamp to deal with, which it already does for every
+ * restore.
+ */
+function readerFrameFromRust(stored: unknown): ReaderFrame | null {
+  if (!isPlainObject(stored)) return null;
+  const { x, y, width, height } = stored;
+  const finite = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value);
+  if (!finite(x) || !finite(y) || !finite(width) || !finite(height)) return null;
+  if (width <= 0 || height <= 0) return null;
+  return { x, y, width, height };
+}
+
 /** Rust document + overlay → the UI settings view. */
 function fromRust(revisioned: RustRevisioned): AppSettings {
   const rust = revisioned.value;
@@ -210,6 +307,18 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     },
   };
 
+  /*
+   * Resolved once, before the object is built, because two things need it: the
+   * settings view below, and the migration flag. See `pendingStageModeAdoption`
+   * for why a read has to record what it found.
+   */
+  const resolvedMode = presentationModeFromRust(rust.stageBehavior, overlay.stage ?? mapped.stage);
+  const modeIsPersisted =
+    rust.stageBehavior.presentationMode === 'prompter' ||
+    rust.stageBehavior.presentationMode === 'reader';
+  stageModeAwaitingAdoption =
+    !modeIsPersisted && overlayStatedAMode(overlay.stage) ? resolvedMode : null;
+
   return {
     ...mapped,
     general: mergeSection(mapped.general, overlay.general),
@@ -231,13 +340,20 @@ function fromRust(revisioned: RustRevisioned): AppSettings {
     stage: {
       ...mergeSection(mapped.stage, overlay.stage),
       /*
-       * The mode is migrated rather than merged, because the stored section may
-       * still be carrying the retired `fullscreen` boolean and nothing else.
-       * `mergeSection` would spread that straight through — leaving a dead key on
-       * the section and `presentationMode` silently on its default — so the one
-       * field that has a predecessor reads it explicitly. See `migrateStageMode`.
+       * Two Rust-owned fields in an otherwise-local section, both spread over
+       * the merge above so a stale overlay copy can never contradict the
+       * document. `displayFingerprint` is the one field here that is still
+       * genuinely per-machine, and it keeps the overlay merge.
+       *
+       * The mode is resolved rather than merged for a second reason as well: the
+       * stored section may still be carrying the retired `fullscreen` boolean and
+       * nothing else, and `mergeSection` would spread that straight through —
+       * leaving a dead key on the section and `presentationMode` silently on its
+       * default. See `presentationModeFromRust`, which reads the document first
+       * and falls back to `migrateStageMode`.
        */
-      presentationMode: migrateStageMode(overlay.stage ?? mapped.stage),
+      presentationMode: resolvedMode,
+      readerFrame: readerFrameFromRust(rust.stageBehavior.readerFrame),
     },
     optical: opticalFromOverlay(defaults.optical, overlay.optical),
     // `saveTranscript` is Rust-owned (§36.2): a stale local overlay must never
@@ -286,6 +402,22 @@ function toRustPatch(patch: Partial<AppSettings>): Record<string, unknown> {
     put('audio', 'transcriptionModel', patch.speech.transcriptionModel);
     put('audio', 'language', patch.speech.language);
   }
+  if (patch.stage) {
+    // The half this file keeps losing. `saveTranscript` and `vadSensitivity`
+    // both shipped mapped in one direction only, which reads as a control that
+    // works and silently forgets — so both stage fields are written here, next
+    // to where they are read.
+    put('stageBehavior', 'presentationMode', patch.stage.presentationMode);
+    /*
+     * `null` is a meaningful value rather than an omission: Rust's `merge_json`
+     * REMOVES a key whose patch value is null, which is exactly how a frame is
+     * forgotten. So this passes null through and only skips `undefined`, which
+     * is a patch that says nothing about the frame at all.
+     */
+    if (patch.stage.readerFrame !== undefined) {
+      (rust.stageBehavior ??= {}).readerFrame = patch.stage.readerFrame;
+    }
+  }
   if (patch.teleprompter) {
     put('stageBehavior', 'horizontalMirror', patch.teleprompter.mirrorX);
     put('stageBehavior', 'fixedSpeedWpm', patch.teleprompter.fixedSpeedWpm);
@@ -322,15 +454,37 @@ function applyOverlayPatch(patch: Partial<AppSettings>): void {
     if (typeof section !== 'object' || section === null) continue;
     // Rust-owned fields never enter the overlay (§28.4, §36.2, §47) — a cached
     // copy would outlive the document and could contradict it.
-    const overlayable = { ...(section as Record<string, unknown>) };
-    delete overlayable.saveTranscript;
-    if (key === 'audio') {
-      for (const owned of RUST_OWNED_AUDIO_KEYS) delete overlayable[owned];
-    }
-    (overlay as Record<string, object>)[key] = {
-      ...((overlay as Record<string, object | undefined>)[key] ?? {}),
-      ...overlayable,
+    const merged: Record<string, unknown> = {
+      ...((overlay as Record<string, Record<string, unknown> | undefined>)[key] ?? {}),
+      ...(section as Record<string, unknown>),
     };
+    /*
+     * Rust-owned fields never enter the overlay (§28.4, §36.2, §47) — a cached
+     * copy would outlive the document and could contradict it.
+     *
+     * Stripped from the MERGED result, not from the incoming patch. Stripping
+     * the patch alone is the mistake this used to make: the line below spreads
+     * whatever the overlay already held back in, so a key retired from the
+     * overlay was deleted from the new half and immediately restored from the
+     * old one. It would sit there forever — and for `stage.presentationMode`
+     * that is not inert, because the migration fallback reads exactly that key
+     * whenever Rust has no answer, so a stale choice could come back from the
+     * dead.
+     */
+    delete merged.saveTranscript;
+    if (key === 'audio') {
+      for (const owned of RUST_OWNED_AUDIO_KEYS) delete merged[owned];
+    }
+    if (key === 'stage') {
+      // Rust-owned since the mode moved out of here. `displayFingerprint` is
+      // still genuinely per-machine and keeps the section alive.
+      delete merged.presentationMode;
+      delete merged.readerFrame;
+      // The retired predecessor goes with it: it is only ever read as a stand-in
+      // for a mode Rust does not hold, and Rust holds one by now.
+      delete merged.fullscreen;
+    }
+    (overlay as Record<string, object>)[key] = merged;
   }
   saveOverlay(overlay);
 }

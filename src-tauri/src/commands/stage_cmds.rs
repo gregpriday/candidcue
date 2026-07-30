@@ -67,17 +67,30 @@ pub fn set_stage_fullscreen<R: Runtime>(
 /// the command above: an `{ enabled: true }` payload from before reader mode
 /// existed must keep doing exactly what it did, which is present as a prompter.
 /// `enabled: false` ignores it — there is one way to stop.
+///
+/// `reader_frame` is where a reading window was left on a PREVIOUS run, read
+/// out of the settings document by the caller. Optional in the same way and for
+/// the same reason: absent means "present in place", which is what reader mode
+/// did before the frame was persisted at all. It is ignored for `prompter`,
+/// which fills a monitor rather than occupying a rectangle, and on the way out.
+///
+/// The frame arrives as an argument rather than being read from settings here
+/// on purpose. This module owns windows, not preferences, and the round trip is
+/// already asymmetric — Rust is the only thing that can MEASURE the frame, the
+/// settings document is the only thing that can KEEP it — so the frontend owns
+/// the storage half at both ends and Rust stays a pure window operation.
 pub fn set_control_presenting<R: Runtime>(
     app: AppHandle<R>,
     enabled: bool,
     mode: Option<windows::PresentMode>,
+    reader_frame: Option<windows::ReaderFrame>,
 ) -> Result<ControlPresentationState, AppError> {
     let requested = if enabled {
         Some(mode.unwrap_or(windows::PresentMode::Prompter))
     } else {
         None
     };
-    windows::set_control_presenting(&app, requested)
+    windows::set_control_presenting(&app, requested, reader_frame)
 }
 
 #[tauri::command]

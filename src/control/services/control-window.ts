@@ -23,7 +23,7 @@
  * size" things a caller can await rather than things it hopes have happened.
  */
 import { invokeOrMock } from './ipc';
-import type { PresentationMode } from './settings-types';
+import type { PresentationMode, ReaderFrame } from './settings-types';
 
 /**
  * Where the window ended up, in the CSS pixels the renderer measures in.
@@ -46,6 +46,19 @@ export interface ControlPresentationState {
   mode?: PresentationMode;
   width: number;
   height: number;
+  /**
+   * The reading window's bounds, whenever this call knew them.
+   *
+   * The case worth naming is the one on the way OUT: ending a take in reader
+   * mode, and switching from reader to prompter, both report the rectangle the
+   * window had a moment before it stopped having it. That is the only instant
+   * those bounds exist, so it is the only chance to persist them — see
+   * `rememberReaderFrame` in the session store.
+   *
+   * Absent for a prompter, which has no bounds of its own: it fills whichever
+   * monitor it was already on.
+   */
+  readerFrame?: ReaderFrame;
 }
 
 /**
@@ -60,13 +73,23 @@ export interface ControlPresentationState {
  * `reader` presents in place and moves no geometry at all, so the viewport is
  * already the size it is going to be and `awaitViewportSettled` matches on its
  * first check. See `windows/present.rs` for what each mode does to the window.
+ *
+ * `readerFrame` is the exception to "presents in place": a rectangle this reader
+ * left behind on an earlier RUN of the app, which the in-process latch cannot
+ * remember because it dies with the process. Passing it is what makes a reading
+ * window come back where it was rather than at whatever size the editor happened
+ * to be. Ignored for `prompter`, which has a monitor to fill instead.
  */
 export async function enterPresentation(
   mode: PresentationMode = 'prompter',
+  readerFrame?: ReaderFrame | null,
 ): Promise<ControlPresentationState> {
   return invokeOrMock<ControlPresentationState>(
     'set_control_presenting',
-    { enabled: true, mode },
+    // Omitted rather than sent as null when there is nothing to restore: the
+    // command's argument is optional, and an explicit null would have to be
+    // deserialized as one.
+    { enabled: true, mode, ...(readerFrame ? { readerFrame } : {}) },
     () => browserViewport(true, mode),
   );
 }

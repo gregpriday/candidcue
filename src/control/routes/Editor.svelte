@@ -14,6 +14,7 @@
   import IconButton from '../components/IconButton.svelte';
   import MarkdownEditor from '../components/MarkdownEditor.svelte';
   import OverflowMenu from '../components/OverflowMenu.svelte';
+import SplitButton from '../components/SplitButton.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import RenderBlocks from '../components/RenderBlocks.svelte';
   import RevisionHistory from '../components/RevisionHistory.svelte';
@@ -21,7 +22,9 @@
   import SegmentedControl from '../components/SegmentedControl.svelte';
   import StatusPill from '../components/StatusPill.svelte';
   import { exportScriptToFile } from '../lib/app-actions';
-  import { startTake, takeStarting } from '../lib/start-take';
+  import { presentMenuItems } from '../lib/present-menu';
+import { startTake, takeStarting } from '../lib/start-take';
+import type { PresentationMode } from '../services/settings-types';
   import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
   import * as inserts from '../lib/markdown-insert';
   import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
@@ -188,11 +191,20 @@
    * Present opens the stage. There is no screen in between — everything the
    * old Preflight page asked for is in Settings, and the take reports its own
    * microphone, display and connection from the stage (lib/start-take.ts).
+   *
+   * `mode` is absent for the main button, which presents in whatever the saved
+   * default is, and set when the choice came from the split menu — which also
+   * makes that choice the new default. See `StartTakeOptions.presentationMode`
+   * for why an explicit choice sticks when the mid-take toggle does not.
    */
-  async function present(): Promise<void> {
+  async function present(mode?: PresentationMode): Promise<void> {
     await saveNow();
-    await startTake(scriptId);
+    await startTake(scriptId, mode === undefined ? {} : { presentationMode: mode });
   }
+
+  const presentModeItems = $derived(
+    presentMenuItems($settings.stage.presentationMode, (mode) => void present(mode)),
+  );
 
   function withView(fn: (view: NonNullable<ReturnType<MarkdownEditor['getView']>>) => void): void {
     const view = editorRef?.getView();
@@ -465,9 +477,14 @@
         onclick={() => (panelOpen = !panelOpen)}
       />
       <OverflowMenu items={overflowItems} label="Script actions" />
-      <Button variant="primary" disabled={$takeStarting} onclick={() => present()}>
-        {$takeStarting ? 'Opening stage…' : 'Present'}
-      </Button>
+      <SplitButton
+        variant="primary"
+        label={$takeStarting ? 'Opening stage…' : 'Present'}
+        menuLabel="How to present"
+        disabled={$takeStarting}
+        items={presentModeItems}
+        onclick={() => void present()}
+      />
     {/snippet}
   </PageHeader>
 

@@ -18,6 +18,7 @@ const calls = vi.hoisted(() => ({
   painted: vi.fn(),
   setPresentingPhase: vi.fn(),
   showToast: vi.fn(),
+  patchSettings: vi.fn(),
 }));
 
 const editorState = vi.hoisted(() => ({
@@ -73,6 +74,7 @@ vi.mock('../../../src/control/stores/settings', async () => {
   const { readable } = await import('svelte/store');
   return {
     loadSettings: async () => settingsState.value,
+    patchSettings: calls.patchSettings,
     settings: readable(settingsState.value, (set) => {
       set(settingsState.value);
       return () => {};
@@ -209,6 +211,7 @@ beforeEach(() => {
   calls.exitPresentation.mockResolvedValue({ presenting: false, width: 1240, height: 820 });
   calls.awaitViewportSettled.mockResolvedValue(undefined);
   calls.painted.mockResolvedValue(undefined);
+  calls.patchSettings.mockResolvedValue(undefined);
   stageCalls.listDisplays.mockResolvedValue([]);
 
   for (const [name, fn] of Object.entries(stageCalls)) {
@@ -395,6 +398,119 @@ describe('single-window Present', () => {
     expect(calls.startSessionRecord).not.toHaveBeenCalled();
     expect(calls.enterPresentation).not.toHaveBeenCalled();
     for (const fn of Object.values(stageCalls)) expect(fn).not.toHaveBeenCalled();
+  });
+
+  /* ------------------------------------------------- how the take opens */
+
+  it('opens in the saved mode and writes nothing when no choice was made', async () => {
+    // The main Present button. It asks no question and changes no setting.
+    settingsState.value!.stage.presentationMode = 'reader';
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null);
+    expect(calls.patchSettings).not.toHaveBeenCalled();
+  });
+
+  it('composes the stage for the mode it is actually opening in', async () => {
+    /*
+     * The regression this exists for. The mode used to be resolved into a bare
+     * string while `stageSettingsFromSettings` kept reading the PRE-CHOICE
+     * settings snapshot — so choosing "Present in a window" from a prompter
+     * default opened a reading window composed for glass: prompter optics, and
+     * a horizontally mirrored script if the rig had mirroring on.
+     *
+     * Asserted on what the session is actually handed, because that is the
+     * object the stage renders from. Checking the window command alone is what
+     * let this through: that call was always correct.
+     */
+    settingsState.value!.stage.presentationMode = 'prompter';
+    settingsState.value!.teleprompter.mirrorX = true;
+
+    await expect(startTake(SCRIPT.id, { presentationMode: 'reader' })).resolves.toBe(true);
+
+    const opened = calls.startLiveSession.mock.calls[0]![0] as {
+      presentationMode: string;
+      stageSettings: { readingContext?: string; mirrorX: boolean };
+      stageEnvelope: { stageSettings: { readingContext?: string; mirrorX: boolean } };
+    };
+    expect(opened.presentationMode).toBe('reader');
+    expect(opened.stageSettings.readingContext).toBe('reader');
+    // A reading window is read at desk distance with no beamsplitter in the
+    // optical path, so there is nothing for a mirror to undo.
+    expect(opened.stageSettings.mirrorX).toBe(false);
+    // The envelope is what actually reaches the renderer; it must not disagree.
+    expect(opened.stageEnvelope.stageSettings.readingContext).toBe('reader');
+    expect(opened.stageEnvelope.stageSettings.mirrorX).toBe(false);
+  });
+
+  it('composes the stage for a prompter chosen out of a reader default', async () => {
+    // The same defect in the other direction: a glass rig composed as a desk.
+    settingsState.value!.stage.presentationMode = 'reader';
+    settingsState.value!.teleprompter.mirrorX = true;
+
+    await expect(startTake(SCRIPT.id, { presentationMode: 'prompter' })).resolves.toBe(true);
+
+    const opened = calls.startLiveSession.mock.calls[0]![0] as {
+      presentationMode: string;
+      stageSettings: { readingContext?: string; mirrorX: boolean };
+    };
+    expect(opened.presentationMode).toBe('prompter');
+    expect(opened.stageSettings.readingContext).not.toBe('reader');
+    expect(opened.stageSettings.mirrorX).toBe(true);
+  });
+
+  it('remembers a mode chosen explicitly at the moment of presenting', async () => {
+    /*
+     * The whole point of the split menu. An explicit choice is a statement about
+     * how this operator presents — unlike the mid-take toggle, which
+     * `stores/session.ts` deliberately keeps take-scoped — so the NEXT take must
+     * open the same way without being told again.
+     */
+    settingsState.value!.stage.presentationMode = 'prompter';
+    await expect(
+      startTake(SCRIPT.id, { presentationMode: 'reader' }),
+    ).resolves.toBe(true);
+    expect(calls.patchSettings).toHaveBeenCalledWith('stage', { presentationMode: 'reader' });
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null);
+  });
+
+  it('does not write a setting that already says what was asked for', async () => {
+    settingsState.value!.stage.presentationMode = 'reader';
+    await expect(startTake(SCRIPT.id, { presentationMode: 'reader' })).resolves.toBe(true);
+    expect(calls.patchSettings).not.toHaveBeenCalled();
+  });
+
+  it('presents anyway when the choice could not be saved', async () => {
+    // A settings document that would not take the patch is not a reason to
+    // refuse to present. `patchSettings` has already reported the failure.
+    calls.patchSettings.mockRejectedValue(new Error('revision conflict'));
+    await expect(startTake(SCRIPT.id, { presentationMode: 'reader' })).resolves.toBe(true);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null);
+  });
+
+  it('hands back a remembered reading window', async () => {
+    const frame = { x: 40, y: 60, width: 720, height: 540 };
+    settingsState.value!.stage.presentationMode = 'reader';
+    settingsState.value!.stage.readerFrame = frame;
+    settingsState.value!.general.restoreWindows = true;
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', frame);
+  });
+
+  it('leaves the window where it is when the operator asked us not to remember', async () => {
+    settingsState.value!.stage.presentationMode = 'reader';
+    settingsState.value!.stage.readerFrame = { x: 40, y: 60, width: 720, height: 540 };
+    settingsState.value!.general.restoreWindows = false;
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('reader', null);
+  });
+
+  it('never hands a stored frame to a prompter', async () => {
+    // A prompter fills whichever monitor it is on. A stored rectangle would be
+    // describing something else entirely.
+    settingsState.value!.stage.presentationMode = 'prompter';
+    settingsState.value!.stage.readerFrame = { x: 40, y: 60, width: 720, height: 540 };
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(calls.enterPresentation).toHaveBeenCalledWith('prompter', null);
   });
 
   it('ignores a second Present while the first one is still starting', async () => {

@@ -37,6 +37,28 @@ import type {
  */
 export type PresentationMode = 'prompter' | 'reader';
 
+/**
+ * A reading window's bounds in LOGICAL (CSS) pixels, as Rust measures them and
+ * as the settings document keeps them.
+ *
+ * Only reader mode has any: a prompter fills whichever monitor it was already
+ * on, so there is no rectangle to remember. See `ReaderFrame` in
+ * `src-tauri/src/windows/present.rs` for why the units are logical — the frame
+ * outlives the process, and physical pixels do not survive a change of display
+ * scale.
+ *
+ * Nothing here is validated against the current display arrangement. Rust
+ * applies the same off-screen clamp every restore gets, so a frame saved on a
+ * panel that has since been unplugged comes back somewhere visible rather than
+ * somewhere the operator cannot reach.
+ */
+export interface ReaderFrame {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface StageSettings {
   schemaVersion: 1;
   themeId: string;

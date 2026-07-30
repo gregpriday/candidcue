@@ -109,6 +109,34 @@ pub struct StageBehaviorSettings {
     pub horizontal_mirror: bool,
     pub keep_screen_awake: bool,
     pub blank_color: String,
+    /// The shape a take OPENS in: 'prompter' | 'reader' (§ reader-mode spec).
+    ///
+    /// ------------------------------------------------------------------------
+    /// WHY `Option`, WHEN EVERY OTHER FIELD HERE HAS A PLAIN DEFAULT
+    /// ------------------------------------------------------------------------
+    /// This setting used to live only in the frontend's localStorage overlay,
+    /// where a cleared browser store silently returned a reader to prompter. It
+    /// moved here so it outlives that store — but the move has to carry the
+    /// existing answer across, and that needs "never chosen" to stay tellable
+    /// from "chosen prompter" exactly once. A defaulted `String` collapses the
+    /// two, so every document written before the move would claim `prompter`
+    /// and overwrite the preference it was supposed to inherit.
+    ///
+    /// `None` therefore means "ask the overlay"; the frontend adopts whatever it
+    /// finds there (see `migrateStageMode` in settings-types.ts) and the first
+    /// explicit choice pins the answer here for good.
+    pub presentation_mode: Option<String>,
+    /// Where a reader-mode take last had its window, in LOGICAL (CSS) pixels.
+    ///
+    /// Logical rather than physical because the frame outlives the rig it was
+    /// measured on: a window saved on a 2x panel and restored against a 1x one
+    /// would come back at half the size it was left at. Rust converts on the way
+    /// in and out, so the stored numbers mean the same thing on every display.
+    ///
+    /// Only read when `general.restoreWindows` is on, and only for reader mode —
+    /// prompter mode has no bounds of its own to remember, it fills whichever
+    /// monitor the window is already on.
+    pub reader_frame: Option<crate::windows::ReaderFrame>,
 }
 
 impl Default for StageBehaviorSettings {
@@ -123,6 +151,9 @@ impl Default for StageBehaviorSettings {
             horizontal_mirror: false,
             keep_screen_awake: true,
             blank_color: "#000000".into(),
+            // See the field docs: absent is not the same claim as 'prompter'.
+            presentation_mode: None,
+            reader_frame: None,
         }
     }
 }
@@ -253,6 +284,17 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
             .with_detail("field", field));
         }
     }
+    // The shape a take opens in. Checked only when it has been chosen: `None`
+    // is the legitimate "never chosen, ask the overlay" state, not a bad value.
+    if let Some(mode) = settings.stage_behavior.presentation_mode.as_deref() {
+        if mode != "prompter" && mode != "reader" {
+            return Err(AppError::invalid_input(
+                "Setting stageBehavior.presentationMode must be prompter or reader.",
+            )
+            .with_detail("field", "stageBehavior.presentationMode"));
+        }
+    }
+
     let allowed_transcript = ["off", "1d", "7d", "30d", "forever"];
     if !allowed_transcript.contains(&settings.general.save_transcript.as_str()) {
         return Err(AppError::invalid_input(
@@ -535,6 +577,59 @@ mod tests {
         let mut settings = AppSettings::default();
         settings.following.fidelity_mode = "psychic".into();
         assert!(validate(&settings).is_err());
+    }
+
+    /// Absent is not the same claim as `prompter`, and the whole migration off
+    /// the frontend's localStorage overlay rests on that distinction: a document
+    /// written before the move must be able to say "I have no opinion" so the
+    /// frontend can adopt whatever the overlay already held. A defaulted
+    /// `String` would collapse the two and overwrite the preference.
+    #[test]
+    fn presentation_mode_starts_unchosen() {
+        assert_eq!(StageBehaviorSettings::default().presentation_mode, None);
+        let json = serde_json::json!({ "schemaVersion": 1 });
+        let settings: AppSettings = serde_json::from_value(json).expect("defaults fill in");
+        assert_eq!(settings.stage_behavior.presentation_mode, None);
+        assert_eq!(settings.stage_behavior.reader_frame, None);
+    }
+
+    #[test]
+    fn presentation_mode_accepts_only_the_two_shapes() {
+        for mode in ["prompter", "reader"] {
+            let mut settings = AppSettings::default();
+            settings.stage_behavior.presentation_mode = Some(mode.into());
+            assert!(validate(&settings).is_ok(), "{mode} must be accepted");
+        }
+        let mut settings = AppSettings::default();
+        settings.stage_behavior.presentation_mode = Some("picture-in-picture".into());
+        assert!(validate(&settings).is_err());
+    }
+
+    /// The frame round-trips as logical pixels, in the camelCase the IPC
+    /// boundary and the settings document share.
+    #[test]
+    fn a_reader_frame_round_trips() {
+        let json = serde_json::json!({
+            "schemaVersion": 1,
+            "stageBehavior": {
+                "presentationMode": "reader",
+                "readerFrame": { "x": 120.0, "y": 90.0, "width": 860.0, "height": 600.0 },
+            },
+        });
+        let settings: AppSettings = serde_json::from_value(json).expect("frame loads");
+        let frame = settings
+            .stage_behavior
+            .reader_frame
+            .expect("the frame survives deserialization");
+        assert_eq!(frame.width, 860.0);
+        assert_eq!(frame.height, 600.0);
+        assert!(validate(&settings).is_ok());
+
+        let round_tripped = serde_json::to_value(&settings).expect("serializes");
+        assert_eq!(
+            round_tripped["stageBehavior"]["readerFrame"]["x"],
+            serde_json::json!(120.0),
+        );
     }
 
     #[test]

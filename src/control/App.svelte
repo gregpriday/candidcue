@@ -17,6 +17,7 @@
   import Calibrate from './routes/Calibrate.svelte';
   import Welcome from './routes/Welcome.svelte';
   import { createAndOpenScript } from './lib/app-actions';
+import { rememberReaderFrame } from './lib/reader-frame';
   import { installShortcuts, onShortcut } from './lib/shortcuts';
   import { initAudioTrace } from './services/audio-trace';
   import { initAppStatus } from './stores/app-status';
@@ -139,6 +140,9 @@
           stopSession();
           clearSession();
           const restored = await exitPresentation().catch(() => null);
+          // Awaited so the write cannot be overtaken by the next take's forced
+          // settings read — see `leavePresentation` in Live.svelte.
+          await rememberReaderFrame(restored);
           if (restored) await awaitViewportSettled(restored);
         } finally {
           setPresentingPhase('off');
@@ -172,6 +176,15 @@
        * needs a force-quit.
        *
        * Before `ready`, so the first thing painted is already the right shape.
+       *
+       * Deliberately NOT remembering the reader frame here, unlike the other
+       * exits. This runs before `loadSettings`, so the settings store still
+       * holds defaults at revision 1 — a patch from here would be written
+       * against a revision that is not the document's, and `patchSettings`
+       * announces that failure to an operator who has not yet seen the app
+       * finish launching. The frame from the take that was interrupted is lost,
+       * which is the right trade: it is a crash-recovery path, and the last
+       * ORDERLY exit already stored a frame.
        */
       await exitPresentation().catch(() => {});
       setPresentingPhase('off');
