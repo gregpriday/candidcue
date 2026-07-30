@@ -397,11 +397,26 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             radii.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            println!(
-                "\nrobustness: {unbroken} unbroken; radius p05 {:.2}, p50 {:.2}",
-                cc_bench::perceptual::pctl(&radii, 5.0),
-                cc_bench::perceptual::pctl(&radii, 50.0),
-            );
+            /*
+             * "radius p05 NaN, p50 NaN" is what this printed when nothing broke,
+             * and a NaN in a summary line reads as a measurement that failed
+             * rather than as a result. There is no radius when every scenario
+             * survives the whole budget — that is the outcome, and it deserves
+             * saying in words.
+             */
+            if radii.is_empty() {
+                println!(
+                    "\nrobustness: {unbroken} unbroken, none broken — no radius to report \
+                     (raise --budget to search harder)"
+                );
+            } else {
+                println!(
+                    "\nrobustness: {unbroken} unbroken, {} broken; radius p05 {:.2}, p50 {:.2}",
+                    radii.len(),
+                    cc_bench::perceptual::pctl(&radii, 5.0),
+                    cc_bench::perceptual::pctl(&radii, 50.0),
+                );
+            }
         }
         Some("synth-audio") => {
             let flags = parse_flags(args[1..].iter())?;

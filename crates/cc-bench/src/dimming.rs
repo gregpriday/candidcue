@@ -173,7 +173,13 @@ pub fn benchmark(config: &AlignmentConfig) -> Vec<DimmingMetric> {
             "fuzzy.near_word_false_bridge",
             collision_false,
             "%",
-            "lower",
+            // Diagnostic, not a gate. `desert`/`dessert` and `affect`/`effect`
+            // are one edit apart and no single-word matcher can separate a real
+            // near word from a mistranscription, so this sits at 100% by
+            // construction and cannot be driven down. Labelled "lower" it read
+            // as a permanently failing gate — the one row in the table that
+            // could never move — which trains a reader to ignore the column.
+            "diagnostic",
         ),
         metric(
             "fuzzy.chain_advances",

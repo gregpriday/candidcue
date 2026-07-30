@@ -327,6 +327,31 @@ cargo run --release -p cc-bench -- compare-c ../bench/results/a-c.json ../bench/
 cargo run --release -p cc-bench -- report A-base.json A-opt.json B-base.json B-opt.json
 ```
 
+## Rows that carry no direction
+
+Most rows are scored: `compare` marks an improvement `+` and a regression `!`.
+Some rows are recorded but cannot be scored, and those are labelled `diagnostic`
+and marked `~`. A row in that class is not a weaker gate — it is a number whose
+direction is meaningless, and marking it anyway manufactures regressions somebody
+then goes looking for. Three qualify today:
+
+| row | why it cannot be scored |
+|---|---|
+| `perf.scale_ratio_5k` | A ratio of two single-pass wall-clock means, so it carries both of their noise. Five repeat runs of identical code on one machine gave 0.93, 1.09, 1.17, 1.23, 1.28 — a 38% spread with nothing changed. The question it answers ("does per-event cost blow up on a 5,000-atom script") still has a useful answer: no, it stays about 1x. |
+| `fuzzy.near_word_false_bridge` | 100% by construction. `desert`/`dessert` and `affect`/`effect` are one edit apart, and no single-word matcher can separate a real near word from a mistranscription. Labelled `lower` it was the one row in the table that could never move, which teaches a reader to ignore the column. |
+| `fuzzy.corpus_advances` / `_retractions` | A fact about the corpus, not a target. Zero is not a failure and not a pass. |
+
+`compare` takes each row's direction from the BASELINE file, so relabelling a row
+only takes effect once both sides have been regenerated. That is deliberate — the
+baseline defines the contract being compared against — but it does mean an old
+result file keeps scoring a row the current code no longer scores.
+
+`fuzzy.corpus_advances` exists to sit beside the 100% recall rows above it. Those
+come from `dimming.rs`, which builds its own precondition; this one counts how
+often the frontier actually opened on the fixtures that were replayed. Seeing
+`spelling_recall 100` and `corpus_advances 0` in one table is the whole point —
+it is not possible to mistake the harness for the corpus.
+
 ## What the benchmarks mean
 
 Safety is lexicographically first: a config that improves accuracy but adds a

@@ -374,6 +374,33 @@ fn build_table(
         "%",
         "higher",
     ));
+    /*
+     * How often the reversible frontier actually opened on the REPLAYED corpus.
+     *
+     * The `fuzzy.*` rows above come from `dimming.rs`, which drives the engine
+     * directly and builds the precondition itself — a confident manual lock, then
+     * one item holding a single misspelled word. No replay fixture produces that
+     * shape, so those rows read 100% for a mechanism that may never fire on a
+     * take. This row is the check beside them: a reader who sees recall at 100%
+     * and this at 0 cannot mistake the harness for the corpus.
+     *
+     * Measured 0 across all Tier A scenarios and all Tier B fixtures at the time
+     * it was added. Real partials carry several words at once, including exact
+     * matches and recogniser word splits, and `is_coherent_approx_chain` requires
+     * neither.
+     */
+    table.push(entry(
+        "fuzzy.corpus_advances",
+        runs.iter().map(|r| r.provisional_advances as f64).sum(),
+        "count",
+        "diagnostic",
+    ));
+    table.push(entry(
+        "fuzzy.corpus_retractions",
+        runs.iter().map(|r| r.provisional_retractions as f64).sum(),
+        "count",
+        "diagnostic",
+    ));
     table.extend(
         crate::dimming::benchmark(config)
             .into_iter()
@@ -636,11 +663,23 @@ fn build_table(
         "µs",
         "lower",
     ));
+    /*
+     * A ratio of two single-pass wall-clock means, so it carries both of their
+     * noise. Measured across five repeat runs of identical code on one machine:
+     * 0.93, 1.09, 1.17, 1.23, 1.28 — a 38% spread with nothing changed. It is
+     * still worth recording (the question "does per-event cost blow up on a
+     * 5,000-atom script" is a real one, and the answer is "no, it stays ~1x"),
+     * but it cannot carry a direction at n=1. Scored, a quiet run and a busy one
+     * look like a regression.
+     *
+     * Zero rather than NaN when a script is missing: a NaN here reaches the
+     * result JSON, and NaN != NaN makes the file uncomparable with itself.
+     */
     let scale_ratio = match (scale_us.get("huge"), scale_us.get("product-update")) {
         (Some(big), Some(small)) if *small > 0.0 => big / small,
-        _ => f64::NAN,
+        _ => 0.0,
     };
-    table.push(entry("perf.scale_ratio_5k", scale_ratio, "×", "lower"));
+    table.push(entry("perf.scale_ratio_5k", scale_ratio, "×", "diagnostic"));
 
     table
 }
@@ -894,6 +933,33 @@ pub fn run_tier_b(
         "%",
         "higher_is_worse_diagnostic",
     ));
+    /*
+     * How often the reversible frontier actually opened on the REPLAYED corpus.
+     *
+     * The `fuzzy.*` rows above come from `dimming.rs`, which drives the engine
+     * directly and builds the precondition itself — a confident manual lock, then
+     * one item holding a single misspelled word. No replay fixture produces that
+     * shape, so those rows read 100% for a mechanism that may never fire on a
+     * take. This row is the check beside them: a reader who sees recall at 100%
+     * and this at 0 cannot mistake the harness for the corpus.
+     *
+     * Measured 0 across all Tier A scenarios and all Tier B fixtures at the time
+     * it was added. Real partials carry several words at once, including exact
+     * matches and recogniser word splits, and `is_coherent_approx_chain` requires
+     * neither.
+     */
+    table.push(entry(
+        "fuzzy.corpus_advances",
+        runs.iter().map(|r| r.provisional_advances as f64).sum(),
+        "count",
+        "diagnostic",
+    ));
+    table.push(entry(
+        "fuzzy.corpus_retractions",
+        runs.iter().map(|r| r.provisional_retractions as f64).sum(),
+        "count",
+        "diagnostic",
+    ));
     table.extend(
         crate::dimming::benchmark(config)
             .into_iter()
@@ -912,7 +978,12 @@ pub fn run_tier_b(
 pub fn print_table(result: &SuiteResult) {
     println!("== {} ==", result.label);
     for e in &result.table {
-        println!("{:38} {:>10.3} {:<6} ({} is better)", e.name, e.value, e.unit, e.better);
+        // "(diagnostic is better)" is nonsense; a row with no direction says so.
+        if e.better.contains("diagnostic") {
+            println!("{:38} {:>10.3} {:<6} (diagnostic)", e.name, e.value, e.unit);
+        } else {
+            println!("{:38} {:>10.3} {:<6} ({} is better)", e.name, e.value, e.unit, e.better);
+        }
     }
 }
 
@@ -944,11 +1015,24 @@ pub fn compare_entry_tables(
         let Some(c) = candidate.iter().find(|e| e.name == b.name) else {
             continue;
         };
+        /*
+         * A DIAGNOSTIC row carries no direction, and marking it anyway is worse
+         * than leaving it blank: `perf.scale_ratio_5k` swings 0.93..1.28 across
+         * repeat runs of identical code, so a `!` on it reads as a regression
+         * somebody then goes looking for. `~` says "recorded, not scored".
+         *
+         * This match used to send every label that was not "higher" down the
+         * lower-is-better arm, which meant the one existing diagnostic label was
+         * scored as a gate and the label did nothing at all.
+         */
+        let diagnostic = b.better.contains("diagnostic");
         let improved = match b.better.as_str() {
             "higher" => c.value > b.value,
             _ => c.value < b.value,
         };
-        let marker = if (c.value - b.value).abs() < 1e-9 {
+        let marker = if diagnostic {
+            "~"
+        } else if (c.value - b.value).abs() < 1e-9 {
             " "
         } else if improved {
             "+"
