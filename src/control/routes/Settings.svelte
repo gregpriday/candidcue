@@ -1552,7 +1552,7 @@
         -->
         <Section
           title="Stage display"
-          description="The panel you calibrate, preview and test against. Present fills whichever display this window is already on — drag it there first."
+          description="The panel you calibrate, preview and test against. Present stays on whichever display this window is already on — drag it there first."
         >
           {#snippet actions()}
             <Button size="sm" disabled={displaysLoading} onclick={() => void loadDisplays()}>

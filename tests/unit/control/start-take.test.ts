@@ -573,24 +573,35 @@ describe('the display a take is calibrated against', () => {
   };
 
   /** A calibrated rig, distinguishable only by the panel scale it was measured at. */
-  function rig(rigName: string, mmPerCssPx: number) {
+  function rig(rigName: string, mmPerCssPx: number, lensPlacement: string) {
     return {
       ...defaultOpticalProfile(),
       rigName,
+      lensPlacement,
       scale: { mmPerCssPx, source: 'ruler' as const },
       viewingDistanceMm: 900,
     };
   }
 
-  /** Both panels calibrated, under `rigName`, at scales that cannot be confused. */
-  function calibrateBoth(rigName: string): void {
+  /**
+   * Both panels calibrated, under `rigName`, at scales that cannot be confused.
+   *
+   * `lensPlacement` is not decoration. `readerOpticalProfile` adopts a stored
+   * rig only when it reads `'none'` — the one field only a reading rig has —
+   * and otherwise derives an uncalibrated profile, refusing even to inherit a
+   * `'ruler'` scale because a ruler measures the finished optical path. A
+   * reader fixture left at the prompter default therefore sizes BOTH panels
+   * identically, and a test asserting only the panel's name would pass while
+   * the type came out the same either way.
+   */
+  function calibrateBoth(rigName: string, lensPlacement: string): void {
     settingsState.value!.optical = {
       activeRig: { [LAPTOP.fingerprint]: rigName, [PROMPTER.fingerprint]: rigName },
       profiles: {
-        [opticalRigKey(LAPTOP.fingerprint, rigName)]: rig(rigName, 0.12),
-        [opticalRigKey(PROMPTER.fingerprint, rigName)]: rig(rigName, 0.48),
+        [opticalRigKey(LAPTOP.fingerprint, rigName)]: rig(rigName, 0.12, lensPlacement),
+        [opticalRigKey(PROMPTER.fingerprint, rigName)]: rig(rigName, 0.48, lensPlacement),
       },
-    };
+    } as never;
   }
 
   /** The `StageSettings` the session was actually opened with. */
@@ -611,7 +622,7 @@ describe('the display a take is calibrated against', () => {
     // sitting on the laptop when Present is pressed.
     settingsState.value!.stage.presentationMode = 'prompter';
     settingsState.value!.stage.displayFingerprint = PROMPTER.fingerprint;
-    calibrateBoth('Studio hood');
+    calibrateBoth('Studio hood', 'in-panel');
     calls.enterPresentation.mockResolvedValue({
       presenting: true,
       width: 1728,
@@ -649,7 +660,8 @@ describe('the display a take is calibrated against', () => {
      * dragged their window to the external panel before pressing Present.
      */
     settingsState.value!.stage.presentationMode = 'reader';
-    calibrateBoth(READER_RIG_NAME);
+    // `'none'` is what makes these adoptable AS reading rigs; see `calibrateBoth`.
+    calibrateBoth(READER_RIG_NAME, 'none');
     calls.enterPresentation.mockResolvedValue({
       presenting: true,
       width: 1200,
@@ -660,6 +672,20 @@ describe('the display a take is calibrated against', () => {
     await expect(startTake(SCRIPT.id)).resolves.toBe(true);
 
     expect(opened().stageDisplay?.fingerprint).toBe(PROMPTER.fingerprint);
+    const onPrompter = opened().stageSettings.fontSizePx;
+
+    // Named the right panel AND sized from it — the two are separate claims,
+    // and a reader fixture that is not a reading rig satisfies only the first.
+    calls.startLiveSession.mockClear();
+    calls.enterPresentation.mockResolvedValue({
+      presenting: true,
+      width: 1200,
+      height: 800,
+      displayFingerprint: LAPTOP.fingerprint,
+    });
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(opened().stageDisplay?.fingerprint).toBe(LAPTOP.fingerprint);
+    expect(opened().stageSettings.fontSizePx).not.toBe(onPrompter);
   });
 
   it('falls back to the guess when Rust names no display', async () => {
@@ -671,7 +697,7 @@ describe('the display a take is calibrated against', () => {
      */
     settingsState.value!.stage.presentationMode = 'prompter';
     settingsState.value!.stage.displayFingerprint = PROMPTER.fingerprint;
-    calibrateBoth('Studio hood');
+    calibrateBoth('Studio hood', 'in-panel');
     calls.enterPresentation.mockResolvedValue({ presenting: true, width: 1728, height: 1117 });
 
     await expect(startTake(SCRIPT.id)).resolves.toBe(true);
@@ -685,7 +711,7 @@ describe('the display a take is calibrated against', () => {
     // calibration.
     settingsState.value!.stage.presentationMode = 'prompter';
     settingsState.value!.stage.displayFingerprint = LAPTOP.fingerprint;
-    calibrateBoth('Studio hood');
+    calibrateBoth('Studio hood', 'in-panel');
     calls.enterPresentation.mockResolvedValue({
       presenting: true,
       width: 1728,
@@ -705,7 +731,13 @@ describe('the display a take is calibrated against', () => {
      * have been composed from a guess.
      */
     settingsState.value!.stage.presentationMode = 'prompter';
-    calibrateBoth('Studio hood');
+    /*
+     * Pinned to the laptop so the pre-present guess and the landed panel
+     * disagree. Without that the guess would happen to name the same display
+     * and this would pass just as well on the code that never asked.
+     */
+    settingsState.value!.stage.displayFingerprint = LAPTOP.fingerprint;
+    calibrateBoth('Studio hood', 'in-panel');
     const held = deferred<PresentationState>();
     calls.enterPresentation.mockReturnValue(held.promise);
 

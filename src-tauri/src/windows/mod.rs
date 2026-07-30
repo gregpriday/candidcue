@@ -685,21 +685,6 @@ pub(super) fn monitor_fingerprint<R: Runtime>(
         .and_then(|index| fingerprints.get(index).cloned())
 }
 
-/// The fingerprint of the monitor at `index` in `available_monitors()` order.
-///
-/// For a caller that has already chosen a monitor BY INDEX out of that same
-/// enumeration — `windows::present`'s reader placement does, when it fits a
-/// remembered frame back onto a panel — and so has no `Monitor` left to match
-/// against. Re-enumerating here rather than threading the list through keeps
-/// that ordering the single source of both answers.
-pub(super) fn monitor_fingerprint_at<R: Runtime>(
-    app: &AppHandle<R>,
-    index: usize,
-) -> Option<String> {
-    let monitors = app.available_monitors().ok()?;
-    monitor_fingerprints(&monitors).get(index).cloned()
-}
-
 /// The fingerprint of the monitor a live window actually landed on, if it can
 /// be determined. Used to verify the stage opened where it was asked to.
 pub(super) fn window_monitor_fingerprint<R: Runtime>(

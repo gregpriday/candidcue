@@ -357,10 +357,6 @@ export async function startTake(
     });
     sessionId = record.id;
 
-    // The renderer still needs a panel's calibrated geometry even though it no
-    // longer opens a window there. Enumeration is read-only; which of these the
-    // take is measured against is settled below, once the window has moved.
-    const displays = await stageService.listDisplays().catch(() => []);
     const assets = await resolveDocumentAssets(compiled.script);
     const micDeviceId = await resolvePinnedMicrophone(s);
 
@@ -422,18 +418,27 @@ export async function startTake(
      * operator with an external prompter pinned who pressed Present at their
      * laptop read type laid out for the external panel's millimetres.
      *
-     * This costs nothing to do late. `buildStageEnvelope` assembles data; the
-     * stage has not mounted, `startLiveSession` has not run, and no line map
-     * exists to invalidate — so the ordering argument above, which is about
-     * measuring the DOCUMENT twice, is untouched.
+     * Doing this late costs no LAYOUT work, which is what the ordering argument
+     * above is about: `buildStageEnvelope` assembles data, the stage has not
+     * mounted, `startLiveSession` has not run, and there is no line map to
+     * invalidate. It is not literally free — building the render document is
+     * proportional to the script — but that work now happens behind the cover
+     * rather than over the editor, which is the right side of the seam for it.
+     *
+     * The enumeration is here rather than beside the compile FOR THIS REASON:
+     * it is the panel list the answer is matched against, so taking it any
+     * earlier would be matching a fingerprint resolved now against a topology
+     * read before the assets, the microphone, the cover and the window move. A
+     * display unplugged across that gap would drop the take back to the guess
+     * for no reason other than when the list was taken.
      *
      * `chooseStageDisplay` is the fallback rather than the rule now: Rust omits
      * the fingerprint in plain-browser dev and on a rig whose monitor cannot be
-     * identified. A fingerprint that names a panel this enumeration does not
-     * have is the same "we do not know" — and it falls back rather than
-     * inventing a descriptor, because a profile keyed to a display nobody can
-     * see is not calibration.
+     * identified. Falling back to it is a GUESS and can be the wrong panel —
+     * but it is the guess that shipped before any of this existed, so it is
+     * never worse than what it replaced.
      */
+    const displays = await stageService.listDisplays().catch(() => []);
     const landed =
       displays.find((d) => d.fingerprint === presentation.displayFingerprint) ??
       chooseStageDisplay(displays, s.stage.displayFingerprint, presentationMode);

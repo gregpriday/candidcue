@@ -75,8 +75,9 @@ export interface ControlPresentationState {
    *
    * Absent when the window is not presenting, when the monitor could not be
    * identified, and in plain-browser dev, where there are no monitors to name.
-   * A caller that gets nothing falls back to its own guess — never to a panel
-   * this answer did not mention.
+   * A caller that gets nothing falls back to its own guess, which may well name
+   * a panel this answer did not — that is what a guess is, and it is the one
+   * takes were composed from before this field existed.
    */
   displayFingerprint?: string;
 }

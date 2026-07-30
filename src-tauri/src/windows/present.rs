@@ -226,21 +226,31 @@ fn reader_placement<R: Runtime>(
 /// can cross monitors — a frame saved on the external panel last night is
 /// replayed onto it this morning — so unlike the prompter, "whichever monitor
 /// the window is on right now" is not the answer here.
-fn reader_frame_display<R: Runtime>(app: &AppHandle<R>, frame: ReaderFrame) -> Option<String> {
-    fit_reader_monitor_index(frame, &monitor_rects(app))
-        .and_then(|index| super::monitor_fingerprint_at(app, index))
-}
-
-/// The same answer for a frame that is already physical.
+/// The panel a windowed frame is about to land on, named the way
+/// `list_displays` names it.
 ///
-/// `Switch(→Reader)` restores a `ControlFrame` rather than a stored
-/// `ReaderFrame`, and converting one to the other through [`logical_frame`]
-/// would divide by the scale of the monitor the window is on NOW — which, for a
-/// switch that crosses panels on a mixed-DPI rig, is the wrong divisor and can
-/// name the wrong monitor. The physical origin needs no conversion.
+/// ---------------------------------------------------------------------------
+/// ASKED OF `restore_position`, NOT OF THE STORED RECTANGLE
+/// ---------------------------------------------------------------------------
+/// The stored origin is not where the window goes. [`apply_windowed`] passes
+/// every frame through [`restore_position`] first, which rescues a rectangle no
+/// live display covers — a take saved on a panel since unplugged — onto the
+/// PRIMARY monitor. Naming the panel from the raw frame instead would report
+/// the display it was rescued FROM, which is unplugged, so the take would be
+/// measured against a panel nobody is looking at.
+///
+/// Reporting the placed position rather than re-deriving the rule is what keeps
+/// the two in step: this cannot disagree with the placement, because it is
+/// asking the placement.
+///
+/// Enumerated ONCE, so the index that selects the monitor and the index that
+/// names it are indices into the same list.
 fn control_frame_display<R: Runtime>(app: &AppHandle<R>, frame: &ControlFrame) -> Option<String> {
-    monitor_index_at(frame.position, &monitor_rects(app))
-        .and_then(|index| super::monitor_fingerprint_at(app, index))
+    let placed = restore_position(app, frame);
+    let monitors = app.available_monitors().ok()?;
+    let rects: Vec<MonitorRect> = monitors.iter().map(MonitorRect::of).collect();
+    let index = monitor_index_at(placed, &rects)?;
+    super::monitor_fingerprints(&monitors).get(index).cloned()
 }
 
 /// Which monitor a physical point falls on, by the same
@@ -934,7 +944,25 @@ fn apply_presentation<R: Runtime>(
         .ok_or_else(|| presentation_failed("no monitor to present on"))?;
 
     let bounds = *monitor.size();
-    // Named before the setters run, for the reason in the doc comment above.
+    /*
+     * Named before the setters run, for the reason in the doc comment above —
+     * and named from the SAME `monitor` whose bounds are applied below, so the
+     * panel reported and the rectangle applied can only ever describe the same
+     * display.
+     *
+     * That is the guarantee worth having, because it is the one that survives
+     * the case above it. A window left in NATIVE fullscreen has just been asked
+     * to leave it, and `set_fullscreen(false)` is delivered asynchronously like
+     * everything else here: AppKit can finish its exit animation after the
+     * geometry below has been queued, and restore the pre-fullscreen frame over
+     * the top of it. If that happens the window ends up somewhere this function
+     * did not put it — but the size it reports is derived from this same
+     * monitor, so the report and the geometry are wrong together rather than
+     * separately, and the renderer is never calibrated for one panel while laid
+     * out for another. Untestable here (no WebDriver for WKWebView) and reached
+     * only by a window the PREVIOUS implementation left in fullscreen, so it is
+     * recorded rather than worked around.
+     */
     let display = super::monitor_fingerprint(app, &monitor);
     /*
      * Give the declared floor back, in case we are arriving from reader mode.
@@ -1560,7 +1588,11 @@ pub fn set_control_presenting<R: Runtime>(
                      * so the monitor it is on is the monitor it stays on.
                      */
                     landed_display = match reader_frame {
-                        Some(frame) => reader_frame_display(app, frame),
+                        // Through the same `reader_placement` the apply below
+                        // runs, so the panel reported is the panel fitted to.
+                        Some(frame) => {
+                            control_frame_display(app, &reader_placement(app, frame, decorations))
+                        }
                         None => super::window_monitor_fingerprint(app, &window),
                     };
                     apply_reader(app, &window, decorations, reader_frame)?
@@ -1820,8 +1852,17 @@ pub fn set_control_presenting<R: Runtime>(
          * would otherwise hand the renderer a display to measure nothing
          * against.
          */
-        display_fingerprint: applied.and(landed_display),
+        display_fingerprint: reported_display(applied, landed_display),
     })
+}
+
+/// The panel to report, given what was applied and what was named.
+///
+/// A one-line rule with a real invariant in it, so it is named and tested
+/// rather than inlined: a window that is not presenting has no take to
+/// calibrate, and must report no panel however confidently an arm named one.
+fn reported_display(applied: Option<PresentMode>, landed: Option<String>) -> Option<String> {
+    applied.and(landed)
 }
 
 /*
@@ -1878,9 +1919,10 @@ mod tests {
         assert!(position.x >= 3024, "placed on the panel it was named for");
     }
 
-    /// A frame whose panel is gone is placed on the first monitor, so that is
-    /// the one it must be reported against too — never `None`, which the caller
-    /// would read as "could not be identified" and fall back from.
+    /// A frame whose panel is gone is still fitted onto a live one, never left
+    /// unplaced — and because `fit_reader_frame` CLAMPS it into that monitor,
+    /// the rectangle handed on is already on a live display, so
+    /// `restore_position` passes it through and the reported panel agrees.
     #[test]
     fn a_reader_whose_panel_is_gone_is_measured_against_where_it_actually_lands() {
         let screens = [monitor(0, 0, 1440.0, 900.0, 2.0)];
@@ -1918,17 +1960,20 @@ mod tests {
 
     /* ------------------------------------------ what the renderer is handed */
 
+    /// Built the way `set_control_presenting` builds it — through
+    /// [`reported_display`] rather than around it, so a test cannot assert a
+    /// combination production forbids.
     fn presentation_state(
-        presenting: bool,
-        display: Option<&str>,
+        applied: Option<PresentMode>,
+        landed: Option<&str>,
     ) -> ControlPresentationState {
         ControlPresentationState {
-            presenting,
-            mode: presenting.then_some(PresentMode::Prompter),
+            presenting: applied.is_some(),
+            mode: applied,
             width: 1728.0,
             height: 1117.0,
             reader_frame: None,
-            display_fingerprint: display.map(str::to_owned),
+            display_fingerprint: reported_display(applied, landed.map(str::to_owned)),
         }
     }
 
@@ -1936,18 +1981,24 @@ mod tests {
     /// name has to be the camelCase one `control-window.ts` declares.
     #[test]
     fn the_panel_reaches_the_renderer_under_the_name_it_reads() {
-        let json = serde_json::to_value(presentation_state(true, Some("panel-2"))).unwrap();
+        let json =
+            serde_json::to_value(presentation_state(PROMPTER, Some("panel-2"))).unwrap();
         assert_eq!(json["displayFingerprint"], "panel-2");
     }
 
-    /// Omitted rather than null, both when there is no take to calibrate and
-    /// when the monitor could not be identified — the renderer treats an absent
-    /// field as "fall back to your own guess".
+    /// Omitted rather than null, so the renderer's "fall back to your own
+    /// guess" branch is reached by an ABSENT key.
+    ///
+    /// The third case is the invariant worth having: an un-present that somehow
+    /// named a panel still reports none, because there is no take to calibrate
+    /// against it. That combination is unreachable through the arms today, and
+    /// asserting it here is what keeps it unreachable.
     #[test]
     fn a_panel_that_cannot_be_named_is_left_out_entirely() {
         for state in [
-            presentation_state(false, None),
-            presentation_state(true, None),
+            presentation_state(None, None),
+            presentation_state(PROMPTER, None),
+            presentation_state(None, Some("panel-2")),
         ] {
             let json = serde_json::to_value(state).unwrap();
             assert!(
