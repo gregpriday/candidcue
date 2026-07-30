@@ -21,22 +21,54 @@ import { isMacPlatform, SHORTCUT_OWNERSHIP } from '../../src/control/lib/shortcu
    reads it rather than assumed to be the Mac one. */
 const mod = isMacPlatform() ? '⌘' : 'Ctrl+';
 
-function open() {
+/** Render the dialog and hand back its panel — required, so a component that
+    rendered nothing fails loudly instead of every text assertion passing on ''. */
+function open(): HTMLElement {
   render(ShortcutsDialog, { props: { open: true, onclose: () => {} } });
+  const panel = document.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
+  if (!panel) throw new Error('the dialog did not render');
+  return panel;
+}
+
+function tables(): HTMLTableElement[] {
   return [...document.querySelectorAll('table')];
+}
+
+/** The group name alone — the caption also carries an optional note. */
+function captionOf(table: HTMLTableElement): string {
+  return table.querySelector('caption .group')?.textContent?.trim() ?? '';
 }
 
 /** The rows under a group caption, as `[action, keys]` pairs. */
 function groupRows(caption: string): Array<[string, string]> {
-  const table = [...document.querySelectorAll('table')].find((t) =>
-    // The caption also carries an optional note, so match its first line.
-    t.querySelector('caption')?.textContent?.trim().startsWith(caption),
-  );
+  const table = tables().find((t) => captionOf(t) === caption);
   if (!table) throw new Error(`no group captioned "${caption}"`);
   return [...table.querySelectorAll('tbody tr')].map((tr) => {
     const cells = tr.querySelectorAll('td');
     return [cells[0]?.textContent?.trim() ?? '', cells[1]?.textContent?.trim() ?? ''];
   });
+}
+
+/**
+ * Every `action → group caption` claim the rendered page makes.
+ *
+ * Read off `data-actions` rather than counted, because a count is not the
+ * invariant. Losing one row and duplicating another keeps the total identical
+ * while leaving a command undocumented — which is this issue's own failure mode,
+ * and would be a poor thing for this file to be blind to.
+ */
+function renderedClaims(): string[] {
+  const claims: string[] = [];
+  for (const table of tables()) {
+    const caption = captionOf(table);
+    for (const tr of table.querySelectorAll('tbody tr')) {
+      const actions = tr.getAttribute('data-actions');
+      // Bold and Italic are the editor's own keys and carry no action.
+      if (!actions) continue;
+      for (const action of actions.split(' ')) claims.push(`${action} → ${caption}`);
+    }
+  }
+  return claims.sort();
 }
 
 function labelsIn(caption: string): string[] {
@@ -45,10 +77,10 @@ function labelsIn(caption: string): string[] {
 
 describe('the shortcuts reference is grouped by the screen that answers each key', () => {
   it('heads every group with a caption and two column headers', () => {
-    const tables = open();
-    expect(tables.length).toBe(4);
-    for (const table of tables) {
-      expect(table.querySelector('caption')?.textContent?.trim()).toBeTruthy();
+    open();
+    expect(tables().length).toBe(4);
+    for (const table of tables()) {
+      expect(captionOf(table)).toBeTruthy();
       const headers = [...table.querySelectorAll('thead th')];
       expect(headers.length).toBe(2);
       // The complaint was that the table had no header cells at all; `scope`
@@ -60,12 +92,11 @@ describe('the shortcuts reference is grouped by the screen that answers each key
   });
 
   it('names the four groups in the order the app is used', () => {
-    const tables = open();
-    const captions = tables.map((t) => t.querySelector('caption')?.textContent?.trim() ?? '');
-    expect(captions[0]).toBe('Everywhere');
-    expect(captions[1]).toBe('Library');
-    expect(captions[2]?.startsWith('Editor')).toBe(true);
-    expect(captions[3]).toBe('During a take');
+    open();
+    // The screens that answer nothing are named in the component but drop out
+    // here, because a table headed "Settings" with no rows says the opposite of
+    // what is true.
+    expect(tables().map(captionOf)).toEqual(['Everywhere', 'Library', 'Editor', 'During a take']);
   });
 
   it('puts each key under the screen that actually answers it', () => {
@@ -92,46 +123,77 @@ describe('the shortcuts reference is grouped by the screen that answers each key
   });
 
   it('no longer annotates rows by hand now the caption says where they work', () => {
-    open();
-    const body = document.querySelector('.panel')?.textContent ?? '';
-    expect(body).not.toContain('(during Live)');
+    const panel = open();
+    expect(panel.textContent).not.toContain('(during Live)');
   });
 
   /*
-   * The drift guard.
+   * The drift guard, and the reason this file exists at all.
    *
    * The failure this whole change is about is a command and its help going out
-   * of step. A new `ShortcutAction` with no row here would be a key that works
-   * and is documented nowhere; a row naming a command that no longer exists
-   * stops compiling. Counting rows against the table is what turns "we
-   * remembered this time" into something the suite enforces.
+   * of step. So the page is checked against `SHORTCUT_OWNERSHIP` claim by claim
+   * rather than by counting rows: a command with no row, a command printed under
+   * a screen that does not answer it, and a command printed twice are three
+   * different mistakes, and a total only notices when they fail to cancel out.
    */
-  it('documents every command exactly once', () => {
+  it('prints every command under exactly the screens that answer it', () => {
     open();
-    const documented = [
-      ...labelsIn('Everywhere'),
-      ...labelsIn('Library'),
-      ...labelsIn('Editor'),
-      ...labelsIn('During a take'),
-    ];
-    const actionCount = Object.keys(SHORTCUT_OWNERSHIP).length;
-    /*
-     * Four rows document a pair each (back/forward, previous/next chapter,
-     * larger/smaller stage text, slower/faster), Present is deliberately shown
-     * twice because two screens answer it, and Bold and Italic are the editor's
-     * own keys rather than entries in the table.
-     */
-    const PAIRED_ROWS = 4;
-    const PRESENT_SHOWN_TWICE = 1;
-    const EDITOR_LOCAL_ROWS = 2;
-    expect(documented.length).toBe(
-      actionCount - PAIRED_ROWS + PRESENT_SHOWN_TWICE + EDITOR_LOCAL_ROWS,
-    );
-    // And nothing is listed twice inside one group.
+    const CAPTION: Record<string, string> = {
+      global: 'Everywhere',
+      library: 'Library',
+      editor: 'Editor',
+      live: 'During a take',
+      welcome: 'Welcome',
+      settings: 'Settings',
+      calibrate: 'Calibrate',
+    };
+    const expected: string[] = [];
+    for (const [action, ownership] of Object.entries(SHORTCUT_OWNERSHIP)) {
+      const scopes = ownership === 'global' ? ['global'] : [...ownership];
+      for (const scope of scopes) expected.push(`${action} → ${CAPTION[scope]}`);
+    }
+    expect(renderedClaims()).toEqual(expected.sort());
+  });
+
+  /*
+   * A row that documents a pair — back/forward, previous/next — is one line for
+   * two commands, and only honest while both work in the same place. If one of
+   * them ever gained an owner the other lacks, the row would quietly follow the
+   * narrower of the two and the wider command would go undocumented on the
+   * screen it had just been given.
+   */
+  it('keeps paired rows to commands that share a screen', () => {
+    open();
+    for (const table of document.querySelectorAll('table')) {
+      for (const tr of table.querySelectorAll('tbody tr')) {
+        const actions = (tr.getAttribute('data-actions') ?? '').split(' ').filter(Boolean);
+        if (actions.length < 2) continue;
+        const owners = actions.map((a) =>
+          JSON.stringify(SHORTCUT_OWNERSHIP[a as keyof typeof SHORTCUT_OWNERSHIP]),
+        );
+        expect(new Set(owners).size, `row "${actions.join(' ')}" spans screens`).toBe(1);
+      }
+    }
+  });
+
+  it('lists nothing twice inside one group', () => {
+    open();
     for (const caption of ['Everywhere', 'Library', 'Editor', 'During a take']) {
       const labels = labelsIn(caption);
       expect(new Set(labels).size).toBe(labels.length);
     }
+  });
+
+  /*
+   * Opening on the end of a scrolled list is the bug a footer button causes: the
+   * shell focuses the first control it finds, and Done is past four tables.
+   */
+  it('opens with focus at the top rather than on the button past the list', () => {
+    const panel = open();
+    const intro = panel.querySelector('.intro');
+    expect(document.activeElement).toBe(intro);
+    // And it stays out of the Tab order, so Done is still the first stop.
+    expect(intro?.getAttribute('tabindex')).toBe('-1');
   });
 
   it('gives the editor its formatting keys, marked as needing the text focused', () => {

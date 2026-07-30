@@ -124,6 +124,13 @@ function press(
     altKey?: boolean;
   } = {},
 ): Fired {
+  /*
+   * Cleared before the dispatch, not after: `lastAction` is module state, so a
+   * press that emits NOTHING would otherwise return whatever the press before it
+   * emitted — and a test asserting a key still works on its own screen would
+   * pass on the previous screen's answer.
+   */
+  lastAction = null;
   const event = {
     key,
     metaKey: options.metaKey ?? false,

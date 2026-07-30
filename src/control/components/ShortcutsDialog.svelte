@@ -124,29 +124,81 @@
     return rows.filter((row) => row.actions.every((action) => ownedBy(action, scope)));
   }
 
+  /**
+   * The name each scope wears on the page.
+   *
+   * Exhaustive over `ShortcutScope`, which is the point. Listing the four
+   * groups that happen to have keys today would repeat this issue one level up:
+   * a command handed to Settings would be owned by the table, claimed by the
+   * listener on that screen, and printed in no section at all — a working key
+   * documented nowhere. Sections with nothing in them are dropped below, so
+   * naming a screen here costs a line and buys the guarantee.
+   */
+  const GROUP_CAPTIONS = {
+    global: 'Everywhere',
+    library: 'Library',
+    editor: 'Editor',
+    live: 'During a take',
+    welcome: 'Welcome',
+    settings: 'Settings',
+    calibrate: 'Calibrate',
+  } as const satisfies Record<ShortcutScope, string>;
+
+  /** Everywhere first, then the screens roughly in the order they are met. */
+  const GROUP_ORDER = [
+    'global',
+    'library',
+    'editor',
+    'live',
+    'welcome',
+    'settings',
+    'calibrate',
+  ] as const satisfies readonly ShortcutScope[];
+
   /*
    * Present appears under both Library and Editor, because both screens answer
    * it — a duplicated line is the honest rendering of a key with two owners.
-   * The routes that answer nothing (Welcome, Settings, Calibrate) have no group:
-   * an empty table headed "Settings" would say the opposite of what is true.
+   *
+   * `data-actions` carries what the resolver calls each row so the suite can
+   * check the rendered page against `SHORTCUT_OWNERSHIP` pair by pair, rather
+   * than counting rows and hoping. The editor's own keys carry none: they are
+   * not in the table, which is exactly what the empty value says.
    */
-  const groups: Array<{ caption: string; note?: string; rows: Array<Pick<ShortcutRow, 'label' | 'keys'>> }> = [
-    { caption: 'Everywhere', rows: rowsFor('global') },
-    { caption: 'Library', rows: rowsFor('library') },
-    {
-      caption: 'Editor',
-      note: 'Bold and italic apply while the script text has focus.',
-      rows: [...rowsFor('editor'), ...editorLocalRows],
-    },
-    { caption: 'During a take', rows: rowsFor('live') },
-  ];
+  const groups = GROUP_ORDER.map((scope) => ({
+    scope,
+    caption: GROUP_CAPTIONS[scope],
+    note:
+      scope === 'editor' ? 'Bold and italic apply while the script text has focus.' : undefined,
+    rows: [
+      ...rowsFor(scope).map((row) => ({
+        label: row.label,
+        keys: row.keys,
+        actions: row.actions.join(' '),
+      })),
+      ...(scope === 'editor' ? editorLocalRows.map((row) => ({ ...row, actions: '' })) : []),
+    ],
+  })).filter((group) => group.rows.length > 0);
 </script>
 
 <Dialog {open} title="Keyboard shortcuts" {onclose}>
-  {#each groups as group (group.caption)}
+  <!--
+    Focus lands here rather than on Done, and `tabindex="-1"` keeps it out of the
+    Tab order while still being a thing `focus()` can reach.
+
+    The reference is now four tables tall — past the panel's max height, so the
+    panel scrolls. Dialog focuses the first control it finds, which is the Done
+    button in the footer, and focusing the footer of a scrolled panel scrolls the
+    list to its end: the help would have opened on its last few rows with the
+    title out of sight. A static line at the top is also what long dialogs are
+    supposed to open on.
+  -->
+  <p class="intro" data-autofocus tabindex="-1">
+    Every key the app answers, and the screen that answers it.
+  </p>
+  {#each groups as group (group.scope)}
     <table class="shortcuts">
       <caption>
-        {group.caption}
+        <span class="group">{group.caption}</span>
         {#if group.note}<span class="note">{group.note}</span>{/if}
       </caption>
       <thead>
@@ -157,7 +209,7 @@
       </thead>
       <tbody>
         {#each group.rows as row (row.label)}
-          <tr>
+          <tr data-actions={row.actions}>
             <td class="action">{row.label}</td>
             <td class="keys">{row.keys}</td>
           </tr>
@@ -175,12 +227,23 @@
     width: 100%;
     border-collapse: collapse;
   }
+  .intro {
+    margin: 0;
+    color: var(--text-secondary);
+  }
+  /* Focused on open, and never wearing a ring for it — the panel carries the
+     modality, and an accent outline on a paragraph would read as an error. */
+  .intro:focus {
+    outline: none;
+  }
   caption {
+    text-align: left;
+    padding-bottom: var(--space-1);
+  }
+  .group {
     /* The group name reads as a heading for the rows under it, so it carries the
        weight rather than the accent — the dialog's own title is the only voice
        raised on this panel. */
-    text-align: left;
-    padding-bottom: var(--space-1);
     font-size: var(--text-sm);
     font-weight: 650;
     color: var(--text-primary);
