@@ -14,6 +14,17 @@ export interface LibraryState {
   query: string;
   sort: ScriptSort;
   selectedId: string | null;
+  /**
+   * Whether `selectedId` came from the operator rather than from the fallback in
+   * `loadLibrary`.
+   *
+   * The fallback exists so the Present shortcut has a target the moment the
+   * library finishes loading, which is worth keeping — but it is a default, not a
+   * choice, and drawing it as a chosen card says the operator picked the top
+   * script when they have not touched anything yet. Cards read the flag; the
+   * shortcut keeps reading `selectedId` and is unaffected.
+   */
+  selectionIsExplicit: boolean;
   error: string | null;
 }
 
@@ -24,6 +35,7 @@ const state = writable<LibraryState>({
   query: '',
   sort: 'recently_edited',
   selectedId: null,
+  selectionIsExplicit: false,
   error: null,
 });
 
@@ -41,14 +53,19 @@ export async function loadLibrary(): Promise<void> {
       { view: current.view, query: current.query },
       current.sort,
     );
-    state.update((s) => ({
-      ...s,
-      loading: false,
-      scripts: page.items,
-      selectedId: page.items.some((i) => i.id === s.selectedId)
-        ? s.selectedId
-        : page.items[0]?.id ?? null,
-    }));
+    state.update((s) => {
+      const kept = page.items.some((i) => i.id === s.selectedId);
+      return {
+        ...s,
+        loading: false,
+        scripts: page.items,
+        selectedId: kept ? s.selectedId : page.items[0]?.id ?? null,
+        // An explicit choice survives a reload as long as the script is still in
+        // the list. Falling back to the first item is not a choice, so it must
+        // not inherit the flag from the selection it replaced.
+        selectionIsExplicit: kept ? s.selectionIsExplicit : false,
+      };
+    });
   } catch (err) {
     state.update((s) => ({ ...s, loading: false, error: String(err) }));
   }
@@ -70,7 +87,7 @@ export function setLibrarySort(sort: ScriptSort): void {
 }
 
 export function selectScript(id: string | null): void {
-  state.update((s) => ({ ...s, selectedId: id }));
+  state.update((s) => ({ ...s, selectedId: id, selectionIsExplicit: id !== null }));
 }
 
 export async function duplicateScript(id: string): Promise<void> {

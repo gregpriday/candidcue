@@ -936,8 +936,17 @@
             <Icon name="pause" size={16} />
             Pause
           </Button>
+          <!--
+            Left-aligned, because this trigger lives at the LEFT end of the
+            transport. The default right alignment pins the popover's right edge
+            to the trigger, and this menu's one item is a long `nowrap` label — so
+            it extended roughly 320px leftwards from a trigger sitting about 145px
+            in, putting its opening words at a negative coordinate. That truncated
+            the only route to "Hard pause — mic off" in the app.
+          -->
           <OverflowMenu
             label="Pause options"
+            align="left"
             items={[
               {
                 label: 'Hard pause — mic off, resume by click only',

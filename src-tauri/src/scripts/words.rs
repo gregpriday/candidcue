@@ -166,13 +166,32 @@ pub fn estimated_duration_seconds(words: u32, wpm: u32) -> u32 {
     ((words as f64 / wpm as f64) * 60.0).round() as u32
 }
 
-/// Short library preview (first ~200 chars of spoken text).
+/// Short library preview — the leading spoken text, cut on a word boundary.
+///
+/// It used to slice at exactly 200 characters and append the ellipsis wherever
+/// that landed, which was usually mid-word: the library showed "…whether the
+/// text scrolls smoothly and rem…". A broken word is a worse identifier than a
+/// shorter whole one, because the eye stops at the fragment instead of finishing
+/// the sentence — and this string is the only thing distinguishing two scripts
+/// that share a title.
 pub fn preview_text(plain: &str) -> String {
-    let mut preview: String = plain.chars().take(200).collect();
-    if plain.chars().count() > 200 {
-        preview.push('…');
+    const LIMIT: usize = 200;
+    if plain.chars().count() <= LIMIT {
+        return plain.to_string();
     }
-    preview
+    let head: String = plain.chars().take(LIMIT).collect();
+    // Back up to the last space so the preview ends on a whole word. With no
+    // space in 200 characters the text is one unbroken run — a URL, or a script
+    // in a language that does not space its words — and the hard cut is the only
+    // thing left to do.
+    let boundary = head.rfind(char::is_whitespace).unwrap_or(0);
+    let trimmed = head[..boundary].trim_end();
+    let body = if trimmed.is_empty() {
+        head.trim_end()
+    } else {
+        trimmed
+    };
+    format!("{body}…")
 }
 
 #[cfg(test)]
@@ -185,6 +204,51 @@ mod tests {
         let plain = spoken_plain_text(source, SpokenTextOptions::default());
         assert_eq!(plain, "Hello world from CandidCue. Second paragraph here.");
         assert_eq!(word_count(&plain), 7);
+    }
+
+    #[test]
+    fn preview_leaves_short_text_alone() {
+        assert_eq!(preview_text("Good morning, everyone."), "Good morning, everyone.");
+    }
+
+    #[test]
+    fn preview_cuts_on_a_word_boundary() {
+        // The library used to read "…text scrolls smoothly and rem…", because the
+        // cut was a flat 200-character slice.
+        //
+        // The 7-character unit is the point: 200 is not a multiple of it, so the
+        // old implementation's cut landed four characters into a word and produced
+        // "…abcd…". A 5-character unit divides 200 exactly, which is why the
+        // obvious "word ".repeat(60) fixture passed against the OLD code too and
+        // proved nothing.
+        let plain = "abcdef ".repeat(40);
+        let preview = preview_text(&plain);
+
+        assert!(preview.ends_with("abcdef…"), "cut mid-word: {preview}");
+        let body = preview.trim_end_matches('…');
+        // `all` over an empty iterator is vacuously true, so the emptiness of the
+        // body is its own assertion rather than something the loop below implies.
+        assert!(!body.is_empty(), "the preview lost its text entirely");
+
+        let words: Vec<&str> = body.split_whitespace().collect();
+        assert_eq!(words.len(), 28, "{preview}");
+        assert!(
+            words.iter().all(|w| *w == "abcdef"),
+            "no half-spelled word may survive: {preview}"
+        );
+        // Backing up to the boundary must not push it past the limit either.
+        assert!(body.chars().count() <= 200, "{}", body.chars().count());
+    }
+
+    #[test]
+    fn preview_hard_cuts_text_with_no_boundary() {
+        // One unbroken run — a URL, or a script whose language does not space its
+        // words. There is no boundary to back up to, so the flat cut is all there
+        // is, and it must still terminate rather than return the whole document.
+        let plain = "a".repeat(500);
+        let preview = preview_text(&plain);
+        assert_eq!(preview.chars().count(), 201);
+        assert!(preview.ends_with('…'));
     }
 
     #[test]

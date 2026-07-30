@@ -73,7 +73,22 @@ export function plainExcerpt(source: string, maxLength = 140): string {
     .replace(/\s+/g, ' ')
     .trim();
   if (stripped.length <= maxLength) return stripped;
-  return `${stripped.slice(0, maxLength - 1).trimEnd()}…`;
+  // Cut on a word boundary — see `preview_text` in src-tauri/src/scripts/words.rs,
+  // which owns the real thing. This is the dev/mock path and has to agree with it,
+  // or a preview looks different in `pnpm dev` than it does in the app.
+  const head = stripped.slice(0, maxLength - 1);
+  const boundary = head.lastIndexOf(' ');
+  if (boundary > 0) return `${head.slice(0, boundary).trimEnd()}…`;
+  /*
+   * No boundary to back up to — one unbroken run, so the flat cut is all there
+   * is. `slice` counts UTF-16 code units, and Rust's `chars()` counts scalars, so
+   * this is the one path where the two implementations can disagree: a run of
+   * emoji cut between the halves of a surrogate pair renders as a replacement
+   * glyph right before the ellipsis. Dropping the orphaned half costs one
+   * character and cannot produce broken glass.
+   */
+  const cut = /[\uD800-\uDBFF]$/.test(head) ? head.slice(0, -1) : head;
+  return `${cut.trimEnd()}…`;
 }
 
 /** Stable non-cryptographic hash of a script source (FNV-1a, hex). */

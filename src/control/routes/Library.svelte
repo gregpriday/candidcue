@@ -6,9 +6,9 @@
   import Button from '../components/Button.svelte';
   import EmptyState from '../components/EmptyState.svelte';
   import Icon from '../components/Icon.svelte';
-  import ListRow from '../components/ListRow.svelte';
   import OverflowMenu from '../components/OverflowMenu.svelte';
   import PageHeader from '../components/PageHeader.svelte';
+  import ScriptCard from '../components/ScriptCard.svelte';
   import Select from '../components/Select.svelte';
   import StatusPill from '../components/StatusPill.svelte';
   import { formatSpeakingDuration, relativeTime } from '../lib/format';
@@ -121,20 +121,25 @@
     showToast('Export ready', 'success');
   }
 
-  function rowMeta(script: ScriptSummary): string {
-    const parts = [
+  /** Metadata as discrete parts — the card sets the separators, not this. */
+  function rowMeta(script: ScriptSummary): string[] {
+    return [
       relativeTime(script.updatedAt),
       `${script.spokenWordCount.toLocaleString()} words`,
       formatSpeakingDuration(script.estimatedDurationSeconds),
-    ];
-    return parts.filter(Boolean).join(' · ');
+    ].filter(Boolean);
   }
 
   function rowMenu(script: ScriptSummary) {
     if (inTrash) {
       return [
         { label: 'Restore', onselect: () => void restoreScriptFromTrash(script.id) },
-        { label: 'Delete permanently', danger: true, onselect: () => void confirmDeleteForever(script) },
+        {
+          label: 'Delete permanently',
+          danger: true,
+          separated: true,
+          onselect: () => void confirmDeleteForever(script),
+        },
       ];
     }
     return [
@@ -142,7 +147,9 @@
       { label: 'Present', onselect: () => presentScript(script) },
       { label: 'Duplicate', onselect: () => void duplicateScript(script.id) },
       { label: 'Export Markdown', onselect: () => void exportScript(script) },
-      { label: 'Move to Trash', danger: true, onselect: () => void confirmTrash(script) },
+      // Ruled off: the only irreversible-looking action in the list should not
+      // sit one slot below "Export Markdown" with nothing between them.
+      { label: 'Move to Trash', danger: true, separated: true, onselect: () => void confirmTrash(script) },
     ];
   }
 </script>
@@ -173,12 +180,22 @@
       <input
         class="search-input"
         type="search"
-        placeholder="Search scripts   ⌘K"
+        placeholder="Search scripts"
         aria-label="Search scripts"
         value={query}
         bind:this={searchInput}
         oninput={onSearchInput}
       />
+      <!--
+        The shortcut is chrome, not placeholder text. It used to be three hard
+        spaces and "⌘K" inside the placeholder, which meant it shared the
+        placeholder's colour and baseline, vanished the moment anybody typed, and
+        drifted left as the field resized. `aria-hidden` because the input's own
+        label already names the field and the binding is announced elsewhere.
+      -->
+      {#if query === ''}
+        <kbd class="hint" aria-hidden="true">⌘K</kbd>
+      {/if}
     </div>
     {#if showsSort}
       <div class="sort">
@@ -217,31 +234,30 @@
       <ul class="list" aria-label={pageTitle}>
         {#each $library.scripts as script (script.id)}
           <li>
-            <ListRow
+            <ScriptCard
               title={script.title}
               excerpt={script.previewText || undefined}
               meta={rowMeta(script)}
-              selected={$library.selectedId === script.id}
+              selected={$library.selectionIsExplicit && $library.selectedId === script.id}
               onselect={() => selectScript(script.id)}
               onopen={() => (inTrash ? undefined : openScript(script))}
             >
-              {#snippet leading()}
-                <Icon name="doc" size={18} />
-              {/snippet}
-              {#snippet trailing()}
+              {#snippet status()}
                 {#if script.hasWarnings}
                   <StatusPill tone="warning" label="Needs attention" />
                 {:else if script.status === 'ready'}
                   <StatusPill tone="success" label="Prepared" />
                 {/if}
+              {/snippet}
+              {#snippet actions()}
                 {#if !inTrash}
-                  <Button size="sm" onclick={() => presentScript(script)}>Present</Button>
+                  <Button onclick={() => presentScript(script)}>Present</Button>
                 {:else}
-                  <Button size="sm" onclick={() => restoreScriptFromTrash(script.id)}>Restore</Button>
+                  <Button onclick={() => restoreScriptFromTrash(script.id)}>Restore</Button>
                 {/if}
                 <OverflowMenu items={rowMenu(script)} label="Script actions" />
               {/snippet}
-            </ListRow>
+            </ScriptCard>
           </li>
         {/each}
       </ul>
@@ -280,10 +296,30 @@
     pointer-events: none;
     display: inline-flex;
   }
+  .hint {
+    position: absolute;
+    right: var(--space-2);
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 6px;
+    border: 1px solid var(--border-faint);
+    border-radius: 5px;
+    background: var(--bg-sunken);
+    color: var(--text-faint);
+    font-family: var(--font-ui);
+    font-size: var(--text-2xs);
+    font-weight: 600;
+    pointer-events: none;
+  }
+
   .search-input {
     width: 100%;
     height: var(--control-h);
-    padding: 0 var(--space-3) 0 calc(var(--space-3) + 22px);
+    /* Right padding clears the ⌘K capsule so a long query never runs under it. */
+    padding: 0 calc(var(--space-2) + 34px) 0 calc(var(--space-3) + 22px);
     border: 1px solid var(--border-control);
     border-radius: var(--radius-sm);
     background: var(--bg-panel);
