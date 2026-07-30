@@ -333,8 +333,8 @@
    * to turn the glass around. Writing settings here made the leave-without-
    * saving prompt a lie — the mirror change outlived the Discard it claimed to
    * have dropped, and the next take opened flipped with nothing on screen to
-   * explain it. `finish()` is now the only place that puts a flip anywhere
-   * permanent.
+   * explain it. Within this wizard, `finish()` is now the only place that puts
+   * a flip anywhere permanent.
    */
   function applyPreset(preset: OpticalRigPreset): void {
     patchProfile(opticalProfileFieldsForPreset(preset));
@@ -608,11 +608,11 @@
     /*
      * Deliberately does NOT say "leave this screen".
      *
-     * Leaving is what the navigation guard catches, and the only button on that
-     * prompt is Discard — so the old wording sent an operator who had lost the
-     * preview to the one action that throws away every measurement in the
-     * sentence before it. Finishing keeps the work AND is the thing that lets
-     * the window come back.
+     * Leaving is what the navigation guard catches, and the only button on
+     * that prompt that actually leaves is Discard — so the old wording sent an
+     * operator who had lost the preview to the one action that throws away
+     * every measurement in the sentence before it. Finishing keeps the work
+     * AND is the thing that lets the window come back.
      */
     stageError =
       'The prompt window was closed from the prompter. Everything measured here is still here — carry on and apply the rig when you are ready. Opening Calibrate again after it is saved puts the window back.';
@@ -797,12 +797,13 @@
    * either of them.
    *
    * `profile.flips` is the RECORD — what this rig's glass does — and
-   * `teleprompter.mirrorX/mirrorY` is what actually reaches the render, because
-   * `buildStageSettings` deliberately takes mirroring from the Settings toggles
-   * rather than from the profile (honouring both would double-flip a rig, and
-   * preferring the profile would quietly un-mirror somebody the first time they
-   * calibrated). Two homes for one physical fact can only stay consistent if
-   * one place writes both, so one place does: `finish()`.
+   * `teleprompter.mirrorX/mirrorY` is what a real take actually renders from.
+   * `buildStageSettings` takes mirroring as explicit arguments rather than
+   * choosing a source: a take passes the Settings values, and this screen
+   * passes `profile.flips` (honouring both at once would double-flip a rig).
+   * Two homes for one physical fact can only stay consistent if one place
+   * writes both, and within this wizard that place is `finish()` — the Stage
+   * display screen still owns its own toggles.
    *
    * This writes only the record. Judging the step by eye still works, because
    * the preview does not come from the settings — `calibrationStageSettings()`
@@ -1024,13 +1025,15 @@
    * `teleprompter` settings a real take renders from here, at the one moment the
    * operator has actually said to keep this rig.
    *
-   * The two writes are awaited one after the other, never together.
-   * `patchSettings` reads the store's revision when it is called; fired as a
-   * pair they would both start from the same one, and the backend would reject
-   * the loser as stale — dropping the mirror silently. Optical goes first
-   * because it is the calibration itself: if it cannot be stored there is no rig
-   * to be mirrored for, and a global flip written against a profile that failed
-   * to save is precisely the orphaned state this whole change is about.
+   * The two writes are awaited one after the other, never together. Optical
+   * goes first because it is the calibration itself: if it cannot be stored
+   * there is no rig to be mirrored for, and a global flip written against a
+   * profile that failed to save is the orphaned state this change is about.
+   *
+   * They are sequential rather than concurrent for ordering, not for the
+   * revision race — `toRustPatch` has no optical branch, so only the mirror
+   * write reaches the backend and the two cannot collide over a revision. Two
+   * overlapping FINISHES still could, which is what `finishing` is for.
    */
   async function finish(): Promise<void> {
     if (finishing) return;
@@ -1059,11 +1062,16 @@
       showToast(`${name} is now the rig this display runs with.`, 'success');
       await navigate({ name: 'settings', section: 'stage' });
     } catch {
-      // patchSettings has already reverted and toasted; staying put is what
-      // keeps the measurements on screen rather than losing them to a failed
-      // write nobody could have anticipated. If the mirror write is the one
-      // that failed, the profile is stored but not yet in force — pressing
-      // Apply again retries from a settled revision.
+      /*
+       * patchSettings has already reverted and toasted; staying put is what
+       * keeps the measurements on screen rather than losing them to a failed
+       * write nobody could have anticipated.
+       *
+       * Note what a mirror-write failure leaves behind: the optical write ran
+       * first and `withOpticalProfile` sets `activeRig`, so the rig is stored
+       * AND already the one this panel runs with — only its mirroring did not
+       * land. Pressing Apply again is the retry, and it is idempotent.
+       */
     } finally {
       finishing = false;
     }

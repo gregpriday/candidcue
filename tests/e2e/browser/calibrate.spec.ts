@@ -33,6 +33,7 @@ const SCRIPT = {
 
 /** Steps are headed by their question, not by their id. */
 const ORIENTATION_STEP = 'Does it read the right way round?';
+const LAST_STEP = 'How hot should the type burn?';
 
 /** Settings → Stage display, the section that owns the mirror switches and Calibrate. */
 async function openStageDisplay(page: Page): Promise<void> {
@@ -60,13 +61,60 @@ function presetCard(page: Page, name: string) {
   });
 }
 
-/** Walk the wizard to a named step by pressing Skip, which advances without recording. */
+/**
+ * Open the wizard, then clear the IPC log once it has finished hydrating.
+ *
+ * Waits for a preset card rather than the page heading: the heading paints at
+ * once, while `hydrate()` is async and deliberately withholds the cards until
+ * the display list has arrived. Resetting on the heading alone would let
+ * hydration's own calls land in a log the test then reads as the operator's.
+ */
+async function enterWizard(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Calibrate…' }).click();
+  await expect(page.getByRole('heading', { name: 'Calibrate this display' })).toBeVisible();
+  await expect(presetCard(page, 'Elgato Prompter')).toBeVisible();
+  await page.evaluate(() => window.__E2E__.reset());
+}
+
+/**
+ * Walk the wizard to a named step by pressing Skip, which advances without
+ * recording an answer.
+ *
+ * Each press waits for the heading to actually change before the next one.
+ * `isVisible()` is an instantaneous read, so a loop that only polled it could
+ * click Skip against the step it had already left.
+ */
 async function skipTo(page: Page, heading: string): Promise<void> {
+  const target = page.getByRole('heading', { name: heading });
   for (let i = 0; i < 12; i += 1) {
-    if (await page.getByRole('heading', { name: heading }).isVisible()) return;
+    if (await target.isVisible()) return;
+    const before = await currentStep(page);
     await page.getByRole('button', { name: 'Skip', exact: true }).click();
+    await expect
+      .poll(() => currentStep(page), { message: `Skip did not advance past "${before}"` })
+      .not.toBe(before);
   }
   throw new Error(`never reached the "${heading}" step`);
+}
+
+/** The heading of the step currently on screen. */
+async function currentStep(page: Page): Promise<string> {
+  return (await page.locator('.step-title').first().textContent())?.trim() ?? '';
+}
+
+/**
+ * Walk to the last step and press Apply, failing loudly if it never appears.
+ *
+ * Explicitly clicks "Apply this rig" rather than whatever the footer offers:
+ * the ghost button becomes "Finish without this" on the last step, which is a
+ * second route into `finish()`, and a test that took it by accident would not
+ * be testing what it says it is.
+ */
+async function applyRig(page: Page): Promise<void> {
+  await skipTo(page, LAST_STEP);
+  const apply = page.getByRole('button', { name: 'Apply this rig' });
+  await expect(apply).toBeEnabled();
+  await apply.click();
 }
 
 /** The mirror axes on the newest `settings` directive the stage was sent. */
@@ -111,11 +159,7 @@ test('a mirror tried out in the wizard reaches the glass but not the settings, a
   await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'false');
   await expect(toggle(page, 'Vertical mirror')).toHaveAttribute('aria-checked', 'false');
 
-  await page.getByRole('button', { name: 'Calibrate…' }).click();
-  await expect(page.getByRole('heading', { name: 'Calibrate this display' })).toBeVisible();
-
-  // Hydration has settled; from here every recorded call belongs to the wizard.
-  await page.evaluate(() => window.__E2E__.reset());
+  await enterWizard(page);
 
   // A preset that mirrors horizontally. The glass must turn around...
   await presetCard(page, 'Elgato Prompter').click();
@@ -147,6 +191,39 @@ test('a mirror tried out in the wizard reaches the glass but not the settings, a
   expect(await settingsWrites(page)).toEqual([]);
 });
 
+/*
+ * The re-entrancy guard, which exists because finishing is no longer a single
+ * write. A second Apply landing mid-save would start a second sequence from the
+ * same store revision, and the backend would reject the loser — losing the
+ * mirror the same way the old per-axis writes did.
+ */
+test('a second Apply cannot start while the first is still saving', async ({ page }) => {
+  test.slow();
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
+  await page.goto('/control.html');
+
+  await openStageDisplay(page);
+  await enterWizard(page);
+  await presetCard(page, 'Elgato Prompter').click();
+
+  // Hold the save open so the in-flight window is something the test can act in.
+  await page.evaluate(() => window.__E2E__.setDelay('update_settings', 3000));
+  await applyRig(page);
+
+  // While it is in flight both completion buttons are out of reach, so there is
+  // no way to ask for a second save.
+  const apply = page.getByRole('button', { name: 'Apply this rig' });
+  await expect(apply).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Finish without this' })).toBeDisabled();
+
+  // The save completes and the wizard leaves on its own.
+  await page.evaluate(() => window.__E2E__.setDelay('update_settings', null));
+  await expect(page.getByRole('button', { name: 'Calibrate…' })).toBeVisible();
+
+  // Still exactly one write, despite Apply having been pressed during a save.
+  expect(await settingsWrites(page)).toHaveLength(1);
+});
+
 test('finishing the wizard is what applies the mirror, both axes at once', async ({ page }) => {
   // Ten steps clicked through one at a time does not fit the default budget.
   test.slow();
@@ -154,23 +231,16 @@ test('finishing the wizard is what applies the mirror, both axes at once', async
   await page.goto('/control.html');
 
   await openStageDisplay(page);
-  await page.getByRole('button', { name: 'Calibrate…' }).click();
-  await expect(page.getByRole('heading', { name: 'Calibrate this display' })).toBeVisible();
-  await page.evaluate(() => window.__E2E__.reset());
+  await enterWizard(page);
 
   await presetCard(page, 'Elgato Prompter').click();
   await skipTo(page, ORIENTATION_STEP);
   await toggle(page, 'Mirror vertically').click();
 
-  // Run out the wizard and apply the rig.
-  for (let i = 0; i < 12; i += 1) {
-    const apply = page.getByRole('button', { name: 'Apply this rig' });
-    if (await apply.isVisible()) {
-      await apply.click();
-      break;
-    }
-    await page.getByRole('button', { name: 'Skip', exact: true }).click();
-  }
+  // Nothing is persisted right up to the moment Apply is pressed, so the write
+  // below is caused by finishing and by nothing earlier in the walk.
+  expect(await settingsWrites(page)).toEqual([]);
+  await applyRig(page);
 
   // Finishing navigates back to Stage display on its own.
   await expect(page.getByRole('button', { name: 'Calibrate…' })).toBeVisible();
@@ -199,10 +269,20 @@ test('finishing the wizard is what applies the mirror, both axes at once', async
 /*
  * Only the mirror write reaches Rust — `optical` is overlay-backed — so failing
  * `update_settings` fails precisely the step that puts a flip in force. What
- * must not happen is the wizard claiming success, or the display's mirroring
- * moving anyway.
+ * must not happen is the wizard claiming success it did not have.
+ *
+ * SCOPE OF THIS TEST, precisely. It proves the in-session outcome: one write
+ * was attempted, it carried the mirror, the wizard neither announced success
+ * nor left, the switches read unchanged afterwards, and the operator can try
+ * again. It does NOT prove durability across a reload, and must not be read as
+ * if it did: `updateSettings` writes the section into the localStorage overlay
+ * BEFORE calling Rust, and the store's rollback restores only its in-memory
+ * snapshot — so a rejected write leaves the overlay holding the mirror, and a
+ * later cold read merges it back over Rust. That gap is in the settings
+ * service rather than this wizard, it predates this change, and it is reported
+ * separately; asserting a cold read here would only re-fail on that defect.
  */
-test('a mirror write that fails leaves the display mirrored exactly as it was', async ({
+test('a mirror write that fails is reported, not silently half-applied', async ({
   page,
 }) => {
   // As above, plus a failing round trip to wait out.
@@ -211,14 +291,13 @@ test('a mirror write that fails leaves the display mirrored exactly as it was', 
   await page.goto('/control.html');
 
   await openStageDisplay(page);
-  await page.getByRole('button', { name: 'Calibrate…' }).click();
-  await expect(page.getByRole('heading', { name: 'Calibrate this display' })).toBeVisible();
-  await page.evaluate(() => window.__E2E__.reset());
+  await enterWizard(page);
 
   await presetCard(page, 'Elgato Prompter').click();
 
-  // The write that puts a flip in force now fails. Shaped like a real AppError:
-  // the store's `catch` describes it, and a bare string has no `userMessage`.
+  // The write that puts a flip in force now fails. Shaped like a real AppError
+  // for realism only — the store toasts one fixed line and rethrows without
+  // reading the error, so the shape is not what makes this work.
   await page.evaluate(() =>
     window.__E2E__.setFail('update_settings', {
       code: 'STORAGE_ERROR',
@@ -226,14 +305,7 @@ test('a mirror write that fails leaves the display mirrored exactly as it was', 
     }),
   );
 
-  for (let i = 0; i < 12; i += 1) {
-    const apply = page.getByRole('button', { name: 'Apply this rig' });
-    if (await apply.isVisible()) {
-      await apply.click();
-      break;
-    }
-    await page.getByRole('button', { name: 'Skip', exact: true }).click();
-  }
+  await applyRig(page);
 
   /*
    * Wait for the write to have actually come back rejected before going on.
@@ -247,10 +319,27 @@ test('a mirror write that fails leaves the display mirrored exactly as it was', 
 
   // The wizard stays put with the measurements on screen: no success, no exit.
   await expect(page.getByRole('heading', { name: 'Calibrate this display' })).toBeVisible();
-  expect(await settingsWrites(page)).toHaveLength(1);
 
+  /*
+   * One write, and it was the mirror. The count alone would not say that:
+   * `patchSettings` sends the whole merged section, so a call carrying only
+   * `fixedSpeedWpm` would satisfy a bare length check.
+   */
+  const writes = await settingsWrites(page);
+  expect(writes).toHaveLength(1);
+  expect((writes[0]?.['stageBehavior'] as Record<string, unknown>)?.['horizontalMirror']).toBe(true);
+
+  // The guard released: a failed save must leave the wizard retryable, not
+  // permanently disabled with the work stranded behind it.
+  await expect(page.getByRole('button', { name: 'Apply this rig' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Finish without this' })).toBeEnabled();
+
+  /*
+   * And the switches read exactly as they did. Only the horizontal axis is
+   * asserted: this test never turns vertical mirroring on, so a `false` there
+   * would pass whether the code rolled back or did nothing at all.
+   */
   await page.getByRole('button', { name: 'Stage display' }).first().click();
   await page.getByRole('button', { name: 'Discard' }).click();
   await expect(toggle(page, 'Horizontal mirror')).toHaveAttribute('aria-checked', 'false');
-  await expect(toggle(page, 'Vertical mirror')).toHaveAttribute('aria-checked', 'false');
 });
