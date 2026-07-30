@@ -25,7 +25,14 @@ import { render } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setInvokeForTesting, type InvokeFn } from '../../src/control/services/ipc';
-import { loadLibrary, setLibraryQuery, setLibraryView } from '../../src/control/stores/library';
+import { get } from 'svelte/store';
+import {
+  library,
+  loadLibrary,
+  setLibraryQuery,
+  setLibraryView,
+} from '../../src/control/stores/library';
+import { showToast } from '../../src/control/stores/toasts';
 import Library from '../../src/control/routes/Library.svelte';
 import type { ScriptSummary } from '../../src/shared/contracts';
 
@@ -41,6 +48,28 @@ const confirm = vi.hoisted(() => ({
   // Typed with its argument so the assertions below can read the request back.
   requestConfirm: vi.fn(async (_request: { title: string; body: string }) => false),
 }));
+
+/**
+ * The shortcut handler the route registers, captured so a test can fire an
+ * action directly instead of synthesising the keystroke that produces it.
+ */
+const shortcuts = vi.hoisted(() => {
+  const handlers = new Set<(action: string) => void>();
+  return {
+    handlers,
+    onShortcut: (handler: (action: string) => void) => {
+      handlers.add(handler);
+      return () => handlers.delete(handler);
+    },
+    fire: (action: string) => {
+      for (const handler of handlers) handler(action);
+    },
+  };
+});
+vi.mock('../../src/control/lib/shortcuts', () => ({ onShortcut: shortcuts.onShortcut }));
+
+const take = vi.hoisted(() => ({ startTake: vi.fn(async () => {}) }));
+vi.mock('../../src/control/lib/start-take', () => ({ startTake: take.startTake }));
 vi.mock('../../src/control/stores/confirm', () => ({
   requestConfirm: confirm.requestConfirm,
   pendingConfirm: { subscribe: () => () => {} },
@@ -109,6 +138,8 @@ function buttonNamed(container: HTMLElement, name: string): HTMLButtonElement | 
 beforeEach(async () => {
   confirm.requestConfirm.mockReset();
   confirm.requestConfirm.mockResolvedValue(false);
+  shortcuts.handlers.clear();
+  take.startTake.mockClear();
   setInvokeForTesting(serving([summary('a', 'Alpha'), summary('b', 'Bravo')]));
   setLibraryQuery('');
   setLibraryView('all');
@@ -277,6 +308,189 @@ describe('a Trash row does not pretend its body is a button', () => {
   it('keeps the treatment on a live row', async () => {
     const container = await mount();
     expect(container.querySelector('.card')?.classList.contains('interactive')).toBe(true);
+  });
+});
+
+describe('the Present shortcut says what it did', () => {
+  it('refuses a trashed script and explains, rather than staging it', async () => {
+    setInvokeForTesting(serving([summary('a', 'Alpha')]));
+    setLibraryView('trash');
+    await loadLibrary();
+    await mount();
+
+    shortcuts.fire('present');
+    await settle();
+
+    expect(take.startTake).not.toHaveBeenCalled();
+    expect(vi.mocked(showToast)).toHaveBeenCalledWith(
+      'Scripts in Trash cannot be presented. Restore one first.',
+      'info',
+    );
+  });
+
+  it('says so when there is no target at all', async () => {
+    setInvokeForTesting(serving([]));
+    setLibraryView('all');
+    await loadLibrary();
+    await mount();
+
+    shortcuts.fire('present');
+    await settle();
+
+    expect(take.startTake).not.toHaveBeenCalled();
+    expect(vi.mocked(showToast)).toHaveBeenCalledWith(
+      'There is no script to present yet.',
+      'info',
+    );
+  });
+
+  it('still stages the target it does have', async () => {
+    await mount();
+    shortcuts.fire('present');
+    await settle();
+    expect(take.startTake).toHaveBeenCalledWith('a');
+  });
+});
+
+describe('exporting reports itself once, from the helper that knows', () => {
+  it('never adds a second, unconditional success notice', async () => {
+    // `exportScriptToFile` returns quietly on a cancelled dialog and reports
+    // warnings, success and failure itself. The route toasted "Export ready" on
+    // top of that, unconditionally — so a cancelled dialog and a failed write
+    // both ended in a success notice.
+    setInvokeForTesting(async <T,>(command: string): Promise<T> => {
+      // A real export result, so the helper takes its own success path and the
+      // assertion below is about a duplicate notice rather than a failure.
+      if (command === 'export_script') {
+        return { path: '/tmp/alpha.md', format: 'markdown', warnings: [] } as T;
+      }
+      return { items: [summary('a', 'Alpha')], total: 1 } as T;
+    });
+    await loadLibrary();
+    const container = await mount();
+    const menu = container.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
+    menu?.click();
+    await settle();
+    buttonNamed(container, 'Export Markdown')?.click();
+    await settle();
+
+    const said = vi.mocked(showToast).mock.calls.map((call) => String(call[0]));
+    expect(said).not.toContain('Export ready');
+    // The helper's own notice is the one that should be there, exactly once.
+    expect(said.filter((message) => message === 'Script exported')).toHaveLength(1);
+  });
+});
+
+describe('Recent is not a first run', () => {
+  it('says nothing has been opened rather than nothing has been written', async () => {
+    // A library can hold fifty scripts and have opened none of them.
+    setInvokeForTesting(serving([]));
+    setLibraryView('recent');
+    await loadLibrary();
+    const container = await mount();
+
+    expect(text(container)).toContain('No recent scripts');
+    expect(text(container)).not.toContain('Write the words');
+    expect(buttonNamed(container, 'Create a script')).toBeNull();
+  });
+});
+
+describe('Empty Trash stays reachable when the count is unknown', () => {
+  it('offers the action, then names the set it actually read', async () => {
+    // 40 scripts in Trash, a search matching none of them, and the cheap
+    // unfiltered count probe rejecting. The action used to vanish over a full
+    // Trash. It is now offered, and the confirmation counts what it enumerates
+    // rather than the probe that failed.
+    const trashed = Array.from({ length: 40 }, (_, i) => summary(`t${i}`));
+    const fake: InvokeFn = async <T,>(
+      _command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      const filter = args?.filter as { query?: string } | undefined;
+      const page = args?.page as { pageSize: number } | undefined;
+      if (filter?.query !== undefined) return { items: [], total: 0 } as T;
+      // The count probe asks for one row; that is the read failing here.
+      if (page?.pageSize === 1) throw unreadable;
+      return { items: trashed, total: trashed.length } as T;
+    };
+    setInvokeForTesting(fake);
+    setLibraryView('trash');
+    setLibraryQuery('matches nothing');
+    await loadLibrary();
+    const container = await mount();
+
+    const button = buttonNamed(container, 'Empty Trash');
+    expect(button).not.toBeNull();
+
+    button?.click();
+    await settle();
+    expect(confirm.requestConfirm.mock.calls[0]?.[0].body).toContain('40 scripts');
+  });
+
+  it('says the Trash is already empty rather than confirming a deletion of nothing', async () => {
+    // The count probe fails, so the button is offered on the generous "we do
+    // not know it is empty" predicate — and the Trash then turns out to be
+    // empty after all. The destructive sheet must not appear over nothing.
+    const fake: InvokeFn = async <T,>(
+      _command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      const page = args?.page as { pageSize: number } | undefined;
+      if (page?.pageSize === 1) throw unreadable;
+      return { items: [], total: 0 } as T;
+    };
+    setInvokeForTesting(fake);
+    setLibraryView('trash');
+    setLibraryQuery('matches nothing');
+    await loadLibrary();
+    const container = await mount();
+
+    buttonNamed(container, 'Empty Trash')?.click();
+    await settle();
+
+    expect(confirm.requestConfirm).not.toHaveBeenCalled();
+    expect(vi.mocked(showToast)).toHaveBeenCalledWith('Trash is already empty.', 'info');
+  });
+});
+
+describe('the search field and the results it filtered agree', () => {
+  it('comes back carrying the query the store is still filtering by', async () => {
+    // The store outlives the route. Opening a script from a set of results and
+    // returning used to restore the filtered list under an empty search box,
+    // ⌘K hint and all, as though nothing had been typed.
+    setInvokeForTesting(serving([summary('a', 'Alpha')]));
+    setLibraryQuery('keynote');
+    await loadLibrary();
+    const container = await mount();
+
+    const input = container.querySelector<HTMLInputElement>('input.search-input');
+    expect(input?.value).toBe('keynote');
+  });
+
+  it('drops a pending search when the route goes away', async () => {
+    vi.useFakeTimers();
+    try {
+      const { container, unmount } = render(Library);
+      const input = container.querySelector<HTMLInputElement>('input.search-input');
+      if (input) input.value = 'half typed';
+      input?.dispatchEvent(new Event('input', { bubbles: true }));
+
+      unmount();
+      // The debounce would otherwise land 180ms from here, set the singleton's
+      // query and start a load for a screen nobody is looking at.
+      vi.advanceTimersByTime(1000);
+      expect(get(library).query).not.toBe('half typed');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets go of the shortcut handler on the way out', async () => {
+    const { unmount } = render(Library);
+    await settle();
+    expect(shortcuts.handlers.size).toBe(1);
+    unmount();
+    expect(shortcuts.handlers.size).toBe(0);
   });
 });
 

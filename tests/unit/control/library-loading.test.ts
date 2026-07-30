@@ -139,6 +139,77 @@ describe('a read that fails', () => {
   });
 });
 
+/**
+ * Two reads in flight at once.
+ *
+ * Every setter fires its own un-awaited `loadLibrary`, so a view change during
+ * a search is two requests racing. Whichever answers LAST used to win, and its
+ * update kept the current `view` while replacing the rows — which is how live
+ * scripts came to be rendered inside Trash, each one carrying Restore and
+ * Delete permanently.
+ */
+describe('overlapping reads', () => {
+  /** One macrotask, which is where a resolved promise chain lands. */
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('never lets the view being left commit its rows', async () => {
+    const releases: Array<() => void> = [];
+    setInvokeForTesting(async <T,>(
+      _command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      const filter = args?.filter as { status?: string } | undefined;
+      const trashed = filter?.status === 'trash';
+      await new Promise<void>((resolve) => {
+        releases.push(resolve);
+      });
+      return { items: [summary(trashed ? 'deleted-thing' : 'live-thing')], total: 1 } as T;
+    });
+
+    const leaving = loadLibrary();
+    await flush();
+    setLibraryView('trash');
+    await flush();
+    expect(releases).toHaveLength(2);
+
+    // Trash answers first; the abandoned read answers last and must be ignored.
+    releases[1]?.();
+    await flush();
+    releases[0]?.();
+    await leaving;
+    await flush();
+
+    expect(get(library).view).toBe('trash');
+    expect(get(library).scripts.map((script) => script.id)).toEqual(['deleted-thing']);
+  });
+
+  it('does not let an older failure bury a newer success', async () => {
+    const releases: Array<(fail: boolean) => void> = [];
+    setInvokeForTesting(async <T,>(): Promise<T> => {
+      const shouldFail = await new Promise<boolean>((resolve) => {
+        releases.push(resolve);
+      });
+      if (shouldFail) throw unreadable;
+      return { items: [summary('fresh')], total: 1 } as T;
+    });
+
+    const older = loadLibrary();
+    await flush();
+    const newer = loadLibrary();
+    await flush();
+
+    releases[1]?.(false);
+    await newer;
+    releases[0]?.(true);
+    await older;
+    await flush();
+
+    expect(get(library).error).toBeNull();
+    expect(get(library).loading).toBe(false);
+    expect(get(library).scripts.map((script) => script.id)).toEqual(['fresh']);
+  });
+});
+
 describe('changing view', () => {
   it('drops the rows belonging to the view being left', async () => {
     // Live scripts left rendering as Trash rows carry a menu whose entries

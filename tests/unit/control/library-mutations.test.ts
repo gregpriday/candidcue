@@ -24,6 +24,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import { setInvokeForTesting, type InvokeFn } from '../../../src/control/services/ipc';
 import {
+  collectTrashTargets,
   deleteScriptPermanently,
   duplicateScript,
   emptyTrash,
@@ -82,9 +83,14 @@ const conflict = { code: 'SCRIPT_CONFLICT', userMessage: 'stale revision' };
 /** The scripts the fake backend is holding. Mutations really change it. */
 let live: ScriptSummary[] = [];
 
-function pageOf(args: Record<string, unknown> | undefined): { items: ScriptSummary[]; total: number } {
+function pageOf(args: Record<string, unknown> | undefined): {
+  items: ScriptSummary[];
+  total: number;
+} {
   const page = args?.page as { page: number; pageSize: number } | undefined;
-  return { items: live.slice(0, page?.pageSize ?? 100), total: live.length };
+  const size = page?.pageSize ?? 100;
+  const offset = (page?.page ?? 0) * size;
+  return { items: live.slice(offset, offset + size), total: live.length };
 }
 
 /** A backend where a delete really does shorten the next `list_scripts`. */
@@ -108,6 +114,17 @@ function installBackend(fail: Record<string, unknown> = {}): void {
     throw new Error(`unexpected command ${command}`);
   };
   setInvokeForTesting(fake);
+}
+
+/**
+ * The route's own sequence: read what is in the Trash, then delete exactly
+ * that set. Driving both halves keeps the enumeration under test rather than
+ * letting it be an implementation detail nothing exercises.
+ */
+async function runEmptyTrash(): Promise<boolean> {
+  const targets = await collectTrashTargets();
+  if (targets === null) return false;
+  return emptyTrash(targets);
 }
 
 beforeEach(async () => {
@@ -210,7 +227,7 @@ describe('Empty Trash empties the Trash, not the page of it on screen', () => {
   it('deletes past the one page Rust will serve', async () => {
     // 620 trashed scripts, 500 to a page. The old loop walked the loaded page
     // and stopped, leaving 120 scripts inside an emptied Trash.
-    await expect(emptyTrash()).resolves.toBe(true);
+    await expect(runEmptyTrash()).resolves.toBe(true);
     expect(live).toHaveLength(0);
     expect(messages('success')).toEqual(['Trash emptied']);
     expect(messages('danger')).toEqual([]);
@@ -241,8 +258,98 @@ describe('Empty Trash empties the Trash, not the page of it on screen', () => {
     await loadLibrary();
     expect(get(library).scripts).toEqual([]);
 
-    await expect(emptyTrash()).resolves.toBe(true);
+    await expect(runEmptyTrash()).resolves.toBe(true);
     expect(live).toHaveLength(0);
+  });
+
+  it('still reaches the rows past the first page when the whole first page fails', async () => {
+    // The shape this replaced deleted page zero and re-read page zero, so a
+    // full page of undeletable rows parked itself at the top and hid the 501st
+    // — which was deletable — behind it, then reported no progress and stopped.
+    live = Array.from({ length: 501 }, (_, index) => summary(`t${index}`));
+    const stuck = new Set(live.slice(0, 500).map((script) => script.id));
+    const fake: InvokeFn = async <T,>(
+      command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      if (command === 'list_scripts') return pageOf(args) as T;
+      if (command === 'permanently_delete_script') {
+        const id = args?.scriptId as string;
+        if (stuck.has(id)) throw conflict;
+        live = live.filter((script) => script.id !== id);
+        return undefined as T;
+      }
+      throw new Error(`unexpected command ${command}`);
+    };
+    setInvokeForTesting(fake);
+
+    await expect(runEmptyTrash()).resolves.toBe(false);
+
+    // The one deletable row is gone, and the count says exactly that.
+    expect(live.map((script) => script.id)).not.toContain('t500');
+    expect(live).toHaveLength(500);
+    expect(messages('danger')[0]).toContain('Deleted 1 of 501 scripts.');
+  });
+
+  it('attempts each row once rather than retrying one into a contradiction', async () => {
+    // A row that fails and then succeeds on a later pass used to leave the
+    // first failure latched, producing "Trash was only partly emptied. Deleted
+    // 2 of 2 scripts." — a report that argues with itself.
+    live = [summary('flaky'), summary('fine')];
+    // Counted per id, not in total: two attempts could otherwise mean "tried
+    // `flaky` twice and never touched `fine`", which is the failure being ruled
+    // out here.
+    const attempts: string[] = [];
+    const fake: InvokeFn = async <T,>(
+      command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      if (command === 'list_scripts') return pageOf(args) as T;
+      if (command === 'permanently_delete_script') {
+        const id = args?.scriptId as string;
+        attempts.push(id);
+        if (id === 'flaky' && attempts.filter((seen) => seen === 'flaky').length === 1) {
+          throw conflict;
+        }
+        live = live.filter((script) => script.id !== id);
+        return undefined as T;
+      }
+      throw new Error(`unexpected command ${command}`);
+    };
+    setInvokeForTesting(fake);
+
+    await expect(runEmptyTrash()).resolves.toBe(false);
+    expect([...attempts].sort()).toEqual(['fine', 'flaky']);
+    const shown = messages('danger');
+    expect(shown).toHaveLength(1);
+    expect(shown[0]).toContain('Deleted 1 of 2 scripts.');
+  });
+
+  it('stops enumerating when a page comes back saying nothing new', async () => {
+    // A backend that answers every page with the same rows while claiming a
+    // larger total would spin this loop forever, in front of a permanent
+    // delete. `total` is a separate COUNT(*) and is not a termination
+    // condition; a page that contributes no new id is.
+    live = Array.from({ length: 500 }, (_, index) => summary(`t${index}`));
+    let reads = 0;
+    const fake: InvokeFn = async <T,>(
+      command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      if (command === 'list_scripts') {
+        reads += 1;
+        // Always a full page of the same rows, and a total one larger.
+        return { items: live.slice(0, 500), total: 501 } as T;
+      }
+      if (command === 'permanently_delete_script') return undefined as T;
+      throw new Error(`unexpected command ${command}`);
+    };
+    setInvokeForTesting(fake);
+
+    const targets = await collectTrashTargets();
+    expect(targets).toHaveLength(500);
+    // Page zero, then one repeat that proves there is nothing further.
+    expect(reads).toBe(2);
   });
 
   it('counts what it managed and stops rather than spinning on a row it cannot delete', async () => {
@@ -264,7 +371,7 @@ describe('Empty Trash empties the Trash, not the page of it on screen', () => {
 
     // It terminates: the second pass deletes nothing, so the loop gives up
     // rather than reading the same undeletable row back forever.
-    await expect(emptyTrash()).resolves.toBe(false);
+    await expect(runEmptyTrash()).resolves.toBe(false);
 
     const shown = messages('danger');
     expect(shown).toHaveLength(1);
@@ -281,7 +388,7 @@ describe('Empty Trash empties the Trash, not the page of it on screen', () => {
     };
     setInvokeForTesting(fake);
 
-    await expect(emptyTrash()).resolves.toBe(false);
+    await expect(runEmptyTrash()).resolves.toBe(false);
     const shown = messages('danger');
     expect(shown).toHaveLength(1);
     expectReadableFailure(shown[0], 'Trash could not be emptied.');
@@ -294,7 +401,7 @@ describe('Empty Trash empties the Trash, not the page of it on screen', () => {
     };
     setInvokeForTesting(fake);
 
-    await expect(emptyTrash()).resolves.toBe(false);
+    await expect(runEmptyTrash()).resolves.toBe(false);
     const shown = messages('danger');
     expect(shown).toHaveLength(1);
     expectReadableFailure(shown[0], 'Trash could not be emptied.');

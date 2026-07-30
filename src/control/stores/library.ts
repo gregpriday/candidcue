@@ -106,7 +106,19 @@ async function trashCount(
   }
 }
 
+/**
+ * Which load is allowed to commit.
+ *
+ * Every setter fires its own `void loadLibrary()`, so switching view while a
+ * search is still in flight leaves two reads racing — and the loser resolving
+ * last would write live scripts into a Trash view, under a menu whose entries
+ * delete permanently. Only the newest read commits anything: rows, totals,
+ * `loading`, or an error.
+ */
+let loadGeneration = 0;
+
 export async function loadLibrary(): Promise<void> {
+  const generation = (loadGeneration += 1);
   const current = get(state);
   state.update((s) => ({ ...s, loading: true, error: null }));
   try {
@@ -116,6 +128,7 @@ export async function loadLibrary(): Promise<void> {
       { page: 0, pageSize: PAGE_SIZE },
     );
     const trashTotal = await trashCount(current.view, current.query, page);
+    if (generation !== loadGeneration) return;
     state.update((s) => {
       const kept = page.items.some((i) => i.id === s.selectedId);
       return {
@@ -132,6 +145,7 @@ export async function loadLibrary(): Promise<void> {
       };
     });
   } catch (err) {
+    if (generation !== loadGeneration) return;
     // The rows already on screen stay. A failed re-query is a failure to
     // refresh, not the discovery that the library is empty, and blanking the
     // list would put a database read error behind the first-run invitation to
@@ -236,46 +250,79 @@ export async function deleteScriptPermanently(id: string): Promise<boolean> {
 }
 
 /**
- * Empty the Trash — all of it.
+ * Every script in Trash, read unfiltered.
+ *
+ * Pages are only stable while nothing is being removed, so the whole list is
+ * enumerated before a single delete goes out and the deletes then work from
+ * that fixed set. Reading a page, deleting it and re-reading page zero — the
+ * obvious shape — has three separate faults: a row that cannot be deleted parks
+ * itself at the top and hides everything behind it, a script trashed while the
+ * loop runs gets swept up by a confirmation that never mentioned it, and the
+ * denominator moves under the count being reported against it.
+ *
+ * Two independent exits, because this loop stands in front of permanent
+ * deletion: a short page, which is the ordinary end of the list, and a page
+ * that contributed no new id, which is what a backend repeating itself looks
+ * like from here. `total` is deliberately not a termination condition — it is a
+ * separate COUNT(*) and can disagree with the rows in either direction.
+ */
+async function listTrashedIds(): Promise<string[]> {
+  const ids = new Set<string>();
+  for (let page = 0; ; page += 1) {
+    const result = await scriptsService.listScripts({ view: 'trash' }, undefined, {
+      page,
+      pageSize: PAGE_SIZE,
+    });
+    const before = ids.size;
+    for (const script of result.items) ids.add(script.id);
+    if (result.items.length < PAGE_SIZE || ids.size === before) break;
+  }
+  return [...ids];
+}
+
+/**
+ * The scripts Empty Trash would remove, read before the confirmation is shown.
+ *
+ * The sheet has to name the set that will actually be deleted. Counting first
+ * and enumerating afterwards means anything trashed while the sheet is open
+ * gets deleted by a confirmation that never mentioned it — and the number the
+ * operator agreed to was, by then, simply the wrong number.
+ *
+ * `null` means the Trash could not be read: there is nothing to confirm, and
+ * the failure has already been reported.
+ */
+export async function collectTrashTargets(): Promise<string[] | null> {
+  try {
+    return await listTrashedIds();
+  } catch (err) {
+    showToast(`Trash could not be emptied. ${describeError(err)}`, 'danger');
+    return null;
+  }
+}
+
+/**
+ * Delete exactly the scripts that were confirmed, and say how it went.
  *
  * It used to walk `state.scripts`, which is one page of Trash as narrowed by
  * whatever is in the search box, so "Empty Trash" could leave most of the trash
- * in it. This re-reads page zero unfiltered after every batch: deleting from
- * the front pulls the remainder forward, so nothing is stepped over.
+ * in it.
  *
- * The deletes stay serial. These are SQLite writes behind IPC, so running them
- * together buys lock contention rather than speed, and a serial loop is what
- * makes "deleted N of M" a count rather than an estimate.
+ * The deletes are serial. These are SQLite writes behind IPC, so running them
+ * together buys lock contention rather than speed, and one at a time is what
+ * makes "deleted N of M" a count rather than an estimate. Each target is
+ * attempted exactly once: a failure is a failure, not something to be retried
+ * into a report that contradicts itself.
  */
-export async function emptyTrash(): Promise<boolean> {
+export async function emptyTrash(targets: string[]): Promise<boolean> {
   let deleted = 0;
-  let total: number | null = null;
   let firstError: unknown = null;
-
-  try {
-    for (;;) {
-      const page = await scriptsService.listScripts({ view: 'trash' }, undefined, {
-        page: 0,
-        pageSize: PAGE_SIZE,
-      });
-      if (total === null) total = page.total;
-      if (page.items.length === 0) break;
-
-      let deletedFromBatch = 0;
-      for (const script of page.items) {
-        try {
-          await scriptsService.permanentlyDeleteScript(script.id);
-          deleted += 1;
-          deletedFromBatch += 1;
-        } catch (err) {
-          firstError ??= err;
-        }
-      }
-      // A batch that deleted nothing reads the same rows back forever.
-      if (deletedFromBatch === 0) break;
+  for (const id of targets) {
+    try {
+      await scriptsService.permanentlyDeleteScript(id);
+      deleted += 1;
+    } catch (err) {
+      firstError ??= err;
     }
-  } catch (err) {
-    firstError ??= err;
   }
 
   await loadLibrary();
@@ -286,8 +333,10 @@ export async function emptyTrash(): Promise<boolean> {
   }
 
   const opening = deleted === 0 ? 'Trash could not be emptied.' : 'Trash was only partly emptied.';
-  const counted =
-    total === null ? '' : ` Deleted ${deleted} of ${total} ${total === 1 ? 'script' : 'scripts'}.`;
-  showToast(`${opening}${counted} ${describeError(firstError)}`, 'danger');
+  const scripts = `${targets.length} ${targets.length === 1 ? 'script' : 'scripts'}`;
+  showToast(
+    `${opening} Deleted ${deleted} of ${scripts}. ${describeError(firstError)}`,
+    'danger',
+  );
   return false;
 }

@@ -18,6 +18,7 @@
   import * as scriptsService from '../services/scripts';
   import { requestConfirm } from '../stores/confirm';
   import {
+    collectTrashTargets,
     deleteScriptPermanently,
     duplicateScript,
     emptyTrash,
@@ -36,7 +37,15 @@
 
   let searchInput: HTMLInputElement | null = $state(null);
   let listElement: HTMLUListElement | null = $state(null);
-  let query = $state('');
+  /**
+   * Seeded from the store, not from empty.
+   *
+   * The store is a singleton and its query outlives this route, so opening a
+   * script from a set of search results and coming back used to restore the
+   * filtered list under a blank search box — with the ⌘K hint sitting in it, as
+   * though nothing had been typed. The results and the field now agree.
+   */
+  let query = $state($library.query);
   let searchDebounce: ReturnType<typeof setTimeout> | null = null;
 
   const sortOptions = [
@@ -57,9 +66,28 @@
     $library.view === 'trash' ? 'Trash' : $library.view === 'recent' ? 'Recent' : 'Scripts',
   );
 
+  /**
+   * Empty Trash is offered unless the Trash is known to be empty.
+   *
+   * `trashTotal` counts the whole Trash rather than the rows a search has left
+   * on screen, so it is the only number that answers this. It is `null` when
+   * that count could not be read — and a filtered list of nothing says nothing
+   * at all about how much is behind it, so the action stays available.
+   *
+   * This predicate can afford to be generous: it decides whether to OFFER the
+   * action, not what the action removes. `confirmEmptyTrash` re-reads the Trash
+   * before asking, so a button shown over an empty Trash costs a notice, not a
+   * deletion.
+   */
+  const canEmptyTrash = $derived(
+    $library.trashTotal === null
+      ? $library.scripts.length > 0 || $library.query.trim() !== ''
+      : $library.trashTotal > 0,
+  );
+
   $effect(() => {
     void loadLibrary();
-    return onShortcut((action) => {
+    const unsubscribe = onShortcut((action) => {
       if (action === 'quick-search') searchInput?.focus();
       if (action === 'new-script') void createAndOpenScript('new');
       if (action === 'present') {
@@ -78,6 +106,13 @@
         void startTake(id);
       }
     });
+    return () => {
+      unsubscribe();
+      // A search typed on the way out would otherwise land 180ms later, on a
+      // screen that has gone: it sets the singleton's query and starts a load
+      // for a route nobody is looking at.
+      if (searchDebounce) clearTimeout(searchDebounce);
+    };
   });
 
   function onSearchInput(event: Event): void {
@@ -138,30 +173,36 @@
   }
 
   async function confirmEmptyTrash(): Promise<void> {
-    // The count is everything in Trash, not the rows a search has left on
-    // screen — Empty Trash deletes the former. `null` means the count could not
-    // be read, and no number is better than a wrong one in front of this.
-    const count = $library.trashTotal;
+    // Read what is in the Trash BEFORE asking about it, and delete exactly that
+    // set. Counting first and enumerating after acceptance meant the sheet
+    // named one number and the deletes ran against another — anything trashed
+    // while the sheet was open went with them, unmentioned.
+    const targets = await collectTrashTargets();
+    if (targets === null) return; // already reported
+    if (targets.length === 0) {
+      showToast('Trash is already empty.', 'info');
+      await loadLibrary();
+      return;
+    }
+    const count = targets.length;
     const body =
-      count === null
-        ? 'Everything in Trash will be deleted permanently, along with retained revisions and unshared local assets. This cannot be undone.'
-        : count === 1
-          ? '1 script in Trash will be deleted permanently, along with its retained revisions and unshared local assets. This cannot be undone.'
-          : `${count} scripts in Trash will be deleted permanently, along with their retained revisions and unshared local assets. This cannot be undone.`;
+      count === 1
+        ? '1 script in Trash will be deleted permanently, along with its retained revisions and unshared local assets. This cannot be undone.'
+        : `${count} scripts in Trash will be deleted permanently, along with their retained revisions and unshared local assets. This cannot be undone.`;
     const accepted = await requestConfirm({
       title: 'Empty Trash?',
       body,
       confirmLabel: 'Empty Trash',
       danger: true,
     });
-    if (accepted) await emptyTrash();
+    if (accepted) await emptyTrash(targets);
   }
 
   /**
-   * `exportScriptToFile` owns every outcome of an export — cancelled, warned,
-   * written, failed — and reports each one itself. There used to be an
-   * unconditional "Export ready" here as well, which meant a cancelled dialog
-   * and a failed write both ended in a success notice.
+   * `exportScriptToFile` owns the outcome of an export: it returns quietly on a
+   * cancelled dialog and reports warnings, success and failure itself. There
+   * used to be an unconditional "Export ready" here as well, which meant a
+   * cancelled dialog and a failed write both ended in a success notice.
    */
   async function exportScript(script: ScriptSummary): Promise<void> {
     // No success toast here: `exportScriptToFile` owns every outcome, including
@@ -212,7 +253,7 @@
           something that does not match used to take the button away while
           there was still a Trash to empty.
         -->
-        {#if ($library.trashTotal ?? $library.scripts.length) > 0}
+        {#if canEmptyTrash}
           <Button variant="danger" onclick={() => confirmEmptyTrash()}>Empty Trash</Button>
         {/if}
       {:else}
@@ -304,6 +345,17 @@
         <EmptyState title="No matching scripts" body="No titles or script text matched your search." />
       {:else if inTrash}
         <EmptyState title="Trash is empty" body="Deleted scripts stay here for 30 days before they are removed." />
+      {:else if $library.view === 'recent'}
+        <!--
+          Recent lists what has been opened, which is a different question from
+          whether anything has been written. Without this the view answered an
+          empty `last_opened_at` with "Write the words" and an offer to create
+          your first script, over a library that might hold fifty.
+        -->
+        <EmptyState
+          title="No recent scripts"
+          body="Scripts appear here once you have opened them, most recently opened first."
+        />
       {:else}
         <EmptyState
           title="Write the words. CandidCue keeps your place."

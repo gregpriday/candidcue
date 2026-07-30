@@ -63,8 +63,11 @@ describe('a script card opens on a single click', () => {
   });
 
   it('still selects when there is nothing to open', () => {
-    // The Trash view passes an `onopen` that deliberately does nothing; the row
-    // must stay selectable there rather than becoming inert.
+    // A card given a selection but no way to open stays selectable rather than
+    // becoming inert. The Trash view is no longer the example: it now withholds
+    // BOTH callbacks, because an `onopen` that internally did nothing still
+    // read as `Boolean(onopen)` and bought a dead row the interactive
+    // treatment. See the note at the list in `Library.svelte`.
     const { button, onselect } = row({ onopen: undefined });
     button.click();
     expect(onselect).toHaveBeenCalledTimes(1);
