@@ -63,6 +63,7 @@
   } from '../../shared/contracts';
   import { discoverProfile, identifyHardware } from '../../shared/optical-discovery';
   import { resolveStageGeometry } from '../../shared/optical-resolve';
+  import { RIG_PRESETS, type OpticalRigPreset } from '../../shared/optical-rig-presets';
   import {
     inchesToMm,
     isPlausibleDiagonalMm,
@@ -88,15 +89,19 @@
   /* --------------------------------------------------------------- steps */
 
   /**
-   * The nine questions, in the order they can be answered.
+   * The ten questions, in the order they can be answered.
    *
-   * The order is not cosmetic. Scale has to precede distance because the two
-   * multiply into every angular result, and both have to precede text size or
-   * the sample on the glass is a guess being judged as a measurement. Safe area
-   * precedes lens because the lens is expressed as a fraction of the safe
-   * rectangle, so moving the frame afterwards would silently move the crosshair.
+   * The order is not cosmetic. Preset comes first because it is a shortcut for
+   * several of the answers that follow, not a replacement for any of them —
+   * every field it writes is still open to correction on its own step. Scale
+   * has to precede distance because the two multiply into every angular
+   * result, and both have to precede text size or the sample on the glass is a
+   * guess being judged as a measurement. Safe area precedes lens because the
+   * lens is expressed as a fraction of the safe rectangle, so moving the frame
+   * afterwards would silently move the crosshair.
    */
   type WizardStepId =
+    | 'preset'
     | 'hardware'
     | 'scale'
     | 'safe-area'
@@ -128,6 +133,13 @@
   }
 
   const STEPS: WizardStep[] = [
+    {
+      id: 'preset',
+      title: 'Start from a preset?',
+      lead: 'Pick the arrangement closest to yours to fill in the obvious answers. Every one of them stays open to correction on the steps ahead.',
+      records: null,
+      card: null,
+    },
     {
       id: 'hardware',
       title: 'Which prompter is this?',
@@ -212,6 +224,16 @@
     return { ...defaultOpticalProfile(), rigName };
   }
   let profile = $state<OpticalProfile>(seedProfile());
+  /**
+   * True once `hydrate()` has installed the stored or discovered profile.
+   *
+   * `onMount` fires `hydrate()` without awaiting it, so the wizard's first
+   * paint happens before that IPC round trip settles. A preset applied in that
+   * gap would patch the seeded default and then be silently overwritten the
+   * moment `hydrate()` replaces `profile` wholesale — so the preset step
+   * withholds its cards until this is true.
+   */
+  let hydrated = $state(false);
   /** Steps answered in THIS sitting, plus whatever the stored rig already had. */
   let answered = $state<OpticalCalibrationStep[]>([]);
   /** True once anything has been touched, so leaving can warn rather than lose it. */
@@ -276,6 +298,42 @@
     dirty = true;
   }
 
+  /* ---------------------------------------------------------- step: preset */
+
+  /**
+   * Apply a named rig's starting values in one move.
+   *
+   * The flip axes are set through `setFlip()` rather than folded into the
+   * `patchProfile()` call below, because a flip is recorded in two places —
+   * `profile.flips` and the `teleprompter` mirror settings a real take
+   * actually renders from (see `setFlip()`) — and `setFlip()` is the one
+   * function allowed to write both. Patching `flips` here directly would give
+   * the desk preset's "mirroring off" a correct profile and a stale take.
+   */
+  function applyPreset(preset: OpticalRigPreset): void {
+    patchProfile({
+      hardwareKind: preset.patch.hardwareKind,
+      viewingDistanceMm: preset.patch.viewingDistanceMm,
+      lens: { ...preset.patch.lens },
+      bias: preset.patch.bias,
+    });
+    setFlip('horizontal', preset.patch.flips.horizontal);
+    setFlip('vertical', preset.patch.flips.vertical);
+  }
+
+  /** Whether every field a preset owns already matches it — for the selected card, not for persistence. */
+  function matchesPreset(preset: OpticalRigPreset): boolean {
+    return (
+      profile.hardwareKind === preset.patch.hardwareKind &&
+      profile.viewingDistanceMm === preset.patch.viewingDistanceMm &&
+      profile.flips.horizontal === preset.patch.flips.horizontal &&
+      profile.flips.vertical === preset.patch.flips.vertical &&
+      profile.lens.x === preset.patch.lens.x &&
+      profile.lens.y === preset.patch.lens.y &&
+      profile.bias === preset.patch.bias
+    );
+  }
+
   /* -------------------------------------------------------------- arrival */
 
   onMount(() => {
@@ -334,6 +392,7 @@
     // Discovery filling fields in is not the user having answered anything, so
     // the sequence still starts clean and nothing here counts as dirty yet.
     dirty = false;
+    hydrated = true;
   }
 
   /* ---------------------------------------------------------- the stage */
@@ -734,7 +793,9 @@
     const name = profile.rigName.trim();
     if (name === '') {
       showToast('Give this rig a name so you can tell it from the others on this panel.', 'danger');
-      stepIndex = 0;
+      // Not necessarily step 0: the preset step precedes 'hardware', which is
+      // the step that actually owns the rig-name field.
+      stepIndex = STEPS.findIndex((s) => s.id === 'hardware');
       return;
     }
     const next: OpticalProfile = { ...profile, rigName: name, completedSteps: answered };
@@ -813,7 +874,30 @@
         <p class="step-lead">{step.lead}</p>
       </div>
 
-      {#if step.id === 'hardware'}
+      {#if step.id === 'preset'}
+        {#if !hydrated}
+          <p class="hint-line">Loading what CandidCue already knows about this display…</p>
+        {:else}
+          <div class="preset-grid" role="group" aria-label="Rig presets">
+            {#each RIG_PRESETS as preset (preset.id)}
+              <button
+                type="button"
+                class="preset-card"
+                class:selected={matchesPreset(preset)}
+                aria-pressed={matchesPreset(preset)}
+                onclick={() => applyPreset(preset)}
+              >
+                <span class="preset-name">{preset.label}</span>
+                <span class="preset-description">{preset.description}</span>
+              </button>
+            {/each}
+          </div>
+          <p class="hint-line">
+            Not sure, or using something else entirely? Skip this — CandidCue will start from what
+            it already knows about this display, and every field below stays open to correction.
+          </p>
+        {/if}
+      {:else if step.id === 'hardware'}
         <TextField
           label="Rig name"
           value={profile.rigName}
@@ -1256,6 +1340,43 @@
   .chip.selected:hover {
     background: var(--accent-wash);
     border-color: var(--border-strong);
+  }
+
+  .preset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: var(--space-2);
+  }
+  .preset-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-control);
+    background: var(--bg-elevated);
+    text-align: left;
+    transition:
+      background var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out);
+  }
+  .preset-card:hover {
+    background: var(--bg-hover-surface);
+  }
+  .preset-card.selected,
+  .preset-card.selected:hover {
+    background: var(--accent-wash);
+    border-color: var(--border-strong);
+  }
+  .preset-name {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .preset-description {
+    font-size: var(--text-sm);
+    color: var(--text-muted);
   }
 
   .readout {
