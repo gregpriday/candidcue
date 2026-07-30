@@ -42,6 +42,7 @@ import {
   DEFAULT_DEAD_ZONE_LINES,
   DEFAULT_FUTURE_RESERVE_LINES,
   DEFAULT_TOP_FADE_LINES,
+  OFF_PANEL_READING_BAND_EDGE_FRACTION,
 } from '../../shared/optical-resolve';
 
 /* ---------------------------------------------------------------------------
@@ -150,14 +151,20 @@ export interface ReadingBand {
  * which is the exact fault the optical model exists to remove.
  *
  * An off-panel lens (`lensPlacement` `'above'`/`'below'`) is where the same
- * argument reaches its edge: `resolveStageGeometry` pins the band at 5%/95%
- * precisely because there IS no lens inside the rectangle to centre on, and
- * re-narrowing that pin to 10–90% here would undo the one thing the pin was
- * for. `OFF_PANEL_CENTER_RANGE` is that rig's version of the same rule.
+ * argument reaches its edge: `resolveStageGeometry` pins the band at
+ * `OFF_PANEL_READING_BAND_EDGE_FRACTION`/its complement precisely because
+ * there IS no lens inside the rectangle to centre on, and re-narrowing that
+ * pin to 10–90% here would undo the one thing the pin was for.
+ * `OFF_PANEL_CENTER_RANGE` shares that exact bound rather than opening to the
+ * full 0–1 — a centre allowed to land exactly on 0 or 1 would give the
+ * corridor a top or bottom margin of zero, and this way it can't.
  */
 const VIEWPORT_CENTER_RANGE = { min: 0.2, max: 0.7 } as const;
 const SAFE_RECT_CENTER_RANGE = { min: 0.1, max: 0.9 } as const;
-const OFF_PANEL_CENTER_RANGE = { min: 0, max: 1 } as const;
+const OFF_PANEL_CENTER_RANGE = {
+  min: OFF_PANEL_READING_BAND_EDGE_FRACTION,
+  max: 1 - OFF_PANEL_READING_BAND_EDGE_FRACTION,
+} as const;
 
 /**
  * Where the band sits when the caller has not said usefully.

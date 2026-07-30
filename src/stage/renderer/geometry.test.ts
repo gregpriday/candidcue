@@ -152,27 +152,46 @@ describe('the reading corridor', () => {
     ).toBeCloseTo(100, 9);
   });
 
-  it('never returns a degenerate band for an off-panel lens pinned at the extreme edges', () => {
+  it('clamps an out-of-range off-panel centerPercent to the same 5–95% the resolver pins to', () => {
+    // The off-panel range shares its bound with the resolver's own pin rather
+    // than opening to a raw 0–100%: a centre allowed to land exactly on the
+    // edge would give the corridor a zero margin on that side.
     const safeRect: SafeRect = { x: 0, y: 0, width: 1024, height: 1000 };
+    const settings = { halfHeightPercent: 4, linePitchPx: PITCH, safeRect };
     const above = computeReadingBand(1000, {
+      ...settings,
       centerPercent: 0,
-      halfHeightPercent: 4,
-      linePitchPx: PITCH,
-      safeRect,
       lensPlacement: 'above',
     });
+    expect(above.centerPx).toBeCloseTo(50, 9);
     expect(above.bottomPx).toBeGreaterThan(above.topPx);
-    expect(above.topPx).toBeGreaterThanOrEqual(safeRect.y);
+    expect(above.topPx).toBeGreaterThan(safeRect.y);
 
     const below = computeReadingBand(1000, {
+      ...settings,
       centerPercent: 100,
-      halfHeightPercent: 4,
-      linePitchPx: PITCH,
-      safeRect,
       lensPlacement: 'below',
     });
+    expect(below.centerPx).toBeCloseTo(950, 9);
     expect(below.bottomPx).toBeGreaterThan(below.topPx);
-    expect(below.bottomPx).toBeLessThanOrEqual(safeRect.y + safeRect.height);
+    expect(below.bottomPx).toBeLessThan(safeRect.y + safeRect.height);
+  });
+
+  it('ignores lensPlacement on the uncalibrated viewport path, which has no safe rect', () => {
+    // Only a resolved, calibrated rig ever carries `lensPlacement`, and it
+    // always arrives with a safe rect alongside it — but the function itself
+    // should not honour an off-panel placement it has no rectangle to widen.
+    expect(
+      computeReadingBand(1000, { centerPercent: 5, halfHeightPercent: 4, lensPlacement: 'above' })
+        .centerPx,
+    ).toBe(200);
+    expect(
+      computeReadingBand(1000, {
+        centerPercent: 95,
+        halfHeightPercent: 4,
+        lensPlacement: 'below',
+      }).centerPx,
+    ).toBe(700);
   });
 
   /*

@@ -184,7 +184,7 @@ describe('lens position', () => {
     expect(optics.readingBandY).toBeLessThanOrEqual(0.9);
   });
 
-  it('defaults an unspecified rig to in-panel', () => {
+  it('carries the default in-panel placement through to resolved optics', () => {
     const { optics } = resolveStageGeometry({ profile: calibrated(), viewport: PROMPTER_9 });
     expect(optics.lensPlacement).toBe('in-panel');
   });
