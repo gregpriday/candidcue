@@ -74,11 +74,44 @@
     window.addEventListener('keydown', onKeydown, true);
     return () => window.removeEventListener('keydown', onKeydown, true);
   });
+
+  /*
+   * Dismiss on a click of the scrim — but only a click that BEGAN on the scrim.
+   *
+   * A `click` event's target is where the pointer went UP, not where it went
+   * down, so `e.target === e.currentTarget` alone cannot tell a dismissing tap
+   * apart from the end of a drag. Selecting a line of the take summary and
+   * overshooting the panel released on the scrim and threw the dialog away,
+   * taking the selection with it. The same is true in reverse: a drag that
+   * starts on the scrim and ends inside the panel is not a dismissal either.
+   *
+   * So the origin is recorded on `pointerdown` and consulted on `click`. This
+   * is what Radix, React Aria and Ark all do, for the same reason.
+   */
+  let pointerDownOnScrim = false;
+
+  function onScrimPointerDown(event: PointerEvent): void {
+    pointerDownOnScrim = event.target === event.currentTarget;
+  }
+
+  function onScrimClick(event: MouseEvent): void {
+    const beganOnScrim = pointerDownOnScrim;
+    // One gesture, one verdict: a stale `true` must not authorise the next
+    // click (a keyboard-synthesised one, say, which fires no pointerdown).
+    pointerDownOnScrim = false;
+    if (beganOnScrim && event.target === event.currentTarget) onclose?.();
+  }
 </script>
 
 {#if open}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <div class="scrim" role="presentation" onclick={(e) => e.target === e.currentTarget && onclose?.()}>
+  <div
+    class="scrim"
+    role="presentation"
+    onpointerdown={onScrimPointerDown}
+    onpointercancel={() => (pointerDownOnScrim = false)}
+    onclick={onScrimClick}
+  >
     <div
       class="panel {size}"
       role="dialog"
@@ -105,7 +138,7 @@
     z-index: 100;
     display: grid;
     place-items: center;
-    background: rgba(15, 17, 21, 0.4);
+    background: var(--dialog-scrim);
     padding: var(--space-8);
     animation: scrim-in var(--dur-fast) var(--ease-out);
   }

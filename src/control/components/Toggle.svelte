@@ -25,16 +25,20 @@
 <div class="toggle-row" class:disabled>
   <span class="text">
     <label class="label" for={uid}>{label}</label>
-    {#if description}<span class="description">{description}</span>{/if}
+    <!-- Described BY id, not merely rendered beside: text that only sits near a
+         control is text a screen reader never connects to it. -->
+    {#if description}<span class="description" id="{uid}-description">{description}</span>{/if}
   </span>
   <button
     type="button"
     id={uid}
     class="switch"
     class:on={checked}
+    data-focus="control"
     role="switch"
     aria-checked={checked}
     aria-label={label}
+    aria-describedby={description ? `${uid}-description` : undefined}
     {disabled}
     onclick={toggle}
   >
@@ -105,6 +109,9 @@
   }
   .on .knob {
     transform: translateX(16px);
-    background: #fff;
+    /* The knob sits on the accent fill once it is on, so it wears the accent's
+       own contrast colour rather than a literal white that only happened to
+       work in one theme. */
+    background: var(--accent-contrast);
   }
 </style>

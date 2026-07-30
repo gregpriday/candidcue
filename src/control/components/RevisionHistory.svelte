@@ -11,6 +11,7 @@
   replaces is snapshotted under the per-script lock first.
 -->
 <script lang="ts">
+  import { tick } from 'svelte';
   import Button from './Button.svelte';
   import Dialog from './Dialog.svelte';
   import {
@@ -50,12 +51,39 @@
   let restoring = $state(false);
   let confirming = $state(false);
 
+  /*
+   * The two footer buttons the confirm step swaps between.
+   *
+   * Asking to restore replaces the button that was focused with a different
+   * pair, so focus fell to the body: the keyboard was left nowhere, and a
+   * screen reader was told nothing at all — the question appeared as a
+   * paragraph no one was reading. Focus is therefore moved deliberately, onto
+   * Cancel rather than Restore so the destructive key is never the one already
+   * under a waiting Return.
+   */
+  let cancelButton = $state<HTMLButtonElement | null>(null);
+  let restoreButton = $state<HTMLButtonElement | null>(null);
+
   const selected = $derived(revisions.find((r) => r.id === selectedId) ?? null);
 
   $effect(() => {
     if (!open) return;
+    // A reopened dialog must not still be holding a half-answered question.
+    confirming = false;
     void load(scriptId);
   });
+
+  async function askToRestore(): Promise<void> {
+    confirming = true;
+    await tick();
+    cancelButton?.focus();
+  }
+
+  async function cancelRestore(): Promise<void> {
+    confirming = false;
+    await tick();
+    restoreButton?.focus();
+  }
 
   async function load(id: string): Promise<void> {
     loading = true;
@@ -99,7 +127,12 @@
       onrestored();
     } catch (err) {
       previewError = describeError(err);
+      // The confirm pair is about to be replaced by the single Restore button
+      // again; without this the failure would ALSO drop focus to the body.
       confirming = false;
+      restoring = false;
+      await tick();
+      restoreButton?.focus();
     } finally {
       restoring = false;
     }
@@ -167,7 +200,10 @@
     </div>
 
     {#if confirming}
-      <p class="note confirm">
+      <!-- role="alert" so the question is spoken when it appears. Without it
+           the confirm step was a silent paragraph and the only signal that
+           anything had happened was visual. -->
+      <p class="note confirm" role="alert" aria-atomic="true">
         Replace the current text with this revision? {RESTORE_SAFETY_NOTE}
       </p>
     {/if}
@@ -176,15 +212,18 @@
   {#snippet footer()}
     <Button variant="ghost" onclick={onclose}>Close</Button>
     {#if confirming}
-      <Button variant="ghost" onclick={() => (confirming = false)}>Cancel</Button>
-      <Button variant="primary" disabled={restoring} onclick={() => void restore()}>
+      <Button bind:element={cancelButton} variant="ghost" onclick={() => void cancelRestore()}>
+        Cancel
+      </Button>
+      <Button variant="danger" disabled={restoring} onclick={() => void restore()}>
         {restoring ? 'Restoring…' : 'Restore this version'}
       </Button>
     {:else}
       <Button
+        bind:element={restoreButton}
         variant="primary"
         disabled={!preview || restoring}
-        onclick={() => (confirming = true)}
+        onclick={() => void askToRestore()}
       >
         Restore this version
       </Button>

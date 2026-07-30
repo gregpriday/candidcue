@@ -32,6 +32,7 @@
         <button
           type="button"
           class="dismiss"
+          data-focus="control"
           aria-label="Dismiss notification"
           onclick={() => dismissToast(toast.id)}
         >
@@ -48,6 +49,7 @@
         <button
           type="button"
           class="dismiss"
+          data-focus="control"
           aria-label="Dismiss notification"
           onclick={() => dismissToast(toast.id)}
         >

@@ -33,6 +33,7 @@
       class:silent={!block.spoken && block.kind !== 'cue'}
       role={onblockclick ? 'button' : undefined}
       tabindex={onblockclick ? 0 : undefined}
+      data-focus={onblockclick ? 'surface' : undefined}
       onclick={() => onblockclick?.(block)}
       onkeydown={(e) => {
         if (onblockclick && (e.key === 'Enter' || e.key === ' ')) {
@@ -77,12 +78,13 @@
     gap: var(--space-4);
   }
 
+  /* A preview block is a surface, not a control — the quiet inset edge comes
+     from the central focus policy via the `data-focus` attribute below, so the
+     background shift here is the accompanying signal rather than the only one. */
   .block[role='button'] {
     cursor: pointer;
     border-radius: var(--radius-sm);
     transition: background var(--dur-fast) var(--ease-out);
-    /* Focus on a preview block: quiet surface shift, not an accent ring. */
-    outline: none;
   }
   .block[role='button']:hover,
   .block[role='button']:focus-visible {

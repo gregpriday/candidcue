@@ -90,4 +90,45 @@ describe('Toggle (role=switch)', () => {
     const described = renderToggle({ description: 'Kept for 30 days' });
     expect(described.container.querySelector('.description')?.textContent).toBe('Kept for 30 days');
   });
+
+  /*
+   * The description was rendered beside the switch and wired to nothing, so it
+   * existed on screen and nowhere else: a screen reader announced the label and
+   * the state and simply never mentioned the sentence explaining what the
+   * setting does.
+   */
+  it('points the switch at its description, so it is announced with the control', () => {
+    const { getByRole } = renderToggle({ description: 'Kept for 30 days' });
+    const swtch = getByRole('switch');
+
+    const describedBy = swtch.getAttribute('aria-describedby');
+    expect(describedBy, 'the switch must reference a description').toBeTruthy();
+
+    // The reference has to RESOLVE in the document the way assistive tech
+    // resolves it — an id pointing at nothing reads as no description at all,
+    // and looks identical in the markup.
+    expect(document.getElementById(describedBy!)?.textContent).toBe('Kept for 30 days');
+  });
+
+  it('claims no description when it has none to give', () => {
+    const { getByRole } = renderToggle();
+    expect(getByRole('switch').getAttribute('aria-describedby')).toBeNull();
+  });
+
+  it('two described toggles point at their own description, not each other’s', () => {
+    const a = renderToggle({ label: 'One', description: 'First' });
+    const b = renderToggle({ label: 'Two', description: 'Second' });
+
+    const idA = a.getByRole('switch', { name: 'One' }).getAttribute('aria-describedby');
+    const idB = b.getByRole('switch', { name: 'Two' }).getAttribute('aria-describedby');
+    expect(idA).not.toBe(idB);
+    expect(document.getElementById(idA!)?.textContent).toBe('First');
+    expect(document.getElementById(idB!)?.textContent).toBe('Second');
+  });
+
+  /* The switch is a real control, so it keeps the accent focus ring that
+     tokens.css now hands out only on request. */
+  it('opts into the small-control focus ring', () => {
+    expect(renderToggle().getByRole('switch').getAttribute('data-focus')).toBe('control');
+  });
 });

@@ -187,13 +187,14 @@
 </script>
 
 <div class="split {variant}" class:open bind:this={root}>
-  <button type="button" class="main" {disabled} onclick={() => onclick?.()}>
+  <button type="button" class="main" data-focus="control" {disabled} onclick={() => onclick?.()}>
     {label}
   </button>
   <span class="divider" aria-hidden="true"></span>
   <button
     type="button"
     class="caret"
+    data-focus="control"
     {disabled}
     aria-haspopup="menu"
     aria-expanded={open}

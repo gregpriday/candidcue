@@ -12,6 +12,13 @@
     disabled?: boolean;
     type?: 'button' | 'submit';
     title?: string;
+    /**
+     * The rendered element, for callers that must move focus onto this button
+     * deliberately (RevisionHistory's confirm step). Exposed rather than left to
+     * a `querySelector` on a private class name, which would break silently the
+     * moment the class is renamed.
+     */
+    element?: HTMLButtonElement | null;
     onclick?: (event: MouseEvent) => void;
     children?: Snippet;
   }
@@ -22,12 +29,21 @@
     disabled = false,
     type = 'button',
     title,
+    element = $bindable(null),
     onclick,
     children,
   }: Props = $props();
 </script>
 
-<button class="button {variant} {size}" {type} {disabled} {title} {onclick}>
+<button
+  bind:this={element}
+  class="button {variant} {size}"
+  data-focus="control"
+  {type}
+  {disabled}
+  {title}
+  {onclick}
+>
   {@render children?.()}
 </button>
 
@@ -95,7 +111,7 @@
     font-size: var(--text-sm);
   }
 
-  /* Ghost & danger recede into toolbars. */
+  /* Ghost recedes into toolbars. */
   .ghost {
     background: transparent;
     border-color: transparent;
@@ -109,14 +125,35 @@
     color: var(--text-primary);
   }
 
+  /*
+   * Danger — the same solid recipe as primary, in red.
+   *
+   * It used to be a borderless text button, which read at exactly the weight of
+   * the Cancel beside it. Every caller is the confirming half of a destructive
+   * pair (empty trash, stop the take, the confirm sheet), so the one action that
+   * cannot be undone was the only one on screen with no visually primary
+   * button. Filled, it is unmistakably the thing being asked about.
+   */
   .danger {
-    background: transparent;
-    border-color: transparent;
-    color: var(--danger);
-    box-shadow: none;
+    background: var(--danger);
+    border-color: var(--danger-strong);
+    color: var(--danger-contrast);
+    font-size: var(--text-base);
   }
   .danger:hover:not(:disabled) {
-    background: var(--danger-soft);
-    border-color: transparent;
+    background: var(--danger-strong);
+    border-color: var(--danger-strong);
+  }
+  /* Neutral when disabled, like primary — dimming a red fill reads as a
+     softer warning rather than an unavailable control. */
+  .danger:disabled {
+    opacity: 1;
+    background: var(--bg-secondary);
+    border-color: var(--border);
+    color: var(--text-muted);
+    box-shadow: none;
+  }
+  .danger.sm {
+    font-size: var(--text-sm);
   }
 </style>

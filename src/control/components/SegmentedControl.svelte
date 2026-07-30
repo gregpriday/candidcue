@@ -51,6 +51,7 @@
       type="button"
       class="segment"
       class:selected={option.value === value}
+      data-focus="control"
       role="radio"
       aria-checked={option.value === value}
       tabindex={segmentTabIndex(options, value, index)}

@@ -48,6 +48,29 @@ describe('Slider', () => {
     expect(text(off.container)).toContain('72%');
   });
 
+  /*
+   * Rendering the sentence is only half of it. The §28.4 description is the
+   * only place the sensitivity control explains what it moves, and until the
+   * input pointed at it a screen-reader user got a bare percentage with no
+   * explanation anywhere in the accessibility tree.
+   */
+  it('points the range input at its description, so it is announced with the control', () => {
+    const { getByRole } = renderSlider({ description: VAD_SENSITIVITY_COPY.description });
+    const input = getByRole('slider');
+
+    const describedBy = input.getAttribute('aria-describedby');
+    expect(describedBy, 'the range must reference a description').toBeTruthy();
+
+    // Resolved out of the document, the way assistive tech resolves it.
+    expect(document.getElementById(describedBy!)?.textContent).toBe(
+      VAD_SENSITIVITY_COPY.description,
+    );
+  });
+
+  it('claims no description when it has none to give', () => {
+    expect(renderSlider().getByRole('slider').getAttribute('aria-describedby')).toBeNull();
+  });
+
   it('reports the new number upward on input', async () => {
     const onchange = vi.fn();
     const { getByRole } = renderSlider({ onchange });

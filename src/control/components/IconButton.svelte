@@ -44,6 +44,7 @@
   class="icon-button"
   class:active
   class:danger
+  data-focus="control"
   aria-label={label}
   aria-pressed={haspopup === undefined && active ? 'true' : undefined}
   aria-haspopup={haspopup}

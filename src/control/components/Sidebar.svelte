@@ -38,7 +38,7 @@
     <span class="brand">CandidCue</span>
   </div>
 
-  <button type="button" class="new-button" onclick={onnew}>
+  <button type="button" class="new-button" data-focus="control" onclick={onnew}>
     <Icon name="plus" size={16} />
     <span>New script</span>
   </button>
@@ -137,7 +137,7 @@
       border-color var(--dur-fast) var(--ease-out);
   }
   .new-button:hover {
-    box-shadow: 0 3px 10px rgba(24, 25, 29, 0.08);
+    box-shadow: var(--shadow-hover);
     border-color: var(--border);
   }
 

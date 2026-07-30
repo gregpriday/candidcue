@@ -80,9 +80,10 @@
   .select:hover:not(:disabled) {
     border-color: var(--border-strong);
   }
+  /* As TextField: the border/background shift accompanies the central quiet
+     inset edge rather than standing in for it. */
   .select:focus,
   .select:focus-visible {
-    outline: none;
     border-color: var(--border-strong);
     background: var(--bg-elevated);
   }

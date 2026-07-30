@@ -279,6 +279,7 @@
         <div class="nudge">
           <button
             type="button"
+            data-focus="control"
             aria-label="Smaller text"
             title="Smaller text (hold Shift for a bigger step)"
             disabled={atMinSize}
@@ -286,6 +287,7 @@
           >
           <button
             type="button"
+            data-focus="control"
             aria-label="Larger text"
             title="Larger text (hold Shift for a bigger step)"
             disabled={atMaxSize}
