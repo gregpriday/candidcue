@@ -6,6 +6,8 @@
 -->
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
+  import Button from './components/Button.svelte';
   import ConfirmHost from './components/ConfirmHost.svelte';
   import ShortcutsDialog from './components/ShortcutsDialog.svelte';
   import Sidebar from './components/Sidebar.svelte';
@@ -17,21 +19,48 @@
   import Calibrate from './routes/Calibrate.svelte';
   import Welcome from './routes/Welcome.svelte';
   import { createAndOpenScript } from './lib/app-actions';
+  import {
+    STOP_SESSION_CONFIRM_BODY,
+    editorNavigationDecision,
+    initialRouteForBoot,
+    isFatalBootCode,
+    recentScriptIdForBoot,
+  } from './lib/app-lifecycle';
 import { rememberReaderFrame } from './lib/reader-frame';
   import { installShortcuts, onShortcut } from './lib/shortcuts';
   import { initAudioTrace } from './services/audio-trace';
+  import { exportSupportBundle } from './services/diagnostics';
+  import { describeError, errorCode } from './services/errors';
+  import { listScripts } from './services/scripts';
+  import { defaultAppSettings } from './services/settings-types';
   import { initAppStatus } from './stores/app-status';
   import { requestConfirm } from './stores/confirm';
-  import { saveNow } from './stores/editor';
+  import { editor, editorHasUnsavedWork, saveNow } from './stores/editor';
   import { loadLibrary } from './stores/library';
   import { awaitViewportSettled, exitPresentation, painted } from './services/control-window';
   import { canvasIsBlack, coverIsUp, presentingPhase, setPresentingPhase } from './stores/presenting';
   import { navigate, registerNavigationGuard, route, setInitialRoute } from './stores/router';
   import { clearSession, session, stopSession } from './stores/session';
   import { loadSettings } from './stores/settings';
+  import { showToast } from './stores/toasts';
 
   let ready = $state(false);
   let shortcutsOpen = $state(false);
+
+  /*
+   * Why boot has a failure state at all.
+   *
+   * `ready` is a two-value flag with three outcomes: still starting, started,
+   * and never going to start. Without the third, a rejection anywhere in the
+   * boot sequence left `ready` false forever and the wordmark on screen — an app
+   * that looks like it is still loading, indefinitely, with force-quit the only
+   * way out. The splash and the failure share the `.boot` block deliberately:
+   * this has to render before anything else exists, so it cannot depend on a
+   * route, a store that failed to load, or a component further down the shell.
+   */
+  let bootFailure = $state<string | null>(null);
+  let bootExporting = $state(false);
+  let bootExportNote = $state<string | null>(null);
 
   /*
    * The dark studio theme belongs to a RUNNING take, not to the Live route.
@@ -98,6 +127,22 @@ import { rememberReaderFrame } from './lib/reader-frame';
     // §30.1 triage. Off unless the operator switched it on for this window;
     // see audio-trace.ts for why the audio path needs it at all.
     initAudioTrace();
+    /*
+     * The boot sequence outlives the component if the shell is torn down
+     * mid-launch (HMR, a reload landing on a slow IPC round trip). None of the
+     * calls below can be cancelled, so let them settle and drop the final
+     * commits — a route set or a `ready` flip against an unmounted tree is at
+     * best wasted and at worst a write nobody can see or undo.
+     *
+     * Scoped honestly: this covers the route, `ready` and the toast, and NOT
+     * the stores each boot call writes on its way past. `initAppStatus`,
+     * `loadSettings` and `loadLibrary` are global and commit before this is
+     * consulted, so a torn-down boot can still land an older snapshot over a
+     * newer one. Closing that needs a generation token through those loaders,
+     * which is a bigger change than this one and only reachable under HMR — a
+     * full webview reload throws the whole JS context away.
+     */
+    let disposed = false;
     const teardownShortcuts = installShortcuts();
     const teardownHelp = onShortcut((action) => {
       if (action === 'command-help') shortcutsOpen = true;
@@ -108,7 +153,7 @@ import { rememberReaderFrame } from './lib/reader-frame';
       if (from.name === 'live' && to.name !== 'live' && $session.active) {
         const accepted = await requestConfirm({
           title: 'Stop the session?',
-          body: 'Leaving Live stops the session: the realtime connection closes and the stage leaves full screen.',
+          body: STOP_SESSION_CONFIRM_BODY,
           confirmLabel: 'Stop session',
           danger: true,
         });
@@ -151,10 +196,71 @@ import { rememberReaderFrame } from './lib/reader-frame';
       return true;
     });
 
-    /* Flush any pending editor autosave when navigating away (spec §13.5). */
-    const unregisterSaveGuard = registerNavigationGuard(async (_to, from) => {
-      if (from.name === 'editor') await saveNow();
-      return true;
+    /*
+     * Flush any pending editor autosave when navigating away (spec §13.5) — and
+     * then check that the flush actually landed.
+     *
+     * `saveNow()` reports a conflict or a failed write through store state and
+     * resolves normally either way, so awaiting it proves nothing on its own.
+     * This guard used to await it and return true unconditionally, which meant
+     * that with a save failing, clicking Library abandoned the only copy of the
+     * text without a word — and the conflict sheet, whose entire job is to let
+     * the operator choose between their text and the disk's, could be walked
+     * past without ever appearing.
+     *
+     * The confirmation always offers a way THROUGH. A failing save is already a
+     * bad situation; a guard that cannot be satisfied would turn it into a
+     * screen the operator cannot leave, which is the same trap as a boot that
+     * never finishes. `saveNow()` is wrapped even though it does not currently
+     * throw: if that contract ever changes, the escape path has to survive it.
+     */
+    const unregisterSaveGuard = registerNavigationGuard(async (to, from) => {
+      if (from.name !== 'editor') return true;
+
+      let saveThrew = false;
+      try {
+        await saveNow();
+      } catch {
+        saveThrew = true;
+      }
+
+      const decision = editorNavigationDecision({
+        to,
+        from,
+        hasUnsavedWork: saveThrew || editorHasUnsavedWork(),
+      });
+      if (decision === 'allow') return true;
+      // Live is vetoed rather than asked about — see app-lifecycle.ts.
+      if (decision === 'veto') return false;
+
+      /*
+       * A conflict gets its own question, because it is a different question.
+       *
+       * The other three states are one accident — the write has not happened
+       * yet, or it failed — and "they may be lost" is the honest summary. A
+       * conflict is not an accident: the file changed on disk, both versions
+       * are real, and Editor.svelte has a sheet for choosing between them.
+       * Wrapping that in "may be lost" would describe the one case where the
+       * loss is certain and the remedy is one screen away.
+       */
+      const conflicted = get(editor).saveState === 'conflict';
+      return await requestConfirm(
+        conflicted
+          ? {
+              title: 'Leave without resolving the conflict?',
+              body: 'This script also changed on disk. Stay to choose which version to keep — leaving now discards the version in CandidCue.',
+              confirmLabel: 'Discard my version',
+              cancelLabel: 'Stay and resolve',
+              danger: true,
+            }
+          : {
+              title: 'Leave with unsaved changes?',
+              body: 'Your latest changes are not saved. If you leave now, they may be lost.',
+              confirmLabel: 'Leave anyway',
+              cancelLabel: 'Stay in editor',
+              danger: true,
+            },
+      );
     });
 
     void (async () => {
@@ -186,17 +292,73 @@ import { rememberReaderFrame } from './lib/reader-frame';
        * which is the right trade: it is a crash-recovery path, and the last
        * ORDERLY exit already stored a frame.
        */
-      await exitPresentation().catch(() => {});
-      setPresentingPhase('off');
+      try {
+        await exitPresentation().catch(() => {});
+        setPresentingPhase('off');
 
-      const status = await initAppStatus();
-      await loadSettings();
-      await loadLibrary();
-      setInitialRoute(status.firstLaunch ? { name: 'welcome' } : { name: 'library', view: 'all' });
-      ready = true;
+        const status = await initAppStatus();
+
+        /*
+         * A settings read that fails is not a reason to refuse to start.
+         *
+         * The store already holds `defaultAppSettings()`, so the fallback is a
+         * working app with the wrong preferences — plainly better than no app,
+         * and `loaded` stays false so Settings and the next take both retry the
+         * real read. The exception is a database that could not be migrated or
+         * whose integrity check failed: those are rethrown to the boot failure
+         * screen, because opening the app there would invite somebody to write
+         * a script into a store that cannot keep it.
+         *
+         * Routing reads the value this returned rather than the store, so it
+         * cannot race a subscription that has not fired yet.
+         */
+        let launchSettings = defaultAppSettings();
+        let settingsWarning: string | null = null;
+        try {
+          launchSettings = await loadSettings();
+        } catch (err) {
+          if (isFatalBootCode(errorCode(err))) throw err;
+          settingsWarning = describeError(err);
+        }
+
+        // Needed even when a script is about to open: the sidebar reads it.
+        await loadLibrary();
+
+        const recentScriptId = await recentScriptIdForBoot({
+          firstLaunch: status.firstLaunch,
+          launchBehavior: launchSettings.general.launchBehavior,
+          listRecent: () => listScripts({ view: 'recent' }),
+        });
+
+        if (disposed) return;
+        setInitialRoute(
+          initialRouteForBoot({
+            firstLaunch: status.firstLaunch,
+            launchBehavior: launchSettings.general.launchBehavior,
+            recentScriptId,
+          }),
+        );
+        ready = true;
+
+        /*
+         * After `ready`, and it does not need to wait for a paint: ToastRegion
+         * lives outside the boot branch and is mounted for the whole life of the
+         * shell. Raised last so it lands on the app rather than on the splash.
+         */
+        if (settingsWarning !== null) {
+          showToast(
+            `CandidCue could not load your settings, so this launch is using defaults. ${settingsWarning}`,
+            'danger',
+          );
+        }
+      } catch (err) {
+        if (disposed) return;
+        bootFailure = describeError(err);
+      }
     })();
 
     return () => {
+      disposed = true;
       teardownShortcuts();
       teardownHelp();
       unregisterLiveGuard();
@@ -207,12 +369,65 @@ import { rememberReaderFrame } from './lib/reader-frame';
   async function newScriptFromSidebar(): Promise<void> {
     await createAndOpenScript('new');
   }
+
+  /**
+   * The one action the boot failure screen offers.
+   *
+   * The authored copy for a failed migration tells the operator to export a
+   * support bundle from Settings — and a launch that stopped here is precisely a
+   * launch with no Settings to reach. Rather than quote an instruction nobody
+   * can follow, the screen carries the export itself. Rust owns the folder
+   * picker, so cancelling is an ordinary outcome and not a failure; a genuine
+   * failure is reported in place, which leaves the operator no worse off than
+   * the button not being there.
+   */
+  async function exportBootSupportBundle(): Promise<void> {
+    bootExporting = true;
+    bootExportNote = null;
+    try {
+      const result = await exportSupportBundle();
+      // `path` is optional on the result type, so it is checked rather than
+      // interpolated — "saved to undefined" would read as a bug in the report
+      // somebody is exporting precisely because something is already wrong.
+      if (!result.cancelled) {
+        bootExportNote =
+          result.path === undefined
+            ? 'Support bundle saved.'
+            : `Support bundle saved to ${result.path}.`;
+      }
+    } catch (err) {
+      bootExportNote = `The support bundle could not be written. ${describeError(err)}`;
+    } finally {
+      bootExporting = false;
+    }
+  }
 </script>
 
 <div class="shell" data-theme={theme}>
   {#if !ready}
     <div class="boot">
-      <p class="boot-mark">CandidCue</p>
+      {#if bootFailure === null}
+        <p class="boot-mark">CandidCue</p>
+      {:else}
+        <section class="boot-failure" role="alert">
+          <h1 class="boot-failure-title">CandidCue could not finish starting</h1>
+          <p class="boot-failure-body">{bootFailure}</p>
+          <Button variant="default" disabled={bootExporting} onclick={() => void exportBootSupportBundle()}>
+            {bootExporting ? 'Exporting…' : 'Export support bundle'}
+          </Button>
+          {#if bootExportNote !== null}
+            <p class="boot-failure-note">{bootExportNote}</p>
+          {/if}
+          <!--
+            No second export instruction here. The authored copy above may already
+            carry one (the migration text points at Settings → Diagnostics, which
+            a launch that stopped here cannot reach) and the button is the answer
+            to it — repeating the advice underneath, hedged with "if it happens
+            again", contradicts the copy it sits below.
+          -->
+          <p class="boot-failure-note">Quit CandidCue and open it again.</p>
+        </section>
+      {/if}
     </div>
   {:else}
     {#if showSidebar}
@@ -348,6 +563,37 @@ import { rememberReaderFrame } from './lib/reader-frame';
     font-size: var(--text-lg);
     font-weight: 650;
     letter-spacing: var(--ls-title);
+    color: var(--text-muted);
+  }
+
+  /*
+   * Bounded and centred rather than full-bleed: this is a short piece of prose
+   * somebody has to read carefully and then act on, and a measure that runs the
+   * width of a monitor is one nobody reads carefully.
+   */
+  .boot-failure {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-4);
+    max-width: 44ch;
+    padding: var(--space-8);
+    text-align: center;
+  }
+  .boot-failure-title {
+    margin: 0;
+    font-size: var(--text-lg);
+    font-weight: 650;
+    letter-spacing: var(--ls-title);
+    color: var(--text-primary);
+  }
+  .boot-failure-body {
+    margin: 0;
+    color: var(--text-primary);
+  }
+  .boot-failure-note {
+    margin: 0;
+    font-size: var(--text-sm);
     color: var(--text-muted);
   }
 </style>

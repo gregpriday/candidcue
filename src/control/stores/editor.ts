@@ -311,9 +311,33 @@ export async function keepEditorVersion(): Promise<ConflictOutcome> {
   return { copied: false };
 }
 
+/**
+ * Is there work in this state that leaving would abandon?
+ *
+ * `conflict` counts, and it is the state where the answer matters most: the
+ * operator's text and the disk's text are both real and neither has been
+ * chosen yet, so navigating away discards one of them silently. It was left out
+ * originally because `saveNow()` resolves normally on a conflict — but resolving
+ * is not the same as saving, which is the whole reason this predicate exists
+ * rather than callers awaiting `saveNow()` and assuming the best.
+ *
+ * Takes the state rather than reading the store so the save-state axis can be
+ * tested on its own. Driving the real store cannot produce a clean-but-failed
+ * editor — every failure path leaves `dirty` true as well — so a store-only
+ * test passes on `dirty` alone and would go on passing if the save states were
+ * dropped from this predicate entirely.
+ */
+export function editorStateHasUnsavedWork(
+  s: Pick<EditorState, 'dirty' | 'saveState'>,
+): boolean {
+  return (
+    s.dirty || s.saveState === 'saving' || s.saveState === 'error' || s.saveState === 'conflict'
+  );
+}
+
+/** `editorStateHasUnsavedWork` against the live editor. */
 export function editorHasUnsavedWork(): boolean {
-  const s = get(state);
-  return s.dirty || s.saveState === 'saving' || s.saveState === 'error';
+  return editorStateHasUnsavedWork(get(state));
 }
 
 /** Run a debounced compile now (or do nothing when none is pending). */

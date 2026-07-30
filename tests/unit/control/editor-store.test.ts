@@ -11,6 +11,7 @@ import {
   closeScript,
   editor,
   editorHasUnsavedWork,
+  editorStateHasUnsavedWork,
   openScript,
   saveNow,
   setSource,
@@ -100,6 +101,58 @@ describe('editor autosave', () => {
     expect(state.scriptId).toBe(scriptId);
     expect(state.saveState).toBe('saved');
     expect(state.dirty).toBe(false);
+  });
+
+  /*
+   * The predicate the leave guard asks before it lets anybody out of the
+   * editor. It had no callers at all until that guard started using it, so
+   * nothing had ever pinned down what it considers safe to abandon.
+   */
+  it('reports nothing outstanding on a freshly opened script', () => {
+    expect(editorHasUnsavedWork()).toBe(false);
+  });
+
+  it('reports work outstanding while a save is still in flight', async () => {
+    vi.useFakeTimers();
+    setSource('# Start\n\nIn flight.\n');
+    const pending = saveNow();
+    // Mid-save: the bytes are not on disk yet, so leaving now would still lose
+    // them if the write fails.
+    expect(get(editor).saveState).toBe('saving');
+    expect(editorHasUnsavedWork()).toBe(true);
+    await pending;
+    await vi.runAllTimersAsync();
+    expect(get(editor).saveState).toBe('saved');
+    expect(editorHasUnsavedWork()).toBe(false);
+    vi.useRealTimers();
+  });
+});
+
+/*
+ * The save-state axis on its own.
+ *
+ * These cases cannot be reached through the store: every failure path leaves
+ * `dirty` true as well, so a store-driven test is satisfied by `dirty` alone
+ * and would keep passing if the save states were deleted from the predicate
+ * outright. Holding `dirty` false is the only way to assert that each save
+ * state carries the decision by itself.
+ */
+describe('editorStateHasUnsavedWork', () => {
+  it('lets a clean, settled editor go', () => {
+    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'idle' })).toBe(false);
+    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'saved' })).toBe(false);
+  });
+
+  it('holds on to a save that has not landed, with nothing else outstanding', () => {
+    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'saving' })).toBe(true);
+    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'error' })).toBe(true);
+    // The state the predicate used to miss entirely.
+    expect(editorStateHasUnsavedWork({ dirty: false, saveState: 'conflict' })).toBe(true);
+  });
+
+  it('treats unsaved typing as outstanding whatever the last save did', () => {
+    expect(editorStateHasUnsavedWork({ dirty: true, saveState: 'idle' })).toBe(true);
+    expect(editorStateHasUnsavedWork({ dirty: true, saveState: 'saved' })).toBe(true);
   });
 
   it('debounces autosave ~500 ms after typing stops', async () => {

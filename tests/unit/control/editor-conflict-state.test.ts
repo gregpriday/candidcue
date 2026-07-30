@@ -85,6 +85,7 @@ vi.mock('../../../src/control/stores/compiled', () => ({
 
 const {
   editor,
+  editorHasUnsavedWork,
   openScript,
   saveNow,
   setSource,
@@ -124,6 +125,15 @@ describe('the editor reflects a real SCRIPT_CONFLICT', () => {
     // sheet instead of the choice between the two real versions.
     expect(state.saveState).toBe('conflict');
     expect(state.lastError).toContain('changed outside CandidCue');
+    /*
+     * And it counts as unsaved work, which is what lets the leave guard stop.
+     *
+     * A conflict is the state where walking away costs the most — the
+     * operator's text and the disk's text are both real and neither has been
+     * chosen — and it was the one state the predicate left out, so the guard
+     * waved it through and the resolution sheet could be bypassed entirely.
+     */
+    expect(editorHasUnsavedWork()).toBe(true);
   });
 
   it('still reports other failures as errors', async () => {
@@ -136,6 +146,7 @@ describe('the editor reflects a real SCRIPT_CONFLICT', () => {
     const state = get(editor);
     expect(state.saveState).toBe('error');
     expect(state.lastError).toBe('CandidCue could not write the script file.');
+    expect(editorHasUnsavedWork()).toBe(true);
   });
 
   /** A stale revision is a different failure and must not read as a conflict. */
