@@ -173,14 +173,29 @@ const REPLAYED: &[&str] = &[
     "app_version",
     "get_script",
     "get_stage_status",
-    // Single-window presentation. The harness builds a `control`-labelled
-    // webview, so the `{ enabled }` binding is reachable here even though the
-    // geometry work behind it is not — `current_monitor` has no answer on the
-    // MockRuntime and entering ends in a domain error. That is precisely the
-    // distinction this test draws: a domain error is fine, an argument
-    // rejection is the defect. `set_stage_fullscreen` stays out because it
-    // needs a real stage window to exist first.
-    "set_control_presenting",
+    /*
+     * `set_control_presenting` is deliberately NOT here, and the note that used
+     * to sit in its place was wrong in a way worth recording.
+     *
+     * It claimed the `{ enabled }` binding was reachable on the MockRuntime and
+     * that entering "ends in a domain error". It does not. The command was
+     * never registered in the harness's `generate_handler!` below, so every run
+     * invoked a command this app did not have — and "Command not found" is not
+     * an argument rejection, so `is_argument_rejection` answered false and the
+     * assertion passed while binding nothing whatsoever. The list said covered;
+     * the harness said absent; the test agreed with neither and reported green.
+     *
+     * Registering it does not fix that: presenting reaches raw `objc` calls
+     * against an `NSWindow` a MockRuntime webview does not have, and the whole
+     * test binary dies with SIGSEGV rather than returning any error at all.
+     * (Measured, not assumed — try it.)
+     *
+     * So the payload binding for this command is checked where it can be: the
+     * TypeScript side owns the shape (`services/control-window.ts`), the Rust
+     * side owns the arguments, and `windows::present`'s own unit tests cover the
+     * geometry policy without a window. `set_stage_fullscreen` stays out for the
+     * older, simpler reason that it needs a real stage window to exist first.
+     */
 ];
 
 struct Harness {

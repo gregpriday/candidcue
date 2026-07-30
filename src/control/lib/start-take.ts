@@ -40,7 +40,7 @@ import {
   stageSettingsFromSettings,
 } from '../services/stage-envelope';
 import type { DisplayDescriptor } from '../services/stage-types';
-import type { AppSettings, PresentationMode } from '../services/settings-types';
+import type { AppSettings, PresentationMode, ReaderFrame } from '../services/settings-types';
 import { editor, saveNow } from '../stores/editor';
 import { navigate } from '../stores/router';
 import {
@@ -49,7 +49,7 @@ import {
   stopSession,
 } from '../stores/session';
 import { setPresentingPhase } from '../stores/presenting';
-import { loadSettings, settings } from '../stores/settings';
+import { loadSettings, patchSettings, settings } from '../stores/settings';
 import { showToast } from '../stores/toasts';
 import { getVoiceFacade } from '../services/voice-facade';
 import { writable } from 'svelte/store';
@@ -189,13 +189,95 @@ async function resolvePinnedMicrophone(s: AppSettings): Promise<string | undefin
 }
 
 /**
+ * The settings this take actually opens with, persisting an explicit choice on
+ * the way through.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY THIS RETURNS SETTINGS AND NOT JUST A MODE
+ * ---------------------------------------------------------------------------
+ * It used to return the mode alone, and that was a bug with teeth. The mode is
+ * read three times below — for the display, for the window, and for what the
+ * session records — but it is read a FOURTH time inside
+ * `stageSettingsFromSettings`, which decides from it whether the take gets a
+ * reader's rig or a prompter's, and whether the picture is mirrored.
+ *
+ * Handing that function the pre-choice snapshot while handing the window the
+ * chosen mode produced the worst possible pairing: choose "Present in a window"
+ * from a prompter default and you got a reading window composed for glass —
+ * prompter optics, and a horizontally mirrored script if the rig had mirroring
+ * on. Returning one consistent object means there is no second copy of the
+ * answer for anything downstream to disagree with.
+ *
+ * The write is awaited so the document matches what this take is about to do,
+ * but a failure is deliberately not fatal: a settings document that would not
+ * take the patch is a reason to present in the mode that was asked for anyway,
+ * not a reason to refuse to present at all. `patchSettings` has already
+ * reverted its optimistic update and told the operator by the time this
+ * catches, so swallowing here does not swallow the report.
+ */
+async function resolveLaunchSettings(
+  saved: AppSettings,
+  requested: PresentationMode | undefined,
+): Promise<AppSettings> {
+  if (requested === undefined || requested === saved.stage.presentationMode) return saved;
+  await patchSettings('stage', { presentationMode: requested }).catch(() => {});
+  return { ...saved, stage: { ...saved.stage, presentationMode: requested } };
+}
+
+/**
+ * The frame a reading window should come back at, or null to present in place.
+ *
+ * Three things have to hold. The take must be opening in reader mode — a
+ * prompter fills a monitor and has no rectangle of its own. A frame must
+ * actually have been stored. And "Restore windows" must be on: that toggle
+ * shipped with no reader anywhere in the tree, which is the same defect the
+ * retired `fullscreen` boolean was culled for, and this is the behaviour it now
+ * governs.
+ */
+function restoreFrameFor(saved: AppSettings, mode: PresentationMode): ReaderFrame | null {
+  if (mode !== 'reader') return null;
+  if (!saved.general.restoreWindows) return null;
+  return saved.stage.readerFrame;
+}
+
+export interface StartTakeOptions {
+  /**
+   * Present in this shape, and REMEMBER it.
+   *
+   * ---------------------------------------------------------------------------
+   * WHY AN EXPLICIT CHOICE STICKS WHEN THE MID-TAKE TOGGLE DOES NOT
+   * ---------------------------------------------------------------------------
+   * `session.ts` argues, correctly, that ⌃⌘F must not change what tomorrow's
+   * take opens as: somebody who pops out to the full display to read one
+   * difficult paragraph is making a decision about the paragraph, not about
+   * their habits.
+   *
+   * This is the other kind of decision, and it is told apart by WHERE it was
+   * made rather than by what it says. Choosing "Present in a window" from the
+   * Present button is a statement about how this take should open, made at the
+   * moment of opening it — the same gesture PowerPoint's "Set Up Slide Show"
+   * and OBS's projector preference persist. A choice that had to be re-made
+   * every single time is how the app came to feel like it was forgetting
+   * things: the launch mode lived only in Settings, three levels from the
+   * button, so the only reachable control was the transient one.
+   *
+   * Absent means "whatever Settings says", which is what every Present button
+   * did before this existed.
+   */
+  presentationMode?: PresentationMode;
+}
+
+/**
  * Open a take for a script and route to Live. Resolves true when the take is
  * running.
  *
  * Every failure path leaves nothing behind: no half-open stage window, no
  * unfinished session row, no microphone held by a session that does not exist.
  */
-export async function startTake(scriptId: string): Promise<boolean> {
+export async function startTake(
+  scriptId: string,
+  options: StartTakeOptions = {},
+): Promise<boolean> {
   if (get(startingStore)) return false;
   startingStore.set(true);
 
@@ -235,7 +317,14 @@ export async function startTake(scriptId: string): Promise<boolean> {
       );
     }
     const doc = await scriptsService.getScript(scriptId);
-    const s = await loadSettings(true).catch(() => get(settings));
+    const loaded = await loadSettings(true).catch(() => get(settings));
+    /*
+     * One snapshot, resolved once, and everything below reads the take's
+     * settings from it — including `stageSettingsFromSettings`, which composes
+     * the rig and the mirror from the same field. See `resolveLaunchSettings`.
+     */
+    const s = await resolveLaunchSettings(loaded, options.presentationMode);
+    const presentationMode = s.stage.presentationMode;
     const compiled = await compileForTake(scriptId, doc.source, s.general.readHeadings);
 
     /*
@@ -261,11 +350,7 @@ export async function startTake(scriptId: string): Promise<boolean> {
     // though it no longer opens a window there. Enumeration is read-only; the
     // user moves this window to that panel before pressing Present.
     const displays = await stageService.listDisplays().catch(() => []);
-    const display = chooseStageDisplay(
-      displays,
-      s.stage.displayFingerprint,
-      s.stage.presentationMode,
-    );
+    const display = chooseStageDisplay(displays, s.stage.displayFingerprint, presentationMode);
     const stageSettings = stageSettingsFromSettings(s, display);
     const assets = await resolveDocumentAssets(compiled.script);
     const stageEnvelope = buildStageEnvelope({
@@ -318,7 +403,10 @@ export async function startTake(scriptId: string): Promise<boolean> {
      * colour, the chrome, and the line map being measured at the size it will be
      * read at rather than at whatever the editor left behind.
      */
-    const presentation = await enterPresentation(s.stage.presentationMode);
+    const presentation = await enterPresentation(
+      presentationMode,
+      restoreFrameFor(s, presentationMode),
+    );
     await awaitViewportSettled(presentation);
 
     // There is no stage window. Alignment, transcription and rendering all
@@ -352,7 +440,7 @@ export async function startTake(scriptId: string): Promise<boolean> {
        * against type that is no longer there.
        */
       teleprompter: s.teleprompter,
-      presentationMode: s.stage.presentationMode,
+      presentationMode,
       stageDisplay: display,
       transcription: {
         model: s.speech.transcriptionModel,

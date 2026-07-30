@@ -11,6 +11,7 @@ import {
   type OpticalHardwareKind,
   type OpticalOverrides,
   type PresentationMode,
+  type ReaderFrame,
   type ReadingCueStyle,
   type StageMode,
   type OpticalProfile,
@@ -32,7 +33,7 @@ export type UpdateChannel = 'stable' | 'beta';
  * Re-exported from the contracts, where it lives because `StageSettings` and the
  * stage's own dock both need it and neither may import from control services.
  */
-export type { PresentationMode };
+export type { PresentationMode, ReaderFrame };
 
 /**
  * Read a stored `stage` section that may predate `presentationMode`.
@@ -75,9 +76,24 @@ export interface AppSettings {
    * Where the prompt window opens, and how (§14.2 A, §52.7).
    *
    * Its own section rather than a corner of `teleprompter`, because the answer
-   * is about a physical panel rather than about type. Both fields are
-   * per-machine — a fingerprint means nothing on another Mac — so both live in
-   * the local overlay.
+   * is about a physical panel rather than about type.
+   *
+   * ---------------------------------------------------------------------------
+   * THE SECTION IS SPLIT DOWN THE MIDDLE, AND THAT IS THE POINT
+   * ---------------------------------------------------------------------------
+   * This section used to be wholly overlay-backed on the grounds that all of it
+   * was per-machine. `displayFingerprint` genuinely is — a fingerprint means
+   * nothing on another Mac — and it stays local.
+   *
+   * `presentationMode` is not. It is a statement about how somebody works, it is
+   * the same answer on every machine they own, and losing it to a cleared
+   * browser store is exactly the failure this codebase has already documented
+   * for the optical rigs. It is Rust-backed now; see `RustSettings` in
+   * settings.ts for the mapping and for how an existing overlay value is
+   * adopted rather than overwritten on the first read after the move.
+   *
+   * `readerFrame` is Rust-backed too, for a plainer reason: it has to survive a
+   * quit to be worth anything at all.
    */
   stage: {
     /**
@@ -105,6 +121,19 @@ export interface AppSettings {
      * See `migrateStageMode` for how the old field is read on the way in.
      */
     presentationMode: PresentationMode;
+    /**
+     * Where a reader-mode take last left its window, or `null` if one never has.
+     *
+     * Read only when `general.restoreWindows` is on — that toggle shipped with
+     * no reader anywhere in the tree, which is the same defect the retired
+     * `fullscreen` boolean was culled for, and this is what gives it something
+     * to actually govern.
+     *
+     * Prompter mode has no frame and never writes one: it fills whichever
+     * monitor the window is already on, so there is nothing about its geometry
+     * that a next launch could restore.
+     */
+    readerFrame: ReaderFrame | null;
   };
   /**
    * On-device speech-to-text (spec §18.2). There is no API key and no
@@ -742,6 +771,9 @@ export function defaultAppSettings(): AppSettings {
       // display — and the calibration a good prompter take needs is the same
       // calibration the Welcome flow already walks somebody through.
       presentationMode: 'prompter',
+      // Nothing to restore until a reading window has actually been left
+      // somewhere.
+      readerFrame: null,
     },
     speech: {
       // Must match `crate::speech::MODEL_NAME`. Rust re-derives this on every

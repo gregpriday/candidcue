@@ -735,3 +735,89 @@ test('the appearance panel applies live and restores what it opened on', async (
 
   errors.expectClean();
 });
+
+/* ------------------------------------------------ choosing how to present */
+
+/**
+ * The Present split button.
+ *
+ * The launch mode used to be reachable only from Settings, three levels from
+ * the button, so in practice the only control anybody found was the mid-take
+ * chord — and that one is deliberately take-scoped, which is why the app read
+ * as forgetting the choice. These prove the two halves of the fix: the choice
+ * is reachable where the decision is made, and making it once is enough.
+ */
+test('the Present menu offers both shapes and marks the current default', async ({ page }) => {
+  const errors = watchPageErrors(page);
+  await page.goto('/control.html');
+  await page
+    .getByRole('list', { name: 'Scripts' })
+    .getByRole('button', { name: /Single-window walkthrough/ })
+    .click();
+  await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
+
+  // The main half still says Present and still presents — the common case must
+  // not have grown a question.
+  await expect(page.getByRole('button', { name: 'Present', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'How to present' }).click();
+  const menu = page.getByRole('menu', { name: 'How to present' });
+  await expect(menu).toBeVisible();
+
+  // Modes, not commands: the menu says which one a take would open in.
+  const fullScreen = menu.getByRole('menuitemradio', { name: /Present full screen/ });
+  const inWindow = menu.getByRole('menuitemradio', { name: /Present in a window/ });
+  await expect(fullScreen).toHaveAttribute('aria-checked', 'true');
+  await expect(inWindow).toHaveAttribute('aria-checked', 'false');
+
+  errors.expectClean();
+});
+
+test('choosing a shape presents in it and makes it the default for next time', async ({ page }) => {
+  const errors = watchPageErrors(page);
+  await page.goto('/control.html');
+  await page
+    .getByRole('list', { name: 'Scripts' })
+    .getByRole('button', { name: /Single-window walkthrough/ })
+    .click();
+  await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'How to present' }).click();
+  await page
+    .getByRole('menu', { name: 'How to present' })
+    .getByRole('menuitemradio', { name: /Present in a window/ })
+    .click();
+
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({
+    timeout: 20_000,
+  });
+
+  /*
+   * The window was asked for the shape that was chosen, not the saved default.
+   *
+   * Filtered to the calls that PRESENT: App.svelte un-presents once at startup
+   * to give the window back after a reload mid-take, and that call carries no
+   * mode at all.
+   */
+  const modes = await page.evaluate(() =>
+    window.__E2E__.calls
+      .filter((c) => c.command === 'set_control_presenting')
+      .map((c) => c.args as { enabled?: boolean; mode?: string } | null)
+      .filter((args) => args?.enabled === true)
+      .map((args) => args?.mode ?? null),
+  );
+  expect(modes[0]).toBe('reader');
+
+  // And the choice was PERSISTED, which is the half that stops the app looking
+  // like it forgets. The mid-take toggle deliberately writes nothing.
+  const wrote = await page.evaluate(() =>
+    window.__E2E__.calls
+      .filter((c) => c.command === 'update_settings')
+      .map((c) => (c.args as { patch?: Record<string, Record<string, unknown>> } | null)?.patch)
+      .filter((patch) => patch?.['stageBehavior']?.['presentationMode'] !== undefined),
+  );
+  expect(wrote.length, 'an explicit launch choice must reach the settings document').toBeGreaterThan(0);
+  expect(wrote[0]!['stageBehavior']!['presentationMode']).toBe('reader');
+
+  errors.expectClean();
+});

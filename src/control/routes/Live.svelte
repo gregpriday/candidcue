@@ -24,7 +24,8 @@
   import { AUTO_SCROLL_WPM_STEP } from '../../stage/renderer/autoscroll';
   import { VIEWPORT_REFLOW_SETTLE_MS } from '../../stage/renderer/geometry';
   import { formatClock } from '../lib/format';
-  import { onShortcut } from '../lib/shortcuts';
+  import { rememberReaderFrame } from '../lib/reader-frame';
+import { onShortcut } from '../lib/shortcuts';
   import { startTake } from '../lib/start-take';
   import {
     awaitViewportSettled,
@@ -315,6 +316,18 @@
     try {
       await painted();
       const restored = await exitPresentation().catch(() => null);
+      /*
+       * Before the settle wait, because this is the last call that knew where a
+       * reading window was — and AWAITED, which is the part that is easy to get
+       * wrong.
+       *
+       * Firing it and walking away races the next take: `startTake` opens with
+       * `loadSettings(true)`, a forced re-read, and a read that overtakes this
+       * write returns the previous frame and then patches from its revision.
+       * The cover is already up and the write is one IPC round trip, so waiting
+       * costs nothing anybody can see. It never rejects.
+       */
+      await rememberReaderFrame(restored);
       if (restored) await awaitViewportSettled(restored);
       await destination();
       await painted();
@@ -401,6 +414,14 @@
     const forSession = $session.sessionId;
     try {
       const switched = await switchPresentationMode(next);
+      /*
+       * Switching AWAY from reader mode reports the bounds the reading window
+       * had a moment ago, and this is the only time they are reported outside a
+       * teardown. Without it, popping out to the full display and then ending
+       * the take from there would forget a window the reader had deliberately
+       * placed — the mid-take toggle would quietly destroy a saved frame.
+       */
+      await rememberReaderFrame(switched);
       await awaitViewportSettled(switched);
       // The stage's own trailed viewport, not just the raw one — see above.
       await new Promise((resolve) => setTimeout(resolve, VIEWPORT_REFLOW_SETTLE_MS));

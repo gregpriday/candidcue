@@ -124,6 +124,208 @@ struct ControlFrame {
     maximized: bool,
 }
 
+/// A reading window's bounds in LOGICAL (CSS) pixels.
+///
+/// ---------------------------------------------------------------------------
+/// THE ONE FRAME IN THIS MODULE THAT OUTLIVES THE PROCESS
+/// ---------------------------------------------------------------------------
+/// `resting` and `reader` in [`PresentState`] are physical and stay that way:
+/// they never leave this process, and converting them would round a rectangle
+/// twice on every present/restore cycle to no purpose.
+///
+/// This one is different. It crosses the IPC boundary and is persisted in the
+/// settings document, so a reader gets their window back on the NEXT LAUNCH —
+/// and physical pixels mean nothing across that gap. A frame captured on a 2x
+/// panel and replayed against a 1x one comes back at half the size it was left
+/// at, which is precisely the "remembers, but wrongly" behaviour that is worse
+/// than not remembering. So the conversion happens here, once, at the boundary.
+///
+/// Nothing validates these numbers on the way back in beyond the off-screen
+/// clamp every restore already gets ([`restore_position`]): a frame is a hint
+/// about where a window was, and the OS is the authority on where one may go.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReaderFrame {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl ReaderFrame {
+    /// The window's current bounds, converted for storage.
+    fn measure<R: Runtime>(window: &WebviewWindow<R>) -> Result<Self, AppError> {
+        let scale = scale_factor(window);
+        let position = window.outer_position().map_err(presentation_failed)?;
+        let size = window.inner_size().map_err(presentation_failed)?;
+        Ok(Self {
+            x: position.x as f64 / scale,
+            y: position.y as f64 / scale,
+            width: size.width as f64 / scale,
+            height: size.height as f64 / scale,
+        })
+    }
+
+}
+
+/// Turn a remembered reading window back into a physical rectangle, against the
+/// monitor it will actually land on.
+///
+/// ---------------------------------------------------------------------------
+/// WHY THE MONITOR HAS TO BE RESOLVED FIRST
+/// ---------------------------------------------------------------------------
+/// The obvious implementation multiplies the stored logical frame by
+/// `window.scale_factor()` — the scale of wherever the EDITOR happens to be
+/// sitting — and it is wrong on any mixed-DPI rig. A reading window left at 800
+/// logical px on a 1x panel, restored while the editor is on a 2x panel,
+/// becomes 1600 physical px; land that on the 1x panel and it is 1600 LOGICAL
+/// px, twice the size it was left at. Measuring it on the way out then stores
+/// 1600, and the next cycle asks for 3200. The window grows every take, and the
+/// inverse arrangement shrinks it every take.
+///
+/// (Handing Tauri a `Logical` position and size does not help: tao converts it
+/// with the window's current scale factor, which is the same wrong number.)
+///
+/// So the monitor is resolved from the frame's own logical origin, and every
+/// conversion below uses THAT monitor's scale. The size is also clamped to the
+/// monitor, which bounds the runaway above even if the arithmetic is ever wrong
+/// again: a remembered window can never come back bigger than the screen it is
+/// coming back to.
+///
+/// `maximized` is deliberately false — a remembered reading window is a
+/// rectangle somebody chose, and replaying it as maximized would discard the
+/// choice while claiming to honour it.
+fn reader_placement<R: Runtime>(
+    app: &AppHandle<R>,
+    frame: ReaderFrame,
+    decorations: bool,
+) -> ControlFrame {
+    let monitors: Vec<MonitorRect> = app
+        .available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .map(MonitorRect::of)
+        .collect();
+    let (position, inner_size) = fit_reader_frame(frame, &monitors);
+    ControlFrame {
+        position,
+        inner_size,
+        decorations,
+        maximized: false,
+    }
+}
+
+/// One monitor, in both of the spaces this calculation needs it in.
+///
+/// A window's position is SET in physical pixels, and a stored frame is
+/// EXPRESSED in logical ones, so a placement that touches only one of the two
+/// is the bug described above wearing different clothes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MonitorRect {
+    /// Physical origin — the space `set_position` works in.
+    origin: PhysicalPosition<i32>,
+    /// The same rectangle in this monitor's own logical pixels.
+    logical: (f64, f64, f64, f64),
+    scale: f64,
+}
+
+impl MonitorRect {
+    fn of(monitor: &tauri::Monitor) -> Self {
+        let scale = if monitor.scale_factor() > 0.0 {
+            monitor.scale_factor()
+        } else {
+            1.0
+        };
+        let origin = *monitor.position();
+        let size = monitor.size();
+        Self {
+            origin,
+            logical: (
+                origin.x as f64 / scale,
+                origin.y as f64 / scale,
+                size.width as f64 / scale,
+                size.height as f64 / scale,
+            ),
+            scale,
+        }
+    }
+}
+
+/// The placement policy, with no window and no app handle in sight.
+///
+/// Split out from [`reader_placement`] so it can be tested on a machine with no
+/// display server, which is every machine that runs this suite. The interesting
+/// behaviour is entirely arithmetic — which monitor, whose scale, and what the
+/// clamps do — and none of it needs a real window to exercise.
+fn fit_reader_frame(
+    frame: ReaderFrame,
+    monitors: &[MonitorRect],
+) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
+    let target = monitors
+        .iter()
+        .find(|monitor| {
+            let (mx, my, mw, mh) = monitor.logical;
+            frame.x >= mx && frame.y >= my && frame.x < mx + mw && frame.y < my + mh
+        })
+        /* The panel it was saved on is gone. The first monitor is visible by
+           definition, which is the only property that has to hold — the same
+           fallback `restore_position` makes for the resting frame. */
+        .or_else(|| monitors.first());
+
+    let Some(monitor) = target else {
+        /* No monitors at all. Nothing sensible to compute against, so the frame
+           is passed through unscaled rather than sent to an invented
+           coordinate — the caller's `restore_position` still gets a look. */
+        return (
+            PhysicalPosition {
+                x: frame.x as i32,
+                y: frame.y as i32,
+            },
+            PhysicalSize {
+                width: frame.width.max(1.0) as u32,
+                height: frame.height.max(1.0) as u32,
+            },
+        );
+    };
+
+    let (mx, my, mw, mh) = monitor.logical;
+    let scale = monitor.scale;
+    /* Never bigger than the screen it is coming back to. This is what bounds
+       the runaway the doc comment describes: even if a stored frame is absurd —
+       a corrupt document, or an arrangement that no longer exists — the window
+       that comes back still fits on a display. */
+    let width = frame.width.clamp(1.0, mw);
+    let height = frame.height.clamp(1.0, mh);
+    /* Offset within the monitor, kept inside it so the titlebar is always
+       reachable even if the frame was saved against a larger arrangement. */
+    let offset_x = (frame.x - mx).clamp(0.0, (mw - width).max(0.0));
+    let offset_y = (frame.y - my).clamp(0.0, (mh - height).max(0.0));
+
+    (
+        PhysicalPosition {
+            x: monitor.origin.x + (offset_x * scale).round() as i32,
+            y: monitor.origin.y + (offset_y * scale).round() as i32,
+        },
+        PhysicalSize {
+            // A zero-sized window is unrecoverable without the mouse, and a
+            // stored frame is the one input here the app did not measure itself
+            // this run.
+            width: (width * scale).round().max(1.0) as u32,
+            height: (height * scale).round().max(1.0) as u32,
+        },
+    )
+}
+
+/// Never zero, and never negative: every use of this divides by it.
+fn scale_factor<R: Runtime>(window: &WebviewWindow<R>) -> f64 {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    if scale > 0.0 {
+        scale
+    } else {
+        1.0
+    }
+}
+
 /// What a present/un-present request should actually do.
 ///
 /// Pure and separated for the same reason [`sleep::plan`] is: the interesting
@@ -248,6 +450,18 @@ pub struct ControlPresentationState {
     pub mode: Option<PresentMode>,
     pub width: f64,
     pub height: f64,
+    /// The reading window's bounds, whenever this call knew them.
+    ///
+    /// Present while a take is in reader mode, and — the case that matters —
+    /// on the way OUT of it: a `Restore` from reader mode, and the reader half
+    /// of a `Switch`, both measure the window before they move it. That is the
+    /// only moment those bounds still exist, so it is the only moment the
+    /// frontend can be handed them to persist.
+    ///
+    /// Absent for a prompter, which has no bounds of its own to remember: it
+    /// fills whichever monitor it was already on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reader_frame: Option<ReaderFrame>,
 }
 
 fn control_window<R: Runtime>(app: &AppHandle<R>) -> Result<WebviewWindow<R>, AppError> {
@@ -292,9 +506,24 @@ fn presentation_failed(detail: impl std::fmt::Display) -> AppError {
 /// So this reports the INTENDED geometry. It is the number the window is on its
 /// way to, which is exactly what a wait wants.
 fn logical_size<R: Runtime>(window: &WebviewWindow<R>, size: PhysicalSize<u32>) -> (f64, f64) {
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let scale = scale_factor(window);
     (size.width as f64 / scale, size.height as f64 / scale)
+}
+
+/// A latched physical frame in the units [`ReaderFrame`] is stored in.
+///
+/// For the one case that cannot measure the live window: a take that visited
+/// reader mode, switched away, and is now being restored from the prompter. The
+/// reading window no longer exists to be read, so the latch's copy is converted
+/// instead.
+fn logical_frame<R: Runtime>(window: &WebviewWindow<R>, frame: &ControlFrame) -> ReaderFrame {
+    let scale = scale_factor(window);
+    ReaderFrame {
+        x: frame.position.x as f64 / scale,
+        y: frame.position.y as f64 / scale,
+        width: frame.inner_size.width as f64 / scale,
+        height: frame.inner_size.height as f64 / scale,
+    }
 }
 
 /// Where the window should actually go back to.
@@ -376,10 +605,11 @@ fn set_min_size<R: Runtime>(window: &WebviewWindow<R>, size: Option<tauri::Logic
     let _ = window.set_min_size(size.map(tauri::Size::Logical));
 }
 
-/// Present in place: this window, where it is, at the size it is.
+/// Present in place: this window, where it is, at the size it is — unless the
+/// caller hands back a rectangle this reader chose on a previous launch.
 ///
 /// ---------------------------------------------------------------------------
-/// WHY THIS MOVES NO GEOMETRY AT ALL
+/// WHY THIS NORMALLY MOVES NO GEOMETRY AT ALL
 /// ---------------------------------------------------------------------------
 /// The operator put this window somewhere and made it a size. That IS the
 /// gesture — the same argument the module header makes about not teleporting the
@@ -391,6 +621,52 @@ fn set_min_size<R: Runtime>(window: &WebviewWindow<R>, size: Option<tauri::Logic
 /// backing, the lowered floor, an ordinary titlebar, and not being pinned above
 /// other applications (a reading window that floated over everything would be
 /// unusable for the one thing people read scripts beside).
+///
+/// ---------------------------------------------------------------------------
+/// AND THE ONE CASE THAT DOES MOVE IT
+/// ---------------------------------------------------------------------------
+/// `place_at` is a rectangle the SAME gesture produced, just in an earlier run
+/// of the app — the reader dragged their window somewhere, ended the take, and
+/// quit. Honouring it is not overriding the operator's placement, it is the only
+/// way to give it back: the in-process latch dies with the process, so without
+/// this the third launch in a row opens at whatever size the editor happened to
+/// be, and the reader re-drags their window every single day.
+///
+/// It is only ever passed on `Enter`, and only when the frame came from storage.
+/// A `Reassert` or a `Switch` has a live window to read from and must not move
+/// it — see [`set_control_presenting`].
+fn apply_reader<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    decorations: bool,
+    place_at: Option<ReaderFrame>,
+) -> Result<PhysicalSize<u32>, AppError> {
+    if let Some(frame) = place_at {
+        /*
+         * The stored frame goes through `apply_windowed` rather than through a
+         * pair of setters here, so it inherits the two things that path already
+         * gets right: the off-screen clamp (`restore_position` — a reader who
+         * saved their window on a panel they have since unplugged must not get
+         * an invisible one back) and the floor-before-size ordering, which is
+         * what stops the OS clamping a deliberately narrow reading window
+         * straight back up to the editor's minimum.
+         */
+        let _ = window.set_background_color(Some(tauri::window::Color(0, 0, 0, 255)));
+        return apply_windowed(
+            app,
+            window,
+            &reader_placement(app, frame, decorations),
+            Some(tauri::LogicalSize {
+                width: READER_MIN_WIDTH_PX,
+                height: READER_MIN_HEIGHT_PX,
+            }),
+        );
+    }
+    apply_reader_in_place(app, window, decorations)
+}
+
+/// The in-place half, unchanged: everything about a reading window except where
+/// it is.
 ///
 /// ---------------------------------------------------------------------------
 /// AND WHY IT UNDOES THE PROMPTER'S CHROME AND PINNING EVERY TIME
@@ -410,7 +686,7 @@ fn set_min_size<R: Runtime>(window: &WebviewWindow<R>, size: Option<tauri::Logic
 /// Both calls are idempotent, which is what makes this free: `set_always_on_top`
 /// is an unconditional level write, and `chrome::restore` silently does nothing
 /// once the mask latch is empty.
-fn apply_reader<R: Runtime>(
+fn apply_reader_in_place<R: Runtime>(
     app: &AppHandle<R>,
     window: &WebviewWindow<R>,
     decorations: bool,
@@ -468,6 +744,22 @@ fn apply_windowed<R: Runtime>(
     window.set_always_on_top(false).map_err(presentation_failed)?;
     chrome::restore(app, window, frame.decorations)?;
     set_min_size(window, min_size);
+    if !frame.maximized {
+        /*
+         * A maximized window ignores `set_position`/`set_size` on Windows and
+         * fights them on macOS — the same reason `apply_presentation` drops the
+         * state before it moves anything.
+         *
+         * It was not needed while this function only ran on the way OUT of a
+         * presentation, because entering had already unmaximized the window.
+         * `Enter(Reader)` with a remembered frame broke that assumption: the
+         * editor may well be maximized when Present is pressed, and the stored
+         * rectangle would then be quietly ignored — a reading window that
+         * remembers, except when it does not, which is the flakiest thing this
+         * feature could be. A no-op on every path that used to reach here.
+         */
+        let _ = window.unmaximize();
+    }
     window
         .set_position(tauri::Position::Physical(restore_position(app, frame)))
         .map_err(presentation_failed)?;
@@ -1100,10 +1392,20 @@ mod pin {
 pub fn set_control_presenting<R: Runtime>(
     app: &AppHandle<R>,
     mode: Option<PresentMode>,
+    reader_frame: Option<ReaderFrame>,
 ) -> Result<ControlPresentationState, AppError> {
     let window = control_window(app)?;
     let mut saved = lock();
     let target;
+    /*
+     * What to REPORT, which is not the same question as what to apply.
+     *
+     * Set by the arms that pass through a moment where a reading window's
+     * bounds are both real and about to stop being real — the switch away from
+     * reader mode, and the restore out of it. Everywhere else it is filled in
+     * from the live window at the bottom of this function.
+     */
+    let mut departing_reader: Option<ReaderFrame> = None;
 
     match plan(saved.map(|state| state.mode), mode) {
         PresentAction::Enter(entering) => {
@@ -1122,8 +1424,13 @@ pub fn set_control_presenting<R: Runtime>(
              */
             let decorations = saved.as_ref().expect("just written").resting.decorations;
             target = match entering {
+                /*
+                 * A remembered frame is honoured only here, on `Enter`. The
+                 * prompter arm ignores it entirely — it has a monitor to fill,
+                 * and a stored rectangle would be describing the wrong thing.
+                 */
                 PresentMode::Prompter => apply_presentation(app, &window)?,
-                PresentMode::Reader => apply_reader(app, &window, decorations)?,
+                PresentMode::Reader => apply_reader(app, &window, decorations, reader_frame)?,
             };
             /*
              * The operator deliberately stops touching the keyboard for the
@@ -1142,7 +1449,11 @@ pub fn set_control_presenting<R: Runtime>(
             let decorations = saved.as_ref().expect("Reassert is only planned while presenting").resting.decorations;
             target = match current {
                 PresentMode::Prompter => apply_presentation(app, &window)?,
-                PresentMode::Reader => apply_reader(app, &window, decorations)?,
+                // Never `reader_frame`: a reassert re-applies the mode the
+                // window is ALREADY in, so the live window is the authority on
+                // its own bounds and a stored rectangle would yank a reader's
+                // window back to where it sat this morning.
+                PresentMode::Reader => apply_reader_in_place(app, &window, decorations)?,
             };
         }
         PresentAction::Switch(to) => {
@@ -1182,10 +1493,20 @@ pub fn set_control_presenting<R: Runtime>(
                      * back, and remembering a rectangle costs nothing if the
                      * switch then fails.
                      */
-                    let reader_frame = measure_frame(&window)?;
+                    let departing = measure_frame(&window)?;
                     if let Some(state) = saved.as_mut() {
-                        state.reader = Some(reader_frame);
+                        state.reader = Some(departing);
                     }
+                    /*
+                     * The same rectangle, in the units that survive a quit.
+                     *
+                     * The latch above gets the reader back within THIS take; this
+                     * gets them back on the next launch. Converted from the frame
+                     * just measured rather than measured a second time — one
+                     * reading of the window, so the two copies cannot disagree,
+                     * and no second chance to fail.
+                     */
+                    departing_reader = Some(logical_frame(&window, &departing));
                     target = apply_presentation(app, &window)?;
                 }
                 PresentMode::Reader => {
@@ -1211,7 +1532,36 @@ pub fn set_control_presenting<R: Runtime>(
             }
         }
         PresentAction::Restore => {
-            let frame = saved.as_ref().expect("Restore is only planned while presenting").resting;
+            let state = *saved.as_ref().expect("Restore is only planned while presenting");
+            let frame = state.resting;
+            /*
+             * Ending a take IN reader mode is the ordinary way a reading window
+             * is last seen, so it is the measurement that matters most — and it
+             * has to happen here, before `apply_windowed` replays the resting
+             * frame over the top of it.
+             *
+             * A take that ended in prompter mode falls back to whatever the
+             * latch recorded on its way out of reader mode earlier in the same
+             * take, so popping out to the full display for one paragraph and
+             * then pressing Escape still remembers the reading window rather
+             * than forgetting it for having been left second.
+             */
+            /*
+             * Best-effort, and the `?` this used to carry was a real hazard.
+             *
+             * Remembering where a reading window sat is ancillary; putting the
+             * operator's window back is not. A failing getter would have
+             * aborted the whole restore — leaving a borderless, monitor-sized,
+             * always-on-top window — in service of a rectangle nobody would
+             * have missed. So a measurement that cannot be taken is simply not
+             * reported.
+             */
+            departing_reader = match state.mode {
+                PresentMode::Reader => ReaderFrame::measure(&window).ok(),
+                PresentMode::Prompter => state
+                    .reader
+                    .map(|reader| logical_frame(&window, &reader)),
+            };
             /*
              * RESTORE, THEN FORGET — never the other way round.
              *
@@ -1288,11 +1638,29 @@ pub fn set_control_presenting<R: Runtime>(
      */
     let applied = saved.map(|state| state.mode);
     let (width, height) = logical_size(&window, target);
+    /*
+     * ONLY the departure measurement, never a live read of the window here.
+     *
+     * This used to fall back to measuring the window whenever the applied mode
+     * was `Reader`, which looks like a helpful generalisation and is a way to
+     * report the wrong rectangle. A `Switch` INTO reader mode has just called
+     * `set_position`/`set_size`, and every geometry setter in this file is
+     * delivered asynchronously — `logical_size` exists precisely because a
+     * getter read straight afterwards describes the window the setter has not
+     * moved yet. So the fallback measured the outgoing PROMPTER: a
+     * monitor-sized rectangle, reported under the name `readerFrame`, which the
+     * frontend then persisted as where the reading window lives.
+     *
+     * The consumer only ever needs the departure cases, which are the arms that
+     * set `departing_reader` — and each of those measures BEFORE it moves
+     * anything. There is nothing for a general case to add.
+     */
     Ok(ControlPresentationState {
         presenting: applied.is_some(),
         mode: applied,
         width,
         height,
+        reader_frame: departing_reader,
     })
 }
 
@@ -1311,6 +1679,110 @@ mod tests {
 
     const PROMPTER: Option<PresentMode> = Some(PresentMode::Prompter);
     const READER: Option<PresentMode> = Some(PresentMode::Reader);
+
+    /* ------------------------------------------- placing a remembered window */
+
+    /// A monitor at a physical origin, given in logical size and a scale.
+    fn monitor(x: i32, y: i32, logical_w: f64, logical_h: f64, scale: f64) -> MonitorRect {
+        MonitorRect {
+            origin: PhysicalPosition { x, y },
+            logical: (x as f64 / scale, y as f64 / scale, logical_w, logical_h),
+            scale,
+        }
+    }
+
+    fn frame(x: f64, y: f64, width: f64, height: f64) -> ReaderFrame {
+        ReaderFrame { x, y, width, height }
+    }
+
+    #[test]
+    fn a_remembered_window_comes_back_the_size_it_was_left() {
+        let screens = [monitor(0, 0, 1440.0, 900.0, 2.0)];
+        let (position, size) = fit_reader_frame(frame(100.0, 80.0, 800.0, 600.0), &screens);
+        // Logical in, physical out, at this monitor's scale.
+        assert_eq!(size, PhysicalSize { width: 1600, height: 1200 });
+        assert_eq!(position, PhysicalPosition { x: 200, y: 160 });
+    }
+
+    /// The defect this function was extracted to make testable.
+    ///
+    /// Converting with the scale of whatever monitor the EDITOR happens to be on
+    /// meant an 800-logical-px reader saved on a 1x panel came back as 1600
+    /// logical px on that panel — and measuring it on the way out then stored
+    /// 1600, so the next take asked for 3200. The window grew every session.
+    #[test]
+    fn a_frame_saved_on_another_panel_does_not_grow_each_cycle() {
+        let screens = [
+            monitor(0, 0, 1512.0, 982.0, 2.0),  // the editor's retina panel
+            monitor(3024, 0, 1920.0, 1080.0, 1.0), // where the reader lives
+        ];
+        let saved = frame(3100.0, 120.0, 800.0, 600.0);
+
+        let (_, first) = fit_reader_frame(saved, &screens);
+        // Placed on the 1x panel, so 800 logical is 800 physical — NOT 1600.
+        assert_eq!(first, PhysicalSize { width: 800, height: 600 });
+
+        // What the next exit would measure there, fed back in: unchanged.
+        let measured_again = frame(3100.0, 120.0, first.width as f64, first.height as f64);
+        let (_, second) = fit_reader_frame(measured_again, &screens);
+        assert_eq!(second, first, "a save/restore cycle must be a fixed point");
+    }
+
+    #[test]
+    fn a_window_saved_on_a_panel_that_is_gone_comes_back_somewhere_visible() {
+        let screens = [monitor(0, 0, 1440.0, 900.0, 2.0)];
+        // Coordinates on a second display that is no longer attached.
+        let (position, size) = fit_reader_frame(frame(4000.0, 300.0, 700.0, 500.0), &screens);
+        assert_eq!(position, PhysicalPosition { x: 1480, y: 600 });
+        assert_eq!(size, PhysicalSize { width: 1400, height: 1000 });
+    }
+
+    #[test]
+    fn a_frame_larger_than_the_screen_is_cut_down_to_it() {
+        // A corrupt document, or an arrangement that no longer exists. The
+        // window that comes back still has to fit on a display.
+        let screens = [monitor(0, 0, 1440.0, 900.0, 1.0)];
+        let (position, size) = fit_reader_frame(frame(0.0, 0.0, 9000.0, 9000.0), &screens);
+        assert_eq!(size, PhysicalSize { width: 1440, height: 900 });
+        assert_eq!(position, PhysicalPosition { x: 0, y: 0 });
+    }
+
+    #[test]
+    fn a_window_hanging_off_the_edge_is_pulled_back_on() {
+        // One pixel of origin on screen used to count as "fine", which leaves no
+        // titlebar to grab.
+        let screens = [monitor(0, 0, 1440.0, 900.0, 1.0)];
+        let (position, _) = fit_reader_frame(frame(1439.0, 899.0, 800.0, 600.0), &screens);
+        assert_eq!(position, PhysicalPosition { x: 640, y: 300 });
+    }
+
+    #[test]
+    fn a_monitor_left_of_the_primary_keeps_its_negative_coordinates() {
+        // Displays arranged to the left or above have negative origins, and a
+        // frame there is perfectly valid.
+        let screens = [
+            monitor(0, 0, 1440.0, 900.0, 1.0),
+            monitor(-1920, 0, 1920.0, 1080.0, 1.0),
+        ];
+        let (position, size) = fit_reader_frame(frame(-1800.0, 100.0, 800.0, 600.0), &screens);
+        assert_eq!(position, PhysicalPosition { x: -1800, y: 100 });
+        assert_eq!(size, PhysicalSize { width: 800, height: 600 });
+    }
+
+    #[test]
+    fn no_monitors_at_all_is_survivable() {
+        // Nothing to compute against; the caller's own clamp still gets a look.
+        let (_, size) = fit_reader_frame(frame(10.0, 10.0, 800.0, 600.0), &[]);
+        assert_eq!(size, PhysicalSize { width: 800, height: 600 });
+    }
+
+    #[test]
+    fn a_fractional_scale_still_lands_inside_the_monitor() {
+        let screens = [monitor(0, 0, 1536.0, 864.0, 1.25)];
+        let (position, size) = fit_reader_frame(frame(100.0, 50.0, 800.0, 600.0), &screens);
+        assert_eq!(size, PhysicalSize { width: 1000, height: 750 });
+        assert_eq!(position, PhysicalPosition { x: 125, y: 63 });
+    }
 
     /// The saved frame is a LATCH, not a stack.
     ///
