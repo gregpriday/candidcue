@@ -14,8 +14,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppError } from '../../../src/shared/contracts/errors';
 import { looksLikeCode } from '../../../src/control/services/errors';
 import {
-  NEW_SCRIPT_SOURCE,
+  NEW_SCRIPT_TITLE,
   SAMPLE_SCRIPT_SOURCE,
+  SAMPLE_SCRIPT_TITLE,
 } from '../../../src/control/lib/sample-script';
 
 const calls = vi.hoisted(() => ({
@@ -109,7 +110,7 @@ describe('createAndOpenScript', () => {
     expect(calls.showToast).not.toHaveBeenCalled();
   });
 
-  it('sends the sample body for the sample kind and the blank body for the new kind', async () => {
+  it('sends the sample body for the sample kind and an empty body for the new kind', async () => {
     calls.createScript.mockResolvedValue({ id: 'script-1' });
 
     await createAndOpenScript('sample');
@@ -117,10 +118,13 @@ describe('createAndOpenScript', () => {
 
     const [sample] = calls.createScript.mock.calls[0] as [{ title: string; source: string }];
     const [blank] = calls.createScript.mock.calls[1] as [{ title: string; source: string }];
-    // Guards the branch itself: swapping the two arms would otherwise pass.
-    expect(sample).not.toEqual(blank);
-    expect(sample.source).toContain(SAMPLE_SCRIPT_SOURCE);
-    expect(blank.source).toContain(NEW_SCRIPT_SOURCE);
+    // Exact, not `toContain`: a new script's body is the empty string, and
+    // `toContain('')` is true of every string — it would guard nothing. Both
+    // titles are asserted too, so swapping the two arms still fails here.
+    expect(sample.title).toBe(SAMPLE_SCRIPT_TITLE);
+    expect(sample.source).toBe(SAMPLE_SCRIPT_SOURCE);
+    expect(blank.title).toBe(NEW_SCRIPT_TITLE);
+    expect(blank.source).toBe('');
   });
 
   it('reports a non-AppError rejection without leaking its shape', async () => {

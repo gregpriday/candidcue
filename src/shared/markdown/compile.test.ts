@@ -938,6 +938,9 @@ describe('compile: determinism, hashes, empty input, performance', () => {
     expect(script.statistics.spokenWordCount).toBe(0);
     expect(script.statistics.estimatedDurationSeconds).toBe(0);
     expect(script.navigationTargets.map((t) => t.type)).toEqual(['beginning', 'end']);
+    // Diagnostics gate Go Live, and empty is what every new script now starts
+    // as — so a blank document has to be clean, not merely well-formed.
+    expect(script.diagnostics ?? []).toEqual([]);
   });
 
   it('compiles a representative 5,000-word script quickly (§25.8)', () => {

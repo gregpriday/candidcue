@@ -8,30 +8,28 @@ import { markWelcomed } from '../stores/app-status';
 import { loadLibrary } from '../stores/library';
 import { navigate } from '../stores/router';
 import { showToast } from '../stores/toasts';
-import {
-  NEW_SCRIPT_SOURCE,
-  NEW_SCRIPT_TITLE,
-  SAMPLE_SCRIPT_SOURCE,
-  SAMPLE_SCRIPT_TITLE,
-} from './sample-script';
+import { NEW_SCRIPT_TITLE, SAMPLE_SCRIPT_SOURCE, SAMPLE_SCRIPT_TITLE } from './sample-script';
 import { isTauriRuntime } from '../services/ipc';
 import type { ExportFormat } from '../services/scripts-types';
 
 /**
- * Create a script (blank example or sample) and open the editor.
+ * Create a script (blank or the read-aloud sample) and open the editor.
  *
  * This is the welcome screen's primary call to action, so a failure here is the
  * first thing a new operator can hit. It used to reject out of the click
  * handler as an unhandled rejection — no toast, no navigation, nothing to read.
  * The failure is reported here rather than rethrown because no caller inspects
  * the result; every one of them fires this and forgets it.
+ *
+ * The blank arm sends an empty body on purpose. The editor's placeholder is the
+ * guidance now, so there is nothing to select and delete before writing.
  */
 export async function createAndOpenScript(kind: 'new' | 'sample' = 'new'): Promise<void> {
   try {
     const doc = await scriptsService.createScript(
       kind === 'sample'
         ? { title: SAMPLE_SCRIPT_TITLE, source: SAMPLE_SCRIPT_SOURCE }
-        : { title: NEW_SCRIPT_TITLE, source: NEW_SCRIPT_SOURCE },
+        : { title: NEW_SCRIPT_TITLE, source: '' },
     );
     markWelcomed();
     await loadLibrary();

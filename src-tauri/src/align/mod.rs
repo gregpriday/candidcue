@@ -812,9 +812,12 @@ mod tests {
 mod starter_script_tests {
     use super::*;
 
-    /// `scripts/<id>/script.md` as the app creates it for a new user, already
-    /// tokenized the way the app's compiler tokenizes it. The heading is not
-    /// spoken and neither is the cue line, so 26 spoken tokens remain.
+    /// The prose the app once created new scripts with, kept verbatim as a
+    /// captured fixture, already tokenized the way the app's compiler tokenizes
+    /// it. The heading is not spoken and neither is the cue line, so 26 spoken
+    /// tokens remain. New scripts now start empty, but this stays as-is: what
+    /// it pins down is that a word-perfect read moves the cursor, and the
+    /// captured take below was recorded against exactly these 26 tokens.
     fn starter_tokens() -> Vec<AlignToken> {
         let sentence_one = "Write the words you plan to say, exactly the way you would say them.";
         let sentence_two = "When you present, the stage follows your voice and keeps your place.";
@@ -908,7 +911,7 @@ mod starter_script_tests {
     #[test]
     fn the_starter_script_read_verbatim_is_followed_to_the_last_word() {
         let tokens = starter_tokens();
-        assert_eq!(tokens.len(), 26, "the starter script has 26 spoken tokens");
+        assert_eq!(tokens.len(), 26, "the captured starter fixture has 26 spoken tokens");
 
         let state = AlignmentState::new();
         state.start(1, &tokens);
@@ -918,7 +921,7 @@ mod starter_script_tests {
         assert_eq!(snapshot.state, "following");
         assert!(
             snapshot.confirmed_token >= 25.0,
-            "a word-perfect read of the app's own starter script was not followed: \
+            "a word-perfect read of the captured starter fixture was not followed: \
              confirmed {} of 26",
             snapshot.confirmed_token
         );

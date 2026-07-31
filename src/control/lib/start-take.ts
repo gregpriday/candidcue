@@ -376,6 +376,30 @@ export async function startTake(
     const compiled = await compileForTake(scriptId, doc.source, s.general.readHeadings);
 
     /*
+     * A script with no words in it is not a take.
+     *
+     * Deliberately NOT a compiler diagnostic and not an error: an empty script
+     * is the ordinary, correct state of one somebody has just made, and the
+     * compiler is right to call it clean. It is simply nothing to follow, and
+     * every part of this sequence would report success over it — `startAlignment`
+     * no-ops on a zero-token script, so the session goes live, the microphone
+     * opens, the recogniser loads, the window fills the monitor, and the glass
+     * then holds still for as long as the operator leaves it there with nothing
+     * anywhere saying why.
+     *
+     * Here rather than on the Present button because every entry point — the
+     * editor, both Library paths, the retake on Live — arrives through this one
+     * function, so a guard on the button is a guard on none of the others. The
+     * compiler is what is asked, rather than the source text, because whitespace,
+     * comments and unread headings all look like content and none of them are
+     * words the presenter will say.
+     */
+    if (compiled.spokenWordCount <= 0) {
+      showToast('There is nothing to present yet — this script has no words in it.', 'info');
+      return false;
+    }
+
+    /*
      * C1: open the session record FIRST.
      *
      * `start_session` is the only path to `AppCoordinator::begin_session`,

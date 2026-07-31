@@ -411,6 +411,51 @@ describe('single-window Present', () => {
     for (const fn of Object.values(stageCalls)) expect(fn).not.toHaveBeenCalled();
   });
 
+  /**
+   * New scripts start empty, so this is the state a script is in for as long as
+   * it takes somebody to write the first line — and Present sat live over it.
+   *
+   * Nothing downstream would have said so. An empty script compiles clean (that
+   * is deliberate: a blank document is not a mistake), `startAlignment` no-ops on
+   * zero tokens and the session counts that as a healthy start. So the take would
+   * open the microphone, load the recogniser, fill the monitor, and hold still.
+   */
+  it('refuses to present a script with no words, without acquiring anything', async () => {
+    calls.compileScript.mockResolvedValue({ ...compiled(), spokenWordCount: 0 });
+
+    await expect(startTake(SCRIPT.id)).resolves.toBe(false);
+    expect(calls.startSessionRecord).not.toHaveBeenCalled();
+    expect(calls.startLiveSession).not.toHaveBeenCalled();
+    expect(calls.enterPresentation).not.toHaveBeenCalled();
+    expect(calls.navigate).not.toHaveBeenCalled();
+    // Nothing was acquired, so there is nothing to tear down — and the window
+    // was never covered, which is what would strand the operator behind an
+    // opaque plate if the refusal took the failure path instead.
+    expect(calls.setPresentingPhase).not.toHaveBeenCalled();
+    expect(calls.exitPresentation).not.toHaveBeenCalled();
+    for (const fn of Object.values(stageCalls)) expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('says why it refused, as a notice rather than a failure', async () => {
+    calls.compileScript.mockResolvedValue({ ...compiled(), spokenWordCount: 0 });
+
+    await startTake(SCRIPT.id);
+    const [message, tone] = calls.showToast.mock.calls[0] ?? [];
+    // An empty script is an ordinary state, not a fault, and the copy has to be
+    // about the script rather than about the app failing to do something.
+    expect(tone).toBe('info');
+    expect(message).toContain('no words');
+    expect(message).not.toContain('Could not');
+  });
+
+  it('lets a take that has just one word through', async () => {
+    // The guard is "nothing to follow", not a length opinion. A one-word script
+    // is a strange script and a perfectly valid take.
+    calls.compileScript.mockResolvedValue({ ...compiled(), spokenWordCount: 1 });
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
+    expect(calls.startLiveSession).toHaveBeenCalled();
+  });
+
   /* ------------------------------------------------- how the take opens */
 
   it('opens in the saved mode and writes nothing when no choice was made', async () => {
