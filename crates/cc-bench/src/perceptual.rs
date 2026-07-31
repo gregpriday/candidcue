@@ -79,9 +79,12 @@ const READABLE_AHEAD_DARKNESS: f64 = 0.25;
 /// weakest-evidenced constant in this file. The oral reading literature puts
 /// fixation roughly 500 ms ahead of articulation; none of it was measured
 /// through teleprompter glass with a camera in the way, and Tier D is what would
-/// turn it into a measurement. It is reported, never gated on — `..._p05` is
-/// published beside the deficit so a later revision of this number can be
-/// applied to old results instead of invalidating them.
+/// turn it into a measurement. It is reported, never gated on.
+///
+/// Revising it means re-running: `..._p05` is published beside the deficit to
+/// show the shape of the bad tail, NOT to make the threshold re-applicable
+/// after the fact. Two points do not reconstruct a distribution, and the
+/// per-frame pool is not serialised.
 const READABLE_AHEAD_MIN_MS: f64 = 500.0;
 
 /// Blur exposure: above this rendered speed the text is not readable while it
@@ -477,8 +480,11 @@ enum ReadableAheadEnd {
     /// The dim ramp had already taken a word the reader has not said. The
     /// defect the metric exists for.
     DimRamp,
-    /// The corridor ran off the glass. Legitimately a deficit — text the
-    /// presenter cannot see is not text they can read — but it is a placement
+    /// The glass stopped showing the corridor. Usually running off the bottom,
+    /// but it also covers the reader's own line being scrolled off the TOP,
+    /// which is the catastrophic running-ahead case and belongs here rather
+    /// than in a category of its own. Legitimately a deficit — text the
+    /// presenter cannot see is not text they can read — but a placement
     /// failure, not an opacity one, and `future_reserve` is its geometry-only
     /// sibling.
     Viewport,
@@ -523,10 +529,15 @@ impl Glass<'_> {
 
     /// Rendered darkness of `atom`, on the 0-bright/1-far-past axis.
     ///
-    /// An atom the renderer skipped is bright: the ramp only ever walks opacity
-    /// DOWN from 1.0, and only for atoms at or behind the dim cursor. One it
-    /// never drew — because of the bound described above — has had nothing
-    /// applied to it, and it lies ahead of the reader by construction here.
+    /// An atom the renderer skipped is bright, and the reason is the viewport's
+    /// direction rather than the ramp's: `rendered_opacity` persists between
+    /// frames and a sustained retreat of the dim cursor does walk tokens back
+    /// UP, so "opacity only ever falls" would be wrong. What holds is that the
+    /// drawn range's far edge only advances while the document scrolls forward,
+    /// so a token cannot leave that range downward and stay visible — and the
+    /// one thing that moves the viewport backward, a re-anchor, resets every
+    /// entry to 1.0 (`stage.rs`, `rendered_opacity.iter_mut()`). So an atom
+    /// that is visible and undrawn has had nothing applied to it.
     fn darkness_of(&self, atom: u32) -> f64 {
         self.token_opacity
             .binary_search_by_key(&atom, |&(a, _)| a)
@@ -1913,12 +1924,15 @@ mod tests {
         // exactly the frames material-end censoring exists to protect.
         let gold = gold_at(150, vec![PlanOp::Read { from: 0, to: 20 }]);
         let stage = Stage::tall(40.0);
-        let drawn = opacities(0..18, &[]);
+        // Exactly what `render` emits here: twenty one-atom lines, a glass
+        // taller than all of them, so `first_atom_at_y(bottom)` returns 19 —
+        // the first atom of the LAST line — and `lo..hi` drops atom 19 alone.
+        let drawn = opacities(0..19, &[]);
         let r = measure_readable_ahead(&gold, 0, 16.0, &stage.glass(&drawn)).unwrap();
         assert_eq!(
             r.end,
             ReadableAheadEnd::MaterialEnd,
-            "atoms 18 and 19 are on the glass, merely undrawn"
+            "atom 19 is on the glass, merely undrawn"
         );
     }
 
