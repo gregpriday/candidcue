@@ -504,6 +504,25 @@ mod tests {
 
         let french = AlignmentState::new();
         french.start_in(1, &tokens(FRENCH_SCRIPT), cc_align::AlignmentLanguage::French);
+
+        // The load-bearing assertion: the ARMED engine's script says French.
+        // Everything else in this test would still pass if `start_in` threw the
+        // parameter away and compiled English — the atom comparison above is
+        // standalone, and the session below advances either way, because script
+        // and transcript share whatever profile was used. This reads it back
+        // off the engine, so dropping the argument fails here and only here.
+        assert_eq!(
+            french
+                .lock()
+                .as_ref()
+                .expect("a session was just armed")
+                .engine
+                .script
+                .language(),
+            cc_align::AlignmentLanguage::French,
+            "the language did not reach `compile_tokens_in`"
+        );
+
         french.bind_stream(1);
         let snapshot = french
             .observe(

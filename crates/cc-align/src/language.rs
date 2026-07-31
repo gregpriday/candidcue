@@ -11,8 +11,9 @@
 //! three things:
 //!
 //! 1. Names the languages the engine can normalise ([`AlignmentLanguage`]).
-//!    The enum is CLOSED and currently has one variant. A language appears here
-//!    when it has been measured, not when a model exists that speaks it.
+//!    The enum is CLOSED. A language appears here when somebody has written and
+//!    reviewed a profile for it — which is a claim about NORMALISATION and not
+//!    about following quality; see "What this module deliberately does NOT do".
 //! 2. Enumerates every rule in the normaliser whose behaviour is language
 //!    specific ([`LanguageRule`]) and records what each one costs if a language
 //!    does not supply it ([`RuleDisposition`]).
@@ -41,10 +42,15 @@
 //!
 //! What actually holds the door is a different list, in a different crate: a
 //! language reaches a user only through a `cc_stt::models::BundledModel` that
-//! serves it, and that table admits nothing without measured tuning. So the
-//! three profiles added for #157 are reachable by the benchmark — which is the
-//! whole point, since a corpus cannot be scored in a language the engine cannot
-//! normalise — and reachable by nothing else.
+//! serves it, and that table admits nothing without measured tuning. No model
+//! this build can load serves French, German or Spanish, so nothing here
+//! offers them.
+//!
+//! A profile is the PRECONDITION for measuring a language rather than the
+//! measurement: a corpus cannot be scored in a language the normaliser does not
+//! have. Being precise about the remaining distance — `cc-bench` compiles every
+//! suite with `CompileOptions::default()`, so selecting one of these from its
+//! command line is still to be built.
 
 /// A language the alignment engine knows how to normalise.
 ///
@@ -473,24 +479,54 @@ static ENGLISH: NormalizationProfile = NormalizationProfile {
  * measurement: nobody has yet read a French script to a French recogniser and
  * measured what the glass did.
  *
- * Three limitations are known now rather than discovered later:
+ * Known limitations, recorded now rather than discovered later. The first two
+ * are specific to these languages; the last three are properties of the schema
+ * that English shares, listed because a reader comparing profiles will
+ * otherwise think they are new here.
  *
  * * GROUPING SEPARATOR. `group_separator` is one character, and French groups
  *   thousands with a narrow no-break space rather than a point. `.` is the
- *   convention German and Spanish actually use and the one French readers see
- *   most often in software, so it is the least-wrong single character — but a
- *   French script writing `3.5` and meaning three and a half normalises to
- *   `35`. The decimal half, which is the half that changes the NUMBER, is
- *   correct for all three.
- * * CURRENCY SEQUENCES. `currency_units` holds one atom per unit, and French
- *   and Spanish both say "millions D'euros" and "millones DE euros". The
- *   reordering rule still puts the scale word in the right place, so two atoms
- *   of three line up and the third does not. This is the gap the field's own
- *   doc comment already records; a corpus makes the right shape obvious and its
- *   absence makes it guesswork.
+ *   convention German and Spanish actually use, and no single character can be
+ *   right for French, so it is chosen as the one that is at least right for two
+ *   of the three — but it is not complete French, in two ways. A French script
+ *   writing `3.5` and
+ *   meaning three and a half normalises to `35`, because interior points are
+ *   dropped without checking that the groups are three digits long. And a
+ *   script writing the number CORRECTLY, as `1 234,5`, never reaches the
+ *   separator logic at all: `canonical_atoms_for` splits on whitespace first,
+ *   so that is two atoms, `1` and `234.5`. The decimal half — the half that
+ *   changes the NUMBER — is right for all three.
+ * * REGIONAL SPLITS. The profile is chosen by PRIMARY subtag, so `es-MX` gets
+ *   this one, and Mexican usage is the English convention: decimal point,
+ *   grouping comma. `de-CH` is a third convention again. A locale-aware
+ *   numeric profile is a bigger change than a word list and wants a corpus
+ *   behind it.
+ * * CURRENCY SEQUENCES — FRENCH ONLY. `currency_units` holds one atom per
+ *   unit, and French elides before a vowel: "millions D'EUROS" is the atom
+ *   `d'euros`, which is not `euros`. Spanish and German are FINE here, and the
+ *   distinction is worth keeping straight — "millones DE euros" leaves `euros`
+ *   intact and merely adds an unmatched `de`, and German says "Millionen Euro"
+ *   exactly. So this costs French one atom in three, and the other two
+ *   nothing. `the_french_currency_sequence_is_a_known_gap` in `normalize.rs`
+ *   pins it.
+ * * SINGULAR AT ONE. `1 km` expands to `kilomètres` against a reader who says
+ *   `kilomètre`. English has had this since the unit table existed (`1 km` →
+ *   `kilometres`) and it is the measured baseline, so it is a property of the
+ *   one-atom substitution rather than anything these three do differently.
+ * * PARTIAL UNIT PHRASES. `fps` is "images par seconde", "Bilder pro Sekunde",
+ *   "fotogramas por segundo" — three atoms, and the table substitutes one. It
+ *   expands to the head noun, so the first atom matches and the rest do not.
+ *   English does exactly the same (`fps` → `frames`).
+ * * SCALE SEQUENCES. Spanish says `mil millones` for 10^9. That is two atoms,
+ *   and `scale_words` entries must be one, so the currency swap does not see
+ *   it. `millardo` exists and is rare enough that using it would be its own
+ *   mismatch.
  * * VOCABULARY. The filler and stopword lists are deliberately short. A
  *   stopword list decides atom weight and global-anchor eligibility, so padding
- *   it speculatively changes the engine rather than merely adding words.
+ *   it speculatively changes the engine rather than merely adding words. The
+ *   entries mirror the CATEGORIES the measured English profile uses — it lists
+ *   `yes`, `no`, `here`, `there`, `now`, `very`, `well` — rather than a
+ *   stricter rule invented for these three.
  */
 
 /// French. Candidate, not measured — see the block comment above.
@@ -500,19 +536,37 @@ static FRENCH: NormalizationProfile = NormalizationProfile {
     // Elisions never reach this list: `l'arbre` is ONE atom, because the
     // normaliser keeps word-internal apostrophes. These are the standalone
     // forms, which are the only ones that can match.
-    fillers: &["euh", "heu", "hum", "hmm", "mm", "mmh"],
+    //
+    // `hum` is deliberately absent though a recogniser may well emit it: in a
+    // written script it is a deliberate interjection carrying doubt, and a
+    // filler is skipped, so listing it would throw away a word the author
+    // chose. The rule at the top of the struct — never a real script word —
+    // decides that, not how often the recogniser writes it.
+    fillers: &["euh", "heu", "hmm", "mm", "mmh"],
 
+    // The elided forms are here on purpose and are the reason this list is
+    // longer than a translation of the English one. Because word-internal
+    // apostrophes survive, `c'est` and `qu'il` are single atoms made entirely
+    // of function words — among the most frequent atoms in any French script —
+    // and neither `ce` nor `est` classifies them. Left out, they would carry
+    // full locating weight and be eligible as global anchors, which is exactly
+    // the false-anchoring failure the rule's doc warns about.
+    //
+    // `fait` and `faire` are deliberately absent: `fait` is also the ordinary
+    // noun "fact", and the English list has no comparable content word.
     stopwords: &[
         "le", "la", "les", "un", "une", "des", "de", "du", "et", "ou", "mais",
         "à", "au", "aux", "en", "dans", "sur", "sous", "pour", "par", "avec",
-        "sans", "que", "qui", "quoi", "dont", "où", "ce", "cet", "cette",
-        "ces", "il", "elle", "ils", "elles", "je", "tu", "nous", "vous", "on",
-        "me", "te", "se", "mon", "ma", "mes", "ton", "ta", "tes", "son", "sa",
-        "ses", "notre", "nos", "votre", "vos", "leur", "leurs", "est", "sont",
-        "était", "étaient", "être", "été", "a", "ont", "avait", "avaient",
-        "avoir", "fait", "faire", "ne", "pas", "plus", "non", "oui", "si",
-        "alors", "donc", "très", "bien", "aussi", "tout", "tous", "toute",
-        "toutes", "comme", "quand", "déjà", "encore", "ici", "là",
+        "sans", "chez", "entre", "depuis", "vers", "que", "qui", "quoi",
+        "dont", "où", "ce", "cet", "cette", "ces", "il", "elle", "ils",
+        "elles", "je", "tu", "nous", "vous", "on", "me", "te", "se", "lui",
+        "y", "ça", "mon", "ma", "mes", "ton", "ta", "tes", "son", "sa", "ses",
+        "notre", "nos", "votre", "vos", "leur", "leurs", "est", "sont",
+        "était", "étaient", "être", "été", "suis", "a", "ai", "as", "avons",
+        "avez", "ont", "avait", "avaient", "avoir", "ne", "pas", "plus",
+        "non", "oui", "si", "alors", "donc", "très", "bien", "aussi", "tout",
+        "tous", "toute", "toutes", "comme", "quand", "déjà", "encore", "ici",
+        "là", "c'est", "qu'il", "qu'elle", "n'est", "j'ai", "d'un", "d'une",
     ],
 
     phonetics: PhoneticPolicy::Disabled,
@@ -538,6 +592,14 @@ static FRENCH: NormalizationProfile = NormalizationProfile {
         ("mhz", "mégahertz"),
         ("ghz", "gigahertz"),
         ("ms", "millisecondes"),
+        // Both spellings of the abbreviation, because a French script is more
+        // likely to write `500 Go` than `500 GB` and matching is exact on the
+        // abbreviation — `go` left out would simply never expand. Lowercasing
+        // happens first, so these are the folded forms of Ko/Mo/Go/To.
+        ("ko", "kilooctets"),
+        ("mo", "mégaoctets"),
+        ("go", "gigaoctets"),
+        ("to", "téraoctets"),
         ("kb", "kilooctets"),
         ("mb", "mégaoctets"),
         ("gb", "gigaoctets"),
@@ -558,21 +620,31 @@ static FRENCH: NormalizationProfile = NormalizationProfile {
 static GERMAN: NormalizationProfile = NormalizationProfile {
     language: AlignmentLanguage::German,
 
-    fillers: &["äh", "ähm", "öhm", "hm", "hmm", "mhm", "mmh"],
+    // `hm` and `mhm` are deliberately absent. Both are ordinary German
+    // responses — reflection and agreement — rather than noise, and `hm` is
+    // also the SI symbol for hectometre, which `unit_words` does not expand.
+    // A filler that is really a unit would silently drop a measurement.
+    fillers: &["äh", "ähm", "öhm", "hmm", "mmh"],
 
     stopwords: &[
         "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen",
         "einem", "einer", "eines", "und", "oder", "aber", "von", "vom", "zu",
         "zum", "zur", "in", "im", "an", "am", "auf", "für", "mit", "bei",
         "nach", "über", "unter", "durch", "um", "ist", "sind", "war", "waren",
-        "sein", "gewesen", "hat", "haben", "hatte", "hatten", "wird",
-        "werden", "wurde", "wurden", "kann", "können", "soll", "sollen",
-        "muss", "müssen", "will", "wollen", "nicht", "kein", "keine", "ja",
-        "nein", "ich", "du", "er", "sie", "es", "wir", "ihr", "mich", "dich",
+        "sein", "gewesen", "bin", "hat", "haben", "habe", "hast", "hatte",
+        "hatten", "wird", "werden", "wurde", "wurden", "kann", "können",
+        "soll", "sollen", "muss", "müssen", "will", "wollen", "nicht",
+        "kein", "keine", "ja", "nein", "ich", "du", "er", "sie", "es", "wir",
+        "ihr", "man", "mich", "dich", "mir", "dir", "ihm", "ihn", "ihnen",
         "sich", "uns", "euch", "mein", "dein", "unser", "als", "wie", "wenn",
-        "dass", "weil", "denn", "auch", "noch", "schon", "nur", "sehr",
-        "hier", "da", "dort", "so", "dann", "jetzt", "alle", "alles", "was",
-        "wer", "wo", "wann", "warum",
+        "dass", "weil", "denn", "doch", "auch", "noch", "schon", "nur",
+        "sehr", "hier", "da", "dort", "so", "dann", "jetzt", "alle", "alles",
+        "was", "wer", "wo", "wann", "warum",
+        // Prepositions and the fused preposition+article forms, which are
+        // single words in German and among the most frequent atoms there is.
+        "aus", "vor", "ohne", "seit", "bis", "gegen", "zwischen", "pro",
+        "ins", "ans", "beim",
+        "dieser", "diese", "dieses", "diesen", "diesem",
     ],
 
     phonetics: PhoneticPolicy::Disabled,
@@ -622,21 +694,33 @@ static GERMAN: NormalizationProfile = NormalizationProfile {
 static SPANISH: NormalizationProfile = NormalizationProfile {
     language: AlignmentLanguage::Spanish,
 
-    fillers: &["eh", "ehm", "em", "mm", "mmm", "hmm"],
+    // `eh` is deliberately absent: it is a real Spanish interjection — "¿eh?",
+    // "eh, tú" — and a script that writes it means it. `em` and `ehm` are not
+    // ordinary words, so they are safe to skip.
+    fillers: &["ehm", "em", "mm", "mmm", "hmm"],
 
     stopwords: &[
         "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del",
-        "al", "a", "y", "e", "o", "u", "pero", "en", "con", "sin", "por",
-        "para", "sobre", "entre", "hasta", "desde", "que", "quien", "cual",
-        "cuando", "donde", "como", "es", "son", "era", "eran", "ser", "sido",
-        "está", "están", "estaba", "estaban", "estar", "ha", "han", "había",
+        "al", "a", "y", "e", "o", "u", "ni", "pero", "sino", "aunque", "en",
+        "con", "sin", "por", "para", "sobre", "entre", "hasta", "desde",
+        "que", "quien", "cual", "cuando", "donde", "como", "es", "son",
+        "era", "eran", "ser", "sido", "soy", "eres", "somos",
+        "está", "están", "estaba", "estaban", "estar", "estoy", "estás",
+        "estamos", "ha", "han", "he", "has", "hemos", "había",
         "habían", "haber", "hay", "fue", "fueron", "no", "sí", "yo", "tú",
-        "él", "ella", "ellos", "ellas", "nosotros", "vosotros", "usted", "me",
-        "te", "se", "nos", "os", "mi", "mis", "tu", "tus", "su", "sus",
-        "nuestro", "nuestra", "este", "esta", "esto", "ese", "esa", "eso",
+        "él", "ella", "ellos", "ellas", "nosotros", "vosotros", "usted",
+        "ustedes", "me", "te", "se", "lo", "le", "les",
+        "nos", "os", "mi", "mis", "tu", "tus", "su", "sus",
+        "nuestro", "nuestra", "nuestros", "nuestras", "este", "esta", "esto",
+        "estos", "estas", "ese", "esa", "eso", "esos", "esas",
         "muy", "más", "menos", "también", "ya", "ahora", "aquí", "allí",
         "todo", "todos", "toda", "todas", "algo", "si", "entonces", "porque",
         "así", "bien",
+        // Spanish accents its interrogatives, and accents survive
+        // normalisation — so `que` does not classify `qué`. Without these the
+        // most frequent question words in the language would each carry full
+        // anchor weight.
+        "qué", "quién", "cuál", "cuándo", "dónde", "cómo",
     ],
 
     phonetics: PhoneticPolicy::Disabled,
@@ -712,19 +796,31 @@ mod tests {
         }
     }
 
-    /// `ALL` is what the contract test iterates. A variant missing from it
+    /// `ALL` is what the contract test iterates, so a variant missing from it
     /// would skip every check in this file.
+    ///
+    /// What this can and cannot do is worth being exact about, because the
+    /// name promises more than a test in Rust can deliver: there is no way to
+    /// enumerate an enum's variants, so nothing here can PROVE `ALL` is
+    /// complete. What makes a forgotten variant fail is the compiler — every
+    /// `match` in this module is exhaustive, so adding one breaks
+    /// `primary_subtag` and `profile` until it is answered. This test adds the
+    /// two things the compiler cannot see: that each variant is actually
+    /// LISTED, and a pinned count so silently dropping one is a failure rather
+    /// than a quietly shorter loop.
     #[test]
     fn all_lists_every_variant() {
-        // Exhaustive match: adding a variant breaks this until `ALL` is
-        // updated to match.
-        for lang in AlignmentLanguage::ALL {
-            match lang {
-                AlignmentLanguage::English => {}
-                AlignmentLanguage::French => {}
-                AlignmentLanguage::German => {}
-                AlignmentLanguage::Spanish => {}
-            }
+        for lang in [
+            AlignmentLanguage::English,
+            AlignmentLanguage::French,
+            AlignmentLanguage::German,
+            AlignmentLanguage::Spanish,
+        ] {
+            assert!(
+                AlignmentLanguage::ALL.contains(&lang),
+                "{lang:?} has a profile but is missing from ALL, so every \
+                 contract test in this file skips it"
+            );
         }
         assert_eq!(AlignmentLanguage::ALL.len(), 4, "update this count with ALL");
     }
@@ -926,13 +1022,16 @@ mod tests {
         }
     }
 
-    /// Measurement is not something this crate records, and a language that has
-    /// not been measured must not be reachable as though it had. The gate is
-    /// `cc_stt::models::BundledModel` — no model this build can load serves
-    /// fr/de/es — and this test is the reminder that the gate is elsewhere, so
-    /// that a future reader does not mistake `ALL` for a shipping list.
+    /// The candidate profiles are complete enough to normalise with, and carry
+    /// no claim about following quality.
+    ///
+    /// Named for what it checks. It does NOT verify that fr/de/es are
+    /// unreachable by a user — that gate is a `cc_stt::models::BundledModel`
+    /// serving the language, which is two crates away and is asserted in
+    /// `src-tauri/src/speech/catalogue.rs`. This crate cannot see it, and a
+    /// test here that claimed to would be checking nothing.
     #[test]
-    fn a_profile_is_a_capability_rather_than_a_shipping_decision() {
+    fn a_candidate_profile_normalises_without_claiming_to_follow() {
         for lang in [
             AlignmentLanguage::French,
             AlignmentLanguage::German,

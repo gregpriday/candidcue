@@ -586,9 +586,11 @@ evidence for the observe/confirm/jump gates — a take whose `le`/`la`/`de` all
 carry full locating weight is a different engine, and false anchoring on a
 frequent function word is what it costs.
 
-**Phonetics is intended to start disabled outside English** — an intention, not
-a demonstrated behaviour: English is the only profile that exists, so the
-`Disabled` branch has never run on a real language. The reason is measurement
+**Phonetics starts disabled outside English.** As of #157 that is a behaviour
+rather than an intention: French, German and Spanish profiles exist and all
+three select `Disabled`, so the branch runs on real languages — though what has
+been shown is that it produces no key, not that producing none is the right
+choice for those languages. The reason is measurement
 rather than taste: Double Metaphone was tried against the in-house consonant
 skeleton and measurably lost, so there is no reason to assume a per-language
 phonetic algorithm wins either — it has to be shown on that language's own

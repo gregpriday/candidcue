@@ -43,16 +43,24 @@ pub async fn start_alignment(
 /// Read once, here, at the top of the take, rather than by the engine while it
 /// runs — see [`AlignmentState::start_in`] for why that separation matters.
 ///
-/// Two things can go wrong and both answer English, for the same reason. A
-/// settings read that fails should not take the take down: the presenter is
-/// about to speak, and refusing to follow at all is worse than following in the
-/// language every install starts in. A persisted tag naming a language the
-/// engine has no profile for should not either — but note that this is
-/// belt-and-braces rather than the real defence. `settings::migrate_in_place`
-/// already repairs such a tag on every load, and it does it with a stronger
-/// test than this one: it also asks whether the RECOGNISER serves the language,
-/// which is what keeps a normalisable-but-unmeasured French out. By the time a
-/// tag reaches here it has been through that gate.
+/// Two things can go wrong and both answer English, but not for the same
+/// reason, and the weaker of the two is worth being honest about.
+///
+/// A failed settings read is a real failure and English is a degraded answer,
+/// not a correct one. It is chosen because this build ships one recogniser and
+/// it is English: following in the language every install starts in beats not
+/// following, and the alternative is not "fail loudly" but "the take runs with
+/// no following at all", since the caller in `services/session.ts` catches an
+/// alignment start failure and carries on. That trade stops being right the
+/// day a second language ships, at which point this should resolve the
+/// language alongside the MODEL and fail when they disagree.
+///
+/// An unresolvable tag is different: it should be unreachable.
+/// `settings::migrate_in_place` runs on every read and repairs any tag this
+/// build cannot both transcribe and normalise, so `None` here means that
+/// invariant broke. It is logged as such rather than silently absorbed —
+/// `from_bcp47`'s own doc says pretending an unknown tag is English is never
+/// right, and this is the one place that would otherwise do it quietly.
 async fn resolve_language(db: &Database) -> cc_align::AlignmentLanguage {
     let tag = match crate::settings::get_settings(db.pool()).await {
         Ok(settings) => settings.value.audio.language,
@@ -65,8 +73,10 @@ async fn resolve_language(db: &Database) -> cc_align::AlignmentLanguage {
         }
     };
     cc_align::AlignmentLanguage::from_bcp47(tag.trim()).unwrap_or_else(|| {
-        tracing::warn!(
-            "alignment: no normalisation profile for {tag:?}; compiling as English"
+        tracing::error!(
+            "alignment: settings returned {tag:?}, which has no normalisation \
+             profile — migrate_in_place should have repaired it before this \
+             point. Compiling as English."
         );
         cc_align::AlignmentLanguage::English
     })

@@ -174,9 +174,11 @@ pub struct AudioSettings {
     /// which takes two questions rather than a constant: the selected
     /// recogniser has to transcribe it and the alignment engine has to have a
     /// normalisation profile for it. Both are facts about the build, and they
-    /// do not currently give the same answer — the shipped bundle is bilingual
-    /// (`zh-en`, a fact the code denied for long enough to be worth stating
-    /// here), while the engine knows only English. See `migrate_in_place`.
+    /// do not give the same answer — the shipped bundle is bilingual (`zh-en`,
+    /// a fact the code denied for long enough to be worth stating here) and has
+    /// no French, while the engine normalises English, French, German and
+    /// Spanish and has no Chinese. The two overlap on English alone. See
+    /// `migrate_in_place`.
     pub language: String,
     pub soft_pause_auto_disconnect_minutes: u32,
     /// Local voice-detection sensitivity, 0-1, 0.5 = the Appendix A.6 defaults
@@ -425,10 +427,14 @@ fn migrate_in_place(settings: &mut AppSettings) {
     //
     // The first question goes to the ALIGNMENT ENGINE: does it have a
     // normalisation profile for this tag? Asked of the engine's own table
-    // rather than a literal `starts_with("en")` here, so when a language passes
-    // the bar in `cc_bench::language_gate` and gains a profile, this gate opens
-    // for it without anybody remembering to come back and edit a string
-    // comparison. `from_bcp47` is also what canonicalises the persisted string:
+    // rather than a literal `starts_with("en")` here, so it needs no editing as
+    // that table grows — which it since has: #157 gave the engine French,
+    // German and Spanish profiles. Note what that did NOT do. A profile is a
+    // normalisation capability, so this half of the conjunction now says yes to
+    // `fr-FR`, and the tag is still repaired, because the second half says no.
+    // That is the design: the bar in `cc_bench::language_gate` is a measurement
+    // of a MODEL on a corpus, and it is the model table that records the
+    // verdict. `from_bcp47` is also what canonicalises the persisted string:
     // it resolves the PRIMARY subtag, so `en_GB` and `en-gibberish-` are still
     // English while `english` and `eng` — which the old prefix test waved
     // through — are not tags at all and resolve to nothing.
@@ -439,13 +445,24 @@ fn migrate_in_place(settings: &mut AppSettings) {
     // a setting the recogniser cannot serve is worth doing; overwriting one it
     // can is losing the user's choice on a build that happened to be sure.
     //
-    // Today the conjunction bites in exactly one place, `zh-CN`: the model
-    // transcribes Chinese and the engine has no Chinese profile, so the script
-    // would be compiled as English — and `language.rs` says plainly that CJK
-    // needs a real tokenizer before whitespace segmentation means anything.
-    // Keeping the tag would buy a true claim about the transcript and a false
-    // one about the glass. It stops biting the moment Chinese earns a profile,
-    // and it stops by itself.
+    // The conjunction now bites from BOTH directions, which is what makes it a
+    // conjunction rather than a formality:
+    //
+    // * `zh-CN` — the model transcribes Chinese and the engine has no Chinese
+    //   profile, so the script would be compiled as English, and `language.rs`
+    //   says plainly that CJK needs a real tokenizer before whitespace
+    //   segmentation means anything. Keeping the tag would buy a true claim
+    //   about the transcript and a false one about the glass.
+    // * `fr-FR`, `de-DE`, `es-ES` — the mirror image. The engine has profiles
+    //   for all three, and no recogniser this build can LOAD speaks them: the
+    //   Kroko bundles are in the download catalogue but have no entry in
+    //   `cc_stt::models`, because that table's tuning is measured and no
+    //   `blank_penalty` sweep has been run for them. Keeping one of these tags
+    //   would claim a French take from a recogniser with no French in it.
+    //
+    // Each stops biting on its own terms — Chinese when it earns a profile, the
+    // other three when a sweep and a corpus earn them a model — and each stops
+    // by itself, with no string comparison here to remember to edit.
     let followable = cc_align::AlignmentLanguage::from_bcp47(settings.audio.language.trim())
         .is_some_and(|language| model.serves_language(language.primary_subtag()));
     if !followable {
@@ -504,9 +521,25 @@ pub async fn update_settings(
     let mut base = serde_json::to_value(&current.value)
         .map_err(|e| AppError::Internal(format!("settings serialize: {e}")))?;
     merge_json(&mut base, &patch);
-    let merged: AppSettings = serde_json::from_value(base)
+    let mut merged: AppSettings = serde_json::from_value(base)
         .map_err(|e| AppError::invalid_input("Settings patch has an invalid shape.")
             .with_log(format!("settings patch deserialize: {e}")))?;
+    // Repaired on WRITE as well as on read.
+    //
+    // `get_settings` migrates the copy it hands back but does not persist the
+    // repair, so this used to be the one path that could put a value this
+    // build cannot honour into the database — and, worse, RETURN it. A patch
+    // setting `audio.language` to a tag no loadable recogniser serves was
+    // written, echoed to the frontend, adopted by its settings store, and only
+    // silently corrected the next time something read settings. The UI spent
+    // that whole window showing a language the app would not have followed in.
+    //
+    // `validate` cannot catch it: it checks the Appendix A numeric ranges, and
+    // whether a language is followable is a question about this build's model
+    // table rather than about the value's shape. Running the same repair here
+    // makes the two paths agree, and `repairing_twice_changes_nothing_the_
+    // second_time` already pins the idempotence this relies on.
+    migrate_in_place(&mut merged);
     validate(&merged)?;
 
     let json = serde_json::to_string(&merged)
@@ -642,6 +675,33 @@ mod tests {
             settings.audio.language = kept.to_string();
             migrate_in_place(&mut settings);
             assert_eq!(settings.audio.language, kept, "{kept} must survive");
+        }
+    }
+
+    /// A language the ENGINE can normalise is still refused while no loadable
+    /// recogniser speaks it.
+    ///
+    /// The half of the conjunction #157 put weight on. `fr-FR` used to be
+    /// rejected because `from_bcp47` returned `None`; it now resolves to a real
+    /// French profile, and it must STILL be rejected — for the other reason.
+    /// If someone adds a Kroko `BundledModel` before its `blank_penalty` sweep
+    /// exists, this test is what fails.
+    #[test]
+    fn a_language_the_engine_can_normalise_is_not_thereby_offered() {
+        for tag in ["fr-FR", "de-DE", "es-ES", "fr", "de", "es"] {
+            assert!(
+                cc_align::AlignmentLanguage::from_bcp47(tag).is_some(),
+                "{tag} should normalise — the engine has the profile"
+            );
+            let mut settings = AppSettings::default();
+            settings.audio.language = tag.to_string();
+            migrate_in_place(&mut settings);
+            assert_eq!(
+                settings.audio.language,
+                crate::speech::default_model().default_language,
+                "{tag} must be repaired: no recogniser this build can load \
+                 serves it, however well the engine normalises it"
+            );
         }
     }
 

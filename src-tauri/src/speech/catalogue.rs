@@ -464,10 +464,19 @@ mod tests {
     /// coincidence and calling it evidence.
     ///
     /// So `loadable_model` answers `None` for them, the model manager reports
-    /// them unsupported, and `settings::migrate_in_place` refuses a `fr-FR`
-    /// because no loadable recogniser serves French. Deleting this test to make
-    /// a language work is the mistake it exists to catch: the fix is a corpus
-    /// and a sweep, then a `BundledModel` entry carrying real numbers.
+    /// them unsupported and refuses the download, and
+    /// `settings::migrate_in_place` refuses a `fr-FR` because no loadable
+    /// recogniser serves French. Deleting this test to make a language work is
+    /// the mistake it exists to catch.
+    ///
+    /// What the fix actually is, stated in full so nobody plans on half of it:
+    /// a corpus in the language, a `blank_penalty` sweep, a passing run of
+    /// `cc-bench gate-language`, and then a `BundledModel` entry carrying the
+    /// measured numbers. AND the speech commands have to start honouring the
+    /// selected model — `start_transcription` and `preload_speech_engine` both
+    /// call `default_model()` today and never read the setting, which is
+    /// harmless while one model ships and becomes a take transcribed in the
+    /// wrong language the moment two do.
     #[test]
     fn the_kroko_models_download_but_do_not_load_until_they_are_measured() {
         for id in ["kroko-fr", "kroko-de", "kroko-es"] {

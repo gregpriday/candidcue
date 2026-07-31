@@ -1178,10 +1178,12 @@ mod tests {
      * The three candidate languages, exercised through the real pipeline.
      *
      * A profile that merely answers the `MustReplace` contract is data; these
-     * are the tests that it CHANGES SOMETHING, and that what it changes is what
-     * a reader of that language would actually say. The English rows above are
-     * unchanged and must stay that way — every one of them is a measured
-     * baseline.
+     * are the tests that it CHANGES SOMETHING, and that what it changes is
+     * what the profile says it should. That is the honest limit of what a
+     * table-driven test can establish: it pins the authored profile against
+     * the normaliser, and it cannot tell you the author chose the right words.
+     * Only a corpus does that. The English rows above are unchanged and must
+     * stay that way — every one of them is a measured baseline.
      */
 
     fn atoms_in(language: AlignmentLanguage, text: &str) -> Vec<String> {
@@ -1190,9 +1192,9 @@ mod tests {
 
     /// The rule that produces a WRONG NUMBER rather than a missed match.
     ///
-    /// `12,5` is twelve and a half in all three languages and twelve-thousand-
-    /// five-hundred in English. Read with the English convention it becomes the
-    /// atom `125`, a number nobody said.
+    /// `12,5` is twelve and a half in all three languages. Read with the
+    /// English convention the comma is a thousands separator and simply
+    /// dropped, so the atom is `125` — a number nobody said.
     #[test]
     fn the_candidate_languages_point_with_a_comma() {
         for lang in [
@@ -1295,12 +1297,19 @@ mod tests {
 
     /// The known gap, asserted rather than described.
     ///
-    /// French and Spanish both say "millions D'euros" / "millones DE euros",
-    /// and `currency_units` holds ONE atom per unit — so the scale word lands
-    /// correctly and the unit itself does not match the elided form a
-    /// recogniser writes. Two atoms of three line up. This test exists so the
-    /// limitation is visible in the suite rather than only in a comment, and so
-    /// that fixing it later is a test that changes rather than a surprise.
+    /// French elides before a vowel — "millions D'EUROS" — and
+    /// `currency_units` holds ONE atom per unit, so `d'euros` is a single atom
+    /// that is not `euros`. The scale word still lands correctly, so two atoms
+    /// of three line up.
+    ///
+    /// FRENCH only, and worth keeping straight: Spanish says "millones DE
+    /// euros", which leaves `euros` intact as its own atom and merely adds an
+    /// unmatched `de`, and German says "Millionen Euro" exactly. The row below
+    /// asserts that difference rather than assuming it.
+    ///
+    /// The "spoken" side here is what the NORMALISER does with French written
+    /// the way French is written. It is not a claim about what the Kroko
+    /// recogniser emits — no French corpus exists yet to say.
     #[test]
     fn the_french_currency_sequence_is_a_known_gap() {
         let script = atoms_in(AlignmentLanguage::French, "€2,4 millions");
@@ -1313,11 +1322,26 @@ mod tests {
         // The part that does not, and is recorded as a gap rather than fixed
         // speculatively — the right shape needs a French corpus to see.
         assert_ne!(script[2], spoken[2]);
+
+        // Spanish keeps all three script atoms, in order, and only adds an
+        // unmatched `de`. German is exact. Neither shares French's problem.
+        let es_script = atoms_in(AlignmentLanguage::Spanish, "€2,4 millones");
+        let es_spoken = atoms_in(AlignmentLanguage::Spanish, "2,4 millones de euros");
+        assert_eq!(es_script, vec!["2.4", "millones", "euros"]);
+        assert_eq!(es_spoken, vec!["2.4", "millones", "de", "euros"]);
+
+        let de_script = atoms_in(AlignmentLanguage::German, "€2,4 Millionen");
+        let de_spoken = atoms_in(AlignmentLanguage::German, "2,4 Millionen Euro");
+        assert_eq!(de_script, de_spoken, "German needs no linking word at all");
     }
 
-    /// Elisions pass through untouched, on BOTH sides, which is what makes
-    /// leaving the English contraction table switched off safe rather than
-    /// lossy.
+    /// Elisions pass through untouched, on BOTH sides.
+    ///
+    /// That is what makes leaving the English contraction table switched off
+    /// fail SAFE — no false merges, and a script and a recogniser that write
+    /// the same surface still match. It is not free: the rule's disposition is
+    /// `InertRecallGap` precisely because the equivalence it bought is gone,
+    /// so the case where the two sides spell it differently is now a miss.
     #[test]
     fn elisions_survive_because_both_sides_keep_them() {
         for (lang, text, expected) in [
