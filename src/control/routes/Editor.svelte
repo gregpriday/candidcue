@@ -25,6 +25,7 @@ import SplitButton from '../components/SplitButton.svelte';
   import { presentMenuItems } from '../lib/present-menu';
 import { startTake, takeStarting } from '../lib/start-take';
 import type { PresentationMode } from '../services/settings-types';
+  import { isCompileSettledForScript, isEditorOpening } from '../lib/editor-readiness';
   import { estimateDurationSeconds, formatScriptMeta, formatSpeakingDuration } from '../lib/format';
   import * as inserts from '../lib/markdown-insert';
   import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
@@ -66,15 +67,96 @@ import type { PresentationMode } from '../services/settings-types';
   let previewScroller: HTMLElement | null = $state(null);
   let toolbarEl: HTMLElement | null = $state(null);
 
-  $effect(() => {
-    void openScript(scriptId).catch((err) => {
+  /*
+   * The editor stays behind one panel until everything it is about to draw is
+   * in hand — see lib/editor-readiness.ts for why the document alone is not
+   * enough, and why this waits for the first compile too.
+   */
+  let openStarted = $state(false);
+  let firstCompileSettled = $state(false);
+  let settleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Plain `let`: the focus effect is woken by `opening`, not by this. */
+  let focusEditorWhenOpen = false;
+
+  /**
+   * How long the panel will wait for a first compile that is never coming.
+   *
+   * `compileScript` settles only when the worker answers — it has no timeout
+   * and no `error` listener — so a worker that fails to construct leaves the
+   * compile pending forever. That already costs the preview; without this it
+   * would now cost the whole editor, which is a far worse trade than the one
+   * this change set out to make. Generous enough never to fire on a real
+   * compile, and the reserved metadata row means firing early costs no jump.
+   *
+   * It is time given to the COMPILE, so the clock starts when the document
+   * lands rather than when the open begins — armed at the open, a slow read
+   * would spend the whole allowance before the compile had been asked for.
+   */
+  const FIRST_COMPILE_SETTLE_TIMEOUT_MS = 2000;
+
+  function clearSettleTimer(): void {
+    if (settleTimer !== null) {
+      clearTimeout(settleTimer);
+      settleTimer = null;
+    }
+  }
+
+  function beginOpen(id: string): Promise<unknown> {
+    openStarted = true;
+    firstCompileSettled = false;
+    clearSettleTimer();
+    return openScript(id).catch((err) => {
       showToast(`Could not open script: ${describeError(err)}`, 'danger');
       void navigate({ name: 'library', view: 'all' });
     });
+  }
+
+  $effect(() => {
+    void beginOpen(scriptId);
+    return clearSettleTimer;
+  });
+
+  // A latch, never a live reading: a later compile must not raise the panel
+  // back over a working editor. Order against the open effect above does not
+  // matter — until that effect has run, `openStarted` is false and this bails.
+  $effect(() => {
+    if (!openStarted || firstCompileSettled) return;
+    if (isCompileSettledForScript(scriptId, $editor, $compiled)) {
+      clearSettleTimer();
+      firstCompileSettled = true;
+      return;
+    }
+    // The document is here and its compile has not answered. Start the clock.
+    if ($editor.scriptId === scriptId && !$editor.loading && settleTimer === null) {
+      settleTimer = setTimeout(() => {
+        settleTimer = null;
+        firstCompileSettled = true;
+      }, FIRST_COMPILE_SETTLE_TIMEOUT_MS);
+    }
+  });
+
+  const opening = $derived(
+    isEditorOpening(scriptId, $editor, { openStarted, firstCompileSettled }),
+  );
+
+  /*
+   * Restoring a revision reopens the same script without unmounting this route,
+   * so the panel now takes the header down with it — and the overflow item the
+   * revision dialog wants to hand focus back to goes with it. Put focus in the
+   * text instead, which is where someone who has just restored a revision is
+   * looking anyway. Only on that path: arriving from the Library should not
+   * steal focus into the editor.
+   */
+  $effect(() => {
+    if (opening || !focusEditorWhenOpen) return;
+    focusEditorWhenOpen = false;
+    void tick().then(() => editorRef?.focus());
   });
 
   $effect(() =>
     onShortcut((action) => {
+      // The controls these mirror are behind the panel; the subscription is not.
+      if (opening) return;
       if (action === 'save') void manualSave();
       if (action === 'present') void present();
     }),
@@ -484,7 +566,8 @@ import type { PresentationMode } from '../services/settings-types';
 
   async function afterRestore(): Promise<void> {
     revisionsOpen = false;
-    await openScript(scriptId);
+    focusEditorWhenOpen = true;
+    await beginOpen(scriptId);
     showToast('Revision restored. Your previous text was saved as a revision.', 'success');
   }
 
@@ -564,92 +647,101 @@ import type { PresentationMode } from '../services/settings-types';
 </script>
 
 <div class="page">
-  <PageHeader
-    title={$editor.title || 'Untitled script'}
-    {meta}
-    backLabel="Library"
-    onback={() => goBack()}
-    editableTitle
-    ontitlechange={(t) => void setTitle(t)}
-  >
-    {#snippet status()}
-      {#if $editor.saveState === 'error'}
-        <button type="button" class="save-issue" onclick={() => (saveIssueOpen = true)}>
-          <StatusPill tone="danger" label={saveLabel} />
-        </button>
-      {:else if $editor.saveState === 'conflict'}
-        <button type="button" class="save-issue" onclick={() => (conflictOpen = true)}>
-          <StatusPill tone="warning" label={saveLabel} />
-        </button>
-      {:else if saveLabel}
-        <span class="save-state" aria-live="polite">{saveLabel}</span>
-      {/if}
-    {/snippet}
-    {#snippet actions()}
-      <SegmentedControl
-        label="Editor mode"
-        options={[
-          { value: 'edit', label: 'Edit' },
-          { value: 'preview', label: 'Preview' },
-        ]}
-        value={$editor.mode}
-        onchange={(mode) => void changeMode(mode as 'edit' | 'preview')}
-      />
-      <IconButton
-        icon="doc"
-        label={panelOpen ? 'Hide outline panel' : 'Show outline panel'}
-        active={panelOpen}
-        onclick={() => (panelOpen = !panelOpen)}
-      />
-      <OverflowMenu items={overflowItems} label="Script actions" />
-      <SplitButton
-        variant="primary"
-        label={$takeStarting ? 'Opening stage…' : 'Present'}
-        menuLabel="How to present"
-        disabled={$takeStarting}
-        items={presentModeItems}
-        onclick={() => void present()}
-      />
-    {/snippet}
-  </PageHeader>
-
-  {#if $editor.mode !== 'preview'}
+  {#if opening}
     <!--
-      Heading is a typographic glyph rather than an icon, like Bold and Italic
-      beside it: the icon set has no heading mark, and it is owned by another
-      change. It wore a chevron, which means "go forward" everywhere else in
-      the product.
-
-      "Insert cue" gives up `flag` to the take marker, which was wearing the
-      undo arrow. The compiler models take markers as navigation targets — a
-      flag is exactly that — and a cue is an aside to the presenter.
+      One panel over the whole route, not a line inside the work area.
+      The header and the toolbar used to assemble on their own schedule around
+      that line, so the pieces arrived one at a time; covering all of them means
+      the editor appears once, complete.
     -->
-    <div
-      class="toolbar"
-      role="toolbar"
-      aria-label="Insert"
-      aria-orientation="horizontal"
-      bind:this={toolbarEl}
-      onkeydown={onToolbarKeydown}
-      onfocusin={onToolbarFocusIn}
-    >
-      <button type="button" class="glyph" aria-label="Cycle heading level" title="Cycle heading level" onclick={() => withView(inserts.cycleHeading)}><strong>H</strong></button>
-      <button type="button" class="glyph" aria-label="Bold" title="Bold" onclick={() => withView(inserts.insertBold)}><strong>B</strong></button>
-      <button type="button" class="glyph" aria-label="Italic" title="Italic" onclick={() => withView(inserts.insertItalic)}><em>I</em></button>
-      <IconButton icon="link" label="Insert link" onclick={() => withView(inserts.insertLink)} />
-      <span class="toolbar-rule" aria-hidden="true"></span>
-      <IconButton icon="info" label="Insert cue" onclick={() => withView(inserts.insertCue)} />
-      <IconButton icon="image" label="Insert image" onclick={() => void insertImage()} />
-      <IconButton icon="diagram" label="Insert diagram block" onclick={() => withView(inserts.insertDiagram)} />
-      <IconButton icon="flag" label="Insert take marker" onclick={() => withView(inserts.insertTakeMarker)} />
+    <div class="opening" role="status">
+      <p class="opening-message">Opening script…</p>
     </div>
-  {/if}
+  {:else}
+    <PageHeader
+      title={$editor.title || 'Untitled script'}
+      {meta}
+      reserveMetaSpace
+      backLabel="Library"
+      onback={() => goBack()}
+      editableTitle
+      ontitlechange={(t) => void setTitle(t)}
+    >
+      {#snippet status()}
+        {#if $editor.saveState === 'error'}
+          <button type="button" class="save-issue" onclick={() => (saveIssueOpen = true)}>
+            <StatusPill tone="danger" label={saveLabel} />
+          </button>
+        {:else if $editor.saveState === 'conflict'}
+          <button type="button" class="save-issue" onclick={() => (conflictOpen = true)}>
+            <StatusPill tone="warning" label={saveLabel} />
+          </button>
+        {:else if saveLabel}
+          <span class="save-state" aria-live="polite">{saveLabel}</span>
+        {/if}
+      {/snippet}
+      {#snippet actions()}
+        <SegmentedControl
+          label="Editor mode"
+          options={[
+            { value: 'edit', label: 'Edit' },
+            { value: 'preview', label: 'Preview' },
+          ]}
+          value={$editor.mode}
+          onchange={(mode) => void changeMode(mode as 'edit' | 'preview')}
+        />
+        <IconButton
+          icon="doc"
+          label={panelOpen ? 'Hide outline panel' : 'Show outline panel'}
+          active={panelOpen}
+          onclick={() => (panelOpen = !panelOpen)}
+        />
+        <OverflowMenu items={overflowItems} label="Script actions" />
+        <SplitButton
+          variant="primary"
+          label={$takeStarting ? 'Opening stage…' : 'Present'}
+          menuLabel="How to present"
+          disabled={$takeStarting}
+          items={presentModeItems}
+          onclick={() => void present()}
+        />
+      {/snippet}
+    </PageHeader>
 
-  <div class="body">
-    <div class="work">
-      {#if $editor.loading}
-        <p class="loading">Opening script…</p>
-      {:else}
+    {#if $editor.mode !== 'preview'}
+      <!--
+        Heading is a typographic glyph rather than an icon, like Bold and Italic
+        beside it: the icon set has no heading mark, and it is owned by another
+        change. It wore a chevron, which means "go forward" everywhere else in
+        the product.
+
+        "Insert cue" gives up `flag` to the take marker, which was wearing the
+        undo arrow. The compiler models take markers as navigation targets — a
+        flag is exactly that — and a cue is an aside to the presenter.
+      -->
+      <div
+        class="toolbar"
+        role="toolbar"
+        aria-label="Insert"
+        aria-orientation="horizontal"
+        bind:this={toolbarEl}
+        onkeydown={onToolbarKeydown}
+        onfocusin={onToolbarFocusIn}
+      >
+        <button type="button" class="glyph" aria-label="Cycle heading level" title="Cycle heading level" onclick={() => withView(inserts.cycleHeading)}><strong>H</strong></button>
+        <button type="button" class="glyph" aria-label="Bold" title="Bold" onclick={() => withView(inserts.insertBold)}><strong>B</strong></button>
+        <button type="button" class="glyph" aria-label="Italic" title="Italic" onclick={() => withView(inserts.insertItalic)}><em>I</em></button>
+        <IconButton icon="link" label="Insert link" onclick={() => withView(inserts.insertLink)} />
+        <span class="toolbar-rule" aria-hidden="true"></span>
+        <IconButton icon="info" label="Insert cue" onclick={() => withView(inserts.insertCue)} />
+        <IconButton icon="image" label="Insert image" onclick={() => void insertImage()} />
+        <IconButton icon="diagram" label="Insert diagram block" onclick={() => withView(inserts.insertDiagram)} />
+        <IconButton icon="flag" label="Insert take marker" onclick={() => withView(inserts.insertTakeMarker)} />
+      </div>
+    {/if}
+
+    <div class="body">
+      <div class="work">
         <!--
           ONE editor and ONE preview for both modes, shown and hidden with
           CSS. Rendering them from separate `{#if}` branches per mode is what
@@ -684,85 +776,85 @@ import type { PresentationMode } from '../services/settings-types';
             {/if}
           </div>
         </div>
-      {/if}
-    </div>
+      </div>
 
-    {#if panelOpen}
-      <aside class="panel" aria-label="Outline">
-        <div class="panel-head">
-          <p class="panel-title">Outline</p>
-        </div>
+      {#if panelOpen}
+        <aside class="panel" aria-label="Outline">
+          <div class="panel-head">
+            <p class="panel-title">Outline</p>
+          </div>
 
-        <div class="panel-body">
-            {#if outline.length > 0}
-              <ul class="outline">
-                {#each flattenOutline(outline) as entry (entry.node.id)}
-                  <li>
+          <div class="panel-body">
+              {#if outline.length > 0}
+                <ul class="outline">
+                  {#each flattenOutline(outline) as entry (entry.node.id)}
+                    <li>
+                      <button
+                        type="button"
+                        class="outline-item"
+                        style="padding-left: {10 + entry.depth * 14}px"
+                        onclick={() => outlineNavigate(entry.node)}
+                      >
+                        <span class="outline-title">{entry.node.title}</span>
+                        <span class="outline-meta">{sectionDuration(entry.node)}</span>
+                      </button>
+                    </li>
+                  {/each}
+                </ul>
+                <p class="panel-meta">
+                  {cueCount}
+                  {cueCount === 1 ? 'cue' : 'cues'}
+                  {#if takeMarkers.length > 0}
+                    · {takeMarkers.length}
+                    {takeMarkers.length === 1 ? 'take marker' : 'take markers'}
+                  {/if}
+                </p>
+              {:else}
+                <p class="panel-empty">Headings appear here as you write.</p>
+              {/if}
+          </div>
+
+          <!-- Advisory only, and placed accordingly: above the compile status
+               rather than inside it, so prose advice never sits in the same list
+               as a diagnostic that can stop a script rendering. -->
+          <ScriptLintPanel findings={lintFindings} ongoto={(f) => void goToFinding(f)} />
+
+          <div class="panel-foot" aria-live="polite">
+            {#if compileFailed}
+              <!-- Without this the rail went silent on the one status that
+                   stops a script rendering at all. -->
+              <span class="foot-line bad">
+                <Icon name="alert" size={14} />
+                Could not render this script.
+              </span>
+            {:else if $compiled.status === 'compiling'}
+              <span class="foot-line neutral">Reading the script…</span>
+            {:else if $compiled.status === 'ready' && blockingCount === 0 && diagnostics.length === 0}
+              <span class="foot-line good">
+                <Icon name="check" size={14} />
+                Ready to present.
+              </span>
+            {:else if $compiled.status === 'ready'}
+              <ul class="diagnostics">
+                {#each diagnostics as diagnostic (diagnostic.code + String(diagnostic.source?.utf16Start ?? ''))}
+                  <li class="diagnostic {diagnostic.severity}">
+                    <Icon name={diagnostic.severity === 'error' ? 'alert' : 'info'} size={13} />
                     <button
                       type="button"
-                      class="outline-item"
-                      style="padding-left: {10 + entry.depth * 14}px"
-                      onclick={() => outlineNavigate(entry.node)}
+                      class="diagnostic-text"
+                      onclick={() => diagnostic.source && goToOffset(diagnostic.source.utf16Start)}
                     >
-                      <span class="outline-title">{entry.node.title}</span>
-                      <span class="outline-meta">{sectionDuration(entry.node)}</span>
+                      {diagnostic.message}
                     </button>
                   </li>
                 {/each}
               </ul>
-              <p class="panel-meta">
-                {cueCount}
-                {cueCount === 1 ? 'cue' : 'cues'}
-                {#if takeMarkers.length > 0}
-                  · {takeMarkers.length}
-                  {takeMarkers.length === 1 ? 'take marker' : 'take markers'}
-                {/if}
-              </p>
-            {:else}
-              <p class="panel-empty">Headings appear here as you write.</p>
             {/if}
-        </div>
-
-        <!-- Advisory only, and placed accordingly: above the compile status
-             rather than inside it, so prose advice never sits in the same list
-             as a diagnostic that can stop a script rendering. -->
-        <ScriptLintPanel findings={lintFindings} ongoto={(f) => void goToFinding(f)} />
-
-        <div class="panel-foot" aria-live="polite">
-          {#if compileFailed}
-            <!-- Without this the rail went silent on the one status that
-                 stops a script rendering at all. -->
-            <span class="foot-line bad">
-              <Icon name="alert" size={14} />
-              Could not render this script.
-            </span>
-          {:else if $compiled.status === 'compiling'}
-            <span class="foot-line neutral">Reading the script…</span>
-          {:else if $compiled.status === 'ready' && blockingCount === 0 && diagnostics.length === 0}
-            <span class="foot-line good">
-              <Icon name="check" size={14} />
-              Ready to present.
-            </span>
-          {:else if $compiled.status === 'ready'}
-            <ul class="diagnostics">
-              {#each diagnostics as diagnostic (diagnostic.code + String(diagnostic.source?.utf16Start ?? ''))}
-                <li class="diagnostic {diagnostic.severity}">
-                  <Icon name={diagnostic.severity === 'error' ? 'alert' : 'info'} size={13} />
-                  <button
-                    type="button"
-                    class="diagnostic-text"
-                    onclick={() => diagnostic.source && goToOffset(diagnostic.source.utf16Start)}
-                  >
-                    {diagnostic.message}
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </div>
-      </aside>
-    {/if}
-  </div>
+          </div>
+        </aside>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <!-- §21.4 revision browser -->
@@ -917,10 +1009,26 @@ import type { PresentationMode } from '../services/settings-types';
     background: var(--bg-panel);
   }
 
-  .loading {
-    margin: var(--space-6) var(--page-x);
+  /*
+   * Full-bleed and borderless on purpose: this is the route standing in for
+   * itself for a moment, not a card floating over it. It fills the same box the
+   * header and body will, so the cut to the loaded editor moves nothing.
+   */
+  .opening {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    display: grid;
+    place-items: center;
+    padding: var(--space-6) var(--page-x);
+    background: var(--bg-panel);
+  }
+
+  .opening-message {
+    margin: 0;
     color: var(--text-muted);
     font-size: var(--text-sm);
+    line-height: var(--lh-label);
   }
 
   .panes {

@@ -1,7 +1,8 @@
 /**
- * PageHeader.svelte — the heading, and the edit that has to be abandonable.
+ * PageHeader.svelte — the heading, the edit that has to be abandonable, and the
+ * metadata row that has to hold its height.
  *
- * Three defects met in this component and none of them is visible from the
+ * Three defects met in the heading and none of them is visible from the
  * outside: with `editableTitle` set, the `<h1>` was REPLACED by an `<input>`,
  * so the Editor — the screen an operator lives in — had no level-one heading
  * at all and heading navigation skipped straight over it. The edit could not be
@@ -10,6 +11,15 @@
  *
  * All three are structural rather than visual, which is why they survived: the
  * header looked right in every screenshot.
+ *
+ * The metadata row is the fourth. The editor's metadata line is derived from
+ * the COMPILE, not from the document, so it lands after the text does and
+ * leaves again the moment a script is emptied. While the row was conditional,
+ * each of those was a ~20px change in the header's height — and the insert
+ * toolbar sits directly beneath it, which is why the jump was most visible
+ * there (issue #140). Reserving the row is opt-in, so the cases below also pin
+ * the default: a header that never gains or loses metadata does not carry an
+ * empty row it will never use.
  */
 import { render } from '@testing-library/svelte';
 import { flushSync, tick } from 'svelte';
@@ -187,5 +197,72 @@ describe('PageHeader — focus treatment', () => {
     const { container } = renderHeader({ editableTitle: true });
     // No opt-in marker: tokens.css gives an unmarked input the quiet treatment.
     expect(titleInput(container).getAttribute('data-focus')).toBeNull();
+  });
+});
+
+describe('the page header metadata row', () => {
+  it('renders no row at all when there is no metadata and none is expected', () => {
+    const { container } = render(PageHeader, { props: { title: 'Settings' } });
+    expect(container.querySelector('.meta')).toBeNull();
+  });
+
+  it('renders the metadata when it has some, without being asked to reserve space', () => {
+    const { container } = render(PageHeader, {
+      props: { title: 'Calibrate this display', meta: 'Studio Display' },
+    });
+    expect(container.querySelector('.meta')?.textContent).toBe('Studio Display');
+  });
+
+  it('holds an empty row when space is reserved and there is nothing to say yet', () => {
+    const { container } = render(PageHeader, {
+      props: { title: 'Launch keynote', reserveMetaSpace: true },
+    });
+    const row = container.querySelector('.meta');
+    expect(row).not.toBeNull();
+    expect(row?.textContent).toBe('');
+  });
+
+  it('keeps the reserved empty row out of the accessibility tree', () => {
+    // Height is a layout concern. A blank line is not something to announce.
+    const { container } = render(PageHeader, {
+      props: { title: 'Launch keynote', reserveMetaSpace: true },
+    });
+    expect(container.querySelector('.meta')?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('announces the metadata once it arrives', () => {
+    const { container } = render(PageHeader, {
+      props: { title: 'Launch keynote', meta: '412 words · 2m 45s · 3 cues', reserveMetaSpace: true },
+    });
+    const row = container.querySelector('.meta');
+    expect(row?.textContent).toBe('412 words · 2m 45s · 3 cues');
+    expect(row?.getAttribute('aria-hidden')).toBeNull();
+  });
+
+  it('keeps the row across metadata arriving and leaving again', async () => {
+    /*
+     * The transition, which is where the height was lost. The row has to be
+     * there before the compile answers and still be there after a script is
+     * emptied back to no spoken words — that second direction is the one
+     * waiting for the first compile cannot cover on its own.
+     *
+     * jsdom does not lay out, so this pins the row's PRESENCE and its
+     * announcement; that the present row has a height is the `min-height` on
+     * the single `.meta` rule, and the browser geometry test covers it.
+     */
+    const { container, rerender } = render(PageHeader, {
+      props: { title: 'Launch keynote', reserveMetaSpace: true },
+    });
+    expect(container.querySelector('.meta')?.getAttribute('aria-hidden')).toBe('true');
+
+    await rerender({ title: 'Launch keynote', meta: '412 words', reserveMetaSpace: true });
+    expect(container.querySelector('.meta')?.textContent).toBe('412 words');
+    expect(container.querySelector('.meta')?.getAttribute('aria-hidden')).toBeNull();
+
+    await rerender({ title: 'Launch keynote', meta: '', reserveMetaSpace: true });
+    const emptied = container.querySelector('.meta');
+    expect(emptied).not.toBeNull();
+    expect(emptied?.textContent).toBe('');
+    expect(emptied?.getAttribute('aria-hidden')).toBe('true');
   });
 });

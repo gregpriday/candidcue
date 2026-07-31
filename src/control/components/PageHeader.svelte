@@ -13,12 +13,31 @@
     onback?: () => void;
     editableTitle?: boolean;
     ontitlechange?: (title: string) => void;
+    /**
+     * Hold the metadata row's height even while there is nothing to put in it.
+     *
+     * Opt-in, because a header that never gains or loses its metadata should
+     * not carry an empty row it will never use. The editor's metadata comes
+     * from the compile rather than from the document, so it arrives late and
+     * can leave again — every keystroke that empties the script would otherwise
+     * resize the header and shove the insert toolbar under it.
+     */
+    reserveMetaSpace?: boolean;
     status?: Snippet;
     actions?: Snippet;
   }
 
-  let { title, meta, backLabel, onback, editableTitle = false, ontitlechange, status, actions }: Props =
-    $props();
+  let {
+    title,
+    meta,
+    backLabel,
+    onback,
+    editableTitle = false,
+    ontitlechange,
+    reserveMetaSpace = false,
+    status,
+    actions,
+  }: Props = $props();
 
   /*
    * The input is a DRAFT of `title`, not the thing itself.
@@ -106,7 +125,11 @@
           {title}
         {/if}
       </h1>
-      {#if meta}<p class="meta">{meta}</p>{/if}
+      {#if meta}
+        <p class="meta">{meta}</p>
+      {:else if reserveMetaSpace}
+        <p class="meta" aria-hidden="true"></p>
+      {/if}
     </div>
     <div class="right">
       {#if status}<div class="status">{@render status()}</div>{/if}
@@ -216,7 +239,8 @@
   .meta {
     margin: 0;
     font-size: var(--text-sm);
-    line-height: 18px;
+    line-height: var(--lh-label);
+    min-height: var(--lh-label);
     color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
