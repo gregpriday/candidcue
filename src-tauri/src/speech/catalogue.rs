@@ -28,7 +28,7 @@ const CATALOGUE_JSON: &str = include_str!("../../models/catalogue.json");
 /// Bumped when the shape changes in a way `model-catalogue.mjs` must be taught.
 const SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Catalogue {
     pub schema_version: u32,
@@ -43,7 +43,7 @@ pub struct Catalogue {
     pub models: Vec<ModelEntry>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelEntry {
     /// Stable short identifier. Also the directory the model installs into.
@@ -57,7 +57,7 @@ pub struct ModelEntry {
     pub attribution: Attribution,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Archive {
     pub file_name: String,
@@ -68,7 +68,7 @@ pub struct Archive {
     pub bytes: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelFile {
     pub name: String,
@@ -82,7 +82,7 @@ pub struct ModelFile {
 /// CC-BY-SA require the notice to travel with the files, which is why
 /// `ATTRIBUTION.md` is written beside the model at unpack time from exactly
 /// these fields rather than being maintained by hand somewhere else.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Attribution {
     pub title: String,
@@ -96,7 +96,7 @@ pub struct Attribution {
     pub modified: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct License {
     pub id: String,
@@ -136,14 +136,143 @@ impl Catalogue {
 
 impl ModelEntry {
     /// Where the bundler puts this model, relative to the resource root.
+    ///
+    /// Only meaningful for a build that opts into shipping one: stock
+    /// `tauri.conf.json` bundles no models at all (§152), and the resolver
+    /// treats this as a fallback to check rather than a place to expect.
     pub fn resource_dir(&self) -> String {
         format!("models/{}", self.install_dir)
+    }
+
+    /// Total size on disk once installed, in bytes.
+    ///
+    /// The archive's own `bytes` is the DOWNLOAD size and is much smaller —
+    /// 128 MB of bz2 unpacks to ~161 MB here. Both are shown, because a user
+    /// deciding whether to start needs the transfer and a user deciding
+    /// whether to delete needs the footprint.
+    pub fn installed_bytes(&self) -> u64 {
+        self.files.iter().map(|file| file.bytes).sum()
+    }
+
+    /// The archive member this catalogue file is unpacked from.
+    ///
+    /// Composed rather than stored: every upstream bundle puts its files
+    /// directly under one root directory, and `every_entry_is_well_formed`
+    /// already refuses a `rootDir` or `name` that could escape it.
+    pub fn member_path(&self, file: &ModelFile) -> String {
+        format!("{}/{}", self.archive.root_dir, file.name)
+    }
+
+    /// The catalogue file this archive member is, if the catalogue wants it.
+    ///
+    /// Everything else in the archive — test WAVs, export scripts, symlinks —
+    /// is never written to disk. The digest already proves these are the
+    /// pinned bytes; naming the members is the separate claim that they are
+    /// safe to unpack.
+    pub fn file_for_member(&self, member: &str) -> Option<&ModelFile> {
+        self.files
+            .iter()
+            .find(|file| self.member_path(file) == member)
+    }
+
+    /// Where this model installs to under a models root.
+    ///
+    /// Built from `install_dir`, which `every_entry_is_well_formed` pins to a
+    /// single path segment with no separators, no leading dot and no NUL — so
+    /// this cannot climb out of `root` however the catalogue is edited. A raw
+    /// id off the IPC boundary never reaches this; callers resolve an entry
+    /// first and pass the entry.
+    pub fn install_path(&self, root: &std::path::Path) -> std::path::PathBuf {
+        root.join(&self.install_dir)
     }
 }
 
 /// The model this build ships.
 pub fn default_model() -> &'static ModelEntry {
     catalogue().default_model()
+}
+
+/// The name the notice is written under, inside the model directory.
+pub const ATTRIBUTION_FILE: &str = "ATTRIBUTION.md";
+
+/// Render the licence notice that travels with an installed model.
+///
+/// A second renderer, beside `scripts/model-catalogue.mjs`, and deliberately.
+/// The script writes the notice for a model fetched into the source tree at
+/// dev time; this writes it for one downloaded into app data on a user's
+/// machine, and only one of those two runs on a machine that has node. Both
+/// read the SAME catalogue, so they cannot disagree about a licence — which is
+/// the property that matters and the one
+/// `the_runtime_notice_states_every_fact_the_committed_one_does` pins.
+///
+/// Byte-identity between the two is NOT asserted, because it would be a lie
+/// dressed as a guarantee: the wording legitimately differs (the script can
+/// tell you to re-run `pnpm models:fetch`; the app cannot), and pinning the
+/// prose would make every copy-edit a cross-language chore that teaches people
+/// to update the fixture rather than think about it.
+pub fn render_attribution(model: &ModelEntry) -> String {
+    let a = &model.attribution;
+    let mut out = String::new();
+    out.push_str(
+        "<!-- Generated by CandidCue from src-tauri/models/catalogue.json.\n     \
+         Do not edit by hand. -->\n\n\
+         # Speech recognition model\n\n\
+         CandidCue transcribes speech on-device using a model it does not own. This file\n\
+         travels with the model because redistribution requires the attribution to travel\n\
+         with it, and the upstream archive ships no licence file of its own.\n\n\
+         It lives inside the model directory deliberately: the model is downloaded after\n\
+         installation rather than shipped inside the app, so a notice kept anywhere else\n\
+         would describe an artefact that may not be present.\n\n\
+         ## The model\n\n",
+    );
+    out.push_str(&format!("**{}**\n\n", a.title));
+    out.push_str(&format!("- Model: `{}`\n", model.model_name));
+    out.push_str(&format!("- Languages: {}\n", model.languages.join(", ")));
+    out.push_str(&format!("- Authors: {}\n", a.author));
+    out.push_str(&format!("- Source: <{}>\n", a.source_url));
+    if let Some(via) = &a.distributed_via {
+        out.push_str(&format!(
+            "- Distributed via: <{}>, as `{}`\n",
+            via, model.archive.root_dir
+        ));
+    }
+    out.push_str(&format!(
+        "- **Licence: {}** (`{}`) — <{}>\n\n",
+        a.license.name, a.license.id, a.license.url
+    ));
+    out.push_str(if a.modified {
+        "CandidCue redistributes these model weights **with modifications**.\n"
+    } else {
+        "CandidCue redistributes these model weights **unmodified**.\n"
+    });
+    if let Some(note) = &a.license_note {
+        out.push_str(&format!("\n{note}\n"));
+    }
+    out.push_str(
+        "\n## Integrity\n\n\
+         The archive these files came from is pinned in the catalogue by SHA-256, and\n\
+         the download refuses to unpack bytes that do not match:\n\n",
+    );
+    out.push_str(&format!("- Archive: `{}`\n", model.archive.file_name));
+    out.push_str(&format!("- SHA-256: `{}`\n", model.archive.sha256));
+    out.push_str(&format!("- Size: {} bytes\n", model.archive.bytes));
+    out.push_str(
+        "\n## The runtime\n\n\
+         Inference runs through **sherpa-onnx** (<https://github.com/k2-fsa/sherpa-onnx>),\n\
+         Apache-2.0, linked statically via the `sherpa-onnx` Rust crate, which in turn\n\
+         embeds **ONNX Runtime** (MIT).\n\n\
+         ## Licence text\n\n",
+    );
+    out.push_str(&format!(
+        "The full text of the {} is at <{}>.\n\n",
+        a.license.name, a.license.url
+    ));
+    out.push_str(
+        "A distributed build must include that text. If CandidCue grows a general\n\
+         third-party licence screen, this entry belongs in it; until then this file is\n\
+         the record, and it travels with the model.\n",
+    );
+    out
 }
 
 #[cfg(test)]

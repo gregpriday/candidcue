@@ -34,6 +34,13 @@
   import { createAndOpenScript, importMarkdown } from '../lib/app-actions';
   import { chooseStageDisplay } from '../lib/start-take';
   import * as stageService from '../services/stage';
+  import {
+    formatBytes,
+    getSpeechModelStatus,
+    isBusy as isModelBusy,
+    phaseLabel,
+    type SpeechModelStatus,
+  } from '../services/speech-models';
   import type { DisplayDescriptor } from '../services/stage-types';
   import { markWelcomed } from '../stores/app-status';
   import { navigate } from '../stores/router';
@@ -144,6 +151,71 @@
 
   const displayState = $derived<RowState>(resolveDisplayState());
 
+  /**
+   * The speech model is a download now (#152), so first run has to say so.
+   *
+   * This row LINKS to Settings rather than carrying its own Download button.
+   * The install is a state machine — progress, verification, unpacking, cancel,
+   * failure, retry — and running it from two screens means two copies of that
+   * logic drifting apart. One place owns it; this says whether it has happened.
+   *
+   * Non-blocking, like every other row here: writing, importing and the stage
+   * all work without a recogniser. Only voice following needs one.
+   */
+  let modelStatus = $state<SpeechModelStatus | null>(null);
+
+  $effect(() => {
+    void getSpeechModelStatus()
+      .then((status) => (modelStatus = status))
+      .catch(() => {
+        // An IPC failure is not evidence about the model. Leave the row on
+        // "Checking…" rather than accusing the installation of being broken.
+      });
+  });
+
+  const speechState = $derived<RowState>(resolveSpeechState());
+
+  function resolveSpeechState(): RowState {
+    if (!modelStatus) {
+      return {
+        tone: 'neutral',
+        pill: 'Checking…',
+        detail: 'Looking for the speech model.',
+        emphasis: 'quiet',
+        action: 'Open speech settings',
+      };
+    }
+    if (isModelBusy(modelStatus)) {
+      return {
+        tone: 'neutral',
+        pill: phaseLabel(modelStatus),
+        detail: 'The speech model is installing. You can carry on writing meanwhile.',
+        emphasis: 'quiet',
+        action: 'View progress',
+      };
+    }
+    if (modelStatus.installed) {
+      return {
+        tone: 'neutral',
+        pill: 'Installed',
+        detail: 'Voice following is ready. Transcription happens on this machine.',
+        emphasis: 'quiet',
+        action: 'Manage model',
+      };
+    }
+    return {
+      tone: 'accent',
+      pill: 'Set up',
+      // The size is the whole reason this is a separate step, so it is named
+      // rather than buried behind the link.
+      detail: `Voice following needs a one-time ${formatBytes(
+        modelStatus.downloadBytes,
+      )} download. Everything else works without it.`,
+      emphasis: 'setup',
+      action: 'Download speech model',
+    };
+  }
+
   function resolveDisplayState(): RowState {
     if (readerMode) {
       // Reader mode presents in an ordinary window at desk distance, so there
@@ -225,6 +297,10 @@
     void navigate({ name: 'settings', section: 'stage' });
   }
 
+  function openSpeechSettings(): void {
+    void navigate({ name: 'settings', section: 'speech' });
+  }
+
   function skipToLibrary(): void {
     markWelcomed();
     void navigate({ name: 'library', view: 'all' });
@@ -295,6 +371,27 @@
           <StatusPill tone={displayState.tone} label={displayState.pill} />
           <button type="button" class="link" onclick={openDisplaySettings}>
             {displayState.action}
+          </button>
+        </span>
+      </li>
+
+      <!--
+        Like the display row, this one's state ARRIVES — the status comes back
+        over IPC, and an install running in the background moves it again — so
+        the detail is a polite live region for the same reason.
+      -->
+      <li class="readiness-item" class:setup={speechState.emphasis === 'setup'}>
+        <span class="readiness-icon"><Icon name="mic" size={16} /></span>
+        <span class="readiness-text">
+          <span class="readiness-title">Speech model</span>
+          <span class="readiness-detail" role="status" aria-live="polite">
+            {speechState.detail}
+          </span>
+        </span>
+        <span class="readiness-status">
+          <StatusPill tone={speechState.tone} label={speechState.pill} />
+          <button type="button" class="link" onclick={openSpeechSettings}>
+            {speechState.action}
           </button>
         </span>
       </li>

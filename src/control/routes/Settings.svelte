@@ -68,6 +68,18 @@
   import * as settingsService from '../services/settings';
   import * as stageService from '../services/stage';
   import { getSpeechEngineStatus, type SpeechEngineStatus } from '../services/stt/local';
+  import {
+    cancelSpeechModelDownload,
+    deleteSpeechModel,
+    formatBytes,
+    getSpeechModelStatus,
+    isBusy as isModelBusy,
+    onSpeechModelProgress,
+    phaseLabel,
+    progressFraction,
+    startSpeechModelDownload,
+    type SpeechModelStatus,
+  } from '../services/speech-models';
   import { getVoiceFacade } from '../services/voice-facade';
   import type { DisplayDescriptor } from '../services/stage-types';
   import {
@@ -154,21 +166,94 @@
    */
   let recentErrors = $state<ErrorDiagnosticEntry[]>([]);
 
+  /* ------------------------------------------------------- speech model */
+
+  let modelStatus = $state<SpeechModelStatus | null>(null);
+  let modelActionError = $state<string | null>(null);
+  let modelActionBusy = $state(false);
+  let confirmingModelDelete = $state(false);
+
+  async function refreshModelStatus(): Promise<void> {
+    try {
+      modelStatus = await getSpeechModelStatus();
+    } catch {
+      // Leave whatever was last known rather than blanking the panel: an IPC
+      // hiccup is not evidence the model went away.
+    }
+  }
+
+  /**
+   * Re-read the engine status too.
+   *
+   * The two answer different questions — "is a model on disk" and "can this
+   * installation transcribe" — and an install changes both. Reading only the
+   * first would leave the pill above still saying "Not installed" after a
+   * download that just finished.
+   */
+  async function refreshSpeechStatus(): Promise<void> {
+    await refreshModelStatus();
+    try {
+      engineStatus = await getSpeechEngineStatus();
+    } catch {
+      engineStatus = {
+        available: false,
+        loaded: false,
+        model: 'unknown',
+        detail: 'CandidCue could not ask the backend about the speech model.',
+      };
+    }
+  }
+
+  async function runModelAction(
+    action: () => Promise<SpeechModelStatus>,
+  ): Promise<void> {
+    modelActionBusy = true;
+    modelActionError = null;
+    try {
+      modelStatus = await action();
+    } catch (err) {
+      modelActionError = err instanceof Error ? err.message : String(err);
+    } finally {
+      modelActionBusy = false;
+    }
+    await refreshSpeechStatus();
+  }
+
   $effect(() => {
     void loadSettings();
     // A rejection here is an IPC failure rather than a broken bundle — a
     // missing model comes back as data — but without this the readout sits on
     // "Checking…" forever and raises an unhandled rejection behind it.
-    void getSpeechEngineStatus()
-      .then((status) => (engineStatus = status))
-      .catch(() => {
-        engineStatus = {
-          available: false,
-          loaded: false,
-          model: 'unknown',
-          detail: 'CandidCue could not ask the backend about the speech model.',
-        };
-      });
+    void refreshSpeechStatus();
+  });
+
+  /**
+   * Follow an install that is already running.
+   *
+   * Subscribed for the life of the screen rather than only while a download is
+   * in flight: the install may have been started from Welcome, or from this
+   * screen before it was navigated away from and back.
+   *
+   * Every event carries the whole status, so this assigns rather than merges.
+   */
+  $effect(() => {
+    let stop: (() => void) | null = null;
+    let disposed = false;
+    void onSpeechModelProgress((status) => {
+      modelStatus = status;
+      // A finished install changes what the engine can do, and only Rust knows
+      // it finished.
+      if (!isModelBusy(status)) void refreshSpeechStatus();
+    }).then((unlisten) => {
+      // Awaiting the listener can outlive the effect if the screen is left
+      // immediately; without this the subscription leaks.
+      if (disposed) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      disposed = true;
+      stop?.();
+    };
   });
 
   /** Diagnostics are only fetched for the screen that shows them (§47.10). */
@@ -1490,37 +1575,123 @@
       {:else if section === 'speech'}
         <Section
           title="Speech"
-          description="CandidCue transcribes on this machine. The recogniser is part of the app — there is no account to create, no key to paste, and no audio leaves your computer."
+          description="CandidCue transcribes on this machine. There is no account to create and no key to paste — but the recogniser is a large download, so it is fetched once after installation rather than shipped inside the app."
         >
           {#snippet actions()}
-            {#if engineStatus?.available}
-              <StatusPill
-                tone="success"
-                label={engineStatus.loaded ? 'Ready' : 'Installed'}
-              />
-            {:else if engineStatus}
+            {#if modelStatus && isModelBusy(modelStatus)}
+              <StatusPill tone="neutral" label={phaseLabel(modelStatus)} />
+            {:else if engineStatus?.available}
+              <StatusPill tone="success" label={engineStatus.loaded ? 'Ready' : 'Installed'} />
+            {:else if modelStatus}
               <StatusPill tone="warning" label="Not installed" />
             {:else}
               <StatusPill tone="neutral" label="Checking…" />
             {/if}
           {/snippet}
 
-          {#if engineStatus && !engineStatus.available}
-            <p class="inline-alert" role="alert">
-              The speech model is missing from this installation, so voice tracking cannot run.
-              Reinstalling CandidCue will restore it.
+          {#if modelStatus}
+            {@const busy = isModelBusy(modelStatus)}
+            {@const fraction = progressFraction(modelStatus)}
+
+            {#if !modelStatus.supported}
+              <p class="inline-alert" role="alert">
+                This version of CandidCue cannot run {modelStatus.modelId} yet.
+              </p>
+            {:else if busy}
+              <p class="hint-line" role="status" aria-live="polite">
+                {phaseLabel(modelStatus)}
+                {#if fraction !== null}
+                  — {formatBytes(modelStatus.progressBytes)} of {formatBytes(
+                    modelStatus.progressTotal,
+                  )}
+                {/if}
+              </p>
+              <!-- A determinate bar only while there is a real fraction to
+                   show. `installing` and `validating` measure nothing, and a
+                   bar snapping back to empty there reads as a restart. -->
+              <progress
+                class="model-progress"
+                max="1"
+                value={fraction ?? undefined}
+                aria-label="Speech model install progress"
+              ></progress>
+              <div class="model-actions">
+                <Button variant="default" onclick={() => void runModelAction(cancelSpeechModelDownload)}>
+                  Stop
+                </Button>
+              </div>
+            {:else if modelStatus.installed}
+              <p class="hint-line">
+                Installed{modelStatus.source === 'bundled'
+                  ? ' with the app'
+                  : ''} — {formatBytes(modelStatus.installedBytes)} on disk.
+              </p>
+              {#if modelStatus.source !== 'bundled'}
+                <div class="model-actions">
+                  {#if confirmingModelDelete}
+                    <p class="hint-line">
+                      Remove the speech model? Voice following will not work until it is
+                      downloaded again.
+                    </p>
+                    <Button
+                      variant="danger-primary"
+                      disabled={modelActionBusy}
+                      onclick={() => {
+                        confirmingModelDelete = false;
+                        void runModelAction(deleteSpeechModel);
+                      }}
+                    >
+                      Remove it
+                    </Button>
+                    <Button variant="default" onclick={() => (confirmingModelDelete = false)}>
+                      Keep it
+                    </Button>
+                  {:else}
+                    <Button
+                      variant="danger"
+                      disabled={modelActionBusy}
+                      onclick={() => (confirmingModelDelete = true)}
+                    >
+                      Remove download
+                    </Button>
+                  {/if}
+                </div>
+              {/if}
+            {:else}
+              <p class="inline-alert" role="alert">
+                The speech model has not been downloaded yet, so voice following cannot run.
+                Everything else — writing, the stage, and fixed-speed scrolling — works without it.
+              </p>
+              {#if modelStatus.error}
+                <p class="hint-line">{modelStatus.error.message}</p>
+              {/if}
+              <div class="model-actions">
+                <Button
+                  variant="primary"
+                  disabled={modelActionBusy}
+                  onclick={() => void runModelAction(startSpeechModelDownload)}
+                >
+                  Download ({formatBytes(modelStatus.downloadBytes)})
+                </Button>
+              </div>
+            {/if}
+
+            {#if modelActionError}
+              <p class="inline-alert" role="alert">{modelActionError}</p>
+            {/if}
+
+            <p class="hint-line">
+              Recogniser: <code>{modelStatus.modelName}</code>. It transcribes {modelStatus.languages.join(
+                ' and ',
+              )}, runs only while a take is running, and uses a small fraction of one CPU core.
             </p>
-            {#if engineStatus.detail}<p class="hint-line">{engineStatus.detail}</p>{/if}
           {/if}
 
           <p class="hint-line">
-            Recogniser: <code>{engineStatus?.model ?? '—'}</code>. English only. It runs while a take
-            is running and uses a small fraction of one CPU core.
-          </p>
-          <p class="hint-line">
-            Your voice is never uploaded, and nothing is recorded or saved — the words are used only
-            to work out where in the script you are. They are kept only if you turn on
-            transcript saving under Data &amp; privacy.
+            The download is the only time CandidCue contacts the network for speech. Your voice is
+            never uploaded, and nothing is recorded or saved — the words are used only to work out
+            where in the script you are. They are kept only if you turn on transcript saving under
+            Data &amp; privacy.
           </p>
         </Section>
       {:else if section === 'audio'}
@@ -2729,6 +2900,39 @@
     font-size: var(--text-meta);
     line-height: var(--lh-meta);
     color: var(--text-muted);
+  }
+
+  /* Speech-model install (#152). */
+  .model-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  /*
+   * Styled for both states. With no `value` a progress element is
+   * indeterminate, which is exactly what the install and validate phases
+   * want — they have no fraction to report and a bar reading zero there
+   * would look like the download had restarted.
+   */
+  .model-progress {
+    width: 100%;
+    height: 6px;
+    appearance: none;
+    border: none;
+    border-radius: 3px;
+    background: var(--surface-sunken);
+  }
+
+  .model-progress::-webkit-progress-bar {
+    border-radius: 3px;
+    background: var(--surface-sunken);
+  }
+
+  .model-progress::-webkit-progress-value {
+    border-radius: 3px;
+    background: var(--accent);
   }
 
   /*

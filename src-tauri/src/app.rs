@@ -46,6 +46,12 @@ pub fn run() {
             commands::start_transcription,
             commands::push_transcription_audio,
             commands::stop_transcription,
+            // Speech-model install (§152): the recogniser is downloaded after
+            // installation rather than bundled.
+            commands::get_speech_model_status,
+            commands::start_speech_model_download,
+            commands::cancel_speech_model_download,
+            commands::delete_speech_model,
             // Speech-to-script alignment (crates/cc-align, hosted in src/align)
             commands::start_alignment,
             commands::stop_alignment,
@@ -120,6 +126,18 @@ pub fn run() {
             // streaming session. It stays in Rust because the alignment engine
             // runs beside it and the two share an audio clock.
             handle.manage(SpeechEngine::new());
+
+            // Owns the "is a model downloading, and how far has it got" state
+            // that Settings and Welcome both read (§152). Managed rather than
+            // static so a download cannot outlive the app that started it.
+            handle.manage(crate::speech::model_manager::SpeechModelManager::new());
+
+            // A staging directory belongs to an install that did not finish.
+            // Extraction is never resumed, so anything here is garbage that
+            // would otherwise hold ~161 MB until the next successful install.
+            if let Err(err) = crate::speech::model_store::clear_staging(&data_dir) {
+                tracing::warn!(error = %err, "could not sweep model staging directories");
+            }
 
             // The alignment engine runs beside the recogniser that feeds it, so a
             // transcript frame and the audio clock it is timed against never

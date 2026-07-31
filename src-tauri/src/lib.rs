@@ -13,6 +13,7 @@ pub mod database;
 pub mod dialogs;
 pub mod diagnostics;
 pub mod errors;
+pub mod net;
 pub mod scripts;
 pub mod sessions;
 pub mod speech;

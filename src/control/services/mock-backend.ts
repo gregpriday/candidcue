@@ -32,6 +32,9 @@ import type {
   StageWindowState,
 } from './stage-types';
 import type { SaveResult, ScriptListFilter, ScriptPage, ScriptSort } from './scripts-types';
+// Type-only, so this does not close a runtime cycle: `speech-models` reaches
+// this module through a dynamic import, and types are erased.
+import type { SpeechModelStatus } from './speech-models';
 
 const STORAGE_KEY = 'candidcue.mock.scripts.v1';
 
@@ -281,6 +284,62 @@ export const mockSpeech = {
    */
   status(): { available: boolean; loaded: boolean; model: string } {
     return { available: true, loaded: false, model: `${BUNDLED_MODEL_NAME} (mock)` };
+  },
+};
+
+/* ----------------------------------------------------- speech model install */
+
+/**
+ * The model lifecycle (#152), for a window with no Rust behind it.
+ *
+ * Stateful rather than a constant, because the screen it backs is a state
+ * machine and a mock that always answers "installed" cannot exercise it. It
+ * does NOT simulate progress on a timer: browser dev has no event bus to
+ * publish `speech://model-progress` on, so a fake in-flight state would be one
+ * the UI could never leave. Start and delete flip the flag; the screen re-reads
+ * and sees the result, which is the honest half of the behaviour.
+ *
+ * Defaults to installed so existing browser-dev flows keep working; the tests
+ * that care about the empty state call `reset(false)` first.
+ */
+const MOCK_MODEL_DOWNLOAD_BYTES = 133_895_136;
+const MOCK_MODEL_INSTALLED_BYTES = 169_347_218;
+
+let mockModelInstalled = true;
+
+function mockModelStatus(): SpeechModelStatus {
+  return {
+    modelId: 'x-asr-480ms',
+    modelName: `${BUNDLED_MODEL_NAME} (mock)`,
+    languages: ['en', 'zh'],
+    phase: mockModelInstalled ? 'installed' : 'notInstalled',
+    source: mockModelInstalled ? 'downloaded' : null,
+    installed: mockModelInstalled,
+    supported: true,
+    downloadBytes: MOCK_MODEL_DOWNLOAD_BYTES,
+    installedBytes: MOCK_MODEL_INSTALLED_BYTES,
+    progressBytes: 0,
+    progressTotal: 0,
+    operationId: null,
+    error: null,
+  };
+}
+
+export const mockSpeechModels = {
+  status: mockModelStatus,
+  /** No network in browser dev, so this completes immediately. */
+  start(): SpeechModelStatus {
+    mockModelInstalled = true;
+    return mockModelStatus();
+  },
+  cancel: mockModelStatus,
+  remove(): SpeechModelStatus {
+    mockModelInstalled = false;
+    return mockModelStatus();
+  },
+  /** Test seam: put the mock back into a known state. */
+  reset(installed = true): void {
+    mockModelInstalled = installed;
   },
 };
 

@@ -47,8 +47,29 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::errors::{AppError, ErrorCategory};
+use catalogue::catalogue;
+
+/// The model is not on this machine — and that is now an ordinary state.
+///
+/// It used to mean "your installation is damaged", because every build carried
+/// the weights and their absence could only be corruption. Since §152 the
+/// stock installer ships none, so the honest message points at the download
+/// rather than telling the user to reinstall the app. Recoverable, because it
+/// genuinely is: Settings has the button.
+fn not_installed() -> AppError {
+    AppError::structured(
+        "STT_MODEL_NOT_INSTALLED",
+        ErrorCategory::Validation,
+        "The speech model has not been downloaded yet. \
+         Open Settings › Speech to install it.",
+        true,
+    )
+}
 
 pub mod catalogue;
+pub mod model_download;
+pub mod model_manager;
+pub mod model_store;
 pub mod session;
 
 /// The one sample rate the app captures and streams at.
@@ -119,12 +140,20 @@ impl SpeechEngine {
         }
     }
 
-    /// Resolve a bundled model's directory for this installation.
+    /// Find this model's directory on this machine.
     ///
-    /// Always through Tauri's resource resolver, never by reasoning about the
-    /// executable's path: the answer differs between `tauri dev`, a macOS
-    /// `.app`, an MSI install and a Linux package, and the resolver is the only
-    /// thing that knows which one it is in.
+    /// This used to be one line: resolve the resource directory and hand it
+    /// back, on the assumption that every model this build knows about is
+    /// inside the application bundle. §152 removed that assumption — stock
+    /// builds bundle no models at all — so the question changed from "where
+    /// would the bundler have put it" to "where, if anywhere, IS it".
+    ///
+    /// `model_store::resolve` answers that, preferring what this machine
+    /// downloaded and falling back to a bundled resource for the builds that
+    /// still ship one. The resource path still comes from Tauri's resolver
+    /// rather than from reasoning about the executable's location, because the
+    /// answer differs between `tauri dev`, a macOS `.app`, an MSI install and
+    /// a Linux package.
     ///
     /// The model is a parameter rather than a constant because which one is
     /// wanted is a runtime question — even while there is only one answer to
@@ -134,8 +163,26 @@ impl SpeechEngine {
         app: &tauri::AppHandle<R>,
         model: &BundledModel,
     ) -> Result<PathBuf, AppError> {
+        // The bundle manifest and the fetch catalogue agree at the default,
+        // and `the_resource_dir_is_the_catalogue_install_dir` pins that. An
+        // entry that is genuinely absent from the catalogue can still be
+        // resolved the old way, so a model added to `cc_stt` before the
+        // catalogue catches up degrades to "bundled only" rather than to
+        // "unfindable".
+        let entry = catalogue()
+            .models
+            .iter()
+            .find(|entry| entry.model_name == model.id);
+        if let Some(entry) = entry {
+            if let Some(found) = model_manager::resolve_for(app, entry) {
+                return Ok(found.dir);
+            }
+            return Err(not_installed());
+        }
+
         use tauri::Manager as _;
-        app.path()
+        let dir = app
+            .path()
             .resolve(model.resource_dir, tauri::path::BaseDirectory::Resource)
             .map_err(|err| {
                 AppError::structured(
@@ -144,7 +191,29 @@ impl SpeechEngine {
                     format!("The speech model could not be located in this installation: {err}"),
                     false,
                 )
-            })
+            })?;
+        if cc_stt::local::ModelFiles::detect(&dir).is_err() {
+            return Err(not_installed());
+        }
+        Ok(dir)
+    }
+
+    /// Evict the resident recogniser if it is this model.
+    ///
+    /// Called after a model is installed or deleted. The cache holds an `Arc`
+    /// to graphs loaded from a directory that has just been replaced or
+    /// removed, and keeping it would mean the next take runs on the old
+    /// weights — or on files that are no longer there.
+    ///
+    /// A take already running keeps its own `Arc` and finishes on the model it
+    /// started with, which is the only safe answer: swapping a recogniser out
+    /// from under a live session would change what the engine is hearing
+    /// halfway through.
+    pub fn evict_if_loaded(&self, model_id: &str) {
+        let mut slot = self.recognizer.lock().expect("stt model poisoned");
+        if slot.as_ref().is_some_and(|c| c.model_id == model_id) {
+            *slot = None;
+        }
     }
 
     /// Load the requested model if it is not already resident, and hand back a
@@ -347,20 +416,32 @@ mod tests {
         assert!(decode_base64("not base64!!").is_err());
     }
 
-    /// Every model the catalogue offers must actually be in the bundle.
+    /// The stock installer ships NO speech model (§152).
     ///
-    /// If the two drift, the app builds, installs, and fails to transcribe
-    /// anything — with a resource resolver that reports success and a file that
-    /// is not there.
+    /// This is the inverse of the test that used to be here, which required
+    /// every registered model to appear in `bundle.resources`. That was the
+    /// right guard while the weights were part of the app: the two lists
+    /// drifting meant a build that installed and then failed to transcribe,
+    /// with a resource resolver reporting success over a file that was not
+    /// there.
+    ///
+    /// The policy is now the opposite, so the test is too. ~161 MB of ONNX
+    /// graphs in every download and every update bought nothing that the
+    /// catalogue's SHA-256 was not already providing, and the model is fetched
+    /// after install instead. Re-adding a `models/` entry here would silently
+    /// restore the payload this issue removed, which is exactly the kind of
+    /// change that is invisible in a diff review and obvious on a download
+    /// page — so it fails here instead.
+    ///
+    /// A build that deliberately wants an offline installer can still add one:
+    /// `model_store::resolve` keeps the bundled fallback. It just cannot happen
+    /// by accident on `main`.
     ///
     /// Read as JSON rather than searched as text. A substring test passes on a
     /// path that appears anywhere in the file, including inside a longer path
-    /// or a setting that has nothing to do with bundling, and the whole point
-    /// of this test is to be specific about one key. It is also what will fail
-    /// the day a second model is registered without being packaged, which is
-    /// the failure this catalogue makes possible.
+    /// or a setting that has nothing to do with bundling.
     #[test]
-    fn every_registered_model_directory_is_bundled() {
+    fn the_stock_bundle_ships_no_speech_model() {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../../tauri.conf.json"))
                 .expect("tauri.conf.json must be valid JSON");
@@ -374,9 +455,33 @@ mod tests {
             .collect();
         for model in bundled_models() {
             assert!(
-                bundled.contains(&model.resource_dir.trim_end_matches('/')),
-                "tauri.conf.json must bundle {} for model {} (it lists {bundled:?})",
+                !bundled.contains(&model.resource_dir.trim_end_matches('/')),
+                "tauri.conf.json bundles {} for model {}. Models are downloaded \
+                 after install (#152); bundling one puts ~161 MB back into every \
+                 download. If that is deliberate, this test is the place to say so.",
                 model.resource_dir,
+                model.id
+            );
+        }
+    }
+
+    /// Every model this build can LOAD must be one the catalogue can fetch.
+    ///
+    /// The guard that replaces the bundling one, and the same failure it was
+    /// really about: a model registered in `cc_stt` with no way to obtain it
+    /// is offered in the UI and can never be installed. The catalogue is
+    /// allowed to be the longer list — it describes models this build cannot
+    /// yet decode with — but not the shorter one.
+    #[test]
+    fn every_loadable_model_can_be_downloaded() {
+        for model in bundled_models() {
+            assert!(
+                catalogue()
+                    .models
+                    .iter()
+                    .any(|entry| entry.model_name == model.id),
+                "models/catalogue.json has no entry for {}, so it can never be \
+                 installed on a machine that does not already have it",
                 model.id
             );
         }
