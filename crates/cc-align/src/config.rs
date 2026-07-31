@@ -501,8 +501,12 @@ impl AlignmentConfig {
         // hysteresis exists to disregard, which is the bug, not a tuning.
         self.off_script_enter_revisions = self.off_script_enter_revisions.clamp(2, 16);
         self.off_script_return_revisions = self.off_script_return_revisions.clamp(2, 16);
-        // One matched word is not an order.
-        self.off_script_return_min_run = self.off_script_return_min_run.clamp(2, 16);
+        // One matched word is not an order. The upper bound is the tail
+        // itself: a run longer than the query can hold is a run the evidence
+        // can never report, which would latch an aside shut for good.
+        self.off_script_return_min_run = self
+            .off_script_return_min_run
+            .clamp(2, (self.max_query_atoms as u32).max(2));
         self
     }
 }

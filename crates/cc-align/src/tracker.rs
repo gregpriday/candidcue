@@ -345,6 +345,9 @@ pub struct Engine {
     /// window and votes to end the aside again on every later revision —
     /// the same three words counted twice, which is not two pieces of evidence.
     off_script_return_position: f64,
+    /// Exact matches behind that position, so progress cannot be manufactured
+    /// by a fuzzy word landing after an unchanged run.
+    off_script_return_exact: u32,
     /// Evidence older than this is dead: it was spoken before the last
     /// accepted discontinuity (or manual move) and would otherwise keep
     /// out-voting the new location in the full-tail alignment — the failure
@@ -381,8 +384,33 @@ impl Engine {
             off_script_enter_streak: 0,
             off_script_return_streak: 0,
             off_script_return_position: 0.0,
+            off_script_return_exact: 0,
             tail_horizon_ms: f64::MIN,
             regions: Vec::new(),
+        }
+    }
+
+    /// Begin the aside, in one step.
+    ///
+    /// The latch has to take the display with it. `weak_streak` reaches
+    /// `Holding` on its own count, and on a tuned config the aside can be
+    /// certain first — leaving `off_script` true while the snapshot still says
+    /// `Following` and publishes a rate. That is the confidently-wrong state
+    /// this engine exists to avoid, so entry parks the display itself rather
+    /// than trusting a later hold to do it.
+    fn enter_off_script(&mut self) {
+        if self.off_script {
+            return;
+        }
+        self.off_script = true;
+        if !matches!(self.state, TrackingState::Searching) {
+            self.state = TrackingState::Holding;
+        }
+        // The dim frontier is a guess about the next word. There is no next
+        // word while the reader is off the page.
+        if self.provisional.take().is_some() {
+            self.provisional_retracted = true;
+            self.approximate_streak = 0;
         }
     }
 
@@ -393,6 +421,7 @@ impl Engine {
         self.off_script_enter_streak = 0;
         self.off_script_return_streak = 0;
         self.off_script_return_position = 0.0;
+        self.off_script_return_exact = 0;
     }
 
     /// Tell the tracker what range of atoms the presenter can currently see.
@@ -485,6 +514,35 @@ impl Engine {
     // Core update
     // -----------------------------------------------------------------
 
+    /// Where to centre the local search band for this event.
+    ///
+    /// This is the engine's OWN prediction, not the display's. The display
+    /// stops extrapolating the moment the state leaves `Following`; this does
+    /// not, and that is the coast an aside has to end.
+    fn predicted_position(&self, locked: bool, now_ms: f64) -> f64 {
+        if self.off_script {
+            // An aside is not reading, so there is no pace to extrapolate.
+            // Left to coast, the band keeps sliding forward on the pace the
+            // reader had BEFORE they left — away from the line they are coming
+            // back to, at exactly the moment nothing is confirming it.
+            //
+            // `self.rate` is deliberately untouched. The learned pace is still
+            // true of this reader, and discarding it would make the return
+            // slower, not safer.
+            return self.observed;
+        }
+        if !locked {
+            return self.observed;
+        }
+        // Coasting is bounded: after a long silence the reader is far
+        // more likely to be where they stopped than rate*60s ahead —
+        // an unbounded dt once centred the local band 170 atoms past
+        // the reader after a minute of quiet.
+        let dt = ((now_ms - self.config.emission_lag_ms) - self.last_evidence_ms)
+            .clamp(0.0, self.config.max_prediction_ms + self.config.coast_ms);
+        (self.observed + self.rate * dt / 1000.0).min(self.script.len() as f64)
+    }
+
     fn update(&mut self, now_ms: f64) -> Snapshot {
         let mut query = self.ledger.tail(
             self.config.max_query_atoms,
@@ -497,29 +555,7 @@ impl Engine {
         }
 
         let locked = !matches!(self.state, TrackingState::Searching);
-        let predicted = if self.off_script {
-            // An aside is not reading, so there is no pace to extrapolate. The
-            // published rate is already zero here (see `snapshot`), but the
-            // engine's own prediction is not: it would keep centring the local
-            // band on the pace the reader had BEFORE they left, walking the
-            // search window away from the line they are coming back to.
-            //
-            // Freeze the band on the last position real evidence supported.
-            // `self.rate` is deliberately left alone — the learned pace is
-            // still true of this reader, and throwing it away would make the
-            // return slower, not safer.
-            self.observed
-        } else if locked {
-            // Coasting is bounded: after a long silence the reader is far
-            // more likely to be where they stopped than rate*60s ahead —
-            // an unbounded dt once centred the local band 170 atoms past
-            // the reader after a minute of quiet.
-            let dt = ((now_ms - self.config.emission_lag_ms) - self.last_evidence_ms)
-                .clamp(0.0, self.config.max_prediction_ms + self.config.coast_ms);
-            (self.observed + self.rate * dt / 1000.0).min(self.script.len() as f64)
-        } else {
-            self.observed
-        };
+        let predicted = self.predicted_position(locked, now_ms);
         let len = self.script.len() as u32;
 
         // ---------------------------------------------------------------
@@ -635,9 +671,16 @@ impl Engine {
         // A bad recogniser also makes insertions dominate, and that reader is
         // still on script — latching there parks a reader who never left. The
         // two are told apart by the same thing the return gate asks for: a run
-        // of consecutive exact matches. Corruption still throws them off
-        // intermittently, an aside does not, so a revision that still contains
-        // one is not an aside no matter how much noise came with it.
+        // of consecutive exact matches anywhere in the tail. Corruption still
+        // throws them off intermittently, an aside does not.
+        //
+        // Because the tail is cumulative, the reader's last on-script run keeps
+        // vetoing entry until it ages out — so an aside is latched from the
+        // point the script genuinely stops explaining the speech, not from the
+        // first odd revision. That patience is deliberate and it is measured:
+        // relaxing this to only veto on an ADVANCING run latches far more
+        // eagerly and costs both recovery and accuracy (adlib_p95 6.35s ->
+        // 11.75s, corrupt_within5 96.7% -> 93.0% on Tier A).
         let off_script_vote = locked
             && weak
             && unexplained_content >= self.config.weak_unexplained_content
@@ -648,10 +691,18 @@ impl Engine {
         if off_script_vote {
             self.off_script_enter_streak = self.off_script_enter_streak.saturating_add(1);
             if self.off_script_enter_streak >= self.config.off_script_enter_revisions {
-                self.off_script = true;
+                self.enter_off_script();
             }
         } else {
             self.off_script_enter_streak = 0;
+        }
+        // A revision that explained nothing locally is not a step towards
+        // coming back. The return streak is otherwise only touched in
+        // `decide_local`, which several hold paths never reach — without this
+        // a contradictory revision in the middle would leave an earlier vote
+        // standing and let a later unrelated run count as consecutive.
+        if self.off_script && local_candidate.is_none() {
+            self.off_script_return_streak = 0;
         }
 
         // ---------------------------------------------------------------
@@ -1041,14 +1092,19 @@ impl Engine {
         // say three of these words once?
         if self.off_script {
             let position = ev.end_position as f64;
+            // Progress has to be made of EXACT matches. `end_position` alone
+            // can be nudged forward by a fuzzy or phonetic word sitting after
+            // the same old run, which would let one lucky run buy both votes.
+            let progressed = position > self.off_script_return_position
+                && ev.exact_matches > self.off_script_return_exact;
             let returning = ev.longest_run >= c.off_script_return_min_run
                 && ev.content_matches >= c.observe_min_content
                 && position >= self.observed
-                && (self.off_script_return_streak == 0
-                    || position > self.off_script_return_position);
+                && (self.off_script_return_streak == 0 || progressed);
             if returning {
                 self.off_script_return_streak = self.off_script_return_streak.saturating_add(1);
                 self.off_script_return_position = position;
+                self.off_script_return_exact = ev.exact_matches;
             } else {
                 self.off_script_return_streak = 0;
             }
@@ -1884,32 +1940,68 @@ mod tests {
         final_item(&mut engine, 2, "aardvark quokka numbat", 800.0);
         assert_eq!(engine.off_script_enter_streak, 2);
 
-        // Reading the script again is not the third revision of an aside.
-        final_item(&mut engine, 3, "echo foxtrot golf", 1_200.0);
+        // Reading the script again is not the third revision of an aside. The
+        // revision is still WEAK — the aside's own words are most of the tail,
+        // so the ordinary ratio gate cannot pass yet — which is exactly why
+        // weakness alone must not be allowed to stand in for an aside.
+        let reading = final_item(&mut engine, 3, "echo foxtrot golf", 1_200.0);
         assert_eq!(engine.off_script_enter_streak, 0);
         assert!(!engine.off_script);
+        assert_ne!(reading.decision, DecisionCode::HoldOffScript);
+
+        // ...and the count really did restart, rather than the latch simply
+        // being one revision away.
+        final_item(&mut engine, 4, "wombat pangolin marmoset", 1_600.0);
+        let still_clear = final_item(&mut engine, 5, "aardvark quokka numbat", 2_000.0);
+        assert!(!engine.off_script);
+        assert_eq!(still_clear.decision, DecisionCode::HoldLowEvidence);
     }
 
     #[test]
-    fn a_latched_aside_freezes_prediction_without_forgetting_the_pace() {
+    fn a_corrupt_recogniser_is_not_an_aside() {
+        let mut engine = Engine::new(aside_script(), AlignmentConfig::default());
+        engine.set_manual_position(4, 0.0);
+
+        // Every revision is weak and insertion-dominated, but each still
+        // carries an ordered run of script words that reaches further on —
+        // a reader being mangled by the recogniser, not one who left.
+        final_item(&mut engine, 1, "echo foxtrot golf zzqx vvwy ppkr", 400.0);
+        final_item(&mut engine, 2, "hotel india juliet zzqx vvwy ppkr", 800.0);
+        let third = final_item(&mut engine, 3, "kilo lima mike zzqx vvwy ppkr", 1_200.0);
+
+        assert!(
+            !engine.off_script,
+            "corruption must not park a reader who never left the script",
+        );
+        assert_ne!(third.decision, DecisionCode::HoldOffScript);
+    }
+
+    #[test]
+    fn a_latched_aside_freezes_the_search_band_without_forgetting_the_pace() {
         let mut engine = engine_off_script();
+        // A pace the reader actually set, not the default — otherwise this
+        // cannot tell "kept the pace" from "reset it to the default".
+        engine.rate = 5.0;
+        engine.last_evidence_ms = 1_200.0;
 
-        // The learned pace survives the aside — it is still true of this
-        // reader, and discarding it would make the return slower, not safer.
-        let rate_before = engine.rate;
-        assert!(rate_before > 0.0);
+        // The engine's own prediction, a second and a half later. Not the
+        // published rate: that is zero for any hold and would prove nothing.
+        let frozen = engine.predicted_position(true, 2_700.0);
+        assert_eq!(
+            frozen, engine.observed,
+            "a latched aside must centre the band on the last real evidence",
+        );
 
-        // Long silence. Locked-but-not-off-script would coast the search band
-        // forward from `observed` at that pace; the latch pins it.
-        let snapshot = engine.handle(SessionEvent::ItemStarted {
-            item_id: "item-9".to_string(),
-            audio_start_ms: 30_000.0,
-        });
+        // The same instant without the latch is the coast the aside removes.
+        engine.off_script = false;
+        let coasting = engine.predicted_position(true, 2_700.0);
+        assert!(
+            coasting > frozen,
+            "fixture is not exercising the freeze: coasting {coasting} vs frozen {frozen}",
+        );
 
-        assert_eq!(engine.rate, rate_before);
-        assert_eq!(engine.observed, 4.0);
-        // The display never extrapolates while holding, latch or no latch.
-        assert_eq!(snapshot.rate, 0.0);
+        // The learned pace survived — it is still true of this reader.
+        assert_eq!(engine.rate, 5.0);
     }
 
     #[test]
@@ -2009,6 +2101,31 @@ mod tests {
         assert_eq!(engine.off_script_enter_streak, 0);
         assert_eq!(engine.off_script_return_streak, 0);
         assert_eq!(snapshot.state, TrackingState::Following);
+        assert_eq!(snapshot.decision, DecisionCode::ManualAnchor);
+        assert_eq!(snapshot.observed, 12.0);
+
+        // The label must not survive the anchor either.
+        let after = final_item(&mut engine, 9, "wombat pangolin marmoset", 2_400.0);
+        assert_eq!(after.decision, DecisionCode::HoldLowEvidence);
+    }
+
+    #[test]
+    fn entering_an_aside_parks_the_display_in_the_same_step() {
+        let mut engine = Engine::new(aside_script(), AlignmentConfig::default());
+        engine.set_manual_position(4, 0.0);
+        for (n, at) in [(1u32, 400.0), (2, 800.0)] {
+            final_item(&mut engine, n, "wombat pangolin marmoset", at);
+        }
+
+        let latched = final_item(&mut engine, 3, "capybara dugong axolotl", 1_200.0);
+
+        // Latching must take the display with it. A snapshot that still said
+        // Following, with a rate, while the engine had decided the reader is
+        // off the page is the confidently-wrong state this engine avoids.
+        assert!(engine.off_script);
+        assert_ne!(latched.state, TrackingState::Following);
+        assert_eq!(latched.rate, 0.0);
+        assert_eq!(latched.provisional, None);
     }
 
     #[test]
