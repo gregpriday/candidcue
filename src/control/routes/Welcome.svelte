@@ -30,22 +30,20 @@
 <script lang="ts">
   import Button from '../components/Button.svelte';
   import Icon from '../components/Icon.svelte';
+  import SpeechLanguagePicker from '../components/SpeechLanguagePicker.svelte';
   import StatusPill, { type PillTone } from '../components/StatusPill.svelte';
   import { createAndOpenScript, importMarkdown } from '../lib/app-actions';
   import { chooseStageDisplay } from '../lib/start-take';
   import * as stageService from '../services/stage';
   import {
-    formatBytes,
-    getSpeechModelStatus,
     isBusy as isModelBusy,
-    onSpeechModelProgress,
     phaseLabel,
     type SpeechModelStatus,
   } from '../services/speech-models';
   import type { DisplayDescriptor } from '../services/stage-types';
   import { markWelcomed } from '../stores/app-status';
   import { navigate } from '../stores/router';
-  import { settings } from '../stores/settings';
+  import { loadSettings, settings } from '../stores/settings';
 
   /**
    * Connected displays are not part of the boot sequence, so unlike the
@@ -163,46 +161,17 @@
    * Non-blocking, like every other row here: writing, importing and the stage
    * all work without a recogniser. Only voice following needs one.
    */
-  let modelStatus = $state<SpeechModelStatus | null>(null);
-
   /**
-   * Subscribed, not sampled.
+   * Reported BY the picker below, not fetched here.
    *
-   * A single read on mount was wrong in the ordinary case: the install is
-   * started from Settings and takes minutes, so a user coming back to this
-   * screen would see whatever phase it was in when they left — including
-   * "Downloading" long after it had finished. Every event carries the whole
-   * status, so this assigns.
+   * This row used to keep its own snapshot and its own listener, and both were
+   * wrong once more than one model could be installed: `getSpeechModelStatus()`
+   * with no argument asks about the CATALOGUE DEFAULT rather than the selected
+   * language, and the listener accepted a progress event for any model at all —
+   * so downloading an inactive language moved a row describing the active one.
+   * The picker already owns that state machine; one owner, one answer.
    */
-  $effect(() => {
-    let stop: (() => void) | null = null;
-    let disposed = false;
-    onSpeechModelProgress((status) => {
-      if (!disposed) modelStatus = status;
-    })
-      .then((unlisten) => {
-        if (disposed) unlisten();
-        else stop = unlisten;
-      })
-      .catch(() => {})
-      // After the listener, so an install finishing in the gap is not missed.
-      .finally(() => {
-        if (disposed) return;
-        void getSpeechModelStatus()
-          .then((status) => {
-            // A live event is fresher than this snapshot; do not overwrite one.
-            if (!disposed && modelStatus === null) modelStatus = status;
-          })
-          .catch(() => {
-            // An IPC failure is not evidence about the model. Leave the row on
-            // "Checking…" rather than accusing the installation of being broken.
-          });
-      });
-    return () => {
-      disposed = true;
-      stop?.();
-    };
-  });
+  let modelStatus = $state<SpeechModelStatus | null>(null);
 
   const speechState = $derived<RowState>(resolveSpeechState());
 
@@ -231,19 +200,18 @@
         pill: 'Installed',
         detail: 'Voice following is ready. Transcription happens on this machine.',
         emphasis: 'quiet',
-        action: 'Manage model',
+        action: 'Manage languages',
       };
     }
     return {
       tone: 'accent',
       pill: 'Set up',
-      // The size is the whole reason this is a separate step, so it is named
-      // rather than buried behind the link.
-      detail: `Voice following needs a one-time ${formatBytes(
-        modelStatus.downloadBytes,
-      )} download. Everything else works without it.`,
+      // The picker below states the size for the chosen language; this line
+      // says why the step exists rather than repeating the number.
+      detail:
+        'Choose the language you will speak. Voice following needs a one-time download; everything else works without it.',
       emphasis: 'setup',
-      action: 'Download speech model',
+      action: 'Open speech settings',
     };
   }
 
@@ -407,24 +375,45 @@
       </li>
 
       <!--
-        Like the display row, this one's state ARRIVES — the status comes back
-        over IPC, and an install running in the background moves it again — so
-        the detail is a polite live region for the same reason.
+        §153: the language choice belongs HERE, at first run, alongside the
+        other setup a good take needs — not behind a link to Settings. The row
+        above it still reports state (and, like the display row, that state
+        ARRIVES over IPC, so the detail stays a polite live region); the picker
+        beneath it is where the choice is actually made.
+
+        Still not a gate. Writing, importing and the stage all work with no
+        recogniser at all, and nothing here blocks a CTA.
       -->
-      <li class="readiness-item" class:setup={speechState.emphasis === 'setup'}>
-        <span class="readiness-icon"><Icon name="mic" size={16} /></span>
-        <span class="readiness-text">
-          <span class="readiness-title">Speech model</span>
-          <span class="readiness-detail" role="status" aria-live="polite">
-            {speechState.detail}
+      <li class="readiness-item stacked" class:setup={speechState.emphasis === 'setup'}>
+        <div class="readiness-head">
+          <span class="readiness-icon"><Icon name="mic" size={16} /></span>
+          <span class="readiness-text">
+            <span class="readiness-title">Speech language</span>
+            <span class="readiness-detail" role="status" aria-live="polite">
+              {speechState.detail}
+            </span>
           </span>
-        </span>
-        <span class="readiness-status">
-          <StatusPill tone={speechState.tone} label={speechState.pill} />
-          <button type="button" class="link" onclick={openSpeechSettings}>
-            {speechState.action}
-          </button>
-        </span>
+          <span class="readiness-status">
+            <StatusPill tone={speechState.tone} label={speechState.pill} />
+            <button type="button" class="link" onclick={openSpeechSettings}>
+              {speechState.action}
+            </button>
+          </span>
+        </div>
+        <div class="readiness-picker">
+          <SpeechLanguagePicker
+            compact
+            revision={$settings.revision}
+            onactivestatus={(status) => (modelStatus = status)}
+            onlanguagechange={async () => {
+              // Awaited: Rust has just superseded the revision this screen was
+              // handed, and the settings store is shared with every other
+              // screen. Leaving it stale would make the NEXT write anywhere in
+              // the app fail its conflict check.
+              await loadSettings(true);
+            }}
+          />
+        </div>
       </li>
     </ul>
 
@@ -550,6 +539,25 @@
     align-items: flex-end;
     gap: 6px;
     flex: 0 0 auto;
+  }
+  /*
+    The speech row carries a control rather than only a readout (§153), so it
+    stacks: the same header as every other row, with the picker beneath it.
+  */
+  .readiness-item.stacked {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .readiness-head {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+  }
+  .readiness-picker {
+    /* Aligned under the title rather than the icon, so the block reads as
+       belonging to this row instead of starting a new one. */
+    padding-left: calc(16px + var(--space-3));
+    padding-top: var(--space-2);
   }
 
   .footer-links {

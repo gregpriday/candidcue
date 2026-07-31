@@ -34,6 +34,7 @@ import { setInvokeForTesting } from '../../src/control/services/ipc';
 import * as scripts from '../../src/control/services/scripts';
 import * as sessionRecords from '../../src/control/services/session-records';
 import * as settings from '../../src/control/services/settings';
+import * as speechModels from '../../src/control/services/speech-models';
 import * as stage from '../../src/control/services/stage';
 
 const ROOT = resolve(__dirname, '../..');
@@ -248,12 +249,19 @@ describe('captured IPC payloads (production services → wire)', () => {
 
   it('captures the settings and maintenance commands', async () => {
     await capture('get_settings', () => settings.getSettings());
+    // Deliberately NO `speech` section (§153). The language and the recogniser
+    // are one choice and are set through `select_speech_language`, which is
+    // guarded on a running take and checks the model is actually installed —
+    // neither of which this command can do. Rust now REFUSES an `audio.language`
+    // patch, so capturing one here would pin a payload the backend rejects.
     await capture('update_settings', () =>
       settings.updateSettings(3, {
         privacy: { saveTranscript: '7d' } as never,
         teleprompter: { mirrorX: true, fixedSpeedWpm: 155 } as never,
-        speech: { language: 'en-GB' } as never,
       }),
+    );
+    await capture('select_speech_language', () =>
+      speechModels.selectSpeechLanguage(3, 'en-US'),
     );
     await capture('clear_cache_logs', () => settings.clearCache('logs'));
     await capture('clear_cache_analysis', () => settings.clearCache('analysis'));

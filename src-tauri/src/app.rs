@@ -52,6 +52,10 @@ pub fn run() {
             commands::start_speech_model_download,
             commands::cancel_speech_model_download,
             commands::delete_speech_model,
+            // Language choice (§153): the user picks a language; the model is
+            // an implementation detail of that choice.
+            commands::get_speech_language_options,
+            commands::select_speech_language,
             // Speech-to-script alignment (crates/cc-align, hosted in src/align)
             commands::start_alignment,
             commands::stop_alignment,

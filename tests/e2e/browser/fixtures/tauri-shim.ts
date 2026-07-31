@@ -39,8 +39,29 @@ export interface ShimConfig {
   /**
    * Speech-model status returned by the four model-lifecycle commands (#152).
    * Seed it to drive the not-installed, downloading or failed states.
+   *
+   * Applies to the DEFAULT model (`x-asr-480ms`). Use `modelStatuses` to seed
+   * more than one at a time.
    */
   modelStatus?: Record<string, unknown>;
+  /**
+   * Per-model status, keyed by catalogue id (#153).
+   *
+   * The picker addresses each model by id, so a shim that answered the same
+   * object however it was asked would let a spec pass while the UI requested
+   * the wrong model entirely. Falls back to `modelStatus`, then to a default.
+   */
+  modelStatuses?: Record<string, Record<string, unknown>>;
+  /**
+   * The language options the picker paints (#153).
+   *
+   * Defaults to English-only installed, which is what a healthy real build
+   * returns: Rust joins the catalogue against the recogniser and alignment
+   * tables and only English survives today.
+   */
+  languageOptions?: Record<string, unknown>;
+  /** When set, select_speech_language rejects with this AppError. */
+  failSelectLanguage?: Record<string, unknown>;
   /** When true, list_displays rejects (degraded enumeration path). */
   failListDisplays?: boolean;
   /**
@@ -414,6 +435,126 @@ function shimBody(config: ShimConfig): void {
     });
   }
 
+  /*
+   * The speech model surface (#152, #153).
+   *
+   * `DEFAULT_MODEL_ID` is the catalogue's short id — the one every install
+   * command is addressed with, and NOT the long recogniser id that settings
+   * persists. The two are different strings on purpose and a shim that
+   * conflated them would hide exactly the bug the real code is careful about.
+   */
+  const DEFAULT_MODEL_ID = 'x-asr-480ms';
+  const DEFAULT_RECOGNIZER_ID = 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05';
+
+  function baseModelStatus(modelId: string): Record<string, unknown> {
+    return {
+      modelId,
+      modelName: DEFAULT_RECOGNIZER_ID,
+      languages: ['en', 'zh'],
+      phase: 'installed',
+      source: 'downloaded',
+      installed: true,
+      supported: true,
+      downloadBytes: 133_895_136,
+      installedBytes: 169_347_218,
+      progressBytes: 0,
+      progressTotal: 0,
+      operationId: null,
+      error: null,
+    };
+  }
+
+  /** Per-model seed first, then the single-model seed, then a healthy default. */
+  function modelStatusFor(modelId: string): Record<string, unknown> {
+    const keyed = config.modelStatuses?.[modelId];
+    if (keyed) return keyed;
+    // The single-model seed answers only for the default model. Letting it
+    // answer for every id is what made a multi-model spec vacuous.
+    if (config.modelStatus && modelId === DEFAULT_MODEL_ID) return config.modelStatus;
+    return baseModelStatus(modelId);
+  }
+
+  /**
+   * English alone, because that is what a real build returns.
+   *
+   * Rust joins the catalogue against the recogniser table and the alignment
+   * engine's language table; French, German and Spanish are catalogued and fail
+   * the other two, so they are absent rather than disabled. A shim that offered
+   * them would let a spec assert against a screen no backend can produce.
+   */
+  function defaultLanguageOptions(): Record<string, unknown> {
+    const status = modelStatusFor(DEFAULT_MODEL_ID);
+    return {
+      active: {
+        languageTag: 'en-US',
+        primarySubtag: 'en',
+        modelId: DEFAULT_MODEL_ID,
+        recognizerId: DEFAULT_RECOGNIZER_ID,
+      },
+      changeBlocked: false,
+      languages: [
+        {
+          languageTag: 'en-US',
+          primarySubtag: 'en',
+          modelId: DEFAULT_MODEL_ID,
+          recognizerId: DEFAULT_RECOGNIZER_ID,
+          active: true,
+          status,
+          origins: [{ kind: 'upstream', host: 'github.com' }],
+          attribution: {
+            title: 'X-ASR streaming Zipformer transducer (480 ms chunk, INT8, punctuated)',
+            author: 'Jun Guo, with the X-LANCE Lab, Shanghai Jiao Tong University',
+            sourceUrl: 'https://github.com/Gilgamesh-J/X-ASR',
+            distributedVia: 'https://github.com/k2-fsa/sherpa-onnx',
+            license: {
+              id: 'Apache-2.0',
+              name: 'Apache License 2.0',
+              url: 'https://www.apache.org/licenses/LICENSE-2.0',
+            },
+            licenseNote: null,
+            modified: false,
+          },
+        },
+      ],
+      removable: [],
+    };
+  }
+
+  /**
+   * The language a `select_speech_language` call has committed, if any.
+   *
+   * Held so the picker's SUBSEQUENT reads reflect the choice. A shim that only
+   * bumped a revision left the screen showing the old active row for ever,
+   * which would let a spec assert "activation worked" against a UI that had not
+   * changed at all.
+   */
+  let selectedLanguageTag: string | null = null;
+
+  /** The options reply, with any committed selection applied. */
+  function currentLanguageOptions(): Record<string, unknown> {
+    const base = (config.languageOptions ?? defaultLanguageOptions()) as {
+      active: Record<string, unknown>;
+      languages: Array<Record<string, unknown>>;
+      [key: string]: unknown;
+    };
+    if (selectedLanguageTag === null) return base;
+    const chosen = base.languages.find((row) => row['languageTag'] === selectedLanguageTag);
+    if (!chosen) return base;
+    return {
+      ...base,
+      active: {
+        languageTag: chosen['languageTag'],
+        primarySubtag: chosen['primarySubtag'],
+        modelId: chosen['modelId'],
+        recognizerId: chosen['recognizerId'],
+      },
+      languages: base.languages.map((row) => ({
+        ...row,
+        active: row['languageTag'] === selectedLanguageTag,
+      })),
+    };
+  }
+
   function handle(command: string, args: Record<string, unknown> | undefined): unknown {
     /*
      * Tauri event plugin (used by @tauri-apps/api/event). `listen` returns the
@@ -571,23 +712,62 @@ function shimBody(config: ShimConfig): void {
       case 'start_speech_model_download':
       case 'cancel_speech_model_download':
       case 'delete_speech_model':
-        return (
-          config.modelStatus ?? {
-            modelId: 'x-asr-480ms',
-            modelName: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
-            languages: ['en', 'zh'],
-            phase: 'installed',
-            source: 'downloaded',
-            installed: true,
-            supported: true,
-            downloadBytes: 133_895_136,
-            installedBytes: 169_347_218,
-            progressBytes: 0,
-            progressTotal: 0,
-            operationId: null,
-            error: null,
-          }
+        /*
+         * Routed by the requested id (#153).
+         *
+         * This used to return one object however it was asked, which was fine
+         * while one model existed and became a trap the moment the picker
+         * started addressing several: a spec could drive Download on model B,
+         * be handed model A's status, and pass while the UI did the wrong
+         * thing entirely.
+         */
+        return modelStatusFor(
+          (args?.['modelId'] as string | undefined) ?? DEFAULT_MODEL_ID,
         );
+
+      /*
+       * The language picker (#153). One call carries every followable
+       * language with its sizes, origin, attribution and install state.
+       */
+      case 'get_speech_language_options':
+        return currentLanguageOptions();
+
+      case 'select_speech_language': {
+        if (config.failSelectLanguage) throw config.failSelectLanguage;
+        const input = (args?.['input'] ?? {}) as {
+          expectedRevision?: number;
+          languageTag?: string;
+        };
+        // The conflict check is half of what this command is for: a stale
+        // revision means another window has written since this screen loaded.
+        // A shim that skipped it would hide a UI holding a superseded revision.
+        if (input.expectedRevision !== settingsDoc.revision) {
+          throw {
+            code: 'SCRIPT_CONFLICT',
+            userMessage: 'Settings changed somewhere else. Reopen this screen and try again.',
+          };
+        }
+        const chosen = (currentLanguageOptions()['languages'] as Array<Record<string, unknown>>).find(
+          (row) => row['languageTag'] === input.languageTag,
+        );
+        if (!chosen) {
+          throw {
+            code: 'STT_LANGUAGE_UNAVAILABLE',
+            userMessage: 'CandidCue cannot follow that language yet.',
+          };
+        }
+        // Both halves of the pair, together — the whole point of the command.
+        const audio = (settingsDoc.value as unknown as Record<string, Record<string, unknown>>)[
+          'audio'
+        ];
+        if (audio) {
+          audio['language'] = chosen['languageTag'];
+          audio['transcriptionModel'] = chosen['recognizerId'];
+        }
+        selectedLanguageTag = String(chosen['languageTag']);
+        settingsDoc.revision += 1;
+        return settingsDoc;
+      }
 
       case 'list_displays':
         if (control.fail['list_displays']) throw control.fail['list_displays'];

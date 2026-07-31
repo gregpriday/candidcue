@@ -340,7 +340,50 @@ pub fn validate(settings: &AppSettings) -> Result<(), AppError> {
         )
         .with_detail("field", "following.motionProfileId"));
     }
+
+    /*
+     * The recogniser and the language are ONE choice (§153).
+     *
+     * `migrate_in_place` repairs an incoherent pair on READ, which is right for
+     * a document a previous build wrote — the user should not lose a session
+     * because an old value cannot be honoured. It is the wrong answer for a
+     * WRITE: a patch that sets a language this recogniser cannot serve, or a
+     * recogniser this build cannot load, should fail where it was issued rather
+     * than succeed and be silently rewritten the next time settings are read.
+     * Accepting it is how the settings screen ends up showing one language
+     * while the session declares another.
+     *
+     * Both halves are checked against the same tables the picker offers from,
+     * so a value `select_speech_language` produced always passes and a value
+     * nothing offers never does. `get_settings` migrates before this ever runs
+     * on a merge, so an old document reaches here already repaired.
+     */
+    let Some(model) = crate::speech::model_by_id(&settings.audio.transcription_model) else {
+        return Err(AppError::invalid_input(
+            "Setting audio.transcriptionModel names a recogniser this version cannot load.",
+        )
+        .with_detail("field", "audio.transcriptionModel"));
+    };
+    let followable = cc_align::AlignmentLanguage::from_bcp47(settings.audio.language.trim())
+        .is_some_and(|language| model.serves_language(language.primary_subtag()));
+    if !followable {
+        return Err(AppError::invalid_input(
+            "Setting audio.language names a language this recogniser cannot follow.",
+        )
+        .with_detail("field", "audio.language"));
+    }
     Ok(())
+}
+
+/// The recogniser a settings document selects.
+///
+/// The one conversion from the persisted string to a loadable model, shared by
+/// every speech command so that "which model is this take using?" has exactly
+/// one answer. Anything this build cannot load resolves to the default rather
+/// than failing: the value is repaired on read anyway, and a take should not
+/// refuse to start because a stale string outlived the build that wrote it.
+pub fn selected_model(settings: &AppSettings) -> &'static crate::speech::BundledModel {
+    resolve_model(settings.audio.transcription_model.as_str())
 }
 
 /// Recursive JSON merge: objects merge key-by-key, everything else replaces.
