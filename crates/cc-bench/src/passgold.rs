@@ -412,6 +412,21 @@ impl PassGold {
         Some(t0 + (t1 - t0) * (z - p0) / (p1 - p0))
     }
 
+    /// The atom span `[lo, hi]` pass `p` covers — exactly the range `tau` can
+    /// answer for.
+    ///
+    /// A forward-looking metric has to know where the material it is walking
+    /// runs out, and "the pass ended" is not the same complaint as "the display
+    /// hid it". Without this the two are indistinguishable, and every take's
+    /// last seconds score as a failure for the crime of being the last seconds.
+    pub fn pass_span(&self, pass: u32) -> Option<(f64, f64)> {
+        let samples = self.passes.get(pass as usize)?;
+        match (samples.first(), samples.last()) {
+            (Some(&(lo, _)), Some(&(hi, _))) if hi > lo => Some((lo, hi)),
+            _ => None,
+        }
+    }
+
     /// Is a word being spoken at `t`?
     pub fn speaking(&self, t: f64) -> bool {
         self.words
@@ -581,6 +596,26 @@ mod tests {
         let gold = gold_for(vec![PlanOp::Read { from: 0, to: 10 }], WORDS);
         let pg = PassGold::derive(&gold);
         assert!(pg.tau(0, 18.0).is_none());
+    }
+
+    #[test]
+    fn pass_span_is_the_range_tau_can_answer_for() {
+        let gold = gold_for(
+            vec![
+                PlanOp::Read { from: 0, to: 12 },
+                PlanOp::Read { from: 6, to: 20 },
+            ],
+            WORDS,
+        );
+        let pg = PassGold::derive(&gold);
+        let (lo0, hi0) = pg.pass_span(0).expect("pass 0 was read");
+        let (lo1, hi1) = pg.pass_span(1).expect("the retake opened pass 1");
+        assert!(pg.tau(0, hi0).is_some() && pg.tau(0, hi0 + 1.0).is_none());
+        assert!(pg.tau(1, lo1).is_some());
+        assert!(lo1 < hi0, "the retake starts behind where pass 0 ended");
+        assert!(hi1 > hi0, "and carries on past it");
+        assert!(lo0 <= lo1);
+        assert!(pg.pass_span(7).is_none(), "no such pass");
     }
 
     #[test]

@@ -119,6 +119,8 @@ fn merge(into: &mut PerceptualSamples, from: &PerceptualSamples) {
     into.band_err_lines.extend_from_slice(&from.band_err_lines);
     into.future_reserve_lines
         .extend_from_slice(&from.future_reserve_lines);
+    into.readable_ahead_ms
+        .extend_from_slice(&from.readable_ahead_ms);
     into.handoff_err_lines.extend_from_slice(&from.handoff_err_lines);
     into.plant_err_lines.extend_from_slice(&from.plant_err_lines);
     into.pulse.extend_from_slice(&from.pulse);
@@ -579,6 +581,38 @@ fn finish(
         "count",
         "lower",
     ));
+    // §6.3 the readable corridor. `future_reserve` above is the same question
+    // asked geometrically — it counts lines drawn below the focus and cannot
+    // see opacity, so a corridor dimmed to the far past scores identically to a
+    // bright one. These rows count only text that is still legible, measured
+    // from the mouth, in ms of the reader's own pace.
+    t.push(entry(
+        "band.readable_ahead_deficit_pct",
+        macro_avg(&runs, |r| r.readable_ahead_deficit_pct),
+        "%",
+        "lower",
+    ));
+    t.push(entry(
+        "band.readable_ahead_p05",
+        pctl(&headline.readable_ahead_ms, 5.0),
+        "ms",
+        "higher",
+    ));
+    // The split is the point: "it faded the word I was about to say" and "it
+    // ran out of glass" are one number in `readable_ahead_deficit_pct` and two
+    // entirely different bugs.
+    t.push(entry(
+        "band.readable_ahead_opacity_pct",
+        macro_avg(&runs, |r| r.readable_ahead_opacity_deficit_pct),
+        "%",
+        "lower",
+    ));
+    t.push(entry(
+        "band.readable_ahead_viewport_pct",
+        macro_avg(&runs, |r| r.readable_ahead_viewport_deficit_pct),
+        "%",
+        "lower",
+    ));
     t.push(entry(
         "band.handoff_p95",
         pctl(&headline.handoff_err_lines, 95.0),
@@ -814,6 +848,15 @@ fn finish(
             vec![
                 entry("readable_availability", avg(&|r| r.readable_availability), "%", "higher"),
                 entry("band.occupancy", avg(&|r| r.band_occupancy_pct), "%", "higher"),
+                // Per-layout because the viewport half of this row IS a
+                // statement about the rig: a shorter glass runs the corridor
+                // out sooner, and the headline alone would hide that.
+                entry(
+                    "band.readable_ahead_deficit_pct",
+                    avg(&|r| r.readable_ahead_deficit_pct),
+                    "%",
+                    "lower",
+                ),
                 entry("motion.plant_err_p95", avg(&|r| r.plant_err_p95), "lines", "lower"),
                 entry("motion.pulse_p95", avg(&|r| r.snapshot_pulse_p95), "lines/s²", "lower"),
                 entry("ink.half_dim_p50", avg(&|r| r.half_dim_p50), "ms", "lower"),
@@ -841,6 +884,73 @@ pub fn layouts_for(names: Option<&[String]>) -> Vec<Layout> {
             .into_iter()
             .filter(|l| want.iter().any(|w| w == &l.name))
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `merge` is hand-written, one line per pool, and a pool left out of it is
+    /// silent: the run-level metric is right, the headline percentile is
+    /// computed over an empty vec, and `pctl` answers NaN rather than failing.
+    #[test]
+    fn merge_carries_the_readable_corridor_pool() {
+        let mut into = PerceptualSamples::default();
+        let from = PerceptualSamples {
+            readable_ahead_ms: vec![120.0, 640.0],
+            ..Default::default()
+        };
+        merge(&mut into, &from);
+        assert_eq!(into.readable_ahead_ms, vec![120.0, 640.0]);
+    }
+
+    #[test]
+    fn the_table_carries_the_readable_corridor_rows() {
+        let headline = PerceptualSamples {
+            readable_ahead_ms: vec![100.0, 200.0, 300.0, 400.0],
+            ..Default::default()
+        };
+        let runs = vec![PerceptualMetrics {
+            layout: HEADLINE_LAYOUT.to_string(),
+            readable_ahead_deficit_pct: 25.0,
+            readable_ahead_opacity_deficit_pct: 10.0,
+            readable_ahead_viewport_deficit_pct: 15.0,
+            ..Default::default()
+        }];
+        let result = finish(
+            "t",
+            &AlignmentConfig::default(),
+            runs,
+            headline,
+            PerceptualSamples::default(),
+        );
+        let row = |name: &str| {
+            result
+                .table
+                .iter()
+                .find(|e| e.name == name)
+                .unwrap_or_else(|| panic!("{name} is missing from the table"))
+                .clone()
+        };
+
+        let deficit = row("band.readable_ahead_deficit_pct");
+        assert_eq!(deficit.value, 25.0);
+        assert_eq!(deficit.unit, "%");
+        assert_eq!(deficit.better, "lower", "a deficit is not an achievement");
+
+        let p05 = row("band.readable_ahead_p05");
+        assert_eq!(p05.value, 100.0);
+        assert_eq!(p05.unit, "ms");
+        assert_eq!(p05.better, "higher", "more readable text ahead is better");
+
+        // The split has to add up to the headline, or the two causes are not a
+        // partition of it and reading either one is misleading.
+        assert_eq!(
+            row("band.readable_ahead_opacity_pct").value
+                + row("band.readable_ahead_viewport_pct").value,
+            deficit.value
+        );
     }
 }
 
