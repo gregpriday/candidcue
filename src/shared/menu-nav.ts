@@ -1,6 +1,13 @@
 /**
- * Keyboard logic for the `role="menu"` pattern used by OverflowMenu (spec
- * §20). Pure, so the WAI-ARIA menu-button contract is testable without a DOM.
+ * Keyboard logic for the `role="menu"` pattern (spec §20). Pure, so the
+ * WAI-ARIA menu-button contract is testable without a DOM.
+ *
+ * It lives in `shared/` rather than beside its first caller because it now has
+ * two of them in different layers: control's `OverflowMenu`/`SplitButton`, and
+ * the stage's own session menu — which is in a window that must not pull
+ * control's component tree in behind it. The arithmetic has no DOM and no I/O,
+ * so it is the same module in both places rather than a second copy that can
+ * drift.
  *
  * Contract (WAI-ARIA menu button):
  *  - the menu opens on Enter/Space/ArrowDown (first item) and ArrowUp (last);

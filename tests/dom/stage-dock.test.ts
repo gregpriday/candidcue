@@ -15,7 +15,7 @@
  * component and drives it.
  */
 import { render } from '@testing-library/svelte';
-import { createRawSnippet, flushSync } from 'svelte';
+import { createRawSnippet, flushSync, tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import StageDock from '../../src/stage/StageDock.svelte';
 import type { StageVoicePillPayload } from '../../src/shared/contracts';
@@ -70,12 +70,37 @@ function mount(overrides: Record<string, unknown> = {}) {
 }
 
 const endButton = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.dock-button.end')!;
-const followButton = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.dock-button.follow')!;
-const adjustButton = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.dock-button.adjust');
-const presentButton = (c: HTMLElement) =>
-  c.querySelector<HTMLButtonElement>('.dock-button.present-mode');
+const menuTrigger = (c: HTMLElement) =>
+  c.querySelector<HTMLButtonElement>('.dock-button.menu-trigger')!;
 const confirmEnd = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.confirm-end');
 const confirmCancel = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('.confirm-cancel');
+
+const menuRows = (c: HTMLElement) => [...c.querySelectorAll<HTMLButtonElement>('[data-menu-row]')];
+const menuRow = (c: HTMLElement, id: string) =>
+  c.querySelector<HTMLButtonElement>(`[data-menu-row="${id}"]`);
+
+/**
+ * Open the menu and let the component's `tick()`-deferred focus land.
+ *
+ * The menu-button pattern requires focus to move onto a row the moment the menu
+ * opens, and the row does not exist until Svelte has rendered it — so the
+ * component defers the focus by a microtask and every test that cares about
+ * where the keyboard went has to wait with it.
+ */
+async function openMenu(c: HTMLElement): Promise<void> {
+  menuTrigger(c).click();
+  flushSync();
+  await tick();
+  await tick();
+}
+
+/** A key, on whatever has the keyboard, the way a browser delivers it. */
+async function press(node: Element, key: string): Promise<void> {
+  node.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+  flushSync();
+  await tick();
+  await tick();
+}
 
 afterEach(() => {
   document.body.innerHTML = '';
@@ -129,31 +154,154 @@ describe('the buttons come and go; the audio readout does not', () => {
   });
 });
 
-describe('the settings button exists only when something can be adjusted', () => {
+describe('the menu holds whatever this window can actually offer', () => {
   /*
    * The standalone stage window receives a resolved envelope and holds no
-   * settings. A button that opened an empty panel there would be a promise the
-   * window cannot keep, so the honest answer is not to draw it.
+   * settings, and it is a window on a second display with no presentation mode
+   * to toggle. Rows that opened an empty panel or flipped a mode this window
+   * does not have would be promises it cannot keep, so the honest answer is not
+   * to draw them — and `menu-nav` walks this array to work out what the arrows
+   * do, so a row that is not offered may not occupy an index either.
    */
-  it('is absent when no panel was handed in', () => {
+  it('offers only the follow switch when the host handed in nothing else', async () => {
     const { container } = mount();
-    expect(adjustButton(container)).toBeNull();
+    await openMenu(container);
+    expect(menuRows(container).map((row) => row.dataset.menuRow)).toEqual(['follow']);
   });
 
-  it('asks the host to open, and to close again on a second press', () => {
-    const { container, onappearanceopen, onappearanceclose } = mount({ appearancePanel: PANEL });
-    adjustButton(container)!.click();
+  it('offers all three when the host owns settings and a window', async () => {
+    const { container } = mount({ appearancePanel: PANEL, onpresentationtoggle: vi.fn() });
+    await openMenu(container);
+    expect(menuRows(container).map((row) => row.dataset.menuRow)).toEqual([
+      'appearance',
+      'present',
+      'follow',
+    ]);
+  });
+
+  /*
+   * The two shapes are not interchangeable. A row that flips a mode where it
+   * stands reports `aria-checked`; the row that opens a panel of SLIDERS says
+   * `aria-haspopup="dialog"`, because a slider inside `role="menu"` loses its
+   * own left/right arrows to the menu's and stops being operable at all.
+   */
+  it('says which rows are switches and which one opens another level', async () => {
+    const { container } = mount({ appearancePanel: PANEL, onpresentationtoggle: vi.fn() });
+    await openMenu(container);
+
+    const appearance = menuRow(container, 'appearance')!;
+    expect(appearance.getAttribute('role')).toBe('menuitem');
+    expect(appearance.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(appearance.getAttribute('aria-checked')).toBeNull();
+
+    const follow = menuRow(container, 'follow')!;
+    expect(follow.getAttribute('role')).toBe('menuitemcheckbox');
+    expect(follow.getAttribute('aria-checked')).toBe('true');
+    expect(follow.getAttribute('aria-haspopup')).toBeNull();
+  });
+
+  it('reports how the two modes are set', async () => {
+    const off = mount({
+      onpresentationtoggle: vi.fn(),
+      presentationMode: 'reader',
+      followPaused: true,
+    });
+    await openMenu(off.container);
+    expect(menuRow(off.container, 'present')!.getAttribute('aria-checked')).toBe('false');
+    expect(menuRow(off.container, 'follow')!.getAttribute('aria-checked')).toBe('false');
+    document.body.innerHTML = '';
+
+    const on = mount({ onpresentationtoggle: vi.fn(), presentationMode: 'prompter' });
+    await openMenu(on.container);
+    expect(menuRow(on.container, 'present')!.getAttribute('aria-checked')).toBe('true');
+    // The tick is the same state said to an eye. A row that reported `checked`
+    // to a screen reader and drew nothing would look like a menu of verbs.
+    expect(menuRow(on.container, 'present')!.querySelector('.menu-mark svg')).not.toBeNull();
+    expect(menuRow(on.container, 'follow')!.getAttribute('aria-checked')).toBe('true');
+  });
+
+  /*
+   * A switch that reports but does not act, or acts but does not report, looks
+   * identical from a single snapshot — so this drives the host prop the way the
+   * real host does and watches the row turn over underneath the pointer.
+   */
+  it('turns over where it stands when the host answers', async () => {
+    const onpresentationtoggle = vi.fn();
+    const { container, rerender } = mount({ onpresentationtoggle, presentationMode: 'prompter' });
+    await openMenu(container);
+
+    menuRow(container, 'present')!.click();
+    flushSync();
+    expect(onpresentationtoggle).toHaveBeenCalledTimes(1);
+    expect(menuRow(container, 'present'), 'the menu stays up').not.toBeNull();
+
+    await rerender({ onpresentationtoggle, presentationMode: 'reader' } as never);
+    flushSync();
+    expect(menuRow(container, 'present')!.getAttribute('aria-checked')).toBe('false');
+    expect(menuRow(container, 'present')!.querySelector('.menu-mark svg')).toBeNull();
+  });
+
+  /*
+   * A switch flips where it stands and the menu STAYS OPEN. These are settings,
+   * not commands: somebody may want to see one take effect and then reconsider,
+   * and a menu that closed on every tick would make reconsidering a second hunt
+   * for the trigger.
+   */
+  it('flips a mode without closing itself', async () => {
+    const { container, onfollowtoggle } = mount();
+    await openMenu(container);
+    menuRow(container, 'follow')!.click();
+    flushSync();
+    expect(onfollowtoggle).toHaveBeenCalledTimes(1);
+    expect(menuRow(container, 'follow'), 'the menu stays up').not.toBeNull();
+  });
+
+  it('replaces itself with the level the panel row opens', async () => {
+    const { container, onappearanceopen } = mount({ appearancePanel: PANEL });
+    await openMenu(container);
+    menuRow(container, 'appearance')!.click();
     flushSync();
     expect(onappearanceopen).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.menu-popover'), 'level one is gone').toBeNull();
+  });
 
-    const { container: open, onappearanceclose: closeAgain } = mount({
+  /*
+   * The ORDER of those two things is load-bearing, and nothing else can see it.
+   *
+   * `StageAppearanceSheet` reads `document.activeElement` as it mounts and puts
+   * focus back there when it closes. Unmounting the row before handing the
+   * keyboard to the trigger would leave it recording `<body>` — so closing the
+   * panel, by any route, would drop focus on a full-screen stage and the next
+   * Tab would start from a page nobody can see. Both the panel and the menu
+   * would still look perfectly correct.
+   */
+  it('hands the keyboard to the trigger before the level below opens', async () => {
+    let openerAtMount: Element | null = null;
+    const { container } = mount({
       appearancePanel: PANEL,
-      appearanceOpen: true,
+      onappearanceopen: () => (openerAtMount = document.activeElement),
     });
-    adjustButton(open)!.click();
+    await openMenu(container);
+    menuRow(container, 'appearance')!.click();
     flushSync();
-    expect(closeAgain).toHaveBeenCalledTimes(1);
-    expect(onappearanceclose).not.toHaveBeenCalled();
+    expect(openerAtMount).toBe(menuTrigger(container));
+  });
+
+  /*
+   * The host owns `appearanceOpen`, so "the menu closed it on the way past" is
+   * a property of every path that exists TODAY rather than a guarantee. A
+   * second opener added on the control side later would put both levels on the
+   * glass at once, which this file promises in several places cannot happen.
+   */
+  it('never shows level one under a level two the host opened by itself', async () => {
+    const { container, rerender } = mount({ appearancePanel: PANEL });
+    await openMenu(container);
+    expect(container.querySelector('.menu-popover')).not.toBeNull();
+
+    await rerender({ appearancePanel: PANEL, appearanceOpen: true } as never);
+    flushSync();
+    expect(container.querySelector('.menu-popover')).toBeNull();
+    expect(container.querySelector('.appearance-popover')).not.toBeNull();
   });
 
   it('renders the host panel above the dock when it is open', () => {
@@ -161,6 +309,225 @@ describe('the settings button exists only when something can be adjusted', () =>
     const panel = container.querySelector('[data-testid="panel"]');
     expect(panel).not.toBeNull();
     expect(panel?.closest('.appearance-popover')).not.toBeNull();
+  });
+
+  /*
+   * The trigger is the way back OUT of the second level, and it means cancel —
+   * the same as Escape and the same as clicking off the panel. Answering a
+   * dismissal gesture by re-opening the menu would show more chrome, not less.
+   */
+  it('puts the second level away when the trigger is pressed again', () => {
+    const { container, onappearanceclose, onappearanceopen } = mount({
+      appearancePanel: PANEL,
+      appearanceOpen: true,
+    });
+    menuTrigger(container).click();
+    flushSync();
+    expect(onappearanceclose).toHaveBeenCalledTimes(1);
+    expect(onappearanceopen).not.toHaveBeenCalled();
+    expect(container.querySelector('.menu-popover')).toBeNull();
+  });
+});
+
+describe('the menu is operable from the keyboard', () => {
+  it('announces the popup and whether it is up', async () => {
+    const { container } = mount();
+    expect(menuTrigger(container).getAttribute('aria-haspopup')).toBe('menu');
+    expect(menuTrigger(container).getAttribute('aria-expanded')).toBe('false');
+    await openMenu(container);
+    expect(menuTrigger(container).getAttribute('aria-expanded')).toBe('true');
+  });
+
+  /*
+   * Both levels are the same popup as far as the trigger is concerned. Leaving
+   * `aria-expanded` false while the appearance panel is up would tell a screen
+   * reader the trigger does nothing, at the one moment pressing it is the way
+   * back out.
+   */
+  it('stays expanded while the second level is showing', () => {
+    const { container } = mount({ appearancePanel: PANEL, appearanceOpen: true });
+    expect(menuTrigger(container).getAttribute('aria-expanded')).toBe('true');
+  });
+
+  /*
+   * OPENED BY MOUSE, NOTHING IS DRAWN AS CHOSEN; OPENED BY KEY, SOMETHING IS.
+   *
+   * Focus must move onto a row either way — the menu-button pattern requires it
+   * and a keyboard user has to be able to carry on with the arrows — but
+   * painting that row as chosen is a different claim. A pointer has not said
+   * which row it wants, and the top row drawn as chosen looks one Return away
+   * from firing. A keyboard user, meanwhile, is left inside a menu with nothing
+   * drawn to say where, because these rows deliberately suppress their outline.
+   *
+   * `detail` is the only discriminator a click carries: a pointer click counts
+   * at least one, and a click synthesised from Enter/Space — or dispatched by
+   * assistive technology — counts zero.
+   */
+  it('paints nothing as chosen when a pointer opened it', async () => {
+    const { container } = mount();
+    menuTrigger(container).dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }),
+    );
+    flushSync();
+    await tick();
+    await tick();
+
+    const row = menuRow(container, 'follow')!;
+    expect(document.activeElement, 'focus still moves in').toBe(row);
+    expect(row.classList.contains('active')).toBe(false);
+  });
+
+  it('paints the row it landed on when a key opened it', async () => {
+    // `.click()` produces `detail: 0`, which is exactly what a browser
+    // synthesises for Enter or Space on a focused button.
+    const { container } = mount();
+    await openMenu(container);
+    expect(menuRow(container, 'follow')!.classList.contains('active')).toBe(true);
+  });
+
+  it('moves the highlight with the pointer, and only ever marks one row', async () => {
+    const { container } = mount({ appearancePanel: PANEL, onpresentationtoggle: vi.fn() });
+    await openMenu(container);
+    menuRow(container, 'follow')!.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }));
+    flushSync();
+    await tick();
+
+    const marked = menuRows(container).filter((row) => row.classList.contains('active'));
+    expect(marked).toEqual([menuRow(container, 'follow')]);
+  });
+
+  it('moves the keyboard onto a row, as one tab stop', async () => {
+    const { container } = mount({ appearancePanel: PANEL, onpresentationtoggle: vi.fn() });
+    await openMenu(container);
+    const rows = menuRows(container);
+    expect(document.activeElement).toBe(rows[0]);
+    expect(rows.map((row) => row.getAttribute('tabindex'))).toEqual(['0', '-1', '-1']);
+  });
+
+  it('walks with the arrows and wraps', async () => {
+    const { container } = mount({ appearancePanel: PANEL, onpresentationtoggle: vi.fn() });
+    await openMenu(container);
+    await press(document.activeElement!, 'ArrowDown');
+    expect(document.activeElement).toBe(menuRow(container, 'present'));
+    await press(document.activeElement!, 'End');
+    expect(document.activeElement).toBe(menuRow(container, 'follow'));
+    await press(document.activeElement!, 'ArrowDown');
+    expect(document.activeElement).toBe(menuRow(container, 'appearance'));
+  });
+
+  it('opens onto the last row from ArrowUp on the trigger', async () => {
+    const { container } = mount({ appearancePanel: PANEL, onpresentationtoggle: vi.fn() });
+    await press(menuTrigger(container), 'ArrowUp');
+    expect(document.activeElement).toBe(menuRow(container, 'follow'));
+  });
+
+  /*
+   * ESCAPE MUST NOT REACH THE STAGE.
+   *
+   * The stage counts Escape towards the double press that ends a take, and it
+   * listens on the window. A menu that merely closed would spend the
+   * presenter's first press on itself and leave the second one ending the
+   * session — the same defect the end confirmation's handler exists to stop.
+   */
+  it('closes on Escape, hands the keyboard back, and stops the key there', async () => {
+    const stage = vi.fn();
+    window.addEventListener('keydown', stage);
+    try {
+      const { container } = mount();
+      await openMenu(container);
+      await press(document.activeElement!, 'Escape');
+
+      expect(container.querySelector('.menu-popover')).toBeNull();
+      expect(document.activeElement).toBe(menuTrigger(container));
+      expect(stage).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', stage);
+    }
+  });
+
+  /*
+   * Tab dismisses — a menu is not part of the tab ring — and hands the keyboard
+   * back to the TRIGGER before it goes.
+   *
+   * The menu is rendered after the button row, so tabbing straight out of a row
+   * skips the End control entirely and Shift+Tab walks backwards into it, both
+   * of which disagree with where the menu visibly hangs from. Returning to the
+   * trigger first makes the browser's own Tab continue from the control the
+   * operator opened.
+   */
+  it('is not part of the tab ring: Tab dismisses it and gives the trigger back', async () => {
+    const { container } = mount();
+    await openMenu(container);
+    await press(document.activeElement!, 'Tab');
+    expect(container.querySelector('.menu-popover')).toBeNull();
+    expect(document.activeElement).toBe(menuTrigger(container));
+  });
+
+  it('dismisses on a click anywhere else, keyboard included', async () => {
+    const { container } = mount();
+    await openMenu(container);
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    flushSync();
+    expect(container.querySelector('.menu-popover')).toBeNull();
+    // Every route out of a popover in this file puts the keyboard back on the
+    // control that opened it; a click away is not an exception.
+    expect(document.activeElement).toBe(menuTrigger(container));
+  });
+
+  it('closes and gives the keyboard back when the trigger is pressed again', async () => {
+    const { container } = mount();
+    await openMenu(container);
+    menuTrigger(container).click();
+    flushSync();
+    expect(container.querySelector('.menu-popover')).toBeNull();
+    expect(document.activeElement).toBe(menuTrigger(container));
+  });
+
+  /*
+   * A PRESS ON THE MENU'S OWN PADDING MAY NOT HAND THE SCRIPT THE KEYBOARD.
+   *
+   * This is the defect the window-level key handling and the pointerdown guard
+   * both exist for. The stage answers ArrowUp/ArrowDown, PageUp/PageDown,
+   * Space, `a` and `[`/`]` on the WINDOW, and stands down only for a key whose
+   * target sits inside `[data-stage-chrome]`. Blur the focused row onto
+   * `<body>` and every one of those keys starts scrolling the script, toggling
+   * the transport and changing the auto-scroll pace behind a menu the operator
+   * is looking straight at.
+   */
+  it('keeps a press on its own padding from handing the script the keyboard', async () => {
+    const stage = vi.fn();
+    window.addEventListener('keydown', stage);
+    try {
+      const { container } = mount({ appearancePanel: PANEL, onpresentationtoggle: vi.fn() });
+      await openMenu(container);
+
+      const panel = container.querySelector('.menu-popover')!;
+      const onPadding = new PointerEvent('pointerdown', { bubbles: true, cancelable: true });
+      panel.dispatchEvent(onPadding);
+      expect(onPadding.defaultPrevented, 'the browser never moves focus off the row').toBe(true);
+
+      // And the arrows still walk the menu, wherever the keyboard ended up, and
+      // the stage never sees them.
+      stage.mockClear();
+      await press(document.body, 'ArrowDown');
+      expect(document.activeElement).toBe(menuRow(container, 'present'));
+      expect(stage).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('keydown', stage);
+    }
+  });
+
+  /*
+   * A press on a ROW still focuses it. The guard above is for the padding only;
+   * blanket-preventing the default would break the pointer's own highlight.
+   */
+  it('still lets a press land on a row', async () => {
+    const { container } = mount();
+    await openMenu(container);
+    const row = menuRow(container, 'follow')!;
+    const onRow = new PointerEvent('pointerdown', { bubbles: true, cancelable: true });
+    row.dispatchEvent(onRow);
+    expect(onRow.defaultPrevented).toBe(false);
   });
 });
 
@@ -311,65 +678,43 @@ describe('never two panes of glass over one dock', () => {
     expect(onend).not.toHaveBeenCalled();
   });
 
-  it('stands the follow and presentation controls down for the same reason', () => {
-    /*
-     * These two were left live behind the modal, which made the promise a
-     * half-truth rather than a lie only about End. Follow is the worst of the
-     * three to leave reachable: it sets a MODE, so a stray click does not
-     * merely cancel the appearance transaction, it stops the script following
-     * the presenter's voice and leaves them to work out from a stationary
-     * script that something they never meant to touch is now off.
-     */
-    const onpresentationtoggle = vi.fn();
-    const { container, onfollowtoggle } = mount({
-      appearancePanel: PANEL,
-      appearanceOpen: true,
-      onpresentationtoggle,
-      presentationMode: 'prompter',
-    });
-
-    const present = presentButton(container);
-    expect(followButton(container).disabled).toBe(true);
-    expect(present).not.toBeNull();
-    expect(present!.disabled).toBe(true);
-
-    followButton(container).click();
-    present!.click();
-    flushSync();
-    expect(onfollowtoggle).not.toHaveBeenCalled();
-    expect(onpresentationtoggle).not.toHaveBeenCalled();
+  /*
+   * The mode switches used to be buttons in this row and had to be stood down
+   * individually; folding them into the menu retires that whole class of
+   * mistake, because there is no menu to reach past an open panel. The two
+   * levels are mutually exclusive by construction.
+   */
+  it('never shows the menu and the panel at once', () => {
+    const { container } = mount({ appearancePanel: PANEL, appearanceOpen: true });
+    expect(container.querySelector('.menu-popover')).toBeNull();
+    expect(container.querySelector('.appearance-popover')).not.toBeNull();
   });
 
-  it('hands both back the moment the panel closes', () => {
+  it('hands the End control back the moment the panel closes', () => {
     // The stand-down is scoped to the modal being up, and nothing else — a
     // control that stayed dead afterwards would be a worse bug than the one
     // this fixes.
-    const onpresentationtoggle = vi.fn();
-    const { container, onfollowtoggle } = mount({
-      appearancePanel: PANEL,
-      onpresentationtoggle,
-      presentationMode: 'prompter',
-    });
-
-    expect(followButton(container).disabled).toBe(false);
-    expect(presentButton(container)!.disabled).toBe(false);
-
-    followButton(container).click();
-    presentButton(container)!.click();
-    flushSync();
-    expect(onfollowtoggle).toHaveBeenCalled();
-    expect(onpresentationtoggle).toHaveBeenCalled();
+    const { container } = mount({ appearancePanel: PANEL });
+    expect(endButton(container).disabled).toBe(false);
   });
 
-  it('closes the end confirmation when the appearance panel opens', () => {
-    const { container } = mount({ appearancePanel: PANEL });
+  it('closes the end confirmation when the menu opens', async () => {
+    const { container } = mount();
     endButton(container).click();
     flushSync();
     expect(confirmEnd(container)).not.toBeNull();
 
-    adjustButton(container)!.click();
-    flushSync();
+    await openMenu(container);
     expect(confirmEnd(container)).toBeNull();
+  });
+
+  it('closes the menu when the end confirmation opens', async () => {
+    const { container } = mount();
+    await openMenu(container);
+    endButton(container).click();
+    flushSync();
+    expect(container.querySelector('.menu-popover')).toBeNull();
+    expect(confirmEnd(container)).not.toBeNull();
   });
 });
 
@@ -402,69 +747,102 @@ describe('what the dock tells the stage around it', () => {
     flushSync();
     expect(onpopover).toHaveBeenLastCalledWith(true);
   });
+
+  /*
+   * The menu counts for both, and it is worth saying separately from the
+   * confirmation: leaving `menuOpen` out of `held` would let the idle timer
+   * fade the dock out from under an open menu, and leaving it out of
+   * `popoverOpen` would leave the diagnostic transcript — which sits directly
+   * above this dock — being read through a panel.
+   */
+  it('holds itself up and reports a popup for the menu too', async () => {
+    const { container, onhold, onpopover } = mount({ revealed: false });
+    await openMenu(container);
+    expect(onhold).toHaveBeenLastCalledWith(true);
+    expect(onpopover).toHaveBeenLastCalledWith(true);
+
+    /*
+     * Then take the keyboard away, which is what isolates the claim.
+     *
+     * Opening the menu puts focus on a row, and focus inside the dock holds it
+     * up on its own — so the assertion above passes whether or not `menuOpen`
+     * is wired into `held` at all. Dropping focus leaves the open menu as the
+     * only reason left, and the hold has to survive on it or the idle timer
+     * fades the dock out from under a menu somebody is reading.
+     */
+    (document.activeElement as HTMLElement).blur();
+    flushSync();
+    expect(onhold).toHaveBeenLastCalledWith(true);
+
+    onpopover.mockClear();
+    await press(document.body, 'Escape');
+    expect(onpopover, 'and it lets the transcript back out on the way down').toHaveBeenLastCalledWith(
+      false,
+    );
+  });
 });
 
-describe('the follow switch (§48)', () => {
-  it('reports the decision rather than taking it', () => {
+describe('a mode that is off may not hide inside the menu (§48)', () => {
+  it('reports the decision rather than taking it', async () => {
     // §16.9: the stage never acts on a privileged decision itself. Following is
     // control's state — the same switch its own transport checkbox reads — so
-    // the button says what happened and nothing else.
+    // the row says what happened and nothing else.
     const { container, onfollowtoggle } = mount();
-    followButton(container).click();
+    await openMenu(container);
+    menuRow(container, 'follow')!.click();
     flushSync();
     expect(onfollowtoggle).toHaveBeenCalledTimes(1);
   });
 
-  it('fades with the other buttons while following is on', () => {
+  it('lets the trigger fade while following is on', () => {
     // On is the ordinary case and the whole take. A lit control in the corner
     // of a script that is behaving is a mark reporting nothing.
     const { container } = mount({ revealed: false, followPaused: false });
-    expect(followButton(container).getAttribute('data-hidden')).toBe('true');
+    expect(menuTrigger(container).getAttribute('data-hidden')).toBe('true');
   });
 
-  it('stays lit while following is off, even when nothing is revealed', () => {
+  it('keeps the trigger lit while following is off, even when nothing is revealed', () => {
     /*
      * The failure this prevents: a presenter looks up at a script that will not
-     * move, and the one control that explains why is invisible until they
-     * happen to move the mouse. Every other control here is a verb somebody
-     * reaches for and forgets; this one sets a mode.
+     * move, and the answer is one click behind a cog they cannot see until they
+     * happen to move the mouse. Everything else behind this trigger is a verb
+     * somebody reaches for and forgets; this one sets a mode.
      */
     const { container } = mount({ revealed: false, followPaused: true });
-    expect(followButton(container).getAttribute('data-hidden')).toBe('false');
-    // The others go, which is the point: this is one control staying behind,
-    // not the idle timer failing to fire.
+    expect(menuTrigger(container).getAttribute('data-hidden')).toBe('false');
+    // The way out still goes, which is the point: this is one control staying
+    // behind, not the idle timer failing to fire.
     expect(endButton(container).getAttribute('data-hidden')).toBe('true');
   });
 
-  it('says which way it is set, in words and in colour', () => {
+  it('says so on the trigger, in words, in colour and in a mark', () => {
     const on = mount({ followPaused: false });
-    expect(followButton(on.container).getAttribute('aria-pressed')).toBe('true');
-    expect(followButton(on.container).getAttribute('aria-label')).toContain('is on');
-    expect(followButton(on.container).classList.contains('paused')).toBe(false);
+    expect(menuTrigger(on.container).getAttribute('aria-label')).toBe('Session menu');
+    expect(menuTrigger(on.container).classList.contains('flagged')).toBe(false);
+    expect(on.container.querySelector('.menu-trigger .flag')).toBeNull();
     document.body.innerHTML = '';
 
     const off = mount({ followPaused: true });
-    expect(followButton(off.container).getAttribute('aria-pressed')).toBe('false');
-    expect(followButton(off.container).getAttribute('aria-label')).toContain('is off');
-    // A struck-through 16px glyph is a coin toss through a beamsplitter at two
-    // metres; the tint is what carries the state at that distance.
-    expect(followButton(off.container).classList.contains('paused')).toBe(true);
+    expect(menuTrigger(off.container).getAttribute('aria-label')).toContain('following is off');
+    /*
+     * Both, on purpose. A hue shift and a shape fail under different
+     * conditions — colour goes first through a beamsplitter, geometry goes
+     * first at 16px on a non-Retina panel — so the state that must never be
+     * missed is carried twice.
+     */
+    expect(menuTrigger(off.container).classList.contains('flagged')).toBe(true);
+    expect(off.container.querySelector('.menu-trigger .flag')).not.toBeNull();
   });
 });
 
 describe('operable without a mouse', () => {
   it('names both controls', () => {
     const { container } = mount({ appearancePanel: PANEL });
-    expect(adjustButton(container)!.getAttribute('aria-label')).toBe('Adjust the prompter');
+    expect(menuTrigger(container).getAttribute('aria-label')).toBe('Session menu');
     expect(endButton(container).getAttribute('aria-label')).toBe('End session');
     // A tooltip as well as a name: an unlabelled × is also a plausible "close
     // this small panel", and the two readings have very different consequences.
     expect(endButton(container).getAttribute('title')).toBe('End session');
-  });
-
-  it('says whether its popup is open', () => {
-    const { container } = mount({ appearancePanel: PANEL, appearanceOpen: true });
-    expect(adjustButton(container)!.getAttribute('aria-expanded')).toBe('true');
   });
 
   it('skips the audio readout in the tab order', () => {

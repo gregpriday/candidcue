@@ -24,6 +24,21 @@ async function present(page: Page): Promise<void> {
 }
 
 /**
+ * Open the appearance panel the way an operator does: through the dock's menu.
+ *
+ * The dock is one trigger and a way out; adjusting the prompter is the menu's
+ * second level, so getting there is two gestures rather than one. Both are
+ * asserted on the real surface here because the seam between them — the menu
+ * closing as the panel it opened rises in the same place — is exactly what a
+ * unit test of either half cannot see.
+ */
+async function openAppearancePanel(page: Page): Promise<void> {
+  await page.locator('.stage-root').hover();
+  await page.locator('.stage-dock .dock-button.menu-trigger').click();
+  await page.locator('.stage-dock [data-menu-row="appearance"]').click();
+}
+
+/**
  * The `enabled` flag of every `set_control_presenting`, in order.
  *
  * The command name alone cannot tell a present from an un-present, and the
@@ -764,9 +779,37 @@ test('the session dock is the only routine control surface, and mirroring does n
   expect(after!.x).toBeCloseTo(before!.x, 0);
   expect(after!.y).toBeCloseTo(before!.y, 0);
 
-  // The appearance panel opens upward from its own button and stays on screen.
+  /*
+   * LEVEL ONE FITS TOO, AND IS CLICKABLE.
+   *
+   * The same claim already made for the appearance sheet below, made one level
+   * earlier: the menu is the only route to every routine control now, so a menu
+   * that ran off the top of a 9-inch panel or needed scrolling to reach its
+   * last row would put those controls out of reach entirely. jsdom cannot see
+   * any of this — it resolves no stylesheets and measures nothing — so the
+   * geometry has to be judged in a real engine at the Prompter's own size.
+   */
   await page.locator('.stage-root').hover();
-  await page.locator('.stage-dock .dock-button.adjust').click();
+  await page.locator('.stage-dock .dock-button.menu-trigger').click();
+  const menu = page.locator('.stage-dock .menu-popover');
+  await expect(menu).toBeVisible();
+  const menuBox = await menu.boundingBox();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.y, 'the menu must not run off the top of a 1024x600 Prompter').toBeGreaterThanOrEqual(0);
+  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(before!.y + 1);
+  expect(
+    await menu.evaluate((el) => el.scrollHeight - el.clientHeight),
+    'and no row of it may need scrolling to reach',
+  ).toBe(0);
+  // Painted AND hit-testable: the operator plane above this dock is
+  // `pointer-events: none`, so a row that inherited it would look perfect and
+  // do nothing. `.hover()` fails if anything else is on top of it.
+  await menu.locator('[data-menu-row="follow"]').hover();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+
+  // The appearance panel opens upward from the dock and stays on screen.
+  await openAppearancePanel(page);
   const panel = page.locator('.stage-dock .appearance-popover');
   await expect(panel).toBeVisible();
   const panelBox = await panel.boundingBox();
@@ -815,8 +858,7 @@ test('the appearance panel applies live and restores what it opened on', async (
   const scriptColumn = page.locator('.script-layer .column').first();
   const widthOf = async () => (await scriptColumn.boundingBox())!.width;
 
-  await page.locator('.stage-root').hover();
-  await page.locator('.stage-dock .dock-button.adjust').click();
+  await openAppearancePanel(page);
   const panel = page.locator('.stage-dock .appearance-popover');
   await expect(panel).toBeVisible();
 
@@ -833,7 +875,7 @@ test('the appearance panel applies live and restores what it opened on', async (
   await expect.poll(widthOf).toBeCloseTo(opened, 0);
 
   // And a click away is the same promise, not a quiet keep.
-  await page.locator('.stage-dock .dock-button.adjust').click();
+  await openAppearancePanel(page);
   await expect(panel).toBeVisible();
   await width.fill('50');
   await width.dispatchEvent('input');

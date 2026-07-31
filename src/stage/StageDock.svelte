@@ -45,10 +45,54 @@
   large fraction of the width. Putting it first costs nothing: the buttons still
   hold their space so they do not shuffle among themselves, and now the thing
   that never hides is the thing in the corner.
+
+  ---------------------------------------------------------------------------
+  THREE SLOTS, NOT FIVE: ONE MENU AND ONE WAY OUT
+  ---------------------------------------------------------------------------
+  Every verb the dock offers used to have a button of its own, so the row grew
+  by forty pixels every time one was added and ran to roughly two hundred and
+  sixty. On a windowed take that is a bar across the bottom of the script — the
+  thing this dock is drawn small and quiet to avoid being.
+
+  So the verbs collapsed into one trigger and a menu behind it, and the row is
+  now the readout, the menu, and the way out. Ending the take keeps a control of
+  its own because it is the one thing somebody may need to find in a hurry and
+  the one thing they must never hit by accident; putting it behind the same
+  trigger as "adjust the text size" would have made both worse.
+
+  A GEAR, not a hamburger and not an ellipsis. Three horizontal lines mean
+  global navigation — a drawer of places to go — and this menu goes nowhere. An
+  ellipsis means "the rest of the actions", which reads as leftovers. What is
+  actually behind here is how the prompter behaves, and every fullscreen player
+  a presenter has ever used (YouTube, Vimeo, VLC) puts exactly that behind a
+  cog. The menu also mixes settings with live mode switches, which is what those
+  players' cogs contain too.
+
+  ---------------------------------------------------------------------------
+  A MODE THAT IS OFF MAY NOT HIDE INSIDE THE MENU
+  ---------------------------------------------------------------------------
+  Voice following used to be a button that stayed lit while it was off, for the
+  reason set out at that button's old markup: a presenter staring at a script
+  that will not move must not have to go looking for the reason. Folding it into
+  a menu would put that answer one click behind a cog — recall instead of
+  recognition, and the failure it prevents is the whole take.
+
+  So the state came out with the button: while following is off the TRIGGER
+  carries it — amber, with a mark on its shoulder — and the trigger stops
+  fading. It is drawn twice on purpose, because a hue shift and a shape fail in
+  different conditions and this dock is judged through a beamsplitter. The
+  mirrored hold chip still says it in words in presenter-sized type
+  (`resolveHoldStatus`); this is the half somebody can click.
 -->
 <script lang="ts">
-  import type { Snippet } from 'svelte';
+  import { tick, type Snippet } from 'svelte';
   import type { PresentationMode, StageVoicePillPayload } from '../shared/contracts';
+  import {
+    firstEnabledIndex,
+    menuItemTabIndex,
+    nextMenuIndex,
+    openIndexForTriggerKey,
+  } from '../shared/menu-nav';
   import VoicePill from './VoicePill.svelte';
 
   interface Props {
@@ -61,12 +105,12 @@
      */
     revealed: boolean;
     /**
-     * The appearance panel, rendered by whoever owns the settings.
+     * The appearance panel — the menu's second level.
      *
      * A snippet rather than a component, because the stage does not own stage
      * settings and must not start pretending to: the standalone stage window
      * receives a resolved envelope and has nothing to adjust, so it passes
-     * nothing and the button is simply not there. Single-window presentation
+     * nothing and the menu row is simply not there. Single-window presentation
      * hands in the host's own sheet, which keeps the transaction — live
      * preview, Done saves, Cancel restores — where the state it is transacting
      * on actually lives.
@@ -75,7 +119,7 @@
     /** Whether that panel is open. Owned by the host, for the same reason. */
     appearanceOpen?: boolean;
     onappearanceopen?: () => void;
-    /** Escape, a click outside, or the settings button again. Means "cancel". */
+    /** Escape, a click outside, or the trigger again. Means "cancel". */
     onappearanceclose?: () => void;
     /**
      * Whether the take is filling its display or sitting in a window.
@@ -131,13 +175,77 @@
   }: Props = $props();
 
   let confirmOpen = $state(false);
+  let menuOpen = $state(false);
   let pointerInside = $state(false);
   let focusInside = $state(false);
 
   let dockRoot: HTMLElement | null = $state(null);
   let endButton: HTMLButtonElement | null = $state(null);
+  let menuButton: HTMLButtonElement | null = $state(null);
+  let menuPanel: HTMLElement | null = $state(null);
   let confirmPanel: HTMLElement | null = $state(null);
   let cancelButton: HTMLButtonElement | null = $state(null);
+
+  /**
+   * WHAT IS ACTUALLY IN THE MENU, IN ORDER.
+   *
+   * Built rather than written out, because two of the three rows depend on what
+   * the host handed in and `menu-nav`'s arithmetic walks this array to work out
+   * what the arrow keys do. A row that is not offered may not occupy an index.
+   *
+   * `kind` separates the two ARIA shapes below: a `menuitemcheckbox` reports
+   * `aria-checked` and flips a mode where it stands, and the panel row is a
+   * plain `menuitem` that says `aria-haspopup="dialog"` because the level it
+   * opens is a dialog with sliders in it — form controls inside `role="menu"`
+   * lose their own arrow keys to the menu's.
+   */
+  type MenuRow =
+    | { kind: 'panel'; id: 'appearance'; label: string; select: () => void }
+    | { kind: 'checkbox'; id: 'present' | 'follow'; label: string; checked: boolean; select: () => void };
+
+  const rows = $derived<MenuRow[]>([
+    ...(appearancePanel
+      ? [
+          {
+            kind: 'panel' as const,
+            id: 'appearance' as const,
+            // The ellipsis is the desktop convention it has always been: this
+            // row asks for more input rather than doing something.
+            label: 'Adjust the prompter…',
+            select: openAppearance,
+          },
+        ]
+      : []),
+    ...(onpresentationtoggle
+      ? [
+          {
+            kind: 'checkbox' as const,
+            id: 'present' as const,
+            label: 'Fill the display',
+            checked: presentationMode === 'prompter',
+            select: () => onpresentationtoggle?.(),
+          },
+        ]
+      : []),
+    {
+      kind: 'checkbox' as const,
+      id: 'follow' as const,
+      label: 'Follow my voice',
+      checked: !followPaused,
+      select: () => onfollowtoggle?.(),
+    },
+  ]);
+
+  /** Which row the arrows have walked to. -1 before focus has landed. */
+  let activeIndex = $state(-1);
+  /**
+   * Whether that row should LOOK chosen — the same distinction `OverflowMenu`
+   * makes. The menu-button pattern requires focus to move in on open, so
+   * `activeIndex` always points at something; a menu opened with the MOUSE has
+   * not been told which row the operator wants, and painting the top one as
+   * chosen makes it look one Return away from firing.
+   */
+  let highlighted = $state(false);
 
   /**
    * A fault holds the dock up on its own.
@@ -149,11 +257,11 @@
   const faulted = $derived(pill !== null && pill.reading === 'fault' && pill.visible);
 
   const held = $derived(
-    pointerInside || focusInside || confirmOpen || appearanceOpen || faulted,
+    pointerInside || focusInside || confirmOpen || menuOpen || appearanceOpen || faulted,
   );
   const buttonsVisible = $derived(revealed || held);
 
-  const popoverOpen = $derived(confirmOpen || appearanceOpen);
+  const popoverOpen = $derived(confirmOpen || menuOpen || appearanceOpen);
 
   $effect(() => {
     onhold?.(held);
@@ -162,6 +270,131 @@
   $effect(() => {
     onpopover?.(popoverOpen);
   });
+
+  /* ------------------------------------------------------------ the menu */
+
+  function menuItems(): HTMLElement[] {
+    return menuPanel ? [...menuPanel.querySelectorAll<HTMLElement>('[data-menu-row]')] : [];
+  }
+
+  function focusRow(index: number, highlight = true): void {
+    activeIndex = index;
+    if (highlight) highlighted = true;
+    // The row only exists once the menu has rendered.
+    void tick().then(() => {
+      if (menuOpen) menuItems()[index]?.focus();
+    });
+  }
+
+  function openMenu(index = firstEnabledIndex(rows), highlight = true): void {
+    confirmOpen = false;
+    // Through the owner's own path, so the appearance panel's
+    // cancel-restores-the-snapshot promise is kept rather than bypassed.
+    if (appearanceOpen) onappearanceclose?.();
+    menuOpen = true;
+    focusRow(index, highlight);
+  }
+
+  function closeMenu(restoreFocus: boolean): void {
+    if (!menuOpen) return;
+    menuOpen = false;
+    activeIndex = -1;
+    highlighted = false;
+    // Focus dropped on `<body>` is focus nobody can see on a full-screen stage.
+    if (restoreFocus) menuButton?.focus();
+  }
+
+  /**
+   * The trigger, deciding whether the highlight has anything to say.
+   *
+   * `detail` is the discriminator `OverflowMenu` uses for the same reason: a
+   * pointer click carries a click count of at least one, and a click
+   * synthesised from Enter/Space — or dispatched by assistive technology —
+   * carries zero. Modality is not otherwise recoverable from a click event, and
+   * a keyboard user left inside a menu with nothing drawn to say where has no
+   * way to tell what Return would fire.
+   */
+  function toggleMenu(event?: MouseEvent): void {
+    if (menuOpen) {
+      closeMenu(true);
+      return;
+    }
+    /*
+     * The trigger is also the way OUT of the second level.
+     *
+     * Pressing it while the appearance panel is up means "put this away", the
+     * same as pressing the old settings button again did — and putting the
+     * panel away means cancel, which is what every other dismissal of it
+     * already means. Re-opening onto the menu instead would answer a dismissal
+     * gesture by showing more chrome.
+     */
+    if (appearanceOpen) {
+      onappearanceclose?.();
+      return;
+    }
+    openMenu(firstEnabledIndex(rows), !event || event.detail === 0);
+  }
+
+  function onTriggerKeydown(event: KeyboardEvent): void {
+    if (menuOpen) return;
+    // Enter/Space reach the click handler as well; letting both run would
+    // toggle twice, so only the arrows are handled here.
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const index = openIndexForTriggerKey(rows, event.key);
+    if (index === null) return;
+    event.preventDefault();
+    openMenu(index);
+  }
+
+  /**
+   * A press that lands on the menu's own padding keeps the keyboard where it is.
+   *
+   * Without this the press blurs the focused row onto `<body>`, and a key aimed
+   * at the open menu then arrives at the stage with a target that is not inside
+   * `[data-stage-chrome]` — so ArrowDown scrolls the script, Space toggles the
+   * transport and `[`/`]` change the auto-scroll pace, all behind a menu the
+   * operator is looking at. Preventing the default of `pointerdown` is what
+   * stops the browser moving focus at all.
+   */
+  function onMenuPointerDown(event: PointerEvent): void {
+    const target = event.target;
+    if (target instanceof Element && target.closest('[data-menu-row]') !== null) return;
+    event.preventDefault();
+  }
+
+  /**
+   * A checkbox row flips its mode and the menu STAYS OPEN.
+   *
+   * These are settings, not commands: "fill the display" and "follow my voice"
+   * are things somebody may want to see take effect and then reconsider, and a
+   * menu that closes on every tick makes reconsidering a second hunt for the
+   * cog. The panel row is the other way round — it replaces the menu with the
+   * level it opens — which is why the two paths are not one.
+   */
+  function chooseRow(row: MenuRow): void {
+    if (row.kind === 'panel') {
+      /*
+       * Focus goes back to the TRIGGER before the level below opens, and that
+       * ordering is the point.
+       *
+       * `StageAppearanceSheet` reads `document.activeElement` when it mounts and
+       * puts focus back there when it closes. Unmounting the row first would
+       * leave it reading `<body>` — so closing the panel would drop the keyboard
+       * on a full-screen stage, which is the one defect every dismissal path in
+       * this file is careful about.
+       */
+      closeMenu(true);
+      row.select();
+      return;
+    }
+    row.select();
+  }
+
+  function openConfirm(): void {
+    closeMenu(false);
+    if (appearanceOpen) onappearanceclose?.();
+    confirmOpen = true;
+  }
 
   /*
    * Never two panes of glass over the same dock. Opening one closes the other,
@@ -174,11 +407,6 @@
     else onappearanceopen?.();
   }
 
-  function openConfirm(): void {
-    if (appearanceOpen) onappearanceclose?.();
-    confirmOpen = true;
-  }
-
   function closeConfirm(): void {
     if (!confirmOpen) return;
     confirmOpen = false;
@@ -186,6 +414,94 @@
     // nobody can see on a full-screen stage.
     endButton?.focus();
   }
+
+  /*
+   * THE WHOLE MENU KEYBOARD, ON THE WINDOW AND IN THE CAPTURE PHASE.
+   *
+   * Not on the menu element, which is where this kind of handler usually goes
+   * and where `OverflowMenu` correctly puts its own. Two things force it up
+   * here, and both are properties of the surface rather than of the menu:
+   *
+   *   - The stage answers ArrowUp/ArrowDown, PageUp/PageDown, Space, `a` and
+   *     `[`/`]` on the WINDOW, and it counts Escape towards the double press
+   *     that ends a take. A key this menu handles must therefore be stopped
+   *     before the stage sees it, not merely acted on afterwards — a menu that
+   *     closed on Escape without stopping it would spend the presenter's first
+   *     press on itself and leave the second one ending the session.
+   *   - An element-scoped handler only fires while something inside it has
+   *     focus, and focus on this surface is not guaranteed to be anywhere in
+   *     particular. `onMenuPointerDown` above keeps it on a row where it can;
+   *     catching the keys here means the arrows still walk the menu even if
+   *     something else took the keyboard.
+   */
+  $effect(() => {
+    if (!menuOpen) return undefined;
+    const onKeydown = (event: KeyboardEvent): void => {
+      // A real modal stacked over the menu keeps its own keyboard, for the
+      // reason spelled out at the confirmation's handler below.
+      if (document.querySelector('[role="dialog"][aria-modal="true"]') !== null) return;
+
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        event.preventDefault();
+        closeMenu(true);
+        return;
+      }
+      if (event.key === 'Tab') {
+        /*
+         * A menu is not part of the tab ring, so Tab dismisses it — and it
+         * hands the keyboard back to the TRIGGER before doing so, rather than
+         * leaving it on a row that is about to unmount.
+         *
+         * That is not tidiness. The menu is rendered after the button row, so
+         * tabbing out of a row skips the End control entirely and Shift+Tab
+         * walks backwards INTO it, both of which disagree with where the menu
+         * visibly hangs from. Returning to the trigger first makes Tab continue
+         * from the control the operator actually opened. Deliberately not
+         * prevented: the browser's own Tab then does the moving.
+         */
+        closeMenu(true);
+        return;
+      }
+
+      const index = nextMenuIndex(rows, activeIndex, event.key);
+      if (index === null) return;
+      event.stopPropagation();
+      event.preventDefault();
+      focusRow(index);
+    };
+    /*
+     * `pointerdown` rather than `click`, so a press that starts outside cannot
+     * be completed on a row. Scoped to the whole dock rather than to the panel:
+     * the trigger's own click already toggles, and letting this fire on it too
+     * would close the menu and immediately re-open it.
+     */
+    const onPointerDown = (event: PointerEvent): void => {
+      /*
+       * A stacked modal's own clicks are not "outside".
+       *
+       * Cmd+. can raise the host's "Stop the session?" dialog over this menu.
+       * That dialog records whatever had focus as the control to return it to —
+       * a menu row — so closing the menu underneath its first click detaches
+       * that node and leaves the dialog's own dismissal dropping focus on
+       * `<body>`. The same guard the keyboard half above already makes.
+       */
+      if (document.querySelector('[role="dialog"][aria-modal="true"]') !== null) return;
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (dockRoot?.contains(target)) return;
+      // Focus back on the trigger, like every other route out of a popover in
+      // this file. A genuinely focusable thing that was clicked still wins,
+      // because the browser's own focus happens after this capture handler.
+      closeMenu(true);
+    };
+    window.addEventListener('keydown', onKeydown, true);
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeydown, true);
+      window.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  });
 
   function confirmEnd(): void {
     confirmOpen = false;
@@ -234,6 +550,9 @@
      */
     const onPointerDown = (event: PointerEvent): void => {
       const target = event.target;
+      // A stacked modal's own clicks are not "outside" — see the menu's handler
+      // above for the defect this stops.
+      if (document.querySelector('[role="dialog"][aria-modal="true"]') !== null) return;
       if (!(target instanceof Node)) return;
       if (confirmPanel?.contains(target) || endButton?.contains(target)) return;
       /*
@@ -315,128 +634,73 @@
     </div>
 
     <!--
-      THE FOLLOW SWITCH, AND WHY IT DOES NOT FADE WHEN IT IS OFF.
+      THE MENU TRIGGER, AND WHY IT DOES NOT FADE WHILE FOLLOWING IS OFF.
 
-      Every other control in this dock is a verb somebody reaches for and then
-      forgets: adjust the prompter, end the session. This one sets a MODE, and a
-      mode that hides itself is how a presenter ends up staring at a script that
-      will not move, with the control that explains it invisible until they
-      happen to move the mouse.
+      Everything behind it is a verb somebody reaches for and then forgets:
+      adjust the prompter, take the display, hand it back. One of them is not —
+      voice following sets a MODE, and a mode that hides itself is how a
+      presenter ends up staring at a script that will not move, with the control
+      that explains it invisible until they happen to move the mouse.
 
-      So it obeys `buttonsVisible` in exactly one direction. While following is
-      on — the ordinary case, the whole take — it fades with the rest, because
-      it is then reporting the state everybody already assumes. While it is off
-      it stays lit, because it is then the answer to the only question the
-      presenter is going to ask.
+      So the trigger obeys `buttonsVisible` in exactly one direction. While
+      following is on — the ordinary case, the whole take — it fades with the
+      rest, because it is then reporting the state everybody already assumes.
+      While it is off it stays lit and amber, because it is then the answer to
+      the only question the presenter is going to ask.
 
-      The hold chip says the same thing in words, in the mirror plane, in
-      presenter-sized type (`resolveHoldStatus`). This is the half somebody can
-      click.
-    -->
-    <!--
-      Stood down while the appearance panel is up, for the reason set out in
-      full above the end button below: that panel says `aria-modal`, and a live
-      control beside a modal is a promise the modal does not keep.
-
-      This one had been left out of that stand-down, which made it the worst of
-      the three to leave live: it is a MODE switch, so a stray click while the
-      panel is open does not merely cancel the appearance transaction, it also
-      stops the script following the presenter's voice — and leaves them to work
-      out from a stationary script that something they did not intend to touch
-      is now off.
+      It is NOT stood down while the appearance panel is up, unlike everything
+      else in this row: pressing it is how somebody puts that panel away with
+      the mouse, and it means cancel — the same as Escape and the same as
+      clicking off it. A control the modal's own dismissal gesture runs through
+      is not a control reaching past the modal.
     -->
     <button
       type="button"
-      class="dock-button follow"
-      class:paused={followPaused}
+      class="dock-button menu-trigger"
+      class:flagged={followPaused}
       data-hidden={!buttonsVisible && !followPaused}
-      disabled={appearanceOpen}
-      aria-pressed={!followPaused}
-      aria-label={followPaused
-        ? 'Voice following is off — switch it on'
-        : 'Voice following is on — switch it off'}
-      title={followPaused ? 'Follow my voice' : 'Stop following my voice'}
-      onclick={() => onfollowtoggle?.()}
+      aria-haspopup="menu"
+      aria-expanded={menuOpen || appearanceOpen}
+      aria-label={followPaused ? 'Session menu — voice following is off' : 'Session menu'}
+      title={followPaused ? 'Session menu — voice following is off' : 'Session menu'}
+      bind:this={menuButton}
+      onclick={toggleMenu}
+      onkeydown={onTriggerKeydown}
     >
-      <!-- The reading line, and the script advancing under it. Struck through
-           when nothing is advancing it. Deliberately not a waveform: the audio
-           display sits inches away in this same row and two waveforms in one
-           corner would read as two claims about the microphone. -->
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-        <path d="M4 9h16" stroke-linecap="round" />
-        <path d="M9 14l3 3 3-3" stroke-linecap="round" stroke-linejoin="round" />
-        {#if followPaused}
-          <path d="M5 19 19 5" stroke-linecap="round" />
-        {/if}
+      <!--
+        Lucide's cog, inlined.
+
+        Inlined rather than taken from `Icon.svelte` because that component
+        lives in control's tree, and the standalone stage window is a separate
+        entry point that must not pull control in behind one glyph. Every other
+        icon in this dock is drawn here for the same reason.
+      -->
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <path
+          d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+        />
+        <circle cx="12" cy="12" r="3" />
       </svg>
+      <!--
+        The mode mark, drawn as well as tinted.
+
+        A hue shift and a shape fail under different conditions — colour goes
+        first through a beamsplitter, geometry goes first at 16px on a
+        non-Retina panel — so the state that must never be missed is carried by
+        both. `aria-hidden`, because the trigger's own name already says it.
+      -->
+      {#if followPaused}
+        <span class="flag" aria-hidden="true"></span>
+      {/if}
     </button>
-
-    <!--
-      Full display, or a window.
-
-      Present in the dock rather than only on the keyboard because of the fault
-      the dock exists for (see the note on `revealed`): a prompter filling a
-      display with no visible way out reads as a hang, and "give me my window
-      back" is the most literal instance of that there is. Somebody who pressed
-      Present without realising it would take the screen needs to be able to
-      point at the way back, not know a chord.
-
-      Only rendered when the host supplies the handler — the standalone stage
-      window is a separate window on a second display, and there is no
-      presentation mode to toggle for it.
-    -->
-    {#if onpresentationtoggle}
-      <!-- Stood down with the panel open, like the follow and end buttons
-           beside it: taking the display over or handing it back underneath an
-           open modal is the largest thing this dock can do by accident. -->
-      <button
-        type="button"
-        class="dock-button present-mode"
-        data-hidden={!buttonsVisible}
-        disabled={appearanceOpen}
-        aria-pressed={presentationMode === 'prompter'}
-        aria-label={presentationMode === 'prompter'
-          ? 'Filling the display — show in a window instead'
-          : 'Showing in a window — fill the display instead'}
-        title={presentationMode === 'prompter' ? 'Show in a window' : 'Fill the display'}
-        onclick={() => onpresentationtoggle?.()}
-      >
-        <!-- The two states drawn as what they ARE rather than as an arrow: a
-             frame filling its bounds, or a smaller frame inside them. An
-             enter/exit chevron pair would need the presenter to know which
-             direction they are currently in to read it. -->
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          {#if presentationMode === 'prompter'}
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <rect x="8" y="9" width="8" height="6" rx="1" />
-          {:else}
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M8 9h8M8 12h8M8 15h5" stroke-linecap="round" />
-          {/if}
-        </svg>
-      </button>
-    {/if}
-
-    {#if appearancePanel}
-      <button
-        type="button"
-        class="dock-button adjust"
-        data-hidden={!buttonsVisible}
-        aria-label="Adjust the prompter"
-        aria-expanded={appearanceOpen}
-        title="Adjust the prompter"
-        onclick={openAppearance}
-      >
-        <!-- Sliders, not an ellipsis. Once ending the session has a control of
-             its own an overflow menu would open onto a single real action, and
-             a glyph that names the thing beats a glyph that names a list. -->
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <path d="M20 7h-9M14 17H5" stroke-linecap="round" />
-          <circle cx="17" cy="17" r="3" />
-          <circle cx="7" cy="7" r="3" />
-        </svg>
-      </button>
-    {/if}
 
     <!-- The destructive control is deliberately further away. It is the one
          thing in this dock nobody wants to hit while reaching for something
@@ -470,6 +734,81 @@
       </svg>
     </button>
   </div>
+
+  <!--
+    LEVEL ONE. It is not rendered at the same time as level two: choosing the
+    panel row replaces the menu with it, in the same place, rising from the same
+    control.
+
+    `role="menu"` ends here on purpose. The level it opens is a form with
+    sliders in it, and inside a menu a slider loses its own left/right arrows to
+    the menu's — so the appearance popover below claims `dialog` and this claims
+    nothing about it beyond `aria-haspopup` on the row.
+  -->
+  <!--
+    `!appearanceOpen` makes the two levels exclusive STRUCTURALLY rather than by
+    every path that opens one happening to close the other. The dock does not
+    own `appearanceOpen` — the host does — so a second opener added over there
+    later would otherwise put both levels on the glass at once, and this file
+    promises in several places that it cannot.
+  -->
+  {#if menuOpen && !appearanceOpen}
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="dock-popover menu-popover"
+      role="menu"
+      tabindex="-1"
+      aria-label="Session menu"
+      bind:this={menuPanel}
+      onpointerdown={onMenuPointerDown}
+    >
+      {#each rows as row, index (row.id)}
+        <button
+          type="button"
+          class="menu-row"
+          class:active={highlighted && index === activeIndex}
+          data-menu-row={row.id}
+          role={row.kind === 'checkbox' ? 'menuitemcheckbox' : 'menuitem'}
+          aria-checked={row.kind === 'checkbox' ? row.checked : undefined}
+          aria-haspopup={row.kind === 'panel' ? 'dialog' : undefined}
+          tabindex={menuItemTabIndex(activeIndex, index)}
+          onclick={() => chooseRow(row)}
+          onpointerenter={() => focusRow(index)}
+        >
+          <!--
+            A fixed gutter, filled only by a checked row.
+
+            The tick is the state — `aria-checked` says it to a screen reader
+            and this says it to an eye — and it has to hold its column whether
+            or not it is drawn, or every label in the menu shifts sideways as
+            modes are flipped from inside it.
+          -->
+          <span class="menu-mark" aria-hidden="true">
+            {#if row.kind === 'checkbox' && row.checked}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="m5 12.5 4.5 4.5L19 7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            {/if}
+          </span>
+          <span class="menu-label">{row.label}</span>
+          {#if row.kind === 'panel'}
+            <!-- The chevron says "there is another level", which is the one
+                 thing the ellipsis in the label cannot say on its own. -->
+            <svg
+              class="menu-into"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              aria-hidden="true"
+            >
+              <path d="m9 6 6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          {/if}
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   {#if appearanceOpen && appearancePanel}
     <div class="dock-popover appearance-popover">
@@ -516,8 +855,9 @@
   .dock-row {
     display: flex;
     align-items: center;
-    /* The buttons sit together as one cluster; the audio readout and the end
-       button are pushed clear of it by the larger gaps below. */
+    /* Three slots, and the two gaps between them are not the same: the readout
+       and the way out are each pushed clear of the middle by the larger margins
+       below. */
     gap: 6px;
   }
 
@@ -600,35 +940,46 @@
     height: 16px;
   }
 
-  .follow {
+  .menu-trigger {
     color: rgb(245 243 239 / 72%);
   }
 
   /*
-   * Off is a STATE, so it is drawn as one rather than left to the icon alone.
+   * A mode that is off is a STATE, so it is drawn as one rather than left to
+   * the glyph alone.
    *
-   * A 16px glyph with a stroke through it is a legible difference on a monitor
-   * and a coin toss through a beamsplitter at two metres, which is where this
-   * is read from. The tint does the work the geometry cannot; it is the amber
-   * end of the palette rather than the red the end button borrows, because
-   * nothing is wrong — the presenter asked for this.
+   * Amber rather than the red the end button borrows, because nothing is wrong
+   * — the presenter asked for this. The mark is a disc on the shoulder of the
+   * button, outside the glass rather than inside the cog: a badge overlapping a
+   * 16px icon with twelve notches in it is two shapes fighting for the same
+   * pixels on a non-Retina panel.
    */
-  .follow.paused {
+  .menu-trigger.flagged {
     color: #e8b661;
     background: rgb(232 182 97 / 12%);
     border-color: rgb(232 182 97 / 38%);
   }
 
-  .follow.paused:hover,
-  .follow.paused:focus-visible {
+  .menu-trigger.flagged:hover,
+  .menu-trigger.flagged:focus-visible {
     color: #f2c97e;
     background: rgb(232 182 97 / 18%);
     border-color: rgb(232 182 97 / 52%);
   }
 
-  .adjust {
-    color: rgb(245 243 239 / 72%);
+  .flag {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #e8b661;
+    /* A ring in the dock's own material, so the disc reads as a mark ON the
+       button rather than as a speck of script showing through it. */
+    box-shadow: 0 0 0 2px rgb(12 14 18 / 92%);
   }
+
   .end {
     /* Quietest of the three at rest. It is not tinted at all until somebody is
        actually pointing at it: a persistent red mark in the corner of a take
@@ -720,6 +1071,98 @@
 
   .appearance-popover {
     left: 0;
+  }
+
+  /*
+   * Left-aligned with the dock, like the other two, and for the reason set out
+   * at `.confirm-popover` below: a panel hung off the right edge of a control
+   * this close to the left edge of the screen starts at a negative x and is
+   * silently cropped by `.stage-root`'s `overflow: hidden`.
+   *
+   * Sized to its longest row rather than to a round number. It carries three
+   * short labels and nothing else, and a menu wider than its content over a
+   * running script is glass bought for nothing.
+   */
+  .menu-popover {
+    left: 0;
+    min-width: 196px;
+    display: flex;
+    flex-direction: column;
+    /* No gap: the highlight is a full-width wash, and gaps between washes read
+       as a list of buttons rather than as a menu. */
+    padding: 6px;
+    border: 1px solid var(--stage-chrome-border);
+    border-radius: var(--stage-chrome-radius);
+    /* The same slightly-more-opaque glass the confirmation uses. This one
+       carries prose over moving white type too. */
+    background: rgb(12 14 18 / 90%);
+    box-shadow: var(--stage-chrome-shadow);
+    -webkit-backdrop-filter: blur(18px) saturate(130%);
+    backdrop-filter: blur(18px) saturate(130%);
+    color: var(--stage-chrome-text);
+    overflow-y: auto;
+  }
+
+  .menu-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    /* 34, not 32: this is aimed at from across a room with a mouse somebody is
+       not looking at, the same reason the dock buttons carry a 44px target. */
+    min-height: 34px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: #f5f3ef;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 120ms linear;
+  }
+
+  /*
+   * A menu highlights, it does not ring.
+   *
+   * Driven by `activeIndex` rather than by `:focus`/`:hover`, so exactly one
+   * row is ever marked no matter which device is driving it — and so the mark
+   * does not depend on how the engine chooses to interpret programmatic focus
+   * for `:focus-visible`. An outline as well would read as a second selection
+   * sitting underneath the wash marking the very same row.
+   */
+  .menu-row:focus,
+  .menu-row:focus-visible {
+    outline: none;
+  }
+  .menu-row.active {
+    background: rgb(255 255 255 / 12%);
+  }
+
+  .menu-mark {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 14px;
+    height: 14px;
+  }
+  .menu-mark svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .menu-label {
+    flex: 1 1 auto;
+  }
+
+  .menu-into {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    color: rgb(245 243 239 / 52%);
   }
 
   /*
@@ -836,6 +1279,7 @@
     .dock-button {
       background: rgb(12 14 18 / 92%);
     }
+    .menu-popover,
     .confirm-popover {
       background: rgb(12 14 18 / 96%);
     }

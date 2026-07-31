@@ -17,7 +17,7 @@ import {
   menuItemTabIndex,
   nextMenuIndex,
   openIndexForTriggerKey,
-} from '../../../src/control/components/menu-nav';
+} from '../../../src/shared/menu-nav';
 
 const ITEMS = [{ label: 'One' }, { label: 'Two' }, { label: 'Three' }];
 const WITH_DISABLED = [{ label: 'One' }, { label: 'Two', disabled: true }, { label: 'Three' }];

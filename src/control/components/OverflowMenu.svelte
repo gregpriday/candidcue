@@ -16,7 +16,7 @@
     menuItemTabIndex,
     nextMenuIndex,
     openIndexForTriggerKey,
-  } from './menu-nav';
+  } from '../../shared/menu-nav';
 
   export interface MenuItem {
     label: string;
