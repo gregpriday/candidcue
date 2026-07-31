@@ -67,12 +67,29 @@ pub async fn get_speech_engine_status<R: tauri::Runtime>(
     // "Never fails" is a promise this command makes in its own doc comment, and
     // reading the selection introduced a way to break it: a database hiccup
     // would turn "can I transcribe?" into an exception on a screen that only
-    // wants an answer. An unreadable settings document falls back to the
-    // default recogniser, which is the same model a fresh install runs on.
-    let model = selected_model(&db).await.unwrap_or_else(|err| {
-        tracing::warn!(error = %err, "speech status: could not read the selected model");
-        crate::speech::default_model()
-    });
+    // wants an answer.
+    //
+    // Reported as UNAVAILABLE rather than answered about the default model.
+    // Substituting the default keeps the promise and tells a lie to keep it: if
+    // a non-default language is selected while the default happens to be
+    // resident, `loaded` would come back true and the screen would label the
+    // selected language Ready on the strength of a different recogniser being
+    // warm. Not knowing which model is selected is exactly the state this field
+    // exists to report.
+    let model = match selected_model(&db).await {
+        Ok(model) => model,
+        Err(err) => {
+            tracing::warn!(error = %err, "speech status: could not read the selected model");
+            return Ok(SpeechEngineStatus {
+                available: false,
+                loaded: false,
+                model: String::new(),
+                detail: Some(
+                    "CandidCue could not read which speech language is selected.".to_string(),
+                ),
+            });
+        }
+    };
     // "Is THIS model resident", not "is anything resident". The two are the
     // same answer while one model ships and stop being the same the moment a
     // second does — at which point a status line reporting model B as loaded

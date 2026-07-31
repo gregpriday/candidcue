@@ -140,16 +140,42 @@
   /** The language currently in use, whether or not it is the one on screen. */
   const activeOption = $derived(languages.find((option) => option.active) ?? null);
 
+  /** What was last handed to `onactivestatus`, so it is not told twice. */
+  let reportedActive: SpeechModelStatus | null = null;
+
   /**
-   * Report the ACTIVE language's status upward whenever it moves.
+   * Report the ACTIVE language's status upward whenever it CHANGES.
    *
    * `$effect` rather than a call inside `refresh()`, so an event that arrives
    * with no refresh behind it still reaches the parent.
+   *
+   * The change check is not an optimisation. Every progress event replaces
+   * `statusByModel`, so this effect reruns for a DOWNLOAD OF SOME OTHER MODEL
+   * — several times a second — while the active model sits unchanged and
+   * settled. Settings responds to a settled status by re-reading the engine,
+   * so without this guard an inactive language's download would fire an IPC
+   * call every progress frame to ask a question whose answer had not moved.
    */
   $effect(() => {
     const status = activeOption ? statusOf(activeOption) : null;
+    if (sameStatus(status, reportedActive)) return;
+    reportedActive = status;
     onactivestatus?.(status);
   });
+
+  /** Whether two statuses say the same thing about the same model. */
+  function sameStatus(a: SpeechModelStatus | null, b: SpeechModelStatus | null): boolean {
+    if (a === null || b === null) return a === b;
+    return (
+      a.modelId === b.modelId &&
+      a.phase === b.phase &&
+      a.installed === b.installed &&
+      a.source === b.source &&
+      a.progressBytes === b.progressBytes &&
+      a.progressTotal === b.progressTotal &&
+      a.error?.code === b.error?.code
+    );
+  }
 
   /**
    * Whether committing to the shown language is possible right now.
@@ -302,17 +328,35 @@
     selectError = null;
     try {
       await selectSpeechLanguage(revision, option.languageTag);
-      // Awaited, and BEFORE `selecting` is released. Rust has just superseded
-      // the revision this component was handed, so until the caller has
-      // reloaded the settings document, another click would write against a
-      // revision that no longer exists and fail on the conflict check.
+    } catch (err) {
+      // The write itself failed, so nothing changed and the revision this
+      // component holds is still good.
+      selectError = describeError(err);
+      selecting = false;
+      await refresh();
+      return;
+    }
+
+    /*
+     * Past this line the language IS changed, and the two failures are not the
+     * same failure.
+     *
+     * Rust has superseded the revision this component was handed, so until the
+     * caller has reloaded the settings document another write anywhere in the
+     * app would be issued against a revision that no longer exists. If that
+     * reload fails, reporting it as "could not change the language" would be
+     * simply untrue — the language changed — and releasing the button would
+     * arm exactly the conflict the reload was there to prevent. So the button
+     * stays disabled and the message says what actually needs doing.
+     */
+    try {
       await onlanguagechange?.();
       await refresh();
-    } catch (err) {
-      selectError = describeError(err);
-      await refresh();
-    } finally {
       selecting = false;
+    } catch {
+      selectError =
+        `${languageDisplayName(option.languageTag)} is now the speech language, but this screen ` +
+        'could not reload. Reopen Settings before changing it again.';
     }
   }
 
