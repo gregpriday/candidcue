@@ -69,6 +69,28 @@ node "${HELPER}" fields "${SELECTOR[@]+"${SELECTOR[@]}"}" > "${TMP}/fields"
 FIELDS=()
 while IFS= read -r -d '' field; do FIELDS+=("${field}"); done < "${TMP}/fields"
 
+# The helper rejects control characters in every field it emits, because a NUL
+# smuggled into one would split it in two and shift everything after it — which
+# would let the catalogue decide what this script reads as FILE_COUNT. Bash
+# expands a variable used in arithmetic recursively, so a command substitution
+# landing there would RUN. Checking the framing here means both sides have to
+# fail before that is reachable.
+HEADER_FIELDS=10
+if (( ${#FIELDS[@]} < HEADER_FIELDS )); then
+  echo "catalogue helper emitted ${#FIELDS[@]} fields, expected at least ${HEADER_FIELDS}" >&2
+  exit 1
+fi
+
+# Validated as a literal string BEFORE it is ever used in arithmetic.
+if [[ ! "${FIELDS[9]}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "file count is not a positive integer: ${FIELDS[9]}" >&2
+  exit 1
+fi
+if (( ${#FIELDS[@]} != HEADER_FIELDS + FIELDS[9] * 3 )); then
+  echo "expected $(( HEADER_FIELDS + FIELDS[9] * 3 )) fields, got ${#FIELDS[@]}" >&2
+  exit 1
+fi
+
 MODEL_ID="${FIELDS[0]}"
 MODEL_NAME="${FIELDS[1]}"
 INSTALL_DIR="${FIELDS[2]}"
@@ -83,9 +105,11 @@ FILE_COUNT="${FIELDS[9]}"
 # Files arrive as (name, sha256, bytes) triples after the header.
 FILE_NAMES=()
 FILE_SHAS=()
+FILE_BYTES=()
 for ((i = 0; i < FILE_COUNT; i++)); do
-  FILE_NAMES+=("${FIELDS[$((10 + i * 3))]}")
-  FILE_SHAS+=("${FIELDS[$((10 + i * 3 + 1))]}")
+  FILE_NAMES+=("${FIELDS[$((HEADER_FIELDS + i * 3))]}")
+  FILE_SHAS+=("${FIELDS[$((HEADER_FIELDS + i * 3 + 1))]}")
+  FILE_BYTES+=("${FIELDS[$((HEADER_FIELDS + i * 3 + 2))]}")
 done
 
 DEST="${MODELS_DIR}/${INSTALL_DIR}"
@@ -121,7 +145,16 @@ try_download() {
   local url="$1" label="$2" target="${TMP}/${ARCHIVE_NAME}"
   rm -f "${target}"
   echo "Downloading ${ARCHIVE_NAME} from ${label}…"
-  if ! curl -fL --connect-timeout 20 --retry 2 "${url}" -o "${target}"; then
+  # `--max-filesize` bounds the transfer at the size the catalogue promises, so
+  # a host that decides to stream a terabyte fills a temp dir rather than the
+  # disk. The size and digest are still checked afterwards — this only stops the
+  # bleeding early, and does nothing when the server omits Content-Length.
+  # https only, redirects included: a downgrade to http mid-chain is a refusal,
+  # not something to notice after the bytes have already been read.
+  if ! curl -fL --connect-timeout 20 --retry 2 \
+      --proto '=https' --proto-redir '=https' \
+      --max-filesize "${ARCHIVE_BYTES}" \
+      "${url}" -o "${target}"; then
     echo "  ${label}: download failed" >&2
     rm -f "${target}"
     return 1
@@ -159,7 +192,36 @@ if [[ "${got_archive}" != true ]]; then
   exit 1
 fi
 
-tar -xjf "${TMP}/${ARCHIVE_NAME}" -C "${TMP}"
+# Only the files the catalogue lists are extracted at all. The digest already
+# proves these are the pinned bytes, so this is not about a substituted archive
+# — it is that "the archive we pinned" and "an archive safe to unpack whole" are
+# different claims. Naming the members means a bundle's test WAVs, export
+# scripts, symlinks or anything else never touch the filesystem.
+MEMBERS=()
+for ((i = 0; i < FILE_COUNT; i++)); do
+  MEMBERS+=("${ARCHIVE_ROOT}/${FILE_NAMES[$i]}")
+done
+tar -xjf "${TMP}/${ARCHIVE_NAME}" -C "${TMP}" "${MEMBERS[@]}"
+
+# Every file is verified BEFORE any of them is moved into place. Verifying and
+# moving in one pass would let a mismatch on the last file leave the directory
+# holding a new encoder beside an old decoder — a mixed model that still has
+# every filename `ModelFiles::detect` looks for.
+for ((i = 0; i < FILE_COUNT; i++)); do
+  name="${FILE_NAMES[$i]}"
+  src="${TMP}/${ARCHIVE_ROOT}/${name}"
+  [[ -f "${src}" ]] || { echo "archive has no ${name}" >&2; exit 1; }
+  actual_bytes="$(size_of "${src}")"
+  if [[ "${actual_bytes}" != "${FILE_BYTES[$i]}" ]]; then
+    echo "${name}: expected ${FILE_BYTES[$i]} bytes, got ${actual_bytes}" >&2
+    exit 1
+  fi
+  actual="$(sha256_of "${src}")"
+  if [[ "${actual}" != "${FILE_SHAS[$i]}" ]]; then
+    echo "${name}: expected sha256 ${FILE_SHAS[$i]}, got ${actual}" >&2
+    exit 1
+  fi
+done
 
 # Staged, then moved into place one file at a time. `mv` within a filesystem is
 # atomic, so an interrupted run leaves a file either absent or complete — never
@@ -168,18 +230,14 @@ tar -xjf "${TMP}/${ARCHIVE_NAME}" -C "${TMP}"
 mkdir -p "${DEST}"
 for ((i = 0; i < FILE_COUNT; i++)); do
   name="${FILE_NAMES[$i]}"
-  src="${TMP}/${ARCHIVE_ROOT}/${name}"
-  [[ -f "${src}" ]] || { echo "archive has no ${name}" >&2; exit 1; }
-  actual="$(sha256_of "${src}")"
-  if [[ "${actual}" != "${FILE_SHAS[$i]}" ]]; then
-    echo "${name}: expected sha256 ${FILE_SHAS[$i]}, got ${actual}" >&2
-    exit 1
-  fi
-  cp "${src}" "${DEST}/.${name}.part"
+  cp "${TMP}/${ARCHIVE_ROOT}/${name}" "${DEST}/.${name}.part"
   mv "${DEST}/.${name}.part" "${DEST}/${name}"
 done
 
 write_attribution
 
+# Best-effort: the model is installed by this point, and `pipefail` would
+# otherwise let an unreadable directory under DEST report the whole fetch as a
+# failure over a size line nobody depends on.
 echo "Installed ${MODEL_NAME} into ${DEST}:"
-du -ch "${DEST}" | tail -1
+du -sh "${DEST}" 2>/dev/null || true

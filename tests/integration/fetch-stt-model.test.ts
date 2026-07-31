@@ -9,9 +9,11 @@
  * mistranscribes, or does not transcribe at all.
  *
  * The real archives are 57–161 MB, so these tests build a tiny `.tar.bz2` and a
- * throwaway catalogue that points at it over `file://`, and run the actual
- * shipping script against them. That exercises the real download → verify →
- * unpack path rather than a re-implementation of it.
+ * throwaway catalogue, then run the ACTUAL shipping script against them with a
+ * fake `curl` early on `PATH`. The script and the catalogue reader therefore
+ * take exactly the production code path — there is no test-only branch inside
+ * either of them, which was a deliberate choice: a scheme exception for tests
+ * is a thing that can be reached in production by accident.
  *
  * What is deliberately NOT covered: the shipped app fetching a model at
  * runtime. Nothing does that yet — the model is still bundled as a Tauri
@@ -20,14 +22,26 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const REPO_ROOT = resolve(__dirname, '../..');
 const SCRIPT = join(REPO_ROOT, 'scripts/fetch-stt-model.sh');
 const HELPER = join(REPO_ROOT, 'scripts/model-catalogue.mjs');
+
+/** The shim serves this host and refuses every other one. */
+const SERVED = 'https://fixtures.invalid/archive';
+const REFUSED = 'https://gone.invalid/archive';
 
 const ARCHIVE_ROOT = 'test-model-1970-01-01';
 const MODEL_FILES: Record<string, string> = {
@@ -40,12 +54,68 @@ const MODEL_FILES: Record<string, string> = {
 const sha256 = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
 
 let work: string;
+let shimBin: string;
 let archivePath: string;
 let archiveSha: string;
 let archiveBytes: number;
 
+/**
+ * Base environment for every child process.
+ *
+ * Both override variables are deleted rather than inherited: a developer with
+ * `CANDIDCUE_MODEL_CATALOGUE` exported would otherwise make "accepts the
+ * committed catalogue" quietly validate some other file.
+ */
+function baseEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.CANDIDCUE_MODEL_CATALOGUE;
+  delete env.CANDIDCUE_MODEL_MIRROR;
+  delete env.CANDIDCUE_MODELS_DIR;
+  return env;
+}
+
+/**
+ * The catalogue shape, spelled out so the fixtures are type-checked.
+ *
+ * Deliberately permissive where the real schema is not — `licenseNote` is
+ * `string | null` so a test can set one, which an inferred `null` would forbid.
+ */
+interface TestCatalogue {
+  schemaVersion: number;
+  mirrorBaseUrl: string | null;
+  defaultModelId: string;
+  models: Array<{
+    id: string;
+    modelName: string;
+    installDir: string;
+    languages: string[];
+    archive: {
+      fileName: string;
+      rootDir: string;
+      upstreamUrl: string;
+      sha256: string;
+      bytes: number;
+    };
+    files: Array<{ name: string; sha256: string; bytes: number }>;
+    attribution: {
+      title: string;
+      author: string;
+      sourceUrl: string;
+      distributedVia: string | null;
+      license: { id: string; name: string; url: string };
+      licenseNote: string | null;
+      modified: boolean;
+    };
+  }>;
+}
+
+/** The single entry these fixtures carry. */
+const entry = (catalogue: TestCatalogue) => catalogue.models[0]!;
+
 /** A throwaway catalogue naming the fixture archive. */
-function catalogueFor(overrides: { upstreamUrl?: string; mirrorBaseUrl?: string | null } = {}) {
+function catalogueFor(
+  overrides: { upstreamUrl?: string; mirrorBaseUrl?: string | null } = {},
+): TestCatalogue {
   return {
     schemaVersion: 1,
     mirrorBaseUrl: overrides.mirrorBaseUrl ?? null,
@@ -59,7 +129,7 @@ function catalogueFor(overrides: { upstreamUrl?: string; mirrorBaseUrl?: string 
         archive: {
           fileName: `${ARCHIVE_ROOT}.tar.bz2`,
           rootDir: ARCHIVE_ROOT,
-          upstreamUrl: overrides.upstreamUrl ?? `file://${archivePath}`,
+          upstreamUrl: overrides.upstreamUrl ?? `${SERVED}/${ARCHIVE_ROOT}.tar.bz2`,
           sha256: archiveSha,
           bytes: archiveBytes,
         },
@@ -86,28 +156,32 @@ function catalogueFor(overrides: { upstreamUrl?: string; mirrorBaseUrl?: string 
   };
 }
 
+function writeCatalogue(catalogue: unknown): string {
+  const path = join(work, `catalogue-${Math.random().toString(36).slice(2)}.json`);
+  writeFileSync(path, typeof catalogue === 'string' ? catalogue : JSON.stringify(catalogue));
+  return path;
+}
+
 /**
- * Run the shipping script against a catalogue and a scratch models dir.
+ * Run the shipping script.
  *
  * `spawnSync` rather than `execFileSync` because the interesting diagnostics —
- * the mirror miss, the hash mismatch — are written to stderr, and the failure
- * cases have to be assertable without throwing.
+ * the mirror miss, the hash mismatch — go to stderr, and the failure cases have
+ * to be assertable without throwing.
  */
 function runFetch(
   catalogue: unknown,
   modelsDir: string,
   args: string[] = [],
 ): { ok: boolean; output: string } {
-  const cataloguePath = join(work, `catalogue-${Math.random().toString(36).slice(2)}.json`);
-  writeFileSync(cataloguePath, JSON.stringify(catalogue));
-  const result = spawnSync('bash', [SCRIPT, ...args], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      CANDIDCUE_MODEL_CATALOGUE: cataloguePath,
-      CANDIDCUE_MODELS_DIR: modelsDir,
-    },
-  });
+  const env = baseEnv();
+  env.CANDIDCUE_MODEL_CATALOGUE = writeCatalogue(catalogue);
+  env.CANDIDCUE_MODELS_DIR = modelsDir;
+  env.PATH = `${shimBin}${delimiter}${env.PATH ?? ''}`;
+  env.SHIM_ARCHIVE = archivePath;
+
+  const result = spawnSync('bash', [SCRIPT, ...args], { encoding: 'utf8', env });
+  if (result.error) return { ok: false, output: String(result.error) };
   return { ok: result.status === 0, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
 }
 
@@ -120,18 +194,42 @@ const freshModelsDir = () => {
 
 beforeAll(() => {
   work = mkdtempSync(join(tmpdir(), 'cc-fetch-test-'));
+
   const stage = join(work, ARCHIVE_ROOT);
   mkdirSync(stage, { recursive: true });
   for (const [name, body] of Object.entries(MODEL_FILES)) {
     writeFileSync(join(stage, name), body);
   }
-  // A file the catalogue does not list — the script must leave it behind.
+  // Present in the archive, absent from the catalogue. Must never be extracted.
   writeFileSync(join(stage, 'test_wavs_readme.txt'), 'not part of the model\n');
 
   archivePath = join(work, `${ARCHIVE_ROOT}.tar.bz2`);
   execFileSync('tar', ['-cjf', archivePath, '-C', work, ARCHIVE_ROOT]);
   archiveSha = sha256(readFileSync(archivePath));
   archiveBytes = statSync(archivePath).size;
+
+  // A fake curl: serves one host from a local file, refuses everything else.
+  // This is what lets the script keep `--proto '=https'` with no test seam.
+  shimBin = join(work, 'bin');
+  mkdirSync(shimBin, { recursive: true });
+  const shim = [
+    '#!/usr/bin/env bash',
+    'set -uo pipefail',
+    'url=""',
+    'target=""',
+    'while [[ $# -gt 0 ]]; do',
+    '  case "$1" in',
+    '    -o) target="$2"; shift 2 ;;',
+    '    --connect-timeout|--retry|--max-filesize|--proto|--proto-redir) shift 2 ;;',
+    '    -*) shift ;;',
+    '    *) url="$1"; shift ;;',
+    '  esac',
+    'done',
+    '[[ "${url}" == https://fixtures.invalid/* ]] || exit 22',
+    'cp "${SHIM_ARCHIVE}" "${target}"',
+  ].join('\n');
+  writeFileSync(join(shimBin, 'curl'), `${shim}\n`);
+  chmodSync(join(shimBin, 'curl'), 0o755);
 });
 
 afterAll(() => {
@@ -147,7 +245,7 @@ describe('fetch-stt-model.sh', () => {
     for (const [name, body] of Object.entries(MODEL_FILES)) {
       expect(readFileSync(join(dir, 'test-model', name), 'utf8')).toBe(body);
     }
-    // Present in the archive, absent from the catalogue, so not installed.
+    // In the archive, not in the catalogue — so never even extracted.
     expect(() => statSync(join(dir, 'test-model', 'test_wavs_readme.txt'))).toThrow();
     // No staging file survived.
     expect(() => statSync(join(dir, 'test-model', '.tokens.txt.part'))).toThrow();
@@ -156,7 +254,7 @@ describe('fetch-stt-model.sh', () => {
   it('refuses to unpack an archive whose hash does not match', () => {
     const dir = freshModelsDir();
     const tampered = catalogueFor();
-    tampered.models[0].archive.sha256 = 'f'.repeat(64);
+    entry(tampered).archive.sha256 = 'f'.repeat(64);
 
     const { ok, output } = runFetch(tampered, dir);
     expect(ok).toBe(false);
@@ -169,7 +267,7 @@ describe('fetch-stt-model.sh', () => {
   it('refuses an archive whose byte count does not match', () => {
     const dir = freshModelsDir();
     const tampered = catalogueFor();
-    tampered.models[0].archive.bytes = archiveBytes + 1;
+    entry(tampered).archive.bytes = archiveBytes + 1;
 
     const { ok, output } = runFetch(tampered, dir);
     expect(ok).toBe(false);
@@ -179,9 +277,7 @@ describe('fetch-stt-model.sh', () => {
 
   it('falls back to upstream when the mirror misses, and still verifies', () => {
     const dir = freshModelsDir();
-    const withDeadMirror = catalogueFor({
-      mirrorBaseUrl: `file://${join(work, 'no-such-mirror')}`,
-    });
+    const withDeadMirror = catalogueFor({ mirrorBaseUrl: 'https://gone.invalid' });
 
     const { ok, output } = runFetch(withDeadMirror, dir);
     expect(ok, output).toBe(true);
@@ -192,11 +288,25 @@ describe('fetch-stt-model.sh', () => {
     );
   });
 
+  it('prefers the mirror when it answers', () => {
+    const dir = freshModelsDir();
+    // The mirror host is the one the shim serves; upstream is not.
+    const served = catalogueFor({
+      mirrorBaseUrl: 'https://fixtures.invalid',
+      upstreamUrl: `${REFUSED}/${ARCHIVE_ROOT}.tar.bz2`,
+    });
+
+    const { ok, output } = runFetch(served, dir);
+    expect(ok, output).toBe(true);
+    expect(output).toMatch(/mirror: verified/);
+    expect(output).not.toMatch(/Mirror miss/);
+  });
+
   it('fails when neither mirror nor upstream yields verified bytes', () => {
     const dir = freshModelsDir();
     const broken = catalogueFor({
-      mirrorBaseUrl: `file://${join(work, 'no-such-mirror')}`,
-      upstreamUrl: `file://${join(work, 'no-such-archive.tar.bz2')}`,
+      mirrorBaseUrl: 'https://gone.invalid',
+      upstreamUrl: `${REFUSED}/${ARCHIVE_ROOT}.tar.bz2`,
     });
 
     const { ok, output } = runFetch(broken, dir);
@@ -208,10 +318,8 @@ describe('fetch-stt-model.sh', () => {
     const dir = freshModelsDir();
     expect(runFetch(catalogueFor(), dir).ok).toBe(true);
 
-    // Point upstream at nothing. A second run must not need it.
-    const unreachable = catalogueFor({
-      upstreamUrl: `file://${join(work, 'no-such-archive.tar.bz2')}`,
-    });
+    // Point upstream at a host the shim refuses. A second run must not need it.
+    const unreachable = catalogueFor({ upstreamUrl: `${REFUSED}/${ARCHIVE_ROOT}.tar.bz2` });
     const { ok, output } = runFetch(unreachable, dir);
     expect(ok, output).toBe(true);
     expect(output).toMatch(/already present and verified/);
@@ -231,6 +339,16 @@ describe('fetch-stt-model.sh', () => {
     );
   });
 
+  it('re-downloads under --force even when everything verifies', () => {
+    const dir = freshModelsDir();
+    expect(runFetch(catalogueFor(), dir).ok).toBe(true);
+
+    const { ok, output } = runFetch(catalogueFor(), dir, ['--force']);
+    expect(ok, output).toBe(true);
+    expect(output).toMatch(/upstream: verified/);
+    expect(output).not.toMatch(/already present/);
+  });
+
   it('writes the attribution notice from the catalogue, every run', () => {
     const dir = freshModelsDir();
     expect(runFetch(catalogueFor(), dir).ok).toBe(true);
@@ -241,21 +359,50 @@ describe('fetch-stt-model.sh', () => {
     // A licence-only catalogue change must reach disk even though no download
     // happens — the fast path regenerates the notice too.
     const relicensed = catalogueFor();
-    relicensed.models[0].attribution.author = 'Somebody Else';
+    entry(relicensed).attribution.author = 'Somebody Else';
     expect(runFetch(relicensed, dir).ok).toBe(true);
     expect(readFileSync(notice, 'utf8')).toContain('Somebody Else');
+  });
+
+  it('rejects a catalogue whose field count does not match its file count', () => {
+    const dir = freshModelsDir();
+    // Hand-built stream: a well-formed header claiming three files, but only
+    // one triple after it. The script must refuse rather than index past the
+    // end of the array.
+    const fakeHelper = join(work, 'lying-helper.mjs');
+    writeFileSync(
+      fakeHelper,
+      [
+        "const out = ['id','name','dir','a.tar.bz2','root','" +
+          'a'.repeat(64) +
+          "','10','','https://x.invalid/a','3'];",
+        "out.push('tokens.txt','" + 'b'.repeat(64) + "','5');",
+        "process.stdout.write(out.join('\\0') + '\\0');",
+      ].join('\n'),
+    );
+
+    const env = baseEnv();
+    env.CANDIDCUE_MODELS_DIR = dir;
+    env.PATH = `${shimBin}${delimiter}${env.PATH ?? ''}`;
+    const patched = readFileSync(SCRIPT, 'utf8').replace(
+      'HELPER="${REPO_ROOT}/scripts/model-catalogue.mjs"',
+      `HELPER="${fakeHelper}"`,
+    );
+    const patchedScript = join(work, 'patched-fetch.sh');
+    writeFileSync(patchedScript, patched);
+
+    const result = spawnSync('bash', [patchedScript], { encoding: 'utf8', env });
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/expected \d+ fields, got \d+/);
   });
 });
 
 describe('model-catalogue.mjs', () => {
   const run = (args: string[], catalogue?: unknown) => {
-    const env = { ...process.env } as NodeJS.ProcessEnv;
-    if (catalogue !== undefined) {
-      const path = join(work, `cat-${Math.random().toString(36).slice(2)}.json`);
-      writeFileSync(path, JSON.stringify(catalogue));
-      env.CANDIDCUE_MODEL_CATALOGUE = path;
-    }
+    const env = baseEnv();
+    if (catalogue !== undefined) env.CANDIDCUE_MODEL_CATALOGUE = writeCatalogue(catalogue);
     const result = spawnSync('node', [HELPER, ...args], { encoding: 'utf8', env });
+    if (result.error) return { ok: false, output: String(result.error) };
     return { ok: result.status === 0, output: `${result.stdout ?? ''}${result.stderr ?? ''}` };
   };
 
@@ -269,16 +416,18 @@ describe('model-catalogue.mjs', () => {
     const withMirror = catalogueFor({ mirrorBaseUrl: 'https://models.example.com/' });
     const { ok, output } = run(['fields'], withMirror);
     expect(ok, output).toBe(true);
-    const fields = output.split('\0');
-    expect(fields[7]).toBe(
+    expect(output.split('\0')[7]).toBe(
       `https://models.example.com/sha256/${archiveSha}/${ARCHIVE_ROOT}.tar.bz2`,
     );
   });
 
-  it('emits no mirror URL when none is configured', () => {
+  it('emits no mirror URL when none is configured, without shifting later fields', () => {
     const { ok, output } = run(['fields'], catalogueFor());
     expect(ok, output).toBe(true);
-    expect(output.split('\0')[7]).toBe('');
+    const fields = output.split('\0');
+    expect(fields[7]).toBe('');
+    // The file count must still land in its documented slot.
+    expect(fields[9]).toBe(String(Object.keys(MODEL_FILES).length));
   });
 
   it.each([
@@ -287,17 +436,69 @@ describe('model-catalogue.mjs', () => {
     ['a zero byte count', (c: any) => (c.models[0].archive.bytes = 0)],
     ['a path-traversing file name', (c: any) => (c.models[0].files[0].name = '../escape')],
     ['a path-traversing install dir', (c: any) => (c.models[0].installDir = '../escape')],
-    ['a plain-http upstream', (c: any) => (c.models[0].archive.upstreamUrl = 'http://example.com/a')],
+    [
+      'a plain-http upstream',
+      (c: any) => (c.models[0].archive.upstreamUrl = 'http://example.com/a'),
+    ],
+    ['a file:// upstream', (c: any) => (c.models[0].archive.upstreamUrl = 'file:///etc/passwd')],
     ['a defaultModelId naming nothing', (c: any) => (c.defaultModelId = 'absent')],
     ['an unknown schema version', (c: any) => (c.schemaVersion = 99)],
     [
       'a modification with no statement of what changed',
       (c: any) => (c.models[0].attribution.modified = true),
     ],
+    [
+      'a modification whose statement is blank',
+      (c: any) => {
+        c.models[0].attribution.modified = true;
+        c.models[0].attribution.licenseNote = '';
+      },
+    ],
   ])('rejects %s', (_label, mutate) => {
     const broken = catalogueFor();
     mutate(broken);
     expect(run(['validate'], broken).ok).toBe(false);
+  });
+
+  /**
+   * A NUL anywhere in any emitted field is an extra delimiter, which shifts
+   * every later field and hands the catalogue control of what bash reads as
+   * FILE_COUNT. Bash re-evaluates a variable used in arithmetic, so a command
+   * substitution landing there executes. These are the regression tests for
+   * that; JSON writes the NUL as \u0000.
+   */
+  it.each([
+    ['a model name', (c: any) => (c.models[0].modelName = 'a\u0000b')],
+    ['an upstream URL', (c: any) => (c.models[0].archive.upstreamUrl = 'https://x.invalid/\u00000')],
+    ['a title', (c: any) => (c.models[0].attribution.title = 'a\u0000b')],
+    ['an author', (c: any) => (c.models[0].attribution.author = 'a\u0000b')],
+    ['a licence note', (c: any) => (c.models[0].attribution.licenseNote = 'a\u0000b')],
+    ['a language', (c: any) => (c.models[0].languages = ['e\u0000n'])],
+  ])('refuses an embedded NUL in %s', (_label, mutate) => {
+    const poisoned = catalogueFor();
+    mutate(poisoned);
+    const { ok, output } = run(['fields'], poisoned);
+    expect(ok).toBe(false);
+    expect(output).not.toContain('\0');
+  });
+
+  /**
+   * The mirror override cannot carry a NUL at all — environment strings are
+   * NUL-terminated, so one never survives the trip (Node refuses to spawn
+   * with it outright). The catalogue FILE is the only route a NUL can take,
+   * which is what the table above covers. What the override can still do is
+   * name a host that is not https, so that is what gets checked here.
+   */
+  it.each([
+    ['plain http', 'http://mirror.invalid'],
+    ['a file URL', 'file:///tmp'],
+    ['not a URL at all', 'mirror.invalid'],
+  ])('refuses a mirror override that is %s', (_label, mirror) => {
+    const env = baseEnv();
+    env.CANDIDCUE_MODEL_CATALOGUE = writeCatalogue(catalogueFor());
+    env.CANDIDCUE_MODEL_MIRROR = mirror;
+    const result = spawnSync('node', [HELPER, 'fields'], { encoding: 'utf8', env });
+    expect(result.status).not.toBe(0);
   });
 
   it('renders attribution deterministically', () => {
@@ -310,12 +511,45 @@ describe('model-catalogue.mjs', () => {
 
   it('states the modification when the catalogue says the files were changed', () => {
     const modified = catalogueFor();
-    modified.models[0].attribution.modified = true;
-    modified.models[0].attribution.licenseNote = 'Quantised to int8 by CandidCue.';
+    entry(modified).attribution.modified = true;
+    entry(modified).attribution.licenseNote = 'Quantised to int8 by CandidCue.';
 
     const { ok, output } = run(['attribution'], modified);
     expect(ok, output).toBe(true);
     expect(output).toContain('with modifications');
     expect(output).toContain('Quantised to int8 by CandidCue.');
+  });
+});
+
+describe('the committed ATTRIBUTION.md', () => {
+  /**
+   * Byte-for-byte, not substring.
+   *
+   * The notice is generated output that is also committed, because the model
+   * ships as a bundled resource and the file has to exist in a fresh clone. So
+   * it can go stale: edit the licence in the catalogue, forget to re-run
+   * `pnpm models:fetch`, and the bundle now carries a notice describing terms
+   * the model is not distributed under. A substring check misses a licence-ID
+   * change, a renamed archive, or a new licence note; comparing the whole
+   * rendering misses nothing.
+   */
+  it('is exactly what the catalogue renders today', () => {
+    const catalogue = JSON.parse(
+      readFileSync(join(REPO_ROOT, 'src-tauri/models/catalogue.json'), 'utf8'),
+    );
+    const model = catalogue.models.find((m: any) => m.id === catalogue.defaultModelId);
+    expect(model, 'defaultModelId must name an entry').toBeTruthy();
+
+    const rendered = spawnSync('node', [HELPER, 'attribution', '--model', model.id], {
+      encoding: 'utf8',
+      env: baseEnv(),
+    });
+    expect(rendered.status, rendered.stderr).toBe(0);
+
+    const committed = readFileSync(
+      join(REPO_ROOT, 'src-tauri/models', model.installDir, 'ATTRIBUTION.md'),
+      'utf8',
+    );
+    expect(committed).toBe(rendered.stdout);
   });
 });

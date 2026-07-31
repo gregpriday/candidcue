@@ -264,7 +264,9 @@ mod tests {
             // not satisfy either licence's modification clause.
             if a.modified {
                 assert!(
-                    a.license_note.is_some(),
+                    a.license_note
+                        .as_deref()
+                        .is_some_and(|note| !note.trim().is_empty()),
                     "{}: modified is true but licenseNote does not say what changed",
                     model.id
                 );
@@ -298,6 +300,20 @@ mod tests {
     #[test]
     fn the_resource_dir_is_the_catalogue_install_dir() {
         assert_eq!(super::super::MODEL_RESOURCE_DIR, default_model().resource_dir());
+    }
+
+    /// The frontend carries its own copy of the model name, for the browser
+    /// mock and the offline fallback — the two places Rust is not there to
+    /// correct a stale value. Same `include_str!` trick the stage event names
+    /// use, for the same reason.
+    #[test]
+    fn the_frontend_names_the_same_recogniser() {
+        let ts = include_str!("../../../src/shared/contracts/audio.ts");
+        let expected = format!("export const BUNDLED_MODEL_NAME = '{}';", super::super::MODEL_NAME);
+        assert!(
+            ts.contains(&expected),
+            "src/shared/contracts/audio.ts must declare {expected}"
+        );
     }
 
     /// The committed notice is generated output. If the catalogue's licence

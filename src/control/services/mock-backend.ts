@@ -12,6 +12,7 @@
  * ============================================================================
  */
 import type { ScriptDocument, ScriptSummary, StageStatus } from '../../shared/contracts';
+import { BUNDLED_MODEL_NAME } from '../../shared/contracts';
 import {
   countWords,
   estimateDurationSeconds,
@@ -279,7 +280,7 @@ export const mockSpeech = {
    * the only place this can be true or false for a real reason.
    */
   status(): { available: boolean; loaded: boolean; model: string } {
-    return { available: true, loaded: false, model: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05 (mock)' };
+    return { available: true, loaded: false, model: `${BUNDLED_MODEL_NAME} (mock)` };
   },
 };
 

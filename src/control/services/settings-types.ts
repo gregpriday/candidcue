@@ -3,6 +3,7 @@
  * (spec §18) and defaults used until `get_settings` lands in Rust.
  */
 import {
+  BUNDLED_MODEL_NAME,
   OPTICAL_HARDWARE,
   defaultOpticalProfile,
   type FramingPreset,
@@ -823,13 +824,14 @@ export function defaultAppSettings(): AppSettings {
       readerFrame: null,
     },
     speech: {
-      // Must match the id of `cc_stt::models::default_model()`, re-exported as
-      // `crate::speech::default_model`. Rust re-derives this on every
-      // settings read, so a stale value here is corrected before a take — but
-      // it is also what the browser mock and the offline fallback show, and a
-      // default that names a service the app no longer talks to is a lie in
-      // the one place nothing is there to correct it.
-      transcriptionModel: 'x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05',
+      // One literal, in `shared/contracts/audio.ts`, asserted by a Rust test to
+      // equal the id of `cc_stt::models::default_model()` — re-exported as
+      // `crate::speech::default_model` — which is in turn asserted equal to the
+      // fetch catalogue's default. Rust re-derives this on every settings read,
+      // so a stale value is corrected before a take, but it is also what the
+      // browser mock and the offline fallback show, and a default that names the
+      // wrong recogniser is a lie in the one place nothing corrects it.
+      transcriptionModel: BUNDLED_MODEL_NAME,
       language: 'en-US',
     },
     audio: {

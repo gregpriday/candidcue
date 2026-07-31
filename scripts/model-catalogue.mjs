@@ -34,36 +34,56 @@ function fail(message) {
   process.exit(1);
 }
 
+/**
+ * No control characters, anywhere.
+ *
+ * This is load-bearing, not hygiene. Every string below is emitted into a
+ * NUL-delimited stream that bash splits on NUL. JSON can encode a NUL as
+ * `\u0000`, so one embedded in ANY field — a URL, a title, a model name —
+ * becomes an extra delimiter, shifting every later field by one. That lets a
+ * catalogue choose what bash reads as `FILE_COUNT`, and bash evaluates a value
+ * used in arithmetic recursively, so a command substitution smuggled in there
+ * would execute. The count check on the bash side is the second line of
+ * defence; this is the first.
+ */
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
+
+function isCleanString(value) {
+  return typeof value === 'string' && value.length > 0 && !CONTROL_CHARS.test(value);
+}
+
 /** A name that stays inside the model directory — no traversal, no absolute paths. */
 function isSafeName(name) {
   return (
-    typeof name === 'string' &&
-    name.length > 0 &&
-    !name.startsWith('.') &&
-    !name.includes('/') &&
-    !name.includes('\\') &&
-    !name.includes('\0')
+    isCleanString(name) && !name.startsWith('.') && !name.includes('/') && !name.includes('\\')
   );
 }
 
-/**
- * Download URLs must be https.
- *
- * `file://` is tolerated ONLY when a catalogue path was injected, which no
- * shipping path does — it is how the tests drive the fetch script without a
- * network. The committed catalogue is additionally asserted to be https-only
- * by the Rust drift guard, so this seam cannot widen what actually ships.
- */
-function requireFetchableUrl(url, where) {
-  if (typeof url !== 'string') fail(`${where} must be a URL`);
-  if (url.startsWith('https://')) return;
-  if (url.startsWith('file://') && process.env.CANDIDCUE_MODEL_CATALOGUE) return;
-  fail(`${where} must be an https:// URL`);
+function requireClean(value, where) {
+  if (!isCleanString(value)) {
+    fail(`${where} must be a non-empty string with no control characters`);
+  }
 }
 
+/**
+ * https, and parseable as a URL.
+ *
+ * Parsed rather than prefix-matched: `startsWith('https://')` happily accepts a
+ * string with a NUL or a newline later in it, and those are exactly what must
+ * not reach the NUL-delimited stream. There is no scheme exception for tests —
+ * they put a fake `curl` on `PATH` instead, so this reader has no branch that
+ * only test runs take.
+ */
 function requireHttps(url, where) {
-  if (typeof url !== 'string' || !url.startsWith('https://')) {
-    fail(`${where} must be an https:// URL`);
+  requireClean(url, where);
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    fail(`${where} is not a valid URL`);
+  }
+  if (parsed.protocol !== 'https:') {
+    fail(`${where} must be an https:// URL, got ${parsed.protocol}`);
   }
 }
 
@@ -104,11 +124,12 @@ function load(cataloguePath) {
     if (seenDirs.has(model.installDir)) fail(`duplicate installDir ${model.installDir}`);
     seenDirs.add(model.installDir);
 
-    if (typeof model.modelName !== 'string' || model.modelName.length === 0) {
-      fail(`${model.id}: modelName must be a non-empty string`);
-    }
+    requireClean(model.modelName, `${model.id}: modelName`);
     if (!Array.isArray(model.languages) || model.languages.length === 0) {
       fail(`${model.id}: languages must be a non-empty array`);
+    }
+    for (const language of model.languages) {
+      requireClean(language, `${model.id}: language`);
     }
 
     const archive = model.archive;
@@ -121,7 +142,7 @@ function load(cataloguePath) {
     if (!Number.isSafeInteger(archive.bytes) || archive.bytes <= 0) {
       fail(`${model.id}: archive.bytes must be a positive integer`);
     }
-    requireFetchableUrl(archive.upstreamUrl, `${model.id}: archive.upstreamUrl`);
+    requireHttps(archive.upstreamUrl, `${model.id}: archive.upstreamUrl`);
 
     if (!Array.isArray(model.files) || model.files.length === 0) {
       fail(`${model.id}: files must be a non-empty array`);
@@ -143,22 +164,24 @@ function load(cataloguePath) {
 
     const attribution = model.attribution;
     if (!attribution || typeof attribution !== 'object') fail(`${model.id}: missing attribution`);
-    for (const field of ['title', 'author', 'sourceUrl']) {
-      if (typeof attribution[field] !== 'string' || attribution[field].length === 0) {
-        fail(`${model.id}: attribution.${field} must be a non-empty string`);
-      }
+    for (const field of ['title', 'author']) {
+      requireClean(attribution[field], `${model.id}: attribution.${field}`);
     }
     requireHttps(attribution.sourceUrl, `${model.id}: attribution.sourceUrl`);
+    if (attribution.distributedVia !== null && attribution.distributedVia !== undefined) {
+      requireHttps(attribution.distributedVia, `${model.id}: attribution.distributedVia`);
+    }
     const license = attribution.license;
     if (!license || typeof license !== 'object') fail(`${model.id}: missing attribution.license`);
-    for (const field of ['id', 'name', 'url']) {
-      if (typeof license[field] !== 'string' || license[field].length === 0) {
-        fail(`${model.id}: attribution.license.${field} must be a non-empty string`);
-      }
+    for (const field of ['id', 'name']) {
+      requireClean(license[field], `${model.id}: attribution.license.${field}`);
     }
     requireHttps(license.url, `${model.id}: attribution.license.url`);
     if (typeof attribution.modified !== 'boolean') {
       fail(`${model.id}: attribution.modified must be a boolean`);
+    }
+    if (attribution.licenseNote !== null && attribution.licenseNote !== undefined) {
+      requireClean(attribution.licenseNote, `${model.id}: attribution.licenseNote`);
     }
     // A modification statement is a licence obligation under both Apache-2.0
     // and CC-BY-SA. Saying "modified" without saying what changed is not one.
@@ -203,7 +226,7 @@ function select(catalogue, { modelId, language }) {
 function mirrorUrl(catalogue, model) {
   const base = process.env.CANDIDCUE_MODEL_MIRROR || catalogue.mirrorBaseUrl;
   if (!base) return '';
-  requireFetchableUrl(base, 'mirror base');
+  requireHttps(base, 'mirror base');
   return `${base.replace(/\/+$/, '')}/sha256/${model.archive.sha256}/${model.archive.fileName}`;
 }
 
@@ -223,6 +246,17 @@ function emitFields(catalogue, model) {
   for (const file of model.files) {
     out.push(file.name, file.sha256, String(file.bytes));
   }
+  // Last line of defence on the framing. Validation above already rejects
+  // control characters field by field; this catches anything a future field
+  // forgets to run through `requireClean`, because the cost of one slipping
+  // through is bash reading a delimiter where there should be data.
+  for (const field of out) {
+    if (CONTROL_CHARS.test(field)) {
+      fail('refusing to emit a field containing a control character');
+    }
+  }
+  // The mirror URL is legitimately empty when none is configured, so an empty
+  // field is expected. Bash checks the total count against this header.
   process.stdout.write(out.join('\0') + '\0');
 }
 
