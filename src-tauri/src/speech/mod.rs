@@ -48,6 +48,7 @@ use std::sync::Arc;
 
 use crate::errors::{AppError, ErrorCategory};
 
+pub mod catalogue;
 pub mod session;
 
 /// The one sample rate the app captures and streams at.
@@ -63,6 +64,13 @@ pub const SAMPLE_RATE_HZ: u32 = 24_000;
 /// Re-exported from `cc_stt` so that the app has one name for "the catalogue"
 /// and the tests that assert against it do not have to reach across workspaces
 /// to say so.
+///
+/// Not to be confused with `models/catalogue.json`, which `catalogue.rs` reads.
+/// That one is a FETCH manifest — URLs, digests, sizes, licences for everything
+/// `pnpm models:fetch` can download. This one is a BUNDLE manifest: the models
+/// this build actually ships and the tuning each was measured with. The fetch
+/// catalogue is deliberately the longer list, so the two are asserted equal only
+/// where they overlap, at the default.
 pub use cc_stt::models::{bundled_models, default_model, model_by_id, BundledModel};
 
 /// The recogniser resident in memory, and which one it is.
