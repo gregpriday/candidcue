@@ -505,7 +505,7 @@
           {:else if status.source === 'override'}
             Loaded from CANDIDCUE_MODELS_DIR.
           {:else}
-            Downloaded to this Mac.
+            Downloaded to this computer.
           {/if}
           Transcription runs here; nothing is uploaded.
         </p>
@@ -598,7 +598,7 @@
         be reclaimed; they are deliberately NOT choices.
       -->
       <div class="inventory">
-        <h4 class="inventory-title">Other language data on this Mac</h4>
+        <h4 class="inventory-title">Other language data on this computer</h4>
         {#each options.removable as entry (entry.modelId)}
           <!--
             The OVERLAID status, not the snapshot's: a removal that has already

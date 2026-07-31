@@ -444,7 +444,7 @@ describe('reclaiming disk', () => {
     });
     const { view } = await mount(optionsFixture({ removable: [orphan] }));
 
-    expect(text(view)).toContain('Other language data on this Mac');
+    expect(text(view)).toContain('Other language data on this computer');
     const remove = buttonLabelled(view, 'Remove');
     expect(remove).not.toBeNull();
 
@@ -466,7 +466,7 @@ describe('reclaiming disk', () => {
     // enough — the ROW and its action must be absent too, or the section would
     // merely be unlabelled rather than hidden.
     const shown = text(view);
-    expect(shown).not.toContain('Other language data on this Mac');
+    expect(shown).not.toContain('Other language data on this computer');
     expect(shown).not.toContain('Spanish');
     expect(shown).not.toContain('149 MB');
   });

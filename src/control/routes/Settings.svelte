@@ -1590,10 +1590,10 @@
           />
 
           <p class="hint-line">
-            The download is the only time CandidCue contacts the network for speech. Your voice is
-            never uploaded, and nothing is recorded or saved — the words are used only to work out
-            where in the script you are. They are kept only if you turn on transcript saving under
-            Data &amp; privacy.
+            Once the language is downloaded, everything happens on this computer. Your voice is
+            never sent anywhere, and nothing is recorded or saved. The words are used only to work
+            out where in the script you are, and they are kept only if you turn on transcript
+            saving under Data &amp; privacy.
           </p>
         </Section>
       {:else if section === 'audio'}

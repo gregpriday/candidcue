@@ -221,7 +221,7 @@ test('a remembered grant and a connected pinned display both read quiet', async 
   await expect(pill(micRow(page))).toHaveText('Previously allowed');
   await expect(pill(micRow(page))).toHaveClass(hasToken('neutral'));
   await expect(micRow(page)).not.toHaveClass(hasToken('setup'));
-  await expect(micRow(page)).toContainText('Access was allowed on this Mac');
+  await expect(micRow(page)).toContainText('Access was allowed on this computer');
   await expect(micRow(page)).not.toContainText('Ready');
 
   await expect(pill(displayRow(page))).toHaveText('Connected');

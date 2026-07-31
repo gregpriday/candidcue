@@ -393,7 +393,7 @@ test('a model backing no offered language can be removed, behind a confirm', asy
   await openSpeechSettings(page);
 
   const picker = page.locator('.picker');
-  await expect(picker).toContainText('Other language data on this Mac');
+  await expect(picker).toContainText('Other language data on this computer');
 
   await picker.getByRole('button', { name: 'Remove', exact: true }).click();
   // Several hundred megabytes is never a single click.

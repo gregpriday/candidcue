@@ -135,7 +135,7 @@
           // confident wrong answer in exactly the cases somebody most needs a
           // true one.
           pill: 'Previously allowed',
-          detail: 'Access was allowed on this Mac. Test the level before a real take.',
+          detail: 'Access was allowed on this computer. Test the level before a real take.',
           emphasis: 'quiet',
           action: 'Test microphone',
         }
