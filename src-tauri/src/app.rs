@@ -132,12 +132,12 @@ pub fn run() {
             // static so a download cannot outlive the app that started it.
             handle.manage(crate::speech::model_manager::SpeechModelManager::new());
 
-            // A staging directory belongs to an install that did not finish.
-            // Extraction is never resumed, so anything here is garbage that
-            // would otherwise hold ~161 MB until the next successful install.
-            if let Err(err) = crate::speech::model_store::clear_staging(&data_dir) {
-                tracing::warn!(error = %err, "could not sweep model staging directories");
-            }
+            // Put back any model whose replacement was interrupted mid-commit
+            // (§152). Restore-only: it never deletes, so it cannot damage an
+            // install running in another instance. Stale staging is swept by
+            // the next install of that model instead, which is the moment it
+            // is provably garbage.
+            crate::speech::model_store::recover_interrupted(&data_dir);
 
             // The alignment engine runs beside the recogniser that feeds it, so a
             // transcript frame and the audio clock it is timed against never

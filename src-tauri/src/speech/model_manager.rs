@@ -97,22 +97,36 @@ pub struct StatusError {
     pub message: String,
 }
 
-/// A running install.
+/// A model is being worked on. Downloads and deletions both take one.
 struct Operation {
     id: String,
-    cancel: CancelFlag,
+    /// `None` for a deletion, which is synchronous and cannot be stopped.
+    cancel: Option<CancelFlag>,
     phase: StatusPhase,
     progress_bytes: u64,
     progress_total: u64,
 }
 
+/// Everything the manager knows, under ONE lock.
+///
+/// These were two mutexes — one for running operations, one for the last
+/// failure per model — and every transition had to take both. Between them a
+/// finishing job could remove itself, be descheduled, and then clear a failure
+/// recorded by the job that started in the gap: the screen would show "not
+/// installed" for a download that had just failed. Two locks around one
+/// invariant is an invitation for the halves to disagree, so there is one.
+#[derive(Default)]
+struct ManagerState {
+    operations: HashMap<String, Operation>,
+    /// The last failure per model, so a screen opened after a download failed
+    /// can still say why rather than showing a bare "not installed".
+    failures: HashMap<String, StatusError>,
+}
+
 /// Managed state. One per app.
 #[derive(Default)]
 pub struct SpeechModelManager {
-    operations: Mutex<HashMap<String, Operation>>,
-    /// The last failure per model, so a screen opened after a download failed
-    /// can still say why rather than showing a bare "not installed".
-    failures: Mutex<HashMap<String, StatusError>>,
+    state: Mutex<ManagerState>,
 }
 
 /// The catalogue entry for an id off the IPC boundary.
@@ -156,20 +170,19 @@ impl SpeechModelManager {
         app: &tauri::AppHandle<R>,
         entry: &ModelEntry,
     ) -> SpeechModelStatus {
-        let running = self
-            .operations
-            .lock()
-            .expect("model operations poisoned")
-            .get(&entry.id)
-            .map(|op| (op.id.clone(), op.phase, op.progress_bytes, op.progress_total));
+        // One read of both halves, so the phase and the failure cannot come
+        // from either side of a transition.
+        let (running, failure) = {
+            let state = self.state.lock().expect("model state poisoned");
+            (
+                state.operations.get(&entry.id).map(|op| {
+                    (op.id.clone(), op.phase, op.progress_bytes, op.progress_total)
+                }),
+                state.failures.get(&entry.id).cloned(),
+            )
+        };
 
         let resolved = resolve_for(app, entry);
-        let failure = self
-            .failures
-            .lock()
-            .expect("model failures poisoned")
-            .get(&entry.id)
-            .cloned();
 
         let (phase, operation_id, progress_bytes, progress_total) = match running {
             Some((id, phase, done, total)) => (phase, Some(id), done, total),
@@ -217,31 +230,33 @@ impl SpeechModelManager {
         }
 
         let cancel = {
-            let mut operations = self.operations.lock().expect("model operations poisoned");
-            if operations.contains_key(&entry.id) {
+            let mut state = self.state.lock().expect("model state poisoned");
+            if state.operations.contains_key(&entry.id) {
                 // Already running. Joining is the honest answer to a second
                 // press — a second transfer into the same partial file would
                 // interleave writes and corrupt it.
-                drop(operations);
+                //
+                // The guard is dropped before `status`, which re-locks: this
+                // mutex is not reentrant and holding it here would deadlock.
+                drop(state);
                 return Ok(self.status(app, entry));
             }
             let cancel = CancelFlag::new();
-            operations.insert(
+            state.operations.insert(
                 entry.id.clone(),
                 Operation {
                     id: uuid::Uuid::new_v4().to_string(),
-                    cancel: cancel.clone(),
+                    cancel: Some(cancel.clone()),
                     phase: StatusPhase::Downloading,
                     progress_bytes: 0,
                     progress_total: entry.archive.bytes,
                 },
             );
+            // Claimed and cleared under the SAME guard as the check above, so
+            // a second press cannot land between them.
+            state.failures.remove(&entry.id);
             cancel
         };
-        self.failures
-            .lock()
-            .expect("model failures poisoned")
-            .remove(&entry.id);
 
         let handle = app.clone();
         tauri::async_runtime::spawn(async move {
@@ -260,13 +275,15 @@ impl SpeechModelManager {
         app: &tauri::AppHandle<R>,
         entry: &ModelEntry,
     ) -> SpeechModelStatus {
-        if let Some(op) = self
-            .operations
-            .lock()
-            .expect("model operations poisoned")
-            .get(&entry.id)
         {
-            op.cancel.cancel();
+            let state = self.state.lock().expect("model state poisoned");
+            if let Some(op) = state.operations.get(&entry.id) {
+                // `None` for a deletion, which is synchronous and has nothing
+                // to interrupt.
+                if let Some(cancel) = &op.cancel {
+                    cancel.cancel();
+                }
+            }
         }
         self.status(app, entry)
     }
@@ -277,19 +294,14 @@ impl SpeechModelManager {
         app: &tauri::AppHandle<R>,
         entry: &ModelEntry,
     ) -> Result<SpeechModelStatus, AppError> {
-        if self
-            .operations
-            .lock()
-            .expect("model operations poisoned")
-            .contains_key(&entry.id)
-        {
-            return Err(busy(
-                "Stop the download before removing this model.",
-                "an install is running",
-            ));
-        }
         // A take holding this recogniser is reading these files. Removing them
         // mid-sentence is the one outcome a presenter cannot recover from.
+        //
+        // Checked BEFORE the claim below so a refusal leaves no operation
+        // behind. It remains a check against a moving target — a take can
+        // start immediately afterwards — but `ensure_loaded` validates the
+        // directory before every load, so the worst case is a take that fails
+        // to arm rather than one that dies mid-sentence.
         let speech = app.state::<super::SpeechEngine>();
         if speech.active_generation().is_some()
             && loadable_model(entry).is_some_and(|m| speech.loaded_model_id() == Some(m.id))
@@ -300,49 +312,112 @@ impl SpeechModelManager {
             ));
         }
 
-        let data_dir = app_data_dir(app)?;
-        store::delete_downloaded(&data_dir, entry)
-            .map_err(|e| AppError::Internal(format!("could not remove the model: {e}")))?;
+        // Claim the model, rather than merely observing that nobody else has.
+        // The check and the claim under one guard is what stops a Download
+        // press landing in the gap and having its partial deleted out from
+        // under it — the reason a deletion is an operation at all.
+        {
+            let mut state = self.state.lock().expect("model state poisoned");
+            if state.operations.contains_key(&entry.id) {
+                return Err(busy(
+                    "Stop the download before removing this model.",
+                    "an install is running",
+                ));
+            }
+            state.operations.insert(
+                entry.id.clone(),
+                Operation {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    cancel: None,
+                    phase: StatusPhase::Installing,
+                    progress_bytes: 0,
+                    progress_total: 0,
+                },
+            );
+        }
+
+        let outcome = (|| -> Result<(), AppError> {
+            let data_dir = app_data_dir(app)?;
+            store::delete_downloaded(&data_dir, entry)
+                .map_err(|e| AppError::Internal(format!("could not remove the model: {e}")))
+        })();
+
+        // Released however the delete went; a failed removal must not leave
+        // the model permanently claimed.
+        {
+            let mut state = self.state.lock().expect("model state poisoned");
+            state.operations.remove(&entry.id);
+            state.failures.remove(&entry.id);
+        }
+        outcome?;
+
         // The resident recogniser was loaded from files that are now gone.
         // Evicting is what makes the next take reload from whatever `resolve`
         // finds instead of holding a handle to a deleted directory.
         if let Some(model) = loadable_model(entry) {
             speech.evict_if_loaded(model.id);
         }
-        self.failures
-            .lock()
-            .expect("model failures poisoned")
-            .remove(&entry.id);
         Ok(self.status(app, entry))
     }
 
     fn record_progress(&self, model_id: &str, phase: StatusPhase, done: u64, total: u64) {
-        if let Some(op) = self
-            .operations
-            .lock()
-            .expect("model operations poisoned")
-            .get_mut(model_id)
-        {
+        let mut state = self.state.lock().expect("model state poisoned");
+        if let Some(op) = state.operations.get_mut(model_id) {
             op.phase = phase;
             op.progress_bytes = done;
             op.progress_total = total;
         }
     }
 
-    fn finish(&self, model_id: &str, error: Option<StatusError>) {
-        self.operations
-            .lock()
-            .expect("model operations poisoned")
-            .remove(model_id);
-        let mut failures = self.failures.lock().expect("model failures poisoned");
+    /// Retire an operation, recording how it ended.
+    ///
+    /// `operation_id` is checked: a task only ever retires ITSELF. Without it a
+    /// finishing job could clear a failure belonging to the job that started
+    /// after it — the screen would show "not installed" for a download that
+    /// had just failed for a reason nobody was told.
+    fn finish(&self, model_id: &str, operation_id: &str, error: Option<StatusError>) {
+        let mut state = self.state.lock().expect("model state poisoned");
+        let owns = state
+            .operations
+            .get(model_id)
+            .is_some_and(|op| op.id == operation_id);
+        if !owns {
+            return;
+        }
+        state.operations.remove(model_id);
         match error {
             Some(error) => {
-                failures.insert(model_id.to_string(), error);
+                state.failures.insert(model_id.to_string(), error);
             }
             None => {
-                failures.remove(model_id);
+                state.failures.remove(model_id);
             }
         }
+    }
+
+    /// The id of the operation currently running for this model.
+    fn operation_id(&self, model_id: &str) -> Option<String> {
+        self.state
+            .lock()
+            .expect("model state poisoned")
+            .operations
+            .get(model_id)
+            .map(|op| op.id.clone())
+    }
+}
+
+/// The user-facing half of an error, never the log half.
+///
+/// `AppError`'s `Display` is `"{code}: {log_message}"`, and `log_message` is
+/// documented as never crossing IPC — it carries request detail, digests and
+/// filesystem paths. Putting `to_string()` into a status the Settings panel
+/// renders verbatim published exactly what that field exists to keep private.
+/// `to_payload()` is the same redaction the IPC boundary already applies.
+fn status_error(err: &AppError) -> StatusError {
+    let payload = err.to_payload();
+    StatusError {
+        code: payload.code,
+        message: payload.user_message,
     }
 }
 
@@ -384,16 +459,19 @@ async fn run_install<R: tauri::Runtime>(
     entry: &'static ModelEntry,
     cancel: CancelFlag,
 ) {
+    // Whose operation this is. Every state change below names it, so a task
+    // that has already been superseded cannot retire its successor.
+    let Some(operation_id) = app.state::<SpeechModelManager>().operation_id(&entry.id) else {
+        return;
+    };
+
     let data_dir = match app_data_dir(&app) {
         Ok(dir) => dir,
         Err(err) => {
-            let manager = app.state::<SpeechModelManager>();
-            manager.finish(
+            app.state::<SpeechModelManager>().finish(
                 &entry.id,
-                Some(StatusError {
-                    code: err.code().to_string(),
-                    message: err.to_string(),
-                }),
+                &operation_id,
+                Some(status_error(&err)),
             );
             emit_status(&app, entry);
             return;
@@ -442,15 +520,14 @@ async fn run_install<R: tauri::Runtime>(
             None
         }
         Err(err) => {
+            // The full detail goes to the log, where it belongs; only the
+            // redacted half reaches the screen.
             tracing::warn!(model = %entry.id, error = %err, "speech model install failed");
-            Some(StatusError {
-                code: err.code().to_string(),
-                message: err.to_string(),
-            })
+            Some(status_error(&err))
         }
     };
 
-    app.state::<SpeechModelManager>().finish(&entry.id, error);
+    app.state::<SpeechModelManager>().finish(&entry.id, &operation_id, error);
     emit_status(&app, entry);
 }
 

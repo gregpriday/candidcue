@@ -281,9 +281,18 @@ export const mockSpeech = {
    * Browser dev has no ONNX runtime, so it reports the shape of a healthy
    * installation rather than pretending to transcribe. The packaged build is
    * the only place this can be true or false for a real reason.
+   *
+   * `available` is DERIVED from the model mock below rather than hard-coded
+   * true. The two are answers to the same question, and while they were
+   * independent, deleting the model in browser dev left the Settings header
+   * saying "Installed" over a body offering Download.
    */
   status(): { available: boolean; loaded: boolean; model: string } {
-    return { available: true, loaded: false, model: `${BUNDLED_MODEL_NAME} (mock)` };
+    return {
+      available: mockModelInstalled,
+      loaded: false,
+      model: `${BUNDLED_MODEL_NAME} (mock)`,
+    };
   },
 };
 

@@ -16,6 +16,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setInvokeForTesting } from '../../../src/control/services/ipc';
 import {
+  canDownload,
+  canRemove,
   cancelSpeechModelDownload,
   deleteSpeechModel,
   formatBytes,
@@ -155,10 +157,43 @@ describe('progress fraction', () => {
    * Null, not zero. `installing` and `validating` measure nothing, and a bar
    * snapping back to empty at the very end reads as "it failed and restarted"
    * — the opposite of what happened.
+   *
+   * The totals here are the ones RUST ACTUALLY EMITS: `Validating(0, 1)`,
+   * `Installing(0, 1)`, `Validating(1, 1)`. An earlier version of this test
+   * left `progressTotal: 0` from the fixture, which made it pass against an
+   * implementation that gated on `progressTotal > 0` and therefore rendered
+   * exactly the reset the test claimed to forbid.
    */
   it('is null for phases that have nothing to measure', () => {
-    expect(progressFraction(statusFixture({ phase: 'installing' }))).toBeNull();
-    expect(progressFraction(statusFixture({ phase: 'validating' }))).toBeNull();
+    for (const [phase, bytes, total] of [
+      ['validating', 0, 1],
+      ['installing', 0, 1],
+      ['validating', 1, 1],
+    ] as const) {
+      expect(
+        progressFraction(
+          statusFixture({ phase, progressBytes: bytes, progressTotal: total }),
+        ),
+        `${phase} ${bytes}/${total}`,
+      ).toBeNull();
+    }
+  });
+
+  /** The measured phases still report, so the bar moves where it should. */
+  it('reports a fraction for every byte-measured phase', () => {
+    for (const phase of [
+      'downloading',
+      'verifyingArchive',
+      'extracting',
+      'verifyingFiles',
+    ] as const) {
+      expect(
+        progressFraction(
+          statusFixture({ phase, progressBytes: 25, progressTotal: 100 }),
+        ),
+        phase,
+      ).toBeCloseTo(0.25);
+    }
   });
 
   it('is null when nothing is happening', () => {
@@ -185,33 +220,51 @@ describe('byte formatting', () => {
   });
 });
 
-describe('what the screen shows', () => {
+describe('what the screen offers', () => {
   /**
-   * The download is the ONLY moment the app touches the network for speech.
-   * A status that says a model is installed must also say where it came from,
-   * because "bundled" and "downloaded" differ in whether Remove is offered.
+   * Only a real download is removable, and this is the rule both routes read.
+   *
+   * `bundled` lives inside the app bundle and is not ours to delete.
+   * `override` is `CANDIDCUE_MODELS_DIR`; Remove would delete an app-data copy
+   * the user cannot see while the override stayed installed — a button that
+   * appears to do nothing. An earlier version tested `source !== 'bundled'`,
+   * which offered Remove for an override.
    */
-  it('distinguishes a downloaded model from a bundled one', () => {
-    const downloaded = statusFixture({
-      phase: 'installed',
-      installed: true,
-      source: 'downloaded',
-    });
-    const bundled = statusFixture({ phase: 'installed', installed: true, source: 'bundled' });
-    expect(downloaded.source).toBe('downloaded');
-    expect(bundled.source).toBe('bundled');
-    expect(isBusy(downloaded)).toBe(false);
+  it('offers removal only for a model this machine downloaded', () => {
+    const cases: Array<[SpeechModelStatus['source'], boolean]> = [
+      ['downloaded', true],
+      ['bundled', false],
+      ['override', false],
+      [null, false],
+    ];
+    for (const [source, removable] of cases) {
+      const status = statusFixture({ phase: 'installed', installed: true, source });
+      expect(canRemove(status), `${source}`).toBe(removable);
+    }
+  });
+
+  /** A model still installing is not removable however it got there. */
+  it('never offers removal mid-install', () => {
+    expect(
+      canRemove(statusFixture({ phase: 'extracting', installed: true, source: 'downloaded' })),
+    ).toBe(false);
   });
 
   /**
    * A catalogue entry with no compiled tuning is downloadable and not usable.
-   * Reporting it as merely "not installed" would offer a button that can only
-   * ever fail.
+   * Offering Download for it would be a button that can only ever fail.
    */
-  it('separates unsupported from not-installed', () => {
-    const unsupported = statusFixture({ supported: false });
-    expect(unsupported.supported).toBe(false);
-    expect(unsupported.installed).toBe(false);
+  it('does not offer a download for a model this build cannot load', () => {
+    expect(canDownload(statusFixture({ supported: false }))).toBe(false);
+    expect(canDownload(statusFixture({ supported: true }))).toBe(true);
+    expect(
+      canDownload(statusFixture({ phase: 'downloading', supported: true })),
+      'already running',
+    ).toBe(false);
+    expect(
+      canDownload(statusFixture({ phase: 'installed', installed: true, supported: true })),
+      'already installed',
+    ).toBe(false);
   });
 });
 

@@ -77,15 +77,53 @@ export function isBusy(status: SpeechModelStatus | null): boolean {
 }
 
 /**
+ * The phases whose numbers are a real byte count.
+ *
+ * `installing` and `validating` measure nothing — Rust emits `(0, 1)` and
+ * `(1, 1)` for them as step markers, not progress — so the fraction has to be
+ * decided by the PHASE rather than by whether a total happens to be positive.
+ * Testing `progressTotal > 0` looked equivalent and was not: it turned those
+ * markers into 0%, 0%, 100%, which is the bar snapping back to empty at the
+ * very end that this function exists to prevent.
+ */
+const MEASURED_PHASES: readonly SpeechModelPhase[] = [
+  'downloading',
+  'verifyingArchive',
+  'extracting',
+  'verifyingFiles',
+];
+
+/**
  * How far through, 0–1, or null when the phase has no meaningful fraction.
  *
  * Null rather than 0 for the phases that do not measure themselves: a bar
- * snapping back to empty when verification starts reads as "it failed and
- * restarted", which is the opposite of what happened.
+ * snapping back to empty at the end reads as "it failed and restarted", which
+ * is the opposite of what happened. Null renders as an indeterminate bar.
  */
 export function progressFraction(status: SpeechModelStatus | null): number | null {
-  if (!status || !isBusy(status) || status.progressTotal <= 0) return null;
+  if (!status || !MEASURED_PHASES.includes(status.phase)) return null;
+  if (status.progressTotal <= 0) return null;
   return Math.min(1, status.progressBytes / status.progressTotal);
+}
+
+/**
+ * Whether Remove should be offered.
+ *
+ * Only a model this machine downloaded is ours to delete. `bundled` is inside
+ * the application bundle; `override` is a developer's `CANDIDCUE_MODELS_DIR`,
+ * where Remove would delete an invisible app-data copy and leave the visible
+ * model exactly where it was — a button that appears to do nothing.
+ *
+ * A rule rather than an inline condition because Settings and its tests must
+ * not be able to disagree about it.
+ */
+export function canRemove(status: SpeechModelStatus | null): boolean {
+  return status != null && status.installed && !isBusy(status) && status.source === 'downloaded';
+}
+
+/** Whether Download should be offered. */
+export function canDownload(status: SpeechModelStatus | null): boolean {
+  return status != null && status.supported && !status.installed && !isBusy(status);
 }
 
 /** What the user is told is happening, per phase. */

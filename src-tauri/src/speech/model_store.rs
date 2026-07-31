@@ -56,6 +56,13 @@ const SEAL_VERSION: u32 = 1;
 /// starts with one, so a staging directory can never collide with a real model.
 pub const STAGING_PREFIX: &str = ".staging-";
 
+/// Prefix for a model held aside while its replacement is proven.
+///
+/// Also a sibling of the final directory, for the same reason: the commit and
+/// the rollback are both renames, and a rename only has the atomicity this
+/// design depends on within one filesystem.
+pub const BACKUP_PREFIX: &str = ".backup-";
+
 /// Where partial archives and their resume metadata live, under the models
 /// root. One directory rather than beside each model: a partial download is
 /// not an installed model and should not look like one.
@@ -247,21 +254,78 @@ pub fn remove_dir_if_present(dir: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Delete any staging directory left behind by a run that did not finish.
+/// Where a model being replaced is held until its replacement is proven.
 ///
-/// Extraction is never resumed — only downloads are. A staging directory is
-/// therefore always garbage by the time anything looks at it, and clearing it
-/// before a new attempt keeps a failed run from costing disk forever.
-pub fn clear_staging(app_data_dir: &Path) -> std::io::Result<()> {
+/// A sibling of the final directory, so moving it there and back is a rename
+/// rather than a copy. Deterministic per model rather than random, so a crash
+/// mid-commit leaves exactly one place [`recover_backup`] has to look.
+pub fn backup_path(root: &Path, model: &ModelEntry) -> PathBuf {
+    root.join(format!("{BACKUP_PREFIX}{}", model.install_dir))
+}
+
+/// Put back a model whose replacement was interrupted mid-commit.
+///
+/// The install commit moves the old model aside, renames the new one into
+/// place, proves it, then deletes the backup. A crash between the first two
+/// steps leaves no model and a full backup — the one window where the
+/// transaction is visible from outside. This closes it.
+///
+/// Restore-only, and deliberately: it never deletes anything and only acts
+/// when the target is absent, so running it while another process is
+/// installing cannot destroy that install's work.
+pub fn recover_backup(root: &Path, model: &ModelEntry) -> std::io::Result<bool> {
+    let backup = backup_path(root, model);
+    let target = model.install_path(root);
+    if !backup.is_dir() || target.exists() {
+        return Ok(false);
+    }
+    std::fs::rename(&backup, &target)?;
+    tracing::warn!(
+        model = %model.id,
+        "restored a speech model whose replacement was interrupted"
+    );
+    Ok(true)
+}
+
+/// Recover every model interrupted mid-replacement. Called at startup.
+pub fn recover_interrupted(app_data_dir: &Path) {
+    let root = models_root(app_data_dir);
+    if !root.is_dir() {
+        return;
+    }
+    for model in &super::catalogue::catalogue().models {
+        if let Err(err) = recover_backup(&root, model) {
+            tracing::warn!(model = %model.id, error = %err, "could not restore a model backup");
+        }
+    }
+}
+
+/// Delete staging and backup directories left by a run that did not finish,
+/// for ONE model.
+///
+/// Scoped to a single model, and called only from that model's own install
+/// rather than at startup. A startup-wide sweep looked tidier and was a way to
+/// destroy work: a second instance launching while the first was mid-install
+/// would delete the live staging directory out from under it, and the commit
+/// that followed would fail with the old model already moved aside.
+///
+/// Extraction is never resumed — only downloads are — so a staging directory
+/// belonging to THIS model at the moment we are about to install it is always
+/// garbage. A backup at that moment is garbage too: [`recover_backup`] has
+/// already had its chance to put it back.
+pub fn clear_stale(app_data_dir: &Path, model: &ModelEntry) -> std::io::Result<()> {
     let root = models_root(app_data_dir);
     let entries = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(err) => return Err(err),
     };
+    let staging = format!("{STAGING_PREFIX}{}-", model.install_dir);
+    let backup = format!("{BACKUP_PREFIX}{}", model.install_dir);
     for entry in entries.flatten() {
         let name = entry.file_name();
-        if name.to_string_lossy().starts_with(STAGING_PREFIX) {
+        let name = name.to_string_lossy();
+        if name.starts_with(&staging) || *name == *backup {
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }
@@ -295,6 +359,52 @@ mod tests {
     use super::*;
     use crate::speech::catalogue;
 
+    /// Serialises every test that reads or writes `CANDIDCUE_MODELS_DIR`.
+    ///
+    /// The override is process-wide and cargo runs a suite's tests on threads,
+    /// so the one test that SETS it was racing every test that resolves — and
+    /// the losers saw an override pointing at another test's temp directory.
+    /// It reproduced about one run in four, which is the worst frequency: rare
+    /// enough to look like an unrelated flake, common enough to keep costing.
+    ///
+    /// `resolve` reading the environment is the right production behaviour, so
+    /// the fix belongs here rather than in an API change nothing else wants.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A poisoned lock still serialises. A panicking test must not cascade
+    /// into every other test in this module reporting the same failure.
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner())
+    }
+
+    /// Sets `CANDIDCUE_MODELS_DIR` and puts back whatever was there before.
+    ///
+    /// Restoring on DROP rather than at the end of the test body: a panic
+    /// between set and unset would otherwise leave the variable set for the
+    /// rest of the process, and the next test to resolve would silently pick
+    /// up a temp directory that no longer exists. It also preserves a value a
+    /// developer had exported before running the suite.
+    struct EnvOverride {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvOverride {
+        fn set(value: &Path) -> Self {
+            let previous = std::env::var_os("CANDIDCUE_MODELS_DIR");
+            std::env::set_var("CANDIDCUE_MODELS_DIR", value);
+            Self { previous }
+        }
+    }
+
+    impl Drop for EnvOverride {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => std::env::set_var("CANDIDCUE_MODELS_DIR", value),
+                None => std::env::remove_var("CANDIDCUE_MODELS_DIR"),
+            }
+        }
+    }
+
     /// Enough of a model directory for `ModelFiles::detect` to accept it.
     fn write_detectable_model(dir: &Path) {
         std::fs::create_dir_all(dir).unwrap();
@@ -306,6 +416,7 @@ mod tests {
 
     #[test]
     fn a_sealed_and_detectable_download_resolves() {
+        let _env = env_guard();
         let temp = tempfile::tempdir().unwrap();
         let model = catalogue::default_model();
         let dir = model.install_path(&models_root(temp.path()));
@@ -320,6 +431,7 @@ mod tests {
     /// The window this seal exists for: files in place, load never proven.
     #[test]
     fn an_unsealed_download_is_not_used() {
+        let _env = env_guard();
         let temp = tempfile::tempdir().unwrap();
         let model = catalogue::default_model();
         write_detectable_model(&model.install_path(&models_root(temp.path())));
@@ -333,6 +445,7 @@ mod tests {
     /// A seal from the catalogue entry this build no longer describes.
     #[test]
     fn a_seal_for_a_different_archive_is_not_honoured() {
+        let _env = env_guard();
         let temp = tempfile::tempdir().unwrap();
         let model = catalogue::default_model();
         let dir = model.install_path(&models_root(temp.path()));
@@ -357,6 +470,7 @@ mod tests {
     /// A broken download must not hide a working bundled model.
     #[test]
     fn a_broken_download_falls_through_to_the_bundled_resource() {
+        let _env = env_guard();
         let temp = tempfile::tempdir().unwrap();
         let model = catalogue::default_model();
         // Present but unsealed, and missing a joiner: broken twice over.
@@ -374,6 +488,7 @@ mod tests {
 
     #[test]
     fn nothing_anywhere_resolves_to_nothing() {
+        let _env = env_guard();
         let temp = tempfile::tempdir().unwrap();
         assert!(resolve(temp.path(), None, catalogue::default_model()).is_none());
     }
@@ -381,6 +496,7 @@ mod tests {
     /// A bundled resource is inside the app bundle and is not ours to remove.
     #[test]
     fn deleting_a_download_leaves_the_bundled_resource_alone() {
+        let _env = env_guard();
         let temp = tempfile::tempdir().unwrap();
         let model = catalogue::default_model();
         let downloaded = model.install_path(&models_root(temp.path()));
@@ -423,25 +539,50 @@ mod tests {
     }
 
     #[test]
-    fn staging_directories_are_swept_but_installed_models_are_not() {
+    fn stale_directories_are_swept_but_installed_models_are_not() {
         let temp = tempfile::tempdir().unwrap();
         let model = catalogue::default_model();
         let root = models_root(temp.path());
         let installed = model.install_path(&root);
         write_detectable_model(&installed);
-        let staging = root.join(format!("{STAGING_PREFIX}x-asr-480ms-abc"));
+        let staging = root.join(format!("{STAGING_PREFIX}{}-abc", model.install_dir));
         std::fs::create_dir_all(&staging).unwrap();
+        let backup = backup_path(&root, model);
+        std::fs::create_dir_all(&backup).unwrap();
 
-        clear_staging(temp.path()).unwrap();
+        clear_stale(temp.path(), model).unwrap();
 
         assert!(!staging.exists(), "staging must be swept");
+        assert!(!backup.exists(), "a superseded backup must be swept");
         assert!(installed.exists(), "an installed model must survive");
     }
 
+    /// Scoped to ONE model, so a concurrent install of another is untouched.
+    ///
+    /// The sweep used to run at startup across every model, which meant a
+    /// second app instance launching could delete the staging directory of an
+    /// install running in the first — and that install's commit would then
+    /// fail with the previous model already moved aside.
     #[test]
-    fn sweeping_staging_without_a_models_root_is_not_an_error() {
+    fn sweeping_one_model_leaves_another_models_staging_alone() {
         let temp = tempfile::tempdir().unwrap();
-        clear_staging(temp.path()).unwrap();
+        let root = models_root(temp.path());
+        std::fs::create_dir_all(&root).unwrap();
+        let mine = root.join(format!("{STAGING_PREFIX}x-asr-480ms-abc"));
+        let theirs = root.join(format!("{STAGING_PREFIX}kroko-fr-def"));
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::create_dir_all(&theirs).unwrap();
+
+        clear_stale(temp.path(), catalogue::default_model()).unwrap();
+
+        assert!(!mine.exists(), "this model's staging must be swept");
+        assert!(theirs.exists(), "another model's live staging must survive");
+    }
+
+    #[test]
+    fn sweeping_without_a_models_root_is_not_an_error() {
+        let temp = tempfile::tempdir().unwrap();
+        clear_stale(temp.path(), catalogue::default_model()).unwrap();
     }
 
     /// The override exists so a contributor who ran `pnpm models:fetch` keeps
@@ -453,15 +594,37 @@ mod tests {
         let source_tree = temp.path().join("src-tauri/models");
         write_detectable_model(&model.install_path(&source_tree));
 
-        // Set for this test only. Serialised with the test below by running
-        // both under one #[test], because the environment is process-wide and
-        // cargo runs tests in threads.
-        std::env::set_var("CANDIDCUE_MODELS_DIR", &source_tree);
-        let resolved = resolve(temp.path(), None, model);
-        std::env::remove_var("CANDIDCUE_MODELS_DIR");
+        // The variable is process-wide and cargo runs tests on threads, so the
+        // lock is held for the whole set-resolve-restore sequence. Without it
+        // every other resolving test can observe this override.
+        let _env = env_guard();
+        let _override = EnvOverride::set(&source_tree);
 
-        let resolved = resolved.expect("the override must resolve");
+        let resolved = resolve(temp.path(), None, model).expect("the override must resolve");
         assert_eq!(resolved.source, ModelSource::Override);
+    }
+
+    /// An override pointing somewhere useless is skipped, not preferred.
+    ///
+    /// It is the only source that is not sealed, so shape-checking it is the
+    /// whole of its safety: a stale or half-extracted directory must fall
+    /// through to the download rather than shadow it.
+    #[test]
+    fn an_unusable_override_falls_through_to_the_download() {
+        let temp = tempfile::tempdir().unwrap();
+        let model = catalogue::default_model();
+        let _env = env_guard();
+
+        let empty = temp.path().join("empty-override");
+        std::fs::create_dir_all(model.install_path(&empty)).unwrap();
+        let _override = EnvOverride::set(&empty);
+
+        let downloaded = model.install_path(&models_root(temp.path()));
+        write_detectable_model(&downloaded);
+        write_seal(&downloaded, model).unwrap();
+
+        let resolved = resolve(temp.path(), None, model).expect("the download must be used");
+        assert_eq!(resolved.source, ModelSource::Downloaded);
     }
 
     #[test]

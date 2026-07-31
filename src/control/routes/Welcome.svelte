@@ -38,6 +38,7 @@
     formatBytes,
     getSpeechModelStatus,
     isBusy as isModelBusy,
+    onSpeechModelProgress,
     phaseLabel,
     type SpeechModelStatus,
   } from '../services/speech-models';
@@ -164,13 +165,43 @@
    */
   let modelStatus = $state<SpeechModelStatus | null>(null);
 
+  /**
+   * Subscribed, not sampled.
+   *
+   * A single read on mount was wrong in the ordinary case: the install is
+   * started from Settings and takes minutes, so a user coming back to this
+   * screen would see whatever phase it was in when they left — including
+   * "Downloading" long after it had finished. Every event carries the whole
+   * status, so this assigns.
+   */
   $effect(() => {
-    void getSpeechModelStatus()
-      .then((status) => (modelStatus = status))
-      .catch(() => {
-        // An IPC failure is not evidence about the model. Leave the row on
-        // "Checking…" rather than accusing the installation of being broken.
+    let stop: (() => void) | null = null;
+    let disposed = false;
+    onSpeechModelProgress((status) => {
+      if (!disposed) modelStatus = status;
+    })
+      .then((unlisten) => {
+        if (disposed) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => {})
+      // After the listener, so an install finishing in the gap is not missed.
+      .finally(() => {
+        if (disposed) return;
+        void getSpeechModelStatus()
+          .then((status) => {
+            // A live event is fresher than this snapshot; do not overwrite one.
+            if (!disposed && modelStatus === null) modelStatus = status;
+          })
+          .catch(() => {
+            // An IPC failure is not evidence about the model. Leave the row on
+            // "Checking…" rather than accusing the installation of being broken.
+          });
       });
+    return () => {
+      disposed = true;
+      stop?.();
+    };
   });
 
   const speechState = $derived<RowState>(resolveSpeechState());

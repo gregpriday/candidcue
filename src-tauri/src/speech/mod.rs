@@ -453,15 +453,30 @@ mod tests {
             .filter_map(|entry| entry.as_str())
             .map(|entry| entry.trim_end_matches('/'))
             .collect();
+        // Containment, not equality. An exact-string check passes on `models`,
+        // `models/`, or a glob like `models/*` — every one of which puts the
+        // whole payload back while the test stays green. What is being
+        // asserted is that nothing in the resource list REACHES a model
+        // directory, however it is spelled.
         for model in bundled_models() {
-            assert!(
-                !bundled.contains(&model.resource_dir.trim_end_matches('/')),
-                "tauri.conf.json bundles {} for model {}. Models are downloaded \
-                 after install (#152); bundling one puts ~161 MB back into every \
-                 download. If that is deliberate, this test is the place to say so.",
-                model.resource_dir,
-                model.id
-            );
+            let dir = model.resource_dir.trim_end_matches('/');
+            for entry in &bundled {
+                let reaches = dir == *entry
+                    || dir.starts_with(&format!("{entry}/"))
+                    || entry.trim_end_matches("/*").trim_end_matches("/**") == dir
+                    || dir.starts_with(&format!(
+                        "{}/",
+                        entry.trim_end_matches('*').trim_end_matches('/')
+                    ));
+                assert!(
+                    !reaches,
+                    "tauri.conf.json resource {entry:?} bundles {} for model {}. \
+                     Models are downloaded after install (#152); bundling one puts \
+                     ~161 MB back into every download. If that is deliberate, this \
+                     test is the place to say so.",
+                    model.resource_dir, model.id
+                );
+            }
         }
     }
 

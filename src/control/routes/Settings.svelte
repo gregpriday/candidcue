@@ -69,6 +69,8 @@
   import * as stageService from '../services/stage';
   import { getSpeechEngineStatus, type SpeechEngineStatus } from '../services/stt/local';
   import {
+    canDownload,
+    canRemove,
     cancelSpeechModelDownload,
     deleteSpeechModel,
     formatBytes,
@@ -183,15 +185,14 @@
   }
 
   /**
-   * Re-read the engine status too.
+   * Whether the recogniser is loaded, which is a different question from
+   * whether the model is on disk.
    *
-   * The two answer different questions — "is a model on disk" and "can this
-   * installation transcribe" — and an install changes both. Reading only the
-   * first would leave the pill above still saying "Not installed" after a
-   * download that just finished.
+   * Kept separate from `refreshModelStatus` so a progress event can re-read
+   * only this half. Re-reading both from an event handler would race the event
+   * stream and let an older snapshot land on top of a terminal state.
    */
-  async function refreshSpeechStatus(): Promise<void> {
-    await refreshModelStatus();
+  async function refreshEngineStatus(): Promise<void> {
     try {
       engineStatus = await getSpeechEngineStatus();
     } catch {
@@ -204,6 +205,12 @@
     }
   }
 
+  /** Both halves — for a screen opening, or an action that just completed. */
+  async function refreshSpeechStatus(): Promise<void> {
+    await refreshModelStatus();
+    await refreshEngineStatus();
+  }
+
   async function runModelAction(
     action: () => Promise<SpeechModelStatus>,
   ): Promise<void> {
@@ -212,7 +219,10 @@
     try {
       modelStatus = await action();
     } catch (err) {
-      modelActionError = err instanceof Error ? err.message : String(err);
+      // Tauri rejects with a serialized AppError OBJECT, not an Error, so
+      // `String(err)` renders "[object Object]". `describeError` maps the
+      // stable code to copy and falls back to the redacted user message.
+      modelActionError = describeError(err);
     } finally {
       modelActionBusy = false;
     }
@@ -221,10 +231,6 @@
 
   $effect(() => {
     void loadSettings();
-    // A rejection here is an IPC failure rather than a broken bundle — a
-    // missing model comes back as data — but without this the readout sits on
-    // "Checking…" forever and raises an unhandled rejection behind it.
-    void refreshSpeechStatus();
   });
 
   /**
@@ -239,17 +245,31 @@
   $effect(() => {
     let stop: (() => void) | null = null;
     let disposed = false;
-    void onSpeechModelProgress((status) => {
+    onSpeechModelProgress((status) => {
       modelStatus = status;
       // A finished install changes what the engine can do, and only Rust knows
-      // it finished.
-      if (!isModelBusy(status)) void refreshSpeechStatus();
-    }).then((unlisten) => {
-      // Awaiting the listener can outlive the effect if the screen is left
-      // immediately; without this the subscription leaks.
-      if (disposed) unlisten();
-      else stop = unlisten;
-    });
+      // it finished. Only the ENGINE half is re-read: re-fetching the model
+      // status here would race this event and could overwrite the terminal
+      // state with an older snapshot.
+      if (!isModelBusy(status)) void refreshEngineStatus();
+    })
+      .then((unlisten) => {
+        // Awaiting the listener can outlive the effect if the screen is left
+        // immediately; without this the subscription leaks.
+        if (disposed) unlisten();
+        else stop = unlisten;
+      })
+      // An event bus that will not open is not worth an unhandled rejection.
+      // The screen still works — it just will not live-update.
+      .catch(() => {})
+      // Subscribed FIRST, then reconciled with a snapshot. The other order
+      // loses the terminal event when a screen opens during the last seconds
+      // of an install: the status call snapshots `validating`, the install
+      // finishes before the listener attaches, and nothing ever arrives to
+      // move the screen off "installing".
+      .finally(() => {
+        if (!disposed) void refreshSpeechStatus();
+      });
     return () => {
       disposed = true;
       stop?.();
@@ -1577,15 +1597,26 @@
           title="Speech"
           description="CandidCue transcribes on this machine. There is no account to create and no key to paste — but the recogniser is a large download, so it is fetched once after installation rather than shipped inside the app."
         >
+          <!--
+            `modelStatus` is authoritative for installed / not-installed, and
+            `engineStatus` only upgrades Installed to Ready. They used to be
+            consulted the other way round, which let the pill contradict the
+            body directly beneath it whenever the two calls disagreed — and
+            they disagree for ordinary reasons, since one can fail while the
+            other succeeds.
+          -->
           {#snippet actions()}
-            {#if modelStatus && isModelBusy(modelStatus)}
-              <StatusPill tone="neutral" label={phaseLabel(modelStatus)} />
-            {:else if engineStatus?.available}
-              <StatusPill tone="success" label={engineStatus.loaded ? 'Ready' : 'Installed'} />
-            {:else if modelStatus}
-              <StatusPill tone="warning" label="Not installed" />
-            {:else}
+            {#if !modelStatus}
               <StatusPill tone="neutral" label="Checking…" />
+            {:else if isModelBusy(modelStatus)}
+              <StatusPill tone="neutral" label={phaseLabel(modelStatus)} />
+            {:else if modelStatus.installed}
+              <StatusPill
+                tone="success"
+                label={engineStatus?.loaded ? 'Ready' : 'Installed'}
+              />
+            {:else}
+              <StatusPill tone="warning" label="Not installed" />
             {/if}
           {/snippet}
 
@@ -1622,11 +1653,23 @@
               </div>
             {:else if modelStatus.installed}
               <p class="hint-line">
-                Installed{modelStatus.source === 'bundled'
-                  ? ' with the app'
-                  : ''} — {formatBytes(modelStatus.installedBytes)} on disk.
+                {#if modelStatus.source === 'bundled'}
+                  Installed with the app
+                {:else if modelStatus.source === 'override'}
+                  Loaded from CANDIDCUE_MODELS_DIR
+                {:else}
+                  Installed
+                {/if}
+                — {formatBytes(modelStatus.installedBytes)} on disk.
               </p>
-              {#if modelStatus.source !== 'bundled'}
+              <!--
+                Only a real download is removable. `bundled` lives inside the
+                app bundle and is not ours to delete; `override` is a developer
+                pointing at their own directory, and Remove would silently
+                delete an app-data copy while the override stayed installed —
+                a button that appears to do nothing.
+              -->
+              {#if canRemove(modelStatus)}
                 <div class="model-actions">
                   {#if confirmingModelDelete}
                     <p class="hint-line">
