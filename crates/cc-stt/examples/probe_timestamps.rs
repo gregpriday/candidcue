@@ -5,6 +5,12 @@
 //!
 //! Run: cargo run --release -p cc-stt --example probe_timestamps -- <a.wav> <b.wav>
 //!
+//! One WORD per file when measuring onset-vs-end (`CC_PROBE_TRIM=1`): trimming
+//! gives the outer boundary of each file, so a file holding a whole sentence
+//! pins only its first word's onset and its last word's end. `say -o w.wav
+//! --data-format=LEI16@24000 banana` per word, then let this concatenate them
+//! with an exact gap — that is what makes every onset known.
+//!
 //! Builds the recogniser directly rather than through `LocalRecognizer` because
 //! the raw `RecognizerResult` has to be read at EVERY `get_result()`, and the
 //! session only reads it at one point.
@@ -105,13 +111,24 @@ fn main() {
     let mut boundaries_ms: Vec<(f64, f64)> = Vec::new();
     for (i, arg) in args.iter().enumerate() {
         let (mut samples, sr) = wav_pcm16(Path::new(arg));
+        // Every input has to share a rate: the whole concatenation is fed at
+        // ONE rate, so a stray 16 kHz file would silently re-date every
+        // boundary already measured off the files before it.
+        assert!(
+            rate == 0 || rate == sr,
+            "{arg} is {sr} Hz but an earlier file was {rate} Hz — the measurement \
+             would be against the wrong clock"
+        );
         rate = sr;
         if trim {
             // 1/1000 of full scale — `say` pads generously with true digital
             // silence, so anything above the noise floor is the word itself.
             let loud = |s: &f32| s.abs() > 0.001;
-            let first = samples.iter().position(loud).unwrap_or(0);
-            let last = samples.iter().rposition(loud).unwrap_or(samples.len());
+            let first = samples
+                .iter()
+                .position(loud)
+                .unwrap_or_else(|| panic!("{arg} is silent — there is no onset to measure"));
+            let last = samples.iter().rposition(loud).expect("a loud sample exists");
             samples = samples[first..=last].to_vec();
         }
         if i == 0 && lead_ms > 0 {

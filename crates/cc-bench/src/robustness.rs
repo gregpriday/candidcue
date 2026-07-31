@@ -404,9 +404,11 @@ fn apply(events: &[SttFrame], perts: &[Perturbation], vocab: &[String]) -> Vec<S
     for p in perts {
         let Some(frame) = out.get_mut(p.event) else { continue };
         match frame {
-            SttFrame::Partial { text, audio_ms, .. }
-            | SttFrame::Final { text, audio_end_ms: audio_ms, .. } => {
+            SttFrame::Partial { text, audio_ms, word_times, .. }
+            | SttFrame::Final { text, audio_end_ms: audio_ms, word_times, .. } => {
                 match p.op {
+                    // Only WHEN the frame arrived moved; the words in it did
+                    // not, so their clocks stand.
                     PerturbOp::DelayMs(ms) => *audio_ms += ms as f64,
                     _ => {
                         let mut words: Vec<String> =
@@ -428,6 +430,13 @@ fn apply(events: &[SttFrame], perts: &[Perturbation], vocab: &[String]) -> Vec<S
                             PerturbOp::DelayMs(_) => unreachable!(),
                         }
                         *text = words.join(" ");
+                        // The word list just changed length or spelling, so a
+                        // timing vector built for the old one now describes a
+                        // transcript that no longer exists. Nothing reads it
+                        // yet, which is exactly why it must not be left to rot
+                        // — the day something does, this frame would be a
+                        // corrupt fixture rather than a harder one.
+                        *word_times = None;
                     }
                 }
             }

@@ -63,11 +63,16 @@ fn strip_marker(token: &str) -> &str {
 /// word-initial exactly like a real word: a full stop arrives as `" ."`. Taken
 /// at face value that mints `.` as its own word, and every sentence in the
 /// transcript would carry a bare-stop "word" that the script can never match.
+///
+/// Apostrophes and hyphens are punctuation here TOO, and deliberately so even
+/// though they live inside words. Both readings join them to the word before —
+/// an unmarked `'` continues its word, and a marked `" -"` attaches rather than
+/// opening a new one — so `["It", "'", "s"]` and `[" state", " -", "of"]` come
+/// out as `It's` and `state-of` either way. Carving them out of this test
+/// instead made a MARKED hyphen start a word, turning `state-of-the-art` into
+/// words beginning with hyphens and dated to the hyphen rather than the word.
 fn is_punctuation(stripped: &str) -> bool {
-    !stripped.is_empty()
-        && stripped
-            .chars()
-            .all(|c| !c.is_alphanumeric() && !matches!(c, '\'' | '’' | '-'))
+    !stripped.is_empty() && stripped.chars().all(|c| !c.is_alphanumeric())
 }
 
 /// Join `tokens` into words and put each one on the audio clock.
@@ -97,6 +102,11 @@ pub fn reconstruct(
     if !segment_start_ms.is_finite() || !floor_ms.is_finite() || !ceil_ms.is_finite() {
         return None;
     }
+    // An inverted window describes no instant at all, so there is no honest
+    // answer to give — clamping into it would invent one.
+    if floor_ms > ceil_ms {
+        return None;
+    }
     if timestamps.iter().any(|t| !t.is_finite()) {
         return None;
     }
@@ -105,13 +115,26 @@ pub fn reconstruct(
     // Punctuation ahead of the first real word has nothing to attach to yet, so
     // it waits here for one.
     let mut orphaned = String::new();
+    // A boundary announced by a piece that was NOTHING BUT the marker, waiting
+    // for the piece it belongs to. See the loop below.
+    let mut pending_boundary: Option<f64> = None;
 
     for (token, offset) in tokens.iter().zip(timestamps) {
         let piece = strip_marker(token);
+        let at_ms = segment_start_ms + *offset as f64 * 1000.0;
+
         if piece.is_empty() {
+            // The vocabulary contains a bare boundary marker, and the model
+            // really does emit it: `quick` arrives as `[" ", "q", "u", "i",
+            // "ck"]`. Dropping it loses the only signal that a word started,
+            // and the unmarked pieces then glue onto the word before — the
+            // measured hypothesis `It's a quick` came out as `It's aquick`.
+            // Carry the boundary, and its clock, to the piece that follows.
+            if starts_word(token) {
+                pending_boundary = Some(at_ms);
+            }
             continue;
         }
-        let at_ms = segment_start_ms + *offset as f64 * 1000.0;
 
         if is_punctuation(piece) {
             match words.last_mut() {
@@ -124,12 +147,14 @@ pub fn reconstruct(
             continue;
         }
 
-        if starts_word(token) || words.is_empty() {
+        if starts_word(token) || pending_boundary.is_some() || words.is_empty() {
             let mut text = std::mem::take(&mut orphaned);
             text.push_str(piece);
             words.push(WordTime {
                 text,
-                start_ms: at_ms,
+                // A boundary marker sits where the word begins, so when one
+                // announced this word it is the better clock of the two.
+                start_ms: pending_boundary.take().unwrap_or(at_ms),
             });
         } else {
             // A continuation piece. The word keeps the clock of the piece that
@@ -140,6 +165,7 @@ pub fn reconstruct(
                 .text
                 .push_str(piece);
         }
+        pending_boundary = None;
     }
 
     if words.is_empty() {
@@ -149,10 +175,9 @@ pub fn reconstruct(
     // Bound into the item's known window, and keep the sequence non-decreasing.
     // Equal neighbours are legitimate: the encoder quantises to a frame step,
     // so two short words can genuinely land on the same one.
-    let lo = floor_ms.min(ceil_ms);
-    let mut running = lo;
+    let mut running = floor_ms;
     for word in &mut words {
-        running = word.start_ms.clamp(lo, ceil_ms).max(running);
+        running = word.start_ms.clamp(floor_ms, ceil_ms).max(running);
         word.start_ms = running;
     }
 
@@ -286,6 +311,103 @@ mod tests {
         assert_eq!(words.len(), 2);
         assert_eq!(words[0].text, "It's");
         assert_eq!(words[1].text, "a");
+    }
+
+    /// Straight from the real model: `It's a quick b` decoded as these exact
+    /// pieces, with a BARE boundary marker standing in for the space before
+    /// `quick`. Skipping that marker glued the following pieces onto the word
+    /// before it and produced `aquick`, silently, on ordinary English speech.
+    #[test]
+    fn a_bare_boundary_marker_starts_the_word_that_follows_it() {
+        let words = reconstruct(
+            &tokens(&[" It", "'", "s", " a", " ", "q", "u", "i", "ck", " b"]),
+            &[0.16, 0.2, 0.24, 0.36, 0.6, 0.64, 0.68, 0.72, 0.76, 0.84],
+            0.0,
+            0.0,
+            5_000.0,
+        )
+        .expect("reconstructs");
+
+        let spelled: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+        assert_eq!(spelled, ["It's", "a", "quick", "b"]);
+        // The word takes the MARKER's clock, which is where it began — not the
+        // clock of the first letter after it.
+        assert_close(words[2].start_ms, 600.0);
+    }
+
+    /// A marked hyphen must join the word rather than opening one. Carving
+    /// hyphens out of the punctuation test turned `state-of-the-art` into words
+    /// that begin with a hyphen and are dated to the hyphen.
+    #[test]
+    fn a_marked_hyphen_joins_rather_than_starting_a_word() {
+        let words = reconstruct(
+            &tokens(&[" state", " -", "of", " -", "the"]),
+            &[0.1, 0.2, 0.3, 0.4, 0.5],
+            0.0,
+            0.0,
+            5_000.0,
+        )
+        .expect("reconstructs");
+
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].text, "state-of-the");
+        assert_close(words[0].start_ms, 100.0);
+    }
+
+    /// A trailing apostrophe must not become a word of its own.
+    #[test]
+    fn a_marked_apostrophe_does_not_become_its_own_word() {
+        let words = reconstruct(
+            &tokens(&[" Hello", " '"]),
+            &[0.1, 0.2],
+            0.0,
+            0.0,
+            5_000.0,
+        )
+        .expect("reconstructs");
+
+        assert_eq!(words.len(), 1);
+        assert_eq!(words[0].text, "Hello'");
+    }
+
+    /// An inverted window describes no instant, so there is nothing honest to
+    /// return. It used to answer `Some`, with every word clamped to a value
+    /// BEFORE the item start it was supposed to be bounded by.
+    #[test]
+    fn an_inverted_window_reports_nothing() {
+        assert_eq!(
+            reconstruct(&tokens(&[" a"]), &[1.5], 0.0, 2_000.0, 1_000.0),
+            None
+        );
+    }
+
+    /// The shipped model is bilingual zh-en and the app lets a presenter pick
+    /// Chinese, so this is a real path rather than a curiosity.
+    ///
+    /// Chinese is written without spaces, which sounds like it should collapse
+    /// a whole sentence into one enormous "word". It does not: the recogniser
+    /// marks EVERY character as word-initial, so each one is separately timed —
+    /// which is what a character-based script wants anyway. Measured against
+    /// the real model, not assumed.
+    #[test]
+    fn chinese_characters_are_timed_individually() {
+        let words = reconstruct(
+            &tokens(&[" 今", " 天", " 天", " 气", " 很", " 好", " ，", " 我"]),
+            &[0.48, 0.52, 1.16, 1.4, 1.64, 1.84, 2.0, 2.24],
+            0.0,
+            0.0,
+            5_000.0,
+        )
+        .expect("reconstructs");
+
+        assert_eq!(words.len(), 7, "one word per character, comma attached");
+        assert_eq!(words[0].text, "今");
+        assert_close(words[0].start_ms, 480.0);
+        // The full-width comma attaches to the character before it rather than
+        // becoming a word of its own.
+        assert_eq!(words[5].text, "好，");
+        assert_close(words[5].start_ms, 1840.0);
+        assert_eq!(words[6].text, "我");
     }
 
     /// Timestamps are relative to the segment, so a second utterance's words

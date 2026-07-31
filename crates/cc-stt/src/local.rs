@@ -497,6 +497,7 @@ impl LocalRecognizer {
             started: std::time::Instant::now(),
             last_emitted_ms: 0.0,
             open_item_start_ms: 0.0,
+            prime_offset_ms: prime_ms as f64,
             last_word_times: None,
         }
     }
@@ -524,6 +525,17 @@ pub struct LocalSession<'a> {
     /// inside it is held to — a word cannot have been spoken before the
     /// utterance containing it began.
     open_item_start_ms: f64,
+    /// How far the recogniser's own clock runs AHEAD of the audio clock.
+    ///
+    /// Priming feeds the decoder silence that is deliberately invisible to
+    /// [`Self::audio_ms`] — the clock means "how much of the presenter's audio
+    /// has been heard", and silence this side of the microphone is not that.
+    /// sherpa counts it anyway, so every time it reports is late by exactly the
+    /// priming, and subtracting it here is what keeps the two clocks the same
+    /// clock. Zero for the shipped model, which primes not at all; the knob
+    /// exists for the next one, and a systematic offset is not a thing to
+    /// discover after a model swap.
+    prime_offset_ms: f64,
     /// Word timings for [`Self::last_text`], kept because [`Self::close_item`]
     /// builds its `Final` from the cached text and never asks the recogniser
     /// again. Without this the final — the one frame the ledger treats as
@@ -643,7 +655,7 @@ impl LocalSession<'_> {
                 // shared protocol.
                 let audio_start_ms = result
                     .start_time
-                    .map(|s| s as f64 * 1000.0)
+                    .map(|s| s as f64 * 1000.0 - self.prime_offset_ms)
                     .unwrap_or(audio_ms)
                     .clamp(self.last_emitted_ms, audio_ms);
                 self.last_emitted_ms = audio_start_ms;
@@ -688,7 +700,7 @@ impl LocalSession<'_> {
         ceil_ms: f64,
     ) -> Option<Vec<WordTime>> {
         let timestamps = result.timestamps.as_ref()?;
-        let segment_start_ms = result.start_time? as f64 * 1000.0;
+        let segment_start_ms = result.start_time? as f64 * 1000.0 - self.prime_offset_ms;
         crate::word_times::reconstruct(
             &result.tokens,
             timestamps,
