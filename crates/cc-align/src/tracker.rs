@@ -422,7 +422,7 @@ impl Engine {
                 // a name the recogniser split in two arrives as the one word
                 // the script wrote. Two statements, not one: the script is
                 // borrowed for the atoms, then its interner for the ledger.
-                let atoms = self.script.query_atoms(&text);
+                let atoms = self.script.query_words(&text);
                 self.ledger.revise_atoms(
                     &mut self.script.interner,
                     &item_id,
@@ -437,7 +437,7 @@ impl Engine {
                 text,
                 audio_end_ms,
             } => {
-                let atoms = self.script.query_atoms(&text);
+                let atoms = self.script.query_words(&text);
                 self.ledger.revise_atoms(
                     &mut self.script.interner,
                     &item_id,
@@ -537,7 +537,7 @@ impl Engine {
         let unexplained: &[QueryAtom] = &query[unexplained_start.min(query.len())..];
         let unexplained_content = unexplained
             .iter()
-            .filter(|q| !q.filler && !crate::normalize::is_stopword(&q.surface))
+            .filter(|q| !q.filler && !q.stopword)
             .count();
 
         let ordinary_local_ok = local_candidate

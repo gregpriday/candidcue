@@ -539,6 +539,141 @@ read alone**. A display that runs ahead of the reader at a constant speed scores
 perfectly on every row here. Only the safety and overshoot rows can say whether
 a smoothness win was paid for honestly, and they remain lexicographically first.
 
+## What supporting a language requires
+
+Swapping the recogniser is the small part. `cc-align` was English throughout —
+not by decision, but because nothing else had ever been written — and a French
+model behind an English alignment engine produces a green test suite and a stage
+that does not follow. `crates/cc-align/src/language.rs` now holds the shape of
+the problem; this section holds the bar.
+
+### The normaliser, rule by rule
+
+`LanguageRule` enumerates every rule whose behaviour depends on the language,
+and `RuleDisposition` records what leaving it English costs. A profile that
+omits a `MUST_REPLACE` rule fails `every_language_answers_every_must_replace_rule`,
+so this table cannot drift away from the code without a test going red.
+
+| Disposition | Rules | What it means |
+|---|---|---|
+| `SHARED` | segmentation | Correct unchanged for all four target languages. Whitespace splitting is why the first set is Latin-script; CJK needs a real tokenizer and is a much larger job. |
+| `MUST_REPLACE` | fillers, stopwords, ampersand, decimal syntax, currency symbols, currency order, percent, unit words | Leaving these English is not inert. |
+| `SAFE_EMPTY` | phonetics | Switches off on both sides together, so nothing that matched becomes a mismatch. |
+| `INERT_RECALL_GAP` | contractions, spelled numbers, ordinals | Fail safe — no false merges — but the equivalence they bought is gone. |
+
+Three of the `MUST_REPLACE` rules are worth reading twice, because they are not
+word lists and the obvious reading of "replace the English lists" misses them:
+
+- **Decimal syntax.** English groups with `,` and points with `.`; French,
+  German and Spanish do the opposite. Left alone, a German script's `12,5`
+  normalises to the atom `125`. That is not a missed match, it is the wrong
+  number.
+- **Unit words.** The abbreviations are shared, the spelled forms are English.
+  Left alone, a French script produces the atom `milliseconds`, which the reader
+  will never say.
+- **Ampersand.** `&` is rewritten to the word it is read as, and that word is
+  `et`, `und` or `y`.
+
+**Stopwords** are also stronger than they look. Stopword-ness decides atom
+weight, whether an atom can be a global anchor, and what counts as content
+evidence for the observe/confirm/jump gates — a take whose `le`/`la`/`de` all
+carry full locating weight is a different engine, and false anchoring on a
+frequent function word is what it costs.
+
+**Phonetics starts disabled outside English**, and the reason is measurement
+rather than taste: Double Metaphone was tried against the in-house consonant
+skeleton and measurably lost, so there is no reason to assume a per-language
+phonetic algorithm wins either — it has to be shown on that language's own
+corpus. Folding diacritics before the existing skeleton is the obvious cheap
+alternative and is deliberately not done: accented *vowels* already encode
+identically to unaccented ones, so folding only moves diacritic *consonants* and
+the first-character slot — and the English corpus contains `Przemysław`,
+`Joaquín`, `Dagný Þorvaldsdóttir` and `Reykjavík`, whose keys would change. That
+is an English behaviour change bought for an unmeasured non-English benefit.
+
+### The minimum corpus
+
+Nine scripts across three TTS engines — **18 scoring fixtures**, the shape the
+English corpus already has. The count is fixed rather than a floor because
+`live.dim_never` is an absolute count, and 1-in-18 against 1-in-9 is not a
+comparison. Diagnostic fixtures may sit alongside the core (English carries
+three `fuzzy-follow` runs) but are excluded from scoring.
+
+The nine scripts must cover the difficulty families the English set stratifies
+across — prose, product, technical, long-form, figures, brands, names, refrain,
+huge — because a good score on an easy corpus is not evidence. Figures, names
+and repeated passages are where following actually breaks.
+
+```bash
+# 1. Render the corpus. Both sides of any A/B must come from ONE fresh workdir:
+#    re-synthesis is not deterministic and clip lengths drift by seconds.
+CANDIDCUE_ALLOW_TTS_GENERATION=1 \
+  cargo run --release -p cc-bench -- synth-audio --workdir /tmp/lang-fr --runs ../bench/runs-fr
+
+# 2. Stream it through the real recogniser at real-time pace.
+cargo run --release -p cc-bench -- capture-local \
+  --workdir /tmp/lang-fr --runs ../bench/runs-fr --model ../src-tauri/models/<model>
+```
+
+Each language also needs **its own `blank_penalty` sweep**. The shipping 3.0 was
+swept on the English Tier B corpus, and that sweep found following quality and
+word error rate moving in *opposite* directions past 3.0 — so the value does not
+transfer, and WER must not be used to pick the winner.
+
+### The bar
+
+`crates/cc-bench/src/language_gate.rs`. Absolute limits anchored to the measured
+English baselines, checked by `cc-bench gate-language`, which exits non-zero on
+failure. A language is not required to match English — different model, different
+recording — but it may not be materially worse on the axes that decide whether a
+presenter can use it.
+
+<!-- BEGIN LANGUAGE GATE TABLE (generated — see language_gate::render_bar_markdown) -->
+| Tier | Metric | English | Ship bar |
+|---|---|---:|---:|
+| Tier B | `live.ahead_worst` | 6.700 atoms | <= 7.000 |
+| Tier B | `live.within5` | 94.030 % | >= 90.000 |
+| Tier B | `live.dim_p50_ms` | 500.000 ms | <= 750.000 |
+| Tier B | `live.dim_never` | 1.000 count | <= 1.000 |
+| Tier C | `gate.unread_never_spoken` | 2.903 word·s | <= 3.000 |
+| Tier C | `outcome.readable_availability` | 71.200 % | >= 70.000 |
+| Tier C | `time.lag_p50` | 697.000 ms | <= 800.000 |
+| Tier C | `recover.readable_p50` | 2738.000 ms | <= 3000.000 |
+<!-- END LANGUAGE GATE TABLE -->
+
+Judge depth, not frequency. `live.ahead_worst` is how far the display actually
+got in front of the reader, and running ahead is the failure a fade UI cannot
+survive — a line erased before it is spoken is unreadable, a line that arrives
+late is merely late.
+
+Reported but deliberately **not** gating: `live.ahead_events` (counts occurrences
+rather than depth, and moves with display cadence — the floored dim frontier took
+it from 11 to 30 while `ahead_worst` stayed level), `live.within2` (symmetric, so
+it scores 2 atoms ahead the same as 2 behind), `live.wer` (the recogniser's score,
+and inversely related to following past `blank_penalty` 3.0), and `live.freeze`
+(a symptom; `within5` plus the safety gate already cover the outcome).
+
+```bash
+# Tier C must be the as-shipped layout, or it scores a corridor the product
+# does not have.
+cargo run --release -p cc-bench -- tier-b --runs ../bench/runs-fr --label fr --out /tmp/fr-b.json
+cargo run --release -p cc-bench -- tier-c --runs ../bench/runs-fr --layouts 60hz --focus-lead 0 \
+  --label fr --out /tmp/fr-c.json
+cargo run --release -p cc-bench -- gate-language --label fr --tier-b /tmp/fr-b.json --tier-c /tmp/fr-c.json
+```
+
+### Known gaps, written down rather than fixed
+
+- `compute_weight` in `script.rs` measures word length in UTF-8 **bytes**, so an
+  accented word reads as longer than it is and can cross the `>= 8` weight
+  threshold early. Changing it would move English weights, so it is deferred
+  rather than silently altered here.
+- Tier A's scenarios, ad-lib bank and verbaliser are English. A new language's
+  evidence is captured Tier B plus rendered Tier C; do not claim Tier A coverage
+  for it.
+- Nothing here is a substitute for a real take on real glass, which remains
+  unautomatable on macOS.
+
 ## Reproducibility
 
 Tier A is a pure function of (scripts, plans, seeds, config) — two runs are

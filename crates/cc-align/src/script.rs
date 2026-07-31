@@ -12,7 +12,8 @@
 
 use std::collections::HashMap;
 
-use crate::normalize::{canonical_atoms, is_stopword, phonetic_key, PhoneticKey};
+use crate::language::AlignmentLanguage;
+use crate::normalize::{canonical_atoms_for, is_stopword_for, phonetic_key_for, PhoneticKey};
 
 pub const FLAG_STOPWORD: u8 = 1 << 0;
 pub const FLAG_NUMERIC: u8 = 1 << 1;
@@ -90,21 +91,41 @@ impl Interner {
 }
 
 /// Options mirroring the per-script settings that affect spoken content.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct CompileOptions {
     pub read_headings: bool,
+    /// The language this script is written in.
+    ///
+    /// Set once, here, and then carried by the compiled script for the life of
+    /// the session — see [`CompiledScript::language`].
+    pub language: AlignmentLanguage,
 }
 
-impl Default for CompileOptions {
-    fn default() -> Self {
-        Self {
-            read_headings: false,
-        }
-    }
+/// One normalised transcript word, classified under the script's language.
+#[derive(Debug, Clone)]
+pub struct QueryWord {
+    pub surface: String,
+    pub filler: bool,
+    pub stopword: bool,
+    pub phonetic: PhoneticKey,
 }
 
 #[derive(Debug, Clone)]
 pub struct CompiledScript {
+    /// The language every atom here was normalised under.
+    ///
+    /// Private, and deliberately so. This is the single source of truth for
+    /// the whole session: the tracker normalises incoming transcript text by
+    /// reading it back out (see [`CompiledScript::query_atoms`]), rather than
+    /// being told the language a second time by whoever wired up the engine.
+    ///
+    /// The alternative — a language on `CompileOptions` AND one on
+    /// `AlignmentConfig` — is two values that must agree, and the failure when
+    /// they do not is the "0 of 26" class described in `normalize.rs`: a script
+    /// compiled one way, a transcript normalised another, and two components
+    /// with different opinions about what a word is. Storing it once makes that
+    /// disagreement unrepresentable instead of merely tested against.
+    language: AlignmentLanguage,
     pub atoms: Vec<ScriptAtom>,
     pub interner: Interner,
     /// token id → ascending atom indexes where it occurs.
@@ -176,8 +197,33 @@ impl CompiledScript {
     /// all script words in their own right: if the script says both `rust` and
     /// `light` on their own, two words is a reading it already supports and
     /// guessing otherwise would be the aligner's job, not the normaliser's.
+    /// The language this script was compiled in.
+    pub fn language(&self) -> AlignmentLanguage {
+        self.language
+    }
+
     pub fn query_atoms(&self, text: &str) -> Vec<String> {
-        self.rejoin_split_words(canonical_atoms(text))
+        self.rejoin_split_words(canonical_atoms_for(self.language, text))
+    }
+
+    /// Transcript text, normalised and classified the way the script itself was.
+    ///
+    /// The classification travels WITH the atom rather than being recomputed
+    /// downstream, which is what stops the ledger and the aligner reaching for
+    /// the global English helpers behind the script's back. `filler`,
+    /// `stopword` and the phonetic key are all language decisions, and this is
+    /// the one place in the transcript path that knows the language.
+    pub fn query_words(&self, text: &str) -> Vec<QueryWord> {
+        let profile = self.language.profile();
+        self.query_atoms(text)
+            .into_iter()
+            .map(|surface| QueryWord {
+                filler: profile.is_filler(&surface),
+                stopword: profile.is_stopword(&surface),
+                phonetic: phonetic_key_for(self.language, &surface),
+                surface,
+            })
+            .collect()
     }
 
     /// Is this canonical word one the script itself contains? The interner is
@@ -303,12 +349,19 @@ pub fn compile(source: &str, options: CompileOptions) -> CompiledScript {
     let mut interner = Interner::default();
     let mut atoms: Vec<ScriptAtom> = Vec::new();
     let paras = for_each_spoken_line(source, options, |line_no, para, text| {
-        push_line(text, line_no, para, &mut interner, &mut atoms);
+        push_line(
+            text,
+            line_no,
+            para,
+            options.language,
+            &mut interner,
+            &mut atoms,
+        );
     });
 
     let para_count = if atoms.is_empty() { 0 } else { paras + 1 };
     let token_count = atoms.len() as u32;
-    finalize(atoms, interner, para_count, token_count)
+    finalize(atoms, interner, para_count, token_count, options.language)
 }
 
 /// Walk the Markdown once and hand every SPOKEN run of text to `visit`, with
@@ -431,11 +484,16 @@ pub struct TokenInput {
 /// fine: the atom→token axis is built from what actually survives, so it stays
 /// monotone regardless.
 pub fn compile_tokens(tokens: &[TokenInput]) -> CompiledScript {
+    compile_tokens_in(tokens, AlignmentLanguage::English)
+}
+
+/// The same, for a caller that knows which language the tokens are in.
+pub fn compile_tokens_in(tokens: &[TokenInput], language: AlignmentLanguage) -> CompiledScript {
     let mut interner = Interner::default();
     let mut atoms: Vec<ScriptAtom> = Vec::new();
 
     for (index, token) in tokens.iter().enumerate() {
-        for canonical in canonical_atoms(&token.surface) {
+        for canonical in canonical_atoms_for(language, &token.surface) {
             let id = interner.intern(&canonical);
             atoms.push(ScriptAtom {
                 id,
@@ -452,7 +510,7 @@ pub fn compile_tokens(tokens: &[TokenInput]) -> CompiledScript {
     }
 
     let para_count = atoms.last().map_or(0, |a| a.para + 1);
-    finalize(atoms, interner, para_count, tokens.len() as u32)
+    finalize(atoms, interner, para_count, tokens.len() as u32, language)
 }
 
 /// Occurrence counts, weights, flags, postings and the token axis — everything
@@ -463,6 +521,7 @@ fn finalize(
     interner: Interner,
     para_count: u32,
     token_count: u32,
+    language: AlignmentLanguage,
 ) -> CompiledScript {
     // Occurrence counts, weights, flags.
     let mut counts: HashMap<u32, u16> = HashMap::new();
@@ -474,7 +533,7 @@ fn finalize(
         let occurrences = counts[&atom.id];
         atom.occurrences = occurrences;
         let surface = &atom.surface;
-        let stop = is_stopword(surface);
+        let stop = is_stopword_for(language, surface);
         let numeric = surface.chars().next().is_some_and(|c| c.is_ascii_digit());
         if stop {
             atom.flags |= FLAG_STOPWORD;
@@ -491,7 +550,7 @@ fn finalize(
         // Only anchor-grade words can ever take the phonetic relation, so only
         // they need a key; the rest keep the empty one, which never matches.
         if atom.flags & FLAG_ANCHOR != 0 {
-            atom.phonetic = phonetic_key(&atom.surface);
+            atom.phonetic = phonetic_key_for(language, &atom.surface);
         }
     }
 
@@ -523,6 +582,7 @@ fn finalize(
     let para_end = build_para_end(&atoms);
 
     CompiledScript {
+        language,
         para_count,
         token_count,
         atom_token_pos,
@@ -604,8 +664,15 @@ fn compute_weight(surface: &str, stop: bool, occurrences: u16) -> u16 {
     1000
 }
 
-fn push_line(text: &str, line: u32, para: u32, interner: &mut Interner, atoms: &mut Vec<ScriptAtom>) {
-    for canonical in canonical_atoms(text) {
+fn push_line(
+    text: &str,
+    line: u32,
+    para: u32,
+    language: AlignmentLanguage,
+    interner: &mut Interner,
+    atoms: &mut Vec<ScriptAtom>,
+) {
+    for canonical in canonical_atoms_for(language, text) {
         let id = interner.intern(&canonical);
         // On the Markdown path there is no host tokenizer, so every atom is its
         // own token and the axis is the identity — which is exactly what the
@@ -947,5 +1014,60 @@ mod tests {
         let script = compile("alpha beta alpha gamma alpha", CompileOptions::default());
         let alpha = script.interner.get("alpha").unwrap();
         assert_eq!(script.token_postings[&alpha], vec![0, 2, 4]);
+    }
+
+    /// Both compiler entry points record the language, so a script can always
+    /// say what it was normalised as.
+    #[test]
+    fn both_entry_points_carry_the_language() {
+        let from_markdown = compile("alpha beta", CompileOptions::default());
+        assert_eq!(from_markdown.language(), AlignmentLanguage::English);
+
+        let from_tokens = compile_tokens(&[TokenInput {
+            surface: "alpha".into(),
+            line: 0,
+            para: 0,
+        }]);
+        assert_eq!(from_tokens.language(), AlignmentLanguage::English);
+
+        let explicit = compile_tokens_in(
+            &[TokenInput {
+                surface: "alpha".into(),
+                line: 0,
+                para: 0,
+            }],
+            AlignmentLanguage::English,
+        );
+        assert_eq!(explicit.language(), AlignmentLanguage::English);
+    }
+
+    /// The reason the language lives on the compiled script at all.
+    ///
+    /// The transcript side does not get told which language to normalise as —
+    /// it reads the one the script was compiled with. There is no second value
+    /// to disagree with the first, which is what keeps the "0 of 26" class
+    /// (compiler and tracker holding different opinions about what a word is)
+    /// out of reach rather than merely tested for.
+    #[test]
+    fn the_transcript_side_takes_its_language_from_the_script() {
+        let script = compile("We raised $2.4 million in the fourth quarter.", CompileOptions::default());
+
+        // The same text, normalised by the script path and by the query path,
+        // lands on the same atoms — because there is only one language here.
+        assert_eq!(
+            script.query_atoms("we raised $2.4 million"),
+            canonical_atoms_for(script.language(), "we raised $2.4 million")
+        );
+
+        let words = script.query_words("um we raised the money");
+        let surfaces: Vec<&str> = words.iter().map(|w| w.surface.as_str()).collect();
+        assert_eq!(surfaces, vec!["um", "we", "raised", "the", "money"]);
+
+        // And the classification travels WITH the word, rather than being
+        // recomputed downstream against a global English list.
+        assert!(words[0].filler, "um is a filler");
+        assert!(words[1].stopword, "we is a stopword");
+        assert!(!words[2].stopword, "raised is content");
+        assert!(words.iter().all(|w| !w.filler || !w.stopword));
     }
 }
