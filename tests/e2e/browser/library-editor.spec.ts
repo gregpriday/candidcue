@@ -349,19 +349,24 @@ test('a compile during editing neither re-covers the editor nor moves the toolba
   expect(await page.locator('.cm-editor').getAttribute('data-e2e-original')).toBe('yes');
 
   // The toolbar has not moved: one metadata string replaced another of the
-  // same height. Losing the metadata entirely is the harder direction, and
-  // the next test covers that one.
+  // same height. Emptying the script back to zero counts is the harder
+  // direction, and the next test covers that one.
   const after = await toolbar.boundingBox();
   expect(after).not.toBeNull();
   expect(after?.y).toBe(before?.y);
 });
 
 /**
- * Emptying the script takes the metadata away again — and that must not move
- * the toolbar either. This is the direction the reserved row exists for that
- * waiting on the first compile cannot cover on its own.
+ * Emptying the script takes it back to zero counts — and that must not move the
+ * toolbar either. This is the direction waiting on the first compile cannot
+ * cover on its own: it happens long after the panel has gone, on a script the
+ * author is still typing in.
+ *
+ * Two things hold the row here, and either alone would do it: the count line
+ * reports zero rather than vanishing, and the row's space is reserved. The
+ * height is what is under test, not which of them supplied it.
  */
-test('emptying the script drops the metadata without moving the toolbar', async ({ page }) => {
+test('emptying the script reports zero without moving the toolbar', async ({ page }) => {
   await page.goto('/control.html');
   const list = page.getByRole('list', { name: 'Scripts' });
   await list.getByRole('button', { name: /Launch keynote/ }).click();
@@ -379,9 +384,9 @@ test('emptying the script drops the metadata without moving the toolbar', async 
   await page.keyboard.press('ControlOrMeta+a');
   await page.keyboard.press('Backspace');
 
-  // No spoken words left, so the metadata has nothing to report — and the row
-  // it vacated stays exactly where it was.
-  await expect.poll(() => page.locator('.meta').textContent()).toBe('');
+  // No spoken words left, so the metadata reports zero — in the same row, at
+  // the same height, exactly where it was.
+  await expect.poll(() => page.locator('.meta').textContent()).toBe('0 words · — · 0 cues');
   const after = await toolbar.boundingBox();
   expect(after).not.toBeNull();
   expect(after?.y).toBe(before?.y);
@@ -423,8 +428,9 @@ test('reveals the editor anyway when the compile worker never answers', async ({
   await expect(page.locator('.cm-content')).toContainText('Welcome everyone to the show');
   await expect(page.getByRole('status').filter({ hasText: 'Opening script…' })).toHaveCount(0);
 
-  // Nothing compile-derived can be there, and the metadata row it would have
-  // filled is holding its space empty rather than collapsing.
-  await expect(page.locator('.meta')).toHaveText('');
+  // Nothing compile-derived can be there, so the row says so with the em dash
+  // it keeps for "no compile to report" rather than stating a count nobody has
+  // worked out — and it is on the glass, holding its height, either way.
+  await expect(page.locator('.meta')).toHaveText('—');
   await expect(page.locator('.meta')).toHaveCount(1);
 });
