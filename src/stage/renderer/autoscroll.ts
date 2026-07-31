@@ -209,3 +209,43 @@ export function autoScrollAtEnd(targetPx: number, maxScrollPx: number): boolean 
   if (maxScrollPx <= 0) return true;
   return targetPx >= maxScrollPx - 1;
 }
+
+export interface NowhereToGoInput {
+  /**
+   * Spoken tokens the DOCUMENT contains — what the compiler produced, not what
+   * the renderer has managed to measure yet.
+   *
+   * The distinction is the whole point. A measured count is zero for a frame or
+   * two after every relayout, and treating that as the end of the script would
+   * stand a running transport down mid-roll; the authored count is a property of
+   * the script and does not flicker.
+   */
+  documentTokenCount: number;
+  maxScrollPx: number;
+}
+
+/**
+ * Can this document be rolled at all?
+ *
+ * Two unrelated ways to answer no, which is why it is worth one function rather
+ * than two conditions at the call site.
+ *
+ * A non-positive scroll range is the obvious one: a script shorter than the
+ * glass has nowhere to go.
+ *
+ * A script with no words is the one that is easy to get wrong, because it does
+ * NOT have a zero range. The stage's padding is a viewport plus the reserved
+ * future lines, so an empty document is a couple of hundred pixels taller than
+ * the glass and its `maxScrollPx` is comfortably positive — while there is
+ * nothing on that paper to roll past, no line map can be built from it, and
+ * `measureAutoScrollScale` can never derive a pace. It is as finished as a
+ * script that ran off the bottom, and the caller has to hear the same answer for
+ * both or the empty one is a transport that runs forever and arrives nowhere.
+ */
+export function autoScrollNowhereToGo(input: NowhereToGoInput): boolean {
+  // Deliberately not a finiteness check: a NaN range is a broken measurement,
+  // not a finished script, and announcing an end for it would stand the
+  // transport down over a rebuild that is about to produce a real number.
+  if (input.maxScrollPx <= 0) return true;
+  return !(input.documentTokenCount > 0);
+}

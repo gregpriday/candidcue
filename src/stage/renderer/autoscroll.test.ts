@@ -7,6 +7,7 @@ import {
   AUTO_SCROLL_MIN_WPM,
   advanceAutoScrollTarget,
   autoScrollAtEnd,
+  autoScrollNowhereToGo,
   autoScrollPxPerSecond,
   clampAutoScrollWpm,
   measureAutoScrollScale,
@@ -171,5 +172,41 @@ describe('autoScrollAtEnd', () => {
     // read to the operator as the feature refusing to start.
     expect(autoScrollAtEnd(Number.NaN, 10_000)).toBe(false);
     expect(autoScrollAtEnd(100, Number.NaN)).toBe(false);
+  });
+});
+
+/**
+ * The guard that decides whether the transport has anything to do at all.
+ *
+ * The case worth naming is the empty script, because the obvious test for it is
+ * wrong. A blank document is not a zero scroll range: the stage's own padding is
+ * a viewport plus the reserved future lines, so it is a couple of hundred pixels
+ * TALLER than the glass. Everything that keyed the end of the roll on the range
+ * therefore skipped it, and — with `emptyRenderedLineMap` hard-coding
+ * `valid: false` — it fell to the map guard below and stayed there: the
+ * transport running, `onautoscrollend` never fired, voice following paused for
+ * the rest of a take that could not move a pixel. New scripts start empty, so
+ * that is the FIRST thing a new script does.
+ */
+describe('autoScrollNowhereToGo', () => {
+  it('is true for a document with words but no room to move', () => {
+    expect(autoScrollNowhereToGo({ documentTokenCount: 400, maxScrollPx: 0 })).toBe(true);
+    expect(autoScrollNowhereToGo({ documentTokenCount: 400, maxScrollPx: -12 })).toBe(true);
+  });
+
+  it('is true for an empty script even though its padding leaves room to move', () => {
+    // The regression. ~150-200px of pure padding is the realistic range for a
+    // blank document, and it is positive on every rig.
+    expect(autoScrollNowhereToGo({ documentTokenCount: 0, maxScrollPx: 180 })).toBe(true);
+  });
+
+  it('is false for an ordinary script that has both words and room', () => {
+    expect(autoScrollNowhereToGo({ documentTokenCount: 400, maxScrollPx: 10_000 })).toBe(false);
+  });
+
+  it('does not end the roll on a scroll range that is not a number', () => {
+    // A rebuild mid-flight, not a finished script. Announcing an end here would
+    // stand a running transport down over a measurement about to arrive.
+    expect(autoScrollNowhereToGo({ documentTokenCount: 400, maxScrollPx: Number.NaN })).toBe(false);
   });
 });

@@ -81,6 +81,7 @@
   import {
     advanceAutoScrollTarget,
     autoScrollAtEnd,
+    autoScrollNowhereToGo,
     autoScrollPxPerSecond,
     measureAutoScrollScale,
   } from './autoscroll';
@@ -2442,8 +2443,19 @@
      * both of those would stay true for the rest of a take that can never move.
      * `autoScrollAtEnd` treats a zero range as the end for exactly this reason;
      * returning before asking it was what made the state unreachable.
+     *
+     * "Nowhere to go" is NOT the same question as "is the range zero", and the
+     * difference is the whole of `autoScrollNowhereToGo`: an empty script's
+     * padding alone makes it taller than the glass, so it has a positive range
+     * and no words on it. Asked about geometry alone, this branch let every
+     * empty document fall through to the map guard below and stay there.
      */
-    if (maxScroll <= 0) {
+    if (
+      autoScrollNowhereToGo({
+        documentTokenCount: doc.tokenToNode.length,
+        maxScrollPx: maxScroll,
+      })
+    ) {
       if (!autoEndReported) {
         autoEndReported = true;
         onautoscrollend?.();
@@ -2462,9 +2474,16 @@
      *
      * Placed BELOW the stand-down and end-of-script branches on purpose: those
      * two report states the operator is waiting on, and a return above them is
-     * what once made "a script with nowhere to go" unreachable. Nothing is lost
-     * by waiting here — with no valid map the engine refuses the target anyway
-     * (§62), so this changes when the transport takes over, not whether.
+     * what once made "a script with nowhere to go" unreachable.
+     *
+     * The invariant that makes this return safe is narrow, and it is the branch
+     * above that supplies it: everything that reaches here HAS words, so its map
+     * is one a rebuild can produce, and waiting costs a frame or two. It is not
+     * "an empty document was caught by the geometry check" — an empty document's
+     * range is positive, and while this branch relied on that it held every one
+     * of them here for the rest of the take. Nothing else is lost by waiting:
+     * with no valid map the engine refuses the target anyway (§62), so this
+     * changes when the transport takes over, not whether.
      */
     if (lineMap === null || !lineMap.valid) return;
 
