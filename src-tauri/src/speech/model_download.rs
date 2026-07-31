@@ -812,7 +812,9 @@ pub async fn install(
         .await
         .and_then(|()| {
             on_progress(Phase::VerifyingArchive, 0, model.archive.bytes);
-            verify_archive(&archive_path, model, cancel, on_progress)
+            tokio::task::block_in_place(|| {
+                verify_archive(&archive_path, model, cancel, on_progress)
+            })
         });
 
         match outcome {
@@ -863,14 +865,9 @@ pub async fn install(
         model.install_dir,
         uuid::Uuid::new_v4()
     ));
-    let outcome = install_from_archive(
-        &archive_path,
-        &staging,
-        &root,
-        model,
-        cancel,
-        on_progress,
-    );
+    let outcome = tokio::task::block_in_place(|| {
+        install_from_archive(&archive_path, &staging, &root, model, cancel, on_progress)
+    });
     if outcome.is_err() {
         let _ = std::fs::remove_dir_all(&staging);
         return outcome;
@@ -1404,7 +1401,7 @@ mod tests {
     }
 
     /// The happy path, end to end: fetch, verify, unpack, install, seal.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_model_downloads_verifies_extracts_and_installs() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -1444,7 +1441,7 @@ mod tests {
     }
 
     /// Every hop is revalidated, so a redirect still lands correctly.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_redirect_is_followed_through_the_hardened_guard() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -1471,7 +1468,7 @@ mod tests {
     /// The production policy has no exemption, so the mock is refused outright
     /// — which is what proves the tests above pass because of the exemption
     /// rather than because the guard is weak.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_strict_policy_refuses_the_mock_origin() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -1497,7 +1494,7 @@ mod tests {
     }
 
     /// A partial from an interrupted run is continued, not restarted.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_interrupted_download_resumes_from_the_partial() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -1568,7 +1565,7 @@ mod tests {
     /// unpacking, or crashing before the seal all leave a full archive on
     /// disk. Re-downloading 128 MB that is already there is the most expensive
     /// possible response to a retry.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_complete_archive_is_reused_without_touching_the_network() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -1605,7 +1602,7 @@ mod tests {
     /// The case `If-Range` exists for. Upstream's release tag is mutable, so a
     /// partial can be a prefix of bytes that are no longer there; appending to
     /// it would produce a file that is neither version.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_replaced_asset_restarts_instead_of_appending() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -1675,7 +1672,7 @@ mod tests {
     /// Started FROM a partial, so a range is actually attempted. With no
     /// partial this behaviour is indistinguishable from an ordinary fresh
     /// download and the test would prove nothing.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_origin_without_range_support_restarts_and_still_installs() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -1736,7 +1733,7 @@ mod tests {
     ///
     /// The end-to-end claim the whole resume design exists for, and the one
     /// the cancel-before-the-first-request test cannot make.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancelling_mid_transfer_keeps_the_partial_and_the_next_run_resumes_it() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -1805,7 +1802,7 @@ mod tests {
     }
 
     /// Bytes that fail the digest never reach a decompressor.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_archive_that_fails_its_digest_is_never_unpacked() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -1853,7 +1850,7 @@ mod tests {
 
     /// A body longer than the catalogue promises is cut off mid-stream rather
     /// than filling the disk and being rejected afterwards.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_body_longer_than_the_catalogue_is_refused() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -1897,7 +1894,7 @@ mod tests {
 
     /// Only catalogue-named members are written. A bundle's extra payload —
     /// test audio, scripts, anything with a path that climbs — never lands.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn only_catalogue_named_members_are_extracted() {
         let mut members = fixture_files();
         members.push(("test_wavs/0.wav", b"not a model file".to_vec()));
@@ -1973,7 +1970,7 @@ mod tests {
     /// A file whose hash does not match must leave any existing installation
     /// exactly where it was — the mixed-model failure the staging order and
     /// the verify-all-before-move rule exist to prevent.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_file_hash_mismatch_leaves_the_previous_install_untouched() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -2040,7 +2037,7 @@ mod tests {
     /// `an_unsealed_target_beside_a_sealed_backup_is_repaired` below — an
     /// earlier version of this test claimed to cover it and did not, because
     /// the staged check rejects the model before any rename happens.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_replacement_that_fails_validation_leaves_the_previous_model_installed() {
         // A catalogue whose files do not include a joiner: every digest
         // matches, so verification passes, and `ModelFiles::detect` then
@@ -2202,7 +2199,7 @@ mod tests {
 
     /// An archive missing a file the catalogue requires is refused, rather
     /// than installing a model that is short a graph.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_archive_missing_a_required_file_is_refused() {
         let all = fixture_files();
         let archive = build_archive("bundle-root", &all[..3]);
@@ -2228,7 +2225,7 @@ mod tests {
     }
 
     /// Cancelling keeps the partial: stopping is usually "not now".
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancelling_reports_cancellation_and_installs_nothing() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -2273,7 +2270,7 @@ mod tests {
     /// stopping at the mirror would have reported a download failure instead.
     /// One policy can only exempt one authority, which is what makes this
     /// two-outcome shape the cheapest honest test.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_dead_mirror_is_not_the_end_of_the_search() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -2320,7 +2317,7 @@ mod tests {
     /// Verification used to happen after the url loop, so the first candidate
     /// that produced a complete-looking file won — and a bad mirror could make
     /// a model permanently uninstallable.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_mirror_serving_corrupt_bytes_falls_through_to_upstream() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);
@@ -2369,7 +2366,7 @@ mod tests {
     }
 
     /// A sidecar describing a different archive must not be resumed into.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_partial_from_a_different_archive_is_discarded() {
         let files = fixture_files();
         let archive = build_archive("bundle-root", &files);

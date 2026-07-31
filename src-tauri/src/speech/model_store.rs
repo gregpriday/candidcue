@@ -257,11 +257,16 @@ pub fn delete_downloaded(app_data_dir: &Path, model: &ModelEntry) -> std::io::Re
 
 /// `remove_dir_all`, treating "it was not there" as success.
 ///
-/// Used immediately before the rename that installs a staged directory:
-/// `rename` onto a non-empty directory fails with `ENOTEMPTY` on macOS and
-/// `EEXIST` on Windows, so clearing the target first is required rather than
-/// tidy. Keeping the gap between the two as short as possible is why this is
-/// its own call at the install site and not part of a longer sequence.
+/// The install path used to call this immediately before renaming a staged
+/// directory into place. It no longer does: a replacement moves the old model
+/// aside to [`backup_path`] instead of deleting it, so that remove-then-rename
+/// window is gone and there is no install-site caller to find.
+///
+/// [`delete_downloaded`] is the one caller left, and there "it was not there"
+/// is exactly the state the user asked for rather than an error: the model may
+/// be absent because an earlier delete succeeded, because an install never got
+/// as far as committing, or because the only copy was ever a bundled one this
+/// function is not allowed to touch.
 pub fn remove_dir_if_present(dir: &Path) -> std::io::Result<()> {
     match std::fs::remove_dir_all(dir) {
         Ok(()) => Ok(()),
