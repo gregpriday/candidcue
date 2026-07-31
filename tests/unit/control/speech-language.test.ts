@@ -12,11 +12,12 @@
  *      snapshot for model B. The reconciliation rule is reproduced here so it
  *      can be pinned without mounting a component.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setInvokeForTesting } from '../../../src/control/services/ipc';
 import {
   getSpeechLanguageOptions,
   languageDisplayName,
+  reconcileModelStatuses,
   selectSpeechLanguage,
   type SpeechLanguageOption,
   type SpeechLanguageOptions,
@@ -124,32 +125,46 @@ describe('language display names', () => {
     expect(languageDisplayName('en-US').toLowerCase()).toContain('english');
   });
 
-  it('falls back to the tag when the runtime has no name for it', () => {
-    // Never empty: a bare tag is a worse label than a name and a better one
-    // than nothing at all.
-    expect(languageDisplayName('zz-ZZ')).not.toBe('');
+  it('falls back to the tag when the runtime cannot name one', () => {
+    // Forced, because a nonsense tag does NOT exercise this path: ICU answers
+    // `zz-ZZ` with "zz (Unknown Region)" rather than failing, so an earlier
+    // version of this test asserted a non-empty string against a value that
+    // never touched the fallback at all.
+    //
+    // `vi.spyOn` rather than assignment: `Intl.DisplayNames` is a read-only
+    // property, so `Intl.DisplayNames = …` does not typecheck.
+    const spy = vi.spyOn(Intl, 'DisplayNames').mockImplementation((() => {
+      throw new RangeError('no ICU data');
+    }) as never);
+    try {
+      expect(languageDisplayName('en-US')).toBe('en-US');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('falls back when the runtime returns nothing for a tag', () => {
+    const spy = vi
+      .spyOn(Intl, 'DisplayNames')
+      .mockImplementation((() => ({ of: () => undefined })) as never);
+    try {
+      expect(languageDisplayName('de-DE')).toBe('de-DE');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
 /*
- * The reconciliation rule, reproduced exactly as the picker applies it.
+ * `reconcileModelStatuses` is imported from the service the component actually
+ * calls — NOT reimplemented here.
  *
- * Kept as a pure function here rather than asserted through a mounted
- * component: the rule is the thing that has to be right, and a DOM test would
- * pin the rendering of it instead.
+ * An earlier version of this file carried a private copy of the rule, which
+ * meant these tests stayed green even if the component stopped reconciling
+ * altogether. A test that cannot fail when the code breaks is worse than no
+ * test, because it reports coverage it does not have.
  */
-function reconcile(
-  current: Record<string, SpeechModelStatus>,
-  seen: Record<string, number>,
-  now: Record<string, number>,
-  incoming: SpeechModelStatus[],
-): Record<string, SpeechModelStatus> {
-  const merged = { ...current };
-  for (const row of incoming) {
-    if ((now[row.modelId] ?? 0) === (seen[row.modelId] ?? 0)) merged[row.modelId] = row;
-  }
-  return merged;
-}
+const reconcile = reconcileModelStatuses;
 
 describe('snapshot versus event, per model', () => {
   it('discards a snapshot for a model whose status moved while it was in flight', () => {

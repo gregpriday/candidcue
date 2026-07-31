@@ -218,8 +218,17 @@ pub struct OfferableLanguage {
 ///
 /// Test (2) is `loadable_model`, the same function `SpeechModelStatus.supported`
 /// reports, so an offer and a status cannot disagree about support.
+///
+/// AT MOST ONE OFFER PER LANGUAGE. Two catalogue entries could serve the same
+/// language — a second English model, or one entry listing both `en` and a
+/// regional variant — and the picker would then show the same language twice
+/// while `offer_for_tag` could only ever activate one of them. Picking a row
+/// that silently activates a different model is worse than not offering the
+/// duplicate, so the FIRST qualifying entry in catalogue order wins. Catalogue
+/// order is a committed file, which makes that a deliberate preference rather
+/// than an accident of iteration.
 pub fn offerable_languages() -> Vec<OfferableLanguage> {
-    let mut offers = Vec::new();
+    let mut offers: Vec<OfferableLanguage> = Vec::new();
     for entry in &catalogue().models {
         // (2) Can this build decode with it at all?
         let Some(model) = loadable_model(entry) else {
@@ -239,6 +248,13 @@ pub fn offerable_languages() -> Vec<OfferableLanguage> {
             // same thing and are allowed to disagree; the recogniser's is the
             // one that decides what comes back.
             if !model.serves_language(primary_subtag) {
+                continue;
+            }
+            // One row per language — see the note on this function.
+            if offers
+                .iter()
+                .any(|existing| existing.primary_subtag == primary_subtag)
+            {
                 continue;
             }
             // Persist the recogniser's own default tag when it is this
@@ -316,6 +332,17 @@ pub fn build<R: tauri::Runtime>(
     // Installed models that back no offer. Only ones actually on disk, and only
     // ones this app downloaded — a bundled or overridden model is not ours to
     // remove, which `canRemove` in the frontend already encodes.
+    //
+    // Scoped to THIS BUILD'S CATALOGUE, which leaves one gap open: a model
+    // installed by a newer build and then downgraded away from is not
+    // enumerated here, and `entry_for` refuses to delete an id the catalogue
+    // does not know — so its disk is stranded until the user upgrades again.
+    // Closing that needs an app-owned on-disk inventory rather than a catalogue
+    // walk, and a deletion path that does not resolve through `entry_for`;
+    // widening `entry_for` instead is not an option, since refusing unknown ids
+    // is exactly what keeps a raw string off the IPC boundary away from the
+    // filesystem. The case this DOES cover is the ordinary one: switching
+    // language leaves the previous model listed and removable.
     let removable: Vec<SpeechModelStatus> = catalogue()
         .models
         .iter()
@@ -379,18 +406,20 @@ fn origins_for(entry: &ModelEntry) -> Vec<SpeechDownloadOrigin> {
         .collect()
 }
 
-/// The host part of an https URL.
+/// The host part of a URL, for display.
 ///
-/// Hand-rolled rather than pulling in a URL parser: the catalogue tests already
-/// pin every one of these to `https://`, and this is used for a line of display
-/// text, not for a request.
+/// `reqwest::Url` rather than splitting on punctuation, which `net.rs` already
+/// does for the hop policy. A hand-rolled version got `https://[2001:db8::1]:443/x`
+/// wrong — splitting the authority at the first colon reports the host as
+/// `[2001` — and a mirror named by an IPv6 literal is a perfectly ordinary URL
+/// to put in the catalogue. Getting it wrong would mean telling the user the
+/// download comes from somewhere it does not.
+///
+/// Credentials and the port are deliberately dropped: neither is part of what a
+/// reader is being told about where their bytes come from.
 fn host_of(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"))?;
-    let host = rest.split(['/', '?', '#']).next()?;
-    // Credentials and a port are not part of what a reader is being told.
-    let host = host.rsplit('@').next()?;
-    let host = host.split(':').next()?;
-    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+    let parsed = reqwest::Url::parse(url).ok()?;
+    parsed.host_str().map(|host| host.to_ascii_lowercase())
 }
 
 #[cfg(test)]
@@ -541,7 +570,13 @@ mod tests {
         assert_eq!(host_of("https://github.com/k2-fsa/x.tar.bz2").as_deref(), Some("github.com"));
         assert_eq!(host_of("https://Mirror.Example:8443/sha256/ab/x").as_deref(), Some("mirror.example"));
         assert_eq!(host_of("https://user:pw@cdn.example/x").as_deref(), Some("cdn.example"));
-        assert_eq!(host_of("ftp://example.com/x"), None);
+        // The case the hand-rolled parser got wrong: splitting the authority at
+        // the first colon reported this host as `[2001`.
+        assert_eq!(
+            host_of("https://[2001:db8::10]:8443/sha256/ab/x").as_deref(),
+            Some("[2001:db8::10]")
+        );
         assert_eq!(host_of("https://"), None);
+        assert_eq!(host_of("not a url"), None);
     }
 }

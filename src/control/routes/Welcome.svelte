@@ -36,17 +36,14 @@
   import { chooseStageDisplay } from '../lib/start-take';
   import * as stageService from '../services/stage';
   import {
-    formatBytes,
-    getSpeechModelStatus,
     isBusy as isModelBusy,
-    onSpeechModelProgress,
     phaseLabel,
     type SpeechModelStatus,
   } from '../services/speech-models';
   import type { DisplayDescriptor } from '../services/stage-types';
   import { markWelcomed } from '../stores/app-status';
   import { navigate } from '../stores/router';
-  import { settings } from '../stores/settings';
+  import { loadSettings, settings } from '../stores/settings';
 
   /**
    * Connected displays are not part of the boot sequence, so unlike the
@@ -164,46 +161,17 @@
    * Non-blocking, like every other row here: writing, importing and the stage
    * all work without a recogniser. Only voice following needs one.
    */
-  let modelStatus = $state<SpeechModelStatus | null>(null);
-
   /**
-   * Subscribed, not sampled.
+   * Reported BY the picker below, not fetched here.
    *
-   * A single read on mount was wrong in the ordinary case: the install is
-   * started from Settings and takes minutes, so a user coming back to this
-   * screen would see whatever phase it was in when they left — including
-   * "Downloading" long after it had finished. Every event carries the whole
-   * status, so this assigns.
+   * This row used to keep its own snapshot and its own listener, and both were
+   * wrong once more than one model could be installed: `getSpeechModelStatus()`
+   * with no argument asks about the CATALOGUE DEFAULT rather than the selected
+   * language, and the listener accepted a progress event for any model at all —
+   * so downloading an inactive language moved a row describing the active one.
+   * The picker already owns that state machine; one owner, one answer.
    */
-  $effect(() => {
-    let stop: (() => void) | null = null;
-    let disposed = false;
-    onSpeechModelProgress((status) => {
-      if (!disposed) modelStatus = status;
-    })
-      .then((unlisten) => {
-        if (disposed) unlisten();
-        else stop = unlisten;
-      })
-      .catch(() => {})
-      // After the listener, so an install finishing in the gap is not missed.
-      .finally(() => {
-        if (disposed) return;
-        void getSpeechModelStatus()
-          .then((status) => {
-            // A live event is fresher than this snapshot; do not overwrite one.
-            if (!disposed && modelStatus === null) modelStatus = status;
-          })
-          .catch(() => {
-            // An IPC failure is not evidence about the model. Leave the row on
-            // "Checking…" rather than accusing the installation of being broken.
-          });
-      });
-    return () => {
-      disposed = true;
-      stop?.();
-    };
-  });
+  let modelStatus = $state<SpeechModelStatus | null>(null);
 
   const speechState = $derived<RowState>(resolveSpeechState());
 
@@ -433,7 +401,18 @@
           </span>
         </div>
         <div class="readiness-picker">
-          <SpeechLanguagePicker compact revision={$settings.revision} />
+          <SpeechLanguagePicker
+            compact
+            revision={$settings.revision}
+            onactivestatus={(status) => (modelStatus = status)}
+            onlanguagechange={async () => {
+              // Awaited: Rust has just superseded the revision this screen was
+              // handed, and the settings store is shared with every other
+              // screen. Leaving it stale would make the NEXT write anywhere in
+              // the app fail its conflict check.
+              await loadSettings(true);
+            }}
+          />
         </div>
       </li>
     </ul>

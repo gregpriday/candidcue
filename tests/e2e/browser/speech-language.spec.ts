@@ -109,9 +109,10 @@ test('the first-run screen asks for a language and states what it costs', async 
   // §153: the choice belongs at first run, not behind a link to Settings.
   await expect(row.locator('select')).toBeVisible();
 
-  // All three facts, before the button that spends bandwidth.
+  // All three facts, before the button that spends bandwidth. "once installed"
+  // rather than "on disk", because the model is not on this machine yet.
   await expect(row).toContainText('128 MB to download');
-  await expect(row).toContainText('162 MB on disk');
+  await expect(row).toContainText('162 MB once installed');
   await expect(row).toContainText('github.com');
 
   // Attribution shown; nothing gating on it.
@@ -123,18 +124,32 @@ test('the first-run screen asks for a language and states what it costs', async 
 
 test('downloading from the picker addresses the model by id', async ({ page }) => {
   watchPageErrors(page);
+  // A NON-DEFAULT model deliberately. Every install command takes an OPTIONAL
+  // `modelId` and falls back to the catalogue default, so a picker that forgot
+  // to send one — or hardcoded the default — would drive the wrong model and
+  // still pass a test aimed at `x-asr-480ms`.
+  const german = option({
+    languageTag: 'de-DE',
+    primarySubtag: 'de',
+    modelId: 'kroko-de',
+    recognizerId: 'streaming-zipformer-de-kroko-2025-08-06',
+    active: false,
+    status: status({
+      modelId: 'kroko-de',
+      languages: ['de'],
+      installed: false,
+      phase: 'notInstalled',
+      downloadBytes: 57_565_698,
+    }),
+  });
   await installTauriShim(page, {
     welcomed: true,
-    languageOptions: languageOptions({
-      languages: [option({ status: status({ installed: false, phase: 'notInstalled' }) })],
-    }),
-    modelStatuses: {
-      'x-asr-480ms': status({ installed: false, phase: 'notInstalled' }),
-    },
+    languageOptions: languageOptions({ languages: [option(), german] }),
   });
   await page.goto('/control.html');
   await openSpeechSettings(page);
 
+  await page.locator('.picker select').selectOption('de-DE');
   await page.getByRole('button', { name: /Download/ }).click();
 
   await expect
@@ -144,12 +159,51 @@ test('downloading from the picker addresses the model by id', async ({ page }) =
           window.__E2E__.calls.filter((c) => c.command === 'start_speech_model_download').length,
       ),
     )
-    .toBeGreaterThan(0);
+    .toBe(1);
 
   const call = await page.evaluate(() => window.__E2E__.lastCall('start_speech_model_download'));
   // The SHORT catalogue id, not the long recogniser id: the install commands
   // resolve a catalogue entry, and the long one names nothing there.
-  expect((call!.args as { modelId?: string }).modelId).toBe('x-asr-480ms');
+  expect((call!.args as { modelId?: string }).modelId).toBe('kroko-de');
+});
+
+test('stopping a download addresses the same model', async ({ page }) => {
+  watchPageErrors(page);
+  const german = option({
+    languageTag: 'de-DE',
+    primarySubtag: 'de',
+    modelId: 'kroko-de',
+    active: false,
+    status: status({
+      modelId: 'kroko-de',
+      languages: ['de'],
+      installed: false,
+      phase: 'downloading',
+      progressBytes: 10_000_000,
+      progressTotal: 57_565_698,
+    }),
+  });
+  await installTauriShim(page, {
+    welcomed: true,
+    languageOptions: languageOptions({ languages: [option(), german] }),
+  });
+  await page.goto('/control.html');
+  await openSpeechSettings(page);
+
+  await page.locator('.picker select').selectOption('de-DE');
+  await page.getByRole('button', { name: 'Stop' }).click();
+
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          window.__E2E__.calls.filter((c) => c.command === 'cancel_speech_model_download').length,
+      ),
+    )
+    .toBe(1);
+
+  const call = await page.evaluate(() => window.__E2E__.lastCall('cancel_speech_model_download'));
+  expect((call!.args as { modelId?: string }).modelId).toBe('kroko-de');
 });
 
 test('moving the dropdown downloads nothing and saves nothing', async ({ page }) => {
@@ -207,13 +261,16 @@ test('activating a language is one write carrying the tag', async ({ page }) => 
   await page.locator('.picker select').selectOption('de-DE');
   await page.getByRole('button', { name: /^Use / }).click();
 
+  // EXACTLY one — not "at least one". The language and the recogniser are
+  // paired in Rust precisely so the screen never issues two writes and risks
+  // them being observed half-applied.
   await expect
     .poll(() =>
       page.evaluate(
         () => window.__E2E__.calls.filter((c) => c.command === 'select_speech_language').length,
       ),
     )
-    .toBeGreaterThan(0);
+    .toBe(1);
 
   const call = await page.evaluate(() => window.__E2E__.lastCall('select_speech_language'));
   const args = call!.args as { input: { expectedRevision: number; languageTag: string } };
@@ -222,12 +279,60 @@ test('activating a language is one write carrying the tag', async ({ page }) => 
   expect(args.input.languageTag).toBe('de-DE');
   expect(typeof args.input.expectedRevision).toBe('number');
 
-  // ONE write. The language and the recogniser are paired in Rust precisely so
-  // the screen never has to issue two and risk them being seen half-applied.
   const generic = await page.evaluate(
     () => window.__E2E__.calls.filter((c) => c.command === 'update_settings').length,
   );
   expect(generic).toBe(0);
+
+  // The choice actually took: the shim applies it, and the picker re-reads.
+  await expect(page.locator('.picker')).toContainText('Currently using German');
+});
+
+/**
+ * The regression this pins: the picker is handed a settings revision, and Rust
+ * supersedes it on every successful selection. If the screen does not reload
+ * the settings document before releasing the button, the NEXT write goes out
+ * against a revision that no longer exists and fails its conflict check — which
+ * the shim now models faithfully.
+ */
+test('a second language change in a row does not fail on a stale revision', async ({ page }) => {
+  watchPageErrors(page);
+  const german = option({
+    languageTag: 'de-DE',
+    primarySubtag: 'de',
+    modelId: 'kroko-de',
+    active: false,
+    status: status({ modelId: 'kroko-de', languages: ['de'], installed: true }),
+  });
+  await installTauriShim(page, {
+    welcomed: true,
+    languageOptions: languageOptions({ languages: [option({ active: false }), german] }),
+  });
+  await page.goto('/control.html');
+  await openSpeechSettings(page);
+
+  await page.locator('.picker select').selectOption('de-DE');
+  await page.getByRole('button', { name: /^Use / }).click();
+  await expect(page.locator('.picker')).toContainText('Currently using German');
+
+  // Straight back to English, with no reload in between.
+  await page.locator('.picker select').selectOption('en-US');
+  await page.getByRole('button', { name: /^Use / }).click();
+  await expect(page.locator('.picker')).toContainText('Currently using');
+
+  // Polled, not read once: the second write is in flight when the assertion
+  // above resolves, and a bare `evaluate` would sample before it lands.
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__E2E__.calls.filter((c) => c.command === 'select_speech_language').length,
+      ),
+    )
+    .toBe(2);
+  // No conflict was surfaced — the second write used the revision Rust wrote.
+  // The shim rejects a stale `expectedRevision`, so this would fail loudly if
+  // the screen had not reloaded the settings document between the two clicks.
+  await expect(page.locator('.picker')).not.toContainText('changed somewhere else');
 });
 
 test('a take blocks the change, and the screen says so before the click', async ({ page }) => {

@@ -233,6 +233,15 @@
         }
       }
     },
+    "select_speech_language": {
+      "command": "select_speech_language",
+      "args": {
+        "input": {
+          "expectedRevision": 3,
+          "languageTag": "en-US"
+        }
+      }
+    },
     "set_control_presenting_off": {
       "command": "set_control_presenting",
       "args": {
@@ -278,9 +287,6 @@
       "args": {
         "expectedRevision": 3,
         "patch": {
-          "audio": {
-            "language": "en-GB"
-          },
           "stageBehavior": {
             "horizontalMirror": true,
             "fixedSpeedWpm": 155

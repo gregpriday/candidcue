@@ -64,7 +64,15 @@ pub async fn get_speech_engine_status<R: tauri::Runtime>(
     db: State<'_, Database>,
     speech: State<'_, SpeechEngine>,
 ) -> Result<SpeechEngineStatus, AppError> {
-    let model = selected_model(&db).await?;
+    // "Never fails" is a promise this command makes in its own doc comment, and
+    // reading the selection introduced a way to break it: a database hiccup
+    // would turn "can I transcribe?" into an exception on a screen that only
+    // wants an answer. An unreadable settings document falls back to the
+    // default recogniser, which is the same model a fresh install runs on.
+    let model = selected_model(&db).await.unwrap_or_else(|err| {
+        tracing::warn!(error = %err, "speech status: could not read the selected model");
+        crate::speech::default_model()
+    });
     // "Is THIS model resident", not "is anything resident". The two are the
     // same answer while one model ships and stop being the same the moment a
     // second does — at which point a status line reporting model B as loaded
@@ -355,6 +363,17 @@ pub async fn select_speech_language<R: tauri::Runtime>(
 /// because a take exists before its transcription stream does: `start_session`
 /// establishes this the moment the take begins arming, and a language change
 /// landing in that window would apply to a take already under way.
+///
+/// A check against a moving target, like the one `SpeechModelManager::delete`
+/// makes for the same reason and documents in the same terms: a take can begin
+/// between this returning false and the write landing. The consequence is
+/// bounded and benign — `ensure_loaded` hands a running session its own `Arc`,
+/// so a take already under way finishes on the recogniser it started with, and
+/// the new choice applies to the next one. That is the behaviour §153 asks for
+/// ("a change applies to the next take"), reached by a different route than
+/// intended. Closing the window properly means latching the selection into the
+/// session at `begin_session`, which is a change to the take lifecycle rather
+/// than to this command.
 fn take_is_running(coordinator: &AppCoordinator) -> bool {
     coordinator.snapshot().session.session_id.is_some()
 }

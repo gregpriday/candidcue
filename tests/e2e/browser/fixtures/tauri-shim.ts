@@ -520,6 +520,41 @@ function shimBody(config: ShimConfig): void {
     };
   }
 
+  /**
+   * The language a `select_speech_language` call has committed, if any.
+   *
+   * Held so the picker's SUBSEQUENT reads reflect the choice. A shim that only
+   * bumped a revision left the screen showing the old active row for ever,
+   * which would let a spec assert "activation worked" against a UI that had not
+   * changed at all.
+   */
+  let selectedLanguageTag: string | null = null;
+
+  /** The options reply, with any committed selection applied. */
+  function currentLanguageOptions(): Record<string, unknown> {
+    const base = (config.languageOptions ?? defaultLanguageOptions()) as {
+      active: Record<string, unknown>;
+      languages: Array<Record<string, unknown>>;
+      [key: string]: unknown;
+    };
+    if (selectedLanguageTag === null) return base;
+    const chosen = base.languages.find((row) => row['languageTag'] === selectedLanguageTag);
+    if (!chosen) return base;
+    return {
+      ...base,
+      active: {
+        languageTag: chosen['languageTag'],
+        primarySubtag: chosen['primarySubtag'],
+        modelId: chosen['modelId'],
+        recognizerId: chosen['recognizerId'],
+      },
+      languages: base.languages.map((row) => ({
+        ...row,
+        active: row['languageTag'] === selectedLanguageTag,
+      })),
+    };
+  }
+
   function handle(command: string, args: Record<string, unknown> | undefined): unknown {
     /*
      * Tauri event plugin (used by @tauri-apps/api/event). `listen` returns the
@@ -695,14 +730,44 @@ function shimBody(config: ShimConfig): void {
        * language with its sizes, origin, attribution and install state.
        */
       case 'get_speech_language_options':
-        return config.languageOptions ?? defaultLanguageOptions();
+        return currentLanguageOptions();
 
-      case 'select_speech_language':
+      case 'select_speech_language': {
         if (config.failSelectLanguage) throw config.failSelectLanguage;
-        // Rust answers with the whole revisioned settings document; the picker
-        // only uses it to know the write landed.
+        const input = (args?.['input'] ?? {}) as {
+          expectedRevision?: number;
+          languageTag?: string;
+        };
+        // The conflict check is half of what this command is for: a stale
+        // revision means another window has written since this screen loaded.
+        // A shim that skipped it would hide a UI holding a superseded revision.
+        if (input.expectedRevision !== settingsDoc.revision) {
+          throw {
+            code: 'SCRIPT_CONFLICT',
+            userMessage: 'Settings changed somewhere else. Reopen this screen and try again.',
+          };
+        }
+        const chosen = (currentLanguageOptions()['languages'] as Array<Record<string, unknown>>).find(
+          (row) => row['languageTag'] === input.languageTag,
+        );
+        if (!chosen) {
+          throw {
+            code: 'STT_LANGUAGE_UNAVAILABLE',
+            userMessage: 'CandidCue cannot follow that language yet.',
+          };
+        }
+        // Both halves of the pair, together — the whole point of the command.
+        const audio = (settingsDoc.value as unknown as Record<string, Record<string, unknown>>)[
+          'audio'
+        ];
+        if (audio) {
+          audio['language'] = chosen['languageTag'];
+          audio['transcriptionModel'] = chosen['recognizerId'];
+        }
+        selectedLanguageTag = String(chosen['languageTag']);
         settingsDoc.revision += 1;
         return settingsDoc;
+      }
 
       case 'list_displays':
         if (control.fail['list_displays']) throw control.fail['list_displays'];

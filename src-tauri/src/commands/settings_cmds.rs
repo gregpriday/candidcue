@@ -16,12 +16,37 @@ pub async fn get_settings(db: State<'_, Database>) -> Result<RevisionedSettings,
     settings::get_settings(db.pool()).await
 }
 
+/// The language and the recogniser are not patchable through here (§153).
+///
+/// Both are half of ONE choice, and this command cannot enforce what that
+/// choice requires: it has no take guard, so it would accept a language change
+/// mid-session, and it does not check that the model is actually on the
+/// machine, so it would happily persist a language the next take cannot load.
+/// `select_speech_language` does both and writes the pair atomically.
+///
+/// Refused rather than quietly ignored. A patch that silently dropped these
+/// keys would leave a caller believing it had changed the language, which is
+/// the same class of lie — a screen disagreeing with the session — that the
+/// dedicated command exists to prevent.
+const SPEECH_SELECTION_KEYS: [&str; 2] = ["language", "transcriptionModel"];
+
 #[tauri::command]
 pub async fn update_settings(
     db: State<'_, Database>,
     expected_revision: i64,
     patch: serde_json::Value,
 ) -> Result<RevisionedSettings, AppError> {
+    if let Some(audio) = patch.get("audio").and_then(serde_json::Value::as_object) {
+        if let Some(key) = SPEECH_SELECTION_KEYS
+            .iter()
+            .find(|key| audio.contains_key(**key))
+        {
+            return Err(AppError::invalid_input(
+                "The speech language is changed through its own screen, not a settings patch.",
+            )
+            .with_detail("field", format!("audio.{key}")));
+        }
+    }
     settings::update_settings(db.pool(), expected_revision, patch).await
 }
 

@@ -34,11 +34,13 @@
   the count for the model whose status came back.
 -->
 <script lang="ts">
+  import { tick } from 'svelte';
   import Button from './Button.svelte';
   import Select from './Select.svelte';
   import StatusPill from './StatusPill.svelte';
   import { describeError } from '../services/errors';
   import {
+    canRemove,
     cancelSpeechModelDownload,
     deleteSpeechModel,
     formatBytes,
@@ -48,6 +50,7 @@
     onSpeechModelProgress,
     phaseLabel,
     progressFraction,
+    reconcileModelStatuses,
     selectSpeechLanguage,
     startSpeechModelDownload,
     type SpeechLanguageOption,
@@ -64,11 +67,27 @@
      * the store the rest of the screen renders from.
      */
     revision: number;
-    /** Told when a language is committed, so the caller can refresh settings. */
-    onlanguagechange?: () => void;
+    /**
+     * Told when a language is committed. AWAITED — the caller reloads the
+     * settings document here, and activation stays busy until it has, so a
+     * second click cannot be issued against the revision Rust has just
+     * superseded.
+     */
+    onlanguagechange?: () => void | Promise<void>;
+    /**
+     * The ACTIVE language's install state, whenever it changes.
+     *
+     * Exists so Welcome and Settings can paint a readiness pill without running
+     * a second copy of this state machine. They used to keep their own status,
+     * their own listener and their own counter — which asked the CATALOGUE
+     * DEFAULT rather than the selected model, and accepted a progress event for
+     * any model at all, so downloading an inactive language moved a pill that
+     * was describing the active one.
+     */
+    onactivestatus?: (status: SpeechModelStatus | null) => void;
   }
 
-  let { compact = false, revision, onlanguagechange }: Props = $props();
+  let { compact = false, revision, onlanguagechange, onactivestatus }: Props = $props();
 
   let options = $state<SpeechLanguageOptions | null>(null);
   /** Per model, so one model's event cannot invalidate another's snapshot. */
@@ -81,6 +100,18 @@
   let highlighted = $state<string | null>(null);
   let selecting = $state(false);
   let selectError = $state<string | null>(null);
+  /** Set when the FIRST snapshot fails, so the panel is not "Checking…" forever. */
+  let loadError = $state<string | null>(null);
+
+  /**
+   * Which refresh is current.
+   *
+   * Without it an older reply can land after a newer one and repaint the whole
+   * panel — the language list, the active row and `changeBlocked` — from a
+   * snapshot that has been superseded. The per-model event rule below cannot
+   * catch that: it compares snapshots against EVENTS, not against each other.
+   */
+  let refreshToken = 0;
 
   const languages = $derived(options?.languages ?? []);
   const changeBlocked = $derived(options?.changeBlocked ?? false);
@@ -105,8 +136,20 @@
   }
 
   const shownStatus = $derived(shown ? statusOf(shown) : null);
-  const shownBusy = $derived(isModelBusy(shownStatus));
-  const shownFraction = $derived(progressFraction(shownStatus));
+
+  /** The language currently in use, whether or not it is the one on screen. */
+  const activeOption = $derived(languages.find((option) => option.active) ?? null);
+
+  /**
+   * Report the ACTIVE language's status upward whenever it moves.
+   *
+   * `$effect` rather than a call inside `refresh()`, so an event that arrives
+   * with no refresh behind it still reaches the parent.
+   */
+  $effect(() => {
+    const status = activeOption ? statusOf(activeOption) : null;
+    onactivestatus?.(status);
+  });
 
   /**
    * Whether committing to the shown language is possible right now.
@@ -125,10 +168,40 @@
 
   function pillFor(option: SpeechLanguageOption): { tone: 'success' | 'neutral' | 'warning'; label: string } {
     const status = statusOf(option);
+    // Busy first: "Downloading" is what is happening, and it supersedes both
+    // other labels for as long as it lasts.
     if (isModelBusy(status)) return { tone: 'neutral', label: phaseLabel(status) };
-    if (option.active) return { tone: 'success', label: status.installed ? 'Active' : 'Needs download' };
-    if (status.installed) return { tone: 'neutral', label: 'Installed' };
+    if (option.active) return { tone: 'success', label: status.installed ? 'In use' : 'Needs download' };
+    if (status.installed) return { tone: 'neutral', label: 'Downloaded' };
     return { tone: 'warning', label: 'Not downloaded' };
+  }
+
+  /** Whether removing this model would actually remove anything. */
+  function removable(status: SpeechModelStatus, modelId: string): boolean {
+    return canRemove(status) && !busyByModel[modelId];
+  }
+
+  /**
+   * The non-destructive half of the open confirmation.
+   *
+   * One variable for every confirm in this component, because `confirmingDelete`
+   * holds a single id — only one question can be open at a time.
+   */
+  let keepButton = $state<HTMLButtonElement | null>(null);
+
+  /**
+   * Ask before removing, and move focus onto "Keep it".
+   *
+   * Pressing Remove destroys the button that had focus. Without this the focus
+   * ring lands back on the document and a keyboard user is dropped at the top
+   * of the panel with an unanswered question they never heard. Focus goes to
+   * the SAFE choice, so the destructive key is never the one already under a
+   * waiting Return — the same rule `RevisionHistory` follows.
+   */
+  async function askToRemove(modelId: string): Promise<void> {
+    confirmingDelete = modelId;
+    await tick();
+    keepButton?.focus();
   }
 
   /**
@@ -139,19 +212,25 @@
    */
   async function refresh(): Promise<void> {
     const seen = { ...eventCountByModel };
+    const token = ++refreshToken;
     try {
       const next = await getSpeechLanguageOptions();
+      // A newer refresh started while this one was in flight, so this reply is
+      // already history. Dropping it whole — rather than merging it — is what
+      // stops the language list and the active row flickering back.
+      if (token !== refreshToken) return;
       options = next;
-      const merged: Record<string, SpeechModelStatus> = { ...statusByModel };
-      for (const row of [...next.languages.map((l) => l.status), ...next.removable]) {
-        if ((eventCountByModel[row.modelId] ?? 0) === (seen[row.modelId] ?? 0)) {
-          merged[row.modelId] = row;
-        }
-      }
-      statusByModel = merged;
-    } catch {
-      // Leave whatever was last known rather than blanking the panel: an IPC
-      // hiccup is not evidence that the language list changed.
+      statusByModel = reconcileModelStatuses(statusByModel, seen, eventCountByModel, [
+        ...next.languages.map((language) => language.status),
+        ...next.removable,
+      ]);
+      loadError = null;
+    } catch (err) {
+      // After a first success, keep what was last known: an IPC hiccup is not
+      // evidence that the language list changed. Before one, there is nothing
+      // to keep, and a panel stuck on "Checking…" for ever tells the user
+      // nothing they can act on.
+      if (options === null && token === refreshToken) loadError = describeError(err);
     }
   }
 
@@ -199,9 +278,15 @@
   ): Promise<void> {
     busyByModel = { ...busyByModel, [modelId]: true };
     errorByModel = { ...errorByModel, [modelId]: null };
+    const seen = { ...eventCountByModel };
     try {
       const status = await action(modelId);
-      statusByModel = { ...statusByModel, [modelId]: status };
+      // Reconciled, not assigned. A command reply is a snapshot like any other
+      // and races the event stream the same way: a fast install can emit its
+      // terminal event before `start_speech_model_download`'s promise delivers
+      // the "downloading" status it captured at the start, and assigning that
+      // unconditionally would walk a finished install backwards.
+      statusByModel = reconcileModelStatuses(statusByModel, seen, eventCountByModel, [status]);
     } catch (err) {
       // Tauri rejects with a serialized AppError OBJECT, not an Error, so
       // `String(err)` renders "[object Object]".
@@ -217,13 +302,18 @@
     selectError = null;
     try {
       await selectSpeechLanguage(revision, option.languageTag);
-      onlanguagechange?.();
+      // Awaited, and BEFORE `selecting` is released. Rust has just superseded
+      // the revision this component was handed, so until the caller has
+      // reloaded the settings document, another click would write against a
+      // revision that no longer exists and fail on the conflict check.
+      await onlanguagechange?.();
+      await refresh();
     } catch (err) {
       selectError = describeError(err);
+      await refresh();
     } finally {
       selecting = false;
     }
-    await refresh();
   }
 
   /** "github.com" — or "mirror.example, then github.com" once one is stood up. */
@@ -237,7 +327,14 @@
 </script>
 
 <div class="picker" class:compact>
-  {#if options === null}
+  {#if options === null && loadError !== null}
+    <!-- The FIRST snapshot failed, so there is nothing to fall back to.
+         "Checking…" for ever would be the panel lying about still trying. -->
+    <p class="inline-alert" role="alert">{loadError}</p>
+    <div class="picker-actions">
+      <Button variant="default" onclick={() => void refresh()}>Try again</Button>
+    </div>
+  {:else if options === null}
     <p class="hint-line" role="status" aria-live="polite">Checking which languages are available…</p>
   {:else if languages.length === 0}
     <!--
@@ -249,13 +346,33 @@
       everything else works.
     </p>
   {:else}
+    <!--
+      §153 asks for "a clear indication of which language is active", and that
+      has to survive the user looking at a DIFFERENT row. Without this line the
+      moment you open the dropdown to check German's size, nothing on the screen
+      says English is still the one doing the listening.
+    -->
+    <p class="active-line" role="status" aria-live="polite">
+      {#if activeOption}
+        Currently using <strong>{languageDisplayName(activeOption.languageTag)}</strong>.
+      {:else}
+        <!-- The persisted language is not one this build offers — a downgrade,
+             or a model whose profile went away. Named rather than hidden. -->
+        No language this version can follow is selected.
+      {/if}
+    </p>
+
     <div class="language-row">
       <Select
         label="Language"
         value={shown?.languageTag ?? ''}
         options={languages.map((option) => ({
           value: option.languageTag,
-          label: languageDisplayName(option.languageTag),
+          // The active row is marked in the menu too, so the choice is legible
+          // while it is open and not only in the line above it.
+          label: option.active
+            ? `${languageDisplayName(option.languageTag)} (in use)`
+            : languageDisplayName(option.languageTag),
         }))}
         onchange={(value) => {
           // Looking is not choosing. Changing this starts no download and saves
@@ -283,8 +400,14 @@
         real a question as "how much will this cost me to fetch?".
       -->
       <p class="hint-line">
-        {formatBytes(status.downloadBytes)} to download, {formatBytes(status.installedBytes)} on
-        disk. From {originLine(shown)}.
+        {#if status.installed}
+          {formatBytes(status.downloadBytes)} to download, {formatBytes(status.installedBytes)} on disk.
+        {:else}
+          <!-- "on disk" would be a false claim about a machine that does not
+               have the model; the number is the footprint it WOULD take. -->
+          {formatBytes(status.downloadBytes)} to download, {formatBytes(status.installedBytes)} once installed.
+        {/if}
+        From {originLine(shown)}.
       </p>
 
       {#if busy}
@@ -303,7 +426,7 @@
           value={fraction ?? undefined}
           aria-label="{name} speech model install progress"
         ></progress>
-        <div class="actions">
+        <div class="picker-actions">
           <Button variant="default" onclick={() => void runModelAction(shown.modelId, cancelSpeechModelDownload)}>
             Stop
           </Button>
@@ -322,7 +445,7 @@
         {#if status.error}
           <p class="hint-line">{status.error.message}</p>
         {/if}
-        <div class="actions">
+        <div class="picker-actions">
           <Button
             variant="primary"
             disabled={busyByModel[shown.modelId]}
@@ -343,17 +466,61 @@
           Transcription runs here; nothing is uploaded.
         </p>
 
-        {#if !shown.active}
-          <div class="actions">
+        <div class="picker-actions">
+          {#if !shown.active}
             <Button variant="primary" disabled={!canActivate} onclick={() => void activate(shown)}>
               Use {name}
             </Button>
-          </div>
-          {#if changeBlocked}
-            <!-- Rust refuses this too; saying so before the click is kinder
-                 than letting it fail. -->
-            <p class="hint-line">End the take to change the speech language.</p>
           {/if}
+          <!--
+            §153 asks for a way to remove a model that is no longer wanted, and
+            the language on screen is the commonest thing somebody wants to
+            reclaim — including the active one, which is the only model most
+            installations have. Leaving removal to the orphan inventory below
+            meant a single-language machine could never free its download at
+            all.
+
+            `canRemove` decides, not an inline condition: only a model this
+            machine DOWNLOADED is ours to delete. `bundled` lives inside the app
+            bundle, and `override` is a developer's CANDIDCUE_MODELS_DIR, where
+            Remove would delete an invisible app-data copy and leave the visible
+            model exactly where it was — a button that appears to do nothing.
+          -->
+          {#if removable(status, shown.modelId)}
+            {#if confirmingDelete === shown.modelId}
+              <Button
+                variant="danger-primary"
+                onclick={() => {
+                  confirmingDelete = null;
+                  void runModelAction(shown.modelId, deleteSpeechModel);
+                }}
+              >
+                Remove it
+              </Button>
+              <Button
+                bind:element={keepButton}
+                variant="default"
+                onclick={() => (confirmingDelete = null)}
+              >
+                Keep it
+              </Button>
+            {:else}
+              <Button variant="danger" onclick={() => void askToRemove(shown.modelId)}>
+                Remove download
+              </Button>
+            {/if}
+          {/if}
+        </div>
+        {#if confirmingDelete === shown.modelId}
+          <p class="inline-alert" role="alert">
+            Remove the {name} speech data? Voice following will not work in {name} until it is
+            downloaded again.
+          </p>
+        {/if}
+        {#if !shown.active && changeBlocked}
+          <!-- Rust refuses this too; saying so before the click is kinder
+               than letting it fail. -->
+          <p class="hint-line">End the take to change the speech language.</p>
         {/if}
       {/if}
 
@@ -389,38 +556,52 @@
       <div class="inventory">
         <h4 class="inventory-title">Other language data on this Mac</h4>
         {#each options.removable as entry (entry.modelId)}
+          <!--
+            The OVERLAID status, not the snapshot's: a removal that has already
+            completed leaves a stale row in `options.removable` until the next
+            refresh, and rendering a Remove button for a model that is no longer
+            there is a button that can only fail.
+          -->
           {@const current = statusByModel[entry.modelId] ?? entry}
-          <div class="inventory-row">
-            <span class="inventory-name">
-              {current.languages.map((tag) => languageDisplayName(tag)).join(', ')}
-              <span class="inventory-size">{formatBytes(current.installedBytes)}</span>
-            </span>
-            {#if confirmingDelete === entry.modelId}
-              <span class="inventory-actions">
-                <Button
-                  variant="danger-primary"
-                  disabled={busyByModel[entry.modelId]}
-                  onclick={() => {
-                    confirmingDelete = null;
-                    void runModelAction(entry.modelId, deleteSpeechModel);
-                  }}
-                >
-                  Remove it
-                </Button>
-                <Button variant="default" onclick={() => (confirmingDelete = null)}>Keep it</Button>
+          {#if current.installed}
+            <div class="inventory-row">
+              <span class="inventory-name">
+                {current.languages.map((tag) => languageDisplayName(tag)).join(', ')}
+                <span class="inventory-size">{formatBytes(current.installedBytes)}</span>
               </span>
-            {:else}
-              <Button
-                variant="danger"
-                disabled={busyByModel[entry.modelId] || isModelBusy(current)}
-                onclick={() => (confirmingDelete = entry.modelId)}
-              >
-                Remove
-              </Button>
+              {#if confirmingDelete === entry.modelId}
+                <span class="inventory-actions">
+                  <Button
+                    variant="danger-primary"
+                    onclick={() => {
+                      confirmingDelete = null;
+                      void runModelAction(entry.modelId, deleteSpeechModel);
+                    }}
+                  >
+                    Remove it
+                  </Button>
+                  <Button
+                    bind:element={keepButton}
+                    variant="default"
+                    onclick={() => (confirmingDelete = null)}
+                  >
+                    Keep it
+                  </Button>
+                </span>
+              {:else if removable(current, entry.modelId)}
+                <Button variant="danger" onclick={() => void askToRemove(entry.modelId)}>
+                  Remove
+                </Button>
+              {/if}
+            </div>
+            {#if confirmingDelete === entry.modelId}
+              <p class="inline-alert" role="alert">
+                Remove this language data? It can be downloaded again later.
+              </p>
             {/if}
-          </div>
-          {#if errorByModel[entry.modelId]}
-            <p class="inline-alert" role="alert">{errorByModel[entry.modelId]}</p>
+            {#if errorByModel[entry.modelId]}
+              <p class="inline-alert" role="alert">{errorByModel[entry.modelId]}</p>
+            {/if}
           {/if}
         {/each}
       </div>
@@ -449,6 +630,12 @@
     color: var(--text-secondary);
   }
 
+  .active-line {
+    margin: 0;
+    font-size: var(--text-sm);
+    color: var(--text-primary);
+  }
+
   /*
     A full-row wash, never a one-sided border on a rounded box.
   */
@@ -461,7 +648,7 @@
     font-size: var(--text-sm);
   }
 
-  .actions {
+  .picker-actions {
     display: flex;
     gap: var(--space-2);
     flex-wrap: wrap;

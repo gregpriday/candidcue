@@ -336,6 +336,39 @@ export async function selectSpeechLanguage(
 }
 
 /**
+ * Fold a snapshot into what is already known, per model.
+ *
+ * THE RULE, and why it is keyed rather than global. A status request and the
+ * event stream race: a snapshot can be issued while an install is validating,
+ * the install can finish and emit its terminal event, and the older reply can
+ * then land on top and strand the panel on a phase that is over. #152 solved
+ * that for one model with a single counter — "discard the snapshot if anything
+ * arrived while it was pending".
+ *
+ * Carrying that counter over unchanged would be a NEW bug: with several models
+ * installable at once, a progress event for model A would discard a perfectly
+ * good snapshot for model B, which had not moved at all. So the comparison is
+ * per model, and a snapshot row is accepted only if THAT model's count is
+ * unchanged.
+ *
+ * Pure and exported so it can be pinned without a webview — the same reason
+ * `isBusy`, `canRemove` and `progressFraction` live out here rather than inside
+ * the component that renders them.
+ */
+export function reconcileModelStatuses(
+  current: Record<string, SpeechModelStatus>,
+  seen: Record<string, number>,
+  now: Record<string, number>,
+  incoming: SpeechModelStatus[],
+): Record<string, SpeechModelStatus> {
+  const merged = { ...current };
+  for (const row of incoming) {
+    if ((now[row.modelId] ?? 0) === (seen[row.modelId] ?? 0)) merged[row.modelId] = row;
+  }
+  return merged;
+}
+
+/**
  * The display name for a language tag, in the reader's own locale.
  *
  * `Intl.DisplayNames` rather than a table in this repository: the names are a

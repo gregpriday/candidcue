@@ -70,9 +70,7 @@
   import * as stageService from '../services/stage';
   import { getSpeechEngineStatus, type SpeechEngineStatus } from '../services/stt/local';
   import {
-    getSpeechModelStatus,
     isBusy as isModelBusy,
-    onSpeechModelProgress,
     phaseLabel,
     type SpeechModelStatus,
   } from '../services/speech-models';
@@ -165,48 +163,30 @@
   /* ------------------------------------------------------- speech model
    *
    * What is left here is the SECTION PILL — "can a take follow me right now?" —
-   * and nothing else. Choosing a language, downloading it, cancelling, and
-   * removing one all moved into `SpeechLanguagePicker` when §153 turned this
-   * from one model into a list of them; a second copy of that state machine
-   * living up here is exactly the drift Welcome's own comment warned about.
+   * and nothing else. Choosing a language, downloading it, cancelling and
+   * removing all moved into `SpeechLanguagePicker` when §153 turned this from
+   * one model into a list of them.
    *
-   * The pill still needs the ACTIVE model's status, so this keeps the one
-   * snapshot it needs. `getSpeechModelStatus()` with no argument answers for
-   * the catalogue default, which is the model a stock install runs on.
+   * The status is REPORTED BY the picker rather than fetched here, and that
+   * matters. This screen used to keep its own snapshot, its own listener and
+   * its own event counter — and both halves were wrong once more than one model
+   * could be installed: `getSpeechModelStatus()` with no argument asks about
+   * the CATALOGUE DEFAULT rather than the selected language, and the listener
+   * accepted a progress event for any model at all. Downloading an inactive
+   * language would move a pill that was describing the active one. One owner,
+   * one answer.
    */
 
   let modelStatus = $state<SpeechModelStatus | null>(null);
 
   /**
-   * How many progress events have landed.
-   *
-   * A snapshot request and the event stream race: a status call can be issued
-   * while the install is validating, the install can finish and emit its
-   * terminal event, and the older reply can then land on top and leave the
-   * pill stuck on a phase that is over. Rust is authoritative and its events
-   * are newer than any request that was already in flight, so a snapshot is
-   * discarded if anything arrived while it was pending.
-   */
-  let modelEventCount = $state(0);
-
-  async function refreshModelStatus(): Promise<void> {
-    const seenBefore = modelEventCount;
-    try {
-      const status = await getSpeechModelStatus();
-      if (modelEventCount === seenBefore) modelStatus = status;
-    } catch {
-      // Leave whatever was last known rather than blanking the panel: an IPC
-      // hiccup is not evidence the model went away.
-    }
-  }
-
-  /**
    * Whether the recogniser is loaded, which is a different question from
    * whether the model is on disk.
    *
-   * Kept separate from `refreshModelStatus` so a progress event can re-read
-   * only this half. Re-reading both from an event handler would race the event
-   * stream and let an older snapshot land on top of a terminal state.
+   * Only ever upgrades the pill from Installed to Ready — `modelStatus` stays
+   * authoritative for installed / not-installed. They used to be consulted the
+   * other way round, which let the pill contradict the body beneath it whenever
+   * the two disagreed, and they disagree for ordinary reasons.
    */
   async function refreshEngineStatus(): Promise<void> {
     try {
@@ -221,59 +201,28 @@
     }
   }
 
-  /** Both halves — for a screen opening, or an action that just completed. */
-  async function refreshSpeechStatus(): Promise<void> {
-    await refreshModelStatus();
-    await refreshEngineStatus();
+  /**
+   * The picker reports the ACTIVE language's install state; this reacts to it.
+   *
+   * A finished install changes what the engine can do, and only Rust knows it
+   * finished — so the engine half is re-read whenever the model half settles.
+   */
+  function adoptSpeechStatus(status: SpeechModelStatus | null): void {
+    modelStatus = status;
+    if (status !== null && !isModelBusy(status)) void refreshEngineStatus();
   }
 
+  /** For the screen opening, and after a language change. */
+  async function refreshSpeechStatus(): Promise<void> {
+    await refreshEngineStatus();
+  }
 
   $effect(() => {
     void loadSettings();
   });
 
-  /**
-   * Follow an install that is already running.
-   *
-   * Subscribed for the life of the screen rather than only while a download is
-   * in flight: the install may have been started from Welcome, or from this
-   * screen before it was navigated away from and back.
-   *
-   * Every event carries the whole status, so this assigns rather than merges.
-   */
   $effect(() => {
-    let stop: (() => void) | null = null;
-    let disposed = false;
-    onSpeechModelProgress((status) => {
-      modelEventCount += 1;
-      modelStatus = status;
-      // A finished install changes what the engine can do, and only Rust knows
-      // it finished. Only the ENGINE half is re-read: re-fetching the model
-      // status here would race this event and could overwrite the terminal
-      // state with an older snapshot.
-      if (!isModelBusy(status)) void refreshEngineStatus();
-    })
-      .then((unlisten) => {
-        // Awaiting the listener can outlive the effect if the screen is left
-        // immediately; without this the subscription leaks.
-        if (disposed) unlisten();
-        else stop = unlisten;
-      })
-      // An event bus that will not open is not worth an unhandled rejection.
-      // The screen still works — it just will not live-update.
-      .catch(() => {})
-      // Subscribed FIRST, then reconciled with a snapshot. The other order
-      // loses the terminal event when a screen opens during the last seconds
-      // of an install: the status call snapshots `validating`, the install
-      // finishes before the listener attaches, and nothing ever arrives to
-      // move the screen off "installing".
-      .finally(() => {
-        if (!disposed) void refreshSpeechStatus();
-      });
-    return () => {
-      disposed = true;
-      stop?.();
-    };
+    void refreshEngineStatus();
   });
 
   /** Diagnostics are only fetched for the screen that shows them (§47.10). */
@@ -1629,11 +1578,14 @@
           -->
           <SpeechLanguagePicker
             revision={$settings.revision}
-            onlanguagechange={() => {
-              // Forced: the store is already loaded, and Rust has just written
-              // a revision the screen would otherwise keep patching against.
-              void loadSettings(true);
-              void refreshSpeechStatus();
+            onactivestatus={adoptSpeechStatus}
+            onlanguagechange={async () => {
+              // Forced AND awaited: the store is already loaded, and Rust has
+              // just written a revision the screen would otherwise keep
+              // patching against. The picker holds its button busy until this
+              // resolves, so a second click cannot race the reload.
+              await loadSettings(true);
+              await refreshSpeechStatus();
             }}
           />
 

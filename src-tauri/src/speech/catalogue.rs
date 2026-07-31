@@ -319,7 +319,18 @@ mod tests {
     fn every_entry_is_well_formed() {
         let mut ids = HashSet::new();
         let mut dirs = HashSet::new();
+        let mut model_names = HashSet::new();
         for model in &catalogue().models {
+            // `modelName` is the join to `cc_stt::models::BundledModel::id`, and
+            // it is what `audio.transcriptionModel` persists. Two entries
+            // sharing one would make that setting ambiguous — `model_dir`
+            // resolves the FIRST match, so the app would silently load a
+            // different package than the one the user picked.
+            assert!(
+                model_names.insert(&model.model_name),
+                "duplicate modelName {}",
+                model.model_name
+            );
             assert!(is_safe_name(&model.id), "{}: unsafe id", model.id);
             assert!(ids.insert(&model.id), "duplicate id {}", model.id);
             assert!(

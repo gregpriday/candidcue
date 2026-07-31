@@ -88,8 +88,20 @@ function optionsFixture(overrides: Partial<SpeechLanguageOptions> = {}): SpeechL
   };
 }
 
+/**
+ * Only what these assertions actually touch.
+ *
+ * `ReturnType<typeof render>` names the GENERIC render overload, not the
+ * specialized result this component's props produce, so assigning one to the
+ * other is a type error — and because `tsconfig.json` includes `tests/**`, that
+ * error fails `pnpm check` rather than merely this file.
+ */
+interface MountedView {
+  container: HTMLElement;
+}
+
 interface MountResult {
-  view: ReturnType<typeof render>;
+  view: MountedView;
   calls: Array<{ command: string; args: unknown }>;
 }
 
@@ -103,7 +115,7 @@ async function mount(
     if (command === 'get_speech_language_options') return options as never;
     return statusFixture() as never;
   });
-  const view = render(SpeechLanguagePicker, { props: { revision: 1, ...props } });
+  const view: MountedView = render(SpeechLanguagePicker, { props: { revision: 1, ...props } });
   // The panel paints "Checking…" until the first snapshot lands.
   await waitFor(() => {
     expect(view.container.textContent ?? '').not.toContain('Checking which languages');
@@ -120,11 +132,11 @@ async function mount(
  * component's INDENTATION, and the next person to reflow a line would get a
  * failing test telling them nothing.
  */
-function text(view: ReturnType<typeof render>): string {
+function text(view: MountedView): string {
   return (view.container.textContent ?? '').replace(/\s+/g, ' ').trim();
 }
 
-function buttonLabelled(view: ReturnType<typeof render>, label: string): HTMLButtonElement | null {
+function buttonLabelled(view: MountedView, label: string): HTMLButtonElement | null {
   return (
     Array.from(view.container.querySelectorAll('button')).find((button) =>
       (button.textContent ?? '').includes(label),
@@ -146,8 +158,16 @@ describe('what is shown before anything downloads', () => {
     const shown = text(view);
     // 133_895_136 B → "128 MB"; 169_347_218 B → "162 MB".
     expect(shown).toContain('128 MB to download');
-    expect(shown).toContain('162 MB on disk');
+    // "once installed", not "on disk": the model is not on this machine, and
+    // claiming it occupies disk it does not occupy is simply false.
+    expect(shown).toContain('162 MB once installed');
+    expect(shown).not.toContain('162 MB on disk');
     expect(shown).toContain('github.com');
+  });
+
+  it('says "on disk" only once the model really is', async () => {
+    const { view } = await mount(optionsFixture());
+    expect(text(view)).toContain('162 MB on disk');
   });
 
   it('shows the licence without making it a gate', async () => {
@@ -342,6 +362,78 @@ describe('an install in flight', () => {
   });
 });
 
+describe('which language is in use', () => {
+  it('names the active language even while another row is being inspected', async () => {
+    const german = optionFixture({
+      languageTag: 'de-DE',
+      primarySubtag: 'de',
+      modelId: 'kroko-de',
+      active: false,
+      status: statusFixture({ modelId: 'kroko-de', installed: false, phase: 'notInstalled' }),
+    });
+    const { view } = await mount(optionsFixture({ languages: [optionFixture(), german] }));
+
+    expect(text(view)).toContain('Currently using');
+
+    const select = view.container.querySelector('select')!;
+    select.value = 'de-DE';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await waitFor(() => expect(text(view)).toContain('Download'));
+
+    // §153 asks for "a clear indication of which language is active". Looking
+    // at German must not make English's active-ness vanish from the screen.
+    expect(text(view)).toContain('Currently using');
+    expect(text(view).toLowerCase()).toContain('english');
+    // …and the menu marks it too.
+    const active = Array.from(view.container.querySelectorAll('option')).find((o) =>
+      o.textContent?.includes('in use'),
+    );
+    expect(active?.value).toBe('en-US');
+  });
+
+  it('says plainly when no offered language is selected', async () => {
+    // A downgrade can leave the persisted language outside the offer list.
+    const { view } = await mount(
+      optionsFixture({ languages: [optionFixture({ active: false })] }),
+    );
+    expect(text(view)).toContain('No language this version can follow is selected');
+  });
+});
+
+describe('removing the language on screen', () => {
+  it('offers Remove for a downloaded model, behind a confirm', async () => {
+    // The regression this pins: removal used to exist ONLY for orphaned models,
+    // so a machine with the single default language could never reclaim its
+    // download at all — a control #152 had and this replaced with nothing.
+    const { view } = await mount(optionsFixture());
+    const remove = buttonLabelled(view, 'Remove download');
+    expect(remove).not.toBeNull();
+
+    remove!.click();
+    await waitFor(() => expect(buttonLabelled(view, 'Remove it')).not.toBeNull());
+    expect(buttonLabelled(view, 'Keep it')).not.toBeNull();
+    // Focus goes to the SAFE choice, so a waiting Return does not delete.
+    // Awaited: the move happens after a `tick()`, one flush later than the
+    // buttons appear.
+    await waitFor(() => {
+      expect(document.activeElement).toBe(buttonLabelled(view, 'Keep it'));
+    });
+  });
+
+  it('does not offer Remove for a model that is not ours to delete', async () => {
+    for (const source of ['bundled', 'override'] as const) {
+      const { view } = await mount(
+        optionsFixture({ languages: [optionFixture({ status: statusFixture({ source }) })] }),
+      );
+      // Removing a bundled or overridden model would delete an app-data copy
+      // and leave the visible one exactly where it was.
+      expect(buttonLabelled(view, 'Remove download')).toBeNull();
+      setInvokeForTesting(null);
+      document.body.innerHTML = '';
+    }
+  });
+});
+
 describe('reclaiming disk', () => {
   it('lists a model backing no offered language, with a confirm step', async () => {
     const orphan = statusFixture({
@@ -363,9 +455,19 @@ describe('reclaiming disk', () => {
   });
 
   it('hides the inventory in the compact first-run form', async () => {
-    const orphan = statusFixture({ modelId: 'kroko-es', languages: ['es'], installed: true });
+    const orphan = statusFixture({
+      modelId: 'kroko-es',
+      languages: ['es'],
+      installed: true,
+      installedBytes: 155_832_407,
+    });
     const { view } = await mount(optionsFixture({ removable: [orphan] }), { compact: true });
-    // Reclaiming disk is not a first-run concern.
-    expect(text(view)).not.toContain('Other language data on this Mac');
+    // Reclaiming disk is not a first-run concern. The heading going is not
+    // enough — the ROW and its action must be absent too, or the section would
+    // merely be unlabelled rather than hidden.
+    const shown = text(view);
+    expect(shown).not.toContain('Other language data on this Mac');
+    expect(shown).not.toContain('Spanish');
+    expect(shown).not.toContain('149 MB');
   });
 });
