@@ -851,6 +851,42 @@ mod tests {
         assert!(audio.language.contains('-'), "a BCP-47 tag, not a bare subtag");
     }
 
+    /// The same requirement as the defaults test above, asked of the whole
+    /// catalogue rather than only the model that happens to ship first.
+    ///
+    /// `migrate_in_place` falls back to the RESOLVED model's
+    /// `default_language`, and the resolved model is whichever one the settings
+    /// document names — so every entry in `bundled_models()`, not just
+    /// `default_model()`, supplies a fallback to somebody. If a model's own
+    /// default fails either half of the conjunction, that fallback is
+    /// unfollowable: the migration would rewrite the language to a value the
+    /// next load rejects for exactly the same reason, repairing it to itself on
+    /// every start. Nothing errors, nothing surfaces, and the stage simply
+    /// never follows for anyone who selected that recogniser.
+    ///
+    /// So the invariant belongs to the catalogue: adding a model whose default
+    /// language this build cannot align has to fail here, at the point where
+    /// the model is added, rather than at a take.
+    #[test]
+    fn every_bundled_model_defaults_to_a_language_this_build_can_follow() {
+        for model in crate::speech::bundled_models() {
+            let language = cc_align::AlignmentLanguage::from_bcp47(model.default_language)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "model {:?} defaults to {:?}, which the alignment engine has no profile for",
+                        model.id, model.default_language
+                    )
+                });
+            assert!(
+                model.serves_language(language.primary_subtag()),
+                "model {:?} defaults to {:?}, which it does not transcribe (it serves {:?})",
+                model.id,
+                model.default_language,
+                model.languages
+            );
+        }
+    }
+
     /// A null patch value resets a field to its default. `merge_json` removes
     /// the key outright, and the container-level `default` then refills it —
     /// so "clear this" and "put it back the way it shipped" are the same act.
