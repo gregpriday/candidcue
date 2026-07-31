@@ -21,7 +21,7 @@ export interface EditorState {
   saveState: SaveState;
   dirty: boolean;
   loading: boolean;
-  mode: 'edit' | 'split' | 'preview';
+  mode: 'edit' | 'preview';
   lastError: string | null;
 }
 

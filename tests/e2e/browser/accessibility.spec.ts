@@ -105,33 +105,3 @@ test('the insert toolbar is one tab stop with arrow-key navigation', async ({ pa
   await page.keyboard.press('Home');
   await expect(toolbar.getByRole('button', { name: 'Cycle heading level' })).toBeFocused();
 });
-
-/**
- * The split divider (issue #118). It carried `role="separator"` with no way to
- * focus it, no keys and no value — a resize control that announced itself and
- * could not be used.
- */
-test('the split divider is focusable and operable from the keyboard', async ({ page }) => {
-  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
-  await page.goto('/control.html');
-  await page.getByRole('list', { name: 'Scripts' }).getByRole('button', { name: /Panel talk/ }).click();
-  await expect(page.getByRole('textbox', { name: 'Script Markdown' })).toBeVisible();
-
-  await page.getByRole('radio', { name: 'Split' }).click();
-  const divider = page.getByRole('separator', { name: 'Resize editor and preview' });
-  await expect(divider).toBeVisible();
-
-  await divider.focus();
-  await expect(divider).toBeFocused();
-
-  // It reports where it is, and the ends match the travel a drag is clamped to.
-  await expect(divider).toHaveAttribute('aria-valuemin', '25');
-  await expect(divider).toHaveAttribute('aria-valuemax', '75');
-
-  await page.keyboard.press('Home');
-  await expect(divider).toHaveAttribute('aria-valuenow', '25');
-  await page.keyboard.press('End');
-  await expect(divider).toHaveAttribute('aria-valuenow', '75');
-  await page.keyboard.press('ArrowLeft');
-  await expect(divider).toHaveAttribute('aria-valuenow', '70');
-});
