@@ -4,3 +4,14 @@
 *.onnx
 tokens.txt
 bpe.model
+
+# Interrupted staging files. `fetch-stt-model.sh` moves each file into place
+# atomically, so one of these means a run died mid-copy.
+.*.part
+
+# ATTRIBUTION.md is generated from catalogue.json beside every model the fetch
+# script installs. The English model's copy is TRACKED — it ships inside the
+# bundle as a Tauri resource, so it must exist in a fresh clone. The others are
+# regenerated on fetch and would be untracked noise.
+*/ATTRIBUTION.md
+!x-asr-480ms/ATTRIBUTION.md
