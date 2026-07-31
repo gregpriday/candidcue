@@ -19,8 +19,15 @@ const SCRIPT = {
   source: '# Launch keynote\n\nWelcome everyone to the show.\n',
 };
 
+/** A script with nothing in it yet — the state issue #143 is about. */
+const BLANK_SCRIPT = {
+  id: '22222222-2222-4222-8222-222222222222',
+  title: 'Blank canvas',
+  source: '',
+};
+
 test.beforeEach(async ({ page }) => {
-  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT] });
+  await installTauriShim(page, { welcomed: true, seedScripts: [SCRIPT, BLANK_SCRIPT] });
 });
 
 test('opens a seeded script, edits it, and autosaves to a real save_script call', async ({ page }) => {
@@ -53,6 +60,46 @@ test('opens a seeded script, edits it, and autosaves to a real save_script call'
   expect(saveCall).not.toBeNull();
   expect((saveCall!.args as Record<string, unknown>)['scriptId']).toBe(SCRIPT.id);
   expect((saveCall!.args as Record<string, unknown>)['source']).toContain('A second line of narration.');
+});
+
+/**
+ * The reserved count line (issue #143).
+ *
+ * The header renders its metadata line only when it has text, and the editor
+ * handed it an empty string until the script had a word in it — so a blank
+ * script showed no line at all and the first keystroke inserted one, pushing
+ * the editor body down as the author started typing.
+ *
+ * The unit tests in tests/unit/control/format.test.ts pin what the line SAYS.
+ * This pins what the old code actually got wrong: that it is on the glass at
+ * zero, and that the header is exactly as tall before the first word as after.
+ */
+test('the count line is already there on a blank script, and typing does not move it', async ({
+  page,
+}) => {
+  await page.goto('/control.html');
+
+  const list = page.getByRole('list', { name: 'Scripts' });
+  await list.getByRole('button', { name: /Blank canvas/ }).click();
+  const editorSurface = page.getByRole('textbox', { name: 'Script Markdown' });
+  await expect(editorSurface).toBeVisible();
+
+  // Present, and reporting zero rather than staying silent.
+  const meta = page.locator('.header .meta');
+  await expect(meta).toHaveText('0 words · — · 0 cues');
+
+  // Measured, not merely absent: two null boxes would compare equal below and
+  // the height assertion would prove nothing at all.
+  const before = await page.locator('.header').boundingBox();
+  expect(before?.height).toBeGreaterThan(0);
+
+  await editorSurface.click();
+  await page.keyboard.type('Hello');
+  await expect(meta).toHaveText('1 word · — · 0 cues');
+
+  // The row was already reserved, so counting up cost the header no height.
+  const after = await page.locator('.header').boundingBox();
+  expect(after?.height).toBe(before?.height);
 });
 
 test('a SCRIPT_CONFLICT rejection drives the F.8 external-change resolution sheet', async ({ page }) => {

@@ -25,7 +25,7 @@ import SplitButton from '../components/SplitButton.svelte';
   import { presentMenuItems } from '../lib/present-menu';
 import { startTake, takeStarting } from '../lib/start-take';
 import type { PresentationMode } from '../services/settings-types';
-  import { estimateDurationSeconds, formatSpeakingDuration } from '../lib/format';
+  import { estimateDurationSeconds, formatScriptMeta, formatSpeakingDuration } from '../lib/format';
   import * as inserts from '../lib/markdown-insert';
   import { lintScriptSource, type ScriptLintFinding } from '../lib/script-lint';
   import { onShortcut } from '../lib/shortcuts';
@@ -120,10 +120,16 @@ import type { PresentationMode } from '../services/settings-types';
     return message === '' ? '' : describeError(message);
   });
 
+  /*
+   * Gated on `result` for the same reason `compileFailed` above exists: a
+   * script the compiler has not finished with is not a script with nothing in
+   * it. `openScript` clears the compile store and only THEN awaits the fetch,
+   * so an 800-word script would announce "0 words" for the whole of that
+   * window, and a failed compile — which nulls the result — would go on saying
+   * it underneath the banner explaining that the compile failed.
+   */
   const meta = $derived(
-    wordCount > 0
-      ? `${wordCount.toLocaleString()} words · ${formatSpeakingDuration(durationSeconds)} · ${cueCount} ${cueCount === 1 ? 'cue' : 'cues'}`
-      : '',
+    formatScriptMeta(result ? { wordCount, durationSeconds, cueCount } : null),
   );
 
   /*
@@ -560,7 +566,7 @@ import type { PresentationMode } from '../services/settings-types';
 <div class="page">
   <PageHeader
     title={$editor.title || 'Untitled script'}
-    meta={meta || undefined}
+    {meta}
     backLabel="Library"
     onback={() => goBack()}
     editableTitle
