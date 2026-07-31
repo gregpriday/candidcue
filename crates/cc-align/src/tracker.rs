@@ -1773,14 +1773,44 @@ mod tests {
         );
     }
 
-    /// The authority arithmetic itself, at the thresholds the gates use.
+    /// The third gate: a phase-2 reconnection the global index proposed, close
+    /// enough that `try_discontinuity` never sees it.
     ///
-    /// Direct rather than behavioural because one of the three call sites —
-    /// the `nearby_suffix` reconnection — could not be driven to a decision
-    /// that turns on it: whenever that path was reachable, the ordinary local
-    /// candidate reached the same position anyway, through the undiscounted
-    /// gate the issue says to leave alone. The discount there is consistency
-    /// with the other two relocation gates, not a demonstrated fix.
+    /// Phase 1 holds position on its twenty matched prefix atoms, so the
+    /// unexplained suffix is what goes to global search — and the candidate it
+    /// finds is only fifteen atoms away, far short of `discontinuity_atoms`.
+    /// Nothing else can move the reader here, which is what makes this the one
+    /// arrangement where the gate is load-bearing rather than shadowed by the
+    /// ordinary local candidate.
+    #[test]
+    fn solicited_matches_cannot_reconnect_through_the_nearby_suffix_path() {
+        const PREFIX: &str = "alpha bravo charlie delta echo foxtrot golf hotel india juliet \
+             kilo lima mike november oscar papa quebec romeo sierra tango";
+        const GAP: &str = "uniform victor whiskey xray yankee zebra amber birch cedar dogwood elm fir";
+        const TARGET: &str = "zanzibar quartzite mnemonic";
+
+        let reached = |mark: bool| -> f64 {
+            let mut script = compile(
+                &format!("{PREFIX} {GAP} {TARGET}"),
+                CompileOptions::default(),
+            );
+            if mark {
+                assert_eq!(script.set_biased_terms(&distant_terms(TARGET)), 0);
+            }
+            let mut engine = Engine::new(script, gate_config());
+            engine.set_manual_position(20, 0.0);
+            final_item(&mut engine, 1, &format!("{PREFIX} garbled {TARGET}"), 900.0).observed
+        };
+
+        // Three unsolicited content matches clear `observe_min_content`, so the
+        // reconnection lands on the target.
+        let bare = reached(false);
+        assert!(bare > 30.0, "the nearby-suffix path did not fire: {bare}");
+        // Solicited they are worth 1.5, under the bar, and the reader stays put.
+        assert_eq!(reached(true), 20.0);
+    }
+
+    /// The authority arithmetic itself, at the thresholds the gates use.
     #[test]
     fn content_authority_is_spent_in_whole_and_half_units() {
         let engine_with = |weight: u32| {
@@ -1802,8 +1832,8 @@ mod tests {
         // Unsolicited evidence is unchanged: the gate is exactly `>=`.
         assert!(half.content_authority_ok(&ev(2, 0), 2));
         assert!(!half.content_authority_ok(&ev(1, 0), 2));
-        // Halves accumulate exactly — four of them are two whole words, and
-        // three are two and a half, which clears a bar of two but not three.
+        // Halves accumulate exactly: four of them are two whole words and meet
+        // a bar of two, three of them are one and a half and do not.
         assert!(half.content_authority_ok(&ev(4, 4), 2));
         assert!(!half.content_authority_ok(&ev(3, 3), 2));
         // The mixed case the jump test drives: of four matches, marking one
@@ -1814,8 +1844,12 @@ mod tests {
         // Zero vetoes, full weight is the discount switched off.
         assert!(!engine_with(0).content_authority_ok(&ev(9, 9), 1));
         assert!(engine_with(1000).content_authority_ok(&ev(3, 3), 3));
-        // A config that escaped sanitisation cannot buy a bonus.
-        assert!(!engine_with(u32::MAX).content_authority_ok(&ev(2, 2), 3));
+        // `Engine::new` sanitises, but `config` is public. A weight written
+        // afterwards still cannot make a solicited word worth more than an
+        // ordinary one — which is what the defensive cap in the helper is for.
+        let mut escaped = engine_with(500);
+        escaped.config.biased_content_weight_milli = u32::MAX;
+        assert!(!escaped.content_authority_ok(&ev(2, 2), 3));
 
         // Nothing required is always satisfied; a count that cannot happen
         // (more solicited than content) is clamped rather than wrapping.
@@ -1897,7 +1931,9 @@ mod tests {
         let mut engine = Engine::new(script, config);
         engine.set_manual_position(0, 0.0);
 
-        // Six solicited words would clear the bar twice over at half weight.
+        // Six solicited words are worth exactly the threshold at half weight —
+        // the previous test proves they jump there. At zero they are worth
+        // nothing, and no quantity of them adds up to a relocation.
         assert_ne!(
             final_item(&mut engine, 1, LONGER, 1_800.0).decision,
             DecisionCode::JumpForwardAccepted

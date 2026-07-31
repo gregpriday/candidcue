@@ -39,25 +39,29 @@ pub const FLAG_SENTENCE_END: u8 = 1 << 3;
 /// alias would erase the sentence structure the display brakes on.
 pub const FLAG_BIASED: u8 = 1 << 4;
 
-/// Every canonical surface a bias term could have compiled to.
+/// The ways a bias term could have compiled: as one phrase, and word by word.
 ///
-/// The phrase first, then its words individually, because the two compiler
-/// entry points normalise in different contexts — see
-/// [`CompiledScript::set_biased_terms`]. Marking the union over-approximates in
-/// the safe direction: an extra flagged word can only make a relocation ask for
-/// more evidence, never make local following ask for less.
-fn bias_surfaces(language: AlignmentLanguage, term: &str) -> Vec<String> {
-    let mut out = canonical_atoms_for(language, term);
-    if term.split_whitespace().nth(1).is_some() {
-        for word in term.split_whitespace() {
-            for surface in canonical_atoms_for(language, word) {
-                if !out.contains(&surface) {
-                    out.push(surface);
-                }
-            }
-        }
+/// Two representations rather than one flat set of surfaces, because the two
+/// compiler entry points normalise in different contexts — see
+/// [`CompiledScript::set_biased_terms`] — and a term counts as present only if
+/// one of them survives INTACT. Flattening them would let a stray constituent
+/// stand in for the whole: a script that says `one` somewhere would "resolve"
+/// the term `one hundred` while the figure it came from went unmarked, which is
+/// precisely the silent miss the term count exists to report.
+fn bias_representations(language: AlignmentLanguage, term: &str) -> Vec<Vec<String>> {
+    let phrase = canonical_atoms_for(language, term);
+    if term.split_whitespace().nth(1).is_none() {
+        return vec![phrase];
     }
-    out
+    let by_token: Vec<String> = term
+        .split_whitespace()
+        .flat_map(|word| canonical_atoms_for(language, word))
+        .collect();
+    if by_token == phrase {
+        vec![phrase]
+    } else {
+        vec![phrase, by_token]
+    }
 }
 
 /// One spoken atom of the script, in reading order.
@@ -375,16 +379,27 @@ impl CompiledScript {
         let mut unmatched = 0usize;
         for term in terms {
             let mut matched = false;
-            for surface in bias_surfaces(self.language, term) {
+            for representation in bias_representations(self.language, term) {
+                if representation.is_empty() {
+                    continue;
+                }
+                // All or nothing: a representation the script only partly
+                // contains is not this term, and marking its stray words would
+                // discount evidence the decoder was never biased toward.
+                //
                 // The interner is shared with the transcript, so a hit there is
                 // not proof the script contains the word. The postings are
                 // built from script atoms alone, which is what settles it.
-                let known = self
-                    .interner
-                    .get(&surface)
-                    .filter(|id| self.token_postings.contains_key(id));
-                if let Some(id) = known {
-                    biased.insert(id);
+                let ids: Option<Vec<u32>> = representation
+                    .iter()
+                    .map(|surface| {
+                        self.interner
+                            .get(surface)
+                            .filter(|id| self.token_postings.contains_key(id))
+                    })
+                    .collect();
+                if let Some(ids) = ids {
+                    biased.extend(ids);
                     matched = true;
                 }
             }
@@ -1306,6 +1321,26 @@ mod tests {
         ]);
         // "kombucha" and "entirely absent phrase" miss; the blank is not a term.
         assert_eq!(unmatched, 2);
+    }
+
+    /// A stray constituent is not the term. `one hundred and five` compiles to
+    /// `105`, so the extractor's `one hundred` matched nothing — and must be
+    /// reported as such even though the script says `one` elsewhere, or the
+    /// count reassures a caller about provenance it does not have.
+    #[test]
+    fn a_partly_present_term_is_not_a_match() {
+        let mut script = compile(
+            "One more thing: we shipped one hundred and five units.",
+            CompileOptions::default(),
+        );
+        let surfaces: Vec<&str> = script.atoms.iter().map(|a| a.surface.as_str()).collect();
+        assert!(surfaces.contains(&"one"), "fixture lost its stray word: {surfaces:?}");
+        assert!(surfaces.contains(&"105"), "fixture lost its figure: {surfaces:?}");
+
+        assert_eq!(script.set_biased_terms(&["one hundred".to_string()]), 1);
+        // And the stray `one` is left unmarked, so nothing is discounted on the
+        // strength of a word the decoder was never told about as such.
+        assert!(script.atoms.iter().all(|a| a.flags & FLAG_BIASED == 0));
     }
 
     /// The decoder is configured for the whole take, not for one position, so a
