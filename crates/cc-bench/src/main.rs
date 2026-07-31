@@ -101,8 +101,10 @@ struct Flags {
     seconds: Option<f64>,
     /// `capture-local`: directory holding the on-device model files.
     model: Option<PathBuf>,
-    /// `capture-local`: ms of silence to prime the decoder with.
-    prime_ms: u32,
+    /// `capture-local`: ms of silence to prime the decoder with. `None` means
+    /// "use the model's own tuned value", for the same reason `blank_penalty`
+    /// below is optional.
+    prime_ms: Option<u32>,
     /// `capture-local`: blank penalty override. `None` means "use the
     /// recogniser's own default" — a plain `f32` here silently overrode the
     /// tuned default with 0.0 and captured a whole corpus with the knob off.
@@ -130,7 +132,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
         runs: None,
         seconds: None,
         model: None,
-        prime_ms: 0,
+        prime_ms: None,
         blank_penalty: None,
         decoding: None,
         layouts: None,
@@ -154,7 +156,7 @@ fn parse_flags<'a>(it: impl Iterator<Item = &'a String>) -> anyhow::Result<Flags
             "--runs" => flags.runs = Some(PathBuf::from(take()?)),
             "--seconds" => flags.seconds = Some(take()?.parse()?),
             "--model" => flags.model = Some(PathBuf::from(take()?)),
-            "--prime-ms" => flags.prime_ms = take()?.parse()?,
+            "--prime-ms" => flags.prime_ms = Some(take()?.parse()?),
             "--blank-penalty" => flags.blank_penalty = Some(take()?.parse()?),
             "--decoding" => flags.decoding = Some(take()?),
             "--budget" => flags.budget = take()?.parse()?,
@@ -979,12 +981,18 @@ fn capture_all_local(
     runs_dir: &std::path::Path,
     model_dir: &std::path::Path,
     pace: f64,
-    prime_ms: u32,
+    prime_ms: Option<u32>,
     blank_penalty: Option<f32>,
     decoding: Option<String>,
 ) -> anyhow::Result<()> {
-    let mut config = cc_stt::LocalSttConfig::with_model_dir(model_dir);
-    config.prime_ms = prime_ms;
+    // The profile's tuning first, overrides on top. A capture that started
+    // from anything else would be measuring a recogniser the app does not
+    // ship, which is the one thing a baseline may not do.
+    let model = cc_stt::default_model();
+    let mut config = cc_stt::LocalSttConfig::for_model(model, model_dir);
+    if let Some(ms) = prime_ms {
+        config.prime_ms = ms;
+    }
     if let Some(penalty) = blank_penalty {
         config.blank_penalty = penalty;
     }
@@ -995,7 +1003,8 @@ fn capture_all_local(
     let loading = std::time::Instant::now();
     let recognizer = cc_stt::LocalRecognizer::load(&config).map_err(|e| anyhow::anyhow!(e))?;
     println!(
-        "loaded {} in {:.0}ms ({} threads, {}, prime {}ms, blank_penalty {})",
+        "loaded {} from {} in {:.0}ms ({} threads, {}, prime {}ms, blank_penalty {})",
+        model.id,
         model_dir.display(),
         loading.elapsed().as_secs_f64() * 1000.0,
         config.num_threads,
@@ -1037,8 +1046,15 @@ fn capture_all_local(
         println!("capturing {name}: {audio_s:.1}s at {pace}× …");
 
         let started = std::time::Instant::now();
-        let events =
-            cc_bench::capture_local::capture_events(&recognizer, pcm, sample_rate, pace, prime_ms);
+        // `config.prime_ms`, not the flag: the recogniser was loaded with the
+        // resolved value and the stream must be primed with the same one.
+        let events = cc_bench::capture_local::capture_events(
+            &recognizer,
+            pcm,
+            sample_rate,
+            pace,
+            config.prime_ms,
+        );
         let transcripts = events
             .iter()
             .filter(|e| {

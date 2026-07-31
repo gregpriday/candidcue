@@ -58,12 +58,23 @@ pub mod session;
 /// rate, but two places still have to agree, so there is one constant.
 pub const SAMPLE_RATE_HZ: u32 = 24_000;
 
-/// Where the model lives inside the bundle, relative to the resource root.
-pub const MODEL_RESOURCE_DIR: &str = "models/x-asr-480ms";
+/// Which recognisers this build can load, and how each was measured.
+///
+/// Re-exported from `cc_stt` so that the app has one name for "the catalogue"
+/// and the tests that assert against it do not have to reach across workspaces
+/// to say so.
+pub use cc_stt::models::{bundled_models, default_model, model_by_id, BundledModel};
 
-/// The recogniser this build ships. Reported to Settings so the app can say
-/// what is doing the listening without pretending there is a choice.
-pub const MODEL_NAME: &str = "x-asr-480ms-streaming-zipformer-punct-int8-2026-06-05";
+/// The recogniser resident in memory, and which one it is.
+///
+/// The id travels WITH the handle rather than beside it. Two mutexes holding
+/// two halves of one fact is an invitation for them to disagree, and the fact
+/// they would be disagreeing about is "what is doing the listening" — which is
+/// the question diagnostics exist to answer.
+struct CachedRecognizer {
+    model_id: &'static str,
+    recognizer: Arc<cc_stt::LocalRecognizer>,
+}
 
 /// Managed state: the loaded model, and the live session if one is running.
 ///
@@ -73,8 +84,14 @@ pub struct SpeechEngine {
     /// Loaded once and kept resident. Loading costs ~200 ms, which is 200 ms
     /// that must not be spent at the top of a take: the presenter has already
     /// started talking by the time a session is armed.
-    recognizer: std::sync::Mutex<Option<Arc<cc_stt::LocalRecognizer>>>,
-    model_dir: std::sync::Mutex<Option<PathBuf>>,
+    ///
+    /// One slot, keyed, rather than a map from model to recogniser. A map would
+    /// hold every model that had ever been used — ~161 MB of ONNX graphs each —
+    /// to save a ~200 ms load on a switch that cannot happen during a take,
+    /// since exactly one session may run at a time. Keeping the second model
+    /// resident buys latency nobody is waiting on with memory the presenter's
+    /// machine is using for something else.
+    recognizer: std::sync::Mutex<Option<CachedRecognizer>>,
     session: std::sync::Mutex<Option<session::SessionHandle>>,
     next_generation: std::sync::atomic::AtomicU64,
 }
@@ -89,22 +106,29 @@ impl SpeechEngine {
     pub fn new() -> Self {
         Self {
             recognizer: std::sync::Mutex::new(None),
-            model_dir: std::sync::Mutex::new(None),
             session: std::sync::Mutex::new(None),
             next_generation: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
-    /// Resolve the bundled model directory for this installation.
+    /// Resolve a bundled model's directory for this installation.
     ///
     /// Always through Tauri's resource resolver, never by reasoning about the
     /// executable's path: the answer differs between `tauri dev`, a macOS
     /// `.app`, an MSI install and a Linux package, and the resolver is the only
     /// thing that knows which one it is in.
-    pub fn model_dir<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<PathBuf, AppError> {
+    ///
+    /// The model is a parameter rather than a constant because which one is
+    /// wanted is a runtime question — even while there is only one answer to
+    /// it. A build-time constant here is what made a second model impossible
+    /// to add without touching every caller.
+    pub fn model_dir<R: tauri::Runtime>(
+        app: &tauri::AppHandle<R>,
+        model: &BundledModel,
+    ) -> Result<PathBuf, AppError> {
         use tauri::Manager as _;
         app.path()
-            .resolve(MODEL_RESOURCE_DIR, tauri::path::BaseDirectory::Resource)
+            .resolve(model.resource_dir, tauri::path::BaseDirectory::Resource)
             .map_err(|err| {
                 AppError::structured(
                     "STT_MODEL_MISSING",
@@ -115,13 +139,16 @@ impl SpeechEngine {
             })
     }
 
-    /// Load the model if it is not loaded already, and hand back a handle.
+    /// Load the requested model if it is not already resident, and hand back a
+    /// handle.
     ///
     /// Idempotent and safe to call from a warm-up path as well as from the
-    /// start of a take.
+    /// start of a take. Asking for a model other than the resident one replaces
+    /// it rather than adding to it — see the field docs on `recognizer`.
     pub fn ensure_loaded<R: tauri::Runtime>(
         &self,
         app: &tauri::AppHandle<R>,
+        model: &BundledModel,
     ) -> Result<Arc<cc_stt::LocalRecognizer>, AppError> {
         // The lock is held ACROSS the load, not just across the check. Preload
         // and the start of a take can arrive together — that is the normal
@@ -129,12 +156,20 @@ impl SpeechEngine {
         // both see "not loaded" and each build a recognizer, paying the ~200 ms
         // and the memory twice for one that is immediately dropped.
         let mut slot = self.recognizer.lock().expect("stt model poisoned");
-        if let Some(loaded) = slot.as_ref() {
-            return Ok(Arc::clone(loaded));
+        if let Some(cached) = slot.as_ref() {
+            if cached.model_id == model.id {
+                return Ok(Arc::clone(&cached.recognizer));
+            }
+            // Dropped BEFORE the replacement is built, so the two never sit in
+            // memory together. A session still running keeps its own `Arc`
+            // alive and finishes on the model it started with, which is the
+            // only safe answer: swapping a recogniser out from under a take
+            // would change what the engine is hearing halfway through.
+            *slot = None;
         }
 
-        let dir = Self::model_dir(app)?;
-        let config = cc_stt::LocalSttConfig::with_model_dir(&dir);
+        let dir = Self::model_dir(app, model)?;
+        let config = cc_stt::LocalSttConfig::for_model(model, &dir);
         // Checked before the C library is asked, because `create` answers a
         // missing file with a null pointer and no reason at all.
         config.validate().map_err(|detail| {
@@ -156,24 +191,36 @@ impl SpeechEngine {
             )
         })?;
         tracing::info!(
-            model = MODEL_NAME,
+            model = model.id,
             dir = %dir.display(),
+            blank_penalty = config.blank_penalty,
             load_ms = started.elapsed().as_millis(),
             "loaded on-device speech model"
         );
 
         let loaded = Arc::new(loaded);
-        *slot = Some(Arc::clone(&loaded));
-        *self.model_dir.lock().expect("stt model dir poisoned") = Some(dir);
+        *slot = Some(CachedRecognizer {
+            model_id: model.id,
+            recognizer: Arc::clone(&loaded),
+        });
         Ok(loaded)
     }
 
-    /// Whether the model is resident. Diagnostics and Settings.
+    /// Whether a model is resident. Diagnostics and Settings.
     pub fn is_loaded(&self) -> bool {
         self.recognizer
             .lock()
             .expect("stt model poisoned")
             .is_some()
+    }
+
+    /// Which model is resident, if any. Diagnostics and Settings.
+    pub fn loaded_model_id(&self) -> Option<&'static str> {
+        self.recognizer
+            .lock()
+            .expect("stt model poisoned")
+            .as_ref()
+            .map(|cached| cached.model_id)
     }
 
     /// The generation of the session currently running, if any.
@@ -197,8 +244,9 @@ impl SpeechEngine {
     pub fn start_stream<R: tauri::Runtime>(
         &self,
         app: tauri::AppHandle<R>,
+        model: &BundledModel,
     ) -> Result<u64, AppError> {
-        let recognizer = self.ensure_loaded(&app)?;
+        let recognizer = self.ensure_loaded(&app, model)?;
         let generation = self
             .next_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -284,16 +332,45 @@ mod tests {
         assert!(decode_base64("not base64!!").is_err());
     }
 
+    /// Every model the catalogue offers must actually be in the bundle.
+    ///
+    /// If the two drift, the app builds, installs, and fails to transcribe
+    /// anything — with a resource resolver that reports success and a file that
+    /// is not there.
+    ///
+    /// Read as JSON rather than searched as text. A substring test passes on a
+    /// path that appears anywhere in the file, including inside a longer path
+    /// or a setting that has nothing to do with bundling, and the whole point
+    /// of this test is to be specific about one key. It is also what will fail
+    /// the day a second model is registered without being packaged, which is
+    /// the failure this catalogue makes possible.
     #[test]
-    fn the_bundled_model_directory_is_the_one_the_bundler_ships() {
-        // tauri.conf.json lists this path under `bundle.resources`. If the two
-        // drift, the app builds, installs, and fails to transcribe anything —
-        // with a resource resolver that reports success and a file that is not
-        // there.
-        let config = include_str!("../../tauri.conf.json");
-        assert!(
-            config.contains(MODEL_RESOURCE_DIR),
-            "tauri.conf.json must bundle {MODEL_RESOURCE_DIR}"
-        );
+    fn every_registered_model_directory_is_bundled() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json"))
+                .expect("tauri.conf.json must be valid JSON");
+        let resources = config["bundle"]["resources"]
+            .as_array()
+            .expect("bundle.resources must be a list");
+        let bundled: Vec<&str> = resources
+            .iter()
+            .filter_map(|entry| entry.as_str())
+            .map(|entry| entry.trim_end_matches('/'))
+            .collect();
+        for model in bundled_models() {
+            assert!(
+                bundled.contains(&model.resource_dir.trim_end_matches('/')),
+                "tauri.conf.json must bundle {} for model {} (it lists {bundled:?})",
+                model.resource_dir,
+                model.id
+            );
+        }
+    }
+
+    /// The default is what everything without an explicit choice gets, so it
+    /// has to be a model the catalogue can actually look up.
+    #[test]
+    fn the_default_model_is_in_the_catalogue() {
+        assert_eq!(model_by_id(default_model().id), Some(default_model()));
     }
 }

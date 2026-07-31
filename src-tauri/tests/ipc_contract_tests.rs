@@ -811,7 +811,7 @@ fn an_audio_section_without_a_sensitivity_loads_at_the_neutral_midpoint() {
         // The shipping recogniser, read from the constant rather than typed
         // out: this test is about the missing VAD field defaulting, and it
         // should not have to be edited every time the model changes.
-        "transcriptionModel": candidcue_lib::speech::MODEL_NAME,
+        "transcriptionModel": candidcue_lib::speech::default_model().id,
         "language": "en-US",
         "softPauseAutoDisconnectMinutes": 10,
     }))

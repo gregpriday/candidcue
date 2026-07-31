@@ -23,8 +23,10 @@
  * speech gate, no noise-floor calibration.
  *
  * The key and the model id are gone because there is no service to present them
- * to. The language picker is gone because the bundled model is English-only, and
- * a control that is written, displayed and ignored is worse than no control.
+ * to. The language picker is gone because there is one bundled model and
+ * nothing yet reads the setting, and a control that is written, displayed and
+ * ignored is worse than no control. Not because the model is English-only — it
+ * is bilingual (`zh-en`), and Rust now honours a language it can serve.
  * The rest were absent already: the recogniser endpoints itself, deciding where
  * an utterance ends and emitting a final for it.
  *

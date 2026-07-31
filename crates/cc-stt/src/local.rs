@@ -42,6 +42,14 @@ pub const TOKENS_FILE: &str = "tokens.txt";
 /// `encoder-epoch-99-avg-1.int8.onnx`, the 2026 x-asr bundles use a plain
 /// `encoder.int8.onnx`. Hard-coding one set means the other fails to load with
 /// a null pointer and no reason.
+///
+/// Detection reads the directory and matches on SHAPE — role prefix plus
+/// precision suffix — rather than against a list of names seen so far. The list
+/// was the more cautious-looking option and it was the wrong one: it appeared
+/// to work right up until it met a bundle nobody had added, and the Apache-2.0
+/// French model (`encoder-epoch-29-avg-9-with-averaged-model.int8.onnx`) is
+/// exactly that bundle. A rule that admits an unseen name is testable against
+/// the naming convention; a list can only ever be tested against itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelFiles {
     pub encoder: String,
@@ -59,61 +67,113 @@ pub struct ModelFiles {
     pub bpe_vocab: Option<String>,
 }
 
+/// Which precision to take when a bundle ships a role at both.
+///
+/// Per role rather than per bundle, because the right answer differs by role
+/// and always has — see the two call sites in [`ModelFiles::detect`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Precision {
+    /// Quantised: `<stem>.int8.onnx`.
+    Int8,
+    /// Everything else ending `.onnx`.
+    Fp32,
+}
+
 impl ModelFiles {
     /// Work out how this bundle names things, or say what is missing.
     ///
-    /// INT8 is preferred where both precisions are present: it is what the
-    /// benchmark numbers were taken with, and the FP32 encoder is twice the
-    /// size for accuracy this application spends on nothing.
+    /// One pass over the directory, because the alternative is a `is_file`
+    /// syscall per candidate name and the candidate names are no longer
+    /// enumerable.
+    ///
+    /// INT8 is preferred for the encoder and joiner where both precisions are
+    /// present: it is what the benchmark numbers were taken with, and the FP32
+    /// encoder is twice the size for accuracy this application spends on
+    /// nothing. The decoder goes the other way — see below.
     pub fn detect(dir: &std::path::Path) -> Result<Self, String> {
-        let pick = |candidates: &[&str], role: &str| -> Result<String, String> {
-            candidates
-                .iter()
-                .find(|name| dir.join(name).is_file())
-                .map(|name| (*name).to_string())
-                .ok_or_else(|| {
-                    format!(
-                        "no {role} found in {} (looked for {})",
-                        dir.display(),
-                        candidates.join(", ")
-                    )
-                })
+        let entries = std::fs::read_dir(dir)
+            .map_err(|err| format!("could not read the model directory {}: {err}", dir.display()))?;
+
+        // Two lists: the graphs that name a role, and every `.onnx` file the
+        // directory holds. The second exists for the error message. When a role
+        // is missing it is almost always because a bundle was half-extracted or
+        // the path is one level off, and "there is no encoder here, but there
+        // IS an enc.onnx" ends that search immediately — where a list filtered
+        // down to recognised names would have said the directory was empty.
+        let mut graphs: Vec<(String, Precision)> = Vec::new();
+        let mut onnx_files: Vec<String> = Vec::new();
+        let mut has_tokens = false;
+        let mut has_bpe_vocab = false;
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            match name.as_str() {
+                TOKENS_FILE => has_tokens = true,
+                "bpe.vocab" => has_bpe_vocab = true,
+                _ => {}
+            }
+            // Precision is classified BEFORE role, so that the `.int8` infix is
+            // stripped from the stem rather than left for the role match to
+            // trip over.
+            let classified = name
+                .strip_suffix(".int8.onnx")
+                .map(|stem| (stem, Precision::Int8))
+                .or_else(|| {
+                    name.strip_suffix(".onnx")
+                        .map(|stem| (stem, Precision::Fp32))
+                });
+            if let Some((stem, precision)) = classified {
+                if role_of(stem).is_some() {
+                    graphs.push((name.clone(), precision));
+                }
+                onnx_files.push(name);
+            }
+        }
+
+        // `read_dir` yields entries in whatever order the filesystem hands
+        // over — not sorted, and not stable between machines. Sorting makes an
+        // ambiguous bundle resolve the same way twice, which matters because
+        // the alternative is a model that loads differently on the presenter's
+        // machine than on the one the benchmark ran on.
+        graphs.sort_by(|(left, _), (right, _)| left.cmp(right));
+        onnx_files.sort();
+
+        let pick = |role: &str, preferred: Precision| -> Result<String, String> {
+            let of_role = |precision: Precision| {
+                graphs
+                    .iter()
+                    .find(|(name, found)| *found == precision && role_of_name(name) == Some(role))
+                    .map(|(name, _)| name.clone())
+            };
+            let fallback = match preferred {
+                Precision::Int8 => Precision::Fp32,
+                Precision::Fp32 => Precision::Int8,
+            };
+            of_role(preferred).or_else(|| of_role(fallback)).ok_or_else(|| {
+                let found = if onnx_files.is_empty() {
+                    "none".to_string()
+                } else {
+                    onnx_files.join(", ")
+                };
+                format!(
+                    "no {role} found in {} (expected {role}.onnx, {role}.int8.onnx or a \
+                     {role}-*.onnx variant; the ONNX files present are: {found})",
+                    dir.display()
+                )
+            })
         };
-        let encoder = pick(
-            &[
-                "encoder.int8.onnx",
-                "encoder-epoch-99-avg-1.int8.onnx",
-                "encoder.onnx",
-                "encoder-epoch-99-avg-1.onnx",
-            ],
-            "encoder",
-        )?;
+
+        let encoder = pick("encoder", Precision::Int8)?;
         // The decoder stays FP32 by preference: it is small, and quantising it
         // buys nothing measurable.
-        let decoder = pick(
-            &[
-                "decoder.onnx",
-                "decoder-epoch-99-avg-1.onnx",
-                "decoder.int8.onnx",
-                "decoder-epoch-99-avg-1.int8.onnx",
-            ],
-            "decoder",
-        )?;
-        let joiner = pick(
-            &[
-                "joiner.int8.onnx",
-                "joiner-epoch-99-avg-1.int8.onnx",
-                "joiner.onnx",
-                "joiner-epoch-99-avg-1.onnx",
-            ],
-            "joiner",
-        )?;
-        if !dir.join(TOKENS_FILE).is_file() {
+        let decoder = pick("decoder", Precision::Fp32)?;
+        let joiner = pick("joiner", Precision::Int8)?;
+        if !has_tokens {
             return Err(format!("missing {TOKENS_FILE} in {}", dir.display()));
         }
-        let bpe_vocab = Some("bpe.vocab")
-            .filter(|name| dir.join(name).is_file())
-            .map(str::to_string);
+        let bpe_vocab = has_bpe_vocab.then(|| "bpe.vocab".to_string());
         Ok(Self {
             encoder,
             decoder,
@@ -121,6 +181,31 @@ impl ModelFiles {
             bpe_vocab,
         })
     }
+}
+
+/// The three graph roles, in the order a bundle is searched for them.
+const ROLES: [&str; 3] = ["encoder", "decoder", "joiner"];
+
+/// Which graph a filename stem describes, if any.
+///
+/// The stem must be the bare role or the role followed by `-`. The hyphen is
+/// load-bearing: `encoder-epoch-29-avg-9-with-averaged-model` is an encoder and
+/// `encoder_aux` is not, and a bare `starts_with` would claim both. Upstream
+/// separates a role from its qualifiers with a hyphen in every bundle this
+/// crate has seen, so requiring one costs nothing and refuses a file whose role
+/// we would only be guessing at.
+fn role_of(stem: &str) -> Option<&'static str> {
+    ROLES
+        .into_iter()
+        .find(|role| stem == *role || stem.strip_prefix(role).is_some_and(|rest| rest.starts_with('-')))
+}
+
+/// [`role_of`] for a whole filename, re-deriving the stem.
+fn role_of_name(name: &str) -> Option<&'static str> {
+    let stem = name
+        .strip_suffix(".int8.onnx")
+        .or_else(|| name.strip_suffix(".onnx"))?;
+    role_of(stem)
 }
 
 /// Tuning knobs for the local recogniser.
@@ -221,35 +306,63 @@ pub struct LocalSttConfig {
     pub prime_ms: u32,
 }
 
-impl Default for LocalSttConfig {
-    fn default() -> Self {
+/// The knobs that are a property of the MODEL rather than of the machine.
+///
+/// Deliberately has no [`Default`], and that absence is the whole point. These
+/// values are measurements, and a measurement taken against one model is not
+/// evidence about another — the doc comments on the corresponding
+/// [`LocalSttConfig`] fields carry the sweeps that produced them. When they
+/// were reachable through a default, every caller silently got one model's
+/// numbers no matter which bundle it had opened, and that is not a mistake the
+/// type system was helping with. It is now: a config cannot be built without
+/// naming whose tuning it is using.
+///
+/// Every bundled model declares its own in [`crate::models`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LocalModelTuning {
+    /// See [`LocalSttConfig::rule1_min_trailing_silence`].
+    pub rule1_min_trailing_silence: f32,
+    /// See [`LocalSttConfig::rule2_min_trailing_silence`].
+    pub rule2_min_trailing_silence: f32,
+    /// See [`LocalSttConfig::rule3_min_utterance_length`].
+    pub rule3_min_utterance_length: f32,
+    /// See [`LocalSttConfig::blank_penalty`] — the sweep tables are there.
+    pub blank_penalty: f32,
+    /// See [`LocalSttConfig::prime_ms`].
+    pub prime_ms: u32,
+}
+
+impl LocalSttConfig {
+    /// A config for one model directory, tuned as that model was measured.
+    ///
+    /// The tuning is a parameter rather than a default because it belongs to
+    /// the bundle in `model_dir`; see [`LocalModelTuning`]. Everything else
+    /// here is a property of the machine doing the decoding, not of the model,
+    /// so it is chosen once and the same for every bundle.
+    pub fn new(dir: impl Into<PathBuf>, tuning: LocalModelTuning) -> Self {
         Self {
-            model_dir: PathBuf::new(),
+            model_dir: dir.into(),
             // Two threads: measured 227 ms vs 284 ms for 16.7 s of speech at
             // one. Both are far under budget, and past two the returns are
             // small enough not to be worth the cores during a take.
             num_threads: 2,
             provider: "cpu".to_string(),
             decoding_method: "greedy_search".to_string(),
-            // Upstream's documented defaults for this model. rule2 at 1.2 s is
-            // close to Inworld's measured end-of-turn behaviour, which keeps
-            // utterance granularity comparable between the two recognisers.
-            rule1_min_trailing_silence: 2.4,
-            rule2_min_trailing_silence: 1.2,
-            rule3_min_utterance_length: 20.0,
-            blank_penalty: 3.0,
+            rule1_min_trailing_silence: tuning.rule1_min_trailing_silence,
+            rule2_min_trailing_silence: tuning.rule2_min_trailing_silence,
+            rule3_min_utterance_length: tuning.rule3_min_utterance_length,
+            blank_penalty: tuning.blank_penalty,
             max_active_paths: 4,
-            prime_ms: 0,
+            prime_ms: tuning.prime_ms,
         }
     }
-}
 
-impl LocalSttConfig {
-    pub fn with_model_dir(dir: impl Into<PathBuf>) -> Self {
-        Self {
-            model_dir: dir.into(),
-            ..Self::default()
-        }
+    /// A config for one of the models this build ships.
+    ///
+    /// The overwhelmingly common case, and the one that cannot get the tuning
+    /// wrong: the model says where it lives and how it was measured.
+    pub fn for_model(model: &crate::models::BundledModel, dir: impl Into<PathBuf>) -> Self {
+        Self::new(dir, model.tuning)
     }
 
     /// Check every model file is present, returning the first that is not.
@@ -265,6 +378,15 @@ impl LocalSttConfig {
 /// and `Send + Sync`, so the app loads it once and keeps it resident.
 pub struct LocalRecognizer {
     inner: OnlineRecognizer,
+    /// Carried from the config it was loaded with, so that [`Self::session`]
+    /// primes the way the model it actually holds was measured.
+    ///
+    /// It used to be the caller's job to remember this, and the caller did not:
+    /// the app asked a freshly built default what the priming should be, which
+    /// answered for whichever model happened to be first in the crate rather
+    /// than for the one resident in memory. Load-time and session-time tuning
+    /// reaching different answers is not a bug worth being able to have.
+    prime_ms: u32,
 }
 
 impl LocalRecognizer {
@@ -292,7 +414,10 @@ impl LocalRecognizer {
         sys.max_active_paths = config.max_active_paths;
 
         OnlineRecognizer::create(&sys)
-            .map(|inner| Self { inner })
+            .map(|inner| Self {
+                inner,
+                prime_ms: config.prime_ms,
+            })
             .ok_or_else(|| {
                 format!(
                     "sherpa-onnx could not load the model in {}",
@@ -301,10 +426,12 @@ impl LocalRecognizer {
             })
     }
 
-    /// Begin one take. `generation` is minted into the item ids exactly as the
-    /// app's session generation was on the websocket path.
+    /// Begin one take, primed as this model's own tuning asks for.
+    ///
+    /// `generation` is minted into the item ids exactly as the app's session
+    /// generation was on the websocket path.
     pub fn session(&self, generation: u64) -> LocalSession<'_> {
-        self.session_with(generation, 0)
+        self.session_with(generation, self.prime_ms)
     }
 
     /// Begin one take, priming the decoder with `prime_ms` of silence first.
@@ -560,12 +687,73 @@ pub fn stream_pcm16(
 mod tests {
     use super::*;
 
+    /// A scratch directory holding exactly the named files.
+    fn bundle(label: &str, files: &[&str]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cc-stt-{label}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in files {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        dir
+    }
+
+    fn tuning() -> LocalModelTuning {
+        crate::models::default_model().tuning
+    }
+
+    /// A directory that is not there is a different problem from a directory
+    /// missing one graph, and saying "no encoder" about a path that does not
+    /// exist sends the reader looking for a file in a folder that isn't there.
     #[test]
-    fn a_missing_model_file_names_itself() {
-        let config = LocalSttConfig::with_model_dir("/nonexistent/model/dir");
+    fn a_model_directory_that_is_not_there_says_so() {
+        let config = LocalSttConfig::new("/nonexistent/model/dir", tuning());
         let error = config.validate().unwrap_err();
-        assert!(error.contains("encoder"), "{error}");
         assert!(error.contains("/nonexistent/model/dir"), "{error}");
+        assert!(error.contains("could not read"), "{error}");
+    }
+
+    /// A missing graph names the role, the directory, and what the directory
+    /// actually holds — the last of which is the part that ends the search,
+    /// because it is usually a bundle that was half-extracted or a path one
+    /// level off.
+    #[test]
+    fn a_missing_graph_names_the_role_and_what_was_there_instead() {
+        let dir = bundle(
+            "missing-encoder",
+            &["decoder.onnx", "joiner.int8.onnx", TOKENS_FILE],
+        );
+        let error = ModelFiles::detect(&dir).unwrap_err();
+        assert!(error.contains("no encoder found"), "{error}");
+        assert!(error.contains(&dir.display().to_string()), "{error}");
+        assert!(error.contains("decoder.onnx"), "{error}");
+        assert!(error.contains("joiner.int8.onnx"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A near-miss is the most useful thing the error can carry, and the one a
+    /// list of only-recognised names would drop: a bundle whose encoder is
+    /// called something unexpected reads as an empty directory otherwise.
+    #[test]
+    fn a_missing_graph_reports_onnx_files_that_matched_no_role() {
+        let dir = bundle(
+            "near-miss",
+            &["enc.onnx", "decoder.onnx", "joiner.int8.onnx", TOKENS_FILE],
+        );
+        let error = ModelFiles::detect(&dir).unwrap_err();
+        assert!(error.contains("enc.onnx"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bundle_without_a_token_table_names_it() {
+        let dir = bundle(
+            "missing-tokens",
+            &["encoder.int8.onnx", "decoder.onnx", "joiner.int8.onnx"],
+        );
+        let error = ModelFiles::detect(&dir).unwrap_err();
+        assert!(error.contains(TOKENS_FILE), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Both bundle layouts must be recognised.
@@ -600,24 +788,28 @@ mod tests {
         }
     }
 
-    /// INT8 wins when a bundle ships both precisions: it is what the benchmark
-    /// numbers were taken with, and the FP32 encoder is twice the size for
-    /// accuracy this application spends on nothing.
+    /// Precision preference is per ROLE, and the decoder goes the other way.
+    ///
+    /// INT8 wins for the encoder and joiner: it is what the benchmark numbers
+    /// were taken with, and the FP32 encoder is twice the size for accuracy
+    /// this application spends on nothing. The decoder is small enough that
+    /// quantising it buys nothing measurable, so FP32 wins there — and a
+    /// bundle shipping all six is the only thing that can prove the two rules
+    /// are actually different.
     #[test]
-    fn int8_is_preferred_over_fp32() {
-        let dir = std::env::temp_dir().join("cc-stt-layout-precision");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for name in [
-            "encoder.onnx",
-            "encoder.int8.onnx",
-            "decoder.onnx",
-            "joiner.onnx",
-            "joiner.int8.onnx",
-            TOKENS_FILE,
-        ] {
-            std::fs::write(dir.join(name), b"x").unwrap();
-        }
+    fn precision_preference_is_role_specific() {
+        let dir = bundle(
+            "precision",
+            &[
+                "encoder.onnx",
+                "encoder.int8.onnx",
+                "decoder.onnx",
+                "decoder.int8.onnx",
+                "joiner.onnx",
+                "joiner.int8.onnx",
+                TOKENS_FILE,
+            ],
+        );
         let found = ModelFiles::detect(&dir).unwrap();
         assert_eq!(found.encoder, "encoder.int8.onnx");
         assert_eq!(found.joiner, "joiner.int8.onnx");
@@ -626,13 +818,183 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Either precision alone is enough — a bundle that ships only the one we
+    /// would not have picked still loads.
+    #[test]
+    fn a_single_precision_bundle_falls_back_to_what_it_ships() {
+        let int8_only = bundle(
+            "int8-only",
+            &[
+                "encoder.int8.onnx",
+                "decoder.int8.onnx",
+                "joiner.int8.onnx",
+                TOKENS_FILE,
+            ],
+        );
+        let found = ModelFiles::detect(&int8_only).unwrap();
+        assert_eq!(found.decoder, "decoder.int8.onnx");
+        let _ = std::fs::remove_dir_all(&int8_only);
+
+        let fp32_only = bundle(
+            "fp32-only",
+            &["encoder.onnx", "decoder.onnx", "joiner.onnx", TOKENS_FILE],
+        );
+        let found = ModelFiles::detect(&fp32_only).unwrap();
+        assert_eq!(found.encoder, "encoder.onnx");
+        assert_eq!(found.joiner, "joiner.onnx");
+        let _ = std::fs::remove_dir_all(&fp32_only);
+    }
+
+    /// The bundle that made the enumerated list untenable.
+    ///
+    /// `sherpa-onnx-streaming-zipformer-fr-2023-04-14` is Apache-2.0 and names
+    /// its graphs `-epoch-29-avg-9-with-averaged-model`, which matched nothing
+    /// in the old list. The failure was a null pointer out of the C library
+    /// with no reason attached, and it was not uniform — the Kroko bundles and
+    /// the Russian one happened to match, so detection looked like it worked
+    /// until it met a model where it didn't.
+    #[test]
+    fn an_epoch_suffix_nobody_enumerated_is_still_detected() {
+        let dir = bundle(
+            "french-averaged",
+            &[
+                "encoder-epoch-29-avg-9-with-averaged-model.int8.onnx",
+                "decoder-epoch-29-avg-9-with-averaged-model.onnx",
+                "joiner-epoch-29-avg-9-with-averaged-model.int8.onnx",
+                TOKENS_FILE,
+            ],
+        );
+        let found = ModelFiles::detect(&dir).expect("an unlisted epoch suffix must be detected");
+        assert_eq!(
+            found.encoder,
+            "encoder-epoch-29-avg-9-with-averaged-model.int8.onnx"
+        );
+        assert_eq!(
+            found.decoder,
+            "decoder-epoch-29-avg-9-with-averaged-model.onnx"
+        );
+        assert_eq!(
+            found.joiner,
+            "joiner-epoch-29-avg-9-with-averaged-model.int8.onnx"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Matching on shape means matching only the shape we mean.
+    ///
+    /// A role must be the whole stem or be followed by a hyphen. Without that,
+    /// `encoder_aux.onnx` is an encoder, and so is anything else somebody drops
+    /// in the directory whose name happens to begin with the right letters.
+    #[test]
+    fn only_onnx_graphs_named_for_a_role_are_candidates() {
+        let dir = bundle(
+            "decoys",
+            &[
+                "encoder.int8.onnx",
+                "decoder.onnx",
+                "joiner.int8.onnx",
+                TOKENS_FILE,
+                // None of these are graphs this crate may pick.
+                "encoder.onnx.data",
+                "encoder_aux.onnx",
+                "encoder.json",
+                "joinery.onnx",
+                "README.md",
+            ],
+        );
+        let found = ModelFiles::detect(&dir).unwrap();
+        assert_eq!(found.encoder, "encoder.int8.onnx");
+        assert_eq!(found.joiner, "joiner.int8.onnx");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `read_dir` returns entries in filesystem order, which is neither sorted
+    /// nor stable across machines. An ambiguous bundle must still resolve the
+    /// same way every time, or a model loads differently on the presenter's
+    /// machine than on the one the benchmark ran on.
+    #[test]
+    fn an_ambiguous_bundle_resolves_deterministically() {
+        let dir = bundle(
+            "ambiguous",
+            &[
+                "encoder-epoch-99-avg-1.int8.onnx",
+                "encoder-epoch-10-avg-2.int8.onnx",
+                "decoder-epoch-99-avg-1.onnx",
+                "decoder-epoch-10-avg-2.onnx",
+                "joiner-epoch-99-avg-1.int8.onnx",
+                "joiner-epoch-10-avg-2.int8.onnx",
+                TOKENS_FILE,
+            ],
+        );
+        let first = ModelFiles::detect(&dir).unwrap();
+        for _ in 0..4 {
+            assert_eq!(ModelFiles::detect(&dir).unwrap(), first);
+        }
+        // Lexicographic, so it is a rule someone can predict rather than
+        // whatever the directory happened to hand over first.
+        assert_eq!(first.encoder, "encoder-epoch-10-avg-2.int8.onnx");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `bpe.vocab` is optional and `bpe.model` is deliberately not accepted in
+    /// its place: sherpa's `bpe_vocab` wants the two-column text vocabulary,
+    /// and handing over the binary SentencePiece model is silently accepted
+    /// under greedy decoding and then does nothing.
+    #[test]
+    fn the_bpe_vocabulary_is_optional_and_never_the_binary_model() {
+        let without = bundle(
+            "bpe-absent",
+            &[
+                "encoder.int8.onnx",
+                "decoder.onnx",
+                "joiner.int8.onnx",
+                TOKENS_FILE,
+                "bpe.model",
+            ],
+        );
+        assert_eq!(ModelFiles::detect(&without).unwrap().bpe_vocab, None);
+        let _ = std::fs::remove_dir_all(&without);
+
+        let with = bundle(
+            "bpe-present",
+            &[
+                "encoder.int8.onnx",
+                "decoder.onnx",
+                "joiner.int8.onnx",
+                TOKENS_FILE,
+                "bpe.vocab",
+            ],
+        );
+        assert_eq!(
+            ModelFiles::detect(&with).unwrap().bpe_vocab.as_deref(),
+            Some("bpe.vocab")
+        );
+        let _ = std::fs::remove_dir_all(&with);
+    }
+
     #[test]
     fn endpoint_rules_are_set_rather_than_left_at_sherpas_zeroes() {
         // Regression guard: `enable_endpoint` alone does nothing, because
-        // sherpa's own defaults for all three rules are 0.0.
-        let config = LocalSttConfig::default();
+        // sherpa's own defaults for all three rules are 0.0. The values now
+        // come from the model's own profile, so this asserts the config
+        // carries them through rather than that a crate-wide default exists.
+        let config = LocalSttConfig::new("/model", tuning());
         assert!(config.rule2_min_trailing_silence > 0.0);
         assert!(config.rule1_min_trailing_silence > 0.0);
         assert!(config.rule3_min_utterance_length > 0.0);
+    }
+
+    /// The tuning reaching the config is the model's, not a crate-wide value —
+    /// which is the whole reason the crate no longer has one.
+    #[test]
+    fn a_config_carries_the_tuning_of_the_model_it_names() {
+        let model = crate::models::default_model();
+        let config = LocalSttConfig::for_model(model, "/model");
+        assert_eq!(config.blank_penalty, model.tuning.blank_penalty);
+        assert_eq!(config.prime_ms, model.tuning.prime_ms);
+        assert_eq!(
+            config.rule2_min_trailing_silence,
+            model.tuning.rule2_min_trailing_silence
+        );
     }
 }

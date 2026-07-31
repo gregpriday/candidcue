@@ -12,6 +12,7 @@
 use std::path::PathBuf;
 
 use cc_stt::local::{LocalRecognizer, LocalSttConfig};
+use cc_stt::models::default_model;
 use cc_stt::SttFrame;
 
 /// Find the bundled model, whichever one this build ships.
@@ -34,7 +35,7 @@ fn model_dir() -> Option<PathBuf> {
     candidates.sort();
     candidates
         .into_iter()
-        .find(|dir| LocalSttConfig::with_model_dir(dir).validate().is_ok())
+        .find(|dir| LocalSttConfig::for_model(default_model(), dir).validate().is_ok())
 }
 
 /// The skip is for a clean clone that has not run `pnpm models:fetch`. On a
@@ -62,7 +63,7 @@ fn silence_pcm16(ms: usize) -> Vec<u8> {
 fn the_bundled_model_loads_and_a_session_closes_cleanly() {
     let Some(dir) = require_model() else { return };
     let recognizer =
-        LocalRecognizer::load(&LocalSttConfig::with_model_dir(dir)).expect("model loads");
+        LocalRecognizer::load(&LocalSttConfig::for_model(default_model(), dir)).expect("model loads");
 
     let mut frames = Vec::new();
     let mut session = recognizer.session(7);
@@ -88,7 +89,7 @@ fn the_bundled_model_loads_and_a_session_closes_cleanly() {
 fn the_audio_clock_counts_what_it_was_given_regardless_of_rate() {
     let Some(dir) = require_model() else { return };
     let recognizer =
-        LocalRecognizer::load(&LocalSttConfig::with_model_dir(dir)).expect("model loads");
+        LocalRecognizer::load(&LocalSttConfig::for_model(default_model(), dir)).expect("model loads");
 
     // The clock is "audio consumed", which is what the alignment engine times
     // every prediction against. It must follow the samples handed over, not the
@@ -114,13 +115,13 @@ fn the_audio_clock_counts_what_it_was_given_regardless_of_rate() {
 
 #[test]
 fn a_missing_model_is_refused_by_name_rather_than_by_a_null_pointer() {
-    let config = LocalSttConfig::with_model_dir("/definitely/not/a/model");
+    let config = LocalSttConfig::for_model(default_model(), "/definitely/not/a/model");
     let error = match LocalRecognizer::load(&config) {
         Ok(_) => panic!("a model directory that does not exist must not load"),
         Err(error) => error,
     };
     assert!(
-        error.contains("encoder"),
-        "the error must name the file that is missing: {error}"
+        error.contains("/definitely/not/a/model"),
+        "the error must name what it could not find: {error}"
     );
 }

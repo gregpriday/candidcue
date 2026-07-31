@@ -491,7 +491,7 @@ async fn settings_defaults_patch_and_conflict() {
     assert_eq!(initial.value.general.save_transcript, "off");
     assert_eq!(
         initial.value.audio.transcription_model,
-        candidcue_lib::speech::MODEL_NAME
+        candidcue_lib::speech::default_model().id
     );
 
     // Patch a nested field; others survive.

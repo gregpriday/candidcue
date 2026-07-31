@@ -298,7 +298,12 @@ fn run_session<R: tauri::Runtime>(
 
     // The model is already resident; creating a stream is cheap, so the session
     // is usable immediately rather than after a load.
-    let mut session = recognizer.session_with(generation, cc_stt::LocalSttConfig::default().prime_ms);
+    // Primed by the recogniser itself, from the config it was loaded with.
+    // This used to ask a freshly built default what the priming should be,
+    // which answered for whichever model the crate happened to hardcode rather
+    // than for the one resident in memory — so a model tuned to prime would
+    // have loaded primed and then streamed unprimed.
+    let mut session = recognizer.session(generation);
 
     emit(
         &app,

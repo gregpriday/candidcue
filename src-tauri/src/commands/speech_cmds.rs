@@ -13,7 +13,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::errors::AppError;
-use crate::speech::{decode_base64, SpeechEngine, MODEL_NAME, SAMPLE_RATE_HZ};
+use crate::speech::{decode_base64, default_model, SpeechEngine, SAMPLE_RATE_HZ};
 
 /// What Settings shows in place of "is the key still good?".
 ///
@@ -46,21 +46,25 @@ pub async fn get_speech_engine_status<R: tauri::Runtime>(
     speech: State<'_, SpeechEngine>,
 ) -> Result<SpeechEngineStatus, AppError> {
     let loaded = speech.is_loaded();
-    let available = match SpeechEngine::model_dir(&app) {
-        Ok(dir) => cc_stt::LocalSttConfig::with_model_dir(dir).validate(),
+    let model = default_model();
+    // Asked of the directory directly rather than through a config: "are the
+    // files there?" is a question about the bundle, and building a tuned config
+    // to ask it would imply the tuning had something to do with the answer.
+    let available = match SpeechEngine::model_dir(&app, model) {
+        Ok(dir) => cc_stt::local::ModelFiles::detect(&dir).map(|_| ()),
         Err(err) => Err(err.to_string()),
     };
     Ok(match available {
         Ok(()) => SpeechEngineStatus {
             available: true,
             loaded,
-            model: MODEL_NAME.to_string(),
+            model: model.id.to_string(),
             detail: None,
         },
         Err(detail) => SpeechEngineStatus {
             available: false,
             loaded,
-            model: MODEL_NAME.to_string(),
+            model: model.id.to_string(),
             detail: Some(detail),
         },
     })
@@ -76,7 +80,7 @@ pub async fn preload_speech_engine<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     speech: State<'_, SpeechEngine>,
 ) -> Result<(), AppError> {
-    speech.ensure_loaded(&app).map(|_| ())
+    speech.ensure_loaded(&app, default_model()).map(|_| ())
 }
 
 /// What the renderer may choose about a session.
@@ -108,7 +112,7 @@ pub async fn start_transcription<R: tauri::Runtime>(
     speech: State<'_, SpeechEngine>,
     _options: Option<TranscriptionOptions>,
 ) -> Result<u64, AppError> {
-    speech.start_stream(app)
+    speech.start_stream(app, default_model())
 }
 
 /// Forward one frame of PCM16 audio, base64-encoded.
