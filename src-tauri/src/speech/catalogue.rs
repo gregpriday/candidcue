@@ -446,6 +446,75 @@ mod tests {
         assert_eq!(bundled_default().resource_dir, default_model().resource_dir());
     }
 
+    /// The Kroko models are downloadable and NOT loadable, and that is the
+    /// whole of #157's shipping decision.
+    ///
+    /// `cc_align` gained French, German and Spanish normalisation profiles, so
+    /// the engine can compile a script in those languages — the precondition
+    /// for ever scoring a corpus in one, since a corpus cannot be judged in a
+    /// language the normaliser does not have. (Selecting one from `cc-bench`'s
+    /// command line is still to do; `CompileOptions` carries the language, but
+    /// every call site there passes `default()`.) Nothing else changed here,
+    /// because nothing else may:
+    /// a `BundledModel` entry is a claim that the tuning beside it was
+    /// MEASURED, and no `blank_penalty` sweep has been run for any of these
+    /// three. The English 3.0 cannot be borrowed — it was swept against the
+    /// English corpus, where following quality and word error rate moved in
+    /// OPPOSITE directions, so carrying it across would be picking a number by
+    /// coincidence and calling it evidence.
+    ///
+    /// So `loadable_model` answers `None` for them, the model manager reports
+    /// them unsupported, and `settings::migrate_in_place` refuses a `fr-FR`
+    /// because no loadable recogniser serves French. Deleting this test to make
+    /// a language work is the mistake it exists to catch: the fix is a corpus
+    /// and a sweep, then a `BundledModel` entry carrying real numbers.
+    #[test]
+    fn the_kroko_models_download_but_do_not_load_until_they_are_measured() {
+        for id in ["kroko-fr", "kroko-de", "kroko-es"] {
+            let entry = catalogue()
+                .get(id)
+                .unwrap_or_else(|| panic!("{id} must stay in the catalogue"));
+            assert!(
+                crate::speech::model_manager::loadable_model(entry).is_none(),
+                "{id} has a BundledModel, so this build would offer a language \
+                 nobody has measured. See bench/README.md, \"What supporting a \
+                 language requires\"."
+            );
+
+            // The alignment half IS ready, and saying so here is the point:
+            // these two facts are meant to be separable, and a reader who finds
+            // only the refusal above should be able to see that the profile
+            // exists and is waiting on a measurement rather than on more code.
+            let tag = entry.languages.first().expect("a language");
+            assert!(
+                cc_align::AlignmentLanguage::from_bcp47(tag).is_some(),
+                "{id} serves {tag}, which the alignment engine cannot normalise"
+            );
+        }
+    }
+
+    /// The other half of the gate, from the settings side: a language the
+    /// engine can normalise is still refused while no loadable model serves it.
+    ///
+    /// This is what makes the profiles safe to land ahead of the measurement.
+    #[test]
+    fn a_normalisable_language_is_not_thereby_an_offered_one() {
+        for tag in ["fr-FR", "de-DE", "es-ES"] {
+            assert!(
+                cc_align::AlignmentLanguage::from_bcp47(tag).is_some(),
+                "{tag} should normalise — #157 added the profile"
+            );
+            assert!(
+                !cc_stt::models::bundled_models()
+                    .iter()
+                    .any(|model| model.serves_language(tag)),
+                "{tag} is served by a loadable model, so the settings gate \
+                 would now honour it — which requires a passing language gate \
+                 first"
+            );
+        }
+    }
+
     /// The frontend carries its own copy of the model name, for the browser
     /// mock and the offline fallback — the two places Rust is not there to
     /// correct a stale value. Same `include_str!` trick the stage event names
