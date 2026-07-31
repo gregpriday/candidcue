@@ -397,26 +397,38 @@ import { onShortcut } from '../lib/shortcuts';
    * whether or not it does.
    *
    * ---------------------------------------------------------------------------
-   * IT NO LONGER TAKES A DESTINATION, AND THAT IS THE FIX FOR §115
+   * IT TAKES A DESTINATION AGAIN — WITHOUT THE PART THAT WAS THE BUG
    * ---------------------------------------------------------------------------
-   * It used to run a `destination` callback between the un-present and the
-   * cover coming down, and all three callers passed the same two statements:
+   * This is worth reading before anybody "restores" the previous shape.
+   *
+   * It originally ran a `destination` callback between the un-present and the
+   * cover coming down, and every caller passed the same two statements:
    * `clearSession()` then navigate away. `clearSession()` resets the store, and
-   * the store's `summary` is what the F.17 dialog opens on — so the summary
-   * this take had just produced was destroyed UNDER THE COVER, one step before
-   * the screen it would have appeared on was replaced. The dialog's condition
-   * was true for a handful of frames, every one of them behind an opaque black
+   * the store's `summary` is what the F.17 dialog opens on — so the summary the
+   * take had just produced was destroyed UNDER THE COVER, one step before the
+   * screen it would have appeared on was replaced. The dialog's condition was
+   * true for a handful of frames, every one of them behind an opaque black
    * plate. Nobody had ever seen an end-of-session summary.
    *
-   * The cover cannot be rendered under — App's `.present-cover` sits at
-   * z-index 9999, deliberately above the dialog host — so the summary has to be
-   * shown after the cover falls, on a screen that is still mounted. Hence: this
-   * restores the window and nothing else. The take ends where it started, on
-   * Live, and the summary is simply visible there. Where to go next is the
-   * presenter's decision, made from the summary's own three buttons, and it is
-   * only then that anything is cleared.
+   * The fix at the time was to drop the destination entirely and let the take
+   * end where it started, on Live, with the summary simply visible there. That
+   * fixed the summary and left the presenter looking at the thing behind it: an
+   * operator console built for a two-window rig, its centre pane mirroring a
+   * prompter that had been in this very window, its transport offering to Start
+   * and End a session that was over.
+   *
+   * So the destination is back and the `clearSession()` is not. Navigating
+   * under the cover was never the defect — clearing under it was. The summary
+   * now lives in an app-level host (`SessionSummary.svelte`) which outlives this
+   * route, so the report survives the navigation it used to be destroyed by,
+   * and the only thing that clears the session is somebody dismissing it.
+   *
+   * The cover still cannot be rendered under — App's `.present-cover` sits at
+   * z-index 9999, deliberately above the dialog host — which is why the
+   * destination runs INSIDE the cover and the summary appears only once it
+   * falls.
    */
-  async function leavePresentation(): Promise<void> {
+  async function leavePresentation(destination?: () => Promise<unknown>): Promise<void> {
     setPresentingPhase('closing');
     try {
       await painted();
@@ -434,6 +446,17 @@ import { onShortcut } from '../lib/shortcuts';
        */
       await rememberReaderFrame(restored);
       if (restored) await awaitViewportSettled(restored);
+      /*
+       * The route swap, still behind the plate.
+       *
+       * This unmounts the component this function is declared in, which is fine
+       * and worth stating plainly: `painted` and `setPresentingPhase` are module
+       * imports, not component state, so the last wait and the `finally` below
+       * run exactly as they would have. What must NOT move above this line is
+       * the un-present — the editor arriving at monitor size and then being
+       * resized is the reverse-transition artifact the cover exists for.
+       */
+      await destination?.();
       await painted();
     } finally {
       setPresentingPhase('off');
@@ -460,10 +483,13 @@ import { onShortcut } from '../lib/shortcuts';
    * stage's Escape asks by requiring a second press, and `requestEndSession`
    * asks with a dialog. This is the one teardown they all share.
    *
-   * It deliberately does NOT navigate. `stopSession` is what produces the
-   * summary, and the summary's dialog is a sibling of this route's markup — so
-   * leaving the presenter on Live is what makes it appear at all. See
-   * `leavePresentation`.
+   * IT ENDS ON THE EDITOR, not here. A finished take has exactly three things
+   * anybody wants — the report, the script they just read, and another go — and
+   * this route's inactive state is none of them: it falls back to an operator
+   * console laid out for a rig where the stage has its own window, offering to
+   * Start and End a session that has just ended. The summary itself is hosted
+   * by App now, so it survives the navigation and opens over the editor. See
+   * `leavePresentation` for why the route swap happens under the cover.
    */
   async function endTake(): Promise<void> {
     /*
@@ -483,13 +509,31 @@ import { onShortcut } from '../lib/shortcuts';
      * class of double-entry; the Present buttons read it for the same reason.
      */
     if (endingTake || $takeStarting) return;
+    /*
+     * ...and not while somebody else's cover is up, which `takeStarting` does
+     * not cover.
+     *
+     * The App navigation guard is the other owner: leaving a live session by a
+     * shortcut or a sidebar click raises ITS cover, then awaits a paint before
+     * stopping the session — and its confirmation dialog closes before that. An
+     * end pressed in that gap would run this teardown concurrently with the
+     * guard's, and both finish by writing `presentingPhase` from a `finally`.
+     * `startTake` refuses on the same condition, from the other direction.
+     */
+    if (coverIsUp($presentingPhase)) return;
     endingTake = true;
     try {
       stopSession();
-      // The drawer belongs to a running take, and the summary is about to open
-      // over the top of where it was.
+      // The drawer belongs to a running take, and this route is about to be
+      // replaced anyway — but closing it keeps the state honest for the one
+      // path that lands back here, a navigation a guard refuses.
       takeControlsOpen = false;
-      await leavePresentation();
+      /*
+       * `stopSession()` first, so the guard App registers for leaving a live
+       * session sees an inactive one and waves this through without raising its
+       * own "End the session?" confirmation over a take that has already ended.
+       */
+      await leavePresentation(() => navigate({ name: 'editor', scriptId }));
     } finally {
       endingTake = false;
     }
@@ -753,66 +797,6 @@ import { onShortcut } from '../lib/shortcuts';
       }
     }),
   );
-
-  /**
-   * Go again. The finished session is cleared first so its stage, transport and
-   * clock are gone before a new one opens — `startTake` builds a fresh take
-   * from the same saved settings, so "again" really is again.
-   */
-  async function presentAgain(): Promise<void> {
-    clearSession();
-    /*
-     * `startTake` REPORTS FAILURE, and this used to drop the answer.
-     *
-     * It catches ordinary failures — the script will not load, the compile
-     * fails, the session cannot be created, the window will not present — toasts
-     * them, and returns false without changing the route. The summary has
-     * already been cleared by then, and Live in its inactive state has no
-     * sidebar and nothing to press, so a failed retake left the operator on a
-     * dead screen with no way out but the keyboard.
-     *
-     * It was survivable while the summary was unreachable, because this button
-     * could not be pressed. Making the retake loop work is what makes its
-     * failure path reachable, so it needs somewhere to land: the editor is
-     * where every other exit from a finished take goes.
-     */
-    const started = await startTake(scriptId);
-    if (!started) await navigate({ name: 'editor', scriptId });
-  }
-
-  /*
-   * The summary's two exits: navigate, THEN clear.
-   *
-   * NEITHER UN-PRESENTS ANY MORE, and that is not a regression. They used to,
-   * because the summary was (in theory) reachable from a still-presenting
-   * window and landing in the editor borderless and monitor-sized was the bug
-   * that put the un-present here. `endTake` now restores the window before the
-   * summary is ever shown, so by the time either of these runs the titlebar is
-   * already back and a second `exitPresentation` would be a no-op wrapped in a
-   * half-second of black.
-   *
-   * ORDER MATTERS, AND IT IS THE OPPOSITE OF WHAT IT WAS. Clearing first
-   * destroys `summary`, which closes the dialog — so a navigation that a guard
-   * then VETOES used to leave the presenter on a bare Live screen with the
-   * summary gone and nothing to press. Navigating first means a refused
-   * navigation simply leaves the summary standing, which is the only state the
-   * presenter can act on.
-   *
-   * Neither trips App's navigation guard: `stopSession` has already set
-   * `active` false, and the guard only stops-and-clears a session that is still
-   * running. (That guard's own silent clear is §119's, not this one's.)
-   */
-  async function returnToEditor(): Promise<void> {
-    // `navigate` resolves false when a guard refuses. Clearing anyway would
-    // destroy the summary and leave the presenter on the screen they were not
-    // allowed to leave, with nothing on it — which is the exact failure the
-    // ordering above exists to prevent, so the answer has to be read.
-    if (await navigate({ name: 'editor', scriptId })) clearSession();
-  }
-
-  async function returnToLibrary(): Promise<void> {
-    if (await navigate({ name: 'library', view: 'all' })) clearSession();
-  }
 
   /* ------------------------------------------------ the appearance panel (§14.2)
    *
@@ -1594,184 +1578,6 @@ import { onShortcut } from '../lib/shortcuts';
   </section>
 </div>
 
-<!-- End-of-session summary (F.17) -->
-<!--
-  NOT while the cover is up.
-
-  `stopSession()` populates `summary` and clears `active` synchronously, so this
-  condition becomes true the instant `endTake` starts — several awaits before
-  `leavePresentation` finishes and the cover comes down. The cover is opaque and
-  `pointer-events: none`, so a dialog mounted underneath it is invisible AND
-  fully live: it traps focus, it answers Escape, and clicks land on its scrim.
-  An Escape during the closing transition would have run `returnToEditor` — a
-  navigation, under a black plate, that the presenter neither saw nor asked for.
-
-  So the summary waits for the transition it is the destination of.
--->
-<Dialog
-  open={!$session.active && $session.summary !== null && !coverIsUp($presentingPhase)}
-  title="Session complete"
-  onclose={() => void returnToEditor()}
->
-  {#if $session.summary}
-    {@const summary = $session.summary}
-    <dl class="summary-grid">
-      <dt>Duration</dt>
-      <dd>{formatClock(summary.durationSeconds)}</dd>
-      <dt>Mode</dt>
-      <dd>{summary.mode === 'voice' ? 'Voice follow' : summary.mode === 'manual' ? 'Manual' : 'Fixed speed'}</dd>
-      <!-- The two rows that answer "did it actually work". Everything else
-           here reads the same whether the microphone was live or the take was
-           nine seconds of silence, which is why a take could look complete and
-           have heard nothing at all. -->
-      <dt>Words heard</dt>
-      <dd>
-        {summary.wordsHeard}
-        {#if summary.wordsInFlight > 0}
-          <!-- Finals only. A continuous read leaves the last utterance open,
-               and the summary is taken before `endTurn` closes it — so this
-               said "11" for a passage heard in full. -->
-          + {summary.wordsInFlight} still being transcribed
-        {/if}
-        {#if summary.mode === 'voice' && summary.wordsHeard === 0 && summary.wordsInFlight === 0}
-          <span class="summary-warn">— nothing was transcribed</span>
-        {/if}
-      </dd>
-      <dt>Script followed</dt>
-      <dd>
-        {summary.wordsFollowed} of {summary.scriptWords} words
-        {#if summary.scriptWords > 0}
-          ({Math.round((summary.wordsFollowed / summary.scriptWords) * 100)}%)
-        {/if}
-      </dd>
-      <!--
-        THE NEXT THREE ROWS ONLY MEAN ANYTHING ACROSS A WINDOW BOUNDARY.
-        ---------------------------------------------------------------------
-        Stage updates, document travel and the transcript relay are all measured
-        over the control→stage bridge, and that bridge is only built when the
-        stage has its own window. Single-window presentation runs at stage
-        generation 0, where `startStageBridge` returns immediately: directives
-        are a documented no-op, no motion acks come back, no transcript taps are
-        emitted. So on the configuration most takes actually run in, all three
-        read empty — and the summary accused the app of three separate failures
-        ("the stage did not report back", "the stage did not report a position",
-        "words were heard but never offered to the stage") on every single
-        healthy embedded take.
-
-        Standing false alarms are worse than no diagnostic: they train the
-        presenter to ignore the rows that would matter on the rig where these
-        numbers are real. One honest line instead, and the real rows are kept
-        intact for the case they were written for.
-      -->
-      {#if !summary.stageTelemetryExpected}
-        <dt>Stage diagnostics</dt>
-        <dd>Not applicable — the stage shared this window</dd>
-      {:else}
-        <!--
-          The row that tells a lost aligner apart from a stage that ignored it.
-          Both of the rows above are measured on the control side and agreed
-          perfectly through a take where the script never moved.
-        -->
-        <dt>Stage updates</dt>
-        <dd>
-          {#if summary.stageApplied === null}
-            {summary.updatesSent} sent — the stage did not report back
-          {:else}
-            {summary.stageApplied} of {summary.updatesSent} applied
-            {#if summary.updatesSent - summary.stageApplied >= 4}
-              <span class="summary-warn">— the stage was not following control</span>
-            {/if}
-          {/if}
-        </dd>
-        <!--
-          The only row measured on the GLASS. Everything above it is control's own
-          bookkeeping, which is how a take reported words heard, words followed
-          and snapshots applied — all healthy — while the script never moved.
-        -->
-        <dt>Script moved</dt>
-        <dd>
-          {#if summary.documentTravelPx === null}
-            the stage did not report a position
-          {:else}
-            {Math.round(summary.documentTravelPx)} px
-            {#if summary.targetTravelPx !== null}
-              (aimed at {Math.round(summary.targetTravelPx)} px)
-            {/if}
-            {#if summary.documentTravelPx < 20 && (summary.targetTravelPx ?? 0) >= 20}
-              <span class="summary-warn">— the document never followed its target</span>
-            {:else if summary.documentTravelPx < 20 && summary.wordsFollowed > 5}
-              <span class="summary-warn">— the script did not move</span>
-            {/if}
-          {/if}
-        </dd>
-        <!--
-          Whether the recogniser's own words reached the stage's transcript bar.
-          The bar read "listening — no words yet" through a take that heard
-          eleven, and nothing anywhere said which side dropped them.
-        -->
-        <dt>Transcript to stage</dt>
-        <dd>
-          {summary.transcriptTapsEmitted} of {summary.transcriptTapsSeen} sent
-          {#if summary.transcriptTapFault !== null}
-            <span class="summary-warn">— dropped: {summary.transcriptTapFault}</span>
-          {:else if summary.transcriptTapsSeen === 0 && summary.wordsHeard > 0}
-            <span class="summary-warn">— words were heard but never offered to the stage</span>
-          {/if}
-        </dd>
-      {/if}
-      <!--
-        How hard following actually worked.
-
-        Everything else on this list describes the take; these two describe the
-        APP's part in it, which is the question somebody has walking back from
-        the camera and the one the summary could not answer. A take that
-        transcribed a thousand words and held for half its length reads exactly
-        like a clean one on every other row here.
-      -->
-      <dt>Followed</dt>
-      <dd>
-        {#if summary.followingShare === null}
-          No tracking this take
-        {:else}
-          {Math.round(summary.followingShare * 100)}% of the take
-          {#if summary.followingShare < 0.6}
-            <span class="summary-warn">— the stage spent most of it holding</span>
-          {/if}
-        {/if}
-      </dd>
-      <dt>Manual jumps</dt>
-      <dd>{summary.manualJumps}</dd>
-      <dt>Sections reached</dt>
-      <dd>{summary.sectionsReached}</dd>
-      <dt>Retakes</dt>
-      <dd>{summary.retakes}</dd>
-      <dt>Reconnects</dt>
-      <dd>{summary.reconnects}</dd>
-      <dt>Ending location</dt>
-      <dd>{summary.endingLocation}</dd>
-      <dt>Transcript</dt>
-      <!--
-        Read from the take, not hard-coded. `transcriptSaved` has been on the
-        summary and correctly computed from the retention setting since the
-        session record was wired up; this row simply never asked for it, so a
-        presenter who had deliberately turned transcript saving ON was still
-        told every take that nothing had been kept.
-      -->
-      <dd>{summary.transcriptSaved ? 'Saved' : 'Not saved'}</dd>
-    </dl>
-  {/if}
-  {#snippet footer()}
-    <!--
-      "Finish" said nothing about where it went. The other two buttons name
-      their destination and this one named a mood, which made the only
-      irreversible-looking choice on the dialog the least clear one.
-    -->
-    <Button variant="ghost" onclick={() => void returnToLibrary()}>Return to library</Button>
-    <Button onclick={() => void returnToEditor()}>Return to editor</Button>
-    <Button variant="primary" onclick={() => void presentAgain()}>Present again</Button>
-  {/snippet}
-</Dialog>
-
 <style>
   .stage-preparing {
     position: absolute;
@@ -2364,36 +2170,4 @@ import { onShortcut } from '../lib/shortcuts';
     cursor: pointer;
   }
 
-  /* "Nothing was transcribed" is the one line here that is a problem rather
-     than a statistic, so it reads as one. */
-  .summary-warn {
-    /*
-     * `--text-danger` has never existed. Every one of the five warning spans on
-     * this summary therefore fell through to the fallback and rendered in the
-     * brand accent — the same warm terracotta the mode pill and the primary
-     * button use — so the app's way of saying "this take did not work" was
-     * visually indistinguishable from its way of saying "this is CandidCue".
-     * `--danger` is the real token and is defined in both themes.
-     */
-    color: var(--danger);
-    font-weight: 550;
-  }
-
-  .summary-grid {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: var(--space-1) var(--space-5);
-    margin: 0;
-  }
-  .summary-grid dt {
-    font-size: var(--text-sm);
-    color: var(--text-muted);
-  }
-  .summary-grid dd {
-    margin: 0;
-    font-size: var(--text-sm);
-    font-weight: 600;
-    color: var(--text-primary);
-    font-variant-numeric: tabular-nums;
-  }
 </style>

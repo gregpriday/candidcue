@@ -48,7 +48,7 @@ import {
   startLiveSession,
   stopSession,
 } from '../stores/session';
-import { setPresentingPhase } from '../stores/presenting';
+import { coverIsUp, presentingPhase, setPresentingPhase } from '../stores/presenting';
 import { loadSettings, patchSettings, settings } from '../stores/settings';
 import { showToast } from '../stores/toasts';
 import { getVoiceFacade } from '../services/voice-facade';
@@ -327,6 +327,25 @@ export async function startTake(
   options: StartTakeOptions = {},
 ): Promise<boolean> {
   if (get(startingStore)) return false;
+  /*
+   * NOT WHILE ANOTHER TRANSITION OWNS THE COVER.
+   *
+   * `startingStore` stops a second START; this stops a start racing a FINISH,
+   * which is a different collision with the same consequence. Both ends of a
+   * transition write `presentingPhase` from a `finally`, last writer wins, and
+   * there is no owner token — so a take begun while a teardown is still
+   * unwinding gets its `opening` overwritten by the other one's `off`. That is
+   * an app presenting with no cover, or covered with nothing to present.
+   *
+   * It became reachable when a take started ending on the EDITOR. The window
+   * between the route swap and the cover coming down is short — one paint — but
+   * the screen underneath now has a Present button and answers the Present
+   * shortcut, where the console it replaced had neither. The App navigation
+   * guard opens the same hole from the other side: it raises its own cover and
+   * then awaits a paint before stopping the session, and `endTake` refuses on
+   * this same condition for that reason.
+   */
+  if (coverIsUp(get(presentingPhase))) return false;
   startingStore.set(true);
 
   /*

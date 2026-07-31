@@ -27,6 +27,13 @@ const editorState = vi.hoisted(() => ({
   value: { scriptId: null as string | null, saveState: 'idle', lastError: null as string | null },
 }));
 const settingsState = vi.hoisted(() => ({ value: null as AppSettings | null }));
+/**
+ * The cover phase is READ by `startTake` as well as written by it, so the mock
+ * has to be a real value rather than a pair of spies: the entry guard refuses a
+ * take that would begin while another transition still owns the cover, and a
+ * stub that always answered "off" would make that guard untestable.
+ */
+const presentingState = vi.hoisted(() => ({ phase: 'off' as string }));
 const micState = vi.hoisted(() => ({
   devices: [] as Array<{
     deviceId: string;
@@ -54,6 +61,11 @@ vi.mock('../../../src/control/services/control-window', () => ({
 }));
 vi.mock('../../../src/control/stores/presenting', () => ({
   setPresentingPhase: calls.setPresentingPhase,
+  // `get()` on a store only needs `subscribe`, and the real store's semantics
+  // are one comparison — copied rather than imported so the mock cannot drift
+  // into re-exporting the module it is standing in for.
+  presentingPhase: { subscribe: (run: (v: string) => void) => (run(presentingState.phase), () => {}) },
+  coverIsUp: (value: string) => value === 'opening' || value === 'closing',
 }));
 vi.mock('../../../src/control/stores/session', () => ({
   startLiveSession: calls.startLiveSession,
@@ -203,6 +215,7 @@ beforeEach(() => {
   for (const fn of Object.values(calls)) fn.mockReset();
   for (const fn of Object.values(stageCalls)) fn.mockReset();
   settingsState.value = defaultAppSettings();
+  presentingState.phase = 'off';
   editorState.value = { scriptId: null, saveState: 'idle', lastError: null };
   micState.devices = [
     { deviceId: 'default', label: 'Built-in', isDefault: true, available: true },
@@ -401,6 +414,43 @@ describe('single-window Present', () => {
     expect(calls.setPresentingPhase).toHaveBeenLastCalledWith('off');
     expect(calls.stopSession).toHaveBeenCalled();
     expect(calls.clearSession).toHaveBeenCalled();
+  });
+
+  /*
+   * A START MAY NOT RACE A FINISH.
+   *
+   * Both ends of a presentation transition write `presentingPhase` from a
+   * `finally`, last writer wins, and nothing carries an owner token — so a take
+   * begun while a teardown is still unwinding has its `opening` overwritten by
+   * the other one's `off`. The result is an app presenting with no cover, or
+   * covered with nothing to present, and the only way out is quitting.
+   *
+   * It became reachable when a take started ending on the EDITOR: the route
+   * swap happens under the cover, so for one paint the screen underneath has a
+   * Present button and answers the Present shortcut. The console it replaced
+   * had neither, which is why the existing `takeStarting` latch — which only
+   * ever stopped a second START — was enough before and is not now.
+   */
+  it.each(['opening', 'closing'])(
+    'refuses to begin while another transition still owns the cover (%s)',
+    async (phase) => {
+      presentingState.phase = phase;
+      await expect(startTake(SCRIPT.id)).resolves.toBe(false);
+      // Nothing at all, not even a phase write: the point is that the other
+      // transition's cover is left exactly as it found it.
+      expect(calls.setPresentingPhase).not.toHaveBeenCalled();
+      expect(calls.enterPresentation).not.toHaveBeenCalled();
+      expect(calls.startSessionRecord).not.toHaveBeenCalled();
+      expect(calls.navigate).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still begins from the steady states', async () => {
+    // The guard must be about transitions only. `off` is the ordinary case and
+    // `on` is a take already running, which is somebody else's problem to
+    // refuse — a guard that caught either would break Present outright.
+    presentingState.phase = 'on';
+    await expect(startTake(SCRIPT.id)).resolves.toBe(true);
   });
 
   it('does not open a session or touch the window when compilation fails', async () => {

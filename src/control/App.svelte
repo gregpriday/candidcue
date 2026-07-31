@@ -9,6 +9,7 @@
   import { get } from 'svelte/store';
   import Button from './components/Button.svelte';
   import ConfirmHost from './components/ConfirmHost.svelte';
+  import SessionSummary from './components/SessionSummary.svelte';
   import ShortcutsDialog from './components/ShortcutsDialog.svelte';
   import Sidebar from './components/Sidebar.svelte';
   import ToastRegion from './components/ToastRegion.svelte';
@@ -470,6 +471,14 @@ import { rememberReaderFrame } from './lib/reader-frame';
 
   <ToastRegion />
   <ConfirmHost />
+  <!--
+    The take's report, hosted here rather than on the route that produced it.
+
+    A take now ends by navigating back to the editor, and the summary is the
+    destination of that navigation rather than a passenger on the screen it left
+    — so it has to outlive Live. See the note at the top of the component.
+  -->
+  <SessionSummary />
   <ShortcutsDialog open={shortcutsOpen} onclose={() => (shortcutsOpen = false)} />
 </div>
 

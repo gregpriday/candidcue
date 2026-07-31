@@ -596,18 +596,43 @@ test('the first Escape prompts and the second ends the take, un-presents, and sh
   await expect(page.getByRole('region', { name: 'Teleprompter' })).toHaveCount(0);
 
   /*
-   * §115. This test used to assert the Library's Present button here, because
-   * ending a take navigated straight back out — and on the way past, under the
-   * still-raised black cover, it called `clearSession()`. That reset the store,
-   * `summary` with it, so the F.17 dialog's condition held for a few frames
-   * behind an opaque plate and no presenter had ever seen an end-of-session
-   * summary. The take now ends where it ran and the summary is simply there.
+   * THE SUMMARY, OVER THE EDITOR — and the two halves of that are separate
+   * claims that have each been wrong at different times.
+   *
+   * The summary itself used to be destroyed on the way out: ending a take
+   * navigated away and called `clearSession()` under the still-raised black
+   * cover, so the F.17 dialog's condition held for a few frames behind an opaque
+   * plate and no presenter ever saw one. Fixing that left the take ending where
+   * it ran, on Live — which put the summary over an operator console built for a
+   * rig where the stage has its own window, offering to Start and End a session
+   * that had just ended.
+   *
+   * So both, now: the report survives, AND it opens on the script the presenter
+   * just read. The navigation happens under the cover and the report is hosted
+   * by App rather than by the route it came from, which is what lets those two
+   * be true at once.
    */
   const summary = page.getByRole('dialog', { name: 'Session complete' });
   await expect(summary).toBeVisible();
   // The cover must be DOWN: it sits above the dialog host at z-index 9999, so a
   // summary shown while it is up is a summary nobody can see.
   await expect(page.locator('.present-cover')).toHaveCount(0);
+
+  /*
+   * ...and the editor is ALREADY behind it, before anybody presses anything.
+   *
+   * Scoped to the source pane: Split mode renders the words twice, once in
+   * CodeMirror and once in the preview beside it, so an unscoped match is
+   * ambiguous. And the console the take used to end on must be gone — its
+   * transport offers Start and End session, which is the contradiction that
+   * made the old landing screen unreadable.
+   */
+  await expect(page.locator('aside.sidebar')).toBeVisible();
+  await expect(
+    page.locator('.cm-content').getByText('Thank you for joining me today.'),
+  ).toBeVisible();
+  await expect(page.locator('.live')).toHaveCount(0);
+  await expect(page.locator('footer.transport')).toHaveCount(0);
 
   /*
    * This was a single-window take, so there was no stage window to hear back
@@ -650,22 +675,62 @@ test('the first Escape prompts and the second ends the take, un-presents, and sh
   expect(result.commands).toContain('end_session');
   expect(result.presenting).toBe(false);
 
-  // And the retake loop the summary exists for actually goes somewhere. This is
-  // the other half of §115: the three buttons were unreachable, so "Return to
-  // editor" had never been pressed by anyone.
-  await page.getByRole('button', { name: 'Return to editor' }).click();
+  /*
+   * Dismissal is now a plain close, and it has to leave the presenter somewhere
+   * they can work.
+   *
+   * The button used to say "Return to editor" and perform a navigation. Once
+   * the take lands there by itself that name promised a journey to a place the
+   * presenter was already standing in — so it read as the safe default while
+   * doing nothing visible, which is the worst combination available for the
+   * button most people press.
+   */
+  await page.getByRole('button', { name: 'Back to the script' }).click();
   await expect(page.getByRole('dialog', { name: 'Session complete' })).toHaveCount(0);
-  // The DESTINATION, not just the dialog's absence — clearing the summary
-  // without going anywhere would have satisfied that on its own.
-  await expect(page.locator('aside.sidebar')).toBeVisible();
-  // And it is THIS script, scoped to the source pane: Split mode renders the
-  // words twice — once in CodeMirror, once in the preview beside it — so an
-  // unscoped match is ambiguous. What "Return to editor" owes a presenter is
-  // the take's script back under the cursor, ready to be changed for another
-  // run, which is the editor pane specifically.
   await expect(
     page.locator('.cm-content').getByText('Thank you for joining me today.'),
   ).toBeVisible();
+  /*
+   * That the session was genuinely CLEARED — rather than the dialog merely
+   * hidden — is proved by the retake test below rather than re-asserted here:
+   * `presenting` is a native-window fact and was already false before this
+   * click, so checking it again would pass with `clearSession()` deleted.
+   */
+
+  errors.expectClean();
+});
+
+/*
+ * THE RETAKE LOOP, WHICH NOW HAS TO FIND ITS OWN SCRIPT.
+ *
+ * "Present again" used to be a button on the Live route and read the script id
+ * from that route's props. The summary is hosted by App now — it opens over the
+ * editor, and it has no route props to read — so it takes the id off the session
+ * that just ended, which `stopSession` deliberately leaves behind and only
+ * dismissal clears.
+ *
+ * That is a silent failure if it is wrong: a null id would clear the session,
+ * start nothing, and leave the presenter looking at the editor as though the
+ * button had simply been a slow "close". So it is worth a take of its own.
+ */
+test('Present again starts a second take of the same script from the summary', async ({ page }) => {
+  const errors = watchPageErrors(page);
+  await present(page);
+
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog', { name: 'Session complete' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Present again' }).click();
+  await expect(page.getByRole('region', { name: 'Teleprompter' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('dialog', { name: 'Session complete' })).toHaveCount(0);
+  await expect(page.getByText('Thank you for joining me today.')).toBeVisible();
+
+  // Presented, un-presented, presented again — the pairing is what says the
+  // second take is a real one rather than the first one's window left over.
+  const calls = await page.evaluate(() => window.__E2E__.calls.map((c) => ({ command: c.command, args: c.args })));
+  expect(presentationSwitches(calls)).toEqual([false, true, false, true]);
+  expect(await page.evaluate(() => window.__E2E__.presenting)).toBe(true);
 
   errors.expectClean();
 });
