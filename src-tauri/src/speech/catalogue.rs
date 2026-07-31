@@ -151,6 +151,18 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    /// The BUNDLE manifest's default, as opposed to this module's
+    /// `default_model()`, which is the FETCH manifest's.
+    ///
+    /// Two lists, deliberately: `cc_stt::models` is compiled in and describes
+    /// what this build actually ships and how each entry was tuned, while
+    /// `models/catalogue.json` describes everything `pnpm models:fetch` can
+    /// download — four models against the one `tauri.conf.json` bundles. They
+    /// are only required to agree about the default, which is what the tests
+    /// below pin. Aliased rather than glob-imported so that neither name can
+    /// quietly shadow the other.
+    use cc_stt::models::default_model as bundled_default;
+
     /// A name that stays inside the model directory. Mirrors the same check in
     /// `model-catalogue.mjs` — the shell script joins these onto a path.
     fn is_safe_name(name: &str) -> bool {
@@ -287,19 +299,22 @@ mod tests {
         }
     }
 
-    /// `MODEL_NAME` is what Settings reports and what the log line carries.
-    /// Before the catalogue existed it was a second hardcoded string that had
+    /// The bundled model's id is what Settings reports and what the log line
+    /// carries; the fetch catalogue's `modelName` is what gets downloaded.
+    /// Before the catalogue existed this was a second hardcoded string that had
     /// already drifted from the one in the fetch script.
     #[test]
     fn the_reported_model_name_is_the_catalogue_default() {
-        assert_eq!(super::super::MODEL_NAME, default_model().model_name);
+        assert_eq!(bundled_default().id, default_model().model_name);
     }
 
-    /// `MODEL_RESOURCE_DIR` is where the resolver looks at runtime and what
-    /// `tauri.conf.json` bundles. Derived from the catalogue's `installDir`.
+    /// The bundled model's `resource_dir` is where the resolver looks at
+    /// runtime and what `tauri.conf.json` bundles. The fetch catalogue derives
+    /// the same path from its `installDir`, so the download lands where the
+    /// resolver will look.
     #[test]
     fn the_resource_dir_is_the_catalogue_install_dir() {
-        assert_eq!(super::super::MODEL_RESOURCE_DIR, default_model().resource_dir());
+        assert_eq!(bundled_default().resource_dir, default_model().resource_dir());
     }
 
     /// The frontend carries its own copy of the model name, for the browser
@@ -309,7 +324,7 @@ mod tests {
     #[test]
     fn the_frontend_names_the_same_recogniser() {
         let ts = include_str!("../../../src/shared/contracts/audio.ts");
-        let expected = format!("export const BUNDLED_MODEL_NAME = '{}';", super::super::MODEL_NAME);
+        let expected = format!("export const BUNDLED_MODEL_NAME = '{}';", bundled_default().id);
         assert!(
             ts.contains(&expected),
             "src/shared/contracts/audio.ts must declare {expected}"
