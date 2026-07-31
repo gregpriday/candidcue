@@ -179,6 +179,14 @@ pub struct CompiledScript {
     /// with no terminal punctuation at all therefore compiles to
     /// `sentence_end == para_end` and behaves exactly as it did before — that
     /// is a property of how the table is built, not a special case.
+    ///
+    /// "Sentence" is whatever the compile path called one, and the token path
+    /// is only as good as what it was told. The app hands over its NAVIGATION
+    /// units, which are grammatical sentences in prose but deliberately one
+    /// unit per list item however many sentences the bullet holds. So a
+    /// multi-sentence bullet gets a ceiling at the end of the item and none
+    /// inside it — no worse than the paragraph rule it replaces, and no
+    /// better.
     pub sentence_end: Vec<u32>,
 }
 
@@ -194,12 +202,17 @@ impl CompiledScript {
     /// How far the display may be carried by prediction from a frontier at
     /// `atom_pos`: the end of the SENTENCE the reader was last *heard* in.
     ///
-    /// `atom_pos` is a frontier, so the last atom actually spoken is the one
-    /// below it — which is what keeps the rule honest at a break. A reader who
-    /// has just finished a sentence has a frontier sitting exactly on the next
+    /// `atom_pos` is a frontier, so the atom to answer for is the one below it
+    /// — which is what keeps the rule honest at a break. A reader who has just
+    /// finished a sentence has a frontier sitting exactly on the next
     /// sentence's first word; answering with THAT sentence's end would let
     /// prediction fade its opening words on the strength of having heard the
     /// previous one end, which is the guess this function exists to refuse.
+    ///
+    /// A frontier of zero is the one place the phrasing strains: nothing has
+    /// been heard at all, and the answer is the first sentence's end rather
+    /// than nothing. That is the same room a reader gets for the first word of
+    /// any sentence, and the display has nowhere behind it to sit anyway.
     pub fn prediction_ceiling(&self, atom_pos: f64) -> f64 {
         match self.last_heard(atom_pos) {
             Some(at) => self.sentence_end[at] as f64,
@@ -435,8 +448,10 @@ pub fn compile(source: &str, options: CompileOptions) -> CompiledScript {
 /// Both are confined to this entry point, which is the benchmark harness's.
 /// The live path never reaches here: the app segments sentences with a real
 /// abbreviation list (`src/shared/markdown/segment.ts`) and sends the
-/// boundaries over IPC, so it gets `Dr.` and `27.` right. Which means the bench
-/// measures a LOWER BOUND on this feature, not the product's behaviour.
+/// boundaries over IPC, so it gets `Dr.` and `27.` right. So a bench number is
+/// not the product's number, and not a bound on it either — it errs in both
+/// directions at once, braking where the product would not and running on
+/// where it would stop.
 ///
 /// Sharpening it is also a change to what the vocabulary extractor calls a
 /// sentence, so it belongs with its own measurement rather than riding along
@@ -575,12 +590,13 @@ pub struct TokenInput {
     /// full stop by the time it has a surface — `$12` and `well-known` survive
     /// intact, `end.` arrives as `end` — so the engine cannot read a boundary
     /// off the text the way it can on the Markdown path. The caller can: it
-    /// segmented the document to lay it out, and knows exactly which token
-    /// each sentence stops on.
+    /// segmented the document to lay it out, and knows where its own units
+    /// stop. Whether those units are grammatical sentences is the caller's
+    /// business; the engine brakes wherever it is told to.
     ///
-    /// `false` everywhere is a valid answer and the one older callers give by
-    /// default. It costs nothing but the finer ceiling: paragraph ends are
-    /// still sentence ends, so prediction brakes exactly where it used to.
+    /// `false` everywhere is a valid answer. It costs nothing but the finer
+    /// ceiling: paragraph ends are still sentence ends, so prediction brakes
+    /// exactly where it used to.
     pub sentence_end: bool,
 }
 

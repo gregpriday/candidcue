@@ -964,15 +964,6 @@ impl Engine {
         self.snapshot(decision, evidence_ms, now_ms)
     }
 
-    /// May one close spelling/sound stand in for the immediately expected
-    /// script word?
-    ///
-    /// This is intentionally much narrower than ordinary local alignment:
-    /// one new approximate content relation per step, no unexplained transcript
-    /// or skipped script material, forward by about one word, near the pace
-    /// prediction, and only from an already-confident Following lock. It
-    /// updates only the reversible dim frontier; never `observed`, `confirmed`,
-    /// cold acquisition, or discontinuity authority.
     /// How far prediction may carry the DISPLAY from where the reader was last
     /// heard — the sentence they are audibly in, or the paragraph when the
     /// finer rule is switched off for comparison.
@@ -987,6 +978,21 @@ impl Engine {
         }
     }
 
+    /// May one close spelling/sound stand in for the immediately expected
+    /// script word?
+    ///
+    /// This is intentionally much narrower than ordinary local alignment:
+    /// one new approximate content relation per step, no unexplained transcript
+    /// or skipped script material, forward by about one word, near the pace
+    /// prediction, and only from an already-confident Following lock. What it
+    /// MOVES is only the reversible dim frontier; never `observed`,
+    /// `confirmed`, cold acquisition, or discontinuity authority.
+    ///
+    /// What it DECIDES reaches further than that, which is easy to miss and
+    /// matters: the local-health check reads this answer as part of `local_ok`,
+    /// and the ordinary-evidence path treats a refusal here as grounds to hold.
+    /// So a stricter gate does not merely dim less — it can stop the engine
+    /// extrapolating at all.
     fn can_bridge_local_approx(&self, candidate: &Candidate, predicted: f64) -> bool {
         let ev = &candidate.evidence;
         let c = &self.config;
@@ -1524,23 +1530,30 @@ mod tests {
     /// already providing on its own.
     #[test]
     fn a_sentence_break_brakes_the_display_without_stalling_the_tracker() {
+        // The full stop falls after `bravo`, so the bridge's candidate — which
+        // lands on `presenter`, atom 3 — sits BEYOND the sentence ceiling and
+        // inside the paragraph. That gap is the whole point: with the gate on
+        // the sentence ceiling the bridge is refused and the engine holds, so
+        // this test fails if the ceiling is ever put back on it.
         let script = compile(
-            "alpha bravo presenter. teleprompter harbour narration",
+            "alpha bravo. presenter teleprompter harbour narration",
             CompileOptions::default(),
         );
-        // The frontier sits exactly on the full stop after `presenter`.
-        assert_eq!(script.sentence_end[2], 3);
+        assert_eq!(script.sentence_end, vec![2, 2, 6, 6, 6, 6]);
+        assert_eq!(script.para_end, vec![6, 6, 6, 6, 6, 6]);
 
         let mut engine = Engine::new(script, AlignmentConfig::default());
         engine.set_manual_position(2, 0.0);
         let snapshot = final_item(&mut engine, 1, "presentor", 350.0);
 
-        // The fuzzy bridge still carries the reversible frontier across the
-        // boundary — it is dim-only and can be taken back.
+        // Heard through `bravo` and holding at the full stop, the display may
+        // not reach `presenter`...
+        assert_eq!(snapshot.display_limit, 2.0);
+        // ...but the tracker keeps following and the reversible dim frontier
+        // still advances, because shading can be taken back and a stalled
+        // engine cannot.
         assert_eq!(snapshot.state, TrackingState::Following);
         assert_eq!(snapshot.provisional, Some(3.0));
-        // ...while the display itself is held at the full stop.
-        assert_eq!(snapshot.display_limit, 3.0);
     }
 
     #[test]

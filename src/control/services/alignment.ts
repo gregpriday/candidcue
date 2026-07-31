@@ -45,11 +45,11 @@ export interface AlignToken {
    * full stop the reader is about to pause on instead of running into a
    * sentence they have not started.
    *
-   * It has to be sent because it cannot be recovered downstream. `tokenize.ts`
-   * ends every token on a letter or digit, so `surface` reaches the engine as
-   * `end` and never `end.` — the punctuation is gone before this point. What
-   * survives is the compiler's own sentence segmentation, which knows that
-   * `Dr.` and `3.14` are not boundaries, and that is what this carries.
+   * It has to be sent because it cannot be recovered downstream: `tokenize.ts`
+   * never keeps a TERMINAL dot, so `surface` reaches the engine as `end` and
+   * never `end.`, and the punctuation is gone before this point. What survives
+   * is the compiler's own segmentation, which knows that `Dr.` and `3.14` are
+   * not boundaries, and that is what this carries.
    */
   sentenceEnd: boolean;
 }
@@ -65,11 +65,16 @@ export interface AlignToken {
  */
 export function alignTokensFor(compiled: CompiledScript): AlignToken[] {
   /*
-   * `line` and `para` are debug metadata the engine never reads, so a compiled
-   * script that is missing its block or sentence lists must still produce a
+   * A compiled script missing its block or sentence lists must still produce a
    * usable token stream. Throwing here would take alignment down for a take
    * whose SPOKEN TOKENS were perfectly fine — a total loss of following in
-   * exchange for a diagnostic ordinal.
+   * exchange for an ordinal.
+   *
+   * `line` really is only a diagnostic. `para` is NOT: the engine builds its
+   * paragraph table from it, and that table is the outer bound on how far the
+   * display may be carried past the reader. A block list that fails to load
+   * collapses every token into paragraph 0, which is one long paragraph and a
+   * looser ceiling — degraded, still safe, and worth knowing about.
    */
   const blockOrdinals = new Map<string, number>();
   (compiled.blocks ?? []).forEach((block, index) => blockOrdinals.set(block.id, index));
