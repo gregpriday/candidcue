@@ -631,12 +631,20 @@ impl Engine {
         // A revision with content in it and NO local explanation at all is the
         // strongest version of this, not the weakest: nothing to match is a
         // clearer statement than a bad match.
+        //
+        // A bad recogniser also makes insertions dominate, and that reader is
+        // still on script — latching there parks a reader who never left. The
+        // two are told apart by the same thing the return gate asks for: a run
+        // of consecutive exact matches. Corruption still throws them off
+        // intermittently, an aside does not, so a revision that still contains
+        // one is not an aside no matter how much noise came with it.
         let off_script_vote = locked
             && weak
             && unexplained_content >= self.config.weak_unexplained_content
-            && local_candidate
-                .as_ref()
-                .is_none_or(|c| c.evidence.insertions as usize >= unexplained_content);
+            && local_candidate.as_ref().is_none_or(|c| {
+                c.evidence.insertions as usize >= unexplained_content
+                    && c.evidence.longest_run < self.config.off_script_return_min_run
+            });
         if off_script_vote {
             self.off_script_enter_streak = self.off_script_enter_streak.saturating_add(1);
             if self.off_script_enter_streak >= self.config.off_script_enter_revisions {
